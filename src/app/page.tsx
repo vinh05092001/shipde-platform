@@ -18,6 +18,7 @@ import { AdminSystemTab } from '@/components/AdminSystemTab';
 import { ShopSettingsModal } from '@/components/ShopSettingsModal';
 import { UnifiedTrackingModal } from '@/components/UnifiedTrackingModal';
 import { UploadStatementModal } from '@/components/UploadStatementModal';
+import { ApiIntegrationsTab } from '@/components/ApiIntegrationsTab';
 
 import {
   Package,
@@ -37,6 +38,8 @@ import {
   Store,
   CheckCircle2,
   Lock,
+  Key,
+  Webhook,
 } from 'lucide-react';
 
 export default function ShipDeConsoleApp() {
@@ -162,6 +165,7 @@ export default function ShipDeConsoleApp() {
         ];
       case 'BACKOFFICE':
         return [
+          { id: 'api_integrations', label: 'Khai Báo API, Webhooks & Cổng Hãng (CN-01, CN-04, CN-21)', icon: Key },
           { id: 'admin_matrix', label: 'Ma Trận Năng Lực Hãng L0/L1/L2 (CN-05)', icon: Settings },
           { id: 'admin_unmapped', label: 'Hàng Chờ Trạng Thái Chưa Ánh Xạ (CN-23)', icon: Database },
         ];
@@ -172,6 +176,7 @@ export default function ShipDeConsoleApp() {
           { id: 'shipments', label: 'Quản Lý Vận Đơn', icon: Package },
           { id: 'exceptions', label: 'Hộp Việc Cứu Đơn', icon: AlertTriangle, count: openExcCount, countType: 'risk' },
           { id: 'reconciliation', label: 'Đối Soát COD & Cước', icon: DollarSign, count: openDiscCount, countType: 'risk' },
+          { id: 'api_integrations', label: 'Khai Báo API & Webhooks', icon: Key },
           { id: 'returns', label: 'Quản Lý Nhập Hoàn', icon: RotateCcw },
         ];
     }
@@ -452,6 +457,13 @@ export default function ShipDeConsoleApp() {
 
           {activeTab === 'claims' && (
             <ClaimCasesTab claims={claims} onUpdateClaim={handleUpdateClaim} />
+          )}
+
+          {activeTab === 'api_integrations' && (
+            <ApiIntegrationsTab
+              carrierGhnTier={carrierGhnTier}
+              onToggleGhnTier={(t) => setCarrierGhnTier(t)}
+            />
           )}
 
           {/* Backoffice Dedicated Screens */}
