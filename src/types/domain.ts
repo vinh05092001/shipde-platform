@@ -273,6 +273,7 @@ export interface Discrepancy {
   amount: CurrencyAmount;
   status: DiscrepancyResolution;
   reason?: string;
+  created_by_user?: string;
   resolved_by?: string;
   resolved_at?: Date;
   evidence_files?: string[];

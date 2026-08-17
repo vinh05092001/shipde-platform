@@ -10,7 +10,6 @@ import {
   Eye,
   EyeOff,
   CheckCircle2,
-  Sparkles,
   TrendingUp,
   PackageCheck,
   DollarSign,
@@ -37,6 +36,10 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!password.trim()) {
+      setErrorMsg('Vui lòng nhập mật khẩu tài khoản.');
+      return;
+    }
     setLoading(true);
     setErrorMsg(null);
 
@@ -56,26 +59,23 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-blue-600 selection:text-white relative overflow-hidden">
-      {/* Subtle Background Pattern */}
-      <div className="absolute inset-0 bg-[radial-gradient(#CBD5E1_1px,transparent_1px)] [background-size:24px_24px] opacity-40 pointer-events-none" />
-
+    <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#EA4B12] selection:text-white relative">
       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
         {/* Brand Logo & Title */}
-        <div className="text-center space-y-2 mb-6">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-blue-500/20">
+        <div className="text-center space-y-2 mb-8">
+          <div className="w-14 h-14 rounded-2xl bg-[#EA4B12] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-[#EA4B12]/20">
             S
           </div>
-          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
             Đăng Nhập Ship Dễ
-          </h2>
+          </h1>
           <p className="text-sm text-slate-500">
-            Hệ thống điều hành vận chuyển & kiểm soát đối soát COD cho Online Shop
+            Hệ thống kiểm soát vận hành & đối soát COD tự động cho Online Shop
           </p>
         </div>
 
         {/* Main Login Card */}
-        <div className="bg-white py-8 px-6 sm:px-10 shadow-xl shadow-slate-200/50 rounded-3xl border border-slate-200/80 space-y-6">
+        <div className="modern-card p-8 space-y-6 shadow-xl">
           {errorMsg && (
             <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
               <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
@@ -89,13 +89,13 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                 Email hoặc Số Điện Thoại
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
                 <input
                   type="text"
                   value={account}
                   onChange={(e) => setAccount(e.target.value)}
                   placeholder="owner@ananboutique.vn"
-                  className="modern-input w-full pl-10 h-11 text-xs font-medium"
+                  className="modern-input pl-10 h-11 text-sm font-medium"
                   required
                 />
               </div>
@@ -103,31 +103,25 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
 
             <div>
               <div className="flex justify-between items-center mb-1.5">
-                <label className="text-xs font-bold text-slate-700">
-                  Mật Khẩu
-                </label>
-                <button
-                  type="button"
-                  onClick={() => alert('Mã OTP xác thực đã được gửi về số điện thoại đăng ký của bạn.')}
-                  className="text-xs text-blue-600 hover:text-blue-700 font-semibold hover:underline"
-                >
+                <label className="text-xs font-bold text-slate-700">Mật Khẩu</label>
+                <a href="#forgot" onClick={(e) => { e.preventDefault(); alert('Vui lòng liên hệ quản trị viên để đặt lại mật khẩu.'); }} className="text-xs text-[#EA4B12] font-semibold hover:underline">
                   Quên mật khẩu?
-                </button>
+                </a>
               </div>
               <div className="relative">
-                <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
                 <input
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="modern-input w-full pl-10 pr-10 h-11 text-xs font-medium"
+                  className="modern-input pl-10 pr-10 h-11 text-sm font-medium"
                   required
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-700"
+                  className="absolute right-3 top-3.5 text-slate-400 hover:text-slate-600"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -135,122 +129,89 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
             </div>
 
             <div className="flex items-center justify-between pt-1">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
+              <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-600">
                 <input
                   type="checkbox"
                   checked={rememberMe}
                   onChange={(e) => setRememberMe(e.target.checked)}
-                  className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300 cursor-pointer"
+                  className="w-4 h-4 rounded text-[#EA4B12] focus:ring-[#EA4B12] border-slate-300"
                 />
-                <span className="text-xs text-slate-600 font-medium">Ghi nhớ đăng nhập trên máy này</span>
+                <span>Ghi nhớ đăng nhập trên thiết bị này</span>
               </label>
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="btn-primary w-full h-12 text-sm font-bold justify-center shadow-md shadow-blue-500/25 mt-2"
+              className="btn-primary w-full justify-center text-sm py-3 font-bold mt-2"
             >
               {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Đang xác thực...</span>
-                </span>
+                <span>Đang Xác Thực...</span>
               ) : (
-                <span className="flex items-center gap-1.5">
-                  <span>Đăng Nhập Vào Hệ Thống</span>
+                <>
+                  <span>Vào Bàn Điều Khiển</span>
                   <ArrowRight className="w-4 h-4" />
-                </span>
+                </>
               )}
             </button>
           </form>
 
-          {/* 1-Click Role Access Buttons for Instant Testing */}
-          <div className="pt-4 border-t border-slate-100 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                Đăng nhập nhanh theo vai trò test:
-              </span>
-              <span className="badge-info text-[10px]">1-Click Demo</span>
-            </div>
+          {/* Quick Demo Role Switcher for Development Environment */}
+          <div className="pt-5 border-t border-slate-100 space-y-3">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block text-center">
+              Chọn Nhanh Vai Trò Để Trải Nghiệm:
+            </span>
 
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => handleQuickLogin('owner@ananboutique.vn')}
-                className="p-2.5 rounded-xl border border-slate-200 hover:border-blue-400 bg-slate-50/70 hover:bg-blue-50/50 text-left transition flex items-center gap-2.5 cursor-pointer group"
+                className="p-2.5 rounded-xl border border-slate-200 hover:border-[#EA4B12] hover:bg-[#FFF5F0] transition text-left cursor-pointer"
               >
-                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <Store className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="font-bold text-slate-900 text-xs leading-tight">Chủ Shop</div>
-                  <div className="text-[10px] text-slate-500">Owner (Toàn quyền)</div>
-                </div>
+                <div className="font-bold text-xs text-slate-900">👑 Chủ Shop</div>
+                <div className="text-[11px] text-slate-500 truncate">owner@ananboutique.vn</div>
               </button>
 
               <button
                 type="button"
-                onClick={() => handleQuickLogin('cskh1@ananboutique.vn')}
-                className="p-2.5 rounded-xl border border-slate-200 hover:border-emerald-400 bg-slate-50/70 hover:bg-emerald-50/50 text-left transition flex items-center gap-2.5 cursor-pointer group"
+                onClick={() => handleQuickLogin('cskh.hoa@ananboutique.vn')}
+                className="p-2.5 rounded-xl border border-slate-200 hover:border-[#EA4B12] hover:bg-[#FFF5F0] transition text-left cursor-pointer"
               >
-                <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <Headphones className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="font-bold text-slate-900 text-xs leading-tight">CSKH / Vận Hành</div>
-                  <div className="text-[10px] text-slate-500">Cứu đơn & Hộp việc</div>
-                </div>
+                <div className="font-bold text-xs text-slate-900">🎧 CSKH / Vận Hành</div>
+                <div className="text-[11px] text-slate-500 truncate">cskh.hoa@...</div>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleQuickLogin('ketoan@ananboutique.vn')}
-                className="p-2.5 rounded-xl border border-slate-200 hover:border-amber-400 bg-slate-50/70 hover:bg-amber-50/50 text-left transition flex items-center gap-2.5 cursor-pointer group"
+                className="p-2.5 rounded-xl border border-slate-200 hover:border-[#EA4B12] hover:bg-[#FFF5F0] transition text-left cursor-pointer"
               >
-                <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <Calculator className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="font-bold text-slate-900 text-xs leading-tight">Kế Toán</div>
-                  <div className="text-[10px] text-slate-500">Duyệt đối soát COD</div>
-                </div>
+                <div className="font-bold text-xs text-slate-900">📊 Kế Toán Đối Soát</div>
+                <div className="text-[11px] text-slate-500 truncate">ketoan@...</div>
               </button>
 
               <button
                 type="button"
-                onClick={() => handleQuickLogin('kho@ananboutique.vn')}
-                className="p-2.5 rounded-xl border border-slate-200 hover:border-purple-400 bg-slate-50/70 hover:bg-purple-50/50 text-left transition flex items-center gap-2.5 cursor-pointer group"
+                onClick={() => handleQuickLogin('kho.tanbinh@ananboutique.vn')}
+                className="p-2.5 rounded-xl border border-slate-200 hover:border-[#EA4B12] hover:bg-[#FFF5F0] transition text-left cursor-pointer"
               >
-                <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <Warehouse className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="font-bold text-slate-900 text-xs leading-tight">Thủ Kho</div>
-                  <div className="text-[10px] text-slate-500">Quét hàng hoàn kho</div>
-                </div>
+                <div className="font-bold text-xs text-slate-900">📦 Thủ Kho Quét Hoàn</div>
+                <div className="text-[11px] text-slate-500 truncate">kho.tanbinh@...</div>
               </button>
             </div>
           </div>
-
-          <div className="pt-2 text-center border-t border-slate-100">
-            <button
-              type="button"
-              onClick={onSwitchToRegister}
-              className="text-xs text-blue-600 hover:text-blue-700 font-bold hover:underline"
-            >
-              Chưa có tài khoản? Đăng ký cửa hàng mới →
-            </button>
-          </div>
         </div>
 
-        {/* Trust & Invariant Footer */}
-        <div className="text-center mt-6 text-xs text-slate-500 space-y-1.5">
-          <div className="flex items-center justify-center gap-1.5 text-emerald-700 font-semibold">
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>Quy tắc bất biến: Tuyệt đối không giữ tiền COD của Shop (BR-10)</span>
-          </div>
-          <p className="text-[11px] text-slate-400 font-mono">Bản quyền © 2026 Ship Dễ · Control-First Operational Console</p>
+        {/* Footer */}
+        <div className="text-center mt-6 text-xs text-slate-500">
+          Chưa có tài khoản?{' '}
+          <button
+            type="button"
+            onClick={onSwitchToRegister}
+            className="text-[#EA4B12] font-bold hover:underline"
+          >
+            Đăng ký tài khoản mới
+          </button>
         </div>
       </div>
     </div>

@@ -51,14 +51,17 @@ export class MakerCheckerEngine {
     }
 
     // 4. KIỂM TRA TÁCH QUYỀN TÀI CHÍNH CẤP BẢN GHI (BR-12, E2E-06)
-    // Người đã thao tác trên vận đơn (sửa thông tin, gửi giao lại) không được tự duyệt chênh lệch
-    if (shipment.last_modified_by && shipment.last_modified_by === payload.user_id) {
+    // Người đã thao tác trên vận đơn hoặc tạo yêu cầu không được tự duyệt chênh lệch
+    if (
+      (shipment.last_modified_by && shipment.last_modified_by === payload.user_id) ||
+      (discrepancy.created_by_user && discrepancy.created_by_user === payload.user_id)
+    ) {
       throw new ShipDeAppError(ERROR_CATALOG.SELF_APPROVAL_FORBIDDEN, {
         user_id: payload.user_id,
         user_name: payload.user_name,
-        shipment_last_modified_by: shipment.last_modified_by,
+        shipment_last_modified_by: shipment.last_modified_by || discrepancy.created_by_user,
         action: 'approve_discrepancy',
-        message: `Người dùng ${payload.user_name} đã thao tác trên vận đơn ${shipment.tracking_code} nên không thể tự duyệt chênh lệch của chính đơn này.`,
+        message: `Người dùng ${payload.user_name} đã thao tác hoặc tạo bản ghi trên đơn ${shipment.tracking_code} nên không thể tự duyệt chênh lệch (BR-12).`,
       });
     }
 

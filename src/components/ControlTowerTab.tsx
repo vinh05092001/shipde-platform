@@ -1,17 +1,14 @@
 'use client';
 
 import React from 'react';
-import { ActiveRole, UIExceptionItem, UIDiscrepancyItem, UIClaimItem } from './types';
 import { TrackingCode, Money, StatusBadge, AutomationBadge } from './ui/OperationalComponents';
 import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-} from 'recharts';
+  MASTER_SHIPMENTS,
+  MASTER_EXCEPTIONS,
+  MASTER_DISCREPANCIES,
+  MASTER_CLAIMS,
+  getUnifiedMetrics,
+} from '@/services/unifiedDataStore';
 import {
   Package,
   AlertTriangle,
@@ -21,233 +18,209 @@ import {
   ArrowRight,
   ShieldCheck,
   CheckCircle2,
-  Sparkles,
+  Sliders,
+  RotateCcw,
+  Truck,
 } from 'lucide-react';
 
 interface Props {
   role: string;
-  exceptions: UIExceptionItem[];
-  discrepancies: UIDiscrepancyItem[];
-  claims: UIClaimItem[];
   onNavigate: (tab: string) => void;
 }
 
-const WEEKLY_TREND = [
-  { day: 'T2', failCount: 14, rescuedCount: 11 },
-  { day: 'T3', failCount: 18, rescuedCount: 15 },
-  { day: 'T4', failCount: 12, rescuedCount: 10 },
-  { day: 'T5', failCount: 22, rescuedCount: 19 },
-  { day: 'T6', failCount: 16, rescuedCount: 14 },
-  { day: 'T7', failCount: 9, rescuedCount: 8 },
-  { day: 'CN', failCount: 7, rescuedCount: 6 },
-];
+export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate }) => {
+  const metrics = getUnifiedMetrics();
 
-export const ControlTowerTab: React.FC<Props> = ({
-  role,
-  exceptions,
-  discrepancies,
-  claims,
-  onNavigate,
-}) => {
-  const openExceptions = exceptions.filter((e) => e.status === 'OPEN' || e.status === 'ASSIGNED');
-  const openDiscrepancies = discrepancies.filter((d) => String(d.status).toUpperCase() === 'OPEN');
-  const urgentClaims = claims.filter((c) => c.status !== 'CLOSED');
+  const urgentExceptions = MASTER_EXCEPTIONS.filter((e) => e.status === 'OPEN').slice(0, 3);
+  const urgentDiscrepancies = MASTER_DISCREPANCIES.filter((d) => d.status === 'OPEN').slice(0, 3);
 
   return (
     <div className="w-full space-y-6">
-      {/* 4 Modern Operational KPI Cards */}
+      {/* 4 Unified Operational KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Metric 1: Active Shipments */}
         <div
           onClick={() => onNavigate('shipments')}
-          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-blue-300"
+          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-[#EA4B12] transition-colors"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Đơn Đang Hoạt Động</span>
-            <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-              <Package className="w-4 h-4" />
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Tổng Bưu Kiện Đang Chạy</span>
+            <div className="w-9 h-9 rounded-xl bg-[#FFF5F0] text-[#EA4B12] flex items-center justify-center">
+              <Package className="w-4.5 h-4.5" />
             </div>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-black font-mono text-slate-900">1.420 <span className="text-sm font-normal text-slate-500">đơn</span></div>
+            <div className="text-3xl font-black font-mono text-slate-900">{metrics.activeShipments}</div>
+            <div className="text-xs text-slate-500 mt-0.5">Trên tổng số {metrics.totalShipments} bưu kiện trong hệ thống</div>
           </div>
-          <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
-            <span>GHN: 980 · GHTK: 440</span>
-            <ArrowRight className="w-3.5 h-3.5 text-blue-600 group-hover:translate-x-0.5 transition-transform" />
+          <div className="flex items-center gap-1 text-xs font-semibold text-[#EA4B12] group-hover:underline pt-2 border-t border-slate-100">
+            <span>Mở danh sách vận đơn</span>
+            <ArrowRight className="w-3.5 h-3.5" />
           </div>
         </div>
 
+        {/* Metric 2: Open Exceptions Needing Rescue */}
         <div
           onClick={() => onNavigate('exceptions')}
-          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-rose-300 bg-rose-50/10"
+          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-amber-400 transition-colors"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-rose-600 uppercase tracking-wider">Cần Can Thiệp Gấp</span>
-            <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-              <AlertTriangle className="w-4 h-4" />
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Sự Cố Cần Cứu Đơn Gấp</span>
+            <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
+              <AlertTriangle className="w-4.5 h-4.5" />
             </div>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-black font-mono text-rose-600">{openExceptions.length} <span className="text-sm font-normal text-slate-500">hồ sơ</span></div>
+            <div className="text-3xl font-black font-mono text-amber-700">{metrics.openExceptionsCount}</div>
+            <div className="text-xs text-slate-500 mt-0.5">Giao thất bại, trễ lấy hàng, đọng trung chuyển</div>
           </div>
-          <div className="flex items-center justify-between text-xs text-rose-700 pt-2 border-t border-rose-100">
-            <span>SLA 12h: còn 2h45m</span>
-            <ArrowRight className="w-3.5 h-3.5 text-rose-600 group-hover:translate-x-0.5 transition-transform" />
+          <div className="flex items-center gap-1 text-xs font-semibold text-amber-700 group-hover:underline pt-2 border-t border-slate-100">
+            <span>Vào hộp việc CSKH</span>
+            <ArrowRight className="w-3.5 h-3.5" />
           </div>
         </div>
 
+        {/* Metric 3: Financial Discrepancies */}
         <div
           onClick={() => onNavigate('reconciliation')}
-          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-amber-300"
+          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-rose-400 transition-colors"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-amber-700 uppercase tracking-wider">Lệch Cước Chưa Duyệt</span>
-            <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-              <DollarSign className="w-4 h-4" />
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Khoản Lệch Cước & COD</span>
+            <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-700 flex items-center justify-center">
+              <DollarSign className="w-4.5 h-4.5" />
             </div>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-black font-mono text-slate-900">
-              <Money amount={openDiscrepancies.reduce((sum, d) => sum + (d.discrepancy_amount || d.amount || 0), 0)} state="confirmed" />
+            <div className="text-3xl font-black font-mono text-rose-700">
+              <Money amount={metrics.totalDiscrepancyAmount} state="confirmed" />
             </div>
+            <div className="text-xs text-slate-500 mt-0.5">{metrics.openDiscrepanciesCount} khoản lệch đang chờ duyệt</div>
           </div>
-          <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
-            <span>{openDiscrepancies.length} khoản phát hiện (D1–D7)</span>
-            <ArrowRight className="w-3.5 h-3.5 text-blue-600 group-hover:translate-x-0.5 transition-transform" />
+          <div className="flex items-center gap-1 text-xs font-semibold text-rose-700 group-hover:underline pt-2 border-t border-slate-100">
+            <span>Duyệt đối soát chênh lệch</span>
+            <ArrowRight className="w-3.5 h-3.5" />
           </div>
         </div>
 
+        {/* Metric 4: Rescued & Recovered Value */}
         <div
-          onClick={() => onNavigate('claims')}
-          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-purple-300"
+          onClick={() => onNavigate('three_ledgers')}
+          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-emerald-400 transition-colors"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-purple-700 uppercase tracking-wider">Khiếu Nại Còn &lt; 48H</span>
-            <div className="w-9 h-9 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-              <Clock className="w-4 h-4" />
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Bồi Thường Đã Thu Hồi</span>
+            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+              <TrendingUp className="w-4.5 h-4.5" />
             </div>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-black font-mono text-slate-900">
-              <Money amount={urgentClaims.reduce((sum, c) => sum + (c.requested_amount || 0), 0)} state="pending" />
+            <div className="text-3xl font-black font-mono text-emerald-700">
+              <Money amount={1500000} state="confirmed" />
             </div>
+            <div className="text-xs text-slate-500 mt-0.5">Tiền bồi thường thực nhận đã về tài khoản</div>
           </div>
-          <div className="flex items-center justify-between text-xs text-purple-700 pt-2 border-t border-purple-100">
-            <span>{urgentClaims.length} hồ sơ giám sát BR-37</span>
-            <ArrowRight className="w-3.5 h-3.5 text-purple-600 group-hover:translate-x-0.5 transition-transform" />
+          <div className="flex items-center gap-1 text-xs font-semibold text-emerald-700 group-hover:underline pt-2 border-t border-slate-100">
+            <span>Xem Báo Cáo Ba Sổ</span>
+            <ArrowRight className="w-3.5 h-3.5" />
           </div>
         </div>
       </div>
 
-      {/* Main 2-Column Operational Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (7 cols): Exception Action Queue */}
-        <div className="lg:col-span-7 modern-card overflow-hidden flex flex-col">
-          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+      {/* Priority Work Queue (Trả Lời 3 Câu Hỏi Vận Hành) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Panel 1: Urgent Exceptions Requiring Action */}
+        <div className="modern-card p-6 space-y-4">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100">
             <div>
-              <h3 className="font-bold text-sm text-slate-900">Hàng Đợi Ngoại Lệ Cần Can Thiệp Hôm Nay</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Tự động sắp xếp theo hạn SLA và mức tiền COD ưu tiên</p>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <AlertTriangle className="w-4.5 h-4.5 text-amber-600" />
+                <span>Hàng Đợi Cứu Đơn Cần Can Thiệp Hôm Nay</span>
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">Các đơn giao không thành công sắp chạm hạn chót hãng chuyển hoàn.</p>
             </div>
             <button
               type="button"
               onClick={() => onNavigate('exceptions')}
               className="btn-secondary text-xs"
             >
-              Mở Hộp Việc →
+              Xem Tất Cả ({metrics.openExceptionsCount})
             </button>
           </div>
 
-          <div className="overflow-x-auto flex-1">
-            <table className="modern-table">
-              <thead>
-                <tr>
-                  <th>Mã Vận Đơn</th>
-                  <th>Hãng</th>
-                  <th>Sự Cố Báo</th>
-                  <th className="text-right">Tiền COD</th>
-                  <th>Hạn SLA</th>
-                  <th className="text-right">Thao Tác</th>
-                </tr>
-              </thead>
-              <tbody>
-                {exceptions.slice(0, 5).map((e) => (
-                  <tr key={e.id}>
-                    <td>
-                      <TrackingCode code={e.tracking_code} onClick={() => onNavigate('exceptions')} />
-                    </td>
-                    <td>
-                      <AutomationBadge tier={e.carrier_code === 'GHN' ? 'L2' : 'L1'} carrierCode={e.carrier_code} />
-                    </td>
-                    <td className="font-medium text-slate-800 text-xs truncate max-w-[160px]">
-                      {e.reason || e.carrier_reason || 'Khách không nghe máy'}
-                    </td>
-                    <td className="text-right font-bold text-xs">
-                      <Money amount={e.cod_amount} state="pending" />
-                    </td>
-                    <td>
-                      <span className="badge-warn font-mono text-[10px]">
-                        Còn {e.hours_remaining ?? 4}h
-                      </span>
-                    </td>
-                    <td className="text-right">
-                      <button
-                        type="button"
-                        onClick={() => onNavigate('exceptions')}
-                        className="btn-primary text-[11px] py-1 px-2.5"
-                      >
-                        Cứu đơn
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="divide-y divide-slate-100">
+            {urgentExceptions.map((exc) => (
+              <div key={exc.id} className="py-3 flex items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <TrackingCode code={exc.tracking_code} onClick={() => onNavigate('exceptions')} />
+                    <span className="font-bold text-xs text-slate-700">{exc.carrier_code}</span>
+                    <span className="badge-warn text-xs">Còn {exc.hours_remaining}h</span>
+                  </div>
+                  <div className="text-xs text-slate-600 font-medium">
+                    {exc.carrier_reason || 'Khách không nghe máy (Lần 1)'}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Người nhận: <strong>{exc.recipient_name}</strong> · COD: <Money amount={exc.cod_amount} state="pending" className="inline text-xs" />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onNavigate('exceptions')}
+                  className="btn-primary text-xs shrink-0 py-1.5 px-3"
+                >
+                  Xử Lý Ngay
+                </button>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Right Column (5 cols): 7-Day Rescue Trend */}
-        <div className="lg:col-span-5 modern-card p-5 flex flex-col justify-between space-y-4">
-          <div className="flex justify-between items-start border-b border-slate-100 pb-3">
+        {/* Panel 2: Urgent Discrepancies Requiring Maker-Checker Approval */}
+        <div className="modern-card p-6 space-y-4">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100">
             <div>
-              <h3 className="font-bold text-sm text-slate-900">Hiệu Quả Cứu Đơn 7 Ngày (CN-10)</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Tỷ lệ cứu thành công duy trì &gt; 80%</p>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <DollarSign className="w-4.5 h-4.5 text-rose-600" />
+                <span>Khoản Lệch Tài Chính Chờ Kế Toán Duyệt</span>
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">Phát hiện qua 6 phép dò đối soát tự động so với biểu giá hợp đồng.</p>
             </div>
-            <span className="badge-ok text-xs font-bold">84% Thành công</span>
+            <button
+              type="button"
+              onClick={() => onNavigate('reconciliation')}
+              className="btn-secondary text-xs"
+            >
+              Đối Soát Kỳ Này
+            </button>
           </div>
 
-          <div className="h-[220px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={WEEKLY_TREND} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="rescuedGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="failGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#EF4444" stopOpacity={0.15} />
-                    <stop offset="95%" stopColor="#EF4444" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="#F1F5F9" strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="day" stroke="#94A3B8" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="#94A3B8" fontSize={11} tickLine={false} axisLine={false} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#0F172A', borderRadius: '8px', border: 'none', color: '#FFFFFF', fontSize: '11px' }}
-                />
-                <Area type="monotone" dataKey="failCount" name="Sự cố giao thất bại" stroke="#EF4444" strokeWidth={2} fillOpacity={1} fill="url(#failGrad)" />
-                <Area type="monotone" dataKey="rescuedCount" name="Đơn cứu thành công" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#rescuedGrad)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          <div className="divide-y divide-slate-100">
+            {urgentDiscrepancies.map((disc) => (
+              <div key={disc.id} className="py-3 flex items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <TrackingCode code={disc.tracking_code} onClick={() => onNavigate('reconciliation')} />
+                    <StatusBadge status={disc.type} />
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    {disc.reason}
+                  </div>
+                  <div className="text-xs text-rose-700 font-bold font-mono">
+                    Chênh lệch: <Money amount={disc.discrepancy_amount} state="confirmed" className="inline" />
+                  </div>
+                </div>
 
-          <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
-              <span>Sự cố hãng báo</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-              <span>Cứu thành công (BR-50)</span>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('reconciliation')}
+                  className="btn-secondary text-xs shrink-0 py-1.5 px-3 font-semibold"
+                >
+                  Kiểm Tra
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       </div>
