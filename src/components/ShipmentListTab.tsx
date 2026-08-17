@@ -29,12 +29,14 @@ import {
 interface Props {
   onOpenTrackingModal: (trackingCode: string) => void;
   onNavigateToTab?: (tabId: string) => void;
+  onCreateOrder?: () => void;
   userRole?: string;
 }
 
 export const ShipmentListTab: React.FC<Props> = ({
   onOpenTrackingModal,
   onNavigateToTab,
+  onCreateOrder,
   userRole = 'OWNER',
 }) => {
   const [shipments, setShipments] = useState<UnifiedShipment[]>(MASTER_SHIPMENTS);
@@ -177,6 +179,16 @@ export const ShipmentListTab: React.FC<Props> = ({
           </div>
 
           <div className="flex items-center gap-2 self-stretch md:self-auto">
+            {onCreateOrder && (
+              <button
+                type="button"
+                onClick={onCreateOrder}
+                className="btn-primary text-xs"
+              >
+                <span>+ Tạo Vận Đơn</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => {

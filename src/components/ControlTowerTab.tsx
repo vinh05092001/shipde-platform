@@ -26,9 +26,10 @@ import {
 interface Props {
   role: string;
   onNavigate: (tab: string) => void;
+  onCreateOrder?: () => void;
 }
 
-export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate }) => {
+export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrder }) => {
   const metrics = getUnifiedMetrics();
 
   const urgentExceptions = MASTER_EXCEPTIONS.filter((e) => e.status === 'OPEN').slice(0, 3);
@@ -36,6 +37,28 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate }) => {
 
   return (
     <div className="w-full space-y-6">
+      {/* Operational Header Bar */}
+      <div className="modern-card p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-gradient-to-r from-white via-white to-[#FFF5F0] border-l-4 border-l-[#EA4B12]">
+        <div>
+          <h1 className="text-base font-bold text-slate-900 flex items-center gap-2">
+            <span>Bàn Điều Khiển Vận Hành & Đối Soát Ba Sổ</span>
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Giám sát bưu kiện thời gian thực, xử lý sự cố cứu đơn và đối soát chênh lệch tài chính tự động.
+          </p>
+        </div>
+
+        {onCreateOrder && (
+          <button
+            type="button"
+            onClick={onCreateOrder}
+            className="btn-primary text-xs shrink-0"
+          >
+            <span>+ Tạo Vận Đơn Mới</span>
+          </button>
+        )}
+      </div>
+
       {/* 4 Unified Operational KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Metric 1: Active Shipments */}

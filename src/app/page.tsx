@@ -24,6 +24,7 @@ import { AdminSystemTab } from '@/components/AdminSystemTab';
 import { SettingsWorkspace } from '@/components/SettingsWorkspace';
 import { UnifiedTrackingModal } from '@/components/UnifiedTrackingModal';
 import { UploadStatementModal } from '@/components/UploadStatementModal';
+import { CreateOrderModal } from '@/components/CreateOrderModal';
 
 import {
   Package,
@@ -58,6 +59,7 @@ export default function ShipDeConsoleApp() {
   const [claims, setClaims] = useState<UIClaimItem[]>(MASTER_CLAIMS);
 
   // Modals
+  const [createOrderOpen, setCreateOrderOpen] = useState(false);
   const [uploadStatementOpen, setUploadStatementOpen] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [globalSearchCode, setGlobalSearchCode] = useState('');
@@ -306,6 +308,18 @@ export default function ShipDeConsoleApp() {
                 <span>Đồng bộ POS</span>
               </button>
 
+              {/* Create Shipment / Order CTA */}
+              {(currentRole === 'OWNER' || currentRole === 'OPS_CSKH') && (
+                <button
+                  type="button"
+                  onClick={() => setCreateOrderOpen(true)}
+                  className="btn-primary text-xs shrink-0 py-1.5 px-3"
+                  title="Tạo đơn hàng thủ công và so sánh cước đa hãng"
+                >
+                  <span>+ Tạo Đơn Hàng</span>
+                </button>
+              )}
+
               {/* Settings (Full-Page View) */}
               {currentRole === 'OWNER' && (
                 <button
@@ -431,6 +445,7 @@ export default function ShipDeConsoleApp() {
             <ControlTowerTab
               role={user?.role || 'OWNER'}
               onNavigate={(tab) => setActiveTab(tab)}
+              onCreateOrder={() => setCreateOrderOpen(true)}
             />
           )}
 
@@ -438,6 +453,7 @@ export default function ShipDeConsoleApp() {
             <ShipmentListTab
               onOpenTrackingModal={(code) => setSelectedGlobalTracking(code)}
               onNavigateToTab={(tab) => setActiveTab(tab)}
+              onCreateOrder={() => setCreateOrderOpen(true)}
               userRole={user?.role || 'OWNER'}
             />
           )}
@@ -565,6 +581,16 @@ export default function ShipDeConsoleApp() {
           onActionClaim={() => setActiveTab('claims')}
         />
       )}
+
+      {/* Manual Order Creation & Rate Comparison Modal */}
+      <CreateOrderModal
+        isOpen={createOrderOpen}
+        onClose={() => setCreateOrderOpen(false)}
+        onOrderCreated={(newOrder) => {
+          showToast(`✓ Đã tạo vận đơn mới ${newOrder.tracking_code} (${newOrder.carrier_code}) và đẩy sang hãng thành công.`);
+          setActiveTab('shipments');
+        }}
+      />
     </div>
   );
 }
