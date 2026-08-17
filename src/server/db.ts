@@ -1,0 +1,450 @@
+import {
+  Merchant,
+  User,
+  Role,
+  CarrierAccount,
+  CarrierCode,
+  CarrierCapabilityTier,
+  Order,
+  Shipment,
+  ShipmentStatus,
+  ShipmentEvent,
+  ExceptionCase,
+  ExceptionType,
+  ExceptionCaseStatus,
+  ReturnRecord,
+  CarrierStatement,
+  StatementRow,
+  MatchingStatus,
+  Discrepancy,
+  DiscrepancyType,
+  DiscrepancyResolution,
+  Claim,
+  RateCard,
+} from '@/types/domain';
+import { calculateSHA256 } from '@/adapters/csv.adapter';
+
+// In-Memory Persistent Database Store for Standalone Ship Dễ Platform
+class ShipDeDatabase {
+  private static instance: ShipDeDatabase;
+
+  public merchant: Merchant = {
+    id: 'merc_prod_01',
+    name: 'Thời Trang An An Boutique',
+    business_code: '0318928192',
+    phone: '0901234567',
+    email: 'contact@ananboutique.vn',
+    address: '128 Nguyễn Trãi, Phường 3, Quận 5, TP. Hồ Chí Minh',
+    subscription_plan: 'BUSINESS_CONTROL',
+    status: 'ACTIVE',
+    created_at: new Date('2026-01-01'),
+  };
+
+  public users: User[] = [
+    {
+      id: 'usr_01',
+      merchant_id: 'merc_prod_01',
+      full_name: 'Nguyễn Văn An',
+      email: 'owner@ananboutique.vn',
+      phone: '0901234567',
+      role: Role.OWNER,
+      status: 'ACTIVE',
+      created_at: new Date('2026-01-01'),
+    },
+    {
+      id: 'usr_02',
+      merchant_id: 'merc_prod_01',
+      full_name: 'Trần Thị Hoa',
+      email: 'cskh.hoa@ananboutique.vn',
+      phone: '0912345678',
+      role: Role.OPS_CSKH,
+      status: 'ACTIVE',
+      created_at: new Date('2026-01-10'),
+    },
+    {
+      id: 'usr_03',
+      merchant_id: 'merc_prod_01',
+      full_name: 'Lê Minh Kế Toán',
+      email: 'ketoan@ananboutique.vn',
+      phone: '0988776655',
+      role: Role.ACCOUNTANT,
+      status: 'ACTIVE',
+      created_at: new Date('2026-01-15'),
+    },
+    {
+      id: 'usr_04',
+      merchant_id: 'merc_prod_01',
+      full_name: 'Phạm Văn Kho',
+      email: 'kho.tanbinh@ananboutique.vn',
+      phone: '0933221100',
+      role: Role.WAREHOUSE,
+      status: 'ACTIVE',
+      created_at: new Date('2026-02-01'),
+    },
+  ];
+
+  public deviceSessions = [
+    { id: 'dev_1', user_id: 'usr_02', user_name: 'Trần Thị Hoa (CSKH)', device: 'iPhone 15 Pro · iOS 17.5', last_active: 'Vừa xong', is_revoked: false },
+    { id: 'dev_2', user_id: 'usr_04', user_name: 'Phạm Văn Kho (Thủ kho)', device: 'Samsung Galaxy A54 · Android 14', last_active: '15 phút trước', is_revoked: false },
+  ];
+
+  public carrierAccounts: CarrierAccount[] = [
+    {
+      id: 'acc_ghn_01',
+      merchant_id: 'merc_prod_01',
+      carrier_code: CarrierCode.GHN,
+      account_name: 'GHN Express - Kho Tân Bình',
+      capability_tier: CarrierCapabilityTier.L2_EXECUTE,
+      is_active: true,
+      credentials_masked: 'ghn_token_••••••••••••9842',
+      created_at: new Date('2026-01-05'),
+    },
+    {
+      id: 'acc_ghtk_01',
+      merchant_id: 'merc_prod_01',
+      carrier_code: CarrierCode.GHTK,
+      account_name: 'GHTK - Chi Nhánh HCM',
+      capability_tier: CarrierCapabilityTier.L1_ASSIST,
+      is_active: true,
+      credentials_masked: 'ghtk_token_••••••••••••1102',
+      created_at: new Date('2026-01-05'),
+    },
+  ];
+
+  public rateCards: RateCard[] = [
+    {
+      id: 'rc_ghn_2026',
+      merchant_id: 'merc_prod_01',
+      carrier_account_id: 'acc_ghn_01',
+      version: 1,
+      effective_from: new Date('2026-01-01'),
+      effective_to: null,
+      volumetric_divisor: 5000,
+      cod_payout_sla_days: 3,
+      checksum: 'sha256_rate_card_ghn_01',
+      tiers: [
+        {
+          id: 'tier_ghn_intra',
+          rate_card_id: 'rc_ghn_2026',
+          route_type: 'INTRA_PROVINCE',
+          weight_from_g: 0,
+          weight_to_g: 500,
+          base_fee: 22000,
+          step_fee: 5000,
+          step_weight_g: 500,
+        },
+        {
+          id: 'tier_ghn_inter',
+          rate_card_id: 'rc_ghn_2026',
+          route_type: 'INTER_PROVINCE',
+          weight_from_g: 0,
+          weight_to_g: 500,
+          base_fee: 35000,
+          step_fee: 10000,
+          step_weight_g: 500,
+        },
+      ],
+    },
+  ];
+
+  public orders: Order[] = [
+    {
+      id: 'ord_101',
+      merchant_id: 'merc_prod_01',
+      order_code: 'ORD_ANAN_101',
+      created_at: new Date('2026-08-14T08:00:00Z'),
+      cod_amount: 450000,
+      declared_weight_g: 350,
+      recipient_name: 'Nguyễn Văn Hùng',
+      recipient_phone: '0912345678',
+      recipient_province: 'TP. Hồ Chí Minh',
+      recipient_address: '142 Hai Bà Trưng, Phường Tân Định, Quận 1',
+      item_value: 450000,
+    },
+    {
+      id: 'ord_102',
+      merchant_id: 'merc_prod_01',
+      order_code: 'ORD_ANAN_102',
+      created_at: new Date('2026-08-14T09:30:00Z'),
+      cod_amount: 720000,
+      declared_weight_g: 450,
+      recipient_name: 'Trần Thị Mai',
+      recipient_phone: '0987654321',
+      recipient_province: 'TP. Hồ Chí Minh',
+      recipient_address: '89 Đường 3/2, Phường 11, Quận 10',
+      item_value: 720000,
+    },
+    {
+      id: 'ord_103',
+      merchant_id: 'merc_prod_01',
+      order_code: 'ORD_ANAN_103',
+      created_at: new Date('2026-08-13T14:20:00Z'),
+      cod_amount: 320000,
+      declared_weight_g: 250,
+      recipient_name: 'Lê Hoàng Long',
+      recipient_phone: '0933445566',
+      recipient_province: 'Đồng Nai',
+      recipient_address: 'Số 15 QL1A, TP. Biên Hòa',
+      item_value: 320000,
+    },
+    {
+      id: 'ord_104',
+      merchant_id: 'merc_prod_01',
+      order_code: 'ORD_ANAN_104',
+      created_at: new Date('2026-08-12T10:15:00Z'),
+      cod_amount: 580000,
+      declared_weight_g: 500,
+      recipient_name: 'Phạm Thị Lan',
+      recipient_phone: '0944556677',
+      recipient_province: 'Bình Dương',
+      recipient_address: '22 Đại Lộ Bình Dương, TP. Thủ Dầu Một',
+      item_value: 580000,
+    },
+    {
+      id: 'ord_105',
+      merchant_id: 'merc_prod_01',
+      order_code: 'ORD_ANAN_105',
+      created_at: new Date('2026-08-11T16:45:00Z'),
+      cod_amount: 890000,
+      declared_weight_g: 600,
+      recipient_name: 'Vũ Đức Nam',
+      recipient_phone: '0977889900',
+      recipient_province: 'Hà Nội',
+      recipient_address: '77 Phố Huế, Quận Hai Bà Trưng',
+      item_value: 890000,
+    },
+  ];
+
+  public shipments: Shipment[] = [
+    {
+      id: 'ship_01',
+      merchant_id: 'merc_prod_01',
+      order_id: 'ord_101',
+      order_code: 'ORD_ANAN_101',
+      carrier_code: CarrierCode.GHN,
+      carrier_account_id: 'acc_ghn_01',
+      tracking_code: 'GHN88291042',
+      current_status: ShipmentStatus.OUT_FOR_DELIVERY,
+      declared_weight_g: 350,
+      quoted_fee: 22000,
+      cod_amount: 450000,
+      created_at: new Date('2026-08-14T08:30:00Z'),
+      version: 1,
+    },
+    {
+      id: 'ship_02',
+      merchant_id: 'merc_prod_01',
+      order_id: 'ord_102',
+      order_code: 'ORD_ANAN_102',
+      carrier_code: CarrierCode.GHTK,
+      carrier_account_id: 'acc_ghtk_01',
+      tracking_code: 'GHTK77129031',
+      current_status: ShipmentStatus.OUT_FOR_DELIVERY,
+      declared_weight_g: 450,
+      quoted_fee: 22000,
+      cod_amount: 720000,
+      created_at: new Date('2026-08-14T10:00:00Z'),
+      version: 1,
+    },
+    {
+      id: 'ship_03',
+      merchant_id: 'merc_prod_01',
+      order_id: 'ord_103',
+      order_code: 'ORD_ANAN_103',
+      carrier_code: CarrierCode.GHN,
+      carrier_account_id: 'acc_ghn_01',
+      tracking_code: 'GHN88290500',
+      current_status: ShipmentStatus.DELIVERED,
+      declared_weight_g: 250,
+      charged_weight_g: 800,
+      quoted_fee: 22000,
+      charged_fee: 29000,
+      cod_amount: 320000,
+      cod_collected: 320000,
+      delivered_at: new Date('2026-08-15T14:00:00Z'),
+      created_at: new Date('2026-08-13T15:00:00Z'),
+      version: 1,
+      last_modified_by: 'usr_02', // CSKH Hoa đã thao tác
+    },
+    {
+      id: 'ship_04',
+      merchant_id: 'merc_prod_01',
+      order_id: 'ord_104',
+      order_code: 'ORD_ANAN_104',
+      carrier_code: CarrierCode.GHN,
+      carrier_account_id: 'acc_ghn_01',
+      tracking_code: 'GHN88291255',
+      current_status: ShipmentStatus.DELIVERED,
+      declared_weight_g: 500,
+      quoted_fee: 22000,
+      cod_amount: 580000,
+      cod_collected: 580000,
+      delivered_at: new Date('2026-08-15T16:00:00Z'),
+      created_at: new Date('2026-08-12T11:00:00Z'),
+      version: 1,
+    },
+    {
+      id: 'ship_05',
+      merchant_id: 'merc_prod_01',
+      order_id: 'ord_105',
+      order_code: 'ORD_ANAN_105',
+      carrier_code: CarrierCode.GHTK,
+      carrier_account_id: 'acc_ghtk_01',
+      tracking_code: 'GHTK77129501',
+      current_status: ShipmentStatus.RETURNING,
+      declared_weight_g: 600,
+      quoted_fee: 35000,
+      cod_amount: 890000,
+      created_at: new Date('2026-08-11T17:00:00Z'),
+      version: 1,
+    },
+  ];
+
+  public shipmentEvents: ShipmentEvent[] = [
+    {
+      id: 'evt_01',
+      shipment_id: 'ship_01',
+      raw_status: 'delivery_fail',
+      normalized_status: ShipmentStatus.OUT_FOR_DELIVERY,
+      occurred_at: new Date('2026-08-16T08:30:00Z'),
+      received_at: new Date('2026-08-16T08:31:00Z'),
+      source: 'WEBHOOK',
+      raw_payload: { reason: 'Khách không nghe máy lần 1', shipper_name: 'Lê Hoàng Minh' },
+    },
+    {
+      id: 'evt_02',
+      shipment_id: 'ship_02',
+      raw_status: 'delivery_fail',
+      normalized_status: ShipmentStatus.OUT_FOR_DELIVERY,
+      occurred_at: new Date('2026-08-16T09:15:00Z'),
+      received_at: new Date('2026-08-16T09:16:00Z'),
+      source: 'WEBHOOK',
+      raw_payload: { reason: 'Khách đổi địa chỉ giao hàng', shipper_name: 'Nguyễn Văn Tuấn' },
+    },
+  ];
+
+  public exceptionCases: ExceptionCase[] = [
+    {
+      id: 'exc_01',
+      merchant_id: 'merc_prod_01',
+      shipment_id: 'ship_01',
+      tracking_code: 'GHN88291042',
+      exception_type: ExceptionType.DELIVERY_FAIL,
+      status: ExceptionCaseStatus.OPEN,
+      deadline_at: new Date('2026-08-16T20:30:00Z'), // 12h SLA
+      priority_score: 85,
+      carrier_raw_reason: 'Khách không nghe máy lần 1',
+      standard_reason: 'CUSTOMER_UNREACHABLE',
+      created_at: new Date('2026-08-16T08:31:00Z'),
+      version: 1,
+      can_reattempt: true,
+    },
+    {
+      id: 'exc_02',
+      merchant_id: 'merc_prod_01',
+      shipment_id: 'ship_02',
+      tracking_code: 'GHTK77129031',
+      exception_type: ExceptionType.DELIVERY_FAIL,
+      status: ExceptionCaseStatus.OPEN,
+      deadline_at: new Date('2026-08-16T21:15:00Z'),
+      priority_score: 92,
+      carrier_raw_reason: 'Sai số nhà - Khách đổi địa chỉ',
+      standard_reason: 'WRONG_ADDRESS',
+      created_at: new Date('2026-08-16T09:16:00Z'),
+      version: 1,
+      can_reattempt: true,
+    },
+  ];
+
+  public returnRecords: ReturnRecord[] = [
+    {
+      id: 'ret_01',
+      merchant_id: 'merc_prod_01',
+      shipment_id: 'ship_05',
+      tracking_code: 'GHTK77129501',
+      warehouse_id: 'wh_tanbinh',
+      condition: 'intact',
+      scanned_at: new Date('2026-08-16T14:30:00Z'),
+      scanned_by: 'usr_04',
+      evidence_urls: [],
+    },
+  ];
+
+  public discrepancies: Discrepancy[] = [
+    {
+      id: 'disc_01',
+      merchant_id: 'merc_prod_01',
+      shipment_id: 'ship_03',
+      tracking_code: 'GHN88290500',
+      type: DiscrepancyType.D1_WEIGHT,
+      amount: 7000,
+      status: DiscrepancyResolution.OPEN,
+      reason: 'Hãng tính 800g, shop khai báo 250g',
+      version: 1,
+      created_at: new Date('2026-08-16T07:00:00Z'),
+    },
+    {
+      id: 'disc_02',
+      merchant_id: 'merc_prod_01',
+      shipment_id: 'ship_03',
+      tracking_code: 'GHN88290500',
+      type: DiscrepancyType.D4_DUPLICATE_DEDUCTION,
+      amount: 22000,
+      status: DiscrepancyResolution.OPEN,
+      reason: 'Dòng trừ phí vận chuyển bị lặp lại lần thứ 2 trong cùng sao kê',
+      version: 1,
+      created_at: new Date('2026-08-16T07:00:00Z'),
+    },
+  ];
+
+  public claims: Claim[] = [
+    {
+      id: 'clm_01',
+      merchant_id: 'merc_prod_01',
+      shipment_id: 'ship_03',
+      discrepancy_id: 'disc_01',
+      claim_type: 'OVERCHARGED_WEIGHT',
+      carrier_ticket: 'GHN_TCK_99182',
+      requested_amount: 29000,
+      accepted_amount: 29000,
+      recovered_amount: 29000,
+      status: 'CLOSED',
+      deadline_at: new Date('2026-08-20T00:00:00Z'),
+      created_at: new Date('2026-08-10T00:00:00Z'),
+      updated_at: new Date('2026-08-16T00:00:00Z'),
+    },
+    {
+      id: 'clm_02',
+      merchant_id: 'merc_prod_01',
+      shipment_id: 'ship_05',
+      claim_type: 'DAMAGED_RETURN',
+      carrier_ticket: 'GHTK_TCK_44102',
+      requested_amount: 350000,
+      accepted_amount: 350000,
+      recovered_amount: 0, // Mới chấp thuận, chưa về tiền -> Sổ 1 pending
+      status: 'ACCEPTED',
+      deadline_at: new Date(Date.now() + 47 * 3600 * 1000), // Còn 47h -> Cảnh báo đỏ BR-37
+      created_at: new Date('2026-08-15T00:00:00Z'),
+      updated_at: new Date('2026-08-16T00:00:00Z'),
+    },
+  ];
+
+  public notificationMatrix = [
+    { event: 'Giao hàng thất bại (Delivery Fail)', ownerPush: true, opsPush: true, accountantPush: false, email: false, urgent: true },
+    { event: 'Phát hiện lệch cước > 50.000 đ', ownerPush: false, opsPush: false, accountantPush: true, email: true, urgent: false },
+    { event: 'COD quá hạn thanh toán theo SLA', ownerPush: true, opsPush: false, accountantPush: true, email: true, urgent: true },
+    { event: 'Hồ sơ khiếu nại còn < 48h tới hạn', ownerPush: true, opsPush: true, accountantPush: true, email: true, urgent: true },
+    { event: 'Kiện hàng hoàn về kho bất thường (hư/thiếu)', ownerPush: false, opsPush: true, accountantPush: false, email: false, urgent: false },
+  ];
+
+  public digestWindowMinutes = 15;
+
+  public static getInstance(): ShipDeDatabase {
+    if (!ShipDeDatabase.instance) {
+      ShipDeDatabase.instance = new ShipDeDatabase();
+    }
+    return ShipDeDatabase.instance;
+  }
+}
+
+export const db = ShipDeDatabase.getInstance();

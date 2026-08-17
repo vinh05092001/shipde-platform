@@ -1,0 +1,33 @@
+{
+  "name": "shipde-platform",
+  "version": "3.3.0",
+  "description": "Ship Dễ (shipde.net) - Nền tảng điều hành & kiểm soát vận chuyển cho Shop Online",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
+    "concierge:audit": "tsx scripts/concierge-audit.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.2",
+    "framer-motion": "^12.35.0",
+    "lucide-react": "^0.577.0",
+    "next": "16.1.6",
+    "prisma": "^6.19.2",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "recharts": "^3.8.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}
