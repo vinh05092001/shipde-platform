@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shipde.local/schemas/events/order-status.json",
+  "title": "Canonical Shipment Status Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "tenant_id",
+    "shipment_id",
+    "carrier_account_id",
+    "raw_status",
+    "occurred_at",
+    "received_at",
+    "correlation_id"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "const": "shipment.status_received" },
+    "tenant_id": { "type": "string", "format": "uuid" },
+    "shipment_id": { "type": "string", "format": "uuid" },
+    "carrier_account_id": { "type": "string", "format": "uuid" },
+    "provider_event_key": { "type": ["string", "null"] },
+    "raw_status": { "type": "string", "minLength": 1 },
+    "canonical_status": {
+      "type": ["string", "null"],
+      "enum": [
+        "READY_TO_PICK",
+        "PICKED",
+        "IN_TRANSIT",
+        "DELIVERY_FAILED",
+        "DELIVERED",
+        "RETURNING",
+        "RETURNED",
+        "CANCELLED",
+        null
+      ]
+    },
+    "reason_code": { "type": ["string", "null"] },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "received_at": { "type": "string", "format": "date-time" },
+    "correlation_id": { "type": "string", "minLength": 1 },
+    "raw_payload_ref": { "type": ["string", "null"] }
+  }
+}
+

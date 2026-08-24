@@ -1,0 +1,168 @@
+# State Machines
+
+## User invite
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> PENDING
+  PENDING --> ACCEPTED
+  PENDING --> EXPIRED
+  PENDING --> CANCELLED
+  EXPIRED --> PENDING: resend
+\`\`\`
+
+## Carrier account
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> DRAFT
+  DRAFT --> TESTING
+  TESTING --> ACTIVE
+  TESTING --> INVALID
+  ACTIVE --> DEGRADED
+  DEGRADED --> ACTIVE
+  ACTIVE --> EXPIRED
+  EXPIRED --> TESTING: rotate
+  ACTIVE --> REVOKED
+\`\`\`
+
+## Quote
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> REQUESTED
+  REQUESTED --> AVAILABLE
+  REQUESTED --> UNSUPPORTED
+  REQUESTED --> UNKNOWN_ERROR
+  AVAILABLE --> SELECTED
+  AVAILABLE --> EXPIRED
+  SELECTED --> INVALIDATED: input changes
+\`\`\`
+
+## Shipment
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> DRAFT
+  DRAFT --> CREATING
+  CREATING --> CREATED
+  CREATING --> CREATE_FAILED
+  CREATING --> CREATE_OUTCOME_UNKNOWN
+  CREATE_OUTCOME_UNKNOWN --> CREATED: reconcile found
+  CREATE_OUTCOME_UNKNOWN --> CREATING: safe retry
+  CREATED --> READY_TO_PICK
+  READY_TO_PICK --> PICKED
+  READY_TO_PICK --> CANCELLED
+  PICKED --> IN_TRANSIT
+  IN_TRANSIT --> DELIVERY_FAILED
+  DELIVERY_FAILED --> IN_TRANSIT: redelivery
+  DELIVERY_FAILED --> RETURNING
+  IN_TRANSIT --> DELIVERED
+  RETURNING --> RETURNED
+\`\`\`
+
+Carrier raw states never directly replace canonical history; mapping derives canonical transitions.
+
+## Operational exception
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> OPEN
+  OPEN --> ACKNOWLEDGED
+  ACKNOWLEDGED --> IN_PROGRESS
+  IN_PROGRESS --> SNOOZED
+  SNOOZED --> IN_PROGRESS
+  IN_PROGRESS --> RESOLVED
+  RESOLVED --> REOPENED
+  REOPENED --> IN_PROGRESS
+\`\`\`
+
+## Return receipt
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> EXPECTED
+  EXPECTED --> SCANNED
+  SCANNED --> INSPECTING
+  INSPECTING --> RECEIVED_OK
+  INSPECTING --> RECEIVED_WITH_ISSUE
+\`\`\`
+
+## Import and audit run
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> UPLOADED
+  UPLOADED --> VALIDATING
+  VALIDATING --> BLOCKED
+  VALIDATING --> STAGED
+  STAGED --> PROMOTED
+  PROMOTED --> SUPERSEDED: new revision
+\`\`\`
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> QUEUED
+  QUEUED --> RUNNING
+  RUNNING --> COMPLETED
+  RUNNING --> FAILED
+  COMPLETED --> OFFICIAL
+\`\`\`
+
+## Processing status
+
+Exactly one per waybill snapshot:
+
+- MATCHED
+- SOURCE_ONLY
+- CARRIER_ONLY
+- AMBIGUOUS
+- DATA_INCOMPLETE
+
+Findings are separate records and do not form this state machine.
+
+## Settlement batch
+
+Two independent dimensions:
+
+Carrier transfer:
+
+- NOT_REPORTED
+- REPORTED
+
+Bank reconciliation:
+
+- NO_DATA
+- UNMATCHED
+- MATCHED_FULL
+- RECEIVED_SHORT
+- RECEIVED_OVER
+
+## Discrepancy case
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> SUSPECTED
+  SUSPECTED --> NEEDS_DATA
+  NEEDS_DATA --> SUSPECTED
+  SUSPECTED --> INTERNALLY_VERIFIED
+  SUSPECTED --> DISMISSED
+  INTERNALLY_VERIFIED --> READY_TO_SUBMIT
+  READY_TO_SUBMIT --> SUBMITTED
+  SUBMITTED --> CARRIER_ACCEPTED_FULL
+  SUBMITTED --> CARRIER_ACCEPTED_PARTIAL
+  SUBMITTED --> CARRIER_REJECTED
+  CARRIER_ACCEPTED_PARTIAL --> SUPPLEMENTING
+  CARRIER_REJECTED --> SUPPLEMENTING
+  SUPPLEMENTING --> SUBMITTED
+  CARRIER_ACCEPTED_FULL --> ACCEPTED_UNPAID
+  CARRIER_ACCEPTED_PARTIAL --> ACCEPTED_UNPAID
+  ACCEPTED_UNPAID --> PARTIALLY_RECOVERED
+  PARTIALLY_RECOVERED --> RECOVERED_FULL
+  ACCEPTED_UNPAID --> RECOVERED_FULL
+  RECOVERED_FULL --> CLOSED_RECOVERED
+  CARRIER_REJECTED --> CLOSED_UNRECOVERED
+\`\`\`
+
+Carry-forward is a case-period link, not a case state.
+

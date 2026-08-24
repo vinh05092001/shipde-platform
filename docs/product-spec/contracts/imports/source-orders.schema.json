@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shipde.local/schemas/imports/source-orders.json",
+  "title": "Canonical Source Order Import Row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source_order_code",
+    "warehouse_code",
+    "expected_cod_vnd",
+    "delivery_status",
+    "status_as_of",
+    "declared_weight_gram",
+    "service_code",
+    "fee_payer"
+  ],
+  "properties": {
+    "carrier_code": { "type": ["string", "null"] },
+    "carrier_account_code": { "type": ["string", "null"] },
+    "waybill": { "type": ["string", "null"] },
+    "source_order_code": { "type": "string", "minLength": 1 },
+    "warehouse_code": { "type": "string", "minLength": 1 },
+    "expected_cod_vnd": { "type": "integer", "minimum": 0 },
+    "delivery_status": { "type": "string" },
+    "status_source": { "type": ["string", "null"] },
+    "status_as_of": { "type": "string", "format": "date-time" },
+    "created_at": { "type": ["string", "null"], "format": "date-time" },
+    "handover_at": { "type": ["string", "null"], "format": "date-time" },
+    "delivered_at": { "type": ["string", "null"], "format": "date-time" },
+    "declared_weight_gram": { "type": "integer", "minimum": 1 },
+    "length_cm": { "type": ["integer", "null"], "minimum": 1 },
+    "width_cm": { "type": ["integer", "null"], "minimum": 1 },
+    "height_cm": { "type": ["integer", "null"], "minimum": 1 },
+    "service_code": { "type": "string" },
+    "route_zone": { "type": ["string", "null"] },
+    "fee_payer": { "type": "string", "enum": ["SHOP", "RECIPIENT", "OTHER"] },
+    "declared_value_vnd": { "type": "integer", "minimum": 0, "default": 0 },
+    "return_status": { "type": ["string", "null"] }
+  }
+}
+

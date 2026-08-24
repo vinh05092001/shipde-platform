@@ -1,0 +1,262 @@
+Project shipde {
+  database_type: "PostgreSQL"
+  Note: "Conceptual baseline; migrations are generated during implementation."
+}
+
+Table tenants {
+  id uuid [pk]
+  name varchar [not null]
+  status varchar [not null]
+  created_at timestamptz [not null]
+}
+
+Table users {
+  id uuid [pk]
+  email varchar
+  phone varchar
+  status varchar [not null]
+  created_at timestamptz [not null]
+}
+
+Table memberships {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  user_id uuid [not null, ref: > users.id]
+  scope_json jsonb [not null]
+  status varchar [not null]
+  indexes {
+    (tenant_id, user_id) [unique]
+  }
+}
+
+Table shops {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  name varchar [not null]
+  legal_name varchar
+  tax_code varchar
+  created_at timestamptz [not null]
+}
+
+Table warehouses {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  shop_id uuid [not null, ref: > shops.id]
+  name varchar [not null]
+  address_json jsonb [not null]
+  return_address_json jsonb
+  status varchar [not null]
+}
+
+Table carrier_accounts {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  shop_id uuid [not null, ref: > shops.id]
+  carrier_code varchar [not null]
+  alias varchar [not null]
+  external_account_ref varchar
+  permission_profile varchar [not null]
+  status varchar [not null]
+  indexes {
+    (tenant_id, carrier_code, alias) [unique]
+  }
+}
+
+Table source_orders {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  warehouse_id uuid [not null, ref: > warehouses.id]
+  source_system varchar [not null]
+  source_order_code varchar [not null]
+  expected_cod_vnd bigint [not null]
+  status varchar [not null]
+  status_as_of timestamptz
+  recipient_json jsonb [not null]
+  address_json jsonb [not null]
+  created_at timestamptz [not null]
+  indexes {
+    (tenant_id, source_system, source_order_code) [unique]
+  }
+}
+
+Table parcels {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  source_order_id uuid [not null, ref: > source_orders.id]
+  sequence_no int [not null]
+  weight_gram int [not null]
+  length_cm int
+  width_cm int
+  height_cm int
+  declared_value_vnd bigint [not null]
+}
+
+Table quote_requests {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  source_order_id uuid [not null, ref: > source_orders.id]
+  input_hash varchar [not null]
+  requested_at timestamptz [not null]
+}
+
+Table carrier_quotes {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  quote_request_id uuid [not null, ref: > quote_requests.id]
+  carrier_account_id uuid [not null, ref: > carrier_accounts.id]
+  availability varchar [not null]
+  service_code varchar
+  total_fee_vnd bigint
+  components_json jsonb [not null]
+  expires_at timestamptz
+  raw_response_ref varchar [not null]
+}
+
+Table shipments {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  source_order_id uuid [not null, ref: > source_orders.id]
+  carrier_account_id uuid [not null, ref: > carrier_accounts.id]
+  selected_quote_id uuid [ref: > carrier_quotes.id]
+  waybill varchar
+  normalized_waybill varchar
+  canonical_status varchar [not null]
+  created_at timestamptz [not null]
+  indexes {
+    (carrier_account_id, normalized_waybill) [unique]
+  }
+}
+
+Table shipment_commands {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  shipment_id uuid [ref: > shipments.id]
+  command_type varchar [not null]
+  idempotency_key varchar [not null]
+  outcome varchar [not null]
+  correlation_id varchar [not null]
+  raw_request_ref varchar
+  raw_response_ref varchar
+  created_at timestamptz [not null]
+  indexes {
+    (tenant_id, command_type, idempotency_key) [unique]
+  }
+}
+
+Table tracking_events {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  shipment_id uuid [not null, ref: > shipments.id]
+  provider_event_key varchar
+  raw_status varchar [not null]
+  canonical_status varchar
+  occurred_at timestamptz [not null]
+  received_at timestamptz [not null]
+  raw_payload_ref varchar [not null]
+}
+
+Table rate_contract_versions {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  carrier_account_id uuid [not null, ref: > carrier_accounts.id]
+  version varchar [not null]
+  effective_from date [not null]
+  effective_to date
+  approval_status varchar [not null]
+  author_id uuid [not null, ref: > users.id]
+  reviewer_id uuid [ref: > users.id]
+}
+
+Table audit_periods {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  carrier_account_id uuid [not null, ref: > carrier_accounts.id]
+  period_start date [not null]
+  period_end date [not null]
+  status varchar [not null]
+}
+
+Table audit_runs {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  audit_period_id uuid [not null, ref: > audit_periods.id]
+  input_snapshot_hash varchar [not null]
+  status varchar [not null]
+  created_at timestamptz [not null]
+}
+
+Table processing_results {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  audit_run_id uuid [not null, ref: > audit_runs.id]
+  source_order_id uuid [ref: > source_orders.id]
+  shipment_id uuid [ref: > shipments.id]
+  processing_status varchar [not null]
+  explanation_json jsonb [not null]
+}
+
+Table findings {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  processing_result_id uuid [not null, ref: > processing_results.id]
+  finding_type varchar [not null]
+  suspected_amount_vnd bigint [not null]
+  evidence_json jsonb [not null]
+}
+
+Table settlement_batches {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  carrier_account_id uuid [not null, ref: > carrier_accounts.id]
+  external_batch_ref varchar [not null]
+  carrier_transfer_status varchar [not null]
+  bank_status varchar [not null]
+  carrier_reported_amount_vnd bigint [not null]
+}
+
+Table bank_transactions {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  external_transaction_id varchar [not null]
+  posted_at timestamptz [not null]
+  amount_vnd bigint [not null]
+  direction varchar [not null]
+  transfer_reference varchar
+  indexes {
+    (tenant_id, external_transaction_id) [unique]
+  }
+}
+
+Table batch_bank_allocations {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  settlement_batch_id uuid [not null, ref: > settlement_batches.id]
+  bank_transaction_id uuid [not null, ref: > bank_transactions.id]
+  allocated_amount_vnd bigint [not null]
+  confirmed_by uuid [ref: > users.id]
+}
+
+Table discrepancy_cases {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  finding_id uuid [not null, ref: > findings.id]
+  status varchar [not null]
+  suspected_vnd bigint [not null]
+  internally_verified_vnd bigint [not null]
+  carrier_accepted_vnd bigint [not null]
+  received_vnd bigint [not null]
+  owner_id uuid [ref: > users.id]
+}
+
+Table audit_events {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > tenants.id]
+  actor_id uuid [ref: > users.id]
+  action varchar [not null]
+  resource_type varchar [not null]
+  resource_id uuid [not null]
+  correlation_id varchar [not null]
+  metadata_json jsonb [not null]
+  occurred_at timestamptz [not null]
+}
+

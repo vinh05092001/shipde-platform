@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shipde.local/schemas/imports/carrier-statement.json",
+  "title": "Canonical Carrier Statement Row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "carrier_code",
+    "carrier_account_code",
+    "waybill",
+    "batch_reference",
+    "carrier_cod_vnd",
+    "carrier_weight_gram",
+    "fee_components"
+  ],
+  "properties": {
+    "carrier_code": { "type": "string" },
+    "carrier_account_code": { "type": "string" },
+    "waybill": { "type": "string", "minLength": 1 },
+    "source_order_code": { "type": ["string", "null"] },
+    "batch_reference": { "type": "string", "minLength": 1 },
+    "carrier_cod_vnd": { "type": "integer", "minimum": 0 },
+    "carrier_weight_gram": { "type": "integer", "minimum": 0 },
+    "fee_components": {
+      "type": "object",
+      "additionalProperties": { "type": "integer" }
+    },
+    "batch_closed_at": { "type": ["string", "null"], "format": "date-time" },
+    "carrier_reported_transfer_at": { "type": ["string", "null"], "format": "date-time" },
+    "line_type": { "type": "string", "enum": ["CHARGE", "ADJUSTMENT", "REVERSAL"] }
+  }
+}
+

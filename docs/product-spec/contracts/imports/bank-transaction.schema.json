@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shipde.local/schemas/imports/bank-transaction.json",
+  "title": "Canonical Bank Transaction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["external_transaction_id", "posted_at", "amount_vnd", "direction"],
+  "properties": {
+    "external_transaction_id": { "type": "string", "minLength": 1 },
+    "transfer_reference": { "type": ["string", "null"] },
+    "posted_at": { "type": "string", "format": "date-time" },
+    "amount_vnd": { "type": "integer", "minimum": 1 },
+    "direction": { "type": "string", "enum": ["CREDIT", "DEBIT"] },
+    "counterparty_name_masked": { "type": ["string", "null"] }
+  }
+}
+

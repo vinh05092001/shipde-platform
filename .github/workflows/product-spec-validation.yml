@@ -1,0 +1,23 @@
+name: Validate product specification
+
+on:
+  pull_request:
+    paths:
+      - "docs/product-spec/**"
+      - ".github/workflows/product-spec-validation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/product-spec/**"
+      - ".github/workflows/product-spec-validation.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate documentation and contracts
+        run: cd docs/product-spec && python3 scripts/validate_docs.py

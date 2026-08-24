@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shipde.local/schemas/events/carrier-webhook.json",
+  "title": "Carrier Webhook Ingress Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["carrier_code", "carrier_account_id", "received_at", "body_base64", "body_sha256"],
+  "properties": {
+    "carrier_code": { "type": "string" },
+    "carrier_account_id": { "type": "string", "format": "uuid" },
+    "provider_event_key": { "type": ["string", "null"] },
+    "received_at": { "type": "string", "format": "date-time" },
+    "verification_status": {
+      "type": "string",
+      "enum": ["VERIFIED", "FAILED", "UNAVAILABLE"]
+    },
+    "headers_sanitized": { "type": "object" },
+    "body_base64": { "type": "string", "contentEncoding": "base64" },
+    "body_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}
+

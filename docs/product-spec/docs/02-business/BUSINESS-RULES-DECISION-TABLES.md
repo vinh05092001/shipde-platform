@@ -1,0 +1,116 @@
+# Business Rules and Decision Tables
+
+## Address and availability
+
+- BR-ADR-01: Canonical administrative address must be confirmed when normalization has multiple candidates.
+- BR-AVL-01: Carrier response AVAILABLE is valid only for the exact account, origin, destination, parcel, service and COD inputs.
+- BR-AVL-02: Timeout, authentication error and provider outage produce UNKNOWN_ERROR, never UNSUPPORTED.
+- BR-AVL-03: An automatic routing policy may select only AVAILABLE and unexpired options.
+
+### Serviceability decision
+
+| Carrier response | Input valid | Result | User action |
+|---|---:|---|---|
+| Supported services returned | Yes | AVAILABLE | Quote |
+| Explicit route/parcel rejection | Yes | UNSUPPORTED | Show reason/edit |
+| Timeout/5xx | Yes | UNKNOWN_ERROR | Retry/manual |
+| Authentication/permission error | Yes | ACCOUNT_ACTION_REQUIRED | Fix connection |
+| Input invalid | No | INPUT_REQUIRED | Correct fields |
+
+## Quote and recommendation
+
+- BR-QTE-01: Quote components are normalized but raw response remains immutable.
+- BR-QTE-02: A changed price-affecting input invalidates existing quotes.
+- BR-QTE-03: A selected expired quote must be refreshed before create.
+- BR-SEL-01: Cheapest uses total payable cost, not base fee alone.
+- BR-SEL-02: Recommendation score and inputs are stored and explainable.
+- BR-SEL-03: Historical performance may influence ranking only after minimum sample/configuration; it cannot create availability.
+
+## Shipment commands
+
+- BR-IDEM-01: Create idempotency key is tenant + source order + attempt lineage.
+- BR-IDEM-02: A retry after timeout must first query remote state using client order reference.
+- BR-SHP-01: Update/cancel/switch actions are constrained by canonical and carrier-specific status.
+- BR-SHP-02: A price-affecting update triggers serviceability/requote and requires confirmation.
+- BR-LBL-01: Cancel/switch invalidates prior label for operational use.
+
+### Create command decision
+
+| Local command | Carrier response | Remote lookup | Next action |
+|---|---|---|---|
+| New | Success with waybill | Not needed | Confirm created |
+| New | Explicit business error | Not needed | Fail with action |
+| New | Timeout/connection loss | Found by client reference | Confirm created |
+| New | Timeout/connection loss | Not found after bounded reconciliation window | Retry same idempotency lineage |
+| Existing completed | Any duplicate request | Existing waybill | Return existing result |
+| Unknown beyond policy | Unknown | Unknown | Manual reconciliation; no blind retry |
+
+## Tracking and exceptions
+
+- BR-TRK-01: Raw event ledger is append-only.
+- BR-TRK-02: Duplicate provider event does not create a second domain transition.
+- BR-TRK-03: Unknown carrier status remains raw and enters mapping work queue.
+- BR-EXC-01: Exception priority considers COD, age, attempts, SLA and return risk.
+- BR-EXC-02: Redelivery requires action permission, confirmation/policy and idempotency.
+
+## Rate and audit
+
+- BR-RATE-01: Only approved effective rules can declare a carrier charge wrong.
+- BR-RATE-02: Unapproved/ambiguous rules produce suspected or data-incomplete results.
+- BR-AUD-01: Compare each fee component; matching totals do not hide offsetting component errors.
+- BR-AUD-02: Missing data affects only checks requiring that data.
+- BR-AUD-03: One waybill has exactly one processing status and zero-to-many findings.
+- BR-AUD-04: Carrier weight greater than shop weight is suspected weight; rate discrepancy uses carrier weight and still finds incorrect charge.
+- BR-AUD-05: Late-delivery fee waiver is only suspected until policy and causal exclusions are verified.
+
+## Missing statement classification
+
+Milestones are predicted from Settlement Policy:
+
+- A: expected eligibility.
+- B: next expected batch close.
+- C: expected carrier transfer.
+
+| Condition | Classification |
+|---|---|
+| Before A | NOT_ELIGIBLE |
+| A ≤ now < B | ELIGIBLE_WAITING_BATCH |
+| B ≤ now < C | BATCH_CLOSED_WAITING_TRANSFER |
+| now ≥ C, no statement line, no valid exclusion | OVERDUE_MISSING_COD_SUSPECTED |
+| Account-level threshold/carry rule proves exclusion | VALID_EXCLUSION |
+| Any required milestone cannot be calculated | DATA_INCOMPLETE |
+
+BR-MIS-01: Minimum remittance threshold is evaluated at account/batch aggregate plus opening carry-forward, never each waybill independently.
+
+## Batch and bank
+
+- BR-BAT-01: Carrier transfer status and bank reconciliation status are independent.
+- BR-BNK-01: Exact batch reference may auto-match; amount/date/counterparty alone is suggestion-only.
+- BR-BNK-02: Many-to-many links require allocated amount.
+- BR-BNK-03: Sum allocated from a transaction cannot exceed its amount.
+- BR-BNK-04: Actually received/recovered amount requires bank/payment evidence.
+
+## Cases and claims
+
+- BR-CAS-01: Each finding has a separate case unless an explicit merge rule is later approved.
+- BR-CAS-02: Suspected, internally verified, carrier accepted and actually received values remain separate.
+- BR-CAS-03: Carry-forward is independent of case status.
+- BR-CLM-01: Claim deadline uses an effective, sourced policy and correct trigger event; legal periods are not hardcoded without current verification.
+- BR-CLM-02: Automatic submission requires shop opt-in, eligible claim type, verified rules, complete evidence, monetary limit, unexpired deadline and idempotency.
+
+### Claim submission decision
+
+| Complete evidence | Policy verified | Within deadline | Auto enabled/limit | Result |
+|---:|---:|---:|---:|---|
+| No | Any | Any | Any | NEEDS_EVIDENCE |
+| Yes | No | Any | Any | MANUAL_REVIEW |
+| Yes | Yes | No | Any | EXPIRED_DO_NOT_PROMISE_RECOVERY |
+| Yes | Yes | Yes | No | READY_FOR_CONFIRMATION |
+| Yes | Yes | Yes | Yes | AUTO_SUBMIT_ELIGIBLE |
+
+## Billing
+
+- BR-BIL-01: Bill once at first conclusive audit using tenant + carrier account + waybill.
+- BR-BIL-02: No billing for not-eligible or data-incomplete.
+- BR-BIL-03: Rerun, revision, carry-forward and claim follow-up do not rebill.
+

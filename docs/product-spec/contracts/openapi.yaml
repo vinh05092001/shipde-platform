@@ -1,0 +1,563 @@
+openapi: 3.1.0
+info:
+  title: Ship Dễ Internal API
+  version: 1.0.0
+  description: Baseline frontend/backend contract. Extend without changing documented semantics.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+  - name: Organization
+  - name: Carriers
+  - name: Orders
+  - name: Shipping
+  - name: Tracking
+  - name: Reconciliation
+  - name: Claims
+paths:
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authenticated or MFA challenge
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+  /me:
+    get:
+      tags: [Auth]
+      operationId: getMe
+      responses:
+        '200':
+          description: Current user and memberships
+  /shops:
+    get:
+      tags: [Organization]
+      operationId: listShops
+      responses:
+        '200':
+          description: Authorized shops
+    post:
+      tags: [Organization]
+      operationId: createShop
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShopInput'
+      responses:
+        '201':
+          description: Created
+        '400':
+          $ref: '#/components/responses/Error'
+  /carrier-accounts:
+    get:
+      tags: [Carriers]
+      operationId: listCarrierAccounts
+      responses:
+        '200':
+          description: Carrier accounts in scope
+    post:
+      tags: [Carriers]
+      operationId: connectCarrierAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CarrierAccountInput'
+      responses:
+        '202':
+          description: Connection test queued
+        '400':
+          $ref: '#/components/responses/Error'
+  /carrier-accounts/{id}/test:
+    post:
+      tags: [Carriers]
+      operationId: testCarrierAccount
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+  /orders:
+    get:
+      tags: [Orders]
+      operationId: listOrders
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paged source orders
+    post:
+      tags: [Orders]
+      operationId: createOrder
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceOrderInput'
+      responses:
+        '201':
+          description: Source order created
+        '400':
+          $ref: '#/components/responses/Error'
+  /orders/{id}/shipping-options:
+    post:
+      tags: [Shipping]
+      operationId: getShippingOptions
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+  /orders/{id}/routing-decision:
+    post:
+      tags: [Shipping]
+      operationId: selectShippingOption
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quote_id]
+              properties:
+                quote_id:
+                  type: string
+                  format: uuid
+                override_reason:
+                  type: string
+      responses:
+        '201':
+          description: Routing decision persisted
+        '409':
+          $ref: '#/components/responses/Error'
+  /shipments:
+    post:
+      tags: [Shipping]
+      operationId: createShipment
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_order_id, routing_decision_id]
+              properties:
+                source_order_id:
+                  type: string
+                  format: uuid
+                routing_decision_id:
+                  type: string
+                  format: uuid
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+        '409':
+          $ref: '#/components/responses/Error'
+  /shipments/{id}:
+    get:
+      tags: [Shipping]
+      operationId: getShipment
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Shipment detail
+        '404':
+          $ref: '#/components/responses/Error'
+  /shipments/{id}/cancel:
+    post:
+      tags: [Shipping]
+      operationId: cancelShipment
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+  /shipments/{id}/label:
+    get:
+      tags: [Shipping]
+      operationId: getShipmentLabel
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Private label download reference or bytes
+  /shipments/{id}/redelivery:
+    post:
+      tags: [Shipping]
+      operationId: requestRedelivery
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+  /shipments/{id}/tracking:
+    get:
+      tags: [Tracking]
+      operationId: getTracking
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Canonical and raw-safe timeline
+  /audit-periods:
+    post:
+      tags: [Reconciliation]
+      operationId: createAuditPeriod
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditPeriodInput'
+      responses:
+        '201':
+          description: Period created
+  /audit-periods/{id}/runs:
+    post:
+      tags: [Reconciliation]
+      operationId: runAudit
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+  /batches/{id}/bank-allocations:
+    post:
+      tags: [Reconciliation]
+      operationId: allocateBankTransaction
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BankAllocationInput'
+      responses:
+        '201':
+          description: Allocation confirmed
+        '409':
+          $ref: '#/components/responses/Error'
+  /cases/{id}/transitions:
+    post:
+      tags: [Claims]
+      operationId: transitionCase
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaseTransitionInput'
+      responses:
+        '201':
+          description: Case transition recorded
+        '409':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+  responses:
+    Error:
+      description: Canonical error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    CommandAccepted:
+      description: Command accepted
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CommandResponse'
+  schemas:
+    LoginRequest:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier:
+          type: string
+        password:
+          type: string
+          format: password
+        remember_device:
+          type: boolean
+          default: false
+    AuthResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [AUTHENTICATED, MFA_REQUIRED, ORG_SELECTION_REQUIRED]
+            access_token:
+              type: string
+            challenge_id:
+              type: string
+    ShopInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        legal_name:
+          type: string
+        tax_code:
+          type: string
+        timezone:
+          type: string
+          default: Asia/Ho_Chi_Minh
+    CarrierAccountInput:
+      type: object
+      required: [carrier_code, alias, permission_profile, credential]
+      properties:
+        carrier_code:
+          type: string
+          enum: [GHN, GHTK, VIETTEL_POST, JT_EXPRESS]
+        alias:
+          type: string
+        permission_profile:
+          type: string
+          enum: [OBSERVE, ACTION]
+        credential:
+          type: object
+          additionalProperties: true
+          writeOnly: true
+    SourceOrderInput:
+      type: object
+      required: [source_order_code, warehouse_id, recipient, address, parcels, expected_cod_vnd, fee_payer]
+      properties:
+        source_order_code:
+          type: string
+        warehouse_id:
+          type: string
+          format: uuid
+        recipient:
+          type: object
+          required: [name, phone]
+          properties:
+            name:
+              type: string
+            phone:
+              type: string
+        address:
+          type: object
+          required: [line1, province, district, ward]
+          properties:
+            line1:
+              type: string
+            province:
+              type: string
+            district:
+              type: string
+            ward:
+              type: string
+        expected_cod_vnd:
+          type: integer
+          minimum: 0
+        fee_payer:
+          type: string
+          enum: [SHOP, RECIPIENT, OTHER]
+        parcels:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ParcelInput'
+    ParcelInput:
+      type: object
+      required: [weight_gram, declared_value_vnd]
+      properties:
+        weight_gram:
+          type: integer
+          minimum: 1
+        length_cm:
+          type: integer
+          minimum: 1
+        width_cm:
+          type: integer
+          minimum: 1
+        height_cm:
+          type: integer
+          minimum: 1
+        declared_value_vnd:
+          type: integer
+          minimum: 0
+    AuditPeriodInput:
+      type: object
+      required: [carrier_account_id, period_start, period_end]
+      properties:
+        carrier_account_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+    BankAllocationInput:
+      type: object
+      required: [bank_transaction_id, allocated_amount_vnd]
+      properties:
+        bank_transaction_id:
+          type: string
+          format: uuid
+        allocated_amount_vnd:
+          type: integer
+          minimum: 1
+        confirmation_note:
+          type: string
+    CaseTransitionInput:
+      type: object
+      required: [target_status, reason]
+      properties:
+        target_status:
+          type: string
+        reason:
+          type: string
+        evidence_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        amount_vnd:
+          type: integer
+          minimum: 0
+    CommandResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [command_id, status]
+          properties:
+            command_id:
+              type: string
+              format: uuid
+            status:
+              type: string
+              enum: [PENDING, SUCCEEDED, FAILED, OUTCOME_UNKNOWN]
+            resource_id:
+              type: string
+              format: uuid
+            next_action:
+              type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ErrorResponse:
+      type: object
+      required: [error, meta]
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            retryable:
+              type: boolean
+            next_action:
+              type: string
+            fields:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  code:
+                    type: string
+                  message:
+                    type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    Meta:
+      type: object
+      required: [correlation_id]
+      properties:
+        correlation_id:
+          type: string
+
