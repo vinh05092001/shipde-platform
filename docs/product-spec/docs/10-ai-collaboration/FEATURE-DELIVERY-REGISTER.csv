@@ -1,5 +1,5 @@
 "delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
-"1","S00","Foundation","TASK-FOUND-01","","Freeze and classify the prototype","Inventory and protect current behavior","READY_FOR_ZCODE","","docs/product-spec/docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md","","","",""
+"1","S00","Foundation","TASK-FOUND-01","","Freeze and classify the prototype","Inventory and protect current behavior","READY_FOR_ZCODE","","docs/product-spec/work-items/TASK-FOUND-01.md","feat/task-found-01-freeze-prototype","","",""
 "2","S00","Foundation","TASK-FOUND-02","","Migrate repository structure","Move to target monorepo without feature rewrite","BLOCKED_DEPENDENCY","TASK-FOUND-01","docs/product-spec/docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md","","","",""
 "3","S00","Foundation","TASK-FOUND-03","","Add API worker and local infrastructure","Create executable backend foundation","BLOCKED_DEPENDENCY","TASK-FOUND-02","docs/product-spec/docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md","","","",""
 "4","S00","Foundation","TASK-FOUND-04","","Establish contracts and quality gates","Make every later feature testable and reviewable","BLOCKED_DEPENDENCY","TASK-FOUND-03","docs/product-spec/docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md","","","",""
