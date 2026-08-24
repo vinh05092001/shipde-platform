@@ -53,6 +53,16 @@ This register maps the complete documentation set to consolidated repository art
 | Delivery | OPERATIONS-RUNBOOK.md | Operational recovery procedures |
 | Delivery | DEVELOPER-HANDOVER.md | Human developer handover |
 | Delivery | RISKS-OPEN-ISSUES.md | Risks, unknowns and validation plan |
+| AI Collaboration | ZCODE-CODEX-WORKFLOW.md | Cross-application author/reviewer workflow and state gates |
+| AI Collaboration | FOUNDATION-WORK-ITEMS.md | Required repository foundation sequence |
+| AI Collaboration | FEATURE-DELIVERY-REGISTER.csv | Machine-readable queue covering all feature IDs |
+| AI Collaboration | WORK-ITEM-TEMPLATE.md | Definition-of-Ready implementation contract |
+| AI Collaboration | CODEX-PLANNING-PROMPT.md | Codex planning-only handoff prompt |
+| AI Collaboration | ZCODE-START-PROMPT.md | ZCode single-feature implementation prompt |
+| AI Collaboration | CODEX-REVIEW-PROMPT.md | Codex independent feature review prompt |
+| Repository Control | AGENTS.md | Shared instructions and repository-specific review rules |
+| Repository Control | PULL_REQUEST_TEMPLATE.md | Required implementation and evidence format |
+| Repository Control | feature-contract-gate.yml | CI enforcement of one Work Item per PR |
 
 ## Completeness test
 
@@ -61,4 +71,3 @@ For every feature marked CORE, the traceability matrix must eventually provide:
 Feature ID → Actor → Rule → Use case → Screen → API/Job → Entity → State transition → Test → Backlog item.
 
 The validator checks structural links and duplicate identifiers. Semantic sign-off remains a product/BA responsibility.
-

@@ -44,8 +44,21 @@ The former file-first parcel-audit PoV is retained as one module and validation 
 9. [Internal API](docs/05-api-integrations/INTERNAL-API.md)
 10. [System architecture](docs/06-architecture/SYSTEM-ARCHITECTURE.md)
 11. [AI build plan](docs/07-ai-build/VERTICAL-SLICE-PLAN.md)
-12. [Acceptance and E2E](docs/08-testing/ACCEPTANCE-AND-E2E.md)
-13. [Developer handover](docs/09-delivery/DEVELOPER-HANDOVER.md)
+12. [ZCode → Codex workflow](docs/10-ai-collaboration/ZCODE-CODEX-WORKFLOW.md)
+13. [Acceptance and E2E](docs/08-testing/ACCEPTANCE-AND-E2E.md)
+14. [Developer handover](docs/09-delivery/DEVELOPER-HANDOVER.md)
+
+## AI delivery entry points
+
+- Codex prepares the next feature with
+  [CODEX-PLANNING-PROMPT.md](docs/10-ai-collaboration/CODEX-PLANNING-PROMPT.md).
+- ZCode implements the prepared Work Item with
+  [ZCODE-START-PROMPT.md](docs/10-ai-collaboration/ZCODE-START-PROMPT.md).
+- Codex reviews the Pull Request with
+  [CODEX-REVIEW-PROMPT.md](docs/10-ai-collaboration/CODEX-REVIEW-PROMPT.md).
+- The 134-row delivery queue is
+  [FEATURE-DELIVERY-REGISTER.csv](docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv):
+  four foundation tasks plus all 130 product features.
 
 ## Formats
 
@@ -68,4 +81,3 @@ When documents conflict, apply this order:
 6. Backlog and AI prompts.
 
 An implementation must not silently resolve a conflict. Record it in the decision/open-issue register.
-

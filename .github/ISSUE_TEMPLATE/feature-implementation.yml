@@ -1,0 +1,62 @@
+name: Ship Dễ feature implementation
+description: Track one Codex-prepared Work Item through ZCode implementation and Codex review.
+title: "[FEAT-ID] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One issue, branch and Pull Request must cover exactly one Work Item.
+  - type: input
+    id: work_item
+    attributes:
+      label: Work Item ID
+      placeholder: FEAT-AUTH-01
+    validations:
+      required: true
+  - type: input
+    id: work_item_path
+    attributes:
+      label: Work Item path
+      placeholder: docs/product-spec/work-items/FEAT-AUTH-01.md
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Business outcome
+      description: Which actor can do what after this item is merged?
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source requirement IDs
+      description: Feature, rule, use case, screen, API, entity, state and acceptance IDs.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Merged dependencies
+      description: List merge commits or approved deterministic mock contracts.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence required
+      description: Link the complete Work Item matrix; do not restate only the happy path.
+    validations:
+      required: true
+  - type: checkboxes
+    id: ready
+    attributes:
+      label: Definition of Ready
+      options:
+        - label: Codex prepared the Work Item and marked the register READY_FOR_ZCODE.
+          required: true
+        - label: All material business decisions are resolved or the item is explicitly BLOCKED.
+          required: true
+        - label: ZCode will stop after opening the Pull Request for Codex review.
+          required: true
+
