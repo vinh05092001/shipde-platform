@@ -64,6 +64,7 @@ This register maps the complete documentation set to consolidated repository art
 | Repository Control | AGENTS.md | Shared instructions and repository-specific review rules |
 | Repository Control | PULL_REQUEST_TEMPLATE.md | Required implementation and evidence format |
 | Repository Control | feature-contract-gate.yml | CI enforcement of one Work Item per PR |
+| Repository Control | current-application.yml | Path-scoped install, lint, build and E2E gate for application changes |
 
 ## Completeness test
 
