@@ -1,6 +1,6 @@
 ## Work Item
 
-- Work Item ID: <FEAT-ID or TASK-FOUND-ID>
+- Work Item ID: <FEAT-ID, TASK-FOUND-ID or TASK-AI-ID>
 - Feature ID: <FEAT-ID or N/A>
 - Work Item file: <path>
 - Assigned implementation author: <GEMINI or 9ROUTER>
