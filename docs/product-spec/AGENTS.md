@@ -55,7 +55,7 @@ Assign `GEMINI` for all foundation migrations, complete product features, cross-
 
 ## Unit of delivery
 
-- One branch and one Pull Request contain exactly one `FEAT-*` or one `TASK-FOUND-*` Work Item.
+- One branch and one Pull Request contain exactly one `FEAT-*`, `TASK-FOUND-*` or `TASK-AI-*` Work Item.
 - Branch: `feat/<lowercase-work-item-id>-<short-slug>` or `fix/<lowercase-work-item-id>-<short-slug>`.
 - Pull Request title: `[<WORK_ITEM_ID>] <business outcome>`.
 - Do not combine unrelated cleanup, refactoring or another feature.
