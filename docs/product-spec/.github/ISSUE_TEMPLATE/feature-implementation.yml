@@ -1,5 +1,5 @@
 name: Ship Dễ feature implementation
-description: Track one Codex-prepared Work Item through ZCode implementation and Codex review.
+description: Track one prepared Work Item through implementation and independent Codex review.
 title: "[FEAT-ID] "
 body:
   - type: markdown
@@ -18,6 +18,15 @@ body:
     attributes:
       label: Work Item path
       placeholder: docs/product-spec/work-items/FEAT-AUTH-01.md
+    validations:
+      required: true
+  - type: dropdown
+    id: assigned_author
+    attributes:
+      label: Assigned implementation author
+      options:
+        - GEMINI
+        - 9ROUTER
     validations:
       required: true
   - type: textarea
@@ -53,10 +62,11 @@ body:
     attributes:
       label: Definition of Ready
       options:
-        - label: Codex prepared the Work Item and marked the register READY_FOR_ZCODE.
+        - label: Codex prepared the Work Item and marked the register READY_FOR_AUTHOR.
+          required: true
+        - label: Assigned author, risk, allowed paths and deterministic evidence are recorded.
           required: true
         - label: All material business decisions are resolved or the item is explicitly BLOCKED.
           required: true
-        - label: ZCode will stop after opening the Pull Request for Codex review.
+        - label: The author will stop after opening the Pull Request for independent Codex review.
           required: true
-
