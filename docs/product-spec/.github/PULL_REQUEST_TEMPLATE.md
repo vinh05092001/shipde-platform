@@ -3,6 +3,7 @@
 - Work Item ID: <FEAT-ID or TASK-FOUND-ID>
 - Feature ID: <FEAT-ID or N/A>
 - Work Item file: <path>
+- Assigned implementation author: <GEMINI or 9ROUTER>
 - Business outcome: <actor can now do what>
 
 ## Source requirements
@@ -15,7 +16,8 @@
 
 - [ ] This PR contains exactly one Work Item.
 - [ ] No unrelated refactor, cleanup or second feature is included.
-- [ ] All dependencies are already merged or use an explicitly approved deterministic mock.
+- [ ] All dependencies are merged or use an explicitly approved deterministic mock.
+- [ ] Changes stay inside the Work Item author boundary and allowed paths.
 
 ## Implementation
 
@@ -70,5 +72,4 @@
 - Reviewed commit: <filled by Codex>
 - Verdict: <PASS/CHANGES_REQUIRED/BLOCKED — filled by Codex>
 
-- [ ] ZCode has stopped after opening/updating this PR and has not started the next Work Item.
-
+- [ ] The implementation author has stopped after opening/updating this PR and has not started another Work Item.
