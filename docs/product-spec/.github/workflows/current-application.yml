@@ -1,0 +1,33 @@
+name: Current application checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/**"
+      - "prisma/**"
+      - "scripts/**"
+      - "public/**"
+      - "package.json"
+      - "package-lock.json"
+      - "next.config.mjs"
+      - "next-env.d.ts"
+      - "postcss.config.mjs"
+      - "tsconfig.json"
+
+permissions:
+  contents: read
+
+jobs:
+  current-application:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run test:e2e
