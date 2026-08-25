@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORK_ITEM_PATTERN = re.compile(r"\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+)\b")
+WORK_ITEM_PATTERN = re.compile(r"\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+|TASK-AI-[0-9]+)\b")
 REQUIRED_HEADINGS = [
     "## Work Item",
     "## Source requirements",
