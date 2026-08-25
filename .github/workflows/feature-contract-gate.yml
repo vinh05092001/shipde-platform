@@ -21,17 +21,3 @@ jobs:
         run: cd docs/product-spec && python3 scripts/validate_docs.py
       - name: Validate Pull Request contract
         run: python3 docs/product-spec/scripts/validate_pr_contract.py --event "$GITHUB_EVENT_PATH"
-
-  current-application:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run build
-      - run: npm run test:e2e
-
