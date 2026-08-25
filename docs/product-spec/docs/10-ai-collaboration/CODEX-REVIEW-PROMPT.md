@@ -29,5 +29,5 @@ Required review report:
 PASS requires: all acceptance rows pass, CI evidence is valid, no unresolved consequential finding exists, and the implementation is a real vertical feature rather than a mock or UI-only path.
 ```
 
-For the standard GitHub quick review, comment `@codex review`. The prompt above is the deeper per-feature acceptance review.
+For the semi-manual handoff, the human opens a fresh Codex task in the dedicated Codex worktree with the Pull Request URL. Any GitHub quick review is optional and never replaces the deeper requirement-by-requirement acceptance review.
 
