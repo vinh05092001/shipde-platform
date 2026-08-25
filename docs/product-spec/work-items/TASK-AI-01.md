@@ -44,6 +44,7 @@ This is a documentation and workflow-control change. It must not change applicat
 - Record assigned author, risk and allowed paths in every prepared Work Item.
 - Rename `READY_FOR_ZCODE` to `READY_FOR_AUTHOR` in active delivery control artifacts.
 - Update issue/PR templates and documentation validation.
+- Separate the always-on contract gate from path-scoped application checks without changing application commands.
 - Remove Ponytail as an always-on repository rule and skill.
 
 ## Out of scope
@@ -52,7 +53,7 @@ This is a documentation and workflow-control change. It must not change applicat
 - Installing Gemini CLI or Codex CLI.
 - Adding automatic orchestration.
 - Implementing product features or changing production code.
-- Changing existing application CI commands.
+- Changing existing application CI commands; this task only scopes when those commands run.
 
 ## Business rules and edge cases
 
@@ -80,11 +81,17 @@ None. No runtime contract, event, migration or product data is changed.
 | `AC-AI-02` | Human assigns a prepared item | Separate Gemini and 9Router prompts enforce branch, scope, evidence and stop conditions | Prompt files and workflow cross-references |
 | `AC-AI-03` | Planning marks an item ready | Register, template and validator accept `READY_FOR_AUTHOR` consistently | CSV and validator evidence |
 | `AC-AI-04` | An agent begins UI/code work | No Ponytail always-on rule or skill can override completeness or UX sources | Deleted `.agents` files and root UI rule |
-| `AC-AI-05` | Pull Request opens | Existing documentation and application CI gates still run without weakened checks | GitHub Actions results |
+| `AC-AI-05` | Pull Request opens | Contract validation runs for every PR; install, lint, build and E2E run for application-affecting paths | GitHub Actions results and workflow path filters |
 
 ## Verification commands
 
+For this documentation-only Pull Request:
+
 - `cd docs/product-spec && python3 scripts/validate_docs.py`
+- `python3 docs/product-spec/scripts/validate_pr_contract.py --event "$GITHUB_EVENT_PATH"`
+
+For every application-affecting Pull Request, the path-scoped workflow continues to require:
+
 - `npm ci`
 - `npm run lint`
 - `npm run build`
@@ -98,4 +105,4 @@ None. No runtime contract, event, migration or product data is changed.
 
 ## Residual limitations
 
-The DSH-to-9Router provider connection and GitHub branch protection remain explicit one-time local/repository settings after this documentation Pull Request.
+The DSH-to-9Router provider connection and GitHub branch protection remain explicit one-time local/repository settings after this documentation Pull Request. The prototype currently declares an `eslint` script without the `eslint` development dependency; `TASK-FOUND-01` must repair and prove the application baseline before product feature work.
