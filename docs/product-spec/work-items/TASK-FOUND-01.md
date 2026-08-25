@@ -6,7 +6,7 @@
 |---|---|
 | Work Item ID | `TASK-FOUND-01` |
 | Feature ID | `N/A — repository foundation` |
-| Status | `READY_FOR_ZCODE` |
+| Status | `IN_PROGRESS` |
 | Delivery order | `1` |
 | Dependencies | `None` |
 | Author | `ZCode` |
