@@ -31,7 +31,7 @@ function Invoke-ShipDeGit {
     & git -C $Path @Arguments
     $exitCode = $LASTEXITCODE
     if (-not $AllowFailure -and $exitCode -ne 0) {
-        throw "Git command failed in $Path: git $($Arguments -join ' ')"
+        throw "Git command failed in ${Path}: git $($Arguments -join ' ')"
     }
     return $exitCode
 }
@@ -77,4 +77,3 @@ function Test-ShipDeTcpPort {
         $client.Dispose()
     }
 }
-
