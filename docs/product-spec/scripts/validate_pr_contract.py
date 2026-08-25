@@ -55,7 +55,7 @@ def main() -> int:
 
     title_ids = WORK_ITEM_PATTERN.findall(title)
     if len(title_ids) != 1:
-        errors.append("PR title must contain exactly one FEAT-* or TASK-FOUND-* Work Item ID")
+        errors.append("PR title must contain exactly one FEAT-*, TASK-FOUND-* or TASK-AI-* Work Item ID")
     work_item_id = title_ids[0] if len(title_ids) == 1 else ""
 
     for heading in REQUIRED_HEADINGS:
