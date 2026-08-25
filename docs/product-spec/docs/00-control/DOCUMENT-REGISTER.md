@@ -58,7 +58,8 @@ This register maps the complete documentation set to consolidated repository art
 | AI Collaboration | FEATURE-DELIVERY-REGISTER.csv | Machine-readable queue covering all feature IDs |
 | AI Collaboration | WORK-ITEM-TEMPLATE.md | Definition-of-Ready implementation contract |
 | AI Collaboration | CODEX-PLANNING-PROMPT.md | Codex planning-only handoff prompt |
-| AI Collaboration | GEMINI-START-PROMPT.md | Gemini single-Work-Item implementation prompt |\n| AI Collaboration | NINEROUTER-START-PROMPT.md | Constrained low-risk 9Router worker prompt |
+| AI Collaboration | GEMINI-START-PROMPT.md | Gemini single-Work-Item implementation prompt |
+| AI Collaboration | NINEROUTER-START-PROMPT.md | Constrained low-risk 9Router worker prompt |
 | AI Collaboration | CODEX-REVIEW-PROMPT.md | Codex independent feature review prompt |
 | Repository Control | AGENTS.md | Shared instructions and repository-specific review rules |
 | Repository Control | PULL_REQUEST_TEMPLATE.md | Required implementation and evidence format |
