@@ -6,7 +6,7 @@ Definition of Ready.
 
 Filename: `<FEAT-ID>.md`.
 
-ZCode must not implement a product feature that has no prepared file in this
+No implementation author may implement a product feature that has no prepared file in this
 directory. Foundation tasks are defined in
 `docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md`.
 
