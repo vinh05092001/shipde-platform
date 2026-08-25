@@ -6,11 +6,13 @@
 |---|---|
 | Work Item ID | `<WORK_ITEM_ID>` |
 | Feature ID | `<FEAT-ID or N/A>` |
-| Status | `READY_FOR_ZCODE` |
+| Status | `READY_FOR_AUTHOR` |
 | Delivery order | `<number>` |
 | Dependencies | `<merged IDs>` |
-| Author | `ZCode` |
-| Reviewer | `Codex` |
+| Assigned author | `<GEMINI or 9ROUTER>` |
+| Risk | `<LOW/MEDIUM/HIGH>` |
+| Allowed paths | `<explicit paths>` |
+| Reviewer | `Codex — fresh independent task` |
 | Branch | `<branch>` |
 | Pull Request | `<URL>` |
 
@@ -20,11 +22,15 @@ State what becomes possible for which actor and why the product needs it.
 
 ## Source references
 
-List exact feature, actor, rule, use case, screen, API, entity, state and acceptance IDs. A filename without a relevant heading/ID is insufficient.
+List exact feature, actor, rule, use case, screen, API, entity, state and acceptance IDs. A filename without a relevant heading or ID is insufficient.
 
 ## Preconditions and dependencies
 
-List technical and business prerequisites with evidence that they are already merged or available under an approved deterministic mock.
+List technical and business prerequisites with evidence that they are merged or available under an approved deterministic mock.
+
+## Author boundary
+
+Explain why the selected author is appropriate. For `9ROUTER`, enumerate allowed files, deterministic proof and every prohibited boundary. For `GEMINI`, identify consequential architecture/security/product decisions that still require human approval.
 
 ## In scope
 
@@ -32,7 +38,7 @@ List observable behaviors, including frontend, backend, persistence, permission,
 
 ## Out of scope
 
-Explicitly list adjacent behavior that must not be added in this PR.
+Explicitly list adjacent behavior that must not be added in this Pull Request.
 
 ## Business rules and edge cases
 
@@ -65,4 +71,3 @@ List exact repository commands. All must run from a clean checkout.
 ## Residual limitations
 
 Write `None` or list each limitation with owner, risk, next action and human acceptance.
-
