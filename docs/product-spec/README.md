@@ -44,18 +44,22 @@ The former file-first parcel-audit PoV is retained as one module and validation 
 9. [Internal API](docs/05-api-integrations/INTERNAL-API.md)
 10. [System architecture](docs/06-architecture/SYSTEM-ARCHITECTURE.md)
 11. [AI build plan](docs/07-ai-build/VERTICAL-SLICE-PLAN.md)
-12. [ZCode → Codex workflow](docs/10-ai-collaboration/ZCODE-CODEX-WORKFLOW.md)
+12. [Semi-manual AI workflow](docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md)
 13. [Acceptance and E2E](docs/08-testing/ACCEPTANCE-AND-E2E.md)
 14. [Developer handover](docs/09-delivery/DEVELOPER-HANDOVER.md)
 
 ## AI delivery entry points
 
-- Codex prepares the next feature with
+- Claude proposes business and solution changes; the human approves material decisions before they become versioned sources.
+- Codex prepares the next Work Item with
   [CODEX-PLANNING-PROMPT.md](docs/10-ai-collaboration/CODEX-PLANNING-PROMPT.md).
-- ZCode implements the prepared Work Item with
-  [ZCODE-START-PROMPT.md](docs/10-ai-collaboration/ZCODE-START-PROMPT.md).
-- Codex reviews the Pull Request with
+- Gemini implements primary/foundation Work Items with
+  [GEMINI-START-PROMPT.md](docs/10-ai-collaboration/GEMINI-START-PROMPT.md).
+- A DSH/OpenCode worker through 9Router implements only assigned low-risk Work Items with
+  [NINEROUTER-START-PROMPT.md](docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md).
+- Codex independently reviews every Pull Request with
   [CODEX-REVIEW-PROMPT.md](docs/10-ai-collaboration/CODEX-REVIEW-PROMPT.md).
+- The human starts each handoff and is the only merge owner.
 - The 134-row delivery queue is
   [FEATURE-DELIVERY-REGISTER.csv](docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv):
   four foundation tasks plus all 130 product features.
