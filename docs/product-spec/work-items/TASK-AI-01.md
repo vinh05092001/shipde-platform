@@ -13,28 +13,30 @@
 | Allowed paths | `AGENTS.md`, `.agents/**`, `.github/**`, `.gitignore`, `scripts/ai/**`, `docs/product-spec/**` |
 | Reviewer | `Fresh independent Codex task plus human merge owner` |
 | Branch | `chore/ai-semi-manual-workflow` |
-| Pull Request | Recorded after PR creation |
+| Pull Request | `#1` |
 
 ## Business outcome
 
-The product owner can coordinate 9Router, Gemini and Codex without copying code or allowing agents to edit the same workspace. Low-cost models receive bounded low-risk work, Gemini owns primary implementation, Codex independently reviews every Work Item, and the human retains all material decisions and merge authority.
+The product owner can prepare and coordinate the complete Ship Dễ repository/toolchain across 9Router, Gemini and Codex without copying code or allowing agents to edit the same workspace. Low-cost models receive bounded low-risk work, Gemini owns primary implementation, Codex independently reviews every Work Item, and the human retains all material decisions and merge authority.
 
 ## Source references
 
 - Root and product-spec `AGENTS.md` contracts.
-- Product baseline and delivery queue under `docs/product-spec/docs/`.
+- Product baseline, technology stack and delivery queue under `docs/product-spec/docs/`.
 - Existing GitHub issue, Pull Request and CI contract gates.
-- Human decision: use semi-manual control with isolated DSH, Gemini and Codex worktrees.
+- Official installation sources for Codex CLI, Gemini CLI, DSH, 9Router and the selected quality repositories.
+- Human decision: prepare the entire repository and CLI layer before beginning product implementation, using semi-manual control with isolated DSH, Gemini and Codex worktrees.
 
 ## Preconditions and dependencies
 
 - GitHub repository and existing product specification are available.
 - Worktrees `shipde-dsh`, `shipde-gemini` and `shipde-codex` exist at the same baseline.
-- Existing CI validates documentation, lint, build and E2E behavior.
+- Git, GitHub CLI, Node and npm are already available on Windows.
+- Existing CI validates documentation, lint, build and E2E behavior when their paths apply.
 
 ## Author boundary
 
-This is a documentation and workflow-control change. It must not change application behavior, product business rules, database schema, runtime dependencies or deployment behavior.
+This is a documentation and workflow-control change. It may add guarded machine-setup scripts but must not change application behavior, product business rules, database schema, runtime dependencies or deployment behavior.
 
 ## In scope
 
@@ -45,31 +47,37 @@ This is a documentation and workflow-control change. It must not change applicat
 - Rename `READY_FOR_ZCODE` to `READY_FOR_AUTHOR` in active delivery control artifacts.
 - Update issue/PR templates and documentation validation.
 - Separate the always-on contract gate from path-aware application checks without changing application commands.
-- Add safe Windows scripts for bootstrap, health diagnosis, author handoff, review handoff and post-merge `main` protection.
+- Add safe Windows scripts for CLI installation, bootstrap, health diagnosis, author handoff, review handoff and post-merge `main` protection.
+- Record the complete repository/CLI/service inventory and exact rule for global, project-local, Docker and guidance dependencies.
 - Record complete adopted/deferred/rejected toolchain decisions and the DSH-to-9Router configuration contract without storing a credential.
+- Bind every application repository/tool to `TASK-FOUND-01` through `TASK-FOUND-04` instead of installing an unreviewed mixed stack into the prototype.
 - Remove Ponytail as an always-on repository rule and skill and explicitly disable its 9Router endpoint injection.
 
 ## Out of scope
 
-- Configuring DSH provider credentials or 9Router endpoints.
-- Installing Gemini CLI or Codex CLI.
+- Entering account credentials, DSH provider credentials or 9Router API keys on behalf of the human.
+- Starting Docker services or accepting Docker Desktop terms on the user's machine.
 - Adding automatic orchestration.
+- Installing application framework/test dependencies before their assigned Foundation Work Item.
 - Implementing product features or changing production code.
 - Changing existing application CI commands; this task only scopes when those commands run.
 
 ## Business rules and edge cases
 
 - One implementation author works on one Work Item and one branch.
+- Only the Ship Dễ repository is cloned; upstream repositories use supported, versioned consumption mechanisms.
+- Machine agent CLIs may be global; framework/build/test CLIs must be lockfile-pinned project dependencies.
+- The installer previews by default, installs only missing tools, never auto-upgrades and never authenticates an account.
 - 9Router is allowed only for bounded low-risk deterministic work.
 - Two failed 9Router correction rounds require escalation to Gemini.
 - Gemini is the default for foundation, vertical, UI, security, money, carrier-effect and cross-layer work.
 - Codex review uses a fresh task and never self-approves implementation.
-- Only the human may merge or accept residual risk.
+- Only the human may merge, accept terms, provide credentials or accept residual risk.
 - Missing or contradictory business decisions block implementation.
 
 ## UI states
 
-Not applicable. This Work Item changes workflow documentation only.
+Not applicable. This Work Item changes workflow documentation and setup controls only.
 
 ## API, event and data impact
 
@@ -84,8 +92,9 @@ None. No runtime contract, event, migration or product data is changed.
 | `AC-AI-03` | Planning marks an item ready | Register, template and validator accept `READY_FOR_AUTHOR` consistently | CSV and validator evidence |
 | `AC-AI-04` | An agent begins UI/code work | No Ponytail always-on rule or skill can override completeness or UX sources | Deleted `.agents` files and root UI rule |
 | `AC-AI-05` | Pull Request opens | `contract` and `application-gate` always report; install, lint, build and E2E run only for application-affecting paths | GitHub Actions results and scope-detection log |
-| `AC-AI-06` | Human completes Windows setup | Versioned scripts verify worktrees, auth, local services and current free-model availability without persisting a secret | PowerShell parse gate and post-merge doctor output |
+| `AC-AI-06` | Human completes Windows setup | Versioned scripts verify worktrees, all machine CLIs, auth, Docker, local services and current free-model availability without persisting a secret | PowerShell parse gate and post-merge doctor output |
 | `AC-AI-07` | DSH uses 9Router | Provider fields, model route, disabled prompt injection and escalation boundaries are explicit | Toolchain decision and Windows runbook |
+| `AC-AI-08` | Human asks which repositories and CLIs are required | Every product workspace, global CLI, project dependency, Docker service, focused agent guidance and exclusion has one owner and installation phase | Repository/CLI manifest, installer preview and Foundation mapping |
 
 ## Verification commands
 
@@ -96,12 +105,20 @@ For this setup Pull Request:
 - Parse every `scripts/ai/*.ps1` file through the PowerShell abstract syntax tree parser in the `contract` job.
 - Confirm `application-gate` succeeds as not applicable because only setup/control paths changed.
 
+For the post-merge Windows machine:
+
+- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-clis.ps1 -InstallDocker`
+- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-clis.ps1 -Apply -InstallDocker`
+- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\doctor.ps1 -TestDocker -TestModels`
+
 For every application-affecting Pull Request, the path-scoped workflow continues to require:
 
 - `npm ci`
 - `npm run lint`
 - `npm run build`
 - `npm run test:e2e`
+
+These npm commands are replaced atomically by the documented root pnpm commands in `TASK-FOUND-02`.
 
 ## Codex review record
 
@@ -111,4 +128,5 @@ For every application-affecting Pull Request, the path-scoped workflow continues
 
 ## Residual limitations
 
-The API key entry in DSH and application of GitHub branch protection remain explicit post-merge human actions because credentials must not enter Git and required check names must exist on `main` first. Both actions have guarded scripts/runbook evidence. The prototype currently declares an `eslint` script without the `eslint` development dependency; `TASK-FOUND-01` must repair and prove the application baseline before product feature work.
+Account sign-in, API key entry, Docker Desktop terms/restart and application of GitHub branch protection remain explicit human actions because credentials and legal/admin approvals must not be automated or committed. Guarded commands and deterministic checks are ready. The prototype currently declares an `eslint` script without the `eslint` development dependency; `TASK-FOUND-01` must repair and prove the application baseline before product feature work.
+

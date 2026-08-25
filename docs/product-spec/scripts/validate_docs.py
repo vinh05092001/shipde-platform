@@ -15,6 +15,7 @@ REPOSITORY_ROOT = ROOT.parent.parent
 REPOSITORY_REQUIRED = [
     "scripts/ai/README.md",
     "scripts/ai/common.ps1",
+    "scripts/ai/install-clis.ps1",
     "scripts/ai/bootstrap-worktrees.ps1",
     "scripts/ai/doctor.ps1",
     "scripts/ai/start-work-item.ps1",
@@ -48,6 +49,7 @@ REQUIRED = [
     "docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md",
     "docs/10-ai-collaboration/CODEX-REVIEW-PROMPT.md",
     "docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md",
+    "docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md",
     "docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md",
     "docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv",
     "work-items/README.md",
@@ -188,3 +190,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

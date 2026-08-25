@@ -163,5 +163,6 @@ Every Pull Request must contain:
 - 9Router prompt: `docs/product-spec/docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md`
 - Codex review prompt: `docs/product-spec/docs/10-ai-collaboration/CODEX-REVIEW-PROMPT.md`
 - Toolchain decisions: `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`
+- Repository and CLI manifest: `docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md`
 - Windows setup runbook: `docs/product-spec/docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md`
 - Safe control scripts: `scripts/ai/README.md`

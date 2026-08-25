@@ -62,12 +62,13 @@ This register maps the complete documentation set to consolidated repository art
 | AI Collaboration | NINEROUTER-START-PROMPT.md | Constrained low-risk 9Router worker prompt |
 | AI Collaboration | CODEX-REVIEW-PROMPT.md | Codex independent feature review prompt |
 | AI Collaboration | AI-TOOLCHAIN-DECISIONS.md | Adopted, deferred and rejected tools plus safe 9Router policy |
-| AI Collaboration | WINDOWS-SETUP-RUNBOOK.md | Windows worktree, provider, health and protection procedure |
+| AI Collaboration | REPOSITORY-CLI-MANIFEST.md | Complete product workspace, global CLI, project dependency, Docker service and agent-guidance inventory |
+| AI Collaboration | WINDOWS-SETUP-RUNBOOK.md | Windows worktree, CLI, provider, health and protection procedure |
 | Repository Control | AGENTS.md | Shared instructions and repository-specific review rules |
 | Repository Control | PULL_REQUEST_TEMPLATE.md | Required implementation and evidence format |
 | Repository Control | feature-contract-gate.yml | CI enforcement of one Work Item per PR |
 | Repository Control | current-application.yml | Always-present path-aware install, lint, build and E2E gate |
-| Repository Control | scripts/ai/*.ps1 | Safe Windows bootstrap, health, author, review and protection controls |
+| Repository Control | scripts/ai/*.ps1 | Safe Windows CLI installation, bootstrap, health, author, review and protection controls |
 
 ## Completeness test
 
@@ -76,3 +77,4 @@ For every feature marked CORE, the traceability matrix must eventually provide:
 Feature ID → Actor → Rule → Use case → Screen → API/Job → Entity → State transition → Test → Backlog item.
 
 The validator checks structural links and duplicate identifiers. Semantic sign-off remains a product/BA responsibility.
+

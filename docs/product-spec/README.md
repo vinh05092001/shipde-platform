@@ -45,8 +45,9 @@ The former file-first parcel-audit PoV is retained as one module and validation 
 10. [System architecture](docs/06-architecture/SYSTEM-ARCHITECTURE.md)
 11. [AI build plan](docs/07-ai-build/VERTICAL-SLICE-PLAN.md)
 12. [Semi-manual AI workflow](docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md)
-13. [Acceptance and E2E](docs/08-testing/ACCEPTANCE-AND-E2E.md)
-14. [Developer handover](docs/09-delivery/DEVELOPER-HANDOVER.md)
+13. [Repository and CLI manifest](docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md)
+14. [Acceptance and E2E](docs/08-testing/ACCEPTANCE-AND-E2E.md)
+15. [Developer handover](docs/09-delivery/DEVELOPER-HANDOVER.md)
 
 ## AI delivery entry points
 
@@ -62,7 +63,9 @@ The former file-first parcel-audit PoV is retained as one module and validation 
 - The human starts each handoff and is the only merge owner.
 - Approved, rejected and deferred tools are recorded in
   [AI-TOOLCHAIN-DECISIONS.md](docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md).
-- Windows setup, 9Router/DSH connection and GitHub protection are completed through
+- The complete repository, CLI and service inventory is
+  [REPOSITORY-CLI-MANIFEST.md](docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md).
+- Windows setup, CLI installation, 9Router/DSH connection and GitHub protection are completed through
   [WINDOWS-SETUP-RUNBOOK.md](docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md).
 - The 134-row delivery queue is
   [FEATURE-DELIVERY-REGISTER.csv](docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv):
@@ -89,3 +92,4 @@ When documents conflict, apply this order:
 6. Backlog and AI prompts.
 
 An implementation must not silently resolve a conflict. Record it in the decision/open-issue register.
+

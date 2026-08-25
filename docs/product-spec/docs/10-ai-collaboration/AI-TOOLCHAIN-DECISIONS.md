@@ -4,19 +4,25 @@
 
 Use the lowest-cost capable author without reducing business completeness, UI quality, security or evidence. GitHub artifacts are the shared memory; no agent framework may replace the approved product specification, Work Item or independent review.
 
+The complete installation classification is maintained in `REPOSITORY-CLI-MANIFEST.md`. Only the Ship Dễ product repository is cloned; upstream projects are installed through their supported package, image, action or reviewed guidance mechanism.
+
 ## Adopted toolchain
 
 | Tool or repository | Decision | Purpose | Boundary |
 |---|---|---|---|
 | Git, GitHub and Git worktrees | USE NOW | Isolated workspaces, durable handoff, CI and review | `main` is never an implementation workspace |
-| Claude app | USE NOW | Business and solution analysis | No production implementation or self-approval |
-| Codex app | USE NOW | Work Item planning, documentation and fresh independent review | Planning and review are separate tasks; no author self-review |
-| Gemini app | USE NOW | Primary implementation for complete vertical and high-risk work | One prepared Work Item and branch at a time |
+| Claude app | USE NOW | Business and solution analysis | No production implementation or self-approval; Claude Code is not required |
+| Codex app and Codex CLI | USE NOW | Work Item planning, documentation and fresh independent review | Planning and review are separate tasks; no author self-review |
+| Gemini app and [Gemini CLI](https://github.com/google-gemini/gemini-cli) | USE NOW | Primary implementation for complete vertical and high-risk work | One prepared Work Item and branch at a time |
 | [9Router](https://github.com/decolua/9router) | USE NOW | Local OpenAI-compatible gateway, free-model fallback and usage visibility | Localhost only; Ponytail and Caveman disabled |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | USE NOW, PIN | Controlled 9Router author workspace | Developer preview; keep `@deepseek-ai/dsh@0.1.1-rc.2` until an upgrade is tested |
+| pnpm 11 and Docker Desktop/Compose | INSTALL NOW | Prepare the Node 24 machine for the target monorepo and local infrastructure | Do not migrate the current npm prototype outside its Foundation Work Item |
 | [Playwright](https://github.com/microsoft/playwright) | ADOPT IN `TASK-FOUND-04` | Browser E2E, trace/video evidence and screenshot comparison | Golden images require human-approved baselines |
 | [Storybook](https://github.com/storybookjs/storybook) | ADOPT IN `TASK-FOUND-04` | Visible catalog of component states and interaction/accessibility checks | It documents approved UI; it does not invent the design |
 | [axe-core](https://github.com/dequelabs/axe-core) | ADOPT IN `TASK-FOUND-04` | Automated accessibility checks in rendered UI | Automated checks supplement, not replace, manual UX review |
+| [MSW](https://github.com/mswjs/msw) | ADOPT IN `TASK-FOUND-04` | Deterministic API and carrier response states for UI/testing | Mock behavior is labeled and never presented as live production evidence |
+| [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci) | ADOPT IN `TASK-FOUND-04` | Performance budgets for critical approved routes | Targeted CI only; do not consume every local iteration |
+| [Vercel agent skills](https://github.com/vercel-labs/agent-skills) | AUDIT AND PIN IN `TASK-FOUND-04` | React performance and UI review guidance | Only `react-best-practices` and `web-design-guidelines`; Ship Dễ UX sources remain authoritative |
 
 ## Explicitly not adopted
 
@@ -27,7 +33,10 @@ Use the lowest-cost capable author without reducing business completeness, UI qu
 | Headroom semantic compression | DEFER | Adds another local service and may alter context. Reconsider only after measured evaluation. |
 | BMAD, Spec Kit, SuperClaude, Superpowers or another general orchestration framework | REJECT FOR NOW | Duplicates the approved specification, Work Item and role contract and can create conflicting instructions. |
 | Generic dashboard/theme repositories | REJECT | Ship Dễ UI must come from approved screen states and design sources, not a transplanted AI theme. |
-| Unreviewed DSH community plugins | REJECT BY DEFAULT | DSH plugins execute trusted code. Add only through a separate reviewed Work Item with source and permission audit. |
+| Unreviewed DSH or public agent-skill collections | REJECT BY DEFAULT | Plugins and skills execute or inject trusted instructions. Add only through a reviewed, commit-pinned Work Item. |
+| Global Nest, Prisma, Turbo, Playwright, Storybook or test CLIs | REJECT | Project tools must be lockfile-pinned and invoked through root package scripts. |
+| Native PostgreSQL, Redis or MinIO installation | REJECT | Docker Compose owns reproducible local services and avoids conflicting Windows services. |
+| WSL/Ubuntu as a baseline requirement | REJECT | The current Windows 10 Pro workflow is native; use WSL only if a future verified tool cannot operate safely without it. |
 
 ## 9Router endpoint policy
 
@@ -57,15 +66,17 @@ Free catalogs change. The health check reports missing candidates; never silentl
 
 ## Upgrade rule
 
-Do not auto-upgrade 9Router, DSH or an agent plugin during an active Work Item. Record current versions, upgrade in a dedicated low-risk task, run the doctor, execute a disposable test branch and verify prompt injection settings before promoting the version.
+Do not auto-upgrade 9Router, DSH, Codex CLI, Gemini CLI or an agent plugin during an active Work Item. `install-clis.ps1` installs only missing tools. Record current versions, upgrade in a dedicated low-risk task, run the doctor, execute a disposable test branch and verify prompt injection settings before promoting the version.
 
 ## UI quality stack
 
 `TASK-FOUND-04` must make these reviewable in one PR:
 
 - Storybook stories for default, loading, empty, validation, error, forbidden, partial, success and recovery states where applicable;
+- MSW handlers derived from approved contracts for each relevant response state;
 - Playwright user journeys with trace and screenshots on failure;
 - deterministic visual comparison for human-approved critical screens and desktop/mobile viewports;
 - axe-based automated accessibility checks plus keyboard and responsive manual evidence;
+- Lighthouse budgets for a small approved set of critical routes;
+- audited, commit-pinned Vercel React and web-interface guidance shared by author and reviewer;
 - screenshots attached to the PR, not accepted as a substitute for working behavior.
-

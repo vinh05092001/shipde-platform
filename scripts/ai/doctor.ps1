@@ -1,12 +1,13 @@
 param(
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
+    [switch]$TestDocker,
     [switch]$TestModels
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
 
 $failures = [System.Collections.Generic.List[string]]::new()
-$commands = @("git", "gh", "node", "npm", "dsh", "9router")
+$commands = @("git", "gh", "node", "npm", "pnpm", "docker", "dsh", "9router", "gemini", "codex")
 
 Write-Host "=== COMMANDS ==="
 foreach ($command in $commands) {
@@ -16,6 +17,37 @@ foreach ($command in $commands) {
     } else {
         Write-Host ("{0,-10} MISSING" -f $command)
         $failures.Add("Missing command: $command")
+    }
+}
+
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    $nodeVersion = (& node --version).Trim()
+    Write-Host ("Node version: {0}" -f $nodeVersion)
+    if ($nodeVersion -notmatch "^v24\.") {
+        $failures.Add("Node.js $nodeVersion does not match the approved v24 workstation baseline")
+    }
+}
+
+Write-Host "`n=== GLOBAL NPM VERSIONS ==="
+if (Get-Command npm -ErrorAction SilentlyContinue) {
+    $npmPackages = @("pnpm", "9router", "@deepseek-ai/dsh", "@google/gemini-cli", "@openai/codex")
+    foreach ($package in $npmPackages) {
+        $raw = @(& npm list --global $package --depth=0 --json 2>$null) -join "`n"
+        $version = $null
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            try {
+                $parsed = $raw | ConvertFrom-Json
+                if ($parsed.dependencies) {
+                    $property = $parsed.dependencies.PSObject.Properties[$package]
+                    if ($property) {
+                        $version = [string]$property.Value.version
+                    }
+                }
+            } catch {
+                $version = $null
+            }
+        }
+        Write-Host ("{0,-24} {1}" -f $package, $(if ($version) { $version } else { "NOT INSTALLED" }))
     }
 }
 
@@ -43,6 +75,22 @@ foreach ($entry in $paths.GetEnumerator()) {
     if ($state -eq "DIRTY") {
         $failures.Add("Dirty worktree: $($entry.Value)")
     }
+}
+
+Write-Host "`n=== DOCKER ==="
+if (Get-Command docker -ErrorAction SilentlyContinue) {
+    & docker compose version
+    if ($LASTEXITCODE -ne 0) {
+        $failures.Add("Docker Compose plugin is unavailable")
+    }
+    if ($TestDocker) {
+        & docker info --format "Docker server: {{.ServerVersion}}"
+        if ($LASTEXITCODE -ne 0) {
+            $failures.Add("Docker Desktop is installed but its engine is not reachable")
+        }
+    }
+} else {
+    Write-Host "Docker CLI: MISSING"
 }
 
 Write-Host "`n=== LOCAL SERVICES ==="
