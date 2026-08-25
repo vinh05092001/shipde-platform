@@ -6,7 +6,8 @@
 - Added deterministic worker routing, author risk/path boundaries and human control points.
 - Renamed the ready state to `READY_FOR_AUTHOR` and added dedicated Gemini and 9Router prompts.
 - Removed Ponytail as an always-on rule so UI and completeness follow approved product/UX sources.
-- Preserved the existing PR contract and CI verification gates.
+- Preserved the existing PR contract and split application checks into a path-scoped workflow so documentation-only changes do not claim application verification.
+- Recorded the prototype's missing ESLint dependency as a `TASK-FOUND-01` baseline blocker.
 
 ## AI collaboration gate — 2026-08-24
 
