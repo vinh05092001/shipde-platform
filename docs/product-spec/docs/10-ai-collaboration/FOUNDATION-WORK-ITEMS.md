@@ -1,6 +1,6 @@
 # Foundation Work Items
 
-Product feature work is blocked until these items are merged in order. Each item gets its own ZCode branch, Pull Request and Codex review.
+Product feature work is blocked until these items are merged in order. Each item gets its own assigned implementation author branch, Pull Request and Codex review.
 
 ## Current repository finding
 
@@ -56,5 +56,5 @@ As verified on 2026-08-24, the product repository is a single Next.js 16.1.6 app
 
 ## Promotion rule
 
-After `TASK-FOUND-04` is `MERGED`, promote only the first dependency-ready feature rows in `FEATURE-DELIVERY-REGISTER.csv` from `BLOCKED_BY_FOUNDATION` to `READY_FOR_ZCODE`. Do not bulk-mark all 130 features ready.
+After `TASK-FOUND-04` is `MERGED`, promote only the first dependency-ready feature rows in `FEATURE-DELIVERY-REGISTER.csv` from `BLOCKED_BY_FOUNDATION` to `READY_FOR_AUTHOR`. Do not bulk-mark all 130 features ready.
 
