@@ -13,6 +13,7 @@ As verified on 2026-08-24, the product repository is a single Next.js 16.1.6 app
 - Inventory routes, components, server code, Prisma schema, adapters, fixtures and tests.
 - Map existing behavior to feature IDs as `REAL`, `PARTIAL`, `DEMO_ONLY` or `ABSENT`, with file evidence.
 - Add smoke tests for critical visible flows so later migration cannot silently remove them.
+- Repair the verification baseline, including the declared-but-missing ESLint dependency/configuration, without weakening lint rules.
 - Confirm clean `npm ci`, lint, build and current E2E commands.
 - Record current security, data and hardcode gaps; do not fix unrelated features in this PR.
 
@@ -47,7 +48,8 @@ As verified on 2026-08-24, the product repository is a single Next.js 16.1.6 app
 **Outcome:** every later feature is testable and reviewable in the same way.
 
 - Wire OpenAPI/JSON Schema validation and generated/shared contract checks.
-- Provide unit, integration and Playwright test harnesses plus deterministic carrier mocks.
+- Provide unit, integration and Playwright E2E harnesses plus deterministic carrier mocks.
+- Add Storybook state/interaction coverage, Playwright screenshot comparison and axe-based accessibility checks for approved UI.
 - Make root commands from the target stack document executable.
 - Enable PR contract validation, lint, typecheck, tests and build in CI.
 - Add seed reset and isolated test database procedures.

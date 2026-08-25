@@ -64,22 +64,53 @@ if ($TestModels) {
             $response = Invoke-RestMethod -Uri "http://127.0.0.1:20128/v1/models" -Headers $headers -Method Get
             $ids = @($response.data | ForEach-Object { $_.id })
             Write-Host ("Available models: {0}" -f $ids.Count)
+            $combo = "shipde-low-risk"
             $candidates = @(
-                "shipde-low-risk",
                 "oc/deepseek-v4-flash-free",
                 "oc/mimo-v2.5-free",
                 "oc/nemotron-3-ultra-free"
             )
-            foreach ($candidate in $candidates) {
+            foreach ($candidate in @($combo) + $candidates) {
                 Write-Host ("{0,-36} {1}" -f $candidate, $(if ($ids -contains $candidate) { "AVAILABLE" } else { "NOT RETURNED" }))
             }
+            $smokeModel = if ($ids -contains $combo) {
+                $combo
+            } else {
+                $candidates | Where-Object { $ids -contains $_ } | Select-Object -First 1
+            }
+            if (-not $smokeModel) {
+                throw "No approved Ship De low-risk model is currently available"
+            }
+            if ($ids -notcontains $combo) {
+                Write-Warning "shipde-low-risk combo is not returned; using verified candidate $smokeModel for the smoke test"
+            }
+
+            $smokeBody = @{
+                model = $smokeModel
+                messages = @(
+                    @{ role = "user"; content = "Reply exactly: SHIPDE_OK" }
+                )
+                temperature = 0
+                max_tokens = 16
+            } | ConvertTo-Json -Depth 5
+            $smoke = Invoke-RestMethod `
+                -Uri "http://127.0.0.1:20128/v1/chat/completions" `
+                -Headers $headers `
+                -Method Post `
+                -ContentType "application/json" `
+                -Body $smokeBody
+            $reply = [string]$smoke.choices[0].message.content
+            if ($reply.Trim() -ne "SHIPDE_OK") {
+                throw "Model smoke test returned an unexpected response"
+            }
+            Write-Host ("Model smoke test: PASS ({0})" -f $smokeModel)
         } catch {
             $failures.Add("9Router model request failed: $($_.Exception.Message)")
         } finally {
             if ($keyPtr -ne [IntPtr]::Zero) {
                 [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($keyPtr)
             }
-            Remove-Variable plainKey, headers, secureKey -ErrorAction SilentlyContinue
+            Remove-Variable plainKey, headers, secureKey, smokeBody, smoke, reply -ErrorAction SilentlyContinue
         }
     }
 }
@@ -91,4 +122,3 @@ if ($failures.Count -gt 0) {
 }
 
 Write-Host "`nSHIP DE AI SETUP: HEALTHY"
-
