@@ -60,6 +60,10 @@ The former file-first parcel-audit PoV is retained as one module and validation 
 - Codex independently reviews every Pull Request with
   [CODEX-REVIEW-PROMPT.md](docs/10-ai-collaboration/CODEX-REVIEW-PROMPT.md).
 - The human starts each handoff and is the only merge owner.
+- Approved, rejected and deferred tools are recorded in
+  [AI-TOOLCHAIN-DECISIONS.md](docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md).
+- Windows setup, 9Router/DSH connection and GitHub protection are completed through
+  [WINDOWS-SETUP-RUNBOOK.md](docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md).
 - The 134-row delivery queue is
   [FEATURE-DELIVERY-REGISTER.csv](docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv):
   four foundation tasks plus all 130 product features.

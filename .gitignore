@@ -4,3 +4,20 @@ node_modules/
 .DS_Store
 dist/
 build/
+
+# Local credentials and agent state
+.env
+.env.*
+!.env.example
+.ai-local/
+.dsh/
+.9router/
+.claude/
+.gemini/
+.codex/
+
+# Local test and diagnostic output
+*.log
+coverage/
+playwright-report/
+test-results/

@@ -41,9 +41,9 @@ stateDiagram-v2
 | `C:\Users\gumac\AI\shipde-gemini` | `agent/gemini` | Gemini primary author |
 | `C:\Users\gumac\AI\shipde-codex` | `agent/codex-review` | Codex planning and independent review |
 
-Each application opens only its own workspace. Before a new Work Item, fetch `origin`, create the prepared feature branch from current `origin/main`, and confirm `git status` is clean. Do not reuse an unmerged branch for another item.
+Each application opens only its own workspace. Complete and verify this layout with `WINDOWS-SETUP-RUNBOOK.md` and the safe commands under `scripts/ai/`. Before a new Work Item, fetch `origin`, create the prepared feature branch from current `origin/main`, and confirm `git status` is clean. Do not reuse an unmerged branch for another item.
 
-Protect `main`: disallow direct pushes and force pushes, require Pull Requests, require the documentation contract and application CI jobs, and require resolved review conversations.
+Configure DSH and 9Router exactly as recorded in `AI-TOOLCHAIN-DECISIONS.md`: local endpoint only, Ponytail/Caveman/Headroom/request logging OFF and no committed credential. Protect `main`: disallow direct pushes and force pushes, require Pull Requests, require the always-present `contract` and `application-gate` checks, and require resolved review conversations.
 
 ## Per-Work-Item procedure
 
@@ -62,7 +62,7 @@ The author verifies branch, Work Item, allowed scope and readiness before editin
 
 ### 3. CI verifies the handoff
 
-GitHub validates the product specification, PR contract, clean install, lint, build and current E2E suite. A failed check is returned to the same author with its exact log. The author must not claim readiness while CI is red.
+The `contract` check runs for every Pull Request and validates the product specification, PR contract and PowerShell control-script syntax. The `application-gate` check also always reports: it runs clean install, lint, build and current E2E only when application-affecting paths changed, otherwise records that those checks are not applicable. A failed required check is returned to the same author with its exact log. The author must not claim readiness while CI is red.
 
 ### 4. Human starts independent Codex review
 
@@ -113,6 +113,8 @@ The human must explicitly approve or start:
 | Business rule missing or contradictory | Mark `BLOCKED`; no agent may invent it |
 | Carrier capability unverified | Use explicit unverified/unsupported state and deterministic mock/manual fallback |
 | 9Router reaches a prohibited domain or fails twice | Stop and escalate same Work Item to Gemini |
+| 9Router injects Ponytail/Caveman or changes evidence through compression | Stop, disable the feature and repeat verification from uncompressed evidence |
+| DSH/9Router version or model catalog changes mid-item | Pin the working version/model or mark `BLOCKED`; never silently substitute |
 | Author cannot open a PR | Push branch and provide commit; human opens PR with the template |
 | CI fails | Same author fixes the exact failure before review |
 | Codex cannot verify evidence | Return `BLOCKED`, never a conditional pass |

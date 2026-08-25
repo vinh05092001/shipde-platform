@@ -8,6 +8,9 @@
 - Removed Ponytail as an always-on rule so UI and completeness follow approved product/UX sources.
 - Preserved the existing PR contract and split application checks into a path-scoped workflow so documentation-only changes do not claim application verification.
 - Recorded the prototype's missing ESLint dependency as a `TASK-FOUND-01` baseline blocker.
+- Added a complete Windows operating runbook and safe scripts for worktree bootstrap, health checks, author handoff, independent review and `main` protection.
+- Recorded the adopted/deferred/rejected toolchain, pinned DSH policy, free-model route and explicit 9Router Ponytail/Caveman prohibition.
+- Made the application gate always report while running expensive application commands only for application-affecting paths.
 
 ## AI collaboration gate — 2026-08-24
 

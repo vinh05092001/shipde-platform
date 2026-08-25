@@ -61,10 +61,13 @@ This register maps the complete documentation set to consolidated repository art
 | AI Collaboration | GEMINI-START-PROMPT.md | Gemini single-Work-Item implementation prompt |
 | AI Collaboration | NINEROUTER-START-PROMPT.md | Constrained low-risk 9Router worker prompt |
 | AI Collaboration | CODEX-REVIEW-PROMPT.md | Codex independent feature review prompt |
+| AI Collaboration | AI-TOOLCHAIN-DECISIONS.md | Adopted, deferred and rejected tools plus safe 9Router policy |
+| AI Collaboration | WINDOWS-SETUP-RUNBOOK.md | Windows worktree, provider, health and protection procedure |
 | Repository Control | AGENTS.md | Shared instructions and repository-specific review rules |
 | Repository Control | PULL_REQUEST_TEMPLATE.md | Required implementation and evidence format |
 | Repository Control | feature-contract-gate.yml | CI enforcement of one Work Item per PR |
-| Repository Control | current-application.yml | Path-scoped install, lint, build and E2E gate for application changes |
+| Repository Control | current-application.yml | Always-present path-aware install, lint, build and E2E gate |
+| Repository Control | scripts/ai/*.ps1 | Safe Windows bootstrap, health, author, review and protection controls |
 
 ## Completeness test
 

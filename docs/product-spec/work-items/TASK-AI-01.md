@@ -10,7 +10,7 @@
 | Dependencies | Existing product specification and CI baseline at commit `31a75ae` |
 | Assigned author | `Codex document owner` |
 | Risk | `LOW` |
-| Allowed paths | `AGENTS.md`, `.agents/**`, `.github/**`, `docs/product-spec/**` |
+| Allowed paths | `AGENTS.md`, `.agents/**`, `.github/**`, `.gitignore`, `scripts/ai/**`, `docs/product-spec/**` |
 | Reviewer | `Fresh independent Codex task plus human merge owner` |
 | Branch | `chore/ai-semi-manual-workflow` |
 | Pull Request | Recorded after PR creation |
@@ -44,8 +44,10 @@ This is a documentation and workflow-control change. It must not change applicat
 - Record assigned author, risk and allowed paths in every prepared Work Item.
 - Rename `READY_FOR_ZCODE` to `READY_FOR_AUTHOR` in active delivery control artifacts.
 - Update issue/PR templates and documentation validation.
-- Separate the always-on contract gate from path-scoped application checks without changing application commands.
-- Remove Ponytail as an always-on repository rule and skill.
+- Separate the always-on contract gate from path-aware application checks without changing application commands.
+- Add safe Windows scripts for bootstrap, health diagnosis, author handoff, review handoff and post-merge `main` protection.
+- Record complete adopted/deferred/rejected toolchain decisions and the DSH-to-9Router configuration contract without storing a credential.
+- Remove Ponytail as an always-on repository rule and skill and explicitly disable its 9Router endpoint injection.
 
 ## Out of scope
 
@@ -81,14 +83,18 @@ None. No runtime contract, event, migration or product data is changed.
 | `AC-AI-02` | Human assigns a prepared item | Separate Gemini and 9Router prompts enforce branch, scope, evidence and stop conditions | Prompt files and workflow cross-references |
 | `AC-AI-03` | Planning marks an item ready | Register, template and validator accept `READY_FOR_AUTHOR` consistently | CSV and validator evidence |
 | `AC-AI-04` | An agent begins UI/code work | No Ponytail always-on rule or skill can override completeness or UX sources | Deleted `.agents` files and root UI rule |
-| `AC-AI-05` | Pull Request opens | Contract validation runs for every PR; install, lint, build and E2E run for application-affecting paths | GitHub Actions results and workflow path filters |
+| `AC-AI-05` | Pull Request opens | `contract` and `application-gate` always report; install, lint, build and E2E run only for application-affecting paths | GitHub Actions results and scope-detection log |
+| `AC-AI-06` | Human completes Windows setup | Versioned scripts verify worktrees, auth, local services and current free-model availability without persisting a secret | PowerShell parse gate and post-merge doctor output |
+| `AC-AI-07` | DSH uses 9Router | Provider fields, model route, disabled prompt injection and escalation boundaries are explicit | Toolchain decision and Windows runbook |
 
 ## Verification commands
 
-For this documentation-only Pull Request:
+For this setup Pull Request:
 
 - `cd docs/product-spec && python3 scripts/validate_docs.py`
 - `python3 docs/product-spec/scripts/validate_pr_contract.py --event "$GITHUB_EVENT_PATH"`
+- Parse every `scripts/ai/*.ps1` file through the PowerShell abstract syntax tree parser in the `contract` job.
+- Confirm `application-gate` succeeds as not applicable because only setup/control paths changed.
 
 For every application-affecting Pull Request, the path-scoped workflow continues to require:
 
@@ -105,4 +111,4 @@ For every application-affecting Pull Request, the path-scoped workflow continues
 
 ## Residual limitations
 
-The DSH-to-9Router provider connection and GitHub branch protection remain explicit one-time local/repository settings after this documentation Pull Request. The prototype currently declares an `eslint` script without the `eslint` development dependency; `TASK-FOUND-01` must repair and prove the application baseline before product feature work.
+The API key entry in DSH and application of GitHub branch protection remain explicit post-merge human actions because credentials must not enter Git and required check names must exist on `main` first. Both actions have guarded scripts/runbook evidence. The prototype currently declares an `eslint` script without the `eslint` development dependency; `TASK-FOUND-01` must repair and prove the application baseline before product feature work.

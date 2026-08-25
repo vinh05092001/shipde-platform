@@ -11,6 +11,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = ROOT.parent.parent
+REPOSITORY_REQUIRED = [
+    "scripts/ai/README.md",
+    "scripts/ai/common.ps1",
+    "scripts/ai/bootstrap-worktrees.ps1",
+    "scripts/ai/doctor.ps1",
+    "scripts/ai/start-work-item.ps1",
+    "scripts/ai/review-pr.ps1",
+    "scripts/ai/protect-main.ps1",
+]
 REQUIRED = [
     "AGENTS.md",
     "README.md",
@@ -37,6 +47,8 @@ REQUIRED = [
     "docs/10-ai-collaboration/GEMINI-START-PROMPT.md",
     "docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md",
     "docs/10-ai-collaboration/CODEX-REVIEW-PROMPT.md",
+    "docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md",
+    "docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md",
     "docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv",
     "work-items/README.md",
     ".github/PULL_REQUEST_TEMPLATE.md",
@@ -58,6 +70,11 @@ def main() -> int:
         path = ROOT / rel
         if not path.is_file() or path.stat().st_size == 0:
             errors.append(f"missing-or-empty: {rel}")
+
+    for rel in REPOSITORY_REQUIRED:
+        path = REPOSITORY_ROOT / rel
+        if not path.is_file() or path.stat().st_size == 0:
+            errors.append(f"missing-or-empty-repository-control: {rel}")
 
     ids: dict[str, list[str]] = {}
     markdown_files = list(ROOT.rglob("*.md"))

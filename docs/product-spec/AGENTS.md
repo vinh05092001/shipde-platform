@@ -85,6 +85,10 @@ No fake primary action, production hardcode, hidden TODO or success toast withou
 
 Do not use Ponytail or another global minimalism/taste prompt as product or UX authority. Reuse existing components only when they satisfy the approved screen specification and full state coverage. User-facing work must follow `DESIGN.md` once approved and, until then, `docs/product-spec/docs/03-ux/DESIGN-SYSTEM-UX-RULES.md` plus the relevant screen specification. Generic AI dashboards, disconnected controls and missing recovery paths must be rejected.
 
+## 9Router request policy
+
+The 9Router endpoint used by DSH must keep Ponytail, Caveman, Headroom and request logging disabled. RTK may compress tool output only for assigned low-risk work and must be disabled while investigating failed tests, full logs or evidence-sensitive diffs. No router optimization may alter the Work Item, business rules, acceptance evidence or UI state coverage.
+
 ## Current pre-foundation verification
 
 Until `TASK-FOUND-02` replaces the package layout, run at minimum:
@@ -158,3 +162,6 @@ Every Pull Request must contain:
 - Gemini prompt: `docs/product-spec/docs/10-ai-collaboration/GEMINI-START-PROMPT.md`
 - 9Router prompt: `docs/product-spec/docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md`
 - Codex review prompt: `docs/product-spec/docs/10-ai-collaboration/CODEX-REVIEW-PROMPT.md`
+- Toolchain decisions: `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`
+- Windows setup runbook: `docs/product-spec/docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md`
+- Safe control scripts: `scripts/ai/README.md`

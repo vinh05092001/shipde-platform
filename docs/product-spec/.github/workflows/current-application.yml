@@ -2,24 +2,40 @@ name: Current application checks
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "src/**"
-      - "prisma/**"
-      - "scripts/**"
-      - "public/**"
-      - "package.json"
-      - "package-lock.json"
-      - "next.config.mjs"
-      - "next-env.d.ts"
-      - "postcss.config.mjs"
-      - "tsconfig.json"
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
 jobs:
+  detect-application-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      application: ${{ steps.scope.outputs.application }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: scope
+        name: Detect application-affecting paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            src prisma public package.json package-lock.json \
+            next.config.mjs next-env.d.ts postcss.config.mjs tsconfig.json \
+            scripts ':(exclude)scripts/ai/**'; then
+            echo "application=false" >> "$GITHUB_OUTPUT"
+            echo "No application-affecting path changed."
+          else
+            echo "application=true" >> "$GITHUB_OUTPUT"
+            echo "Application verification is required."
+          fi
+
   current-application:
+    needs: detect-application-scope
+    if: needs.detect-application-scope.outputs.application == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,3 +47,29 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm run test:e2e
+
+  application-gate:
+    needs: [detect-application-scope, current-application]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce scoped application result
+        env:
+          DETECT_RESULT: ${{ needs.detect-application-scope.result }}
+          APPLICATION: ${{ needs.detect-application-scope.outputs.application }}
+          APPLICATION_RESULT: ${{ needs.current-application.result }}
+        run: |
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "Application scope detection failed."
+            exit 1
+          fi
+          if [ "$APPLICATION" = "true" ] && [ "$APPLICATION_RESULT" != "success" ]; then
+            echo "Required application checks did not pass: $APPLICATION_RESULT"
+            exit 1
+          fi
+          if [ "$APPLICATION" = "true" ]; then
+            echo "Application checks passed."
+          else
+            echo "Application checks are not applicable to this change."
+          fi
+

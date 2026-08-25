@@ -21,3 +21,23 @@ jobs:
         run: cd docs/product-spec && python3 scripts/validate_docs.py
       - name: Validate Pull Request contract
         run: python3 docs/product-spec/scripts/validate_pr_contract.py --event "$GITHUB_EVENT_PATH"
+      - name: Validate PowerShell control scripts
+        shell: pwsh
+        run: |
+          $hasErrors = $false
+          Get-ChildItem scripts/ai/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $hasErrors = $true
+              $errors | ForEach-Object {
+                Write-Error "$($_.Extent.File):$($_.Extent.StartLineNumber) $($_.Message)"
+              }
+            }
+          }
+          if ($hasErrors) { exit 1 }
