@@ -1,4 +1,12 @@
-# Change log\n\n## Semi-manual multi-agent workflow — 2026-08-25\n\n- Replaced the ZCode-only handoff with explicit 9Router, Gemini and Codex roles.\n- Added deterministic worker routing, author risk/path boundaries and human control points.\n- Renamed the ready state to `READY_FOR_AUTHOR` and added dedicated Gemini and 9Router prompts.\n- Removed Ponytail as an always-on rule so UI and completeness follow approved product/UX sources.\n- Preserved the existing PR contract and CI verification gates.
+# Change log
+
+## Semi-manual multi-agent workflow — 2026-08-25
+
+- Replaced the ZCode-only handoff with explicit 9Router, Gemini and Codex roles.
+- Added deterministic worker routing, author risk/path boundaries and human control points.
+- Renamed the ready state to `READY_FOR_AUTHOR` and added dedicated Gemini and 9Router prompts.
+- Removed Ponytail as an always-on rule so UI and completeness follow approved product/UX sources.
+- Preserved the existing PR contract and CI verification gates.
 
 ## AI collaboration gate — 2026-08-24
 
