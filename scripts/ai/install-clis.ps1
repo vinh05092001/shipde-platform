@@ -150,9 +150,17 @@ if ($planned.Count -gt 0) {
     Write-Host "`n=== INSTALLING MISSING NPM CLIS ==="
     foreach ($tool in $planned) {
         Write-Host ("Installing {0}: {1}" -f $tool.Name, $tool.InstallSpec)
-        & npm install --global $tool.InstallSpec --registry=https://registry.npmjs.org/
+        & npm install `
+            --global `
+            $tool.InstallSpec `
+            --registry=https://registry.npmjs.org/ `
+            --fetch-retries=5 `
+            --fetch-retry-factor=2 `
+            --fetch-retry-mintimeout=20000 `
+            --fetch-retry-maxtimeout=120000 `
+            --fetch-timeout=600000
         if ($LASTEXITCODE -ne 0) {
-            throw "Installation failed: $($tool.InstallSpec)"
+            throw "Installation failed: $($tool.InstallSpec). Existing tools were not upgraded; retry this one package after checking npm connectivity."
         }
     }
 }

@@ -11,7 +11,6 @@ Run these scripts from Windows PowerShell. They default to `%USERPROFILE%\AI` an
 | `review-pr.ps1` | Fetch PR identity/checks and copy a review-only prompt | Clipboard only |
 | `protect-main.ps1` | Preview or apply GitHub merge settings and `main` protection | GitHub only with `-Apply` |
 
-`install-clis.ps1` and `protect-main.ps1` are preview-only unless `-Apply` is supplied. The installer never upgrades an already installed CLI and never authenticates an account or reads a credential.
+`install-clis.ps1` and `protect-main.ps1` are preview-only unless `-Apply` is supplied. The installer installs missing npm CLIs sequentially with bounded network retries, never upgrades an already installed CLI and never authenticates an account or reads a credential.
 
 None of these scripts resets, force-pushes, deletes a worktree, merges a PR or stores a credential.
-
