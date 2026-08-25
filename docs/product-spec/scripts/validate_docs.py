@@ -42,6 +42,7 @@ REQUIRED = [
     ".github/PULL_REQUEST_TEMPLATE.md",
     ".github/ISSUE_TEMPLATE/feature-implementation.yml",
     ".github/workflows/feature-contract-gate.yml",
+    ".github/workflows/current-application.yml",
     "scripts/validate_pr_contract.py",
 ]
 
