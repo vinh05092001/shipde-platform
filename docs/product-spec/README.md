@@ -44,7 +44,7 @@ The former file-first parcel-audit PoV is retained as one module and validation 
 9. [Internal API](docs/05-api-integrations/INTERNAL-API.md)
 10. [System architecture](docs/06-architecture/SYSTEM-ARCHITECTURE.md)
 11. [AI build plan](docs/07-ai-build/VERTICAL-SLICE-PLAN.md)
-12. [Semi-manual AI workflow](docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md)
+12. [Human-gated semi-automatic AI workflow](docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md)
 13. [Repository and CLI manifest](docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md)
 14. [Acceptance and E2E](docs/08-testing/ACCEPTANCE-AND-E2E.md)
 15. [Developer handover](docs/09-delivery/DEVELOPER-HANDOVER.md)
