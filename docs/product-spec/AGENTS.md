@@ -24,6 +24,7 @@ Before the foundation migration, validate with the commands present in the curre
 ## Semi-automatic workspaces
 
 - `shipde-platform` / `main`: integration baseline; implementation agents must not edit it directly.
+- `shipde-claude`: Claude business and solution analysis only; never an implementation or review workspace.
 - `shipde-dsh`: low-risk author using DSH/OpenCode through 9Router.
 - `shipde-gemini`: primary implementation author.
 - `shipde-codex`: independent planning, documentation and review workspace.
