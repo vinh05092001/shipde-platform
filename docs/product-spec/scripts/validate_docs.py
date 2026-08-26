@@ -17,6 +17,7 @@ REPOSITORY_REQUIRED = [
     "scripts/ai/common.ps1",
     "scripts/ai/control.ps1",
     "scripts/ai/install-clis.ps1",
+    "scripts/ai/install-control-shortcut.ps1",
     "scripts/ai/bootstrap-worktrees.ps1",
     "scripts/ai/doctor.ps1",
     "scripts/ai/start-work-item.ps1",
