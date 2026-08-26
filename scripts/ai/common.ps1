@@ -15,6 +15,7 @@ function Get-ShipDePaths {
 
     return [ordered]@{
         Main   = Join-Path $AiRoot "shipde-platform"
+        Claude = Join-Path $AiRoot "shipde-claude"
         Dsh    = Join-Path $AiRoot "shipde-dsh"
         Gemini = Join-Path $AiRoot "shipde-gemini"
         Codex  = Join-Path $AiRoot "shipde-codex"
