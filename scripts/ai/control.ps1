@@ -363,10 +363,16 @@ function Invoke-ShipDeReview {
     New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
     $reviewFile = Join-Path $script:HandoffRoot ("pr-{0}-{1}-codex-review.txt" -f $pr.number, $pr.headRefOid.Substring(0, 8))
     Push-Location $script:Paths.Codex
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
+        # Windows PowerShell 5.1 wraps native stderr as NativeCommandError.
+        # Codex writes harmless startup/status text to stderr, so capture it
+        # without allowing the global Stop preference to abort the review.
+        $ErrorActionPreference = "Continue"
         $output = @(& codex review --base origin/main 2>&1)
         $exitCode = $LASTEXITCODE
     } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
     $output | Set-Content -Path $reviewFile -Encoding UTF8
