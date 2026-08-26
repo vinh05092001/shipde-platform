@@ -11,6 +11,7 @@ Windows 10 Pro is used natively. Ubuntu/WSL is not required for this workflow. D
 | Path | Role |
 |---|---|
 | `C:\Users\gumac\AI\shipde-platform` | protected integration baseline |
+| `C:\Users\gumac\AI\shipde-claude` | Claude business and solution analysis only |
 | `C:\Users\gumac\AI\shipde-dsh` | 9Router/DSH low-risk author |
 | `C:\Users\gumac\AI\shipde-gemini` | Gemini primary author |
 | `C:\Users\gumac\AI\shipde-codex` | Codex planner and independent reviewer |
@@ -29,6 +30,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\ai\bootstrap-worktrees.ps1
 
 The bootstrap script never resets, deletes or overwrites a dirty worktree. It stops and reports the exact workspace requiring attention.
 
+Preview and then install the Desktop entry point for the state controller:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-control-shortcut.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-control-shortcut.ps1 -Apply
+```
+
+This shortcut replaces any older app-launch menu. It opens the versioned controller; choose **Continue pipeline** for normal operation.
+
 ## 2. Inventory and install every required CLI
 
 Preview first:
@@ -44,7 +54,7 @@ If the plan is correct, install only missing tools:
 powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-clis.ps1 -Apply -InstallDocker
 ```
 
-The script covers pnpm 11, 9Router, pinned DSH, Gemini CLI, Codex CLI and Docker Desktop. It does not reinstall or upgrade an existing CLI, sign in, start a provider or store a secret. Docker installation can require administrator approval, a restart and opening a new PowerShell window.
+The script covers pnpm 11, 9Router, pinned DSH, Gemini CLI, Codex CLI, Claude Code and Docker Desktop. It does not reinstall or upgrade an existing CLI, sign in, start a provider or store a secret. Docker installation can require administrator approval, a restart and opening a new PowerShell window.
 
 After restart, launch Docker Desktop and verify:
 
@@ -61,21 +71,22 @@ GitHub is already authenticated; verify it rather than pasting a token:
 gh auth status
 ```
 
-Start Gemini from only its worktree and complete browser sign-in:
+Use the already authenticated Antigravity CLI as the preferred Gemini implementation client; Gemini CLI remains the fallback:
 
 ```powershell
 Set-Location "$env:USERPROFILE\AI\shipde-gemini"
-gemini
+agy --version
+gemini --version
 ```
 
-Exit after sign-in and start Codex from its review worktree. Choose **Sign in with ChatGPT**, not an API key, when that option is available:
+Start Codex from its review worktree and use **Sign in with ChatGPT**, not an API key:
 
 ```powershell
 Set-Location "$env:USERPROFILE\AI\shipde-codex"
-codex
+codex login status
 ```
 
-Claude remains in its app for business and solution analysis. No Claude Code installation is required.
+Claude Code is isolated in `shipde-claude` and remains business/solution-only. Its AgentRouter token must be read by an untracked local launcher or user credential environment, never copied into this repository. Validate the launcher with a harmless analysis prompt; do not route AgentRouter through 9Router.
 
 ## 4. Configure 9Router safely
 
@@ -136,24 +147,34 @@ Do not run global installs for the application framework or test stack. The assi
 
 Each Foundation item must pass its own CI and independent Codex review. Installing all project dependencies into the current prototype in PR `#1` would mix four different Work Items and remove the ability to identify which migration broke the product.
 
-## 8. Start an implementation author
+## 8. Continue the delivery pipeline
 
-Codex first prepares and pushes one Work Item branch, then parks its worktree back on `agent/codex-review`. Start the assigned author with:
-
-```powershell
-# Example only after Codex has prepared the remote branch
-.\scripts\ai\start-work-item.ps1 -WorkItemId TASK-FOUND-01 -Slug freeze-prototype -Author GEMINI
-```
-
-The script refuses dirty worktrees, missing remote branches, missing Work Items or an author mismatch.
-
-## 9. Start independent Codex review
+For normal work, do not type Work Item ID, slug, branch, author or Pull Request number. Open **Ship De AI Control** and choose **Continue pipeline**, or run:
 
 ```powershell
-.\scripts\ai\review-pr.ps1 -PullRequest 2
+Set-Location "$env:USERPROFILE\AI\shipde-platform"
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\control.ps1 -Action Resume
 ```
 
-The script fetches the immutable PR identity, prints its checks and copies a review-only prompt to the Windows clipboard. Paste that prompt into a fresh Codex task opened at `shipde-codex`.
+From durable Git/GitHub state the controller performs exactly one next safe transition:
+
+- no prepared item and no implementation PR: open Codex planning with the exact prompt on the clipboard;
+- one prepared `READY_FOR_AUTHOR` branch: verify its dedicated Work Item, select Gemini/Antigravity or 9Router/DSH, check out only that isolated worktree and copy the filled author prompt;
+- one implementation PR with green CI: detach the Codex worktree at its immutable head and run non-interactive independent review;
+- `CHANGES_REQUIRED`: offer to return the findings to the same author and branch;
+- `PASS`: open the PR for the human merge owner.
+
+The human pastes a prepared prompt when an interactive client opens, approves posting a review comment, resolves material product choices and performs the merge. The controller never merges, invents a product decision, bypasses red CI or resets a dirty worktree.
+
+## 9. Synchronize after human merge
+
+After squash-merging the passing PR, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\control.ps1 -Action Sync
+```
+
+This parks and fast-forwards every clean worktree. Then choose **Continue pipeline** again to prepare the next dependency-ready Work Item. The lower-level `start-work-item.ps1` and `review-pr.ps1` remain recovery tools, not the normal operating path.
 
 ## Daily control rules
 
@@ -162,14 +183,14 @@ The script fetches the immutable PR identity, prints its checks and copies a rev
 - Never paste API keys into chat, Work Items, `.env`, commits, screenshots or logs.
 - Stop when a script reports a dirty workspace; inspect instead of resetting.
 - Do not auto-upgrade a CLI during an active Work Item.
-- After merge, run bootstrap and doctor before preparing the next Work Item.
+- After merge, run controller `Sync`; rerun `doctor.ps1` after tool, Docker, credential or model changes.
 - Keep one active implementation Work Item until the workflow has passed its first complete cycle.
 
 ## Final readiness checklist
 
-- All four worktrees are present and clean.
-- `git`, `gh`, `node`, `npm`, `pnpm`, `docker`, `9router`, `dsh`, `gemini` and `codex` resolve in a new PowerShell window.
-- `gh auth status`, Gemini browser sign-in and Codex ChatGPT sign-in are healthy.
+- All five worktrees are present and clean.
+- `git`, `gh`, `node`, `npm`, `pnpm`, `docker`, `9router`, `dsh`, `codex`, `claude` and at least one Gemini client (`agy` preferred, `gemini` fallback) resolve in a new PowerShell window.
+- `gh auth status`, Antigravity/Gemini sign-in, Codex ChatGPT sign-in and the isolated Claude/AgentRouter launcher are healthy.
 - Docker Desktop is running and `docker compose version` succeeds.
 - 9Router port `20128` and DSH port `3080` are reachable when started.
 - DSH successfully completes the `SHIPDE_OK` task through `shipde-low-risk`.
