@@ -1,6 +1,6 @@
 # Ship Dễ — Shared Agent Contract
 
-This is the operating contract for every AI and human working in the Ship Dễ repository. Delivery is semi-manual: GitHub is the durable handoff channel, the human chooses when each stage starts, implementation authors work in isolated worktrees, CI verifies every Pull Request, and a fresh Codex task independently reviews each Work Item before the human merges it.
+This is the operating contract for every AI and human working in the Ship Dễ repository. Delivery is human-gated and semi-automatic: GitHub is the durable handoff channel, the versioned controller derives the next safe stage, implementation authors work in isolated worktrees, CI verifies every Pull Request, and a fresh Codex task independently reviews each Work Item before the human merges it.
 
 ## Source of truth
 
@@ -21,14 +21,14 @@ The current root application is a Next.js/React/Prisma prototype. A visible scre
 
 Before the foundation migration, validate with the commands present in the current root `package.json`. After migration, the root commands in the target stack document become authoritative. Any command change must update this file and CI in the same Pull Request.
 
-## Semi-manual workspaces
+## Semi-automatic workspaces
 
 - `shipde-platform` / `main`: integration baseline; implementation agents must not edit it directly.
 - `shipde-dsh`: low-risk author using DSH/OpenCode through 9Router.
 - `shipde-gemini`: primary implementation author.
 - `shipde-codex`: independent planning, documentation and review workspace.
 
-Never assume chat history is shared. The Work Item, branch, commits, Pull Request, CI evidence and review comments are the complete handoff package.
+Never assume chat history is shared. The Work Item, branch, commits, Pull Request, CI evidence and review comments are the complete handoff package. `scripts/ai/control.ps1` may route these artifacts, but it may not invent product meaning, bypass a dirty worktree, approve a failed gate or merge.
 
 ## Role separation
 
@@ -37,7 +37,7 @@ Never assume chat history is shared. The Work Item, branch, commits, Pull Reques
 - **9Router worker — constrained author:** handles only explicitly assigned, low-risk, deterministic work such as fixtures, mocks, types, small CRUD, focused tests, lint or mechanical changes. It must stop when scope reaches architecture, authentication, authorization, tenant isolation, money, carrier side effects, database ownership or product UX decisions.
 - **Gemini — primary author:** plans and implements complete foundation or vertical product Work Items, adds evidence and opens/updates the Pull Request.
 - **Codex — independent reviewer:** uses a fresh review-only task, checks the full Pull Request against the Work Item and source specifications, and returns `PASS`, `CHANGES_REQUIRED` or `BLOCKED`. It does not merge or silently fix the author's branch during review.
-- **Human — product and merge owner:** resolves product decisions, starts each semi-manual handoff, accepts residual risk and merges only after CI is green and Codex returns `PASS`.
+- **Human — product and merge owner:** resolves product decisions, triggers each controller gate, accepts residual risk and merges only after CI is green and Codex returns `PASS`.
 
 The author never approves its own work. A feature is not complete because an author says it is complete.
 
