@@ -7,7 +7,7 @@ param(
 . (Join-Path $PSScriptRoot "common.ps1")
 
 $failures = [System.Collections.Generic.List[string]]::new()
-$commands = @("git", "gh", "node", "npm", "pnpm", "docker", "dsh", "9router", "gemini", "codex")
+$commands = @("git", "gh", "node", "npm", "pnpm", "docker", "dsh", "9router", "gemini", "codex", "claude")
 
 Write-Host "=== COMMANDS ==="
 foreach ($command in $commands) {
@@ -30,7 +30,7 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
 
 Write-Host "`n=== GLOBAL NPM VERSIONS ==="
 if (Get-Command npm -ErrorAction SilentlyContinue) {
-    $npmPackages = @("pnpm", "9router", "@deepseek-ai/dsh", "@google/gemini-cli", "@openai/codex")
+    $npmPackages = @("pnpm", "9router", "@deepseek-ai/dsh", "@google/gemini-cli", "@openai/codex", "@anthropic-ai/claude-code")
     foreach ($package in $npmPackages) {
         $raw = @(& npm list --global $package --depth=0 --json 2>$null) -join "`n"
         $version = $null
@@ -50,6 +50,15 @@ if (Get-Command npm -ErrorAction SilentlyContinue) {
         Write-Host ("{0,-24} {1}" -f $package, $(if ($version) { $version } else { "NOT INSTALLED" }))
     }
 }
+
+Write-Host "`n=== OPTIONAL/ALTERNATE CLIENTS ==="
+$agyCommand = Get-Command agy -ErrorAction SilentlyContinue
+Write-Host ("Antigravity CLI: {0}" -f $(if ($agyCommand) { "OK  $($agyCommand.Source)" } else { "NOT INSTALLED; Gemini CLI fallback remains available" }))
+
+$agentRouterSaved = -not [string]::IsNullOrWhiteSpace(
+    [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
+)
+Write-Host ("AgentRouter user credential: {0}" -f $(if ($agentRouterSaved) { "CONFIGURED" } else { "NOT CONFIGURED; Claude app remains the fallback" }))
 
 Write-Host "`n=== GITHUB ==="
 if (Get-Command gh -ErrorAction SilentlyContinue) {
