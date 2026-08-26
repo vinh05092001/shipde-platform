@@ -11,6 +11,8 @@ param(
     [ValidateSet("GEMINI", "9ROUTER")]
     [string]$Author,
 
+    [string]$Branch,
+
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI")
 )
 
@@ -19,7 +21,14 @@ param(
 Assert-ShipDeCommand git
 $paths = Get-ShipDePaths -AiRoot $AiRoot
 $workspace = if ($Author -eq "GEMINI") { $paths.Gemini } else { $paths.Dsh }
-$branch = "feat/$($WorkItemId.ToLowerInvariant())-$Slug"
+$expectedSuffix = "$($WorkItemId.ToLowerInvariant())-$Slug"
+if ([string]::IsNullOrWhiteSpace($Branch)) {
+    $Branch = "feat/$expectedSuffix"
+}
+if ($Branch -notmatch "^(feat|fix)/$([regex]::Escape($expectedSuffix))$") {
+    throw "Branch must be feat/$expectedSuffix or fix/$expectedSuffix"
+}
+$branch = $Branch
 
 Assert-ShipDeRepository -Path $workspace
 Assert-ShipDeClean -Path $workspace
