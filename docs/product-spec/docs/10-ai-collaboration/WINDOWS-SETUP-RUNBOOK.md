@@ -2,7 +2,7 @@
 
 ## Completion definition
 
-Setup is complete only when all worktrees are healthy, all required machine CLIs resolve, Docker Compose is available, Gemini and Codex can authenticate, 9Router and DSH can reach an approved free model, GitHub gates are green and `main` is protected. No API key is stored in Git.
+Setup is complete only when all five worktrees are healthy, all required machine CLIs resolve, Docker Compose is available, Claude/AgentRouter, Gemini/Antigravity and Codex can authenticate, 9Router and DSH can reach an approved free model, GitHub gates are green and `main` is protected. No API key is stored in Git.
 
 Windows 10 Pro is used natively. Ubuntu/WSL is not required for this workflow. Docker Desktop may use its supported Windows backend; follow Docker's restart prompt if one appears.
 
