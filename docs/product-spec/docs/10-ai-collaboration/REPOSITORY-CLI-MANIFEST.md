@@ -13,11 +13,12 @@ Only `vinh05092001/shipde-platform` is cloned as product source. Upstream open-s
 | Local path | Git branch while parked | Owner | Purpose |
 |---|---|---|---|
 | `C:\Users\gumac\AI\shipde-platform` | `main` | Human | Protected integration baseline |
+| `C:\Users\gumac\AI\shipde-claude` | `agent/claude` | Claude | Business and solution analysis only |
 | `C:\Users\gumac\AI\shipde-dsh` | `agent/dsh` | 9Router/DSH | Bounded low-risk author |
 | `C:\Users\gumac\AI\shipde-gemini` | `agent/gemini` | Gemini | Primary implementation author |
 | `C:\Users\gumac\AI\shipde-codex` | `agent/codex-review` | Codex | Planning and fresh independent review |
 
-These are four worktrees of one Git repository, not four independent copies. Branches, commits, Pull Requests and CI are the shared memory between apps.
+These are five worktrees of one Git repository, not five independent copies. Branches, commits, Pull Requests and CI are the shared memory between apps.
 
 ## Machine-wide CLI layer
 
@@ -30,10 +31,12 @@ These are four worktrees of one Git repository, not four independent copies. Bra
 | [Docker Desktop](https://github.com/docker/compose) / Compose | `docker`, `docker compose` | Install now through Windows Package Manager | Native Windows/Hyper-V or Docker backend; no Ubuntu worktree is required |
 | [9Router](https://github.com/decolua/9router) | `9router` | Install if missing; never auto-upgrade during an active Work Item | Bind to localhost; prompt injection and request logging off |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | `dsh` | Pin `@deepseek-ai/dsh@0.1.1-rc.2` | Only the `shipde-dsh` worktree; credential kept outside Git |
-| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini` | Install if missing; record the resolved version | Sign in interactively with the approved Google account |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini` | Install as a supported fallback; record the resolved version | Sign in interactively with the approved Google account |
+| Google Antigravity CLI | `agy` | Install from Google's official installer when available | Preferred authenticated Gemini implementation client in `shipde-gemini` |
 | OpenAI Codex CLI | `codex` | Install if missing; record the resolved version | Sign in with ChatGPT; use the `shipde-codex` worktree for planning/review |
+| Claude Code | `claude` | Install if missing; record the resolved version | Business/solution analysis only in `shipde-claude`; AgentRouter token remains outside Git |
 
-Claude remains the business and solution analyst in its app. Claude Code is not required because it would duplicate the implementation-author role and invite business-analysis context to modify production code.
+AgentRouter is a direct remote provider for Claude Code, not another product worktree and not a 9Router upstream. Its promotional balance is temporary capacity; the workflow must continue to work if that provider is removed.
 
 The guarded installer is `scripts/ai/install-clis.ps1`. It previews by default, installs only missing tools with `-Apply`, does not upgrade an installed CLI, does not sign in and never reads or stores an API key.
 
@@ -89,9 +92,9 @@ Do not install all skills from a public collection. Do not install remote skills
 
 Repository and CLI preparation is complete only when:
 
-1. all four Ship Dễ worktrees are clean and point to the intended parked branches;
-2. `git`, `gh`, `node`, `npm`, `pnpm`, `docker`, `9router`, `dsh`, `gemini` and `codex` resolve from a new PowerShell window;
-3. `docker compose version`, `gh auth status`, Gemini sign-in and Codex ChatGPT sign-in succeed;
+1. all five Ship Dễ worktrees are clean and point to the intended parked branches;
+2. `git`, `gh`, `node`, `npm`, `pnpm`, `docker`, `9router`, `dsh`, `codex`, `claude` and at least one authenticated Gemini client (`agy` preferred, `gemini` fallback) resolve from a new PowerShell window;
+3. `docker compose version`, `gh auth status`, Gemini/Antigravity sign-in, Codex ChatGPT sign-in and the Claude/AgentRouter launcher succeed;
 4. 9Router and DSH complete the approved `SHIPDE_OK` model smoke test without exposing the key;
 5. installed versions are recorded by `doctor.ps1`, and no CLI is auto-upgraded during an active Work Item;
 6. project-level repositories are introduced only by their assigned Foundation Pull Request with CI evidence.
