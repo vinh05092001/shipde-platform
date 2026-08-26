@@ -37,6 +37,7 @@ stateDiagram-v2
 | Workspace | Branch parked after setup | Purpose |
 |---|---|---|
 | `C:\Users\gumac\AI\shipde-platform` | `main` | Integration baseline; never direct implementation |
+| `C:\Users\gumac\AI\shipde-claude` | `agent/claude` | Claude business and solution analysis only |
 | `C:\Users\gumac\AI\shipde-dsh` | `agent/dsh` | 9Router/DSH low-risk author |
 | `C:\Users\gumac\AI\shipde-gemini` | `agent/gemini` | Gemini primary author |
 | `C:\Users\gumac\AI\shipde-codex` | `agent/codex-review` | Codex planning and independent review |
@@ -97,7 +98,7 @@ The human merges only when CI is green, every acceptance row has evidence, Codex
 
 ## Human gates
 
-Normal daily operation uses only `control.ps1 -Action Resume`; advanced stage-specific actions remain available for recovery. The human must explicitly approve or start:
+Normal daily operation uses only `control.ps1 -Action Resume` (or **Continue pipeline** from the Desktop shortcut); advanced stage-specific actions remain available for recovery. The human must explicitly approve or start:
 
 1. material business/solution decisions;
 2. the selected Work Item and implementation author;
