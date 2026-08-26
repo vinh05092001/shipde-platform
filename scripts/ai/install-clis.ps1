@@ -68,6 +68,13 @@ $npmTools = @(
         Package = "@openai/codex"
         InstallSpec = "@openai/codex@latest"
         RequiredVersion = $null
+    },
+    [ordered]@{
+        Name = "Claude Code"
+        Command = "claude"
+        Package = "@anthropic-ai/claude-code"
+        InstallSpec = "@anthropic-ai/claude-code@latest"
+        RequiredVersion = $null
     }
 )
 
