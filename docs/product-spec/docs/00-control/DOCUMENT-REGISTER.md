@@ -53,7 +53,7 @@ This register maps the complete documentation set to consolidated repository art
 | Delivery | OPERATIONS-RUNBOOK.md | Operational recovery procedures |
 | Delivery | DEVELOPER-HANDOVER.md | Human developer handover |
 | Delivery | RISKS-OPEN-ISSUES.md | Risks, unknowns and validation plan |
-| AI Collaboration | SEMI-MANUAL-AI-WORKFLOW.md | 9Router/Gemini author, Codex reviewer and human control workflow |
+| AI Collaboration | SEMI-MANUAL-AI-WORKFLOW.md | Human-gated state controller, 9Router/Gemini author and independent Codex review workflow |
 | AI Collaboration | FOUNDATION-WORK-ITEMS.md | Required repository foundation sequence |
 | AI Collaboration | FEATURE-DELIVERY-REGISTER.csv | Machine-readable queue covering all feature IDs |
 | AI Collaboration | WORK-ITEM-TEMPLATE.md | Definition-of-Ready implementation contract |
@@ -68,7 +68,7 @@ This register maps the complete documentation set to consolidated repository art
 | Repository Control | PULL_REQUEST_TEMPLATE.md | Required implementation and evidence format |
 | Repository Control | feature-contract-gate.yml | CI enforcement of one Work Item per PR |
 | Repository Control | current-application.yml | Always-present path-aware install, lint, build and E2E gate |
-| Repository Control | scripts/ai/*.ps1 | Safe Windows CLI installation, bootstrap, health, author, review and protection controls |
+| Repository Control | scripts/ai/*.ps1 | Safe Windows CLI/shortcut installation, five-worktree bootstrap, state routing, health, author, review and protection controls |
 
 ## Completeness test
 
