@@ -33,6 +33,7 @@ if ($mainBranch -ne "main") {
 Invoke-ShipDeGit -Path $paths.Main -Arguments @("merge", "--ff-only", "origin/main") | Out-Null
 
 $worktrees = @(
+    @{ Path = $paths.Claude; Branch = "agent/claude" },
     @{ Path = $paths.Dsh; Branch = "agent/dsh" },
     @{ Path = $paths.Gemini; Branch = "agent/gemini" },
     @{ Path = $paths.Codex; Branch = "agent/codex-review" }
@@ -62,6 +63,7 @@ foreach ($entry in $paths.GetEnumerator()) {
     Assert-ShipDeClean -Path $entry.Value
     $branch = (& git -C $entry.Value branch --show-current).Trim()
     $parkedBranch = switch ($entry.Key) {
+        "Claude" { "agent/claude" }
         "Dsh" { "agent/dsh" }
         "Gemini" { "agent/gemini" }
         "Codex" { "agent/codex-review" }
