@@ -15,6 +15,7 @@ REPOSITORY_ROOT = ROOT.parent.parent
 REPOSITORY_REQUIRED = [
     "scripts/ai/README.md",
     "scripts/ai/common.ps1",
+    "scripts/ai/control.ps1",
     "scripts/ai/install-clis.ps1",
     "scripts/ai/bootstrap-worktrees.ps1",
     "scripts/ai/doctor.ps1",
