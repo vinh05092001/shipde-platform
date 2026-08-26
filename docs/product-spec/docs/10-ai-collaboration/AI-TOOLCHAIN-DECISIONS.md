@@ -11,9 +11,10 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 | Tool or repository | Decision | Purpose | Boundary |
 |---|---|---|---|
 | Git, GitHub and Git worktrees | USE NOW | Isolated workspaces, durable handoff, CI and review | `main` is never an implementation workspace |
-| Claude app | USE NOW | Business and solution analysis | No production implementation or self-approval; Claude Code is not required |
+| Claude app and Claude Code | USE NOW | Business and solution analysis | Claude Code runs only in `shipde-claude` through AgentRouter; no production implementation or self-approval |
+| AgentRouter | USE NOW | Direct Claude Code-compatible provider with a user-owned promotional balance | Keep its token outside Git; do not route it through 9Router or assume promotional credit is permanent |
 | Codex app and Codex CLI | USE NOW | Work Item planning, documentation and fresh independent review | Planning and review are separate tasks; no author self-review |
-| Gemini app and [Gemini CLI](https://github.com/google-gemini/gemini-cli) | USE NOW | Primary implementation for complete vertical and high-risk work | One prepared Work Item and branch at a time |
+| Gemini app, Antigravity CLI and [Gemini CLI](https://github.com/google-gemini/gemini-cli) | USE NOW | Primary implementation for complete vertical and high-risk work | Prefer authenticated `agy`; `gemini` is the fallback; one prepared Work Item and branch at a time |
 | [9Router](https://github.com/decolua/9router) | USE NOW | Local OpenAI-compatible gateway, free-model fallback and usage visibility | Localhost only; Ponytail and Caveman disabled |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | USE NOW, PIN | Controlled 9Router author workspace | Developer preview; keep `@deepseek-ai/dsh@0.1.1-rc.2` until an upgrade is tested |
 | pnpm 11 and Docker Desktop/Compose | INSTALL NOW | Prepare the Node 24 machine for the target monorepo and local infrastructure | Do not migrate the current npm prototype outside its Foundation Work Item |
@@ -54,6 +55,10 @@ Use one local endpoint:
 
 DSH stores credentials outside the project and keeps only a credential reference in settings. The provider ID is permanent, so use exactly `9router`.
 
+## AgentRouter provider policy
+
+AgentRouter is used directly by Claude Code for business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. The repository stores no token, provider session or request log. AgentRouter is not chained through 9Router, is not an implementation-author route and its promotional balance is treated as temporary capacity rather than a permanent free entitlement.
+
 ## Low-cost model route
 
 Create a 9Router combo named `shipde-low-risk`. Select only model IDs currently returned by `GET /v1/models`, in this preference order when available:
@@ -66,7 +71,7 @@ Free catalogs change. The health check reports missing candidates; never silentl
 
 ## Upgrade rule
 
-Do not auto-upgrade 9Router, DSH, Codex CLI, Gemini CLI or an agent plugin during an active Work Item. `install-clis.ps1` installs only missing tools. Record current versions, upgrade in a dedicated low-risk task, run the doctor, execute a disposable test branch and verify prompt injection settings before promoting the version.
+Do not auto-upgrade 9Router, DSH, Codex CLI, Gemini/Antigravity CLI, Claude Code or an agent plugin during an active Work Item. `install-clis.ps1` installs only missing tools. Record current versions, upgrade in a dedicated low-risk task, run the doctor, execute a disposable test branch and verify prompt injection settings before promoting the version.
 
 ## UI quality stack
 
