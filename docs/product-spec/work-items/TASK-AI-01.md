@@ -17,7 +17,7 @@
 
 ## Business outcome
 
-The product owner can press one `Resume` action to advance the complete Ship Dễ repository/toolchain across 9Router, Gemini and Codex without retyping Work Item, branch, author or Pull Request data and without allowing agents to edit the same workspace. Low-cost models receive bounded low-risk work, Gemini owns primary implementation, Codex independently reviews every Work Item, and the human retains all material decisions and merge authority.
+The product owner can press one `Resume` action to advance the complete Ship Dễ repository/toolchain across Claude, 9Router, Gemini and Codex without retyping Work Item, branch, author or Pull Request data and without allowing agents to edit the same workspace. Low-cost models receive bounded low-risk work, Gemini owns primary implementation, Codex independently reviews every Work Item, and the human retains all material decisions and merge authority.
 
 ## Source references
 
@@ -25,12 +25,12 @@ The product owner can press one `Resume` action to advance the complete Ship D�
 - Product baseline, technology stack and delivery queue under `docs/product-spec/docs/`.
 - Existing GitHub issue, Pull Request and CI contract gates.
 - Official installation sources for Codex CLI, Gemini CLI, DSH, 9Router and the selected quality repositories.
-- Human decision: prepare the entire repository and CLI layer before beginning product implementation, using human-gated semi-automatic control with isolated DSH, Gemini and Codex worktrees.
+- Human decision: prepare the entire repository and CLI layer before beginning product implementation, using human-gated semi-automatic control with isolated Claude, DSH, Gemini and Codex worktrees.
 
 ## Preconditions and dependencies
 
 - GitHub repository and existing product specification are available.
-- Worktrees `shipde-dsh`, `shipde-gemini` and `shipde-codex` exist at the same baseline.
+- Worktrees `shipde-claude`, `shipde-dsh`, `shipde-gemini` and `shipde-codex` exist at the same baseline.
 - Git, GitHub CLI, Node and npm are already available on Windows.
 - Existing CI validates documentation, lint, build and E2E behavior when their paths apply.
 
@@ -47,7 +47,7 @@ This is a documentation and workflow-control change. It may add guarded machine-
 - Rename `READY_FOR_ZCODE` to `READY_FOR_AUTHOR` in active delivery control artifacts.
 - Update issue/PR templates and documentation validation.
 - Separate the always-on contract gate from path-aware application checks without changing application commands.
-- Add safe Windows scripts for CLI installation, bootstrap, health diagnosis, human-gated state routing, author handoff, non-interactive Codex review, post-review correction handoff and post-merge `main` protection.
+- Add safe Windows scripts for CLI installation, five-worktree bootstrap, health diagnosis, Desktop controller installation, human-gated state routing, author handoff, non-interactive Codex review, post-review correction handoff and post-merge `main` protection.
 - Record the complete repository/CLI/service inventory and exact rule for global, project-local, Docker and guidance dependencies.
 - Record complete adopted/deferred/rejected toolchain decisions and the DSH-to-9Router configuration contract without storing a credential.
 - Bind every application repository/tool to `TASK-FOUND-01` through `TASK-FOUND-04` instead of installing an unreviewed mixed stack into the prototype.
@@ -111,7 +111,9 @@ For the post-merge Windows machine:
 
 - `powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-clis.ps1 -InstallDocker`
 - `powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-clis.ps1 -Apply -InstallDocker`
+- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-control-shortcut.ps1 -Apply`
 - `powershell -ExecutionPolicy Bypass -File .\scripts\ai\doctor.ps1 -TestDocker -TestModels`
+- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\control.ps1 -Action Status`
 
 For every application-affecting Pull Request, the path-scoped workflow continues to require:
 
