@@ -1,8 +1,8 @@
-# 9Router / Gemini → Codex Semi-Manual Delivery Workflow
+# 9Router / Gemini → Codex Human-Gated Semi-Automatic Delivery Workflow
 
 ## Decision
 
-The tools do not share chat history and do not automatically wake one another. They coordinate through one GitHub repository, one root `AGENTS.md`, one prepared Work Item, one feature branch and one Pull Request. The human explicitly starts implementation, starts Codex review and performs the merge; CI and versioned evidence carry the handoff.
+The tools do not share chat history. They coordinate through one GitHub repository, one root `AGENTS.md`, one prepared Work Item, one feature branch and one Pull Request. The versioned `scripts/ai/control.ps1` reads Git/GitHub state and routes one `Resume` action to Codex planning, the assigned implementation author or Codex review. The human starts each gate, approves consequential decisions and performs the merge; CI and versioned evidence carry every handoff.
 
 ## Responsibility map
 
@@ -22,7 +22,7 @@ The tools do not share chat history and do not automatically wake one another. T
 ```mermaid
 stateDiagram-v2
     [*] --> ReadyForAuthor
-    ReadyForAuthor --> InProgress: human starts assigned author
+    ReadyForAuthor --> InProgress: controller starts assigned author
     InProgress --> ReadyForCodex: PR and evidence complete
     ReadyForCodex --> ChangesRequired: Codex finds gaps
     ChangesRequired --> ReadyForCodex: same author fixes same PR
@@ -53,10 +53,9 @@ Use `FEATURE-DELIVERY-REGISTER.csv` in ascending `delivery_order`. Dependencies 
 
 Foundation items run before product features. Use `CODEX-PLANNING-PROMPT.md`.
 
-### 2. Human starts the assigned author
+### 2. Controller starts the assigned author
 
-- If assigned `GEMINI`, open `shipde-gemini`, fetch the prepared branch and use `GEMINI-START-PROMPT.md`.
-- If assigned `9ROUTER`, open `shipde-dsh`, fetch the prepared branch and use `NINEROUTER-START-PROMPT.md`.
+The human runs `powershell -ExecutionPolicy Bypass -File .\\scripts\\ai\\control.ps1 -Action Resume`. The controller discovers the earliest remote `READY_FOR_AUTHOR` branch, reads the assigned author from its Work Item, parks the Codex worktree, checks out the branch only in the correct author worktree, copies the completed prompt and opens Gemini/Antigravity or DSH/9Router. No Work Item ID, slug, branch or author is retyped.
 
 The author verifies branch, Work Item, allowed scope and readiness before editing. It implements one Work Item, runs the required checks, updates evidence, opens one Pull Request, marks `READY_FOR_CODEX` and stops.
 
@@ -64,9 +63,9 @@ The author verifies branch, Work Item, allowed scope and readiness before editin
 
 The `contract` check runs for every Pull Request and validates the product specification, PR contract and PowerShell control-script syntax. The `application-gate` check also always reports: it runs clean install, lint, build and current E2E only when application-affecting paths changed, otherwise records that those checks are not applicable. A failed required check is returned to the same author with its exact log. The author must not claim readiness while CI is red.
 
-### 4. Human starts independent Codex review
+### 4. Controller starts independent Codex review
 
-Open a fresh Codex review task in `shipde-codex` with the PR URL and `CODEX-REVIEW-PROMPT.md`. The reviewer reads the repository evidence rather than relying on the planning or author conversation. It returns exactly `PASS`, `CHANGES_REQUIRED` or `BLOCKED` and posts actionable findings.
+When `Resume` detects one non-draft implementation Pull Request and every required check is green, it detaches `shipde-codex` at the immutable PR head and runs `codex review --base origin/main`. The review is saved outside the repository. The human confirms before it is posted to GitHub. The reviewer reads repository evidence rather than planning or author chat and returns `PASS`, `CHANGES_REQUIRED` or `BLOCKED`.
 
 ### 5. Correction loop
 
@@ -74,7 +73,7 @@ Open a fresh Codex review task in `shipde-codex` with the PR URL and `CODEX-REVI
 
 ### 6. Human merge and workspace sync
 
-The human merges only when CI is green, every acceptance row has evidence, Codex returns `PASS`, review conversations are resolved and residual limitations are explicitly accepted. After merge, reconcile the register to `MERGED`, record PR/merge commit, then fast-forward each parked agent branch from `origin/main` before preparing another item.
+The human merges only when CI is green, every acceptance row has evidence, Codex returns `PASS`, review conversations are resolved and residual limitations are explicitly accepted. After merge, reconcile the register to `MERGED`, record PR/merge commit, then run `control.ps1 -Action Sync` to park and fast-forward each clean agent worktree from `origin/main` before preparing another item.
 
 ## Routing rules
 
@@ -96,9 +95,9 @@ The human merges only when CI is green, every acceptance row has evidence, Codex
 - user-facing flows, design-system composition and accessibility;
 - database migrations or cross-module changes.
 
-## Manual control points
+## Human gates
 
-The human must explicitly approve or start:
+Normal daily operation uses only `control.ps1 -Action Resume`; advanced stage-specific actions remain available for recovery. The human must explicitly approve or start:
 
 1. material business/solution decisions;
 2. the selected Work Item and implementation author;
