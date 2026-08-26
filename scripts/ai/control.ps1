@@ -224,6 +224,7 @@ function Start-ShipDeAssignedAuthor {
         -WorkItemId $Item.WorkItemId `
         -Slug $Item.Slug `
         -Author $Item.Author `
+        -Branch $Item.Branch `
         -AiRoot $AiRoot
 
     $workspace = if ($Item.Author -eq "GEMINI") { $script:Paths.Gemini } else { $script:Paths.Dsh }
@@ -413,6 +414,7 @@ function Invoke-ShipDeSync {
     Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("merge", "--ff-only", "origin/main") | Out-Null
 
     $parked = [ordered]@{
+        Claude = "agent/claude"
         Dsh = "agent/dsh"
         Gemini = "agent/gemini"
         Codex = "agent/codex-review"
