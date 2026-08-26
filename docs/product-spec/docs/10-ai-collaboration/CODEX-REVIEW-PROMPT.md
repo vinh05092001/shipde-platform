@@ -1,6 +1,6 @@
 # Codex Feature Review Prompt
 
-Use this in the Codex app after the Pull Request is open. Replace the placeholders. Codex remains reviewer-only during this task.
+Use this only for manual recovery or an app-based review after the Pull Request is open. Normal operation waits for green CI and runs `codex review --base origin/main` through `control.ps1`; the repository review rules below remain authoritative. Codex is reviewer-only during either path.
 
 ```text
 Independently review Ship Dễ Pull Request <PR_URL> for exactly <WORK_ITEM_ID>. Do not modify code and do not merge.
@@ -29,5 +29,5 @@ Required review report:
 PASS requires: all acceptance rows pass, CI evidence is valid, no unresolved consequential finding exists, and the implementation is a real vertical feature rather than a mock or UI-only path.
 ```
 
-For the semi-manual handoff, the human opens a fresh Codex task in the dedicated Codex worktree with the Pull Request URL. Any GitHub quick review is optional and never replaces the deeper requirement-by-requirement acceptance review.
+For the human-gated semi-automatic handoff, the controller detaches the dedicated Codex worktree at the immutable PR head, starts a fresh non-interactive review and saves the report outside Git. The human confirms before posting it and remains the only merge owner. This manual prompt is the recovery path and never weakens the requirement-by-requirement acceptance review.
 
