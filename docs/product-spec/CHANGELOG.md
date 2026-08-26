@@ -1,6 +1,6 @@
 # Change log
 
-## Semi-manual multi-agent workflow — 2026-08-25
+## Human-gated semi-automatic AI workflow — 2026-08-25
 
 - Replaced the ZCode-only handoff with explicit 9Router, Gemini and Codex roles.
 - Added deterministic worker routing, author risk/path boundaries and human control points.
@@ -8,7 +8,7 @@
 - Removed Ponytail as an always-on rule so UI and completeness follow approved product/UX sources.
 - Preserved the existing PR contract and split application checks into a path-scoped workflow so documentation-only changes do not claim application verification.
 - Recorded the prototype's missing ESLint dependency as a `TASK-FOUND-01` baseline blocker.
-- Added a complete Windows operating runbook and safe scripts for worktree bootstrap, health checks, author handoff, independent review and `main` protection.
+- Added a complete Windows operating runbook, five isolated worktrees and safe scripts for one-action state routing, Desktop entry, health checks, author handoff, independent review and `main` protection.
 - Recorded the adopted/deferred/rejected toolchain, pinned DSH policy, free-model route and explicit 9Router Ponytail/Caveman prohibition.
 - Made the application gate always report while running expensive application commands only for application-affecting paths.
 
