@@ -1,4 +1,4 @@
-# TASK-AI-01 — Establish semi-manual AI delivery workflow
+# TASK-AI-01 — Establish human-gated semi-automatic AI delivery workflow
 
 ## Control
 
@@ -17,7 +17,7 @@
 
 ## Business outcome
 
-The product owner can prepare and coordinate the complete Ship Dễ repository/toolchain across 9Router, Gemini and Codex without copying code or allowing agents to edit the same workspace. Low-cost models receive bounded low-risk work, Gemini owns primary implementation, Codex independently reviews every Work Item, and the human retains all material decisions and merge authority.
+The product owner can press one `Resume` action to advance the complete Ship Dễ repository/toolchain across 9Router, Gemini and Codex without retyping Work Item, branch, author or Pull Request data and without allowing agents to edit the same workspace. Low-cost models receive bounded low-risk work, Gemini owns primary implementation, Codex independently reviews every Work Item, and the human retains all material decisions and merge authority.
 
 ## Source references
 
@@ -25,7 +25,7 @@ The product owner can prepare and coordinate the complete Ship Dễ repository/t
 - Product baseline, technology stack and delivery queue under `docs/product-spec/docs/`.
 - Existing GitHub issue, Pull Request and CI contract gates.
 - Official installation sources for Codex CLI, Gemini CLI, DSH, 9Router and the selected quality repositories.
-- Human decision: prepare the entire repository and CLI layer before beginning product implementation, using semi-manual control with isolated DSH, Gemini and Codex worktrees.
+- Human decision: prepare the entire repository and CLI layer before beginning product implementation, using human-gated semi-automatic control with isolated DSH, Gemini and Codex worktrees.
 
 ## Preconditions and dependencies
 
@@ -47,7 +47,7 @@ This is a documentation and workflow-control change. It may add guarded machine-
 - Rename `READY_FOR_ZCODE` to `READY_FOR_AUTHOR` in active delivery control artifacts.
 - Update issue/PR templates and documentation validation.
 - Separate the always-on contract gate from path-aware application checks without changing application commands.
-- Add safe Windows scripts for CLI installation, bootstrap, health diagnosis, author handoff, review handoff and post-merge `main` protection.
+- Add safe Windows scripts for CLI installation, bootstrap, health diagnosis, human-gated state routing, author handoff, non-interactive Codex review, post-review correction handoff and post-merge `main` protection.
 - Record the complete repository/CLI/service inventory and exact rule for global, project-local, Docker and guidance dependencies.
 - Record complete adopted/deferred/rejected toolchain decisions and the DSH-to-9Router configuration contract without storing a credential.
 - Bind every application repository/tool to `TASK-FOUND-01` through `TASK-FOUND-04` instead of installing an unreviewed mixed stack into the prototype.
@@ -57,7 +57,7 @@ This is a documentation and workflow-control change. It may add guarded machine-
 
 - Entering account credentials, DSH provider credentials or 9Router API keys on behalf of the human.
 - Starting Docker services or accepting Docker Desktop terms on the user's machine.
-- Adding automatic orchestration.
+- Fully unattended orchestration, parallel implementation, automatic product decisions, automatic merge, deployment or credential entry.
 - Installing application framework/test dependencies before their assigned Foundation Work Item.
 - Implementing product features or changing production code.
 - Changing existing application CI commands; this task only scopes when those commands run.
@@ -65,6 +65,7 @@ This is a documentation and workflow-control change. It may add guarded machine-
 ## Business rules and edge cases
 
 - One implementation author works on one Work Item and one branch.
+- The controller automatically derives the next stage from versioned Git/GitHub state, but a human initiates each stage and remains the only merge owner.
 - Only the Ship Dễ repository is cloned; upstream repositories use supported, versioned consumption mechanisms.
 - Machine agent CLIs may be global; framework/build/test CLIs must be lockfile-pinned project dependencies.
 - The installer previews by default, installs only missing tools, never auto-upgrades and never authenticates an account.
@@ -87,7 +88,7 @@ None. No runtime contract, event, migration or product data is changed.
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| `AC-AI-01` | Any agent opens the repository | Root and nested `AGENTS.md` describe the same semi-manual roles and source precedence | File diff and documentation validator |
+| `AC-AI-01` | Any agent opens the repository | Root and nested `AGENTS.md` describe the same human-gated semi-automatic roles and source precedence | File diff and documentation validator |
 | `AC-AI-02` | Human assigns a prepared item | Separate Gemini and 9Router prompts enforce branch, scope, evidence and stop conditions | Prompt files and workflow cross-references |
 | `AC-AI-03` | Planning marks an item ready | Register, template and validator accept `READY_FOR_AUTHOR` consistently | CSV and validator evidence |
 | `AC-AI-04` | An agent begins UI/code work | No Ponytail always-on rule or skill can override completeness or UX sources | Deleted `.agents` files and root UI rule |
@@ -95,6 +96,7 @@ None. No runtime contract, event, migration or product data is changed.
 | `AC-AI-06` | Human completes Windows setup | Versioned scripts verify worktrees, all machine CLIs, auth, Docker, local services and current free-model availability without persisting a secret | PowerShell parse gate and post-merge doctor output |
 | `AC-AI-07` | DSH uses 9Router | Provider fields, model route, disabled prompt injection and escalation boundaries are explicit | Toolchain decision and Windows runbook |
 | `AC-AI-08` | Human asks which repositories and CLIs are required | Every product workspace, global CLI, project dependency, Docker service, focused agent guidance and exclusion has one owner and installation phase | Repository/CLI manifest, installer preview and Foundation mapping |
+| `AC-AI-09` | Human runs controller `Resume` | Controller chooses planning, assigned author or Codex review from Git/GitHub state; it stops on dirty worktrees, multiple active PRs or red CI and never merges | `scripts/ai/control.ps1`, PowerShell parser gate and dry status evidence |
 
 ## Verification commands
 
@@ -102,7 +104,7 @@ For this setup Pull Request:
 
 - `cd docs/product-spec && python3 scripts/validate_docs.py`
 - `python3 docs/product-spec/scripts/validate_pr_contract.py --event "$GITHUB_EVENT_PATH"`
-- Parse every `scripts/ai/*.ps1` file through the PowerShell abstract syntax tree parser in the `contract` job.
+- Parse every `scripts/ai/*.ps1` file, including `control.ps1`, through the PowerShell abstract syntax tree parser in the `contract` job.
 - Confirm `application-gate` succeeds as not applicable because only setup/control paths changed.
 
 For the post-merge Windows machine:
