@@ -117,6 +117,47 @@ function Get-ShipDePreparedItems {
     return @($items | Sort-Object DeliveryOrder, WorkItemId -Unique)
 }
 
+function ConvertFrom-ShipDeJsonList {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Json
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Json)) {
+        return
+    }
+
+    # Windows PowerShell 5.1 can emit a JSON array as one pipeline object.
+    # Assign first, then enumerate explicitly so [] produces zero records.
+    $parsed = $Json | ConvertFrom-Json
+    foreach ($item in $parsed) {
+        if ($null -ne $item) {
+            Write-Output $item
+        }
+    }
+}
+
+function Assert-ShipDeJsonListCompatibility {
+    $empty = @(ConvertFrom-ShipDeJsonList -Json "[]")
+    $single = @(ConvertFrom-ShipDeJsonList -Json '[{"title":"one"}]')
+    $multiple = @(ConvertFrom-ShipDeJsonList -Json '[{"title":"one"},{"title":"two"}]')
+
+    if ($empty.Count -ne 0) {
+        throw "Controller JSON compatibility check failed for an empty list."
+    }
+    if ($single.Count -ne 1 -or [string]$single[0].title -ne "one") {
+        throw "Controller JSON compatibility check failed for a single-item list."
+    }
+    if (
+        $multiple.Count -ne 2 -or
+        [string]$multiple[0].title -ne "one" -or
+        [string]$multiple[1].title -ne "two"
+    ) {
+        throw "Controller JSON compatibility check failed for a multi-item list."
+    }
+}
+
 function Get-ShipDeOpenPullRequests {
     Assert-ShipDeCommand gh
     $json = & gh pr list `
@@ -128,7 +169,14 @@ function Get-ShipDeOpenPullRequests {
     if ($LASTEXITCODE -ne 0) {
         throw "Cannot read open Pull Requests from GitHub."
     }
-    return @($json | ConvertFrom-Json)
+
+    $pullRequests = @(ConvertFrom-ShipDeJsonList -Json ($json -join [Environment]::NewLine))
+    foreach ($pullRequest in $pullRequests) {
+        if (-not $pullRequest.PSObject.Properties["title"]) {
+            throw "GitHub returned a malformed Pull Request record without a title."
+        }
+        Write-Output $pullRequest
+    }
 }
 
 function Get-ShipDeCheckField {
@@ -717,6 +765,7 @@ function Show-ShipDeMenu {
     }
 }
 
+Assert-ShipDeJsonListCompatibility
 Assert-ShipDeCommand git
 Assert-ShipDeCommand gh
 New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
