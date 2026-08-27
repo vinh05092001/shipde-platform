@@ -11,6 +11,7 @@ param(
 $script:RegisterPath = "docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv"
 $script:HandoffRoot = Join-Path $AiRoot "handoff"
 $script:Paths = Get-ShipDePaths -AiRoot $AiRoot
+$script:RequiredPrChecks = @("contract", "application-gate")
 
 function Get-ShipDeTextAtRef {
     param(
@@ -130,20 +131,83 @@ function Get-ShipDeOpenPullRequests {
     return @($json | ConvertFrom-Json)
 }
 
+function Get-ShipDeCheckField {
+    param(
+        [Parameter(Mandatory = $true)][object]$Check,
+        [Parameter(Mandatory = $true)][string]$Field
+    )
+
+    $property = $Check.PSObject.Properties[$Field]
+    if (-not $property) {
+        return ""
+    }
+    return [string]$property.Value
+}
+
+function Get-ShipDeCheckName {
+    param([Parameter(Mandatory = $true)][object]$Check)
+
+    $name = Get-ShipDeCheckField -Check $Check -Field "name"
+    if (-not [string]::IsNullOrWhiteSpace($name)) {
+        return $name
+    }
+    return Get-ShipDeCheckField -Check $Check -Field "context"
+}
+
+function Get-ShipDeCheckResult {
+    param([Parameter(Mandatory = $true)][object]$Check)
+
+    $conclusion = (Get-ShipDeCheckField -Check $Check -Field "conclusion").ToUpperInvariant()
+    if (-not [string]::IsNullOrWhiteSpace($conclusion)) {
+        if ($conclusion -eq "SUCCESS") { return "SUCCESS" }
+        if ($conclusion -in @("SKIPPED", "NEUTRAL")) { return "NEUTRAL" }
+        return "FAILED"
+    }
+
+    $state = (Get-ShipDeCheckField -Check $Check -Field "state").ToUpperInvariant()
+    if (-not [string]::IsNullOrWhiteSpace($state)) {
+        if ($state -eq "SUCCESS") { return "SUCCESS" }
+        if ($state -in @("ERROR", "FAILURE")) { return "FAILED" }
+        return "PENDING"
+    }
+
+    return "PENDING"
+}
+
 function Get-ShipDePrGate {
     param([Parameter(Mandatory = $true)][object]$PullRequest)
 
     $checks = @($PullRequest.statusCheckRollup)
-    $pending = @($checks | Where-Object {
-        [string]::IsNullOrWhiteSpace([string]$_.conclusion) -and $_.status -ne "COMPLETED"
-    })
-    $failed = @($checks | Where-Object {
-        -not [string]::IsNullOrWhiteSpace([string]$_.conclusion) -and
-        $_.conclusion -notin @("SUCCESS", "SKIPPED", "NEUTRAL")
-    })
+    if ($checks.Count -eq 0) {
+        return "PENDING"
+    }
 
-    if ($failed.Count -gt 0) { return "FAILED" }
-    if ($pending.Count -gt 0 -or $checks.Count -eq 0) { return "PENDING" }
+    $failed = @($checks | Where-Object {
+        (Get-ShipDeCheckResult -Check $_) -eq "FAILED"
+    })
+    if ($failed.Count -gt 0) {
+        return "FAILED"
+    }
+
+    foreach ($requiredName in $script:RequiredPrChecks) {
+        $matches = @($checks | Where-Object {
+            (Get-ShipDeCheckName -Check $_) -eq $requiredName
+        })
+        if ($matches.Count -eq 0) {
+            return "PENDING"
+        }
+
+        $results = @($matches | ForEach-Object {
+            Get-ShipDeCheckResult -Check $_
+        })
+        if (@($results | Where-Object { $_ -in @("FAILED", "NEUTRAL") }).Count -gt 0) {
+            return "FAILED"
+        }
+        if (@($results | Where-Object { $_ -ne "SUCCESS" }).Count -gt 0) {
+            return "PENDING"
+        }
+    }
+
     return "GREEN"
 }
 
@@ -330,11 +394,45 @@ function Start-ShipDeFixRound {
     Write-Host "Correction prompt copied and the same author reopened on the same branch."
 }
 
+function Get-ShipDePullRequestByNumber {
+    param([Parameter(Mandatory = $true)][int]$Number)
+
+    $matches = @(Get-ShipDeOpenPullRequests | Where-Object {
+        [int]$_.number -eq $Number
+    })
+    if ($matches.Count -gt 1) {
+        throw "GitHub returned duplicate Pull Request #$Number records."
+    }
+    return $matches | Select-Object -First 1
+}
+
+function Assert-ShipDeReviewTarget {
+    param(
+        [Parameter(Mandatory = $true)][object]$PullRequest,
+        [Parameter(Mandatory = $true)][string]$ExpectedHeadSha
+    )
+
+    if (-not $PullRequest) {
+        throw "Pull Request closed or disappeared before review completed."
+    }
+    if ($PullRequest.isDraft) {
+        throw "Pull Request #$($PullRequest.number) is draft. Finish it and mark it ready before continuing."
+    }
+    if ([string]$PullRequest.headRefOid -ne $ExpectedHeadSha) {
+        throw "Pull Request head moved. Discard this review attempt and rerun against the new CI-approved head."
+    }
+
+    $gate = Get-ShipDePrGate -PullRequest $PullRequest
+    if ($gate -ne "GREEN") {
+        throw "Pull Request checks are no longer green for immutable head $ExpectedHeadSha (gate: $gate)."
+    }
+}
+
 function Invoke-ShipDeReview {
     Assert-ShipDeCommand codex
     Assert-ShipDeCommand gh
     $pullRequests = @(Get-ShipDeOpenPullRequests | Where-Object {
-        -not $_.isDraft -and (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title))
+        Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
     })
     if ($pullRequests.Count -eq 0) {
         Write-Host "No implementation Pull Request is ready. Starting or preparing the next item instead."
@@ -346,55 +444,108 @@ function Invoke-ShipDeReview {
     }
 
     $pr = $pullRequests[0]
-    $gate = Get-ShipDePrGate -PullRequest $pr
     Write-Host ("PR #{0}: {1}" -f $pr.number, $pr.title)
+    if ($pr.isDraft) {
+        Write-Host ("BLOCKED: PR #{0} is still draft. Finish the same Work Item and mark the PR ready; no new item was started." -f $pr.number)
+        Write-Host ([string]$pr.url)
+        return
+    }
+
+    $gate = Get-ShipDePrGate -PullRequest $pr
     Write-Host ("CI gate: {0}" -f $gate)
     if ($gate -ne "GREEN") {
-        Start-Process ([string]$pr.url) | Out-Null
-        Write-Host "Codex review did not start because required checks are not green."
+        Write-Host "Codex review did not start because both contract and application-gate must complete successfully."
+        Write-Host ([string]$pr.url)
         return
+    }
+
+    $reviewHeadSha = [string]$pr.headRefOid
+    if ($reviewHeadSha -notmatch '^[0-9a-fA-F]{40,64}$') {
+        throw "Pull Request did not provide a valid immutable head SHA."
     }
 
     Assert-ShipDeRepository -Path $script:Paths.Codex
     Assert-ShipDeClean -Path $script:Paths.Codex
     Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @("fetch", "origin", "--prune") | Out-Null
-    Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @("switch", "--detach", "origin/$($pr.headRefName)") | Out-Null
+    Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @(
+        "fetch",
+        "origin",
+        ("refs/pull/{0}/head" -f $pr.number)
+    ) | Out-Null
+
+    $fetchedHeadSha = (& git -C $script:Paths.Codex rev-parse FETCH_HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $fetchedHeadSha -ne $reviewHeadSha) {
+        throw "Fetched PR head does not match the CI-approved head $reviewHeadSha."
+    }
+
+    $currentPr = Get-ShipDePullRequestByNumber -Number ([int]$pr.number)
+    Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
+    Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @("switch", "--detach", $reviewHeadSha) | Out-Null
+
+    $detachedHeadSha = (& git -C $script:Paths.Codex rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $detachedHeadSha -ne $reviewHeadSha) {
+        throw "Codex worktree is not detached at the approved head $reviewHeadSha."
+    }
 
     New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
-    $reviewFile = Join-Path $script:HandoffRoot ("pr-{0}-{1}-codex-review.txt" -f $pr.number, $pr.headRefOid.Substring(0, 8))
+    $reviewStem = "pr-{0}-{1}-codex-review" -f $pr.number, $reviewHeadSha.Substring(0, 8)
+    $reviewFile = Join-Path $script:HandoffRoot "$reviewStem.txt"
+    $diagnosticFile = Join-Path $script:HandoffRoot "$reviewStem-diagnostics.txt"
     Push-Location $script:Paths.Codex
     $previousErrorActionPreference = $ErrorActionPreference
     try {
-        # Windows PowerShell 5.1 wraps native stderr as NativeCommandError.
-        # Codex writes harmless startup/status text to stderr, so capture it
-        # without allowing the global Stop preference to abort the review.
+        # Codex emits progress diagnostics on native stderr. Keep those in a
+        # separate local file so GitHub receives only the final review.
         $ErrorActionPreference = "Continue"
-        $output = @(& codex review --base origin/main 2>&1)
+        $output = @(& codex review --base origin/main 2> $diagnosticFile)
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
+
     $output | Set-Content -Path $reviewFile -Encoding UTF8
     $output | ForEach-Object { Write-Host $_ }
     if ($exitCode -ne 0) {
-        throw "Codex review failed with exit code $exitCode. Output: $reviewFile"
+        throw "Codex review failed with exit code $exitCode. Diagnostics: $diagnosticFile"
+    }
+    if ($output.Count -eq 0) {
+        throw "Codex returned no final review. Diagnostics: $diagnosticFile"
     }
 
-    $verdictMatches = [regex]::Matches(($output -join "`n"), '(?im)\b(PASS|CHANGES_REQUIRED|BLOCKED)\b')
+    $currentPr = Get-ShipDePullRequestByNumber -Number ([int]$pr.number)
+    Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
+
+    $reviewText = $output -join [Environment]::NewLine
+    $verdictMatches = [regex]::Matches($reviewText, '(?im)\b(PASS|CHANGES_REQUIRED|BLOCKED)\b')
     $verdict = if ($verdictMatches.Count -gt 0) {
         $verdictMatches[$verdictMatches.Count - 1].Groups[1].Value.ToUpperInvariant()
     } else {
         "UNKNOWN"
     }
 
-    Write-Host ("Review file: {0}" -f $reviewFile)
-    Write-Host ("Verdict    : {0}" -f $verdict)
+    $commentFile = $reviewFile
+    $reviewByteCount = [System.Text.Encoding]::UTF8.GetByteCount($reviewText)
+    if ($reviewByteCount -gt 60000) {
+        $commentFile = Join-Path $script:HandoffRoot "$reviewStem-github-summary.txt"
+        $prefix = "Codex final output exceeded the GitHub comment limit. The local file preserves the complete output." +
+            [Environment]::NewLine + [Environment]::NewLine
+        # Four UTF-8 bytes per character is the worst case; 14,000 characters
+        # plus the prefix remains safely below GitHub's 65,536-byte limit.
+        $tailLength = [Math]::Min(14000, $reviewText.Length)
+        $prefix + $reviewText.Substring($reviewText.Length - $tailLength) |
+            Set-Content -Path $commentFile -Encoding UTF8
+    }
+
+    Write-Host ("Review target: {0}" -f $reviewHeadSha)
+    Write-Host ("Review file  : {0}" -f $reviewFile)
+    Write-Host ("Diagnostics  : {0}" -f $diagnosticFile)
+    Write-Host ("Verdict      : {0}" -f $verdict)
     $post = Read-Host "Post this Codex review to PR #$($pr.number)? (Y/N)"
     if ($post -match '(?i)^y(?:es)?$') {
-        & gh pr comment $pr.number --repo $Repository --body-file $reviewFile
+        & gh pr comment $pr.number --repo $Repository --body-file $commentFile
         if ($LASTEXITCODE -ne 0) {
-            throw "Could not post the review comment. The local review file is preserved."
+            throw "Could not post the review comment. Local review files are preserved."
         }
     }
 
@@ -407,8 +558,8 @@ function Invoke-ShipDeReview {
             }
         }
     } elseif ($verdict -eq "PASS") {
-        Start-Process ([string]$pr.url) | Out-Null
-        Write-Host "PASS recorded. Only the human merge owner may merge."
+        Write-Host ([string]$pr.url)
+        Write-Host "PASS recorded for the immutable head above. Only the human merge owner may merge."
     }
 }
 

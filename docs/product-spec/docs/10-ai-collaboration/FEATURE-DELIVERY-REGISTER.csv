@@ -1,4 +1,5 @@
 "delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
+"0","S00","AI workflow","TASK-AI-01","","Human-gated semi-automatic AI delivery","Route one Work Item through author, exact CI gates, immutable Codex review and human merge","READY_FOR_CODEX","","docs/product-spec/work-items/TASK-AI-01.md","chore/ai-semi-manual-workflow","#1","",""
 "1","S00","Foundation","TASK-FOUND-01","","Freeze and classify the prototype","Inventory and protect current behavior","READY_FOR_AUTHOR","","docs/product-spec/docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md","","","",""
 "2","S00","Foundation","TASK-FOUND-02","","Migrate repository structure","Move to target monorepo without feature rewrite","BLOCKED_DEPENDENCY","TASK-FOUND-01","docs/product-spec/docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md","","","",""
 "3","S00","Foundation","TASK-FOUND-03","","Add API worker and local infrastructure","Create executable backend foundation","BLOCKED_DEPENDENCY","TASK-FOUND-02","docs/product-spec/docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md","","","",""

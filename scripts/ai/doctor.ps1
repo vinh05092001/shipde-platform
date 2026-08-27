@@ -9,6 +9,61 @@ param(
 $failures = [System.Collections.Generic.List[string]]::new()
 $commands = @("git", "gh", "node", "npm", "pnpm", "docker", "dsh", "9router", "gemini", "codex", "claude")
 
+function Invoke-ShipDeBoundedProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$CommandText,
+        [int]$TimeoutSeconds = 60
+    )
+
+    $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) ("shipde-probe-{0}.out" -f [Guid]::NewGuid())
+    $stderrPath = Join-Path ([IO.Path]::GetTempPath()) ("shipde-probe-{0}.err" -f [Guid]::NewGuid())
+    $encodedCommand = [Convert]::ToBase64String(
+        [System.Text.Encoding]::Unicode.GetBytes($CommandText)
+    )
+    $process = $null
+    try {
+        $process = Start-Process -FilePath "powershell.exe" -ArgumentList @(
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            $encodedCommand
+        ) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden
+
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit()
+            return [PSCustomObject]@{
+                ExitCode = -1
+                TimedOut = $true
+                Output = ""
+            }
+        }
+
+        $stdout = if (Test-Path $stdoutPath) {
+            Get-Content $stdoutPath -Raw -ErrorAction SilentlyContinue
+        } else {
+            ""
+        }
+        $stderr = if (Test-Path $stderrPath) {
+            Get-Content $stderrPath -Raw -ErrorAction SilentlyContinue
+        } else {
+            ""
+        }
+        return [PSCustomObject]@{
+            ExitCode = $process.ExitCode
+            TimedOut = $false
+            Output = $stdout + [Environment]::NewLine + $stderr
+        }
+    } finally {
+        if ($process) {
+            $process.Dispose()
+        }
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host "=== COMMANDS ==="
 foreach ($command in $commands) {
     $resolved = Get-Command $command -ErrorAction SilentlyContinue
@@ -58,7 +113,107 @@ Write-Host ("Antigravity CLI: {0}" -f $(if ($agyCommand) { "OK  $($agyCommand.So
 $agentRouterSaved = -not [string]::IsNullOrWhiteSpace(
     [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
 )
-Write-Host ("AgentRouter user credential: {0}" -f $(if ($agentRouterSaved) { "CONFIGURED" } else { "NOT CONFIGURED; Claude app remains the fallback" }))
+Write-Host ("AgentRouter user credential: {0}" -f $(if ($agentRouterSaved) { "CONFIGURED" } else { "NOT CONFIGURED; Claude account authentication will be checked" }))
+
+Write-Host ""
+Write-Host "=== AGENT AUTHENTICATION ==="
+Write-Host "Bounded agent probes may use one minimal model request for the selected Google and AgentRouter routes."
+if (Get-Command codex -ErrorAction SilentlyContinue) {
+    $codexProbe = Invoke-ShipDeBoundedProbe -CommandText "& codex login status" -TimeoutSeconds 30
+    if ($codexProbe.TimedOut -or $codexProbe.ExitCode -ne 0 -or $codexProbe.Output -match "(?i)not logged in") {
+        Write-Host "Codex: NOT AUTHENTICATED"
+        $failures.Add("Codex authentication check failed; run codex login")
+    } else {
+        Write-Host "Codex: AUTHENTICATED"
+    }
+}
+
+$googleCommand = $null
+$googleProbe = $null
+if (Get-Command agy -ErrorAction SilentlyContinue) {
+    $googleCommand = "agy"
+    $googleProbe = Invoke-ShipDeBoundedProbe -CommandText "& agy --print-timeout 45s --print 'Reply exactly: SHIPDE_AUTH_OK' --output-format text" -TimeoutSeconds 60
+} elseif (Get-Command gemini -ErrorAction SilentlyContinue) {
+    $googleCommand = "gemini"
+    $googleProbe = Invoke-ShipDeBoundedProbe -CommandText "& gemini --prompt 'Reply exactly: SHIPDE_AUTH_OK' --output-format text" -TimeoutSeconds 60
+}
+if ($googleCommand) {
+    if ($googleProbe.TimedOut -or $googleProbe.ExitCode -ne 0 -or $googleProbe.Output -notmatch "SHIPDE_AUTH_OK") {
+        Write-Host ("{0}: NOT AUTHENTICATED OR UNREACHABLE" -f $googleCommand)
+        $failures.Add("$googleCommand authentication smoke test failed")
+    } else {
+        Write-Host ("{0}: AUTHENTICATED" -f $googleCommand)
+    }
+}
+
+if (Get-Command claude -ErrorAction SilentlyContinue) {
+    $claudeEnvironmentNames = @(
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_USE_VERTEX",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "ANTHROPIC_VERTEX_BASE_URL",
+        "CLOUD_ML_REGION",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GCLOUD_PROJECT",
+        "GOOGLE_CLOUD_PROJECT",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"
+    )
+    $originalClaudeEnvironment = @{}
+    foreach ($name in $claudeEnvironmentNames) {
+        $item = Get-Item "Env:$name" -ErrorAction SilentlyContinue
+        $originalClaudeEnvironment[$name] = if ($item) { $item.Value } else { $null }
+    }
+
+    $claudeHealthy = $false
+    try {
+        if ($agentRouterSaved) {
+            foreach ($name in $claudeEnvironmentNames) {
+                Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+            }
+            $env:ANTHROPIC_AUTH_TOKEN = [Environment]::GetEnvironmentVariable(
+                "AGENTROUTER_API_KEY",
+                "User"
+            )
+            $env:ANTHROPIC_BASE_URL = "https://agentrouter.org/"
+            $env:ANTHROPIC_MODEL = "claude-opus-4-8"
+            $env:CLAUDE_CONFIG_DIR = Join-Path $env:USERPROFILE ".claude-agentrouter-old"
+            $claudeProbe = Invoke-ShipDeBoundedProbe -CommandText "& claude -p 'Reply exactly: SHIPDE_AUTH_OK' --model claude-opus-4-8 --output-format text --max-turns 1" -TimeoutSeconds 60
+            $claudeHealthy = (
+                -not $claudeProbe.TimedOut -and
+                $claudeProbe.ExitCode -eq 0 -and
+                $claudeProbe.Output -match "SHIPDE_AUTH_OK"
+            )
+        } else {
+            $claudeProbe = Invoke-ShipDeBoundedProbe -CommandText "& claude auth status --text" -TimeoutSeconds 30
+            $claudeHealthy = (
+                -not $claudeProbe.TimedOut -and
+                $claudeProbe.ExitCode -eq 0
+            )
+        }
+    } finally {
+        foreach ($name in $claudeEnvironmentNames) {
+            $value = $originalClaudeEnvironment[$name]
+            if ($null -eq $value) {
+                Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+            } else {
+                Set-Item "Env:$name" -Value $value
+            }
+        }
+    }
+
+    if ($claudeHealthy) {
+        Write-Host "Claude: AUTHENTICATED"
+    } else {
+        Write-Host "Claude: NOT AUTHENTICATED OR UNREACHABLE"
+        $failures.Add("Claude authentication check failed")
+    }
+}
 
 Write-Host "`n=== GITHUB ==="
 if (Get-Command gh -ErrorAction SilentlyContinue) {

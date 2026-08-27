@@ -66,6 +66,8 @@ This is a documentation and workflow-control change. It may add guarded machine-
 
 - One implementation author works on one Work Item and one branch.
 - The controller automatically derives the next stage from versioned Git/GitHub state, but a human initiates each stage and remains the only merge owner.
+- A matching draft Pull Request blocks the pipeline; it never causes another Work Item to start.
+- Codex reviews only the immutable PR head SHA whose required `contract` and `application-gate` jobs both completed successfully.
 - Only the Ship Dễ repository is cloned; upstream repositories use supported, versioned consumption mechanisms.
 - Machine agent CLIs may be global; framework/build/test CLIs must be lockfile-pinned project dependencies.
 - The installer previews by default, installs only missing tools, never auto-upgrades and never authenticates an account.
@@ -92,11 +94,11 @@ None. No runtime contract, event, migration or product data is changed.
 | `AC-AI-02` | Human assigns a prepared item | Separate Gemini and 9Router prompts enforce branch, scope, evidence and stop conditions | Prompt files and workflow cross-references |
 | `AC-AI-03` | Planning marks an item ready | Register, template and validator accept `READY_FOR_AUTHOR` consistently | CSV and validator evidence |
 | `AC-AI-04` | An agent begins UI/code work | No Ponytail always-on rule or skill can override completeness or UX sources | Deleted `.agents` files and root UI rule |
-| `AC-AI-05` | Pull Request opens | `contract` and `application-gate` always report; install, lint, build and E2E run only for application-affecting paths | GitHub Actions results and scope-detection log |
-| `AC-AI-06` | Human completes Windows setup | Versioned scripts verify worktrees, all machine CLIs, auth, Docker, local services and current free-model availability without persisting a secret | PowerShell parse gate and post-merge doctor output |
+| `AC-AI-05` | Pull Request opens | `contract` and `application-gate` must both succeed; a default-application path policy runs install, lint, build and E2E for every path not explicitly classified as control/documentation-only | GitHub Actions results and scope-detection log |
+| `AC-AI-06` | Human completes Windows setup | Versioned scripts verify worktrees, every selected agent authentication route with bounded non-secret probes, Docker, local services and current free-model availability without persisting a secret | PowerShell parse gate and post-merge doctor output |
 | `AC-AI-07` | DSH uses 9Router | Provider fields, model route, disabled prompt injection and escalation boundaries are explicit | Toolchain decision and Windows runbook |
 | `AC-AI-08` | Human asks which repositories and CLIs are required | Every product workspace, global CLI, project dependency, Docker service, focused agent guidance and exclusion has one owner and installation phase | Repository/CLI manifest, installer preview and Foundation mapping |
-| `AC-AI-09` | Human runs controller `Resume` | Controller chooses planning, assigned author or Codex review from Git/GitHub state; it stops on dirty worktrees, multiple active PRs or red CI and never merges | `scripts/ai/control.ps1`, PowerShell parser gate and dry status evidence |
+| `AC-AI-09` | Human runs controller `Resume` | Controller chooses planning, assigned author or Codex review from Git/GitHub state; it blocks drafts, requires both named gates, detaches and re-verifies the immutable head SHA, stops on dirty/multiple/moved states and never merges | `scripts/ai/control.ps1`, PowerShell parser gate and dry status evidence |
 
 ## Verification commands
 
@@ -128,7 +130,8 @@ These npm commands are replaced atomically by the documented root pnpm commands 
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | Recorded by reviewer | Pending | Pending |
+| 1 | `c8dd4c69` | `CHANGES_REQUIRED` | Seven P1/P2 findings recorded in PR comment |
+| 2 | Correction head on PR #1 | Pending fresh review | PR protection, path scope, immutable review SHA, exact gates, draft blocking, agent authentication and all-ID Work Item validation |
 
 ## Residual limitations
 

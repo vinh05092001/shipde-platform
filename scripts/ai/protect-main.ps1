@@ -18,7 +18,12 @@ $payload = [ordered]@{
         contexts = $requiredChecks
     }
     enforce_admins = $true
-    required_pull_request_reviews = $null
+    required_pull_request_reviews = [ordered]@{
+        dismiss_stale_reviews = $false
+        require_code_owner_reviews = $false
+        required_approving_review_count = 0
+        require_last_push_approval = $false
+    }
     restrictions = $null
     required_linear_history = $true
     allow_force_pushes = $false
@@ -33,6 +38,7 @@ $json = $payload | ConvertTo-Json -Depth 10
 Write-Host "Repository      : $Repository"
 Write-Host "Protected branch: main"
 Write-Host "Required checks : $($requiredChecks -join ', ')"
+Write-Host "Pull requests   : required (0 mandatory approvals)"
 Write-Host "Merge method    : squash only"
 Write-Host "Delete branch   : after merge"
 

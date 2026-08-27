@@ -22,15 +22,24 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
-            src prisma public package.json package-lock.json \
-            next.config.mjs next-env.d.ts postcss.config.mjs tsconfig.json \
-            scripts ':(exclude)scripts/ai/**'; then
-            echo "application=false" >> "$GITHUB_OUTPUT"
-            echo "No application-affecting path changed."
-          else
-            echo "application=true" >> "$GITHUB_OUTPUT"
+          application=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              .agents/*|.github/*|docs/*|scripts/ai/*|AGENTS.md|README.md|.gitignore)
+                ;;
+              *)
+                application=true
+                echo "Application-affecting path: $path"
+                break
+                ;;
+            esac
+          done < <(git diff --name-only -z "$BASE_SHA" "$HEAD_SHA")
+
+          echo "application=$application" >> "$GITHUB_OUTPUT"
+          if [ "$application" = "true" ]; then
             echo "Application verification is required."
+          else
+            echo "Only explicitly non-application control or documentation paths changed."
           fi
 
   current-application:
