@@ -117,6 +117,94 @@ function Get-ShipDePreparedItems {
     return @($items | Sort-Object DeliveryOrder, WorkItemId -Unique)
 }
 
+function ConvertFrom-ShipDeJsonList {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Json
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Json)) {
+        return
+    }
+
+    # Windows PowerShell 5.1 can emit a JSON array as one pipeline object.
+    # Assign first, then enumerate explicitly so [] produces zero records.
+    $parsed = $Json | ConvertFrom-Json
+    foreach ($item in $parsed) {
+        if ($null -eq $item) {
+            throw "Controller JSON list contains a null record."
+        }
+        Write-Output $item
+    }
+}
+
+function Assert-ShipDePullRequestRecord {
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [object]$PullRequest
+    )
+
+    if ($null -eq $PullRequest) {
+        throw "GitHub returned a null Pull Request record."
+    }
+    $titleProperty = $PullRequest.PSObject.Properties["title"]
+    if (
+        -not $titleProperty -or
+        [string]::IsNullOrWhiteSpace([string]$titleProperty.Value)
+    ) {
+        throw "GitHub returned a malformed Pull Request record without a usable title."
+    }
+}
+
+function Assert-ShipDeJsonListCompatibility {
+    $empty = @(ConvertFrom-ShipDeJsonList -Json "[]")
+    $single = @(ConvertFrom-ShipDeJsonList -Json '[{"title":"one"}]')
+    $multiple = @(ConvertFrom-ShipDeJsonList -Json '[{"title":"one"},{"title":"two"}]')
+
+    if ($empty.Count -ne 0) {
+        throw "Controller JSON compatibility check failed for an empty list."
+    }
+    if ($single.Count -ne 1 -or [string]$single[0].title -ne "one") {
+        throw "Controller JSON compatibility check failed for a single-item list."
+    }
+    if (
+        $multiple.Count -ne 2 -or
+        [string]$multiple[0].title -ne "one" -or
+        [string]$multiple[1].title -ne "two"
+    ) {
+        throw "Controller JSON compatibility check failed for a multi-item list."
+    }
+
+    $nullRejected = $false
+    try {
+        @(ConvertFrom-ShipDeJsonList -Json "[null]") | Out-Null
+    } catch {
+        $nullRejected = $true
+    }
+    if (-not $nullRejected) {
+        throw "Controller JSON compatibility check accepted a null list record."
+    }
+
+    foreach ($invalidRecord in @(
+        [PSCustomObject]@{},
+        [PSCustomObject]@{ title = $null },
+        [PSCustomObject]@{ title = "" },
+        [PSCustomObject]@{ title = " " }
+    )) {
+        $invalidRejected = $false
+        try {
+            Assert-ShipDePullRequestRecord -PullRequest $invalidRecord
+        } catch {
+            $invalidRejected = $true
+        }
+        if (-not $invalidRejected) {
+            throw "Controller Pull Request compatibility check accepted an unusable title."
+        }
+    }
+}
+
 function Get-ShipDeOpenPullRequests {
     Assert-ShipDeCommand gh
     $json = & gh pr list `
@@ -128,7 +216,12 @@ function Get-ShipDeOpenPullRequests {
     if ($LASTEXITCODE -ne 0) {
         throw "Cannot read open Pull Requests from GitHub."
     }
-    return @($json | ConvertFrom-Json)
+
+    $pullRequests = @(ConvertFrom-ShipDeJsonList -Json ($json -join [Environment]::NewLine))
+    foreach ($pullRequest in $pullRequests) {
+        Assert-ShipDePullRequestRecord -PullRequest $pullRequest
+        Write-Output $pullRequest
+    }
 }
 
 function Get-ShipDeCheckField {
@@ -717,6 +810,7 @@ function Show-ShipDeMenu {
     }
 }
 
+Assert-ShipDeJsonListCompatibility
 Assert-ShipDeCommand git
 Assert-ShipDeCommand gh
 New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
