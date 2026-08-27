@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md`; `docs/product-spec/evidence/PROTOTYPE-GAPS-AND-RISKS.md`; `docs/product-spec/work-items/TASK-FOUND-01.md`; the `TASK-FOUND-01` row only in `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `README.md`; `package.json`; `package-lock.json`; `.nvmrc`; `.node-version`; `.github/workflows/current-application.yml`; `.github/workflows/feature-contract-gate.yml`; `.github/workflows/security-baseline.yml`; `.gitignore`; `.prettierignore`; `.prettierrc*`; `prettier.config.*`; `eslint.config.*`; `.gitleaks.toml`; `scripts/verify-*`; `src/tests/**`; and formatting-only, behavior-neutral changes under `src/**` and `prisma/schema.prisma` if required for the approved format baseline |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-found-01-baseline-freeze` |
-| Pull Request | `[TASK-FOUND-01] Freeze and classify the prototype baseline` |
+| Pull Request | `#3` |
 
 ## Business outcome
 
