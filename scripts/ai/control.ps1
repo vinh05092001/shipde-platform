@@ -517,35 +517,80 @@ function Invoke-ShipDeReview {
     Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
 
     $reviewText = $output -join [Environment]::NewLine
-    $verdictMatches = [regex]::Matches($reviewText, '(?im)\b(PASS|CHANGES_REQUIRED|BLOCKED)\b')
-    $verdict = if ($verdictMatches.Count -gt 0) {
-        $verdictMatches[$verdictMatches.Count - 1].Groups[1].Value.ToUpperInvariant()
-    } else {
-        "UNKNOWN"
+    $nonEmptyReviewLines = @($reviewText -split '\r?\n' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
+    })
+    if ($nonEmptyReviewLines.Count -lt 2) {
+        throw "Codex review output is incomplete. No verdict was accepted or posted."
     }
 
-    $commentFile = $reviewFile
+    # A verdict is trustworthy only when it is the sole standalone verdict
+    # marker and the final non-empty line of a non-empty report.
+    $verdictPattern = '(?im)^[\t ]*(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?[\t ]*$'
+    $verdictMatches = [regex]::Matches($reviewText, $verdictPattern)
+    $terminalVerdict = [regex]::Match(
+        [string]$nonEmptyReviewLines[$nonEmptyReviewLines.Count - 1],
+        '(?i)^[\t ]*(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?[\t ]*$'
+    )
+    if ($verdictMatches.Count -ne 1 -or -not $terminalVerdict.Success) {
+        throw "Codex review output is incomplete or ambiguous. The final non-empty line must contain the only PASS, CHANGES_REQUIRED or BLOCKED verdict. Nothing was posted."
+    }
+    $verdict = $terminalVerdict.Groups[1].Value.ToUpperInvariant()
+
+    # GitHub limits one comment to 65,536 bytes. Keep the complete local report,
+    # and split large reports into safe ordered comments without dropping text.
+    $commentFiles = [System.Collections.Generic.List[string]]::new()
     $reviewByteCount = [System.Text.Encoding]::UTF8.GetByteCount($reviewText)
-    if ($reviewByteCount -gt 60000) {
-        $commentFile = Join-Path $script:HandoffRoot "$reviewStem-github-summary.txt"
-        $prefix = "Codex final output exceeded the GitHub comment limit. The local file preserves the complete output." +
-            [Environment]::NewLine + [Environment]::NewLine
-        # Four UTF-8 bytes per character is the worst case; 14,000 characters
-        # plus the prefix remains safely below GitHub's 65,536-byte limit.
-        $tailLength = [Math]::Min(14000, $reviewText.Length)
-        $prefix + $reviewText.Substring($reviewText.Length - $tailLength) |
-            Set-Content -Path $commentFile -Encoding UTF8
+    if ($reviewByteCount -le 60000) {
+        $commentFiles.Add($reviewFile)
+    } else {
+        $reviewParts = [System.Collections.Generic.List[string]]::new()
+        $maxPartCharacters = 14000
+        $offset = 0
+        while ($offset -lt $reviewText.Length) {
+            $partLength = [Math]::Min($maxPartCharacters, $reviewText.Length - $offset)
+            if (
+                $offset + $partLength -lt $reviewText.Length -and
+                [char]::IsHighSurrogate($reviewText[$offset + $partLength - 1]) -and
+                [char]::IsLowSurrogate($reviewText[$offset + $partLength])
+            ) {
+                $partLength--
+            }
+            $reviewParts.Add($reviewText.Substring($offset, $partLength))
+            $offset += $partLength
+        }
+
+        for ($partIndex = 0; $partIndex -lt $reviewParts.Count; $partIndex++) {
+            $commentFile = Join-Path $script:HandoffRoot (
+                "{0}-github-part-{1:D2}-of-{2:D2}.txt" -f $reviewStem, ($partIndex + 1), $reviewParts.Count
+            )
+            $commentText = (
+                "Codex review for PR #{0}, immutable head {1} - part {2} of {3}" -f
+                $pr.number,
+                $reviewHeadSha,
+                ($partIndex + 1),
+                $reviewParts.Count
+            ) + [Environment]::NewLine + [Environment]::NewLine + $reviewParts[$partIndex]
+            if ([System.Text.Encoding]::UTF8.GetByteCount($commentText) -gt 60000) {
+                throw "Internal error: a Codex review comment part exceeds the safe GitHub size."
+            }
+            $commentText | Set-Content -Path $commentFile -Encoding UTF8
+            $commentFiles.Add($commentFile)
+        }
     }
 
-    Write-Host ("Review target: {0}" -f $reviewHeadSha)
-    Write-Host ("Review file  : {0}" -f $reviewFile)
-    Write-Host ("Diagnostics  : {0}" -f $diagnosticFile)
-    Write-Host ("Verdict      : {0}" -f $verdict)
-    $post = Read-Host "Post this Codex review to PR #$($pr.number)? (Y/N)"
+    Write-Host ("Review target : {0}" -f $reviewHeadSha)
+    Write-Host ("Review file   : {0}" -f $reviewFile)
+    Write-Host ("Diagnostics   : {0}" -f $diagnosticFile)
+    Write-Host ("Verdict       : {0}" -f $verdict)
+    Write-Host ("GitHub parts  : {0}" -f $commentFiles.Count)
+    $post = Read-Host "Post the complete Codex review to PR #$($pr.number)? (Y/N)"
     if ($post -match '(?i)^y(?:es)?$') {
-        & gh pr comment $pr.number --repo $Repository --body-file $commentFile
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not post the review comment. Local review files are preserved."
+        foreach ($commentFile in $commentFiles) {
+            & gh pr comment $pr.number --repo $Repository --body-file $commentFile
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not post every review comment. Local review files are preserved."
+            }
         }
     }
 

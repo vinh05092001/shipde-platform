@@ -32,8 +32,18 @@ function Invoke-ShipDeBoundedProbe {
         ) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden
 
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            $process.WaitForExit()
+            # Stop the wrapper and every CLI process it spawned. Killing only
+            # powershell.exe can leave a detached agent process running.
+            $taskKill = Get-Command taskkill.exe -ErrorAction SilentlyContinue
+            if ($taskKill) {
+                & $taskKill.Source /PID $process.Id /T /F 2>$null | Out-Null
+            } else {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            if (-not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            $null = $process.WaitForExit(5000)
             return [PSCustomObject]@{
                 ExitCode = -1
                 TimedOut = $true
@@ -273,7 +283,7 @@ if ($TestModels) {
             $keyPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
             $plainKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyPtr)
             $headers = @{ Authorization = "Bearer $plainKey" }
-            $response = Invoke-RestMethod -Uri "http://127.0.0.1:20128/v1/models" -Headers $headers -Method Get
+            $response = Invoke-RestMethod -Uri "http://127.0.0.1:20128/v1/models" -Headers $headers -Method Get -TimeoutSec 30
             $ids = @($response.data | ForEach-Object { $_.id })
             Write-Host ("Available models: {0}" -f $ids.Count)
             $combo = "shipde-low-risk"
@@ -310,7 +320,8 @@ if ($TestModels) {
                 -Headers $headers `
                 -Method Post `
                 -ContentType "application/json" `
-                -Body $smokeBody
+                -Body $smokeBody `
+                -TimeoutSec 30
             $reply = [string]$smoke.choices[0].message.content
             if ($reply.Trim() -ne "SHIPDE_OK") {
                 throw "Model smoke test returned an unexpected response"
