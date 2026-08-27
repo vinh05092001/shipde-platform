@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-02` |
 | Feature ID | `N/A` |
 | Status | `READY_FOR_CODEX` |
-| Delivery order | `0` |
+| Delivery order | `135` |
 | Dependencies | `TASK-AI-01` merged as `239ad8636e9808f44b5efe43c4c3779ec2900f40` |
 | Assigned author | `9ROUTER` |
 | Risk | `LOW` |
