@@ -189,6 +189,7 @@ function Assert-ShipDeJsonListCompatibility {
 
     foreach ($invalidRecord in @(
         [PSCustomObject]@{},
+        [PSCustomObject]@{ title = $null },
         [PSCustomObject]@{ title = "" },
         [PSCustomObject]@{ title = " " }
     )) {

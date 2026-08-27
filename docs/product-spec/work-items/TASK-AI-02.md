@@ -94,7 +94,8 @@ From a clean checkout:
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `2e32d70c` | `CHANGES_REQUIRED` | Reject null records and missing/blank Pull Request titles instead of treating them as an empty queue |
-| 2 | Pending correction head | Pending fresh review | Null and unusable-title fail-closed guards plus runtime compatibility assertions |
+| 2 | `2cfcf3a1` | `CHANGES_REQUIRED` | Add an explicit `title = $null` runtime assertion; the existing guard already rejects it |
+| 3 | Pending test-complete head | Pending fresh review | Complete null/missing/empty/whitespace malformed-title self-test matrix |
 
 ## Residual limitations
 
