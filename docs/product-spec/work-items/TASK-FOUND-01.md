@@ -1,0 +1,140 @@
+# TASK-FOUND-01 — Freeze and classify the prototype
+
+## Control
+
+| Field | Value |
+|---|---|
+| Work Item ID | `TASK-FOUND-01` |
+| Feature ID | `N/A — repository foundation for EPIC-FND` |
+| Status | `READY_FOR_AUTHOR` |
+| Delivery order | `1` |
+| Dependencies | `None` |
+| Assigned author | `GEMINI` |
+| Risk | `MEDIUM` |
+| Allowed paths | `docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md`; `docs/product-spec/evidence/PROTOTYPE-GAPS-AND-RISKS.md`; `docs/product-spec/work-items/TASK-FOUND-01.md`; the `TASK-FOUND-01` row only in `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `README.md`; `package.json`; `package-lock.json`; `.nvmrc`; `.node-version`; `.github/workflows/current-application.yml`; `.github/workflows/feature-contract-gate.yml`; `.github/workflows/security-baseline.yml`; `.gitignore`; `.prettierignore`; `.prettierrc*`; `prettier.config.*`; `eslint.config.*`; `.gitleaks.toml`; `scripts/verify-*`; `src/tests/**`; and formatting-only, behavior-neutral changes under `src/**` and `prisma/schema.prisma` if required for the approved format baseline |
+| Reviewer | `Codex — fresh independent task` |
+| Branch | `feat/task-found-01-baseline-freeze` |
+| Pull Request | `Pending — implementation author opens it` |
+
+## Business outcome
+
+The human product/merge owner, the independent Codex reviewer, and the `TASK-FOUND-02` author receive a clean and reproducible account of what the current prototype actually does before its repository structure changes. They can distinguish reusable behavior from partial, demo-only, and absent functionality, detect migration regressions, and run the same baseline checks locally and in CI without treating visible mock behavior as a completed feature.
+
+## Source references
+
+- `TASK-FOUND-01` in `docs/product-spec/docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md` — approved outcome, scope, and exit conditions.
+- `DEC-016` and “Baseline statement” in `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md` — TypeScript monorepo target and full-product baseline.
+- “Definition of full product” and “Boundaries” in `docs/product-spec/docs/01-product/PRODUCT-VISION-SCOPE.md` — the end-to-end product boundary and prohibition on fake carrier outcomes or cross-tenant access.
+- All 130 IDs in `docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md` — authoritative inventory keys; no `FEAT-*` implementation is authorized by this Work Item.
+- “Identifier prefixes” and “Initial traceability” in `docs/product-spec/docs/00-control/TRACEABILITY.md` — evidence vocabulary and initial feature-to-acceptance links.
+- `EPIC-FND` and “Planning rules” in `docs/product-spec/docs/09-delivery/BACKLOG-DEPENDENCIES.md` — foundation dependency position.
+- “Default stack”, “Required root commands”, “Environment principles”, and “Code boundaries” in `docs/product-spec/docs/07-ai-build/TECH-STACK-REPOSITORY.md` — target constraints that the inventory must preserve for later migration rather than implement now.
+- “Feature Definition of Ready”, “Feature Definition of Done”, and “Slice Definition of Done” in `docs/product-spec/docs/07-ai-build/DEFINITION-OF-READY-DONE.md` — criteria used to classify prototype evidence; a visible screen alone cannot satisfy them.
+- “Mandatory behavior” and “Prohibited behavior” in `docs/product-spec/docs/07-ai-build/AI-CODING-GUARDRAILS.md` — no hidden gaps, product hardcodes, or silent specification resolutions.
+- “Project dependency layer” row for `TASK-FOUND-01` and “Readiness evidence” in `docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md` — ESLint, Prettier, Gitleaks, and versioned-tooling ownership.
+- “Pull-request pipeline” in `docs/product-spec/docs/09-delivery/CI-CD-DEPLOYMENT.md`, plus “CI gates” in `docs/product-spec/docs/08-testing/TEST-STRATEGY.md` — reproducible local/CI verification expectations.
+- `AC-AUTH-01` through `AC-CLM-01` and `E2E-01` through `E2E-10` in `docs/product-spec/docs/08-testing/ACCEPTANCE-AND-E2E.md` — reference acceptance paths for classification only, not authorization to implement them.
+- “Golden datasets”, “Mock carrier server”, and “Data safety” in `docs/product-spec/docs/08-testing/TEST-DATA-MOCKS.md` — rules for deterministic, synthetic baseline evidence.
+- Root `package.json`, `package-lock.json`, `.github/workflows/current-application.yml`, `src/`, `prisma/`, `scripts/`, and current tests at planning base `da1babed7a5844f4021545dc6cc084c441ed533b` — implementation evidence, not business authority.
+
+## Preconditions and dependencies
+
+- No Work Item dependency exists. The branch is prepared from `origin/main` at `da1babed7a5844f4021545dc6cc084c441ed533b`.
+- `TASK-AI-01` and `TASK-AI-02` are present in that base commit; the existing human-gated controller and CI contract remain in force.
+- The current repository is still the npm/Next.js prototype. `TASK-FOUND-02`, `TASK-FOUND-03`, and `TASK-FOUND-04` remain blocked and must not be pulled into this item.
+- Current evidence shows a declared `npm run lint` command without an installed ESLint dependency/configuration, CI using Node.js 22 while the approved baseline is Node.js 24, and no committed Prettier or Gitleaks baseline. These are required findings, not permission to weaken checks.
+- No carrier capability, production credential, production dataset, external side effect, schema migration, or product decision is needed. Test data must remain synthetic and obvious.
+
+## Author boundary
+
+`GEMINI` is required because every foundation item is routed to Gemini and this Work Item crosses repository tooling, dependency lockfile, CI, documentation, and preservation-test boundaries. It is not eligible for `9ROUTER` even though it does not implement a product feature.
+
+Human approval is required before the author changes the approved Node.js 24 baseline, adopts a dependency outside the `TASK-FOUND-01` manifest row, weakens an existing lint/security rule, excludes broad source or fixture paths from scanning, or changes production behavior to make a preservation test pass. No architecture, security, or product choice beyond the cited sources is delegated to the author.
+
+## In scope
+
+1. Inventory every tracked application area: Next.js routes/pages, components, contexts, services, server/API handlers, adapters, core engines, types, Prisma schema/models, scripts, fixtures/mocks, and tests.
+2. Create `docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md`. Map every catalog `FEAT-*` ID exactly once to `REAL`, `PARTIAL`, `DEMO_ONLY`, or `ABSENT`, citing concrete paths and symbols/line ranges. For each non-`ABSENT` row, identify evidence and gaps across UI, API/application, persistence, server-side authorization/tenant scope, audit/history, external adapter, and tests.
+3. Create `docs/product-spec/evidence/PROTOTYPE-GAPS-AND-RISKS.md`. Record current security, tenant, PII/logging, hardcode, in-memory mutation, simulated carrier, data lineage, test-realism, build/migration, and reusable-UI findings. Do not fix unrelated feature gaps.
+4. Add the smallest deterministic preservation smoke harness needed to detect loss of currently reachable critical surfaces and executable core behavior during `TASK-FOUND-02`. Cover authentication entry, role-aware shell/navigation, dashboard, shipment/tracking entry, create-shipment entry, exception workbox, reconciliation, returns, and settings where present. The harness must label demo/mock behavior truthfully and must not require live providers.
+5. Repair the current verification baseline: install/configure the declared ESLint toolchain without weakening rules, add a deterministic Prettier check, add a Gitleaks secret scan with a safe failure fixture or equivalent negative proof, and expose each through root npm scripts.
+6. Align the existing prototype documentation, package engine declaration, and applicable GitHub Actions on Node.js 24. Do not perform the pnpm/Turborepo migration.
+7. Keep CI and local commands equivalent. Record exact commands, versions, results, durations, and any environment-specific prerequisite in the Work Item and Pull Request evidence.
+8. Update only this Work Item and its register row with implementation evidence and the next valid workflow status.
+
+## Out of scope
+
+- Implementing, completing, or changing any `FEAT-*` business behavior, UI outcome, permission model, tenant boundary, money rule, or carrier effect.
+- Moving files into a monorepo, introducing pnpm/Turborepo, or creating `apps/api`, `apps/worker`, shared packages, Docker services, OpenAPI generation, Storybook, MSW, Playwright, axe, or Lighthouse; those belong to `TASK-FOUND-02` through `TASK-FOUND-04`.
+- UI redesign, copy changes, accessibility remediation, API contract changes, Prisma schema migrations, seed redesign, or broad refactoring.
+- Production carrier/OMS/bank/notification credentials, calls, datasets, or capability claims.
+- Reclassifying missing evidence as real behavior, deleting reusable prototype UI, or changing production code merely to make a smoke assertion pass.
+- Editing any delivery-register row other than `TASK-FOUND-01`.
+
+## Business rules and edge cases
+
+- `REAL` requires evidence of the applicable user-visible, application/API, persistence, server-side scope/permission, audit/external, and test outcomes. A rendered screen, exported array, Prisma model, route stub, or isolated unit-like script is insufficient by itself.
+- `PARTIAL` means some non-simulated production layer exists but at least one required layer or acceptance path is missing. The missing layers must be named.
+- `DEMO_ONLY` covers hard-coded/mock arrays, browser or module memory, artificial timeouts, fabricated success, client-only mutations, generated carrier responses, and tests that reproduce logic rather than drive a committed outcome.
+- `ABSENT` requires an evidence search across the tracked application areas. Ambiguous evidence must not be promoted; record the uncertainty and use the more conservative classification.
+- All 130 catalog feature IDs must occur exactly once. Group aliases such as `FEAT-AUTH` do not replace the concrete catalog IDs such as `FEAT-AUTH-01`.
+- Current tests may contain IDs or claims that do not match the approved acceptance document. Preserve the runnable baseline, but record the mismatch; do not silently rename product requirements or present those tests as authoritative E2E evidence.
+- Lint, format, and secret checks must inspect the intended tracked source/configuration surface. Blanket exclusions, ignored failures, warning-only success, mutable remote rule downloads, and committed test secrets are prohibited.
+- A negative secret-scan proof must use a safe generated fixture or scanner test mechanism that is never committed as a usable credential and must cause a non-zero result when intentionally exercised.
+- Windows-local and Linux-CI paths and line endings must produce the same pass/fail outcome. Generated/build artifacts must not become evidence or enter source control.
+- Duplicate inventory evidence may be referenced by multiple feature rows, but each classification must explain the feature-specific supported and missing behavior.
+- If the author discovers a code/specification conflict or a required tooling choice outside the approved manifest, mark the Work Item `BLOCKED` with file/line evidence and stop.
+
+## UI states
+
+No user-facing state may change in this Work Item. Preservation evidence must truthfully exercise or inventory the current loading, empty, validation, error, forbidden, partial, success, and recovery states for the affected prototype surfaces where they exist. Missing or unreachable states are recorded as gaps; they are not added or repaired here. The preservation harness must fail clearly when an inventoried critical surface disappears or becomes unreachable, while avoiding snapshots that merely freeze volatile styling or demo values.
+
+## API, event and data impact
+
+- No API route, public contract, event, job, state machine, database entity, migration, or persistent data behavior may change.
+- Existing API routes, Prisma models, adapters, and simulated effects are inventoried as evidence only.
+- Test-only fixtures/harness code and tool configuration may be added, provided they are isolated from production runtime and contain no secrets or unnecessary PII.
+- `package.json`, `package-lock.json`, Node version files, lint/format/secret configuration, and CI workflows may change only to establish the approved current-prototype baseline.
+- No idempotency or compatibility behavior is introduced. Existing deficiencies are documented for their owning future feature/foundation item.
+
+## Acceptance matrix
+
+| AC/Test ID | Scenario | Expected result | Evidence required |
+|---|---|---|---|
+| `AC-FOUND-01-01` | Given the 130 catalog IDs, when the inventory validator runs | Every concrete ID appears exactly once with one valid classification; no unknown or aggregate alias silently passes | Deterministic validator output plus inventory matrix |
+| `AC-FOUND-01-02` | Given every tracked application area, when the repository inventory is reviewed | Routes, components, contexts, services, API/server code, adapters, engines, types, Prisma, scripts, fixtures, and tests have path/symbol evidence and counts | Inventory sections, file enumeration command, reviewer spot checks |
+| `AC-FOUND-01-03` | Given representative auth, order/shipment, carrier, reconciliation, return, and money paths, when reality classifications are checked | Hard-coded, client-only, in-memory, simulated, or test-reimplemented behavior is never marked `REAL`; missing layers are explicit | Evidence citations and automated classification constraints where practical |
+| `AC-FOUND-01-04` | Given a clean checkout on Node.js 24, when the approved root baseline runs | Install, lint, format check, build, current E2E, preservation smoke, secret scan, and docs validation complete reproducibly with exact results | CI logs and local command table with tool/runtime versions and durations |
+| `AC-FOUND-01-05` | Given an intentional lint or formatting violation, when its gate runs | The relevant command exits non-zero without a blanket exclusion or warning-only bypass | Safe temporary negative-fixture log or automated gate test |
+| `AC-FOUND-01-06` | Given a safe generated secret-like fixture, when Gitleaks runs | The scan exits non-zero and identifies the fixture; the normal tracked-tree scan passes and no real/test credential is committed | Redacted negative-proof log and clean-scan log |
+| `AC-FOUND-01-07` | Given the critical current prototype surfaces and executable core paths, when preservation smoke tests run | Removal/breakage is detected while demo/mock behavior remains explicitly labeled and no live provider is required | Test source, passing log, and one demonstrated negative failure |
+| `AC-FOUND-01-08` | Given local and CI configuration, when Node versions and commands are compared | Package engine/docs and applicable Actions use Node.js 24 and invoke equivalent root scripts | Diff evidence and CI logs |
+| `AC-FOUND-01-09` | Given the implementation diff, when scope is reviewed | No feature behavior, API/data contract, schema migration, monorepo migration, product UX change, production credential, or unrelated register row is changed | `git diff --name-status origin/main...HEAD`, semantic review, secret scan |
+| `AC-FOUND-01-10` | Given `TASK-FOUND-02` planning, when it consumes the baseline | Reusable assets, behavior-loss risks, security/data gaps, and unverified areas are explicit enough to define preservation checks without inference | `PROTOTYPE-GAPS-AND-RISKS.md` and cross-links from inventory |
+
+## Verification commands
+
+Run from a clean checkout on the approved Node.js 24 runtime. The implementation author must add the named missing scripts; changing these commands requires updating this Work Item and CI in the same Pull Request.
+
+- `node --version`
+- `npm --version`
+- `npm ci`
+- `npm run lint`
+- `npm run format:check`
+- `npm run build`
+- `npm run test:e2e`
+- `npm run test:baseline`
+- `npm run security:secrets`
+- `python docs/product-spec/scripts/validate_docs.py`
+- `git diff --check`
+- `git status --short`
+
+## Codex review record
+
+| Review round | Commit | Verdict | Findings resolved |
+|---|---|---|---|
+| 1 | `Pending` | `Pending` | `Pending` |
+
+## Residual limitations
+
+None at planning time. Implementation-discovered limitations must name the owner, risk, next action, and human acceptance; unverified behavior must remain conservatively classified and cannot be converted into a completion claim.
