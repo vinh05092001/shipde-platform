@@ -1,0 +1,92 @@
+name: Current application checks
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  detect-application-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      application: ${{ steps.scope.outputs.application }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: scope
+        name: Detect application-affecting paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          application=false
+          paths_file="$(mktemp)"
+          trap 'rm -f "$paths_file"' EXIT
+
+          if ! git diff --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$paths_file"; then
+            echo "Failed to enumerate changed paths."
+            exit 1
+          fi
+
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              .agents/*|.github/*|docs/*|scripts/ai/*|AGENTS.md|README.md|.gitignore)
+                ;;
+              *)
+                application=true
+                echo "Application-affecting path: $path"
+                break
+                ;;
+            esac
+          done < "$paths_file"
+
+          echo "application=$application" >> "$GITHUB_OUTPUT"
+          if [ "$application" = "true" ]; then
+            echo "Application verification is required."
+          else
+            echo "Only explicitly non-application control or documentation paths changed."
+          fi
+
+  current-application:
+    needs: detect-application-scope
+    if: needs.detect-application-scope.outputs.application == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run test:e2e
+
+  application-gate:
+    needs: [detect-application-scope, current-application]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce scoped application result
+        env:
+          DETECT_RESULT: ${{ needs.detect-application-scope.result }}
+          APPLICATION: ${{ needs.detect-application-scope.outputs.application }}
+          APPLICATION_RESULT: ${{ needs.current-application.result }}
+        run: |
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "Application scope detection failed."
+            exit 1
+          fi
+          if [ "$APPLICATION" = "true" ] && [ "$APPLICATION_RESULT" != "success" ]; then
+            echo "Required application checks did not pass: $APPLICATION_RESULT"
+            exit 1
+          fi
+          if [ "$APPLICATION" = "true" ]; then
+            echo "Application checks passed."
+          else
+            echo "Application checks are not applicable to this change."
+          fi
+

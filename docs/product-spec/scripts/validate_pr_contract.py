@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import subprocess
@@ -12,7 +13,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORK_ITEM_PATTERN = re.compile(r"\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+)\b")
+WORK_ITEM_PATTERN = re.compile(r"\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+|TASK-AI-[0-9]+)\b")
 REQUIRED_HEADINGS = [
     "## Work Item",
     "## Source requirements",
@@ -55,7 +56,7 @@ def main() -> int:
 
     title_ids = WORK_ITEM_PATTERN.findall(title)
     if len(title_ids) != 1:
-        errors.append("PR title must contain exactly one FEAT-* or TASK-FOUND-* Work Item ID")
+        errors.append("PR title must contain exactly one FEAT-*, TASK-FOUND-* or TASK-AI-* Work Item ID")
     work_item_id = title_ids[0] if len(title_ids) == 1 else ""
 
     for heading in REQUIRED_HEADINGS:
@@ -91,14 +92,33 @@ def main() -> int:
     if any(Path(path).name == ".env" for path in files):
         errors.append("tracked .env file is prohibited; use .env.example with safe placeholders")
 
-    if work_item_id.startswith("FEAT-"):
+    if work_item_id:
         register = ROOT / "docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv"
-        if work_item_id not in register.read_text(encoding="utf-8"):
-            errors.append(f"Work Item is absent from feature register: {work_item_id}")
-        work_item = ROOT / "work-items" / f"{work_item_id}.md"
-        if not work_item.exists():
+        with register.open(encoding="utf-8", newline="") as handle:
+            register_rows = list(csv.DictReader(handle))
+        matching_rows = [
+            row for row in register_rows if row.get("work_item_id") == work_item_id
+        ]
+        if len(matching_rows) != 1:
             errors.append(
-                f"prepared Work Item file is missing: docs/product-spec/work-items/{work_item_id}.md"
+                f"Work Item must have exactly one feature-register row: {work_item_id}"
+            )
+        else:
+            registered_path = matching_rows[0].get("work_item_path") or ""
+            work_item = ROOT.parent.parent / registered_path
+            if not registered_path or not work_item.is_file():
+                errors.append(
+                    f"registered Work Item file is missing: {registered_path or work_item_id}"
+                )
+            if registered_path not in files:
+                errors.append(
+                    f"PR must update its registered Work Item file: {registered_path}"
+                )
+
+        if distinct_changed_ids and distinct_changed_ids != {work_item_id}:
+            errors.append(
+                "changed Work Item files do not match PR title: "
+                f"title={work_item_id} changed={sorted(distinct_changed_ids)}"
             )
 
     if errors:

@@ -11,6 +11,19 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = ROOT.parent.parent
+REPOSITORY_REQUIRED = [
+    "scripts/ai/README.md",
+    "scripts/ai/common.ps1",
+    "scripts/ai/control.ps1",
+    "scripts/ai/install-clis.ps1",
+    "scripts/ai/install-control-shortcut.ps1",
+    "scripts/ai/bootstrap-worktrees.ps1",
+    "scripts/ai/doctor.ps1",
+    "scripts/ai/start-work-item.ps1",
+    "scripts/ai/review-pr.ps1",
+    "scripts/ai/protect-main.ps1",
+]
 REQUIRED = [
     "AGENTS.md",
     "README.md",
@@ -30,17 +43,22 @@ REQUIRED = [
     "docs/07-ai-build/VERTICAL-SLICE-PLAN.md",
     "docs/08-testing/ACCEPTANCE-AND-E2E.md",
     "docs/09-delivery/DEVELOPER-HANDOVER.md",
-    "docs/10-ai-collaboration/ZCODE-CODEX-WORKFLOW.md",
+    "docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md",
     "docs/10-ai-collaboration/FOUNDATION-WORK-ITEMS.md",
     "docs/10-ai-collaboration/WORK-ITEM-TEMPLATE.md",
     "docs/10-ai-collaboration/CODEX-PLANNING-PROMPT.md",
-    "docs/10-ai-collaboration/ZCODE-START-PROMPT.md",
+    "docs/10-ai-collaboration/GEMINI-START-PROMPT.md",
+    "docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md",
     "docs/10-ai-collaboration/CODEX-REVIEW-PROMPT.md",
+    "docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md",
+    "docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md",
+    "docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md",
     "docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv",
     "work-items/README.md",
     ".github/PULL_REQUEST_TEMPLATE.md",
     ".github/ISSUE_TEMPLATE/feature-implementation.yml",
     ".github/workflows/feature-contract-gate.yml",
+    ".github/workflows/current-application.yml",
     "scripts/validate_pr_contract.py",
 ]
 
@@ -56,6 +74,11 @@ def main() -> int:
         path = ROOT / rel
         if not path.is_file() or path.stat().st_size == 0:
             errors.append(f"missing-or-empty: {rel}")
+
+    for rel in REPOSITORY_REQUIRED:
+        path = REPOSITORY_ROOT / rel
+        if not path.is_file() or path.stat().st_size == 0:
+            errors.append(f"missing-or-empty-repository-control: {rel}")
 
     ids: dict[str, list[str]] = {}
     markdown_files = list(ROOT.rglob("*.md"))
@@ -131,7 +154,7 @@ def main() -> int:
         "BACKLOG",
         "BLOCKED_BY_FOUNDATION",
         "BLOCKED_DEPENDENCY",
-        "READY_FOR_ZCODE",
+        "READY_FOR_AUTHOR",
         "IN_PROGRESS",
         "READY_FOR_CODEX",
         "CHANGES_REQUIRED",
@@ -169,3 +192,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
