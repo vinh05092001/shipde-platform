@@ -3,7 +3,10 @@ import * as path from 'path';
 
 const ROOT = path.resolve(__dirname, '..');
 const CATALOG_PATH = path.join(ROOT, 'docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md');
-const INVENTORY_PATH = path.join(ROOT, 'docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md');
+const INVENTORY_PATH = path.join(
+  ROOT,
+  'docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md'
+);
 
 const VALID_CLASSIFICATIONS = new Set(['REAL', 'PARTIAL', 'DEMO_ONLY', 'ABSENT']);
 
@@ -99,6 +102,8 @@ if (require.main === module) {
     process.exit(1);
   }
 
-  console.log('✅ Hoàn hảo: Tất cả 130 tính năng được định danh chính xác 1:1 với phân loại hợp lệ!\n');
+  console.log(
+    '✅ Hoàn hảo: Tất cả 130 tính năng được định danh chính xác 1:1 với phân loại hợp lệ!\n'
+  );
   process.exit(0);
 }
