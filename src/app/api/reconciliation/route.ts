@@ -23,8 +23,8 @@ export async function GET(req: NextRequest) {
         order_code: ship?.order_code || `ORD_${d.tracking_code}`,
         carrier: ship?.carrier_code || (d.tracking_code.startsWith('GHN') ? 'GHN' : 'GHTK'),
         created_by_user: ship?.last_modified_by,
-        charged_amount: (ship?.charged_fee || 29000),
-        contract_amount: (ship?.quoted_fee || 22000),
+        charged_amount: ship?.charged_fee || 29000,
+        contract_amount: ship?.quoted_fee || 22000,
         discrepancy_amount: d.amount,
       };
     });
@@ -53,16 +53,32 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action, discrepancy_id, resolution, reason, user_id, user_name, expected_version, is_period_closed, csv_content, statement_name } = body;
+    const {
+      action,
+      discrepancy_id,
+      resolution,
+      reason,
+      user_id,
+      user_name,
+      expected_version,
+      is_period_closed,
+      csv_content,
+      statement_name,
+    } = body;
 
     // RESOLVE DISCREPANCY (BR-12, BR-11, BR-27)
     if (action === 'RESOLVE_DISCREPANCY') {
       const targetDisc = db.discrepancies.find((d) => d.id === discrepancy_id);
       if (!targetDisc) {
-        return NextResponse.json({ error: { code: 'discrepancy_not_found', message: 'Không tìm thấy dòng sai lệch' } }, { status: 404 });
+        return NextResponse.json(
+          { error: { code: 'discrepancy_not_found', message: 'Không tìm thấy dòng sai lệch' } },
+          { status: 404 }
+        );
       }
 
-      const targetShipment = db.shipments.find((s) => s.id === targetDisc.shipment_id || s.tracking_code === targetDisc.tracking_code) || {
+      const targetShipment = db.shipments.find(
+        (s) => s.id === targetDisc.shipment_id || s.tracking_code === targetDisc.tracking_code
+      ) || {
         id: `ship_${targetDisc.tracking_code}`,
         merchant_id: db.merchant.id,
         tracking_code: targetDisc.tracking_code,
@@ -149,7 +165,11 @@ export async function POST(req: NextRequest) {
 
       // Merge newly discovered discrepancies into DB
       reconResult.discrepancies.forEach((newD) => {
-        if (!db.discrepancies.some((d) => d.tracking_code === newD.tracking_code && d.type === newD.type)) {
+        if (
+          !db.discrepancies.some(
+            (d) => d.tracking_code === newD.tracking_code && d.type === newD.type
+          )
+        ) {
           db.discrepancies.unshift(newD);
         }
       });
@@ -170,12 +190,16 @@ export async function POST(req: NextRequest) {
       const validation = mcEngine.validatePeriodClosure(db.discrepancies);
       return NextResponse.json({
         success: true,
-        message: 'Đã chốt sổ kỳ đối soát thành công. Số liệu kế toán đã được khóa bất biến (BR-11).',
+        message:
+          'Đã chốt sổ kỳ đối soát thành công. Số liệu kế toán đã được khóa bất biến (BR-11).',
         data: validation,
       });
     }
 
-    return NextResponse.json({ error: { code: 'bad_request', message: 'Hành động không hợp lệ' } }, { status: 400 });
+    return NextResponse.json(
+      { error: { code: 'bad_request', message: 'Hành động không hợp lệ' } },
+      { status: 400 }
+    );
   } catch (error: any) {
     const status = error.httpStatus || 500;
     return NextResponse.json(

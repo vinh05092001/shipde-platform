@@ -47,7 +47,8 @@ export const MobileSimulatorTab: React.FC = () => {
             <span className="badge-ok text-xs">Touch Target 48px</span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Tối ưu cho CSKH cứu đơn lưu động và Thủ kho quét nhận hàng hoàn ngoại tuyến SQLite (BR-40)
+            Tối ưu cho CSKH cứu đơn lưu động và Thủ kho quét nhận hàng hoàn ngoại tuyến SQLite
+            (BR-40)
           </p>
         </div>
 
@@ -120,16 +121,31 @@ export const MobileSimulatorTab: React.FC = () => {
 
                   <div className="space-y-3 pt-4">
                     <div>
-                      <label className="text-xs font-semibold text-slate-700 block mb-1">Tài khoản nhân viên:</label>
-                      <input type="text" defaultValue="cskh1@shopanan.vn" className="modern-input w-full text-xs h-11" />
+                      <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        Tài khoản nhân viên:
+                      </label>
+                      <input
+                        type="text"
+                        defaultValue="cskh1@shopanan.vn"
+                        className="modern-input w-full text-xs h-11"
+                      />
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-slate-700 block mb-1">Mật khẩu:</label>
-                      <input type="password" defaultValue="••••••••" className="modern-input w-full text-xs h-11" />
+                      <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        Mật khẩu:
+                      </label>
+                      <input
+                        type="password"
+                        defaultValue="••••••••"
+                        className="modern-input w-full text-xs h-11"
+                      />
                     </div>
                     <button
                       type="button"
-                      onClick={() => { setCurrentScreen(2); showMobileToast('✓ Đăng nhập CSKH thành công'); }}
+                      onClick={() => {
+                        setCurrentScreen(2);
+                        showMobileToast('✓ Đăng nhập CSKH thành công');
+                      }}
                       className="btn-primary w-full h-12 text-sm justify-center font-bold mt-2"
                     >
                       Đăng Nhập
@@ -143,7 +159,9 @@ export const MobileSimulatorTab: React.FC = () => {
                 <div className="space-y-4">
                   <div className="flex justify-between items-center bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
                     <div>
-                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Cửa hàng</span>
+                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">
+                        Cửa hàng
+                      </span>
                       <strong className="text-sm font-bold text-slate-900">An An Boutique</strong>
                     </div>
                     <span className="badge-ok text-xs">CSKH Online</span>
@@ -155,7 +173,9 @@ export const MobileSimulatorTab: React.FC = () => {
                       onClick={() => setCurrentScreen(3)}
                       className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs cursor-pointer hover:border-rose-300"
                     >
-                      <span className="text-[10px] text-rose-600 font-bold uppercase">Cần Cứu Gấp</span>
+                      <span className="text-[10px] text-rose-600 font-bold uppercase">
+                        Cần Cứu Gấp
+                      </span>
                       <div className="font-mono text-2xl font-bold text-rose-600 my-1">2 đơn</div>
                       <span className="text-[11px] text-slate-400">SLA còn 2h</span>
                     </div>
@@ -164,23 +184,35 @@ export const MobileSimulatorTab: React.FC = () => {
                       onClick={() => setCurrentScreen(6)}
                       className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs cursor-pointer hover:border-blue-300"
                     >
-                      <span className="text-[10px] text-slate-500 font-bold uppercase">Quét Hoàn Kho</span>
-                      <div className="font-mono text-2xl font-bold text-slate-900 my-1">{offlineQueueCount} chờ</div>
-                      <span className="text-[11px] text-emerald-700 font-semibold">SQLite Sync</span>
+                      <span className="text-[10px] text-slate-500 font-bold uppercase">
+                        Quét Hoàn Kho
+                      </span>
+                      <div className="font-mono text-2xl font-bold text-slate-900 my-1">
+                        {offlineQueueCount} chờ
+                      </div>
+                      <span className="text-[11px] text-emerald-700 font-semibold">
+                        SQLite Sync
+                      </span>
                     </div>
                   </div>
 
                   <div className="space-y-2 pt-1">
-                    <span className="font-bold text-xs text-slate-900 block">Việc Cần Xử Lý Ngay:</span>
+                    <span className="font-bold text-xs text-slate-900 block">
+                      Việc Cần Xử Lý Ngay:
+                    </span>
                     <div
                       onClick={() => setCurrentScreen(4)}
                       className="p-4 bg-white rounded-2xl border border-slate-200/80 shadow-xs space-y-1.5 cursor-pointer hover:border-blue-400"
                     >
                       <div className="flex justify-between items-center">
-                        <span className="font-mono font-bold text-xs text-blue-600">GHN88291042</span>
+                        <span className="font-mono font-bold text-xs text-blue-600">
+                          GHN88291042
+                        </span>
                         <span className="badge-risk text-[10px]">Còn 2h</span>
                       </div>
-                      <div className="text-xs font-bold text-slate-900">Khách không nghe máy lần 1</div>
+                      <div className="text-xs font-bold text-slate-900">
+                        Khách không nghe máy lần 1
+                      </div>
                       <div className="text-xs text-slate-500">COD: 350.000 đ · TP. Hồ Chí Minh</div>
                     </div>
                   </div>
@@ -191,7 +223,11 @@ export const MobileSimulatorTab: React.FC = () => {
               {currentScreen === 3 && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
-                    <button type="button" onClick={() => setCurrentScreen(2)} className="p-1 rounded-lg bg-white border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentScreen(2)}
+                      className="p-1 rounded-lg bg-white border border-slate-200"
+                    >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
                     <span className="font-bold text-sm text-slate-900">Hộp Việc Ngoại Lệ (2)</span>
@@ -204,14 +240,20 @@ export const MobileSimulatorTab: React.FC = () => {
                     >
                       <div className="flex justify-between items-start">
                         <div>
-                          <span className="font-mono font-bold text-xs text-blue-600 block">GHN88291042</span>
-                          <span className="text-xs font-bold text-slate-900">Khách hẹn giao lại chiều</span>
+                          <span className="font-mono font-bold text-xs text-blue-600 block">
+                            GHN88291042
+                          </span>
+                          <span className="text-xs font-bold text-slate-900">
+                            Khách hẹn giao lại chiều
+                          </span>
                         </div>
                         <span className="badge-risk text-[10px]">SLA 2h</span>
                       </div>
                       <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-xs text-slate-500">
                         <span>Khách: Nguyễn Văn Khách</span>
-                        <button type="button" className="btn-primary text-[10px] py-1 px-2.5">Cứu đơn →</button>
+                        <button type="button" className="btn-primary text-[10px] py-1 px-2.5">
+                          Cứu đơn →
+                        </button>
                       </div>
                     </div>
 
@@ -221,14 +263,18 @@ export const MobileSimulatorTab: React.FC = () => {
                     >
                       <div className="flex justify-between items-start">
                         <div>
-                          <span className="font-mono font-bold text-xs text-blue-600 block">GHTK77129031</span>
+                          <span className="font-mono font-bold text-xs text-blue-600 block">
+                            GHTK77129031
+                          </span>
                           <span className="text-xs font-bold text-slate-900">Sai địa chỉ ngõ</span>
                         </div>
                         <span className="badge-warn text-[10px]">SLA 4h</span>
                       </div>
                       <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-xs text-slate-500">
                         <span>Khách: Trần Thị B</span>
-                        <button type="button" className="btn-primary text-[10px] py-1 px-2.5">Cứu đơn →</button>
+                        <button type="button" className="btn-primary text-[10px] py-1 px-2.5">
+                          Cứu đơn →
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -239,25 +285,41 @@ export const MobileSimulatorTab: React.FC = () => {
               {currentScreen === 4 && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
-                    <button type="button" onClick={() => setCurrentScreen(3)} className="p-1 rounded-lg bg-white border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentScreen(3)}
+                      className="p-1 rounded-lg bg-white border border-slate-200"
+                    >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
                     <div>
-                      <span className="font-mono font-bold text-xs text-slate-900 block">GHN88291042</span>
-                      <span className="text-[10px] text-slate-400">Lịch sử hành trình hợp nhất</span>
+                      <span className="font-mono font-bold text-xs text-slate-900 block">
+                        GHN88291042
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        Lịch sử hành trình hợp nhất
+                      </span>
                     </div>
                   </div>
 
                   <div className="space-y-3 pl-3 border-l-2 border-slate-200 ml-2 text-xs">
                     <div className="relative">
                       <div className="w-2.5 h-2.5 rounded-full bg-amber-500 absolute -left-[18px] top-1 ring-2 ring-white" />
-                      <span className="font-bold text-slate-900 block">CSKH gọi xác nhận thành công</span>
-                      <span className="text-[10px] text-slate-400 font-mono">17/08 09:30 · Trần Thị Hoa</span>
+                      <span className="font-bold text-slate-900 block">
+                        CSKH gọi xác nhận thành công
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        17/08 09:30 · Trần Thị Hoa
+                      </span>
                     </div>
                     <div className="relative">
                       <div className="w-2.5 h-2.5 rounded-full bg-rose-500 absolute -left-[18px] top-1 ring-2 ring-white" />
-                      <span className="font-bold text-rose-700 block">Giao thất bại lần 1 (Không nghe máy)</span>
-                      <span className="text-[10px] text-slate-400 font-mono">17/08 08:15 · Shipper GHN</span>
+                      <span className="font-bold text-rose-700 block">
+                        Giao thất bại lần 1 (Không nghe máy)
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        17/08 08:15 · Shipper GHN
+                      </span>
                     </div>
                   </div>
 
@@ -275,18 +337,28 @@ export const MobileSimulatorTab: React.FC = () => {
               {currentScreen === 5 && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
-                    <button type="button" onClick={() => setCurrentScreen(3)} className="p-1 rounded-lg bg-white border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentScreen(3)}
+                      className="p-1 rounded-lg bg-white border border-slate-200"
+                    >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
                     <div>
-                      <span className="font-bold text-sm text-slate-900 block">Gửi Lệnh Giao Lại</span>
-                      <span className="text-[10px] text-emerald-700 font-semibold">GHN L2 (Gọi API trực tiếp)</span>
+                      <span className="font-bold text-sm text-slate-900 block">
+                        Gửi Lệnh Giao Lại
+                      </span>
+                      <span className="text-[10px] text-emerald-700 font-semibold">
+                        GHN L2 (Gọi API trực tiếp)
+                      </span>
                     </div>
                   </div>
 
                   <div className="space-y-3 text-xs">
                     <div>
-                      <label className="font-semibold text-slate-700 block mb-1">SĐT Người nhận:</label>
+                      <label className="font-semibold text-slate-700 block mb-1">
+                        SĐT Người nhận:
+                      </label>
                       <input
                         type="tel"
                         value={phoneInput}
@@ -295,12 +367,23 @@ export const MobileSimulatorTab: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="font-semibold text-slate-700 block mb-1">Ngày hẹn giao lại:</label>
-                      <input type="date" defaultValue="2026-08-18" className="modern-input w-full text-xs h-10" />
+                      <label className="font-semibold text-slate-700 block mb-1">
+                        Ngày hẹn giao lại:
+                      </label>
+                      <input
+                        type="date"
+                        defaultValue="2026-08-18"
+                        className="modern-input w-full text-xs h-10"
+                      />
                     </div>
                     <div>
-                      <label className="font-semibold text-slate-700 block mb-1">Ghi chú cho Shipper:</label>
-                      <textarea defaultValue="Khách hẹn giao sau 14h chiều" className="modern-input w-full text-xs h-16 resize-none" />
+                      <label className="font-semibold text-slate-700 block mb-1">
+                        Ghi chú cho Shipper:
+                      </label>
+                      <textarea
+                        defaultValue="Khách hẹn giao sau 14h chiều"
+                        className="modern-input w-full text-xs h-16 resize-none"
+                      />
                     </div>
 
                     <button
@@ -363,12 +446,16 @@ export const MobileSimulatorTab: React.FC = () => {
               {currentScreen === 7 && (
                 <div className="space-y-3">
                   <div className="border-b border-slate-200 pb-2">
-                    <span className="font-bold text-sm text-slate-900 block">Đối Soát & Hạn Khiếu Nại</span>
+                    <span className="font-bold text-sm text-slate-900 block">
+                      Đối Soát & Hạn Khiếu Nại
+                    </span>
                     <span className="text-[10px] text-slate-400">Giám sát thời hiệu BR-37</span>
                   </div>
 
                   <div className="p-4 bg-white rounded-2xl border border-slate-200/80 shadow-xs space-y-1">
-                    <span className="text-[10px] text-slate-500 font-bold uppercase">COD ĐÃ ĐỐI SOÁT KỲ NÀY</span>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase">
+                      COD ĐÃ ĐỐI SOÁT KỲ NÀY
+                    </span>
                     <div className="font-mono text-2xl font-bold text-emerald-700">
                       <Money amount={14200000} state="confirmed" />
                     </div>
@@ -394,16 +481,32 @@ export const MobileSimulatorTab: React.FC = () => {
 
             {/* Bottom Mobile Navigation Bar */}
             <div className="bg-white border-t border-slate-200 py-2 px-3 grid grid-cols-4 gap-1 text-center text-[10px] font-semibold text-slate-500">
-              <button type="button" onClick={() => setCurrentScreen(2)} className={`py-1.5 rounded-lg ${currentScreen === 2 ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
+              <button
+                type="button"
+                onClick={() => setCurrentScreen(2)}
+                className={`py-1.5 rounded-lg ${currentScreen === 2 ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}
+              >
                 Trang chủ
               </button>
-              <button type="button" onClick={() => setCurrentScreen(3)} className={`py-1.5 rounded-lg ${currentScreen === 3 ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
+              <button
+                type="button"
+                onClick={() => setCurrentScreen(3)}
+                className={`py-1.5 rounded-lg ${currentScreen === 3 ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}
+              >
                 Hộp việc
               </button>
-              <button type="button" onClick={() => setCurrentScreen(6)} className={`py-1.5 rounded-lg ${currentScreen === 6 ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
+              <button
+                type="button"
+                onClick={() => setCurrentScreen(6)}
+                className={`py-1.5 rounded-lg ${currentScreen === 6 ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}
+              >
                 Quét kho
               </button>
-              <button type="button" onClick={() => setCurrentScreen(7)} className={`py-1.5 rounded-lg ${currentScreen === 7 ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
+              <button
+                type="button"
+                onClick={() => setCurrentScreen(7)}
+                className={`py-1.5 rounded-lg ${currentScreen === 7 ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}
+              >
                 COD & Hạn
               </button>
             </div>

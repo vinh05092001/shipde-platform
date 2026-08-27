@@ -1,0 +1,37 @@
+title = "Ship Dễ Secret Detection Rules"
+
+[allowlist]
+description = "Global allowlist for build artifacts, dependencies and lockfiles"
+paths = [
+  '''^\.git[\\/]''',
+  '''^node_modules[\\/]''',
+  '''^\.next[\\/]''',
+  '''^out[\\/]''',
+  '''^build[\\/]''',
+  '''package-lock\.json$''',
+  '''\.gitleaks\.toml$''',
+]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic High-Entropy Secret or Token"
+regex = '''(?i)(?:api_key|apikey|secret_key|private_key|auth_token|access_token|bearer_token)\s*[:=]\s*['"]([0-9a-zA-Z_\-]{24,})['"]'''
+keywords = ["api_key", "apikey", "secret_key", "private_key", "auth_token", "access_token", "bearer_token"]
+
+[[rules]]
+id = "private-key"
+description = "Private Key Header"
+regex = '''-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'''
+keywords = ["BEGIN RSA PRIVATE KEY", "BEGIN PRIVATE KEY", "BEGIN EC PRIVATE KEY", "BEGIN DSA PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY"]
+
+[[rules]]
+id = "carrier-live-token"
+description = "Live Carrier Production Token"
+regex = '''(?i)(?:ghn|ghtk|vtp|jtexpress)_(?:live|prod)_[0-9a-zA-Z]{16,}'''
+keywords = ["ghn_live_", "ghtk_live_", "vtp_live_", "ghn_prod_", "ghtk_prod_", "vtp_prod_"]
+
+[[rules]]
+id = "aws-secret-key"
+description = "AWS / S3 Secret Key Pattern"
+regex = '''(?i)(?:aws_secret_access_key|s3_secret_key)\s*[:=]\s*['"][0-9a-zA-Z\/+=]{40}['"]'''
+keywords = ["aws_secret_access_key", "s3_secret_key"]

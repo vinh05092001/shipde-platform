@@ -20,7 +20,15 @@ export async function POST(req: NextRequest) {
     // INVITE MEMBER (CN-24)
     if (action === 'INVITE_USER') {
       if (!full_name || !email || !role) {
-        return NextResponse.json({ error: { code: 'validation_error', message: 'Vui lòng cung cấp họ tên, email và vai trò' } }, { status: 400 });
+        return NextResponse.json(
+          {
+            error: {
+              code: 'validation_error',
+              message: 'Vui lòng cung cấp họ tên, email và vai trò',
+            },
+          },
+          { status: 400 }
+        );
       }
 
       const newUser: User = {
@@ -47,7 +55,10 @@ export async function POST(req: NextRequest) {
     if (action === 'REVOKE_DEVICE') {
       const dev = db.deviceSessions.find((d) => d.id === device_id);
       if (!dev) {
-        return NextResponse.json({ error: { code: 'device_not_found', message: 'Không tìm thấy thiết bị' } }, { status: 404 });
+        return NextResponse.json(
+          { error: { code: 'device_not_found', message: 'Không tìm thấy thiết bị' } },
+          { status: 404 }
+        );
       }
 
       dev.is_revoked = true;
@@ -59,8 +70,14 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: { code: 'bad_request', message: 'Hành động không hợp lệ' } }, { status: 400 });
+    return NextResponse.json(
+      { error: { code: 'bad_request', message: 'Hành động không hợp lệ' } },
+      { status: 400 }
+    );
   } catch (error: any) {
-    return NextResponse.json({ error: { code: 'server_error', message: error.message } }, { status: 500 });
+    return NextResponse.json(
+      { error: { code: 'server_error', message: error.message } },
+      { status: 500 }
+    );
   }
 }

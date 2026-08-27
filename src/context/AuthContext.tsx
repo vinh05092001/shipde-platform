@@ -9,69 +9,80 @@ interface AuthContextType {
   isAuthenticated: boolean;
   token: string | null;
   login: (emailOrPhone: string, pass: string) => Promise<{ success: boolean; error?: string }>;
-  register: (payload: { merchantName: string; fullName: string; email: string; phone: string; password: string }) => Promise<{ success: boolean; error?: string }>;
+  register: (payload: {
+    merchantName: string;
+    fullName: string;
+    email: string;
+    phone: string;
+    password: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   switchRole: (role: Role) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const defaultMerchant: Merchant = {
+  id: 'merc_prod_01',
+  name: 'Thời Trang An An Boutique',
+  business_code: '0318928192',
+  phone: '0901234567',
+  email: 'contact@ananboutique.vn',
+  address: '128 Nguyễn Trãi, Phường 3, Quận 5, TP. Hồ Chí Minh',
+  subscription_plan: 'BUSINESS_CONTROL',
+  status: 'ACTIVE',
+  created_at: new Date('2026-01-01'),
+};
+
+const defaultUser: User = {
+  id: 'usr_01',
+  merchant_id: 'merc_prod_01',
+  full_name: 'Nguyễn Văn An',
+  email: 'owner@ananboutique.vn',
+  phone: '0901234567',
+  role: Role.OWNER,
+  status: 'ACTIVE',
+  created_at: new Date('2026-01-01'),
+};
+
+const defaultToken = 'jwt_shipde_session_token_prod_9981';
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [merchant, setMerchant] = useState<Merchant | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-
-  // Initialize with persisted or default authenticated state
-  useEffect(() => {
-    const savedUser = localStorage.getItem('shipde_user');
-    const savedMerchant = localStorage.getItem('shipde_merchant');
-    const savedToken = localStorage.getItem('shipde_token');
-
-    if (savedUser && savedMerchant && savedToken) {
+  const [user, setUser] = useState<User | null>(() => {
+    if (typeof window !== 'undefined') {
       try {
-        setUser(JSON.parse(savedUser));
-        setMerchant(JSON.parse(savedMerchant));
-        setToken(savedToken);
-        return;
-      } catch (e) {
+        const saved = localStorage.getItem('shipde_user');
+        if (saved) return JSON.parse(saved);
+      } catch {
         // Fallback
       }
     }
+    return defaultUser;
+  });
 
-    // Default mock initial session for instant usability
-    const defaultMerchant: Merchant = {
-      id: 'merc_prod_01',
-      name: 'Thời Trang An An Boutique',
-      business_code: '0318928192',
-      phone: '0901234567',
-      email: 'contact@ananboutique.vn',
-      address: '128 Nguyễn Trãi, Phường 3, Quận 5, TP. Hồ Chí Minh',
-      subscription_plan: 'BUSINESS_CONTROL',
-      status: 'ACTIVE',
-      created_at: new Date('2026-01-01'),
-    };
+  const [merchant, setMerchant] = useState<Merchant | null>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('shipde_merchant');
+        if (saved) return JSON.parse(saved);
+      } catch {
+        // Fallback
+      }
+    }
+    return defaultMerchant;
+  });
 
-    const defaultUser: User = {
-      id: 'usr_01',
-      merchant_id: 'merc_prod_01',
-      full_name: 'Nguyễn Văn An',
-      email: 'owner@ananboutique.vn',
-      phone: '0901234567',
-      role: Role.OWNER,
-      status: 'ACTIVE',
-      created_at: new Date('2026-01-01'),
-    };
-
-    const defaultToken = 'jwt_shipde_session_token_prod_9981';
-
-    setUser(defaultUser);
-    setMerchant(defaultMerchant);
-    setToken(defaultToken);
-
-    localStorage.setItem('shipde_user', JSON.stringify(defaultUser));
-    localStorage.setItem('shipde_merchant', JSON.stringify(defaultMerchant));
-    localStorage.setItem('shipde_token', defaultToken);
-  }, []);
+  const [token, setToken] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('shipde_token');
+        if (saved) return saved;
+      } catch {
+        // Fallback
+      }
+    }
+    return defaultToken;
+  });
 
   const login = async (emailOrPhone: string, pass: string) => {
     if (!emailOrPhone || !pass) {
@@ -128,7 +139,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
-  const register = async (payload: { merchantName: string; fullName: string; email: string; phone: string; password: string }) => {
+  const register = async (payload: {
+    merchantName: string;
+    fullName: string;
+    email: string;
+    phone: string;
+    password: string;
+  }) => {
     if (!payload.merchantName || !payload.fullName || !payload.email || !payload.password) {
       return { success: false, error: 'Vui lòng điền đầy đủ các trường thông tin bắt buộc' };
     }

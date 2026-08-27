@@ -52,7 +52,14 @@ export interface UIDiscrepancyItem {
   order_code: string;
   carrier_code?: 'GHN' | 'GHTK';
   carrier?: string;
-  type: 'D1_WEIGHT' | 'D2_FREIGHT' | 'D4_DUPLICATE' | 'D5_COD_MISMATCH' | 'D6_OVERDUE_COD' | 'D7_MISSING' | string;
+  type:
+    | 'D1_WEIGHT'
+    | 'D2_FREIGHT'
+    | 'D4_DUPLICATE'
+    | 'D5_COD_MISMATCH'
+    | 'D6_OVERDUE_COD'
+    | 'D7_MISSING'
+    | string;
   declared_value?: string;
   charged_value?: string;
   contract_amount?: number;

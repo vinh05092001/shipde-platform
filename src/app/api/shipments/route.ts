@@ -101,8 +101,14 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: { code: 'bad_request', message: 'Hành động không hợp lệ' } }, { status: 400 });
+    return NextResponse.json(
+      { error: { code: 'bad_request', message: 'Hành động không hợp lệ' } },
+      { status: 400 }
+    );
   } catch (error: any) {
-    return NextResponse.json({ error: { code: 'server_error', message: error.message } }, { status: 500 });
+    return NextResponse.json(
+      { error: { code: 'server_error', message: error.message } },
+      { status: 500 }
+    );
   }
 }

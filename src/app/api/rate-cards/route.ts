@@ -12,7 +12,10 @@ export async function POST(req: NextRequest) {
     const { carrier_account_id, volumetric_divisor, cod_payout_sla_days, tiers } = body;
 
     if (!tiers || !Array.isArray(tiers) || tiers.length === 0) {
-      return NextResponse.json({ error: { code: 'validation_error', message: 'Biểu giá phải có ít nhất 1 bậc cước' } }, { status: 400 });
+      return NextResponse.json(
+        { error: { code: 'validation_error', message: 'Biểu giá phải có ít nhất 1 bậc cước' } },
+        { status: 400 }
+      );
     }
 
     const rateCardId = `rc_${Date.now()}`;
@@ -48,6 +51,9 @@ export async function POST(req: NextRequest) {
       data: newRateCard,
     });
   } catch (error: any) {
-    return NextResponse.json({ error: { code: 'server_error', message: error.message } }, { status: 500 });
+    return NextResponse.json(
+      { error: { code: 'server_error', message: error.message } },
+      { status: 500 }
+    );
   }
 }

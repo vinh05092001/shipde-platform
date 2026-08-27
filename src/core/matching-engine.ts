@@ -28,7 +28,10 @@ export class MatchingEngine {
    */
   public static normalizeTrackingCode(code?: string): string {
     if (!code) return '';
-    return code.toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
+    return code
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .trim();
   }
 
   /**

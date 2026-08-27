@@ -12,7 +12,11 @@ import {
   CarrierCapabilityTier,
 } from '../types/domain';
 import { ERROR_CATALOG, ShipDeAppError } from '../types/error-codes';
-import { BaseCarrierAdapter, ReattemptRequestPayload, ReattemptResponse } from '../adapters/base.carrier';
+import {
+  BaseCarrierAdapter,
+  ReattemptRequestPayload,
+  ReattemptResponse,
+} from '../adapters/base.carrier';
 
 export interface ReattemptDispatchResult {
   case_id: string;
@@ -55,11 +59,7 @@ export class ExceptionEngine {
    * Tính điểm ưu tiên sắp xếp hộp việc (CN-08, CN-09)
    * Xếp theo giá trị COD, tuổi sự cố, hạn hoàn và khả năng cứu.
    */
-  public calculatePriorityScore(
-    codAmount: number,
-    occurredAt: Date,
-    deadlineAt: Date
-  ): number {
+  public calculatePriorityScore(codAmount: number, occurredAt: Date, deadlineAt: Date): number {
     const codWeight = Math.min(50, Math.round(codAmount / 100000)); // Tối đa 50 điểm
     const remainingHours = Math.max(0, (deadlineAt.getTime() - Date.now()) / (3600 * 1000));
     const urgencyWeight = remainingHours <= 4 ? 40 : remainingHours <= 12 ? 20 : 5; // Tối đa 40 điểm
@@ -77,7 +77,11 @@ export class ExceptionEngine {
     existingCase?: ExceptionCase
   ): ExceptionCase {
     // BR-31: Một hồ sơ ngoại lệ mở duy nhất cho mỗi cặp (vận đơn, loại sự cố)
-    if (existingCase && existingCase.status !== ExceptionCaseStatus.RESCUED && existingCase.status !== ExceptionCaseStatus.RETURNED) {
+    if (
+      existingCase &&
+      existingCase.status !== ExceptionCaseStatus.RESCUED &&
+      existingCase.status !== ExceptionCaseStatus.RETURNED
+    ) {
       // Nối thông tin vào hồ sơ đang mở
       existingCase.carrier_raw_reason = carrierRawReason || existingCase.carrier_raw_reason;
       return existingCase;
@@ -145,7 +149,11 @@ export class ExceptionEngine {
         idempotency_key: `reattempt_${tracking}_${Date.now()}`,
       };
 
-      const resp = await adapter.requestReattempt(reattemptPayload, credentials, payload.overrideTier);
+      const resp = await adapter.requestReattempt(
+        reattemptPayload,
+        credentials,
+        payload.overrideTier
+      );
 
       exceptionCase.status = ExceptionCaseStatus.REATTEMPT_REQUESTED;
       exceptionCase.version += 1;

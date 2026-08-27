@@ -40,7 +40,16 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action, tracking_code, warehouse_id, condition, evidence_urls, scanned_by, commands, is_device_revoked } = body;
+    const {
+      action,
+      tracking_code,
+      warehouse_id,
+      condition,
+      evidence_urls,
+      scanned_by,
+      commands,
+      is_device_revoked,
+    } = body;
 
     // BATCH SYNC OFFLINE COMMANDS (BR-40)
     if (action === 'SYNC_OFFLINE_BATCH' || commands) {
@@ -81,19 +90,26 @@ export async function POST(req: NextRequest) {
 
     // SINGLE SCAN RECEIPT (CN-12)
     if (!tracking_code) {
-      return NextResponse.json({ error: { code: 'validation_error', message: 'Vui lòng quét hoặc nhập mã vận đơn' } }, { status: 400 });
+      return NextResponse.json(
+        { error: { code: 'validation_error', message: 'Vui lòng quét hoặc nhập mã vận đơn' } },
+        { status: 400 }
+      );
     }
 
     const normCode = tracking_code.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
     // Mandatory Evidence Rule (BR-36)
     if (condition && condition !== 'intact' && (!evidence_urls || evidence_urls.length === 0)) {
-      return NextResponse.json({
-        error: {
-          code: 'evidence_required',
-          message: 'Hàng hoàn bị hư hỏng hoặc sai lệch bắt buộc phải đính kèm ảnh chụp chứng cứ (BR-36).',
+      return NextResponse.json(
+        {
+          error: {
+            code: 'evidence_required',
+            message:
+              'Hàng hoàn bị hư hỏng hoặc sai lệch bắt buộc phải đính kèm ảnh chụp chứng cứ (BR-36).',
+          },
         },
-      }, { status: 422 });
+        { status: 422 }
+      );
     }
 
     const newRecord: ReturnRecord = {

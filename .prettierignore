@@ -1,0 +1,13 @@
+.next
+out
+build
+node_modules
+package-lock.json
+next-env.d.ts
+coverage
+*.log
+.git
+docs/**
+.agents/**
+.github/**
+AGENTS.md

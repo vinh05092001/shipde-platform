@@ -26,15 +26,41 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { order_code, cod_amount, declared_weight_g, recipient_name, recipient_phone, recipient_province, recipient_address, carrier_code, tracking_code } = body;
+    const {
+      order_code,
+      cod_amount,
+      declared_weight_g,
+      recipient_name,
+      recipient_phone,
+      recipient_province,
+      recipient_address,
+      carrier_code,
+      tracking_code,
+    } = body;
 
     if (!order_code || !recipient_name || !recipient_phone) {
-      return NextResponse.json({ error: { code: 'validation_error', message: 'Vui lòng điền đầy đủ mã đơn, tên và SĐT người nhận' } }, { status: 400 });
+      return NextResponse.json(
+        {
+          error: {
+            code: 'validation_error',
+            message: 'Vui lòng điền đầy đủ mã đơn, tên và SĐT người nhận',
+          },
+        },
+        { status: 400 }
+      );
     }
 
     // Check duplicate
     if (db.orders.some((o) => o.order_code.toUpperCase() === order_code.toUpperCase())) {
-      return NextResponse.json({ error: { code: 'order_duplicate', message: `Mã đơn hàng ${order_code} đã tồn tại trên hệ thống` } }, { status: 409 });
+      return NextResponse.json(
+        {
+          error: {
+            code: 'order_duplicate',
+            message: `Mã đơn hàng ${order_code} đã tồn tại trên hệ thống`,
+          },
+        },
+        { status: 409 }
+      );
     }
 
     const newOrder: Order = {
@@ -75,6 +101,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, message: 'Tạo đơn hàng thành công', data: newOrder });
   } catch (error: any) {
-    return NextResponse.json({ error: { code: 'server_error', message: error.message } }, { status: 500 });
+    return NextResponse.json(
+      { error: { code: 'server_error', message: error.message } },
+      { status: 500 }
+    );
   }
 }

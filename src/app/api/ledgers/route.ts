@@ -13,7 +13,9 @@ export async function GET(req: NextRequest) {
     const rescuedCases = db.exceptionCases
       .filter((e) => e.status === ExceptionCaseStatus.RESCUED)
       .map((caseRecord) => {
-        const shipment = db.shipments.find((s) => s.id === caseRecord.shipment_id || s.tracking_code === caseRecord.tracking_code);
+        const shipment = db.shipments.find(
+          (s) => s.id === caseRecord.shipment_id || s.tracking_code === caseRecord.tracking_code
+        );
         return {
           caseRecord,
           shipment: shipment || (db.shipments[0] as any),

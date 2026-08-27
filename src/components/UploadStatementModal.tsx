@@ -14,7 +14,9 @@ export const UploadStatementModal: React.FC<Props> = ({ isOpen, onClose, onUploa
   const [carrierCode, setCarrierCode] = useState<'GHN' | 'GHTK' | 'VTP'>('GHN');
   const [fileName, setFileName] = useState('sao_ke_ghn_ky_01_08_2026.xlsx');
   const [fileSize, setFileSize] = useState('142 KB');
-  const [checksum, setChecksum] = useState('80cff0c5191ac087a3b4c12d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f');
+  const [checksum, setChecksum] = useState(
+    '80cff0c5191ac087a3b4c12d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f'
+  );
   const [uploading, setUploading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -61,7 +63,9 @@ export const UploadStatementModal: React.FC<Props> = ({ isOpen, onClose, onUploa
             </div>
             <div>
               <h3 className="font-bold text-sm text-slate-900">Nạp File Sao Kê Đối Soát (CN-13)</h3>
-              <p className="text-[11px] text-slate-500">Đối chiếu tự động 6 phép dò sai lệch cước và tiền thu hộ COD</p>
+              <p className="text-[11px] text-slate-500">
+                Đối chiếu tự động 6 phép dò sai lệch cước và tiền thu hộ COD
+              </p>
             </div>
           </div>
           <button
@@ -81,7 +85,9 @@ export const UploadStatementModal: React.FC<Props> = ({ isOpen, onClose, onUploa
 
         <form onSubmit={handleUpload} className="space-y-4">
           <div>
-            <label className="font-bold text-slate-700 block mb-1">Hãng Vận Chuyển Xuất File:</label>
+            <label className="font-bold text-slate-700 block mb-1">
+              Hãng Vận Chuyển Xuất File:
+            </label>
             <select
               value={carrierCode}
               onChange={(e: any) => {
@@ -102,7 +108,9 @@ export const UploadStatementModal: React.FC<Props> = ({ isOpen, onClose, onUploa
             </div>
             <div>
               <span className="font-mono font-bold text-xs text-slate-900 block">{fileName}</span>
-              <span className="text-[11px] text-slate-500 font-mono">Dung lượng: {fileSize} · Định dạng Excel .XLSX</span>
+              <span className="text-[11px] text-slate-500 font-mono">
+                Dung lượng: {fileSize} · Định dạng Excel .XLSX
+              </span>
             </div>
           </div>
 
@@ -117,18 +125,10 @@ export const UploadStatementModal: React.FC<Props> = ({ isOpen, onClose, onUploa
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary text-xs"
-            >
+            <button type="button" onClick={onClose} className="btn-secondary text-xs">
               Hủy
             </button>
-            <button
-              type="submit"
-              disabled={uploading}
-              className="btn-primary text-xs"
-            >
+            <button type="submit" disabled={uploading} className="btn-primary text-xs">
               {uploading ? 'Đang phân tích 6 phép dò...' : 'Nạp & Phân Tích Sai Lệch Ngay'}
             </button>
           </div>

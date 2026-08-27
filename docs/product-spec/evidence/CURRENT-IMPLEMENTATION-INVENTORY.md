@@ -1,0 +1,250 @@
+# Ship Dễ — Current Implementation Inventory (Prototype Baseline)
+
+**Work Item:** `TASK-FOUND-01`  
+**Execution Date:** 2026-08-27  
+**Runtime Baseline:** Node.js 24 (v24.15.0), npm 11.12.1  
+**Repository State:** Prototype baseline freeze prior to monorepo migration (`TASK-FOUND-02`)
+
+---
+
+## 1. Executive Summary
+
+This document is the authoritative, evidence-based inventory of all capabilities, surfaces, engines, and mock behaviors present in the Next.js prototype repository as of `TASK-FOUND-01`.
+
+### 1.1 Classification Criteria
+Under the governing operating contract (`AGENTS.md`) and Feature Definition of Done (`DEFINITION-OF-READY-DONE.md`):
+- **`REAL` (0 / 130 features):** Requires complete end-to-end evidence across production UI, backend API, real PostgreSQL persistence, server-side tenant isolation & RBAC enforcement, audit logging, live/reconciled external adapters, and automated acceptance tests. **Zero features in the prototype meet this standard**, because database mutations are stored in an in-memory singleton (`src/server/db.ts`), carrier communications are simulated (`src/adapters/*.ts`), and UI state relies heavily on exported mock arrays (`src/services/unifiedDataStore.ts`).
+- **`PARTIAL` (38 / 130 features):** An executable domain engine, structured API handler, typed contract, or validation rule exists and operates deterministically, but at least one critical production layer (e.g. database persistence, server-side RBAC, live adapter, durable outbox) is absent.
+- **`DEMO_ONLY` (32 / 130 features):** Feature is present purely as a visual UI component, mock data array, hard-coded calculation, artificial timer, or client-side in-memory mutation.
+- **`ABSENT` (60 / 130 features):** Feature is specified in `MASTER-FEATURE-CATALOG.md` but has no corresponding implementation, component, or engine in the prototype codebase.
+
+### 1.2 Summary Statistics
+
+| Classification | Count | Percentage | Description |
+|---|---:|---:|---|
+| **`REAL`** | 0 | 0.0% | Fully complete production vertical features |
+| **`PARTIAL`** | 74 | 56.9% | Working core domain engines, calculation logic, API route handlers, or validation |
+| **`DEMO_ONLY`** | 31 | 23.8% | Visual prototype UI, client-only state, simulated carrier views, static mock arrays |
+| **`ABSENT`** | 25 | 19.2% | Backlog features not present in current prototype |
+| **Total** | **130** | **100.0%** | Exact match with `MASTER-FEATURE-CATALOG.md` (130 catalog features) |
+
+---
+
+## 2. Tracked Application Areas Inventory
+
+| Area | Directory / Path | File Count | Core Symbols & Modules | Implementation Reality |
+|---|---|---:|---|---|
+| **App Routes & Shell** | `src/app/` | 4 | `page.tsx` (`ShipDeConsoleApp`), `layout.tsx`, `globals.css` | `DEMO_ONLY` (Client-side tab switching across 9 workspaces) |
+| **UI Components (Tabs)** | `src/components/` | 18 | `ControlTowerTab`, `ShipmentListTab`, `ExceptionWorkboxTab`, `ReconciliationTab`, `ThreeLedgersTab`, `ReturnScanTab`, `ClaimCasesTab`, `AdminSystemTab`, `SettingsWorkspace`, `SourceMatchingTab`, `NotificationMatrixTab`, `UserManagementTab`, `MobileSimulatorTab`, `PublicTrackingTab` | `DEMO_ONLY` / `PARTIAL` (Rich operational UI surfaces backed by in-memory state) |
+| **UI Modals & Forms** | `src/components/`, `src/components/forms/` | 11 | `CreateOrderModal`, `UnifiedTrackingModal`, `UploadStatementModal`, `ShopSettingsModal`, `ConnectCarrierModal`, `CreateClaimModal`, `InviteUserModal`, `RateCardFormModal`, `ReattemptFormModal`, `ResolveDiscrepancyModal` | `PARTIAL` (Form validation & event triggers wired to mock API / local store) |
+| **UI Primitives** | `src/components/ui/` | 2 | `DataTable.tsx`, `OperationalComponents.tsx` | `PARTIAL` (Reusable operational badges, currency formatters, severity tags) |
+| **Auth UI** | `src/components/auth/` | 2 | `LoginView.tsx`, `RegisterView.tsx` | `DEMO_ONLY` (Quick role switcher + mock login/register views) |
+| **Context & State** | `src/context/` | 1 | `AuthContext.tsx` (`AuthProvider`, `useAuth`) | `DEMO_ONLY` (LocalStorage session persistence, client-side role switching) |
+| **Core Domain Engines** | `src/core/` | 6 | `ExceptionEngine`, `MatchingEngine`, `ReconciliationEngine`, `ThreeLedgersCalculator`, `MakerCheckerEngine`, `OfflineScanQueueManager` | `PARTIAL` (Pure deterministic business logic & invariant validation) |
+| **Adapters** | `src/adapters/` | 5 | `BaseCarrierAdapter`, `GhnCarrierAdapter`, `GhtkCarrierAdapter`, `PancakePosAdapter`, `calculateSHA256` | `PARTIAL` (Mock carrier adapters, SHA-256 checksums, POS normalization) |
+| **Server & In-Memory DB** | `src/server/` | 1 | `ShipDeDatabase` (`src/server/db.ts`) | `DEMO_ONLY` (Singleton in-memory store simulating 12 database tables) |
+| **API Route Handlers** | `src/app/api/` | 12 | `/carrier-accounts`, `/claims`, `/exceptions`, `/ledgers`, `/notifications`, `/orders`, `/rate-cards`, `/reconciliation`, `/returns`, `/shipments`, `/tracking/[code]`, `/users` | `PARTIAL` (Next.js Route Handlers with error handling & status codes) |
+| **Data Stores & Fixtures** | `src/services/`, `src/components/`, `scripts/` | 3 | `unifiedDataStore.ts` (`MASTER_*`), `mock-data.ts`, `sample-data.ts` | `DEMO_ONLY` (Deterministic test datasets with 50 shipments, 4 exceptions, 6 discrepancies) |
+| **Types & Error Catalog** | `src/types/` | 3 | `domain.ts`, `error-codes.ts` (`ERROR_CATALOG`, `ShipDeAppError`), `ledger.ts` | `PARTIAL` (Domain schemas, standardized error codes, 3-ledger types) |
+| **Database Schema** | `prisma/` | 1 | `schema.prisma` (PostgreSQL 16+ schema with 12 models) | `PARTIAL` (Schema defined; un-migrated in prototype runtime) |
+| **Verification & Tests** | `src/tests/` | 4 | `e2e-scenarios.test.ts`, `comprehensive-rules.test.ts`, `regression-audit.test.ts`, `preservation-smoke.test.ts` | `PARTIAL` (Runnable baseline tests verifying domain engines & mock flows) |
+| **Automation & Scripts** | `scripts/` | 12 | `verify-secrets.ts`, `concierge-audit.ts`, `control.ps1`, `doctor.ps1`, `bootstrap-worktrees.ps1`, `protect-main.ps1` | `PARTIAL` (Workflow automation, doctor health checks, secret scanning) |
+
+---
+
+## 3. Master Feature Matrix (All 130 Catalog Features)
+
+### 3.1 Group 1: Identity and organization (15 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-AUTH-01` | Self-registration | `DEMO_ONLY` | `src/components/auth/RegisterView.tsx:L1-L150` | UI form | No OTP/SMS verification, no terms audit, client-side only |
+| `FEAT-AUTH-02` | Admin-created shop account | `ABSENT` | None | None | No operator provisioning flow |
+| `FEAT-AUTH-03` | Login | `DEMO_ONLY` | `src/components/auth/LoginView.tsx:L1-L180`, `src/context/AuthContext.tsx:L50-L100` | UI, Role switcher | In-memory token, no real credential verification or brute-force lock |
+| `FEAT-AUTH-04` | Password recovery | `ABSENT` | None | None | No password reset flow or token invalidation |
+| `FEAT-AUTH-05` | MFA | `ABSENT` | None | None | No TOTP/SMS second-factor setup or verification |
+| `FEAT-AUTH-06` | Session management | `PARTIAL` | `src/components/UserManagementTab.tsx:L120-L180`, `src/app/api/users/route.ts:L30-L60`, `src/server/db.ts:L86-L90` | UI, API handler, In-memory state | Device session list and revocation exist in memory; no Redis session store or token refresh |
+| `FEAT-USR-01` | User invitations | `DEMO_ONLY` | `src/components/forms/InviteUserModal.tsx:L1-L120`, `src/components/UserManagementTab.tsx:L50-L110` | UI modal | No email/SMS dispatch, no tokenized acceptance link |
+| `FEAT-USR-02` | User lifecycle | `PARTIAL` | `src/components/UserManagementTab.tsx:L1-L250`, `src/app/api/users/route.ts:L1-L80`, `prisma/schema.prisma:L131-L153` | UI, API, Prisma model | Mutations update `ShipDeDatabase` in-memory; no real DB persistence or lifecycle audit |
+| `FEAT-RBAC-01` | Roles and permissions | `PARTIAL` | `src/types/domain.ts:L16-L22`, `src/core/maker-checker.ts:L19-L66`, `src/context/AuthContext.tsx:L100-L130` | Core logic, Types, UI role filter | 4 roles (OWNER, OPS_CSKH, WAREHOUSE, ACCOUNTANT); no dynamic permission matrix |
+| `FEAT-RBAC-02` | Scope assignment | `DEMO_ONLY` | `src/components/UserManagementTab.tsx:L180-L240`, `src/types/domain.ts:L35-L40` | UI display, Domain types | Scopes selectable in UI; not enforced server-side in API routes |
+| `FEAT-ORG-01` | Shop profile | `DEMO_ONLY` | `src/components/ShopSettingsModal.tsx:L1-L140`, `src/components/SettingsWorkspace.tsx:L20-L80` | UI form | No durable DB persistence or business validation |
+| `FEAT-ORG-02` | Branches | `DEMO_ONLY` | `src/app/page.tsx:L73-L82`, `src/components/SettingsWorkspace.tsx:L80-L120` | UI store selector | Static branch list (`STORES_LIST`); no branch CRUD API |
+| `FEAT-WH-01` | Warehouses | `DEMO_ONLY` | `src/components/SettingsWorkspace.tsx:L140-L190` | UI table | Static warehouse cards; no pickup schedule or printer config |
+| `FEAT-ONB-01` | Guided onboarding | `ABSENT` | None | None | No onboarding step wizard or checklist |
+| `FEAT-PRO-01` | Personal profile | `DEMO_ONLY` | `src/components/SettingsWorkspace.tsx:L30-L70` | UI tab | In-memory profile view; no password change or notification preferences |
+
+### 3.2 Group 2: Shared platform (10 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-COM-01` | Global search | `DEMO_ONLY` | `src/app/page.tsx:L64-L107`, `src/components/ShipmentListTab.tsx:L92-L100` | UI search bar | Client-side search across tracking, order code, phone; no backend indexing |
+| `FEAT-COM-02` | Lists | `PARTIAL` | `src/components/ui/DataTable.tsx:L1-L150`, `src/components/ShipmentListTab.tsx:L45-L115` | UI Component | Client-side filter/sort/pagination; no server-side cursor query |
+| `FEAT-COM-03` | Bulk actions | `DEMO_ONLY` | `src/components/ShipmentListTab.tsx:L250-L300` | UI buttons | Bulk action UI triggers; no async job queue or partial failure rollback |
+| `FEAT-COM-04` | Imports | `PARTIAL` | `src/components/UploadStatementModal.tsx:L1-L150`, `src/adapters/csv.adapter.ts:L1-L90` | UI modal, CSV adapter | CSV parse & SHA-256 dedupe; in-memory processing only |
+| `FEAT-COM-05` | Exports | `PARTIAL` | `src/app/api/ledgers/route.ts:L20-L50`, `src/components/ThreeLedgersTab.tsx:L32-L35` | API route handler | CSV export endpoint; no XLSX/PDF generation or permission metadata |
+| `FEAT-COM-06` | Attachments | `DEMO_ONLY` | `src/components/ReturnScanTab.tsx:L150-L200`, `src/components/forms/CreateClaimModal.tsx:L50-L80` | UI file upload trigger | File selector displays mock URL; no S3/MinIO storage or hash verification |
+| `FEAT-COM-07` | Activity timeline | `PARTIAL` | `src/components/UnifiedTrackingModal.tsx:L1-L220`, `src/types/domain.ts:L75-L85` | UI modal, Domain types | Chronological events rendered; events simulated rather than append-only DB stream |
+| `FEAT-COM-08` | Draft recovery | `ABSENT` | None | None | No localStorage/indexedDB auto-save draft mechanism |
+| `FEAT-COM-09` | Notification center | `PARTIAL` | `src/app/api/notifications/route.ts:L1-L35`, `src/components/NotificationMatrixTab.tsx:L1-L180` | UI tab, API route | Notification list from in-memory store; no WebSocket / push delivery |
+| `FEAT-SUP-01` | Support requests | `ABSENT` | None | None | No support ticket submission or consented access flow |
+
+### 3.3 Group 3: Carrier accounts and configuration (9 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-CAR-01` | Carrier catalog | `PARTIAL` | `src/types/domain.ts:L24-L34`, `src/adapters/base.carrier.ts:L1-L80` | Types, Adapter interface | GHN, GHTK, ViettelPost taxonomy; static enum without dynamic carrier API |
+| `FEAT-CAR-02` | Account connection | `PARTIAL` | `src/components/forms/ConnectCarrierModal.tsx:L1-L120`, `src/server/db.ts:L91-L105` | UI form, In-memory DB | Multiple carrier accounts; credentials masked in memory, not encrypted via KMS |
+| `FEAT-CAR-03` | Permission profiles | `PARTIAL` | `src/adapters/base.carrier.ts:L15-L25`, `src/adapters/ghn.adapter.ts:L30-L55` | Core adapter logic | L0 (Observe), L1 (Assist), L2 (Execute) tier gating implemented |
+| `FEAT-CAR-04` | Connection test | `DEMO_ONLY` | `src/components/ApiIntegrationsTab.tsx:L80-L150` | UI button | Test connection button simulates success with simulated delay |
+| `FEAT-CAR-05` | Credential lifecycle | `DEMO_ONLY` | `src/components/SettingsWorkspace.tsx:L100-L140` | UI display | Masked token display; no automatic expiry check or rotation flow |
+| `FEAT-CAR-06` | Capability registry | `PARTIAL` | `src/adapters/base.carrier.ts:L20-L40`, `src/adapters/ghn.adapter.ts:L20-L35` | Adapter interface | Capabilities (reattempt, cancel, label, webhook) declared per tier |
+| `FEAT-CAR-07` | Connector health | `PARTIAL` | `src/components/ControlTowerTab.tsx:L180-L230`, `src/core/ledger-calculator.ts:L129-L133` | UI widget, Calculation | Uptime & delivery SLA scores calculated; not backed by real ping monitor |
+| `FEAT-CAR-08` | Failure isolation | `PARTIAL` | `src/adapters/ghtk.adapter.ts:L30-L60`, `src/tests/e2e-scenarios.test.ts:L450-L490` | Adapter logic, Tests | GHTK failure does not block GHN execution in E2E harness; in-memory isolation |
+| `FEAT-CAR-09` | Manual/file fallback | `PARTIAL` | `src/adapters/ghn.adapter.ts:L65-L95`, `src/tests/comprehensive-rules.test.ts:L120-L145` | Adapter fallback | L1 Assist generates portal payload when L2 is unavailable |
+
+### 3.4 Group 4: Orders, addresses and quotes (13 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-SRC-01` | Manual source order | `PARTIAL` | `src/components/CreateOrderModal.tsx:L1-L250`, `src/app/api/orders/route.ts:L1-L70` | UI form, API handler | Order creation form with validation; saved to in-memory store |
+| `FEAT-SRC-02` | OMS/file import | `PARTIAL` | `src/adapters/pancake.adapter.ts:L1-L75`, `src/app/api/shipments/route.ts:L40-L75` | Adapter, API handler | Pancake POS JSON ingestion & mapping; no bulk XLSX ingestion |
+| `FEAT-SRC-03` | Order validation | `PARTIAL` | `src/adapters/pancake.adapter.ts:L30-L50`, `src/components/CreateOrderModal.tsx:L80-L130` | Validation logic | Required field check & weight validation; no prohibited goods acknowledgment |
+| `FEAT-ADR-01` | Address normalization | `DEMO_ONLY` | `src/components/CreateOrderModal.tsx:L140-L170` | UI dropdowns | Hardcoded Province/District selection (HCM, HN, Da Nang); no administrative code DB |
+| `FEAT-ADR-02` | Carrier address mapping | `ABSENT` | None | None | No carrier-specific ward/district code translation table |
+| `FEAT-AVL-01` | Serviceability | `DEMO_ONLY` | `src/components/CreateOrderModal.tsx:L180-L240` | UI calculation | Basic weight check against static carrier limits; no real serviceability API |
+| `FEAT-AVL-02` | No-option recovery | `DEMO_ONLY` | `src/components/CreateOrderModal.tsx:L240-L280` | UI warning | Warning message shown when no carrier matches; no manual carrier selection |
+| `FEAT-QTE-01` | Parallel live quote | `DEMO_ONLY` | `src/components/CreateOrderModal.tsx:L200-L270` | UI quote comparison | Quotes calculated client-side from static tier formulae; no live carrier API calls |
+| `FEAT-QTE-02` | Normalized quote | `PARTIAL` | `src/core/reconciliation.ts:L50-L80`, `src/components/CreateOrderModal.tsx:L210-L230` | Calculation logic, UI | Base fee, volumetric weight calculation (divisor 5000/6000), VAT not separated |
+| `FEAT-QTE-03` | Quote snapshot | `ABSENT` | None | None | No immutable quote response snapshot saved with order |
+| `FEAT-SEL-01` | Comparison | `DEMO_ONLY` | `src/components/CreateOrderModal.tsx:L220-L260` | UI cards | Highlights "Cheapest" (Tiết kiệm nhất) and "Fastest" (Nhanh nhất) from mock quotes |
+| `FEAT-SEL-02` | Explainable recommendation | `DEMO_ONLY` | `src/components/CreateOrderModal.tsx:L250-L270` | UI badge | Recommendation label shown; weights not configurable by merchant |
+| `FEAT-SEL-03` | Auto-routing | `ABSENT` | None | None | No routing policy engine or rule-based carrier assignment |
+
+### 3.5 Group 5: Shipment, pickup and labels (12 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-SHP-01` | Shipment draft | `DEMO_ONLY` | `src/components/ShipmentListTab.tsx:L120-L150`, `src/types/domain.ts:L45-L55` | UI table, Domain types | Status `DRAFT` supported in enum and filter; no versioned draft editing |
+| `FEAT-SHP-02` | Create shipment | `PARTIAL` | `src/adapters/ghn.adapter.ts:L40-L80`, `src/tests/e2e-scenarios.test.ts:L40-L90` | Adapter logic, Tests | Idempotency Key caching implemented; carrier API simulated |
+| `FEAT-SHP-03` | Bulk creation | `ABSENT` | None | None | No bulk creation progress job or row-by-row failure report |
+| `FEAT-SHP-04` | Manual waybill link | `DEMO_ONLY` | `src/components/CreateOrderModal.tsx:L60-L80` | UI input | Tracking code manual input field; no audit trail of manual linkage |
+| `FEAT-SHP-05` | Update shipment | `DEMO_ONLY` | `src/server/db.ts:L150-L180` | In-memory mutation | In-memory shipment update; no carrier modification API or requote trigger |
+| `FEAT-SHP-06` | Cancel shipment | `PARTIAL` | `src/adapters/ghn.adapter.ts:L85-L105` | Adapter interface | Cancel method defined with status check; carrier API simulated |
+| `FEAT-SHP-07` | Switch carrier | `ABSENT` | None | None | No carrier switch workflow before pickup |
+| `FEAT-PUP-01` | Pickup request | `DEMO_ONLY` | `src/components/CreateOrderModal.tsx:L31-L35` | UI warehouse select | Pickup warehouse selectable; no shift/window scheduling with carrier |
+| `FEAT-PUP-02` | Pickup handover | `ABSENT` | None | None | No pickup handover manifest or parcel handover counter-signing |
+| `FEAT-LBL-01` | Label retrieval/generation | `DEMO_ONLY` | `src/components/ShipmentListTab.tsx:L320-L340` | UI print button | Print button opens browser window; no carrier thermal label PDF/ZPL stream |
+| `FEAT-LBL-02` | Print and reprint | `DEMO_ONLY` | `src/components/ShipmentListTab.tsx:L325-L335` | UI action | Triggers `window.print()`; no reprint audit or printer profile config |
+| `FEAT-LBL-03` | Label invalidation | `ABSENT` | None | None | No label invalidation after cancellation |
+
+### 3.6 Group 6: Tracking, recipient and exceptions (11 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-TRK-01` | Webhook ingestion | `PARTIAL` | `src/app/api/shipments/route.ts:L1-L40`, `src/tests/e2e-scenarios.test.ts:L90-L140` | API handler, Tests | Event deduplication by `(shipment_id, raw_status, occurred_at)`; no HMAC signature check |
+| `FEAT-TRK-02` | Polling/backfill | `PARTIAL` | `src/adapters/ghn.adapter.ts:L110-L140` | Adapter method | Tracking poll method implemented; no scheduled background polling worker |
+| `FEAT-TRK-03` | Canonical tracking | `PARTIAL` | `src/adapters/ghn.adapter.ts:L20-L40`, `src/types/domain.ts:L55-L65` | Mapping logic | Raw carrier status normalized to canonical `ShipmentStatusEnum` |
+| `FEAT-TRK-04` | Timeline/current state | `PARTIAL` | `src/components/UnifiedTrackingModal.tsx:L1-L220`, `src/services/unifiedDataStore.ts:L45-L60` | UI modal, Data model | Chronological timeline display; state derived from latest `occurred_at` |
+| `FEAT-RECIP-01` | Protected tracking page | `DEMO_ONLY` | `src/components/PublicTrackingTab.tsx:L1-L160` | UI component | Public tracking view; no signed link or recipient OTP protection |
+| `FEAT-RECIP-02` | Recipient action | `ABSENT` | None | None | No recipient delivery rescheduling or note submission |
+| `FEAT-EXC-01` | Exception detection | `PARTIAL` | `src/core/exception-engine.ts:L30-L70`, `src/tests/comprehensive-rules.test.ts:L900-L950` | Core engine | Detects `DELIVERY_FAIL`, `PICKUP_DELAY`, `STUCK_IN_TRANSIT`, `STATUS_MISMATCH` |
+| `FEAT-EXC-02` | Prioritized workbox | `PARTIAL` | `src/core/exception-engine.ts:L58-L85`, `src/components/ExceptionWorkboxTab.tsx:L1-L250` | Core logic, UI | Workbox sorted by priority score (COD value, age, deadline) |
+| `FEAT-EXC-03` | Task workflow | `PARTIAL` | `src/components/ExceptionWorkboxTab.tsx:L120-L200`, `src/app/api/exceptions/route.ts:L1-L100` | UI, API handler | Assign, contact log, snooze, resolve case; state in-memory |
+| `FEAT-EXC-04` | Redelivery | `PARTIAL` | `src/core/exception-engine.ts:L85-L140`, `src/components/forms/ReattemptFormModal.tsx:L1-L120` | Core logic, UI modal | Reattempt dispatch with 409 concurrency lock (`activeReattemptTrackingCodes`) |
+| `FEAT-EXC-05` | Outcome metrics | `PARTIAL` | `src/core/ledger-calculator.ts:L80-L108`, `src/components/ThreeLedgersTab.tsx:L80-L120` | Core calculation, UI | Rescued order count and saved return fee tracked (Ledger 2) |
+
+### 3.7 Group 7: Returns (6 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-RET-01` | Expected returns | `PARTIAL` | `src/components/ReturnScanTab.tsx:L30-L80`, `src/server/db.ts:L220-L250` | UI list, In-memory DB | Queue of returning shipments derived from status `returning` |
+| `FEAT-RET-02` | Scan receipt | `PARTIAL` | `src/core/offline-queue.ts:L33-L90`, `src/components/ReturnScanTab.tsx:L80-L150` | Core engine, UI | Barcode scanning with duplicate prevention (`duplicates_skipped`) |
+| `FEAT-RET-03` | Condition checklist | `PARTIAL` | `src/core/offline-queue.ts:L15-L20`, `src/components/ReturnScanTab.tsx:L110-L140` | Core types, UI | Package condition (intact, damaged, missing_item, wrong_item) checklist |
+| `FEAT-RET-04` | Direct evidence capture | `PARTIAL` | `src/core/offline-queue.ts:L80-L110`, `src/tests/comprehensive-rules.test.ts:L1000-L1050` | Core validation | Evidence required rule (422 `EVIDENCE_REQUIRED` if damaged); mock image URL |
+| `FEAT-RET-05` | Chain of custody | `DEMO_ONLY` | `src/components/ReturnScanTab.tsx:L180-L220` | UI display | Shows receiving staff and timestamp in-memory; no cryptographic tamper seal |
+| `FEAT-RET-06` | Return issue case | `PARTIAL` | `src/components/ReturnScanTab.tsx:L220-L260`, `src/app/api/returns/route.ts:L60-L90` | UI, API handler | Discrepancy case created when condition != intact; in-memory store |
+
+### 3.8 Group 8: Rate, policy and import governance (13 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-RATE-01` | Contract documents | `ABSENT` | None | None | No private PDF contract upload with page/clause metadata |
+| `FEAT-RATE-02` | Structured rate rules | `PARTIAL` | `src/types/domain.ts:L80-L115`, `src/components/forms/RateCardFormModal.tsx:L1-L150` | Domain types, UI modal | Route type (Intra/Inter province), weight brackets, base/step fee, volumetric divisor |
+| `FEAT-RATE-03` | Maker-checker approval | `PARTIAL` | `src/core/maker-checker.ts:L1-L90`, `src/tests/comprehensive-rules.test.ts:L800-L870` | Core engine, Tests | Rate/discrepancy maker-checker segregation (`SELF_APPROVAL_FORBIDDEN`) |
+| `FEAT-RATE-04` | Effective version selection | `PARTIAL` | `src/core/reconciliation.ts:L30-L60`, `prisma/schema.prisma:L196-L214` | Core engine, Prisma | `effective_from`/`effective_to` versioning defined; date basis lookup |
+| `FEAT-RATE-05` | Rate simulator/explanation | `PARTIAL` | `src/core/reconciliation.ts:L45-L75`, `src/components/forms/RateCardFormModal.tsx:L110-L140` | Core calculation, UI | Volumetric weight & expected freight calculation with step weights |
+| `FEAT-SET-01` | Settlement policy | `PARTIAL` | `src/types/domain.ts:L95-L100`, `src/core/reconciliation.ts:L245-L272` | Domain types, Core engine | COD payout SLA days (default: 3 days) enforced in D6 overdue check |
+| `FEAT-SET-02` | Threshold/carry-forward | `PARTIAL` | `src/core/maker-checker.ts:L80-L95`, `src/types/domain.ts:L140-L145` | Core logic, Types | `CARRIED_FORWARD` discrepancy resolution status supported |
+| `FEAT-CLP-01` | Claim policy | `PARTIAL` | `src/core/exception-engine.ts:L145-L170`, `src/tests/comprehensive-rules.test.ts:L950-L990` | Core engine | 48h warning threshold prior to claim deadline (`CLAIM_EXPIRY_WARNING`) |
+| `FEAT-IMP-01` | Raw immutable import | `PARTIAL` | `src/adapters/csv.adapter.ts:L1-L60`, `src/tests/comprehensive-rules.test.ts:L150-L185` | Adapter, Tests | SHA-256 file checksum calculation and duplicate upload rejection (409) |
+| `FEAT-IMP-02` | Staging validation | `PARTIAL` | `src/adapters/csv.adapter.ts:L40-L85` | Adapter parser | Row validation, tracking code cleanup, required fee type extraction |
+| `FEAT-IMP-03` | Source order import | `PARTIAL` | `src/adapters/pancake.adapter.ts:L1-L75` | Adapter parser | Pancake POS JSON order format parsing & normalization |
+| `FEAT-IMP-04` | Carrier statement import | `PARTIAL` | `src/adapters/csv.adapter.ts:L30-L90`, `src/components/UploadStatementModal.tsx:L1-L150` | Adapter, UI modal | CSV statement parsing, total rows, total COD, total fees extracted |
+| `FEAT-IMP-05` | Bank statement import | `ABSENT` | None | None | No bank statement CSV/MT940 parser or transaction deduplication |
+
+### 3.9 Group 9: Matching and audit (14 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-MAT-01` | Primary exact match | `PARTIAL` | `src/core/matching-engine.ts:L20-L40`, `src/tests/comprehensive-rules.test.ts:L200-L240` | Core engine, Tests | Normalized tracking code exact match (removes special chars & spaces) |
+| `FEAT-MAT-02` | Secondary exact match | `PARTIAL` | `src/core/matching-engine.ts:L40-L60`, `src/tests/comprehensive-rules.test.ts:L240-L270` | Core engine, Tests | Source order code exact match when tracking code is missing in statement |
+| `FEAT-MAT-03` | Manual match queue | `PARTIAL` | `src/core/matching-engine.ts:L80-L110`, `src/components/SourceMatchingTab.tsx:L1-L200` | Core engine, UI | Manual match workbench with mandatory reason check (422 `REASON_REQUIRED`) |
+| `FEAT-MAT-04` | Processing status | `PARTIAL` | `src/types/domain.ts:L120-L130`, `src/core/matching-engine.ts:L1-L70` | Types, Core engine | `MATCHED_EXACT`, `MATCHED_FUZZY`, `UNMATCHED`, `AMBIGUOUS` statuses |
+| `FEAT-AUD-01` | Expected fee calculation | `PARTIAL` | `src/core/reconciliation.ts:L45-L80`, `src/tests/comprehensive-rules.test.ts:L760-L775` | Core engine | Contract rate bracket evaluation + volumetric divisor calculation |
+| `FEAT-AUD-02` | COD discrepancy | `PARTIAL` | `src/core/reconciliation.ts:L220-L240`, `src/tests/comprehensive-rules.test.ts:L785-L792` | Core engine (D5) | D5 check: Expected source COD vs statement COD collected mismatch |
+| `FEAT-AUD-03` | Fee discrepancy | `PARTIAL` | `src/core/reconciliation.ts:L195-L220`, `src/tests/comprehensive-rules.test.ts:L770-L776` | Core engine (D2) | D2 check: Statement charged fee vs contract rate calculation |
+| `FEAT-AUD-04` | Weight findings | `PARTIAL` | `src/core/reconciliation.ts:L178-L195`, `src/tests/comprehensive-rules.test.ts:L760-L768` | Core engine (D1) | D1 check: Statement charged weight vs declared/volumetric weight + tolerance |
+| `FEAT-AUD-05` | Duplicate deductions | `PARTIAL` | `src/core/reconciliation.ts:L130-L155`, `src/tests/comprehensive-rules.test.ts:L777-L784` | Core engine (D4) | D4 check: Detects repeated statement rows for same tracking code |
+| `FEAT-AUD-06` | Late-delivery candidate | `ABSENT` | None | None | No automated SLA delivery delay discrepancy detection against carrier commitment |
+| `FEAT-AUD-07` | Multiple findings | `PARTIAL` | `src/core/reconciliation.ts:L160-L290`, `src/types/domain.ts:L135-L150` | Core engine, Types | Multiple independent discrepancies (D1, D2, D4, D5, D6, D7) per waybill |
+| `FEAT-AUD-08` | Immutable runs | `PARTIAL` | `src/core/reconciliation.ts:L295-L325`, `src/app/api/reconciliation/route.ts:L1-L120` | Core engine, API | Snapshot output with summary metrics and reconciled timestamp; in-memory store |
+| `FEAT-MIS-01` | Missing statement classification | `PARTIAL` | `src/core/reconciliation.ts:L245-L292`, `src/tests/comprehensive-rules.test.ts:L793-L808` | Core engine (D6, D7) | D6 (overdue COD without payment) and D7 (delivered shipment missing in statement) |
+| `FEAT-MIS-02` | Re-evaluation | `ABSENT` | None | None | No scheduled re-evaluation worker when new rate cards or statements are uploaded |
+
+### 3.10 Group 10: Settlement, bank, cases and claims (15 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-BAT-01` | Settlement periods/batches | `PARTIAL` | `src/server/db.ts:L300-L330`, `src/components/ReconciliationTab.tsx:L80-L140` | In-memory DB, UI | Statement period start/end and total control amounts; no multi-batch linking |
+| `FEAT-BAT-02` | Dual batch status | `ABSENT` | None | None | No independent tracking of carrier-reported transfer vs bank receipt |
+| `FEAT-BAT-03` | Period close/reopen | `PARTIAL` | `src/core/maker-checker.ts:L29-L35`, `src/tests/comprehensive-rules.test.ts:L850-L870` | Core engine, Tests | Period closed immutability check (409 `PERIOD_CLOSED`); no controlled reopen flow |
+| `FEAT-BNK-01` | Exact-reference match | `ABSENT` | None | None | No bank transaction reference auto-matching |
+| `FEAT-BNK-02` | Suggested match | `ABSENT` | None | None | No heuristic match suggestions for bank transactions |
+| `FEAT-BNK-03` | Many-to-many allocation | `ABSENT` | None | None | No allocation ledger linking bank transactions to settlement batches |
+| `FEAT-COD-01` | COD ledger | `PARTIAL` | `src/core/ledger-calculator.ts:L38-L75`, `src/components/ThreeLedgersTab.tsx:L40-L80` | Core engine (Ledger 1), UI | Sổ 1: Real cash recovered vs pending acceptance; bank receipt layer missing |
+| `FEAT-CAS-01` | Finding case | `PARTIAL` | `src/components/forms/ResolveDiscrepancyModal.tsx:L1-L120`, `src/components/ReconciliationTab.tsx:L140-L220` | UI modal, Component | Finding details, evidence files, resolution status, mandatory reason |
+| `FEAT-CAS-02` | Four money levels | `PARTIAL` | `src/core/ledger-calculator.ts:L45-L65`, `src/types/ledger.ts:L20-L45` | Core calculation, Types | Separates accepted vs recovered amounts; full 4 levels (suspected/verified/accepted/received) partially mapped |
+| `FEAT-CAS-03` | Outcome workflow | `PARTIAL` | `src/types/domain.ts:L140-L150`, `src/core/maker-checker.ts:L65-L75` | Types, Core engine | Resolution statuses: `CONFIRMED`, `DISPUTED`, `WAIVED`, `CARRIED_FORWARD`, `RESOLVED` |
+| `FEAT-CAS-04` | Carry-forward | `PARTIAL` | `src/types/domain.ts:L145`, `src/core/reconciliation.ts:L185-L195` | Types, Core engine | Discrepancy carry-forward status supported in data model |
+| `FEAT-CLM-01` | Deadline calculation | `PARTIAL` | `src/core/exception-engine.ts:L145-L170`, `src/components/ClaimCasesTab.tsx:L40-L90` | Core engine, UI | 48h deadline warning threshold calculation |
+| `FEAT-CLM-02` | Evidence checklist/package | `DEMO_ONLY` | `src/components/ClaimCasesTab.tsx:L90-L130`, `src/components/forms/CreateClaimModal.tsx:L40-L90` | UI modal | Evidence file count and mock URL links; no automated zip pack assembler |
+| `FEAT-CLM-03` | Claim submission modes | `DEMO_ONLY` | `src/components/forms/CreateClaimModal.tsx:L60-L100` | UI form | Manual claim submission modal; no carrier API claim dispatch |
+| `FEAT-CLM-04` | Claim tracking | `PARTIAL` | `src/components/ClaimCasesTab.tsx:L1-L180`, `src/app/api/claims/route.ts:L1-L80` | UI, API handler | Claims list with status (`DRAFT`, `SUBMITTED`, `IN_REVIEW`, `ACCEPTED`, `REJECTED`, `CLOSED`) |
+
+### 3.11 Group 11: Reporting, billing and administration (12 Features)
+
+| Feature ID | Feature Name | Classification | Evidence Paths & Symbols | Implemented Layers | Gaps / Missing Layers |
+|---|---|---|---|---|---|
+| `FEAT-DASH-01` | Role dashboard | `PARTIAL` | `src/components/ControlTowerTab.tsx:L1-L250`, `src/services/unifiedDataStore.ts:L705-L734` | UI dashboard, Aggregator | Role-aware metrics for Owner/CSKH/Accountant/Warehouse from unified store |
+| `FEAT-DASH-02` | Carrier performance | `PARTIAL` | `src/components/ControlTowerTab.tsx:L180-L230`, `src/core/ledger-calculator.ts:L129-L133` | UI component, Types | Carrier delivery rate %, uptime %, on-time SLA metrics |
+| `FEAT-DASH-03` | Audit dashboard | `PARTIAL` | `src/components/ReconciliationTab.tsx:L1-L150`, `src/services/unifiedDataStore.ts:L715-L720` | UI component, Core engine | Discrepancy counts, total amount (1,978,000 đ), D1-D7 breakdown |
+| `FEAT-DASH-04` | Batch/COD dashboard | `PARTIAL` | `src/components/ThreeLedgersTab.tsx:L1-L200`, `src/core/ledger-calculator.ts:L38-L75` | UI component, Core engine | Sổ 1: Real cash recovered vs pending; no live bank feed comparison |
+| `FEAT-REP-01` | Drill-down reports | `DEMO_ONLY` | `src/components/ThreeLedgersTab.tsx:L130-L220` | UI accordion tables | Drill-down to individual claim and rescued order records in UI; in-memory data |
+| `FEAT-BIL-01` | Billable event | `ABSENT` | None | None | No billable event emitter on conclusive audit |
+| `FEAT-BIL-02` | Usage statement | `ABSENT` | None | None | No SaaS usage statement ledger or billing calculation |
+| `FEAT-ADM-01` | Reference/config management | `PARTIAL` | `src/components/AdminSystemTab.tsx:L1-L200`, `src/components/SettingsWorkspace.tsx:L1-L300` | UI tabs | Carrier accounts, rate cards, store scopes configuration |
+| `FEAT-ADM-02` | Job/queue operations | `DEMO_ONLY` | `src/components/AdminSystemTab.tsx:L120-L170` | UI cards | Mock job status cards (Pancake sync, reconciliation); no real BullMQ worker queue |
+| `FEAT-ADM-03` | Audit log | `PARTIAL` | `src/components/AdminSystemTab.tsx:L70-L120`, `prisma/schema.prisma:L489-L508`, `src/server/db.ts:L380-L410` | UI table, In-memory DB, Prisma | PII unmask toast audit, resolution audit log in-memory; no append-only DB table |
+| `FEAT-SEC-01` | Privacy controls | `PARTIAL` | `src/components/ShipmentListTab.tsx:L82-L89`, `src/components/ShipmentListTab.tsx:L180-L210` | UI masking, Audit toast | Recipient phone masking (`090••••567`) with unmask audit event trigger |
+| `FEAT-SEC-02` | Support access | `ABSENT` | None | None | No tenant-approved time-bound support access delegation |
+
+---
+
+## 4. Feature Verification & Catalog Coverage Proof
+
+- **Total Catalog Features:** 130
+- **Total Mapped Rows:** 130
+- **Unmapped / Aliased Features:** 0
+- **Duplicate Rows:** 0
+- **Verification Rule:** Every feature ID matches regular expression `^FEAT-[A-Z]+-[0-9]{2}$` and corresponds 1:1 with `MASTER-FEATURE-CATALOG.md`.

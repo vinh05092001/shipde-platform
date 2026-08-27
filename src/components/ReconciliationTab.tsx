@@ -3,7 +3,13 @@
 import React, { useState } from 'react';
 import { UIDiscrepancyItem } from './types';
 import { MASTER_DISCREPANCIES } from '@/services/unifiedDataStore';
-import { TrackingCode, Money, StatusBadge, AutomationBadge, ConfirmDialog } from './ui/OperationalComponents';
+import {
+  TrackingCode,
+  Money,
+  StatusBadge,
+  AutomationBadge,
+  ConfirmDialog,
+} from './ui/OperationalComponents';
 import { DiscrepancyType, DiscrepancyResolution } from '@/types/domain';
 import {
   DollarSign,
@@ -34,7 +40,9 @@ export const ReconciliationTab: React.FC<Props> = ({
   const [items, setItems] = useState<UIDiscrepancyItem[]>(discrepancies);
   const [selectedDiscrepancyType, setSelectedDiscrepancyType] = useState<string>('ALL');
   const [resolvingItem, setResolvingItem] = useState<UIDiscrepancyItem | null>(null);
-  const [resolvingAction, setResolvingAction] = useState<DiscrepancyResolution>(DiscrepancyResolution.DISPUTE);
+  const [resolvingAction, setResolvingAction] = useState<DiscrepancyResolution>(
+    DiscrepancyResolution.DISPUTE
+  );
   const [isPeriodClosed, setIsPeriodClosed] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -59,7 +67,9 @@ export const ReconciliationTab: React.FC<Props> = ({
   const handleResolveAction = (item: UIDiscrepancyItem, action: DiscrepancyResolution) => {
     // Maker-Checker Check
     if (item.created_by_user === 'usr_02' && role === 'OPS_CSKH') {
-      alert('[Quy tắc Tách quyền tài chính]: Bạn là nhân viên CSKH đã tạo yêu cầu xử lý đơn này, nên không được quyền tự duyệt chênh lệch. Vui lòng chuyển cho Kế toán viên độc lập duyệt.');
+      alert(
+        '[Quy tắc Tách quyền tài chính]: Bạn là nhân viên CSKH đã tạo yêu cầu xử lý đơn này, nên không được quyền tự duyệt chênh lệch. Vui lòng chuyển cho Kế toán viên độc lập duyệt.'
+      );
       return;
     }
 
@@ -93,7 +103,13 @@ export const ReconciliationTab: React.FC<Props> = ({
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             <span>{toastMessage}</span>
           </div>
-          <button type="button" onClick={() => setToastMessage(null)} className="font-bold text-slate-400 hover:text-white">✕</button>
+          <button
+            type="button"
+            onClick={() => setToastMessage(null)}
+            className="font-bold text-slate-400 hover:text-white"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -116,7 +132,11 @@ export const ReconciliationTab: React.FC<Props> = ({
           <div className="text-right">
             <div className="text-xs text-slate-400">Tổng COD Đối Soát</div>
             <div className="text-xl font-bold font-mono text-emerald-400">
-              <Money amount={statementSummary.total_cod} state="confirmed" className="text-emerald-400 text-xl" />
+              <Money
+                amount={statementSummary.total_cod}
+                state="confirmed"
+                className="text-emerald-400 text-xl"
+              />
             </div>
           </div>
 
@@ -124,11 +144,15 @@ export const ReconciliationTab: React.FC<Props> = ({
             type="button"
             onClick={() => {
               if (openCount > 0) {
-                alert(`Không thể chốt kỳ khi còn ${openCount} khoản chênh lệch chưa xử lý. Vui lòng duyệt hoặc chuyển kỳ.`);
+                alert(
+                  `Không thể chốt kỳ khi còn ${openCount} khoản chênh lệch chưa xử lý. Vui lòng duyệt hoặc chuyển kỳ.`
+                );
                 return;
               }
               setIsPeriodClosed(true);
-              setToastMessage('✓ Đã chốt sổ kỳ đối soát thành công. Dữ liệu đã được khóa bất biến.');
+              setToastMessage(
+                '✓ Đã chốt sổ kỳ đối soát thành công. Dữ liệu đã được khóa bất biến.'
+              );
             }}
             disabled={isPeriodClosed}
             className={`btn-primary text-xs ${isPeriodClosed ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -147,7 +171,10 @@ export const ReconciliationTab: React.FC<Props> = ({
               Danh Sách Khoản Lệch Cần Xử Lý ({openCount} khoản mở)
             </span>
             <span className="text-xs text-slate-500 ml-2">
-              Tổng giá trị chênh lệch: <strong className="text-rose-700 font-mono"><Money amount={totalOpenAmount} state="confirmed" className="inline" /></strong>
+              Tổng giá trị chênh lệch:{' '}
+              <strong className="text-rose-700 font-mono">
+                <Money amount={totalOpenAmount} state="confirmed" className="inline" />
+              </strong>
             </span>
           </div>
 
@@ -201,12 +228,12 @@ export const ReconciliationTab: React.FC<Props> = ({
                   <tr key={disc.id}>
                     <td>
                       <TrackingCode code={disc.tracking_code} />
-                      <div className="text-xs text-slate-500 font-mono mt-0.5">{disc.order_code}</div>
+                      <div className="text-xs text-slate-500 font-mono mt-0.5">
+                        {disc.order_code}
+                      </div>
                     </td>
 
-                    <td className="font-bold text-xs text-slate-800">
-                      {disc.carrier_code}
-                    </td>
+                    <td className="font-bold text-xs text-slate-800">{disc.carrier_code}</td>
 
                     <td>
                       <StatusBadge status={disc.type} />
@@ -221,9 +248,7 @@ export const ReconciliationTab: React.FC<Props> = ({
                       <Money amount={disc.discrepancy_amount} state="confirmed" />
                     </td>
 
-                    <td className="text-xs text-slate-600 max-w-xs">
-                      {disc.reason}
-                    </td>
+                    <td className="text-xs text-slate-600 max-w-xs">{disc.reason}</td>
 
                     <td className="text-right space-x-1.5">
                       {isResolved ? (
@@ -232,7 +257,9 @@ export const ReconciliationTab: React.FC<Props> = ({
                         <>
                           <button
                             type="button"
-                            onClick={() => handleResolveAction(disc, DiscrepancyResolution.CONFIRMED)}
+                            onClick={() =>
+                              handleResolveAction(disc, DiscrepancyResolution.CONFIRMED)
+                            }
                             className="btn-secondary text-xs py-1 px-2.5 font-semibold text-emerald-700"
                           >
                             Chấp Thuận
@@ -258,7 +285,11 @@ export const ReconciliationTab: React.FC<Props> = ({
       {/* Discrepancy Resolution Modal with Mandatory Reason */}
       <ConfirmDialog
         isOpen={!!resolvingItem}
-        title={resolvingAction === DiscrepancyResolution.CONFIRMED ? 'Xác Nhận Chấp Thuận Chênh Lệch' : 'Mở Hồ Sơ Khiếu Nại Khoản Lệch'}
+        title={
+          resolvingAction === DiscrepancyResolution.CONFIRMED
+            ? 'Xác Nhận Chấp Thuận Chênh Lệch'
+            : 'Mở Hồ Sơ Khiếu Nại Khoản Lệch'
+        }
         message={`Xử lý khoản lệch ${resolvingItem?.discrepancy_amount.toLocaleString('vi-VN')} đ cho mã vận đơn ${resolvingItem?.tracking_code}.`}
         confirmLabel="Xác Nhận Xử Lý"
         cancelLabel="Hủy Bỏ"

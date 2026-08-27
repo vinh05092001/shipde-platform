@@ -44,16 +44,13 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
             <span>Bàn Điều Khiển Vận Hành & Đối Soát Ba Sổ</span>
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Giám sát bưu kiện thời gian thực, xử lý sự cố cứu đơn và đối soát chênh lệch tài chính tự động.
+            Giám sát bưu kiện thời gian thực, xử lý sự cố cứu đơn và đối soát chênh lệch tài chính
+            tự động.
           </p>
         </div>
 
         {onCreateOrder && (
-          <button
-            type="button"
-            onClick={onCreateOrder}
-            className="btn-primary text-xs shrink-0"
-          >
+          <button type="button" onClick={onCreateOrder} className="btn-primary text-xs shrink-0">
             <span>+ Tạo Vận Đơn Mới</span>
           </button>
         )}
@@ -67,14 +64,20 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-[#EA4B12] transition-colors"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Tổng Bưu Kiện Đang Chạy</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Tổng Bưu Kiện Đang Chạy
+            </span>
             <div className="w-9 h-9 rounded-xl bg-[#FFF5F0] text-[#EA4B12] flex items-center justify-center">
               <Package className="w-4.5 h-4.5" />
             </div>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-black font-mono text-slate-900">{metrics.activeShipments}</div>
-            <div className="text-xs text-slate-500 mt-0.5">Trên tổng số {metrics.totalShipments} bưu kiện trong hệ thống</div>
+            <div className="text-3xl font-black font-mono text-slate-900">
+              {metrics.activeShipments}
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              Trên tổng số {metrics.totalShipments} bưu kiện trong hệ thống
+            </div>
           </div>
           <div className="flex items-center gap-1 text-xs font-semibold text-[#EA4B12] group-hover:underline pt-2 border-t border-slate-100">
             <span>Mở danh sách vận đơn</span>
@@ -88,14 +91,20 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-amber-400 transition-colors"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Sự Cố Cần Cứu Đơn Gấp</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Sự Cố Cần Cứu Đơn Gấp
+            </span>
             <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
               <AlertTriangle className="w-4.5 h-4.5" />
             </div>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-black font-mono text-amber-700">{metrics.openExceptionsCount}</div>
-            <div className="text-xs text-slate-500 mt-0.5">Giao thất bại, trễ lấy hàng, đọng trung chuyển</div>
+            <div className="text-3xl font-black font-mono text-amber-700">
+              {metrics.openExceptionsCount}
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              Giao thất bại, trễ lấy hàng, đọng trung chuyển
+            </div>
           </div>
           <div className="flex items-center gap-1 text-xs font-semibold text-amber-700 group-hover:underline pt-2 border-t border-slate-100">
             <span>Vào hộp việc CSKH</span>
@@ -109,7 +118,9 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-rose-400 transition-colors"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Khoản Lệch Cước & COD</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Khoản Lệch Cước & COD
+            </span>
             <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-700 flex items-center justify-center">
               <DollarSign className="w-4.5 h-4.5" />
             </div>
@@ -118,7 +129,9 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
             <div className="text-3xl font-black font-mono text-rose-700">
               <Money amount={metrics.totalDiscrepancyAmount} state="confirmed" />
             </div>
-            <div className="text-xs text-slate-500 mt-0.5">{metrics.openDiscrepanciesCount} khoản lệch đang chờ duyệt</div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              {metrics.openDiscrepanciesCount} khoản lệch đang chờ duyệt
+            </div>
           </div>
           <div className="flex items-center gap-1 text-xs font-semibold text-rose-700 group-hover:underline pt-2 border-t border-slate-100">
             <span>Duyệt đối soát chênh lệch</span>
@@ -132,7 +145,9 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-emerald-400 transition-colors"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Bồi Thường Đã Thu Hồi</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Bồi Thường Đã Thu Hồi
+            </span>
             <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
               <TrendingUp className="w-4.5 h-4.5" />
             </div>
@@ -141,7 +156,9 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
             <div className="text-3xl font-black font-mono text-emerald-700">
               <Money amount={1500000} state="confirmed" />
             </div>
-            <div className="text-xs text-slate-500 mt-0.5">Tiền bồi thường thực nhận đã về tài khoản</div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              Tiền bồi thường thực nhận đã về tài khoản
+            </div>
           </div>
           <div className="flex items-center gap-1 text-xs font-semibold text-emerald-700 group-hover:underline pt-2 border-t border-slate-100">
             <span>Xem Báo Cáo Ba Sổ</span>
@@ -160,7 +177,9 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
                 <AlertTriangle className="w-4.5 h-4.5 text-amber-600" />
                 <span>Hàng Đợi Cứu Đơn Cần Can Thiệp Hôm Nay</span>
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">Các đơn giao không thành công sắp chạm hạn chót hãng chuyển hoàn.</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Các đơn giao không thành công sắp chạm hạn chót hãng chuyển hoàn.
+              </p>
             </div>
             <button
               type="button"
@@ -176,7 +195,10 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
               <div key={exc.id} className="py-3 flex items-center justify-between gap-3">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <TrackingCode code={exc.tracking_code} onClick={() => onNavigate('exceptions')} />
+                    <TrackingCode
+                      code={exc.tracking_code}
+                      onClick={() => onNavigate('exceptions')}
+                    />
                     <span className="font-bold text-xs text-slate-700">{exc.carrier_code}</span>
                     <span className="badge-warn text-xs">Còn {exc.hours_remaining}h</span>
                   </div>
@@ -184,7 +206,8 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
                     {exc.carrier_reason || 'Khách không nghe máy (Lần 1)'}
                   </div>
                   <div className="text-xs text-slate-400">
-                    Người nhận: <strong>{exc.recipient_name}</strong> · COD: <Money amount={exc.cod_amount} state="pending" className="inline text-xs" />
+                    Người nhận: <strong>{exc.recipient_name}</strong> · COD:{' '}
+                    <Money amount={exc.cod_amount} state="pending" className="inline text-xs" />
                   </div>
                 </div>
 
@@ -208,7 +231,9 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
                 <DollarSign className="w-4.5 h-4.5 text-rose-600" />
                 <span>Khoản Lệch Tài Chính Chờ Kế Toán Duyệt</span>
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">Phát hiện qua 6 phép dò đối soát tự động so với biểu giá hợp đồng.</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Phát hiện qua 6 phép dò đối soát tự động so với biểu giá hợp đồng.
+              </p>
             </div>
             <button
               type="button"
@@ -224,14 +249,16 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
               <div key={disc.id} className="py-3 flex items-center justify-between gap-3">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <TrackingCode code={disc.tracking_code} onClick={() => onNavigate('reconciliation')} />
+                    <TrackingCode
+                      code={disc.tracking_code}
+                      onClick={() => onNavigate('reconciliation')}
+                    />
                     <StatusBadge status={disc.type} />
                   </div>
-                  <div className="text-xs text-slate-600">
-                    {disc.reason}
-                  </div>
+                  <div className="text-xs text-slate-600">{disc.reason}</div>
                   <div className="text-xs text-rose-700 font-bold font-mono">
-                    Chênh lệch: <Money amount={disc.discrepancy_amount} state="confirmed" className="inline" />
+                    Chênh lệch:{' '}
+                    <Money amount={disc.discrepancy_amount} state="confirmed" className="inline" />
                   </div>
                 </div>
 

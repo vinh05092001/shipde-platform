@@ -27,7 +27,9 @@ interface Props {
 
 export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCreated }) => {
   // Order information
-  const [orderCode, setOrderCode] = useState(`ORD_${Math.floor(Math.random() * 89999) + 10000}`);
+  const [orderCode, setOrderCode] = useState(
+    () => `ORD_${Math.floor(Math.random() * 89999) + 10000}`
+  );
   const [pickupWarehouse, setPickupWarehouse] = useState('store_01');
   const [recipientName, setRecipientName] = useState('Nguyễn Văn Khách');
   const [recipientPhone, setRecipientPhone] = useState('0901234567');
@@ -35,7 +37,7 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
   const [recipientDistrict, setRecipientDistrict] = useState('Quận 3');
   const [recipientAddress, setRecipientAddress] = useState('128 Nguyễn Trãi, Phường 3');
   const [itemName, setItemName] = useState('Váy lụa thiết kế cao cấp (Size M)');
-  
+
   // Package specifications
   const [weightGram, setWeightGram] = useState<number>(350);
   const [lengthCm, setLengthCm] = useState<number>(20);
@@ -44,7 +46,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
   const [codAmount, setCodAmount] = useState<number>(450000);
   const [insuranceValue, setInsuranceValue] = useState<number>(450000);
   const [payer, setPayer] = useState<'SENDER' | 'RECEIVER'>('RECEIVER');
-  const [inspectionNote, setInspectionNote] = useState<'CHO_XEM_HANG' | 'CHO_THU_HANG' | 'KHONG_CHO_XEM'>('CHO_XEM_HANG');
+  const [inspectionNote, setInspectionNote] = useState<
+    'CHO_XEM_HANG' | 'CHO_THU_HANG' | 'KHONG_CHO_XEM'
+  >('CHO_XEM_HANG');
 
   // Selected Carrier
   const [selectedCarrier, setSelectedCarrier] = useState<'GHN' | 'GHTK'>('GHN');
@@ -54,7 +58,7 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
   if (!isOpen) return null;
 
   // Volumetric weight formula: (L x W x H) / 5000 * 1000 (in grams)
-  const volumetricWeightGram = Math.round((lengthCm * widthCm * heightCm) / 5000 * 1000);
+  const volumetricWeightGram = Math.round(((lengthCm * widthCm * heightCm) / 5000) * 1000);
   const chargeableWeightGram = Math.max(weightGram, volumetricWeightGram);
 
   // Dynamic Rate Comparison Engine across Connected Carriers
@@ -65,7 +69,8 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
       id: 'GHN' as const,
       name: 'Giao Hàng Nhanh (GHN Express)',
       baseFee: isIntraProvince ? 22000 : 32000,
-      addWeightFee: chargeableWeightGram > 1000 ? Math.ceil((chargeableWeightGram - 1000) / 500) * 5000 : 0,
+      addWeightFee:
+        chargeableWeightGram > 1000 ? Math.ceil((chargeableWeightGram - 1000) / 500) * 5000 : 0,
       insuranceFee: insuranceValue > 1000000 ? Math.round(insuranceValue * 0.005) : 0,
       codFee: 0,
       deliveryTime: isIntraProvince ? 'Hỏa tốc trong 24h (Sáng mai)' : '1 - 2 ngày làm việc',
@@ -79,7 +84,8 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
       id: 'GHTK' as const,
       name: 'Giao Hàng Tiết Kiệm (GHTK)',
       baseFee: isIntraProvince ? 24000 : 34000,
-      addWeightFee: chargeableWeightGram > 1000 ? Math.ceil((chargeableWeightGram - 1000) / 500) * 6000 : 0,
+      addWeightFee:
+        chargeableWeightGram > 1000 ? Math.ceil((chargeableWeightGram - 1000) / 500) * 6000 : 0,
       insuranceFee: insuranceValue > 1000000 ? Math.round(insuranceValue * 0.005) : 0,
       codFee: 0,
       deliveryTime: isIntraProvince ? '1 - 2 ngày làm việc' : '2 - 3 ngày làm việc',
@@ -94,7 +100,8 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
     totalFee: c.baseFee + c.addWeightFee + c.insuranceFee + c.codFee,
   }));
 
-  const activeCarrierInfo = carriersComparison.find((c) => c.id === selectedCarrier) || carriersComparison[0];
+  const activeCarrierInfo =
+    carriersComparison.find((c) => c.id === selectedCarrier) || carriersComparison[0];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,7 +114,12 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
     setErrorMsg(null);
 
     const generatedTracking = `${selectedCarrier}8829${Math.floor(Math.random() * 89999) + 10000}`;
-    const provinceName = recipientProvince === 'HCM' ? 'TP. Hồ Chí Minh' : recipientProvince === 'HN' ? 'Hà Nội' : 'Đà Nẵng';
+    const provinceName =
+      recipientProvince === 'HCM'
+        ? 'TP. Hồ Chí Minh'
+        : recipientProvince === 'HN'
+          ? 'Hà Nội'
+          : 'Đà Nẵng';
 
     const newShipment: UnifiedShipment = {
       id: `shp_${Date.now()}`,
@@ -125,8 +137,10 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
       status: 'picking',
       match_status: 'matched_exact',
       warehouse_id: pickupWarehouse,
-      created_at: new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN'),
-      updated_at: new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN'),
+      created_at:
+        new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN'),
+      updated_at:
+        new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN'),
       has_open_exception: false,
       has_open_discrepancy: false,
       has_open_claim: false,
@@ -161,11 +175,14 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="font-bold text-sm text-slate-900">Tạo Vận Đơn Mới & So Sánh Cước Phí</h2>
+                <h2 className="font-bold text-sm text-slate-900">
+                  Tạo Vận Đơn Mới & So Sánh Cước Phí
+                </h2>
                 <span className="badge-ok text-xs">So Cước Tự Động</span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Nhập thông tin giao hàng để hệ thống tính cước theo biểu giá hợp đồng và đẩy đơn sang hãng vận chuyển.
+                Nhập thông tin giao hàng để hệ thống tính cước theo biểu giá hợp đồng và đẩy đơn
+                sang hãng vận chuyển.
               </p>
             </div>
           </div>
@@ -187,7 +204,11 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
             </div>
           )}
 
-          <form id="create-order-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <form
+            id="create-order-form"
+            onSubmit={handleSubmit}
+            className="grid grid-cols-1 lg:grid-cols-12 gap-6"
+          >
             {/* LEFT COLUMN (7 Cols): Order & Package Info */}
             <div className="lg:col-span-7 space-y-4">
               {/* Section 1: Receiver & Address */}
@@ -197,12 +218,16 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                     <MapPin className="w-3.5 h-3.5 text-[#EA4B12]" />
                     <span>1. Thông Tin Người Nhận & Nơi Giao</span>
                   </span>
-                  <span className="text-xs font-mono text-slate-500 font-semibold">Mã đơn: {orderCode}</span>
+                  <span className="text-xs font-mono text-slate-500 font-semibold">
+                    Mã đơn: {orderCode}
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1 text-xs">Tên Người Nhận:</label>
+                    <label className="font-bold text-slate-700 block mb-1 text-xs">
+                      Tên Người Nhận:
+                    </label>
                     <input
                       type="text"
                       value={recipientName}
@@ -213,7 +238,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                     />
                   </div>
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1 text-xs">Số Điện Thoại:</label>
+                    <label className="font-bold text-slate-700 block mb-1 text-xs">
+                      Số Điện Thoại:
+                    </label>
                     <input
                       type="tel"
                       value={recipientPhone}
@@ -227,7 +254,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1 text-xs">Tỉnh / Thành Phố:</label>
+                    <label className="font-bold text-slate-700 block mb-1 text-xs">
+                      Tỉnh / Thành Phố:
+                    </label>
                     <select
                       value={recipientProvince}
                       onChange={(e: any) => setRecipientProvince(e.target.value)}
@@ -239,7 +268,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                     </select>
                   </div>
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1 text-xs">Quận / Huyện:</label>
+                    <label className="font-bold text-slate-700 block mb-1 text-xs">
+                      Quận / Huyện:
+                    </label>
                     <input
                       type="text"
                       value={recipientDistrict}
@@ -251,7 +282,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                 </div>
 
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1 text-xs">Địa Chỉ Chi Tiết (Số nhà, Tên đường, Phường):</label>
+                  <label className="font-bold text-slate-700 block mb-1 text-xs">
+                    Địa Chỉ Chi Tiết (Số nhà, Tên đường, Phường):
+                  </label>
                   <input
                     type="text"
                     value={recipientAddress}
@@ -263,7 +296,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                 </div>
 
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1 text-xs">Kho / Chi Nhánh Xuất Hàng:</label>
+                  <label className="font-bold text-slate-700 block mb-1 text-xs">
+                    Kho / Chi Nhánh Xuất Hàng:
+                  </label>
                   <select
                     value={pickupWarehouse}
                     onChange={(e) => setPickupWarehouse(e.target.value)}
@@ -285,7 +320,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                 </span>
 
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1 text-xs">Tên Sản Phẩm / Hàng Hóa:</label>
+                  <label className="font-bold text-slate-700 block mb-1 text-xs">
+                    Tên Sản Phẩm / Hàng Hóa:
+                  </label>
                   <input
                     type="text"
                     value={itemName}
@@ -297,7 +334,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1 text-xs">Cân Nặng (g):</label>
+                    <label className="font-bold text-slate-700 block mb-1 text-xs">
+                      Cân Nặng (g):
+                    </label>
                     <input
                       type="number"
                       value={weightGram}
@@ -318,7 +357,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                     />
                   </div>
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1 text-xs">Rộng (cm):</label>
+                    <label className="font-bold text-slate-700 block mb-1 text-xs">
+                      Rộng (cm):
+                    </label>
                     <input
                       type="number"
                       value={widthCm}
@@ -341,13 +382,20 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
 
                 {/* Chargeable Weight Indicator */}
                 <div className="flex justify-between items-center p-2.5 bg-[#FFF5F0] rounded-lg border border-[#FDDDD0] text-xs text-slate-800">
-                  <span>Cân thực: <strong>{weightGram}g</strong> · Thể tích quy đổi (D×R×C/5000): <strong>{volumetricWeightGram}g</strong></span>
-                  <span className="font-bold text-[#EA4B12]">Tính cước: {chargeableWeightGram}g</span>
+                  <span>
+                    Cân thực: <strong>{weightGram}g</strong> · Thể tích quy đổi (D×R×C/5000):{' '}
+                    <strong>{volumetricWeightGram}g</strong>
+                  </span>
+                  <span className="font-bold text-[#EA4B12]">
+                    Tính cước: {chargeableWeightGram}g
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1 text-xs">Tiền Thu Hộ COD (VND):</label>
+                    <label className="font-bold text-slate-700 block mb-1 text-xs">
+                      Tiền Thu Hộ COD (VND):
+                    </label>
                     <input
                       type="number"
                       value={codAmount}
@@ -358,7 +406,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                     />
                   </div>
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1 text-xs">Khai Giá Hàng Hóa:</label>
+                    <label className="font-bold text-slate-700 block mb-1 text-xs">
+                      Khai Giá Hàng Hóa:
+                    </label>
                     <input
                       type="number"
                       value={insuranceValue}
@@ -374,7 +424,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
               {/* Section 3: Delivery Options */}
               <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50/70 rounded-xl border border-slate-200/80">
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1 text-xs">Lưu Ý Xem Hàng:</label>
+                  <label className="font-bold text-slate-700 block mb-1 text-xs">
+                    Lưu Ý Xem Hàng:
+                  </label>
                   <select
                     value={inspectionNote}
                     onChange={(e: any) => setInspectionNote(e.target.value)}
@@ -387,7 +439,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                 </div>
 
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1 text-xs">Người Trả Cước Phí:</label>
+                  <label className="font-bold text-slate-700 block mb-1 text-xs">
+                    Người Trả Cước Phí:
+                  </label>
                   <select
                     value={payer}
                     onChange={(e: any) => setPayer(e.target.value)}
@@ -426,7 +480,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                       >
                         <div className="flex justify-between items-start">
                           <div className="flex items-center gap-2.5">
-                            <div className={`w-8 h-8 rounded-lg ${carrier.logoBg} flex items-center justify-center font-black text-xs shrink-0 border border-slate-200`}>
+                            <div
+                              className={`w-8 h-8 rounded-lg ${carrier.logoBg} flex items-center justify-center font-black text-xs shrink-0 border border-slate-200`}
+                            >
                               {carrier.id}
                             </div>
                             <div>
@@ -446,7 +502,9 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                             <div className="font-mono text-base font-black text-slate-900">
                               <Money amount={carrier.totalFee} state="confirmed" />
                             </div>
-                            <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${carrier.badgeColor}`}>
+                            <span
+                              className={`text-[11px] font-bold px-2 py-0.5 rounded border ${carrier.badgeColor}`}
+                            >
                               {carrier.badge}
                             </span>
                           </div>
@@ -455,8 +513,22 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                         {/* Fee breakdown on selected */}
                         {isSelected && (
                           <div className="pt-2 border-t border-[#FDDDD0] flex justify-between items-center text-xs text-slate-700 font-medium">
-                            <span>Cước gốc: <Money amount={carrier.baseFee} state="confirmed" className="inline text-xs" /></span>
-                            <span>Phụ phí: <Money amount={carrier.addWeightFee} state="confirmed" className="inline text-xs" /></span>
+                            <span>
+                              Cước gốc:{' '}
+                              <Money
+                                amount={carrier.baseFee}
+                                state="confirmed"
+                                className="inline text-xs"
+                              />
+                            </span>
+                            <span>
+                              Phụ phí:{' '}
+                              <Money
+                                amount={carrier.addWeightFee}
+                                state="confirmed"
+                                className="inline text-xs"
+                              />
+                            </span>
                             <AutomationBadge tier={carrier.tier} />
                           </div>
                         )}
@@ -478,14 +550,22 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
 
                 <div className="flex justify-between items-center">
                   <div>
-                    <span className="text-xs text-slate-400 uppercase tracking-wider block">Cước Tạm Tính:</span>
+                    <span className="text-xs text-slate-400 uppercase tracking-wider block">
+                      Cước Tạm Tính:
+                    </span>
                     <div className="font-mono text-2xl font-black text-emerald-400">
-                      <Money amount={activeCarrierInfo.totalFee} state="confirmed" className="text-emerald-400 text-2xl" />
+                      <Money
+                        amount={activeCarrierInfo.totalFee}
+                        state="confirmed"
+                        className="text-emerald-400 text-2xl"
+                      />
                     </div>
                   </div>
 
                   <div className="text-right">
-                    <span className="text-xs text-slate-400 uppercase tracking-wider block">Tiền Thu Hộ COD:</span>
+                    <span className="text-xs text-slate-400 uppercase tracking-wider block">
+                      Tiền Thu Hộ COD:
+                    </span>
                     <div className="font-mono text-lg font-bold text-white">
                       <Money amount={codAmount} state="confirmed" className="text-white text-lg" />
                     </div>

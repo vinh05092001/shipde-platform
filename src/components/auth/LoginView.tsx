@@ -104,7 +104,14 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
             <div>
               <div className="flex justify-between items-center mb-1.5">
                 <label className="text-xs font-bold text-slate-700">Mật Khẩu</label>
-                <a href="#forgot" onClick={(e) => { e.preventDefault(); alert('Vui lòng liên hệ quản trị viên để đặt lại mật khẩu.'); }} className="text-xs text-[#EA4B12] font-semibold hover:underline">
+                <a
+                  href="#forgot"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    alert('Vui lòng liên hệ quản trị viên để đặt lại mật khẩu.');
+                  }}
+                  className="text-xs text-[#EA4B12] font-semibold hover:underline"
+                >
                   Quên mật khẩu?
                 </a>
               </div>

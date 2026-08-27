@@ -53,7 +53,9 @@ export interface UserWithStores {
 }
 
 export const UserManagementTab: React.FC = () => {
-  const [activeSubTab, setActiveSubTab] = useState<'matrix' | 'stores' | 'members' | 'devices'>('members');
+  const [activeSubTab, setActiveSubTab] = useState<'matrix' | 'stores' | 'members' | 'devices'>(
+    'members'
+  );
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -279,20 +281,27 @@ export const UserManagementTab: React.FC = () => {
   ]);
 
   const handleRevokeDevice = (deviceId: string, userName: string) => {
-    setDeviceSessions(prev => prev.filter(d => d.id !== deviceId));
-    setToastMessage(`[BR-08]: Đã thu hồi quyền truy cập của thiết bị [${userName}]. Mọi lệnh quét offline từ máy này sẽ bị từ chối với mã 401 device_revoked.`);
+    setDeviceSessions((prev) => prev.filter((d) => d.id !== deviceId));
+    setToastMessage(
+      `[BR-08]: Đã thu hồi quyền truy cập của thiết bị [${userName}]. Mọi lệnh quét offline từ máy này sẽ bị từ chối với mã 401 device_revoked.`
+    );
     setTimeout(() => setToastMessage(null), 5000);
   };
 
-  const handleTogglePermission = (featureId: string, roleKey: 'owner' | 'manager' | 'cskh' | 'accountant' | 'warehouse') => {
+  const handleTogglePermission = (
+    featureId: string,
+    roleKey: 'owner' | 'manager' | 'cskh' | 'accountant' | 'warehouse'
+  ) => {
     // Invariant check: CSKH cannot have p_discrepancy (Maker-Checker BR-12)
     if (featureId === 'p_discrepancy' && roleKey === 'cskh') {
-      alert('[Bất biến Maker-Checker BR-12]: Nhân viên CSKH can thiệp đơn hàng KHÔNG ĐƯỢC PHÉP tự duyệt chênh lệch tài chính. Hệ thống chặn thay đổi quyền này.');
+      alert(
+        '[Bất biến Maker-Checker BR-12]: Nhân viên CSKH can thiệp đơn hàng KHÔNG ĐƯỢC PHÉP tự duyệt chênh lệch tài chính. Hệ thống chặn thay đổi quyền này.'
+      );
       return;
     }
 
-    setPermissionsMatrix(prev =>
-      prev.map(item => {
+    setPermissionsMatrix((prev) =>
+      prev.map((item) => {
         if (item.id === featureId) {
           return { ...item, [roleKey]: !item[roleKey] };
         }
@@ -308,8 +317,10 @@ export const UserManagementTab: React.FC = () => {
     e.preventDefault();
     if (!editingUser) return;
 
-    setUsers(prev => prev.map(u => (u.id === editingUser.id ? editingUser : u)));
-    setToastMessage(`Đã cập nhật phạm vi cửa hàng và phân quyền cho nhân viên [${editingUser.full_name}].`);
+    setUsers((prev) => prev.map((u) => (u.id === editingUser.id ? editingUser : u)));
+    setToastMessage(
+      `Đã cập nhật phạm vi cửa hàng và phân quyền cho nhân viên [${editingUser.full_name}].`
+    );
     setEditingUser(null);
     setTimeout(() => setToastMessage(null), 4000);
   };
@@ -329,7 +340,7 @@ export const UserManagementTab: React.FC = () => {
       status: 'ACTIVE',
     };
 
-    setStores(prev => [...prev, newStore]);
+    setStores((prev) => [...prev, newStore]);
     setIsNewStoreModalOpen(false);
     setNewStoreName('');
     setNewStoreCode('');
@@ -347,7 +358,11 @@ export const UserManagementTab: React.FC = () => {
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{toastMessage}</span>
           </div>
-          <button type="button" onClick={() => setToastMessage(null)} className="font-bold text-slate-500 hover:text-slate-800">
+          <button
+            type="button"
+            onClick={() => setToastMessage(null)}
+            className="font-bold text-slate-500 hover:text-slate-800"
+          >
             ✕
           </button>
         </div>
@@ -364,7 +379,8 @@ export const UserManagementTab: React.FC = () => {
             <span className="badge-ok text-xs">Chuẩn Tách Quyền BR-12</span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Phân quyền chi tiết theo từng người dùng, giới hạn phạm vi truy cập theo chi nhánh/kho, và thu hồi thiết bị từ xa (BR-08)
+            Phân quyền chi tiết theo từng người dùng, giới hạn phạm vi truy cập theo chi nhánh/kho,
+            và thu hồi thiết bị từ xa (BR-08)
           </p>
         </div>
 
@@ -391,11 +407,26 @@ export const UserManagementTab: React.FC = () => {
       {/* 4-SubTab Navigation */}
       <div className="flex border-b border-slate-200 space-x-2 text-xs font-bold">
         {[
-          { id: 'members', label: '1. Phân Quyền Nhân Viên & Cửa Hàng', icon: UserCheck, count: users.length },
-          { id: 'stores', label: '2. Quản Lý Cửa Hàng / Chi Nhánh', icon: Store, count: stores.length },
+          {
+            id: 'members',
+            label: '1. Phân Quyền Nhân Viên & Cửa Hàng',
+            icon: UserCheck,
+            count: users.length,
+          },
+          {
+            id: 'stores',
+            label: '2. Quản Lý Cửa Hàng / Chi Nhánh',
+            icon: Store,
+            count: stores.length,
+          },
           { id: 'matrix', label: '3. Ma Trận Quyền Nghiệp Vụ (RBAC)', icon: Sliders },
-          { id: 'devices', label: '4. Phiên Thiết Bị & Thu Hồi Từ Xa (BR-08)', icon: Smartphone, count: deviceSessions.length },
-        ].map(tab => {
+          {
+            id: 'devices',
+            label: '4. Phiên Thiết Bị & Thu Hồi Từ Xa (BR-08)',
+            icon: Smartphone,
+            count: deviceSessions.length,
+          },
+        ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeSubTab === tab.id;
           return (
@@ -412,7 +443,9 @@ export const UserManagementTab: React.FC = () => {
               <Icon className="w-4 h-4" />
               <span>{tab.label}</span>
               {tab.count !== undefined && (
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}
+                >
                   {tab.count}
                 </span>
               )}
@@ -426,7 +459,8 @@ export const UserManagementTab: React.FC = () => {
         <div className="space-y-4">
           <div className="modern-card p-4 flex justify-between items-center bg-slate-50/60">
             <div className="text-xs text-slate-600">
-              Tổng số <strong>{users.length}</strong> nhân sự trong hệ thống · Mỗi nhân sự được giới hạn truy cập theo chi nhánh chỉ định để bảo mật dữ liệu khách hàng.
+              Tổng số <strong>{users.length}</strong> nhân sự trong hệ thống · Mỗi nhân sự được giới
+              hạn truy cập theo chi nhánh chỉ định để bảo mật dữ liệu khách hàng.
             </div>
           </div>
 
@@ -444,11 +478,11 @@ export const UserManagementTab: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {users.map(u => {
+                  {users.map((u) => {
                     const isAllStores = u.assigned_stores.includes('*');
                     const assignedStoreObjs = isAllStores
                       ? stores
-                      : stores.filter(s => u.assigned_stores.includes(s.id));
+                      : stores.filter((s) => u.assigned_stores.includes(s.id));
 
                     return (
                       <tr key={u.id} className="hover:bg-slate-50/80 transition">
@@ -458,8 +492,12 @@ export const UserManagementTab: React.FC = () => {
                               {u.full_name.charAt(0)}
                             </div>
                             <div>
-                              <strong className="text-slate-900 text-xs block">{u.full_name}</strong>
-                              <span className="font-mono text-[11px] text-slate-500">{u.email}</span>
+                              <strong className="text-slate-900 text-xs block">
+                                {u.full_name}
+                              </strong>
+                              <span className="font-mono text-[11px] text-slate-500">
+                                {u.email}
+                              </span>
                             </div>
                           </div>
                         </td>
@@ -470,23 +508,23 @@ export const UserManagementTab: React.FC = () => {
                               u.role === 'OWNER'
                                 ? 'bg-purple-50 text-purple-700 border-purple-200'
                                 : u.role === 'ACCOUNTANT'
-                                ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                : u.role === 'OPS_CSKH'
-                                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : u.role === 'STORE_MANAGER'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : 'bg-slate-100 text-slate-700'
+                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                  : u.role === 'OPS_CSKH'
+                                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                    : u.role === 'STORE_MANAGER'
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : 'bg-slate-100 text-slate-700'
                             }`}
                           >
                             {u.role === 'OWNER'
                               ? '👑 Chủ Shop (Owner)'
                               : u.role === 'ACCOUNTANT'
-                              ? '💼 Kế Toán (Maker-Checker)'
-                              : u.role === 'OPS_CSKH'
-                              ? '🎧 CSKH / Cứu Đơn'
-                              : u.role === 'STORE_MANAGER'
-                              ? '🏢 Quản Lý Chi Nhánh'
-                              : '📦 Thủ Kho'}
+                                ? '💼 Kế Toán (Maker-Checker)'
+                                : u.role === 'OPS_CSKH'
+                                  ? '🎧 CSKH / Cứu Đơn'
+                                  : u.role === 'STORE_MANAGER'
+                                    ? '🏢 Quản Lý Chi Nhánh'
+                                    : '📦 Thủ Kho'}
                           </span>
                         </td>
 
@@ -498,7 +536,7 @@ export const UserManagementTab: React.FC = () => {
                                 <span>Toàn Hệ Thống (Tất cả 4 chi nhánh)</span>
                               </span>
                             ) : (
-                              assignedStoreObjs.map(s => (
+                              assignedStoreObjs.map((s) => (
                                 <span
                                   key={s.id}
                                   className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
@@ -543,8 +581,11 @@ export const UserManagementTab: React.FC = () => {
       {activeSubTab === 'stores' && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {stores.map(store => (
-              <div key={store.id} className="modern-card p-5 space-y-3 flex flex-col justify-between">
+            {stores.map((store) => (
+              <div
+                key={store.id}
+                className="modern-card p-5 space-y-3 flex flex-col justify-between"
+              >
                 <div className="space-y-2">
                   <div className="flex justify-between items-start">
                     <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
@@ -569,7 +610,9 @@ export const UserManagementTab: React.FC = () => {
 
                 <div className="pt-3 border-t border-slate-100 flex justify-between items-center text-xs">
                   <span className="text-slate-500">Đơn hàng active:</span>
-                  <strong className="font-mono text-slate-900 font-bold">{store.active_orders_count.toLocaleString()} đơn</strong>
+                  <strong className="font-mono text-slate-900 font-bold">
+                    {store.active_orders_count.toLocaleString()} đơn
+                  </strong>
                 </div>
               </div>
             ))}
@@ -586,8 +629,9 @@ export const UserManagementTab: React.FC = () => {
               <span>Bảo Vệ Tính Toàn Vẹn Quyền Hạn (Invariants Guard)</span>
             </div>
             <p className="text-slate-600 text-[11px] leading-relaxed">
-              Hệ thống thực thi nguyên tắc phân chia trách nhiệm (Segregation of Duties). 
-              Quy tắc <strong>Maker-Checker (BR-12)</strong> khóa cứng không cho phép vai trò CSKH tự duyệt sai lệch đối soát tài chính nhằm phòng ngừa gian lận.
+              Hệ thống thực thi nguyên tắc phân chia trách nhiệm (Segregation of Duties). Quy tắc{' '}
+              <strong>Maker-Checker (BR-12)</strong> khóa cứng không cho phép vai trò CSKH tự duyệt
+              sai lệch đối soát tài chính nhằm phòng ngừa gian lận.
             </p>
           </div>
 
@@ -606,38 +650,41 @@ export const UserManagementTab: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {permissionsMatrix.map(row => (
+                  {permissionsMatrix.map((row) => (
                     <tr key={row.id} className="hover:bg-slate-50/80 transition">
-                      <td className="py-3 px-4 font-semibold text-slate-900">
-                        {row.feature}
-                      </td>
-                      <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">
-                        {row.rule}
-                      </td>
-                      {['owner', 'manager', 'cskh', 'accountant', 'warehouse'].map((roleKey: any) => {
-                        const hasPerm = (row as any)[roleKey];
-                        const isCskhDiscrepancy = row.id === 'p_discrepancy' && roleKey === 'cskh';
+                      <td className="py-3 px-4 font-semibold text-slate-900">{row.feature}</td>
+                      <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">{row.rule}</td>
+                      {['owner', 'manager', 'cskh', 'accountant', 'warehouse'].map(
+                        (roleKey: any) => {
+                          const hasPerm = (row as any)[roleKey];
+                          const isCskhDiscrepancy =
+                            row.id === 'p_discrepancy' && roleKey === 'cskh';
 
-                        return (
-                          <td key={roleKey} className="py-3 px-3 text-center">
-                            <button
-                              type="button"
-                              onClick={() => handleTogglePermission(row.id, roleKey)}
-                              disabled={isCskhDiscrepancy}
-                              className={`w-6 h-6 rounded-md inline-flex items-center justify-center transition cursor-pointer ${
-                                isCskhDiscrepancy
-                                  ? 'bg-rose-50 text-rose-300 border border-rose-200 cursor-not-allowed'
-                                  : hasPerm
-                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
-                                  : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
-                              }`}
-                              title={isCskhDiscrepancy ? 'Bị khóa bởi quy tắc Maker-Checker BR-12' : 'Bấm để đổi quyền'}
-                            >
-                              {hasPerm ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : '✕'}
-                            </button>
-                          </td>
-                        );
-                      })}
+                          return (
+                            <td key={roleKey} className="py-3 px-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleTogglePermission(row.id, roleKey)}
+                                disabled={isCskhDiscrepancy}
+                                className={`w-6 h-6 rounded-md inline-flex items-center justify-center transition cursor-pointer ${
+                                  isCskhDiscrepancy
+                                    ? 'bg-rose-50 text-rose-300 border border-rose-200 cursor-not-allowed'
+                                    : hasPerm
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
+                                      : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                                }`}
+                                title={
+                                  isCskhDiscrepancy
+                                    ? 'Bị khóa bởi quy tắc Maker-Checker BR-12'
+                                    : 'Bấm để đổi quyền'
+                                }
+                              >
+                                {hasPerm ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : '✕'}
+                              </button>
+                            </td>
+                          );
+                        }
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -656,13 +703,18 @@ export const UserManagementTab: React.FC = () => {
               <span>Cơ Chế Thu Hồi Quyền Thiết Bị Từ Xa (CN-25 · BR-08)</span>
             </h4>
             <p className="text-slate-600 text-[11px]">
-              Khi thiết bị PDA của nhân viên kho bị thất lạc, Chủ Shop có thể thu hồi phiên tức thì. Máy bị thu hồi khi có mạng sẽ nhận mã <strong>401 device_revoked</strong> và bị hủy quyền đồng bộ dữ liệu.
+              Khi thiết bị PDA của nhân viên kho bị thất lạc, Chủ Shop có thể thu hồi phiên tức thì.
+              Máy bị thu hồi khi có mạng sẽ nhận mã <strong>401 device_revoked</strong> và bị hủy
+              quyền đồng bộ dữ liệu.
             </p>
           </div>
 
           <div className="space-y-3">
-            {deviceSessions.map(session => (
-              <div key={session.id} className="modern-card p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            {deviceSessions.map((session) => (
+              <div
+                key={session.id}
+                className="modern-card p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3"
+              >
                 <div className="flex items-center gap-3.5">
                   <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
                     <Smartphone className="w-5 h-5" />
@@ -670,14 +722,22 @@ export const UserManagementTab: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-2">
                       <strong className="text-slate-900 text-xs">{session.device_name}</strong>
-                      {session.is_current && <span className="badge-ok text-[10px]">Thiết bị này</span>}
+                      {session.is_current && (
+                        <span className="badge-ok text-[10px]">Thiết bị này</span>
+                      )}
                     </div>
                     <div className="text-[11px] text-slate-500 mt-0.5 space-x-2">
-                      <span>Người dùng: <strong>{session.user_name}</strong></span>
+                      <span>
+                        Người dùng: <strong>{session.user_name}</strong>
+                      </span>
                       <span>·</span>
-                      <span>Chi nhánh: <strong>{session.store_scope}</strong></span>
+                      <span>
+                        Chi nhánh: <strong>{session.store_scope}</strong>
+                      </span>
                       <span>·</span>
-                      <span className="font-mono">IP: {session.ip_address} ({session.location})</span>
+                      <span className="font-mono">
+                        IP: {session.ip_address} ({session.location})
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -708,8 +768,12 @@ export const UserManagementTab: React.FC = () => {
                   <Sliders className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm text-slate-900">Phân Quyền & Cửa Hàng Cho Nhân Viên</h3>
-                  <p className="text-[11px] text-slate-500 font-mono">{editingUser.full_name} ({editingUser.email})</p>
+                  <h3 className="font-bold text-sm text-slate-900">
+                    Phân Quyền & Cửa Hàng Cho Nhân Viên
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-mono">
+                    {editingUser.full_name} ({editingUser.email})
+                  </p>
                 </div>
               </div>
               <button
@@ -760,10 +824,13 @@ export const UserManagementTab: React.FC = () => {
 
                   {!editingUser.assigned_stores.includes('*') && (
                     <div className="space-y-1.5 pt-1">
-                      {stores.map(s => {
+                      {stores.map((s) => {
                         const isChecked = editingUser.assigned_stores.includes(s.id);
                         return (
-                          <label key={s.id} className="flex items-center gap-2 text-slate-700 cursor-pointer">
+                          <label
+                            key={s.id}
+                            className="flex items-center gap-2 text-slate-700 cursor-pointer"
+                          >
                             <input
                               type="checkbox"
                               checked={isChecked}
@@ -772,7 +839,7 @@ export const UserManagementTab: React.FC = () => {
                                 if (e.target.checked) {
                                   newStores.push(s.id);
                                 } else {
-                                  newStores = newStores.filter(id => id !== s.id);
+                                  newStores = newStores.filter((id) => id !== s.id);
                                 }
                                 setEditingUser({ ...editingUser, assigned_stores: newStores });
                               }}
@@ -795,10 +862,7 @@ export const UserManagementTab: React.FC = () => {
                 >
                   Hủy
                 </button>
-                <button
-                  type="submit"
-                  className="btn-primary text-xs"
-                >
+                <button type="submit" className="btn-primary text-xs">
                   Lưu Phân Quyền
                 </button>
               </div>
@@ -817,8 +881,12 @@ export const UserManagementTab: React.FC = () => {
                   <Building2 className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm text-slate-900">Thêm Cửa Hàng / Chi Nhánh Mới</h3>
-                  <p className="text-[11px] text-slate-500">Mở rộng mạng lưới cửa hàng và kho vận</p>
+                  <h3 className="font-bold text-sm text-slate-900">
+                    Thêm Cửa Hàng / Chi Nhánh Mới
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Mở rộng mạng lưới cửa hàng và kho vận
+                  </p>
                 </div>
               </div>
               <button
@@ -886,10 +954,7 @@ export const UserManagementTab: React.FC = () => {
                 >
                   Hủy
                 </button>
-                <button
-                  type="submit"
-                  className="btn-primary text-xs"
-                >
+                <button type="submit" className="btn-primary text-xs">
                   Tạo Chi Nhánh
                 </button>
               </div>
@@ -903,7 +968,7 @@ export const UserManagementTab: React.FC = () => {
         isOpen={isInviteOpen}
         onClose={() => setIsInviteOpen(false)}
         onUserInvited={(newUser: any) => {
-          setUsers(prev => [
+          setUsers((prev) => [
             ...prev,
             {
               id: `usr_${Date.now().toString().slice(-4)}`,
@@ -917,7 +982,9 @@ export const UserManagementTab: React.FC = () => {
               created_at: new Date().toLocaleDateString('vi-VN'),
             },
           ]);
-          setToastMessage(`Đã gửi thư mời kèm link kích hoạt cho [${newUser.email}]. Token hết hạn sau 7 ngày (CN-24).`);
+          setToastMessage(
+            `Đã gửi thư mời kèm link kích hoạt cho [${newUser.email}]. Token hết hạn sau 7 ngày (CN-24).`
+          );
           setTimeout(() => setToastMessage(null), 5000);
         }}
       />

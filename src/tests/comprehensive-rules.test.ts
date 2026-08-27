@@ -13,10 +13,7 @@ import { MakerCheckerEngine } from '../core/maker-checker';
 import { ExceptionEngine } from '../core/exception-engine';
 import { OfflineScanQueueManager, OfflineScanCommand } from '../core/offline-queue';
 import { ThreeLedgersCalculator } from '../core/ledger-calculator';
-import {
-  validateThreeLedgersSeparation,
-  ThreeValueLedgersReport,
-} from '../types/ledger';
+import { validateThreeLedgersSeparation, ThreeValueLedgersReport } from '../types/ledger';
 import {
   Shipment,
   ShipmentStatus,
@@ -45,7 +42,13 @@ interface TestResult {
 
 const auditLog: TestResult[] = [];
 
-function assertTest(group: string, ruleId: string, name: string, condition: boolean, message: string) {
+function assertTest(
+  group: string,
+  ruleId: string,
+  name: string,
+  condition: boolean,
+  message: string
+) {
   auditLog.push({
     group,
     ruleId,
@@ -67,7 +70,9 @@ export async function runComprehensiveRulesAudit(): Promise<{
   results: TestResult[];
 }> {
   console.log('\n================================================================================');
-  console.log('🛡️ SHIP DỄ — BỘ KIỂM TOÁN QUY TẮC TOÀN DIỆN & BẤT BIẾN NGHIỆP VỤ (COMPREHENSIVE AUDIT)');
+  console.log(
+    '🛡️ SHIP DỄ — BỘ KIỂM TOÁN QUY TẮC TOÀN DIỆN & BẤT BIẾN NGHIỆP VỤ (COMPREHENSIVE AUDIT)'
+  );
   console.log('================================================================================\n');
 
   // ==========================================================================
@@ -93,7 +98,9 @@ export async function runComprehensiveRulesAudit(): Promise<{
       'Adapters & Idempotency',
       'BR-01',
       'Idempotency Key cache lại phản hồi cùng payload',
-      res1.success === true && res2.success === true && res2.reference_id?.includes('CACHED') === true,
+      res1.success === true &&
+        res2.success === true &&
+        res2.reference_id?.includes('CACHED') === true,
       'Yêu cầu thứ 2 với cùng key và payload nhận được kết quả đã cache từ hãng.'
     );
   }
@@ -118,7 +125,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
     try {
       await ghn.requestReattempt(payload2, { token: 'valid_token' });
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'idempotency_conflict' && err.httpStatus === 422) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'idempotency_conflict' &&
+        err.httpStatus === 422
+      ) {
         caught422 = true;
       }
     }
@@ -139,7 +150,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
     try {
       await ghn.trackShipment('GHN_NO_AUTH', { token: '' });
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'carrier_auth_failed' && err.httpStatus === 401) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'carrier_auth_failed' &&
+        err.httpStatus === 401
+      ) {
         authFailedCaught = true;
       }
     }
@@ -224,7 +239,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
         CarrierCapabilityTier.L0_OBSERVE
       );
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'carrier_operation_unsupported' && err.httpStatus === 501) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'carrier_operation_unsupported' &&
+        err.httpStatus === 501
+      ) {
         caught501 = true;
       }
     }
@@ -275,9 +294,16 @@ export async function runComprehensiveRulesAudit(): Promise<{
 
     let caughtValErr = false;
     try {
-      pancake.normalizeOrder({ id: '', order_number: '', inserted_at: '', total_price: 0, cod: 0 }, 'merc_001');
+      pancake.normalizeOrder(
+        { id: '', order_number: '', inserted_at: '', total_price: 0, cod: 0 },
+        'merc_001'
+      );
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'validation_error' && err.httpStatus === 400) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'validation_error' &&
+        err.httpStatus === 400
+      ) {
         caughtValErr = true;
       }
     }
@@ -307,7 +333,13 @@ export async function runComprehensiveRulesAudit(): Promise<{
     );
 
     const rawRows: RawStatementRowInput[] = [
-      { tracking_code: ' ghn-882-910 ', charged_fee: 22000, charged_weight_g: 400, cod_collected: 150000, fee_type: 'MAIN_FREIGHT' },
+      {
+        tracking_code: ' ghn-882-910 ',
+        charged_fee: 22000,
+        charged_weight_g: 400,
+        cod_collected: 150000,
+        fee_type: 'MAIN_FREIGHT',
+      },
     ];
     const parseRes = csvAdapter.parseStatement('stmt_audit_1', 'merc_001', dummyContent, rawRows);
 
@@ -315,7 +347,9 @@ export async function runComprehensiveRulesAudit(): Promise<{
       'Adapters & Idempotency',
       'BR-02',
       'Parse sao kê chuẩn hóa tracking code và cộng tổng tiền',
-      parseRes.rows[0].tracking_code === 'GHN882910' && parseRes.total_fees === 22000 && parseRes.total_cod === 150000,
+      parseRes.rows[0].tracking_code === 'GHN882910' &&
+        parseRes.total_fees === 22000 &&
+        parseRes.total_cod === 150000,
       'Chuẩn hóa mã tracking và bóc tách dữ liệu tài chính chính xác.'
     );
 
@@ -324,7 +358,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
     try {
       csvAdapter.parseStatement('stmt_audit_2', 'merc_001', dummyContent, rawRows);
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'statement_duplicate' && err.httpStatus === 409) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'statement_duplicate' &&
+        err.httpStatus === 409
+      ) {
         caughtDup = true;
       }
     }
@@ -492,7 +530,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
     try {
       matchingEngine.manualLink(matchRes.matchedRows[3], shipments[0], 'user_ops_1', '');
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'reason_required' && err.httpStatus === 422) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'reason_required' &&
+        err.httpStatus === 422
+      ) {
         caughtManualReason = true;
       }
     }
@@ -515,7 +557,8 @@ export async function runComprehensiveRulesAudit(): Promise<{
       'Matching Engine',
       'CN-03',
       'Ghép tay thành công khi có lý do hợp lệ',
-      linkedRow.match_status === MatchingStatus.MATCHED_EXACT && linkedRow.matched_shipment_id === shipments[0].id,
+      linkedRow.match_status === MatchingStatus.MATCHED_EXACT &&
+        linkedRow.matched_shipment_id === shipments[0].id,
       'Ghép thủ công cập nhật trạng thái dòng sao kê sang MATCHED_EXACT.'
     );
   }
@@ -570,6 +613,7 @@ export async function runComprehensiveRulesAudit(): Promise<{
         quoted_fee: 22000,
         cod_amount: 300000,
         delivered_at: new Date('2026-08-15T10:00:00Z'),
+        cod_paid_at: new Date('2026-08-16T10:00:00Z'),
         created_at: new Date('2026-08-12T10:00:00Z'),
         version: 1,
       },
@@ -587,6 +631,7 @@ export async function runComprehensiveRulesAudit(): Promise<{
         quoted_fee: 22000,
         cod_amount: 300000,
         delivered_at: new Date('2026-08-15T10:00:00Z'),
+        cod_paid_at: new Date('2026-08-16T10:00:00Z'),
         created_at: new Date('2026-08-12T10:00:00Z'),
         version: 1,
       },
@@ -604,6 +649,7 @@ export async function runComprehensiveRulesAudit(): Promise<{
         quoted_fee: 22000,
         cod_amount: 300000,
         delivered_at: new Date('2026-08-15T10:00:00Z'),
+        cod_paid_at: new Date('2026-08-16T10:00:00Z'),
         created_at: new Date('2026-08-12T10:00:00Z'),
         version: 1,
       },
@@ -621,6 +667,7 @@ export async function runComprehensiveRulesAudit(): Promise<{
         quoted_fee: 22000,
         cod_amount: 500000,
         delivered_at: new Date('2026-08-15T10:00:00Z'),
+        cod_paid_at: new Date('2026-08-16T10:00:00Z'),
         created_at: new Date('2026-08-12T10:00:00Z'),
         version: 1,
       },
@@ -656,6 +703,7 @@ export async function runComprehensiveRulesAudit(): Promise<{
         quoted_fee: 22000,
         cod_amount: 300000,
         delivered_at: new Date('2026-08-15T10:00:00Z'),
+        cod_paid_at: new Date('2026-08-16T10:00:00Z'),
         created_at: new Date('2026-08-12T10:00:00Z'),
         version: 1,
       },
@@ -756,13 +804,20 @@ export async function runComprehensiveRulesAudit(): Promise<{
     ];
 
     // Chạy phép dò với đầy đủ biểu giá
-    const result = reconEngine.runReconciliation('stmt_test', 'merc_test', statementRows, shipments, rateCard);
+    const result = reconEngine.runReconciliation(
+      'stmt_test',
+      'merc_test',
+      statementRows,
+      shipments,
+      rateCard
+    );
 
     assertTest(
       'Reconciliation Engine',
       'D1',
       'Phát hiện lệch cân tính phí [D1_WEIGHT]',
-      result.summary.d1_weight_count === 1 && result.discrepancies.some((d) => d.type === DiscrepancyType.D1_WEIGHT),
+      result.summary.d1_weight_count === 1 &&
+        result.discrepancies.some((d) => d.type === DiscrepancyType.D1_WEIGHT),
       'Phát hiện đúng 1 đơn lệch cân (+550g so với khai báo).'
     );
 
@@ -819,7 +874,8 @@ export async function runComprehensiveRulesAudit(): Promise<{
       'Reconciliation Engine',
       'BR-51',
       'Thiếu biểu giá hợp đồng -> Không tự ý kết luận D2 & Bật cờ cảnh báo missing_rate_card_warning',
-      resultWithoutRateCard.missing_rate_card_warning === true && resultWithoutRateCard.summary.d2_freight_count === 0,
+      resultWithoutRateCard.missing_rate_card_warning === true &&
+        resultWithoutRateCard.summary.d2_freight_count === 0,
       'Khi chưa cài đặt biểu giá, hệ thống không kết luận sai lệch cước bừa bãi.'
     );
   }
@@ -874,7 +930,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
         expected_version: 1,
       });
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'self_approval_forbidden' && err.httpStatus === 403) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'self_approval_forbidden' &&
+        err.httpStatus === 403
+      ) {
         caught403 = true;
       }
     }
@@ -919,7 +979,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
         expected_version: 1, // Current version đã là 2
       });
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'version_conflict' && err.httpStatus === 409) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'version_conflict' &&
+        err.httpStatus === 409
+      ) {
         caught409Version = true;
       }
     }
@@ -944,7 +1008,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
         expected_version: 2,
       });
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'reason_required' && err.httpStatus === 422) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'reason_required' &&
+        err.httpStatus === 422
+      ) {
         caught422Reason = true;
       }
     }
@@ -989,13 +1057,27 @@ export async function runComprehensiveRulesAudit(): Promise<{
 
     // 4.6 BR-11: Điều kiện chốt kỳ - Chặn chốt kỳ khi còn chênh lệch OPEN
     const openDiscs: Discrepancy[] = [
-      { id: 'd1', merchant_id: 'm1', shipment_id: 's1', tracking_code: 't1', type: DiscrepancyType.D1_WEIGHT, amount: 0, status: DiscrepancyResolution.OPEN, version: 1, created_at: new Date() },
+      {
+        id: 'd1',
+        merchant_id: 'm1',
+        shipment_id: 's1',
+        tracking_code: 't1',
+        type: DiscrepancyType.D1_WEIGHT,
+        amount: 0,
+        status: DiscrepancyResolution.OPEN,
+        version: 1,
+        created_at: new Date(),
+      },
     ];
     let caughtUnresolved = false;
     try {
       mcEngine.validatePeriodClosure(openDiscs);
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'unresolved_discrepancies' && err.httpStatus === 409) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'unresolved_discrepancies' &&
+        err.httpStatus === 409
+      ) {
         caughtUnresolved = true;
       }
     }
@@ -1013,7 +1095,9 @@ export async function runComprehensiveRulesAudit(): Promise<{
   // NHÓM 5: NGOẠI LỆ, HẠN XỬ LÝ SLA, CHỐNG RACE CONDITION & CẢNH BÁO 48H
   // (BR-31, BR-32, BR-33, BR-37)
   // ==========================================================================
-  console.log('\n--- [NHÓM 5] NGOẠI LỆ, HẠN SLA BR-32, CHỐNG 2 CSKH CỨU ĐƠN BR-33, CẢNH BÁO 48H BR-37 ---');
+  console.log(
+    '\n--- [NHÓM 5] NGOẠI LỆ, HẠN SLA BR-32, CHỐNG 2 CSKH CỨU ĐƠN BR-33, CẢNH BÁO 48H BR-37 ---'
+  );
 
   {
     const excEngine = new ExceptionEngine();
@@ -1021,9 +1105,18 @@ export async function runComprehensiveRulesAudit(): Promise<{
 
     // 5.1 BR-32: SLA Deadline tính từ occurred_at phía hãng
     const carrierOccurredAt = new Date('2026-08-17T08:00:00Z');
-    const deadlineDeliveryFail = excEngine.calculateDeadline(carrierOccurredAt, ExceptionType.DELIVERY_FAIL);
-    const deadlinePickupDelay = excEngine.calculateDeadline(carrierOccurredAt, ExceptionType.PICKUP_DELAY);
-    const deadlineStuck = excEngine.calculateDeadline(carrierOccurredAt, ExceptionType.STUCK_IN_TRANSIT);
+    const deadlineDeliveryFail = excEngine.calculateDeadline(
+      carrierOccurredAt,
+      ExceptionType.DELIVERY_FAIL
+    );
+    const deadlinePickupDelay = excEngine.calculateDeadline(
+      carrierOccurredAt,
+      ExceptionType.PICKUP_DELAY
+    );
+    const deadlineStuck = excEngine.calculateDeadline(
+      carrierOccurredAt,
+      ExceptionType.STUCK_IN_TRANSIT
+    );
 
     assertTest(
       'Exception Engine',
@@ -1094,7 +1187,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
         { userId: 'cskh_2', userName: 'Minh CSKH', note: 'Giao ngày mai' }
       );
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'reattempt_in_progress' && err.httpStatus === 409) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'reattempt_in_progress' &&
+        err.httpStatus === 409
+      ) {
         caught409Race = true;
       }
     }
@@ -1192,7 +1289,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
         },
       ]);
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'evidence_required' && err.httpStatus === 422) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'evidence_required' &&
+        err.httpStatus === 422
+      ) {
         caughtEvidenceReq = true;
       }
     }
@@ -1223,7 +1324,11 @@ export async function runComprehensiveRulesAudit(): Promise<{
         true // isDeviceRevoked = true
       );
     } catch (err: any) {
-      if (err instanceof ShipDeAppError && err.code === 'device_revoked' && err.httpStatus === 401) {
+      if (
+        err instanceof ShipDeAppError &&
+        err.code === 'device_revoked' &&
+        err.httpStatus === 401
+      ) {
         caughtDeviceRevoked = true;
       }
     }
@@ -1240,7 +1345,9 @@ export async function runComprehensiveRulesAudit(): Promise<{
   // ==========================================================================
   // NHÓM 7: BA SỔ GIÁ TRỊ ĐỘC LẬP (BR-45, BR-50, BR-46)
   // ==========================================================================
-  console.log('\n--- [NHÓM 7] BA SỔ GIÁ TRỊ ĐỘC LẬP BR-45 & CHỈ TÍNH PHÍ HOÀN TRÁNH ĐƯỢC BR-50 ---');
+  console.log(
+    '\n--- [NHÓM 7] BA SỔ GIÁ TRỊ ĐỘC LẬP BR-45 & CHỈ TÍNH PHÍ HOÀN TRÁNH ĐƯỢC BR-50 ---'
+  );
 
   {
     const ledgerCalc = new ThreeLedgersCalculator();
@@ -1421,7 +1528,9 @@ export async function runComprehensiveRulesAudit(): Promise<{
   console.log('\n================================================================================');
   const passedCount = auditLog.filter((r) => r.passed).length;
   const failedCount = auditLog.length - passedCount;
-  console.log(`🏁 KẾT QUẢ KIỂM TOÁN: ${passedCount}/${auditLog.length} QUY TẮC ĐẠT CHUẨN (${Math.round((passedCount / auditLog.length) * 100)}%)`);
+  console.log(
+    `🏁 KẾT QUẢ KIỂM TOÁN: ${passedCount}/${auditLog.length} QUY TẮC ĐẠT CHUẨN (${Math.round((passedCount / auditLog.length) * 100)}%)`
+  );
   console.log('================================================================================\n');
 
   return {

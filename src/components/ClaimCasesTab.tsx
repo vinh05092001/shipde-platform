@@ -3,7 +3,17 @@
 import React, { useState } from 'react';
 import { UIClaimItem } from './types';
 import { TrackingCode, Money, StatusBadge, AutomationBadge } from './ui/OperationalComponents';
-import { FileText, Clock, Download, Plus, Search, ShieldCheck, AlertTriangle, Send, Archive } from 'lucide-react';
+import {
+  FileText,
+  Clock,
+  Download,
+  Plus,
+  Search,
+  ShieldCheck,
+  AlertTriangle,
+  Send,
+  Archive,
+} from 'lucide-react';
 
 interface Props {
   claims: UIClaimItem[];
@@ -15,7 +25,9 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const handleDownloadProofZip = (claim: UIClaimItem) => {
-    setToastMessage(`✓ Đang tải gói chứng cứ tự động [claim_${claim.tracking_code}_sha256.zip] gồm: Lịch sử hành trình, ghi âm CSKH, ảnh chụp nhận kho và sao kê (CN-16).`);
+    setToastMessage(
+      `✓ Đang tải gói chứng cứ tự động [claim_${claim.tracking_code}_sha256.zip] gồm: Lịch sử hành trình, ghi âm CSKH, ảnh chụp nhận kho và sao kê (CN-16).`
+    );
     setTimeout(() => setToastMessage(null), 4500);
   };
 
@@ -26,13 +38,16 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
       accepted_amount: claim.requested_amount,
     };
     onUpdateClaim(updated);
-    setToastMessage(`✓ Hãng đã chấp thuận bồi thường ${claim.requested_amount.toLocaleString('vi-VN')} đ cho đơn ${claim.tracking_code}.`);
+    setToastMessage(
+      `✓ Hãng đã chấp thuận bồi thường ${claim.requested_amount.toLocaleString('vi-VN')} đ cho đơn ${claim.tracking_code}.`
+    );
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const filteredClaims = claims.filter((c) =>
-    c.tracking_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (c.carrier_ticket && c.carrier_ticket.toLowerCase().includes(searchQuery.toLowerCase()))
+  const filteredClaims = claims.filter(
+    (c) =>
+      c.tracking_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (c.carrier_ticket && c.carrier_ticket.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   return (
@@ -40,7 +55,9 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
       {toastMessage && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center justify-between shadow-sm animate-in fade-in">
           <span>{toastMessage}</span>
-          <button type="button" onClick={() => setToastMessage(null)} className="font-bold">✕</button>
+          <button type="button" onClick={() => setToastMessage(null)} className="font-bold">
+            ✕
+          </button>
         </div>
       )}
 
@@ -55,7 +72,8 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
             <span className="badge-ok text-xs">Thời Hiệu BR-37</span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Tự động tập hợp chứng cứ và giám sát hạn chót khiếu nại trước thời hiệu 48 giờ để không bị mất quyền đòi tiền
+            Tự động tập hợp chứng cứ và giám sát hạn chót khiếu nại trước thời hiệu 48 giờ để không
+            bị mất quyền đòi tiền
           </p>
         </div>
 
@@ -92,11 +110,21 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
                 const isUrgent = c.hours_left <= 48 && c.status !== 'CLOSED';
                 return (
                   <tr key={c.id}>
-                    <td><TrackingCode code={c.tracking_code} /></td>
-                    <td className="font-mono text-xs font-semibold text-slate-700">{c.carrier_ticket || 'Chờ sinh ticket'}</td>
+                    <td>
+                      <TrackingCode code={c.tracking_code} />
+                    </td>
+                    <td className="font-mono text-xs font-semibold text-slate-700">
+                      {c.carrier_ticket || 'Chờ sinh ticket'}
+                    </td>
                     <td>
                       <span className="text-xs font-medium text-slate-800">
-                        {c.claim_type === 'FEE' ? 'Lệch cước hợp đồng' : c.claim_type === 'DAMAGED' ? 'Hàng hoàn hư hỏng' : c.claim_type === 'LOST' ? 'Thất lạc kiện' : 'Lệch COD'}
+                        {c.claim_type === 'FEE'
+                          ? 'Lệch cước hợp đồng'
+                          : c.claim_type === 'DAMAGED'
+                            ? 'Hàng hoàn hư hỏng'
+                            : c.claim_type === 'LOST'
+                              ? 'Thất lạc kiện'
+                              : 'Lệch COD'}
                       </span>
                     </td>
                     <td className="text-right font-bold text-xs">
@@ -106,11 +134,19 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
                       <Money amount={c.accepted_amount} state="pending" />
                     </td>
                     <td>
-                      <span className={isUrgent ? 'badge-risk font-mono font-bold text-[10px]' : 'badge-muted font-mono text-[10px]'}>
+                      <span
+                        className={
+                          isUrgent
+                            ? 'badge-risk font-mono font-bold text-[10px]'
+                            : 'badge-muted font-mono text-[10px]'
+                        }
+                      >
                         {isUrgent ? `CÒN ${c.hours_left}H (!)` : `Còn ${c.hours_left}h`}
                       </span>
                     </td>
-                    <td><StatusBadge status={c.status} /></td>
+                    <td>
+                      <StatusBadge status={c.status} />
+                    </td>
                     <td className="text-right">
                       <div className="inline-flex items-center gap-1.5">
                         <button

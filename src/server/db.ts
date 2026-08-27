@@ -84,8 +84,22 @@ class ShipDeDatabase {
   ];
 
   public deviceSessions = [
-    { id: 'dev_1', user_id: 'usr_02', user_name: 'Trần Thị Hoa (CSKH)', device: 'iPhone 15 Pro · iOS 17.5', last_active: 'Vừa xong', is_revoked: false },
-    { id: 'dev_2', user_id: 'usr_04', user_name: 'Phạm Văn Kho (Thủ kho)', device: 'Samsung Galaxy A54 · Android 14', last_active: '15 phút trước', is_revoked: false },
+    {
+      id: 'dev_1',
+      user_id: 'usr_02',
+      user_name: 'Trần Thị Hoa (CSKH)',
+      device: 'iPhone 15 Pro · iOS 17.5',
+      last_active: 'Vừa xong',
+      is_revoked: false,
+    },
+    {
+      id: 'dev_2',
+      user_id: 'usr_04',
+      user_name: 'Phạm Văn Kho (Thủ kho)',
+      device: 'Samsung Galaxy A54 · Android 14',
+      last_active: '15 phút trước',
+      is_revoked: false,
+    },
   ];
 
   public carrierAccounts: CarrierAccount[] = [
@@ -430,11 +444,46 @@ class ShipDeDatabase {
   ];
 
   public notificationMatrix = [
-    { event: 'Giao hàng thất bại (Delivery Fail)', ownerPush: true, opsPush: true, accountantPush: false, email: false, urgent: true },
-    { event: 'Phát hiện lệch cước > 50.000 đ', ownerPush: false, opsPush: false, accountantPush: true, email: true, urgent: false },
-    { event: 'COD quá hạn thanh toán theo SLA', ownerPush: true, opsPush: false, accountantPush: true, email: true, urgent: true },
-    { event: 'Hồ sơ khiếu nại còn < 48h tới hạn', ownerPush: true, opsPush: true, accountantPush: true, email: true, urgent: true },
-    { event: 'Kiện hàng hoàn về kho bất thường (hư/thiếu)', ownerPush: false, opsPush: true, accountantPush: false, email: false, urgent: false },
+    {
+      event: 'Giao hàng thất bại (Delivery Fail)',
+      ownerPush: true,
+      opsPush: true,
+      accountantPush: false,
+      email: false,
+      urgent: true,
+    },
+    {
+      event: 'Phát hiện lệch cước > 50.000 đ',
+      ownerPush: false,
+      opsPush: false,
+      accountantPush: true,
+      email: true,
+      urgent: false,
+    },
+    {
+      event: 'COD quá hạn thanh toán theo SLA',
+      ownerPush: true,
+      opsPush: false,
+      accountantPush: true,
+      email: true,
+      urgent: true,
+    },
+    {
+      event: 'Hồ sơ khiếu nại còn < 48h tới hạn',
+      ownerPush: true,
+      opsPush: true,
+      accountantPush: true,
+      email: true,
+      urgent: true,
+    },
+    {
+      event: 'Kiện hàng hoàn về kho bất thường (hư/thiếu)',
+      ownerPush: false,
+      opsPush: true,
+      accountantPush: false,
+      email: false,
+      urgent: false,
+    },
   ];
 
   public digestWindowMinutes = 15;

@@ -9,10 +9,15 @@ export async function GET(req: NextRequest) {
     const status = searchParams.get('status');
 
     let list = db.claims.map((clm) => {
-      const ship = db.shipments.find((s) => s.id === clm.shipment_id || s.tracking_code.includes(clm.carrier_ticket || ''));
+      const ship = db.shipments.find(
+        (s) => s.id === clm.shipment_id || s.tracking_code.includes(clm.carrier_ticket || '')
+      );
       const order = ship ? db.orders.find((o) => o.id === ship.order_id) : undefined;
       const now = Date.now();
-      const hoursRemaining = Math.max(0, Math.round((new Date(clm.deadline_at).getTime() - now) / (3600 * 1000)));
+      const hoursRemaining = Math.max(
+        0,
+        Math.round((new Date(clm.deadline_at).getTime() - now) / (3600 * 1000))
+      );
 
       return {
         ...clm,
@@ -49,7 +54,15 @@ export async function POST(req: NextRequest) {
 
     if (action === 'CREATE_CLAIM' || !action) {
       if (!tracking_code || !claim_type || !requested_amount) {
-        return NextResponse.json({ error: { code: 'validation_error', message: 'Vui lòng điền đầy đủ mã vận đơn, loại khiếu nại và số tiền yêu cầu' } }, { status: 400 });
+        return NextResponse.json(
+          {
+            error: {
+              code: 'validation_error',
+              message: 'Vui lòng điền đầy đủ mã vận đơn, loại khiếu nại và số tiền yêu cầu',
+            },
+          },
+          { status: 400 }
+        );
       }
 
       const normCode = tracking_code.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -66,7 +79,8 @@ export async function POST(req: NextRequest) {
         recovered_amount: 0,
         status: 'SUBMITTED',
         deadline_at: new Date(Date.now() + 48 * 3600 * 1000), // 48h SLA
-        evidence_pack_url: evidence_pack_url || `https://storage.shipde.net/evidence/${normCode}.zip`,
+        evidence_pack_url:
+          evidence_pack_url || `https://storage.shipde.net/evidence/${normCode}.zip`,
         created_at: new Date(),
         updated_at: new Date(),
       };
@@ -80,8 +94,14 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: { code: 'bad_request', message: 'Hành động không hợp lệ' } }, { status: 400 });
+    return NextResponse.json(
+      { error: { code: 'bad_request', message: 'Hành động không hợp lệ' } },
+      { status: 400 }
+    );
   } catch (error: any) {
-    return NextResponse.json({ error: { code: 'server_error', message: error.message } }, { status: 500 });
+    return NextResponse.json(
+      { error: { code: 'server_error', message: error.message } },
+      { status: 500 }
+    );
   }
 }

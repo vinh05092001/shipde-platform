@@ -3,7 +3,19 @@
 import React, { useState } from 'react';
 import { getMockUnifiedTimeline } from './mock-data';
 import { TrackingCode, Money, StatusBadge, AutomationBadge } from './ui/OperationalComponents';
-import { X, Copy, Check, Eye, EyeOff, ShieldCheck, Download, ArrowRight, Phone, MapPin, Package } from 'lucide-react';
+import {
+  X,
+  Copy,
+  Check,
+  Eye,
+  EyeOff,
+  ShieldCheck,
+  Download,
+  ArrowRight,
+  Phone,
+  MapPin,
+  Package,
+} from 'lucide-react';
 
 interface Props {
   trackingCode: string | null;
@@ -18,7 +30,9 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
   onActionReattempt,
   onActionClaim,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'timeline' | 'financial' | 'evidence'>('timeline');
+  const [activeSubTab, setActiveSubTab] = useState<'timeline' | 'financial' | 'evidence'>(
+    'timeline'
+  );
   const [unmaskPii, setUnmaskPii] = useState(false);
 
   if (!trackingCode) return null;
@@ -46,7 +60,8 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
                 <AutomationBadge tier={carrierTier as any} carrierCode={isGhn ? 'GHN' : 'GHTK'} />
               </div>
               <div className="text-slate-500 mt-0.5">
-                Mã đơn: <strong>ORD_ANAN_101</strong> · Khách: <strong>Nguyễn Văn Khách</strong> (SĐT: {unmaskPii ? '0901234567' : '090*** 567'})
+                Mã đơn: <strong>ORD_ANAN_101</strong> · Khách: <strong>Nguyễn Văn Khách</strong>{' '}
+                (SĐT: {unmaskPii ? '0901234567' : '090*** 567'})
               </div>
             </div>
           </div>
@@ -58,7 +73,11 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
               className="btn-secondary text-xs py-1"
               title="Ghi nhật ký mở xem PII (BR-42)"
             >
-              {unmaskPii ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5 text-blue-600" />}
+              {unmaskPii ? (
+                <EyeOff className="w-3.5 h-3.5" />
+              ) : (
+                <Eye className="w-3.5 h-3.5 text-blue-600" />
+              )}
               <span>{unmaskPii ? 'Ẩn PII' : 'Mở xem PII'}</span>
             </button>
 
@@ -112,7 +131,8 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
                     </div>
                     <p className="text-slate-600 mt-0.5">{ev.description}</p>
                     <div className="text-[10px] text-slate-400 mt-1">
-                      Nguồn: <span className="font-semibold text-slate-600">{ev.source_label}</span> {ev.actor && `· Thực hiện: ${ev.actor}`}
+                      Nguồn: <span className="font-semibold text-slate-600">{ev.source_label}</span>{' '}
+                      {ev.actor && `· Thực hiện: ${ev.actor}`}
                     </div>
                   </div>
                 ))}
@@ -124,7 +144,9 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
             <div className="space-y-4">
               <div className="grid grid-cols-3 gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200/80">
                 <div>
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase">1. Số hệ thống (Biểu giá)</span>
+                  <span className="text-[10px] text-slate-500 font-semibold uppercase">
+                    1. Số hệ thống (Biểu giá)
+                  </span>
                   <div className="font-mono text-base font-bold text-slate-900 mt-0.5">
                     <Money amount={22000} state="confirmed" />
                   </div>
@@ -132,7 +154,9 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
                 </div>
 
                 <div className="border-l border-slate-200 pl-3">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase">2. Số hãng sao kê</span>
+                  <span className="text-[10px] text-slate-500 font-semibold uppercase">
+                    2. Số hãng sao kê
+                  </span>
                   <div className="font-mono text-base font-bold text-rose-600 mt-0.5">
                     <Money amount={29000} state="confirmed" />
                   </div>
@@ -140,16 +164,21 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
                 </div>
 
                 <div className="border-l border-slate-200 pl-3">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase">3. Chênh lệch phát hiện</span>
+                  <span className="text-[10px] text-slate-500 font-semibold uppercase">
+                    3. Chênh lệch phát hiện
+                  </span>
                   <div className="font-mono text-base font-black text-rose-600 mt-0.5">
                     <Money amount={7000} state="confirmed" showSign />
                   </div>
-                  <div className="text-rose-700 font-semibold text-[11px] mt-0.5">Phép dò D2_FREIGHT</div>
+                  <div className="text-rose-700 font-semibold text-[11px] mt-0.5">
+                    Phép dò D2_FREIGHT
+                  </div>
                 </div>
               </div>
 
               <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 text-xs text-blue-900">
-                * Áp dụng quy tắc Maker-Checker (BR-12): CSKH can thiệp đơn này không được tự duyệt chấp thuận chênh lệch 7.000 đ.
+                * Áp dụng quy tắc Maker-Checker (BR-12): CSKH can thiệp đơn này không được tự duyệt
+                chấp thuận chênh lệch 7.000 đ.
               </div>
             </div>
           )}
@@ -162,15 +191,21 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
 
               <div className="space-y-2">
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex justify-between items-center text-xs">
-                  <span className="font-medium text-slate-800">1. Lịch sử quét webhook hãng (12 sự kiện)</span>
+                  <span className="font-medium text-slate-800">
+                    1. Lịch sử quét webhook hãng (12 sự kiện)
+                  </span>
                   <span className="badge-ok text-[10px]">Đã ký SHA-256</span>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex justify-between items-center text-xs">
-                  <span className="font-medium text-slate-800">2. Nhật ký cuộc gọi CSKH cứu đơn (Ghi âm MP3)</span>
+                  <span className="font-medium text-slate-800">
+                    2. Nhật ký cuộc gọi CSKH cứu đơn (Ghi âm MP3)
+                  </span>
                   <span className="badge-ok text-[10px]">Đã đính kèm</span>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex justify-between items-center text-xs">
-                  <span className="font-medium text-slate-800">3. Dòng sao kê cước trừ sai (Kỳ đối soát 01/08 - 15/08)</span>
+                  <span className="font-medium text-slate-800">
+                    3. Dòng sao kê cước trừ sai (Kỳ đối soát 01/08 - 15/08)
+                  </span>
                   <span className="badge-ok text-[10px]">Trích xuất tự động</span>
                 </div>
               </div>
@@ -180,11 +215,7 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
 
         {/* Footer Actions */}
         <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-between items-center">
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-secondary text-xs"
-          >
+          <button type="button" onClick={onClose} className="btn-secondary text-xs">
             Đóng
           </button>
 
@@ -192,7 +223,10 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
             {onActionReattempt && (
               <button
                 type="button"
-                onClick={() => { onClose(); onActionReattempt(trackingCode); }}
+                onClick={() => {
+                  onClose();
+                  onActionReattempt(trackingCode);
+                }}
                 className="btn-primary text-xs"
               >
                 Gửi Lệnh Giao Lại (CN-10) →
@@ -201,7 +235,10 @@ export const UnifiedTrackingModal: React.FC<Props> = ({
             {onActionClaim && (
               <button
                 type="button"
-                onClick={() => { onClose(); onActionClaim(trackingCode); }}
+                onClick={() => {
+                  onClose();
+                  onActionClaim(trackingCode);
+                }}
                 className="btn-secondary text-xs text-rose-700 hover:bg-rose-50 border-rose-200"
               >
                 Khởi Tạo Khiếu Nại (CN-16) →
