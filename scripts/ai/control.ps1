@@ -132,9 +132,29 @@ function ConvertFrom-ShipDeJsonList {
     # Assign first, then enumerate explicitly so [] produces zero records.
     $parsed = $Json | ConvertFrom-Json
     foreach ($item in $parsed) {
-        if ($null -ne $item) {
-            Write-Output $item
+        if ($null -eq $item) {
+            throw "Controller JSON list contains a null record."
         }
+        Write-Output $item
+    }
+}
+
+function Assert-ShipDePullRequestRecord {
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [object]$PullRequest
+    )
+
+    if ($null -eq $PullRequest) {
+        throw "GitHub returned a null Pull Request record."
+    }
+    $titleProperty = $PullRequest.PSObject.Properties["title"]
+    if (
+        -not $titleProperty -or
+        [string]::IsNullOrWhiteSpace([string]$titleProperty.Value)
+    ) {
+        throw "GitHub returned a malformed Pull Request record without a usable title."
     }
 }
 
@@ -156,6 +176,32 @@ function Assert-ShipDeJsonListCompatibility {
     ) {
         throw "Controller JSON compatibility check failed for a multi-item list."
     }
+
+    $nullRejected = $false
+    try {
+        @(ConvertFrom-ShipDeJsonList -Json "[null]") | Out-Null
+    } catch {
+        $nullRejected = $true
+    }
+    if (-not $nullRejected) {
+        throw "Controller JSON compatibility check accepted a null list record."
+    }
+
+    foreach ($invalidRecord in @(
+        [PSCustomObject]@{},
+        [PSCustomObject]@{ title = "" },
+        [PSCustomObject]@{ title = " " }
+    )) {
+        $invalidRejected = $false
+        try {
+            Assert-ShipDePullRequestRecord -PullRequest $invalidRecord
+        } catch {
+            $invalidRejected = $true
+        }
+        if (-not $invalidRejected) {
+            throw "Controller Pull Request compatibility check accepted an unusable title."
+        }
+    }
 }
 
 function Get-ShipDeOpenPullRequests {
@@ -172,9 +218,7 @@ function Get-ShipDeOpenPullRequests {
 
     $pullRequests = @(ConvertFrom-ShipDeJsonList -Json ($json -join [Environment]::NewLine))
     foreach ($pullRequest in $pullRequests) {
-        if (-not $pullRequest.PSObject.Properties["title"]) {
-            throw "GitHub returned a malformed Pull Request record without a title."
-        }
+        Assert-ShipDePullRequestRecord -PullRequest $pullRequest
         Write-Output $pullRequest
     }
 }

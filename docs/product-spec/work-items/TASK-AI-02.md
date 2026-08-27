@@ -93,7 +93,8 @@ From a clean checkout:
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | Pending | Pending | Empty-array compatibility and safe zero-PR routing |
+| 1 | `2e32d70c` | `CHANGES_REQUIRED` | Reject null records and missing/blank Pull Request titles instead of treating them as an empty queue |
+| 2 | Pending correction head | Pending fresh review | Null and unusable-title fail-closed guards plus runtime compatibility assertions |
 
 ## Residual limitations
 
