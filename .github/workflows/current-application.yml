@@ -65,6 +65,19 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
+      - name: Verify Formatting Negative Proof
+        run: |
+          set +e
+          npm run format:check -- --test-negative
+          EXIT_CODE=$?
+          set -e
+          echo "Formatting negative proof returned exit code: $EXIT_CODE"
+          if [ "$EXIT_CODE" -eq 1 ]; then
+            echo "Success: Format check negative proof exited with exact code 1 (unformatted fixture detected) as required by AC-FOUND-01-05."
+          else
+            echo "Error: Expected format check negative proof to exit with exact code 1, but got code $EXIT_CODE!"
+            exit 1
+          fi
       - name: Verify Git Diff Whitespace & Conflict Markers
         run: git diff --check origin/main...HEAD
       - run: npm run build
