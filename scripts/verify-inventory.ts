@@ -8,10 +8,7 @@ const INVENTORY_PATH = path.join(
   'docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md'
 );
 const PRISMA_SCHEMA_PATH = path.join(ROOT, 'prisma/schema.prisma');
-const GAPS_DOC_PATH = path.join(
-  ROOT,
-  'docs/product-spec/evidence/PROTOTYPE-GAPS-AND-RISKS.md'
-);
+const GAPS_DOC_PATH = path.join(ROOT, 'docs/product-spec/evidence/PROTOTYPE-GAPS-AND-RISKS.md');
 
 const VALID_CLASSIFICATIONS = new Set(['REAL', 'PARTIAL', 'DEMO_ONLY', 'ABSENT']);
 
@@ -90,7 +87,10 @@ export function validateInventory(): {
       `Summary text REAL count (${summaryMatches.real[1]}) does not match table count (${classificationCounts.REAL})`
     );
   }
-  if (summaryMatches.partial && Number(summaryMatches.partial[1]) !== classificationCounts.PARTIAL) {
+  if (
+    summaryMatches.partial &&
+    Number(summaryMatches.partial[1]) !== classificationCounts.PARTIAL
+  ) {
     errors.push(
       `Summary text PARTIAL count (${summaryMatches.partial[1]}) does not match table count (${classificationCounts.PARTIAL})`
     );
@@ -123,7 +123,9 @@ export function validateInventory(): {
   }
 
   const gapsContent = fs.readFileSync(GAPS_DOC_PATH, 'utf-8');
-  const gapsSchemaMatch = gapsContent.match(/schema\.prisma[^\n]*?(\d+)\s+(?:domain|PostgreSQL)\s+models/);
+  const gapsSchemaMatch = gapsContent.match(
+    /schema\.prisma[^\n]*?(\d+)\s+(?:domain|PostgreSQL)\s+models/
+  );
   if (gapsSchemaMatch && Number(gapsSchemaMatch[1]) !== actualModelCount) {
     errors.push(
       `PROTOTYPE-GAPS-AND-RISKS.md references ${gapsSchemaMatch[1]} Prisma models, but schema.prisma has ${actualModelCount}`

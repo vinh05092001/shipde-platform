@@ -131,9 +131,10 @@ Run from a clean checkout on the approved Node.js 24 runtime:
 
 ## Codex review record
 
-| Review round | Commit    | Verdict   | Findings resolved |
-| ------------ | --------- | --------- | ----------------- |
-| 1            | `Pending` | `Pending` | `Pending`         |
+| Review round | Commit                                     | Verdict            | Findings resolved                                                                                                                                                                                                                                                                                                                        |
+| ------------ | ------------------------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1            | `7d23485`                                  | `CHANGES_REQUIRED` | Six P1/P2 findings: (1) gitleaks parser + exit 1 on negative test; (2) preservation smoke importing actual UI components + exit 1 on missing surface; (3) reverted semantic changes in AuthContext/ShipmentList/ThreeLedgers/CreateOrder; (4) removed Prettier exclusions; (5) unified 0/74/31/25 counts and 17 Prisma models in docs. |
+| 2            | Head on `feat/task-found-01-baseline-freeze` | `READY_FOR_CODEX`  | All P1/P2 review findings resolved and verified across all 10 baseline checks.                                                                                                                                                                                                                                                           |
 
 ## Residual limitations
 

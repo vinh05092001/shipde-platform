@@ -2,19 +2,19 @@
 
 ## Control
 
-| Field           | Value                                                                                                                                              |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Work Item ID    | `TASK-AI-02`                                                                                                                                       |
-| Feature ID      | `N/A`                                                                                                                                              |
-| Status          | `READY_FOR_CODEX`                                                                                                                                  |
-| Delivery order  | `135`                                                                                                                                              |
-| Dependencies    | `TASK-AI-01` merged as `239ad8636e9808f44b5efe43c4c3779ec2900f40`                                                                                  |
-| Assigned author | `9ROUTER`                                                                                                                                          |
-| Risk            | `LOW`                                                                                                                                              |
-| Allowed paths   | `scripts/ai/control.ps1`, `docs/product-spec/work-items/TASK-AI-02.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
-| Reviewer        | `Codex — fresh independent task`                                                                                                                   |
-| Branch          | `fix/task-ai-02-empty-pr-list`                                                                                                                     |
-| Pull Request    | `#2`                                                                                                                                               |
+| Field | Value |
+|---|---|
+| Work Item ID | `TASK-AI-02` |
+| Feature ID | `N/A` |
+| Status | `READY_FOR_CODEX` |
+| Delivery order | `135` |
+| Dependencies | `TASK-AI-01` merged as `239ad8636e9808f44b5efe43c4c3779ec2900f40` |
+| Assigned author | `9ROUTER` |
+| Risk | `LOW` |
+| Allowed paths | `scripts/ai/control.ps1`, `docs/product-spec/work-items/TASK-AI-02.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Reviewer | `Codex — fresh independent task` |
+| Branch | `fix/task-ai-02-empty-pr-list` |
+| Pull Request | `#2` |
 
 ## Business outcome
 
@@ -72,13 +72,13 @@ None. This changes only local parsing of GitHub CLI JSON. No API contract, produ
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario                                               | Expected result                                                              | Evidence required                                    |
-| ---------- | ------------------------------------------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `AC-AI-10` | `ConvertFrom-Json` receives `[]` on Windows PowerShell | Zero records are emitted and no `title` access occurs                        | Runtime compatibility self-check and controller diff |
-| `AC-AI-11` | JSON contains one or two PR objects                    | Object count, ordering and `title` values are preserved                      | Runtime compatibility self-check                     |
-| `AC-AI-12` | Continue pipeline runs with zero open PRs              | Existing flow advances to prepared-item lookup and Codex planning            | Source trace plus post-merge Windows smoke test      |
-| `AC-AI-13` | GitHub returns a malformed non-empty record            | Controller stops safely with a clear error                                   | Guard in `Get-ShipDeOpenPullRequests`                |
-| `AC-AI-14` | Correction is reviewed                                 | Existing immutable-SHA CI/review and human-only merge rules remain unchanged | CI and fresh Codex review                            |
+| AC/Test ID | Scenario | Expected result | Evidence required |
+|---|---|---|---|
+| `AC-AI-10` | `ConvertFrom-Json` receives `[]` on Windows PowerShell | Zero records are emitted and no `title` access occurs | Runtime compatibility self-check and controller diff |
+| `AC-AI-11` | JSON contains one or two PR objects | Object count, ordering and `title` values are preserved | Runtime compatibility self-check |
+| `AC-AI-12` | Continue pipeline runs with zero open PRs | Existing flow advances to prepared-item lookup and Codex planning | Source trace plus post-merge Windows smoke test |
+| `AC-AI-13` | GitHub returns a malformed non-empty record | Controller stops safely with a clear error | Guard in `Get-ShipDeOpenPullRequests` |
+| `AC-AI-14` | Correction is reviewed | Existing immutable-SHA CI/review and human-only merge rules remain unchanged | CI and fresh Codex review |
 
 ## Verification commands
 
@@ -91,11 +91,11 @@ From a clean checkout:
 
 ## Codex review record
 
-| Review round | Commit                     | Verdict              | Findings resolved                                                                                    |
-| ------------ | -------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------- |
-| 1            | `2e32d70c`                 | `CHANGES_REQUIRED`   | Reject null records and missing/blank Pull Request titles instead of treating them as an empty queue |
-| 2            | `2cfcf3a1`                 | `CHANGES_REQUIRED`   | Add an explicit `title = $null` runtime assertion; the existing guard already rejects it             |
-| 3            | Pending test-complete head | Pending fresh review | Complete null/missing/empty/whitespace malformed-title self-test matrix                              |
+| Review round | Commit | Verdict | Findings resolved |
+|---|---|---|---|
+| 1 | `2e32d70c` | `CHANGES_REQUIRED` | Reject null records and missing/blank Pull Request titles instead of treating them as an empty queue |
+| 2 | `2cfcf3a1` | `CHANGES_REQUIRED` | Add an explicit `title = $null` runtime assertion; the existing guard already rejects it |
+| 3 | Pending test-complete head | Pending fresh review | Complete null/missing/empty/whitespace malformed-title self-test matrix |
 
 ## Residual limitations
 
