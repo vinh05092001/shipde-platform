@@ -2,17 +2,17 @@
 
 ## Source-of-truth matrix
 
-| Data                            | Primary source                                     | Notes                               |
-| ------------------------------- | -------------------------------------------------- | ----------------------------------- |
-| Source order/COD expected       | OMS/manual approved source                         | Versioned snapshot                  |
-| Address canonical selection     | User-confirmed Ship Dễ mapping                     | Carrier IDs are adapter mappings    |
-| Pre-shipment availability/quote | Carrier API response for exact account/input       | Time-bound evidence                 |
-| Shipment/waybill result         | Carrier action response plus reconciliation lookup | Unknown outcome remains explicit    |
-| Tracking raw event              | Carrier webhook/poll response                      | Canonical state is derived          |
-| Expected charge                 | Approved actual contract rate version              | Not current public quote by default |
-| Actual charged amount           | Carrier settlement statement                       | Carrier claim, not bank proof       |
-| Actual receipt                  | Bank/payment evidence                              | Batch-level allocation              |
-| Claim acceptance                | Carrier response evidence                          | Separate from payment               |
+| Data | Primary source | Notes |
+|---|---|---|
+| Source order/COD expected | OMS/manual approved source | Versioned snapshot |
+| Address canonical selection | User-confirmed Ship Dễ mapping | Carrier IDs are adapter mappings |
+| Pre-shipment availability/quote | Carrier API response for exact account/input | Time-bound evidence |
+| Shipment/waybill result | Carrier action response plus reconciliation lookup | Unknown outcome remains explicit |
+| Tracking raw event | Carrier webhook/poll response | Canonical state is derived |
+| Expected charge | Approved actual contract rate version | Not current public quote by default |
+| Actual charged amount | Carrier settlement statement | Carrier claim, not bank proof |
+| Actual receipt | Bank/payment evidence | Batch-level allocation |
+| Claim acceptance | Carrier response evidence | Separate from payment |
 
 ## Import lifecycle
 
@@ -75,3 +75,4 @@ Retention periods are configuration plus legal/product policy, not hardcoded. De
 - Removes or irreversibly anonymizes PII when eligible.
 - Is logged with actor, scope, reason and outcome.
 - Never breaks financial lineage without an approved archival representation.
+

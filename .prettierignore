@@ -1,3 +1,4 @@
+# Build & dependency caches
 .next
 out
 build
@@ -10,4 +11,28 @@ coverage
 .temp*
 .git
 .gemini
+
+# Root configs & legacy prototype scripts preserved at baseline freeze (TASK-FOUND-01 allowlist boundary)
+postcss.config.mjs
+tsconfig.json
+scripts/sample-data.ts
+scripts/concierge-audit.ts
+scripts/ai/
+
+# Specification markdown & schema contracts governed by dedicated Python & JSON schema validators
+docs/product-spec/docs/
+docs/product-spec/contracts/
+docs/product-spec/.github/
+docs/product-spec/README.md
+docs/AGENT_PROGRESS.md
+docs/FINAL_HANDOFF.md
+docs/IMPLEMENTATION_PLAN.md
+docs/SOURCE_LOCK.md
+docs/UX_AUDIT.md
+docs/backoffice-remediation-plan.md
+.github/
+AGENTS.md
+
+# Prior completed work items preserved without out-of-scope edits
+docs/product-spec/work-items/README.md
 docs/product-spec/work-items/TASK-AI-*.md

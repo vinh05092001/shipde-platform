@@ -50,3 +50,4 @@
 ## ADR template
 
 New ADRs state context, considered options, decision, consequences, status and affected IDs.
+

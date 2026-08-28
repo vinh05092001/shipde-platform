@@ -21,6 +21,11 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Install Pinned Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.24.0"
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
       - name: Run Clean Secret Scan
         run: npm run security:secrets
       - name: Verify Secret Scan Negative Proof

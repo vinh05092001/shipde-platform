@@ -30,3 +30,4 @@
     "line_type": { "type": "string", "enum": ["CHARGE", "ADJUSTMENT", "REVERSAL"] }
   }
 }
+

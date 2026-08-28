@@ -39,3 +39,4 @@ Observed public capabilities include:
 - Unknown status/failure code.
 
 Endpoint paths are not duplicated here as immutable truth; the adapter configuration and tests are pinned to the provider version verified at implementation time.
+

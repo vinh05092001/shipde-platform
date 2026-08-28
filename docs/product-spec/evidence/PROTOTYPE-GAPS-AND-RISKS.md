@@ -1,7 +1,7 @@
 # Ship Dễ — Prototype Gaps and Risks Assessment
 
-**Work Item:** `TASK-FOUND-01`  
-**Target Consumer:** `TASK-FOUND-02` (Monorepo migration), `TASK-FOUND-03` (Backend & DB scaffolding), and Codex Reviewer  
+**Work Item:** `TASK-FOUND-01`
+**Target Consumer:** `TASK-FOUND-02` (Monorepo migration), `TASK-FOUND-03` (Backend & DB scaffolding), and Codex Reviewer
 **Execution Date:** 2026-08-27
 
 ---

@@ -16,7 +16,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - name: Validate product specification
         run: cd docs/product-spec && python3 scripts/validate_docs.py
       - name: Validate Pull Request contract

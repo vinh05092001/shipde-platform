@@ -27,3 +27,4 @@ Official public site: https://jtexpress.vn/
 - Sandbox, rate limits, idempotency and support escalation.
 
 Production capability switches remain disabled until partner contract tests pass.
+

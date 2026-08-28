@@ -8,25 +8,25 @@ Legend:
 - P: PARTNER_CONFIRMATION_REQUIRED.
 - U: UNVERIFIED; implement interface stub and manual fallback only.
 
-| Capability                  |                              GHN |                     GHTK |    Viettel Post |                    J&T Vietnam |
-| --------------------------- | -------------------------------: | -----------------------: | --------------: | -----------------------------: |
-| Address master/mapping      |                                O |                O/partial |               P |                              P |
-| Serviceability/service list |                                O |  O/solution/fee response |               P |                              P |
-| Live fee quote              |                                O |                        O |               P | Public web only; partner API P |
-| EDD/SLA                     |                                O |     P/response-dependent |               P |                              P |
-| Create shipment             |                                O |                        O |               P |                              P |
-| Lookup by client reference  |                                O |                        P |               P |                              P |
-| Update shipment             |             O/status constrained |                        P |               P |                              P |
-| Cancel before pickup        |                                O |                        O |               P |                              P |
-| Label                       |                                O |                        O |               P |                              P |
-| Pickup/shift                |                                O | Account/flow dependent P |               P |                              P |
-| Tracking polling            |                                O |                        O |               P | Public tracking; partner API P |
-| Status webhook              |                                O |                        O |               P |                              P |
-| Update COD                  |             O/status constrained |                        P |               P |                              P |
-| Redelivery                  |                                O |                        P |               P |                              P |
-| Return command              |                                O |                        P |               P |                              P |
-| Settlement API              |                  U/file fallback |          U/file fallback | U/file fallback |                U/file fallback |
-| Claim/ticket API            | O ticket surface; business fit P |                        P |               P |                              P |
+| Capability | GHN | GHTK | Viettel Post | J&T Vietnam |
+|---|---:|---:|---:|---:|
+| Address master/mapping | O | O/partial | P | P |
+| Serviceability/service list | O | O/solution/fee response | P | P |
+| Live fee quote | O | O | P | Public web only; partner API P |
+| EDD/SLA | O | P/response-dependent | P | P |
+| Create shipment | O | O | P | P |
+| Lookup by client reference | O | P | P | P |
+| Update shipment | O/status constrained | P | P | P |
+| Cancel before pickup | O | O | P | P |
+| Label | O | O | P | P |
+| Pickup/shift | O | Account/flow dependent P | P | P |
+| Tracking polling | O | O | P | Public tracking; partner API P |
+| Status webhook | O | O | P | P |
+| Update COD | O/status constrained | P | P | P |
+| Redelivery | O | P | P | P |
+| Return command | O | P | P | P |
+| Settlement API | U/file fallback | U/file fallback | U/file fallback | U/file fallback |
+| Claim/ticket API | O ticket surface; business fit P | P | P | P |
 
 ## Interpretation
 
@@ -49,3 +49,4 @@ For every P capability obtain:
 8. Rate limits/SLA/support channel.
 9. Contractual permission to store/process returned data.
 10. Sandbox test evidence stored in the decision log.
+

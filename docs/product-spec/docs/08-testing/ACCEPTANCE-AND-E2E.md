@@ -99,3 +99,4 @@ Two transactions fund one batch and one transaction funds another batch → allo
 ### E2E-10 Tenant attack
 
 User changes resource UUID to another tenant → backend returns not-found/forbidden without leaking metadata; event audited.
+

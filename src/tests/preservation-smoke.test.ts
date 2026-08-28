@@ -1,9 +1,12 @@
 // ============================================================================
 // Ship Dễ — Bộ Kiểm Thử Khói Bảo Toàn Năng Lực (Preservation Smoke Harness)
 // Work Item: TASK-FOUND-01 (Baseline Freeze & Protection)
-// Xác minh sự hiện diện của 10 bề mặt điều hành trọng yếu & các động cơ nghiệp vụ lõi.
+// Xác minh sự hiện diện của 10 bề mặt điều hành trọng yếu, định tuyến app shell, & các động cơ nghiệp vụ lõi.
 // Đảm bảo không thất thoát năng lực hoặc giao diện khi thực hiện di chuyển TASK-FOUND-02.
 // ============================================================================
+
+import * as fs from 'fs';
+import * as path from 'path';
 
 import { LoginView } from '../components/auth/LoginView';
 import { RegisterView } from '../components/auth/RegisterView';
@@ -48,7 +51,7 @@ import {
   DiscrepancyResolution,
 } from '../types/domain';
 
-interface SmokeTestResult {
+export interface SmokeTestResult {
   surfaceId: string;
   surfaceName: string;
   category: string;
@@ -57,13 +60,77 @@ interface SmokeTestResult {
   notes: string;
 }
 
-export function runPreservationSmokeTests(simulateNegativeFailure: boolean = false): {
+export interface AppShellNavigationSpec {
+  hasAuthGate: boolean;
+  roleTabs: Record<string, string[]>;
+  viewportComponents: Record<string, string>;
+  modalMounts: string[];
+}
+
+/**
+ * Parse and validate the committed app shell navigation structure from page.tsx.
+ */
+export function analyzeAppShellSource(pageSource: string): AppShellNavigationSpec {
+  // 1. Auth Gate
+  const hasAuthGate =
+    pageSource.includes('!isAuthenticated') &&
+    pageSource.includes('<LoginView') &&
+    pageSource.includes('<RegisterView');
+
+  // 2. Role tab mapping
+  const roleTabs: Record<string, string[]> = {};
+  const roleBlocks = ['OPS_CSKH', 'ACCOUNTANT', 'WAREHOUSE', 'BACKOFFICE', 'OWNER'];
+
+  for (const role of roleBlocks) {
+    const roleRegex = new RegExp(`case\\s+'${role}':[\\s\\S]*?return\\s*\\[([\\s\\S]*?)\\];`);
+    const defaultRegex =
+      role === 'OWNER' ? /case\s+'OWNER':[\s\S]*?default:[\s\S]*?return\s*\[([\s\S]*?)\];/ : null;
+
+    const match =
+      pageSource.match(roleRegex) || (defaultRegex ? pageSource.match(defaultRegex) : null);
+    if (match) {
+      const tabIds: string[] = [];
+      const idRegex = /id:\s*['"]([^'"]+)['"]/g;
+      let idMatch: RegExpExecArray | null;
+      while ((idMatch = idRegex.exec(match[1])) !== null) {
+        tabIds.push(idMatch[1]);
+      }
+      roleTabs[role] = tabIds;
+    }
+  }
+
+  // 3. Viewport conditional component rendering
+  const viewportComponents: Record<string, string> = {};
+  const viewportRegex = /activeTab\s*===\s*['"]([^'"]+)['"]\s*&&\s*\(?\s*<([A-Za-z0-9]+)/g;
+  let vpMatch: RegExpExecArray | null;
+  while ((vpMatch = viewportRegex.exec(pageSource)) !== null) {
+    viewportComponents[vpMatch[1]] = vpMatch[2];
+  }
+
+  // 4. Modal mounts
+  const modalMounts: string[] = [];
+  if (pageSource.includes('<CreateOrderModal')) modalMounts.push('CreateOrderModal');
+  if (pageSource.includes('<UploadStatementModal')) modalMounts.push('UploadStatementModal');
+  if (pageSource.includes('<UnifiedTrackingModal')) modalMounts.push('UnifiedTrackingModal');
+
+  return {
+    hasAuthGate,
+    roleTabs,
+    viewportComponents,
+    modalMounts,
+  };
+}
+
+export function runPreservationSmokeTests(customPageSource?: string): {
   totalSurfaces: number;
   passedCount: number;
   failedCount: number;
   results: SmokeTestResult[];
 } {
   const results: SmokeTestResult[] = [];
+  const pagePath = path.join(__dirname, '../app/page.tsx');
+  const pageSource = customPageSource ?? fs.readFileSync(pagePath, 'utf-8');
+  const shellSpec = analyzeAppShellSource(pageSource);
 
   const recordSmoke = (
     surfaceId: string,
@@ -77,29 +144,32 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   };
 
   // --------------------------------------------------------------------------
-  // 1. Authentication Entry Surface (UI + Context + Types)
+  // 1. Authentication Entry Surface (UI + Context + App Shell Auth Gate)
   // --------------------------------------------------------------------------
   try {
     const hasLoginView = typeof LoginView === 'function';
     const hasRegisterView = typeof RegisterView === 'function';
     const hasAuthProvider = typeof AuthProvider === 'function';
     const hasUseAuth = typeof useAuth === 'function';
+    const hasAuthGate = shellSpec.hasAuthGate;
 
     const authSurfacesValid =
-      hasLoginView && hasRegisterView && hasAuthProvider && hasUseAuth && !simulateNegativeFailure;
+      hasLoginView && hasRegisterView && hasAuthProvider && hasUseAuth && hasAuthGate;
 
     recordSmoke(
       'SMOKE-AUTH-01',
-      'Cổng xác thực & phân quyền (LoginView, RegisterView, AuthContext)',
+      'Cổng xác thực & phân quyền (LoginView, RegisterView, AuthContext, App Shell Gate)',
       'Authentication',
       'DEMO_MOCK',
       authSurfacesValid,
-      'Sẵn sàng 4 vai trò chuẩn (OWNER, OPS_CSKH, WAREHOUSE, ACCOUNTANT) và component Login/Register/AuthContext'
+      authSurfacesValid
+        ? 'Sẵn sàng 4 vai trò chuẩn (OWNER, OPS_CSKH, WAREHOUSE, ACCOUNTANT), AuthContext, và cổng chặn unauthenticated trong page.tsx'
+        : 'Lỗi: Bề mặt xác thực hoặc cổng điều hướng unauthenticated bị thiếu trong page.tsx'
     );
   } catch (err: any) {
     recordSmoke(
       'SMOKE-AUTH-01',
-      'Cổng xác thực & phân quyền',
+      'Cổng xác thực',
       'Authentication',
       'DEMO_MOCK',
       false,
@@ -108,20 +178,29 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   }
 
   // --------------------------------------------------------------------------
-  // 2. Navigation Shell & Role-Aware App Shell Surface (UI Shell)
+  // 2. Navigation Shell & Role-Aware App Shell Surface (UI Shell + 5 Roles Routing)
   // --------------------------------------------------------------------------
   try {
     const hasAppShell = typeof ShipDeConsoleApp === 'function';
     const hasAdminTab = typeof AdminSystemTab === 'function';
-    const shellValid = hasAppShell && hasAdminTab && !simulateNegativeFailure;
+    const hasAllRolesMapped =
+      shellSpec.roleTabs['OWNER']?.length > 0 &&
+      shellSpec.roleTabs['OPS_CSKH']?.length > 0 &&
+      shellSpec.roleTabs['ACCOUNTANT']?.length > 0 &&
+      shellSpec.roleTabs['WAREHOUSE']?.length > 0 &&
+      shellSpec.roleTabs['BACKOFFICE']?.length > 0;
+
+    const shellValid = hasAppShell && hasAdminTab && hasAllRolesMapped;
 
     recordSmoke(
       'SMOKE-SHELL-01',
-      'Khung điều hướng trung tâm & Điều phối vai trò (ShipDeConsoleApp, AdminSystemTab)',
+      'Khung điều hướng trung tâm & Điều phối vai trò (ShipDeConsoleApp, AdminSystemTab, 5 Role Tabsets)',
       'App Shell',
       'DEMO_MOCK',
       shellValid,
-      'Khung ứng dụng App Router sẵn sàng điều phối 9 không gian làm việc'
+      shellValid
+        ? 'Khung ứng dụng App Router sẵn sàng điều phối 5 vai trò vận hành và 9 không gian làm việc'
+        : 'Lỗi: Thiếu cấu hình định tuyến cho một hoặc nhiều vai trò vận hành trong getTabsForRole'
     );
   } catch (err: any) {
     recordSmoke(
@@ -135,10 +214,11 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   }
 
   // --------------------------------------------------------------------------
-  // 3. Control Tower / Dashboard Surface (UI Component + Metric Calculator)
+  // 3. Control Tower / Dashboard Surface (UI Component + Metric Calculator + Viewport)
   // --------------------------------------------------------------------------
   try {
     const hasDashboardUI = typeof ControlTowerTab === 'function';
+    const isDashboardReachable = shellSpec.viewportComponents['dashboard'] === 'ControlTowerTab';
     const metrics = getUnifiedMetrics();
     const hasCoreMetrics =
       metrics.totalShipments >= 50 &&
@@ -147,15 +227,17 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
       metrics.openDiscrepanciesCount >= 0 &&
       metrics.totalDiscrepancyAmount >= 0;
 
-    const dashValid = hasDashboardUI && hasCoreMetrics && !simulateNegativeFailure;
+    const dashValid = hasDashboardUI && isDashboardReachable && hasCoreMetrics;
 
     recordSmoke(
       'SMOKE-DASH-01',
-      'Bảng điều khiển Tháp chỉ huy (ControlTowerTab + Control Tower Metrics)',
+      'Bảng điều khiển Tháp chỉ huy (ControlTowerTab + Viewport Reachability + Control Tower Metrics)',
       'Dashboard',
       'CORE_LOGIC',
       dashValid,
-      `Component ControlTowerTab sẵn sàng, chỉ số dẫn xuất: ${metrics.totalShipments} vận đơn, ${metrics.openExceptionsCount} sự cố mở, ${metrics.openDiscrepanciesCount} khoản lệch (${metrics.totalDiscrepancyAmount.toLocaleString()} đ)`
+      dashValid
+        ? `Component ControlTowerTab gắn đúng vào viewport 'dashboard', chỉ số: ${metrics.totalShipments} vận đơn, ${metrics.openExceptionsCount} sự cố mở, ${metrics.openDiscrepanciesCount} khoản lệch`
+        : 'Lỗi: ControlTowerTab không được gắn vào nhánh hiển thị viewport activeTab === "dashboard"'
     );
   } catch (err: any) {
     recordSmoke(
@@ -174,6 +256,8 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   try {
     const hasShipmentListUI = typeof ShipmentListTab === 'function';
     const hasTrackingModalUI = typeof UnifiedTrackingModal === 'function';
+    const isShipmentReachable = shellSpec.viewportComponents['shipments'] === 'ShipmentListTab';
+    const isTrackingModalMounted = shellSpec.modalMounts.includes('UnifiedTrackingModal');
     const hasShipments = MASTER_SHIPMENTS && MASTER_SHIPMENTS.length >= 50;
     const sampleShipment = MASTER_SHIPMENTS[0];
     const hasRequiredFields =
@@ -187,17 +271,20 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
     const shipmentSurfaceValid =
       hasShipmentListUI &&
       hasTrackingModalUI &&
+      isShipmentReachable &&
+      isTrackingModalMounted &&
       hasShipments &&
-      hasRequiredFields &&
-      !simulateNegativeFailure;
+      hasRequiredFields;
 
     recordSmoke(
       'SMOKE-SHP-01',
-      'Danh sách vận đơn & Tra cứu hành trình (ShipmentListTab + UnifiedTrackingModal)',
+      'Danh sách vận đơn & Tra cứu hành trình (ShipmentListTab + UnifiedTrackingModal + Reachability)',
       'Shipments',
       'DEMO_MOCK',
       Boolean(shipmentSurfaceValid),
-      `Components ShipmentListTab + UnifiedTrackingModal sẵn sàng với ${MASTER_SHIPMENTS.length} vận đơn mẫu`
+      shipmentSurfaceValid
+        ? `ShipmentListTab gắn đúng viewport 'shipments' và UnifiedTrackingModal gắn modal root với ${MASTER_SHIPMENTS.length} vận đơn mẫu`
+        : 'Lỗi: ShipmentListTab hoặc UnifiedTrackingModal không được gắn kết trong page.tsx'
     );
   } catch (err: any) {
     recordSmoke('SMOKE-SHP-01', 'Danh sách vận đơn', 'Shipments', 'DEMO_MOCK', false, err.message);
@@ -208,6 +295,7 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   // --------------------------------------------------------------------------
   try {
     const hasCreateOrderUI = typeof CreateOrderModal === 'function';
+    const isCreateOrderMounted = shellSpec.modalMounts.includes('CreateOrderModal');
     const hasPancakeAdapter = typeof PancakePosAdapter === 'function';
 
     const rawOrder = {
@@ -228,15 +316,17 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
       rawOrder.weight_g === 350;
 
     const orderSurfaceValid =
-      hasCreateOrderUI && hasPancakeAdapter && isOrderNormalized && !simulateNegativeFailure;
+      hasCreateOrderUI && isCreateOrderMounted && hasPancakeAdapter && isOrderNormalized;
 
     recordSmoke(
       'SMOKE-ORD-01',
-      'Cổng tiếp nhận & Chuẩn hóa đơn hàng (CreateOrderModal + PancakePosAdapter)',
+      'Cổng tiếp nhận & Chuẩn hóa đơn hàng (CreateOrderModal + App Shell Modal + PancakePosAdapter)',
       'Orders',
       'CORE_LOGIC',
       orderSurfaceValid,
-      'Component CreateOrderModal và PancakePosAdapter sẵn sàng chuẩn hóa đơn hàng'
+      orderSurfaceValid
+        ? 'CreateOrderModal gắn vào App Shell và PancakePosAdapter sẵn sàng chuẩn hóa đơn hàng'
+        : 'Lỗi: CreateOrderModal không được gắn trong app shell hoặc adapter POS bị lỗi'
     );
   } catch (err: any) {
     recordSmoke(
@@ -254,21 +344,24 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   // --------------------------------------------------------------------------
   try {
     const hasWorkboxUI = typeof ExceptionWorkboxTab === 'function';
+    const isWorkboxReachable = shellSpec.viewportComponents['exceptions'] === 'ExceptionWorkboxTab';
     const hasExceptions = MASTER_EXCEPTIONS && MASTER_EXCEPTIONS.length > 0;
     const engine = new ExceptionEngine();
     const deadline = engine.calculateDeadline(new Date(), ExceptionType.DELIVERY_FAIL);
     const hasValidDeadline = deadline instanceof Date && deadline.getTime() > Date.now();
 
     const exceptionSurfaceValid =
-      hasWorkboxUI && hasExceptions && hasValidDeadline && !simulateNegativeFailure;
+      hasWorkboxUI && isWorkboxReachable && hasExceptions && hasValidDeadline;
 
     recordSmoke(
       'SMOKE-EXC-01',
-      'Hộp việc xử lý sự cố & Tính toán hạn SLA (ExceptionWorkboxTab + ExceptionEngine)',
+      'Hộp việc xử lý sự cố & Tính toán hạn SLA (ExceptionWorkboxTab + Viewport Reachability + ExceptionEngine)',
       'Exceptions',
       'CORE_LOGIC',
       Boolean(exceptionSurfaceValid),
-      `Component ExceptionWorkboxTab sẵn sàng (${MASTER_EXCEPTIONS.length} hồ sơ), thuật toán tính hạn SLA (DELIVERY_FAIL = +12h) hoạt động chính xác`
+      exceptionSurfaceValid
+        ? `ExceptionWorkboxTab gắn đúng viewport 'exceptions' (${MASTER_EXCEPTIONS.length} hồ sơ), tính hạn SLA (DELIVERY_FAIL = +12h) chính xác`
+        : 'Lỗi: ExceptionWorkboxTab không được gắn vào viewport activeTab === "exceptions"'
     );
   } catch (err: any) {
     recordSmoke('SMOKE-EXC-01', 'Hộp việc sự cố', 'Exceptions', 'CORE_LOGIC', false, err.message);
@@ -280,6 +373,8 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   try {
     const hasReconUI = typeof ReconciliationTab === 'function';
     const hasUploadModalUI = typeof UploadStatementModal === 'function';
+    const isReconReachable = shellSpec.viewportComponents['reconciliation'] === 'ReconciliationTab';
+    const isUploadMounted = shellSpec.modalMounts.includes('UploadStatementModal');
     const reconEngine = new ReconciliationEngine();
     const rateCard = {
       id: 'rc_smoke',
@@ -346,17 +441,20 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
     const reconPassed =
       hasReconUI &&
       hasUploadModalUI &&
+      isReconReachable &&
+      isUploadMounted &&
       reconResult &&
-      reconResult.discrepancies.length > 0 &&
-      !simulateNegativeFailure;
+      reconResult.discrepancies.length > 0;
 
     recordSmoke(
       'SMOKE-REC-01',
-      'Đối soát tự động & Quản lý sai lệch (ReconciliationTab + UploadStatementModal + ReconciliationEngine)',
+      'Đối soát tự động & Quản lý sai lệch (ReconciliationTab + UploadStatementModal + Viewport + ReconciliationEngine)',
       'Reconciliation',
       'CORE_LOGIC',
       reconPassed,
-      `Components ReconciliationTab + UploadStatementModal sẵn sàng, phát hiện đúng ${reconResult.discrepancies.length} khoản lệch (D1 lệch cân, D2 lệch cước)`
+      reconPassed
+        ? `ReconciliationTab gắn đúng viewport 'reconciliation' và UploadStatementModal gắn modal root, phát hiện đúng ${reconResult.discrepancies.length} khoản lệch (D1/D2)`
+        : 'Lỗi: ReconciliationTab hoặc UploadStatementModal không được gắn kết trong app shell page.tsx'
     );
   } catch (err: any) {
     recordSmoke(
@@ -370,10 +468,11 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   }
 
   // --------------------------------------------------------------------------
-  // 8. Three Ledgers Surface (UI Tab + Ledger Calculator Engine)
+  // 8. Three Ledgers Surface (UI Tab + Viewport + Ledger Calculator Engine)
   // --------------------------------------------------------------------------
   try {
     const hasThreeLedgersUI = typeof ThreeLedgersTab === 'function';
+    const isLedgersReachable = shellSpec.viewportComponents['three_ledgers'] === 'ThreeLedgersTab';
     const calc = new ThreeLedgersCalculator();
     const report = calc.generateReport(
       'merc_test',
@@ -400,20 +499,22 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
 
     const ledgersValid =
       hasThreeLedgersUI &&
+      isLedgersReachable &&
       report &&
       report.ledger1_real_cash &&
       report.ledger2_rescued_orders &&
       report.ledger3_control_metrics &&
-      report.ledger1_real_cash.total_recovered_amount === 50000 &&
-      !simulateNegativeFailure;
+      report.ledger1_real_cash.total_recovered_amount === 50000;
 
     recordSmoke(
       'SMOKE-LED-01',
-      'Báo cáo Ba Sổ Giá Trị độc lập (ThreeLedgersTab + ThreeLedgersCalculator)',
+      'Báo cáo Ba Sổ Giá Trị độc lập (ThreeLedgersTab + Viewport Reachability + ThreeLedgersCalculator)',
       'Three Ledgers',
       'CORE_LOGIC',
       Boolean(ledgersValid),
-      `Component ThreeLedgersTab sẵn sàng, Sổ 1 (${report.ledger1_real_cash.total_recovered_amount.toLocaleString()} đ thực nhận), Sổ 2 (${report.ledger2_rescued_orders.total_return_fee_saved.toLocaleString()} đ), Sổ 3 (${report.ledger3_control_metrics.total_active_shipments} đơn)`
+      ledgersValid
+        ? `ThreeLedgersTab gắn đúng viewport 'three_ledgers', Sổ 1 (${report.ledger1_real_cash.total_recovered_amount.toLocaleString()} đ thực nhận), Sổ 2 (${report.ledger2_rescued_orders.total_return_fee_saved.toLocaleString()} đ), Sổ 3 (${report.ledger3_control_metrics.total_active_shipments} đơn)`
+        : 'Lỗi: ThreeLedgersTab không được gắn vào viewport activeTab === "three_ledgers"'
     );
   } catch (err: any) {
     recordSmoke(
@@ -427,11 +528,12 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   }
 
   // --------------------------------------------------------------------------
-  // 9. Returns Surface (UI Tab + Mobile Simulator + Offline Queue Manager)
+  // 9. Returns Surface (UI Tab + Viewport + Offline Queue Manager)
   // --------------------------------------------------------------------------
   try {
     const hasReturnScanUI = typeof ReturnScanTab === 'function';
     const hasMobileSimUI = typeof MobileSimulatorTab === 'function';
+    const isReturnScanReachable = shellSpec.viewportComponents['returns'] === 'ReturnScanTab';
     const offlineManager = new OfflineScanQueueManager();
     const batch = offlineManager.syncOfflineBatch([
       {
@@ -457,17 +559,19 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
     const offlinePassed =
       hasReturnScanUI &&
       hasMobileSimUI &&
+      isReturnScanReachable &&
       batch.newly_created === 1 &&
-      batch.duplicates_skipped === 1 &&
-      !simulateNegativeFailure;
+      batch.duplicates_skipped === 1;
 
     recordSmoke(
       'SMOKE-RET-01',
-      'Bàn quét nhận hàng hoàn & Hàng đợi Offline (ReturnScanTab + MobileSimulatorTab + OfflineScanQueueManager)',
+      'Bàn quét nhận hàng hoàn & Hàng đợi Offline (ReturnScanTab + Viewport Reachability + OfflineScanQueueManager)',
       'Returns',
       'CORE_LOGIC',
       offlinePassed,
-      'Components ReturnScanTab + MobileSimulatorTab sẵn sàng, xử lý 2 lệnh quét trùng -> Tạo đúng 1 biên nhận duy nhất'
+      offlinePassed
+        ? 'ReturnScanTab gắn đúng viewport "returns", xử lý 2 lệnh quét trùng -> Tạo đúng 1 biên nhận duy nhất'
+        : 'Lỗi: ReturnScanTab không được gắn vào viewport activeTab === "returns"'
     );
   } catch (err: any) {
     recordSmoke(
@@ -485,6 +589,7 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
   // --------------------------------------------------------------------------
   try {
     const hasSettingsUI = typeof SettingsWorkspace === 'function';
+    const isSettingsReachable = shellSpec.viewportComponents['settings'] === 'SettingsWorkspace';
     const hasUserMgmtUI = typeof UserManagementTab === 'function';
     const hasShopSettingsUI = typeof ShopSettingsModal === 'function';
     const hasClaimCasesUI = typeof ClaimCasesTab === 'function';
@@ -542,19 +647,21 @@ export function runPreservationSmokeTests(simulateNegativeFailure: boolean = fal
 
     const rbacSurfacePassed =
       hasSettingsUI &&
+      isSettingsReachable &&
       hasUserMgmtUI &&
       hasShopSettingsUI &&
       hasClaimCasesUI &&
-      caughtForbidden &&
-      !simulateNegativeFailure;
+      caughtForbidden;
 
     recordSmoke(
       'SMOKE-RBAC-01',
-      'Cấu hình & Tách quyền tài chính (SettingsWorkspace, UserManagementTab, ShopSettingsModal, MakerCheckerEngine)',
+      'Cấu hình & Tách quyền tài chính (SettingsWorkspace + Viewport Reachability + MakerCheckerEngine)',
       'Settings & RBAC',
       'CORE_LOGIC',
       rbacSurfacePassed,
-      'Components SettingsWorkspace, UserManagementTab, ShopSettingsModal, ClaimCasesTab sẵn sàng; quy tắc tách quyền tài chính chặn thành công người tạo tự duyệt khoản chênh lệch'
+      rbacSurfacePassed
+        ? 'SettingsWorkspace gắn đúng viewport "settings", quy tắc tách quyền tài chính chặn thành công người tạo tự duyệt khoản chênh lệch'
+        : 'Lỗi: SettingsWorkspace không được gắn vào viewport activeTab === "settings" hoặc quy tắc tách quyền tài chính thất bại'
     );
   } catch (err: any) {
     recordSmoke(
@@ -587,8 +694,29 @@ if (require.main === module) {
   console.log('================================================================\n');
 
   if (isNegativeTest) {
-    console.log('⚠️ Chạy chế độ kiểm thử âm tính (Demonstrated Negative Failure Proof)...');
-    const { results, passedCount, totalSurfaces } = runPreservationSmokeTests(true);
+    console.log('⚠️ Chạy kiểm thử âm tính phát hiện bề mặt điều hướng bị gỡ bỏ...');
+    const pagePath = path.join(__dirname, '../app/page.tsx');
+    const realPageSource = fs.readFileSync(pagePath, 'utf-8');
+
+    // Simulate real removal of ExceptionWorkboxTab viewport branch and navigation tab
+    const brokenPageSource = realPageSource
+      .replace(
+        `{activeTab === 'exceptions' && (\n            <ExceptionWorkboxTab\n              exceptions={exceptions}\n              onUpdateException={handleUpdateException}\n              carrierGhnTier={carrierGhnTier}\n            />\n          )}`,
+        `{/* Broken/Removed ExceptionWorkboxTab surface */}`
+      )
+      .replace(
+        `{
+            id: 'exceptions',
+            label: 'Hộp Việc Cứu Đơn',
+            icon: AlertTriangle,
+            count: metrics.openExceptionsCount,
+            countType: 'risk',
+          },`,
+        `/* Removed exceptions tab */`
+      );
+
+    const { results, passedCount, totalSurfaces, failedCount } =
+      runPreservationSmokeTests(brokenPageSource);
 
     for (const r of results) {
       const statusIcon = r.passed ? '✅ PASS' : '❌ FAIL';
@@ -598,18 +726,26 @@ if (require.main === module) {
     }
 
     console.log('\n================================================================');
-    console.log(`KẾT QUẢ KHÓI ÂM TÍNH: ${passedCount}/${totalSurfaces} BỀ MẶT ĐẠT CHUẨN`);
-    console.log('================================================================');
-    console.error(
-      '🚨 VI PHẠM ĐƯỢC PHÁT HIỆN CHÍNH XÁC: Bề mặt bị mất/hỏng gây thất bại kiểm thử khói.'
-    );
-    console.error(
-      '   [AC-FOUND-01-07 Evidence] Đã chứng minh gate kiểm thử khói thoát mã lỗi non-zero (code 1) khi thiếu bề mặt.\n'
-    );
-    process.exit(1);
+    console.log(`KẾT QUẢ KIỂM THỬ ÂM TÍNH: ${passedCount}/${totalSurfaces} BỀ MẶT ĐẠT CHUẨN`);
+    console.log('================================================================\n');
+
+    if (failedCount > 0) {
+      console.error(
+        `🚨 PHÁT HIỆN THẤT BẠI CHÍNH XÁC: Phát hiện ${failedCount} bề mặt điều phối bị mất/gỡ bỏ khỏi app shell navigation!`
+      );
+      console.error(
+        '   [AC-FOUND-01-07 Evidence] Đã chứng minh gate kiểm thử khói thoát mã lỗi non-zero (exit code 1) khi thiếu bề mặt navigation reachability thực tế.\n'
+      );
+      process.exit(1);
+    } else {
+      console.error(
+        '❌ LỖI: Bộ kiểm thử khói KHÔNG phát hiện được bề mặt bị gỡ bỏ trong bài test âm tính!'
+      );
+      process.exit(2);
+    }
   }
 
-  const { results, passedCount, totalSurfaces, failedCount } = runPreservationSmokeTests(false);
+  const { results, passedCount, totalSurfaces, failedCount } = runPreservationSmokeTests();
 
   for (const r of results) {
     const statusIcon = r.passed ? '✅ PASS' : '❌ FAIL';
@@ -625,12 +761,12 @@ if (require.main === module) {
   console.log('================================================================\n');
 
   if (failedCount > 0) {
-    console.error(`❌ Phát hiện ${failedCount} bề mặt bị hỏng hoặc mất liên kết component!`);
+    console.error(`❌ Phát hiện ${failedCount} bề mặt bị hỏng hoặc mất liên kết navigation!`);
     process.exit(1);
   }
 
   console.log(
-    '✅ Hoàn thành: Toàn bộ 10 bề mặt điều hành trọng yếu & động cơ nghiệp vụ được bảo toàn nguyên vẹn.'
+    '✅ Hoàn thành: Toàn bộ 10 bề mặt điều hành trọng yếu, định tuyến navigation & động cơ nghiệp vụ được bảo toàn nguyên vẹn.'
   );
   process.exit(0);
 }

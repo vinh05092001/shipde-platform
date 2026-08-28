@@ -199,35 +199,6 @@ if (require.main === module) {
   }
   console.log('');
 
-  if (isNegativeTest) {
-    console.log('🧪 Chạy kiểm thử âm tính (Demonstrated Negative Failure Proof)...');
-    const tokenHeader = ['ghn', 'live'].join('_');
-    const fakeSecretContent = `// Temporary negative test fixture\nconst carrierLiveKey = "${tokenHeader}_98421039841298412";\n`;
-    const tempFile = path.join(process.cwd(), '.temp-secret-negative-fixture.tmp');
-    fs.writeFileSync(tempFile, fakeSecretContent, 'utf-8');
-
-    try {
-      const findings = scanFile(tempFile, config.rules);
-      if (findings.length > 0) {
-        console.error(
-          `🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XÁC: Phát hiện [${findings[0].ruleId}] "${findings[0].description}" tại dòng ${findings[0].line}`
-        );
-        console.error(
-          '   [AC-FOUND-01-06 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện fixture rò rỉ secret.\n'
-        );
-        // Explicit non-zero exit to fulfill AC-FOUND-01-06 requirement
-        process.exit(1);
-      } else {
-        console.error('❌ LỖI: Bộ quét KHÔNG phát hiện được vi phạm trong bài test âm tính!');
-        process.exit(2);
-      }
-    } finally {
-      if (fs.existsSync(tempFile)) {
-        fs.unlinkSync(tempFile);
-      }
-    }
-  }
-
   // Check if native gitleaks CLI is installed
   let gitleaksAvailable = false;
   try {
@@ -235,6 +206,58 @@ if (require.main === module) {
     gitleaksAvailable = true;
   } catch {
     gitleaksAvailable = false;
+  }
+
+  if (isNegativeTest) {
+    console.log('🧪 Chạy kiểm thử âm tính (Demonstrated Negative Failure Proof)...');
+    const tokenHeader = ['ghn', 'live'].join('_');
+    const fakeSecretContent = `// Temporary negative test fixture\nconst carrierLiveKey = "${tokenHeader}_98421039841298412";\n`;
+    const tempFile = path.join(process.cwd(), 'test-negative-secret-fixture.js');
+    fs.writeFileSync(tempFile, fakeSecretContent, 'utf-8');
+
+    let detected = false;
+    let findingDetails = '';
+
+    try {
+      if (gitleaksAvailable) {
+        try {
+          execSync('gitleaks dir . --config .gitleaks.toml --no-git --redact --verbose', {
+            stdio: 'pipe',
+          });
+          detected = false;
+        } catch (err: any) {
+          detected = true;
+          findingDetails =
+            err.stdout?.toString() ||
+            err.stderr?.toString() ||
+            'Phát hiện pattern secret qua Gitleaks native binary';
+        }
+      } else {
+        const findings = scanFile(tempFile, config.rules);
+        if (findings.length > 0) {
+          detected = true;
+          findingDetails = `Phát hiện [${findings[0].ruleId}] "${findings[0].description}" tại dòng ${findings[0].line}`;
+        }
+      }
+    } finally {
+      // Guaranteed cleanup before any exit
+      if (fs.existsSync(tempFile)) {
+        try {
+          fs.unlinkSync(tempFile);
+        } catch {}
+      }
+    }
+
+    if (detected) {
+      console.error(`🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XÁC: ${findingDetails}`);
+      console.error(
+        '   [AC-FOUND-01-06 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện fixture rò rỉ secret.\n'
+      );
+      process.exit(1);
+    } else {
+      console.error('❌ LỖI: Bộ quét KHÔNG phát hiện được vi phạm trong bài test âm tính!');
+      process.exit(2);
+    }
   }
 
   if (gitleaksAvailable) {

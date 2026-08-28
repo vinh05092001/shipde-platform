@@ -11,8 +11,6 @@ paths = [
   '''package-lock\.json$''',
   '''\.gitleaks\.toml$''',
   '''scripts[\\/]verify-secrets\.ts$''',
-  '''^\.temp''',
-  '''\.tmp$''',
 ]
 
 [[rules]]

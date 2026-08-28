@@ -12,12 +12,33 @@ const GAPS_DOC_PATH = path.join(ROOT, 'docs/product-spec/evidence/PROTOTYPE-GAPS
 
 const VALID_CLASSIFICATIONS = new Set(['REAL', 'PARTIAL', 'DEMO_ONLY', 'ABSENT']);
 
+function getDirectFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => path.join(dir, e.name));
+}
+
+function getAllFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isFile()) files.push(full);
+    else if (e.isDirectory()) files.push(...getAllFiles(full));
+  }
+  return files;
+}
+
 export function validateInventory(): {
   success: boolean;
   totalCatalog: number;
   totalInventory: number;
   classifications: Record<string, number>;
   prismaModelsCount: number;
+  areaValidations: { area: string; declared: number; actual: number }[];
   errors: string[];
 } {
   const errors: string[] = [];
@@ -132,12 +153,79 @@ export function validateInventory(): {
     );
   }
 
+  // 6. Verify Tracked Application Areas table file counts against actual disk filesystem
+  const areaValidations: { area: string; declared: number; actual: number }[] = [];
+
+  const areaCalculators: Record<string, () => number> = {
+    'App Routes & Shell': () => getDirectFiles(path.join(ROOT, 'src/app')).length,
+    'UI Tab Workspaces': () => {
+      const compFiles = getDirectFiles(path.join(ROOT, 'src/components'));
+      return compFiles.filter((f) => {
+        const b = path.basename(f);
+        return b.endsWith('Tab.tsx') || b === 'SettingsWorkspace.tsx';
+      }).length;
+    },
+    'UI Modals & Forms': () => {
+      const compModals = getDirectFiles(path.join(ROOT, 'src/components')).filter((f) =>
+        path.basename(f).endsWith('Modal.tsx')
+      );
+      const formFiles = getDirectFiles(path.join(ROOT, 'src/components/forms'));
+      return compModals.length + formFiles.length;
+    },
+    'UI Primitives': () => getDirectFiles(path.join(ROOT, 'src/components/ui')).length,
+    'Auth UI': () => getDirectFiles(path.join(ROOT, 'src/components/auth')).length,
+    'UI Mock Data & Types': () => {
+      const compFiles = getDirectFiles(path.join(ROOT, 'src/components'));
+      return compFiles.filter((f) => {
+        const b = path.basename(f);
+        return b === 'mock-data.ts' || b === 'types.ts';
+      }).length;
+    },
+    'Context & State': () => getDirectFiles(path.join(ROOT, 'src/context')).length,
+    'Core Domain Engines': () => getDirectFiles(path.join(ROOT, 'src/core')).length,
+    Adapters: () => getDirectFiles(path.join(ROOT, 'src/adapters')).length,
+    'Server & In-Memory DB': () => getDirectFiles(path.join(ROOT, 'src/server')).length,
+    'API Route Handlers': () =>
+      getAllFiles(path.join(ROOT, 'src/app/api')).filter((f) => path.basename(f) === 'route.ts')
+        .length,
+    'Data Stores & Services': () => getDirectFiles(path.join(ROOT, 'src/services')).length,
+    'Types & Error Catalog': () => getDirectFiles(path.join(ROOT, 'src/types')).length,
+    'Database Schema': () => getDirectFiles(path.join(ROOT, 'prisma')).length,
+    'Verification & Tests': () => getDirectFiles(path.join(ROOT, 'src/tests')).length,
+    'Automation & Scripts': () => getAllFiles(path.join(ROOT, 'scripts')).length,
+  };
+
+  const areaRowRegex = /\|\s*\*\*([^*]+)\*\*\s*\|\s*`([^`]+)`[^|]*\|\s*(\d+)\s*\|/g;
+  let areaMatch: RegExpExecArray | null;
+
+  while ((areaMatch = areaRowRegex.exec(inventoryContent)) !== null) {
+    const areaName = areaMatch[1].trim();
+    const declaredCount = Number(areaMatch[3]);
+
+    if (areaCalculators[areaName]) {
+      const actualCount = areaCalculators[areaName]();
+      areaValidations.push({ area: areaName, declared: declaredCount, actual: actualCount });
+      if (declaredCount !== actualCount) {
+        errors.push(
+          `Area "${areaName}" declares ${declaredCount} files in inventory table, but disk has ${actualCount} files`
+        );
+      }
+    }
+  }
+
+  if (areaValidations.length < Object.keys(areaCalculators).length) {
+    errors.push(
+      `Expected ${Object.keys(areaCalculators).length} application areas in inventory table, found ${areaValidations.length}`
+    );
+  }
+
   return {
     success: errors.length === 0,
     totalCatalog: catalogIds.size,
     totalInventory: inventoryIds.size,
     classifications: classificationCounts,
     prismaModelsCount: actualModelCount,
+    areaValidations,
     errors,
   };
 }
@@ -157,6 +245,15 @@ if (require.main === module) {
   console.log(` - DEMO_ONLY: ${result.classifications.DEMO_ONLY || 0}`);
   console.log(` - ABSENT:    ${result.classifications.ABSENT || 0}\n`);
 
+  console.log('Kiểm toán số lượng tệp theo từng vùng ứng dụng (Tracked Areas):');
+  for (const a of result.areaValidations) {
+    const matchIcon = a.declared === a.actual ? '✓' : '✗';
+    console.log(
+      ` - ${matchIcon} [${a.area}]: Khai báo ${a.declared} tệp | Thực tế ${a.actual} tệp`
+    );
+  }
+  console.log('');
+
   if (!result.success) {
     console.error('❌ Phát hiện lỗi trong bảng phân loại:');
     for (const err of result.errors) {
@@ -166,7 +263,7 @@ if (require.main === module) {
   }
 
   console.log(
-    '✅ Hoàn hảo: Tất cả 130 tính năng được định danh chính xác 1:1, khớp 100% tóm tắt và 17 mô hình Prisma!\n'
+    '✅ Hoàn hảo: Tất cả 130 tính năng, 17 mô hình Prisma, và 16 vùng ứng dụng khớp 100% với cây mã nguồn!\n'
   );
   process.exit(0);
 }

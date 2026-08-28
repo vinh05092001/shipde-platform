@@ -2,21 +2,21 @@
 
 ## Canonical error classes
 
-| Code                     | Meaning                             | Retry                                     |
-| ------------------------ | ----------------------------------- | ----------------------------------------- |
-| VALIDATION_ERROR         | Invalid user/input data             | After correction                          |
-| FORBIDDEN                | Permission/scope denied             | No                                        |
-| CONFLICT                 | Version/state/idempotency conflict  | Re-fetch                                  |
-| CARRIER_UNSUPPORTED      | Explicit capability/route rejection | No until input/config changes             |
-| CARRIER_AUTH_REQUIRED    | Invalid/insufficient credentials    | After account fix                         |
-| CARRIER_RATE_LIMITED     | Provider limit                      | Scheduled retry per header/policy         |
-| CARRIER_TIMEOUT          | No timely response                  | Reads may retry; commands reconcile first |
-| CARRIER_UNAVAILABLE      | Provider outage/circuit open        | Deferred retry/manual                     |
-| CARRIER_RESPONSE_INVALID | Schema/unexpected response          | Quarantine and adapter incident           |
-| COMMAND_OUTCOME_UNKNOWN  | External effect may have occurred   | Remote reconciliation only                |
-| DATA_INCOMPLETE          | Evidence missing for a rule         | Add data                                  |
-| RULE_NOT_APPROVED        | Rule cannot support conclusion      | Approve/fix version                       |
-| IMPORT_BLOCKED           | Key/control validation failed       | Correct revision                          |
+| Code | Meaning | Retry |
+|---|---|---|
+| VALIDATION_ERROR | Invalid user/input data | After correction |
+| FORBIDDEN | Permission/scope denied | No |
+| CONFLICT | Version/state/idempotency conflict | Re-fetch |
+| CARRIER_UNSUPPORTED | Explicit capability/route rejection | No until input/config changes |
+| CARRIER_AUTH_REQUIRED | Invalid/insufficient credentials | After account fix |
+| CARRIER_RATE_LIMITED | Provider limit | Scheduled retry per header/policy |
+| CARRIER_TIMEOUT | No timely response | Reads may retry; commands reconcile first |
+| CARRIER_UNAVAILABLE | Provider outage/circuit open | Deferred retry/manual |
+| CARRIER_RESPONSE_INVALID | Schema/unexpected response | Quarantine and adapter incident |
+| COMMAND_OUTCOME_UNKNOWN | External effect may have occurred | Remote reconciliation only |
+| DATA_INCOMPLETE | Evidence missing for a rule | Add data |
+| RULE_NOT_APPROVED | Rule cannot support conclusion | Approve/fix version |
+| IMPORT_BLOCKED | Key/control validation failed | Correct revision |
 
 ## Idempotency
 
@@ -55,3 +55,4 @@ Per carrier account and capability:
 - Half-open: bounded probe.
 
 An account auth failure does not open the carrier globally. A provider incident does not disable unrelated carriers.
+

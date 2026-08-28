@@ -29,15 +29,15 @@
 
 ## Acceptance evidence
 
-| AC/Test ID | Result      | Automated evidence | Visual/manual evidence |
-| ---------- | ----------- | ------------------ | ---------------------- |
-| <ID>       | <PASS/FAIL> | <test/file>        | <screenshot/log/N/A>   |
+| AC/Test ID | Result | Automated evidence | Visual/manual evidence |
+|---|---|---|---|
+| <ID> | <PASS/FAIL> | <test/file> | <screenshot/log/N/A> |
 
 ## Verification
 
-| Command   | Result      | Evidence/notes |
-| --------- | ----------- | -------------- |
-| <command> | <PASS/FAIL> | <summary>      |
+| Command | Result | Evidence/notes |
+|---|---|---|
+| <command> | <PASS/FAIL> | <summary> |
 
 - [ ] Clean install completed.
 - [ ] Lint/typecheck completed.

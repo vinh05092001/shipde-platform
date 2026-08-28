@@ -77,3 +77,4 @@ Commands that do not apply to a package are routed from the root; agents must no
 - Unsafe external commands go through command/outbox workflow.
 - MSW and carrier mocks provide test evidence only and cannot be enabled in production.
 - Storybook, screenshots and Lighthouse scores do not replace functional acceptance evidence.
+

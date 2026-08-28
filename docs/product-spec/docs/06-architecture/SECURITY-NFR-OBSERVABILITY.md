@@ -19,16 +19,16 @@
 
 ## Threat highlights
 
-| Threat                         | Primary control                                                  |
-| ------------------------------ | ---------------------------------------------------------------- |
-| Cross-tenant data leak         | Tenant-scoped repository, authorization and integration tests    |
-| Token exposure                 | Secret reference only, log scrubbing, rotation                   |
-| Duplicate carrier command      | Persistent idempotency and remote reconciliation                 |
-| Forged/replayed webhook        | Signature/secret, timestamp, inbox dedupe and polling validation |
-| Malicious upload               | Type/size/malware scan and private staging                       |
-| Support misuse                 | Shop consent, time-limited grant and audit                       |
-| Claim spam                     | Policy limits, evidence completeness and idempotency             |
-| Incorrect financial conclusion | Approved version, snapshot, lineage and evidence level           |
+| Threat | Primary control |
+|---|---|
+| Cross-tenant data leak | Tenant-scoped repository, authorization and integration tests |
+| Token exposure | Secret reference only, log scrubbing, rotation |
+| Duplicate carrier command | Persistent idempotency and remote reconciliation |
+| Forged/replayed webhook | Signature/secret, timestamp, inbox dedupe and polling validation |
+| Malicious upload | Type/size/malware scan and private staging |
+| Support misuse | Shop consent, time-limited grant and audit |
+| Claim spam | Policy limits, evidence completeness and idempotency |
+| Incorrect financial conclusion | Approved version, snapshot, lineage and evidence level |
 
 ## Privacy
 
@@ -78,3 +78,4 @@ Alerts:
 - Carrier incident threshold.
 - Audit summary invariant failure.
 - Backup/restore failure.
+
