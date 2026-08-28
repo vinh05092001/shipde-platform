@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import * as prettier from 'prettier';
 
 export interface FormatCheckResult {
@@ -54,54 +54,88 @@ export function isPrettierSupported(filePath: string): boolean {
   return SUPPORTED_EXTENSIONS.has(ext);
 }
 
-export function getChangedFiles(baseRef?: string, rootDir: string = process.cwd()): string[] {
-  const changedFiles = new Set<string>();
+export function resolveGitBase(baseRefCandidate?: string, rootDir: string = process.cwd()): string {
+  const candidates: string[] = [];
 
-  // Determine base reference
-  let base = baseRef || process.env.BASE_SHA || process.env.GITHUB_BASE_REF;
-  if (!base) {
+  if (baseRefCandidate) {
+    candidates.push(baseRefCandidate);
+  }
+  if (process.env.BASE_SHA) {
+    candidates.push(process.env.BASE_SHA);
+  }
+  if (process.env.GITHUB_BASE_REF) {
+    candidates.push(`origin/${process.env.GITHUB_BASE_REF}`);
+    candidates.push(process.env.GITHUB_BASE_REF);
+  }
+  candidates.push('origin/main');
+  candidates.push('main');
+  candidates.push('HEAD~1');
+
+  for (const cand of candidates) {
+    if (!cand) continue;
     try {
-      base = execSync('git merge-base origin/main HEAD', {
+      execFileSync('git', ['rev-parse', '--verify', '--quiet', `${cand}^{commit}`], {
         cwd: rootDir,
-        stdio: ['pipe', 'pipe', 'ignore'],
-      })
-        .toString()
-        .trim();
-    } catch {
-      try {
-        base = execSync('git merge-base main HEAD', {
-          cwd: rootDir,
-          stdio: ['pipe', 'pipe', 'ignore'],
-        })
-          .toString()
-          .trim();
-      } catch {
-        base = 'origin/main';
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      const mergeBase = execFileSync('git', ['merge-base', cand, 'HEAD'], {
+        cwd: rootDir,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+
+      if (mergeBase) {
+        return mergeBase;
       }
+    } catch {
+      // Try next candidate
     }
   }
 
-  // 1. Files changed in commits between base and HEAD
-  try {
-    const diffOutput = execSync(`git diff --name-only -z --diff-filter=d ${base} HEAD`, {
-      cwd: rootDir,
-      stdio: ['pipe', 'pipe', 'ignore'],
-    }).toString();
+  throw new Error(
+    `[verify-formatting] Không thể xác định Git merge-base từ các ứng viên: ${candidates
+      .filter(Boolean)
+      .join(', ')}. Hãy kiểm tra git fetch/checkout.`
+  );
+}
 
+export function getChangedFiles(baseRef?: string, rootDir: string = process.cwd()): string[] {
+  const changedFiles = new Set<string>();
+
+  // 1. Resolve merge base (fails closed if unable to find a valid commit)
+  const base = resolveGitBase(baseRef, rootDir);
+
+  // 2. Diff between merge base and HEAD
+  try {
+    const diffBuffer = execFileSync(
+      'git',
+      ['diff', '--name-only', '-z', '--diff-filter=d', base, 'HEAD'],
+      {
+        cwd: rootDir,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }
+    );
+    const diffOutput = diffBuffer.toString('utf-8');
     for (const f of diffOutput.split('\0')) {
-      if (f.trim()) {
-        changedFiles.add(f.trim().replace(/\\/g, '/'));
+      const trimmed = f.trim();
+      if (trimmed) {
+        changedFiles.add(trimmed.replace(/\\/g, '/'));
       }
     }
-  } catch {}
+  } catch (err: any) {
+    throw new Error(
+      `[verify-formatting] Thất bại khi thực thi git diff từ base ${base}: ${err.message}`
+    );
+  }
 
-  // 2. Uncommitted staged and unstaged working tree files
+  // 3. Uncommitted staged and untracked/modified working tree files
   try {
-    const statusOutput = execSync('git status --porcelain -z -uall', {
+    const statusBuffer = execFileSync('git', ['status', '--porcelain', '-z', '-uall'], {
       cwd: rootDir,
-      stdio: ['pipe', 'pipe', 'ignore'],
-    }).toString();
-
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const statusOutput = statusBuffer.toString('utf-8');
     const parts = statusOutput.split('\0');
     for (const part of parts) {
       if (part.length > 3) {
@@ -111,7 +145,9 @@ export function getChangedFiles(baseRef?: string, rootDir: string = process.cwd(
         }
       }
     }
-  } catch {}
+  } catch (err: any) {
+    throw new Error(`[verify-formatting] Thất bại khi thực thi git status: ${err.message}`);
+  }
 
   return Array.from(changedFiles);
 }
@@ -185,7 +221,9 @@ if (require.main === module) {
     console.log('================================================================\n');
 
     if (isNegativeTest) {
-      console.log('🧪 Chạy kiểm thử âm tính phát hiện vi phạm định dạng code/markdown...');
+      console.log(
+        '🧪 Chạy kiểm thử âm tính phát hiện vi phạm định dạng qua toàn bộ luồng enumeration...'
+      );
       const tempFixture = path.join(process.cwd(), 'test-negative-formatting-fixture.md');
       const unformattedContent =
         '# Unformatted Header   \n\n\n\n| Col1 | Col2 |\n|---|---|\n| val1 |    val2   |\n\n\n\nconst x  =   1;\n';
@@ -196,12 +234,25 @@ if (require.main === module) {
       let errorDetail = '';
 
       try {
-        const result = await checkFileFormatting(tempFixture);
-        if (!result.isFormatted) {
+        // Exercise full verifyFormatting() without targetFiles to test getChangedFiles + git status enumeration
+        const { unformattedFiles, checkedFiles } = await verifyFormatting(undefined, process.cwd());
+
+        const isEnumerated = checkedFiles.some((f) =>
+          f.includes('test-negative-formatting-fixture.md')
+        );
+        const isCaught = unformattedFiles.some((u) =>
+          u.filePath.includes('test-negative-formatting-fixture.md')
+        );
+
+        if (!isEnumerated) {
+          errorDetail =
+            'Tệp fixture âm tính không được bộ getChangedFiles() tự động phát hiện qua Git status!';
+        } else if (!isCaught) {
+          errorDetail = 'Tệp fixture âm tính được liệt kê nhưng không bị bắt lỗi định dạng!';
+        } else {
           detected = true;
-          errorDetail = result.error
-            ? `Lỗi parser: ${result.error}`
-            : 'Tệp không tuân thủ quy chuẩn định dạng Prettier (khoảng trắng/dòng trống/bảng biểu thừa)';
+          errorDetail =
+            'Tệp fixture âm tính được tự động phát hiện qua git status và bắt lỗi định dạng thành công.';
         }
       } finally {
         if (fs.existsSync(tempFixture)) {
@@ -212,14 +263,14 @@ if (require.main === module) {
       }
 
       if (detected) {
-        console.error(`🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XÁC: ${errorDetail}`);
+        console.error(`🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XAC: ${errorDetail}`);
         console.error(
-          '   [AC-FOUND-01-05 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện tệp có định dạng sai lệch.\n'
+          '   [AC-FOUND-01-05 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện tệp có định dạng sai lệch qua toàn bộ luồng enumeration.\n'
         );
         process.exit(1);
       } else {
         console.error(
-          '❌ LỖI: Bộ kiểm toán định dạng KHÔNG phát hiện được vi phạm trong bài test âm tính!'
+          `❌ LỖI: Bộ kiểm toán định dạng KHÔNG phát hiện được vi phạm trong bài test âm tính! (${errorDetail})`
         );
         process.exit(2);
       }

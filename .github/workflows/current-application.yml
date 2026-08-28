@@ -65,6 +65,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
       - name: Verify Formatting Negative Proof
         run: |
           set +e
@@ -78,6 +80,8 @@ jobs:
             echo "Error: Expected format check negative proof to exit with exact code 1, but got code $EXIT_CODE!"
             exit 1
           fi
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
       - name: Verify Git Diff Whitespace & Conflict Markers
         run: git diff --check origin/main...HEAD
       - run: npm run build
