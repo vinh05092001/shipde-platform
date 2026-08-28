@@ -1,7 +1,8 @@
 // ============================================================================
 // Ship Dễ — Bộ Kiểm Thử Khói Bảo Toàn Năng Lực (Preservation Smoke Harness)
 // Work Item: TASK-FOUND-01 (Baseline Freeze & Protection)
-// Xác minh sự hiện diện của 10 bề mặt điều hành trọng yếu, định tuyến app shell, & các động cơ nghiệp vụ lõi.
+// Xác minh sự hiện diện của 10 bề mặt điều hành trọng yếu, kết nối 2 chiều giữa định tuyến vai trò
+// (Role Navigation Menu) & nhánh render giao diện (Viewport Rendering), cùng các động cơ nghiệp vụ lõi.
 // Đảm bảo không thất thoát năng lực hoặc giao diện khi thực hiện di chuyển TASK-FOUND-02.
 // ============================================================================
 
@@ -67,6 +68,14 @@ export interface AppShellNavigationSpec {
   modalMounts: string[];
 }
 
+export interface SurfaceReachabilityResult {
+  reachable: boolean;
+  isRenderedInViewport: boolean;
+  mappedRoles: string[];
+  renderedComponent?: string;
+  reason?: string;
+}
+
 /**
  * Parse and validate the committed app shell navigation structure from page.tsx.
  */
@@ -118,6 +127,67 @@ export function analyzeAppShellSource(pageSource: string): AppShellNavigationSpe
     roleTabs,
     viewportComponents,
     modalMounts,
+  };
+}
+
+/**
+ * Verify two-way reachability for a critical surface:
+ * 1. Present in at least one applicable role navigation tab set in getTabsForRole
+ * 2. Rendered in activeTab === tabId conditional viewport branch in page.tsx
+ */
+export function verifySurfaceReachability(
+  shellSpec: AppShellNavigationSpec,
+  tabId: string,
+  expectedComponent: string,
+  applicableRoles: string[]
+): SurfaceReachabilityResult {
+  const renderedComponent = shellSpec.viewportComponents[tabId];
+  const isRenderedInViewport = renderedComponent === expectedComponent;
+
+  const mappedRoles: string[] = [];
+  for (const [role, tabs] of Object.entries(shellSpec.roleTabs)) {
+    if (tabs.includes(tabId)) {
+      mappedRoles.push(role);
+    }
+  }
+
+  const rolePresent = applicableRoles.some((role) => mappedRoles.includes(role));
+
+  if (!isRenderedInViewport && !rolePresent) {
+    return {
+      reachable: false,
+      isRenderedInViewport: false,
+      mappedRoles,
+      renderedComponent,
+      reason: `Bề mặt "${tabId}" vừa không có trong menu vai trò nào (${applicableRoles.join(', ')}), vừa không được gắn render trong viewport!`,
+    };
+  }
+
+  if (!isRenderedInViewport) {
+    return {
+      reachable: false,
+      isRenderedInViewport: false,
+      mappedRoles,
+      renderedComponent,
+      reason: `Tab "${tabId}" có trong menu (${mappedRoles.join(', ')}) nhưng thiếu nhánh viewport render: activeTab === '${tabId}' && <${expectedComponent} />`,
+    };
+  }
+
+  if (!rolePresent) {
+    return {
+      reachable: false,
+      isRenderedInViewport: true,
+      mappedRoles,
+      renderedComponent,
+      reason: `Nhánh viewport <${expectedComponent} /> tồn tại nhưng tab "${tabId}" đã bị gỡ bỏ khỏi toàn bộ menu vai trò hợp lệ (${applicableRoles.join(', ')})!`,
+    };
+  }
+
+  return {
+    reachable: true,
+    isRenderedInViewport: true,
+    mappedRoles,
+    renderedComponent,
   };
 }
 
@@ -214,11 +284,17 @@ export function runPreservationSmokeTests(customPageSource?: string): {
   }
 
   // --------------------------------------------------------------------------
-  // 3. Control Tower / Dashboard Surface (UI Component + Metric Calculator + Viewport)
+  // 3. Control Tower / Dashboard Surface (UI Component + Metric Calculator + Viewport + Roles)
   // --------------------------------------------------------------------------
   try {
     const hasDashboardUI = typeof ControlTowerTab === 'function';
-    const isDashboardReachable = shellSpec.viewportComponents['dashboard'] === 'ControlTowerTab';
+    const reachResult = verifySurfaceReachability(shellSpec, 'dashboard', 'ControlTowerTab', [
+      'OWNER',
+      'OPS_CSKH',
+      'ACCOUNTANT',
+      'WAREHOUSE',
+      'BACKOFFICE',
+    ]);
     const metrics = getUnifiedMetrics();
     const hasCoreMetrics =
       metrics.totalShipments >= 50 &&
@@ -227,7 +303,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       metrics.openDiscrepanciesCount >= 0 &&
       metrics.totalDiscrepancyAmount >= 0;
 
-    const dashValid = hasDashboardUI && isDashboardReachable && hasCoreMetrics;
+    const dashValid = hasDashboardUI && reachResult.reachable && hasCoreMetrics;
 
     recordSmoke(
       'SMOKE-DASH-01',
@@ -236,8 +312,8 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       'CORE_LOGIC',
       dashValid,
       dashValid
-        ? `Component ControlTowerTab gắn đúng vào viewport 'dashboard', chỉ số: ${metrics.totalShipments} vận đơn, ${metrics.openExceptionsCount} sự cố mở, ${metrics.openDiscrepanciesCount} khoản lệch`
-        : 'Lỗi: ControlTowerTab không được gắn vào nhánh hiển thị viewport activeTab === "dashboard"'
+        ? `Component ControlTowerTab gắn đúng viewport 'dashboard' (vai trò: ${reachResult.mappedRoles.join(', ')}), chỉ số: ${metrics.totalShipments} vận đơn, ${metrics.openExceptionsCount} sự cố mở, ${metrics.openDiscrepanciesCount} khoản lệch`
+        : `Lỗi: ${reachResult.reason || 'Dữ liệu chỉ số tháp chỉ huy không hợp lệ'}`
     );
   } catch (err: any) {
     recordSmoke(
@@ -251,12 +327,18 @@ export function runPreservationSmokeTests(customPageSource?: string): {
   }
 
   // --------------------------------------------------------------------------
-  // 4. Shipment & Tracking Surface (UI Table + Timeline Modal + Master Data)
+  // 4. Shipment & Tracking Surface (UI Table + Timeline Modal + Master Data + Viewport + Roles)
   // --------------------------------------------------------------------------
   try {
     const hasShipmentListUI = typeof ShipmentListTab === 'function';
     const hasTrackingModalUI = typeof UnifiedTrackingModal === 'function';
-    const isShipmentReachable = shellSpec.viewportComponents['shipments'] === 'ShipmentListTab';
+    const reachResult = verifySurfaceReachability(shellSpec, 'shipments', 'ShipmentListTab', [
+      'OWNER',
+      'OPS_CSKH',
+      'ACCOUNTANT',
+      'WAREHOUSE',
+      'BACKOFFICE',
+    ]);
     const isTrackingModalMounted = shellSpec.modalMounts.includes('UnifiedTrackingModal');
     const hasShipments = MASTER_SHIPMENTS && MASTER_SHIPMENTS.length >= 50;
     const sampleShipment = MASTER_SHIPMENTS[0];
@@ -271,7 +353,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
     const shipmentSurfaceValid =
       hasShipmentListUI &&
       hasTrackingModalUI &&
-      isShipmentReachable &&
+      reachResult.reachable &&
       isTrackingModalMounted &&
       hasShipments &&
       hasRequiredFields;
@@ -283,8 +365,8 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       'DEMO_MOCK',
       Boolean(shipmentSurfaceValid),
       shipmentSurfaceValid
-        ? `ShipmentListTab gắn đúng viewport 'shipments' và UnifiedTrackingModal gắn modal root với ${MASTER_SHIPMENTS.length} vận đơn mẫu`
-        : 'Lỗi: ShipmentListTab hoặc UnifiedTrackingModal không được gắn kết trong page.tsx'
+        ? `ShipmentListTab gắn đúng viewport 'shipments' (vai trò: ${reachResult.mappedRoles.join(', ')}) và UnifiedTrackingModal gắn modal root với ${MASTER_SHIPMENTS.length} vận đơn mẫu`
+        : `Lỗi: ${reachResult.reason || 'Thiếu modal tra cứu hoặc dữ liệu vận đơn'}`
     );
   } catch (err: any) {
     recordSmoke('SMOKE-SHP-01', 'Danh sách vận đơn', 'Shipments', 'DEMO_MOCK', false, err.message);
@@ -340,18 +422,21 @@ export function runPreservationSmokeTests(customPageSource?: string): {
   }
 
   // --------------------------------------------------------------------------
-  // 6. Exception Workbox Surface (UI Tab + Exception Engine + SLA Calculation)
+  // 6. Exception Workbox Surface (UI Tab + Viewport + Roles + SLA Engine)
   // --------------------------------------------------------------------------
   try {
     const hasWorkboxUI = typeof ExceptionWorkboxTab === 'function';
-    const isWorkboxReachable = shellSpec.viewportComponents['exceptions'] === 'ExceptionWorkboxTab';
+    const reachResult = verifySurfaceReachability(shellSpec, 'exceptions', 'ExceptionWorkboxTab', [
+      'OWNER',
+      'OPS_CSKH',
+    ]);
     const hasExceptions = MASTER_EXCEPTIONS && MASTER_EXCEPTIONS.length > 0;
     const engine = new ExceptionEngine();
     const deadline = engine.calculateDeadline(new Date(), ExceptionType.DELIVERY_FAIL);
     const hasValidDeadline = deadline instanceof Date && deadline.getTime() > Date.now();
 
     const exceptionSurfaceValid =
-      hasWorkboxUI && isWorkboxReachable && hasExceptions && hasValidDeadline;
+      hasWorkboxUI && reachResult.reachable && hasExceptions && hasValidDeadline;
 
     recordSmoke(
       'SMOKE-EXC-01',
@@ -360,20 +445,25 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       'CORE_LOGIC',
       Boolean(exceptionSurfaceValid),
       exceptionSurfaceValid
-        ? `ExceptionWorkboxTab gắn đúng viewport 'exceptions' (${MASTER_EXCEPTIONS.length} hồ sơ), tính hạn SLA (DELIVERY_FAIL = +12h) chính xác`
-        : 'Lỗi: ExceptionWorkboxTab không được gắn vào viewport activeTab === "exceptions"'
+        ? `ExceptionWorkboxTab gắn đúng viewport 'exceptions' (vai trò: ${reachResult.mappedRoles.join(', ')}), ${MASTER_EXCEPTIONS.length} hồ sơ, tính hạn SLA (DELIVERY_FAIL = +12h) chính xác`
+        : `Lỗi: ${reachResult.reason || 'Dữ liệu hồ sơ sự cố hoặc động cơ SLA thất bại'}`
     );
   } catch (err: any) {
     recordSmoke('SMOKE-EXC-01', 'Hộp việc sự cố', 'Exceptions', 'CORE_LOGIC', false, err.message);
   }
 
   // --------------------------------------------------------------------------
-  // 7. Reconciliation Surface (UI Tab + Upload Modal + 6 Audit Checks Engine)
+  // 7. Reconciliation Surface (UI Tab + Upload Modal + Viewport + Roles + Audit Engine)
   // --------------------------------------------------------------------------
   try {
     const hasReconUI = typeof ReconciliationTab === 'function';
     const hasUploadModalUI = typeof UploadStatementModal === 'function';
-    const isReconReachable = shellSpec.viewportComponents['reconciliation'] === 'ReconciliationTab';
+    const reachResult = verifySurfaceReachability(
+      shellSpec,
+      'reconciliation',
+      'ReconciliationTab',
+      ['OWNER', 'ACCOUNTANT']
+    );
     const isUploadMounted = shellSpec.modalMounts.includes('UploadStatementModal');
     const reconEngine = new ReconciliationEngine();
     const rateCard = {
@@ -441,7 +531,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
     const reconPassed =
       hasReconUI &&
       hasUploadModalUI &&
-      isReconReachable &&
+      reachResult.reachable &&
       isUploadMounted &&
       reconResult &&
       reconResult.discrepancies.length > 0;
@@ -453,8 +543,8 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       'CORE_LOGIC',
       reconPassed,
       reconPassed
-        ? `ReconciliationTab gắn đúng viewport 'reconciliation' và UploadStatementModal gắn modal root, phát hiện đúng ${reconResult.discrepancies.length} khoản lệch (D1/D2)`
-        : 'Lỗi: ReconciliationTab hoặc UploadStatementModal không được gắn kết trong app shell page.tsx'
+        ? `ReconciliationTab gắn đúng viewport 'reconciliation' (vai trò: ${reachResult.mappedRoles.join(', ')}) và UploadStatementModal gắn modal root, phát hiện đúng ${reconResult.discrepancies.length} khoản lệch (D1/D2)`
+        : `Lỗi: ${reachResult.reason || 'ReconciliationTab hoặc UploadStatementModal không được gắn kết trong app shell page.tsx'}`
     );
   } catch (err: any) {
     recordSmoke(
@@ -468,11 +558,14 @@ export function runPreservationSmokeTests(customPageSource?: string): {
   }
 
   // --------------------------------------------------------------------------
-  // 8. Three Ledgers Surface (UI Tab + Viewport + Ledger Calculator Engine)
+  // 8. Three Ledgers Surface (UI Tab + Viewport + Roles + Ledger Calculator)
   // --------------------------------------------------------------------------
   try {
     const hasThreeLedgersUI = typeof ThreeLedgersTab === 'function';
-    const isLedgersReachable = shellSpec.viewportComponents['three_ledgers'] === 'ThreeLedgersTab';
+    const reachResult = verifySurfaceReachability(shellSpec, 'three_ledgers', 'ThreeLedgersTab', [
+      'OWNER',
+      'ACCOUNTANT',
+    ]);
     const calc = new ThreeLedgersCalculator();
     const report = calc.generateReport(
       'merc_test',
@@ -499,7 +592,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
 
     const ledgersValid =
       hasThreeLedgersUI &&
-      isLedgersReachable &&
+      reachResult.reachable &&
       report &&
       report.ledger1_real_cash &&
       report.ledger2_rescued_orders &&
@@ -513,8 +606,8 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       'CORE_LOGIC',
       Boolean(ledgersValid),
       ledgersValid
-        ? `ThreeLedgersTab gắn đúng viewport 'three_ledgers', Sổ 1 (${report.ledger1_real_cash.total_recovered_amount.toLocaleString()} đ thực nhận), Sổ 2 (${report.ledger2_rescued_orders.total_return_fee_saved.toLocaleString()} đ), Sổ 3 (${report.ledger3_control_metrics.total_active_shipments} đơn)`
-        : 'Lỗi: ThreeLedgersTab không được gắn vào viewport activeTab === "three_ledgers"'
+        ? `ThreeLedgersTab gắn đúng viewport 'three_ledgers' (vai trò: ${reachResult.mappedRoles.join(', ')}), Sổ 1 (${report.ledger1_real_cash.total_recovered_amount.toLocaleString()} đ thực nhận), Sổ 2 (${report.ledger2_rescued_orders.total_return_fee_saved.toLocaleString()} đ), Sổ 3 (${report.ledger3_control_metrics.total_active_shipments} đơn)`
+        : `Lỗi: ${reachResult.reason || 'Báo cáo Ba Sổ Giá Trị tính toán không hợp lệ'}`
     );
   } catch (err: any) {
     recordSmoke(
@@ -528,12 +621,15 @@ export function runPreservationSmokeTests(customPageSource?: string): {
   }
 
   // --------------------------------------------------------------------------
-  // 9. Returns Surface (UI Tab + Viewport + Offline Queue Manager)
+  // 9. Returns Surface (UI Tab + Viewport + Roles + Offline Queue Manager)
   // --------------------------------------------------------------------------
   try {
     const hasReturnScanUI = typeof ReturnScanTab === 'function';
     const hasMobileSimUI = typeof MobileSimulatorTab === 'function';
-    const isReturnScanReachable = shellSpec.viewportComponents['returns'] === 'ReturnScanTab';
+    const reachResult = verifySurfaceReachability(shellSpec, 'returns', 'ReturnScanTab', [
+      'OWNER',
+      'WAREHOUSE',
+    ]);
     const offlineManager = new OfflineScanQueueManager();
     const batch = offlineManager.syncOfflineBatch([
       {
@@ -559,7 +655,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
     const offlinePassed =
       hasReturnScanUI &&
       hasMobileSimUI &&
-      isReturnScanReachable &&
+      reachResult.reachable &&
       batch.newly_created === 1 &&
       batch.duplicates_skipped === 1;
 
@@ -570,8 +666,8 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       'CORE_LOGIC',
       offlinePassed,
       offlinePassed
-        ? 'ReturnScanTab gắn đúng viewport "returns", xử lý 2 lệnh quét trùng -> Tạo đúng 1 biên nhận duy nhất'
-        : 'Lỗi: ReturnScanTab không được gắn vào viewport activeTab === "returns"'
+        ? `ReturnScanTab gắn đúng viewport "returns" (vai trò: ${reachResult.mappedRoles.join(', ')}), xử lý 2 lệnh quét trùng -> Tạo đúng 1 biên nhận duy nhất`
+        : `Lỗi: ${reachResult.reason || 'Lỗi hàng đợi quét offline'}`
     );
   } catch (err: any) {
     recordSmoke(
@@ -585,11 +681,14 @@ export function runPreservationSmokeTests(customPageSource?: string): {
   }
 
   // --------------------------------------------------------------------------
-  // 10. Settings & Role Permissions Surface (UI Workspace + Maker-Checker Engine)
+  // 10. Settings & Role Permissions Surface (UI Workspace + Viewport + Roles + Maker-Checker)
   // --------------------------------------------------------------------------
   try {
     const hasSettingsUI = typeof SettingsWorkspace === 'function';
-    const isSettingsReachable = shellSpec.viewportComponents['settings'] === 'SettingsWorkspace';
+    const reachResult = verifySurfaceReachability(shellSpec, 'settings', 'SettingsWorkspace', [
+      'BACKOFFICE',
+      'OWNER',
+    ]);
     const hasUserMgmtUI = typeof UserManagementTab === 'function';
     const hasShopSettingsUI = typeof ShopSettingsModal === 'function';
     const hasClaimCasesUI = typeof ClaimCasesTab === 'function';
@@ -647,7 +746,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
 
     const rbacSurfacePassed =
       hasSettingsUI &&
-      isSettingsReachable &&
+      reachResult.reachable &&
       hasUserMgmtUI &&
       hasShopSettingsUI &&
       hasClaimCasesUI &&
@@ -660,8 +759,8 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       'CORE_LOGIC',
       rbacSurfacePassed,
       rbacSurfacePassed
-        ? 'SettingsWorkspace gắn đúng viewport "settings", quy tắc tách quyền tài chính chặn thành công người tạo tự duyệt khoản chênh lệch'
-        : 'Lỗi: SettingsWorkspace không được gắn vào viewport activeTab === "settings" hoặc quy tắc tách quyền tài chính thất bại'
+        ? `SettingsWorkspace gắn đúng viewport "settings" (vai trò: ${reachResult.mappedRoles.join(', ')}), quy tắc tách quyền tài chính chặn thành công người tạo tự duyệt khoản chênh lệch`
+        : `Lỗi: ${reachResult.reason || 'Quy tắc tách quyền tài chính Maker-Checker thất bại'}`
     );
   } catch (err: any) {
     recordSmoke(
@@ -694,52 +793,65 @@ if (require.main === module) {
   console.log('================================================================\n');
 
   if (isNegativeTest) {
-    console.log('⚠️ Chạy kiểm thử âm tính phát hiện bề mặt điều hướng bị gỡ bỏ...');
+    console.log(
+      '⚠️ Chạy kiểm thử âm tính phát hiện bề mặt bị mất liên kết navigation hoặc gỡ bỏ viewport...\n'
+    );
     const pagePath = path.join(__dirname, '../app/page.tsx');
     const realPageSource = fs.readFileSync(pagePath, 'utf-8');
 
-    // Simulate real removal of ExceptionWorkboxTab viewport branch and navigation tab
-    const brokenPageSource = realPageSource
-      .replace(
-        `{activeTab === 'exceptions' && (\n            <ExceptionWorkboxTab\n              exceptions={exceptions}\n              onUpdateException={handleUpdateException}\n              carrierGhnTier={carrierGhnTier}\n            />\n          )}`,
-        `{/* Broken/Removed ExceptionWorkboxTab surface */}`
-      )
-      .replace(
-        `{
-            id: 'exceptions',
-            label: 'Hộp Việc Cứu Đơn',
-            icon: AlertTriangle,
-            count: metrics.openExceptionsCount,
-            countType: 'risk',
-          },`,
-        `/* Removed exceptions tab */`
-      );
+    // Test Case 1: Navigation-only removal (Removes 'exceptions' tab from role menus while viewport render remains)
+    console.log(
+      '--- [KIỂM THỬ ÂM TÍNH 1]: Gỡ bỏ tab "exceptions" khỏi Menu Điều hướng Vai trò (Navigation-Only Removal) ---'
+    );
+    const navRemovedSource = realPageSource.replace(
+      /\{\s*id:\s*'exceptions'[\s\S]*?countType:\s*'risk',\s*\},/g,
+      `/* Removed exceptions from role navigation */`
+    );
 
-    const { results, passedCount, totalSurfaces, failedCount } =
-      runPreservationSmokeTests(brokenPageSource);
+    const navTestRun = runPreservationSmokeTests(navRemovedSource);
+    const excNavResult = navTestRun.results.find((r) => r.surfaceId === 'SMOKE-EXC-01');
 
-    for (const r of results) {
-      const statusIcon = r.passed ? '✅ PASS' : '❌ FAIL';
-      console.log(
-        `${statusIcon} [${r.surfaceId}] [${r.behaviorType}] ${r.surfaceName} -> ${r.notes}`
-      );
-    }
+    console.log(
+      `Kết quả SMOKE-EXC-01 khi gỡ tab khỏi menu: ${excNavResult?.passed ? '❌ LỌT LỖI (VẪN PASS)' : '✅ BẮT THẤT BẠI CHÍNH XÁC'}`
+    );
+    console.log(`Chi tiết: ${excNavResult?.notes}\n`);
 
-    console.log('\n================================================================');
-    console.log(`KẾT QUẢ KIỂM THỬ ÂM TÍNH: ${passedCount}/${totalSurfaces} BỀ MẶT ĐẠT CHUẨN`);
+    // Test Case 2: Viewport-only removal (Removes ExceptionWorkboxTab viewport render branch while role menu remains)
+    console.log(
+      '--- [KIỂM THỬ ÂM TÍNH 2]: Gỡ bỏ nhánh Viewport Render <ExceptionWorkboxTab /> (Viewport-Only Removal) ---'
+    );
+    const viewportRemovedSource = realPageSource.replace(
+      `{activeTab === 'exceptions' && (\n            <ExceptionWorkboxTab\n              exceptions={exceptions}\n              onUpdateException={handleUpdateException}\n              carrierGhnTier={carrierGhnTier}\n            />\n          )}`,
+      `{/* Broken/Removed ExceptionWorkboxTab viewport render */}`
+    );
+
+    const vpTestRun = runPreservationSmokeTests(viewportRemovedSource);
+    const excVpResult = vpTestRun.results.find((r) => r.surfaceId === 'SMOKE-EXC-01');
+
+    console.log(
+      `Kết quả SMOKE-EXC-01 khi gỡ render viewport: ${excVpResult?.passed ? '❌ LỌT LỖI (VẪN PASS)' : '✅ BẮT THẤT BẠI CHÍNH XÁC'}`
+    );
+    console.log(`Chi tiết: ${excVpResult?.notes}\n`);
+
+    const bothNegativeTestsDetected = !excNavResult?.passed && !excVpResult?.passed;
+
+    console.log('================================================================');
+    console.log(
+      `KẾT QUẢ KIỂM THỬ ÂM TÍNH BẢO TOÀN ĐIỀU HƯỚNG & VIEWPORT: ${bothNegativeTestsDetected ? 'ĐẠT CHUẨN (2/2 BẮT LỖI THÀNH CÔNG)' : 'THẤT BẠI'}`
+    );
     console.log('================================================================\n');
 
-    if (failedCount > 0) {
+    if (bothNegativeTestsDetected) {
       console.error(
-        `🚨 PHÁT HIỆN THẤT BẠI CHÍNH XÁC: Phát hiện ${failedCount} bề mặt điều phối bị mất/gỡ bỏ khỏi app shell navigation!`
+        '🚨 ĐÃ CHỨNG MINH THẤT BẠI CHÍNH XÁC CẢ 2 CHIỀU: Gỡ menu điều hướng vai trò HOẶC gỡ nhánh render viewport đều kích hoạt thất bại!'
       );
       console.error(
-        '   [AC-FOUND-01-07 Evidence] Đã chứng minh gate kiểm thử khói thoát mã lỗi non-zero (exit code 1) khi thiếu bề mặt navigation reachability thực tế.\n'
+        '   [AC-FOUND-01-07 Evidence] Gate thoát mã lỗi non-zero (exit code 1) khi phát hiện mất reachability thực tế trong app shell.\n'
       );
       process.exit(1);
     } else {
       console.error(
-        '❌ LỖI: Bộ kiểm thử khói KHÔNG phát hiện được bề mặt bị gỡ bỏ trong bài test âm tính!'
+        '❌ LỖI: Bộ kiểm thử khói KHÔNG phát hiện được bề mặt bị gỡ bỏ trong một hoặc cả hai bài test âm tính!'
       );
       process.exit(2);
     }
@@ -766,7 +878,7 @@ if (require.main === module) {
   }
 
   console.log(
-    '✅ Hoàn thành: Toàn bộ 10 bề mặt điều hành trọng yếu, định tuyến navigation & động cơ nghiệp vụ được bảo toàn nguyên vẹn.'
+    '✅ Hoàn thành: Toàn bộ 10 bề mặt điều hành trọng yếu, kết nối 2 chiều giữa Role Navigation & Viewport Rendering được bảo toàn nguyên vẹn.'
   );
   process.exit(0);
 }

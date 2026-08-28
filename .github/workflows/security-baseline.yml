@@ -30,9 +30,14 @@ jobs:
         run: npm run security:secrets
       - name: Verify Secret Scan Negative Proof
         run: |
-          if npm run security:secrets -- --test-negative; then
-            echo "Error: Expected secret-scan negative proof to exit non-zero!"
-            exit 1
+          set +e
+          npm run security:secrets -- --test-negative
+          EXIT_CODE=$?
+          set -e
+          echo "Negative proof returned exit code: $EXIT_CODE"
+          if [ "$EXIT_CODE" -eq 1 ]; then
+            echo "Success: Secret-scan negative proof exited with exact code 1 (real rule finding detected) as required by AC-FOUND-01-06."
           else
-            echo "Success: Secret-scan negative proof exited non-zero as required by AC-FOUND-01-06."
+            echo "Error: Expected secret-scan negative proof to exit with exact code 1, but got code $EXIT_CODE!"
+            exit 1
           fi
