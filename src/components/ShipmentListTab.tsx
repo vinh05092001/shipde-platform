@@ -76,22 +76,7 @@ export const ShipmentListTab: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try {
-        const res = await fetch('/api/shipments');
-        const data = await res.json();
-        if (active && res.ok && data.data && data.data.length > 0) {
-          // If API returns data, sync, otherwise keep master shipments
-        }
-      } catch (e) {
-        console.error('Failed to load shipments:', e);
-      }
-    };
-    void load();
-    return () => {
-      active = false;
-    };
+    fetchShipments();
   }, []);
 
   const toggleUnmask = (id: string, trackingCode: string) => {

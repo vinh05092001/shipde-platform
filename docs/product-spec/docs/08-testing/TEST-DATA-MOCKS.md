@@ -37,4 +37,3 @@ Mocks live only in local/test. Production configuration fails closed if a mock a
 - No production credential, phone, address, bank account or contract file.
 - Synthetic test data is obvious and namespaced.
 - UAT real data is minimized, separately controlled and never committed.
-

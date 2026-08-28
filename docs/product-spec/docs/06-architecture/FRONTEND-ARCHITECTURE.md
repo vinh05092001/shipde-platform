@@ -14,24 +14,24 @@
 
 \`\`\`text
 apps/web/
-  app/
-  features/
-    auth/
-    organization/
-    carriers/
-    orders/
-    quotes/
-    shipments/
-    tracking/
-    exceptions/
-    returns/
-    reconciliation/
-    claims/
-    reports/
-    admin/
-  components/
-  lib/
-  styles/
+app/
+features/
+auth/
+organization/
+carriers/
+orders/
+quotes/
+shipments/
+tracking/
+exceptions/
+returns/
+reconciliation/
+claims/
+reports/
+admin/
+components/
+lib/
+styles/
 \`\`\`
 
 Feature folders own page composition, hooks and view models. Shared business types come from generated OpenAPI/shared contracts, not handwritten duplicates.
@@ -58,4 +58,3 @@ Feature folders own page composition, hooks and view models. Shared business typ
 - All screens implement loading, empty, error, forbidden and success behavior.
 - Accessibility lint plus keyboard testing for primary journeys.
 - Visual consistency uses tokens/components; no ad-hoc per-page palette.
-

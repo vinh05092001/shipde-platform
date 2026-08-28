@@ -2,19 +2,19 @@
 
 ## Control
 
-| Field | Value |
-|---|---|
-| Work Item ID | `<WORK_ITEM_ID>` |
-| Feature ID | `<FEAT-ID or N/A>` |
-| Status | `READY_FOR_AUTHOR` |
-| Delivery order | `<number>` |
-| Dependencies | `<merged IDs>` |
-| Assigned author | `<GEMINI or 9ROUTER>` |
-| Risk | `<LOW/MEDIUM/HIGH>` |
-| Allowed paths | `<explicit paths>` |
-| Reviewer | `Codex — fresh independent task` |
-| Branch | `<branch>` |
-| Pull Request | `<URL>` |
+| Field           | Value                            |
+| --------------- | -------------------------------- |
+| Work Item ID    | `<WORK_ITEM_ID>`                 |
+| Feature ID      | `<FEAT-ID or N/A>`               |
+| Status          | `READY_FOR_AUTHOR`               |
+| Delivery order  | `<number>`                       |
+| Dependencies    | `<merged IDs>`                   |
+| Assigned author | `<GEMINI or 9ROUTER>`            |
+| Risk            | `<LOW/MEDIUM/HIGH>`              |
+| Allowed paths   | `<explicit paths>`               |
+| Reviewer        | `Codex — fresh independent task` |
+| Branch          | `<branch>`                       |
+| Pull Request    | `<URL>`                          |
 
 ## Business outcome
 
@@ -54,9 +54,9 @@ Describe commands/queries, idempotency, errors, migrations, entities, events, jo
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
-|---|---|---|---|
-| `<ID>` | `<Given/When>` | `<Then>` | `<test/screenshot/log>` |
+| AC/Test ID | Scenario       | Expected result | Evidence required       |
+| ---------- | -------------- | --------------- | ----------------------- |
+| `<ID>`     | `<Given/When>` | `<Then>`        | `<test/screenshot/log>` |
 
 ## Verification commands
 
@@ -64,9 +64,9 @@ List exact repository commands. All must run from a clean checkout.
 
 ## Codex review record
 
-| Review round | Commit | Verdict | Findings resolved |
-|---|---|---|---|
-| 1 | `<sha>` | `<PASS/CHANGES_REQUIRED/BLOCKED>` | `<links>` |
+| Review round | Commit  | Verdict                           | Findings resolved |
+| ------------ | ------- | --------------------------------- | ----------------- |
+| 1            | `<sha>` | `<PASS/CHANGES_REQUIRED/BLOCKED>` | `<links>`         |
 
 ## Residual limitations
 

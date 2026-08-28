@@ -1,6 +1,6 @@
 name: Ship Dễ feature implementation
 description: Track one prepared Work Item through implementation and independent Codex review.
-title: "[FEAT-ID] "
+title: '[FEAT-ID] '
 body:
   - type: markdown
     attributes:

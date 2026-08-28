@@ -6,16 +6,16 @@ The tools do not share chat history. They coordinate through one GitHub reposito
 
 ## Responsibility map
 
-| Artifact/action | Claude | Codex planner | 9Router worker | Gemini | Codex reviewer | Human |
-|---|---:|---:|---:|---:|---:|---:|
-| Propose business/solution updates | Owner | Validate and version | No | No | Verify source | Approve decisions |
-| Prepare executable Work Item | No | Owner | No | No | No | Resolve blockers |
-| Choose implementation author | No | Recommend | No | No | Challenge if unsafe | Confirm/start |
-| Implement production code | No | No | Low-risk only | Primary owner | No | No |
-| Add and run tests | No | Define evidence | Owner for assigned scope | Owner | Verify independently | Observe |
-| Open/update Pull Request | No | Planning commit only | Owner when assigned | Owner when assigned | Read/comment | Observe |
-| Approve implementation | No | No | No self-approval | No self-approval | Recommend | Final owner |
-| Merge to `main` | No | No | No | No | No | Owner |
+| Artifact/action                   | Claude |        Codex planner |           9Router worker |              Gemini |       Codex reviewer |             Human |
+| --------------------------------- | -----: | -------------------: | -----------------------: | ------------------: | -------------------: | ----------------: |
+| Propose business/solution updates |  Owner | Validate and version |                       No |                  No |        Verify source | Approve decisions |
+| Prepare executable Work Item      |     No |                Owner |                       No |                  No |                   No |  Resolve blockers |
+| Choose implementation author      |     No |            Recommend |                       No |                  No |  Challenge if unsafe |     Confirm/start |
+| Implement production code         |     No |                   No |            Low-risk only |       Primary owner |                   No |                No |
+| Add and run tests                 |     No |      Define evidence | Owner for assigned scope |               Owner | Verify independently |           Observe |
+| Open/update Pull Request          |     No | Planning commit only |      Owner when assigned | Owner when assigned |         Read/comment |           Observe |
+| Approve implementation            |     No |                   No |         No self-approval |    No self-approval |            Recommend |       Final owner |
+| Merge to `main`                   |     No |                   No |                       No |                  No |                   No |             Owner |
 
 ## State flow
 
@@ -34,13 +34,13 @@ stateDiagram-v2
 
 ## One-time local setup
 
-| Workspace | Branch parked after setup | Purpose |
-|---|---|---|
-| `C:\Users\gumac\AI\shipde-platform` | `main` | Integration baseline; never direct implementation |
-| `C:\Users\gumac\AI\shipde-claude` | `agent/claude` | Claude business and solution analysis only |
-| `C:\Users\gumac\AI\shipde-dsh` | `agent/dsh` | 9Router/DSH low-risk author |
-| `C:\Users\gumac\AI\shipde-gemini` | `agent/gemini` | Gemini primary author |
-| `C:\Users\gumac\AI\shipde-codex` | `agent/codex-review` | Codex planning and independent review |
+| Workspace                           | Branch parked after setup | Purpose                                           |
+| ----------------------------------- | ------------------------- | ------------------------------------------------- |
+| `C:\Users\gumac\AI\shipde-platform` | `main`                    | Integration baseline; never direct implementation |
+| `C:\Users\gumac\AI\shipde-claude`   | `agent/claude`            | Claude business and solution analysis only        |
+| `C:\Users\gumac\AI\shipde-dsh`      | `agent/dsh`               | 9Router/DSH low-risk author                       |
+| `C:\Users\gumac\AI\shipde-gemini`   | `agent/gemini`            | Gemini primary author                             |
+| `C:\Users\gumac\AI\shipde-codex`    | `agent/codex-review`      | Codex planning and independent review             |
 
 Each application opens only its own workspace. Complete and verify this layout with `WINDOWS-SETUP-RUNBOOK.md` and the safe commands under `scripts/ai/`. Before a new Work Item, fetch `origin`, create the prepared feature branch from current `origin/main`, and confirm `git status` is clean. Do not reuse an unmerged branch for another item.
 
@@ -108,15 +108,15 @@ Normal daily operation uses only `control.ps1 -Action Resume` (or **Continue pip
 
 ## Failure handling
 
-| Situation | Required action |
-|---|---|
-| Business rule missing or contradictory | Mark `BLOCKED`; no agent may invent it |
-| Carrier capability unverified | Use explicit unverified/unsupported state and deterministic mock/manual fallback |
-| 9Router reaches a prohibited domain or fails twice | Stop and escalate same Work Item to Gemini |
-| 9Router injects Ponytail/Caveman or changes evidence through compression | Stop, disable the feature and repeat verification from uncompressed evidence |
-| DSH/9Router version or model catalog changes mid-item | Pin the working version/model or mark `BLOCKED`; never silently substitute |
-| Author cannot open a PR | Push branch and provide commit; human opens PR with the template |
-| CI fails | Same author fixes the exact failure before review |
-| Codex cannot verify evidence | Return `BLOCKED`, never a conditional pass |
-| PR contains more than one Work Item | Split before review |
-| Existing prototype appears complete | Reassess against the full Definition of Done; demo UI is insufficient |
+| Situation                                                                | Required action                                                                  |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| Business rule missing or contradictory                                   | Mark `BLOCKED`; no agent may invent it                                           |
+| Carrier capability unverified                                            | Use explicit unverified/unsupported state and deterministic mock/manual fallback |
+| 9Router reaches a prohibited domain or fails twice                       | Stop and escalate same Work Item to Gemini                                       |
+| 9Router injects Ponytail/Caveman or changes evidence through compression | Stop, disable the feature and repeat verification from uncompressed evidence     |
+| DSH/9Router version or model catalog changes mid-item                    | Pin the working version/model or mark `BLOCKED`; never silently substitute       |
+| Author cannot open a PR                                                  | Push branch and provide commit; human opens PR with the template                 |
+| CI fails                                                                 | Same author fixes the exact failure before review                                |
+| Codex cannot verify evidence                                             | Return `BLOCKED`, never a conditional pass                                       |
+| PR contains more than one Work Item                                      | Split before review                                                              |
+| Existing prototype appears complete                                      | Reassess against the full Definition of Done; demo UI is insufficient            |

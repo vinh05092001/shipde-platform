@@ -14,4 +14,3 @@
     "counterparty_name_masked": { "type": ["string", "null"] }
   }
 }
-

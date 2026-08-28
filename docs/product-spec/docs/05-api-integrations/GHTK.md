@@ -38,4 +38,3 @@ Observed public capabilities include:
 - Cancel in allowed/disallowed statuses.
 - Webhook duplicate/out-of-order delivery.
 - Token expiry/revocation.
-

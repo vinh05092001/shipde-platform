@@ -27,9 +27,7 @@ interface Props {
 
 export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCreated }) => {
   // Order information
-  const [orderCode, setOrderCode] = useState(
-    () => `ORD_${Math.floor(Math.random() * 89999) + 10000}`
-  );
+  const [orderCode, setOrderCode] = useState(`ORD_${Math.floor(Math.random() * 89999) + 10000}`);
   const [pickupWarehouse, setPickupWarehouse] = useState('store_01');
   const [recipientName, setRecipientName] = useState('Nguyễn Văn Khách');
   const [recipientPhone, setRecipientPhone] = useState('0901234567');

@@ -11,19 +11,19 @@
 
 ## Product KPIs
 
-| Area | KPI |
-|---|---|
-| Onboarding | Time to first connected account; time to first successful shipment |
-| Quote | Carrier response coverage; quote latency; no-option rate |
-| Shipment | Creation success; unknown-outcome rate; duplicate waybills |
-| Tracking | Event freshness; unmapped status rate |
-| Exception | Time to acknowledge; rescue success; prevented returns |
-| Return | Scan completeness; duplicate receipt prevented; evidence completeness |
-| Audit | Auditable coverage; auto-match rate; false-positive rate |
-| Money | Suspected, internally verified, carrier accepted and received values, separately |
-| Claim | Cases submitted before deadline; carrier acceptance; recovery aging |
-| Reliability | Connector availability by carrier; job failure/retry rate |
-| User value | Manual hours saved; active users; willingness to pay |
+| Area        | KPI                                                                              |
+| ----------- | -------------------------------------------------------------------------------- |
+| Onboarding  | Time to first connected account; time to first successful shipment               |
+| Quote       | Carrier response coverage; quote latency; no-option rate                         |
+| Shipment    | Creation success; unknown-outcome rate; duplicate waybills                       |
+| Tracking    | Event freshness; unmapped status rate                                            |
+| Exception   | Time to acknowledge; rescue success; prevented returns                           |
+| Return      | Scan completeness; duplicate receipt prevented; evidence completeness            |
+| Audit       | Auditable coverage; auto-match rate; false-positive rate                         |
+| Money       | Suspected, internally verified, carrier accepted and received values, separately |
+| Claim       | Cases submitted before deadline; carrier acceptance; recovery aging              |
+| Reliability | Connector availability by carrier; job failure/retry rate                        |
+| User value  | Manual hours saved; active users; willingness to pay                             |
 
 ## Release gates
 
@@ -32,4 +32,3 @@
 - No financial result without reproducible evidence.
 - Carrier production capability must be partner-confirmed.
 - Business KPI target values must be set before a pilot, not after.
-

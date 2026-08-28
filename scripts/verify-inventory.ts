@@ -7,6 +7,11 @@ const INVENTORY_PATH = path.join(
   ROOT,
   'docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md'
 );
+const PRISMA_SCHEMA_PATH = path.join(ROOT, 'prisma/schema.prisma');
+const GAPS_DOC_PATH = path.join(
+  ROOT,
+  'docs/product-spec/evidence/PROTOTYPE-GAPS-AND-RISKS.md'
+);
 
 const VALID_CLASSIFICATIONS = new Set(['REAL', 'PARTIAL', 'DEMO_ONLY', 'ABSENT']);
 
@@ -15,6 +20,7 @@ export function validateInventory(): {
   totalCatalog: number;
   totalInventory: number;
   classifications: Record<string, number>;
+  prismaModelsCount: number;
   errors: string[];
 } {
   const errors: string[] = [];
@@ -71,11 +77,65 @@ export function validateInventory(): {
     }
   }
 
+  // 4. Verify Executive Summary text vs Table consistency
+  const summaryMatches = {
+    real: inventoryContent.match(/`REAL`\s*\((\d+)\s*\/\s*130\s*features\)/),
+    partial: inventoryContent.match(/`PARTIAL`\s*\((\d+)\s*\/\s*130\s*features\)/),
+    demo: inventoryContent.match(/`DEMO_ONLY`\s*\((\d+)\s*\/\s*130\s*features\)/),
+    absent: inventoryContent.match(/`ABSENT`\s*\((\d+)\s*\/\s*130\s*features\)/),
+  };
+
+  if (summaryMatches.real && Number(summaryMatches.real[1]) !== classificationCounts.REAL) {
+    errors.push(
+      `Summary text REAL count (${summaryMatches.real[1]}) does not match table count (${classificationCounts.REAL})`
+    );
+  }
+  if (summaryMatches.partial && Number(summaryMatches.partial[1]) !== classificationCounts.PARTIAL) {
+    errors.push(
+      `Summary text PARTIAL count (${summaryMatches.partial[1]}) does not match table count (${classificationCounts.PARTIAL})`
+    );
+  }
+  if (summaryMatches.demo && Number(summaryMatches.demo[1]) !== classificationCounts.DEMO_ONLY) {
+    errors.push(
+      `Summary text DEMO_ONLY count (${summaryMatches.demo[1]}) does not match table count (${classificationCounts.DEMO_ONLY})`
+    );
+  }
+  if (summaryMatches.absent && Number(summaryMatches.absent[1]) !== classificationCounts.ABSENT) {
+    errors.push(
+      `Summary text ABSENT count (${summaryMatches.absent[1]}) does not match table count (${classificationCounts.ABSENT})`
+    );
+  }
+
+  // 5. Verify Prisma Schema models count against schema.prisma
+  const prismaContent = fs.readFileSync(PRISMA_SCHEMA_PATH, 'utf-8');
+  const prismaModels = prismaContent.match(/^model\s+\w+/gm) || [];
+  const actualModelCount = prismaModels.length;
+
+  if (actualModelCount !== 17) {
+    errors.push(`Expected 17 models in schema.prisma, found ${actualModelCount}`);
+  }
+
+  const inventorySchemaMatch = inventoryContent.match(/schema\.prisma[^\n]*?(\d+)\s+models/);
+  if (inventorySchemaMatch && Number(inventorySchemaMatch[1]) !== actualModelCount) {
+    errors.push(
+      `CURRENT-IMPLEMENTATION-INVENTORY.md references ${inventorySchemaMatch[1]} Prisma models, but schema.prisma has ${actualModelCount}`
+    );
+  }
+
+  const gapsContent = fs.readFileSync(GAPS_DOC_PATH, 'utf-8');
+  const gapsSchemaMatch = gapsContent.match(/schema\.prisma[^\n]*?(\d+)\s+(?:domain|PostgreSQL)\s+models/);
+  if (gapsSchemaMatch && Number(gapsSchemaMatch[1]) !== actualModelCount) {
+    errors.push(
+      `PROTOTYPE-GAPS-AND-RISKS.md references ${gapsSchemaMatch[1]} Prisma models, but schema.prisma has ${actualModelCount}`
+    );
+  }
+
   return {
     success: errors.length === 0,
     totalCatalog: catalogIds.size,
     totalInventory: inventoryIds.size,
     classifications: classificationCounts,
+    prismaModelsCount: actualModelCount,
     errors,
   };
 }
@@ -88,6 +148,7 @@ if (require.main === module) {
   const result = validateInventory();
   console.log(`Danh mục gốc: ${result.totalCatalog} tính năng`);
   console.log(`Bảng phân loại: ${result.totalInventory} tính năng`);
+  console.log(`Số mô hình Prisma: ${result.prismaModelsCount} models`);
   console.log('Phân bố thực tế:');
   console.log(` - REAL:      ${result.classifications.REAL || 0}`);
   console.log(` - PARTIAL:   ${result.classifications.PARTIAL || 0}`);
@@ -103,7 +164,7 @@ if (require.main === module) {
   }
 
   console.log(
-    '✅ Hoàn hảo: Tất cả 130 tính năng được định danh chính xác 1:1 với phân loại hợp lệ!\n'
+    '✅ Hoàn hảo: Tất cả 130 tính năng được định danh chính xác 1:1, khớp 100% tóm tắt và 17 mô hình Prisma!\n'
   );
   process.exit(0);
 }

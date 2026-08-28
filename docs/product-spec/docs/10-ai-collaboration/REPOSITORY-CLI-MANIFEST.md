@@ -10,31 +10,31 @@ Only `vinh05092001/shipde-platform` is cloned as product source. Upstream open-s
 
 ## Product workspaces
 
-| Local path | Git branch while parked | Owner | Purpose |
-|---|---|---|---|
-| `C:\Users\gumac\AI\shipde-platform` | `main` | Human | Protected integration baseline |
-| `C:\Users\gumac\AI\shipde-claude` | `agent/claude` | Claude | Business and solution analysis only |
-| `C:\Users\gumac\AI\shipde-dsh` | `agent/dsh` | 9Router/DSH | Bounded low-risk author |
-| `C:\Users\gumac\AI\shipde-gemini` | `agent/gemini` | Gemini | Primary implementation author |
-| `C:\Users\gumac\AI\shipde-codex` | `agent/codex-review` | Codex | Planning and fresh independent review |
+| Local path                          | Git branch while parked | Owner       | Purpose                               |
+| ----------------------------------- | ----------------------- | ----------- | ------------------------------------- |
+| `C:\Users\gumac\AI\shipde-platform` | `main`                  | Human       | Protected integration baseline        |
+| `C:\Users\gumac\AI\shipde-claude`   | `agent/claude`          | Claude      | Business and solution analysis only   |
+| `C:\Users\gumac\AI\shipde-dsh`      | `agent/dsh`             | 9Router/DSH | Bounded low-risk author               |
+| `C:\Users\gumac\AI\shipde-gemini`   | `agent/gemini`          | Gemini      | Primary implementation author         |
+| `C:\Users\gumac\AI\shipde-codex`    | `agent/codex-review`    | Codex       | Planning and fresh independent review |
 
 These are five worktrees of one Git repository, not five independent copies. Branches, commits, Pull Requests and CI are the shared memory between apps.
 
 ## Machine-wide CLI layer
 
-| Repository/product | Command | Install policy | Authentication or boundary |
-|---|---|---|---|
-| [Git](https://github.com/git-for-windows/git) | `git` | Existing installation | No shared credential file in the repository |
-| [GitHub CLI](https://github.com/cli/cli) | `gh` | Existing installation | Browser OAuth for `vinh05092001` |
-| [Node.js](https://github.com/nodejs/node) and npm | `node`, `npm` | Existing Node 24 installation | Runtime for agent CLIs only until foundation migration |
-| [pnpm](https://github.com/pnpm/pnpm) | `pnpm` | Install major 11 now; project pins the exact version in `TASK-FOUND-02` | Requires Node 22+; do not use against the current npm prototype before migration |
-| [Docker Desktop](https://github.com/docker/compose) / Compose | `docker`, `docker compose` | Install now through Windows Package Manager | Native Windows/Hyper-V or Docker backend; no Ubuntu worktree is required |
-| [9Router](https://github.com/decolua/9router) | `9router` | Install if missing; never auto-upgrade during an active Work Item | Bind to localhost; prompt injection and request logging off |
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | `dsh` | Pin `@deepseek-ai/dsh@0.1.1-rc.2` | Only the `shipde-dsh` worktree; credential kept outside Git |
-| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini` | Install as a supported fallback; record the resolved version | Sign in interactively with the approved Google account |
-| Google Antigravity CLI | `agy` | Install from Google's official installer when available | Preferred authenticated Gemini implementation client in `shipde-gemini` |
-| OpenAI Codex CLI | `codex` | Install if missing; record the resolved version | Sign in with ChatGPT; use the `shipde-codex` worktree for planning/review |
-| Claude Code | `claude` | Install if missing; record the resolved version | Business/solution analysis only in `shipde-claude`; AgentRouter token remains outside Git |
+| Repository/product                                                  | Command                    | Install policy                                                          | Authentication or boundary                                                                |
+| ------------------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [Git](https://github.com/git-for-windows/git)                       | `git`                      | Existing installation                                                   | No shared credential file in the repository                                               |
+| [GitHub CLI](https://github.com/cli/cli)                            | `gh`                       | Existing installation                                                   | Browser OAuth for `vinh05092001`                                                          |
+| [Node.js](https://github.com/nodejs/node) and npm                   | `node`, `npm`              | Existing Node 24 installation                                           | Runtime for agent CLIs only until foundation migration                                    |
+| [pnpm](https://github.com/pnpm/pnpm)                                | `pnpm`                     | Install major 11 now; project pins the exact version in `TASK-FOUND-02` | Requires Node 22+; do not use against the current npm prototype before migration          |
+| [Docker Desktop](https://github.com/docker/compose) / Compose       | `docker`, `docker compose` | Install now through Windows Package Manager                             | Native Windows/Hyper-V or Docker backend; no Ubuntu worktree is required                  |
+| [9Router](https://github.com/decolua/9router)                       | `9router`                  | Install if missing; never auto-upgrade during an active Work Item       | Bind to localhost; prompt injection and request logging off                               |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | `dsh`                      | Pin `@deepseek-ai/dsh@0.1.1-rc.2`                                       | Only the `shipde-dsh` worktree; credential kept outside Git                               |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli)           | `gemini`                   | Install as a supported fallback; record the resolved version            | Sign in interactively with the approved Google account                                    |
+| Google Antigravity CLI                                              | `agy`                      | Install from Google's official installer when available                 | Preferred authenticated Gemini implementation client in `shipde-gemini`                   |
+| OpenAI Codex CLI                                                    | `codex`                    | Install if missing; record the resolved version                         | Sign in with ChatGPT; use the `shipde-codex` worktree for planning/review                 |
+| Claude Code                                                         | `claude`                   | Install if missing; record the resolved version                         | Business/solution analysis only in `shipde-claude`; AgentRouter token remains outside Git |
 
 AgentRouter is a direct remote provider for Claude Code, not another product worktree and not a 9Router upstream. Its promotional balance is temporary capacity; the workflow must continue to work if that provider is removed.
 
@@ -44,16 +44,16 @@ The guarded installer is `scripts/ai/install-clis.ps1`. It previews by default, 
 
 These repositories become versioned dependencies inside `shipde-platform`; they are not global CLI installations.
 
-| Foundation item | Repository/package family | Required result |
-|---|---|---|
-| `TASK-FOUND-01` | [ESLint](https://github.com/eslint/eslint), Next.js ESLint integration, [Prettier](https://github.com/prettier/prettier), [Gitleaks](https://github.com/gitleaks/gitleaks) | Reproducible lint/format baseline and secret scanning without weakening rules |
-| `TASK-FOUND-02` | [pnpm](https://github.com/pnpm/pnpm), [Turborepo](https://github.com/vercel/turborepo) | pnpm 11 supply-chain defaults, exact `packageManager`, lockfile and root workspace commands |
-| `TASK-FOUND-03` | [NestJS](https://github.com/nestjs/nest), [Prisma](https://github.com/prisma/prisma), [BullMQ](https://github.com/taskforcesh/bullmq) | API, worker, migration and queue foundations with local health checks |
-| `TASK-FOUND-04` | [Vitest](https://github.com/vitest-dev/vitest), [Supertest](https://github.com/ladjs/supertest), [Playwright](https://github.com/microsoft/playwright) | Unit, API integration and browser E2E gates |
-| `TASK-FOUND-04` | [Storybook](https://github.com/storybookjs/storybook), `@storybook/addon-a11y`, [axe-core](https://github.com/dequelabs/axe-core) | Reviewable component states, interactions, keyboard/accessibility evidence |
-| `TASK-FOUND-04` | [MSW](https://github.com/mswjs/msw), [msw-storybook-addon](https://github.com/mswjs/msw-storybook-addon) | Deterministic API/carrier states without fake production behavior |
-| `TASK-FOUND-04` | [openapi-typescript](https://github.com/openapi-ts/openapi-typescript) and OpenAPI validation | Generated frontend contract types and drift detection |
-| `TASK-FOUND-04` | [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci) | Targeted performance budgets for approved critical routes, not every page on every local edit |
+| Foundation item | Repository/package family                                                                                                                                                  | Required result                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `TASK-FOUND-01` | [ESLint](https://github.com/eslint/eslint), Next.js ESLint integration, [Prettier](https://github.com/prettier/prettier), [Gitleaks](https://github.com/gitleaks/gitleaks) | Reproducible lint/format baseline and secret scanning without weakening rules                 |
+| `TASK-FOUND-02` | [pnpm](https://github.com/pnpm/pnpm), [Turborepo](https://github.com/vercel/turborepo)                                                                                     | pnpm 11 supply-chain defaults, exact `packageManager`, lockfile and root workspace commands   |
+| `TASK-FOUND-03` | [NestJS](https://github.com/nestjs/nest), [Prisma](https://github.com/prisma/prisma), [BullMQ](https://github.com/taskforcesh/bullmq)                                      | API, worker, migration and queue foundations with local health checks                         |
+| `TASK-FOUND-04` | [Vitest](https://github.com/vitest-dev/vitest), [Supertest](https://github.com/ladjs/supertest), [Playwright](https://github.com/microsoft/playwright)                     | Unit, API integration and browser E2E gates                                                   |
+| `TASK-FOUND-04` | [Storybook](https://github.com/storybookjs/storybook), `@storybook/addon-a11y`, [axe-core](https://github.com/dequelabs/axe-core)                                          | Reviewable component states, interactions, keyboard/accessibility evidence                    |
+| `TASK-FOUND-04` | [MSW](https://github.com/mswjs/msw), [msw-storybook-addon](https://github.com/mswjs/msw-storybook-addon)                                                                   | Deterministic API/carrier states without fake production behavior                             |
+| `TASK-FOUND-04` | [openapi-typescript](https://github.com/openapi-ts/openapi-typescript) and OpenAPI validation                                                                              | Generated frontend contract types and drift detection                                         |
+| `TASK-FOUND-04` | [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci)                                                                                                             | Targeted performance budgets for approved critical routes, not every page on every local edit |
 
 Nest, Prisma, Turbo, Playwright, Storybook and test CLIs must run through root package scripts (`pnpm ...`). Global copies are prohibited because agents could otherwise use different versions.
 
@@ -61,11 +61,11 @@ Nest, Prisma, Turbo, Playwright, Storybook and test CLIs must run through root p
 
 `TASK-FOUND-03` supplies Docker Compose with pinned image versions or digests for:
 
-| Service | Purpose | Local installation rule |
-|---|---|---|
-| PostgreSQL 16+ | Primary relational data and migrations | Container only; do not install a second native PostgreSQL service |
-| Redis | Queue and cache backing service | Container only |
-| MinIO or another approved S3-compatible image | Local object storage | Container only; production provider is configured separately |
+| Service                                       | Purpose                                | Local installation rule                                           |
+| --------------------------------------------- | -------------------------------------- | ----------------------------------------------------------------- |
+| PostgreSQL 16+                                | Primary relational data and migrations | Container only; do not install a second native PostgreSQL service |
+| Redis                                         | Queue and cache backing service        | Container only                                                    |
+| MinIO or another approved S3-compatible image | Local object storage                   | Container only; production provider is configured separately      |
 
 Carrier APIs, bank APIs, SMS/Zalo and production object storage are mocked or disabled until a dedicated Work Item contains verified credentials, capability evidence and safe fallback behavior.
 

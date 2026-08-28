@@ -9,13 +9,13 @@
 
 ### Serviceability decision
 
-| Carrier response | Input valid | Result | User action |
-|---|---:|---|---|
-| Supported services returned | Yes | AVAILABLE | Quote |
-| Explicit route/parcel rejection | Yes | UNSUPPORTED | Show reason/edit |
-| Timeout/5xx | Yes | UNKNOWN_ERROR | Retry/manual |
-| Authentication/permission error | Yes | ACCOUNT_ACTION_REQUIRED | Fix connection |
-| Input invalid | No | INPUT_REQUIRED | Correct fields |
+| Carrier response                | Input valid | Result                  | User action      |
+| ------------------------------- | ----------: | ----------------------- | ---------------- |
+| Supported services returned     |         Yes | AVAILABLE               | Quote            |
+| Explicit route/parcel rejection |         Yes | UNSUPPORTED             | Show reason/edit |
+| Timeout/5xx                     |         Yes | UNKNOWN_ERROR           | Retry/manual     |
+| Authentication/permission error |         Yes | ACCOUNT_ACTION_REQUIRED | Fix connection   |
+| Input invalid                   |          No | INPUT_REQUIRED          | Correct fields   |
 
 ## Quote and recommendation
 
@@ -36,14 +36,14 @@
 
 ### Create command decision
 
-| Local command | Carrier response | Remote lookup | Next action |
-|---|---|---|---|
-| New | Success with waybill | Not needed | Confirm created |
-| New | Explicit business error | Not needed | Fail with action |
-| New | Timeout/connection loss | Found by client reference | Confirm created |
-| New | Timeout/connection loss | Not found after bounded reconciliation window | Retry same idempotency lineage |
-| Existing completed | Any duplicate request | Existing waybill | Return existing result |
-| Unknown beyond policy | Unknown | Unknown | Manual reconciliation; no blind retry |
+| Local command         | Carrier response        | Remote lookup                                 | Next action                           |
+| --------------------- | ----------------------- | --------------------------------------------- | ------------------------------------- |
+| New                   | Success with waybill    | Not needed                                    | Confirm created                       |
+| New                   | Explicit business error | Not needed                                    | Fail with action                      |
+| New                   | Timeout/connection loss | Found by client reference                     | Confirm created                       |
+| New                   | Timeout/connection loss | Not found after bounded reconciliation window | Retry same idempotency lineage        |
+| Existing completed    | Any duplicate request   | Existing waybill                              | Return existing result                |
+| Unknown beyond policy | Unknown                 | Unknown                                       | Manual reconciliation; no blind retry |
 
 ## Tracking and exceptions
 
@@ -71,14 +71,14 @@ Milestones are predicted from Settlement Policy:
 - B: next expected batch close.
 - C: expected carrier transfer.
 
-| Condition | Classification |
-|---|---|
-| Before A | NOT_ELIGIBLE |
-| A ≤ now < B | ELIGIBLE_WAITING_BATCH |
-| B ≤ now < C | BATCH_CLOSED_WAITING_TRANSFER |
-| now ≥ C, no statement line, no valid exclusion | OVERDUE_MISSING_COD_SUSPECTED |
-| Account-level threshold/carry rule proves exclusion | VALID_EXCLUSION |
-| Any required milestone cannot be calculated | DATA_INCOMPLETE |
+| Condition                                           | Classification                |
+| --------------------------------------------------- | ----------------------------- |
+| Before A                                            | NOT_ELIGIBLE                  |
+| A ≤ now < B                                         | ELIGIBLE_WAITING_BATCH        |
+| B ≤ now < C                                         | BATCH_CLOSED_WAITING_TRANSFER |
+| now ≥ C, no statement line, no valid exclusion      | OVERDUE_MISSING_COD_SUSPECTED |
+| Account-level threshold/carry rule proves exclusion | VALID_EXCLUSION               |
+| Any required milestone cannot be calculated         | DATA_INCOMPLETE               |
 
 BR-MIS-01: Minimum remittance threshold is evaluated at account/batch aggregate plus opening carry-forward, never each waybill independently.
 
@@ -100,17 +100,16 @@ BR-MIS-01: Minimum remittance threshold is evaluated at account/batch aggregate 
 
 ### Claim submission decision
 
-| Complete evidence | Policy verified | Within deadline | Auto enabled/limit | Result |
-|---:|---:|---:|---:|---|
-| No | Any | Any | Any | NEEDS_EVIDENCE |
-| Yes | No | Any | Any | MANUAL_REVIEW |
-| Yes | Yes | No | Any | EXPIRED_DO_NOT_PROMISE_RECOVERY |
-| Yes | Yes | Yes | No | READY_FOR_CONFIRMATION |
-| Yes | Yes | Yes | Yes | AUTO_SUBMIT_ELIGIBLE |
+| Complete evidence | Policy verified | Within deadline | Auto enabled/limit | Result                          |
+| ----------------: | --------------: | --------------: | -----------------: | ------------------------------- |
+|                No |             Any |             Any |                Any | NEEDS_EVIDENCE                  |
+|               Yes |              No |             Any |                Any | MANUAL_REVIEW                   |
+|               Yes |             Yes |              No |                Any | EXPIRED_DO_NOT_PROMISE_RECOVERY |
+|               Yes |             Yes |             Yes |                 No | READY_FOR_CONFIRMATION          |
+|               Yes |             Yes |             Yes |                Yes | AUTO_SUBMIT_ELIGIBLE            |
 
 ## Billing
 
 - BR-BIL-01: Bill once at first conclusive audit using tenant + carrier account + waybill.
 - BR-BIL-02: No billing for not-eligible or data-incomplete.
 - BR-BIL-03: Rerun, revision, carry-forward and claim follow-up do not rebill.
-

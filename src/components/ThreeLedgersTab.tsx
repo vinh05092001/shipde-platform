@@ -36,26 +36,7 @@ export const ThreeLedgersTab: React.FC = () => {
   };
 
   useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try {
-        const res = await fetch('/api/ledgers');
-        const data = await res.json();
-        if (active && data.success) {
-          setReport(data.data);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    };
-    void load();
-    return () => {
-      active = false;
-    };
+    fetchLedgers();
   }, []);
 
   const handleExportCsv = () => {

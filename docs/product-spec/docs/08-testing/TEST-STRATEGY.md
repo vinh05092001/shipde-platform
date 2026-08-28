@@ -2,18 +2,18 @@
 
 ## Test levels
 
-| Level | Purpose |
-|---|---|
-| Unit | Rules, calculations, value objects and state transitions |
+| Level              | Purpose                                                    |
+| ------------------ | ---------------------------------------------------------- |
+| Unit               | Rules, calculations, value objects and state transitions   |
 | Property/invariant | Allocation, totals, idempotency and money-level invariants |
-| API integration | Database, authorization, migration and endpoint contracts |
-| Carrier contract | Adapter mapping against mock/sandbox evidence |
-| Worker/event | Queue retry, inbox/outbox, dedupe and dead-letter |
-| Component | Forms, tables, permission and states |
-| E2E | User journey across frontend/backend |
-| Security | Tenant isolation, auth, secret/PII and webhook |
-| Performance | Quote fan-out, tables/imports/audit/jobs |
-| UAT | Business acceptance with shop/operator examples |
+| API integration    | Database, authorization, migration and endpoint contracts  |
+| Carrier contract   | Adapter mapping against mock/sandbox evidence              |
+| Worker/event       | Queue retry, inbox/outbox, dedupe and dead-letter          |
+| Component          | Forms, tables, permission and states                       |
+| E2E                | User journey across frontend/backend                       |
+| Security           | Tenant isolation, auth, secret/PII and webhook             |
+| Performance        | Quote fan-out, tables/imports/audit/jobs                   |
+| UAT                | Business acceptance with shop/operator examples            |
 
 ## Mandatory invariants
 
@@ -45,4 +45,3 @@
 - Build.
 - E2E smoke.
 - Dependency/secret scan.
-

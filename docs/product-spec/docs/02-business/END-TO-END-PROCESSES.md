@@ -4,28 +4,28 @@
 
 \`\`\`mermaid
 flowchart LR
-  A[Register and configure shop] --> B[Connect carrier accounts]
-  B --> C[Create or import source order]
-  C --> D[Normalize address]
-  D --> E[Check serviceability]
-  E --> F[Get live quotes]
-  F --> G[Recommend and select carrier]
-  G --> H[Create shipment]
-  H --> I[Label and pickup]
-  I --> J[Track]
-  J --> K{Exception?}
-  K -- Yes --> L[Workbox and recovery action]
-  L --> J
-  K -- Return --> M[Receive return with evidence]
-  K -- Delivered --> N[Settlement eligibility]
-  N --> O[Import carrier statement]
-  O --> P[Match and audit]
-  P --> Q[Batch and bank reconciliation]
-  Q --> R{Finding?}
-  R -- No --> S[Close period]
-  R -- Yes --> T[Case and claim]
-  T --> U[Carrier outcome and recovery]
-  U --> S
+A[Register and configure shop] --> B[Connect carrier accounts]
+B --> C[Create or import source order]
+C --> D[Normalize address]
+D --> E[Check serviceability]
+E --> F[Get live quotes]
+F --> G[Recommend and select carrier]
+G --> H[Create shipment]
+H --> I[Label and pickup]
+I --> J[Track]
+J --> K{Exception?}
+K -- Yes --> L[Workbox and recovery action]
+L --> J
+K -- Return --> M[Receive return with evidence]
+K -- Delivered --> N[Settlement eligibility]
+N --> O[Import carrier statement]
+O --> P[Match and audit]
+P --> Q[Batch and bank reconciliation]
+Q --> R{Finding?}
+R -- No --> S[Close period]
+R -- Yes --> T[Case and claim]
+T --> U[Carrier outcome and recovery]
+U --> S
 \`\`\`
 
 ## PR-01 Onboard a shop
@@ -114,4 +114,3 @@ No-carrier flow:
 7. Track full/partial acceptance, rejection, supplement and unpaid state.
 8. Link actual recovery to bank evidence when available.
 9. Close with recovered-full or closed-unrecovered outcome.
-

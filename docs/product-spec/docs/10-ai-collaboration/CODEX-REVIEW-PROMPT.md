@@ -30,4 +30,3 @@ PASS requires: all acceptance rows pass, CI evidence is valid, no unresolved con
 ```
 
 For the human-gated semi-automatic handoff, the controller detaches the dedicated Codex worktree at the immutable PR head, starts a fresh non-interactive review and saves the report outside Git. The human confirms before posting it and remains the only merge owner. This manual prompt is the recovery path and never weakens the requirement-by-requirement acceptance review.
-

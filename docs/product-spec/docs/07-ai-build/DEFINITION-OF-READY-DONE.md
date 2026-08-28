@@ -47,4 +47,3 @@ In addition:
 - Backup/restore and rollback rehearsed.
 - Production carrier capabilities have partner evidence.
 - UAT sign-off and operational runbooks complete.
-

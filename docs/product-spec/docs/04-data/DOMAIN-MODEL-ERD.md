@@ -34,34 +34,34 @@
 
 \`\`\`mermaid
 erDiagram
-  TENANT ||--o{ USER_MEMBERSHIP : has
-  TENANT ||--o{ SHOP : owns
-  SHOP ||--o{ BRANCH : has
-  BRANCH ||--o{ WAREHOUSE : has
-  SHOP ||--o{ CARRIER_ACCOUNT : connects
-  WAREHOUSE ||--o{ SOURCE_ORDER : originates
-  SOURCE_ORDER ||--|{ ORDER_ITEM : contains
-  SOURCE_ORDER ||--|{ PARCEL : packs
-  SOURCE_ORDER ||--o{ QUOTE_REQUEST : requests
-  QUOTE_REQUEST ||--o{ CARRIER_QUOTE : returns
-  CARRIER_QUOTE ||--o| ROUTING_DECISION : selected
-  SOURCE_ORDER ||--o{ SHIPMENT : fulfills
-  SHIPMENT ||--o{ SHIPMENT_COMMAND : changes
-  SHIPMENT ||--o{ TRACKING_EVENT : records
-  SHIPMENT ||--o{ OPERATIONAL_EXCEPTION : raises
-  SHIPMENT ||--o| RETURN_RECEIPT : returns
-  CARRIER_ACCOUNT ||--o{ RATE_CONTRACT_VERSION : prices
-  CARRIER_ACCOUNT ||--o{ SETTLEMENT_POLICY_VERSION : settles
-  AUDIT_PERIOD ||--o{ AUDIT_RUN : runs
-  AUDIT_RUN ||--o{ PROCESSING_RESULT : produces
-  PROCESSING_RESULT ||--o{ FINDING : contains
-  FINDING ||--o| DISCREPANCY_CASE : opens
-  SETTLEMENT_BATCH ||--o{ SETTLEMENT_LINE : contains
-  SETTLEMENT_BATCH ||--o{ BATCH_BANK_ALLOCATION : allocates
-  BANK_TRANSACTION ||--o{ BATCH_BANK_ALLOCATION : allocates
-  DISCREPANCY_CASE ||--o{ CASE_EVENT : history
-  DISCREPANCY_CASE ||--o{ CLAIM_SUBMISSION : submits
-  DISCREPANCY_CASE ||--o{ RECOVERY_RECEIPT : recovers
+TENANT ||--o{ USER_MEMBERSHIP : has
+TENANT ||--o{ SHOP : owns
+SHOP ||--o{ BRANCH : has
+BRANCH ||--o{ WAREHOUSE : has
+SHOP ||--o{ CARRIER_ACCOUNT : connects
+WAREHOUSE ||--o{ SOURCE_ORDER : originates
+SOURCE_ORDER ||--|{ ORDER_ITEM : contains
+SOURCE_ORDER ||--|{ PARCEL : packs
+SOURCE_ORDER ||--o{ QUOTE_REQUEST : requests
+QUOTE_REQUEST ||--o{ CARRIER_QUOTE : returns
+CARRIER_QUOTE ||--o| ROUTING_DECISION : selected
+SOURCE_ORDER ||--o{ SHIPMENT : fulfills
+SHIPMENT ||--o{ SHIPMENT_COMMAND : changes
+SHIPMENT ||--o{ TRACKING_EVENT : records
+SHIPMENT ||--o{ OPERATIONAL_EXCEPTION : raises
+SHIPMENT ||--o| RETURN_RECEIPT : returns
+CARRIER_ACCOUNT ||--o{ RATE_CONTRACT_VERSION : prices
+CARRIER_ACCOUNT ||--o{ SETTLEMENT_POLICY_VERSION : settles
+AUDIT_PERIOD ||--o{ AUDIT_RUN : runs
+AUDIT_RUN ||--o{ PROCESSING_RESULT : produces
+PROCESSING_RESULT ||--o{ FINDING : contains
+FINDING ||--o| DISCREPANCY_CASE : opens
+SETTLEMENT_BATCH ||--o{ SETTLEMENT_LINE : contains
+SETTLEMENT_BATCH ||--o{ BATCH_BANK_ALLOCATION : allocates
+BANK_TRANSACTION ||--o{ BATCH_BANK_ALLOCATION : allocates
+DISCREPANCY_CASE ||--o{ CASE_EVENT : history
+DISCREPANCY_CASE ||--o{ CLAIM_SUBMISSION : submits
+DISCREPANCY_CASE ||--o{ RECOVERY_RECEIPT : recovers
 \`\`\`
 
 ## Modeling rules
@@ -74,4 +74,3 @@ erDiagram
 - Timestamps are UTC; business display and settlement calendar use Asia/Ho_Chi_Minh unless policy says otherwise.
 - Historical snapshots reference exact rule/data versions.
 - Soft delete is limited to configurable/master data. Financial, command, audit and evidence records are append-only or status-closed.
-

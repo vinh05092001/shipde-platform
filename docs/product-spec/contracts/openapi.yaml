@@ -406,7 +406,8 @@ components:
           writeOnly: true
     SourceOrderInput:
       type: object
-      required: [source_order_code, warehouse_id, recipient, address, parcels, expected_cod_vnd, fee_payer]
+      required:
+        [source_order_code, warehouse_id, recipient, address, parcels, expected_cod_vnd, fee_payer]
       properties:
         source_order_code:
           type: string
@@ -560,4 +561,3 @@ components:
       properties:
         correlation_id:
           type: string
-

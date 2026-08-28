@@ -92,4 +92,3 @@ When documents conflict, apply this order:
 6. Backlog and AI prompts.
 
 An implementation must not silently resolve a conflict. Record it in the decision/open-issue register.
-

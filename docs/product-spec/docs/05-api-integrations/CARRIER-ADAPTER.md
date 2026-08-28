@@ -11,22 +11,22 @@
 
 \`\`\`typescript
 interface CarrierAdapter {
-  testConnection(ctx: AccountContext): Promise<ConnectionTest>;
-  getCapabilities(ctx: AccountContext): Promise<CapabilitySet>;
-  normalizeAddress(input: CanonicalAddress): Promise<AddressMappingResult>;
-  checkServiceability(input: ServiceabilityRequest): Promise<ServiceabilityResult>;
-  getQuotes(input: QuoteRequest): Promise<CarrierQuote[]>;
-  createShipment(input: CreateShipmentRequest, idem: IdempotencyContext): Promise<CommandResult>;
-  findShipmentByClientRef(input: ClientReferenceLookup): Promise<RemoteShipmentLookup>;
-  getShipment(input: ShipmentLookup): Promise<CarrierShipment>;
-  updateShipment(input: UpdateShipmentRequest, idem: IdempotencyContext): Promise<CommandResult>;
-  cancelShipment(input: CancelShipmentRequest, idem: IdempotencyContext): Promise<CommandResult>;
-  getLabel(input: LabelRequest): Promise<LabelResult>;
-  requestPickup(input: PickupRequest, idem: IdempotencyContext): Promise<CommandResult>;
-  trackShipment(input: ShipmentLookup): Promise<CarrierTrackingResult>;
-  requestRedelivery(input: RedeliveryRequest, idem: IdempotencyContext): Promise<CommandResult>;
-  fetchSettlement(input: SettlementRequest): Promise<SettlementResult>;
-  submitClaim(input: ClaimRequest, idem: IdempotencyContext): Promise<CommandResult>;
+testConnection(ctx: AccountContext): Promise<ConnectionTest>;
+getCapabilities(ctx: AccountContext): Promise<CapabilitySet>;
+normalizeAddress(input: CanonicalAddress): Promise<AddressMappingResult>;
+checkServiceability(input: ServiceabilityRequest): Promise<ServiceabilityResult>;
+getQuotes(input: QuoteRequest): Promise<CarrierQuote[]>;
+createShipment(input: CreateShipmentRequest, idem: IdempotencyContext): Promise<CommandResult>;
+findShipmentByClientRef(input: ClientReferenceLookup): Promise<RemoteShipmentLookup>;
+getShipment(input: ShipmentLookup): Promise<CarrierShipment>;
+updateShipment(input: UpdateShipmentRequest, idem: IdempotencyContext): Promise<CommandResult>;
+cancelShipment(input: CancelShipmentRequest, idem: IdempotencyContext): Promise<CommandResult>;
+getLabel(input: LabelRequest): Promise<LabelResult>;
+requestPickup(input: PickupRequest, idem: IdempotencyContext): Promise<CommandResult>;
+trackShipment(input: ShipmentLookup): Promise<CarrierTrackingResult>;
+requestRedelivery(input: RedeliveryRequest, idem: IdempotencyContext): Promise<CommandResult>;
+fetchSettlement(input: SettlementRequest): Promise<SettlementResult>;
+submitClaim(input: ClaimRequest, idem: IdempotencyContext): Promise<CommandResult>;
 }
 \`\`\`
 
@@ -71,4 +71,3 @@ Only REJECTED known-safe or verified not-found permits a new attempt according t
 - State transition.
 - Notifications/workbox.
 - Audit and billing.
-

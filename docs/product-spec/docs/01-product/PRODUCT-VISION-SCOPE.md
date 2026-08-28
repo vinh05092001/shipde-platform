@@ -75,4 +75,3 @@ Operational users:
 The product is complete only when the primary end-to-end journey runs without database/admin intervention:
 
 Create shop → connect carrier → create/import order → serviceability → quote → select → create waybill → label/pickup → tracking/exception/return → settlement audit → claim/report.
-

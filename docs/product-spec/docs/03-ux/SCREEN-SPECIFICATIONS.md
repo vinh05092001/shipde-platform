@@ -186,4 +186,3 @@ Sections:
 - Carry-forward periods.
 
 High-impact state transitions require reason/evidence and may require approval.
-

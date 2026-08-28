@@ -2,18 +2,18 @@
 
 ## Control
 
-| Field | Value |
-|---|---|
-| Work Item ID | `TASK-AI-01` |
-| Feature ID | `N/A` |
-| Status | `READY_FOR_CODEX` |
-| Dependencies | Existing product specification and CI baseline at commit `31a75ae` |
-| Assigned author | `Codex document owner` |
-| Risk | `LOW` |
-| Allowed paths | `AGENTS.md`, `.agents/**`, `.github/**`, `.gitignore`, `scripts/ai/**`, `docs/product-spec/**` |
-| Reviewer | `Fresh independent Codex task plus human merge owner` |
-| Branch | `chore/ai-semi-manual-workflow` |
-| Pull Request | `#1` |
+| Field           | Value                                                                                          |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| Work Item ID    | `TASK-AI-01`                                                                                   |
+| Feature ID      | `N/A`                                                                                          |
+| Status          | `READY_FOR_CODEX`                                                                              |
+| Dependencies    | Existing product specification and CI baseline at commit `31a75ae`                             |
+| Assigned author | `Codex document owner`                                                                         |
+| Risk            | `LOW`                                                                                          |
+| Allowed paths   | `AGENTS.md`, `.agents/**`, `.github/**`, `.gitignore`, `scripts/ai/**`, `docs/product-spec/**` |
+| Reviewer        | `Fresh independent Codex task plus human merge owner`                                          |
+| Branch          | `chore/ai-semi-manual-workflow`                                                                |
+| Pull Request    | `#1`                                                                                           |
 
 ## Business outcome
 
@@ -88,17 +88,17 @@ None. No runtime contract, event, migration or product data is changed.
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
-|---|---|---|---|
-| `AC-AI-01` | Any agent opens the repository | Root and nested `AGENTS.md` describe the same human-gated semi-automatic roles and source precedence | File diff and documentation validator |
-| `AC-AI-02` | Human assigns a prepared item | Separate Gemini and 9Router prompts enforce branch, scope, evidence and stop conditions | Prompt files and workflow cross-references |
-| `AC-AI-03` | Planning marks an item ready | Register, template and validator accept `READY_FOR_AUTHOR` consistently | CSV and validator evidence |
-| `AC-AI-04` | An agent begins UI/code work | No Ponytail always-on rule or skill can override completeness or UX sources | Deleted `.agents` files and root UI rule |
-| `AC-AI-05` | Pull Request opens | `contract` and `application-gate` must both succeed; a default-application path policy runs install, lint, build and E2E for every path not explicitly classified as control/documentation-only | GitHub Actions results and scope-detection log |
-| `AC-AI-06` | Human completes Windows setup | Versioned scripts verify worktrees, every selected agent authentication route with bounded non-secret probes, Docker, local services and current free-model availability without persisting a secret | PowerShell parse gate and post-merge doctor output |
-| `AC-AI-07` | DSH uses 9Router | Provider fields, model route, disabled prompt injection and escalation boundaries are explicit | Toolchain decision and Windows runbook |
-| `AC-AI-08` | Human asks which repositories and CLIs are required | Every product workspace, global CLI, project dependency, Docker service, focused agent guidance and exclusion has one owner and installation phase | Repository/CLI manifest, installer preview and Foundation mapping |
-| `AC-AI-09` | Human runs controller `Resume` | Controller chooses planning, assigned author or Codex review from Git/GitHub state; it blocks drafts, requires both named gates, detaches and re-verifies the immutable head SHA, stops on dirty/multiple/moved states and never merges | `scripts/ai/control.ps1`, PowerShell parser gate and dry status evidence |
+| AC/Test ID | Scenario                                            | Expected result                                                                                                                                                                                                                         | Evidence required                                                        |
+| ---------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `AC-AI-01` | Any agent opens the repository                      | Root and nested `AGENTS.md` describe the same human-gated semi-automatic roles and source precedence                                                                                                                                    | File diff and documentation validator                                    |
+| `AC-AI-02` | Human assigns a prepared item                       | Separate Gemini and 9Router prompts enforce branch, scope, evidence and stop conditions                                                                                                                                                 | Prompt files and workflow cross-references                               |
+| `AC-AI-03` | Planning marks an item ready                        | Register, template and validator accept `READY_FOR_AUTHOR` consistently                                                                                                                                                                 | CSV and validator evidence                                               |
+| `AC-AI-04` | An agent begins UI/code work                        | No Ponytail always-on rule or skill can override completeness or UX sources                                                                                                                                                             | Deleted `.agents` files and root UI rule                                 |
+| `AC-AI-05` | Pull Request opens                                  | `contract` and `application-gate` must both succeed; a default-application path policy runs install, lint, build and E2E for every path not explicitly classified as control/documentation-only                                         | GitHub Actions results and scope-detection log                           |
+| `AC-AI-06` | Human completes Windows setup                       | Versioned scripts verify worktrees, every selected agent authentication route with bounded non-secret probes, Docker, local services and current free-model availability without persisting a secret                                    | PowerShell parse gate and post-merge doctor output                       |
+| `AC-AI-07` | DSH uses 9Router                                    | Provider fields, model route, disabled prompt injection and escalation boundaries are explicit                                                                                                                                          | Toolchain decision and Windows runbook                                   |
+| `AC-AI-08` | Human asks which repositories and CLIs are required | Every product workspace, global CLI, project dependency, Docker service, focused agent guidance and exclusion has one owner and installation phase                                                                                      | Repository/CLI manifest, installer preview and Foundation mapping        |
+| `AC-AI-09` | Human runs controller `Resume`                      | Controller chooses planning, assigned author or Codex review from Git/GitHub state; it blocks drafts, requires both named gates, detaches and re-verifies the immutable head SHA, stops on dirty/multiple/moved states and never merges | `scripts/ai/control.ps1`, PowerShell parser gate and dry status evidence |
 
 ## Verification commands
 
@@ -128,12 +128,11 @@ These npm commands are replaced atomically by the documented root pnpm commands 
 
 ## Codex review record
 
-| Review round | Commit | Verdict | Findings resolved |
-|---|---|---|---|
-| 1 | `c8dd4c69` | `CHANGES_REQUIRED` | Seven P1/P2 findings recorded in PR comment |
-| 2 | Correction head on PR #1 | Pending fresh review | PR protection, path scope, immutable review SHA, exact gates, draft blocking, agent authentication and all-ID Work Item validation |
+| Review round | Commit                   | Verdict              | Findings resolved                                                                                                                  |
+| ------------ | ------------------------ | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 1            | `c8dd4c69`               | `CHANGES_REQUIRED`   | Seven P1/P2 findings recorded in PR comment                                                                                        |
+| 2            | Correction head on PR #1 | Pending fresh review | PR protection, path scope, immutable review SHA, exact gates, draft blocking, agent authentication and all-ID Work Item validation |
 
 ## Residual limitations
 
 Account sign-in, API key entry, Docker Desktop terms/restart and application of GitHub branch protection remain explicit human actions because credentials and legal/admin approvals must not be automated or committed. Guarded commands and deterministic checks are ready. The prototype currently declares an `eslint` script without the `eslint` development dependency; `TASK-FOUND-01` must repair and prove the application baseline before product feature work.
-
