@@ -508,7 +508,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
         {
           id: 'tier_1',
           rate_card_id: 'rc_smoke',
-          route_type: 'INTRA_PROVINCE',
+          route_type: 'INTRA_PROVINCE' as const,
           weight_from_g: 0,
           weight_to_g: 500,
           base_fee: 22000,
@@ -609,6 +609,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
           deadline_at: new Date(),
           created_at: new Date(),
           updated_at: new Date(),
+          requested_amount: 50000,
           accepted_amount: 50000,
           recovered_amount: 50000,
         },
