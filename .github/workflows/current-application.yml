@@ -67,6 +67,22 @@ jobs:
       - run: npm run format:check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
+      - name: Verify Formatting Invalid BASE_SHA Fail-Closed Proof
+        run: |
+          set +e
+          BASE_SHA="invalid-sha-deadbeef-00000000000000000000" npm run format:check
+          NORMAL_EXIT_CODE=$?
+          BASE_SHA="invalid-sha-deadbeef-00000000000000000000" npm run format:check -- --test-negative
+          NEGATIVE_EXIT_CODE=$?
+          set -e
+          echo "Invalid BASE_SHA normal check returned exit code: $NORMAL_EXIT_CODE"
+          echo "Invalid BASE_SHA negative proof returned exit code: $NEGATIVE_EXIT_CODE"
+          if [ "$NORMAL_EXIT_CODE" -eq 2 ] && [ "$NEGATIVE_EXIT_CODE" -eq 2 ]; then
+            echo "Success: Invalid BASE_SHA correctly failed closed with exact code 2 in both normal and negative modes without falling back."
+          else
+            echo "Error: Expected invalid BASE_SHA to exit with exact code 2 in both modes, but got normal=$NORMAL_EXIT_CODE, negative=$NEGATIVE_EXIT_CODE!"
+            exit 1
+          fi
       - name: Verify Formatting Negative Proof
         run: |
           set +e

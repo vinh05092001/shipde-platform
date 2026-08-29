@@ -54,49 +54,63 @@ export function isPrettierSupported(filePath: string): boolean {
   return SUPPORTED_EXTENSIONS.has(ext);
 }
 
+function tryResolveMergeBase(cand: string, rootDir: string): string | null {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${cand}^{commit}`], {
+      cwd: rootDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const mergeBase = execFileSync('git', ['merge-base', cand, 'HEAD'], {
+      cwd: rootDir,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+
+    if (mergeBase) {
+      return mergeBase;
+    }
+  } catch {
+    // Cannot resolve candidate
+  }
+  return null;
+}
+
 export function resolveGitBase(baseRefCandidate?: string, rootDir: string = process.cwd()): string {
-  const candidates: string[] = [];
+  const explicitCandidate = baseRefCandidate?.trim() || process.env.BASE_SHA?.trim();
 
-  if (baseRefCandidate) {
-    candidates.push(baseRefCandidate);
+  // 1. If an explicit candidate or BASE_SHA is supplied, it is authoritative and MUST resolve.
+  if (explicitCandidate) {
+    const resolved = tryResolveMergeBase(explicitCandidate, rootDir);
+    if (resolved) {
+      return resolved;
+    }
+    throw new Error(
+      `[verify-formatting] Explicitly supplied base '${explicitCandidate}' is invalid or cannot be resolved to a merge-base with HEAD.`
+    );
   }
-  if (process.env.BASE_SHA) {
-    candidates.push(process.env.BASE_SHA);
+
+  // 2. Only when NO explicit candidate was provided, try fallback candidates in order.
+  const fallbackCandidates: string[] = [];
+  if (process.env.GITHUB_BASE_REF?.trim()) {
+    fallbackCandidates.push(`origin/${process.env.GITHUB_BASE_REF.trim()}`);
+    fallbackCandidates.push(process.env.GITHUB_BASE_REF.trim());
   }
-  if (process.env.GITHUB_BASE_REF) {
-    candidates.push(`origin/${process.env.GITHUB_BASE_REF}`);
-    candidates.push(process.env.GITHUB_BASE_REF);
-  }
-  candidates.push('origin/main');
-  candidates.push('main');
-  candidates.push('HEAD~1');
+  fallbackCandidates.push('origin/main');
+  fallbackCandidates.push('main');
+  fallbackCandidates.push('HEAD~1');
 
-  for (const cand of candidates) {
-    if (!cand) continue;
-    try {
-      execFileSync('git', ['rev-parse', '--verify', '--quiet', `${cand}^{commit}`], {
-        cwd: rootDir,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      const mergeBase = execFileSync('git', ['merge-base', cand, 'HEAD'], {
-        cwd: rootDir,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }).trim();
-
-      if (mergeBase) {
-        return mergeBase;
-      }
-    } catch {
-      // Try next candidate
+  for (const cand of fallbackCandidates) {
+    const resolved = tryResolveMergeBase(cand, rootDir);
+    if (resolved) {
+      return resolved;
     }
   }
 
   throw new Error(
-    `[verify-formatting] Không thể xác định Git merge-base từ các ứng viên: ${candidates
-      .filter(Boolean)
-      .join(', ')}. Hãy kiểm tra git fetch/checkout.`
+    `[verify-formatting] Không thể xác định Git merge-base từ các ứng viên fallback: ${fallbackCandidates.join(
+      ', '
+    )}. Hãy kiểm tra git fetch/checkout.`
   );
 }
 
@@ -184,13 +198,14 @@ export async function checkFileFormatting(
 
 export async function verifyFormatting(
   targetFiles?: string[],
-  rootDir: string = process.cwd()
+  rootDir: string = process.cwd(),
+  baseRef?: string
 ): Promise<{
   totalFiles: number;
   unformattedFiles: FormatCheckResult[];
   checkedFiles: string[];
 }> {
-  const filesToCheck = (targetFiles || getChangedFiles(undefined, rootDir)).filter(
+  const filesToCheck = (targetFiles || getChangedFiles(baseRef, rootDir)).filter(
     (f) => isPrettierSupported(f) && fs.existsSync(path.isAbsolute(f) ? f : path.join(rootDir, f))
   );
 
@@ -232,6 +247,7 @@ if (require.main === module) {
 
       let detected = false;
       let errorDetail = '';
+      let executionError: any = null;
 
       try {
         // Exercise full verifyFormatting() without targetFiles to test getChangedFiles + git status enumeration
@@ -254,6 +270,8 @@ if (require.main === module) {
           errorDetail =
             'Tệp fixture âm tính được tự động phát hiện qua git status và bắt lỗi định dạng thành công.';
         }
+      } catch (err: any) {
+        executionError = err;
       } finally {
         if (fs.existsSync(tempFixture)) {
           try {
@@ -262,8 +280,15 @@ if (require.main === module) {
         }
       }
 
+      if (executionError) {
+        console.error(
+          `❌ LỖI THỰC THI/CẤU HÌNH TRONG BÀI TEST ÂM TÍNH (exit code 2): ${executionError?.message || executionError}`
+        );
+        process.exit(2);
+      }
+
       if (detected) {
-        console.error(`🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XAC: ${errorDetail}`);
+        console.error(`🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XÁC: ${errorDetail}`);
         console.error(
           '   [AC-FOUND-01-05 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện tệp có định dạng sai lệch qua toàn bộ luồng enumeration.\n'
         );
@@ -276,30 +301,35 @@ if (require.main === module) {
       }
     }
 
-    const { totalFiles, unformattedFiles, checkedFiles } = await verifyFormatting();
+    try {
+      const { totalFiles, unformattedFiles, checkedFiles } = await verifyFormatting();
 
-    console.log(
-      `Đã phát hiện và quét ${totalFiles} tệp tin được Prettier hỗ trợ trong phạm vi thay đổi:`
-    );
-    for (const f of checkedFiles) {
-      console.log(` - ${f}`);
-    }
-    console.log('');
-
-    if (unformattedFiles.length > 0) {
-      console.error(
-        `❌ PHÁT HIỆN ${unformattedFiles.length} TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:`
+      console.log(
+        `Đã phát hiện và quét ${totalFiles} tệp tin được Prettier hỗ trợ trong phạm vi thay đổi:`
       );
-      for (const u of unformattedFiles) {
-        console.error(` - ${u.filePath}${u.error ? ` (Lỗi: ${u.error})` : ''}`);
+      for (const f of checkedFiles) {
+        console.log(` - ${f}`);
       }
-      console.error('\nChạy "npx prettier --write <file>" để sửa định dạng các tệp trên.');
-      process.exit(1);
-    }
+      console.log('');
 
-    console.log(
-      `✅ Hoàn tất: Tất cả ${totalFiles} tệp tin thay đổi tuân thủ 100% chuẩn định dạng Prettier (bỏ qua mọi quy tắc .prettierignore).\n`
-    );
-    process.exit(0);
+      if (unformattedFiles.length > 0) {
+        console.error(
+          `❌ PHÁT HIỆN ${unformattedFiles.length} TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:`
+        );
+        for (const u of unformattedFiles) {
+          console.error(` - ${u.filePath}${u.error ? ` (Lỗi: ${u.error})` : ''}`);
+        }
+        console.error('\nChạy "npx prettier --write <file>" để sửa định dạng các tệp trên.');
+        process.exit(1);
+      }
+
+      console.log(
+        `✅ Hoàn tất: Tất cả ${totalFiles} tệp tin thay đổi tuân thủ 100% chuẩn định dạng Prettier (bỏ qua mọi quy tắc .prettierignore).\n`
+      );
+      process.exit(0);
+    } catch (err: any) {
+      console.error(`❌ LỖI HỆ THỐNG / THỰC THI (exit code 2): ${err.message || err}`);
+      process.exit(2);
+    }
   })();
 }
