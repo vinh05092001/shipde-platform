@@ -923,7 +923,11 @@ if (require.main === module) {
       /setCreateOrderOpen\(true\)/g,
       '/* Severed create order modal trigger */'
     );
-    verifyMutationApplied('Modal Opener Trigger Severance', modalOpenerSeveredSource, realPageSource);
+    verifyMutationApplied(
+      'Modal Opener Trigger Severance',
+      modalOpenerSeveredSource,
+      realPageSource
+    );
 
     const modalOpenerTestRun = runPreservationSmokeTests(modalOpenerSeveredSource);
     const ordModalResult = modalOpenerTestRun.results.find((r) => r.surfaceId === 'SMOKE-ORD-01');
