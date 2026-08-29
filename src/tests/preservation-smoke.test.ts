@@ -826,6 +826,15 @@ if (require.main === module) {
     const pagePath = path.join(__dirname, '../app/page.tsx');
     const realPageSource = fs.readFileSync(pagePath, 'utf-8');
 
+    const verifyMutationApplied = (testName: string, mutated: string, original: string): void => {
+      if (mutated === original) {
+        console.error(
+          `❌ LỖI THỰC THI: Không thể áp dụng đột biến mã nguồn cho bài test âm tính [${testName}]! (Kiểm tra regex/newline replacement)`
+        );
+        process.exit(2);
+      }
+    };
+
     // Test Case 1: Full Navigation removal (Removes 'exceptions' tab from all role menus while viewport render remains)
     console.log(
       '--- [KIỂM THỬ ÂM TÍNH 1]: Gỡ bỏ tab "exceptions" khỏi toàn bộ Menu Điều hướng Vai trò (Full Nav Removal) ---'
@@ -834,6 +843,7 @@ if (require.main === module) {
       /\{\s*id:\s*'exceptions'[\s\S]*?countType:\s*'risk',\s*\},/g,
       `/* Removed exceptions from role navigation */`
     );
+    verifyMutationApplied('Full Nav Removal', navRemovedSource, realPageSource);
 
     const navTestRun = runPreservationSmokeTests(navRemovedSource);
     const excNavResult = navTestRun.results.find((r) => r.surfaceId === 'SMOKE-EXC-01');
@@ -857,6 +867,7 @@ if (require.main === module) {
         return `case 'OPS_CSKH':\n        return [${cleanedBody}];`;
       }
     );
+    verifyMutationApplied('Partial Role Nav Removal', partialNavRemovedSource, realPageSource);
 
     const partialTestRun = runPreservationSmokeTests(partialNavRemovedSource);
     const excPartialResult = partialTestRun.results.find((r) => r.surfaceId === 'SMOKE-EXC-01');
@@ -876,6 +887,7 @@ if (require.main === module) {
         return `case 'OWNER':\n      default:\n        return [\n          { id: 'settings', label: 'Cài đặt thừa', icon: Key },\n${body}\n        ];`;
       }
     );
+    verifyMutationApplied('Extra Role Nav Injection', extraNavInjectedSource, realPageSource);
 
     const extraTestRun = runPreservationSmokeTests(extraNavInjectedSource);
     const rbacExtraResult = extraTestRun.results.find((r) => r.surfaceId === 'SMOKE-RBAC-01');
@@ -890,9 +902,10 @@ if (require.main === module) {
       '--- [KIỂM THỬ ÂM TÍNH 4]: Gỡ bỏ nhánh Viewport Render <ExceptionWorkboxTab /> (Viewport-Only Removal) ---'
     );
     const viewportRemovedSource = realPageSource.replace(
-      `{activeTab === 'exceptions' && (\n            <ExceptionWorkboxTab\n              exceptions={exceptions}\n              onUpdateException={handleUpdateException}\n              carrierGhnTier={carrierGhnTier}\n            />\n          )}`,
+      /\{activeTab\s*===\s*['"]exceptions['"]\s*&&\s*\([\s\S]*?<ExceptionWorkboxTab[\s\S]*?\)\s*\}/,
       `{/* Broken/Removed ExceptionWorkboxTab viewport render */}`
     );
+    verifyMutationApplied('Viewport-Only Removal', viewportRemovedSource, realPageSource);
 
     const vpTestRun = runPreservationSmokeTests(viewportRemovedSource);
     const excVpResult = vpTestRun.results.find((r) => r.surfaceId === 'SMOKE-EXC-01');
@@ -910,6 +923,7 @@ if (require.main === module) {
       /setCreateOrderOpen\(true\)/g,
       '/* Severed create order modal trigger */'
     );
+    verifyMutationApplied('Modal Opener Trigger Severance', modalOpenerSeveredSource, realPageSource);
 
     const modalOpenerTestRun = runPreservationSmokeTests(modalOpenerSeveredSource);
     const ordModalResult = modalOpenerTestRun.results.find((r) => r.surfaceId === 'SMOKE-ORD-01');

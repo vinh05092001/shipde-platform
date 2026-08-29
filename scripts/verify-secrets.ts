@@ -64,6 +64,46 @@ export function parseGitleaksConfig(configPath: string): GitleaksConfig {
     }
   }
 
+  const defaultRules: SecretRule[] = [
+    {
+      id: 'generic-api-key',
+      description: 'Generic High-Entropy Secret or Token',
+      regex:
+        /(?:api_key|apikey|secret_key|private_key|auth_token|access_token|bearer_token)\s*[:=]\s*['"]([0-9a-zA-Z_\-]{24,})['"]/i,
+      keywords: [
+        'api_key',
+        'apikey',
+        'secret_key',
+        'private_key',
+        'auth_token',
+        'access_token',
+        'bearer_token',
+      ],
+    },
+    {
+      id: 'private-key',
+      description: 'Private Key Header',
+      regex: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
+      keywords: [
+        'BEGIN RSA PRIVATE KEY',
+        'BEGIN PRIVATE KEY',
+        'BEGIN EC PRIVATE KEY',
+        'BEGIN DSA PRIVATE KEY',
+        'BEGIN OPENSSH PRIVATE KEY',
+      ],
+    },
+    {
+      id: 'aws-secret-key',
+      description: 'AWS / S3 Secret Key Pattern',
+      regex: /(?:aws_secret_access_key|s3_secret_key)\s*[:=]\s*['"][0-9a-zA-Z\/+=]{40}['"]/i,
+      keywords: ['aws_secret_access_key', 's3_secret_key'],
+    },
+  ];
+
+  if (content.includes('[extend]') && /useDefault\s*=\s*true/i.test(content)) {
+    rules.push(...defaultRules);
+  }
+
   // Parse [[rules]]
   const ruleBlocks = content.split('[[rules]]').slice(1);
   for (const block of ruleBlocks) {
@@ -223,6 +263,15 @@ if (require.main === module) {
   console.log('');
 
   const gitleaksBin = getGitleaksBinary();
+  if (!gitleaksBin) {
+    console.error(
+      '❌ LỖI: Không tìm thấy native binary Gitleaks CLI (gitleaks) trong PATH hoặc môi trường hệ thống!'
+    );
+    console.error(
+      '   Gate bảo mật secret bắt buộc phải có Gitleaks native CLI để đảm bảo toàn bộ quy tắc mặc định và quy tắc mở rộng hoạt động đầy đủ.'
+    );
+    process.exit(2);
+  }
 
   if (isNegativeTest) {
     console.log('🧪 Chạy kiểm thử âm tính (Demonstrated Negative Failure Proof)...');
@@ -238,44 +287,36 @@ if (require.main === module) {
     let cliError: string | null = null;
 
     try {
-      if (gitleaksBin) {
-        let commandOutput = '';
-        try {
-          commandOutput = execSync(
-            `${gitleaksBin} dir . -c .gitleaks.toml --report-path "${reportFile}" --report-format json --redact --verbose`,
-            { stdio: 'pipe' }
-          ).toString();
-        } catch (err: any) {
-          commandOutput = (err.stdout?.toString() || '') + '\n' + (err.stderr?.toString() || '');
-        }
+      let commandOutput = '';
+      try {
+        commandOutput = execSync(
+          `${gitleaksBin} dir . -c .gitleaks.toml --report-path "${reportFile}" --report-format json --redact --verbose`,
+          { stdio: 'pipe' }
+        ).toString();
+      } catch (err: any) {
+        commandOutput = (err.stdout?.toString() || '') + '\n' + (err.stderr?.toString() || '');
+      }
 
-        // Verify that report file exists and contains valid secret rule findings
-        if (fs.existsSync(reportFile)) {
-          try {
-            const reportContent = fs.readFileSync(reportFile, 'utf-8');
-            const findings = JSON.parse(reportContent);
-            if (Array.isArray(findings) && findings.length > 0) {
-              const targetFinding =
-                findings.find(
-                  (f: any) =>
-                    f.RuleID === 'shipde-carrier-live-token' || f.RuleID === 'carrier-live-token'
-                ) || findings[0];
-              detected = true;
-              findingDetails = `[${targetFinding.RuleID}] "${targetFinding.Description}" tại ${targetFinding.File}:${targetFinding.StartLine}`;
-            }
-          } catch (parseErr: any) {
-            cliError = `Không thể phân tích báo cáo Gitleaks: ${parseErr.message}`;
+      // Verify that report file exists and contains valid secret rule findings
+      if (fs.existsSync(reportFile)) {
+        try {
+          const reportContent = fs.readFileSync(reportFile, 'utf-8');
+          const findings = JSON.parse(reportContent);
+          if (Array.isArray(findings) && findings.length > 0) {
+            const targetFinding =
+              findings.find(
+                (f: any) =>
+                  f.RuleID === 'shipde-carrier-live-token' || f.RuleID === 'carrier-live-token'
+              ) || findings[0];
+            detected = true;
+            findingDetails = `[${targetFinding.RuleID}] "${targetFinding.Description}" tại ${targetFinding.File}:${targetFinding.StartLine}`;
           }
-        } else {
-          // If no report file, check if it was a CLI invocation / configuration error
-          cliError = `Gitleaks không tạo được file báo cáo findings: ${commandOutput.trim()}`;
+        } catch (parseErr: any) {
+          cliError = `Không thể phân tích báo cáo Gitleaks: ${parseErr.message}`;
         }
       } else {
-        const findings = scanFile(tempFile, config.rules);
-        if (findings.length > 0) {
-          detected = true;
-          findingDetails = `[${findings[0].ruleId}] "${findings[0].description}" tại dòng ${findings[0].line}`;
-        }
+        // If no report file, check if it was a CLI invocation / configuration error
+        cliError = `Gitleaks không tạo được file báo cáo findings: ${commandOutput.trim()}`;
       }
     } finally {
       // Guaranteed cleanup before any exit
@@ -307,124 +348,103 @@ if (require.main === module) {
     }
   }
 
-  if (gitleaksBin) {
-    console.log('🔍 Thực thi Gitleaks native binary CLI...');
-    const dirReportFile = path.join(process.cwd(), '.temp-gitleaks-dir-report.json');
-    const gitReportFile = path.join(process.cwd(), '.temp-gitleaks-git-report.json');
-    const isGitRepo = fs.existsSync(path.join(process.cwd(), '.git'));
+  console.log('🔍 Thực thi Gitleaks native binary CLI...');
+  const dirReportFile = path.join(process.cwd(), '.temp-gitleaks-dir-report.json');
+  const gitReportFile = path.join(process.cwd(), '.temp-gitleaks-git-report.json');
+  const isGitRepo = fs.existsSync(path.join(process.cwd(), '.git'));
 
-    try {
-      if (isGitRepo) {
-        const resolveGitCommit = (ref: string): string | null => {
-          try {
-            return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
-              stdio: 'pipe',
-            })
-              .toString()
-              .trim();
-          } catch {
-            return null;
-          }
-        };
-
-        let baseCommit: string | null = null;
-        if (process.env.BASE_SHA) {
-          baseCommit = resolveGitCommit(process.env.BASE_SHA);
-          if (!baseCommit) {
-            console.error(
-              `❌ LỖI: BASE_SHA được cung cấp '${process.env.BASE_SHA}' không hợp lệ hoặc không thể resolve thành commit!`
-            );
-            process.exit(2);
-          }
-        } else if (process.env.GITHUB_BASE_REF) {
-          baseCommit =
-            resolveGitCommit(`origin/${process.env.GITHUB_BASE_REF}`) ||
-            resolveGitCommit(process.env.GITHUB_BASE_REF);
+  try {
+    if (isGitRepo) {
+      const resolveGitCommit = (ref: string): string | null => {
+        try {
+          return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+            stdio: 'pipe',
+          })
+            .toString()
+            .trim();
+        } catch {
+          return null;
         }
+      };
 
+      let baseCommit: string | null = null;
+      if (process.env.BASE_SHA) {
+        baseCommit = resolveGitCommit(process.env.BASE_SHA);
         if (!baseCommit) {
-          baseCommit =
-            resolveGitCommit('origin/main') ||
-            resolveGitCommit('main') ||
-            resolveGitCommit('HEAD~1');
-        }
-
-        if (!baseCommit) {
-          console.error('❌ LỖI: Không thể xác định commit base để quét lịch sử git!');
+          console.error(
+            `❌ LỖI: BASE_SHA được cung cấp '${process.env.BASE_SHA}' không hợp lệ hoặc không thể resolve thành commit!`
+          );
           process.exit(2);
         }
-
-        const logRange = `${baseCommit}...HEAD`;
-        console.log(`🔍 [Gitleaks git] Quét lịch sử commit PR (${logRange})...`);
-        execSync(
-          `${gitleaksBin} git --log-opts="${logRange}" -c .gitleaks.toml --report-path "${gitReportFile}" --report-format json --redact --verbose`,
-          {
-            stdio: 'inherit',
-          }
-        );
+      } else if (process.env.GITHUB_BASE_REF) {
+        baseCommit =
+          resolveGitCommit(`origin/${process.env.GITHUB_BASE_REF}`) ||
+          resolveGitCommit(process.env.GITHUB_BASE_REF);
       }
 
-      console.log('🔍 [Gitleaks dir] Quét toàn bộ working tree hiện tại...');
+      if (!baseCommit) {
+        baseCommit =
+          resolveGitCommit('origin/main') || resolveGitCommit('main') || resolveGitCommit('HEAD~1');
+      }
+
+      if (!baseCommit) {
+        console.error('❌ LỖI: Không thể xác định commit base để quét lịch sử git!');
+        process.exit(2);
+      }
+
+      const logRange = `${baseCommit}...HEAD`;
+      console.log(`🔍 [Gitleaks git] Quét lịch sử commit PR (${logRange})...`);
       execSync(
-        `${gitleaksBin} dir . -c .gitleaks.toml --report-path "${dirReportFile}" --report-format json --redact --verbose`,
+        `${gitleaksBin} git --log-opts="${logRange}" -c .gitleaks.toml --report-path "${gitReportFile}" --report-format json --redact --verbose`,
         {
           stdio: 'inherit',
         }
       );
-      console.log(
-        '\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.'
-      );
-      process.exit(0);
-    } catch (err: any) {
-      const allFindings: any[] = [];
-      for (const rep of [gitReportFile, dirReportFile]) {
-        if (fs.existsSync(rep)) {
-          try {
-            const reportContent = fs.readFileSync(rep, 'utf-8');
-            const findings = JSON.parse(reportContent);
-            if (Array.isArray(findings)) {
-              allFindings.push(...findings);
-            }
-          } catch {}
-        }
-      }
-
-      if (allFindings.length > 0) {
-        console.error(`\n❌ Gitleaks phát hiện ${allFindings.length} vi phạm bí mật:`);
-        for (const f of allFindings) {
-          console.error(
-            ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
-          );
-        }
-        process.exit(1);
-      }
-      console.error('\n❌ Gitleaks native phát hiện vi phạm bí mật hoặc gặp lỗi cấu hình!');
-      process.exit(1);
-    } finally {
-      for (const rep of [gitReportFile, dirReportFile]) {
-        if (fs.existsSync(rep)) {
-          try {
-            fs.unlinkSync(rep);
-          } catch {}
-        }
-      }
-    }
-  } else {
-    console.log('🔍 Thực thi bộ quét AST phân tích định dạng .gitleaks.toml...');
-    const result = runSecretScan(process.cwd(), configPath);
-    console.log(`Đã quét toàn bộ ${result.filesScanned} tệp tin không thuộc allowlist.`);
-
-    if (result.findings.length > 0) {
-      console.error(`\n❌ PHÁT HIỆN ${result.findings.length} VI PHẠM BẢO MẬT:`);
-      for (const f of result.findings) {
-        console.error(` - [${f.ruleId}] ${f.file}:${f.line} (${f.description})`);
-      }
-      process.exit(1);
     }
 
+    console.log('🔍 [Gitleaks dir] Quét toàn bộ working tree hiện tại...');
+    execSync(
+      `${gitleaksBin} dir . -c .gitleaks.toml --report-path "${dirReportFile}" --report-format json --redact --verbose`,
+      {
+        stdio: 'inherit',
+      }
+    );
     console.log(
-      '✅ Quét hoàn tất: Không phát hiện khóa bí mật, token hãng hay thông tin nhạy cảm nào bị lộ.\n'
+      '\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.'
     );
     process.exit(0);
+  } catch (err: any) {
+    const allFindings: any[] = [];
+    for (const rep of [gitReportFile, dirReportFile]) {
+      if (fs.existsSync(rep)) {
+        try {
+          const reportContent = fs.readFileSync(rep, 'utf-8');
+          const findings = JSON.parse(reportContent);
+          if (Array.isArray(findings)) {
+            allFindings.push(...findings);
+          }
+        } catch {}
+      }
+    }
+
+    if (allFindings.length > 0) {
+      console.error(`\n❌ Gitleaks phát hiện ${allFindings.length} vi phạm bí mật:`);
+      for (const f of allFindings) {
+        console.error(
+          ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
+        );
+      }
+      process.exit(1);
+    }
+    console.error('\n❌ Gitleaks native phát hiện vi phạm bí mật hoặc gặp lỗi cấu hình!');
+    process.exit(1);
+  } finally {
+    for (const rep of [gitReportFile, dirReportFile]) {
+      if (fs.existsSync(rep)) {
+        try {
+          fs.unlinkSync(rep);
+        } catch {}
+      }
+    }
   }
 }
