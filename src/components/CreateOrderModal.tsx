@@ -27,6 +27,7 @@ interface Props {
 
 export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCreated }) => {
   // Order information
+  // eslint-disable-next-line react-hooks/purity -- Legacy prototype random order code generator
   const [orderCode, setOrderCode] = useState(`ORD_${Math.floor(Math.random() * 89999) + 10000}`);
   const [pickupWarehouse, setPickupWarehouse] = useState('store_01');
   const [recipientName, setRecipientName] = useState('Nguyễn Văn Khách');

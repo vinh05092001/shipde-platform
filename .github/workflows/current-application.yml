@@ -109,6 +109,8 @@ jobs:
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
       - run: npm run security:secrets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
 
   application-gate:
     needs: [detect-application-scope, current-application]

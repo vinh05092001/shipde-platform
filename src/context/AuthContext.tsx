@@ -35,6 +35,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (savedUser && savedMerchant && savedToken) {
       try {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- Legacy prototype localStorage hydration pattern
         setUser(JSON.parse(savedUser));
         setMerchant(JSON.parse(savedMerchant));
         setToken(savedToken);

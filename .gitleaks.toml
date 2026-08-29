@@ -1,5 +1,8 @@
 title = "Ship Dễ Secret Detection Rules"
 
+[extend]
+useDefault = true
+
 [allowlist]
 description = "Global allowlist for build artifacts, dependencies and lockfiles"
 paths = [

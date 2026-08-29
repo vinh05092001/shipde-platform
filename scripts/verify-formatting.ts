@@ -181,6 +181,7 @@ export async function checkFileFormatting(
     const isFormatted = await prettier.check(content, {
       ...options,
       filepath: fullPath,
+      endOfLine: 'auto',
     });
 
     return {

@@ -306,37 +306,81 @@ if (require.main === module) {
 
   if (gitleaksBin) {
     console.log('🔍 Thực thi Gitleaks native binary CLI...');
-    const cleanReportFile = path.join(process.cwd(), '.temp-gitleaks-clean-report.json');
+    const dirReportFile = path.join(process.cwd(), '.temp-gitleaks-dir-report.json');
+    const gitReportFile = path.join(process.cwd(), '.temp-gitleaks-git-report.json');
+    const isGitRepo = fs.existsSync(path.join(process.cwd(), '.git'));
+
     try {
+      if (isGitRepo) {
+        let baseCandidate =
+          process.env.BASE_SHA ||
+          (process.env.GITHUB_BASE_REF ? `origin/${process.env.GITHUB_BASE_REF}` : null) ||
+          'origin/main';
+        let logRange = `${baseCandidate}...HEAD`;
+        try {
+          execSync(`git rev-parse --verify --quiet ${baseCandidate}^{commit}`, { stdio: 'ignore' });
+        } catch {
+          try {
+            execSync('git rev-parse --verify --quiet main^{commit}', { stdio: 'ignore' });
+            baseCandidate = 'main';
+            logRange = 'main...HEAD';
+          } catch {
+            logRange = 'HEAD~1...HEAD';
+          }
+        }
+
+        console.log(`🔍 [Gitleaks git] Quét lịch sử commit PR (${logRange})...`);
+        execSync(
+          `${gitleaksBin} git --log-opts="${logRange}" -c .gitleaks.toml --report-path "${gitReportFile}" --report-format json --redact --verbose`,
+          {
+            stdio: 'inherit',
+          }
+        );
+      }
+
+      console.log('🔍 [Gitleaks dir] Quét toàn bộ working tree hiện tại...');
       execSync(
-        `${gitleaksBin} dir . -c .gitleaks.toml --report-path "${cleanReportFile}" --report-format json --redact --verbose`,
+        `${gitleaksBin} dir . -c .gitleaks.toml --report-path "${dirReportFile}" --report-format json --redact --verbose`,
         {
           stdio: 'inherit',
         }
       );
-      console.log('\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên cây mã nguồn.');
+      console.log(
+        '\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.'
+      );
       process.exit(0);
     } catch (err: any) {
-      if (fs.existsSync(cleanReportFile)) {
-        try {
-          const reportContent = fs.readFileSync(cleanReportFile, 'utf-8');
-          const findings = JSON.parse(reportContent);
-          if (Array.isArray(findings) && findings.length > 0) {
-            console.error(`\n❌ Gitleaks phát hiện ${findings.length} vi phạm bí mật:`);
-            for (const f of findings) {
-              console.error(` - [${f.RuleID}] ${f.File}:${f.StartLine} (${f.Description})`);
+      const allFindings: any[] = [];
+      for (const rep of [gitReportFile, dirReportFile]) {
+        if (fs.existsSync(rep)) {
+          try {
+            const reportContent = fs.readFileSync(rep, 'utf-8');
+            const findings = JSON.parse(reportContent);
+            if (Array.isArray(findings)) {
+              allFindings.push(...findings);
             }
-            process.exit(1);
-          }
-        } catch {}
+          } catch {}
+        }
+      }
+
+      if (allFindings.length > 0) {
+        console.error(`\n❌ Gitleaks phát hiện ${allFindings.length} vi phạm bí mật:`);
+        for (const f of allFindings) {
+          console.error(
+            ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
+          );
+        }
+        process.exit(1);
       }
       console.error('\n❌ Gitleaks native phát hiện vi phạm bí mật hoặc gặp lỗi cấu hình!');
       process.exit(1);
     } finally {
-      if (fs.existsSync(cleanReportFile)) {
-        try {
-          fs.unlinkSync(cleanReportFile);
-        } catch {}
+      for (const rep of [gitReportFile, dirReportFile]) {
+        if (fs.existsSync(rep)) {
+          try {
+            fs.unlinkSync(rep);
+          } catch {}
+        }
       }
     }
   } else {

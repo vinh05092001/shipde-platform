@@ -30,12 +30,14 @@ interface Props {
   discrepancies?: UIDiscrepancyItem[];
   onUpdateDiscrepancy?: (updated: UIDiscrepancyItem) => void;
   role?: string;
+  onOpenUpload?: () => void;
 }
 
 export const ReconciliationTab: React.FC<Props> = ({
   discrepancies = MASTER_DISCREPANCIES,
   onUpdateDiscrepancy,
   role = 'OWNER',
+  onOpenUpload,
 }) => {
   const [items, setItems] = useState<UIDiscrepancyItem[]>(discrepancies);
   const [selectedDiscrepancyType, setSelectedDiscrepancyType] = useState<string>('ALL');
@@ -140,26 +142,40 @@ export const ReconciliationTab: React.FC<Props> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              if (openCount > 0) {
-                alert(
-                  `Không thể chốt kỳ khi còn ${openCount} khoản chênh lệch chưa xử lý. Vui lòng duyệt hoặc chuyển kỳ.`
+          <div className="flex items-center gap-2">
+            {onOpenUpload && (
+              <button
+                type="button"
+                onClick={onOpenUpload}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-800 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-slate-700 rounded-lg transition cursor-pointer"
+                title="Tải lên file sao kê hãng Excel / CSV để đối soát tự động"
+              >
+                <Upload className="w-3.5 h-3.5 text-[#EA4B12]" />
+                <span>Nạp Sao Kê Hãng</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                if (openCount > 0) {
+                  alert(
+                    `Không thể chốt kỳ khi còn ${openCount} khoản chênh lệch chưa xử lý. Vui lòng duyệt hoặc chuyển kỳ.`
+                  );
+                  return;
+                }
+                setIsPeriodClosed(true);
+                setToastMessage(
+                  '✓ Đã chốt sổ kỳ đối soát thành công. Dữ liệu đã được khóa bất biến.'
                 );
-                return;
-              }
-              setIsPeriodClosed(true);
-              setToastMessage(
-                '✓ Đã chốt sổ kỳ đối soát thành công. Dữ liệu đã được khóa bất biến.'
-              );
-            }}
-            disabled={isPeriodClosed}
-            className={`btn-primary text-xs ${isPeriodClosed ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            <Lock className="w-4 h-4" />
-            <span>{isPeriodClosed ? 'Kỳ Đã Khóa' : 'Chốt Kỳ Đối Soát'}</span>
-          </button>
+              }}
+              disabled={isPeriodClosed}
+              className={`btn-primary text-xs ${isPeriodClosed ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <Lock className="w-4 h-4" />
+              <span>{isPeriodClosed ? 'Kỳ Đã Khóa' : 'Chốt Kỳ Đối Soát'}</span>
+            </button>
+          </div>
         </div>
       </div>
 

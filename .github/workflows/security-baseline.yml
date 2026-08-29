@@ -28,6 +28,8 @@ jobs:
           gitleaks version
       - name: Run Clean Secret Scan
         run: npm run security:secrets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
       - name: Verify Secret Scan Negative Proof
         run: |
           set +e
