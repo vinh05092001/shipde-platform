@@ -69,7 +69,6 @@ export interface AppShellNavigationSpec {
   modalOpeners: {
     createOrder: boolean;
     unifiedTracking: boolean;
-    uploadStatement: boolean;
   };
 }
 
@@ -134,9 +133,6 @@ export function analyzeAppShellSource(pageSource: string): AppShellNavigationSpe
     unifiedTracking:
       pageSource.includes('setSelectedGlobalTracking(') &&
       pageSource.includes('trackingCode={selectedGlobalTracking}'),
-    uploadStatement:
-      pageSource.includes('setUploadStatementOpen(true)') &&
-      pageSource.includes('isOpen={uploadStatementOpen}'),
   };
 
   return {
@@ -150,7 +146,7 @@ export function analyzeAppShellSource(pageSource: string): AppShellNavigationSpe
 
 /**
  * Verify two-way reachability for a critical surface:
- * 1. Present in EVERY required role navigation tab set in getTabsForRole (strict equality / no missing expected roles)
+ * 1. Present in EXACT set of role navigation tabs in getTabsForRole (strict bidirectional set equality: no missing and no extra roles)
  * 2. Rendered in activeTab === tabId conditional viewport branch in page.tsx
  */
 export function verifySurfaceReachability(
@@ -170,7 +166,8 @@ export function verifySurfaceReachability(
   }
 
   const missingRoles = expectedRoles.filter((role) => !mappedRoles.includes(role));
-  const hasAllExpectedRoles = missingRoles.length === 0;
+  const extraRoles = mappedRoles.filter((role) => !expectedRoles.includes(role));
+  const isExactRoleMatch = missingRoles.length === 0 && extraRoles.length === 0;
 
   if (!isRenderedInViewport && mappedRoles.length === 0) {
     return {
@@ -178,7 +175,7 @@ export function verifySurfaceReachability(
       isRenderedInViewport: false,
       mappedRoles,
       renderedComponent,
-      reason: `Bề mặt "${tabId}" vừa không có trong menu vai trò nào (yêu cầu: [${expectedRoles.join(
+      reason: `Bề mặt "${tabId}" vừa không có trong menu vai trò nào (yêu cầu chính xác: [${expectedRoles.join(
         ', '
       )}]), vừa không được gắn render trong viewport!`,
     };
@@ -196,15 +193,22 @@ export function verifySurfaceReachability(
     };
   }
 
-  if (!hasAllExpectedRoles) {
+  if (!isExactRoleMatch) {
+    const errorDetails: string[] = [];
+    if (missingRoles.length > 0) {
+      errorDetails.push(`thiếu vai trò bắt buộc [${missingRoles.join(', ')}]`);
+    }
+    if (extraRoles.length > 0) {
+      errorDetails.push(`thừa vai trò không được cấp quyền [${extraRoles.join(', ')}]`);
+    }
     return {
       reachable: false,
       isRenderedInViewport: true,
       mappedRoles,
       renderedComponent,
-      reason: `Nhánh viewport <${expectedComponent} /> tồn tại nhưng tab "${tabId}" bị thiếu trong các vai trò yêu cầu: [${missingRoles.join(
-        ', '
-      )}] (hiện có: [${mappedRoles.join(', ')}], yêu cầu đầy đủ: [${expectedRoles.join(', ')}])!`,
+      reason: `Nhánh viewport <${expectedComponent} /> tồn tại nhưng phân quyền menu tab "${tabId}" không khớp tập vai trò chính xác: ${errorDetails.join(
+        '; '
+      )} (hiện có: [${mappedRoles.join(', ')}], yêu cầu chuẩn: [${expectedRoles.join(', ')}])!`,
     };
   }
 
@@ -478,7 +482,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
   }
 
   // --------------------------------------------------------------------------
-  // 7. Reconciliation Surface (UI Tab + Upload Modal + Viewport + Roles + Audit Engine + Modal Opener)
+  // 7. Reconciliation Surface (UI Tab + Upload Modal + Viewport + Roles + Audit Engine)
   // --------------------------------------------------------------------------
   try {
     const hasReconUI = typeof ReconciliationTab === 'function';
@@ -489,9 +493,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       'ReconciliationTab',
       ['ACCOUNTANT', 'OWNER']
     );
-    const isUploadMounted =
-      shellSpec.modalMounts.includes('UploadStatementModal') &&
-      shellSpec.modalOpeners.uploadStatement;
+    const isUploadMounted = shellSpec.modalMounts.includes('UploadStatementModal');
     const reconEngine = new ReconciliationEngine();
     const rateCard = {
       id: 'rc_smoke',
@@ -570,7 +572,7 @@ export function runPreservationSmokeTests(customPageSource?: string): {
       'CORE_LOGIC',
       reconPassed,
       reconPassed
-        ? `ReconciliationTab gắn đúng viewport 'reconciliation' (vai trò: ${reachResult.mappedRoles.join(', ')}), UploadStatementModal gắn modal root với trigger nạp sao kê hợp lệ, phát hiện đúng ${reconResult.discrepancies.length} khoản lệch (D1/D2)`
+        ? `ReconciliationTab gắn đúng viewport 'reconciliation' (vai trò: ${reachResult.mappedRoles.join(', ')}), UploadStatementModal gắn modal root, phát hiện đúng ${reconResult.discrepancies.length} khoản lệch (D1/D2)`
         : `Lỗi: ${reachResult.reason || 'ReconciliationTab hoặc UploadStatementModal không được gắn kết trong app shell page.tsx'}`
     );
   } catch (err: any) {
@@ -864,9 +866,28 @@ if (require.main === module) {
     );
     console.log(`Chi tiết: ${excPartialResult?.notes}\n`);
 
-    // Test Case 3: Viewport-only removal (Removes ExceptionWorkboxTab viewport render branch while role menu remains)
+    // Test Case 3: Extra Role Navigation injection (Assigns 'settings' tab to OWNER in addition to BACKOFFICE)
     console.log(
-      '--- [KIỂM THỬ ÂM TÍNH 3]: Gỡ bỏ nhánh Viewport Render <ExceptionWorkboxTab /> (Viewport-Only Removal) ---'
+      '--- [KIỂM THỬ ÂM TÍNH 3]: Gán quyền dư thừa tab "settings" cho OWNER (Extra Role Nav Injection) ---'
+    );
+    const extraNavInjectedSource = realPageSource.replace(
+      /case\s+'OWNER':[\s\S]*?default:[\s\S]*?return\s*\[([\s\S]*?)\];/,
+      (match, body) => {
+        return `case 'OWNER':\n      default:\n        return [\n          { id: 'settings', label: 'Cài đặt thừa', icon: Key },\n${body}\n        ];`;
+      }
+    );
+
+    const extraTestRun = runPreservationSmokeTests(extraNavInjectedSource);
+    const rbacExtraResult = extraTestRun.results.find((r) => r.surfaceId === 'SMOKE-RBAC-01');
+
+    console.log(
+      `Kết quả SMOKE-RBAC-01 khi gán vai trò dư thừa: ${rbacExtraResult?.passed ? '❌ LỌT LỖI (VẪN PASS)' : '✅ BẮT THẤT BẠI CHÍNH XÁC'}`
+    );
+    console.log(`Chi tiết: ${rbacExtraResult?.notes}\n`);
+
+    // Test Case 4: Viewport-only removal (Removes ExceptionWorkboxTab viewport render branch while role menu remains)
+    console.log(
+      '--- [KIỂM THỬ ÂM TÍNH 4]: Gỡ bỏ nhánh Viewport Render <ExceptionWorkboxTab /> (Viewport-Only Removal) ---'
     );
     const viewportRemovedSource = realPageSource.replace(
       `{activeTab === 'exceptions' && (\n            <ExceptionWorkboxTab\n              exceptions={exceptions}\n              onUpdateException={handleUpdateException}\n              carrierGhnTier={carrierGhnTier}\n            />\n          )}`,
@@ -881,9 +902,9 @@ if (require.main === module) {
     );
     console.log(`Chi tiết: ${excVpResult?.notes}\n`);
 
-    // Test Case 4: Modal Opener Severance (Removes setCreateOrderOpen(true) trigger while CreateOrderModal JSX remains mounted)
+    // Test Case 5: Modal Opener Severance (Removes setCreateOrderOpen(true) trigger while CreateOrderModal JSX remains mounted)
     console.log(
-      '--- [KIỂM THỬ ÂM TÍNH 4]: Ngắt trigger mở modal tạo đơn (Modal Opener Trigger Severance) ---'
+      '--- [KIỂM THỬ ÂM TÍNH 5]: Ngắt trigger mở modal tạo đơn (Modal Opener Trigger Severance) ---'
     );
     const modalOpenerSeveredSource = realPageSource.replace(
       /setCreateOrderOpen\(true\)/g,
@@ -901,18 +922,19 @@ if (require.main === module) {
     const allNegativeTestsDetected =
       !excNavResult?.passed &&
       !excPartialResult?.passed &&
+      !rbacExtraResult?.passed &&
       !excVpResult?.passed &&
       !ordModalResult?.passed;
 
     console.log('================================================================');
     console.log(
-      `KẾT QUẢ KIỂM THỬ ÂM TÍNH BẢO TOÀN ĐIỀU HƯỚNG, VAI TRÒ & VIEWPORT/MODAL: ${allNegativeTestsDetected ? 'ĐẠT CHUẨN (4/4 BẮT LỖI THÀNH CÔNG)' : 'THẤT BẠI'}`
+      `KẾT QUẢ KIỂM THỬ ÂM TÍNH BẢO TOÀN ĐIỀU HƯỚNG, VAI TRÒ & VIEWPORT/MODAL: ${allNegativeTestsDetected ? 'ĐẠT CHUẨN (5/5 BẮT LỖI THÀNH CÔNG)' : 'THẤT BẠI'}`
     );
     console.log('================================================================\n');
 
     if (allNegativeTestsDetected) {
       console.error(
-        '🚨 ĐÃ CHỨNG MINH THẤT BẠI CHÍNH XÁC 4 CHIỀU: Gỡ menu toàn phần, gỡ menu vai trò từng phần, gỡ nhánh viewport render, hoặc ngắt trigger mở modal đều kích hoạt thất bại!'
+        '🚨 ĐÃ CHỨNG MINH THẤT BẠI CHÍNH XÁC 5 CHIỀU: Gỡ menu toàn phần, gỡ menu vai trò từng phần, gán vai trò dư thừa, gỡ nhánh viewport render, hoặc ngắt trigger mở modal đều kích hoạt thất bại!'
       );
       console.error(
         '   [AC-FOUND-01-07 Evidence] Gate thoát mã lỗi non-zero (exit code 1) khi phát hiện mất reachability thực tế trong app shell.\n'

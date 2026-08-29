@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 
 export interface SecretRule {
   id: string;
@@ -256,7 +256,10 @@ if (require.main === module) {
             const findings = JSON.parse(reportContent);
             if (Array.isArray(findings) && findings.length > 0) {
               const targetFinding =
-                findings.find((f: any) => f.RuleID === 'carrier-live-token') || findings[0];
+                findings.find(
+                  (f: any) =>
+                    f.RuleID === 'shipde-carrier-live-token' || f.RuleID === 'carrier-live-token'
+                ) || findings[0];
               detected = true;
               findingDetails = `[${targetFinding.RuleID}] "${targetFinding.Description}" tại ${targetFinding.File}:${targetFinding.StartLine}`;
             }
@@ -312,23 +315,46 @@ if (require.main === module) {
 
     try {
       if (isGitRepo) {
-        let baseCandidate =
-          process.env.BASE_SHA ||
-          (process.env.GITHUB_BASE_REF ? `origin/${process.env.GITHUB_BASE_REF}` : null) ||
-          'origin/main';
-        let logRange = `${baseCandidate}...HEAD`;
-        try {
-          execSync(`git rev-parse --verify --quiet ${baseCandidate}^{commit}`, { stdio: 'ignore' });
-        } catch {
+        const resolveGitCommit = (ref: string): string | null => {
           try {
-            execSync('git rev-parse --verify --quiet main^{commit}', { stdio: 'ignore' });
-            baseCandidate = 'main';
-            logRange = 'main...HEAD';
+            return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+              stdio: 'pipe',
+            })
+              .toString()
+              .trim();
           } catch {
-            logRange = 'HEAD~1...HEAD';
+            return null;
           }
+        };
+
+        let baseCommit: string | null = null;
+        if (process.env.BASE_SHA) {
+          baseCommit = resolveGitCommit(process.env.BASE_SHA);
+          if (!baseCommit) {
+            console.error(
+              `❌ LỖI: BASE_SHA được cung cấp '${process.env.BASE_SHA}' không hợp lệ hoặc không thể resolve thành commit!`
+            );
+            process.exit(2);
+          }
+        } else if (process.env.GITHUB_BASE_REF) {
+          baseCommit =
+            resolveGitCommit(`origin/${process.env.GITHUB_BASE_REF}`) ||
+            resolveGitCommit(process.env.GITHUB_BASE_REF);
         }
 
+        if (!baseCommit) {
+          baseCommit =
+            resolveGitCommit('origin/main') ||
+            resolveGitCommit('main') ||
+            resolveGitCommit('HEAD~1');
+        }
+
+        if (!baseCommit) {
+          console.error('❌ LỖI: Không thể xác định commit base để quét lịch sử git!');
+          process.exit(2);
+        }
+
+        const logRange = `${baseCommit}...HEAD`;
         console.log(`🔍 [Gitleaks git] Quét lịch sử commit PR (${logRange})...`);
         execSync(
           `${gitleaksBin} git --log-opts="${logRange}" -c .gitleaks.toml --report-path "${gitReportFile}" --report-format json --redact --verbose`,

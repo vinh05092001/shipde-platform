@@ -277,7 +277,7 @@ export function getMockUnifiedTimeline(trackingCode: string): UITimelineEvent[] 
       source_label: 'Lệnh Hẹn Giao Lại (API GHN L2)',
       title: 'Gửi API hẹn giao lại thành công (CN-10)',
       description:
-        'Payload dispatch idempotency_key=REQ_REATTEMPT_88291042. Hãng phản hồi HTTP 200 schedule_accepted.',
+        'Payload dispatch (idempotency: REQ_REATTEMPT_88291042). Hãng phản hồi HTTP 200 schedule_accepted.',
       actor: 'Ship Dễ Dispatcher',
       occurred_at: '16/08/2026 09:12',
       type: 'success',

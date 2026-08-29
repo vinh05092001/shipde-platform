@@ -71,6 +71,7 @@ None of the gaps documented below are to be resolved inside `TASK-FOUND-01`. Ins
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------- |
 | **Raw File Preservation**            | Carrier statements are parsed directly from memory; raw files are not archived to S3/MinIO object storage.                                              | `HIGH`        | `TASK-FOUND-03`, `FEAT-IMP-01`, `FEAT-IMP-04` |
 | **Bank Statements & COD Allocation** | Bank statement parsing (`FEAT-IMP-05`), exact reference matching (`FEAT-BNK-01`), and multi-waybill COD allocation (`FEAT-BNK-03`) are not implemented. | `MEDIUM`      | `FEAT-IMP-05`, `FEAT-BNK-01`, `FEAT-BNK-03`   |
+| **Dormant Statement Upload Modal**   | `UploadStatementModal` is mounted in `src/app/page.tsx` with dormant state; no trigger button exists in `ReconciliationTab.tsx` in baseline prototype.  | `LOW`         | `TASK-FOUND-03`, `FEAT-IMP-01`                |
 
 ### 2.8 Test Realism & Verification Findings
 

@@ -554,7 +554,6 @@ export default function ShipDeConsoleApp() {
               discrepancies={discrepancies}
               onUpdateDiscrepancy={handleUpdateDiscrepancy}
               role={user?.role || 'OWNER'}
-              onOpenUpload={() => setUploadStatementOpen(true)}
             />
           )}
 
