@@ -1,18 +1,15 @@
-import nextConfig from 'eslint-config-next';
-
-const eslintConfig = [
-  ...nextConfig,
+export default [
   {
     ignores: [
-      '.next/**',
-      'out/**',
-      'build/**',
-      'node_modules/**',
-      'next-env.d.ts',
-      'coverage/**',
-      'postcss.config.mjs',
+      '**/node_modules/**',
+      '**/.next/**',
+      '**/out/**',
+      '**/build/**',
+      '**/dist/**',
+      '**/.turbo/**',
+      '**/coverage/**',
+      'apps/web/next-env.d.ts',
+      'apps/web/postcss.config.mjs',
     ],
   },
 ];
-
-export default eslintConfig;

@@ -3,42 +3,29 @@
   "version": "3.3.0",
   "description": "Ship Dễ (shipde.net) - Nền tảng điều hành & kiểm soát vận chuyển cho Shop Online",
   "private": true,
+  "packageManager": "pnpm@11.23.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=11.0.0"
+  },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint .",
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
     "format:check": "tsx scripts/verify-formatting.ts",
     "format:write": "prettier --write .",
-    "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
-    "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "test:e2e": "turbo test:e2e",
+    "test:baseline": "tsx apps/web/src/tests/preservation-smoke.test.ts",
     "security:secrets": "tsx scripts/verify-secrets.ts",
     "concierge:audit": "tsx scripts/concierge-audit.ts"
   },
-  "engines": {
-    "node": ">=24.0.0",
-    "npm": ">=11.0.0"
-  },
-  "dependencies": {
-    "@prisma/client": "^6.19.2",
-    "framer-motion": "^12.35.0",
-    "lucide-react": "^0.577.0",
-    "next": "16.1.6",
-    "prisma": "^6.19.2",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "recharts": "^3.8.0"
-  },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9.39.5",
-    "eslint-config-next": "^16.1.6",
     "prettier": "^3.9.6",
-    "tailwindcss": "^4.2.1",
     "tsx": "^4.21.0",
+    "turbo": "^2.4.4",
     "typescript": "^5"
   }
 }

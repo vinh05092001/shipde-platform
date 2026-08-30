@@ -90,16 +90,19 @@ Do not use Ponytail or another global minimalism/taste prompt as product or UX a
 
 The 9Router endpoint used by DSH must keep Ponytail, Caveman, Headroom and request logging disabled. RTK may compress tool output only for assigned low-risk work and must be disabled while investigating failed tests, full logs or evidence-sensitive diffs. No router optimization may alter the Work Item, business rules, acceptance evidence or UI state coverage.
 
-## Current pre-foundation verification
+## Foundation verification commands
 
-Until `TASK-FOUND-02` replaces the package layout, run at minimum:
+Following `TASK-FOUND-02` monorepo migration, use the authoritative workspace root commands:
 
-- `npm ci`
-- `npm run lint`
-- `npm run build`
-- `npm run test:e2e`
-
-After migration, use the root commands defined in the target stack document and updated CI.
+- `pnpm install --frozen-lockfile`
+- `pnpm lint`
+- `pnpm format:check`
+- `pnpm typecheck`
+- `pnpm test`
+- `pnpm test:e2e`
+- `pnpm test:baseline`
+- `pnpm security:secrets`
+- `pnpm build`
 
 ## Pull Request evidence
 

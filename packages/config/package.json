@@ -1,0 +1,14 @@
+{
+  "name": "@shipde/config",
+  "version": "0.1.0",
+  "description": "Ship Dễ — Shared workspace configuration, tsconfig base, and toolchain defaults",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}

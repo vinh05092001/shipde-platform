@@ -2,7 +2,15 @@
 // Ship Dễ — Dữ liệu Giả lập Độc lập cho Thí nghiệm Concierge (Tập 0 Mục 3, 5)
 // ============================================================================
 
-import { Order, Shipment, StatementRow, RateCard, CarrierCode, ShipmentStatus, MatchingStatus } from '../src/types/domain';
+import {
+  Order,
+  Shipment,
+  StatementRow,
+  RateCard,
+  CarrierCode,
+  ShipmentStatus,
+  MatchingStatus,
+} from '../apps/web/src/types/domain';
 
 export function generateShopData(
   shopName: string,
@@ -77,7 +85,9 @@ export function generateShopData(
     };
     orders.push(order);
 
-    const deliveredDate = isDelivered ? new Date(now - Math.floor(Math.random() * 20) * 24 * 3600 * 1000) : null;
+    const deliveredDate = isDelivered
+      ? new Date(now - Math.floor(Math.random() * 20) * 24 * 3600 * 1000)
+      : null;
 
     const shipment: Shipment = {
       id: `ship_${merchantId}_${i}`,

@@ -211,6 +211,10 @@ function walkDir(
         entry.name === '.git' ||
         entry.name === 'node_modules' ||
         entry.name === '.next' ||
+        entry.name === '.turbo' ||
+        entry.name === 'dist' ||
+        entry.name === 'build' ||
+        entry.name === 'out' ||
         entry.name === '.gemini'
       ) {
         continue;
