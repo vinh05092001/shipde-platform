@@ -2,7 +2,13 @@
 // Ship Dễ UI — Mock Data for Interactive Testing
 // ============================================================================
 
-import { UIExceptionItem, UIDiscrepancyItem, UIClaimItem, UIReturnScanItem, UITimelineEvent } from './types';
+import {
+  UIExceptionItem,
+  UIDiscrepancyItem,
+  UIClaimItem,
+  UIReturnScanItem,
+  UITimelineEvent,
+} from './types';
 
 export const INITIAL_EXCEPTIONS: UIExceptionItem[] = [
   {
@@ -91,7 +97,7 @@ export const INITIAL_EXCEPTIONS: UIExceptionItem[] = [
     priority_score: 78,
     carrier_reason: 'Quá 12h chưa có bưu tá tới lấy hàng',
     attempts: 0,
-  }
+  },
 ];
 
 export const INITIAL_DISCREPANCIES: UIDiscrepancyItem[] = [
@@ -239,7 +245,8 @@ export function getMockUnifiedTimeline(trackingCode: string): UITimelineEvent[] 
       source: 'CARRIER',
       source_label: 'Hãng GHN Express (Sự cố)',
       title: 'Giao hàng không thành công (Lần 1)',
-      description: 'Lý do báo: Khách không nghe máy khi shipper gọi 3 cuộc lúc 08:25, 08:28, 08:30.',
+      description:
+        'Lý do báo: Khách không nghe máy khi shipper gọi 3 cuộc lúc 08:25, 08:28, 08:30.',
       occurred_at: '16/08/2026 08:30',
       type: 'warning',
     },
@@ -248,7 +255,8 @@ export function getMockUnifiedTimeline(trackingCode: string): UITimelineEvent[] 
       source: 'SYSTEM',
       source_label: 'Ship Dễ Engine (BR-08)',
       title: 'Tự động mở hồ sơ cứu đơn khẩn cấp',
-      description: 'Điểm ưu tiên tính toán: 85 điểm (COD 450k, khách mới). SLA cứu đơn trước 20:30.',
+      description:
+        'Điểm ưu tiên tính toán: 85 điểm (COD 450k, khách mới). SLA cứu đơn trước 20:30.',
       occurred_at: '16/08/2026 08:31',
       type: 'error',
     },
@@ -257,7 +265,8 @@ export function getMockUnifiedTimeline(trackingCode: string): UITimelineEvent[] 
       source: 'CSKH',
       source_label: 'Thao tác CSKH (App Web)',
       title: 'CSKH gọi điện hỗ trợ khách hàng',
-      description: 'Nhân viên Hoa CSKH đã gọi xác nhận: Khách bận họp buổi sáng, hẹn shipper giao lại sau 15h30 chiều mai.',
+      description:
+        'Nhân viên Hoa CSKH đã gọi xác nhận: Khách bận họp buổi sáng, hẹn shipper giao lại sau 15h30 chiều mai.',
       actor: 'Hoa CSKH (user_cskh_1)',
       occurred_at: '16/08/2026 09:10',
       type: 'success',
@@ -267,7 +276,8 @@ export function getMockUnifiedTimeline(trackingCode: string): UITimelineEvent[] 
       source: 'CSKH',
       source_label: 'Lệnh Hẹn Giao Lại (API GHN L2)',
       title: 'Gửi API hẹn giao lại thành công (CN-10)',
-      description: 'Payload dispatch idempotency_key=REQ_REATTEMPT_88291042. Hãng phản hồi HTTP 200 schedule_accepted.',
+      description:
+        'Payload dispatch idempotency_key=REQ_REATTEMPT_88291042. Hãng phản hồi HTTP 200 schedule_accepted.',
       actor: 'Ship Dễ Dispatcher',
       occurred_at: '16/08/2026 09:12',
       type: 'success',

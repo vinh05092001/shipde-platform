@@ -52,7 +52,8 @@ export function DataTable<T>({
   onNextPage,
   totalRecords,
 }: DataTableProps<T>) {
-  const isAllSelected = data.length > 0 && selectedIds && data.every((item) => selectedIds.has(keyExtractor(item)));
+  const isAllSelected =
+    data.length > 0 && selectedIds && data.every((item) => selectedIds.has(keyExtractor(item)));
 
   return (
     <div className="w-full bg-[var(--surface)] border border-[var(--line)] rounded-[5px] flex flex-col overflow-hidden">
@@ -76,7 +77,11 @@ export function DataTable<T>({
                   key={idx}
                   style={{ width: col.width }}
                   className={
-                    col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
+                    col.align === 'right'
+                      ? 'text-right'
+                      : col.align === 'center'
+                        ? 'text-center'
+                        : 'text-left'
                   }
                 >
                   {col.header}
@@ -89,7 +94,11 @@ export function DataTable<T>({
               // Static gray loading cells (No blinking skeleton)
               Array.from({ length: 8 }).map((_, rIdx) => (
                 <tr key={rIdx}>
-                  {onToggleSelect && <td className="text-center"><div className="w-3.5 h-3.5 bg-[var(--line)] mx-auto rounded-[2px]" /></td>}
+                  {onToggleSelect && (
+                    <td className="text-center">
+                      <div className="w-3.5 h-3.5 bg-[var(--line)] mx-auto rounded-[2px]" />
+                    </td>
+                  )}
                   {columns.map((_, cIdx) => (
                     <td key={cIdx}>
                       <div className="h-4 bg-[var(--line)] rounded-[2px] w-3/4" />
@@ -138,10 +147,16 @@ export function DataTable<T>({
                       <td
                         key={cIdx}
                         className={
-                          col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
+                          col.align === 'right'
+                            ? 'text-right'
+                            : col.align === 'center'
+                              ? 'text-center'
+                              : 'text-left'
                         }
                       >
-                        {col.cell ? col.cell(item, index) : (item as any)[col.accessorKey as string]}
+                        {col.cell
+                          ? col.cell(item, index)
+                          : (item as any)[col.accessorKey as string]}
                       </td>
                     ))}
                   </tr>
@@ -156,9 +171,15 @@ export function DataTable<T>({
       <div className="h-10 border-t border-[var(--line)] bg-[var(--canvas)] px-3 flex items-center justify-between text-[12px] text-[var(--ink-600)]">
         <div>
           {totalRecords !== undefined ? (
-            <span>Tổng số: <strong className="text-[var(--ink-900)] tabular-nums">{totalRecords}</strong> bản ghi</span>
+            <span>
+              Tổng số:{' '}
+              <strong className="text-[var(--ink-900)] tabular-nums">{totalRecords}</strong> bản ghi
+            </span>
           ) : (
-            <span>Hiển thị <strong className="text-[var(--ink-900)] tabular-nums">{data.length}</strong> dòng</span>
+            <span>
+              Hiển thị <strong className="text-[var(--ink-900)] tabular-nums">{data.length}</strong>{' '}
+              dòng
+            </span>
           )}
         </div>
 
@@ -173,7 +194,9 @@ export function DataTable<T>({
             <ChevronLeft className="w-3 h-3 mr-0.5" /> Trước
           </button>
 
-          <span className="text-[11px] font-mono text-[var(--ink-400)]">Phân trang bằng con trỏ</span>
+          <span className="text-[11px] font-mono text-[var(--ink-400)]">
+            Phân trang bằng con trỏ
+          </span>
 
           <button
             type="button"

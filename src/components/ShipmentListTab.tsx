@@ -42,7 +42,7 @@ export const ShipmentListTab: React.FC<Props> = ({
   const [shipments, setShipments] = useState<UnifiedShipment[]>(MASTER_SHIPMENTS);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  
+
   // Filter Controls
   const [carrierFilter, setCarrierFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -76,6 +76,7 @@ export const ShipmentListTab: React.FC<Props> = ({
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Legacy prototype initial fetch pattern
     fetchShipments();
   }, []);
 
@@ -83,7 +84,9 @@ export const ShipmentListTab: React.FC<Props> = ({
     const isCurrentlyUnmasked = unmaskedRows[id];
     setUnmaskedRows((prev) => ({ ...prev, [id]: !isCurrentlyUnmasked }));
     if (!isCurrentlyUnmasked) {
-      setToast(`[Audit Log] Đã mở xem thông tin số điện thoại khách hàng cho mã ${trackingCode}. Đã ghi nhật ký kiểm toán.`);
+      setToast(
+        `[Audit Log] Đã mở xem thông tin số điện thoại khách hàng cho mã ${trackingCode}. Đã ghi nhật ký kiểm toán.`
+      );
       setTimeout(() => setToast(null), 4000);
     }
   };
@@ -156,7 +159,13 @@ export const ShipmentListTab: React.FC<Props> = ({
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
             <span>{toast}</span>
           </div>
-          <button type="button" onClick={() => setToast(null)} className="font-bold text-slate-400 hover:text-white">✕</button>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="font-bold text-slate-400 hover:text-white"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -174,17 +183,14 @@ export const ShipmentListTab: React.FC<Props> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Tra cứu bưu kiện toàn trình, kiểm tra trạng thái khớp mã nguồn và mở Timeline sự kiện hợp nhất 3 nguồn.
+              Tra cứu bưu kiện toàn trình, kiểm tra trạng thái khớp mã nguồn và mở Timeline sự kiện
+              hợp nhất 3 nguồn.
             </p>
           </div>
 
           <div className="flex items-center gap-2 self-stretch md:self-auto">
             {onCreateOrder && (
-              <button
-                type="button"
-                onClick={onCreateOrder}
-                className="btn-primary text-xs"
-              >
+              <button type="button" onClick={onCreateOrder} className="btn-primary text-xs">
                 <span>+ Tạo Vận Đơn</span>
               </button>
             )}
@@ -192,7 +198,9 @@ export const ShipmentListTab: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => {
-                setToast(`✓ Đã xuất file Excel ${totalCount} vận đơn theo đúng tiêu chí lọc hiện hành.`);
+                setToast(
+                  `✓ Đã xuất file Excel ${totalCount} vận đơn theo đúng tiêu chí lọc hiện hành.`
+                );
                 setTimeout(() => setToast(null), 4000);
               }}
               className="btn-secondary text-xs"
@@ -208,7 +216,9 @@ export const ShipmentListTab: React.FC<Props> = ({
               className="btn-secondary text-xs"
               title="Tải lại dữ liệu mới nhất"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#EA4B12]' : 'text-slate-500'}`} />
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#EA4B12]' : 'text-slate-500'}`}
+              />
               <span className="hidden sm:inline">Làm mới</span>
             </button>
           </div>
@@ -222,7 +232,10 @@ export const ShipmentListTab: React.FC<Props> = ({
             <input
               type="text"
               value={searchTerm}
-              onChange={(e) => { setSearchTerm(e.target.value); setCursorIndex(0); }}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCursorIndex(0);
+              }}
               placeholder="Tìm mã vận đơn, mã đơn POS, tên, SĐT..."
               className="modern-input pl-9 pr-8 text-xs font-medium"
             />
@@ -241,7 +254,10 @@ export const ShipmentListTab: React.FC<Props> = ({
           <div>
             <select
               value={carrierFilter}
-              onChange={(e) => { setCarrierFilter(e.target.value); setCursorIndex(0); }}
+              onChange={(e) => {
+                setCarrierFilter(e.target.value);
+                setCursorIndex(0);
+              }}
               className="modern-input text-xs font-semibold text-slate-800"
             >
               <option value="ALL">Hãng: Tất cả (GHN, GHTK)</option>
@@ -254,7 +270,10 @@ export const ShipmentListTab: React.FC<Props> = ({
           <div>
             <select
               value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setCursorIndex(0); }}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setCursorIndex(0);
+              }}
               className="modern-input text-xs font-semibold text-slate-800"
             >
               <option value="ALL">Trạng thái: Tất cả</option>
@@ -272,7 +291,10 @@ export const ShipmentListTab: React.FC<Props> = ({
           <div>
             <select
               value={dateRangeFilter}
-              onChange={(e) => { setDateRangeFilter(e.target.value); setCursorIndex(0); }}
+              onChange={(e) => {
+                setDateRangeFilter(e.target.value);
+                setCursorIndex(0);
+              }}
               className="modern-input text-xs font-semibold text-slate-800"
             >
               <option value="today">Hôm nay</option>
@@ -288,7 +310,10 @@ export const ShipmentListTab: React.FC<Props> = ({
               type="button"
               onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
               className={`flex-1 btn-secondary text-xs justify-center ${
-                showAdvancedFilters || hasOpenCaseFilter || matchStatusFilter !== 'ALL' || warehouseFilter !== 'ALL'
+                showAdvancedFilters ||
+                hasOpenCaseFilter ||
+                matchStatusFilter !== 'ALL' ||
+                warehouseFilter !== 'ALL'
                   ? 'bg-[#FFF5F0] text-[#EA4B12] border-[#FDDDD0] font-bold'
                   : ''
               }`}
@@ -319,7 +344,10 @@ export const ShipmentListTab: React.FC<Props> = ({
               </label>
               <select
                 value={matchStatusFilter}
-                onChange={(e) => { setMatchStatusFilter(e.target.value); setCursorIndex(0); }}
+                onChange={(e) => {
+                  setMatchStatusFilter(e.target.value);
+                  setCursorIndex(0);
+                }}
                 className="modern-input text-xs"
               >
                 <option value="ALL">Tất cả trạng thái khớp</option>
@@ -335,7 +363,10 @@ export const ShipmentListTab: React.FC<Props> = ({
               </label>
               <select
                 value={warehouseFilter}
-                onChange={(e) => { setWarehouseFilter(e.target.value); setCursorIndex(0); }}
+                onChange={(e) => {
+                  setWarehouseFilter(e.target.value);
+                  setCursorIndex(0);
+                }}
                 className="modern-input text-xs"
               >
                 <option value="ALL">Tất cả chi nhánh</option>
@@ -351,7 +382,10 @@ export const ShipmentListTab: React.FC<Props> = ({
                 <input
                   type="checkbox"
                   checked={hasOpenCaseFilter}
-                  onChange={(e) => { setHasOpenCaseFilter(e.target.checked); setCursorIndex(0); }}
+                  onChange={(e) => {
+                    setHasOpenCaseFilter(e.target.checked);
+                    setCursorIndex(0);
+                  }}
                   className="w-4 h-4 rounded text-[#EA4B12] focus:ring-[#EA4B12] border-slate-300"
                 />
                 <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
@@ -392,9 +426,13 @@ export const ShipmentListTab: React.FC<Props> = ({
                   <tr key={shipment.id}>
                     {/* Column 1: Tracking & Order Code */}
                     <td>
-                      <TrackingCode code={shipment.tracking_code} onClick={() => onOpenTrackingModal(shipment.tracking_code)} />
+                      <TrackingCode
+                        code={shipment.tracking_code}
+                        onClick={() => onOpenTrackingModal(shipment.tracking_code)}
+                      />
                       <div className="text-xs text-slate-500 font-mono mt-0.5">
-                        Đơn: <span className="font-semibold text-slate-700">{shipment.order_code}</span>
+                        Đơn:{' '}
+                        <span className="font-semibold text-slate-700">{shipment.order_code}</span>
                       </div>
                     </td>
 
@@ -411,16 +449,26 @@ export const ShipmentListTab: React.FC<Props> = ({
 
                     {/* Column 3: Customer with PII Masking */}
                     <td>
-                      <div className="font-semibold text-slate-900 text-xs">{shipment.recipient_name}</div>
+                      <div className="font-semibold text-slate-900 text-xs">
+                        {shipment.recipient_name}
+                      </div>
                       <div className="text-xs text-slate-600 flex items-center gap-1.5 mt-0.5">
                         <span className="font-mono">{maskedPhone}</span>
                         <button
                           type="button"
                           onClick={() => toggleUnmask(shipment.id, shipment.tracking_code)}
                           className="text-slate-400 hover:text-[#EA4B12] transition"
-                          title={isUnmasked ? 'Ẩn số điện thoại' : 'Mở xem số điện thoại (Có ghi log kiểm toán)'}
+                          title={
+                            isUnmasked
+                              ? 'Ẩn số điện thoại'
+                              : 'Mở xem số điện thoại (Có ghi log kiểm toán)'
+                          }
                         >
-                          {isUnmasked ? <EyeOff className="w-3.5 h-3.5 text-[#EA4B12]" /> : <Eye className="w-3.5 h-3.5" />}
+                          {isUnmasked ? (
+                            <EyeOff className="w-3.5 h-3.5 text-[#EA4B12]" />
+                          ) : (
+                            <Eye className="w-3.5 h-3.5" />
+                          )}
                         </button>
                       </div>
                       <div className="text-xs text-slate-400 truncate max-w-[200px]">
@@ -487,23 +535,27 @@ export const ShipmentListTab: React.FC<Props> = ({
                         </button>
                       )}
 
-                      {shipment.has_open_claim && !shipment.has_open_exception && !shipment.has_open_discrepancy && (
-                        <button
-                          type="button"
-                          onClick={() => onNavigateToTab && onNavigateToTab('claims')}
-                          className="badge-info text-xs cursor-pointer hover:bg-slate-200 transition inline-flex items-center gap-1"
-                        >
-                          <FileSpreadsheet className="w-3.5 h-3.5" />
-                          <span>Hồ sơ bồi thường</span>
-                        </button>
-                      )}
+                      {shipment.has_open_claim &&
+                        !shipment.has_open_exception &&
+                        !shipment.has_open_discrepancy && (
+                          <button
+                            type="button"
+                            onClick={() => onNavigateToTab && onNavigateToTab('claims')}
+                            className="badge-info text-xs cursor-pointer hover:bg-slate-200 transition inline-flex items-center gap-1"
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5" />
+                            <span>Hồ sơ bồi thường</span>
+                          </button>
+                        )}
 
-                      {!shipment.has_open_exception && !shipment.has_open_discrepancy && !shipment.has_open_claim && (
-                        <span className="text-slate-400 text-xs flex items-center gap-1 font-medium">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Bình thường</span>
-                        </span>
-                      )}
+                      {!shipment.has_open_exception &&
+                        !shipment.has_open_discrepancy &&
+                        !shipment.has_open_claim && (
+                          <span className="text-slate-400 text-xs flex items-center gap-1 font-medium">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Bình thường</span>
+                          </span>
+                        )}
                     </td>
 
                     {/* Column 8: Details CTA */}
@@ -524,7 +576,9 @@ export const ShipmentListTab: React.FC<Props> = ({
                 <tr>
                   <td colSpan={8} className="py-12 text-center text-slate-400 text-xs">
                     <Package className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                    <p className="font-semibold text-slate-600">Không tìm thấy bưu kiện nào phù hợp với bộ lọc hiện tại.</p>
+                    <p className="font-semibold text-slate-600">
+                      Không tìm thấy bưu kiện nào phù hợp với bộ lọc hiện tại.
+                    </p>
                     {hasActiveFilters && (
                       <button
                         type="button"
@@ -545,9 +599,12 @@ export const ShipmentListTab: React.FC<Props> = ({
         <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-slate-600">
           <div className="flex items-center gap-3">
             <span>
-              Hiển thị <strong className="text-slate-900">{totalCount > 0 ? cursorIndex + 1 : 0}</strong> –{' '}
-              <strong className="text-slate-900">{Math.min(cursorIndex + pageSize, totalCount)}</strong> trên tổng{' '}
-              <strong className="text-slate-900">{totalCount}</strong> bưu kiện
+              Hiển thị{' '}
+              <strong className="text-slate-900">{totalCount > 0 ? cursorIndex + 1 : 0}</strong> –{' '}
+              <strong className="text-slate-900">
+                {Math.min(cursorIndex + pageSize, totalCount)}
+              </strong>{' '}
+              trên tổng <strong className="text-slate-900">{totalCount}</strong> bưu kiện
             </span>
 
             <div className="flex items-center gap-1.5">
@@ -555,7 +612,10 @@ export const ShipmentListTab: React.FC<Props> = ({
               <span>Dòng/trang:</span>
               <select
                 value={pageSize}
-                onChange={(e) => { setPageSize(Number(e.target.value)); setCursorIndex(0); }}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCursorIndex(0);
+                }}
                 className="px-2 py-1 rounded-md border border-slate-200 bg-white font-semibold text-xs"
               >
                 <option value={20}>20</option>

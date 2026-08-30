@@ -1,0 +1,42 @@
+# Build, runtime and dependency caches
+.next
+out
+build
+node_modules
+package-lock.json
+next-env.d.ts
+coverage
+*.log
+*.tmp
+.temp*
+.git
+.gemini
+
+# Unsupported syntax without native Prettier parser
+prisma/schema.prisma
+*.toml
+
+# Un-migrated prototype legacy configs and scripts preserved from origin/main
+tsconfig.json
+postcss.config.mjs
+scripts/sample-data.ts
+scripts/concierge-audit.ts
+scripts/ai/
+
+# Specification documents, contracts and templates governed by dedicated Python and JSON schema validators
+# (Preserved unmodified from origin/main to prevent out-of-scope diffs outside TASK-FOUND-01 allowlist)
+docs/product-spec/docs/
+docs/product-spec/contracts/
+docs/product-spec/.github/
+docs/product-spec/README.md
+docs/product-spec/work-items/README.md
+docs/product-spec/work-items/TASK-AI-*.md
+docs/AGENT_PROGRESS.md
+docs/FINAL_HANDOFF.md
+docs/IMPLEMENTATION_PLAN.md
+docs/SOURCE_LOCK.md
+docs/UX_AUDIT.md
+docs/backoffice-remediation-plan.md
+.github/ISSUE_TEMPLATE/
+.github/PULL_REQUEST_TEMPLATE.md
+.github/workflows/product-spec-validation.yml

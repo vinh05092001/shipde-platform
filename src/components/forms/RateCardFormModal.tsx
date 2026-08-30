@@ -55,8 +55,12 @@ export const RateCardFormModal: React.FC<Props> = ({ isOpen, onClose, onSaved })
               <Scale className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-slate-900">Cài Đặt Biểu Giá Hợp Đồng (CN-23)</h3>
-              <p className="text-[11px] text-slate-500">Cơ sở tính cước chuẩn phát hiện sai lệch phép dò D2 (BR-51)</p>
+              <h3 className="font-bold text-sm text-slate-900">
+                Cài Đặt Biểu Giá Hợp Đồng (CN-23)
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Cơ sở tính cước chuẩn phát hiện sai lệch phép dò D2 (BR-51)
+              </p>
             </div>
           </div>
           <button
@@ -84,7 +88,9 @@ export const RateCardFormModal: React.FC<Props> = ({ isOpen, onClose, onSaved })
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="font-bold text-slate-700 block mb-1">Cước Nội Tỉnh (&lt;1kg):</label>
+              <label className="font-bold text-slate-700 block mb-1">
+                Cước Nội Tỉnh (&lt;1kg):
+              </label>
               <input
                 type="number"
                 value={intraProvinceFee}
@@ -95,7 +101,9 @@ export const RateCardFormModal: React.FC<Props> = ({ isOpen, onClose, onSaved })
             </div>
 
             <div>
-              <label className="font-bold text-slate-700 block mb-1">Cước Liên Tỉnh (&lt;1kg):</label>
+              <label className="font-bold text-slate-700 block mb-1">
+                Cước Liên Tỉnh (&lt;1kg):
+              </label>
               <input
                 type="number"
                 value={interProvinceFee}
@@ -107,7 +115,9 @@ export const RateCardFormModal: React.FC<Props> = ({ isOpen, onClose, onSaved })
           </div>
 
           <div>
-            <label className="font-bold text-slate-700 block mb-1">Phụ Phí Mỗi 0.5kg Tiếp Theo:</label>
+            <label className="font-bold text-slate-700 block mb-1">
+              Phụ Phí Mỗi 0.5kg Tiếp Theo:
+            </label>
             <input
               type="number"
               value={additionalKgFee}
@@ -118,18 +128,10 @@ export const RateCardFormModal: React.FC<Props> = ({ isOpen, onClose, onSaved })
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary text-xs"
-            >
+            <button type="button" onClick={onClose} className="btn-secondary text-xs">
               Hủy
             </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary text-xs"
-            >
+            <button type="submit" disabled={loading} className="btn-primary text-xs">
               {loading ? 'Đang lưu...' : 'Lưu Biểu Giá Hợp Đồng'}
             </button>
           </div>

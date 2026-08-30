@@ -3,7 +3,13 @@
 import React, { useState } from 'react';
 import { UIExceptionItem } from './types';
 import { MASTER_EXCEPTIONS } from '@/services/unifiedDataStore';
-import { TrackingCode, Money, StatusBadge, AutomationBadge, ConfirmDialog } from './ui/OperationalComponents';
+import {
+  TrackingCode,
+  Money,
+  StatusBadge,
+  AutomationBadge,
+  ConfirmDialog,
+} from './ui/OperationalComponents';
 import {
   Phone,
   Calendar,
@@ -44,12 +50,15 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
 
   const myCasesCount = caseList.filter((e) => e.assigned_to?.includes('Hoa')).length;
   const unassignedCount = caseList.filter((e) => !e.assigned_to).length;
-  const expiringCount = caseList.filter((e) => (e.hours_remaining ?? 6) <= 4 && (e.hours_remaining ?? 6) > 0).length;
+  const expiringCount = caseList.filter(
+    (e) => (e.hours_remaining ?? 6) <= 4 && (e.hours_remaining ?? 6) > 0
+  ).length;
 
   const filteredCases = caseList.filter((e) => {
     if (filterType === 'MINE') return e.assigned_to?.includes('Hoa');
     if (filterType === 'UNASSIGNED') return !e.assigned_to;
-    if (filterType === 'EXPIRING') return (e.hours_remaining ?? 6) <= 4 && (e.hours_remaining ?? 6) > 0;
+    if (filterType === 'EXPIRING')
+      return (e.hours_remaining ?? 6) <= 4 && (e.hours_remaining ?? 6) > 0;
     return true;
   });
 
@@ -95,7 +104,13 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             <span>{toastFeedback}</span>
           </div>
-          <button type="button" onClick={() => setToastFeedback(null)} className="font-bold text-slate-400 hover:text-white">✕</button>
+          <button
+            type="button"
+            onClick={() => setToastFeedback(null)}
+            className="font-bold text-slate-400 hover:text-white"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -111,8 +126,18 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
             {[
               { id: 'ALL', label: 'Tất cả sự cố', count: caseList.length, color: 'text-slate-900' },
               { id: 'MINE', label: 'Việc của tôi', count: myCasesCount, color: 'text-[#EA4B12]' },
-              { id: 'UNASSIGNED', label: 'Chưa phân công', count: unassignedCount, color: 'text-slate-600' },
-              { id: 'EXPIRING', label: 'Sắp hết hạn xử lý (<4h)', count: expiringCount, color: 'text-amber-700' },
+              {
+                id: 'UNASSIGNED',
+                label: 'Chưa phân công',
+                count: unassignedCount,
+                color: 'text-slate-600',
+              },
+              {
+                id: 'EXPIRING',
+                label: 'Sắp hết hạn xử lý (<4h)',
+                count: expiringCount,
+                color: 'text-amber-700',
+              },
             ].map((f) => (
               <button
                 key={f.id}
@@ -174,7 +199,14 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
                         {c.carrier_reason || 'Khách không nghe máy lần 1'}
                       </div>
                       <div className="flex items-center gap-2 text-xs text-slate-500">
-                        <span>COD: <Money amount={c.cod_amount} state="pending" className="inline text-xs font-bold" /></span>
+                        <span>
+                          COD:{' '}
+                          <Money
+                            amount={c.cod_amount}
+                            state="pending"
+                            className="inline text-xs font-bold"
+                          />
+                        </span>
                         <span>·</span>
                         <span>{c.recipient_name}</span>
                       </div>
@@ -202,11 +234,17 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
             <div className="border-b border-slate-100 pb-3 flex justify-between items-start">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-mono font-bold text-base text-slate-900">{selectedCase.tracking_code}</span>
-                  <AutomationBadge tier={currentTier as any} carrierCode={selectedCase.carrier_code} />
+                  <span className="font-mono font-bold text-base text-slate-900">
+                    {selectedCase.tracking_code}
+                  </span>
+                  <AutomationBadge
+                    tier={currentTier as any}
+                    carrierCode={selectedCase.carrier_code}
+                  />
                 </div>
                 <div className="text-slate-500 mt-1">
-                  Đơn hàng: <strong>{selectedCase.order_code}</strong> · COD: <Money amount={selectedCase.cod_amount} state="pending" className="inline" />
+                  Đơn hàng: <strong>{selectedCase.order_code}</strong> · COD:{' '}
+                  <Money amount={selectedCase.cod_amount} state="pending" className="inline" />
                 </div>
               </div>
               <StatusBadge status={selectedCase.status} />
@@ -239,12 +277,15 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
             <div className="space-y-3 p-4 rounded-xl border border-[#FDDDD0] bg-[#FFF5F0]/50">
               <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
                 <Send className="w-4 h-4 text-[#EA4B12]" />
-                Gửi Yêu Cầu Giao Lại ({currentTier === 'L2' ? 'Tự động gọi qua API' : 'Tạo hồ sơ dán cổng'}):
+                Gửi Yêu Cầu Giao Lại (
+                {currentTier === 'L2' ? 'Tự động gọi qua API' : 'Tạo hồ sơ dán cổng'}):
               </span>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-xs font-semibold text-slate-600 block mb-1">Ngày hẹn giao:</label>
+                  <label className="text-xs font-semibold text-slate-600 block mb-1">
+                    Ngày hẹn giao:
+                  </label>
                   <input
                     type="date"
                     value={scheduledDate}
@@ -253,7 +294,9 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-slate-600 block mb-1">Ghi chú bưu tá:</label>
+                  <label className="text-xs font-semibold text-slate-600 block mb-1">
+                    Ghi chú bưu tá:
+                  </label>
                   <input
                     type="text"
                     value={reattemptNote}
@@ -298,7 +341,11 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
                 className="flex items-center justify-between w-full text-xs font-bold text-slate-500 hover:text-slate-800 py-1"
               >
                 <span>Chi Tiết Kỹ Thuật (Dành cho Quản Trị)</span>
-                {showTechnicalDetails ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                {showTechnicalDetails ? (
+                  <ChevronUp className="w-4 h-4" />
+                ) : (
+                  <ChevronDown className="w-4 h-4" />
+                )}
               </button>
 
               {showTechnicalDetails && (

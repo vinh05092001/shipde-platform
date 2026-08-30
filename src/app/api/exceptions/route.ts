@@ -16,12 +16,17 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get('q')?.toLowerCase();
 
     let list = db.exceptionCases.map((exc) => {
-      const shipment = db.shipments.find((s) => s.id === exc.shipment_id || s.tracking_code === exc.tracking_code);
-      const order = shipment ? db.orders.find((o) => o.id === shipment.order_id || o.order_code === shipment.order_code) : undefined;
+      const shipment = db.shipments.find(
+        (s) => s.id === exc.shipment_id || s.tracking_code === exc.tracking_code
+      );
+      const order = shipment
+        ? db.orders.find((o) => o.id === shipment.order_id || o.order_code === shipment.order_code)
+        : undefined;
       return {
         ...exc,
         order_code: shipment?.order_code || `ORD_${exc.tracking_code}`,
-        carrier_code: shipment?.carrier_code || (exc.tracking_code.startsWith('GHN') ? 'GHN' : 'GHTK'),
+        carrier_code:
+          shipment?.carrier_code || (exc.tracking_code.startsWith('GHN') ? 'GHN' : 'GHTK'),
         customer_name: order?.recipient_name || 'Khách hàng',
         customer_phone: order?.recipient_phone || '0912345678',
         customer_address: order?.recipient_address || 'Địa chỉ giao hàng',
@@ -50,21 +55,45 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action, case_id, tracking_code, carrier_code, note, new_phone, scheduled_date, user_id, user_name, override_tier, call_result } = body;
+    const {
+      action,
+      case_id,
+      tracking_code,
+      carrier_code,
+      note,
+      new_phone,
+      scheduled_date,
+      user_id,
+      user_name,
+      override_tier,
+      call_result,
+    } = body;
 
-    const targetCase = db.exceptionCases.find((e) => e.id === case_id || e.tracking_code === tracking_code);
+    const targetCase = db.exceptionCases.find(
+      (e) => e.id === case_id || e.tracking_code === tracking_code
+    );
     if (!targetCase) {
-      return NextResponse.json({ error: { code: 'case_not_found', message: 'Không tìm thấy hồ sơ ngoại lệ' } }, { status: 404 });
+      return NextResponse.json(
+        { error: { code: 'case_not_found', message: 'Không tìm thấy hồ sơ ngoại lệ' } },
+        { status: 404 }
+      );
     }
 
-    const targetShipment = db.shipments.find((s) => s.id === targetCase.shipment_id || s.tracking_code === targetCase.tracking_code);
+    const targetShipment = db.shipments.find(
+      (s) => s.id === targetCase.shipment_id || s.tracking_code === targetCase.tracking_code
+    );
     if (!targetShipment) {
-      return NextResponse.json({ error: { code: 'shipment_not_found', message: 'Không tìm thấy vận đơn tương ứng' } }, { status: 404 });
+      return NextResponse.json(
+        { error: { code: 'shipment_not_found', message: 'Không tìm thấy vận đơn tương ứng' } },
+        { status: 404 }
+      );
     }
 
     // DISPATCH REATTEMPT (CN-10)
     if (action === 'DISPATCH_REATTEMPT' || !action) {
-      const carrierAccount = db.carrierAccounts.find((a) => a.carrier_code === targetShipment.carrier_code);
+      const carrierAccount = db.carrierAccounts.find(
+        (a) => a.carrier_code === targetShipment.carrier_code
+      );
       const adapter = targetShipment.carrier_code === 'GHN' ? ghnAdapter : ghtkAdapter;
       const currentTier = override_tier || carrierAccount?.capability_tier || adapter.defaultTier;
 
@@ -109,9 +138,10 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: result.tier_executed === CarrierCapabilityTier.L2_EXECUTE
-          ? 'Đã gửi yêu cầu hẹn giao lại trực tiếp qua API hãng thành công (GHN L2)'
-          : 'Đã tạo và xuất trọn gói hồ sơ hỗ trợ CSKH gửi cổng hãng (GHTK L1 Assist)',
+        message:
+          result.tier_executed === CarrierCapabilityTier.L2_EXECUTE
+            ? 'Đã gửi yêu cầu hẹn giao lại trực tiếp qua API hãng thành công (GHN L2)'
+            : 'Đã tạo và xuất trọn gói hồ sơ hỗ trợ CSKH gửi cổng hãng (GHTK L1 Assist)',
         data: {
           case: targetCase,
           shipment: targetShipment,
@@ -144,7 +174,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: { code: 'bad_request', message: 'Hành động không hợp lệ' } }, { status: 400 });
+    return NextResponse.json(
+      { error: { code: 'bad_request', message: 'Hành động không hợp lệ' } },
+      { status: 400 }
+    );
   } catch (error: any) {
     const status = error.httpStatus || 500;
     return NextResponse.json(

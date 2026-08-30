@@ -9,7 +9,13 @@ interface AuthContextType {
   isAuthenticated: boolean;
   token: string | null;
   login: (emailOrPhone: string, pass: string) => Promise<{ success: boolean; error?: string }>;
-  register: (payload: { merchantName: string; fullName: string; email: string; phone: string; password: string }) => Promise<{ success: boolean; error?: string }>;
+  register: (payload: {
+    merchantName: string;
+    fullName: string;
+    email: string;
+    phone: string;
+    password: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   switchRole: (role: Role) => void;
 }
@@ -29,6 +35,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (savedUser && savedMerchant && savedToken) {
       try {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- Legacy prototype localStorage hydration pattern
         setUser(JSON.parse(savedUser));
         setMerchant(JSON.parse(savedMerchant));
         setToken(savedToken);
@@ -128,7 +135,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
-  const register = async (payload: { merchantName: string; fullName: string; email: string; phone: string; password: string }) => {
+  const register = async (payload: {
+    merchantName: string;
+    fullName: string;
+    email: string;
+    phone: string;
+    password: string;
+  }) => {
     if (!payload.merchantName || !payload.fullName || !payload.email || !payload.password) {
       return { success: false, error: 'Vui lòng điền đầy đủ các trường thông tin bắt buộc' };
     }

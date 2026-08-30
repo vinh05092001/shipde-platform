@@ -1,7 +1,16 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Settings, Shield, Sliders, CheckCircle2, RefreshCw, Database, Layers, ArrowRight } from 'lucide-react';
+import {
+  Settings,
+  Shield,
+  Sliders,
+  CheckCircle2,
+  RefreshCw,
+  Database,
+  Layers,
+  ArrowRight,
+} from 'lucide-react';
 import { AutomationBadge } from './ui/OperationalComponents';
 
 interface Props {
@@ -17,7 +26,12 @@ export const AdminSystemTab: React.FC<Props> = ({
 }) => {
   const [internalTier, setInternalTier] = useState<'L2' | 'L1'>(carrierGhnTier);
   const [unmappedStatuses, setUnmappedStatuses] = useState([
-    { raw_code: 'ghn_special_delay_flood', carrier: 'GHN', occurrences: 4, mapped_to: 'in_transit' },
+    {
+      raw_code: 'ghn_special_delay_flood',
+      carrier: 'GHN',
+      occurrences: 4,
+      mapped_to: 'in_transit',
+    },
   ]);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -44,7 +58,9 @@ export const AdminSystemTab: React.FC<Props> = ({
       {toast && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center justify-between shadow-xs animate-in fade-in">
           <span>{toast}</span>
-          <button type="button" onClick={() => setToast(null)} className="font-bold">✕</button>
+          <button type="button" onClick={() => setToast(null)} className="font-bold">
+            ✕
+          </button>
         </div>
       )}
 
@@ -61,7 +77,8 @@ export const AdminSystemTab: React.FC<Props> = ({
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Quản trị viên cấu hình ma trận năng lực hãng (CN-05, BR-44) và xử lý hàng chờ trạng thái lạ chưa ánh xạ (CN-23, BR-18).
+            Quản trị viên cấu hình ma trận năng lực hãng (CN-05, BR-44) và xử lý hàng chờ trạng thái
+            lạ chưa ánh xạ (CN-23, BR-18).
           </p>
         </div>
       </div>
@@ -76,7 +93,8 @@ export const AdminSystemTab: React.FC<Props> = ({
                 <span>1. Quản Lý Ma Trận Năng Lực Hãng Vận Chuyển (CN-05, BR-44)</span>
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Quy định mức độ tự động hóa của từng hãng để hệ thống tự động chọn luồng gọi API hoặc tạo hồ sơ hỗ trợ.
+                Quy định mức độ tự động hóa của từng hãng để hệ thống tự động chọn luồng gọi API
+                hoặc tạo hồ sơ hỗ trợ.
               </p>
             </div>
             <button
@@ -95,7 +113,9 @@ export const AdminSystemTab: React.FC<Props> = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-sm text-slate-900">Giao Hàng Nhanh (GHN)</span>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold">R1 Core</span>
+                  <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold">
+                    R1 Core
+                  </span>
                 </div>
                 <AutomationBadge tier={activeTier} />
               </div>
@@ -113,13 +133,18 @@ export const AdminSystemTab: React.FC<Props> = ({
             <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="font-bold text-sm text-slate-900">Giao Hàng Tiết Kiệm (GHTK)</span>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold">R1 Core</span>
+                  <span className="font-bold text-sm text-slate-900">
+                    Giao Hàng Tiết Kiệm (GHTK)
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold">
+                    R1 Core
+                  </span>
                 </div>
                 <AutomationBadge tier="L1" />
               </div>
               <p className="text-xs text-slate-600">
-                • L1 ASSIST: Tự động tổng hợp dữ liệu bưu kiện, lịch sử liên hệ và sinh hồ sơ hỗ trợ chuẩn mẫu để shop dán vào cổng GHTK.
+                • L1 ASSIST: Tự động tổng hợp dữ liệu bưu kiện, lịch sử liên hệ và sinh hồ sơ hỗ trợ
+                chuẩn mẫu để shop dán vào cổng GHTK.
               </p>
               <div className="text-[11px] text-slate-400 font-mono">
                 Phiên bản rule: v3.2.0 · Đang hoạt động ổn định
@@ -139,7 +164,8 @@ export const AdminSystemTab: React.FC<Props> = ({
                 <span>2. Hàng Chờ Trạng Thái Chưa Ánh Xạ (CN-23, BR-18)</span>
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Bảo vệ BR-18: Khi nhận mã trạng thái lạ từ hãng, giữ nguyên trạng thái bưu kiện, không đoán bừa bãi và đưa vào hàng chờ kiểm tra.
+                Bảo vệ BR-18: Khi nhận mã trạng thái lạ từ hãng, giữ nguyên trạng thái bưu kiện,
+                không đoán bừa bãi và đưa vào hàng chờ kiểm tra.
               </p>
             </div>
             <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
@@ -161,7 +187,9 @@ export const AdminSystemTab: React.FC<Props> = ({
               <tbody className="divide-y divide-slate-100">
                 {unmappedStatuses.map((item, idx) => (
                   <tr key={idx} className="hover:bg-slate-50">
-                    <td className="py-2.5 px-3 font-mono font-bold text-slate-800">{item.raw_code}</td>
+                    <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
+                      {item.raw_code}
+                    </td>
                     <td className="py-2.5 px-3 font-semibold">{item.carrier}</td>
                     <td className="py-2.5 px-3 font-mono">{item.occurrences} lần</td>
                     <td className="py-2.5 px-3">
@@ -171,7 +199,9 @@ export const AdminSystemTab: React.FC<Props> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          setToast(`✓ Đã phát hành ánh xạ mới cho mã [${item.raw_code}] sang trạng thái chuẩn. Đang chạy lại sự kiện tồn đọng (FR-ADM-001).`);
+                          setToast(
+                            `✓ Đã phát hành ánh xạ mới cho mã [${item.raw_code}] sang trạng thái chuẩn. Đang chạy lại sự kiện tồn đọng (FR-ADM-001).`
+                          );
                           setUnmappedStatuses([]);
                         }}
                         className="btn-primary text-xs py-1 px-2.5"

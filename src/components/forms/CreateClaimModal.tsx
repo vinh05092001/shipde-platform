@@ -55,7 +55,9 @@ export const CreateClaimModal: React.FC<Props> = ({ isOpen, onClose, onClaimCrea
             </div>
             <div>
               <h3 className="font-bold text-sm text-slate-900">Tạo Hồ Sơ Khiếu Nại Hãng (CN-16)</h3>
-              <p className="text-[11px] text-slate-500">Tự động tập hợp chứng cứ và giám sát thời hiệu 48h (BR-37)</p>
+              <p className="text-[11px] text-slate-500">
+                Tự động tập hợp chứng cứ và giám sát thời hiệu 48h (BR-37)
+              </p>
             </div>
           </div>
           <button
@@ -107,7 +109,9 @@ export const CreateClaimModal: React.FC<Props> = ({ isOpen, onClose, onClaimCrea
           </div>
 
           <div>
-            <label className="font-bold text-slate-700 block mb-1">Lý Do Chi Tiết & Bằng Chứng:</label>
+            <label className="font-bold text-slate-700 block mb-1">
+              Lý Do Chi Tiết & Bằng Chứng:
+            </label>
             <textarea
               value={reason}
               onChange={(e) => setReason(e.target.value)}
@@ -117,18 +121,10 @@ export const CreateClaimModal: React.FC<Props> = ({ isOpen, onClose, onClaimCrea
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary text-xs"
-            >
+            <button type="button" onClick={onClose} className="btn-secondary text-xs">
               Hủy
             </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary text-xs"
-            >
+            <button type="submit" disabled={loading} className="btn-primary text-xs">
               {loading ? 'Đang tạo...' : 'Khởi Tạo Hồ Sơ'}
             </button>
           </div>

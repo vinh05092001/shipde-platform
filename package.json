@@ -7,9 +7,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint .",
+    "format:check": "tsx scripts/verify-formatting.ts",
+    "format:write": "prettier --write .",
     "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
+    "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
+    "security:secrets": "tsx scripts/verify-secrets.ts",
     "concierge:audit": "tsx scripts/concierge-audit.ts"
+  },
+  "engines": {
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
@@ -26,6 +34,9 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.1.6",
+    "prettier": "^3.9.6",
     "tailwindcss": "^4.2.1",
     "tsx": "^4.21.0",
     "typescript": "^5"

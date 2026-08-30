@@ -18,21 +18,44 @@ import {
 export const ReturnScanTab: React.FC = () => {
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [barcodeInput, setBarcodeInput] = useState('');
-  const [conditionInput, setConditionInput] = useState<'intact' | 'damaged' | 'missing_item'>('intact');
+  const [conditionInput, setConditionInput] = useState<'intact' | 'damaged' | 'missing_item'>(
+    'intact'
+  );
   const [hasPhoto, setHasPhoto] = useState(false);
-  const [toastMessage, setToastMessage] = useState<{ type: 'ok' | 'risk' | 'warn'; msg: string } | null>(null);
+  const [toastMessage, setToastMessage] = useState<{
+    type: 'ok' | 'risk' | 'warn';
+    msg: string;
+  } | null>(null);
 
   const [offlineQueue, setOfflineQueue] = useState<any[]>([]);
   const [history, setHistory] = useState([
-    { id: 'rec_1', tracking_code: 'GHN88290111', warehouse: 'Kho Tân Bình, HCM', condition: 'intact', scanned_at: '17/08/2026 08:15', staff: 'Phạm Văn Kho' },
-    { id: 'rec_2', tracking_code: 'GHTK77129002', warehouse: 'Kho Tân Bình, HCM', condition: 'damaged', scanned_at: '17/08/2026 08:30', staff: 'Phạm Văn Kho', evidence_url: 'https://storage.shipde.net/evidence/img_02.jpg' },
+    {
+      id: 'rec_1',
+      tracking_code: 'GHN88290111',
+      warehouse: 'Kho Tân Bình, HCM',
+      condition: 'intact',
+      scanned_at: '17/08/2026 08:15',
+      staff: 'Phạm Văn Kho',
+    },
+    {
+      id: 'rec_2',
+      tracking_code: 'GHTK77129002',
+      warehouse: 'Kho Tân Bình, HCM',
+      condition: 'damaged',
+      scanned_at: '17/08/2026 08:30',
+      staff: 'Phạm Văn Kho',
+      evidence_url: 'https://storage.shipde.net/evidence/img_02.jpg',
+    },
   ]);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleScanSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const code = barcodeInput.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const code = barcodeInput
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
     if (!code) return;
 
     // Kiện hàng hư hỏng bắt buộc chụp ảnh làm chứng cứ
@@ -49,7 +72,8 @@ export const ReturnScanTab: React.FC = () => {
       tracking_code: code,
       warehouse: 'Kho Tân Bình, HCM',
       condition: conditionInput,
-      scanned_at: new Date().toLocaleTimeString('vi-VN') + ' ' + new Date().toLocaleDateString('vi-VN'),
+      scanned_at:
+        new Date().toLocaleTimeString('vi-VN') + ' ' + new Date().toLocaleDateString('vi-VN'),
       staff: 'Phạm Văn Kho (Thủ kho)',
       evidence_url: hasPhoto ? 'https://storage.shipde.net/evidence/photo_proof.jpg' : undefined,
     };
@@ -93,8 +117,8 @@ export const ReturnScanTab: React.FC = () => {
             toastMessage.type === 'ok'
               ? 'bg-slate-900 text-white'
               : toastMessage.type === 'risk'
-              ? 'bg-rose-900 text-white'
-              : 'bg-amber-900 text-white'
+                ? 'bg-rose-900 text-white'
+                : 'bg-amber-900 text-white'
           }`}
         >
           <div className="flex items-center gap-2">
@@ -105,7 +129,13 @@ export const ReturnScanTab: React.FC = () => {
             )}
             <span>{toastMessage.msg}</span>
           </div>
-          <button type="button" onClick={() => setToastMessage(null)} className="font-bold text-slate-400 hover:text-white">✕</button>
+          <button
+            type="button"
+            onClick={() => setToastMessage(null)}
+            className="font-bold text-slate-400 hover:text-white"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -117,7 +147,9 @@ export const ReturnScanTab: React.FC = () => {
               <RotateCcw className="w-5 h-5 text-[#EA4B12]" />
               <span>Tiếp Nhận & Quét Mã Kiện Hàng Hoàn</span>
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">Dành cho Thủ kho sử dụng máy quét mã vạch chuyên dụng hoặc camera điện thoại.</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Dành cho Thủ kho sử dụng máy quét mã vạch chuyên dụng hoặc camera điện thoại.
+            </p>
           </div>
 
           {/* Offline Toggle */}
@@ -229,11 +261,7 @@ export const ReturnScanTab: React.FC = () => {
             <span className="text-xs font-bold text-amber-900">
               Có {offlineQueue.length} kiện hàng đang chờ đồng bộ lên máy chủ
             </span>
-            <button
-              type="button"
-              onClick={handleSyncOffline}
-              className="btn-primary text-xs"
-            >
+            <button type="button" onClick={handleSyncOffline} className="btn-primary text-xs">
               <RefreshCw className="w-3.5 h-3.5" />
               <span>Đồng Bộ Ngay</span>
             </button>
@@ -250,11 +278,17 @@ export const ReturnScanTab: React.FC = () => {
               <div className="space-y-0.5">
                 <div className="flex items-center gap-2">
                   <TrackingCode code={item.tracking_code} />
-                  <span className={item.condition === 'intact' ? 'badge-ok text-xs' : 'badge-risk text-xs'}>
+                  <span
+                    className={
+                      item.condition === 'intact' ? 'badge-ok text-xs' : 'badge-risk text-xs'
+                    }
+                  >
                     {item.condition === 'intact' ? 'Nguyên Vẹn' : 'Hư Hỏng'}
                   </span>
                 </div>
-                <div className="text-slate-500">{item.warehouse} · {item.staff}</div>
+                <div className="text-slate-500">
+                  {item.warehouse} · {item.staff}
+                </div>
               </div>
               <div className="text-slate-400 font-mono">{item.scanned_at}</div>
             </div>

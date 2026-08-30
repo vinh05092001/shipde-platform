@@ -14,7 +14,13 @@ import {
   Ledger3_ControlMetrics,
   validateThreeLedgersSeparation,
 } from '../types/ledger';
-import { Claim, ExceptionCase, ExceptionCaseStatus, Shipment, ShipmentStatus } from '../types/domain';
+import {
+  Claim,
+  ExceptionCase,
+  ExceptionCaseStatus,
+  Shipment,
+  ShipmentStatus,
+} from '../types/domain';
 
 export class ThreeLedgersCalculator {
   /**
@@ -106,8 +112,11 @@ export class ThreeLedgersCalculator {
     // Độ phủ trạng thái trong 24h, % COD đối soát, giờ kế toán tiết kiệm
     // ------------------------------------------------------------------------
     const totalActive = shipments.length;
-    const deliveredCount = shipments.filter((s) => s.current_status === ShipmentStatus.DELIVERED).length;
-    const trackingCoverage = totalActive > 0 ? Math.round((deliveredCount / totalActive) * 1000) / 10 : 100;
+    const deliveredCount = shipments.filter(
+      (s) => s.current_status === ShipmentStatus.DELIVERED
+    ).length;
+    const trackingCoverage =
+      totalActive > 0 ? Math.round((deliveredCount / totalActive) * 1000) / 10 : 100;
     const codReconciledPct = totalActive > 0 ? 98.5 : 100;
     const hoursSaved = Math.round((totalActive / 500) * 10) / 10; // 500 đơn = 1h
 

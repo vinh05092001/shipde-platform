@@ -78,7 +78,7 @@ export default function ShipDeConsoleApp() {
     { id: 'store_04', name: 'Chi Nhánh Đà Nẵng (Hải Châu)', code: 'DN-HC' },
   ];
 
-  const currentStoreObj = STORES_LIST.find(s => s.id === selectedStore) || STORES_LIST[0];
+  const currentStoreObj = STORES_LIST.find((s) => s.id === selectedStore) || STORES_LIST[0];
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -147,17 +147,41 @@ export default function ShipDeConsoleApp() {
       case 'OPS_CSKH':
         return [
           { id: 'dashboard', label: 'Tổng Quan CSKH', icon: LayoutDashboard },
-          { id: 'exceptions', label: 'Hộp Việc Cứu Đơn', icon: AlertTriangle, count: metrics.openExceptionsCount, countType: 'risk' },
+          {
+            id: 'exceptions',
+            label: 'Hộp Việc Cứu Đơn',
+            icon: AlertTriangle,
+            count: metrics.openExceptionsCount,
+            countType: 'risk',
+          },
           { id: 'shipments', label: 'Tra Cứu Vận Đơn', icon: Package },
-          { id: 'claims', label: 'Khiếu Nại Giao Hàng', icon: FileText, count: metrics.urgentClaimsCount, countType: 'warn' },
+          {
+            id: 'claims',
+            label: 'Khiếu Nại Giao Hàng',
+            icon: FileText,
+            count: metrics.urgentClaimsCount,
+            countType: 'warn',
+          },
         ];
       case 'ACCOUNTANT':
         return [
           { id: 'dashboard', label: 'Tổng Quan Đối Soát', icon: LayoutDashboard },
-          { id: 'reconciliation', label: 'Đối Soát COD & Cước', icon: DollarSign, count: metrics.openDiscrepanciesCount, countType: 'risk' },
+          {
+            id: 'reconciliation',
+            label: 'Đối Soát COD & Cước',
+            icon: DollarSign,
+            count: metrics.openDiscrepanciesCount,
+            countType: 'risk',
+          },
           { id: 'shipments', label: 'Tra Cứu Vận Đơn', icon: Package },
           { id: 'three_ledgers', label: 'Báo Cáo Ba Sổ', icon: TrendingUp },
-          { id: 'claims', label: 'Hồ Sơ Bồi Thường', icon: FileText, count: metrics.urgentClaimsCount, countType: 'warn' },
+          {
+            id: 'claims',
+            label: 'Hồ Sơ Bồi Thường',
+            icon: FileText,
+            count: metrics.urgentClaimsCount,
+            countType: 'warn',
+          },
         ];
       case 'WAREHOUSE':
         return [
@@ -176,8 +200,20 @@ export default function ShipDeConsoleApp() {
         return [
           { id: 'dashboard', label: 'Bàn Điều Khiển & 3 Sổ', icon: LayoutDashboard },
           { id: 'shipments', label: 'Quản Lý Vận Đơn', icon: Package },
-          { id: 'exceptions', label: 'Hộp Việc Cứu Đơn', icon: AlertTriangle, count: metrics.openExceptionsCount, countType: 'risk' },
-          { id: 'reconciliation', label: 'Đối Soát COD & Cước', icon: DollarSign, count: metrics.openDiscrepanciesCount, countType: 'risk' },
+          {
+            id: 'exceptions',
+            label: 'Hộp Việc Cứu Đơn',
+            icon: AlertTriangle,
+            count: metrics.openExceptionsCount,
+            countType: 'risk',
+          },
+          {
+            id: 'reconciliation',
+            label: 'Đối Soát COD & Cước',
+            icon: DollarSign,
+            count: metrics.openDiscrepanciesCount,
+            countType: 'risk',
+          },
           { id: 'returns', label: 'Quản Lý Nhập Hoàn', icon: RotateCcw },
         ];
     }
@@ -189,7 +225,7 @@ export default function ShipDeConsoleApp() {
     switchRole(newRole);
     setUserMenuOpen(false);
     const newTabs = getTabsForRole(newRole);
-    if (!newTabs.some(t => t.id === activeTab)) {
+    if (!newTabs.some((t) => t.id === activeTab)) {
       setActiveTab(newTabs[0].id);
     }
     showToast(`Đã chuyển vai trò: ${newRole}`);
@@ -210,7 +246,12 @@ export default function ShipDeConsoleApp() {
           <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 text-xs font-semibold flex items-center gap-2.5 animate-in slide-in-from-bottom-2 duration-150">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span>{toastMessage}</span>
-            <button onClick={() => setToastMessage(null)} className="text-slate-400 hover:text-white font-bold ml-2">✕</button>
+            <button
+              onClick={() => setToastMessage(null)}
+              className="text-slate-400 hover:text-white font-bold ml-2"
+            >
+              ✕
+            </button>
           </div>
         )}
 
@@ -304,7 +345,9 @@ export default function ShipDeConsoleApp() {
                 className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-[#EAE7E4] rounded-lg transition cursor-pointer"
                 title="Kích hoạt đồng bộ đơn hàng mới từ Pancake POS"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${syncingPancake ? 'animate-spin text-[#EA4B12]' : 'text-slate-600'}`} />
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${syncingPancake ? 'animate-spin text-[#EA4B12]' : 'text-slate-600'}`}
+                />
                 <span>Đồng bộ POS</span>
               </button>
 
@@ -372,25 +415,65 @@ export default function ShipDeConsoleApp() {
                       <span className="text-[11px] text-slate-400 font-bold px-2 block uppercase tracking-wider">
                         Chuyển Vai Trò Vận Hành:
                       </span>
-                      <button type="button" onClick={() => handleRoleChange('OWNER')} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium">👑 Chủ Shop (Owner)</button>
-                      <button type="button" onClick={() => handleRoleChange('OPS_CSKH')} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium">🎧 CSKH / Vận Hành (Ops)</button>
-                      <button type="button" onClick={() => handleRoleChange('ACCOUNTANT')} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium">📊 Kế Toán Đối Soát</button>
-                      <button type="button" onClick={() => handleRoleChange('WAREHOUSE')} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium">📦 Thủ Kho Quét Hoàn</button>
-                      <button type="button" onClick={() => handleRoleChange('BACKOFFICE')} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium">🛡️ Quản Trị Hệ Thống</button>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('OWNER')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        👑 Chủ Shop (Owner)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('OPS_CSKH')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        🎧 CSKH / Vận Hành (Ops)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('ACCOUNTANT')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        📊 Kế Toán Đối Soát
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('WAREHOUSE')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        📦 Thủ Kho Quét Hoàn
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('BACKOFFICE')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        🛡️ Quản Trị Hệ Thống
+                      </button>
                     </div>
 
                     <div className="pt-1 space-y-0.5">
                       {currentRole === 'OWNER' && (
                         <button
                           type="button"
-                          onClick={() => { setActiveTab('settings'); setUserMenuOpen(false); }}
+                          onClick={() => {
+                            setActiveTab('settings');
+                            setUserMenuOpen(false);
+                          }}
                           className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-1.5"
                         >
                           <Settings className="w-3.5 h-3.5 text-slate-500" />
                           <span>Cài Đặt Cửa Hàng</span>
                         </button>
                       )}
-                      <button type="button" onClick={() => { logout(); setUserMenuOpen(false); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600 font-bold flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          logout();
+                          setUserMenuOpen(false);
+                        }}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600 font-bold flex items-center gap-1.5"
+                      >
                         <LogOut className="w-3.5 h-3.5" /> Đăng xuất
                       </button>
                     </div>
@@ -425,8 +508,8 @@ export default function ShipDeConsoleApp() {
                           isActive
                             ? 'bg-white/20 text-white'
                             : tab.countType === 'risk'
-                            ? 'bg-rose-100 text-rose-800'
-                            : 'bg-amber-100 text-amber-800'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-amber-100 text-amber-800'
                         }`}
                       >
                         {tab.count}
@@ -492,13 +575,9 @@ export default function ShipDeConsoleApp() {
           )}
 
           {/* Backoffice System Management */}
-          {activeTab === 'admin_matrix' && (
-            <AdminSystemTab activeSection="carrier_matrix" />
-          )}
+          {activeTab === 'admin_matrix' && <AdminSystemTab activeSection="carrier_matrix" />}
 
-          {activeTab === 'admin_unmapped' && (
-            <AdminSystemTab activeSection="unmapped_queue" />
-          )}
+          {activeTab === 'admin_unmapped' && <AdminSystemTab activeSection="unmapped_queue" />}
         </main>
       </div>
 
@@ -587,7 +666,9 @@ export default function ShipDeConsoleApp() {
         isOpen={createOrderOpen}
         onClose={() => setCreateOrderOpen(false)}
         onOrderCreated={(newOrder) => {
-          showToast(`✓ Đã tạo vận đơn mới ${newOrder.tracking_code} (${newOrder.carrier_code}) và đẩy sang hãng thành công.`);
+          showToast(
+            `✓ Đã tạo vận đơn mới ${newOrder.tracking_code} (${newOrder.carrier_code}) và đẩy sang hãng thành công.`
+          );
           setActiveTab('shipments');
         }}
       />

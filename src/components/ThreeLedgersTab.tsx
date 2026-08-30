@@ -3,7 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import { ThreeValueLedgersReport } from '@/types/ledger';
 import { Money, TrackingCode } from './ui/OperationalComponents';
-import { Download, AlertTriangle, CheckCircle2, ShieldAlert, ArrowUpRight, TrendingUp, Clock, ShieldCheck, DollarSign } from 'lucide-react';
+import {
+  Download,
+  AlertTriangle,
+  CheckCircle2,
+  ShieldAlert,
+  ArrowUpRight,
+  TrendingUp,
+  Clock,
+  ShieldCheck,
+  DollarSign,
+} from 'lucide-react';
 
 export const ThreeLedgersTab: React.FC = () => {
   const [report, setReport] = useState<ThreeValueLedgersReport | null>(null);
@@ -26,6 +36,7 @@ export const ThreeLedgersTab: React.FC = () => {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Legacy prototype initial fetch pattern
     fetchLedgers();
   }, []);
 
@@ -58,15 +69,12 @@ export const ThreeLedgersTab: React.FC = () => {
             <span className="badge-ok text-xs">Chuẩn Kế Toán BR-45</span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Kỳ hạch toán: 01/08/2026 – 31/08/2026 · Ba sổ được phân tách tuyệt đối, minh bạch dòng tiền thực nhận và chi phí hoàn tránh được
+            Kỳ hạch toán: 01/08/2026 – 31/08/2026 · Ba sổ được phân tách tuyệt đối, minh bạch dòng
+            tiền thực nhận và chi phí hoàn tránh được
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={handleExportCsv}
-          className="btn-primary text-xs"
-        >
+        <button type="button" onClick={handleExportCsv} className="btn-primary text-xs">
           <Download className="w-4 h-4" />
           <span>Xuất Báo Cáo (.CSV)</span>
         </button>
@@ -82,7 +90,9 @@ export const ThreeLedgersTab: React.FC = () => {
                 <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider block">
                   Sổ 1 · Tiền Thực Nhận
                 </span>
-                <span className="text-xs text-slate-500">Tiền bồi thường đã về tài khoản ngân hàng</span>
+                <span className="text-xs text-slate-500">
+                  Tiền bồi thường đã về tài khoản ngân hàng
+                </span>
               </div>
               <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
                 <DollarSign className="w-5 h-5" />
@@ -90,7 +100,9 @@ export const ThreeLedgersTab: React.FC = () => {
             </div>
 
             <div>
-              <span className="text-xs text-slate-500 font-semibold block mb-1">Tổng tiền thực nhận (Bank/Cấn trừ):</span>
+              <span className="text-xs text-slate-500 font-semibold block mb-1">
+                Tổng tiền thực nhận (Bank/Cấn trừ):
+              </span>
               <div className="text-3xl font-black font-mono text-emerald-700">
                 <Money amount={s1.total_recovered_amount} state="confirmed" />
               </div>
@@ -98,7 +110,9 @@ export const ThreeLedgersTab: React.FC = () => {
 
             {/* Separate Column for Pending Acceptance */}
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/70 space-y-1 text-xs">
-              <span className="text-slate-600 font-medium block">Hãng đã chấp thuận (chờ kỳ sau):</span>
+              <span className="text-slate-600 font-medium block">
+                Hãng đã chấp thuận (chờ kỳ sau):
+              </span>
               <div className="text-sm font-mono font-bold text-slate-400 italic">
                 <Money amount={s1.pending_acceptance_amount} state="pending" />
               </div>
@@ -134,9 +148,12 @@ export const ThreeLedgersTab: React.FC = () => {
             </div>
 
             <div>
-              <span className="text-xs text-slate-500 font-semibold block mb-1">Số đơn cứu thành công:</span>
+              <span className="text-xs text-slate-500 font-semibold block mb-1">
+                Số đơn cứu thành công:
+              </span>
               <div className="text-3xl font-black font-mono text-slate-900">
-                {s2.rescued_orders_count} <span className="text-base font-normal text-slate-500">đơn</span>
+                {s2.rescued_orders_count}{' '}
+                <span className="text-base font-normal text-slate-500">đơn</span>
               </div>
             </div>
 
@@ -150,10 +167,13 @@ export const ThreeLedgersTab: React.FC = () => {
               </div>
               <div className="flex justify-between text-slate-500 italic text-[11px]">
                 <span>Hàng giữ lại (GMV ước tính):</span>
-                <span className="font-mono">{Number(s2.rescued_gmv).toLocaleString('vi-VN')} đ</span>
+                <span className="font-mono">
+                  {Number(s2.rescued_gmv).toLocaleString('vi-VN')} đ
+                </span>
               </div>
               <p className="text-[10px] text-slate-400 italic pt-1">
-                * BR-50: Chỉ tính tổng phí hoàn thực tế tránh được của từng đơn theo biểu giá hợp đồng, tuyệt đối không cộng cước đi
+                * BR-50: Chỉ tính tổng phí hoàn thực tế tránh được của từng đơn theo biểu giá hợp
+                đồng, tuyệt đối không cộng cước đi
               </p>
             </div>
           </div>
@@ -186,22 +206,30 @@ export const ThreeLedgersTab: React.FC = () => {
             <div className="space-y-2.5 text-xs">
               <div className="flex justify-between items-center">
                 <span className="text-slate-600">Đơn cập nhật trong 24h:</span>
-                <strong className="font-mono text-slate-900 text-sm">{s3.realtime_tracking_coverage_pct}%</strong>
+                <strong className="font-mono text-slate-900 text-sm">
+                  {s3.realtime_tracking_coverage_pct}%
+                </strong>
               </div>
 
               <div className="flex justify-between items-center">
                 <span className="text-slate-600">COD đã đối soát chính xác:</span>
-                <strong className="font-mono text-slate-900 text-sm">{s3.reconciled_cod_coverage_pct}%</strong>
+                <strong className="font-mono text-slate-900 text-sm">
+                  {s3.reconciled_cod_coverage_pct}%
+                </strong>
               </div>
 
               <div className="flex justify-between items-center">
                 <span className="text-slate-600">Sai lệch phát hiện & chặn đứng:</span>
-                <strong className="font-mono text-rose-600 text-sm">{s3.discrepancies_detected_count} khoản</strong>
+                <strong className="font-mono text-rose-600 text-sm">
+                  {s3.discrepancies_detected_count} khoản
+                </strong>
               </div>
 
               <div className="p-3 bg-purple-50/50 border border-purple-100 rounded-xl flex justify-between items-center mt-2">
                 <span className="text-purple-900 font-semibold">Giờ kế toán tiết kiệm:</span>
-                <strong className="font-mono text-base text-purple-700 font-bold">{s3.accounting_hours_saved} giờ</strong>
+                <strong className="font-mono text-base text-purple-700 font-bold">
+                  {s3.accounting_hours_saved} giờ
+                </strong>
               </div>
             </div>
           </div>
@@ -217,7 +245,8 @@ export const ThreeLedgersTab: React.FC = () => {
         <div className="modern-card p-5 space-y-4 animate-in fade-in">
           <div className="flex justify-between items-center border-b border-slate-100 pb-3">
             <h3 className="font-bold text-sm text-slate-900">
-              Chi tiết chứng từ tạo nên {activeDrilldown === 'S1' ? 'Sổ 1 (Tiền thực nhận)' : 'Sổ 2 (Đơn cứu được)'}
+              Chi tiết chứng từ tạo nên{' '}
+              {activeDrilldown === 'S1' ? 'Sổ 1 (Tiền thực nhận)' : 'Sổ 2 (Đơn cứu được)'}
             </h3>
             <button
               type="button"
@@ -240,31 +269,42 @@ export const ThreeLedgersTab: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {activeDrilldown === 'S1' ? (
-                  s1.records.map((r, idx) => (
-                    <tr key={idx}>
-                      <td><TrackingCode code={r.tracking_code} /></td>
-                      <td className="font-semibold text-xs">{r.carrier_code}</td>
-                      <td className="text-right font-bold text-xs text-emerald-700">
-                        <Money amount={r.recovered_amount} state="confirmed" />
-                      </td>
-                      <td className="font-mono text-xs text-slate-500">{new Date(r.paid_at).toLocaleDateString('vi-VN')}</td>
-                      <td className="text-xs text-slate-600">Đã khớp chứng từ ngân hàng số {r.bank_reference || 'REF_99182'}</td>
-                    </tr>
-                  ))
-                ) : (
-                  s2.records.map((r, idx) => (
-                    <tr key={idx}>
-                      <td><TrackingCode code={r.tracking_code} /></td>
-                      <td className="font-semibold text-xs">GHN</td>
-                      <td className="text-right font-bold text-xs text-blue-700">
-                        <Money amount={r.return_fee_saved} state="confirmed" />
-                      </td>
-                      <td className="font-mono text-xs text-slate-500">{new Date(r.rescued_at).toLocaleDateString('vi-VN')}</td>
-                      <td className="text-xs text-slate-600">Cứu đơn sau {r.delivery_attempts} lần giao thất bại (Kênh {r.intervention_channel})</td>
-                    </tr>
-                  ))
-                )}
+                {activeDrilldown === 'S1'
+                  ? s1.records.map((r, idx) => (
+                      <tr key={idx}>
+                        <td>
+                          <TrackingCode code={r.tracking_code} />
+                        </td>
+                        <td className="font-semibold text-xs">{r.carrier_code}</td>
+                        <td className="text-right font-bold text-xs text-emerald-700">
+                          <Money amount={r.recovered_amount} state="confirmed" />
+                        </td>
+                        <td className="font-mono text-xs text-slate-500">
+                          {new Date(r.paid_at).toLocaleDateString('vi-VN')}
+                        </td>
+                        <td className="text-xs text-slate-600">
+                          Đã khớp chứng từ ngân hàng số {r.bank_reference || 'REF_99182'}
+                        </td>
+                      </tr>
+                    ))
+                  : s2.records.map((r, idx) => (
+                      <tr key={idx}>
+                        <td>
+                          <TrackingCode code={r.tracking_code} />
+                        </td>
+                        <td className="font-semibold text-xs">GHN</td>
+                        <td className="text-right font-bold text-xs text-blue-700">
+                          <Money amount={r.return_fee_saved} state="confirmed" />
+                        </td>
+                        <td className="font-mono text-xs text-slate-500">
+                          {new Date(r.rescued_at).toLocaleDateString('vi-VN')}
+                        </td>
+                        <td className="text-xs text-slate-600">
+                          Cứu đơn sau {r.delivery_attempts} lần giao thất bại (Kênh{' '}
+                          {r.intervention_channel})
+                        </td>
+                      </tr>
+                    ))}
               </tbody>
             </table>
           </div>

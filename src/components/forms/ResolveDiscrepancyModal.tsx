@@ -20,7 +20,9 @@ export const ResolveDiscrepancyModal: React.FC<Props> = ({
   role,
   onResolved,
 }) => {
-  const [resolution, setResolution] = useState<DiscrepancyResolution>(DiscrepancyResolution.DISPUTE);
+  const [resolution, setResolution] = useState<DiscrepancyResolution>(
+    DiscrepancyResolution.DISPUTE
+  );
   const [reason, setReason] = useState('Khấu trừ cước sai biểu giá hợp đồng cam kết');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -32,7 +34,9 @@ export const ResolveDiscrepancyModal: React.FC<Props> = ({
 
     // Maker-Checker Check (BR-12)
     if (discrepancyItem.created_by_user === 'usr_02' && role === 'OPS_CSKH') {
-      setErrorMsg('[Quy tắc BR-12]: Bạn là nhân viên CSKH đã xử lý đơn này, nên không được quyền tự duyệt chênh lệch. Vui lòng chuyển cho Kế toán viên độc lập duyệt.');
+      setErrorMsg(
+        '[Quy tắc BR-12]: Bạn là nhân viên CSKH đã xử lý đơn này, nên không được quyền tự duyệt chênh lệch. Vui lòng chuyển cho Kế toán viên độc lập duyệt.'
+      );
       return;
     }
 
@@ -83,7 +87,9 @@ export const ResolveDiscrepancyModal: React.FC<Props> = ({
             </div>
             <div>
               <h3 className="font-bold text-sm text-slate-900">Duyệt Sai Lệch Đối Soát (BR-12)</h3>
-              <p className="text-[11px] text-slate-500 font-mono">Mã: {discrepancyItem.tracking_code}</p>
+              <p className="text-[11px] text-slate-500 font-mono">
+                Mã: {discrepancyItem.tracking_code}
+              </p>
             </div>
           </div>
           <button
@@ -109,7 +115,11 @@ export const ResolveDiscrepancyModal: React.FC<Props> = ({
           <div className="flex justify-between">
             <span className="text-slate-600">Số tiền chênh lệch:</span>
             <strong className="text-rose-600 font-mono font-bold">
-              <Money amount={discrepancyItem.discrepancy_amount || discrepancyItem.amount || 0} state="confirmed" showSign />
+              <Money
+                amount={discrepancyItem.discrepancy_amount || discrepancyItem.amount || 0}
+                state="confirmed"
+                showSign
+              />
             </strong>
           </div>
         </div>
@@ -122,15 +132,23 @@ export const ResolveDiscrepancyModal: React.FC<Props> = ({
               onChange={(e: any) => setResolution(e.target.value)}
               className="modern-input w-full text-xs font-semibold"
             >
-              <option value={DiscrepancyResolution.DISPUTE}>1. Khởi tạo khiếu nại đòi tiền hãng (DISPUTE)</option>
-              <option value={DiscrepancyResolution.CONFIRMED}>2. Chấp thuận khấu trừ (CONFIRMED)</option>
+              <option value={DiscrepancyResolution.DISPUTE}>
+                1. Khởi tạo khiếu nại đòi tiền hãng (DISPUTE)
+              </option>
+              <option value={DiscrepancyResolution.CONFIRMED}>
+                2. Chấp thuận khấu trừ (CONFIRMED)
+              </option>
               <option value={DiscrepancyResolution.WAIVE}>3. Bỏ qua chênh lệch nhỏ (WAIVE)</option>
-              <option value={DiscrepancyResolution.CARRY_FORWARD}>4. Chuyển sang kỳ sau tiếp tục đối chiếu (CARRY_FORWARD)</option>
+              <option value={DiscrepancyResolution.CARRY_FORWARD}>
+                4. Chuyển sang kỳ sau tiếp tục đối chiếu (CARRY_FORWARD)
+              </option>
             </select>
           </div>
 
           <div>
-            <label className="font-bold text-slate-700 block mb-1">Lý Do Giải Trình (Bắt Buộc BR-22):</label>
+            <label className="font-bold text-slate-700 block mb-1">
+              Lý Do Giải Trình (Bắt Buộc BR-22):
+            </label>
             <textarea
               value={reason}
               onChange={(e) => setReason(e.target.value)}
@@ -140,18 +158,10 @@ export const ResolveDiscrepancyModal: React.FC<Props> = ({
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary text-xs"
-            >
+            <button type="button" onClick={onClose} className="btn-secondary text-xs">
               Hủy
             </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary text-xs"
-            >
+            <button type="submit" disabled={loading} className="btn-primary text-xs">
               {loading ? 'Đang lưu...' : 'Xác Nhận Quyết Định'}
             </button>
           </div>

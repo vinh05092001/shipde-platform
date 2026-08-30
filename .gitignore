@@ -18,6 +18,8 @@ build/
 
 # Local test and diagnostic output
 *.log
+*.tmp
+.temp*
 coverage/
 playwright-report/
 test-results/

@@ -31,7 +31,10 @@ export class PancakePosAdapter {
   /**
    * Chuẩn hóa đơn hàng thô từ Pancake POS sang Order Entity chuẩn của Ship Dễ
    */
-  public normalizeOrder(raw: PancakeRawOrder, merchantId: string): { order: Order; rawTrackingCode?: string } {
+  public normalizeOrder(
+    raw: PancakeRawOrder,
+    merchantId: string
+  ): { order: Order; rawTrackingCode?: string } {
     if (!raw.order_number && !raw.id) {
       throw new ShipDeAppError(ERROR_CATALOG.VALIDATION_ERROR, {
         reason: 'Pancake payload missing order_number or id',
@@ -73,7 +76,11 @@ export class PancakePosAdapter {
     fromDate: Date,
     pageSize: number = 100,
     cursor?: string
-  ): Promise<{ orders: Array<{ order: Order; rawTrackingCode?: string }>; nextCursor?: string; hasMore: boolean }> {
+  ): Promise<{
+    orders: Array<{ order: Order; rawTrackingCode?: string }>;
+    nextCursor?: string;
+    hasMore: boolean;
+  }> {
     if (!apiKey) {
       throw new ShipDeAppError(ERROR_CATALOG.AUTHENTICATION_REQUIRED, {
         source: 'Pancake POS',

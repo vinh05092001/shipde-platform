@@ -53,7 +53,9 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
             </div>
             <div>
               <h3 className="font-bold text-sm text-slate-900">Mời Thành Viên Mới (CN-24)</h3>
-              <p className="text-[11px] text-slate-500">Tách quyền tài chính và cấp quyền truy cập theo vai trò</p>
+              <p className="text-[11px] text-slate-500">
+                Tách quyền tài chính và cấp quyền truy cập theo vai trò
+              </p>
             </div>
           </div>
           <button
@@ -105,18 +107,10 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary text-xs"
-            >
+            <button type="button" onClick={onClose} className="btn-secondary text-xs">
               Hủy
             </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary text-xs"
-            >
+            <button type="submit" disabled={loading} className="btn-primary text-xs">
               {loading ? 'Đang gửi...' : 'Gửi Lời Mời'}
             </button>
           </div>

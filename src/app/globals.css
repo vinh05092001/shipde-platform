@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-@import "tailwindcss";
+@import 'tailwindcss';
 
 :root {
   /* ============================================================================
@@ -10,44 +10,44 @@
   --font-mono: 'JetBrains Mono', monospace;
 
   /* Brand Primary Orange */
-  --primary: #EA4B12;
-  --primary-hover: #D03E0B;
-  --primary-subtle: #FFF5F0;
-  --primary-border: #FDDDD0;
+  --primary: #ea4b12;
+  --primary-hover: #d03e0b;
+  --primary-subtle: #fff5f0;
+  --primary-border: #fdddd0;
 
   /* Ink / Navy Typography Palette */
-  --text-primary: #0C1421;
-  --text-secondary: #3B4352;
+  --text-primary: #0c1421;
+  --text-secondary: #3b4352;
   --text-muted: #697386;
-  --text-dim: #9DA6B8;
+  --text-dim: #9da6b8;
 
   /* Warm Canvas Surfaces */
-  --bg-app: #FDFCFB;
-  --bg-card: #FFFFFF;
-  --bg-subtle: #F6F5F3;
-  --bg-hover: #F2F0EC;
+  --bg-app: #fdfcfb;
+  --bg-card: #ffffff;
+  --bg-subtle: #f6f5f3;
+  --bg-hover: #f2f0ec;
 
   /* Warm Neutral Hairline Borders */
-  --border-subtle: #EAE7E4;
-  --border-strong: #D5D1CB;
-  --border-focus: #EA4B12;
+  --border-subtle: #eae7e4;
+  --border-strong: #d5d1cb;
+  --border-focus: #ea4b12;
 
   /* Semantic Status Tokens (Green, Amber, Red Only) */
-  --status-ok-bg: #F0FDF4;
-  --status-ok-text: #15803D;
-  --status-ok-border: #BBF7D0;
+  --status-ok-bg: #f0fdf4;
+  --status-ok-text: #15803d;
+  --status-ok-border: #bbf7d0;
 
-  --status-warn-bg: #FFFBEB;
-  --status-warn-text: #B45309;
-  --status-warn-border: #FDE68A;
+  --status-warn-bg: #fffbeb;
+  --status-warn-text: #b45309;
+  --status-warn-border: #fde68a;
 
-  --status-risk-bg: #FEF2F2;
-  --status-risk-text: #B91C1C;
-  --status-risk-border: #FECACA;
+  --status-risk-bg: #fef2f2;
+  --status-risk-text: #b91c1c;
+  --status-risk-border: #fecaca;
 
-  --status-info-bg: #F8F7F6;
-  --status-info-text: #0C1421;
-  --status-info-border: #EAE7E4;
+  --status-info-bg: #f8f7f6;
+  --status-info-text: #0c1421;
+  --status-info-border: #eae7e4;
 }
 
 body {
@@ -63,7 +63,10 @@ body {
 }
 
 /* Tabular numbers for financial precision */
-.tabular-nums, .font-mono, td, th {
+.tabular-nums,
+.font-mono,
+td,
+th {
   font-variant-numeric: tabular-nums;
 }
 
@@ -76,29 +79,33 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #D5D1CB;
+  background: #d5d1cb;
   border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #9DA6B8;
+  background: #9da6b8;
 }
 
 /* Card Primitive */
 .modern-card {
-  background: #FFFFFF;
+  background: #ffffff;
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  box-shadow: 0 1px 3px 0 rgba(12, 20, 33, 0.03), 0 1px 2px -1px rgba(12, 20, 33, 0.03);
+  box-shadow:
+    0 1px 3px 0 rgba(12, 20, 33, 0.03),
+    0 1px 2px -1px rgba(12, 20, 33, 0.03);
   transition: all 0.15s ease-in-out;
 }
 .modern-card:hover {
-  box-shadow: 0 4px 6px -1px rgba(12, 20, 33, 0.05), 0 2px 4px -2px rgba(12, 20, 33, 0.03);
+  box-shadow:
+    0 4px 6px -1px rgba(12, 20, 33, 0.05),
+    0 2px 4px -2px rgba(12, 20, 33, 0.03);
 }
 
 /* Button Primitives (Min 40px touch targets, 14px text) */
 .btn-primary {
   background-color: var(--primary);
-  color: #FFFFFF;
+  color: #ffffff;
   font-weight: 600;
   font-size: 14px;
   min-height: 40px;
@@ -122,7 +129,7 @@ body {
 }
 
 .btn-secondary {
-  background-color: #FFFFFF;
+  background-color: #ffffff;
   color: var(--text-primary);
   font-weight: 600;
   font-size: 14px;
@@ -146,7 +153,7 @@ body {
 }
 
 .btn-danger {
-  background-color: #FFFFFF;
+  background-color: #ffffff;
   color: var(--status-risk-text);
   font-weight: 600;
   font-size: 14px;
@@ -166,7 +173,7 @@ body {
 
 /* Modern Accessible Input Control */
 .modern-input {
-  background-color: #FFFFFF;
+  background-color: #ffffff;
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   padding: 9px 14px;
@@ -242,7 +249,7 @@ body {
   text-align: left;
 }
 .modern-table th {
-  background-color: #FAF9F7;
+  background-color: #faf9f7;
   color: var(--text-secondary);
   font-weight: 600;
   font-size: 12px;
@@ -261,7 +268,7 @@ body {
   transition: background-color 0.1s ease;
 }
 .modern-table tbody tr:hover {
-  background-color: #FAF9F7;
+  background-color: #faf9f7;
 }
 
 /* Operational Badges & Code Blocks */
@@ -269,7 +276,7 @@ body {
   font-family: var(--font-mono);
   font-weight: 600;
   color: var(--text-primary);
-  background-color: #F6F5F3;
+  background-color: #f6f5f3;
   padding: 3px 8px;
   border-radius: 6px;
   border: 1px solid var(--border-subtle);

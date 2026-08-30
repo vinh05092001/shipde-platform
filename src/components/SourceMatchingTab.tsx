@@ -2,7 +2,16 @@
 
 import React, { useState } from 'react';
 import { TrackingCode, Money, ConfirmDialog } from './ui/OperationalComponents';
-import { Database, RefreshCw, Link2, Search, CheckCircle2, AlertTriangle, ShieldCheck, Sparkles } from 'lucide-react';
+import {
+  Database,
+  RefreshCw,
+  Link2,
+  Search,
+  CheckCircle2,
+  AlertTriangle,
+  ShieldCheck,
+  Sparkles,
+} from 'lucide-react';
 
 export const SourceMatchingTab: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
@@ -12,8 +21,22 @@ export const SourceMatchingTab: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const [unmatchedRows, setUnmatchedRows] = useState([
-    { id: 'u_1', statement_tracking: 'GHN88290999', statement_fee: 25000, cod: 300000, date: '15/08/2026', carrier: 'GHN' },
-    { id: 'u_2', statement_tracking: 'GHTK77128888', statement_fee: 32000, cod: 450000, date: '16/08/2026', carrier: 'GHTK' },
+    {
+      id: 'u_1',
+      statement_tracking: 'GHN88290999',
+      statement_fee: 25000,
+      cod: 300000,
+      date: '15/08/2026',
+      carrier: 'GHN',
+    },
+    {
+      id: 'u_2',
+      statement_tracking: 'GHTK77128888',
+      statement_fee: 32000,
+      cod: 450000,
+      date: '16/08/2026',
+      carrier: 'GHTK',
+    },
   ]);
 
   const handleSyncPancake = () => {
@@ -28,7 +51,9 @@ export const SourceMatchingTab: React.FC = () => {
   const handleConfirmManualMatch = (reason: string) => {
     if (!selectedRow) return;
     setUnmatchedRows((prev) => prev.filter((r) => r.id !== selectedRow.id));
-    setToastMessage(`✓ Đã ghép tay ${selectedRow.statement_tracking} -> Đơn ${manualOrderCode || 'ORD_ANAN_101'} (Ghi nhận audit: ${reason}).`);
+    setToastMessage(
+      `✓ Đã ghép tay ${selectedRow.statement_tracking} -> Đơn ${manualOrderCode || 'ORD_ANAN_101'} (Ghi nhận audit: ${reason}).`
+    );
     setSelectedRow(null);
     setManualOrderCode('');
     setTimeout(() => setToastMessage(null), 4000);
@@ -43,7 +68,9 @@ export const SourceMatchingTab: React.FC = () => {
       {toastMessage && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center justify-between shadow-sm animate-in fade-in">
           <span>{toastMessage}</span>
-          <button type="button" onClick={() => setToastMessage(null)} className="font-bold">✕</button>
+          <button type="button" onClick={() => setToastMessage(null)} className="font-bold">
+            ✕
+          </button>
         </div>
       )}
 
@@ -58,7 +85,8 @@ export const SourceMatchingTab: React.FC = () => {
             <span className="badge-ok text-xs">Chuẩn NFR-04 (&gt;95%)</span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Đồng bộ đơn hàng tự động và đối chiếu sao kê qua Khóa 1 (Mã vận đơn), Khóa 2 (Mã đơn), Khóa 3 (Khớp mờ COD ±3 ngày)
+            Đồng bộ đơn hàng tự động và đối chiếu sao kê qua Khóa 1 (Mã vận đơn), Khóa 2 (Mã đơn),
+            Khóa 3 (Khớp mờ COD ±3 ngày)
           </p>
         </div>
 
@@ -81,7 +109,9 @@ export const SourceMatchingTab: React.FC = () => {
             <span className="badge-ok text-[11px]">NFR-04</span>
           </div>
           <div className="text-3xl font-black font-mono text-emerald-700">98.2%</div>
-          <p className="text-xs text-slate-500">Khớp chính xác 100% qua tracking code hoặc mã đơn POS</p>
+          <p className="text-xs text-slate-500">
+            Khớp chính xác 100% qua tracking code hoặc mã đơn POS
+          </p>
         </div>
 
         <div className="modern-card p-5 space-y-2">
@@ -99,9 +129,12 @@ export const SourceMatchingTab: React.FC = () => {
             <span className="badge-risk text-[11px]">{unmatchedRows.length} dòng</span>
           </div>
           <div className="text-3xl font-black font-mono text-rose-600">
-            {unmatchedRows.length} <span className="text-sm font-normal text-slate-500">chưa ghép</span>
+            {unmatchedRows.length}{' '}
+            <span className="text-sm font-normal text-slate-500">chưa ghép</span>
           </div>
-          <p className="text-xs text-slate-500">Cần CSKH đối chiếu thủ công và giải trình lý do (BR-22)</p>
+          <p className="text-xs text-slate-500">
+            Cần CSKH đối chiếu thủ công và giải trình lý do (BR-22)
+          </p>
         </div>
       </div>
 
@@ -112,7 +145,9 @@ export const SourceMatchingTab: React.FC = () => {
             <h3 className="font-bold text-sm text-slate-900">
               Hàng Đợi Dòng Sao Kê Chưa Ghép Được (CN-03)
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">Nhấp để liên kết với đơn hàng trong hệ thống</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Nhấp để liên kết với đơn hàng trong hệ thống
+            </p>
           </div>
 
           <div className="relative min-w-[220px]">
@@ -150,12 +185,20 @@ export const SourceMatchingTab: React.FC = () => {
               ) : (
                 filteredUnmatched.map((r) => (
                   <tr key={r.id}>
-                    <td><TrackingCode code={r.statement_tracking} /></td>
+                    <td>
+                      <TrackingCode code={r.statement_tracking} />
+                    </td>
                     <td className="font-semibold text-xs">{r.carrier}</td>
-                    <td className="text-right text-xs"><Money amount={r.statement_fee} state="confirmed" /></td>
-                    <td className="text-right font-bold text-xs"><Money amount={r.cod} state="confirmed" /></td>
+                    <td className="text-right text-xs">
+                      <Money amount={r.statement_fee} state="confirmed" />
+                    </td>
+                    <td className="text-right font-bold text-xs">
+                      <Money amount={r.cod} state="confirmed" />
+                    </td>
                     <td className="font-mono text-xs text-slate-500">{r.date}</td>
-                    <td><span className="badge-warn text-[10px]">Chưa ghép</span></td>
+                    <td>
+                      <span className="badge-warn text-[10px]">Chưa ghép</span>
+                    </td>
                     <td className="text-right">
                       <button
                         type="button"

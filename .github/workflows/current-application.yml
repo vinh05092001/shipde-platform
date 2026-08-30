@@ -56,14 +56,61 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '24'
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm run format:check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
+      - name: Verify Formatting Invalid BASE_SHA Fail-Closed Proof
+        run: |
+          set +e
+          BASE_SHA="invalid-sha-deadbeef-00000000000000000000" npm run format:check
+          NORMAL_EXIT_CODE=$?
+          BASE_SHA="invalid-sha-deadbeef-00000000000000000000" npm run format:check -- --test-negative
+          NEGATIVE_EXIT_CODE=$?
+          set -e
+          echo "Invalid BASE_SHA normal check returned exit code: $NORMAL_EXIT_CODE"
+          echo "Invalid BASE_SHA negative proof returned exit code: $NEGATIVE_EXIT_CODE"
+          if [ "$NORMAL_EXIT_CODE" -eq 2 ] && [ "$NEGATIVE_EXIT_CODE" -eq 2 ]; then
+            echo "Success: Invalid BASE_SHA correctly failed closed with exact code 2 in both normal and negative modes without falling back."
+          else
+            echo "Error: Expected invalid BASE_SHA to exit with exact code 2 in both modes, but got normal=$NORMAL_EXIT_CODE, negative=$NEGATIVE_EXIT_CODE!"
+            exit 1
+          fi
+      - name: Verify Formatting Negative Proof
+        run: |
+          set +e
+          npm run format:check -- --test-negative
+          EXIT_CODE=$?
+          set -e
+          echo "Formatting negative proof returned exit code: $EXIT_CODE"
+          if [ "$EXIT_CODE" -eq 1 ]; then
+            echo "Success: Format check negative proof exited with exact code 1 (unformatted fixture detected) as required by AC-FOUND-01-05."
+          else
+            echo "Error: Expected format check negative proof to exit with exact code 1, but got code $EXIT_CODE!"
+            exit 1
+          fi
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
+      - name: Verify Git Diff Whitespace & Conflict Markers
+        run: git diff --check origin/main...HEAD
       - run: npm run build
       - run: npm run test:e2e
+      - run: npm run test:baseline
+      - name: Install Pinned Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.24.0"
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+      - run: npm run security:secrets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
 
   application-gate:
     needs: [detect-application-scope, current-application]
@@ -89,4 +136,3 @@ jobs:
           else
             echo "Application checks are not applicable to this change."
           fi
-

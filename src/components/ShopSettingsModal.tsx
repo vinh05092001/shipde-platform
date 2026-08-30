@@ -1,7 +1,20 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Store, Truck, DollarSign, Users, Bell, Search, ShieldCheck, CheckCircle2, AlertTriangle, Key, ExternalLink } from 'lucide-react';
+import {
+  X,
+  Store,
+  Truck,
+  DollarSign,
+  Users,
+  Bell,
+  Search,
+  ShieldCheck,
+  CheckCircle2,
+  AlertTriangle,
+  Key,
+  ExternalLink,
+} from 'lucide-react';
 import { ApiIntegrationsTab } from './ApiIntegrationsTab';
 import { UserManagementTab } from './UserManagementTab';
 import { NotificationMatrixTab } from './NotificationMatrixTab';
@@ -41,8 +54,13 @@ export const ShopSettingsModal: React.FC<ShopSettingsModalProps> = ({
               <Store className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-900">Cài Đặt Cửa Hàng & Vận Hành (Shop Settings)</h2>
-              <p className="text-xs text-slate-500">Cấu hình kết nối Pancake POS, tài khoản hãng GHN/GHTK, biểu giá hợp đồng và phân quyền nhân sự</p>
+              <h2 className="text-base font-bold text-slate-900">
+                Cài Đặt Cửa Hàng & Vận Hành (Shop Settings)
+              </h2>
+              <p className="text-xs text-slate-500">
+                Cấu hình kết nối Pancake POS, tài khoản hãng GHN/GHTK, biểu giá hợp đồng và phân
+                quyền nhân sự
+              </p>
             </div>
           </div>
           <button
@@ -87,8 +105,13 @@ export const ShopSettingsModal: React.FC<ShopSettingsModalProps> = ({
             {activeSubTab === 'pos_carrier' && (
               <div className="space-y-6">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 mb-1">Kết Nối Nguồn Đơn & Tài Khoản Hãng (R1)</h3>
-                  <p className="text-xs text-slate-500 mb-4">Quản lý kết nối Pancake POS (CN-01) và tài khoản hãng chính thức GHN (L2 API) & GHTK (L1 Assist) (CN-04, BR-15)</p>
+                  <h3 className="text-sm font-bold text-slate-900 mb-1">
+                    Kết Nối Nguồn Đơn & Tài Khoản Hãng (R1)
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4">
+                    Quản lý kết nối Pancake POS (CN-01) và tài khoản hãng chính thức GHN (L2 API) &
+                    GHTK (L1 Assist) (CN-04, BR-15)
+                  </p>
                 </div>
                 <ApiIntegrationsTab />
               </div>
@@ -97,8 +120,13 @@ export const ShopSettingsModal: React.FC<ShopSettingsModalProps> = ({
             {activeSubTab === 'users_rbac' && (
               <div className="space-y-6">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 mb-1">Quản Lý Nhân Viên & Phân Quyền Chi Nhánh (CN-24)</h3>
-                  <p className="text-xs text-slate-500 mb-4">Phân quyền 4 vai trò (Chủ shop, CSKH, Kế toán, Kho), gán phạm vi chi nhánh và thực thi quy tắc Maker-Checker (BR-12)</p>
+                  <h3 className="text-sm font-bold text-slate-900 mb-1">
+                    Quản Lý Nhân Viên & Phân Quyền Chi Nhánh (CN-24)
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4">
+                    Phân quyền 4 vai trò (Chủ shop, CSKH, Kế toán, Kho), gán phạm vi chi nhánh và
+                    thực thi quy tắc Maker-Checker (BR-12)
+                  </p>
                 </div>
                 <UserManagementTab />
               </div>
@@ -107,8 +135,13 @@ export const ShopSettingsModal: React.FC<ShopSettingsModalProps> = ({
             {activeSubTab === 'notifications' && (
               <div className="space-y-6">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 mb-1">Ma Trận Cấu Hình Cảnh Báo (CN-19, BR-23)</h3>
-                  <p className="text-xs text-slate-500 mb-4">Cấu hình thông báo cho ngoại lệ bưu kiện, COD quá hạn và thời hiệu khiếu nại 48h kèm cơ chế chống dội tin</p>
+                  <h3 className="text-sm font-bold text-slate-900 mb-1">
+                    Ma Trận Cấu Hình Cảnh Báo (CN-19, BR-23)
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4">
+                    Cấu hình thông báo cho ngoại lệ bưu kiện, COD quá hạn và thời hiệu khiếu nại 48h
+                    kèm cơ chế chống dội tin
+                  </p>
                 </div>
                 <NotificationMatrixTab />
               </div>
@@ -117,8 +150,13 @@ export const ShopSettingsModal: React.FC<ShopSettingsModalProps> = ({
             {activeSubTab === 'public_portal' && (
               <div className="space-y-6">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 mb-1">Cổng Tra Cứu Toàn Trình Cho Người Nhận (CN-20, BR-42)</h3>
-                  <p className="text-xs text-slate-500 mb-4">Cung cấp đường link tra cứu hành trình không cần đăng nhập cho người mua, bảo vệ thông tin cá nhân tối thiểu</p>
+                  <h3 className="text-sm font-bold text-slate-900 mb-1">
+                    Cổng Tra Cứu Toàn Trình Cho Người Nhận (CN-20, BR-42)
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4">
+                    Cung cấp đường link tra cứu hành trình không cần đăng nhập cho người mua, bảo vệ
+                    thông tin cá nhân tối thiểu
+                  </p>
                 </div>
                 <PublicTrackingTab />
               </div>

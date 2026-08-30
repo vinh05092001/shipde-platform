@@ -8,26 +8,67 @@ export const NotificationMatrixTab: React.FC = () => {
   const [toast, setToast] = useState<string | null>(null);
 
   const [matrix, setMatrix] = useState([
-    { event: 'Giao hàng thất bại (Delivery Fail)', ownerPush: true, opsPush: true, accountantPush: false, email: false, urgent: true },
-    { event: 'Phát hiện lệch cước > 50.000 đ', ownerPush: false, opsPush: false, accountantPush: true, email: true, urgent: false },
-    { event: 'COD quá hạn thanh toán theo SLA', ownerPush: true, opsPush: false, accountantPush: true, email: true, urgent: true },
-    { event: 'Hồ sơ khiếu nại còn < 48h tới hạn', ownerPush: true, opsPush: true, accountantPush: true, email: true, urgent: true },
-    { event: 'Kiện hàng hoàn về kho bất thường (hư/thiếu)', ownerPush: false, opsPush: true, accountantPush: false, email: false, urgent: false },
+    {
+      event: 'Giao hàng thất bại (Delivery Fail)',
+      ownerPush: true,
+      opsPush: true,
+      accountantPush: false,
+      email: false,
+      urgent: true,
+    },
+    {
+      event: 'Phát hiện lệch cước > 50.000 đ',
+      ownerPush: false,
+      opsPush: false,
+      accountantPush: true,
+      email: true,
+      urgent: false,
+    },
+    {
+      event: 'COD quá hạn thanh toán theo SLA',
+      ownerPush: true,
+      opsPush: false,
+      accountantPush: true,
+      email: true,
+      urgent: true,
+    },
+    {
+      event: 'Hồ sơ khiếu nại còn < 48h tới hạn',
+      ownerPush: true,
+      opsPush: true,
+      accountantPush: true,
+      email: true,
+      urgent: true,
+    },
+    {
+      event: 'Kiện hàng hoàn về kho bất thường (hư/thiếu)',
+      ownerPush: false,
+      opsPush: true,
+      accountantPush: false,
+      email: false,
+      urgent: false,
+    },
   ]);
 
   const toggleCheck = (idx: number, field: string) => {
     setMatrix((prev) =>
-      prev.map((item, i) => (i === idx ? { ...item, [field]: !item[field as keyof typeof item] } : item))
+      prev.map((item, i) =>
+        i === idx ? { ...item, [field]: !item[field as keyof typeof item] } : item
+      )
     );
   };
 
   const handleSave = () => {
-    setToast(`✓ Đã lưu cấu hình ma trận thông báo & ngưỡng gộp tin ${digestWindow} phút thành công (CN-19, BR-23).`);
+    setToast(
+      `✓ Đã lưu cấu hình ma trận thông báo & ngưỡng gộp tin ${digestWindow} phút thành công (CN-19, BR-23).`
+    );
     setTimeout(() => setToast(null), 4000);
   };
 
   const handleTestNotification = () => {
-    setToast('✓ Đã gửi thông báo thử nghiệm mẫu tới thiết bị đã liên kết qua FCM/APNS (BR-42 Masked).');
+    setToast(
+      '✓ Đã gửi thông báo thử nghiệm mẫu tới thiết bị đã liên kết qua FCM/APNS (BR-42 Masked).'
+    );
     setTimeout(() => setToast(null), 4000);
   };
 
@@ -36,7 +77,9 @@ export const NotificationMatrixTab: React.FC = () => {
       {toast && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center justify-between shadow-sm animate-in fade-in">
           <span>{toast}</span>
-          <button type="button" onClick={() => setToast(null)} className="font-bold">✕</button>
+          <button type="button" onClick={() => setToast(null)} className="font-bold">
+            ✕
+          </button>
         </div>
       )}
 
@@ -51,24 +94,17 @@ export const NotificationMatrixTab: React.FC = () => {
             <span className="badge-ok text-xs">FCM / APNS Multi-channel</span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Cấu hình phân phối thông báo đa kênh theo vai trò và kích hoạt cơ chế gộp tin chống dội chuông liên tục
+            Cấu hình phân phối thông báo đa kênh theo vai trò và kích hoạt cơ chế gộp tin chống dội
+            chuông liên tục
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleTestNotification}
-            className="btn-secondary text-xs"
-          >
+          <button type="button" onClick={handleTestNotification} className="btn-secondary text-xs">
             <Send className="w-3.5 h-3.5" />
             <span>Bắn Test Thử</span>
           </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            className="btn-primary text-xs"
-          >
+          <button type="button" onClick={handleSave} className="btn-primary text-xs">
             <Check className="w-3.5 h-3.5" />
             <span>Lưu Cấu Hình</span>
           </button>
@@ -83,7 +119,8 @@ export const NotificationMatrixTab: React.FC = () => {
             Cửa Sổ Gộp Tin Chống Dội Chuông (BR-23):
           </span>
           <p className="text-xs text-slate-500">
-            Tự động gộp các thông báo không khẩn thành 1 bản tin tóm tắt trong khung giờ cao điểm để tránh làm phiền nhân viên.
+            Tự động gộp các thông báo không khẩn thành 1 bản tin tóm tắt trong khung giờ cao điểm để
+            tránh làm phiền nhân viên.
           </p>
         </div>
 
@@ -106,11 +143,21 @@ export const NotificationMatrixTab: React.FC = () => {
             <thead>
               <tr>
                 <th>Sự Kiện Nghiệp Vụ</th>
-                <th className="text-center" style={{ width: '130px' }}>App Chủ Shop</th>
-                <th className="text-center" style={{ width: '130px' }}>App CSKH</th>
-                <th className="text-center" style={{ width: '130px' }}>App Kế Toán</th>
-                <th className="text-center" style={{ width: '130px' }}>Email Báo Cáo</th>
-                <th className="text-center" style={{ width: '130px' }}>Mức Khẩn Cấp</th>
+                <th className="text-center" style={{ width: '130px' }}>
+                  App Chủ Shop
+                </th>
+                <th className="text-center" style={{ width: '130px' }}>
+                  App CSKH
+                </th>
+                <th className="text-center" style={{ width: '130px' }}>
+                  App Kế Toán
+                </th>
+                <th className="text-center" style={{ width: '130px' }}>
+                  Email Báo Cáo
+                </th>
+                <th className="text-center" style={{ width: '130px' }}>
+                  Mức Khẩn Cấp
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -150,7 +197,9 @@ export const NotificationMatrixTab: React.FC = () => {
                     />
                   </td>
                   <td className="text-center">
-                    <span className={row.urgent ? 'badge-risk text-[10px]' : 'badge-muted text-[10px]'}>
+                    <span
+                      className={row.urgent ? 'badge-risk text-[10px]' : 'badge-muted text-[10px]'}
+                    >
                       {row.urgent ? 'Khẩn (Gửi ngay)' : 'Thường'}
                     </span>
                   </td>

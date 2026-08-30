@@ -55,8 +55,10 @@ export const ERROR_CATALOG = {
   },
   SELF_APPROVAL_FORBIDDEN: {
     code: 'self_approval_forbidden',
-    message: 'Quy tắc tách quyền tài chính (BR-12): Người tạo hoặc xử lý vận đơn không được tự duyệt chênh lệch của chính đơn đó.',
-    message_en: 'Maker-checker violation: You cannot approve discrepancies on orders you created or modified.',
+    message:
+      'Quy tắc tách quyền tài chính (BR-12): Người tạo hoặc xử lý vận đơn không được tự duyệt chênh lệch của chính đơn đó.',
+    message_en:
+      'Maker-checker violation: You cannot approve discrepancies on orders you created or modified.',
     httpStatus: 403,
   },
   PRIVILEGE_ESCALATION: {
@@ -179,7 +181,8 @@ export const ERROR_CATALOG = {
   // 429 Too Many Requests
   RATE_LIMIT_EXCEEDED: {
     code: 'rate_limit_exceeded',
-    message: 'Đã vượt quá giới hạn tần suất yêu cầu (Rate Limit ba tầng: Merchant, Carrier, Endpoint).',
+    message:
+      'Đã vượt quá giới hạn tần suất yêu cầu (Rate Limit ba tầng: Merchant, Carrier, Endpoint).',
     message_en: 'Rate limit exceeded.',
     httpStatus: 429,
   },
@@ -195,7 +198,8 @@ export const ERROR_CATALOG = {
   // 503 Service Unavailable
   CARRIER_UNAVAILABLE: {
     code: 'carrier_unavailable',
-    message: 'Hệ thống đối tác vận chuyển tạm thời gián đoạn. Đã kích hoạt cơ chế cô lập lỗi (NFR-06).',
+    message:
+      'Hệ thống đối tác vận chuyển tạm thời gián đoạn. Đã kích hoạt cơ chế cô lập lỗi (NFR-06).',
     message_en: 'Carrier API temporarily unavailable.',
     httpStatus: 503,
   },
@@ -211,7 +215,8 @@ export const ERROR_CATALOG = {
   // 202 Accepted (Asynchronous Processing / Unknown Result)
   CARRIER_RESULT_UNKNOWN: {
     code: 'carrier_result_unknown',
-    message: 'Đã gửi yêu cầu tới hãng nhưng chưa rõ kết quả tức thì. Hệ thống sẽ đối soát qua mã tham chiếu.',
+    message:
+      'Đã gửi yêu cầu tới hãng nhưng chưa rõ kết quả tức thì. Hệ thống sẽ đối soát qua mã tham chiếu.',
     message_en: 'Carrier request sent, result pending reconciliation.',
     httpStatus: 202,
   },

@@ -39,7 +39,9 @@ interface Props {
 }
 
 export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onToggleGhnTier }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'carriers' | 'pos' | 'webhooks' | 'logs' | 'rates'>('carriers');
+  const [activeSubTab, setActiveSubTab] = useState<
+    'carriers' | 'pos' | 'webhooks' | 'logs' | 'rates'
+  >('carriers');
 
   // Carrier API Credentials
   const [ghnToken, setGhnToken] = useState('tok_ghn_live_sec_991823901842');
@@ -78,17 +80,77 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
 
   // Realtime Live Logs
   const [liveLogs, setLiveLogs] = useState([
-    { id: 'log_1', time: '10:22:15', source: 'GHN Open API', event: 'ORDER_STATUS_CHANGED', tracking: 'GHN88291042', status: 200, duration: '42ms', signature: 'Valid (SHA-256 HMAC)' },
-    { id: 'log_2', time: '10:20:04', source: 'Pancake POS', event: 'SYNC_NEW_ORDERS', tracking: 'ORD_ANAN_104', status: 200, duration: '115ms', signature: 'Valid' },
-    { id: 'log_3', time: '10:15:48', source: 'GHTK Partner', event: 'WEBHOOK_DELIVERY_UPDATE', tracking: 'GHTK77129031', status: 200, duration: '58ms', signature: 'Valid' },
-    { id: 'log_4', time: '10:08:12', source: 'Viettel Post', event: 'TRACKING_PING', tracking: 'VTP99812401', status: 200, duration: '65ms', signature: 'Valid' },
+    {
+      id: 'log_1',
+      time: '10:22:15',
+      source: 'GHN Open API',
+      event: 'ORDER_STATUS_CHANGED',
+      tracking: 'GHN88291042',
+      status: 200,
+      duration: '42ms',
+      signature: 'Valid (SHA-256 HMAC)',
+    },
+    {
+      id: 'log_2',
+      time: '10:20:04',
+      source: 'Pancake POS',
+      event: 'SYNC_NEW_ORDERS',
+      tracking: 'ORD_ANAN_104',
+      status: 200,
+      duration: '115ms',
+      signature: 'Valid',
+    },
+    {
+      id: 'log_3',
+      time: '10:15:48',
+      source: 'GHTK Partner',
+      event: 'WEBHOOK_DELIVERY_UPDATE',
+      tracking: 'GHTK77129031',
+      status: 200,
+      duration: '58ms',
+      signature: 'Valid',
+    },
+    {
+      id: 'log_4',
+      time: '10:08:12',
+      source: 'Viettel Post',
+      event: 'TRACKING_PING',
+      tracking: 'VTP99812401',
+      status: 200,
+      duration: '65ms',
+      signature: 'Valid',
+    },
   ]);
 
   // Rate Cards
   const [rateCards, setRateCards] = useState([
-    { id: 'rc_ghn', carrier: 'GHN Express', tier: 'Hợp Đồng VIP 2026', intraFee: 22000, interFee: 32000, addKgFee: 5000, status: 'ACTIVE' },
-    { id: 'rc_ghtk', carrier: 'GHTK', tier: 'Hợp Đồng Chuẩn 2026', intraFee: 24000, interFee: 34000, addKgFee: 6000, status: 'ACTIVE' },
-    { id: 'rc_vtp', carrier: 'Viettel Post', tier: 'Hợp Đồng Thương Mại 2026', intraFee: 21500, interFee: 31000, addKgFee: 4500, status: 'ACTIVE' },
+    {
+      id: 'rc_ghn',
+      carrier: 'GHN Express',
+      tier: 'Hợp Đồng VIP 2026',
+      intraFee: 22000,
+      interFee: 32000,
+      addKgFee: 5000,
+      status: 'ACTIVE',
+    },
+    {
+      id: 'rc_ghtk',
+      carrier: 'GHTK',
+      tier: 'Hợp Đồng Chuẩn 2026',
+      intraFee: 24000,
+      interFee: 34000,
+      addKgFee: 6000,
+      status: 'ACTIVE',
+    },
+    {
+      id: 'rc_vtp',
+      carrier: 'Viettel Post',
+      tier: 'Hợp Đồng Thương Mại 2026',
+      intraFee: 21500,
+      interFee: 31000,
+      addKgFee: 4500,
+      status: 'ACTIVE',
+    },
   ]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -133,7 +195,9 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
         2
       )
     );
-    showToast(`✓ [Webhook Simulator] Đã bắn thử nghiệm thành công sự kiện [${simEvent}] cho mã ${simTracking} (HTTP 200 OK).`);
+    showToast(
+      `✓ [Webhook Simulator] Đã bắn thử nghiệm thành công sự kiện [${simEvent}] cho mã ${simTracking} (HTTP 200 OK).`
+    );
   };
 
   return (
@@ -141,7 +205,9 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
       {toastMessage && (
         <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center justify-between shadow-sm animate-in fade-in">
           <span>{toastMessage}</span>
-          <button type="button" onClick={() => setToastMessage(null)} className="font-bold">✕</button>
+          <button type="button" onClick={() => setToastMessage(null)} className="font-bold">
+            ✕
+          </button>
         </div>
       )}
 
@@ -156,7 +222,8 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
             <span className="badge-ok text-xs">Multi-Carrier Hub</span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Hỗ trợ kết nối toàn diện: GHN, GHTK, Viettel Post, J&T, VNPost, Pancake POS, KiotViet, TikTok Shop, Haravan, Sapo & Webhook Simulator
+            Hỗ trợ kết nối toàn diện: GHN, GHTK, Viettel Post, J&T, VNPost, Pancake POS, KiotViet,
+            TikTok Shop, Haravan, Sapo & Webhook Simulator
           </p>
         </div>
 
@@ -169,8 +236,16 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
       {/* Sub-tab Navigation */}
       <div className="flex border-b border-slate-200 bg-white px-2 rounded-xl border text-xs font-semibold gap-1 p-1 overflow-x-auto custom-scrollbar">
         {[
-          { id: 'carriers', label: '1. Hãng Vận Chuyển (GHN, GHTK, VTP, J&T, VNPost)', icon: Truck },
-          { id: 'pos', label: '2. Nguồn Đơn POS & Sàn TMĐT (Pancake, KiotViet, TikTok, Haravan)', icon: ShoppingBag },
+          {
+            id: 'carriers',
+            label: '1. Hãng Vận Chuyển (GHN, GHTK, VTP, J&T, VNPost)',
+            icon: Truck,
+          },
+          {
+            id: 'pos',
+            label: '2. Nguồn Đơn POS & Sàn TMĐT (Pancake, KiotViet, TikTok, Haravan)',
+            icon: ShoppingBag,
+          },
           { id: 'webhooks', label: '3. Quản Lý Webhooks & Trình Bắn Test Giả Lập', icon: Webhook },
           { id: 'logs', label: '4. Nhật Ký Webhook & API Calls Thời Gian Thực', icon: Terminal },
           { id: 'rates', label: '5. Cài Đặt Biểu Giá Cước Hợp Đồng (BR-51)', icon: Scale },
@@ -202,17 +277,23 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
             <div className="flex justify-between items-start border-b border-slate-100 pb-3">
               <div>
                 <div className="flex items-center gap-2">
-                  <h4 className="font-bold text-sm text-slate-900">Giao Hàng Nhanh (GHN Express)</h4>
+                  <h4 className="font-bold text-sm text-slate-900">
+                    Giao Hàng Nhanh (GHN Express)
+                  </h4>
                   <AutomationBadge tier={carrierGhnTier} carrierCode="GHN" />
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">Open API v2 · Tự động gọi API thực thi cứu đơn L2</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Open API v2 · Tự động gọi API thực thi cứu đơn L2
+                </p>
               </div>
               <span className="badge-ok text-[11px]">Đang hoạt động</span>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">API Token Hãng (Secret):</label>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  API Token Hãng (Secret):
+                </label>
                 <div className="relative">
                   <input
                     type={showGhnToken ? 'text' : 'password'}
@@ -233,30 +314,67 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="font-semibold text-slate-700 block mb-1">Shop ID:</label>
-                  <input type="text" value={ghnShopId} onChange={(e) => setGhnShopId(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                  <input
+                    type="text"
+                    value={ghnShopId}
+                    onChange={(e) => setGhnShopId(e.target.value)}
+                    className="modern-input w-full font-mono text-xs"
+                  />
                 </div>
                 <div>
                   <label className="font-semibold text-slate-700 block mb-1">Client ID:</label>
-                  <input type="text" value={ghnClientId} onChange={(e) => setGhnClientId(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                  <input
+                    type="text"
+                    value={ghnClientId}
+                    onChange={(e) => setGhnClientId(e.target.value)}
+                    className="modern-input w-full font-mono text-xs"
+                  />
                 </div>
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Webhook URL Endpoint:</label>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Webhook URL Endpoint:
+                </label>
                 <div className="flex gap-1.5">
-                  <input type="text" readOnly value="https://api.shipde.net/v1/webhooks/ghn/wh_anan_99" className="modern-input w-full font-mono text-[11px] bg-slate-50 text-slate-600" />
-                  <button type="button" onClick={() => copyToClipboard('https://api.shipde.net/v1/webhooks/ghn/wh_anan_99', 'ghn')} className="btn-secondary px-2 text-xs">
-                    {copiedUrl === 'ghn' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  <input
+                    type="text"
+                    readOnly
+                    value="https://api.shipde.net/v1/webhooks/ghn/wh_anan_99"
+                    className="modern-input w-full font-mono text-[11px] bg-slate-50 text-slate-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      copyToClipboard('https://api.shipde.net/v1/webhooks/ghn/wh_anan_99', 'ghn')
+                    }
+                    className="btn-secondary px-2 text-xs"
+                  >
+                    {copiedUrl === 'ghn' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
                   </button>
                 </div>
               </div>
 
               <div className="flex justify-between items-center pt-3 border-t border-slate-100">
-                <button type="button" onClick={() => onToggleGhnTier && onToggleGhnTier(carrierGhnTier === 'L2' ? 'L1' : 'L2')} className="btn-secondary text-[11px] py-1 text-slate-600">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onToggleGhnTier && onToggleGhnTier(carrierGhnTier === 'L2' ? 'L1' : 'L2')
+                  }
+                  className="btn-secondary text-[11px] py-1 text-slate-600"
+                >
                   <Sliders className="w-3 h-3" />
                   <span>{carrierGhnTier === 'L2' ? 'Hạ cấp xuống L1' : 'Nâng lên L2 API'}</span>
                 </button>
-                <button type="button" onClick={() => showToast('✓ [GHN Express] Kết nối API thành công (Ping: 42ms).')} className="btn-primary text-xs">
+                <button
+                  type="button"
+                  onClick={() => showToast('✓ [GHN Express] Kết nối API thành công (Ping: 42ms).')}
+                  className="btn-primary text-xs"
+                >
                   Ping Test & Lưu GHN
                 </button>
               </div>
@@ -271,14 +389,18 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   <h4 className="font-bold text-sm text-slate-900">Giao Hàng Tiết Kiệm (GHTK)</h4>
                   <AutomationBadge tier="L1" carrierCode="GHTK" />
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">Partner Token · Chế độ tạo hồ sơ dán cổng L1 Assist</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Partner Token · Chế độ tạo hồ sơ dán cổng L1 Assist
+                </p>
               </div>
               <span className="badge-ok text-[11px]">Đang hoạt động</span>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Partner Token GHTK:</label>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Partner Token GHTK:
+                </label>
                 <div className="relative">
                   <input
                     type={showGhtkToken ? 'text' : 'password'}
@@ -286,30 +408,64 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                     onChange={(e) => setGhtkToken(e.target.value)}
                     className="modern-input w-full font-mono pr-9 text-xs"
                   />
-                  <button type="button" onClick={() => setShowGhtkToken(!showGhtkToken)} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => setShowGhtkToken(!showGhtkToken)}
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-700"
+                  >
                     {showGhtkToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Partner ID / Client Key:</label>
-                <input type="text" value={ghtkPartnerId} onChange={(e) => setGhtkPartnerId(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Partner ID / Client Key:
+                </label>
+                <input
+                  type="text"
+                  value={ghtkPartnerId}
+                  onChange={(e) => setGhtkPartnerId(e.target.value)}
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Webhook URL Endpoint:</label>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Webhook URL Endpoint:
+                </label>
                 <div className="flex gap-1.5">
-                  <input type="text" readOnly value="https://api.shipde.net/v1/webhooks/ghtk/wh_anan_99" className="modern-input w-full font-mono text-[11px] bg-slate-50 text-slate-600" />
-                  <button type="button" onClick={() => copyToClipboard('https://api.shipde.net/v1/webhooks/ghtk/wh_anan_99', 'ghtk')} className="btn-secondary px-2 text-xs">
-                    {copiedUrl === 'ghtk' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  <input
+                    type="text"
+                    readOnly
+                    value="https://api.shipde.net/v1/webhooks/ghtk/wh_anan_99"
+                    className="modern-input w-full font-mono text-[11px] bg-slate-50 text-slate-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      copyToClipboard('https://api.shipde.net/v1/webhooks/ghtk/wh_anan_99', 'ghtk')
+                    }
+                    className="btn-secondary px-2 text-xs"
+                  >
+                    {copiedUrl === 'ghtk' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
                   </button>
                 </div>
               </div>
 
               <div className="flex justify-between items-center pt-3 border-t border-slate-100">
-                <span className="text-[11px] text-slate-400 italic">* L1 Assist theo Catalog Trang 8</span>
-                <button type="button" onClick={() => showToast('✓ [GHTK Partner] Kết nối thành công (Ping: 65ms).')} className="btn-primary text-xs">
+                <span className="text-[11px] text-slate-400 italic">
+                  * L1 Assist theo Catalog Trang 8
+                </span>
+                <button
+                  type="button"
+                  onClick={() => showToast('✓ [GHTK Partner] Kết nối thành công (Ping: 65ms).')}
+                  className="btn-primary text-xs"
+                >
                   Ping Test & Lưu GHTK
                 </button>
               </div>
@@ -324,14 +480,18 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   <h4 className="font-bold text-sm text-slate-900">Viettel Post (VTP)</h4>
                   <AutomationBadge tier="L2" carrierCode="VTP" />
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">Open API v2 · Tự động đọc cước & webhook hành trình</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Open API v2 · Tự động đọc cước & webhook hành trình
+                </p>
               </div>
               <span className="badge-ok text-[11px]">Đã kết nối</span>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Viettel Post Access Token:</label>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Viettel Post Access Token:
+                </label>
                 <div className="relative">
                   <input
                     type={showVtpToken ? 'text' : 'password'}
@@ -339,29 +499,64 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                     onChange={(e) => setVtpToken(e.target.value)}
                     className="modern-input w-full font-mono pr-9 text-xs"
                   />
-                  <button type="button" onClick={() => setShowVtpToken(!showVtpToken)} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => setShowVtpToken(!showVtpToken)}
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-700"
+                  >
                     {showVtpToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Customer Code / Mã Khách Hàng:</label>
-                <input type="text" value={vtpCustomerCode} onChange={(e) => setVtpCustomerCode(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Customer Code / Mã Khách Hàng:
+                </label>
+                <input
+                  type="text"
+                  value={vtpCustomerCode}
+                  onChange={(e) => setVtpCustomerCode(e.target.value)}
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Webhook URL Endpoint:</label>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Webhook URL Endpoint:
+                </label>
                 <div className="flex gap-1.5">
-                  <input type="text" readOnly value="https://api.shipde.net/v1/webhooks/viettelpost/wh_anan_99" className="modern-input w-full font-mono text-[11px] bg-slate-50 text-slate-600" />
-                  <button type="button" onClick={() => copyToClipboard('https://api.shipde.net/v1/webhooks/viettelpost/wh_anan_99', 'vtp')} className="btn-secondary px-2 text-xs">
-                    {copiedUrl === 'vtp' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  <input
+                    type="text"
+                    readOnly
+                    value="https://api.shipde.net/v1/webhooks/viettelpost/wh_anan_99"
+                    className="modern-input w-full font-mono text-[11px] bg-slate-50 text-slate-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      copyToClipboard(
+                        'https://api.shipde.net/v1/webhooks/viettelpost/wh_anan_99',
+                        'vtp'
+                      )
+                    }
+                    className="btn-secondary px-2 text-xs"
+                  >
+                    {copiedUrl === 'vtp' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
                   </button>
                 </div>
               </div>
 
               <div className="flex justify-end pt-3 border-t border-slate-100">
-                <button type="button" onClick={() => showToast('✓ [Viettel Post] Kết nối API thành công (Ping: 48ms).')} className="btn-primary text-xs">
+                <button
+                  type="button"
+                  onClick={() => showToast('✓ [Viettel Post] Kết nối API thành công (Ping: 48ms).')}
+                  className="btn-primary text-xs"
+                >
                   Ping Test & Lưu VTP
                 </button>
               </div>
@@ -376,14 +571,18 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   <h4 className="font-bold text-sm text-slate-900">J&T Express</h4>
                   <AutomationBadge tier="L1" carrierCode="J&T" />
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">J&T Open Platform · Đồng bộ sao kê & Webhook</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  J&T Open Platform · Đồng bộ sao kê & Webhook
+                </p>
               </div>
               <span className="badge-ok text-[11px]">Đã kết nối</span>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">J&T Customer Secret Key:</label>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  J&T Customer Secret Key:
+                </label>
                 <div className="relative">
                   <input
                     type={showJtToken ? 'text' : 'password'}
@@ -391,29 +590,64 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                     onChange={(e) => setJtToken(e.target.value)}
                     className="modern-input w-full font-mono pr-9 text-xs"
                   />
-                  <button type="button" onClick={() => setShowJtToken(!showJtToken)} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => setShowJtToken(!showJtToken)}
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-700"
+                  >
                     {showJtToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Customer ID / Mã Hợp Đồng:</label>
-                <input type="text" value={jtCustId} onChange={(e) => setJtCustId(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Customer ID / Mã Hợp Đồng:
+                </label>
+                <input
+                  type="text"
+                  value={jtCustId}
+                  onChange={(e) => setJtCustId(e.target.value)}
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Webhook URL Endpoint:</label>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Webhook URL Endpoint:
+                </label>
                 <div className="flex gap-1.5">
-                  <input type="text" readOnly value="https://api.shipde.net/v1/webhooks/jtexpress/wh_anan_99" className="modern-input w-full font-mono text-[11px] bg-slate-50 text-slate-600" />
-                  <button type="button" onClick={() => copyToClipboard('https://api.shipde.net/v1/webhooks/jtexpress/wh_anan_99', 'jt')} className="btn-secondary px-2 text-xs">
-                    {copiedUrl === 'jt' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  <input
+                    type="text"
+                    readOnly
+                    value="https://api.shipde.net/v1/webhooks/jtexpress/wh_anan_99"
+                    className="modern-input w-full font-mono text-[11px] bg-slate-50 text-slate-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      copyToClipboard(
+                        'https://api.shipde.net/v1/webhooks/jtexpress/wh_anan_99',
+                        'jt'
+                      )
+                    }
+                    className="btn-secondary px-2 text-xs"
+                  >
+                    {copiedUrl === 'jt' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
                   </button>
                 </div>
               </div>
 
               <div className="flex justify-end pt-3 border-t border-slate-100">
-                <button type="button" onClick={() => showToast('✓ [J&T Express] Kết nối API thành công (Ping: 52ms).')} className="btn-primary text-xs">
+                <button
+                  type="button"
+                  onClick={() => showToast('✓ [J&T Express] Kết nối API thành công (Ping: 52ms).')}
+                  className="btn-primary text-xs"
+                >
                   Ping Test & Lưu J&T
                 </button>
               </div>
@@ -433,22 +667,44 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   <h4 className="font-bold text-sm text-slate-900">Pancake POS (CN-01)</h4>
                   <span className="badge-ok text-xs">Nguồn chính</span>
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">Tự động đồng bộ đơn hàng, số điện thoại người nhận & mã vận đơn</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Tự động đồng bộ đơn hàng, số điện thoại người nhận & mã vận đơn
+                </p>
               </div>
               <span className="badge-ok text-[11px]">Active</span>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Pancake API Access Token:</label>
-                <input type="password" value={pancakeApiKey} onChange={(e) => setPancakeApiKey(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Pancake API Access Token:
+                </label>
+                <input
+                  type="password"
+                  value={pancakeApiKey}
+                  onChange={(e) => setPancakeApiKey(e.target.value)}
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Pancake Shop ID / Page ID:</label>
-                <input type="text" value={pancakeShopId} onChange={(e) => setPancakeShopId(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Pancake Shop ID / Page ID:
+                </label>
+                <input
+                  type="text"
+                  value={pancakeShopId}
+                  onChange={(e) => setPancakeShopId(e.target.value)}
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
               <div className="flex justify-end pt-2 border-t border-slate-100">
-                <button type="button" onClick={() => showToast('✓ [Pancake POS] Đồng bộ tức thì 24 đơn mới thành công.')} className="btn-primary text-xs">
+                <button
+                  type="button"
+                  onClick={() =>
+                    showToast('✓ [Pancake POS] Đồng bộ tức thì 24 đơn mới thành công.')
+                  }
+                  className="btn-primary text-xs"
+                >
                   Đồng Bộ Đơn Ngay
                 </button>
               </div>
@@ -463,22 +719,44 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   <h4 className="font-bold text-sm text-slate-900">KiotViet Open API</h4>
                   <span className="badge-ok text-xs">Connected</span>
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">Đồng bộ doanh thu, tiền COD và kho hàng chi nhánh</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Đồng bộ doanh thu, tiền COD và kho hàng chi nhánh
+                </p>
               </div>
               <span className="badge-ok text-[11px]">Active</span>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Client Secret Key:</label>
-                <input type="password" value={kiotApiKey} onChange={(e) => setKiotApiKey(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Client Secret Key:
+                </label>
+                <input
+                  type="password"
+                  value={kiotApiKey}
+                  onChange={(e) => setKiotApiKey(e.target.value)}
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Retailer Alias (Tên Gian Hàng):</label>
-                <input type="text" value={kiotRetailer} onChange={(e) => setKiotRetailer(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Retailer Alias (Tên Gian Hàng):
+                </label>
+                <input
+                  type="text"
+                  value={kiotRetailer}
+                  onChange={(e) => setKiotRetailer(e.target.value)}
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
               <div className="flex justify-end pt-2 border-t border-slate-100">
-                <button type="button" onClick={() => showToast('✓ [KiotViet] Đã xác thực API Client Secret thành công.')} className="btn-primary text-xs">
+                <button
+                  type="button"
+                  onClick={() =>
+                    showToast('✓ [KiotViet] Đã xác thực API Client Secret thành công.')
+                  }
+                  className="btn-primary text-xs"
+                >
                   Lưu & Đồng Bộ KiotViet
                 </button>
               </div>
@@ -493,22 +771,42 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   <h4 className="font-bold text-sm text-slate-900">TikTok Shop Partner API</h4>
                   <span className="badge-ok text-xs">Live Channel</span>
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">Tự động nhận đơn hàng livestream và đối chiếu tiền cấn trừ sàn</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Tự động nhận đơn hàng livestream và đối chiếu tiền cấn trừ sàn
+                </p>
               </div>
               <span className="badge-ok text-[11px]">Active</span>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">App Key / Partner ID:</label>
-                <input type="text" value={tiktokAppKey} onChange={(e) => setTiktokAppKey(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  App Key / Partner ID:
+                </label>
+                <input
+                  type="text"
+                  value={tiktokAppKey}
+                  onChange={(e) => setTiktokAppKey(e.target.value)}
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Shop Cipher Secret:</label>
-                <input type="password" value={tiktokCipher} onChange={(e) => setTiktokCipher(e.target.value)} className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Shop Cipher Secret:
+                </label>
+                <input
+                  type="password"
+                  value={tiktokCipher}
+                  onChange={(e) => setTiktokCipher(e.target.value)}
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
               <div className="flex justify-end pt-2 border-t border-slate-100">
-                <button type="button" onClick={() => showToast('✓ [TikTok Shop] Kết nối API thành công.')} className="btn-primary text-xs">
+                <button
+                  type="button"
+                  onClick={() => showToast('✓ [TikTok Shop] Kết nối API thành công.')}
+                  className="btn-primary text-xs"
+                >
                   Lưu TikTok Shop
                 </button>
               </div>
@@ -523,17 +821,29 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   <h4 className="font-bold text-sm text-slate-900">Haravan & Sapo Omnichannel</h4>
                   <span className="badge-muted text-xs">Sẵn sàng kết nối</span>
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">Đồng bộ đơn hàng website và các kênh bán lẻ đa sàn</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Đồng bộ đơn hàng website và các kênh bán lẻ đa sàn
+                </p>
               </div>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Haravan Access Token / App Secret:</label>
-                <input type="password" placeholder="hrv_live_sec_••••••••••••" className="modern-input w-full font-mono text-xs" />
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Haravan Access Token / App Secret:
+                </label>
+                <input
+                  type="password"
+                  placeholder="hrv_live_sec_••••••••••••"
+                  className="modern-input w-full font-mono text-xs"
+                />
               </div>
               <div className="flex justify-end pt-2 border-t border-slate-100">
-                <button type="button" onClick={() => showToast('✓ Đã kích hoạt kết nối Haravan / Sapo.')} className="btn-secondary text-xs">
+                <button
+                  type="button"
+                  onClick={() => showToast('✓ Đã kích hoạt kết nối Haravan / Sapo.')}
+                  className="btn-secondary text-xs"
+                >
                   Kích Hoạt Kênh
                 </button>
               </div>
@@ -549,9 +859,16 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
           <div className="modern-card p-5 bg-blue-50/40 border border-blue-100 flex items-start gap-3">
             <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
             <div className="text-xs space-y-1">
-              <span className="font-bold text-blue-950 block">Cơ Chế Bảo Mật Webhook Chuẩn Doanh Nghiệp (HMAC SHA-256):</span>
+              <span className="font-bold text-blue-950 block">
+                Cơ Chế Bảo Mật Webhook Chuẩn Doanh Nghiệp (HMAC SHA-256):
+              </span>
               <p className="text-blue-800">
-                Mọi webhook từ hãng gửi về đều được xác thực chữ ký SHA-256 HMAC qua Header <code className="bg-white px-1.5 py-0.5 rounded border border-blue-200 font-mono">X-ShipDe-Signature</code>. Các gói tin gửi trùng lặp sẽ được tự động lọc bỏ an toàn nhờ cơ chế khử trùng lặp lũy đẳng (BR-02 / BR-40).
+                Mọi webhook từ hãng gửi về đều được xác thực chữ ký SHA-256 HMAC qua Header{' '}
+                <code className="bg-white px-1.5 py-0.5 rounded border border-blue-200 font-mono">
+                  X-ShipDe-Signature
+                </code>
+                . Các gói tin gửi trùng lặp sẽ được tự động lọc bỏ an toàn nhờ cơ chế khử trùng lặp
+                lũy đẳng (BR-02 / BR-40).
               </p>
             </div>
           </div>
@@ -562,7 +879,9 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
               <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
                 <div className="flex items-center gap-2">
                   <Play className="w-4 h-4 text-blue-600" />
-                  <h3 className="font-bold text-sm text-slate-900">Trình Bắn Webhook Thử Nghiệm (Live Simulator)</h3>
+                  <h3 className="font-bold text-sm text-slate-900">
+                    Trình Bắn Webhook Thử Nghiệm (Live Simulator)
+                  </h3>
                 </div>
                 <span className="badge-info text-xs">Sandbox Mode</span>
               </div>
@@ -570,8 +889,14 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
               <div className="space-y-3 text-xs">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="font-semibold text-slate-700 block mb-1">Chọn Hãng Bắn Webhook:</label>
-                    <select value={simCarrier} onChange={(e) => setSimCarrier(e.target.value)} className="modern-input w-full text-xs font-semibold">
+                    <label className="font-semibold text-slate-700 block mb-1">
+                      Chọn Hãng Bắn Webhook:
+                    </label>
+                    <select
+                      value={simCarrier}
+                      onChange={(e) => setSimCarrier(e.target.value)}
+                      className="modern-input w-full text-xs font-semibold"
+                    >
                       <option value="GHN">Giao Hàng Nhanh (GHN)</option>
                       <option value="GHTK">Giao Hàng Tiết Kiệm (GHTK)</option>
                       <option value="Viettel Post">Viettel Post</option>
@@ -581,25 +906,53 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   </div>
 
                   <div>
-                    <label className="font-semibold text-slate-700 block mb-1">Mã Vận Đơn Giả Lập:</label>
-                    <input type="text" value={simTracking} onChange={(e) => setSimTracking(e.target.value)} className="modern-input w-full font-mono uppercase font-bold text-xs" />
+                    <label className="font-semibold text-slate-700 block mb-1">
+                      Mã Vận Đơn Giả Lập:
+                    </label>
+                    <input
+                      type="text"
+                      value={simTracking}
+                      onChange={(e) => setSimTracking(e.target.value)}
+                      className="modern-input w-full font-mono uppercase font-bold text-xs"
+                    />
                   </div>
                 </div>
 
                 <div>
-                  <label className="font-semibold text-slate-700 block mb-1">Sự Kiện Webhook:</label>
-                  <select value={simEvent} onChange={(e) => setSimEvent(e.target.value)} className="modern-input w-full text-xs font-semibold">
-                    <option value="DELIVERY_FAIL">1. Giao thất bại (DELIVERY_FAIL $\rightarrow$ Kích hoạt cứu đơn)</option>
-                    <option value="PICKUP_DELAY">2. Chậm lấy hàng (PICKUP_DELAY $\rightarrow$ SLA 6h)</option>
-                    <option value="DELIVERED">3. Giao thành công (DELIVERED $\rightarrow$ Chờ đối soát COD)</option>
+                  <label className="font-semibold text-slate-700 block mb-1">
+                    Sự Kiện Webhook:
+                  </label>
+                  <select
+                    value={simEvent}
+                    onChange={(e) => setSimEvent(e.target.value)}
+                    className="modern-input w-full text-xs font-semibold"
+                  >
+                    <option value="DELIVERY_FAIL">
+                      1. Giao thất bại (DELIVERY_FAIL $\rightarrow$ Kích hoạt cứu đơn)
+                    </option>
+                    <option value="PICKUP_DELAY">
+                      2. Chậm lấy hàng (PICKUP_DELAY $\rightarrow$ SLA 6h)
+                    </option>
+                    <option value="DELIVERED">
+                      3. Giao thành công (DELIVERED $\rightarrow$ Chờ đối soát COD)
+                    </option>
                     <option value="RETURNING">4. Đang hoàn hàng về kho (RETURNING)</option>
-                    <option value="DAMAGED_RETURN">5. Hàng hoàn hư hỏng (DAMAGED $\rightarrow$ Mở khiếu nại)</option>
+                    <option value="DAMAGED_RETURN">
+                      5. Hàng hoàn hư hỏng (DAMAGED $\rightarrow$ Mở khiếu nại)
+                    </option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="font-semibold text-slate-700 block mb-1">Lý Do Shipper Báo:</label>
-                  <input type="text" value={simReason} onChange={(e) => setSimReason(e.target.value)} className="modern-input w-full text-xs" />
+                  <label className="font-semibold text-slate-700 block mb-1">
+                    Lý Do Shipper Báo:
+                  </label>
+                  <input
+                    type="text"
+                    value={simReason}
+                    onChange={(e) => setSimReason(e.target.value)}
+                    className="modern-input w-full text-xs"
+                  />
                 </div>
 
                 <button
@@ -618,13 +971,16 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
               <div className="flex justify-between items-center border-b border-slate-800 pb-3">
                 <div className="flex items-center gap-2">
                   <Terminal className="w-4 h-4 text-emerald-400" />
-                  <span className="font-mono font-bold text-xs text-slate-200">Server Response Payload (JSON)</span>
+                  <span className="font-mono font-bold text-xs text-slate-200">
+                    Server Response Payload (JSON)
+                  </span>
                 </div>
                 <span className="badge-ok text-[10px]">HTTP 200 OK</span>
               </div>
 
               <div className="flex-1 font-mono text-[11px] text-emerald-400 bg-slate-950 p-4 rounded-xl overflow-x-auto custom-scrollbar leading-relaxed">
-                {simResponse || `// Nhấp "Bắn Webhook Vào Hệ Thống" để xem phản hồi JSON thời gian thực...
+                {simResponse ||
+                  `// Nhấp "Bắn Webhook Vào Hệ Thống" để xem phản hồi JSON thời gian thực...
 {
   "status": "ready_for_test",
   "endpoint": "https://api.shipde.net/v1/webhooks/${simCarrier.toLowerCase()}/wh_anan_99",
@@ -646,8 +1002,12 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
         <div className="modern-card overflow-hidden">
           <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
             <div>
-              <h3 className="font-bold text-sm text-slate-900">Nhật Ký Gọi API & Webhooks Thời Gian Thực ({liveLogs.length} sự kiện)</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Tự động ghi vết toàn bộ sự kiện nhận từ hãng và POS phục vụ kiểm toán</p>
+              <h3 className="font-bold text-sm text-slate-900">
+                Nhật Ký Gọi API & Webhooks Thời Gian Thực ({liveLogs.length} sự kiện)
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Tự động ghi vết toàn bộ sự kiện nhận từ hãng và POS phục vụ kiểm toán
+              </p>
             </div>
             <button
               type="button"
@@ -677,11 +1037,19 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   <tr key={log.id}>
                     <td className="font-mono text-xs text-slate-500">{log.time}</td>
                     <td className="font-bold text-xs text-slate-900">{log.source}</td>
-                    <td><span className="badge-info font-mono text-[10px]">{log.event}</span></td>
+                    <td>
+                      <span className="badge-info font-mono text-[10px]">{log.event}</span>
+                    </td>
                     <td className="font-mono font-bold text-xs text-blue-600">{log.tracking}</td>
-                    <td><span className="badge-ok font-mono text-[10px]">{log.status} OK</span></td>
+                    <td>
+                      <span className="badge-ok font-mono text-[10px]">{log.status} OK</span>
+                    </td>
                     <td className="font-mono text-xs text-slate-500">{log.duration}</td>
-                    <td><span className="text-xs text-emerald-700 font-semibold">{log.signature}</span></td>
+                    <td>
+                      <span className="text-xs text-emerald-700 font-semibold">
+                        {log.signature}
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -699,7 +1067,9 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                 <Scale className="w-4 h-4 text-blue-600" />
                 <span>Biểu Giá Hợp Đồng Cước Hãng (Cơ Sở Phép Dò D2 · BR-51)</span>
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">Nếu chưa cấu hình biểu giá, hệ thống sẽ không tự ý kết luận sai lệch cước bừa bãi</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Nếu chưa cấu hình biểu giá, hệ thống sẽ không tự ý kết luận sai lệch cước bừa bãi
+              </p>
             </div>
             <button
               type="button"
@@ -729,10 +1099,18 @@ export const ApiIntegrationsTab: React.FC<Props> = ({ carrierGhnTier = 'L2', onT
                   <tr key={rc.id}>
                     <td className="font-bold text-slate-900 text-xs">{rc.carrier}</td>
                     <td className="font-semibold text-slate-700 text-xs">{rc.tier}</td>
-                    <td className="text-right font-mono font-bold text-xs"><Money amount={rc.intraFee} state="confirmed" /></td>
-                    <td className="text-right font-mono font-bold text-xs"><Money amount={rc.interFee} state="confirmed" /></td>
-                    <td className="text-right font-mono text-xs"><Money amount={rc.addKgFee} state="confirmed" /></td>
-                    <td><span className="badge-ok text-[10px]">Đang áp dụng (Phép dò D2)</span></td>
+                    <td className="text-right font-mono font-bold text-xs">
+                      <Money amount={rc.intraFee} state="confirmed" />
+                    </td>
+                    <td className="text-right font-mono font-bold text-xs">
+                      <Money amount={rc.interFee} state="confirmed" />
+                    </td>
+                    <td className="text-right font-mono text-xs">
+                      <Money amount={rc.addKgFee} state="confirmed" />
+                    </td>
+                    <td>
+                      <span className="badge-ok text-[10px]">Đang áp dụng (Phép dò D2)</span>
+                    </td>
                     <td className="text-right">
                       <button
                         type="button"

@@ -132,19 +132,31 @@ export async function runAll12E2ETests(): Promise<{
     let user2Caught409 = false;
 
     // Giả lập 2 request đồng thời
-    const call1 = excEngine.dispatchReattempt(dummyCase, dummyShipment, ghn, { token: 'ghn_token' }, {
-      userId: 'user_A',
-      userName: 'Hoa CSKH',
-      note: 'Giao lại ca chiều',
-    });
+    const call1 = excEngine.dispatchReattempt(
+      dummyCase,
+      dummyShipment,
+      ghn,
+      { token: 'ghn_token' },
+      {
+        userId: 'user_A',
+        userName: 'Hoa CSKH',
+        note: 'Giao lại ca chiều',
+      }
+    );
 
     // Request 2 diễn ra ngay khi Request 1 chưa nhả khóa
     try {
-      await excEngine.dispatchReattempt(dummyCase, dummyShipment, ghn, { token: 'ghn_token' }, {
-        userId: 'user_B',
-        userName: 'Minh CSKH',
-        note: 'Giao lại ngày mai',
-      });
+      await excEngine.dispatchReattempt(
+        dummyCase,
+        dummyShipment,
+        ghn,
+        { token: 'ghn_token' },
+        {
+          userId: 'user_B',
+          userName: 'Minh CSKH',
+          note: 'Giao lại ngày mai',
+        }
+      );
     } catch (e: any) {
       if (e.code === 'reattempt_in_progress' && e.httpStatus === 409) {
         user2Caught409 = true;
@@ -321,8 +333,7 @@ export async function runAll12E2ETests(): Promise<{
     );
 
     const passed =
-      reconRes.summary.d1_weight_count === 8 &&
-      reconRes.summary.d4_duplicate_count === 3;
+      reconRes.summary.d1_weight_count === 8 && reconRes.summary.d4_duplicate_count === 3;
 
     record(
       'E2E-05',
@@ -649,7 +660,9 @@ export async function runAll12E2ETests(): Promise<{
   console.log('\n===============================================================');
   const passedCount = results.filter((r) => r.success).length;
   const failedCount = results.length - passedCount;
-  console.log(`KẾT QUẢ: ${passedCount}/${results.length} KỊCH BẢN ĐẠT CHUẨN (${Math.round((passedCount / results.length) * 100)}%)`);
+  console.log(
+    `KẾT QUẢ: ${passedCount}/${results.length} KỊCH BẢN ĐẠT CHUẨN (${Math.round((passedCount / results.length) * 100)}%)`
+  );
   console.log('===============================================================\n');
 
   return {
@@ -674,4 +687,3 @@ if (require.main === module) {
     }
   });
 }
-

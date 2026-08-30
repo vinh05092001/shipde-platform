@@ -77,9 +77,14 @@ export const ReattemptFormModal: React.FC<Props> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-bold text-sm text-slate-900">Gửi Lệnh Giao Lại / Đổi SĐT</h3>
-                <AutomationBadge tier={currentTier as any} carrierCode={exceptionItem.carrier_code} />
+                <AutomationBadge
+                  tier={currentTier as any}
+                  carrierCode={exceptionItem.carrier_code}
+                />
               </div>
-              <p className="text-[11px] text-slate-500 font-mono">Mã: {exceptionItem.tracking_code}</p>
+              <p className="text-[11px] text-slate-500 font-mono">
+                Mã: {exceptionItem.tracking_code}
+              </p>
             </div>
           </div>
           <button
@@ -99,7 +104,9 @@ export const ReattemptFormModal: React.FC<Props> = ({
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="font-bold text-slate-700 block mb-1">Số Điện Thoại Mới (Nếu khách đổi):</label>
+            <label className="font-bold text-slate-700 block mb-1">
+              Số Điện Thoại Mới (Nếu khách đổi):
+            </label>
             <input
               type="tel"
               value={newPhone}
@@ -131,23 +138,15 @@ export const ReattemptFormModal: React.FC<Props> = ({
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary text-xs"
-            >
+            <button type="button" onClick={onClose} className="btn-secondary text-xs">
               Hủy
             </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary text-xs"
-            >
+            <button type="submit" disabled={loading} className="btn-primary text-xs">
               {loading
                 ? 'Đang gửi...'
                 : currentTier === 'L2'
-                ? 'Bắn Lệnh Giao Lại (L2 API)'
-                : 'Tạo Hồ Sơ Hỗ Trợ (L1 Assist)'}
+                  ? 'Bắn Lệnh Giao Lại (L2 API)'
+                  : 'Tạo Hồ Sơ Hỗ Trợ (L1 Assist)'}
             </button>
           </div>
         </form>

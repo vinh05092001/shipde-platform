@@ -78,7 +78,10 @@ export class MakerCheckerEngine {
   /**
    * Kiểm tra điều kiện chốt kỳ đối soát (BR-11, CN-15 E2)
    */
-  public validatePeriodClosure(discrepancies: Discrepancy[]): { canClose: boolean; openCount: number } {
+  public validatePeriodClosure(discrepancies: Discrepancy[]): {
+    canClose: boolean;
+    openCount: number;
+  } {
     const openList = discrepancies.filter(
       (d) =>
         d.status !== DiscrepancyResolution.CONFIRMED &&

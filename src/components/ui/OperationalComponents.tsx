@@ -37,8 +37,12 @@ export const Money: React.FC<MoneyProps> = ({
   }
 
   return (
-    <span className={`${stateStyle} ${className}`} title={state !== 'confirmed' ? `Trạng thái: ${state}` : undefined}>
-      {signStr}{formatted}
+    <span
+      className={`${stateStyle} ${className}`}
+      title={state !== 'confirmed' ? `Trạng thái: ${state}` : undefined}
+    >
+      {signStr}
+      {formatted}
     </span>
   );
 };
@@ -100,7 +104,13 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className = ''
   let label = status;
   let dotColor = 'bg-slate-400';
 
-  if (s === 'DELIVERED' || s === 'RESOLVED' || s === 'MATCHED' || s === 'ACCEPTED' || s === 'ACTIVE') {
+  if (
+    s === 'DELIVERED' ||
+    s === 'RESOLVED' ||
+    s === 'MATCHED' ||
+    s === 'ACCEPTED' ||
+    s === 'ACTIVE'
+  ) {
     badgeClass = 'badge-ok';
     dotColor = 'bg-emerald-600';
     if (s === 'DELIVERED') label = 'Giao Thành Công';
@@ -135,7 +145,14 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className = ''
     badgeClass = 'badge-info';
     dotColor = 'bg-slate-400';
     label = 'Đã Hủy';
-  } else if (s.includes('FAIL') || s.includes('DISPUTE') || s.includes('REJECTED') || s.includes('DAMAGED') || s.includes('LOST') || s.startsWith('D')) {
+  } else if (
+    s.includes('FAIL') ||
+    s.includes('DISPUTE') ||
+    s.includes('REJECTED') ||
+    s.includes('DAMAGED') ||
+    s.includes('LOST') ||
+    s.startsWith('D')
+  ) {
     badgeClass = 'badge-risk';
     dotColor = 'bg-rose-600';
     if (s === 'DELIVERY_FAIL') label = 'Giao Thất Bại';
@@ -148,7 +165,13 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className = ''
     else if (s === 'D5_COD_MISMATCH' || s.includes('D5')) label = 'Lệch Tiền COD';
     else if (s === 'D6_OVERDUE_COD' || s.includes('D6')) label = 'COD Quá Hạn';
     else if (s === 'D7_MISSING' || s.includes('D7')) label = 'Thiếu Dòng Sao Kê';
-  } else if (s.includes('DELAY') || s.includes('PENDING') || s.includes('OPEN') || s.includes('ASSIGNED') || s.includes('SUBMITTED')) {
+  } else if (
+    s.includes('DELAY') ||
+    s.includes('PENDING') ||
+    s.includes('OPEN') ||
+    s.includes('ASSIGNED') ||
+    s.includes('SUBMITTED')
+  ) {
     badgeClass = 'badge-warn';
     dotColor = 'bg-amber-600';
     if (s === 'PICKUP_DELAY') label = 'Chậm Lấy Hàng';
@@ -188,7 +211,10 @@ export const AutomationBadge: React.FC<AutomationBadgeProps> = ({
 
   if (t === 'L2' || t.includes('EXECUTE')) {
     return (
-      <span className={`badge-ok font-semibold text-xs ${className}`} title="Tự động gọi API hãng trực tiếp">
+      <span
+        className={`badge-ok font-semibold text-xs ${className}`}
+        title="Tự động gọi API hãng trực tiếp"
+      >
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
         <span>{carrierCode ? `${carrierCode} · ` : ''}Tự Động Qua API</span>
       </span>
@@ -197,7 +223,10 @@ export const AutomationBadge: React.FC<AutomationBadgeProps> = ({
 
   if (t === 'L1' || t.includes('ASSIST')) {
     return (
-      <span className={`badge-warn font-semibold text-xs ${className}`} title="Tạo hồ sơ chuẩn mẫu để nhân viên dán lên cổng hãng">
+      <span
+        className={`badge-warn font-semibold text-xs ${className}`}
+        title="Tạo hồ sơ chuẩn mẫu để nhân viên dán lên cổng hãng"
+      >
         <span className="w-1.5 h-1.5 rounded-full bg-amber-600" />
         <span>{carrierCode ? `${carrierCode} · ` : ''}Hỗ Trợ Cổng Hãng</span>
       </span>
@@ -205,7 +234,10 @@ export const AutomationBadge: React.FC<AutomationBadgeProps> = ({
   }
 
   return (
-    <span className={`badge-info font-medium text-xs ${className}`} title="Thao tác hoàn toàn thủ công">
+    <span
+      className={`badge-info font-medium text-xs ${className}`}
+      title="Thao tác hoàn toàn thủ công"
+    >
       <span>{carrierCode ? `${carrierCode} · ` : ''}Thủ Công</span>
     </span>
   );
@@ -238,7 +270,9 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
       </div>
       <div className="space-y-1 max-w-md">
         <h4 className="font-bold text-slate-900 text-sm">{title}</h4>
-        {(description || reason) && <p className="text-xs text-slate-500">{description || reason}</p>}
+        {(description || reason) && (
+          <p className="text-xs text-slate-500">{description || reason}</p>
+        )}
       </div>
       {actionLabel && onAction && (
         <button type="button" onClick={onAction} className="btn-primary mt-2">
@@ -302,7 +336,9 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
         <div className="flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${isDanger ? 'bg-rose-50 text-rose-600' : 'bg-[#FFF5F0] text-[#EA4B12]'}`}>
+          <div
+            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${isDanger ? 'bg-rose-50 text-rose-600' : 'bg-[#FFF5F0] text-[#EA4B12]'}`}
+          >
             {isDanger ? <ShieldAlert className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
           </div>
           <div>

@@ -1,0 +1,45 @@
+name: Security baseline
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Install Pinned Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.24.0"
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+      - name: Run Clean Secret Scan
+        run: npm run security:secrets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
+      - name: Verify Secret Scan Negative Proof
+        run: |
+          set +e
+          npm run security:secrets -- --test-negative
+          EXIT_CODE=$?
+          set -e
+          echo "Negative proof returned exit code: $EXIT_CODE"
+          if [ "$EXIT_CODE" -eq 1 ]; then
+            echo "Success: Secret-scan negative proof exited with exact code 1 (real rule finding detected) as required by AC-FOUND-01-06."
+          else
+            echo "Error: Expected secret-scan negative proof to exit with exact code 1, but got code $EXIT_CODE!"
+            exit 1
+          fi

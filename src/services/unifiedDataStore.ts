@@ -3,7 +3,13 @@
 // Bảm bảo 100% tính nhất quán dữ liệu giữa Dashboard, Vận Đơn, Cứu Đơn, Đối Soát & Ba Sổ
 // ============================================================================
 
-import { UIExceptionItem, UIDiscrepancyItem, UIClaimItem, UIReturnScanItem, UITimelineEvent } from '@/components/types';
+import {
+  UIExceptionItem,
+  UIDiscrepancyItem,
+  UIClaimItem,
+  UIReturnScanItem,
+  UITimelineEvent,
+} from '@/components/types';
 import { ShipmentStatus, CarrierCode } from '@/types/domain';
 
 export interface UnifiedShipment {
@@ -20,7 +26,15 @@ export interface UnifiedShipment {
   quoted_fee: number;
   declared_weight_g: number;
   charged_weight_g?: number;
-  status: 'picking' | 'in_transit' | 'out_for_delivery' | 'delivered' | 'delivery_fail' | 'stuck_in_transit' | 'returning' | 'returned';
+  status:
+    | 'picking'
+    | 'in_transit'
+    | 'out_for_delivery'
+    | 'delivered'
+    | 'delivery_fail'
+    | 'stuck_in_transit'
+    | 'returning'
+    | 'returned';
   match_status: 'matched_exact' | 'matched_fuzzy' | 'unmatched';
   warehouse_id: string;
   created_at: string;
@@ -60,10 +74,25 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: true,
     has_open_claim: false,
     timeline: [
-      { title: 'Tạo đơn và gửi thông tin lấy hàng', description: 'Đơn hàng được đồng bộ tự động từ Pancake POS', occurred_at: '16/08/2026 08:30', source_label: 'Pancake POS' },
-      { title: 'Bưu tá đã nhận hàng tại kho Tân Bình', description: 'Bưu tá Nguyễn Văn Cường (0938112233) tiếp nhận kiện', occurred_at: '16/08/2026 10:15', source_label: 'GHN Express' },
-      { title: 'Giao hàng không thành công lần 1', description: 'Khách không nghe máy, bưu tá lưu kho chuẩn bị giao lại', occurred_at: '17/08/2026 08:30', source_label: 'Hãng GHN' }
-    ]
+      {
+        title: 'Tạo đơn và gửi thông tin lấy hàng',
+        description: 'Đơn hàng được đồng bộ tự động từ Pancake POS',
+        occurred_at: '16/08/2026 08:30',
+        source_label: 'Pancake POS',
+      },
+      {
+        title: 'Bưu tá đã nhận hàng tại kho Tân Bình',
+        description: 'Bưu tá Nguyễn Văn Cường (0938112233) tiếp nhận kiện',
+        occurred_at: '16/08/2026 10:15',
+        source_label: 'GHN Express',
+      },
+      {
+        title: 'Giao hàng không thành công lần 1',
+        description: 'Khách không nghe máy, bưu tá lưu kho chuẩn bị giao lại',
+        occurred_at: '17/08/2026 08:30',
+        source_label: 'Hãng GHN',
+      },
+    ],
   },
   {
     id: 'shp_002',
@@ -87,9 +116,19 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: false,
     has_open_claim: false,
     timeline: [
-      { title: 'Đã nhận đơn từ hệ thống bán lẻ', description: 'Đơn hàng sẵn sàng lấy', occurred_at: '16/08/2026 09:15', source_label: 'Ship Dễ System' },
-      { title: 'Giao hàng thất bại lần 1', description: 'Sai số nhà, khách hẹn chiều giao lại', occurred_at: '17/08/2026 09:15', source_label: 'GHTK Partner' }
-    ]
+      {
+        title: 'Đã nhận đơn từ hệ thống bán lẻ',
+        description: 'Đơn hàng sẵn sàng lấy',
+        occurred_at: '16/08/2026 09:15',
+        source_label: 'Ship Dễ System',
+      },
+      {
+        title: 'Giao hàng thất bại lần 1',
+        description: 'Sai số nhà, khách hẹn chiều giao lại',
+        occurred_at: '17/08/2026 09:15',
+        source_label: 'GHTK Partner',
+      },
+    ],
   },
   {
     id: 'shp_003',
@@ -113,8 +152,13 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: false,
     has_open_claim: false,
     timeline: [
-      { title: 'Đang trung chuyển qua bưu cục trung tâm', description: 'Kiện hàng lưu kho quá 24h chưa xuất bưu cục phát', occurred_at: '16/08/2026 14:00', source_label: 'GHN Hub' }
-    ]
+      {
+        title: 'Đang trung chuyển qua bưu cục trung tâm',
+        description: 'Kiện hàng lưu kho quá 24h chưa xuất bưu cục phát',
+        occurred_at: '16/08/2026 14:00',
+        source_label: 'GHN Hub',
+      },
+    ],
   },
   {
     id: 'shp_004',
@@ -138,8 +182,13 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: false,
     has_open_claim: false,
     timeline: [
-      { title: 'Chờ bưu tá lấy hàng', description: 'Đã báo lấy hàng quá 12h chưa có bưu tá nhận', occurred_at: '17/08/2026 07:00', source_label: 'GHTK System' }
-    ]
+      {
+        title: 'Chờ bưu tá lấy hàng',
+        description: 'Đã báo lấy hàng quá 12h chưa có bưu tá nhận',
+        occurred_at: '17/08/2026 07:00',
+        source_label: 'GHTK System',
+      },
+    ],
   },
   {
     id: 'shp_005',
@@ -163,9 +212,19 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: false,
     has_open_claim: false,
     timeline: [
-      { title: 'CSKH can thiệp hẹn lại giờ giao', description: 'Đã gọi khách và điều hướng bưu tá giao ca chiều', occurred_at: '15/08/2026 14:00', source_label: 'Ship Dễ CSKH' },
-      { title: 'Giao hàng thành công', description: 'Người nhận đã thanh toán COD 600.000 đ', occurred_at: '16/08/2026 16:20', source_label: 'GHN Shipper' }
-    ]
+      {
+        title: 'CSKH can thiệp hẹn lại giờ giao',
+        description: 'Đã gọi khách và điều hướng bưu tá giao ca chiều',
+        occurred_at: '15/08/2026 14:00',
+        source_label: 'Ship Dễ CSKH',
+      },
+      {
+        title: 'Giao hàng thành công',
+        description: 'Người nhận đã thanh toán COD 600.000 đ',
+        occurred_at: '16/08/2026 16:20',
+        source_label: 'GHN Shipper',
+      },
+    ],
   },
   {
     id: 'shp_006',
@@ -189,8 +248,13 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: true,
     has_open_claim: false,
     timeline: [
-      { title: 'Giao thành công', description: 'Đã thu tiền COD', occurred_at: '14/08/2026 14:30', source_label: 'GHN' }
-    ]
+      {
+        title: 'Giao thành công',
+        description: 'Đã thu tiền COD',
+        occurred_at: '14/08/2026 14:30',
+        source_label: 'GHN',
+      },
+    ],
   },
   {
     id: 'shp_007',
@@ -214,8 +278,13 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: true,
     has_open_claim: false,
     timeline: [
-      { title: 'Giao thành công', description: 'Đã hoàn tất phát hàng', occurred_at: '12/08/2026 15:00', source_label: 'GHTK' }
-    ]
+      {
+        title: 'Giao thành công',
+        description: 'Đã hoàn tất phát hàng',
+        occurred_at: '12/08/2026 15:00',
+        source_label: 'GHTK',
+      },
+    ],
   },
   {
     id: 'shp_008',
@@ -239,8 +308,13 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: true,
     has_open_claim: false,
     timeline: [
-      { title: 'Giao thành công', description: 'Shipper thu tiền COD 500k thay vì 550k', occurred_at: '13/08/2026 16:00', source_label: 'GHN' }
-    ]
+      {
+        title: 'Giao thành công',
+        description: 'Shipper thu tiền COD 500k thay vì 550k',
+        occurred_at: '13/08/2026 16:00',
+        source_label: 'GHN',
+      },
+    ],
   },
   {
     id: 'shp_009',
@@ -264,8 +338,13 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: true,
     has_open_claim: false,
     timeline: [
-      { title: 'Giao thành công', description: 'Đơn giao 14 ngày trước nhưng chưa chuyển tiền COD', occurred_at: '03/08/2026 14:00', source_label: 'GHN' }
-    ]
+      {
+        title: 'Giao thành công',
+        description: 'Đơn giao 14 ngày trước nhưng chưa chuyển tiền COD',
+        occurred_at: '03/08/2026 14:00',
+        source_label: 'GHN',
+      },
+    ],
   },
   {
     id: 'shp_010',
@@ -289,8 +368,13 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: true,
     has_open_claim: false,
     timeline: [
-      { title: 'Giao thành công', description: 'Vắng mặt trong sao kê tuần của hãng', occurred_at: '08/08/2026 11:00', source_label: 'GHTK' }
-    ]
+      {
+        title: 'Giao thành công',
+        description: 'Vắng mặt trong sao kê tuần của hãng',
+        occurred_at: '08/08/2026 11:00',
+        source_label: 'GHTK',
+      },
+    ],
   },
   {
     id: 'shp_011',
@@ -314,8 +398,13 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: false,
     has_open_claim: false,
     timeline: [
-      { title: 'Nhập hoàn kho Tân Bình', description: 'Thủ kho Phạm Văn Kho xác nhận kiện nguyên vẹn', occurred_at: '17/08/2026 08:15', source_label: 'Thủ kho Ship Dễ' }
-    ]
+      {
+        title: 'Nhập hoàn kho Tân Bình',
+        description: 'Thủ kho Phạm Văn Kho xác nhận kiện nguyên vẹn',
+        occurred_at: '17/08/2026 08:15',
+        source_label: 'Thủ kho Ship Dễ',
+      },
+    ],
   },
   {
     id: 'shp_012',
@@ -339,9 +428,14 @@ export const MASTER_SHIPMENTS: UnifiedShipment[] = [
     has_open_discrepancy: false,
     has_open_claim: true,
     timeline: [
-      { title: 'Tiếp nhận hàng hoàn hư hỏng', description: 'Vỏ hộp rách, bể vỡ sản phẩm bên trong. Đã chụp ảnh bằng chứng', occurred_at: '17/08/2026 08:30', source_label: 'Thủ kho Ship Dễ' }
-    ]
-  }
+      {
+        title: 'Tiếp nhận hàng hoàn hư hỏng',
+        description: 'Vỏ hộp rách, bể vỡ sản phẩm bên trong. Đã chụp ảnh bằng chứng',
+        occurred_at: '17/08/2026 08:30',
+        source_label: 'Thủ kho Ship Dễ',
+      },
+    ],
+  },
 ];
 
 // Generate 38 additional realistic active shipments to reach total of 50
@@ -349,8 +443,12 @@ for (let i = 13; i <= 50; i++) {
   const isGhn = i % 2 === 0;
   const isDelivered = i % 3 === 0;
   const isTransit = i % 3 === 1;
-  const status: UnifiedShipment['status'] = isDelivered ? 'delivered' : isTransit ? 'in_transit' : 'out_for_delivery';
-  
+  const status: UnifiedShipment['status'] = isDelivered
+    ? 'delivered'
+    : isTransit
+      ? 'in_transit'
+      : 'out_for_delivery';
+
   MASTER_SHIPMENTS.push({
     id: `shp_${String(i).padStart(3, '0')}`,
     tracking_code: `${isGhn ? 'GHN8829' : 'GHTK7712'}${1000 + i}`,
@@ -359,9 +457,16 @@ for (let i = 13; i <= 50; i++) {
     carrier_account: isGhn ? 'GHN Kho Tân Bình' : 'GHTK Trụ Sở Q3',
     recipient_name: `Khách Hàng ${i}`,
     recipient_phone: `090${String(i).padStart(7, '0')}`,
-    recipient_address: `${i * 3} Đường Số ${i % 12 + 1}, Quận ${i % 10 + 1}`,
-    destination_province: i % 4 === 0 ? 'Hà Nội' : i % 4 === 1 ? 'TP. Hồ Chí Minh' : i % 4 === 2 ? 'Đà Nẵng' : 'Cần Thơ',
-    cod_amount: (i % 5 + 1) * 150000,
+    recipient_address: `${i * 3} Đường Số ${(i % 12) + 1}, Quận ${(i % 10) + 1}`,
+    destination_province:
+      i % 4 === 0
+        ? 'Hà Nội'
+        : i % 4 === 1
+          ? 'TP. Hồ Chí Minh'
+          : i % 4 === 2
+            ? 'Đà Nẵng'
+            : 'Cần Thơ',
+    cod_amount: ((i % 5) + 1) * 150000,
     quoted_fee: isGhn ? 22000 : 24000,
     declared_weight_g: 300 + (i % 5) * 100,
     status,
@@ -373,9 +478,19 @@ for (let i = 13; i <= 50; i++) {
     has_open_discrepancy: false,
     has_open_claim: false,
     timeline: [
-      { title: 'Tạo đơn thành công', description: 'Đã sẵn sàng lấy hàng', occurred_at: `12/08/2026 09:00`, source_label: 'Pancake POS' },
-      { title: status === 'delivered' ? 'Giao thành công' : 'Đang vận chuyển', description: 'Cập nhật từ bưu cục phát', occurred_at: `14/08/2026 14:00`, source_label: isGhn ? 'GHN' : 'GHTK' }
-    ]
+      {
+        title: 'Tạo đơn thành công',
+        description: 'Đã sẵn sàng lấy hàng',
+        occurred_at: `12/08/2026 09:00`,
+        source_label: 'Pancake POS',
+      },
+      {
+        title: status === 'delivered' ? 'Giao thành công' : 'Đang vận chuyển',
+        description: 'Cập nhật từ bưu cục phát',
+        occurred_at: `14/08/2026 14:00`,
+        source_label: isGhn ? 'GHN' : 'GHTK',
+      },
+    ],
   });
 }
 
@@ -400,7 +515,7 @@ export const MASTER_EXCEPTIONS: UIExceptionItem[] = [
     priority_score: 85,
     carrier_reason: 'Khách không nghe máy (Lần 1)',
     attempts: 1,
-    version: 1
+    version: 1,
   },
   {
     id: 'exc_002',
@@ -419,7 +534,7 @@ export const MASTER_EXCEPTIONS: UIExceptionItem[] = [
     priority_score: 92,
     carrier_reason: 'Sai số nhà, khách hẹn chiều giao lại',
     attempts: 2,
-    version: 1
+    version: 1,
   },
   {
     id: 'exc_003',
@@ -439,7 +554,7 @@ export const MASTER_EXCEPTIONS: UIExceptionItem[] = [
     carrier_reason: 'Lưu kho quá 24h tại Kho Trung Chuyển Tân Bình',
     attempts: 0,
     assigned_to: 'Trần Thị Hoa (CSKH)',
-    version: 1
+    version: 1,
   },
   {
     id: 'exc_004',
@@ -458,8 +573,8 @@ export const MASTER_EXCEPTIONS: UIExceptionItem[] = [
     priority_score: 78,
     carrier_reason: 'Quá 12h chưa có bưu tá tới lấy hàng',
     attempts: 0,
-    version: 1
-  }
+    version: 1,
+  },
 ];
 
 // ----------------------------------------------------------------------------
@@ -478,7 +593,7 @@ export const MASTER_DISCREPANCIES: UIDiscrepancyItem[] = [
     status: 'OPEN',
     reason: 'Hãng tính vượt cân 500g dù kích thước kiện hàng chuẩn A6',
     created_by_user: 'usr_02', // Tạo bởi CSKH Hoa -> Test Maker-Checker
-    version: 1
+    version: 1,
   },
   {
     id: 'disc_002',
@@ -492,7 +607,7 @@ export const MASTER_DISCREPANCIES: UIDiscrepancyItem[] = [
     status: 'OPEN',
     reason: 'Thu cước vượt 7.000 đ so với biểu giá hợp đồng VIP 2026',
     created_by_user: 'usr_03',
-    version: 1
+    version: 1,
   },
   {
     id: 'disc_003',
@@ -506,7 +621,7 @@ export const MASTER_DISCREPANCIES: UIDiscrepancyItem[] = [
     status: 'OPEN',
     reason: 'Khấu trừ phí vận chuyển 2 lần cho cùng một mã vận đơn',
     created_by_user: 'usr_03',
-    version: 1
+    version: 1,
   },
   {
     id: 'disc_004',
@@ -520,7 +635,7 @@ export const MASTER_DISCREPANCIES: UIDiscrepancyItem[] = [
     status: 'OPEN',
     reason: 'Shipper bớt 50.000 đ tiền COD khi đối soát',
     created_by_user: 'usr_02',
-    version: 1
+    version: 1,
   },
   {
     id: 'disc_005',
@@ -534,7 +649,7 @@ export const MASTER_DISCREPANCIES: UIDiscrepancyItem[] = [
     status: 'OPEN',
     reason: 'COD quá hạn thanh toán theo chu kỳ đối soát thứ Hai - thứ Năm',
     created_by_user: 'usr_03',
-    version: 1
+    version: 1,
   },
   {
     id: 'disc_006',
@@ -548,8 +663,8 @@ export const MASTER_DISCREPANCIES: UIDiscrepancyItem[] = [
     status: 'OPEN',
     reason: 'Thiếu dòng đối soát cho đơn đã giao thành công',
     created_by_user: 'usr_03',
-    version: 1
-  }
+    version: 1,
+  },
 ];
 
 // ----------------------------------------------------------------------------
@@ -567,7 +682,7 @@ export const MASTER_CLAIMS: UIClaimItem[] = [
     deadline_at: '19/08/2026 08:35',
     hours_left: 48,
     carrier_ticket: 'TKT_GHTK_99182',
-    evidence_count: 3
+    evidence_count: 3,
   },
   {
     id: 'clm_002',
@@ -580,8 +695,8 @@ export const MASTER_CLAIMS: UIClaimItem[] = [
     deadline_at: '10/08/2026 10:00',
     hours_left: 0,
     carrier_ticket: 'TKT_GHN_44812',
-    evidence_count: 2
-  }
+    evidence_count: 2,
+  },
 ];
 
 // ----------------------------------------------------------------------------
@@ -589,13 +704,22 @@ export const MASTER_CLAIMS: UIClaimItem[] = [
 // ----------------------------------------------------------------------------
 export function getUnifiedMetrics() {
   const totalShipments = MASTER_SHIPMENTS.length; // 50
-  const activeShipments = MASTER_SHIPMENTS.filter(s => s.status !== 'delivered' && s.status !== 'returned').length;
-  const deliveredShipments = MASTER_SHIPMENTS.filter(s => s.status === 'delivered').length;
-  const failShipments = MASTER_SHIPMENTS.filter(s => s.status === 'delivery_fail').length;
-  const openExceptionsCount = MASTER_EXCEPTIONS.filter(e => e.status === 'OPEN' || e.status === 'ASSIGNED').length; // 4
-  const openDiscrepanciesCount = MASTER_DISCREPANCIES.filter(d => d.status === 'OPEN').length; // 6
-  const totalDiscrepancyAmount = MASTER_DISCREPANCIES.filter(d => d.status === 'OPEN').reduce((sum, d) => sum + d.discrepancy_amount, 0); // 1,978,000 đ
-  const urgentClaimsCount = MASTER_CLAIMS.filter(c => c.status === 'SUBMITTED' || c.status === 'IN_REVIEW').length; // 1
+  const activeShipments = MASTER_SHIPMENTS.filter(
+    (s) => s.status !== 'delivered' && s.status !== 'returned'
+  ).length;
+  const deliveredShipments = MASTER_SHIPMENTS.filter((s) => s.status === 'delivered').length;
+  const failShipments = MASTER_SHIPMENTS.filter((s) => s.status === 'delivery_fail').length;
+  const openExceptionsCount = MASTER_EXCEPTIONS.filter(
+    (e) => e.status === 'OPEN' || e.status === 'ASSIGNED'
+  ).length; // 4
+  const openDiscrepanciesCount = MASTER_DISCREPANCIES.filter((d) => d.status === 'OPEN').length; // 6
+  const totalDiscrepancyAmount = MASTER_DISCREPANCIES.filter((d) => d.status === 'OPEN').reduce(
+    (sum, d) => sum + d.discrepancy_amount,
+    0
+  ); // 1,978,000 đ
+  const urgentClaimsCount = MASTER_CLAIMS.filter(
+    (c) => c.status === 'SUBMITTED' || c.status === 'IN_REVIEW'
+  ).length; // 1
 
   return {
     totalShipments,
@@ -605,6 +729,6 @@ export function getUnifiedMetrics() {
     openExceptionsCount,
     openDiscrepanciesCount,
     totalDiscrepancyAmount,
-    urgentClaimsCount
+    urgentClaimsCount,
   };
 }

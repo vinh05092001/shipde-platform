@@ -63,17 +63,65 @@ export const SettingsWorkspace: React.FC<Props> = ({
 
   // Stores State
   const [stores, setStores] = useState([
-    { id: 'store_01', name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)', address: '128 Nguyễn Trãi, P. 3, Q. 5, TP. HCM', code: 'HCM-Q3', is_default: true },
-    { id: 'store_02', name: 'Kho Vận Tân Bình', address: '55 CMT8, P. 5, Tân Bình, TP. HCM', code: 'HCM-TB', is_default: false },
-    { id: 'store_03', name: 'Chi Nhánh Hà Nội', address: '320 Cầu Giấy, Quan Hoa, Cầu Giấy, Hà Nội', code: 'HN-CG', is_default: false },
-    { id: 'store_04', name: 'Chi Nhánh Đà Nẵng', address: '102 Hoàng Văn Thụ, Hải Châu, Đà Nẵng', code: 'DN-HC', is_default: false },
+    {
+      id: 'store_01',
+      name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)',
+      address: '128 Nguyễn Trãi, P. 3, Q. 5, TP. HCM',
+      code: 'HCM-Q3',
+      is_default: true,
+    },
+    {
+      id: 'store_02',
+      name: 'Kho Vận Tân Bình',
+      address: '55 CMT8, P. 5, Tân Bình, TP. HCM',
+      code: 'HCM-TB',
+      is_default: false,
+    },
+    {
+      id: 'store_03',
+      name: 'Chi Nhánh Hà Nội',
+      address: '320 Cầu Giấy, Quan Hoa, Cầu Giấy, Hà Nội',
+      code: 'HN-CG',
+      is_default: false,
+    },
+    {
+      id: 'store_04',
+      name: 'Chi Nhánh Đà Nẵng',
+      address: '102 Hoàng Văn Thụ, Hải Châu, Đà Nẵng',
+      code: 'DN-HC',
+      is_default: false,
+    },
   ]);
 
   // Device Sessions State
   const [sessions, setSessions] = useState([
-    { id: 'sess_1', user: 'Nguyễn Văn An (Chủ Shop)', device: 'MacBook Pro · Chrome 127', ip: '14.161.22.88', location: 'TP. Hồ Chí Minh', last_active: 'Đang hoạt động', current: true },
-    { id: 'sess_2', user: 'Trần Thị Hoa (CSKH)', device: 'iPhone 15 Pro · iOS 17.5', ip: '113.190.44.12', location: 'TP. Hồ Chí Minh', last_active: '5 phút trước', current: false },
-    { id: 'sess_3', user: 'Phạm Văn Kho (Thủ kho)', device: 'Samsung Galaxy A54 · Android 14', ip: '115.79.33.90', location: 'TP. Hồ Chí Minh', last_active: '15 phút trước', current: false },
+    {
+      id: 'sess_1',
+      user: 'Nguyễn Văn An (Chủ Shop)',
+      device: 'MacBook Pro · Chrome 127',
+      ip: '14.161.22.88',
+      location: 'TP. Hồ Chí Minh',
+      last_active: 'Đang hoạt động',
+      current: true,
+    },
+    {
+      id: 'sess_2',
+      user: 'Trần Thị Hoa (CSKH)',
+      device: 'iPhone 15 Pro · iOS 17.5',
+      ip: '113.190.44.12',
+      location: 'TP. Hồ Chí Minh',
+      last_active: '5 phút trước',
+      current: false,
+    },
+    {
+      id: 'sess_3',
+      user: 'Phạm Văn Kho (Thủ kho)',
+      device: 'Samsung Galaxy A54 · Android 14',
+      ip: '115.79.33.90',
+      location: 'TP. Hồ Chí Minh',
+      last_active: '15 phút trước',
+      current: false,
+    },
   ]);
 
   const copyToClipboard = (text: string, id: string) => {
@@ -84,7 +132,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
 
   const handleRevokeSession = (sessionId: string, userName: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-    onToast(`✓ Đã thu hồi quyền truy cập thiết bị của ${userName}. Phiên làm việc đã bị vô hiệu hóa từ xa.`);
+    onToast(
+      `✓ Đã thu hồi quyền truy cập thiết bị của ${userName}. Phiên làm việc đã bị vô hiệu hóa từ xa.`
+    );
   };
 
   return (
@@ -97,15 +147,12 @@ export const SettingsWorkspace: React.FC<Props> = ({
             <span>Cài Đặt & Cấu Hình Cửa Hàng</span>
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Quản lý chi nhánh, nhân sự phân quyền, kết nối hãng vận chuyển và chính sách bảo mật hệ thống.
+            Quản lý chi nhánh, nhân sự phân quyền, kết nối hãng vận chuyển và chính sách bảo mật hệ
+            thống.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onBackToDashboard}
-          className="btn-secondary text-sm"
-        >
+        <button type="button" onClick={onBackToDashboard} className="btn-secondary text-sm">
           <span>← Quay lại Bàn Điều Khiển</span>
         </button>
       </div>
@@ -116,12 +163,42 @@ export const SettingsWorkspace: React.FC<Props> = ({
         <div className="lg:col-span-3 space-y-2">
           <nav className="modern-card p-2 space-y-1">
             {[
-              { id: 'stores', label: 'Cửa Hàng & Chi Nhánh', icon: Store, desc: 'Phạm vi kho và chi nhánh' },
-              { id: 'team', label: 'Nhân Sự & Phân Quyền', icon: Users, desc: 'Quản lý thành viên & RBAC' },
-              { id: 'integrations', label: 'Tích Hợp Kênh & Hãng', icon: Key, desc: 'API GHN, GHTK, Pancake POS' },
-              { id: 'notifications', label: 'Cấu Hình Cảnh Báo', icon: Bell, desc: 'Ma trận thông báo & PII' },
-              { id: 'security', label: 'Bảo Mật & Phiên Thiết Bị', icon: Shield, desc: 'Giám sát IP & thu hồi từ xa' },
-              { id: 'tracking_portal', label: 'Cổng Tra Cứu Khách Hàng', icon: Globe, desc: 'Trang công khai cho người mua' },
+              {
+                id: 'stores',
+                label: 'Cửa Hàng & Chi Nhánh',
+                icon: Store,
+                desc: 'Phạm vi kho và chi nhánh',
+              },
+              {
+                id: 'team',
+                label: 'Nhân Sự & Phân Quyền',
+                icon: Users,
+                desc: 'Quản lý thành viên & RBAC',
+              },
+              {
+                id: 'integrations',
+                label: 'Tích Hợp Kênh & Hãng',
+                icon: Key,
+                desc: 'API GHN, GHTK, Pancake POS',
+              },
+              {
+                id: 'notifications',
+                label: 'Cấu Hình Cảnh Báo',
+                icon: Bell,
+                desc: 'Ma trận thông báo & PII',
+              },
+              {
+                id: 'security',
+                label: 'Bảo Mật & Phiên Thiết Bị',
+                icon: Shield,
+                desc: 'Giám sát IP & thu hồi từ xa',
+              },
+              {
+                id: 'tracking_portal',
+                label: 'Cổng Tra Cứu Khách Hàng',
+                icon: Globe,
+                desc: 'Trang công khai cho người mua',
+              },
             ].map((item) => {
               const Icon = item.icon;
               const isActive = activeSection === item.id;
@@ -136,7 +213,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
                       : 'text-slate-700 hover:bg-slate-50 font-medium'
                   }`}
                 >
-                  <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-[#EA4B12]' : 'text-slate-400'}`} />
+                  <Icon
+                    className={`w-5 h-5 shrink-0 ${isActive ? 'text-[#EA4B12]' : 'text-slate-400'}`}
+                  />
                   <div>
                     <div className="text-sm leading-tight">{item.label}</div>
                     <div className="text-xs text-slate-400 font-normal mt-0.5">{item.desc}</div>
@@ -154,8 +233,12 @@ export const SettingsWorkspace: React.FC<Props> = ({
             <div className="modern-card p-6 space-y-6">
               <div className="flex justify-between items-center pb-4 border-b border-slate-100">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">Danh Sách Chi Nhánh & Kho Vận</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Phân quyền vận đơn và kiểm soát bưu kiện theo từng địa điểm xuất hàng.</p>
+                  <h2 className="text-base font-bold text-slate-900">
+                    Danh Sách Chi Nhánh & Kho Vận
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Phân quyền vận đơn và kiểm soát bưu kiện theo từng địa điểm xuất hàng.
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -176,9 +259,7 @@ export const SettingsWorkspace: React.FC<Props> = ({
                         <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold border border-slate-200">
                           {store.code}
                         </span>
-                        {store.is_default && (
-                          <span className="badge-ok text-xs">Mặc Định</span>
-                        )}
+                        {store.is_default && <span className="badge-ok text-xs">Mặc Định</span>}
                       </div>
                       <p className="text-xs text-slate-500">{store.address}</p>
                     </div>
@@ -211,8 +292,12 @@ export const SettingsWorkspace: React.FC<Props> = ({
               {/* R1 Active Integrations */}
               <div className="modern-card p-6 space-y-6">
                 <div className="pb-4 border-b border-slate-100">
-                  <h2 className="text-base font-bold text-slate-900">1. Kênh Bán Hàng & Cổng Hãng Đang Kết Nối (R1 Core)</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Khai báo thông tin API và Webhook tiếp nhận sự kiện từ các đối tác chính thức.</p>
+                  <h2 className="text-base font-bold text-slate-900">
+                    1. Kênh Bán Hàng & Cổng Hãng Đang Kết Nối (R1 Core)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Khai báo thông tin API và Webhook tiếp nhận sự kiện từ các đối tác chính thức.
+                  </p>
                 </div>
 
                 {/* GHN Card */}
@@ -224,10 +309,14 @@ export const SettingsWorkspace: React.FC<Props> = ({
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="font-bold text-sm text-slate-900">Giao Hàng Nhanh (GHN Express)</h3>
+                          <h3 className="font-bold text-sm text-slate-900">
+                            Giao Hàng Nhanh (GHN Express)
+                          </h3>
                           <span className="badge-ok text-xs">Đang Hoạt Động</span>
                         </div>
-                        <p className="text-xs text-slate-500">Đồng bộ trạng thái toàn trình qua Webhook & gọi lệnh giao lại tự động.</p>
+                        <p className="text-xs text-slate-500">
+                          Đồng bộ trạng thái toàn trình qua Webhook & gọi lệnh giao lại tự động.
+                        </p>
                       </div>
                     </div>
 
@@ -237,7 +326,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                     {/* API Token (Write-Only Secret) */}
                     <div>
-                      <label className="text-xs font-bold text-slate-700 block mb-1">API Token (Khóa Bí Mật):</label>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">
+                        API Token (Khóa Bí Mật):
+                      </label>
                       {isEditingGhnToken ? (
                         <div className="flex gap-2">
                           <input
@@ -261,7 +352,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
                         </div>
                       ) : (
                         <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
-                          <span className="font-mono text-slate-600 font-semibold">ghn_live_••••••••••••9842</span>
+                          <span className="font-mono text-slate-600 font-semibold">
+                            ghn_live_••••••••••••9842
+                          </span>
                           <button
                             type="button"
                             onClick={() => setIsEditingGhnToken(true)}
@@ -275,7 +368,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
 
                     {/* Shop ID */}
                     <div>
-                      <label className="text-xs font-bold text-slate-700 block mb-1">GHN Shop ID & Client ID:</label>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">
+                        GHN Shop ID & Client ID:
+                      </label>
                       <div className="grid grid-cols-2 gap-2">
                         <input
                           type="text"
@@ -297,7 +392,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
 
                   {/* Webhook Endpoint */}
                   <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700 block">Webhook Endpoint Nhận Sự Kiện GHN:</label>
+                    <label className="text-xs font-bold text-slate-700 block">
+                      Webhook Endpoint Nhận Sự Kiện GHN:
+                    </label>
                     <div className="flex gap-2">
                       <input
                         type="text"
@@ -307,11 +404,20 @@ export const SettingsWorkspace: React.FC<Props> = ({
                       />
                       <button
                         type="button"
-                        onClick={() => copyToClipboard('https://api.shipde.net/v1/webhooks/ghn/wh_anan_9901', 'ghn')}
+                        onClick={() =>
+                          copyToClipboard(
+                            'https://api.shipde.net/v1/webhooks/ghn/wh_anan_9901',
+                            'ghn'
+                          )
+                        }
                         className="btn-secondary text-xs"
                         title="Sao chép URL"
                       >
-                        {copiedUrl === 'ghn' ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                        {copiedUrl === 'ghn' ? (
+                          <Check className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
                         <span>{copiedUrl === 'ghn' ? 'Đã chép' : 'Sao chép'}</span>
                       </button>
                     </div>
@@ -321,16 +427,21 @@ export const SettingsWorkspace: React.FC<Props> = ({
                   <div className="flex justify-between items-center pt-3 border-t border-slate-200">
                     <button
                       type="button"
-                      onClick={() => onToggleGhnTier && onToggleGhnTier(carrierGhnTier === 'L2' ? 'L1' : 'L2')}
+                      onClick={() =>
+                        onToggleGhnTier && onToggleGhnTier(carrierGhnTier === 'L2' ? 'L1' : 'L2')
+                      }
                       className="text-xs font-bold text-slate-600 hover:text-slate-900 underline"
                     >
-                      Chuyển sang {carrierGhnTier === 'L2' ? 'Chế độ Hỗ trợ (L1)' : 'Tự động gọi API (L2)'}
+                      Chuyển sang{' '}
+                      {carrierGhnTier === 'L2' ? 'Chế độ Hỗ trợ (L1)' : 'Tự động gọi API (L2)'}
                     </button>
 
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => onToast('✓ [GHN Express] Kiểm tra kết nối API thành công (Độ trễ: 38ms).')}
+                        onClick={() =>
+                          onToast('✓ [GHN Express] Kiểm tra kết nối API thành công (Độ trễ: 38ms).')
+                        }
                         className="btn-secondary text-xs"
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
@@ -356,10 +467,14 @@ export const SettingsWorkspace: React.FC<Props> = ({
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="font-bold text-sm text-slate-900">Giao Hàng Tiết Kiệm (GHTK)</h3>
+                          <h3 className="font-bold text-sm text-slate-900">
+                            Giao Hàng Tiết Kiệm (GHTK)
+                          </h3>
                           <span className="badge-ok text-xs">Đang Hoạt Động</span>
                         </div>
-                        <p className="text-xs text-slate-500">Tự động tổng hợp hồ sơ chuẩn mẫu dán cổng khi cần can thiệp giao lại.</p>
+                        <p className="text-xs text-slate-500">
+                          Tự động tổng hợp hồ sơ chuẩn mẫu dán cổng khi cần can thiệp giao lại.
+                        </p>
                       </div>
                     </div>
 
@@ -368,7 +483,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                     <div>
-                      <label className="text-xs font-bold text-slate-700 block mb-1">Partner Token:</label>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">
+                        Partner Token:
+                      </label>
                       {isEditingGhtkToken ? (
                         <div className="flex gap-2">
                           <input
@@ -392,7 +509,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
                         </div>
                       ) : (
                         <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
-                          <span className="font-mono text-slate-600 font-semibold">ghtk_partner_••••••••2394</span>
+                          <span className="font-mono text-slate-600 font-semibold">
+                            ghtk_partner_••••••••2394
+                          </span>
                           <button
                             type="button"
                             onClick={() => setIsEditingGhtkToken(true)}
@@ -405,7 +524,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold text-slate-700 block mb-1">Partner ID:</label>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">
+                        Partner ID:
+                      </label>
                       <input
                         type="text"
                         value={ghtkPartnerId}
@@ -418,7 +539,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
                   <div className="flex justify-end items-center gap-2 pt-3 border-t border-slate-200">
                     <button
                       type="button"
-                      onClick={() => onToast('✓ [GHTK] Kiểm tra cổng đối tác thành công (Ping: 45ms).')}
+                      onClick={() =>
+                        onToast('✓ [GHTK] Kiểm tra cổng đối tác thành công (Ping: 45ms).')
+                      }
                       className="btn-secondary text-xs"
                     >
                       Kiểm Tra Kết Nối
@@ -445,16 +568,22 @@ export const SettingsWorkspace: React.FC<Props> = ({
                           <h3 className="font-bold text-sm text-slate-900">Pancake POS Open API</h3>
                           <span className="badge-ok text-xs">Tự Động Đồng Bộ</span>
                         </div>
-                        <p className="text-xs text-slate-500">Tự động nạp đơn hàng mới, thông tin khách và mã vận đơn vào Ship Dễ.</p>
+                        <p className="text-xs text-slate-500">
+                          Tự động nạp đơn hàng mới, thông tin khách và mã vận đơn vào Ship Dễ.
+                        </p>
                       </div>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                     <div>
-                      <label className="text-xs font-bold text-slate-700 block mb-1">Pancake API Key:</label>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">
+                        Pancake API Key:
+                      </label>
                       <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
-                        <span className="font-mono text-slate-600 font-semibold">pk_live_••••••••1039</span>
+                        <span className="font-mono text-slate-600 font-semibold">
+                          pk_live_••••••••1039
+                        </span>
                         <button
                           type="button"
                           onClick={() => onToast('✓ Vui lòng nhập mã API Key mới')}
@@ -466,7 +595,9 @@ export const SettingsWorkspace: React.FC<Props> = ({
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold text-slate-700 block mb-1">Shop ID:</label>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">
+                        Shop ID:
+                      </label>
                       <input
                         type="text"
                         value={pancakeShopId}
@@ -481,8 +612,12 @@ export const SettingsWorkspace: React.FC<Props> = ({
               {/* Roadmap Deferred Integrations (R2/R3) */}
               <div className="modern-card p-6 space-y-4">
                 <div className="pb-3 border-b border-slate-100">
-                  <h2 className="text-base font-bold text-slate-900">2. Cổng Tích Hợp Đang Phát Triển (Lộ Trình R2 / R3)</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Các cổng sau được lên kế hoạch phát hành ở phiên bản tiếp theo.</p>
+                  <h2 className="text-base font-bold text-slate-900">
+                    2. Cổng Tích Hợp Đang Phát Triển (Lộ Trình R2 / R3)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Các cổng sau được lên kế hoạch phát hành ở phiên bản tiếp theo.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -492,9 +627,16 @@ export const SettingsWorkspace: React.FC<Props> = ({
                     { name: 'VNPost', type: 'Hãng vận chuyển', badge: 'Lộ trình R2' },
                     { name: 'KiotViet POS', type: 'Kênh bán lẻ', badge: 'Lộ trình R2' },
                     { name: 'TikTok Shop', type: 'Sàn TMĐT', badge: 'Lộ trình R2' },
-                    { name: 'Public Developer API', type: 'Cổng lập trình viên', badge: 'Lộ trình R3' },
+                    {
+                      name: 'Public Developer API',
+                      type: 'Cổng lập trình viên',
+                      badge: 'Lộ trình R3',
+                    },
                   ].map((ch, idx) => (
-                    <div key={idx} className="p-4 rounded-xl border border-slate-200 bg-white space-y-2 opacity-75">
+                    <div
+                      key={idx}
+                      className="p-4 rounded-xl border border-slate-200 bg-white space-y-2 opacity-75"
+                    >
                       <div className="flex justify-between items-start">
                         <span className="font-bold text-sm text-slate-900">{ch.name}</span>
                         <span className="badge-warn text-[11px]">{ch.badge}</span>
@@ -523,20 +665,26 @@ export const SettingsWorkspace: React.FC<Props> = ({
                   <span>Giám Sát Bảo Mật & Phiên Làm Việc Thiết Bị</span>
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Kiểm soát các thiết bị di động, máy tính của nhân viên đang đăng nhập vào hệ thống và thu hồi quyền từ xa khi cần.
+                  Kiểm soát các thiết bị di động, máy tính của nhân viên đang đăng nhập vào hệ thống
+                  và thu hồi quyền từ xa khi cần.
                 </p>
               </div>
 
               <div className="divide-y divide-slate-100">
                 {sessions.map((sess) => (
-                  <div key={sess.id} className="py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <div
+                    key={sess.id}
+                    className="py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3"
+                  >
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-sm text-slate-900">{sess.user}</span>
                         {sess.current ? (
                           <span className="badge-ok text-xs">Phiên Này</span>
                         ) : (
-                          <span className="text-xs text-slate-500 font-medium">· {sess.last_active}</span>
+                          <span className="text-xs text-slate-500 font-medium">
+                            · {sess.last_active}
+                          </span>
                         )}
                       </div>
                       <div className="text-xs text-slate-500 flex items-center gap-3">

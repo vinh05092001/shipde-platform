@@ -21,7 +21,7 @@ import { MatchingEngine } from './matching-engine';
 
 export interface ReconciliationOptions {
   weight_tolerance_g?: number; // Dung sai cân nặng (mặc định 20g)
-  fee_tolerance_vnd?: number;   // Dung sai tiền cước (mặc định 0 VNĐ)
+  fee_tolerance_vnd?: number; // Dung sai tiền cước (mặc định 0 VNĐ)
 }
 
 export interface ReconciliationResult {
@@ -165,14 +165,19 @@ export class ReconciliationEngine {
         continue;
       }
 
-      const shipment = row.matched_shipment_id ? shipmentById.get(row.matched_shipment_id) : undefined;
+      const shipment = row.matched_shipment_id
+        ? shipmentById.get(row.matched_shipment_id)
+        : undefined;
       if (!shipment) continue;
 
       matchedCount++;
       matchedShipmentIdsInStatement.add(shipment.id);
 
       const divisor = rateCard?.volumetric_divisor || 5000;
-      const volWeight = ReconciliationEngine.calculateVolumetricWeight(shipment.dimensions_cm, divisor);
+      const volWeight = ReconciliationEngine.calculateVolumetricWeight(
+        shipment.dimensions_cm,
+        divisor
+      );
       const expectedBillableWeight = Math.max(shipment.declared_weight_g, volWeight);
 
       // --- PHÉP DÒ D1: Lệch cân tính phí ---
@@ -299,19 +304,25 @@ export class ReconciliationEngine {
       d2_freight_amount: discrepancies
         .filter((d) => d.type === DiscrepancyType.D2_FREIGHT)
         .reduce((sum, d) => sum + d.amount, 0),
-      d4_duplicate_count: discrepancies.filter((d) => d.type === DiscrepancyType.D4_DUPLICATE_DEDUCTION).length,
+      d4_duplicate_count: discrepancies.filter(
+        (d) => d.type === DiscrepancyType.D4_DUPLICATE_DEDUCTION
+      ).length,
       d4_duplicate_amount: discrepancies
         .filter((d) => d.type === DiscrepancyType.D4_DUPLICATE_DEDUCTION)
         .reduce((sum, d) => sum + d.amount, 0),
-      d5_cod_mismatch_count: discrepancies.filter((d) => d.type === DiscrepancyType.D5_COD_MISMATCH).length,
+      d5_cod_mismatch_count: discrepancies.filter((d) => d.type === DiscrepancyType.D5_COD_MISMATCH)
+        .length,
       d5_cod_mismatch_amount: discrepancies
         .filter((d) => d.type === DiscrepancyType.D5_COD_MISMATCH)
         .reduce((sum, d) => sum + d.amount, 0),
-      d6_overdue_cod_count: discrepancies.filter((d) => d.type === DiscrepancyType.D6_OVERDUE_COD).length,
+      d6_overdue_cod_count: discrepancies.filter((d) => d.type === DiscrepancyType.D6_OVERDUE_COD)
+        .length,
       d6_overdue_cod_amount: discrepancies
         .filter((d) => d.type === DiscrepancyType.D6_OVERDUE_COD)
         .reduce((sum, d) => sum + d.amount, 0),
-      d7_missing_rows_count: discrepancies.filter((d) => d.type === DiscrepancyType.D7_MISSING_STATEMENT_ROW).length,
+      d7_missing_rows_count: discrepancies.filter(
+        (d) => d.type === DiscrepancyType.D7_MISSING_STATEMENT_ROW
+      ).length,
     };
 
     return {

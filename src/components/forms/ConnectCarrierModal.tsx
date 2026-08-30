@@ -65,8 +65,12 @@ export const ConnectCarrierModal: React.FC<Props> = ({ isOpen, onClose, onConnec
               <Key className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-slate-900">Kết Nối Tài Khoản Hãng Vận Chuyển</h3>
-              <p className="text-[11px] text-slate-500">Sử dụng API Token tài khoản riêng của Shop (BYO Account)</p>
+              <h3 className="font-bold text-sm text-slate-900">
+                Kết Nối Tài Khoản Hãng Vận Chuyển
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Sử dụng API Token tài khoản riêng của Shop (BYO Account)
+              </p>
             </div>
           </div>
           <button
@@ -96,7 +100,9 @@ export const ConnectCarrierModal: React.FC<Props> = ({ isOpen, onClose, onConnec
               className="modern-input w-full text-xs font-semibold"
             >
               <option value="GHN">Giao Hàng Nhanh (GHN) — Mức L2 Execute (API Trực Tiếp)</option>
-              <option value="GHTK">Giao Hàng Tiết Kiệm (GHTK) — Mức L1 Assist (Hồ Sơ Hỗ Trợ)</option>
+              <option value="GHTK">
+                Giao Hàng Tiết Kiệm (GHTK) — Mức L1 Assist (Hồ Sơ Hỗ Trợ)
+              </option>
               <option value="VTP">Viettel Post (VTP) — Mức L2 Execute (API Trực Tiếp)</option>
             </select>
           </div>
@@ -113,7 +119,9 @@ export const ConnectCarrierModal: React.FC<Props> = ({ isOpen, onClose, onConnec
           </div>
 
           <div>
-            <label className="font-bold text-slate-700 block mb-1">API Token / Secret Key Hãng:</label>
+            <label className="font-bold text-slate-700 block mb-1">
+              API Token / Secret Key Hãng:
+            </label>
             <input
               type="password"
               value={token}
@@ -125,7 +133,9 @@ export const ConnectCarrierModal: React.FC<Props> = ({ isOpen, onClose, onConnec
           </div>
 
           <div>
-            <label className="font-bold text-slate-700 block mb-1">Shop ID / Client ID (Tùy chọn):</label>
+            <label className="font-bold text-slate-700 block mb-1">
+              Shop ID / Client ID (Tùy chọn):
+            </label>
             <input
               type="text"
               value={clientId}
@@ -136,18 +146,10 @@ export const ConnectCarrierModal: React.FC<Props> = ({ isOpen, onClose, onConnec
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary text-xs"
-            >
+            <button type="button" onClick={onClose} className="btn-secondary text-xs">
               Hủy
             </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary text-xs"
-            >
+            <button type="submit" disabled={loading} className="btn-primary text-xs">
               {loading ? 'Đang kết nối...' : 'Lưu & Kích Hoạt'}
             </button>
           </div>
