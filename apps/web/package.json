@@ -14,8 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx src/tests/regression-audit.test.ts && tsx src/tests/comprehensive-rules.test.ts",
     "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
-    "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
-    "postinstall": "prisma generate"
+    "test:baseline": "tsx src/tests/preservation-smoke.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
@@ -25,7 +24,6 @@
     "framer-motion": "^12.35.0",
     "lucide-react": "^0.577.0",
     "next": "16.1.6",
-    "prisma": "^6.19.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "recharts": "^3.8.0"
@@ -38,6 +36,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.1.6",
+    "prisma": "^6.19.2",
     "tailwindcss": "^4.2.1",
     "tsx": "^4.21.0",
     "typescript": "^5"

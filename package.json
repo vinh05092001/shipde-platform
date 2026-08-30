@@ -22,8 +22,10 @@
     "concierge:audit": "tsx scripts/concierge-audit.ts"
   },
   "devDependencies": {
+    "@prisma/client": "^6.19.2",
     "@types/node": "^20",
     "prettier": "^3.9.6",
+    "prisma": "^6.19.2",
     "tsx": "^4.21.0",
     "turbo": "^2.4.4",
     "typescript": "^5"
