@@ -24,6 +24,7 @@
     "@shipde/contracts": "workspace:*",
     "@shipde/ui": "workspace:*",
     "@types/node": "^20",
+    "@typescript-eslint/parser": "^8.68.0",
     "eslint": "^9.39.5",
     "tsx": "^4.21.0",
     "typescript": "^5"
