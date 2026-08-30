@@ -9,7 +9,11 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@shipde/contracts": ["../../packages/contracts/src/index.ts"],
+      "@shipde/config": ["../../packages/config/src/index.ts"],
+      "@shipde/testkit": ["../../packages/testkit/src/index.ts"],
+      "@shipde/ui": ["../../packages/ui/src/index.ts"]
     }
   },
   "include": [
