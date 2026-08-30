@@ -6,12 +6,15 @@ useDefault = true
 [allowlist]
 description = "Global allowlist for build artifacts, dependencies and lockfiles"
 paths = [
-  '''^\.git[\\/]''',
-  '''^node_modules[\\/]''',
-  '''^\.next[\\/]''',
-  '''^out[\\/]''',
-  '''^build[\\/]''',
+  '''(?i)(?:^|[\\/])\.git(?:[\\/]|$)''',
+  '''(?i)(?:^|[\\/])node_modules(?:[\\/]|$)''',
+  '''(?i)(?:^|[\\/])\.next(?:[\\/]|$)''',
+  '''(?i)(?:^|[\\/])\.turbo(?:[\\/]|$)''',
+  '''(?i)(?:^|[\\/])out(?:[\\/]|$)''',
+  '''(?i)(?:^|[\\/])build(?:[\\/]|$)''',
+  '''(?i)(?:^|[\\/])dist(?:[\\/]|$)''',
   '''package-lock\.json$''',
+  '''pnpm-lock\.yaml$''',
 ]
 stopwords = [
   "REQ_REATTEMPT_88291042",
