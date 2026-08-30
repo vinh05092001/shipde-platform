@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsc",
     "lint": "eslint .",
-    "test": "tsx src/index.test.ts",
+    "test": "tsc && tsx src/index.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -17,6 +17,10 @@
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$"]
     },
+    "@shipde/testkit#test": {
+      "dependsOn": ["build", "^build"],
+      "inputs": ["$TURBO_DEFAULT$"]
+    },
     "test:e2e": {
       "cache": false
     },
