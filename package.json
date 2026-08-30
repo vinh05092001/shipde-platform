@@ -14,7 +14,7 @@
     "lint": "turbo lint",
     "format:check": "tsx scripts/verify-formatting.ts",
     "format:write": "prettier --write .",
-    "typecheck": "turbo typecheck",
+    "typecheck": "tsc -p tsconfig.json --noEmit && turbo typecheck",
     "test": "turbo test",
     "test:e2e": "turbo test:e2e",
     "test:baseline": "tsx apps/web/src/tests/preservation-smoke.test.ts",

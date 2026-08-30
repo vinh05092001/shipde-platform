@@ -212,6 +212,7 @@ function walkDir(
         entry.name === 'node_modules' ||
         entry.name === '.next' ||
         entry.name === '.turbo' ||
+        entry.name === '.pnpm-store' ||
         entry.name === 'dist' ||
         entry.name === 'build' ||
         entry.name === 'out' ||

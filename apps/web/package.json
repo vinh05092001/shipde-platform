@@ -3,6 +3,9 @@
   "version": "3.3.0",
   "description": "Ship Dễ (shipde.net) - Next.js Web Console Application",
   "private": true,
+  "prisma": {
+    "schema": "../../prisma/schema.prisma"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -11,13 +14,13 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx src/tests/regression-audit.test.ts && tsx src/tests/comprehensive-rules.test.ts",
     "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
-    "test:baseline": "tsx src/tests/preservation-smoke.test.ts"
+    "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
     "@shipde/config": "workspace:*",
     "@shipde/contracts": "workspace:*",
-    "@shipde/testkit": "workspace:*",
     "@shipde/ui": "workspace:*",
     "framer-motion": "^12.35.0",
     "lucide-react": "^0.577.0",
@@ -28,6 +31,7 @@
     "recharts": "^3.8.0"
   },
   "devDependencies": {
+    "@shipde/testkit": "workspace:*",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

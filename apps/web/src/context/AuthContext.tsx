@@ -86,7 +86,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // Map role based on email hint or default
-    let role = Role.OWNER;
+    let role: Role = Role.OWNER;
     let name = 'Nguyễn Văn An (Chủ Shop)';
     if (emailOrPhone.includes('cskh')) {
       role = Role.OPS_CSKH;

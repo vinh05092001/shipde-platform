@@ -4,12 +4,13 @@ title = "Ship Dễ Secret Detection Rules"
 useDefault = true
 
 [allowlist]
-description = "Global allowlist for build artifacts, dependencies and lockfiles"
+description = "Global allowlist for build artifacts, dependencies, caches, and lockfiles"
 paths = [
   '''(?i)(?:^|[\\/])\.git(?:[\\/]|$)''',
   '''(?i)(?:^|[\\/])node_modules(?:[\\/]|$)''',
   '''(?i)(?:^|[\\/])\.next(?:[\\/]|$)''',
   '''(?i)(?:^|[\\/])\.turbo(?:[\\/]|$)''',
+  '''(?i)(?:^|[\\/])\.pnpm-store(?:[\\/]|$)''',
   '''(?i)(?:^|[\\/])out(?:[\\/]|$)''',
   '''(?i)(?:^|[\\/])build(?:[\\/]|$)''',
   '''(?i)(?:^|[\\/])dist(?:[\\/]|$)''',
