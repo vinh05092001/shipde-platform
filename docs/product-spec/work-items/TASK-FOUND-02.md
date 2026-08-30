@@ -175,9 +175,9 @@ Run from a clean checkout on the approved Node.js 24 runtime:
 
 ## Codex review record
 
-| Review round | Commit                   | Verdict                            | Findings resolved        |
-| ------------ | ------------------------ | ---------------------------------- | ------------------------ |
-| 1            | `Pending implementation` | `Pending fresh independent review` | `None ??? planning only` |
+| Review round | Commit    | Verdict                            | Findings resolved                |
+| ------------ | --------- | ---------------------------------- | -------------------------------- |
+| 1            | `0c4404d` | `Pending fresh independent review` | `None — implementation complete` |
 
 ## Residual limitations
 
