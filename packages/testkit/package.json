@@ -15,11 +15,16 @@
   },
   "scripts": {
     "build": "tsc",
+    "lint": "eslint .",
     "test": "tsx src/index.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@shipde/config": "workspace:*",
+    "@shipde/contracts": "workspace:*",
+    "@shipde/ui": "workspace:*",
     "@types/node": "^20",
+    "eslint": "^9.39.5",
     "tsx": "^4.21.0",
     "typescript": "^5"
   }

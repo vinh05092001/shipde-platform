@@ -11,13 +11,17 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
-    }
+    },
+    "./eslint.base.mjs": "./eslint.base.mjs",
+    "./tsconfig.base.json": "./tsconfig.base.json"
   },
   "scripts": {
     "build": "tsc",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
     "typescript": "^5"
   }
 }

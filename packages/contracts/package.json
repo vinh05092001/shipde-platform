@@ -15,9 +15,12 @@
   },
   "scripts": {
     "build": "tsc",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@shipde/config": "workspace:*",
+    "eslint": "^9.39.5",
     "typescript": "^5"
   }
 }

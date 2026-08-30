@@ -1,20 +1,56 @@
-import { assertValidMonorepoPackage, createMockId } from './index';
+import { assertValidMonorepoPackage, createMockId, resolveMonorepoPackage } from './index';
+import { UserRole, CarrierCode, CarrierCapabilityTier, ShipmentStatus } from '@shipde/contracts';
 
 function testTestkit() {
+  // Test mock ID generation
   const id = createMockId('test');
   if (!id.startsWith('test_')) {
     throw new Error('createMockId failed');
   }
 
+  // Test real package export resolution for all workspace packages
   if (!assertValidMonorepoPackage('@shipde/contracts')) {
-    throw new Error('assertValidMonorepoPackage failed for @shipde/contracts');
+    throw new Error('assertValidMonorepoPackage failed to resolve @shipde/contracts');
+  }
+  if (!assertValidMonorepoPackage('@shipde/config')) {
+    throw new Error('assertValidMonorepoPackage failed to resolve @shipde/config');
+  }
+  if (!assertValidMonorepoPackage('@shipde/ui')) {
+    throw new Error('assertValidMonorepoPackage failed to resolve @shipde/ui');
+  }
+  if (!assertValidMonorepoPackage('@shipde/testkit')) {
+    throw new Error('assertValidMonorepoPackage failed to resolve @shipde/testkit');
   }
 
+  // Negative tests: fake names must FAIL resolution even with @shipde/ prefix
+  if (assertValidMonorepoPackage('@shipde/not-real')) {
+    throw new Error('assertValidMonorepoPackage falsely succeeded for fake @shipde/not-real');
+  }
   if (assertValidMonorepoPackage('unscoped-package')) {
-    throw new Error('assertValidMonorepoPackage failed for unscoped package');
+    throw new Error('assertValidMonorepoPackage falsely succeeded for unscoped package');
   }
 
-  console.log('✅ @shipde/testkit package self-test passed');
+  // Verify resolveMonorepoPackage returns valid entrypoint path
+  const contractsPath = resolveMonorepoPackage('@shipde/contracts');
+  if (!contractsPath || typeof contractsPath !== 'string') {
+    throw new Error('resolveMonorepoPackage did not return valid path for @shipde/contracts');
+  }
+
+  // Verify runtime imports and contract values from @shipde/contracts
+  if (UserRole.OWNER !== 'OWNER') {
+    throw new Error(`Unexpected UserRole.OWNER: ${UserRole.OWNER}`);
+  }
+  if (CarrierCode.GHN !== 'GHN' || CarrierCode.GHTK !== 'GHTK') {
+    throw new Error('Unexpected CarrierCode values');
+  }
+  if (CarrierCapabilityTier.L0_OBSERVE !== 'L0') {
+    throw new Error('Unexpected CarrierCapabilityTier value');
+  }
+  if (ShipmentStatus.DELIVERED !== 'delivered') {
+    throw new Error('Unexpected ShipmentStatus value');
+  }
+
+  console.log('✅ @shipde/testkit package export resolution and contract self-tests passed');
 }
 
 testTestkit();
