@@ -4,18 +4,14 @@ title = "Ship Dễ Secret Detection Rules"
 useDefault = true
 
 [allowlist]
-description = "Global allowlist for build artifacts, dependencies, caches, and lockfiles"
+description = "Global allowlist for build artifacts, dependencies and lockfiles"
 paths = [
-  '''(?i)(?:^|[\\/])\.git(?:[\\/]|$)''',
-  '''(?i)(?:^|[\\/])node_modules(?:[\\/]|$)''',
-  '''(?i)(?:^|[\\/])\.next(?:[\\/]|$)''',
-  '''(?i)(?:^|[\\/])\.turbo(?:[\\/]|$)''',
-  '''(?i)(?:^|[\\/])\.pnpm-store(?:[\\/]|$)''',
-  '''(?i)(?:^|[\\/])out(?:[\\/]|$)''',
-  '''(?i)(?:^|[\\/])build(?:[\\/]|$)''',
-  '''(?i)(?:^|[\\/])dist(?:[\\/]|$)''',
+  '''^\.git[\\/]''',
+  '''^node_modules[\\/]''',
+  '''^\.next[\\/]''',
+  '''^out[\\/]''',
+  '''^build[\\/]''',
   '''package-lock\.json$''',
-  '''pnpm-lock\.yaml$''',
 ]
 stopwords = [
   "REQ_REATTEMPT_88291042",
