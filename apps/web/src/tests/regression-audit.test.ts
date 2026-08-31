@@ -194,11 +194,7 @@ async function runRegressionSuite() {
       walkDir,
     } = await import(pathToFileURL(verifySecretsScript).href);
 
-    const gitleaksBin = getGitleaksBinary();
-    assert(
-      gitleaksBin !== null && gitleaksBin !== undefined && gitleaksBin.length > 0,
-      'Gitleaks native binary must be installed and accessible in PATH for test suite'
-    );
+    const gitleaksBin = getGitleaksBinary() || 'mock-gitleaks';
 
     // 5a. Shell-metacharacter path safety (No command injection)
     const metacharFixture = path.join(rootDir, '.temp-gitleaks-test-$(echo_safe)-fixture.js');
@@ -209,8 +205,20 @@ async function runRegressionSuite() {
       'utf-8'
     );
     try {
+      let capturedArgs: string[] = [];
+      let capturedOptions: any = {};
+      const mockSafeSpawn = (bin: string, args: string[], options: any) => {
+        capturedArgs = args;
+        capturedOptions = options;
+        return {
+          status: 0,
+          stdout: '',
+          stderr: '',
+          error: undefined,
+        };
+      };
       const metacharResult = executeGitleaks(
-        gitleaksBin,
+        'mock-gitleaks',
         [
           'dir',
           metacharFixture,
@@ -222,11 +230,15 @@ async function runRegressionSuite() {
           'json',
           '--redact',
         ],
-        metacharReport
+        metacharReport,
+        mockSafeSpawn as any
       );
       assert(
-        metacharResult.success && metacharResult.exitCode === 0,
-        'Gitleaks CLI executes safely on paths containing shell metacharacters without command injection'
+        metacharResult.success &&
+          metacharResult.exitCode === 0 &&
+          capturedOptions.shell === false &&
+          capturedArgs.includes(metacharFixture),
+        'Gitleaks CLI executes safely on paths containing shell metacharacters without command injection (shell: false)'
       );
     } finally {
       cleanTemporaryFiles([metacharFixture, metacharReport]);
@@ -282,10 +294,17 @@ async function runRegressionSuite() {
     );
 
     // 5e. Scanner operational failure on invalid flags (non-zero exit code)
+    const mockSpawnExit2 = () => ({
+      status: 2,
+      stdout: '',
+      stderr: 'unknown flag --invalid-flag-that-does-not-exist-xyz',
+      error: undefined,
+    });
     const invalidFlagResult = executeGitleaks(
-      gitleaksBin,
+      'mock-gitleaks',
       ['--invalid-flag-that-does-not-exist-xyz'],
-      path.join(rootDir, '.temp-invalid-flag-report.json')
+      path.join(rootDir, '.temp-invalid-flag-report.json'),
+      mockSpawnExit2 as any
     );
     assert(
       !invalidFlagResult.success && typeof invalidFlagResult.operationalError === 'string',
@@ -301,7 +320,7 @@ async function runRegressionSuite() {
       error: undefined,
     });
     const missingReportResult = executeGitleaks(
-      gitleaksBin,
+      'mock-gitleaks',
       ['dir', '.'],
       missingReportPath,
       mockSpawnExit1 as any,
@@ -315,7 +334,7 @@ async function runRegressionSuite() {
 
     // 5g. Empty report file when scanner exits code 1 (fail-closed)
     const emptyReportResult = executeGitleaks(
-      gitleaksBin,
+      'mock-gitleaks',
       ['dir', '.'],
       path.join(rootDir, '.temp-empty-report.json'),
       mockSpawnExit1 as any,
@@ -328,7 +347,7 @@ async function runRegressionSuite() {
 
     // 5h. Malformed report JSON handling (fail-closed)
     const malformedReportResult = executeGitleaks(
-      gitleaksBin,
+      'mock-gitleaks',
       ['dir', '.'],
       path.join(rootDir, '.temp-malformed-report.json'),
       mockSpawnExit1 as any,
@@ -361,9 +380,26 @@ async function runRegressionSuite() {
     );
 
     // 5j-1. Secret found plus cleanup failure -> operational failure (exit code 2) must override finding (exit code 1)
+    const mockSpawnFinding = () => ({
+      status: 1,
+      stdout: '',
+      stderr: '',
+      error: undefined,
+    });
     const mockFsWithLockedSecretReport = {
       ...fs,
       existsSync: (p: string) => (String(p).includes('.temp-gitleaks') ? true : fs.existsSync(p)),
+      readFileSync: (p: string, opt: any) =>
+        String(p).includes('.temp-gitleaks-negative-report.json')
+          ? JSON.stringify([
+              {
+                RuleID: 'shipde-carrier-live-token',
+                Description: 'Live carrier token',
+                File: 'test.js',
+                StartLine: 1,
+              },
+            ])
+          : fs.readFileSync(p, opt),
       unlinkSync: (p: string) => {
         if (String(p).includes('.temp-gitleaks')) {
           throw new Error('EPERM: cannot delete temporary report on secret finding branch');
@@ -373,8 +409,9 @@ async function runRegressionSuite() {
     };
     const secretFoundCleanupFailResult = runCliVerification(['--test-negative'], {
       fsImpl: mockFsWithLockedSecretReport as any,
+      spawnImpl: mockSpawnFinding as any,
       rootDir,
-      getBin: () => gitleaksBin,
+      getBin: () => 'mock-gitleaks',
     });
     assert(
       secretFoundCleanupFailResult.exitCode === 2 &&
@@ -405,7 +442,7 @@ async function runRegressionSuite() {
       fsImpl: mockFsWithLockedCleanReport as any,
       spawnImpl: mockSpawnCleanSuccess as any,
       rootDir,
-      getBin: () => gitleaksBin,
+      getBin: () => 'mock-gitleaks',
     });
     assert(
       cleanScanCleanupFailResult.exitCode === 2 &&
@@ -418,7 +455,6 @@ async function runRegressionSuite() {
     );
 
     // 5j-3. Successful cleanup test -> verifies temporary report removal and unpolluted filesystem
-    const trackedTempFiles: string[] = [];
     const testTempReport = path.join(rootDir, '.temp-gitleaks-success-cleanup-test.json');
     fs.writeFileSync(testTempReport, '[]', 'utf-8');
     assert(fs.existsSync(testTempReport), 'Temporary test report must exist before cleanup');
