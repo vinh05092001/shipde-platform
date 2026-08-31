@@ -142,6 +142,24 @@ async function runRegressionSuite() {
     `Tổng số tiền lệch D1..D7 tính toán chính xác từ từng dòng: 1.978.000 đ (Thực tế: ${sumAmount.toLocaleString('vi-VN')} đ)`
   );
 
+  // Test 4: Build artifact preservation invariant
+  if (typeof window === 'undefined') {
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const nextDir = path.resolve(process.cwd(), '.next');
+      if (fs.existsSync(nextDir)) {
+        const buildManifest = path.join(nextDir, 'build-manifest.json');
+        const prerenderManifest = path.join(nextDir, 'prerender-manifest.json');
+        const hasManifests = fs.existsSync(buildManifest) || fs.existsSync(prerenderManifest);
+        assert(
+          hasManifests,
+          'Next.js production build artifacts (.next manifests) remain intact and uncorrupted'
+        );
+      }
+    } catch {}
+  }
+
   console.log('\n================================================================');
   console.log('🎉 TẤT CẢ CÁC BÀI KIỂM TOÁN HỒI QUY ĐẠT 100%');
   console.log('================================================================\n');

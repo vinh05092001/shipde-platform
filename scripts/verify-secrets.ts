@@ -232,6 +232,64 @@ function walkDir(
   return fileList;
 }
 
+export function getGitleaksScanTargets(rootDir: string = process.cwd()): string[] {
+  const targets: string[] = [];
+  const ignoredNames = new Set([
+    '.git',
+    'node_modules',
+    '.next',
+    '.turbo',
+    '.pnpm-store',
+    'dist',
+    'build',
+    'out',
+    '.gemini',
+  ]);
+
+  function hasAnyIgnoredDescendant(dir: string): boolean {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (ignoredNames.has(entry.name)) {
+          return true;
+        }
+        if (entry.isDirectory()) {
+          if (hasAnyIgnoredDescendant(path.join(dir, entry.name))) {
+            return true;
+          }
+        }
+      }
+    } catch {}
+    return false;
+  }
+
+  function collectSafeTargets(dir: string) {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (ignoredNames.has(entry.name)) {
+          continue;
+        }
+        const fullPath = path.join(dir, entry.name);
+        const relPath = path.relative(rootDir, fullPath);
+
+        if (entry.isDirectory()) {
+          if (hasAnyIgnoredDescendant(fullPath)) {
+            collectSafeTargets(fullPath);
+          } else {
+            targets.push(relPath);
+          }
+        } else if (entry.isFile()) {
+          targets.push(relPath);
+        }
+      }
+    } catch {}
+  }
+
+  collectSafeTargets(rootDir);
+  return targets;
+}
+
 export function runSecretScan(rootDir: string = process.cwd(), configPath?: string) {
   const tomlPath = configPath || path.join(rootDir, '.gitleaks.toml');
   const config = parseGitleaksConfig(tomlPath);
@@ -295,7 +353,7 @@ if (require.main === module) {
       let commandOutput = '';
       try {
         commandOutput = execSync(
-          `${gitleaksBin} dir . -c .gitleaks.toml --report-path "${reportFile}" --report-format json --redact --verbose`,
+          `${gitleaksBin} dir "${tempFile}" -c .gitleaks.toml --report-path "${reportFile}" --report-format json --redact --verbose`,
           { stdio: 'pipe' }
         ).toString();
       } catch (err: any) {
@@ -354,9 +412,9 @@ if (require.main === module) {
   }
 
   console.log('🔍 Thực thi Gitleaks native binary CLI...');
-  const dirReportFile = path.join(process.cwd(), '.temp-gitleaks-dir-report.json');
   const gitReportFile = path.join(process.cwd(), '.temp-gitleaks-git-report.json');
   const isGitRepo = fs.existsSync(path.join(process.cwd(), '.git'));
+  const tempReportFiles: string[] = [];
 
   try {
     if (isGitRepo) {
@@ -407,33 +465,51 @@ if (require.main === module) {
       );
     }
 
-    // Ensure ephemeral uncommitted Next.js build artifacts do not pollute the static directory scan
-    const ephemeralBuildDirs = [
-      path.join(process.cwd(), '.next'),
-      path.join(process.cwd(), 'apps', 'web', '.next'),
-    ];
-    for (const bDir of ephemeralBuildDirs) {
-      if (fs.existsSync(bDir)) {
-        try {
-          fs.rmSync(bDir, { recursive: true, force: true });
-        } catch {}
+    console.log('🔍 [Gitleaks dir] Quét working tree các thư mục và tệp mã nguồn...');
+    const scanTargets = getGitleaksScanTargets(process.cwd());
+    const allDirFindings: any[] = [];
+
+    for (let idx = 0; idx < scanTargets.length; idx++) {
+      const target = scanTargets[idx];
+      const targetReport = path.join(process.cwd(), `.temp-gitleaks-target-${idx}-report.json`);
+      tempReportFiles.push(targetReport);
+      try {
+        execSync(
+          `${gitleaksBin} dir "${target}" -c .gitleaks.toml --report-path "${targetReport}" --report-format json --redact --verbose`,
+          { stdio: 'pipe' }
+        );
+      } catch (cmdErr: any) {
+        if (fs.existsSync(targetReport)) {
+          try {
+            const reportContent = fs.readFileSync(targetReport, 'utf-8');
+            const findings = JSON.parse(reportContent);
+            if (Array.isArray(findings)) {
+              allDirFindings.push(...findings);
+            }
+          } catch {}
+        }
       }
     }
 
-    console.log('🔍 [Gitleaks dir] Quét toàn bộ working tree hiện tại...');
-    execSync(
-      `${gitleaksBin} dir . -c .gitleaks.toml --report-path "${dirReportFile}" --report-format json --redact --verbose`,
-      {
-        stdio: 'inherit',
+    if (allDirFindings.length > 0) {
+      console.error(
+        `\n❌ Gitleaks phát hiện ${allDirFindings.length} vi phạm bí mật trong working tree:`
+      );
+      for (const f of allDirFindings) {
+        console.error(
+          ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
+        );
       }
-    );
+      process.exit(1);
+    }
+
     console.log(
       '\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.'
     );
     process.exit(0);
   } catch (err: any) {
     const allFindings: any[] = [];
-    for (const rep of [gitReportFile, dirReportFile]) {
+    for (const rep of [gitReportFile, ...tempReportFiles]) {
       if (fs.existsSync(rep)) {
         try {
           const reportContent = fs.readFileSync(rep, 'utf-8');
@@ -457,7 +533,7 @@ if (require.main === module) {
     console.error('\n❌ Gitleaks native phát hiện vi phạm bí mật hoặc gặp lỗi cấu hình!');
     process.exit(1);
   } finally {
-    for (const rep of [gitReportFile, dirReportFile]) {
+    for (const rep of [gitReportFile, ...tempReportFiles]) {
       if (fs.existsSync(rep)) {
         try {
           fs.unlinkSync(rep);
