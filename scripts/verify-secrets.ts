@@ -511,6 +511,8 @@ export function runCliVerification(
     spawnImpl?: typeof spawnSync;
     getBin?: typeof getGitleaksBinary;
     rootDir?: string;
+    baseCommit?: string | null;
+    resolveGitCommit?: (ref: string) => string | null;
   } = {}
 ): {
   exitCode: number;
@@ -563,47 +565,56 @@ export function runCliVerification(
     let hasOperationalError = false;
     let hasFinding = false;
 
-    const isGitRepo = fsImpl.existsSync(path.join(rootDir, '.git'));
+    const isGitRepo =
+      fsImpl.existsSync(path.join(rootDir, '.git')) || dependencies.baseCommit !== undefined;
     if (isGitRepo) {
-      const resolveGitCommit = (ref: string): string | null => {
-        try {
-          return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
-            stdio: 'pipe',
-            shell: false,
-            cwd: rootDir,
-          })
-            .toString()
-            .trim();
-        } catch {
-          return null;
-        }
-      };
+      const resolveGitCommit =
+        dependencies.resolveGitCommit ||
+        ((ref: string): string | null => {
+          try {
+            return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+              stdio: 'pipe',
+              shell: false,
+              cwd: rootDir,
+            })
+              .toString()
+              .trim();
+          } catch {
+            return null;
+          }
+        });
 
-      let baseCommit: string | null = null;
-      if (process.env.BASE_SHA) {
-        baseCommit = resolveGitCommit(process.env.BASE_SHA);
-        if (!baseCommit) {
-          console.error(
-            `❌ LỖI: BASE_SHA được cung cấp '${process.env.BASE_SHA}' không hợp lệ hoặc không thể resolve thành commit!`
-          );
-          outcome = { exitCode: 2, message: 'Invalid BASE_SHA' };
+      let baseCommit: string | null =
+        dependencies.baseCommit !== undefined ? dependencies.baseCommit : null;
+
+      if (dependencies.baseCommit === undefined) {
+        if (process.env.BASE_SHA) {
+          baseCommit = resolveGitCommit(process.env.BASE_SHA);
+          if (!baseCommit) {
+            console.error(
+              `❌ LỖI: BASE_SHA được cung cấp '${process.env.BASE_SHA}' không hợp lệ hoặc không thể resolve thành commit!`
+            );
+            outcome = { exitCode: 2, message: 'Invalid BASE_SHA' };
+            hasOperationalError = true;
+          }
+        } else if (process.env.GITHUB_BASE_REF) {
+          baseCommit =
+            resolveGitCommit(`origin/${process.env.GITHUB_BASE_REF}`) ||
+            resolveGitCommit(process.env.GITHUB_BASE_REF);
+        }
+
+        if (!hasOperationalError && !baseCommit) {
+          baseCommit =
+            resolveGitCommit('origin/main') ||
+            resolveGitCommit('main') ||
+            resolveGitCommit('HEAD~1');
+        }
+
+        if (!hasOperationalError && !baseCommit) {
+          console.error('❌ LỖI: Không thể xác định commit base để quét lịch sử git!');
+          outcome = { exitCode: 2, message: 'Cannot resolve base commit' };
           hasOperationalError = true;
         }
-      } else if (process.env.GITHUB_BASE_REF) {
-        baseCommit =
-          resolveGitCommit(`origin/${process.env.GITHUB_BASE_REF}`) ||
-          resolveGitCommit(process.env.GITHUB_BASE_REF);
-      }
-
-      if (!hasOperationalError && !baseCommit) {
-        baseCommit =
-          resolveGitCommit('origin/main') || resolveGitCommit('main') || resolveGitCommit('HEAD~1');
-      }
-
-      if (!hasOperationalError && !baseCommit) {
-        console.error('❌ LỖI: Không thể xác định commit base để quét lịch sử git!');
-        outcome = { exitCode: 2, message: 'Cannot resolve base commit' };
-        hasOperationalError = true;
       }
 
       if (!hasOperationalError && baseCommit) {
