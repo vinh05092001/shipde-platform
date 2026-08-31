@@ -407,6 +407,19 @@ if (require.main === module) {
       );
     }
 
+    // Ensure ephemeral uncommitted Next.js build artifacts do not pollute the static directory scan
+    const ephemeralBuildDirs = [
+      path.join(process.cwd(), '.next'),
+      path.join(process.cwd(), 'apps', 'web', '.next'),
+    ];
+    for (const bDir of ephemeralBuildDirs) {
+      if (fs.existsSync(bDir)) {
+        try {
+          fs.rmSync(bDir, { recursive: true, force: true });
+        } catch {}
+      }
+    }
+
     console.log('🔍 [Gitleaks dir] Quét toàn bộ working tree hiện tại...');
     execSync(
       `${gitleaksBin} dir . -c .gitleaks.toml --report-path "${dirReportFile}" --report-format json --redact --verbose`,
