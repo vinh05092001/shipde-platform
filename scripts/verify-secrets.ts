@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync, execFileSync } from 'child_process';
+import { spawnSync, execFileSync } from 'child_process';
 
 export interface SecretRule {
   id: string;
@@ -15,12 +15,37 @@ export interface GitleaksConfig {
   rules: SecretRule[];
 }
 
+export interface GitleaksExecResult {
+  success: boolean;
+  exitCode: number | null;
+  findings: any[];
+  operationalError?: string;
+}
+
+export const IGNORED_SCAN_NAMES = new Set([
+  '.git',
+  'node_modules',
+  '.next',
+  '.turbo',
+  '.pnpm-store',
+  'dist',
+  'build',
+  'out',
+  '.gemini',
+]);
+
+export function isIgnoredScanName(name: string): boolean {
+  if (IGNORED_SCAN_NAMES.has(name)) return true;
+  if (name.startsWith('.temp-gitleaks')) return true;
+  return false;
+}
+
 /**
  * Resolve gitleaks executable path if available in PATH or local environment.
  */
 export function getGitleaksBinary(): string | null {
   try {
-    execSync('gitleaks version', { stdio: 'ignore' });
+    execFileSync('gitleaks', ['version'], { stdio: 'ignore', shell: false });
     return 'gitleaks';
   } catch {}
 
@@ -29,8 +54,8 @@ export function getGitleaksBinary(): string | null {
     const localExe = path.join(process.env.TEMP, 'gitleaks', 'gitleaks.exe');
     if (fs.existsSync(localExe)) {
       try {
-        execSync(`"${localExe}" version`, { stdio: 'ignore' });
-        return `"${localExe}"`;
+        execFileSync(localExe, ['version'], { stdio: 'ignore', shell: false });
+        return localExe;
       } catch {}
     }
   }
@@ -195,7 +220,7 @@ function isPathAllowed(relPath: string, allowlistPaths: RegExp[]): boolean {
   return false;
 }
 
-function walkDir(
+export function walkDir(
   dir: string,
   rootDir: string,
   allowlistPaths: RegExp[],
@@ -207,23 +232,16 @@ function walkDir(
     const relPath = path.relative(rootDir, fullPath);
 
     if (entry.isDirectory()) {
-      if (
-        entry.name === '.git' ||
-        entry.name === 'node_modules' ||
-        entry.name === '.next' ||
-        entry.name === '.turbo' ||
-        entry.name === '.pnpm-store' ||
-        entry.name === 'dist' ||
-        entry.name === 'build' ||
-        entry.name === 'out' ||
-        entry.name === '.gemini'
-      ) {
+      if (isIgnoredScanName(entry.name)) {
         continue;
       }
       if (!isPathAllowed(relPath + '/', allowlistPaths)) {
         walkDir(fullPath, rootDir, allowlistPaths, fileList);
       }
     } else if (entry.isFile()) {
+      if (isIgnoredScanName(entry.name)) {
+        continue;
+      }
       if (!isPathAllowed(relPath, allowlistPaths)) {
         fileList.push(fullPath);
       }
@@ -234,23 +252,12 @@ function walkDir(
 
 export function getGitleaksScanTargets(rootDir: string = process.cwd()): string[] {
   const targets: string[] = [];
-  const ignoredNames = new Set([
-    '.git',
-    'node_modules',
-    '.next',
-    '.turbo',
-    '.pnpm-store',
-    'dist',
-    'build',
-    'out',
-    '.gemini',
-  ]);
 
   function hasAnyIgnoredDescendant(dir: string): boolean {
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (ignoredNames.has(entry.name)) {
+        if (isIgnoredScanName(entry.name)) {
           return true;
         }
         if (entry.isDirectory()) {
@@ -267,7 +274,7 @@ export function getGitleaksScanTargets(rootDir: string = process.cwd()): string[
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (ignoredNames.has(entry.name)) {
+        if (isIgnoredScanName(entry.name)) {
           continue;
         }
         const fullPath = path.join(dir, entry.name);
@@ -284,10 +291,105 @@ export function getGitleaksScanTargets(rootDir: string = process.cwd()): string[
         }
       }
     } catch {}
+    return false;
   }
 
   collectSafeTargets(rootDir);
   return targets;
+}
+
+export function executeGitleaks(
+  gitleaksBin: string,
+  args: string[],
+  reportPath: string
+): GitleaksExecResult {
+  let spawnResult;
+  try {
+    spawnResult = spawnSync(gitleaksBin, args, {
+      stdio: 'pipe',
+      encoding: 'utf-8',
+      shell: false,
+    });
+  } catch (err: any) {
+    return {
+      success: false,
+      exitCode: null,
+      findings: [],
+      operationalError: `Failed to spawn gitleaks process: ${err.message}`,
+    };
+  }
+
+  if (spawnResult.error) {
+    return {
+      success: false,
+      exitCode: spawnResult.status ?? null,
+      findings: [],
+      operationalError: `Gitleaks process execution error: ${spawnResult.error.message}`,
+    };
+  }
+
+  const exitCode = spawnResult.status;
+
+  if (exitCode === 0) {
+    return {
+      success: true,
+      exitCode: 0,
+      findings: [],
+    };
+  }
+
+  if (exitCode === 1) {
+    if (!fs.existsSync(reportPath)) {
+      const errOutput = (spawnResult.stderr || spawnResult.stdout || '').trim();
+      return {
+        success: false,
+        exitCode: 1,
+        findings: [],
+        operationalError: `Gitleaks exited with code 1 (findings detected) but report file was not created: ${reportPath}. Output: ${errOutput}`,
+      };
+    }
+
+    try {
+      const content = fs.readFileSync(reportPath, 'utf-8').trim();
+      if (!content) {
+        return {
+          success: false,
+          exitCode: 1,
+          findings: [],
+          operationalError: `Gitleaks report file is empty: ${reportPath}`,
+        };
+      }
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        return {
+          success: false,
+          exitCode: 1,
+          findings: [],
+          operationalError: `Gitleaks report file does not contain a non-empty findings array: ${reportPath}`,
+        };
+      }
+      return {
+        success: true,
+        exitCode: 1,
+        findings: parsed,
+      };
+    } catch (parseErr: any) {
+      return {
+        success: false,
+        exitCode: 1,
+        findings: [],
+        operationalError: `Failed to parse Gitleaks report file ${reportPath}: ${parseErr.message}`,
+      };
+    }
+  }
+
+  const stdErr = (spawnResult.stderr || spawnResult.stdout || '').trim();
+  return {
+    success: false,
+    exitCode: exitCode ?? -1,
+    findings: [],
+    operationalError: `Gitleaks failed with operational exit code ${exitCode}: ${stdErr}`,
+  };
 }
 
 export function runSecretScan(rootDir: string = process.cwd(), configPath?: string) {
@@ -308,9 +410,73 @@ export function runSecretScan(rootDir: string = process.cwd(), configPath?: stri
   };
 }
 
-// CLI entrypoint
-if (require.main === module) {
-  const args = process.argv.slice(2);
+export function runNegativeCliTest(gitleaksBin: string): { exitCode: number; message?: string } {
+  console.log('🧪 Chạy kiểm thử âm tính (Demonstrated Negative Failure Proof)...');
+  const tokenHeader = ['ghn', 'live'].join('_');
+  const fakeSecretContent = `// Temporary negative test fixture\nconst carrierLiveKey = "${tokenHeader}_98421039841298412";\n`;
+  const tempFile = path.join(process.cwd(), 'test-negative-secret-fixture.js');
+  const reportFile = path.join(process.cwd(), '.temp-gitleaks-negative-report.json');
+
+  fs.writeFileSync(tempFile, fakeSecretContent, 'utf-8');
+
+  try {
+    const result = executeGitleaks(
+      gitleaksBin,
+      [
+        'dir',
+        tempFile,
+        '-c',
+        '.gitleaks.toml',
+        '--report-path',
+        reportFile,
+        '--report-format',
+        'json',
+        '--redact',
+        '--verbose',
+      ],
+      reportFile
+    );
+
+    if (!result.success) {
+      console.error(
+        `❌ LỖI THỰC THI GITLEAKS (KHÔNG PHẢI PHÁT HIỆN SECRET): ${result.operationalError}`
+      );
+      return { exitCode: 2, message: result.operationalError };
+    }
+
+    if (result.findings.length > 0) {
+      const targetFinding =
+        result.findings.find(
+          (f: any) => f.RuleID === 'shipde-carrier-live-token' || f.RuleID === 'carrier-live-token'
+        ) || result.findings[0];
+      const findingDetails = `[${targetFinding.RuleID}] "${targetFinding.Description}" tại ${targetFinding.File}:${targetFinding.StartLine}`;
+      console.error(`🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XÁC QUA RULE: ${findingDetails}`);
+      console.error(
+        '   [AC-FOUND-01-06 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện fixture rò rỉ secret thực tế.\n'
+      );
+      return { exitCode: 1, message: 'Detected secret finding in negative fixture' };
+    } else {
+      console.error('❌ LỖI: Bộ quét KHÔNG phát hiện được vi phạm trong bài test âm tính!');
+      return { exitCode: 2, message: 'Negative test failed to detect secret' };
+    }
+  } finally {
+    if (fs.existsSync(tempFile)) {
+      try {
+        fs.unlinkSync(tempFile);
+      } catch {}
+    }
+    if (fs.existsSync(reportFile)) {
+      try {
+        fs.unlinkSync(reportFile);
+      } catch {}
+    }
+  }
+}
+
+export function runCliVerification(args: string[] = process.argv.slice(2)): {
+  exitCode: number;
+  message?: string;
+} {
   const isNegativeTest = args.includes('--test-negative');
   const configPath = path.join(process.cwd(), '.gitleaks.toml');
 
@@ -333,95 +499,24 @@ if (require.main === module) {
     console.error(
       '   Gate bảo mật secret bắt buộc phải có Gitleaks native CLI để đảm bảo toàn bộ quy tắc mặc định và quy tắc mở rộng hoạt động đầy đủ.'
     );
-    process.exit(2);
+    return { exitCode: 2, message: 'Gitleaks binary not found' };
   }
 
   if (isNegativeTest) {
-    console.log('🧪 Chạy kiểm thử âm tính (Demonstrated Negative Failure Proof)...');
-    const tokenHeader = ['ghn', 'live'].join('_');
-    const fakeSecretContent = `// Temporary negative test fixture\nconst carrierLiveKey = "${tokenHeader}_98421039841298412";\n`;
-    const tempFile = path.join(process.cwd(), 'test-negative-secret-fixture.js');
-    const reportFile = path.join(process.cwd(), '.temp-gitleaks-negative-report.json');
-
-    fs.writeFileSync(tempFile, fakeSecretContent, 'utf-8');
-
-    let detected = false;
-    let findingDetails = '';
-    let cliError: string | null = null;
-
-    try {
-      let commandOutput = '';
-      try {
-        commandOutput = execSync(
-          `${gitleaksBin} dir "${tempFile}" -c .gitleaks.toml --report-path "${reportFile}" --report-format json --redact --verbose`,
-          { stdio: 'pipe' }
-        ).toString();
-      } catch (err: any) {
-        commandOutput = (err.stdout?.toString() || '') + '\n' + (err.stderr?.toString() || '');
-      }
-
-      // Verify that report file exists and contains valid secret rule findings
-      if (fs.existsSync(reportFile)) {
-        try {
-          const reportContent = fs.readFileSync(reportFile, 'utf-8');
-          const findings = JSON.parse(reportContent);
-          if (Array.isArray(findings) && findings.length > 0) {
-            const targetFinding =
-              findings.find(
-                (f: any) =>
-                  f.RuleID === 'shipde-carrier-live-token' || f.RuleID === 'carrier-live-token'
-              ) || findings[0];
-            detected = true;
-            findingDetails = `[${targetFinding.RuleID}] "${targetFinding.Description}" tại ${targetFinding.File}:${targetFinding.StartLine}`;
-          }
-        } catch (parseErr: any) {
-          cliError = `Không thể phân tích báo cáo Gitleaks: ${parseErr.message}`;
-        }
-      } else {
-        // If no report file, check if it was a CLI invocation / configuration error
-        cliError = `Gitleaks không tạo được file báo cáo findings: ${commandOutput.trim()}`;
-      }
-    } finally {
-      // Guaranteed cleanup before any exit
-      if (fs.existsSync(tempFile)) {
-        try {
-          fs.unlinkSync(tempFile);
-        } catch {}
-      }
-      if (fs.existsSync(reportFile)) {
-        try {
-          fs.unlinkSync(reportFile);
-        } catch {}
-      }
-    }
-
-    if (detected) {
-      console.error(`🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XÁC QUA RULE: ${findingDetails}`);
-      console.error(
-        '   [AC-FOUND-01-06 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện fixture rò rỉ secret thực tế.\n'
-      );
-      process.exit(1);
-    } else {
-      if (cliError) {
-        console.error(`❌ LỖI THỰC THI GITLEAKS (KHÔNG PHẢI PHÁT HIỆN SECRET): ${cliError}`);
-      } else {
-        console.error('❌ LỖI: Bộ quét KHÔNG phát hiện được vi phạm trong bài test âm tính!');
-      }
-      process.exit(2);
-    }
+    return runNegativeCliTest(gitleaksBin);
   }
 
   console.log('🔍 Thực thi Gitleaks native binary CLI...');
-  const gitReportFile = path.join(process.cwd(), '.temp-gitleaks-git-report.json');
-  const isGitRepo = fs.existsSync(path.join(process.cwd(), '.git'));
-  const tempReportFiles: string[] = [];
+  const tempFilesToClean: string[] = [];
 
   try {
+    const isGitRepo = fs.existsSync(path.join(process.cwd(), '.git'));
     if (isGitRepo) {
       const resolveGitCommit = (ref: string): string | null => {
         try {
           return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
             stdio: 'pipe',
+            shell: false,
           })
             .toString()
             .trim();
@@ -437,7 +532,7 @@ if (require.main === module) {
           console.error(
             `❌ LỖI: BASE_SHA được cung cấp '${process.env.BASE_SHA}' không hợp lệ hoặc không thể resolve thành commit!`
           );
-          process.exit(2);
+          return { exitCode: 2, message: 'Invalid BASE_SHA' };
         }
       } else if (process.env.GITHUB_BASE_REF) {
         baseCommit =
@@ -452,17 +547,47 @@ if (require.main === module) {
 
       if (!baseCommit) {
         console.error('❌ LỖI: Không thể xác định commit base để quét lịch sử git!');
-        process.exit(2);
+        return { exitCode: 2, message: 'Cannot resolve base commit' };
       }
 
       const logRange = `${baseCommit}...HEAD`;
       console.log(`🔍 [Gitleaks git] Quét lịch sử commit PR (${logRange})...`);
-      execSync(
-        `${gitleaksBin} git --log-opts="${logRange}" -c .gitleaks.toml --report-path "${gitReportFile}" --report-format json --redact --verbose`,
-        {
-          stdio: 'inherit',
-        }
+      const gitReportFile = path.join(process.cwd(), '.temp-gitleaks-git-report.json');
+      tempFilesToClean.push(gitReportFile);
+
+      const gitResult = executeGitleaks(
+        gitleaksBin,
+        [
+          'git',
+          `--log-opts=${logRange}`,
+          '-c',
+          '.gitleaks.toml',
+          '--report-path',
+          gitReportFile,
+          '--report-format',
+          'json',
+          '--redact',
+          '--verbose',
+        ],
+        gitReportFile
       );
+
+      if (!gitResult.success) {
+        console.error(`❌ LỖI THỰC THI GITLEAKS TRÊN LỊCH SỬ GIT: ${gitResult.operationalError}`);
+        return { exitCode: 2, message: gitResult.operationalError };
+      }
+
+      if (gitResult.findings.length > 0) {
+        console.error(
+          `\n❌ Gitleaks phát hiện ${gitResult.findings.length} vi phạm bí mật trong lịch sử git:`
+        );
+        for (const f of gitResult.findings) {
+          console.error(
+            ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
+          );
+        }
+        return { exitCode: 1, message: 'Secrets detected in git history' };
+      }
     }
 
     console.log('🔍 [Gitleaks dir] Quét working tree các thư mục và tệp mã nguồn...');
@@ -472,22 +597,34 @@ if (require.main === module) {
     for (let idx = 0; idx < scanTargets.length; idx++) {
       const target = scanTargets[idx];
       const targetReport = path.join(process.cwd(), `.temp-gitleaks-target-${idx}-report.json`);
-      tempReportFiles.push(targetReport);
-      try {
-        execSync(
-          `${gitleaksBin} dir "${target}" -c .gitleaks.toml --report-path "${targetReport}" --report-format json --redact --verbose`,
-          { stdio: 'pipe' }
+      tempFilesToClean.push(targetReport);
+
+      const dirResult = executeGitleaks(
+        gitleaksBin,
+        [
+          'dir',
+          target,
+          '-c',
+          '.gitleaks.toml',
+          '--report-path',
+          targetReport,
+          '--report-format',
+          'json',
+          '--redact',
+          '--verbose',
+        ],
+        targetReport
+      );
+
+      if (!dirResult.success) {
+        console.error(
+          `❌ LỖI THỰC THI GITLEAKS TRÊN TARGET "${target}": ${dirResult.operationalError}`
         );
-      } catch (cmdErr: any) {
-        if (fs.existsSync(targetReport)) {
-          try {
-            const reportContent = fs.readFileSync(targetReport, 'utf-8');
-            const findings = JSON.parse(reportContent);
-            if (Array.isArray(findings)) {
-              allDirFindings.push(...findings);
-            }
-          } catch {}
-        }
+        return { exitCode: 2, message: dirResult.operationalError };
+      }
+
+      if (dirResult.findings.length > 0) {
+        allDirFindings.push(...dirResult.findings);
       }
     }
 
@@ -500,40 +637,15 @@ if (require.main === module) {
           ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
         );
       }
-      process.exit(1);
+      return { exitCode: 1, message: 'Secrets detected in working tree' };
     }
 
     console.log(
       '\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.'
     );
-    process.exit(0);
-  } catch (err: any) {
-    const allFindings: any[] = [];
-    for (const rep of [gitReportFile, ...tempReportFiles]) {
-      if (fs.existsSync(rep)) {
-        try {
-          const reportContent = fs.readFileSync(rep, 'utf-8');
-          const findings = JSON.parse(reportContent);
-          if (Array.isArray(findings)) {
-            allFindings.push(...findings);
-          }
-        } catch {}
-      }
-    }
-
-    if (allFindings.length > 0) {
-      console.error(`\n❌ Gitleaks phát hiện ${allFindings.length} vi phạm bí mật:`);
-      for (const f of allFindings) {
-        console.error(
-          ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
-        );
-      }
-      process.exit(1);
-    }
-    console.error('\n❌ Gitleaks native phát hiện vi phạm bí mật hoặc gặp lỗi cấu hình!');
-    process.exit(1);
+    return { exitCode: 0 };
   } finally {
-    for (const rep of [gitReportFile, ...tempReportFiles]) {
+    for (const rep of tempFilesToClean) {
       if (fs.existsSync(rep)) {
         try {
           fs.unlinkSync(rep);
@@ -541,4 +653,10 @@ if (require.main === module) {
       }
     }
   }
+}
+
+// CLI entrypoint
+if (require.main === module) {
+  const outcome = runCliVerification();
+  process.exit(outcome.exitCode);
 }
