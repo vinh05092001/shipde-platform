@@ -15,7 +15,11 @@
     },
     "test": {
       "dependsOn": ["build", "^build"],
-      "inputs": ["$TURBO_DEFAULT$"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/scripts/verify-secrets.ts",
+        "$TURBO_ROOT$/.gitleaks.toml"
+      ]
     },
     "test:e2e": {
       "cache": false
