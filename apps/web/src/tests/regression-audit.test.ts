@@ -144,145 +144,273 @@ async function runRegressionSuite() {
 
   // Test 4: Build artifact preservation invariant
   if (typeof window === 'undefined') {
-    try {
-      const fs = await import('fs');
-      const path = await import('path');
-      const nextDir = path.resolve(process.cwd(), '.next');
-      if (fs.existsSync(nextDir)) {
-        const buildManifest = path.join(nextDir, 'build-manifest.json');
-        const prerenderManifest = path.join(nextDir, 'prerender-manifest.json');
-        const hasManifests = fs.existsSync(buildManifest) || fs.existsSync(prerenderManifest);
-        assert(
-          hasManifests,
-          'Next.js production build artifacts (.next manifests) remain intact and uncorrupted'
-        );
-      }
-    } catch {}
+    const fs = await import('fs');
+    const path = await import('path');
+    let webDir = process.cwd();
+    if (
+      !fs.existsSync(path.join(webDir, '.next')) &&
+      fs.existsSync(path.join(webDir, 'apps', 'web', '.next'))
+    ) {
+      webDir = path.join(webDir, 'apps', 'web');
+    }
+    const nextDir = path.join(webDir, '.next');
+    assert(fs.existsSync(nextDir), 'apps/web/.next build directory must exist and be preserved');
+    const prerenderManifest = path.join(nextDir, 'prerender-manifest.json');
+    assert(
+      fs.existsSync(prerenderManifest),
+      'apps/web/.next/prerender-manifest.json must exist and remain uncorrupted'
+    );
+    const buildManifest = path.join(nextDir, 'build-manifest.json');
+    assert(
+      fs.existsSync(buildManifest),
+      'apps/web/.next/build-manifest.json must exist and remain uncorrupted'
+    );
   }
 
-  // Test 5: Secret Scanner Robustness, Shell-Metacharacter Safety, Fail-Closed & Cleanup
+  // Test 5: Secret Scanner Robustness, Shell-Metacharacter Safety, Fail-Closed & Mock-Injected Negative Proofs
   if (typeof window === 'undefined') {
+    const fs = await import('fs');
+    const path = await import('path');
+    let rootDir = process.cwd();
+    if (fs.existsSync(path.join(rootDir, '../../scripts/verify-secrets.ts'))) {
+      rootDir = path.resolve(rootDir, '../..');
+    }
+    const verifySecretsScript = path.join(rootDir, 'scripts', 'verify-secrets.ts');
+    const rootConfigPath = path.join(rootDir, '.gitleaks.toml');
+
+    assert(
+      fs.existsSync(verifySecretsScript) && fs.existsSync(rootConfigPath),
+      'verify-secrets.ts and .gitleaks.toml must exist in repository root'
+    );
+
+    const { pathToFileURL } = await import('url');
+    const {
+      executeGitleaks,
+      getGitleaksBinary,
+      isIgnoredScanName,
+      getGitleaksScanTargets,
+      cleanTemporaryFiles,
+      runCliVerification,
+      walkDir,
+    } = await import(pathToFileURL(verifySecretsScript).href);
+
+    const gitleaksBin = getGitleaksBinary();
+    assert(
+      gitleaksBin !== null && gitleaksBin !== undefined && gitleaksBin.length > 0,
+      'Gitleaks native binary must be installed and accessible in PATH for test suite'
+    );
+
+    // 5a. Shell-metacharacter path safety (No command injection)
+    const metacharFixture = path.join(rootDir, '.temp-gitleaks-test-$(echo_safe)-fixture.js');
+    const metacharReport = path.join(rootDir, '.temp-gitleaks-test-metachar-report.json');
+    fs.writeFileSync(
+      metacharFixture,
+      '// Safe file with shell metacharacters in filename\nconst safeConst = 12345;\n',
+      'utf-8'
+    );
     try {
-      const fs = await import('fs');
-      const path = await import('path');
-      // Locate verify-secrets.ts from workspace root
-      let rootDir = process.cwd();
-      if (fs.existsSync(path.join(rootDir, '../../scripts/verify-secrets.ts'))) {
-        rootDir = path.resolve(rootDir, '../..');
+      const metacharResult = executeGitleaks(
+        gitleaksBin,
+        [
+          'dir',
+          metacharFixture,
+          '-c',
+          rootConfigPath,
+          '--report-path',
+          metacharReport,
+          '--report-format',
+          'json',
+          '--redact',
+        ],
+        metacharReport
+      );
+      assert(
+        metacharResult.success && metacharResult.exitCode === 0,
+        'Gitleaks CLI executes safely on paths containing shell metacharacters without command injection'
+      );
+    } finally {
+      cleanTemporaryFiles([metacharFixture, metacharReport]);
+    }
+
+    // 5b. Deterministic fail-closed on directory enumeration failure (DI mock)
+    let readdirThrown = false;
+    try {
+      const mockFailingFs = {
+        readdirSync: () => {
+          throw new Error('EACCES: permission denied, scan directory unreadable');
+        },
+      };
+      getGitleaksScanTargets(rootDir, mockFailingFs as any);
+    } catch (err: any) {
+      if (err.message.includes('EACCES')) {
+        readdirThrown = true;
       }
-      const verifySecretsScript = path.join(rootDir, 'scripts', 'verify-secrets.ts');
-      const rootConfigPath = path.join(rootDir, '.gitleaks.toml');
+    }
+    assert(
+      readdirThrown,
+      'getGitleaksScanTargets fails closed and throws operational error when directory enumeration fails'
+    );
 
-      if (fs.existsSync(verifySecretsScript) && fs.existsSync(rootConfigPath)) {
-        const { pathToFileURL } = await import('url');
-        const { executeGitleaks, getGitleaksBinary, isIgnoredScanName, getGitleaksScanTargets } =
-          await import(pathToFileURL(verifySecretsScript).href);
+    // 5c. Deterministic fail-closed on walkDir failure (DI mock)
+    let walkDirThrown = false;
+    try {
+      const mockFailingFs = {
+        readdirSync: () => {
+          throw new Error('ENOENT: directory missing during walk');
+        },
+      };
+      walkDir(rootDir, rootDir, [], [], mockFailingFs as any);
+    } catch (err: any) {
+      if (err.message.includes('ENOENT')) {
+        walkDirThrown = true;
+      }
+    }
+    assert(
+      walkDirThrown,
+      'walkDir fails closed and throws operational error when directory enumeration fails'
+    );
 
-        const gitleaksBin = getGitleaksBinary();
-        if (gitleaksBin) {
-          // 5a. Shell-metacharacter path safety (No command injection)
-          const metacharFixture = path.join(rootDir, '.temp-gitleaks-test-$(echo_safe)-fixture.js');
-          const metacharReport = path.join(rootDir, '.temp-gitleaks-test-metachar-report.json');
-          fs.writeFileSync(
-            metacharFixture,
-            '// Safe file with shell metacharacters in filename\nconst safeConst = 12345;\n',
-            'utf-8'
-          );
+    // 5d. Scanner operational failure handling (fail-closed on spawn error)
+    const failResult = executeGitleaks(
+      'nonexistent-gitleaks-binary-xyz',
+      ['dir', '.'],
+      path.join(rootDir, '.temp-nonexistent-report.json')
+    );
+    assert(
+      !failResult.success && typeof failResult.operationalError === 'string',
+      'executeGitleaks fails closed when scanner binary fails to spawn'
+    );
 
-          try {
-            const metacharResult = executeGitleaks(
-              gitleaksBin,
-              [
-                'dir',
-                metacharFixture,
-                '-c',
-                rootConfigPath,
-                '--report-path',
-                metacharReport,
-                '--report-format',
-                'json',
-                '--redact',
-              ],
-              metacharReport
-            );
-            assert(
-              metacharResult.success && metacharResult.exitCode === 0,
-              'Gitleaks CLI executes safely on paths containing shell metacharacters without command injection'
-            );
-          } finally {
-            if (fs.existsSync(metacharFixture)) fs.unlinkSync(metacharFixture);
-            if (fs.existsSync(metacharReport)) fs.unlinkSync(metacharReport);
-          }
+    // 5e. Scanner operational failure on invalid flags (non-zero exit code)
+    const invalidFlagResult = executeGitleaks(
+      gitleaksBin,
+      ['--invalid-flag-that-does-not-exist-xyz'],
+      path.join(rootDir, '.temp-invalid-flag-report.json')
+    );
+    assert(
+      !invalidFlagResult.success && typeof invalidFlagResult.operationalError === 'string',
+      'executeGitleaks fails closed on non-zero operational exit codes'
+    );
 
-          // 5b. Scanner operational failure handling (fail-closed)
-          const failResult = executeGitleaks(
-            'nonexistent-gitleaks-binary-xyz',
-            ['dir', '.'],
-            path.join(rootDir, '.temp-nonexistent-report.json')
-          );
-          assert(
-            !failResult.success && typeof failResult.operationalError === 'string',
-            'executeGitleaks fails closed when scanner binary fails to spawn'
-          );
+    // 5f. Missing report file when scanner exits code 1 (fail-closed)
+    const missingReportPath = path.join(rootDir, '.temp-nonexistent-finding-report.json');
+    const mockSpawnExit1 = () => ({
+      status: 1,
+      stdout: '',
+      stderr: 'simulated finding output',
+      error: undefined,
+    });
+    const missingReportResult = executeGitleaks(
+      gitleaksBin,
+      ['dir', '.'],
+      missingReportPath,
+      mockSpawnExit1 as any,
+      { existsSync: () => false, readFileSync: () => '' } as any
+    );
+    assert(
+      !missingReportResult.success &&
+        Boolean(missingReportResult.operationalError?.includes('report file was not created')),
+      'executeGitleaks fails closed when exit code 1 occurs but report file is missing'
+    );
 
-          const invalidFlagResult = executeGitleaks(
-            gitleaksBin,
-            ['--invalid-flag-that-does-not-exist-xyz'],
-            path.join(rootDir, '.temp-invalid-flag-report.json')
-          );
-          assert(
-            !invalidFlagResult.success && typeof invalidFlagResult.operationalError === 'string',
-            'executeGitleaks fails closed on non-zero operational exit codes'
-          );
+    // 5g. Empty report file when scanner exits code 1 (fail-closed)
+    const emptyReportResult = executeGitleaks(
+      gitleaksBin,
+      ['dir', '.'],
+      path.join(rootDir, '.temp-empty-report.json'),
+      mockSpawnExit1 as any,
+      { existsSync: () => true, readFileSync: () => '   ' } as any
+    );
+    assert(
+      !emptyReportResult.success && Boolean(emptyReportResult.operationalError?.includes('empty')),
+      'executeGitleaks fails closed when exit code 1 occurs but report file is empty'
+    );
 
-          // 5c. Malformed report JSON handling (fail-closed)
-          const malformedReport = path.join(rootDir, '.temp-gitleaks-malformed-report.json');
-          fs.writeFileSync(malformedReport, '{ invalid json content !!!', 'utf-8');
-          try {
-            // Test that parsing corrupted report content fails closed
-            const corruptedContentResult = executeGitleaks(
-              gitleaksBin,
-              ['dir', rootDir, '--invalid-trigger'],
-              malformedReport
-            );
-            assert(
-              !corruptedContentResult.success,
-              'Scanner fails closed when report file is missing or contains malformed JSON'
-            );
-          } finally {
-            if (fs.existsSync(malformedReport)) fs.unlinkSync(malformedReport);
-          }
+    // 5h. Malformed report JSON handling (fail-closed)
+    const malformedReportResult = executeGitleaks(
+      gitleaksBin,
+      ['dir', '.'],
+      path.join(rootDir, '.temp-malformed-report.json'),
+      mockSpawnExit1 as any,
+      { existsSync: () => true, readFileSync: () => '{ invalid json :::' } as any
+    );
+    assert(
+      !malformedReportResult.success &&
+        Boolean(malformedReportResult.operationalError?.includes('Failed to parse')),
+      'executeGitleaks fails closed when report file contains malformed JSON'
+    );
 
-          // 5d. Ignored paths and generated artifact filtering
-          assert(
-            isIgnoredScanName('.temp-gitleaks-target-0-report.json'),
-            'Temporary gitleaks report filenames are strictly excluded from scanner directory walking'
-          );
-          assert(
-            isIgnoredScanName('.next') &&
-              isIgnoredScanName('.turbo') &&
-              isIgnoredScanName('.pnpm-store') &&
-              isIgnoredScanName('dist'),
-            'Generated build outputs (.next, .turbo, .pnpm-store, dist) are strictly excluded from scanner directory walking'
-          );
+    // 5i. Deterministic cleanup failure handling in cleanTemporaryFiles (fail-closed)
+    let cleanupFailedClosed = false;
+    try {
+      const mockUnlinkFailingFs = {
+        existsSync: () => true,
+        unlinkSync: () => {
+          throw new Error('EBUSY: resource locked');
+        },
+      };
+      cleanTemporaryFiles(['/mock/path/temp.json'], mockUnlinkFailingFs as any);
+    } catch (err: any) {
+      if (err.message.includes('EBUSY')) {
+        cleanupFailedClosed = true;
+      }
+    }
+    assert(
+      cleanupFailedClosed,
+      'cleanTemporaryFiles fails closed and throws operational error when unlinking reports fails'
+    );
 
-          // 5e. Target discovery excludes temporary reports
-          const dummyTempReport = path.join(rootDir, '.temp-gitleaks-dummy-scan.json');
-          fs.writeFileSync(dummyTempReport, '[]', 'utf-8');
-          try {
-            const targets = getGitleaksScanTargets(rootDir);
-            const includesTemp = targets.some((t: string) => t.includes('.temp-gitleaks'));
-            assert(
-              !includesTemp,
-              'getGitleaksScanTargets strictly excludes .temp-gitleaks files from scan targets'
-            );
-          } finally {
-            if (fs.existsSync(dummyTempReport)) fs.unlinkSync(dummyTempReport);
-          }
+    // 5j. CLI runner fail-closed on mock cleanup failure (DI test)
+    const mockFsWithLockedReport = {
+      ...fs,
+      existsSync: (p: string) =>
+        String(p).includes('.temp-gitleaks-negative') ? true : fs.existsSync(p),
+      unlinkSync: (p: string) => {
+        if (String(p).includes('.temp-gitleaks-negative')) {
+          throw new Error('EPERM: cannot delete temporary report');
         }
-      }
-    } catch (testErr: any) {
-      assert(false, `Test 5 Secret Scanner Robustness failed: ${testErr.message}`);
+        fs.unlinkSync(p);
+      },
+    };
+    const cliCleanupFailResult = runCliVerification(['--test-negative'], {
+      fsImpl: mockFsWithLockedReport as any,
+      rootDir,
+      getBin: () => gitleaksBin,
+    });
+    assert(
+      cliCleanupFailResult.exitCode === 2 &&
+        Boolean(cliCleanupFailResult.message?.includes('cannot delete temporary report')),
+      'runCliVerification fails closed with exit code 2 when temporary report cleanup fails'
+    );
+
+    // 5k. Ignored paths and generated artifact filtering
+    assert(
+      isIgnoredScanName('.temp-gitleaks-target-0-report.json') &&
+        isIgnoredScanName('.temp-gitleaks-git-report.json') &&
+        isIgnoredScanName('.temp-gitleaks-negative-report.json'),
+      'Temporary gitleaks report filenames are strictly excluded from scanner directory walking'
+    );
+    assert(
+      isIgnoredScanName('.next') &&
+        isIgnoredScanName('.turbo') &&
+        isIgnoredScanName('.pnpm-store') &&
+        isIgnoredScanName('dist') &&
+        isIgnoredScanName('node_modules'),
+      'Generated build outputs (.next, .turbo, .pnpm-store, dist, node_modules) are strictly excluded from scanner directory walking'
+    );
+
+    // 5l. Target discovery excludes temporary reports
+    const dummyTempReport = path.join(rootDir, '.temp-gitleaks-dummy-scan.json');
+    fs.writeFileSync(dummyTempReport, '[]', 'utf-8');
+    try {
+      const targets = getGitleaksScanTargets(rootDir);
+      const includesTemp = targets.some((t: string) => t.includes('.temp-gitleaks'));
+      assert(
+        !includesTemp,
+        'getGitleaksScanTargets strictly excludes .temp-gitleaks files from scan targets'
+      );
+    } finally {
+      cleanTemporaryFiles([dummyTempReport]);
     }
   }
 

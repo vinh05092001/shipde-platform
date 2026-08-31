@@ -224,9 +224,10 @@ export function walkDir(
   dir: string,
   rootDir: string,
   allowlistPaths: RegExp[],
-  fileList: string[] = []
+  fileList: string[] = [],
+  fsImpl: { readdirSync: typeof fs.readdirSync } = fs
 ): string[] {
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const entries = fsImpl.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     const relPath = path.relative(rootDir, fullPath);
@@ -236,7 +237,7 @@ export function walkDir(
         continue;
       }
       if (!isPathAllowed(relPath + '/', allowlistPaths)) {
-        walkDir(fullPath, rootDir, allowlistPaths, fileList);
+        walkDir(fullPath, rootDir, allowlistPaths, fileList, fsImpl);
       }
     } else if (entry.isFile()) {
       if (isIgnoredScanName(entry.name)) {
@@ -250,62 +251,82 @@ export function walkDir(
   return fileList;
 }
 
-export function getGitleaksScanTargets(rootDir: string = process.cwd()): string[] {
+export function getGitleaksScanTargets(
+  rootDir: string = process.cwd(),
+  fsImpl: { readdirSync: typeof fs.readdirSync } = fs
+): string[] {
   const targets: string[] = [];
 
   function hasAnyIgnoredDescendant(dir: string): boolean {
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (isIgnoredScanName(entry.name)) {
+    const entries = fsImpl.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (isIgnoredScanName(entry.name)) {
+        return true;
+      }
+      if (entry.isDirectory()) {
+        if (hasAnyIgnoredDescendant(path.join(dir, entry.name))) {
           return true;
         }
-        if (entry.isDirectory()) {
-          if (hasAnyIgnoredDescendant(path.join(dir, entry.name))) {
-            return true;
-          }
-        }
       }
-    } catch {}
+    }
     return false;
   }
 
   function collectSafeTargets(dir: string) {
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (isIgnoredScanName(entry.name)) {
-          continue;
-        }
-        const fullPath = path.join(dir, entry.name);
-        const relPath = path.relative(rootDir, fullPath);
+    const entries = fsImpl.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (isIgnoredScanName(entry.name)) {
+        continue;
+      }
+      const fullPath = path.join(dir, entry.name);
+      const relPath = path.relative(rootDir, fullPath);
 
-        if (entry.isDirectory()) {
-          if (hasAnyIgnoredDescendant(fullPath)) {
-            collectSafeTargets(fullPath);
-          } else {
-            targets.push(relPath);
-          }
-        } else if (entry.isFile()) {
+      if (entry.isDirectory()) {
+        if (hasAnyIgnoredDescendant(fullPath)) {
+          collectSafeTargets(fullPath);
+        } else {
           targets.push(relPath);
         }
+      } else if (entry.isFile()) {
+        targets.push(relPath);
       }
-    } catch {}
-    return false;
+    }
   }
 
   collectSafeTargets(rootDir);
   return targets;
 }
 
+export function cleanTemporaryFiles(
+  files: string[],
+  fsImpl: { existsSync: typeof fs.existsSync; unlinkSync: typeof fs.unlinkSync } = fs
+): void {
+  const errors: Error[] = [];
+  for (const file of files) {
+    try {
+      if (fsImpl.existsSync(file)) {
+        fsImpl.unlinkSync(file);
+      }
+    } catch (err: any) {
+      console.error(`❌ LỖI XÓA FILE BÁO CÁO TẠM ${file}: ${err.message}`);
+      errors.push(err);
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(`Failed to delete temporary files: ${errors.map((e) => e.message).join('; ')}`);
+  }
+}
+
 export function executeGitleaks(
   gitleaksBin: string,
   args: string[],
-  reportPath: string
+  reportPath: string,
+  spawnImpl: typeof spawnSync = spawnSync,
+  fsImpl: { existsSync: typeof fs.existsSync; readFileSync: typeof fs.readFileSync } = fs
 ): GitleaksExecResult {
   let spawnResult;
   try {
-    spawnResult = spawnSync(gitleaksBin, args, {
+    spawnResult = spawnImpl(gitleaksBin, args, {
       stdio: 'pipe',
       encoding: 'utf-8',
       shell: false,
@@ -339,7 +360,7 @@ export function executeGitleaks(
   }
 
   if (exitCode === 1) {
-    if (!fs.existsSync(reportPath)) {
+    if (!fsImpl.existsSync(reportPath)) {
       const errOutput = (spawnResult.stderr || spawnResult.stdout || '').trim();
       return {
         success: false,
@@ -350,7 +371,7 @@ export function executeGitleaks(
     }
 
     try {
-      const content = fs.readFileSync(reportPath, 'utf-8').trim();
+      const content = fsImpl.readFileSync(reportPath, 'utf-8').trim();
       if (!content) {
         return {
           success: false,
@@ -410,14 +431,25 @@ export function runSecretScan(rootDir: string = process.cwd(), configPath?: stri
   };
 }
 
-export function runNegativeCliTest(gitleaksBin: string): { exitCode: number; message?: string } {
+export function runNegativeCliTest(
+  gitleaksBin: string,
+  dependencies: {
+    fsImpl?: typeof fs;
+    spawnImpl?: typeof spawnSync;
+    rootDir?: string;
+  } = {}
+): { exitCode: number; message?: string } {
+  const fsImpl = dependencies.fsImpl || fs;
+  const rootDir = dependencies.rootDir || process.cwd();
   console.log('🧪 Chạy kiểm thử âm tính (Demonstrated Negative Failure Proof)...');
   const tokenHeader = ['ghn', 'live'].join('_');
   const fakeSecretContent = `// Temporary negative test fixture\nconst carrierLiveKey = "${tokenHeader}_98421039841298412";\n`;
-  const tempFile = path.join(process.cwd(), 'test-negative-secret-fixture.js');
-  const reportFile = path.join(process.cwd(), '.temp-gitleaks-negative-report.json');
+  const tempFile = path.join(rootDir, 'test-negative-secret-fixture.js');
+  const reportFile = path.join(rootDir, '.temp-gitleaks-negative-report.json');
 
-  fs.writeFileSync(tempFile, fakeSecretContent, 'utf-8');
+  fsImpl.writeFileSync(tempFile, fakeSecretContent, 'utf-8');
+  const tempFilesToClean = [tempFile, reportFile];
+  let outcome: { exitCode: number; message?: string } = { exitCode: 2, message: 'Uninitialized' };
 
   try {
     const result = executeGitleaks(
@@ -426,7 +458,7 @@ export function runNegativeCliTest(gitleaksBin: string): { exitCode: number; mes
         'dir',
         tempFile,
         '-c',
-        '.gitleaks.toml',
+        path.join(rootDir, '.gitleaks.toml'),
         '--report-path',
         reportFile,
         '--report-format',
@@ -434,14 +466,17 @@ export function runNegativeCliTest(gitleaksBin: string): { exitCode: number; mes
         '--redact',
         '--verbose',
       ],
-      reportFile
+      reportFile,
+      dependencies.spawnImpl,
+      fsImpl
     );
 
     if (!result.success) {
       console.error(
         `❌ LỖI THỰC THI GITLEAKS (KHÔNG PHẢI PHÁT HIỆN SECRET): ${result.operationalError}`
       );
-      return { exitCode: 2, message: result.operationalError };
+      outcome = { exitCode: 2, message: result.operationalError };
+      return outcome;
     }
 
     if (result.findings.length > 0) {
@@ -454,44 +489,59 @@ export function runNegativeCliTest(gitleaksBin: string): { exitCode: number; mes
       console.error(
         '   [AC-FOUND-01-06 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện fixture rò rỉ secret thực tế.\n'
       );
-      return { exitCode: 1, message: 'Detected secret finding in negative fixture' };
+      outcome = { exitCode: 1, message: 'Detected secret finding in negative fixture' };
     } else {
       console.error('❌ LỖI: Bộ quét KHÔNG phát hiện được vi phạm trong bài test âm tính!');
-      return { exitCode: 2, message: 'Negative test failed to detect secret' };
+      outcome = { exitCode: 2, message: 'Negative test failed to detect secret' };
     }
   } finally {
-    if (fs.existsSync(tempFile)) {
-      try {
-        fs.unlinkSync(tempFile);
-      } catch {}
-    }
-    if (fs.existsSync(reportFile)) {
-      try {
-        fs.unlinkSync(reportFile);
-      } catch {}
+    try {
+      cleanTemporaryFiles(tempFilesToClean, fsImpl);
+    } catch (cleanupErr: any) {
+      console.error(`❌ LỖI DỌN DẸP BÁO CÁO TẠM TRONG NEGATIVE TEST: ${cleanupErr.message}`);
+      outcome = { exitCode: 2, message: cleanupErr.message };
     }
   }
+  return outcome;
 }
 
-export function runCliVerification(args: string[] = process.argv.slice(2)): {
+export function runCliVerification(
+  args: string[] = process.argv.slice(2),
+  dependencies: {
+    fsImpl?: typeof fs;
+    spawnImpl?: typeof spawnSync;
+    getBin?: typeof getGitleaksBinary;
+    rootDir?: string;
+  } = {}
+): {
   exitCode: number;
   message?: string;
 } {
+  const fsImpl = dependencies.fsImpl || fs;
+  const rootDir = dependencies.rootDir || process.cwd();
+  const getBin = dependencies.getBin || getGitleaksBinary;
   const isNegativeTest = args.includes('--test-negative');
-  const configPath = path.join(process.cwd(), '.gitleaks.toml');
+  const configPath = path.join(rootDir, '.gitleaks.toml');
 
   console.log('================================================================');
   console.log('🔒 SHIP DỄ — BỘ QUÉT BẢO MẬT & CHỐNG LỘ BÍ MẬT (SECRET SCANNER)');
   console.log('================================================================\n');
 
-  const config = parseGitleaksConfig(configPath);
+  let config;
+  try {
+    config = parseGitleaksConfig(configPath);
+  } catch (err: any) {
+    console.error(`❌ LỖI NẠP CẤU HÌNH GITLEAKS: ${err.message}`);
+    return { exitCode: 2, message: `Configuration load failure: ${err.message}` };
+  }
+
   console.log(`Đã nạp thành công ${config.rules.length} quy tắc từ .gitleaks.toml:`);
   for (const r of config.rules) {
     console.log(` - [${r.id}] ${r.description}`);
   }
   console.log('');
 
-  const gitleaksBin = getGitleaksBinary();
+  const gitleaksBin = getBin();
   if (!gitleaksBin) {
     console.error(
       '❌ LỖI: Không tìm thấy native binary Gitleaks CLI (gitleaks) trong PATH hoặc môi trường hệ thống!'
@@ -503,20 +553,22 @@ export function runCliVerification(args: string[] = process.argv.slice(2)): {
   }
 
   if (isNegativeTest) {
-    return runNegativeCliTest(gitleaksBin);
+    return runNegativeCliTest(gitleaksBin, { fsImpl, spawnImpl: dependencies.spawnImpl, rootDir });
   }
 
   console.log('🔍 Thực thi Gitleaks native binary CLI...');
   const tempFilesToClean: string[] = [];
+  let outcome: { exitCode: number; message?: string } = { exitCode: 2, message: 'Scan incomplete' };
 
   try {
-    const isGitRepo = fs.existsSync(path.join(process.cwd(), '.git'));
+    const isGitRepo = fsImpl.existsSync(path.join(rootDir, '.git'));
     if (isGitRepo) {
       const resolveGitCommit = (ref: string): string | null => {
         try {
           return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
             stdio: 'pipe',
             shell: false,
+            cwd: rootDir,
           })
             .toString()
             .trim();
@@ -552,7 +604,7 @@ export function runCliVerification(args: string[] = process.argv.slice(2)): {
 
       const logRange = `${baseCommit}...HEAD`;
       console.log(`🔍 [Gitleaks git] Quét lịch sử commit PR (${logRange})...`);
-      const gitReportFile = path.join(process.cwd(), '.temp-gitleaks-git-report.json');
+      const gitReportFile = path.join(rootDir, '.temp-gitleaks-git-report.json');
       tempFilesToClean.push(gitReportFile);
 
       const gitResult = executeGitleaks(
@@ -561,7 +613,7 @@ export function runCliVerification(args: string[] = process.argv.slice(2)): {
           'git',
           `--log-opts=${logRange}`,
           '-c',
-          '.gitleaks.toml',
+          configPath,
           '--report-path',
           gitReportFile,
           '--report-format',
@@ -569,7 +621,9 @@ export function runCliVerification(args: string[] = process.argv.slice(2)): {
           '--redact',
           '--verbose',
         ],
-        gitReportFile
+        gitReportFile,
+        dependencies.spawnImpl,
+        fsImpl
       );
 
       if (!gitResult.success) {
@@ -591,21 +645,33 @@ export function runCliVerification(args: string[] = process.argv.slice(2)): {
     }
 
     console.log('🔍 [Gitleaks dir] Quét working tree các thư mục và tệp mã nguồn...');
-    const scanTargets = getGitleaksScanTargets(process.cwd());
+    let scanTargets: string[];
+    try {
+      scanTargets = getGitleaksScanTargets(rootDir, fsImpl);
+    } catch (err: any) {
+      console.error(`❌ LỖI ENUMERATION THƯ MỤC KHI QUÉT SECRET: ${err.message}`);
+      return { exitCode: 2, message: `Directory enumeration failed: ${err.message}` };
+    }
+
+    if (scanTargets.length === 0) {
+      console.error('❌ LỖI: Không tìm thấy bất kỳ target hợp lệ nào để quét trong working tree!');
+      return { exitCode: 2, message: 'No valid scan targets found' };
+    }
+
     const allDirFindings: any[] = [];
 
     for (let idx = 0; idx < scanTargets.length; idx++) {
       const target = scanTargets[idx];
-      const targetReport = path.join(process.cwd(), `.temp-gitleaks-target-${idx}-report.json`);
+      const targetReport = path.join(rootDir, `.temp-gitleaks-target-${idx}-report.json`);
       tempFilesToClean.push(targetReport);
 
       const dirResult = executeGitleaks(
         gitleaksBin,
         [
           'dir',
-          target,
+          path.resolve(rootDir, target),
           '-c',
-          '.gitleaks.toml',
+          configPath,
           '--report-path',
           targetReport,
           '--report-format',
@@ -613,7 +679,9 @@ export function runCliVerification(args: string[] = process.argv.slice(2)): {
           '--redact',
           '--verbose',
         ],
-        targetReport
+        targetReport,
+        dependencies.spawnImpl,
+        fsImpl
       );
 
       if (!dirResult.success) {
@@ -643,16 +711,18 @@ export function runCliVerification(args: string[] = process.argv.slice(2)): {
     console.log(
       '\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.'
     );
-    return { exitCode: 0 };
+    outcome = { exitCode: 0 };
+  } catch (err: any) {
+    outcome = { exitCode: 2, message: `Unexpected operational error: ${err.message}` };
   } finally {
-    for (const rep of tempFilesToClean) {
-      if (fs.existsSync(rep)) {
-        try {
-          fs.unlinkSync(rep);
-        } catch {}
-      }
+    try {
+      cleanTemporaryFiles(tempFilesToClean, fsImpl);
+    } catch (cleanupErr: any) {
+      console.error(`❌ LỖI DỌN DẸP BÁO CÁO TẠM: ${cleanupErr.message}`);
+      outcome = { exitCode: 2, message: cleanupErr.message };
     }
   }
+  return outcome;
 }
 
 // CLI entrypoint
