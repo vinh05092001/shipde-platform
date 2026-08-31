@@ -2,6 +2,7 @@
   "name": "@shipde/ui",
   "version": "0.1.0",
   "description": "Shared UI tokens, primitive components, and design foundation for Ship Dễ",
+  "type": "module",
   "private": true,
   "main": "./dist/index.js",
   "module": "./dist/index.js",

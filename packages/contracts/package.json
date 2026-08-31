@@ -2,6 +2,7 @@
   "name": "@shipde/contracts",
   "version": "0.1.0",
   "description": "Shared domain contracts, types, and error catalog for Ship Dễ",
+  "type": "module",
   "private": true,
   "main": "./dist/index.js",
   "module": "./dist/index.js",

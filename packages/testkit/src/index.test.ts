@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { assertValidMonorepoPackage, createMockId, resolveMonorepoPackage } from './index';
 import {
   UserRole,
@@ -6,6 +9,8 @@ import {
   CarrierCapabilityTier,
   ShipmentStatus,
 } from '@shipde/contracts';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function testTestkit() {
   // Test mock ID generation
@@ -69,6 +74,18 @@ function testTestkit() {
   }
   if (ShipmentStatus.DELIVERED !== 'delivered') {
     throw new Error('Unexpected ShipmentStatus value');
+  }
+
+  // Verify type: "module" in all shared package manifests
+  const sharedPackages = ['contracts', 'config', 'testkit', 'ui'];
+  for (const pkg of sharedPackages) {
+    const pkgJsonPath = path.resolve(__dirname, `../../${pkg}/package.json`);
+    if (fs.existsSync(pkgJsonPath)) {
+      const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
+      if (pkgJson.type !== 'module') {
+        throw new Error(`Package @shipde/${pkg} package.json missing "type": "module" declaration`);
+      }
+    }
   }
 
   console.log('✅ @shipde/testkit package export resolution and contract self-tests passed');

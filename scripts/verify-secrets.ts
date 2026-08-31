@@ -476,10 +476,7 @@ export function runNegativeCliTest(
         `❌ LỖI THỰC THI GITLEAKS (KHÔNG PHẢI PHÁT HIỆN SECRET): ${result.operationalError}`
       );
       outcome = { exitCode: 2, message: result.operationalError };
-      return outcome;
-    }
-
-    if (result.findings.length > 0) {
+    } else if (result.findings.length > 0) {
       const targetFinding =
         result.findings.find(
           (f: any) => f.RuleID === 'shipde-carrier-live-token' || f.RuleID === 'carrier-live-token'
@@ -494,6 +491,8 @@ export function runNegativeCliTest(
       console.error('❌ LỖI: Bộ quét KHÔNG phát hiện được vi phạm trong bài test âm tính!');
       outcome = { exitCode: 2, message: 'Negative test failed to detect secret' };
     }
+  } catch (err: any) {
+    outcome = { exitCode: 2, message: `Unexpected error in negative test: ${err.message}` };
   } finally {
     try {
       cleanTemporaryFiles(tempFilesToClean, fsImpl);
@@ -561,6 +560,9 @@ export function runCliVerification(
   let outcome: { exitCode: number; message?: string } = { exitCode: 2, message: 'Scan incomplete' };
 
   try {
+    let hasOperationalError = false;
+    let hasFinding = false;
+
     const isGitRepo = fsImpl.existsSync(path.join(rootDir, '.git'));
     if (isGitRepo) {
       const resolveGitCommit = (ref: string): string | null => {
@@ -584,7 +586,8 @@ export function runCliVerification(
           console.error(
             `❌ LỖI: BASE_SHA được cung cấp '${process.env.BASE_SHA}' không hợp lệ hoặc không thể resolve thành commit!`
           );
-          return { exitCode: 2, message: 'Invalid BASE_SHA' };
+          outcome = { exitCode: 2, message: 'Invalid BASE_SHA' };
+          hasOperationalError = true;
         }
       } else if (process.env.GITHUB_BASE_REF) {
         baseCommit =
@@ -592,126 +595,141 @@ export function runCliVerification(
           resolveGitCommit(process.env.GITHUB_BASE_REF);
       }
 
-      if (!baseCommit) {
+      if (!hasOperationalError && !baseCommit) {
         baseCommit =
           resolveGitCommit('origin/main') || resolveGitCommit('main') || resolveGitCommit('HEAD~1');
       }
 
-      if (!baseCommit) {
+      if (!hasOperationalError && !baseCommit) {
         console.error('❌ LỖI: Không thể xác định commit base để quét lịch sử git!');
-        return { exitCode: 2, message: 'Cannot resolve base commit' };
+        outcome = { exitCode: 2, message: 'Cannot resolve base commit' };
+        hasOperationalError = true;
       }
 
-      const logRange = `${baseCommit}...HEAD`;
-      console.log(`🔍 [Gitleaks git] Quét lịch sử commit PR (${logRange})...`);
-      const gitReportFile = path.join(rootDir, '.temp-gitleaks-git-report.json');
-      tempFilesToClean.push(gitReportFile);
+      if (!hasOperationalError && baseCommit) {
+        const logRange = `${baseCommit}...HEAD`;
+        console.log(`🔍 [Gitleaks git] Quét lịch sử commit PR (${logRange})...`);
+        const gitReportFile = path.join(rootDir, '.temp-gitleaks-git-report.json');
+        tempFilesToClean.push(gitReportFile);
 
-      const gitResult = executeGitleaks(
-        gitleaksBin,
-        [
-          'git',
-          `--log-opts=${logRange}`,
-          '-c',
-          configPath,
-          '--report-path',
+        const gitResult = executeGitleaks(
+          gitleaksBin,
+          [
+            'git',
+            `--log-opts=${logRange}`,
+            '-c',
+            configPath,
+            '--report-path',
+            gitReportFile,
+            '--report-format',
+            'json',
+            '--redact',
+            '--verbose',
+          ],
           gitReportFile,
-          '--report-format',
-          'json',
-          '--redact',
-          '--verbose',
-        ],
-        gitReportFile,
-        dependencies.spawnImpl,
-        fsImpl
-      );
-
-      if (!gitResult.success) {
-        console.error(`❌ LỖI THỰC THI GITLEAKS TRÊN LỊCH SỬ GIT: ${gitResult.operationalError}`);
-        return { exitCode: 2, message: gitResult.operationalError };
-      }
-
-      if (gitResult.findings.length > 0) {
-        console.error(
-          `\n❌ Gitleaks phát hiện ${gitResult.findings.length} vi phạm bí mật trong lịch sử git:`
+          dependencies.spawnImpl,
+          fsImpl
         );
-        for (const f of gitResult.findings) {
+
+        if (!gitResult.success) {
+          console.error(`❌ LỖI THỰC THI GITLEAKS TRÊN LỊCH SỬ GIT: ${gitResult.operationalError}`);
+          outcome = { exitCode: 2, message: gitResult.operationalError };
+          hasOperationalError = true;
+        } else if (gitResult.findings.length > 0) {
           console.error(
-            ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
+            `\n❌ Gitleaks phát hiện ${gitResult.findings.length} vi phạm bí mật trong lịch sử git:`
           );
+          for (const f of gitResult.findings) {
+            console.error(
+              ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
+            );
+          }
+          outcome = { exitCode: 1, message: 'Secrets detected in git history' };
+          hasFinding = true;
         }
-        return { exitCode: 1, message: 'Secrets detected in git history' };
       }
     }
 
-    console.log('🔍 [Gitleaks dir] Quét working tree các thư mục và tệp mã nguồn...');
-    let scanTargets: string[];
-    try {
-      scanTargets = getGitleaksScanTargets(rootDir, fsImpl);
-    } catch (err: any) {
-      console.error(`❌ LỖI ENUMERATION THƯ MỤC KHI QUÉT SECRET: ${err.message}`);
-      return { exitCode: 2, message: `Directory enumeration failed: ${err.message}` };
-    }
-
-    if (scanTargets.length === 0) {
-      console.error('❌ LỖI: Không tìm thấy bất kỳ target hợp lệ nào để quét trong working tree!');
-      return { exitCode: 2, message: 'No valid scan targets found' };
-    }
-
-    const allDirFindings: any[] = [];
-
-    for (let idx = 0; idx < scanTargets.length; idx++) {
-      const target = scanTargets[idx];
-      const targetReport = path.join(rootDir, `.temp-gitleaks-target-${idx}-report.json`);
-      tempFilesToClean.push(targetReport);
-
-      const dirResult = executeGitleaks(
-        gitleaksBin,
-        [
-          'dir',
-          path.resolve(rootDir, target),
-          '-c',
-          configPath,
-          '--report-path',
-          targetReport,
-          '--report-format',
-          'json',
-          '--redact',
-          '--verbose',
-        ],
-        targetReport,
-        dependencies.spawnImpl,
-        fsImpl
-      );
-
-      if (!dirResult.success) {
-        console.error(
-          `❌ LỖI THỰC THI GITLEAKS TRÊN TARGET "${target}": ${dirResult.operationalError}`
-        );
-        return { exitCode: 2, message: dirResult.operationalError };
+    if (!hasOperationalError) {
+      console.log('🔍 [Gitleaks dir] Quét working tree các thư mục và tệp mã nguồn...');
+      let scanTargets: string[] = [];
+      try {
+        scanTargets = getGitleaksScanTargets(rootDir, fsImpl);
+      } catch (err: any) {
+        console.error(`❌ LỖI ENUMERATION THƯ MỤC KHI QUÉT SECRET: ${err.message}`);
+        outcome = { exitCode: 2, message: `Directory enumeration failed: ${err.message}` };
+        hasOperationalError = true;
       }
 
-      if (dirResult.findings.length > 0) {
-        allDirFindings.push(...dirResult.findings);
+      if (!hasOperationalError) {
+        if (scanTargets.length === 0) {
+          console.error(
+            '❌ LỖI: Không tìm thấy bất kỳ target hợp lệ nào để quét trong working tree!'
+          );
+          outcome = { exitCode: 2, message: 'No valid scan targets found' };
+          hasOperationalError = true;
+        } else {
+          const allDirFindings: any[] = [];
+
+          for (let idx = 0; idx < scanTargets.length; idx++) {
+            const target = scanTargets[idx];
+            const targetReport = path.join(rootDir, `.temp-gitleaks-target-${idx}-report.json`);
+            tempFilesToClean.push(targetReport);
+
+            const dirResult = executeGitleaks(
+              gitleaksBin,
+              [
+                'dir',
+                path.resolve(rootDir, target),
+                '-c',
+                configPath,
+                '--report-path',
+                targetReport,
+                '--report-format',
+                'json',
+                '--redact',
+                '--verbose',
+              ],
+              targetReport,
+              dependencies.spawnImpl,
+              fsImpl
+            );
+
+            if (!dirResult.success) {
+              console.error(
+                `❌ LỖI THỰC THI GITLEAKS TRÊN TARGET "${target}": ${dirResult.operationalError}`
+              );
+              outcome = { exitCode: 2, message: dirResult.operationalError };
+              hasOperationalError = true;
+              break;
+            }
+
+            if (dirResult.findings.length > 0) {
+              allDirFindings.push(...dirResult.findings);
+            }
+          }
+
+          if (!hasOperationalError) {
+            if (allDirFindings.length > 0) {
+              console.error(
+                `\n❌ Gitleaks phát hiện ${allDirFindings.length} vi phạm bí mật trong working tree:`
+              );
+              for (const f of allDirFindings) {
+                console.error(
+                  ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
+                );
+              }
+              outcome = { exitCode: 1, message: 'Secrets detected in working tree' };
+            } else if (!hasFinding) {
+              console.log(
+                '\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.'
+              );
+              outcome = { exitCode: 0 };
+            }
+          }
+        }
       }
     }
-
-    if (allDirFindings.length > 0) {
-      console.error(
-        `\n❌ Gitleaks phát hiện ${allDirFindings.length} vi phạm bí mật trong working tree:`
-      );
-      for (const f of allDirFindings) {
-        console.error(
-          ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
-        );
-      }
-      return { exitCode: 1, message: 'Secrets detected in working tree' };
-    }
-
-    console.log(
-      '\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.'
-    );
-    outcome = { exitCode: 0 };
   } catch (err: any) {
     outcome = { exitCode: 2, message: `Unexpected operational error: ${err.message}` };
   } finally {

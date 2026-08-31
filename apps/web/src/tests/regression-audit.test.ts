@@ -360,27 +360,72 @@ async function runRegressionSuite() {
       'cleanTemporaryFiles fails closed and throws operational error when unlinking reports fails'
     );
 
-    // 5j. CLI runner fail-closed on mock cleanup failure (DI test)
-    const mockFsWithLockedReport = {
+    // 5j-1. Secret found plus cleanup failure -> operational failure (exit code 2) must override finding (exit code 1)
+    const mockFsWithLockedSecretReport = {
       ...fs,
-      existsSync: (p: string) =>
-        String(p).includes('.temp-gitleaks-negative') ? true : fs.existsSync(p),
+      existsSync: (p: string) => (String(p).includes('.temp-gitleaks') ? true : fs.existsSync(p)),
       unlinkSync: (p: string) => {
-        if (String(p).includes('.temp-gitleaks-negative')) {
-          throw new Error('EPERM: cannot delete temporary report');
+        if (String(p).includes('.temp-gitleaks')) {
+          throw new Error('EPERM: cannot delete temporary report on secret finding branch');
         }
         fs.unlinkSync(p);
       },
     };
-    const cliCleanupFailResult = runCliVerification(['--test-negative'], {
-      fsImpl: mockFsWithLockedReport as any,
+    const secretFoundCleanupFailResult = runCliVerification(['--test-negative'], {
+      fsImpl: mockFsWithLockedSecretReport as any,
       rootDir,
       getBin: () => gitleaksBin,
     });
     assert(
-      cliCleanupFailResult.exitCode === 2 &&
-        Boolean(cliCleanupFailResult.message?.includes('cannot delete temporary report')),
-      'runCliVerification fails closed with exit code 2 when temporary report cleanup fails'
+      secretFoundCleanupFailResult.exitCode === 2 &&
+        Boolean(secretFoundCleanupFailResult.message?.includes('cannot delete temporary report')),
+      'runCliVerification overrides finding (exit code 1) with exit code 2 when report cleanup fails after secret finding'
+    );
+
+    // 5j-2. Clean scan plus cleanup failure -> operational failure (exit code 2) must override clean result (exit code 0)
+    const mockSpawnCleanSuccess = () => ({
+      status: 0,
+      stdout: '',
+      stderr: '',
+      error: undefined,
+    });
+    const mockFsWithLockedCleanReport = {
+      ...fs,
+      existsSync: (p: string) => (String(p).includes('.temp-gitleaks') ? true : fs.existsSync(p)),
+      readFileSync: (p: string, opt: any) =>
+        String(p).includes('.temp-gitleaks') ? '[]' : fs.readFileSync(p, opt),
+      unlinkSync: (p: string) => {
+        if (String(p).includes('.temp-gitleaks')) {
+          throw new Error('EBUSY: resource locked on clean scan report cleanup');
+        }
+        fs.unlinkSync(p);
+      },
+    };
+    const cleanScanCleanupFailResult = runCliVerification([], {
+      fsImpl: mockFsWithLockedCleanReport as any,
+      spawnImpl: mockSpawnCleanSuccess as any,
+      rootDir,
+      getBin: () => gitleaksBin,
+    });
+    assert(
+      cleanScanCleanupFailResult.exitCode === 2 &&
+        Boolean(
+          cleanScanCleanupFailResult.message?.includes(
+            'resource locked on clean scan report cleanup'
+          )
+        ),
+      'runCliVerification overrides clean result (exit code 0) with exit code 2 when report cleanup fails on clean scan'
+    );
+
+    // 5j-3. Successful cleanup test -> verifies temporary report removal and unpolluted filesystem
+    const trackedTempFiles: string[] = [];
+    const testTempReport = path.join(rootDir, '.temp-gitleaks-success-cleanup-test.json');
+    fs.writeFileSync(testTempReport, '[]', 'utf-8');
+    assert(fs.existsSync(testTempReport), 'Temporary test report must exist before cleanup');
+    cleanTemporaryFiles([testTempReport]);
+    assert(
+      !fs.existsSync(testTempReport),
+      'cleanTemporaryFiles must delete temporary report on successful cleanup'
     );
 
     // 5k. Ignored paths and generated artifact filtering

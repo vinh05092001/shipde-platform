@@ -2,6 +2,7 @@
   "name": "@shipde/config",
   "version": "0.1.0",
   "description": "Ship Dễ — Shared workspace configuration, tsconfig base, and toolchain defaults",
+  "type": "module",
   "private": true,
   "main": "./dist/index.js",
   "module": "./dist/index.js",
