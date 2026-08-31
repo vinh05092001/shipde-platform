@@ -8,6 +8,7 @@ export type WeightGram = number; // Gram (Ví dụ: 500 = 0.5kg)
 import {
   UserRole,
   Role,
+  PrototypePersona,
   CarrierCode,
   CarrierCapabilityTier,
   ShipmentStatus,
@@ -21,6 +22,7 @@ import {
 export {
   UserRole,
   Role,
+  PrototypePersona,
   CarrierCode,
   CarrierCapabilityTier,
   ShipmentStatus,

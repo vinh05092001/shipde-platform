@@ -1,5 +1,11 @@
 import { assertValidMonorepoPackage, createMockId, resolveMonorepoPackage } from './index';
-import { UserRole, CarrierCode, CarrierCapabilityTier, ShipmentStatus } from '@shipde/contracts';
+import {
+  UserRole,
+  PrototypePersona,
+  CarrierCode,
+  CarrierCapabilityTier,
+  ShipmentStatus,
+} from '@shipde/contracts';
 
 function testTestkit() {
   // Test mock ID generation
@@ -34,6 +40,21 @@ function testTestkit() {
   const contractsPath = resolveMonorepoPackage('@shipde/contracts');
   if (!contractsPath || typeof contractsPath !== 'string') {
     throw new Error('resolveMonorepoPackage did not return valid path for @shipde/contracts');
+  }
+
+  // Verify canonical UserRole contains exactly the 4 persisted/domain roles
+  const canonicalRoleKeys = Object.keys(UserRole).sort();
+  const expectedRoleKeys = ['ACCOUNTANT', 'OPS_CSKH', 'OWNER', 'WAREHOUSE'].sort();
+  if (JSON.stringify(canonicalRoleKeys) !== JSON.stringify(expectedRoleKeys)) {
+    throw new Error(`UserRole keys mismatch: got ${canonicalRoleKeys.join(',')}`);
+  }
+  if ('BACKOFFICE' in UserRole) {
+    throw new Error('BACKOFFICE must not be part of canonical UserRole contract');
+  }
+
+  // Verify PrototypePersona models navigation persona
+  if (PrototypePersona.BACKOFFICE !== 'BACKOFFICE') {
+    throw new Error('PrototypePersona.BACKOFFICE must equal BACKOFFICE');
   }
 
   // Verify runtime imports and contract values from @shipde/contracts

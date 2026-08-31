@@ -9,7 +9,6 @@ export const UserRole = {
   OPS_CSKH: 'OPS_CSKH',
   WAREHOUSE: 'WAREHOUSE',
   ACCOUNTANT: 'ACCOUNTANT',
-  BACKOFFICE: 'BACKOFFICE',
 } as const;
 
 export type UserRole = (typeof UserRole)[keyof typeof UserRole];
@@ -18,6 +17,14 @@ export const Role = UserRole;
 
 export const CanonicalRole = UserRole;
 export type CanonicalRole = UserRole;
+
+// --- Prototype Navigation Personas ---
+export const PrototypePersona = {
+  ...UserRole,
+  BACKOFFICE: 'BACKOFFICE',
+} as const;
+
+export type PrototypePersona = (typeof PrototypePersona)[keyof typeof PrototypePersona];
 
 // --- Carrier Codes ---
 export const CarrierCode = {
