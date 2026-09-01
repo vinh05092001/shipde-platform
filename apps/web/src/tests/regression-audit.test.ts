@@ -565,7 +565,7 @@ async function runRegressionSuite() {
         };
 
         // Inject failing rmSync into executeScopedCleanup cleanup path
-        const failingRmSync: typeof fs.rmSync = (targetPath: string, options?: any) => {
+        const failingRmSync = (targetPath: any, options?: any): void => {
           throw new Error('EPERM: simulated permission denied during directory cleanup');
         };
 
