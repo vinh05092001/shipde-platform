@@ -565,6 +565,102 @@ async function runRegressionSuite() {
     );
   }
 
+  // Test 7: Next.js next-env.d.ts Stability Invariant Across Dev and Build
+  if (typeof window === 'undefined') {
+    const fs = await import('fs');
+    const path = await import('path');
+    const cp = await import('child_process');
+    let rootDir = process.cwd();
+    if (fs.existsSync(path.join(rootDir, '../../turbo.json'))) {
+      rootDir = path.resolve(rootDir, '../..');
+    }
+
+    const gitignorePath = path.join(rootDir, '.gitignore');
+    assert(fs.existsSync(gitignorePath), '.gitignore must exist in root');
+    const gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8');
+    const gitignoreLines = gitignoreContent.split('\n').map((l) => l.trim());
+    assert(
+      gitignoreLines.includes('next-env.d.ts'),
+      '.gitignore must ignore next-env.d.ts to prevent command-specific generated variants from dirtying git'
+    );
+
+    const webTsconfigPath = path.join(rootDir, 'apps/web/tsconfig.json');
+    assert(fs.existsSync(webTsconfigPath), 'apps/web/tsconfig.json must exist');
+    const tsconfig = JSON.parse(fs.readFileSync(webTsconfigPath, 'utf-8'));
+    assert(
+      tsconfig.include &&
+        tsconfig.include.includes('next-env.d.ts') &&
+        tsconfig.include.includes('.next/types/**/*.ts') &&
+        tsconfig.include.includes('.next/dev/types/**/*.ts'),
+      'apps/web/tsconfig.json must include next-env.d.ts and both dev/prod next route types'
+    );
+
+    // Verify git ls-files does not track apps/web/next-env.d.ts
+    try {
+      const lsResult = cp
+        .execFileSync('git', ['ls-files', 'apps/web/next-env.d.ts'], {
+          cwd: rootDir,
+          encoding: 'utf-8',
+        })
+        .trim();
+      assert(
+        lsResult.length === 0,
+        `apps/web/next-env.d.ts must not be tracked in git (git ls-files returned: "${lsResult}")`
+      );
+
+      // Verify git check-ignore confirms apps/web/next-env.d.ts is ignored
+      const checkIgnoreResult = cp
+        .execFileSync('git', ['check-ignore', 'apps/web/next-env.d.ts'], {
+          cwd: rootDir,
+          encoding: 'utf-8',
+        })
+        .trim();
+      assert(
+        checkIgnoreResult.endsWith('next-env.d.ts'),
+        `apps/web/next-env.d.ts must be matched by git ignore rules (got: "${checkIgnoreResult}")`
+      );
+
+      // Test dev generation simulation: ensure writing dev content leaves working tree 100% clean
+      const webNextEnvPath = path.join(rootDir, 'apps/web/next-env.d.ts');
+      const devContent =
+        '/// <reference types="next" />\n/// <reference types="next/image-types/global" />\nimport "./.next/dev/types/routes.d.ts";\n\n// NOTE: This file should not be edited\n';
+      fs.writeFileSync(webNextEnvPath, devContent, 'utf-8');
+
+      const devStatusResult = cp
+        .execFileSync('git', ['status', '--porcelain', 'apps/web/next-env.d.ts'], {
+          cwd: rootDir,
+          encoding: 'utf-8',
+        })
+        .trim();
+      assert(
+        devStatusResult.length === 0,
+        `apps/web/next-env.d.ts must not dirty git status during dev generation (got: "${devStatusResult}")`
+      );
+
+      // Test build generation simulation: ensure writing build content leaves working tree 100% clean
+      const buildContent =
+        '/// <reference types="next" />\n/// <reference types="next/image-types/global" />\nimport "./.next/types/routes.d.ts";\n\n// NOTE: This file should not be edited\n';
+      fs.writeFileSync(webNextEnvPath, buildContent, 'utf-8');
+
+      const buildStatusResult = cp
+        .execFileSync('git', ['status', '--porcelain', 'apps/web/next-env.d.ts'], {
+          cwd: rootDir,
+          encoding: 'utf-8',
+        })
+        .trim();
+      assert(
+        buildStatusResult.length === 0,
+        `apps/web/next-env.d.ts must not dirty git status during build generation (got: "${buildStatusResult}")`
+      );
+    } catch (e: any) {
+      if (e.message && e.message.includes('not a git repository')) {
+        // Safe fallback in environments without git
+      } else {
+        throw e;
+      }
+    }
+  }
+
   console.log('\n================================================================');
   console.log('🎉 TẤT CẢ CÁC BÀI KIỂM TOÁN HỒI QUY ĐẠT 100%');
   console.log('================================================================\n');
