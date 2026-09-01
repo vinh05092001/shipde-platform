@@ -194,6 +194,16 @@ async function runRegressionSuite() {
       walkDir,
     } = await import(pathToFileURL(verifySecretsScript).href);
 
+    // Snapshot initial temporary files in root directory to distinguish pre-existing artifacts from newly created ones
+    const initialTempReports = new Set(
+      fs
+        .readdirSync(rootDir)
+        .filter(
+          (entry: string) =>
+            entry.startsWith('.temp-gitleaks') || entry.startsWith('test-negative-secret-fixture')
+        )
+    );
+
     // Create an isolated temporary directory for running all CLI and scanner regression tests
     const isolatedTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-scanner-test-'));
     const isolatedConfigPath = path.join(isolatedTempDir, '.gitleaks.toml');
@@ -514,20 +524,23 @@ async function runRegressionSuite() {
       }
     } finally {
       // Guarantee real filesystem cleanup of the isolated temporary directory
-      try {
-        fs.rmSync(isolatedTempDir, { recursive: true, force: true });
-      } catch {}
+      fs.rmSync(isolatedTempDir, { recursive: true, force: true });
+      assert(
+        !fs.existsSync(isolatedTempDir),
+        `Isolated temporary directory ${isolatedTempDir} must be completely deleted after test run`
+      );
     }
 
-    // Assert that the repository root workspace is 100% free of any temporary gitleaks reports or test fixtures
+    // Assert that the test run left zero new temporary secret scanner reports or fixtures
     const rootDirEntries = fs.readdirSync(rootDir);
-    const leftoverTempReports = rootDirEntries.filter(
+    const newlyCreatedTempReports = rootDirEntries.filter(
       (entry: string) =>
-        entry.startsWith('.temp-gitleaks') || entry.startsWith('test-negative-secret-fixture')
+        (entry.startsWith('.temp-gitleaks') || entry.startsWith('test-negative-secret-fixture')) &&
+        !initialTempReports.has(entry)
     );
     assert(
-      leftoverTempReports.length === 0,
-      `Repository root must contain zero temporary secret scanner reports or fixtures after test run (found: ${leftoverTempReports.join(', ')})`
+      newlyCreatedTempReports.length === 0,
+      `Repository root must contain zero new temporary secret scanner reports or fixtures created by test run (found: ${newlyCreatedTempReports.join(', ')})`
     );
   }
 
@@ -544,24 +557,8 @@ async function runRegressionSuite() {
     const turboConfig = JSON.parse(fs.readFileSync(turboJsonPath, 'utf-8'));
     const testTask = turboConfig.tasks?.test;
     assert(
-      testTask && testTask.cache !== false,
-      'turbo.json must have test task with caching enabled'
-    );
-    assert(
-      Array.isArray(testTask.inputs),
-      'turbo.json test task must explicitly configure inputs array'
-    );
-    assert(
-      testTask.inputs.includes('$TURBO_DEFAULT$'),
-      'turbo.json test task inputs must include $TURBO_DEFAULT$'
-    );
-    assert(
-      testTask.inputs.includes('$TURBO_ROOT$/scripts/verify-secrets.ts'),
-      'turbo.json test task inputs must include $TURBO_ROOT$/scripts/verify-secrets.ts to invalidate cache on scanner script change'
-    );
-    assert(
-      testTask.inputs.includes('$TURBO_ROOT$/.gitleaks.toml'),
-      'turbo.json test task inputs must include $TURBO_ROOT$/.gitleaks.toml to invalidate cache on gitleaks config change'
+      testTask && testTask.cache === false,
+      'turbo.json must configure test task as uncached (cache: false) to prevent environment-sensitive repository state tests from being bypassed by stale cache replays'
     );
   }
 
