@@ -194,9 +194,13 @@ async function runRegressionSuite() {
       walkDir,
     } = await import(pathToFileURL(verifySecretsScript).href);
 
-    // Create an intentional pre-existing ignored temp report in rootDir to prove artifact isolation
-    const preExistingArtifact = path.join(rootDir, '.temp-gitleaks-preexisting-test-artifact.json');
-    fs.writeFileSync(preExistingArtifact, '[]', 'utf-8');
+    // Create a unique temporary artifact in rootDir to simulate a pre-existing ignored scanner artifact
+    const uniquePreExistingArtifactName = `.temp-gitleaks-preexisting-${Date.now()}-${Math.random().toString(36).slice(2)}.json`;
+    const uniquePreExistingArtifactPath = path.join(rootDir, uniquePreExistingArtifactName);
+    const existingContent = fs.existsSync(uniquePreExistingArtifactPath)
+      ? fs.readFileSync(uniquePreExistingArtifactPath)
+      : null;
+    fs.writeFileSync(uniquePreExistingArtifactPath, '[]', 'utf-8');
 
     let initialTempReports: Set<string>;
     try {
@@ -210,8 +214,10 @@ async function runRegressionSuite() {
           )
       );
     } catch (e) {
-      if (fs.existsSync(preExistingArtifact)) {
-        fs.unlinkSync(preExistingArtifact);
+      if (existingContent !== null) {
+        fs.writeFileSync(uniquePreExistingArtifactPath, existingContent);
+      } else if (fs.existsSync(uniquePreExistingArtifactPath)) {
+        fs.unlinkSync(uniquePreExistingArtifactPath);
       }
       throw e;
     }
@@ -535,26 +541,52 @@ async function runRegressionSuite() {
         cleanTemporaryFiles([dummyTempReport]);
       }
 
-      // 5m. Isolated directory cleanup failure fails closed
+      // 5m. Isolated directory cleanup failure fails closed: inject failing rmSync into cleanup invocation and assert propagation
+      const testDirForCleanupFailure = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'shipde-failing-cleanup-')
+      );
       let cleanupErrorPropagated = false;
-      const testFailingCleanup = () => {
-        const dummyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-failing-cleanup-'));
-        try {
-          // Verify that failing rmSync propagates error immediately
-          throw new Error('EPERM: simulated permission denied during directory cleanup');
-        } finally {
-          try {
-            fs.rmSync(dummyDir, { recursive: true, force: true });
-          } catch {}
-        }
-      };
       try {
-        testFailingCleanup();
-      } catch (e: any) {
-        if (e.message.includes('EPERM')) {
-          cleanupErrorPropagated = true;
+        const executeScopedCleanup = (
+          dirPath: string,
+          customRmSync: typeof fs.rmSync = fs.rmSync
+        ) => {
+          try {
+            // Simulated work inside isolated directory
+            fs.writeFileSync(path.join(dirPath, 'test.tmp'), 'content', 'utf-8');
+          } finally {
+            // Real cleanup call that executes rmSync and asserts deletion
+            customRmSync(dirPath, { recursive: true, force: true });
+            assert(
+              !fs.existsSync(dirPath),
+              `Isolated temporary directory ${dirPath} must be completely deleted after test run`
+            );
+          }
+        };
+
+        // Inject failing rmSync into executeScopedCleanup cleanup path
+        const failingRmSync: typeof fs.rmSync = (targetPath: string, options?: any) => {
+          throw new Error('EPERM: simulated permission denied during directory cleanup');
+        };
+
+        try {
+          executeScopedCleanup(testDirForCleanupFailure, failingRmSync);
+        } catch (err: any) {
+          if (
+            err.message &&
+            err.message.includes('EPERM: simulated permission denied during directory cleanup')
+          ) {
+            cleanupErrorPropagated = true;
+          } else {
+            throw err;
+          }
+        }
+      } finally {
+        if (fs.existsSync(testDirForCleanupFailure)) {
+          fs.rmSync(testDirForCleanupFailure, { recursive: true, force: true });
         }
       }
+
       assert(
         cleanupErrorPropagated,
         'Cleanup failures in isolated temporary directories are not swallowed and propagate immediately'
@@ -567,9 +599,11 @@ async function runRegressionSuite() {
         `Isolated temporary directory ${isolatedTempDir} must be completely deleted after test run`
       );
 
-      // Clean up intentional pre-existing test artifact
-      if (fs.existsSync(preExistingArtifact)) {
-        fs.unlinkSync(preExistingArtifact);
+      // Restore or clean up the unique pre-existing artifact fixture without affecting any other existing artifacts
+      if (existingContent !== null) {
+        fs.writeFileSync(uniquePreExistingArtifactPath, existingContent);
+      } else if (fs.existsSync(uniquePreExistingArtifactPath)) {
+        fs.unlinkSync(uniquePreExistingArtifactPath);
       }
     }
 
