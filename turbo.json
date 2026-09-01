@@ -15,6 +15,9 @@
     },
     "test": {
       "dependsOn": ["build", "^build"],
+      "inputs": ["$TURBO_DEFAULT$"]
+    },
+    "test:audit": {
       "cache": false
     },
     "test:e2e": {

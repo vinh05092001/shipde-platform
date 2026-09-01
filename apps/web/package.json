@@ -12,7 +12,8 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/tests/regression-audit.test.ts && tsx src/tests/comprehensive-rules.test.ts",
+    "test": "tsx src/tests/comprehensive-rules.test.ts",
+    "test:audit": "tsx src/tests/regression-audit.test.ts",
     "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
     "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
     "version:next": "next --version"
