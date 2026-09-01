@@ -112,6 +112,19 @@ jobs:
       - run: pnpm test
       - run: pnpm test:e2e
       - run: pnpm test:baseline
+      - name: Verify Preservation Baseline Negative Proof
+        run: |
+          set +e
+          pnpm test:baseline -- --test-negative
+          EXIT_CODE=$?
+          set -e
+          echo "Preservation baseline negative proof returned exit code: $EXIT_CODE"
+          if [ "$EXIT_CODE" -eq 1 ]; then
+            echo "Success: Preservation baseline negative proof exited with exact code 1 as required by AC-FOUND-02-04."
+          else
+            echo "Error: Expected preservation baseline negative proof to exit with exact code 1, but got code $EXIT_CODE!"
+            exit 1
+          fi
       - run: pnpm build
       - run: pnpm security:secrets
         env:
