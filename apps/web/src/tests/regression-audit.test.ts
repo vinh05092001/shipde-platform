@@ -751,6 +751,21 @@ async function runRegressionSuite() {
       webPkg.scripts?.['version:next'] && webPkg.scripts?.['test:audit'],
       'apps/web/package.json must expose version:next and test:audit scripts'
     );
+
+    // 6d. Explicit cacheDir ensures cache is isolated inside the active linked worktree
+    assert(
+      turboConfig.cacheDir === '.turbo/cache',
+      'turbo.json must configure explicit cacheDir: ".turbo/cache" to keep every Turbo cache inside the active linked worktree and disable shared worktree caching'
+    );
+
+    const turboTaskScripts = ['dev', 'build', 'lint', 'typecheck', 'test', 'test:e2e'];
+    for (const scriptName of turboTaskScripts) {
+      const scriptCmd = rootPkg.scripts?.[scriptName] || '';
+      assert(
+        scriptCmd.includes('--cache-dir=.turbo/cache'),
+        `Root package.json script "${scriptName}" must explicitly specify --cache-dir=.turbo/cache (got: "${scriptCmd}")`
+      );
+    }
   }
 
   // Test 7: Next.js next-env.d.ts Stability Invariant Across Dev and Build
