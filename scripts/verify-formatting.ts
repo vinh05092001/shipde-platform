@@ -280,7 +280,10 @@ if (require.main === module) {
         if (fs.existsSync(tempFixture)) {
           try {
             fs.unlinkSync(tempFixture);
-          } catch {}
+          } catch (cleanupErr: any) {
+            console.error(`❌ LỖI XÓA FIXTURE ÂM TÍNH: ${cleanupErr.message}`);
+            executionError = cleanupErr;
+          }
         }
       }
 

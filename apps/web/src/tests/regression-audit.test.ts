@@ -191,36 +191,19 @@ async function runRegressionSuite() {
       getGitleaksScanTargets,
       cleanTemporaryFiles,
       runCliVerification,
+      runNegativeCliTest,
       walkDir,
     } = await import(pathToFileURL(verifySecretsScript).href);
 
-    // Create a unique temporary artifact in rootDir to simulate a pre-existing ignored scanner artifact
-    const uniquePreExistingArtifactName = `.temp-gitleaks-preexisting-${Date.now()}-${Math.random().toString(36).slice(2)}.json`;
-    const uniquePreExistingArtifactPath = path.join(rootDir, uniquePreExistingArtifactName);
-    const existingContent = fs.existsSync(uniquePreExistingArtifactPath)
-      ? fs.readFileSync(uniquePreExistingArtifactPath)
-      : null;
-    fs.writeFileSync(uniquePreExistingArtifactPath, '[]', 'utf-8');
-
-    let initialTempReports: Set<string>;
-    try {
-      // Snapshot initial temporary files in root directory to distinguish pre-existing artifacts from newly created ones
-      initialTempReports = new Set(
-        fs
-          .readdirSync(rootDir)
-          .filter(
-            (entry: string) =>
-              entry.startsWith('.temp-gitleaks') || entry.startsWith('test-negative-secret-fixture')
-          )
-      );
-    } catch (e) {
-      if (existingContent !== null) {
-        fs.writeFileSync(uniquePreExistingArtifactPath, existingContent);
-      } else if (fs.existsSync(uniquePreExistingArtifactPath)) {
-        fs.unlinkSync(uniquePreExistingArtifactPath);
-      }
-      throw e;
-    }
+    // Snapshot initial temporary files in root directory to distinguish pre-existing artifacts from newly created ones
+    const initialTempReports = new Set(
+      fs
+        .readdirSync(rootDir)
+        .filter(
+          (entry: string) =>
+            entry.startsWith('.temp-gitleaks') || entry.startsWith('test-negative-secret-fixture')
+        )
+    );
 
     // Create an isolated temporary directory for running all CLI and scanner regression tests
     const isolatedTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-scanner-test-'));
@@ -541,55 +524,167 @@ async function runRegressionSuite() {
         cleanTemporaryFiles([dummyTempReport]);
       }
 
-      // 5m. Isolated directory cleanup failure fails closed: inject failing rmSync into cleanup invocation and assert propagation
-      const testDirForCleanupFailure = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'shipde-failing-cleanup-')
-      );
-      let cleanupErrorPropagated = false;
-      try {
-        const executeScopedCleanup = (
-          dirPath: string,
-          customRmSync: typeof fs.rmSync = fs.rmSync
-        ) => {
-          try {
-            // Simulated work inside isolated directory
-            fs.writeFileSync(path.join(dirPath, 'test.tmp'), 'content', 'utf-8');
-          } finally {
-            // Real cleanup call that executes rmSync and asserts deletion
-            customRmSync(dirPath, { recursive: true, force: true });
-            assert(
-              !fs.existsSync(dirPath),
-              `Isolated temporary directory ${dirPath} must be completely deleted after test run`
+      // 5m-1. Inject failing rmSync into real production cleanup call during clean CLI scan
+      const { unlinkSync: _unusedUnlink1, ...baseFsClean } = fs;
+      const mockFsWithFailingRmSyncOnCleanScan = {
+        ...baseFsClean,
+        unlinkSync: undefined,
+        existsSync: (p: string) => {
+          if (String(p).includes('.temp-gitleaks')) return true;
+          return fs.existsSync(p);
+        },
+        readFileSync: (p: string, encoding: any) => {
+          if (String(p).includes('.temp-gitleaks')) {
+            return JSON.stringify([]);
+          }
+          return fs.readFileSync(p, encoding);
+        },
+        rmSync: (targetPath: any, options?: any) => {
+          if (String(targetPath).includes('.temp-gitleaks')) {
+            throw new Error(
+              'EPERM: simulated permission denied during production rmSync cleanup on clean scan'
             );
           }
-        };
+          return fs.rmSync(targetPath, options);
+        },
+      };
 
-        // Inject failing rmSync into executeScopedCleanup cleanup path
-        const failingRmSync = (targetPath: any, options?: any): void => {
-          throw new Error('EPERM: simulated permission denied during directory cleanup');
-        };
-
-        try {
-          executeScopedCleanup(testDirForCleanupFailure, failingRmSync);
-        } catch (err: any) {
-          if (
-            err.message &&
-            err.message.includes('EPERM: simulated permission denied during directory cleanup')
-          ) {
-            cleanupErrorPropagated = true;
-          } else {
-            throw err;
-          }
-        }
-      } finally {
-        if (fs.existsSync(testDirForCleanupFailure)) {
-          fs.rmSync(testDirForCleanupFailure, { recursive: true, force: true });
-        }
-      }
+      const cleanScanFailingRmSyncResult = runCliVerification([], {
+        fsImpl: mockFsWithFailingRmSyncOnCleanScan as any,
+        spawnImpl: mockSpawnCleanSuccess as any,
+        rootDir: isolatedTempDir,
+        baseCommit: 'mock-base-sha-commit',
+        resolveGitCommit: () => 'mock-base-sha-commit',
+        getBin: () => 'mock-gitleaks',
+      });
 
       assert(
-        cleanupErrorPropagated,
-        'Cleanup failures in isolated temporary directories are not swallowed and propagate immediately'
+        cleanScanFailingRmSyncResult.exitCode === 2 &&
+          Boolean(
+            cleanScanFailingRmSyncResult.message?.includes(
+              'EPERM: simulated permission denied during production rmSync cleanup on clean scan'
+            )
+          ),
+        'runCliVerification fails closed with exit code 2 when injected rmSync throws EPERM during real production cleanup call on clean scan'
+      );
+
+      // 5m-2. Inject failing rmSync into real production cleanup call during negative CLI test
+      const { unlinkSync: _unusedUnlink2, ...baseFsNegative } = fs;
+      const mockFsWithFailingRmSyncOnNegative = {
+        ...baseFsNegative,
+        unlinkSync: undefined,
+        existsSync: (p: string) => {
+          if (
+            String(p).includes('.temp-gitleaks') ||
+            String(p).includes('test-negative-secret-fixture')
+          )
+            return true;
+          return fs.existsSync(p);
+        },
+        writeFileSync: (p: string, data: any) => {
+          return fs.writeFileSync(p, data);
+        },
+        rmSync: (targetPath: any, options?: any) => {
+          if (
+            String(targetPath).includes('.temp-gitleaks') ||
+            String(targetPath).includes('test-negative-secret-fixture')
+          ) {
+            throw new Error(
+              'EPERM: simulated permission denied during production rmSync cleanup on negative test'
+            );
+          }
+          return fs.rmSync(targetPath, options);
+        },
+      };
+
+      const negativeFailingRmSyncResult = runNegativeCliTest('mock-gitleaks', {
+        fsImpl: mockFsWithFailingRmSyncOnNegative as any,
+        spawnImpl: mockSpawnFinding as any,
+        rootDir: isolatedTempDir,
+      });
+
+      assert(
+        negativeFailingRmSyncResult.exitCode === 2 &&
+          Boolean(
+            negativeFailingRmSyncResult.message?.includes(
+              'EPERM: simulated permission denied during production rmSync cleanup on negative test'
+            )
+          ),
+        'runNegativeCliTest fails closed with exit code 2 when injected rmSync throws EPERM during real production cleanup call on negative test'
+      );
+
+      // 5m-3. Direct cleanTemporaryFiles throws when injected rmSync throws EPERM
+      let directCleanupError: any = null;
+      try {
+        cleanTemporaryFiles(['/mock/path/.temp-gitleaks-test.json'], {
+          existsSync: () => true,
+          rmSync: () => {
+            throw new Error('EPERM: simulated permission denied during direct rmSync call');
+          },
+        });
+      } catch (err: any) {
+        directCleanupError = err;
+      }
+      assert(
+        directCleanupError &&
+          directCleanupError.message.includes(
+            'EPERM: simulated permission denied during direct rmSync call'
+          ),
+        'cleanTemporaryFiles throws operational error when injected rmSync throws EPERM'
+      );
+
+      // 5n. Pre-existing scanner artifacts and sentinel reports are strictly preserved byte-for-byte
+      const sentinelReportName = `.temp-gitleaks-sentinel-evidence-${Date.now()}-${Math.random().toString(36).slice(2)}.json`;
+      const sentinelReportPath = path.join(isolatedTempDir, sentinelReportName);
+      const sentinelKnownBytes = Buffer.from(
+        JSON.stringify(
+          [
+            {
+              RuleID: 'sentinel-mock-finding',
+              Description:
+                'Historical preserved sentinel report evidence for test isolation verification',
+              File: 'src/sentinel.ts',
+              StartLine: 42,
+              EndLine: 42,
+            },
+          ],
+          null,
+          2
+        ) + '\n',
+        'utf-8'
+      );
+      fs.writeFileSync(sentinelReportPath, sentinelKnownBytes);
+
+      // Verify that getGitleaksScanTargets and walkDir strictly ignore pre-existing sentinel reports
+      const scanTargetsWithSentinel = getGitleaksScanTargets(isolatedTempDir);
+      assert(
+        !scanTargetsWithSentinel.some((t: string) => t.includes(sentinelReportName)),
+        'getGitleaksScanTargets strictly excludes pre-existing sentinel reports from scan targets'
+      );
+      const walkedFilesWithSentinel = walkDir(isolatedTempDir, isolatedTempDir, []);
+      assert(
+        !walkedFilesWithSentinel.some((f: string) => f.includes(sentinelReportName)),
+        'walkDir strictly excludes pre-existing sentinel reports from enumerated files'
+      );
+
+      // Run cleanTemporaryFiles with a separate transient report
+      const transientReport = path.join(
+        isolatedTempDir,
+        '.temp-gitleaks-transient-run-report.json'
+      );
+      fs.writeFileSync(transientReport, '[]', 'utf-8');
+      cleanTemporaryFiles([transientReport]);
+      assert(!fs.existsSync(transientReport), 'cleanTemporaryFiles cleans transient report');
+
+      // Assert that pre-existing sentinel report was never modified or deleted and remains byte-for-byte identical
+      assert(
+        fs.existsSync(sentinelReportPath),
+        'Pre-existing sentinel report must still exist after scanner scenario'
+      );
+      const sentinelReadBytes = fs.readFileSync(sentinelReportPath);
+      assert(
+        Buffer.compare(sentinelReadBytes, sentinelKnownBytes) === 0,
+        'Pre-existing sentinel report contents must remain byte-for-byte identical throughout test execution'
       );
     } finally {
       // Guarantee real filesystem cleanup of the isolated temporary directory
@@ -598,13 +693,6 @@ async function runRegressionSuite() {
         !fs.existsSync(isolatedTempDir),
         `Isolated temporary directory ${isolatedTempDir} must be completely deleted after test run`
       );
-
-      // Restore or clean up the unique pre-existing artifact fixture without affecting any other existing artifacts
-      if (existingContent !== null) {
-        fs.writeFileSync(uniquePreExistingArtifactPath, existingContent);
-      } else if (fs.existsSync(uniquePreExistingArtifactPath)) {
-        fs.unlinkSync(uniquePreExistingArtifactPath);
-      }
     }
 
     // Assert that the test run left zero new temporary secret scanner reports or fixtures

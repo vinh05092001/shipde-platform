@@ -297,15 +297,24 @@ export function getGitleaksScanTargets(
   return targets;
 }
 
-export function cleanTemporaryFiles(
-  files: string[],
-  fsImpl: { existsSync: typeof fs.existsSync; unlinkSync: typeof fs.unlinkSync } = fs
-): void {
+export interface CleanupFsInterface {
+  existsSync: (path: fs.PathLike) => boolean;
+  unlinkSync?: (path: fs.PathLike) => void;
+  rmSync?: (path: fs.PathLike, options?: fs.RmOptions) => void;
+}
+
+export function cleanTemporaryFiles(files: string[], fsImpl: CleanupFsInterface = fs): void {
   const errors: Error[] = [];
   for (const file of files) {
     try {
       if (fsImpl.existsSync(file)) {
-        fsImpl.unlinkSync(file);
+        if (typeof fsImpl.unlinkSync === 'function') {
+          fsImpl.unlinkSync(file);
+        } else if (typeof fsImpl.rmSync === 'function') {
+          fsImpl.rmSync(file, { recursive: true, force: true });
+        } else {
+          fs.unlinkSync(file);
+        }
       }
     } catch (err: any) {
       console.error(`❌ LỖI XÓA FILE BÁO CÁO TẠM ${file}: ${err.message}`);
