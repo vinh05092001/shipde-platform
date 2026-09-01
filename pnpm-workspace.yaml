@@ -3,9 +3,15 @@ packages:
   - 'packages/*'
 
 allowBuilds:
+  # 1. Generates Prisma client JavaScript/TypeScript runtime bindings during install
   '@prisma/client': true
+  # 2. Downloads and extracts pre-compiled Prisma query engine binaries for schema operations
   '@prisma/engines': true
+  # 3. Native binary installer required by tsx for script execution and Turborepo builds
   esbuild: true
+  # 4. Prisma CLI setup for database schema generation and validation
   prisma: true
+  # 5. Native image processing library required for Next.js image optimization
   sharp: true
+  # 6. Native resolver binary required for ESLint/TypeScript module resolution during linting
   unrs-resolver: true

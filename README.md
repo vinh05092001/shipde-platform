@@ -39,11 +39,25 @@ Tất cả các lệnh được điều phối từ thư mục gốc qua `pnpm` 
 | `pnpm format:write`              | Tự động định dạng toàn bộ mã nguồn                           |
 | `pnpm typecheck`                 | Kiểm tra kiểu dữ liệu TypeScript trên toàn workspace         |
 | `pnpm test`                      | Chạy bộ kiểm toán hồi quy & bất biến nghiệp vụ               |
+| `pnpm test:audit`                | Chạy kiểm toán hồi quy độc lập (tự động build prerequisite)  |
 | `pnpm test:e2e`                  | Chạy 12 kịch bản kiểm thử xuyên suốt (E2E Scenarios)         |
 | `pnpm test:baseline`             | Chạy bộ kiểm thử khói bảo toàn 10 bề mặt điều hành trọng yếu |
 | `pnpm security:secrets`          | Quét kiểm tra rò rỉ bí mật với Gitleaks                      |
 | `pnpm concierge:audit`           | Thực thi kiểm toán thí nghiệm Concierge trên 3 shop mẫu      |
 
-## 4. Nguyên tắc Vận hành & Đóng góp
+## 4. Chính sách Phê duyệt Lifecycle Scripts (pnpm allowBuilds)
+
+Nhằm đảm bảo an toàn chuỗi cung ứng (supply chain security), toàn bộ dependency lifecycle scripts bị từ chối mặc định (`deny by default`). Chỉ có 6 gói phụ thuộc sau được phê duyệt rõ ràng trong `pnpm-workspace.yaml`:
+
+| Gói phụ thuộc     | Lý do cụ thể                              | Tính năng yêu cầu                       | Kết quả thẩm định                    | Tính chấp nhận được                  |
+| ----------------- | ----------------------------------------- | --------------------------------------- | ------------------------------------ | ------------------------------------ |
+| `@prisma/client`  | Sinh TypeScript client bindings từ schema | `apps/web/src/server/db.ts` & 17 models | Sinh mã local trong `.prisma/client` | Bắt buộc cho type-safe ORM           |
+| `@prisma/engines` | Tải pre-compiled query engine binaries    | CLI validation & client execution       | Binaries xác thực checksum           | Cần thiết cho Prisma query engine    |
+| `esbuild`         | Cài đặt native binary cho host OS         | `tsx` chạy root scripts & Turbo build   | Native binary đóng gói sẵn           | Bundler chuẩn cho TypeScript scripts |
+| `prisma`          | Thiết lập Prisma CLI command              | Schema generation & validation          | Local CLI wrapper                    | Tooling quản trị schema              |
+| `sharp`           | Cài đặt native libvips image processor    | Next.js Image optimization              | Xử lý ảnh pod/logo local             | Tối ưu hóa ảnh trong `apps/web`      |
+| `unrs-resolver`   | Native Rust module resolution             | ESLint / TypeScript linting resolver    | Phân giải import path static         | Cần thiết cho `pnpm lint` workspace  |
+
+## 5. Nguyên tắc Vận hành & Đóng góp
 
 Vui lòng tham khảo chi tiết hợp đồng tác tử và quy tắc chuyển giao tại [AGENTS.md](./AGENTS.md).
