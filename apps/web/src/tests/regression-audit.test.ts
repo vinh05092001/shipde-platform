@@ -905,10 +905,11 @@ async function runRegressionSuite() {
     }
   }
 
-  // Test 8: Real Cache-Writing Turbo Task & Worktree Isolation Invariant (Fail-Closed)
+  // Test 8: Deterministic Ephemeral Linked-Worktree Isolation & 3-State Cache Preservation Invariant (Fail-Closed)
   if (typeof window === 'undefined') {
     const fs = await import('fs');
     const path = await import('path');
+    const os = await import('os');
     const cp = await import('child_process');
     let rootDir = process.cwd();
     if (fs.existsSync(path.join(rootDir, '../../turbo.json'))) {
@@ -935,156 +936,225 @@ async function runRegressionSuite() {
       'Git worktree list must identify at least the primary repository'
     );
 
-    const normalizePath = (p: string) => path.normalize(p).toLowerCase();
-    const activeNormalized = normalizePath(rootDir);
+    // 8b. Create a deterministic ephemeral linked worktree and explicit 3-state sibling regression scenarios
+    const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-wt-isolate-'));
+    const ephemeralWtPath = path.join(tempBase, 'target-wt');
 
-    // 8b. Snapshot integration checkout, Codex worktree, and all sibling worktrees before execution
-    interface WorktreeSnapshot {
+    // Ephemeral linked worktree setup
+    cp.execFileSync('git', ['worktree', 'add', '--detach', ephemeralWtPath, 'HEAD'], {
+      cwd: rootDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Sibling Regression Case A: Non-target sibling with no .turbo directory
+    const mockSiblingNoTurbo = path.join(tempBase, 'sibling-case-a-no-turbo');
+    fs.mkdirSync(mockSiblingNoTurbo, { recursive: true });
+
+    // Sibling Regression Case B: Non-target sibling where .turbo exists but .turbo/cache is absent
+    const mockSiblingTurboNoCache = path.join(tempBase, 'sibling-case-b-turbo-no-cache');
+    fs.mkdirSync(path.join(mockSiblingTurboNoCache, '.turbo'), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(mockSiblingTurboNoCache, '.turbo', 'config.json'),
+      '{"synthetic":true}',
+      'utf-8'
+    );
+
+    // Sibling Regression Case C: Non-target sibling where .turbo/cache exists with files
+    const mockSiblingTurboWithCache = path.join(tempBase, 'sibling-case-c-turbo-with-cache');
+    fs.mkdirSync(path.join(mockSiblingTurboWithCache, '.turbo', 'cache'), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(mockSiblingTurboWithCache, '.turbo', 'cache', 'mock-existing-cache.json'),
+      '{"cached":true}',
+      'utf-8'
+    );
+
+    interface TargetStateSnapshot {
       path: string;
-      isCurrent: boolean;
-      turboExists: boolean;
-      turboFiles: { name: string; size: number }[] | null;
-      gitStatus: string;
+      isGitWorktree: boolean;
+      turboDirExists: boolean;
+      turboCacheDirExists: boolean;
+      cacheFiles: { name: string; size: number }[] | null;
+      gitStatus: string | null;
     }
 
-    const preExecutionSnapshots: Record<string, WorktreeSnapshot> = {};
-    for (const wt of worktreePaths) {
-      const isCurrent = normalizePath(wt) === activeNormalized;
-      const turboDir = path.join(wt, '.turbo');
-      const turboCacheDir = path.join(turboDir, 'cache');
-      const turboExists = fs.existsSync(turboDir);
-      let turboFiles: { name: string; size: number }[] | null = null;
-      if (turboExists && fs.existsSync(turboCacheDir)) {
-        turboFiles = fs.readdirSync(turboCacheDir).map((file) => ({
-          name: file,
-          size: fs.statSync(path.join(turboCacheDir, file)).size,
-        }));
-      }
-      const gitStatus = cp
-        .execFileSync('git', ['status', '--porcelain'], {
-          cwd: wt,
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        })
-        .trim();
-      preExecutionSnapshots[wt] = {
-        path: wt,
-        isCurrent,
-        turboExists,
-        turboFiles,
-        gitStatus,
-      };
-    }
+    const monitoredTargets: { path: string; isGitWorktree: boolean }[] = [
+      ...worktreePaths.map((p) => ({ path: p, isGitWorktree: true })),
+      { path: mockSiblingNoTurbo, isGitWorktree: false },
+      { path: mockSiblingTurboNoCache, isGitWorktree: false },
+      { path: mockSiblingTurboWithCache, isGitWorktree: false },
+    ];
 
-    // 8c. Run a real deterministic root Turbo command that writes real cache
-    const turboBin = path.join(rootDir, 'node_modules', 'turbo', 'bin', 'turbo');
-    assert(fs.existsSync(turboBin), 'turbo binary must exist in root node_modules');
-
-    const executionStartTime = Date.now();
-    const turboBuildOutput = cp
-      .execFileSync(
-        process.execPath,
-        [
-          turboBin,
-          'build',
-          '--filter=@shipde/contracts',
-          '--filter=@shipde/config',
-          '--force',
-          '--cache-dir=.turbo/cache',
-        ],
-        {
-          cwd: rootDir,
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }
-      )
-      .trim();
-    assert(
-      turboBuildOutput.includes('turbo') || turboBuildOutput.includes('Tasks:'),
-      'Turbo execution must produce valid task output'
-    );
-
-    // 8d. Prove cache was created and updated strictly inside active worktree (.turbo/cache)
-    const activeTurboCacheDir = path.join(rootDir, '.turbo', 'cache');
-    assert(
-      fs.existsSync(activeTurboCacheDir),
-      'Turbo must create/write cache inside the active worktree (.turbo/cache)'
-    );
-    const activeCacheFiles = fs.readdirSync(activeTurboCacheDir);
-    assert(
-      activeCacheFiles.length > 0,
-      'Active worktree .turbo/cache must contain real Turbo cache entries'
-    );
-
-    // Verify presence of real Turbo cache artifacts (manifest, meta, or tarballs)
-    const hasTurboArtifacts = activeCacheFiles.some(
-      (f) => f.endsWith('.tar.zst') || f.endsWith('-manifest.json') || f.endsWith('-meta.json')
-    );
-    assert(
-      hasTurboArtifacts,
-      'Active worktree .turbo/cache must contain real Turbo-generated artifacts (*.tar.zst / *-manifest.json)'
-    );
-
-    // 8e. Prove integration and sibling worktrees remain unchanged and clean
-    for (const wt of worktreePaths) {
-      const snap = preExecutionSnapshots[wt];
-      if (!snap.isCurrent) {
-        const turboDir = path.join(wt, '.turbo');
+    try {
+      // 8c. Snapshot all monitored non-target states separately before execution
+      const preSnapshots: Record<string, TargetStateSnapshot> = {};
+      for (const target of monitoredTargets) {
+        const turboDir = path.join(target.path, '.turbo');
         const turboCacheDir = path.join(turboDir, 'cache');
-        if (!snap.turboExists) {
-          assert(
-            !fs.existsSync(turboDir),
-            `Worktree "${wt}" must NOT have .turbo directory created by Turbo execution in another worktree`
-          );
-        } else {
-          assert(
-            fs.existsSync(turboCacheDir),
-            `Worktree "${wt}" existing .turbo/cache must be preserved`
-          );
-          const currentFiles = fs.readdirSync(turboCacheDir).map((file) => ({
-            name: file,
-            size: fs.statSync(path.join(turboCacheDir, file)).size,
+        const turboDirExists = fs.existsSync(turboDir);
+        const turboCacheDirExists = fs.existsSync(turboCacheDir);
+        let cacheFiles: { name: string; size: number }[] | null = null;
+        if (turboCacheDirExists) {
+          cacheFiles = fs.readdirSync(turboCacheDir).map((f) => ({
+            name: f,
+            size: fs.statSync(path.join(turboCacheDir, f)).size,
           }));
-          assert(
-            JSON.stringify(currentFiles) === JSON.stringify(snap.turboFiles),
-            `Worktree "${wt}" cache entries must remain 100% identical and unpolluted`
-          );
         }
+        const gitStatus = target.isGitWorktree
+          ? cp
+              .execFileSync('git', ['status', '--porcelain'], {
+                cwd: target.path,
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe'],
+              })
+              .trim()
+          : null;
+        preSnapshots[target.path] = {
+          path: target.path,
+          isGitWorktree: target.isGitWorktree,
+          turboDirExists,
+          turboCacheDirExists,
+          cacheFiles,
+          gitStatus,
+        };
+      }
 
-        const currentGitStatus = cp
-          .execFileSync('git', ['status', '--porcelain'], {
-            cwd: wt,
+      // 8d. Install and execute real cache-writing root Turbo command inside the ephemeral linked worktree
+      const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+      cp.execSync(`${pnpmCmd} install --frozen-lockfile`, {
+        cwd: ephemeralWtPath,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      const turboBin = path.join(ephemeralWtPath, 'node_modules', 'turbo', 'bin', 'turbo');
+      assert(
+        fs.existsSync(turboBin),
+        'Turbo binary must exist in ephemeral linked worktree node_modules'
+      );
+
+      const turboBuildOutput = cp
+        .execFileSync(
+          process.execPath,
+          [
+            turboBin,
+            'build',
+            '--filter=@shipde/contracts',
+            '--filter=@shipde/config',
+            '--force',
+            '--cache-dir=.turbo/cache',
+          ],
+          {
+            cwd: ephemeralWtPath,
             encoding: 'utf-8',
             stdio: ['pipe', 'pipe', 'pipe'],
-          })
-          .trim();
+          }
+        )
+        .trim();
+      assert(
+        turboBuildOutput.includes('turbo') || turboBuildOutput.includes('Tasks:'),
+        'Turbo execution in ephemeral linked worktree must produce valid task output'
+      );
+
+      // 8e. Prove cache was created strictly inside the target ephemeral worktree (.turbo/cache)
+      const wtTurboCacheDir = path.join(ephemeralWtPath, '.turbo', 'cache');
+      assert(
+        fs.existsSync(wtTurboCacheDir),
+        'Target ephemeral linked worktree must have .turbo/cache created by Turbo'
+      );
+      const wtCacheFiles = fs.readdirSync(wtTurboCacheDir);
+      assert(
+        wtCacheFiles.length > 0,
+        'Target ephemeral worktree .turbo/cache must contain real Turbo cache entries'
+      );
+      const hasRealTurboArtifacts = wtCacheFiles.some(
+        (f) => f.endsWith('.tar.zst') || f.endsWith('-manifest.json') || f.endsWith('-meta.json')
+      );
+      assert(
+        hasRealTurboArtifacts,
+        'Target ephemeral worktree .turbo/cache must contain real Turbo-generated artifacts (*.tar.zst / *-manifest.json)'
+      );
+
+      // 8f. Prove exact 3-state preservation for all non-target siblings and original checkouts
+      for (const target of monitoredTargets) {
+        const pre = preSnapshots[target.path];
+        const turboDir = path.join(target.path, '.turbo');
+        const turboCacheDir = path.join(turboDir, 'cache');
+        const turboDirExists = fs.existsSync(turboDir);
+        const turboCacheDirExists = fs.existsSync(turboCacheDir);
+
+        // a. Exact .turbo directory existence
         assert(
-          currentGitStatus === snap.gitStatus,
-          `Worktree "${wt}" git status must remain identical and clean`
+          turboDirExists === pre.turboDirExists,
+          `Non-target path "${target.path}" .turbo existence must match pre-state (expected: ${pre.turboDirExists}, got: ${turboDirExists})`
+        );
+
+        // b. Exact .turbo/cache directory existence
+        assert(
+          turboCacheDirExists === pre.turboCacheDirExists,
+          `Non-target path "${target.path}" .turbo/cache existence must match pre-state (expected: ${pre.turboCacheDirExists}, got: ${turboCacheDirExists})`
+        );
+
+        // c. Exact cache files and contents when cache exists
+        if (pre.turboCacheDirExists) {
+          const currentFiles = fs.readdirSync(turboCacheDir).map((f) => ({
+            name: f,
+            size: fs.statSync(path.join(turboCacheDir, f)).size,
+          }));
+          assert(
+            JSON.stringify(currentFiles) === JSON.stringify(pre.cacheFiles),
+            `Non-target path "${target.path}" cache entries must remain 100% identical and unpolluted`
+          );
+        }
+
+        // d. Exact working tree git status for repository checkouts
+        if (target.isGitWorktree) {
+          const currentGitStatus = cp
+            .execFileSync('git', ['status', '--porcelain'], {
+              cwd: target.path,
+              encoding: 'utf-8',
+              stdio: ['pipe', 'pipe', 'pipe'],
+            })
+            .trim();
+          assert(
+            currentGitStatus === pre.gitStatus,
+            `Non-target git worktree "${target.path}" status must remain identical and clean`
+          );
+        }
+      }
+
+      // 8g. Negative regression proof: Fail-closed verification on injected Turbo failure
+      let caughtNegative = false;
+      try {
+        cp.execFileSync(
+          process.execPath,
+          [turboBin, 'run', 'nonexistent-worktree-isolation-task', '--cache-dir=.turbo/cache'],
+          {
+            cwd: ephemeralWtPath,
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          }
+        );
+      } catch (negativeErr: any) {
+        caughtNegative = true;
+        assert(
+          negativeErr.status !== 0,
+          `Negative Turbo execution must fail closed with non-zero exit code (got: ${negativeErr.status})`
         );
       }
+      assert(caughtNegative, 'Negative Turbo task execution must exit with non-zero status code');
+    } finally {
+      // Scoped cleanup
+      if (fs.existsSync(tempBase)) {
+        fs.rmSync(tempBase, { recursive: true, force: true });
+      }
+      cp.execFileSync('git', ['worktree', 'prune'], {
+        cwd: rootDir,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
     }
-
-    // 8f. Negative regression proof: Fail-closed verification on injected Turbo failure
-    let caughtNegative = false;
-    try {
-      cp.execFileSync(
-        process.execPath,
-        [turboBin, 'run', 'nonexistent-worktree-isolation-task', '--cache-dir=.turbo/cache'],
-        {
-          cwd: rootDir,
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }
-      );
-    } catch (negativeErr: any) {
-      caughtNegative = true;
-      assert(
-        negativeErr.status !== 0,
-        `Negative Turbo execution must fail closed with non-zero exit code (got: ${negativeErr.status})`
-      );
-    }
-    assert(caughtNegative, 'Negative Turbo task execution must exit with non-zero status code');
   }
 
   console.log('\n================================================================');
