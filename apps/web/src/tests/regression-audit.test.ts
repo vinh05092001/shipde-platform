@@ -1523,6 +1523,16 @@ async function runRegressionSuite() {
       // Proves that scoped safe.directory per-invocation configuration allows safe Git operations
       // in permission-isolated checkouts without modifying global Git configuration or using broad '*' exemptions.
       {
+        const safeArgs = getSafeDirectoryArgs(ephemeralWtPath);
+        assert(
+          safeArgs.includes('-c') && safeArgs.some((a) => a.startsWith('safe.directory=')),
+          'getSafeDirectoryArgs must generate -c safe.directory=<path> arguments'
+        );
+        assert(
+          !safeArgs.some((a) => a === 'safe.directory=*' || a === 'safe.directory=/*'),
+          'getSafeDirectoryArgs must NEVER use broad safe.directory=* exemptions'
+        );
+
         const globalSafeDirsBefore = (() => {
           try {
             return cp
