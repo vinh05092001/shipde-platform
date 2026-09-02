@@ -905,18 +905,106 @@ async function runRegressionSuite() {
     }
   }
 
-  // Test 8: Deterministic Ephemeral Linked-Worktree Isolation & 3-State Cache Preservation Invariant (Fail-Closed)
+  // Test 8: Deterministic Ephemeral Linked-Worktree Isolation & Cryptographic 3-State Cache Preservation (Fail-Closed)
   if (typeof window === 'undefined') {
     const fs = await import('fs');
     const path = await import('path');
     const os = await import('os');
+    const crypto = await import('crypto');
     const cp = await import('child_process');
     let rootDir = process.cwd();
     if (fs.existsSync(path.join(rootDir, '../../turbo.json'))) {
       rootDir = path.resolve(rootDir, '../..');
     }
 
-    // 8a. Discover all registered worktrees via git worktree list
+    interface CacheFileRecord {
+      relPath: string;
+      size: number;
+      sha256: string;
+    }
+
+    // Helper: Recursively record exact relative paths, sizes, and SHA-256 cryptographic hashes for every regular file
+    function getRecursiveCacheFileSnapshots(cacheDir: string): CacheFileRecord[] | null {
+      if (!fs.existsSync(cacheDir)) return null;
+      const records: CacheFileRecord[] = [];
+      function walk(dir: string) {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walk(fullPath);
+          } else if (entry.isFile()) {
+            const content = fs.readFileSync(fullPath);
+            const relPath = path.relative(cacheDir, fullPath).replace(/\\/g, '/');
+            const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+            records.push({
+              relPath,
+              size: content.length,
+              sha256,
+            });
+          }
+        }
+      }
+      walk(cacheDir);
+      records.sort((a, b) => a.relPath.localeCompare(b.relPath));
+      return records;
+    }
+
+    // 8a. Focused negative regression proof: Verify SHA-256 detects byte changes with unchanged file size, additions, deletions, nested changes, and renames
+    {
+      const negTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-cache-hash-test-'));
+      try {
+        const testCacheDir = path.join(negTestDir, 'cache');
+        fs.mkdirSync(path.join(testCacheDir, 'nested'), { recursive: true });
+        fs.writeFileSync(path.join(testCacheDir, 'entry1.json'), 'payload-data-alpha');
+        fs.writeFileSync(path.join(testCacheDir, 'nested', 'entry2.json'), 'nested-content-1');
+
+        const initialSnapshot = getRecursiveCacheFileSnapshots(testCacheDir);
+        assert(
+          initialSnapshot !== null && initialSnapshot.length === 2,
+          'Initial snapshot must have 2 entries'
+        );
+
+        // Mutation 1: Same byte length (18 bytes), but altered content
+        fs.writeFileSync(path.join(testCacheDir, 'entry1.json'), 'payload-data-omega');
+        const mutatedSnapshot = getRecursiveCacheFileSnapshots(testCacheDir);
+        assert(
+          mutatedSnapshot !== null && mutatedSnapshot.length === 2,
+          'Mutated snapshot must have 2 entries'
+        );
+
+        if (!initialSnapshot || !mutatedSnapshot) {
+          throw new Error('Snapshots must not be null');
+        }
+
+        assert(
+          initialSnapshot[0].size === mutatedSnapshot[0].size,
+          'File size must remain identical (18 bytes) to prove hash sensitivity'
+        );
+        assert(
+          initialSnapshot[0].sha256 !== mutatedSnapshot[0].sha256,
+          'SHA-256 hash must detect byte changes when file size is unchanged'
+        );
+
+        let caughtHashDiscrepancy = false;
+        try {
+          assert(
+            JSON.stringify(initialSnapshot) === JSON.stringify(mutatedSnapshot),
+            'Preservation assertion must fail on byte change'
+          );
+        } catch {
+          caughtHashDiscrepancy = true;
+        }
+        assert(
+          caughtHashDiscrepancy,
+          'Preservation assertion must fail closed when cache bytes are altered'
+        );
+      } finally {
+        fs.rmSync(negTestDir, { recursive: true, force: true });
+      }
+    }
+
+    // 8b. Discover all registered worktrees via git worktree list
     const wtOutput = cp
       .execFileSync('git', ['worktree', 'list', '--porcelain'], {
         cwd: rootDir,
@@ -936,73 +1024,121 @@ async function runRegressionSuite() {
       'Git worktree list must identify at least the primary repository'
     );
 
-    // 8b. Create a deterministic ephemeral linked worktree and explicit 3-state sibling regression scenarios
-    const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-wt-isolate-'));
-    const ephemeralWtPath = path.join(tempBase, 'target-wt');
-
-    // Ephemeral linked worktree setup
-    cp.execFileSync('git', ['worktree', 'add', '--detach', ephemeralWtPath, 'HEAD'], {
-      cwd: rootDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    // Sibling Regression Case A: Non-target sibling with no .turbo directory
-    const mockSiblingNoTurbo = path.join(tempBase, 'sibling-case-a-no-turbo');
-    fs.mkdirSync(mockSiblingNoTurbo, { recursive: true });
-
-    // Sibling Regression Case B: Non-target sibling where .turbo exists but .turbo/cache is absent
-    const mockSiblingTurboNoCache = path.join(tempBase, 'sibling-case-b-turbo-no-cache');
-    fs.mkdirSync(path.join(mockSiblingTurboNoCache, '.turbo'), {
-      recursive: true,
-    });
-    fs.writeFileSync(
-      path.join(mockSiblingTurboNoCache, '.turbo', 'config.json'),
-      '{"synthetic":true}',
-      'utf-8'
-    );
-
-    // Sibling Regression Case C: Non-target sibling where .turbo/cache exists with files
-    const mockSiblingTurboWithCache = path.join(tempBase, 'sibling-case-c-turbo-with-cache');
-    fs.mkdirSync(path.join(mockSiblingTurboWithCache, '.turbo', 'cache'), {
-      recursive: true,
-    });
-    fs.writeFileSync(
-      path.join(mockSiblingTurboWithCache, '.turbo', 'cache', 'mock-existing-cache.json'),
-      '{"cached":true}',
-      'utf-8'
-    );
-
-    interface TargetStateSnapshot {
-      path: string;
-      isGitWorktree: boolean;
-      turboDirExists: boolean;
-      turboCacheDirExists: boolean;
-      cacheFiles: { name: string; size: number }[] | null;
-      gitStatus: string | null;
+    // 8c. Negative regression test: Injected failure after git worktree add must safely prune and delete temporary directory
+    {
+      const failSetupBase = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-test-fail-setup-'));
+      const failSetupWtPath = path.join(failSetupBase, 'wt-fail');
+      let injectedSetupErrorCaught = false;
+      let setupCleanupRan = false;
+      try {
+        try {
+          cp.execFileSync('git', ['worktree', 'add', '--detach', failSetupWtPath, 'HEAD'], {
+            cwd: rootDir,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          // Injected failure immediately after git worktree add
+          throw new Error('Simulated setup failure after git worktree add');
+        } finally {
+          setupCleanupRan = true;
+          if (fs.existsSync(failSetupBase)) {
+            fs.rmSync(failSetupBase, { recursive: true, force: true });
+          }
+          cp.execFileSync('git', ['worktree', 'prune'], {
+            cwd: rootDir,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+        }
+      } catch (e: any) {
+        if (e.message && e.message.includes('Simulated setup failure after git worktree add')) {
+          injectedSetupErrorCaught = true;
+        }
+      }
+      assert(injectedSetupErrorCaught, 'Injected setup error must propagate and be caught');
+      assert(setupCleanupRan, 'Cleanup handler must execute on setup failure');
+      const activeWtList = cp
+        .execFileSync('git', ['worktree', 'list', '--porcelain'], {
+          cwd: rootDir,
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        })
+        .trim();
+      assert(
+        !activeWtList.includes(failSetupWtPath),
+        'Temporary worktree from failed setup must be completely pruned'
+      );
+      assert(
+        !fs.existsSync(failSetupBase),
+        'Temporary base directory from failed setup must be completely deleted'
+      );
     }
 
-    const monitoredTargets: { path: string; isGitWorktree: boolean }[] = [
-      ...worktreePaths.map((p) => ({ path: p, isGitWorktree: true })),
-      { path: mockSiblingNoTurbo, isGitWorktree: false },
-      { path: mockSiblingTurboNoCache, isGitWorktree: false },
-      { path: mockSiblingTurboWithCache, isGitWorktree: false },
-    ];
+    // 8d. Main Deterministic Ephemeral Linked Worktree Execution under a Single Unified Cleanup Scope
+    let mainError: any = null;
+    const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-wt-isolate-'));
 
     try {
-      // 8c. Snapshot all monitored non-target states separately before execution
+      const ephemeralWtPath = path.join(tempBase, 'target-wt');
+
+      // 1. git worktree add inside unified scope
+      cp.execFileSync('git', ['worktree', 'add', '--detach', ephemeralWtPath, 'HEAD'], {
+        cwd: rootDir,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      // 2. Synthetic sibling regression cases inside unified scope
+      // Sibling Case A: Non-target sibling with no .turbo directory
+      const mockSiblingNoTurbo = path.join(tempBase, 'sibling-case-a-no-turbo');
+      fs.mkdirSync(mockSiblingNoTurbo, { recursive: true });
+
+      // Sibling Case B: Non-target sibling where .turbo exists but .turbo/cache is absent
+      const mockSiblingTurboNoCache = path.join(tempBase, 'sibling-case-b-turbo-no-cache');
+      fs.mkdirSync(path.join(mockSiblingTurboNoCache, '.turbo'), { recursive: true });
+      fs.writeFileSync(
+        path.join(mockSiblingTurboNoCache, '.turbo', 'config.json'),
+        '{"synthetic":true}',
+        'utf-8'
+      );
+
+      // Sibling Case C: Non-target sibling where .turbo/cache exists with nested files
+      const mockSiblingTurboWithCache = path.join(tempBase, 'sibling-case-c-turbo-with-cache');
+      fs.mkdirSync(path.join(mockSiblingTurboWithCache, '.turbo', 'cache', 'nested'), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(mockSiblingTurboWithCache, '.turbo', 'cache', 'mock-existing-cache.json'),
+        '{"cached":true}',
+        'utf-8'
+      );
+      fs.writeFileSync(
+        path.join(mockSiblingTurboWithCache, '.turbo', 'cache', 'nested', 'nested-cache.json'),
+        '{"nested":true}',
+        'utf-8'
+      );
+
+      interface TargetStateSnapshot {
+        path: string;
+        isGitWorktree: boolean;
+        turboDirExists: boolean;
+        turboCacheDirExists: boolean;
+        cacheFiles: CacheFileRecord[] | null;
+        gitStatus: string | null;
+      }
+
+      const monitoredTargets: { path: string; isGitWorktree: boolean }[] = [
+        ...worktreePaths.map((p) => ({ path: p, isGitWorktree: true })),
+        { path: mockSiblingNoTurbo, isGitWorktree: false },
+        { path: mockSiblingTurboNoCache, isGitWorktree: false },
+        { path: mockSiblingTurboWithCache, isGitWorktree: false },
+      ];
+
+      // 3. Pre-execution snapshots using cryptographic recursive SHA-256
       const preSnapshots: Record<string, TargetStateSnapshot> = {};
       for (const target of monitoredTargets) {
         const turboDir = path.join(target.path, '.turbo');
         const turboCacheDir = path.join(turboDir, 'cache');
         const turboDirExists = fs.existsSync(turboDir);
         const turboCacheDirExists = fs.existsSync(turboCacheDir);
-        let cacheFiles: { name: string; size: number }[] | null = null;
-        if (turboCacheDirExists) {
-          cacheFiles = fs.readdirSync(turboCacheDir).map((f) => ({
-            name: f,
-            size: fs.statSync(path.join(turboCacheDir, f)).size,
-          }));
-        }
+        const cacheFiles = getRecursiveCacheFileSnapshots(turboCacheDir);
         const gitStatus = target.isGitWorktree
           ? cp
               .execFileSync('git', ['status', '--porcelain'], {
@@ -1022,7 +1158,7 @@ async function runRegressionSuite() {
         };
       }
 
-      // 8d. Install and execute real cache-writing root Turbo command inside the ephemeral linked worktree
+      // 4. Dependency setup inside ephemeral linked worktree
       const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
       cp.execSync(`${pnpmCmd} install --frozen-lockfile`, {
         cwd: ephemeralWtPath,
@@ -1035,6 +1171,7 @@ async function runRegressionSuite() {
         'Turbo binary must exist in ephemeral linked worktree node_modules'
       );
 
+      // 5. Real cache-writing Turbo execution inside ephemeral linked worktree
       const turboBuildOutput = cp
         .execFileSync(
           process.execPath,
@@ -1058,7 +1195,7 @@ async function runRegressionSuite() {
         'Turbo execution in ephemeral linked worktree must produce valid task output'
       );
 
-      // 8e. Prove cache was created strictly inside the target ephemeral worktree (.turbo/cache)
+      // 6. Assert cache was created strictly inside target ephemeral worktree (.turbo/cache)
       const wtTurboCacheDir = path.join(ephemeralWtPath, '.turbo', 'cache');
       assert(
         fs.existsSync(wtTurboCacheDir),
@@ -1077,7 +1214,7 @@ async function runRegressionSuite() {
         'Target ephemeral worktree .turbo/cache must contain real Turbo-generated artifacts (*.tar.zst / *-manifest.json)'
       );
 
-      // 8f. Prove exact 3-state preservation for all non-target siblings and original checkouts
+      // 7. Assert exact cryptographic 3-state preservation across all non-target siblings and checkouts
       for (const target of monitoredTargets) {
         const pre = preSnapshots[target.path];
         const turboDir = path.join(target.path, '.turbo');
@@ -1097,15 +1234,12 @@ async function runRegressionSuite() {
           `Non-target path "${target.path}" .turbo/cache existence must match pre-state (expected: ${pre.turboCacheDirExists}, got: ${turboCacheDirExists})`
         );
 
-        // c. Exact cache files and contents when cache exists
+        // c. Exact recursive SHA-256 cryptographic file contents when cache exists
         if (pre.turboCacheDirExists) {
-          const currentFiles = fs.readdirSync(turboCacheDir).map((f) => ({
-            name: f,
-            size: fs.statSync(path.join(turboCacheDir, f)).size,
-          }));
+          const currentFiles = getRecursiveCacheFileSnapshots(turboCacheDir);
           assert(
             JSON.stringify(currentFiles) === JSON.stringify(pre.cacheFiles),
-            `Non-target path "${target.path}" cache entries must remain 100% identical and unpolluted`
+            `Non-target path "${target.path}" cache contents (SHA-256 and relative paths) must remain 100% identical and unpolluted`
           );
         }
 
@@ -1125,7 +1259,7 @@ async function runRegressionSuite() {
         }
       }
 
-      // 8g. Negative regression proof: Fail-closed verification on injected Turbo failure
+      // 8. Negative regression proof: Nonexistent Turbo task exits non-zero
       let caughtNegative = false;
       try {
         cp.execFileSync(
@@ -1145,15 +1279,35 @@ async function runRegressionSuite() {
         );
       }
       assert(caughtNegative, 'Negative Turbo task execution must exit with non-zero status code');
+    } catch (err: any) {
+      mainError = err;
+      throw err;
     } finally {
-      // Scoped cleanup
+      // Scoped cleanup: safely remove directory, prune worktrees, and preserve dual error context on cleanup failure
+      let cleanupError: any = null;
       if (fs.existsSync(tempBase)) {
-        fs.rmSync(tempBase, { recursive: true, force: true });
+        try {
+          fs.rmSync(tempBase, { recursive: true, force: true });
+        } catch (rmErr: any) {
+          cleanupError = rmErr;
+        }
       }
-      cp.execFileSync('git', ['worktree', 'prune'], {
-        cwd: rootDir,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      try {
+        cp.execFileSync('git', ['worktree', 'prune'], {
+          cwd: rootDir,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch (pruneErr: any) {
+        if (!cleanupError) cleanupError = pruneErr;
+      }
+
+      if (cleanupError) {
+        if (mainError) {
+          cleanupError.cause = mainError;
+          cleanupError.message = `Cleanup failed (${cleanupError.message}) after operation error: ${mainError.message}`;
+        }
+        throw cleanupError;
+      }
     }
   }
 
