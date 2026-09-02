@@ -754,13 +754,58 @@ async function runRegressionSuite() {
       'Root package.json must expose verify:inventory and test:audit scripts'
     );
     assert(
+      rootPkg.scripts?.['db:generate'] === 'prisma generate --schema=prisma/schema.prisma' &&
+        rootPkg.scripts?.['postinstall'] === 'prisma generate --schema=prisma/schema.prisma',
+      'Root package.json must expose db:generate and postinstall scripts targeting canonical schema'
+    );
+    assert(
       rootPkg.scripts?.['test:audit'] === 'turbo test:audit --cache-dir=.turbo/cache',
       `Root package.json test:audit script must route through turbo with --cache-dir (got: "${rootPkg.scripts?.['test:audit']}")`
     );
     assert(
-      webPkg.scripts?.['version:next'] && webPkg.scripts?.['test:audit'],
-      'apps/web/package.json must expose version:next and test:audit scripts'
+      webPkg.scripts?.['version:next'] &&
+        webPkg.scripts?.['test:audit'] &&
+        webPkg.scripts?.['db:generate'] === 'prisma generate' &&
+        webPkg.scripts?.['postinstall'] === 'prisma generate',
+      'apps/web/package.json must expose version:next, test:audit, db:generate, and postinstall scripts'
     );
+    assert(
+      webPkg.prisma?.schema === '../../prisma/schema.prisma',
+      'apps/web/package.json must declare schema at ../../prisma/schema.prisma'
+    );
+
+    // 6c-2. Deterministic Prisma Client import and model instantiation from canonical schema
+    const { PrismaClient } = await import('@prisma/client');
+    assert(
+      typeof PrismaClient === 'function',
+      '@prisma/client must export a valid PrismaClient constructor after workspace generate'
+    );
+    const prismaInstance = new PrismaClient();
+    const expectedPrismaModels = [
+      'merchant',
+      'user',
+      'deviceSession',
+      'carrierAccount',
+      'rateCard',
+      'rateTier',
+      'order',
+      'shipment',
+      'shipmentEvent',
+      'exceptionCase',
+      'exceptionContactLog',
+      'returnRecord',
+      'carrierStatement',
+      'statementRow',
+      'discrepancy',
+      'claim',
+      'auditLog',
+    ];
+    for (const modelName of expectedPrismaModels) {
+      assert(
+        typeof (prismaInstance as any)[modelName]?.findMany === 'function',
+        `PrismaClient must provide findMany method for canonical model: ${modelName}`
+      );
+    }
 
     // 6d. Explicit cacheDir ensures cache is isolated inside the active linked worktree
     assert(
@@ -1079,6 +1124,50 @@ async function runRegressionSuite() {
     }
 
     // 8b. Discover all registered worktrees via git worktree list (read-only baseline)
+    // Parse complete porcelain records and retain only live, existing, non-prunable worktrees
+    interface ParsedWorktreeRecord {
+      path: string;
+      isPrunable: boolean;
+      isLocked: boolean;
+      exists: boolean;
+    }
+
+    function parseGitWorktreesPorcelain(output: string): ParsedWorktreeRecord[] {
+      const records: ParsedWorktreeRecord[] = [];
+      const blocks = output.split(/\r?\n\r?\n/);
+      for (const block of blocks) {
+        const lines = block
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0);
+        if (lines.length === 0) continue;
+
+        let wtPath = '';
+        let isPrunable = false;
+        let isLocked = false;
+
+        for (const line of lines) {
+          if (line.startsWith('worktree ')) {
+            wtPath = path.normalize(line.slice(9).trim());
+          } else if (line.startsWith('prunable')) {
+            isPrunable = true;
+          } else if (line.startsWith('locked')) {
+            isLocked = true;
+          }
+        }
+
+        if (wtPath) {
+          records.push({
+            path: wtPath,
+            isPrunable,
+            isLocked,
+            exists: fs.existsSync(wtPath),
+          });
+        }
+      }
+      return records;
+    }
+
     const initialRealWtOutput = execSafeGit(['worktree', 'list', '--porcelain'], {
       cwd: rootDir,
       encoding: 'utf-8',
@@ -1091,17 +1180,58 @@ async function runRegressionSuite() {
     }).trim();
     const realGitCommonDir = path.resolve(rootDir, realGitCommonDirRaw);
 
-    const worktreeLines = initialRealWtOutput.split('\n');
-    const worktreePaths: string[] = [];
-    for (const line of worktreeLines) {
-      if (line.startsWith('worktree ')) {
-        worktreePaths.push(path.normalize(line.slice(9).trim()));
-      }
-    }
+    const parsedWorktrees = parseGitWorktreesPorcelain(initialRealWtOutput);
+    const liveWorktrees = parsedWorktrees.filter((r) => !r.isPrunable && r.exists);
+    const worktreePaths: string[] = liveWorktrees.map((r) => r.path);
+
     assert(
       worktreePaths.length > 0,
       'Git worktree list must identify at least the primary repository'
     );
+
+    // 8b-2. Regression case: Verify parseGitWorktreesPorcelain correctly excludes prunable and missing worktree records
+    {
+      const fakeSyntheticPorcelain = [
+        `worktree ${rootDir.replace(/\\/g, '/')}`,
+        'HEAD 1111111111111111111111111111111111111111',
+        'branch refs/heads/main',
+        '',
+        'worktree /non/existent/path/stale-prunable-wt',
+        'HEAD 2222222222222222222222222222222222222222',
+        'detached',
+        'prunable gitdir file points to non-existent location',
+        '',
+        'worktree /non/existent/path/missing-dir-wt',
+        'HEAD 3333333333333333333333333333333333333333',
+        'branch refs/heads/agent/test',
+        '',
+      ].join('\n');
+
+      const parsedSynthetic = parseGitWorktreesPorcelain(fakeSyntheticPorcelain);
+      assert(
+        parsedSynthetic.length === 3,
+        'Porcelain worktree parser must parse all 3 synthetic records'
+      );
+      assert(
+        parsedSynthetic[0].exists && !parsedSynthetic[0].isPrunable,
+        'Valid existing repository must be recognized as existing and non-prunable'
+      );
+      assert(
+        parsedSynthetic[1].isPrunable,
+        'Stale record with prunable marker must be identified as isPrunable=true'
+      );
+      assert(
+        !parsedSynthetic[2].exists,
+        'Record pointing to non-existent directory must be identified as exists=false'
+      );
+
+      const filteredSynthetic = parsedSynthetic.filter((r) => !r.isPrunable && r.exists);
+      assert(
+        filteredSynthetic.length === 1 &&
+          path.resolve(filteredSynthetic[0].path) === path.resolve(rootDir),
+        'Filtering must exclude prunable and missing worktrees while retaining live records'
+      );
+    }
 
     // 8c. Negative regression test: Injected failure after git worktree add on standalone repo must safely prune and delete temporary directory without mutating real repository
     {

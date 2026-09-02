@@ -43,6 +43,7 @@ Tất cả các lệnh được điều phối từ thư mục gốc qua `pnpm` 
 | `pnpm test:e2e`                  | Chạy 12 kịch bản kiểm thử xuyên suốt (E2E Scenarios)         |
 | `pnpm test:baseline`             | Chạy bộ kiểm thử khói bảo toàn 10 bề mặt điều hành trọng yếu |
 | `pnpm security:secrets`          | Quét kiểm tra rò rỉ bí mật với Gitleaks                      |
+| `pnpm db:generate`               | Sinh Prisma client từ schema gốc (prisma/schema.prisma)      |
 | `pnpm concierge:audit`           | Thực thi kiểm toán thí nghiệm Concierge trên 3 shop mẫu      |
 
 ## 4. Chính sách Phê duyệt Lifecycle Scripts (pnpm allowBuilds)
