@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "turbo dev --cache-dir=.turbo/cache",
-    "build": "turbo build --cache-dir=.turbo/cache",
+    "build": "pnpm db:generate && turbo build --cache-dir=.turbo/cache",
     "lint": "turbo lint --cache-dir=.turbo/cache && eslint scripts",
     "format:check": "tsx scripts/verify-formatting.ts",
     "format:write": "prettier --write .",
@@ -19,7 +19,6 @@
     "test:audit": "turbo test:audit --cache-dir=.turbo/cache",
     "test:e2e": "turbo test:e2e --cache-dir=.turbo/cache",
     "test:baseline": "tsx apps/web/src/tests/preservation-smoke.test.ts",
-    "prepare": "prisma generate --schema=prisma/schema.prisma",
     "db:generate": "prisma generate --schema=prisma/schema.prisma",
     "security:secrets": "tsx scripts/verify-secrets.ts",
     "verify:inventory": "tsx scripts/verify-inventory.ts",

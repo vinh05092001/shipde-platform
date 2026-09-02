@@ -65,7 +65,12 @@ jobs:
         with:
           node-version: '24'
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - name: Verify clean production-only install
+        run: pnpm install --prod --frozen-lockfile
+      - name: Install full development dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Generate Prisma Client from canonical schema
+        run: pnpm db:generate
       - run: pnpm lint
       - run: pnpm format:check
         env:

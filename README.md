@@ -29,24 +29,27 @@ scripts/                # Tập lệnh kiểm tra tự động, bảo mật & đ
 
 Tất cả các lệnh được điều phối từ thư mục gốc qua `pnpm` và `Turborepo`:
 
-| Lệnh                             | Mô tả tác vụ                                                 |
-| -------------------------------- | ------------------------------------------------------------ |
-| `pnpm install --frozen-lockfile` | Cài đặt chính xác các phụ thuộc theo `pnpm-lock.yaml`        |
-| `pnpm dev`                       | Khởi chạy máy chủ phát triển ứng dụng (`apps/web`)           |
-| `pnpm build`                     | Biên dịch toàn bộ các gói và ứng dụng                        |
-| `pnpm lint`                      | Kiểm tra quy tắc mã nguồn qua ESLint                         |
-| `pnpm format:check`              | Kiểm toán định dạng gia tăng với Prettier (Fail-Closed)      |
-| `pnpm format:write`              | Tự động định dạng toàn bộ mã nguồn                           |
-| `pnpm typecheck`                 | Kiểm tra kiểu dữ liệu TypeScript trên toàn workspace         |
-| `pnpm test`                      | Chạy bộ kiểm toán hồi quy & bất biến nghiệp vụ               |
-| `pnpm test:audit`                | Chạy kiểm toán hồi quy độc lập (tự động build prerequisite)  |
-| `pnpm test:e2e`                  | Chạy 12 kịch bản kiểm thử xuyên suốt (E2E Scenarios)         |
-| `pnpm test:baseline`             | Chạy bộ kiểm thử khói bảo toàn 10 bề mặt điều hành trọng yếu |
-| `pnpm security:secrets`          | Quét kiểm tra rò rỉ bí mật với Gitleaks                      |
-| `pnpm db:generate`               | Sinh Prisma client từ schema gốc (prisma/schema.prisma)      |
-| `pnpm concierge:audit`           | Thực thi kiểm toán thí nghiệm Concierge trên 3 shop mẫu      |
+| Lệnh                                    | Mô tả tác vụ                                                 |
+| --------------------------------------- | ------------------------------------------------------------ |
+| `pnpm install --prod --frozen-lockfile` | Kiểm chứng cài đặt production không chạy CLI chỉ có ở dev    |
+| `pnpm install --frozen-lockfile`        | Cài đặt chính xác toàn bộ phụ thuộc theo `pnpm-lock.yaml`    |
+| `pnpm dev`                              | Khởi chạy máy chủ phát triển ứng dụng (`apps/web`)           |
+| `pnpm build`                            | Sinh Prisma Client rồi biên dịch toàn bộ workspace           |
+| `pnpm lint`                             | Kiểm tra quy tắc mã nguồn qua ESLint                         |
+| `pnpm format:check`                     | Kiểm toán định dạng gia tăng với Prettier (Fail-Closed)      |
+| `pnpm format:write`                     | Tự động định dạng toàn bộ mã nguồn                           |
+| `pnpm typecheck`                        | Kiểm tra kiểu dữ liệu TypeScript trên toàn workspace         |
+| `pnpm test`                             | Chạy bộ kiểm toán hồi quy & bất biến nghiệp vụ               |
+| `pnpm test:audit`                       | Chạy kiểm toán hồi quy độc lập (tự động build prerequisite)  |
+| `pnpm test:e2e`                         | Chạy 12 kịch bản kiểm thử xuyên suốt (E2E Scenarios)         |
+| `pnpm test:baseline`                    | Chạy bộ kiểm thử khói bảo toàn 10 bề mặt điều hành trọng yếu |
+| `pnpm security:secrets`                 | Quét kiểm tra rò rỉ bí mật với Gitleaks                      |
+| `pnpm db:generate`                      | Sinh Prisma client từ schema gốc (prisma/schema.prisma)      |
+| `pnpm concierge:audit`                  | Thực thi kiểm toán thí nghiệm Concierge trên 3 shop mẫu      |
 
 ## 4. Chính sách Phê duyệt Lifecycle Scripts (pnpm allowBuilds)
+
+Repository không khai báo `preinstall`, `install`, `postinstall` hoặc `prepare` để gọi Prisma CLI. Prisma Client chỉ được sinh bằng `pnpm db:generate` hoặc bước đầu của `pnpm build`, sau khi dev dependencies đã được cài đầy đủ. CI phải chạy lệnh production-only trên clean checkout để ngăn lifecycle hook làm hỏng production image.
 
 Nhằm đảm bảo an toàn chuỗi cung ứng (supply chain security), toàn bộ dependency lifecycle scripts bị từ chối mặc định (`deny by default`). Chỉ có 6 gói phụ thuộc sau được phê duyệt rõ ràng trong `pnpm-workspace.yaml`:
 

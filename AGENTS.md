@@ -94,7 +94,9 @@ The 9Router endpoint used by DSH must keep Ponytail, Caveman, Headroom and reque
 
 Following `TASK-FOUND-02` monorepo migration, use the authoritative workspace root commands:
 
+- `pnpm install --prod --frozen-lockfile` (production-install regression gate; run from a clean checkout)
 - `pnpm install --frozen-lockfile`
+- `pnpm db:generate`
 - `pnpm lint`
 - `pnpm format:check`
 - `pnpm typecheck`

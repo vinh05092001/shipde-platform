@@ -912,10 +912,9 @@ async function runRegressionSuite() {
       'Root package.json must expose verify:inventory and test:audit scripts'
     );
     assert(
-      rootPkg.scripts?.['prepare'] === 'prisma generate --schema=prisma/schema.prisma' &&
-        rootPkg.scripts?.['db:generate'] === 'prisma generate --schema=prisma/schema.prisma' &&
-        !rootPkg.scripts?.['postinstall'],
-      'Root package.json must expose prepare and db:generate scripts targeting canonical schema without unconditional dev-only postinstall'
+      rootPkg.scripts?.['db:generate'] === 'prisma generate --schema=prisma/schema.prisma' &&
+        rootPkg.scripts?.['build'] === 'pnpm db:generate && turbo build --cache-dir=.turbo/cache',
+      'Root package.json must expose canonical db:generate and run it explicitly before Turbo build'
     );
     assert(
       rootPkg.scripts?.['test:audit'] === 'turbo test:audit --cache-dir=.turbo/cache',
@@ -924,9 +923,8 @@ async function runRegressionSuite() {
     assert(
       webPkg.scripts?.['version:next'] &&
         webPkg.scripts?.['test:audit'] &&
-        webPkg.scripts?.['db:generate'] === 'prisma generate' &&
-        !webPkg.scripts?.['postinstall'],
-      'apps/web/package.json must expose version:next, test:audit, and db:generate scripts without dev-only postinstall'
+        webPkg.scripts?.['db:generate'] === 'prisma generate',
+      'apps/web/package.json must expose version:next, test:audit, and db:generate scripts'
     );
     assert(
       webPkg.prisma?.schema === '../../prisma/schema.prisma',
@@ -966,21 +964,38 @@ async function runRegressionSuite() {
       );
     }
 
-    // 6c-3. Clean production-only install regression test:
-    // Proves that production dependency installation (such as pnpm install --prod) does not execute
-    // dev-only Prisma CLI via lifecycle hooks, avoiding missing binary errors during production image builds.
+    // 6c-3. Clean production-only install regression gate:
+    // The workflow executes pnpm install --prod on a clean checkout. These assertions prevent
+    // repository lifecycle hooks from invoking the dev-only Prisma CLI during that install.
     {
-      assert(
-        !rootPkg.scripts?.['postinstall'] && !webPkg.scripts?.['postinstall'],
-        'Neither root nor workspace package.json may contain unconditional postinstall scripts invoking dev-only CLIs'
-      );
+      const installLifecycleHooks = ['preinstall', 'install', 'postinstall', 'prepare'];
+      for (const hook of installLifecycleHooks) {
+        assert(
+          !rootPkg.scripts?.[hook] && !webPkg.scripts?.[hook],
+          `Root and web package manifests must not define install lifecycle hook "${hook}"`
+        );
+      }
       assert(
         rootPkg.devDependencies?.['prisma'] && !rootPkg.dependencies?.['prisma'],
         'prisma CLI must reside strictly in devDependencies'
       );
+
+      const applicationWorkflow = fs.readFileSync(
+        path.join(rootDir, '.github/workflows/current-application.yml'),
+        'utf-8'
+      );
+      const productionInstallIndex = applicationWorkflow.indexOf(
+        'run: pnpm install --prod --frozen-lockfile'
+      );
+      const developmentInstallIndex = applicationWorkflow.indexOf(
+        'run: pnpm install --frozen-lockfile'
+      );
+      const prismaGenerateIndex = applicationWorkflow.indexOf('run: pnpm db:generate');
       assert(
-        rootPkg.scripts?.['prepare'] === 'prisma generate --schema=prisma/schema.prisma',
-        'Root package.json prepare hook guarantees deterministic Prisma client generation during dev/CI installs while being safely skipped in production-only installs'
+        productionInstallIndex >= 0 &&
+          developmentInstallIndex > productionInstallIndex &&
+          prismaGenerateIndex > developmentInstallIndex,
+        'Current application CI must execute a clean production-only install before restoring dev dependencies and generating Prisma Client'
       );
     }
 
