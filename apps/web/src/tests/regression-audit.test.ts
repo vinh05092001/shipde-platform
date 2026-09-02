@@ -839,26 +839,38 @@ async function runRegressionSuite() {
       'apps/web/tsconfig.json must include next-env.d.ts and both dev/prod next route types'
     );
 
+    // Safe Git invocation helper: Explicitly configures safe.directory for the specific target directory
+    // without mutating global Git configuration or using broad '*' exemptions, handling dubious-ownership environments.
+    function execSafeGit(
+      args: string[],
+      options: { cwd: string; encoding?: BufferEncoding; stdio?: any }
+    ): string {
+      const normalizedCwd = path.resolve(options.cwd).replace(/\\/g, '/');
+      return (
+        cp.execFileSync(
+          'git',
+          ['-c', `safe.directory=${normalizedCwd}`, ...args],
+          options as any
+        ) as any
+      ).toString();
+    }
+
     // Verify git ls-files does not track apps/web/next-env.d.ts
     try {
-      const lsResult = cp
-        .execFileSync('git', ['ls-files', 'apps/web/next-env.d.ts'], {
-          cwd: rootDir,
-          encoding: 'utf-8',
-        })
-        .trim();
+      const lsResult = execSafeGit(['ls-files', 'apps/web/next-env.d.ts'], {
+        cwd: rootDir,
+        encoding: 'utf-8',
+      }).trim();
       assert(
         lsResult.length === 0,
         `apps/web/next-env.d.ts must not be tracked in git (git ls-files returned: "${lsResult}")`
       );
 
       // Verify git check-ignore confirms apps/web/next-env.d.ts is ignored
-      const checkIgnoreResult = cp
-        .execFileSync('git', ['check-ignore', 'apps/web/next-env.d.ts'], {
-          cwd: rootDir,
-          encoding: 'utf-8',
-        })
-        .trim();
+      const checkIgnoreResult = execSafeGit(['check-ignore', 'apps/web/next-env.d.ts'], {
+        cwd: rootDir,
+        encoding: 'utf-8',
+      }).trim();
       assert(
         checkIgnoreResult.endsWith('next-env.d.ts'),
         `apps/web/next-env.d.ts must be matched by git ignore rules (got: "${checkIgnoreResult}")`
@@ -870,12 +882,10 @@ async function runRegressionSuite() {
         '/// <reference types="next" />\n/// <reference types="next/image-types/global" />\nimport "./.next/dev/types/routes.d.ts";\n\n// NOTE: This file should not be edited\n';
       fs.writeFileSync(webNextEnvPath, devContent, 'utf-8');
 
-      const devStatusResult = cp
-        .execFileSync('git', ['status', '--porcelain', 'apps/web/next-env.d.ts'], {
-          cwd: rootDir,
-          encoding: 'utf-8',
-        })
-        .trim();
+      const devStatusResult = execSafeGit(['status', '--porcelain', 'apps/web/next-env.d.ts'], {
+        cwd: rootDir,
+        encoding: 'utf-8',
+      }).trim();
       assert(
         devStatusResult.length === 0,
         `apps/web/next-env.d.ts must not dirty git status during dev generation (got: "${devStatusResult}")`
@@ -886,12 +896,10 @@ async function runRegressionSuite() {
         '/// <reference types="next" />\n/// <reference types="next/image-types/global" />\nimport "./.next/types/routes.d.ts";\n\n// NOTE: This file should not be edited\n';
       fs.writeFileSync(webNextEnvPath, buildContent, 'utf-8');
 
-      const buildStatusResult = cp
-        .execFileSync('git', ['status', '--porcelain', 'apps/web/next-env.d.ts'], {
-          cwd: rootDir,
-          encoding: 'utf-8',
-        })
-        .trim();
+      const buildStatusResult = execSafeGit(['status', '--porcelain', 'apps/web/next-env.d.ts'], {
+        cwd: rootDir,
+        encoding: 'utf-8',
+      }).trim();
       assert(
         buildStatusResult.length === 0,
         `apps/web/next-env.d.ts must not dirty git status during build generation (got: "${buildStatusResult}")`
@@ -1004,21 +1012,33 @@ async function runRegressionSuite() {
       }
     }
 
+    // Safe Git invocation helper: Explicitly configures safe.directory for the specific target directory
+    // without mutating global Git configuration or using broad '*' exemptions, handling dubious-ownership environments.
+    function execSafeGit(
+      args: string[],
+      options: { cwd: string; encoding?: BufferEncoding; stdio?: any }
+    ): string {
+      const normalizedCwd = path.resolve(options.cwd).replace(/\\/g, '/');
+      return (
+        cp.execFileSync(
+          'git',
+          ['-c', `safe.directory=${normalizedCwd}`, ...args],
+          options as any
+        ) as any
+      ).toString();
+    }
+
     // 8b. Discover all registered worktrees via git worktree list (read-only baseline)
-    const initialRealWtOutput = cp
-      .execFileSync('git', ['worktree', 'list', '--porcelain'], {
-        cwd: rootDir,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-      .trim();
-    const realGitCommonDirRaw = cp
-      .execFileSync('git', ['rev-parse', '--git-common-dir'], {
-        cwd: rootDir,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-      .trim();
+    const initialRealWtOutput = execSafeGit(['worktree', 'list', '--porcelain'], {
+      cwd: rootDir,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const realGitCommonDirRaw = execSafeGit(['rev-parse', '--git-common-dir'], {
+      cwd: rootDir,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
     const realGitCommonDir = path.resolve(rootDir, realGitCommonDirRaw);
 
     const worktreeLines = initialRealWtOutput.split('\n');
@@ -1047,6 +1067,10 @@ async function runRegressionSuite() {
           cp.execFileSync(
             'git',
             [
+              '-c',
+              `safe.directory=${path.resolve(rootDir).replace(/\\/g, '/')}`,
+              '-c',
+              `safe.directory=${path.resolve(standaloneFailRepo).replace(/\\/g, '/')}`,
               'clone',
               '--no-hardlinks',
               '--dissociate',
@@ -1056,7 +1080,7 @@ async function runRegressionSuite() {
             ],
             { stdio: ['pipe', 'pipe', 'pipe'] }
           );
-          cp.execFileSync('git', ['worktree', 'add', '--detach', failSetupWtPath, 'HEAD'], {
+          execSafeGit(['worktree', 'add', '--detach', failSetupWtPath, 'HEAD'], {
             cwd: standaloneFailRepo,
             stdio: ['pipe', 'pipe', 'pipe'],
           });
@@ -1070,7 +1094,7 @@ async function runRegressionSuite() {
           let cleanupError: any = null;
           if (fs.existsSync(standaloneFailRepo)) {
             try {
-              cp.execFileSync('git', ['worktree', 'prune'], {
+              execSafeGit(['worktree', 'prune'], {
                 cwd: standaloneFailRepo,
                 stdio: ['pipe', 'pipe', 'pipe'],
               });
@@ -1107,13 +1131,11 @@ async function runRegressionSuite() {
         !fs.existsSync(failSetupBase),
         'Temporary base directory from failed setup must be completely deleted'
       );
-      const postFailRealWtOutput = cp
-        .execFileSync('git', ['worktree', 'list', '--porcelain'], {
-          cwd: rootDir,
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        })
-        .trim();
+      const postFailRealWtOutput = execSafeGit(['worktree', 'list', '--porcelain'], {
+        cwd: rootDir,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
       assert(
         postFailRealWtOutput === initialRealWtOutput,
         'Original repository registered worktree list must remain 100% byte-for-byte unchanged after failed setup'
@@ -1131,24 +1153,33 @@ async function runRegressionSuite() {
       const rootDirUrl = 'file:///' + rootDir.replace(/\\/g, '/');
       cp.execFileSync(
         'git',
-        ['clone', '--no-hardlinks', '--dissociate', '--depth=1', rootDirUrl, standaloneRepo],
+        [
+          '-c',
+          `safe.directory=${path.resolve(rootDir).replace(/\\/g, '/')}`,
+          '-c',
+          `safe.directory=${path.resolve(standaloneRepo).replace(/\\/g, '/')}`,
+          'clone',
+          '--no-hardlinks',
+          '--dissociate',
+          '--depth=1',
+          rootDirUrl,
+          standaloneRepo,
+        ],
         { stdio: ['pipe', 'pipe', 'pipe'] }
       );
 
       // 2. Create ephemeral linked worktree using the standalone temporary repository
-      cp.execFileSync('git', ['worktree', 'add', '--detach', ephemeralWtPath, 'HEAD'], {
+      execSafeGit(['worktree', 'add', '--detach', ephemeralWtPath, 'HEAD'], {
         cwd: standaloneRepo,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
       // 3. Explicit assertions on Git common directory isolation
-      const ephemCommonDirRaw = cp
-        .execFileSync('git', ['rev-parse', '--git-common-dir'], {
-          cwd: ephemeralWtPath,
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        })
-        .trim();
+      const ephemCommonDirRaw = execSafeGit(['rev-parse', '--git-common-dir'], {
+        cwd: ephemeralWtPath,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
       const resolvedEphemCommonDir = path.resolve(ephemeralWtPath, ephemCommonDirRaw);
 
       assert(
@@ -1167,7 +1198,9 @@ async function runRegressionSuite() {
 
       // Sibling Case B: Non-target sibling where .turbo exists but .turbo/cache is absent
       const mockSiblingTurboNoCache = path.join(tempBase, 'sibling-case-b-turbo-no-cache');
-      fs.mkdirSync(path.join(mockSiblingTurboNoCache, '.turbo'), { recursive: true });
+      fs.mkdirSync(path.join(mockSiblingTurboNoCache, '.turbo'), {
+        recursive: true,
+      });
       fs.writeFileSync(
         path.join(mockSiblingTurboNoCache, '.turbo', 'config.json'),
         '{"synthetic":true}',
@@ -1215,13 +1248,11 @@ async function runRegressionSuite() {
         const turboCacheDirExists = fs.existsSync(turboCacheDir);
         const cacheFiles = getRecursiveCacheFileSnapshots(turboCacheDir);
         const gitStatus = target.isGitWorktree
-          ? cp
-              .execFileSync('git', ['status', '--porcelain'], {
-                cwd: target.path,
-                encoding: 'utf-8',
-                stdio: ['pipe', 'pipe', 'pipe'],
-              })
-              .trim()
+          ? execSafeGit(['status', '--porcelain'], {
+              cwd: target.path,
+              encoding: 'utf-8',
+              stdio: ['pipe', 'pipe', 'pipe'],
+            }).trim()
           : null;
         preSnapshots[target.path] = {
           path: target.path,
@@ -1320,13 +1351,11 @@ async function runRegressionSuite() {
 
         // d. Exact working tree git status for repository checkouts
         if (target.isGitWorktree) {
-          const currentGitStatus = cp
-            .execFileSync('git', ['status', '--porcelain'], {
-              cwd: target.path,
-              encoding: 'utf-8',
-              stdio: ['pipe', 'pipe', 'pipe'],
-            })
-            .trim();
+          const currentGitStatus = execSafeGit(['status', '--porcelain'], {
+            cwd: target.path,
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          }).trim();
           assert(
             currentGitStatus === pre.gitStatus,
             `Non-target git worktree "${target.path}" status must remain identical and clean`
@@ -1335,13 +1364,11 @@ async function runRegressionSuite() {
       }
 
       // 10. Assert that original repository's registered worktree list is byte-for-byte unchanged before and after the audit
-      const postRealWtOutput = cp
-        .execFileSync('git', ['worktree', 'list', '--porcelain'], {
-          cwd: rootDir,
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        })
-        .trim();
+      const postRealWtOutput = execSafeGit(['worktree', 'list', '--porcelain'], {
+        cwd: rootDir,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
       assert(
         postRealWtOutput === initialRealWtOutput,
         'Original repository registered worktree list must remain 100% byte-for-byte identical before and after audit'
@@ -1373,18 +1400,16 @@ async function runRegressionSuite() {
       // the audit does not require write permission to the original/parent common Git metadata and succeeds with full isolation.
       {
         const reviewWsPath = path.join(tempBase, 'linked-review-ws');
-        cp.execFileSync('git', ['worktree', 'add', '--detach', reviewWsPath, 'HEAD'], {
+        execSafeGit(['worktree', 'add', '--detach', reviewWsPath, 'HEAD'], {
           cwd: standaloneRepo,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
 
-        const reviewGitCommonRaw = cp
-          .execFileSync('git', ['rev-parse', '--git-common-dir'], {
-            cwd: reviewWsPath,
-            encoding: 'utf-8',
-            stdio: ['pipe', 'pipe', 'pipe'],
-          })
-          .trim();
+        const reviewGitCommonRaw = execSafeGit(['rev-parse', '--git-common-dir'], {
+          cwd: reviewWsPath,
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
         const resolvedReviewGitCommon = path.resolve(reviewWsPath, reviewGitCommonRaw);
 
         // Verify that reviewWsPath is indeed a linked worktree sharing standaloneRepo's common dir
@@ -1400,23 +1425,32 @@ async function runRegressionSuite() {
           const reviewWsUrl = 'file:///' + reviewWsPath.replace(/\\/g, '/');
           cp.execFileSync(
             'git',
-            ['clone', '--no-hardlinks', '--dissociate', '--depth=1', reviewWsUrl, innerStandalone],
+            [
+              '-c',
+              `safe.directory=${path.resolve(reviewWsPath).replace(/\\/g, '/')}`,
+              '-c',
+              `safe.directory=${path.resolve(innerStandalone).replace(/\\/g, '/')}`,
+              'clone',
+              '--no-hardlinks',
+              '--dissociate',
+              '--depth=1',
+              reviewWsUrl,
+              innerStandalone,
+            ],
             { stdio: ['pipe', 'pipe', 'pipe'] }
           );
 
           const innerEphemeral = path.join(innerAuditBase, 'inner-ephemeral');
-          cp.execFileSync('git', ['worktree', 'add', '--detach', innerEphemeral, 'HEAD'], {
+          execSafeGit(['worktree', 'add', '--detach', innerEphemeral, 'HEAD'], {
             cwd: innerStandalone,
             stdio: ['pipe', 'pipe', 'pipe'],
           });
 
-          const innerEphemCommonRaw = cp
-            .execFileSync('git', ['rev-parse', '--git-common-dir'], {
-              cwd: innerEphemeral,
-              encoding: 'utf-8',
-              stdio: ['pipe', 'pipe', 'pipe'],
-            })
-            .trim();
+          const innerEphemCommonRaw = execSafeGit(['rev-parse', '--git-common-dir'], {
+            cwd: innerEphemeral,
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          }).trim();
           const resolvedInnerEphemCommon = path.resolve(innerEphemeral, innerEphemCommonRaw);
 
           assert(
@@ -1437,6 +1471,53 @@ async function runRegressionSuite() {
           }
         }
       }
+
+      // 13. Regression coverage for dubious-ownership & safe-directory execution:
+      // Proves that scoped safe.directory per-invocation configuration allows safe Git operations
+      // in permission-isolated checkouts without modifying global Git configuration or using broad '*' exemptions.
+      {
+        const globalSafeDirsBefore = (() => {
+          try {
+            return cp
+              .execFileSync('git', ['config', '--global', '--get-all', 'safe.directory'], {
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe'],
+              })
+              .trim();
+          } catch {
+            return '';
+          }
+        })();
+
+        // Execute scoped safe Git status in ephemeral checkout
+        const scopedStatus = execSafeGit(['status', '--porcelain'], {
+          cwd: ephemeralWtPath,
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        assert(
+          typeof scopedStatus === 'string',
+          'Scoped safe Git execution must return valid string output'
+        );
+
+        const globalSafeDirsAfter = (() => {
+          try {
+            return cp
+              .execFileSync('git', ['config', '--global', '--get-all', 'safe.directory'], {
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe'],
+              })
+              .trim();
+          } catch {
+            return '';
+          }
+        })();
+
+        assert(
+          globalSafeDirsAfter === globalSafeDirsBefore,
+          'Scoped safe.directory Git invocation must not mutate user global Git configuration'
+        );
+      }
     } catch (err: any) {
       mainError = err;
       throw err;
@@ -1445,7 +1526,7 @@ async function runRegressionSuite() {
       let cleanupError: any = null;
       if (fs.existsSync(standaloneRepo)) {
         try {
-          cp.execFileSync('git', ['worktree', 'prune'], {
+          execSafeGit(['worktree', 'prune'], {
             cwd: standaloneRepo,
             stdio: ['pipe', 'pipe', 'pipe'],
           });

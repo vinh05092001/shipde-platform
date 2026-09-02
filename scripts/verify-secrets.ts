@@ -186,7 +186,12 @@ export function scanFile(
   filePath: string,
   rules: SecretRule[]
 ): { file: string; line: number; ruleId: string; description: string }[] {
-  const findings: { file: string; line: number; ruleId: string; description: string }[] = [];
+  const findings: {
+    file: string;
+    line: number;
+    ruleId: string;
+    description: string;
+  }[] = [];
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split(/\r?\n/);
@@ -331,7 +336,10 @@ export function executeGitleaks(
   args: string[],
   reportPath: string,
   spawnImpl: typeof spawnSync = spawnSync,
-  fsImpl: { existsSync: typeof fs.existsSync; readFileSync: typeof fs.readFileSync } = fs
+  fsImpl: {
+    existsSync: typeof fs.existsSync;
+    readFileSync: typeof fs.readFileSync;
+  } = fs
 ): GitleaksExecResult {
   let spawnResult;
   try {
@@ -426,7 +434,12 @@ export function runSecretScan(rootDir: string = process.cwd(), configPath?: stri
   const tomlPath = configPath || path.join(rootDir, '.gitleaks.toml');
   const config = parseGitleaksConfig(tomlPath);
   const allFiles = walkDir(rootDir, rootDir, config.allowlistPaths);
-  const allFindings: { file: string; line: number; ruleId: string; description: string }[] = [];
+  const allFindings: {
+    file: string;
+    line: number;
+    ruleId: string;
+    description: string;
+  }[] = [];
 
   for (const file of allFiles) {
     const findings = scanFile(file, config.rules);
@@ -458,7 +471,10 @@ export function runNegativeCliTest(
 
   fsImpl.writeFileSync(tempFile, fakeSecretContent, 'utf-8');
   const tempFilesToClean = [tempFile, reportFile];
-  let outcome: { exitCode: number; message?: string } = { exitCode: 2, message: 'Uninitialized' };
+  let outcome: { exitCode: number; message?: string } = {
+    exitCode: 2,
+    message: 'Uninitialized',
+  };
 
   try {
     const result = executeGitleaks(
@@ -495,13 +511,22 @@ export function runNegativeCliTest(
       console.error(
         '   [AC-FOUND-01-06 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện fixture rò rỉ secret thực tế.\n'
       );
-      outcome = { exitCode: 1, message: 'Detected secret finding in negative fixture' };
+      outcome = {
+        exitCode: 1,
+        message: 'Detected secret finding in negative fixture',
+      };
     } else {
       console.error('❌ LỖI: Bộ quét KHÔNG phát hiện được vi phạm trong bài test âm tính!');
-      outcome = { exitCode: 2, message: 'Negative test failed to detect secret' };
+      outcome = {
+        exitCode: 2,
+        message: 'Negative test failed to detect secret',
+      };
     }
   } catch (err: any) {
-    outcome = { exitCode: 2, message: `Unexpected error in negative test: ${err.message}` };
+    outcome = {
+      exitCode: 2,
+      message: `Unexpected error in negative test: ${err.message}`,
+    };
   } finally {
     try {
       cleanTemporaryFiles(tempFilesToClean, fsImpl);
@@ -542,7 +567,10 @@ export function runCliVerification(
     config = parseGitleaksConfig(configPath);
   } catch (err: any) {
     console.error(`❌ LỖI NẠP CẤU HÌNH GITLEAKS: ${err.message}`);
-    return { exitCode: 2, message: `Configuration load failure: ${err.message}` };
+    return {
+      exitCode: 2,
+      message: `Configuration load failure: ${err.message}`,
+    };
   }
 
   console.log(`Đã nạp thành công ${config.rules.length} quy tắc từ .gitleaks.toml:`);
@@ -563,12 +591,19 @@ export function runCliVerification(
   }
 
   if (isNegativeTest) {
-    return runNegativeCliTest(gitleaksBin, { fsImpl, spawnImpl: dependencies.spawnImpl, rootDir });
+    return runNegativeCliTest(gitleaksBin, {
+      fsImpl,
+      spawnImpl: dependencies.spawnImpl,
+      rootDir,
+    });
   }
 
   console.log('🔍 Thực thi Gitleaks native binary CLI...');
   const tempFilesToClean: string[] = [];
-  let outcome: { exitCode: number; message?: string } = { exitCode: 2, message: 'Scan incomplete' };
+  let outcome: { exitCode: number; message?: string } = {
+    exitCode: 2,
+    message: 'Scan incomplete',
+  };
 
   try {
     let hasOperationalError = false;
@@ -581,11 +616,23 @@ export function runCliVerification(
         dependencies.resolveGitCommit ||
         ((ref: string): string | null => {
           try {
-            return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
-              stdio: 'pipe',
-              shell: false,
-              cwd: rootDir,
-            })
+            const normalizedRootDir = path.resolve(rootDir).replace(/\\/g, '/');
+            return execFileSync(
+              'git',
+              [
+                '-c',
+                `safe.directory=${normalizedRootDir}`,
+                'rev-parse',
+                '--verify',
+                '--quiet',
+                `${ref}^{commit}`,
+              ],
+              {
+                stdio: 'pipe',
+                shell: false,
+                cwd: rootDir,
+              }
+            )
               .toString()
               .trim();
           } catch {
@@ -677,7 +724,10 @@ export function runCliVerification(
         scanTargets = getGitleaksScanTargets(rootDir, fsImpl);
       } catch (err: any) {
         console.error(`❌ LỖI ENUMERATION THƯ MỤC KHI QUÉT SECRET: ${err.message}`);
-        outcome = { exitCode: 2, message: `Directory enumeration failed: ${err.message}` };
+        outcome = {
+          exitCode: 2,
+          message: `Directory enumeration failed: ${err.message}`,
+        };
         hasOperationalError = true;
       }
 
@@ -739,7 +789,10 @@ export function runCliVerification(
                   ` - [${f.RuleID}] ${f.File || f.Commit}:${f.StartLine || ''} (${f.Description})`
                 );
               }
-              outcome = { exitCode: 1, message: 'Secrets detected in working tree' };
+              outcome = {
+                exitCode: 1,
+                message: 'Secrets detected in working tree',
+              };
             } else if (!hasFinding) {
               console.log(
                 '\n✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.'
@@ -751,7 +804,10 @@ export function runCliVerification(
       }
     }
   } catch (err: any) {
-    outcome = { exitCode: 2, message: `Unexpected operational error: ${err.message}` };
+    outcome = {
+      exitCode: 2,
+      message: `Unexpected operational error: ${err.message}`,
+    };
   } finally {
     try {
       cleanTemporaryFiles(tempFilesToClean, fsImpl);
