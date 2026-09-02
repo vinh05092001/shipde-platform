@@ -419,7 +419,7 @@ async function runRegressionSuite() {
         ...fs,
         existsSync: (p: string) => (String(p).includes('.temp-gitleaks') ? true : fs.existsSync(p)),
         readFileSync: (p: string, opt: any) =>
-          String(p).includes('.temp-gitleaks-negative-report.json')
+          String(p).includes('.temp-gitleaks')
             ? JSON.stringify([
                 {
                   RuleID: 'shipde-carrier-live-token',
@@ -576,7 +576,8 @@ async function runRegressionSuite() {
         existsSync: (p: string) => {
           if (
             String(p).includes('.temp-gitleaks') ||
-            String(p).includes('test-negative-secret-fixture')
+            String(p).includes('test-negative-secret-fixture') ||
+            String(p).includes('.temp-negative-fixture')
           )
             return true;
           return fs.existsSync(p);
@@ -587,7 +588,8 @@ async function runRegressionSuite() {
         rmSync: (targetPath: any, options?: any) => {
           if (
             String(targetPath).includes('.temp-gitleaks') ||
-            String(targetPath).includes('test-negative-secret-fixture')
+            String(targetPath).includes('test-negative-secret-fixture') ||
+            String(targetPath).includes('.temp-negative-fixture')
           ) {
             throw new Error(
               'EPERM: simulated permission denied during production rmSync cleanup on negative test'
@@ -633,39 +635,194 @@ async function runRegressionSuite() {
         'cleanTemporaryFiles throws operational error when injected rmSync throws EPERM'
       );
 
-      // 5n. Pre-existing scanner artifacts and sentinel reports are strictly preserved byte-for-byte
-      const sentinelReportName = `.temp-gitleaks-sentinel-evidence-${Date.now()}-${Math.random().toString(36).slice(2)}.json`;
-      const sentinelReportPath = path.join(isolatedTempDir, sentinelReportName);
-      const sentinelKnownBytes = Buffer.from(
-        JSON.stringify(
-          [
-            {
-              RuleID: 'sentinel-mock-finding',
-              Description:
-                'Historical preserved sentinel report evidence for test isolation verification',
-              File: 'src/sentinel.ts',
-              StartLine: 42,
-              EndLine: 42,
-            },
-          ],
-          null,
-          2
-        ) + '\n',
-        'utf-8'
-      );
-      fs.writeFileSync(sentinelReportPath, sentinelKnownBytes);
+      // 5n. Pre-existing scanner artifacts and actual would-be report paths are strictly preserved byte-for-byte
+      // Test with all candidate/actual output paths: .temp-gitleaks-target-0-report.json, .temp-gitleaks-git-report.json, .temp-gitleaks-negative-report.json
+      const preservedReports: { path: string; knownBytes: Buffer }[] = [
+        {
+          path: path.join(isolatedTempDir, '.temp-gitleaks-target-0-report.json'),
+          knownBytes: Buffer.from(
+            JSON.stringify(
+              [
+                {
+                  RuleID: 'diagnostic-target-0',
+                  Description: 'Pre-existing diagnostic target report',
+                },
+              ],
+              null,
+              2
+            ) + '\n',
+            'utf-8'
+          ),
+        },
+        {
+          path: path.join(isolatedTempDir, '.temp-gitleaks-target-1-report.json'),
+          knownBytes: Buffer.from(
+            JSON.stringify(
+              [
+                {
+                  RuleID: 'diagnostic-target-1',
+                  Description: 'Pre-existing diagnostic target-1 report',
+                },
+              ],
+              null,
+              2
+            ) + '\n',
+            'utf-8'
+          ),
+        },
+        {
+          path: path.join(isolatedTempDir, '.temp-gitleaks-git-report.json'),
+          knownBytes: Buffer.from(
+            JSON.stringify(
+              [{ RuleID: 'diagnostic-git', Description: 'Pre-existing diagnostic git report' }],
+              null,
+              2
+            ) + '\n',
+            'utf-8'
+          ),
+        },
+        {
+          path: path.join(isolatedTempDir, '.temp-gitleaks-negative-report.json'),
+          knownBytes: Buffer.from(
+            JSON.stringify(
+              [
+                {
+                  RuleID: 'diagnostic-negative',
+                  Description: 'Pre-existing diagnostic negative report',
+                },
+              ],
+              null,
+              2
+            ) + '\n',
+            'utf-8'
+          ),
+        },
+        {
+          path: path.join(
+            isolatedTempDir,
+            `.temp-gitleaks-sentinel-evidence-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
+          ),
+          knownBytes: Buffer.from(
+            JSON.stringify(
+              [
+                {
+                  RuleID: 'sentinel-mock-finding',
+                  Description: 'Historical preserved sentinel report evidence',
+                },
+              ],
+              null,
+              2
+            ) + '\n',
+            'utf-8'
+          ),
+        },
+      ];
 
-      // Verify that getGitleaksScanTargets and walkDir strictly ignore pre-existing sentinel reports
-      const scanTargetsWithSentinel = getGitleaksScanTargets(isolatedTempDir);
-      assert(
-        !scanTargetsWithSentinel.some((t: string) => t.includes(sentinelReportName)),
-        'getGitleaksScanTargets strictly excludes pre-existing sentinel reports from scan targets'
-      );
-      const walkedFilesWithSentinel = walkDir(isolatedTempDir, isolatedTempDir, []);
-      assert(
-        !walkedFilesWithSentinel.some((f: string) => f.includes(sentinelReportName)),
-        'walkDir strictly excludes pre-existing sentinel reports from enumerated files'
-      );
+      for (const item of preservedReports) {
+        fs.writeFileSync(item.path, item.knownBytes);
+      }
+
+      // Verify that getGitleaksScanTargets and walkDir strictly ignore pre-existing reports
+      const scanTargetsWithReports = getGitleaksScanTargets(isolatedTempDir);
+      for (const item of preservedReports) {
+        const basename = path.basename(item.path);
+        assert(
+          !scanTargetsWithReports.some((t: string) => t.includes(basename)),
+          `getGitleaksScanTargets strictly excludes pre-existing report ${basename} from scan targets`
+        );
+      }
+      const walkedFilesWithReports = walkDir(isolatedTempDir, isolatedTempDir, []);
+      for (const item of preservedReports) {
+        const basename = path.basename(item.path);
+        assert(
+          !walkedFilesWithReports.some((f: string) => f.includes(basename)),
+          `walkDir strictly excludes pre-existing report ${basename} from enumerated files`
+        );
+      }
+
+      // Verify that runCliVerification across successful, finding, and operational paths preserves pre-existing report files byte-for-byte
+      // 1. Clean scan path
+      const runCleanResult = runCliVerification([], {
+        spawnImpl: mockSpawnCleanSuccess as any,
+        rootDir: isolatedTempDir,
+        baseCommit: 'mock-base-sha-commit',
+        resolveGitCommit: () => 'mock-base-sha-commit',
+        getBin: () => 'mock-gitleaks',
+      });
+      assert(runCleanResult.exitCode === 0, 'Clean scan mock must exit code 0');
+      for (const item of preservedReports) {
+        assert(
+          fs.existsSync(item.path),
+          `Report file ${path.basename(item.path)} must exist after clean scan`
+        );
+        assert(
+          Buffer.compare(fs.readFileSync(item.path), item.knownBytes) === 0,
+          `Report file ${path.basename(item.path)} must remain byte-for-byte intact after clean scan`
+        );
+      }
+
+      // 2. Finding scan path (simulating Gitleaks writing findings report to dynamically assigned unique report path)
+      const mockSpawnFindingWithReport = (_bin: string, args: string[]) => {
+        const reportIdx = args.indexOf('--report-path');
+        if (reportIdx >= 0 && args[reportIdx + 1]) {
+          try {
+            fs.writeFileSync(
+              args[reportIdx + 1],
+              JSON.stringify([
+                {
+                  RuleID: 'shipde-carrier-live-token',
+                  Description: 'Live carrier token found in scan',
+                  File: 'test.js',
+                  StartLine: 1,
+                },
+              ]),
+              'utf-8'
+            );
+          } catch {}
+        }
+        return {
+          status: 1,
+          stdout: '',
+          stderr: '',
+          error: undefined,
+        };
+      };
+
+      const runFindingResult = runCliVerification([], {
+        spawnImpl: mockSpawnFindingWithReport as any,
+        rootDir: isolatedTempDir,
+        baseCommit: 'mock-base-sha-commit',
+        resolveGitCommit: () => 'mock-base-sha-commit',
+        getBin: () => 'mock-gitleaks',
+      });
+      assert(runFindingResult.exitCode === 1, 'Finding scan mock must exit code 1');
+      for (const item of preservedReports) {
+        assert(
+          fs.existsSync(item.path),
+          `Report file ${path.basename(item.path)} must exist after finding scan`
+        );
+        assert(
+          Buffer.compare(fs.readFileSync(item.path), item.knownBytes) === 0,
+          `Report file ${path.basename(item.path)} must remain byte-for-byte intact after finding scan`
+        );
+      }
+
+      // 3. Negative CLI test path
+      const runNegResult = runNegativeCliTest('mock-gitleaks', {
+        spawnImpl: mockSpawnFindingWithReport as any,
+        rootDir: isolatedTempDir,
+      });
+      assert(runNegResult.exitCode === 1, 'Negative test mock must exit code 1');
+      for (const item of preservedReports) {
+        assert(
+          fs.existsSync(item.path),
+          `Report file ${path.basename(item.path)} must exist after negative test`
+        );
+        assert(
+          Buffer.compare(fs.readFileSync(item.path), item.knownBytes) === 0,
+          `Report file ${path.basename(item.path)} must remain byte-for-byte intact after negative test`
+        );
+      }
 
       // Run cleanTemporaryFiles with a separate transient report
       const transientReport = path.join(
@@ -676,16 +833,17 @@ async function runRegressionSuite() {
       cleanTemporaryFiles([transientReport]);
       assert(!fs.existsSync(transientReport), 'cleanTemporaryFiles cleans transient report');
 
-      // Assert that pre-existing sentinel report was never modified or deleted and remains byte-for-byte identical
-      assert(
-        fs.existsSync(sentinelReportPath),
-        'Pre-existing sentinel report must still exist after scanner scenario'
-      );
-      const sentinelReadBytes = fs.readFileSync(sentinelReportPath);
-      assert(
-        Buffer.compare(sentinelReadBytes, sentinelKnownBytes) === 0,
-        'Pre-existing sentinel report contents must remain byte-for-byte identical throughout test execution'
-      );
+      // Assert that all pre-existing reports remain intact after cleanup
+      for (const item of preservedReports) {
+        assert(
+          fs.existsSync(item.path),
+          `Report file ${path.basename(item.path)} must still exist`
+        );
+        assert(
+          Buffer.compare(fs.readFileSync(item.path), item.knownBytes) === 0,
+          `Report file ${path.basename(item.path)} must remain byte-for-byte identical throughout test execution`
+        );
+      }
     } finally {
       // Guarantee real filesystem cleanup of the isolated temporary directory
       fs.rmSync(isolatedTempDir, { recursive: true, force: true });
@@ -754,9 +912,10 @@ async function runRegressionSuite() {
       'Root package.json must expose verify:inventory and test:audit scripts'
     );
     assert(
-      rootPkg.scripts?.['db:generate'] === 'prisma generate --schema=prisma/schema.prisma' &&
-        rootPkg.scripts?.['postinstall'] === 'prisma generate --schema=prisma/schema.prisma',
-      'Root package.json must expose db:generate and postinstall scripts targeting canonical schema'
+      rootPkg.scripts?.['prepare'] === 'prisma generate --schema=prisma/schema.prisma' &&
+        rootPkg.scripts?.['db:generate'] === 'prisma generate --schema=prisma/schema.prisma' &&
+        !rootPkg.scripts?.['postinstall'],
+      'Root package.json must expose prepare and db:generate scripts targeting canonical schema without unconditional dev-only postinstall'
     );
     assert(
       rootPkg.scripts?.['test:audit'] === 'turbo test:audit --cache-dir=.turbo/cache',
@@ -766,8 +925,8 @@ async function runRegressionSuite() {
       webPkg.scripts?.['version:next'] &&
         webPkg.scripts?.['test:audit'] &&
         webPkg.scripts?.['db:generate'] === 'prisma generate' &&
-        webPkg.scripts?.['postinstall'] === 'prisma generate',
-      'apps/web/package.json must expose version:next, test:audit, db:generate, and postinstall scripts'
+        !webPkg.scripts?.['postinstall'],
+      'apps/web/package.json must expose version:next, test:audit, and db:generate scripts without dev-only postinstall'
     );
     assert(
       webPkg.prisma?.schema === '../../prisma/schema.prisma',
@@ -804,6 +963,24 @@ async function runRegressionSuite() {
       assert(
         typeof (prismaInstance as any)[modelName]?.findMany === 'function',
         `PrismaClient must provide findMany method for canonical model: ${modelName}`
+      );
+    }
+
+    // 6c-3. Clean production-only install regression test:
+    // Proves that production dependency installation (such as pnpm install --prod) does not execute
+    // dev-only Prisma CLI via lifecycle hooks, avoiding missing binary errors during production image builds.
+    {
+      assert(
+        !rootPkg.scripts?.['postinstall'] && !webPkg.scripts?.['postinstall'],
+        'Neither root nor workspace package.json may contain unconditional postinstall scripts invoking dev-only CLIs'
+      );
+      assert(
+        rootPkg.devDependencies?.['prisma'] && !rootPkg.dependencies?.['prisma'],
+        'prisma CLI must reside strictly in devDependencies'
+      );
+      assert(
+        rootPkg.scripts?.['prepare'] === 'prisma generate --schema=prisma/schema.prisma',
+        'Root package.json prepare hook guarantees deterministic Prisma client generation during dev/CI installs while being safely skipped in production-only installs'
       );
     }
 

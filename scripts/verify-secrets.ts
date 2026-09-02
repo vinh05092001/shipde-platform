@@ -37,7 +37,39 @@ export const IGNORED_SCAN_NAMES = new Set([
 export function isIgnoredScanName(name: string): boolean {
   if (IGNORED_SCAN_NAMES.has(name)) return true;
   if (name.startsWith('.temp-gitleaks')) return true;
+  if (name.startsWith('.temp-negative-fixture')) return true;
+  if (name.startsWith('test-negative-secret-fixture')) return true;
   return false;
+}
+
+/**
+ * Generate a run-unique, collision-free temporary report file path.
+ */
+export function generateUniqueReportPath(
+  rootDir: string,
+  category: string,
+  fsImpl: { existsSync: (p: fs.PathLike) => boolean } = fs
+): string {
+  const pid = process.pid;
+  const time = Date.now();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const randomSuffix = Math.random().toString(36).slice(2, 10);
+    const candidate = path.join(
+      rootDir,
+      `.temp-gitleaks-${category}-${pid}-${time}-${randomSuffix}${attempt > 0 ? `-${attempt}` : ''}-report.json`
+    );
+    try {
+      if (!fsImpl.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      return candidate;
+    }
+  }
+  return path.join(
+    rootDir,
+    `.temp-gitleaks-${category}-${pid}-${time}-${Math.random().toString(36).slice(2, 10)}-report.json`
+  );
 }
 
 /**
@@ -466,8 +498,9 @@ export function runNegativeCliTest(
   console.log('🧪 Chạy kiểm thử âm tính (Demonstrated Negative Failure Proof)...');
   const tokenHeader = ['ghn', 'live'].join('_');
   const fakeSecretContent = `// Temporary negative test fixture\nconst carrierLiveKey = "${tokenHeader}_98421039841298412";\n`;
-  const tempFile = path.join(rootDir, 'test-negative-secret-fixture.js');
-  const reportFile = path.join(rootDir, '.temp-gitleaks-negative-report.json');
+  const runId = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const tempFile = path.join(rootDir, `.temp-negative-fixture-${runId}.js`);
+  const reportFile = generateUniqueReportPath(rootDir, 'negative', fsImpl);
 
   fsImpl.writeFileSync(tempFile, fakeSecretContent, 'utf-8');
   const tempFilesToClean = [tempFile, reportFile];
@@ -696,7 +729,7 @@ export function runCliVerification(
       if (!hasOperationalError && baseCommit) {
         const logRange = `${baseCommit}...HEAD`;
         console.log(`🔍 [Gitleaks git] Quét lịch sử commit PR (${logRange})...`);
-        const gitReportFile = path.join(rootDir, '.temp-gitleaks-git-report.json');
+        const gitReportFile = generateUniqueReportPath(rootDir, 'git', fsImpl);
         tempFilesToClean.push(gitReportFile);
 
         const gitResult = executeGitleaks(
@@ -763,7 +796,7 @@ export function runCliVerification(
 
           for (let idx = 0; idx < scanTargets.length; idx++) {
             const target = scanTargets[idx];
-            const targetReport = path.join(rootDir, `.temp-gitleaks-target-${idx}-report.json`);
+            const targetReport = generateUniqueReportPath(rootDir, `target-${idx}`, fsImpl);
             tempFilesToClean.push(targetReport);
 
             const dirResult = executeGitleaks(

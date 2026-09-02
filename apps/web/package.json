@@ -17,7 +17,6 @@
     "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
     "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
     "db:generate": "prisma generate",
-    "postinstall": "prisma generate",
     "version:next": "next --version"
   },
   "dependencies": {

@@ -19,8 +19,8 @@
     "test:audit": "turbo test:audit --cache-dir=.turbo/cache",
     "test:e2e": "turbo test:e2e --cache-dir=.turbo/cache",
     "test:baseline": "tsx apps/web/src/tests/preservation-smoke.test.ts",
+    "prepare": "prisma generate --schema=prisma/schema.prisma",
     "db:generate": "prisma generate --schema=prisma/schema.prisma",
-    "postinstall": "prisma generate --schema=prisma/schema.prisma",
     "security:secrets": "tsx scripts/verify-secrets.ts",
     "verify:inventory": "tsx scripts/verify-inventory.ts",
     "concierge:audit": "tsx scripts/concierge-audit.ts"
