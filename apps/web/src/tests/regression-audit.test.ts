@@ -839,20 +839,45 @@ async function runRegressionSuite() {
       'apps/web/tsconfig.json must include next-env.d.ts and both dev/prod next route types'
     );
 
-    // Safe Git invocation helper: Explicitly configures safe.directory for the specific target directory
+    // Safe Git invocation helper: Explicitly configures safe.directory for the specific target directory and any linked gitdir
     // without mutating global Git configuration or using broad '*' exemptions, handling dubious-ownership environments.
+    function getSafeDirectoryArgs(cwd: string): string[] {
+      const normalizedCwd = path.resolve(cwd).replace(/\\/g, '/');
+      const safeDirs = new Set<string>([normalizedCwd]);
+      const dotGitPath = path.join(cwd, '.git');
+      try {
+        if (fs.existsSync(dotGitPath)) {
+          const stat = fs.statSync(dotGitPath);
+          if (stat.isFile()) {
+            const dotGitContent = fs.readFileSync(dotGitPath, 'utf-8');
+            const match = dotGitContent.match(/gitdir:\s*(.+)/i);
+            if (match && match[1]) {
+              const gitDirPath = path.resolve(cwd, match[1].trim()).replace(/\\/g, '/');
+              safeDirs.add(gitDirPath);
+              const parts = gitDirPath.split('/');
+              const worktreesIdx = parts.lastIndexOf('worktrees');
+              if (worktreesIdx > 0 && parts[worktreesIdx - 1] === '.git') {
+                const parentRepo = parts.slice(0, worktreesIdx - 1).join('/');
+                if (parentRepo) safeDirs.add(parentRepo);
+              }
+            }
+          }
+        }
+      } catch {}
+
+      const args: string[] = [];
+      for (const dir of safeDirs) {
+        args.push('-c', `safe.directory=${dir}`);
+      }
+      return args;
+    }
+
     function execSafeGit(
       args: string[],
       options: { cwd: string; encoding?: BufferEncoding; stdio?: any }
     ): string {
-      const normalizedCwd = path.resolve(options.cwd).replace(/\\/g, '/');
-      return (
-        cp.execFileSync(
-          'git',
-          ['-c', `safe.directory=${normalizedCwd}`, ...args],
-          options as any
-        ) as any
-      ).toString();
+      const safeArgs = getSafeDirectoryArgs(options.cwd);
+      return (cp.execFileSync('git', [...safeArgs, ...args], options as any) as any).toString();
     }
 
     // Verify git ls-files does not track apps/web/next-env.d.ts
@@ -1012,20 +1037,45 @@ async function runRegressionSuite() {
       }
     }
 
-    // Safe Git invocation helper: Explicitly configures safe.directory for the specific target directory
+    // Safe Git invocation helper: Explicitly configures safe.directory for the specific target directory and any linked gitdir
     // without mutating global Git configuration or using broad '*' exemptions, handling dubious-ownership environments.
+    function getSafeDirectoryArgs(cwd: string): string[] {
+      const normalizedCwd = path.resolve(cwd).replace(/\\/g, '/');
+      const safeDirs = new Set<string>([normalizedCwd]);
+      const dotGitPath = path.join(cwd, '.git');
+      try {
+        if (fs.existsSync(dotGitPath)) {
+          const stat = fs.statSync(dotGitPath);
+          if (stat.isFile()) {
+            const dotGitContent = fs.readFileSync(dotGitPath, 'utf-8');
+            const match = dotGitContent.match(/gitdir:\s*(.+)/i);
+            if (match && match[1]) {
+              const gitDirPath = path.resolve(cwd, match[1].trim()).replace(/\\/g, '/');
+              safeDirs.add(gitDirPath);
+              const parts = gitDirPath.split('/');
+              const worktreesIdx = parts.lastIndexOf('worktrees');
+              if (worktreesIdx > 0 && parts[worktreesIdx - 1] === '.git') {
+                const parentRepo = parts.slice(0, worktreesIdx - 1).join('/');
+                if (parentRepo) safeDirs.add(parentRepo);
+              }
+            }
+          }
+        }
+      } catch {}
+
+      const args: string[] = [];
+      for (const dir of safeDirs) {
+        args.push('-c', `safe.directory=${dir}`);
+      }
+      return args;
+    }
+
     function execSafeGit(
       args: string[],
       options: { cwd: string; encoding?: BufferEncoding; stdio?: any }
     ): string {
-      const normalizedCwd = path.resolve(options.cwd).replace(/\\/g, '/');
-      return (
-        cp.execFileSync(
-          'git',
-          ['-c', `safe.directory=${normalizedCwd}`, ...args],
-          options as any
-        ) as any
-      ).toString();
+      const safeArgs = getSafeDirectoryArgs(options.cwd);
+      return (cp.execFileSync('git', [...safeArgs, ...args], options as any) as any).toString();
     }
 
     // 8b. Discover all registered worktrees via git worktree list (read-only baseline)
@@ -1067,8 +1117,7 @@ async function runRegressionSuite() {
           cp.execFileSync(
             'git',
             [
-              '-c',
-              `safe.directory=${path.resolve(rootDir).replace(/\\/g, '/')}`,
+              ...getSafeDirectoryArgs(rootDir),
               '-c',
               `safe.directory=${path.resolve(standaloneFailRepo).replace(/\\/g, '/')}`,
               'clone',
@@ -1154,8 +1203,7 @@ async function runRegressionSuite() {
       cp.execFileSync(
         'git',
         [
-          '-c',
-          `safe.directory=${path.resolve(rootDir).replace(/\\/g, '/')}`,
+          ...getSafeDirectoryArgs(rootDir),
           '-c',
           `safe.directory=${path.resolve(standaloneRepo).replace(/\\/g, '/')}`,
           'clone',
@@ -1426,8 +1474,7 @@ async function runRegressionSuite() {
           cp.execFileSync(
             'git',
             [
-              '-c',
-              `safe.directory=${path.resolve(reviewWsPath).replace(/\\/g, '/')}`,
+              ...getSafeDirectoryArgs(reviewWsPath),
               '-c',
               `safe.directory=${path.resolve(innerStandalone).replace(/\\/g, '/')}`,
               'clone',

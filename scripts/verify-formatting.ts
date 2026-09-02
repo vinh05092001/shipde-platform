@@ -57,12 +57,43 @@ export function isPrettierSupported(filePath: string): boolean {
   return SUPPORTED_EXTENSIONS.has(ext);
 }
 
+function getSafeDirectoryArgs(cwd: string): string[] {
+  const normalizedCwd = path.resolve(cwd).replace(/\\/g, '/');
+  const safeDirs = new Set<string>([normalizedCwd]);
+  const dotGitPath = path.join(cwd, '.git');
+  try {
+    if (fs.existsSync(dotGitPath)) {
+      const stat = fs.statSync(dotGitPath);
+      if (stat.isFile()) {
+        const dotGitContent = fs.readFileSync(dotGitPath, 'utf-8');
+        const match = dotGitContent.match(/gitdir:\s*(.+)/i);
+        if (match && match[1]) {
+          const gitDirPath = path.resolve(cwd, match[1].trim()).replace(/\\/g, '/');
+          safeDirs.add(gitDirPath);
+          const parts = gitDirPath.split('/');
+          const worktreesIdx = parts.lastIndexOf('worktrees');
+          if (worktreesIdx > 0 && parts[worktreesIdx - 1] === '.git') {
+            const parentRepo = parts.slice(0, worktreesIdx - 1).join('/');
+            if (parentRepo) safeDirs.add(parentRepo);
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const args: string[] = [];
+  for (const dir of safeDirs) {
+    args.push('-c', `safe.directory=${dir}`);
+  }
+  return args;
+}
+
 function execSafeGit(
   args: string[],
   options: { cwd: string; encoding?: BufferEncoding; stdio?: any }
 ): Buffer | string {
-  const normalizedCwd = path.resolve(options.cwd).replace(/\\/g, '/');
-  return execFileSync('git', ['-c', `safe.directory=${normalizedCwd}`, ...args], options as any);
+  const safeArgs = getSafeDirectoryArgs(options.cwd);
+  return execFileSync('git', [...safeArgs, ...args], options as any);
 }
 
 function tryResolveMergeBase(cand: string, rootDir: string): string | null {

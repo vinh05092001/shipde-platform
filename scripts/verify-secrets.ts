@@ -617,16 +617,36 @@ export function runCliVerification(
         ((ref: string): string | null => {
           try {
             const normalizedRootDir = path.resolve(rootDir).replace(/\\/g, '/');
+            const safeDirs = new Set<string>([normalizedRootDir]);
+            const dotGitPath = path.join(rootDir, '.git');
+            try {
+              if (fsImpl.existsSync(dotGitPath)) {
+                const stat = fs.statSync(dotGitPath);
+                if (stat.isFile()) {
+                  const dotGitContent = fsImpl.readFileSync(dotGitPath, 'utf-8');
+                  const match = dotGitContent.match(/gitdir:\s*(.+)/i);
+                  if (match && match[1]) {
+                    const gitDirPath = path.resolve(rootDir, match[1].trim()).replace(/\\/g, '/');
+                    safeDirs.add(gitDirPath);
+                    const parts = gitDirPath.split('/');
+                    const worktreesIdx = parts.lastIndexOf('worktrees');
+                    if (worktreesIdx > 0 && parts[worktreesIdx - 1] === '.git') {
+                      const parentRepo = parts.slice(0, worktreesIdx - 1).join('/');
+                      if (parentRepo) safeDirs.add(parentRepo);
+                    }
+                  }
+                }
+              }
+            } catch {}
+
+            const safeArgs: string[] = [];
+            for (const dir of safeDirs) {
+              safeArgs.push('-c', `safe.directory=${dir}`);
+            }
+
             return execFileSync(
               'git',
-              [
-                '-c',
-                `safe.directory=${normalizedRootDir}`,
-                'rev-parse',
-                '--verify',
-                '--quiet',
-                `${ref}^{commit}`,
-              ],
+              [...safeArgs, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
               {
                 stdio: 'pipe',
                 shell: false,
