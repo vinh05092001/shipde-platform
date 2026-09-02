@@ -905,7 +905,7 @@ async function runRegressionSuite() {
     }
   }
 
-  // Test 8: Deterministic Ephemeral Linked-Worktree Isolation & Cryptographic 3-State Cache Preservation (Fail-Closed)
+  // Test 8: Standalone Temporary Git Repository & Cryptographic 3-State Cache Isolation (Fail-Closed)
   if (typeof window === 'undefined') {
     const fs = await import('fs');
     const path = await import('path');
@@ -1004,15 +1004,24 @@ async function runRegressionSuite() {
       }
     }
 
-    // 8b. Discover all registered worktrees via git worktree list
-    const wtOutput = cp
+    // 8b. Discover all registered worktrees via git worktree list (read-only baseline)
+    const initialRealWtOutput = cp
       .execFileSync('git', ['worktree', 'list', '--porcelain'], {
         cwd: rootDir,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       .trim();
-    const worktreeLines = wtOutput.split('\n');
+    const realGitCommonDirRaw = cp
+      .execFileSync('git', ['rev-parse', '--git-common-dir'], {
+        cwd: rootDir,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      .trim();
+    const realGitCommonDir = path.resolve(rootDir, realGitCommonDirRaw);
+
+    const worktreeLines = initialRealWtOutput.split('\n');
     const worktreePaths: string[] = [];
     for (const line of worktreeLines) {
       if (line.startsWith('worktree ')) {
@@ -1024,38 +1033,81 @@ async function runRegressionSuite() {
       'Git worktree list must identify at least the primary repository'
     );
 
-    // 8c. Negative regression test: Injected failure after git worktree add must safely prune and delete temporary directory
+    // 8c. Negative regression test: Injected failure after git worktree add on standalone repo must safely prune and delete temporary directory without mutating real repository
     {
       const failSetupBase = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-test-fail-setup-'));
+      const standaloneFailRepo = path.join(failSetupBase, 'standalone-repo');
       const failSetupWtPath = path.join(failSetupBase, 'wt-fail');
       let injectedSetupErrorCaught = false;
       let setupCleanupRan = false;
+      let setupMainError: any = null;
       try {
         try {
+          const rootDirUrl = 'file:///' + rootDir.replace(/\\/g, '/');
+          cp.execFileSync(
+            'git',
+            [
+              'clone',
+              '--no-hardlinks',
+              '--dissociate',
+              '--depth=1',
+              rootDirUrl,
+              standaloneFailRepo,
+            ],
+            { stdio: ['pipe', 'pipe', 'pipe'] }
+          );
           cp.execFileSync('git', ['worktree', 'add', '--detach', failSetupWtPath, 'HEAD'], {
-            cwd: rootDir,
+            cwd: standaloneFailRepo,
             stdio: ['pipe', 'pipe', 'pipe'],
           });
           // Injected failure immediately after git worktree add
-          throw new Error('Simulated setup failure after git worktree add');
+          throw new Error('Simulated setup failure after git worktree add on standalone repo');
+        } catch (e: any) {
+          setupMainError = e;
+          throw e;
         } finally {
           setupCleanupRan = true;
-          if (fs.existsSync(failSetupBase)) {
-            fs.rmSync(failSetupBase, { recursive: true, force: true });
+          let cleanupError: any = null;
+          if (fs.existsSync(standaloneFailRepo)) {
+            try {
+              cp.execFileSync('git', ['worktree', 'prune'], {
+                cwd: standaloneFailRepo,
+                stdio: ['pipe', 'pipe', 'pipe'],
+              });
+            } catch (pruneErr: any) {
+              cleanupError = pruneErr;
+            }
           }
-          cp.execFileSync('git', ['worktree', 'prune'], {
-            cwd: rootDir,
-            stdio: ['pipe', 'pipe', 'pipe'],
-          });
+          if (fs.existsSync(failSetupBase)) {
+            try {
+              fs.rmSync(failSetupBase, { recursive: true, force: true });
+            } catch (rmErr: any) {
+              if (!cleanupError) cleanupError = rmErr;
+            }
+          }
+          if (cleanupError) {
+            if (setupMainError) {
+              cleanupError.cause = setupMainError;
+              cleanupError.message = `Cleanup failed (${cleanupError.message}) after operation error: ${setupMainError.message}`;
+            }
+            throw cleanupError;
+          }
         }
       } catch (e: any) {
-        if (e.message && e.message.includes('Simulated setup failure after git worktree add')) {
+        if (
+          e.message &&
+          e.message.includes('Simulated setup failure after git worktree add on standalone repo')
+        ) {
           injectedSetupErrorCaught = true;
         }
       }
       assert(injectedSetupErrorCaught, 'Injected setup error must propagate and be caught');
       assert(setupCleanupRan, 'Cleanup handler must execute on setup failure');
-      const activeWtList = cp
+      assert(
+        !fs.existsSync(failSetupBase),
+        'Temporary base directory from failed setup must be completely deleted'
+      );
+      const postFailRealWtOutput = cp
         .execFileSync('git', ['worktree', 'list', '--porcelain'], {
           cwd: rootDir,
           encoding: 'utf-8',
@@ -1063,29 +1115,52 @@ async function runRegressionSuite() {
         })
         .trim();
       assert(
-        !activeWtList.includes(failSetupWtPath),
-        'Temporary worktree from failed setup must be completely pruned'
-      );
-      assert(
-        !fs.existsSync(failSetupBase),
-        'Temporary base directory from failed setup must be completely deleted'
+        postFailRealWtOutput === initialRealWtOutput,
+        'Original repository registered worktree list must remain 100% byte-for-byte unchanged after failed setup'
       );
     }
 
-    // 8d. Main Deterministic Ephemeral Linked Worktree Execution under a Single Unified Cleanup Scope
+    // 8d. Main Deterministic Standalone Repository & Linked Worktree Execution under a Single Unified Cleanup Scope
     let mainError: any = null;
     const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-wt-isolate-'));
+    const standaloneRepo = path.join(tempBase, 'standalone-repo');
+    const ephemeralWtPath = path.join(tempBase, 'target-wt');
 
     try {
-      const ephemeralWtPath = path.join(tempBase, 'target-wt');
+      // 1. Create completely standalone temporary Git repository with its own independent .git directory
+      const rootDirUrl = 'file:///' + rootDir.replace(/\\/g, '/');
+      cp.execFileSync(
+        'git',
+        ['clone', '--no-hardlinks', '--dissociate', '--depth=1', rootDirUrl, standaloneRepo],
+        { stdio: ['pipe', 'pipe', 'pipe'] }
+      );
 
-      // 1. git worktree add inside unified scope
+      // 2. Create ephemeral linked worktree using the standalone temporary repository
       cp.execFileSync('git', ['worktree', 'add', '--detach', ephemeralWtPath, 'HEAD'], {
-        cwd: rootDir,
+        cwd: standaloneRepo,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
-      // 2. Synthetic sibling regression cases inside unified scope
+      // 3. Explicit assertions on Git common directory isolation
+      const ephemCommonDirRaw = cp
+        .execFileSync('git', ['rev-parse', '--git-common-dir'], {
+          cwd: ephemeralWtPath,
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        })
+        .trim();
+      const resolvedEphemCommonDir = path.resolve(ephemeralWtPath, ephemCommonDirRaw);
+
+      assert(
+        resolvedEphemCommonDir.startsWith(tempBase),
+        `Ephemeral worktree Git common directory (${resolvedEphemCommonDir}) must be inside temporary base (${tempBase})`
+      );
+      assert(
+        resolvedEphemCommonDir !== realGitCommonDir,
+        `Ephemeral worktree Git common directory must not be the real checkout's Git common directory (${realGitCommonDir})`
+      );
+
+      // 4. Synthetic sibling regression cases inside unified scope
       // Sibling Case A: Non-target sibling with no .turbo directory
       const mockSiblingNoTurbo = path.join(tempBase, 'sibling-case-a-no-turbo');
       fs.mkdirSync(mockSiblingNoTurbo, { recursive: true });
@@ -1131,7 +1206,7 @@ async function runRegressionSuite() {
         { path: mockSiblingTurboWithCache, isGitWorktree: false },
       ];
 
-      // 3. Pre-execution snapshots using cryptographic recursive SHA-256
+      // 5. Pre-execution snapshots using cryptographic recursive SHA-256
       const preSnapshots: Record<string, TargetStateSnapshot> = {};
       for (const target of monitoredTargets) {
         const turboDir = path.join(target.path, '.turbo');
@@ -1158,7 +1233,7 @@ async function runRegressionSuite() {
         };
       }
 
-      // 4. Dependency setup inside ephemeral linked worktree
+      // 6. Dependency setup inside ephemeral linked worktree
       const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
       cp.execSync(`${pnpmCmd} install --frozen-lockfile`, {
         cwd: ephemeralWtPath,
@@ -1171,7 +1246,7 @@ async function runRegressionSuite() {
         'Turbo binary must exist in ephemeral linked worktree node_modules'
       );
 
-      // 5. Real cache-writing Turbo execution inside ephemeral linked worktree
+      // 7. Real cache-writing Turbo execution inside ephemeral linked worktree
       const turboBuildOutput = cp
         .execFileSync(
           process.execPath,
@@ -1195,7 +1270,7 @@ async function runRegressionSuite() {
         'Turbo execution in ephemeral linked worktree must produce valid task output'
       );
 
-      // 6. Assert cache was created strictly inside target ephemeral worktree (.turbo/cache)
+      // 8. Assert cache was created strictly inside target ephemeral worktree (.turbo/cache)
       const wtTurboCacheDir = path.join(ephemeralWtPath, '.turbo', 'cache');
       assert(
         fs.existsSync(wtTurboCacheDir),
@@ -1214,7 +1289,7 @@ async function runRegressionSuite() {
         'Target ephemeral worktree .turbo/cache must contain real Turbo-generated artifacts (*.tar.zst / *-manifest.json)'
       );
 
-      // 7. Assert exact cryptographic 3-state preservation across all non-target siblings and checkouts
+      // 9. Assert exact cryptographic 3-state preservation across all non-target siblings and checkouts
       for (const target of monitoredTargets) {
         const pre = preSnapshots[target.path];
         const turboDir = path.join(target.path, '.turbo');
@@ -1259,7 +1334,20 @@ async function runRegressionSuite() {
         }
       }
 
-      // 8. Negative regression proof: Nonexistent Turbo task exits non-zero
+      // 10. Assert that original repository's registered worktree list is byte-for-byte unchanged before and after the audit
+      const postRealWtOutput = cp
+        .execFileSync('git', ['worktree', 'list', '--porcelain'], {
+          cwd: rootDir,
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        })
+        .trim();
+      assert(
+        postRealWtOutput === initialRealWtOutput,
+        'Original repository registered worktree list must remain 100% byte-for-byte identical before and after audit'
+      );
+
+      // 11. Negative regression proof: Nonexistent Turbo task exits non-zero
       let caughtNegative = false;
       try {
         cp.execFileSync(
@@ -1279,26 +1367,98 @@ async function runRegressionSuite() {
         );
       }
       assert(caughtNegative, 'Negative Turbo task execution must exit with non-zero status code');
+
+      // 12. Regression coverage representing a permission-isolated linked review workspace:
+      // Proves that when the audit is launched from within a linked worktree (where the common Git directory is outside the workspace),
+      // the audit does not require write permission to the original/parent common Git metadata and succeeds with full isolation.
+      {
+        const reviewWsPath = path.join(tempBase, 'linked-review-ws');
+        cp.execFileSync('git', ['worktree', 'add', '--detach', reviewWsPath, 'HEAD'], {
+          cwd: standaloneRepo,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+
+        const reviewGitCommonRaw = cp
+          .execFileSync('git', ['rev-parse', '--git-common-dir'], {
+            cwd: reviewWsPath,
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          })
+          .trim();
+        const resolvedReviewGitCommon = path.resolve(reviewWsPath, reviewGitCommonRaw);
+
+        // Verify that reviewWsPath is indeed a linked worktree sharing standaloneRepo's common dir
+        assert(
+          resolvedReviewGitCommon === path.resolve(standaloneRepo, '.git'),
+          'Review workspace must be a linked worktree sharing standalone repo Git common dir'
+        );
+
+        // Execute audit isolation from within reviewWsPath
+        const innerAuditBase = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-review-audit-'));
+        try {
+          const innerStandalone = path.join(innerAuditBase, 'inner-standalone');
+          const reviewWsUrl = 'file:///' + reviewWsPath.replace(/\\/g, '/');
+          cp.execFileSync(
+            'git',
+            ['clone', '--no-hardlinks', '--dissociate', '--depth=1', reviewWsUrl, innerStandalone],
+            { stdio: ['pipe', 'pipe', 'pipe'] }
+          );
+
+          const innerEphemeral = path.join(innerAuditBase, 'inner-ephemeral');
+          cp.execFileSync('git', ['worktree', 'add', '--detach', innerEphemeral, 'HEAD'], {
+            cwd: innerStandalone,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+
+          const innerEphemCommonRaw = cp
+            .execFileSync('git', ['rev-parse', '--git-common-dir'], {
+              cwd: innerEphemeral,
+              encoding: 'utf-8',
+              stdio: ['pipe', 'pipe', 'pipe'],
+            })
+            .trim();
+          const resolvedInnerEphemCommon = path.resolve(innerEphemeral, innerEphemCommonRaw);
+
+          assert(
+            resolvedInnerEphemCommon.startsWith(innerAuditBase),
+            `Inner ephemeral common dir (${resolvedInnerEphemCommon}) must be inside innerAuditBase (${innerAuditBase})`
+          );
+          assert(
+            resolvedInnerEphemCommon !== resolvedReviewGitCommon,
+            'Inner ephemeral common dir must NOT be review workspace common dir'
+          );
+          assert(
+            resolvedInnerEphemCommon !== realGitCommonDir,
+            'Inner ephemeral common dir must NOT be real repository Git common dir'
+          );
+        } finally {
+          if (fs.existsSync(innerAuditBase)) {
+            fs.rmSync(innerAuditBase, { recursive: true, force: true });
+          }
+        }
+      }
     } catch (err: any) {
       mainError = err;
       throw err;
     } finally {
-      // Scoped cleanup: safely remove directory, prune worktrees, and preserve dual error context on cleanup failure
+      // Scoped cleanup: prune worktree inside standaloneRepo, safely delete tempBase, and preserve dual error context on cleanup failure
       let cleanupError: any = null;
+      if (fs.existsSync(standaloneRepo)) {
+        try {
+          cp.execFileSync('git', ['worktree', 'prune'], {
+            cwd: standaloneRepo,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+        } catch (pruneErr: any) {
+          cleanupError = pruneErr;
+        }
+      }
       if (fs.existsSync(tempBase)) {
         try {
           fs.rmSync(tempBase, { recursive: true, force: true });
         } catch (rmErr: any) {
-          cleanupError = rmErr;
+          if (!cleanupError) cleanupError = rmErr;
         }
-      }
-      try {
-        cp.execFileSync('git', ['worktree', 'prune'], {
-          cwd: rootDir,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-      } catch (pruneErr: any) {
-        if (!cleanupError) cleanupError = pruneErr;
       }
 
       if (cleanupError) {
