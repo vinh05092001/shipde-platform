@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync")]
+    [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Recover", "Sync")]
     [string]$Action = "Menu",
 
     [string]$Repository = "vinh05092001/shipde-platform",
@@ -521,6 +521,213 @@ function Assert-ShipDeReviewTarget {
     }
 }
 
+function Get-ShipDeReviewArtifact {
+    param(
+        [Parameter(Mandatory = $true)][object]$PullRequest,
+        [Parameter(Mandatory = $true)][string]$HeadSha
+    )
+
+    if ($HeadSha -notmatch '^[0-9a-fA-F]{40,64}$') {
+        throw "Cannot locate a saved review without a valid immutable head SHA."
+    }
+
+    $reviewStem = "pr-{0}-{1}-codex-review" -f $PullRequest.number, $HeadSha.Substring(0, 8)
+    $reviewFile = Join-Path $script:HandoffRoot "$reviewStem.txt"
+    if (-not (Test-Path -LiteralPath $reviewFile -PathType Leaf)) {
+        return $null
+    }
+    return $reviewFile
+}
+
+function Get-ShipDeTerminalReviewVerdict {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $nonEmptyLines = @($Text -split '\r?\n' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
+    })
+    if ($nonEmptyLines.Count -eq 0) {
+        return $null
+    }
+
+    $verdictPattern = '(?im)^[\t ]*(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?[\t ]*$'
+    $matches = [regex]::Matches($Text, $verdictPattern)
+    $terminal = [regex]::Match(
+        [string]$nonEmptyLines[$nonEmptyLines.Count - 1],
+        '(?i)^[\t ]*(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?[\t ]*$'
+    )
+    if ($matches.Count -ne 1 -or -not $terminal.Success) {
+        return $null
+    }
+    return $terminal.Groups[1].Value.ToUpperInvariant()
+}
+
+function Get-ShipDeRecoveredReviewComment {
+    param(
+        [Parameter(Mandatory = $true)][object]$PullRequest,
+        [Parameter(Mandatory = $true)][string]$HeadSha
+    )
+
+    $json = & gh pr view $PullRequest.number `
+        --repo $Repository `
+        --json comments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot read Pull Request comments while recovering a Codex review."
+    }
+
+    try {
+        $payload = ($json -join [Environment]::NewLine) | ConvertFrom-Json
+    } catch {
+        throw "GitHub returned malformed Pull Request comments JSON."
+    }
+
+    $comments = @($payload.comments)
+    for ($index = $comments.Count - 1; $index -ge 0; $index--) {
+        $body = [string]$comments[$index].body
+        if ([string]::IsNullOrWhiteSpace($body)) {
+            continue
+        }
+        if ($body -notmatch '(?i)Codex(?: Sol)? review recovery') {
+            continue
+        }
+
+        $marker = [regex]::Match(
+            $body,
+            '(?im)<!--\s*shipde-codex-review\s+head=(?<head>[0-9a-fA-F]{40,64})\s+verdict=(?<verdict>PASS|CHANGES_REQUIRED|BLOCKED)\s*-->'
+        )
+        $commentHead = if ($marker.Success) {
+            $marker.Groups['head'].Value
+        } else {
+            $proseHead = [regex]::Match(
+                $body,
+                '(?im)PR head\s+`?(?<head>[0-9a-fA-F]{40,64})`?'
+            )
+            if ($proseHead.Success) { $proseHead.Groups['head'].Value } else { '' }
+        }
+        if ($commentHead -ne $HeadSha) {
+            continue
+        }
+
+        $verdict = Get-ShipDeTerminalReviewVerdict -Text $body
+        if (-not $verdict -and $marker.Success) {
+            $verdict = $marker.Groups['verdict'].Value.ToUpperInvariant()
+        }
+        if (-not $verdict) {
+            throw "A recovered review comment exists for $HeadSha but has no valid terminal verdict."
+        }
+
+        return [PSCustomObject]@{
+            HeadSha = $commentHead
+            Verdict = $verdict
+            Url = [string]$comments[$index].url
+        }
+    }
+    return $null
+}
+
+function Continue-ShipDeAfterReviewVerdict {
+    param(
+        [Parameter(Mandatory = $true)][object]$PullRequest,
+        [Parameter(Mandatory = $true)][ValidateSet('PASS', 'CHANGES_REQUIRED', 'BLOCKED')][string]$Verdict
+    )
+
+    if ($Verdict -eq 'CHANGES_REQUIRED') {
+        $item = Get-ShipDePrWorkItem -PullRequest $PullRequest
+        if (-not $item) {
+            throw "Cannot resolve the assigned implementation author for PR #$($PullRequest.number)."
+        }
+        Start-ShipDeFixRound -PullRequest $PullRequest -Item $item
+        return
+    }
+    if ($Verdict -eq 'PASS') {
+        Write-Host ([string]$PullRequest.url)
+        Write-Host "PASS recorded for the immutable head. Only the human merge owner may merge."
+        return
+    }
+
+    Write-Host ([string]$PullRequest.url)
+    Write-Host "BLOCKED recorded. Resolve the stated blocker without starting another Work Item."
+}
+
+function Invoke-ShipDeRecoverReview {
+    Assert-ShipDeCommand gh
+    $pullRequests = @(Get-ShipDeOpenPullRequests | Where-Object {
+        Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
+    })
+    if ($pullRequests.Count -ne 1) {
+        throw "Review recovery requires exactly one active implementation Pull Request."
+    }
+
+    $pr = $pullRequests[0]
+    $reviewHeadSha = [string]$pr.headRefOid
+    Assert-ShipDeReviewTarget -PullRequest $pr -ExpectedHeadSha $reviewHeadSha
+
+    $reviewFile = Get-ShipDeReviewArtifact -PullRequest $pr -HeadSha $reviewHeadSha
+    if (-not $reviewFile) {
+        throw "No saved Codex review exists for current head $reviewHeadSha. A fresh review was not started."
+    }
+
+    $posted = Get-ShipDeRecoveredReviewComment -PullRequest $pr -HeadSha $reviewHeadSha
+    if ($posted) {
+        Write-Host ("Recovered review already posted: {0}" -f $posted.Url)
+        Write-Host ("Verdict: {0}" -f $posted.Verdict)
+        Continue-ShipDeAfterReviewVerdict -PullRequest $pr -Verdict $posted.Verdict
+        return
+    }
+
+    $reviewText = Get-Content -LiteralPath $reviewFile -Raw -Encoding UTF8
+    if ([string]::IsNullOrWhiteSpace($reviewText)) {
+        throw "Saved Codex review is empty: $reviewFile"
+    }
+
+    $verdict = Get-ShipDeTerminalReviewVerdict -Text $reviewText
+    if (-not $verdict) {
+        $standalonePattern = '(?im)^[\t ]*(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?[\t ]*$'
+        if ([regex]::Matches($reviewText, $standalonePattern).Count -gt 0) {
+            throw "Saved review contains an ambiguous/non-terminal verdict. It was not modified or posted."
+        }
+        $enteredVerdict = (Read-Host "Recovered verdict (PASS/CHANGES_REQUIRED/BLOCKED)").Trim().ToUpperInvariant()
+        if ($enteredVerdict -notin @('PASS', 'CHANGES_REQUIRED', 'BLOCKED')) {
+            throw "Recovery verdict was not one of PASS, CHANGES_REQUIRED or BLOCKED."
+        }
+        $verdict = $enteredVerdict
+        $reviewText = $reviewText.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $verdict
+    }
+
+    $currentPr = Get-ShipDePullRequestByNumber -Number ([int]$pr.number)
+    Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
+    if (Get-ShipDeRecoveredReviewComment -PullRequest $currentPr -HeadSha $reviewHeadSha) {
+        throw "A recovered review was posted concurrently. Nothing was posted twice."
+    }
+
+    $safeReviewText = $reviewText.Replace([string]$script:Paths.Codex, '.')
+    $marker = "<!-- shipde-codex-review head=$reviewHeadSha verdict=$verdict -->"
+    $commentText = $marker + [Environment]::NewLine + [Environment]::NewLine +
+        "## Codex review recovery" + [Environment]::NewLine + [Environment]::NewLine +
+        "Recovered from the controller artifact for immutable PR head ``$reviewHeadSha``; no new Codex review was run." +
+        [Environment]::NewLine + [Environment]::NewLine + $safeReviewText
+    if ([System.Text.Encoding]::UTF8.GetByteCount($commentText) -gt 60000) {
+        throw "Recovered review exceeds the safe single-comment size. The source artifact was preserved."
+    }
+
+    $recoveredFile = [System.IO.Path]::ChangeExtension($reviewFile, '.recovered.txt')
+    $commentText | Set-Content -LiteralPath $recoveredFile -Encoding UTF8
+    Write-Host ("Review target : {0}" -f $reviewHeadSha)
+    Write-Host ("Review source : {0}" -f $reviewFile)
+    Write-Host ("Recovery file : {0}" -f $recoveredFile)
+    Write-Host ("Verdict       : {0}" -f $verdict)
+    $post = Read-Host "Post the recovered review to PR #$($pr.number) and continue? (Y/N)"
+    if ($post -notmatch '(?i)^y(?:es)?$') {
+        Write-Host "Recovery file preserved; nothing was posted and Codex was not rerun."
+        return
+    }
+
+    & gh pr comment $pr.number --repo $Repository --body-file $recoveredFile
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not post the recovered review. Local artifacts were preserved."
+    }
+    Continue-ShipDeAfterReviewVerdict -PullRequest $currentPr -Verdict $verdict
+}
+
 function Invoke-ShipDeReview {
     Assert-ShipDeCommand codex
     Assert-ShipDeCommand gh
@@ -626,7 +833,7 @@ function Invoke-ShipDeReview {
         '(?i)^[\t ]*(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?[\t ]*$'
     )
     if ($verdictMatches.Count -ne 1 -or -not $terminalVerdict.Success) {
-        throw "Codex review output is incomplete or ambiguous. The final non-empty line must contain the only PASS, CHANGES_REQUIRED or BLOCKED verdict. Nothing was posted."
+        throw "Codex review output is incomplete or ambiguous. The final non-empty line must contain the only PASS, CHANGES_REQUIRED or BLOCKED verdict. Nothing was posted. Choose Continue pipeline to recover the saved output without rerunning Codex."
     }
     $verdict = $terminalVerdict.Groups[1].Value.ToUpperInvariant()
 
@@ -766,7 +973,16 @@ function Invoke-ShipDeResume {
     $pullRequests = @(Get-ShipDeOpenPullRequests | Where-Object {
         Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
     })
-    if ($pullRequests.Count -gt 0) {
+    if ($pullRequests.Count -gt 1) {
+        throw "More than one active implementation Pull Request exists. Park extras before automated routing."
+    }
+    if ($pullRequests.Count -eq 1) {
+        $pr = $pullRequests[0]
+        $reviewFile = Get-ShipDeReviewArtifact -PullRequest $pr -HeadSha ([string]$pr.headRefOid)
+        if ($reviewFile) {
+            Invoke-ShipDeRecoverReview
+            return
+        }
         Invoke-ShipDeReview
         return
     }
@@ -790,6 +1006,7 @@ function Show-ShipDeMenu {
         Write-Host "4. Start prepared author"
         Write-Host "5. Run Codex review"
         Write-Host "6. Sync after human merge"
+        Write-Host "7. Recover saved Codex review"
         Write-Host "0. Exit"
         $choice = Read-Host "Choose"
         try {
@@ -800,6 +1017,7 @@ function Show-ShipDeMenu {
                 "4" { Invoke-ShipDeStart }
                 "5" { Invoke-ShipDeReview }
                 "6" { Invoke-ShipDeSync }
+                "7" { Invoke-ShipDeRecoverReview }
                 "0" { return }
                 default { Write-Warning "Invalid choice." }
             }
@@ -821,6 +1039,7 @@ switch ($Action) {
     "Prepare" { Invoke-ShipDePrepare }
     "Start" { Invoke-ShipDeStart }
     "Review" { Invoke-ShipDeReview }
+    "Recover" { Invoke-ShipDeRecoverReview }
     "Sync" { Invoke-ShipDeSync }
     default { Show-ShipDeMenu }
 }
