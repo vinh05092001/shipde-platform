@@ -133,7 +133,7 @@ Missing states already classified by `TASK-FOUND-01` remain explicit gaps for la
 
 | AC/Test ID       | Scenario                                                                                                     | Expected result                                                                                                                                                                                                 | Evidence & Execution Results                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ---------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AC-FOUND-02-01` | Given a clean checkout on Node.js 24 with no `node_modules`, when the approved install commands run          | The exact pnpm 11 version from `packageManager` is used; both production-only and full frozen installs succeed without lockfile changes; one `pnpm-lock.yaml` owns the workspace; `package-lock.json` is absent | `pnpm@11.23.0` pinned in `packageManager`. GitHub Actions now executes `pnpm install --prod --frozen-lockfile` on a clean checkout before restoring full dev dependencies. Final evidence pending CI on the Round 31 fix commit.                                                                                                                                                                                                                                                                                                         |
+| `AC-FOUND-02-01` | Given a clean checkout on Node.js 24 with no `node_modules`, when the approved install commands run          | The exact pnpm 11 version from `packageManager` is used; both production-only and full frozen installs succeed without lockfile changes; one `pnpm-lock.yaml` owns the workspace; `package-lock.json` is absent | `pnpm@11.23.0` pinned in `packageManager`. GitHub Actions run `33653340398` executed `pnpm install --prod --frozen-lockfile` successfully on a clean checkout before restoring full dev dependencies and generating Prisma Client; application gate passed.                                                                                                                                                                                                                                                                              |
 | `AC-FOUND-02-02` | Given the root workspace, when its structure and manifests are inspected                                     | `apps/web`, `packages/contracts`, `packages/config`, `packages/testkit`, and `packages/ui` are registered workspaces with explicit purpose/exports and no speculative backend or product implementation         | `pnpm-workspace.yaml` registers `apps/*` and `packages/*`. Each package has manifest, tsconfig, README, and public exports. `pnpm typecheck` passed 5/5 tasks across all workspaces.                                                                                                                                                                                                                                                                                                                                                     |
 | `AC-FOUND-02-03` | Given the current prototype, when it is run from `apps/web` through root commands                            | Existing page routes, `/api/*` routes, styles/assets, aliases, and current synthetic behavior remain reachable without URL or business-behavior changes                                                         | `pnpm build` (`pnpm db:generate && turbo build`) compiled all 14 static and dynamic routes successfully (`/`, `/_not-found`, 12 `/api/*` handlers). `pnpm --filter @shipde/web run version:next` confirmed `Next.js v16.1.6`.                                                                                                                                                                                                                                                                                                            |
 | `AC-FOUND-02-04` | Given the merged preservation suite, when `pnpm test:baseline` runs                                          | All ten protected surfaces and their strict role/opener/reachability assertions pass from relocated paths; each approved negative mutation exits non-zero and cleanup leaves the tree unchanged                 | `pnpm test:baseline` passed 10/10 surfaces (100%). `pnpm test:baseline -- --test-negative` caught all 5 negative mutations and exited with exact code 1. Clean working tree verified.                                                                                                                                                                                                                                                                                                                                                    |
@@ -150,29 +150,26 @@ Missing states already classified by `TASK-FOUND-01` remain explicit gaps for la
 
 Run from a clean checkout on the approved Node.js 24 runtime:
 
-1. `node --version` -> `v24.15.0`
-2. `pnpm --version` -> `11.23.0` (matches `packageManager: "pnpm@11.23.0"`)
-3. `pnpm install --prod --frozen-lockfile` -> Added as an executable clean-checkout CI gate; Round 31 result pending
-4. `pnpm install --frozen-lockfile` -> Round 31 result pending
-5. `pnpm db:generate` -> Generates Prisma Client explicitly from `prisma/schema.prisma`; Round 31 result pending
-6. `pnpm lint` -> Round 31 result pending
-7. `pnpm format:check` -> Round 31 result pending
-   - Negative proofs for invalid `BASE_SHA` and unformatted fixtures remain required
-8. `pnpm typecheck` -> Round 31 result pending
-9. `pnpm test` -> Round 31 result pending
-10. `pnpm test:audit` -> Round 31 result pending
-11. `pnpm test:e2e` -> Round 31 result pending
-12. `pnpm test:baseline` -> Round 31 result pending
-    - Negative preservation proof remains required
-13. `pnpm security:secrets` -> Round 31 result pending
-    - Negative secret-detection proof remains required
-14. `pnpm build` -> `pnpm db:generate && turbo build --cache-dir=.turbo/cache`; Round 31 result pending
-15. `pnpm concierge:audit` -> Round 31 result pending
-16. `pnpm --filter @shipde/web run version:next` -> Round 31 result pending
-17. `pnpm run verify:inventory` -> Round 31 result pending
-18. `python docs/product-spec/scripts/validate_docs.py` -> Round 31 result pending
-19. `git diff --check origin/main...HEAD` -> Round 31 result pending
-20. `turbo run nonexistent-task` -> Negative task routing proof remains required
+1. `node --version` -> Node.js 24 configured by `actions/setup-node@v4` (PASS)
+2. `pnpm --version` -> `pnpm@11.23.0` configured by `pnpm/action-setup@v4` (PASS)
+3. `pnpm install --prod --frozen-lockfile` -> Clean production-only install passed in GitHub Actions run `33653340398` (Exit Code 0)
+4. `pnpm install --frozen-lockfile` -> Full development dependency restore passed after production-only install (Exit Code 0)
+5. `pnpm db:generate` -> Generated Prisma Client explicitly from `prisma/schema.prisma` (Exit Code 0)
+6. `pnpm lint` -> Application workflow passed (Exit Code 0)
+7. `pnpm format:check` -> Application workflow and all formatter negative proofs passed (Exit Code 0)
+8. `pnpm typecheck` -> Application workflow passed (Exit Code 0)
+9. `pnpm test` -> Business rules and regression audit passed, including strengthened section `6c-3` (Exit Code 0)
+10. `pnpm test:audit` -> Passed as the uncached repository-state half of `pnpm test` (Exit Code 0)
+11. `pnpm test:e2e` -> Application workflow passed (Exit Code 0)
+12. `pnpm test:baseline` -> Preservation baseline and negative proof passed (Exit Code 0)
+13. `pnpm security:secrets` -> Application workflow and Security baseline passed (Exit Code 0)
+14. `pnpm build` -> Explicit Prisma generation plus Turbo workspace build passed (Exit Code 0)
+15. `pnpm concierge:audit` -> Prior 3-shop GO evidence remains valid; command and implementation are unchanged
+16. `pnpm --filter @shipde/web run version:next` -> Prior `Next.js v16.1.6` evidence remains valid; dependency is unchanged
+17. `pnpm run verify:inventory` -> Prior 130-feature / 17-model / 16-area evidence remains valid; inventory inputs are unchanged
+18. `python docs/product-spec/scripts/validate_docs.py` -> Workflow run `33653340392` passed (Exit Code 0)
+19. `git diff --check origin/main...HEAD` -> Application workflow passed (Exit Code 0)
+20. `turbo run nonexistent-task` -> Prior fail-closed routing proof remains valid; Turbo configuration is unchanged
 
 ## Codex review record
 
@@ -208,7 +205,7 @@ Run from a clean checkout on the approved Node.js 24 runtime:
 | 28           | `18564a7` | `CHANGES_REQUIRED` | Resolved dubious-ownership Git checks, but review noted: (1) Missing deterministic `prisma generate` / `db:generate` script targeting canonical schema in workspace and web package; (2) Naive line-based parsing of `git worktree list --porcelain` included stale/prunable/missing worktree directories in audit snapshot.                                                                                                                                                                                                                                        |
 | 29           | `58ac7a2` | `CHANGES_REQUIRED` | Resolved all Round 28 findings, but review noted: (1) Unconditional `postinstall` running dev-only `prisma` CLI broke production-only installs (`pnpm install --prod --frozen-lockfile`); (2) Gitleaks scanner used deterministic report file names (`.temp-gitleaks-target-<index>-report.json`), which could overwrite and delete pre-existing diagnostic files at actual output paths.                                                                                                                                                                           |
 | 30           | `37f9fd2` | `CHANGES_REQUIRED` | Resolved the Round 29 report-preservation finding, but independent review found that root `prepare` still runs during `pnpm install --prod --frozen-lockfile` after dev-only `prisma` is omitted, so production-only installation fails; regression test `6c-3` inspected manifest strings instead of executing the production install scenario.                                                                                                                                                                                                                    |
-| 31           | `HEAD`    | `VERIFYING`        | Removed Prisma from all repository install lifecycle hooks; made generation explicit through `pnpm db:generate` and the root `pnpm build` command; added an executable clean-checkout production-only install gate to `current-application.yml`; strengthened regression audit to enforce lifecycle absence and CI command ordering. Final verdict waits for all required GitHub Actions checks.                                                                                                                                                                    |
+| 31           | `2f255cf` | `READY_FOR_CODEX`  | Removed Prisma from all repository install lifecycle hooks; made generation explicit through `pnpm db:generate` and the root `pnpm build` command; added an executable clean-checkout production-only install gate to `current-application.yml`; strengthened regression audit to enforce lifecycle absence and CI command ordering. GitHub Actions runs `33653340392`, `33653340413`, `33653340398`, and `33653340483` all passed.                                                                                                                                 |
 
 ## Residual limitations
 
