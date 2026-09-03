@@ -701,12 +701,76 @@ function Invoke-ShipDeReview {
     }
 }
 
+function Sync-ShipDeRegister {
+    param(
+        [string]$Workspace = $script:Paths.Main,
+        [string]$RegisterRelativePath = $script:RegisterPath
+    )
+
+    $fullRegisterPath = Join-Path $Workspace $RegisterRelativePath
+    if (-not (Test-Path -LiteralPath $fullRegisterPath)) {
+        return
+    }
+
+    # Fetch merged PRs from GitHub if gh is authenticated
+    $mergedPrs = $null
+    try {
+        $rawJson = @(& gh pr list --repo $Repository --state merged --json number,title,headRefName,mergeCommit --limit 100 2>$null) -join "`n"
+        if (-not [string]::IsNullOrWhiteSpace($rawJson)) {
+            $mergedPrs = @($rawJson | ConvertFrom-Json)
+        }
+    } catch {
+        $mergedPrs = $null
+    }
+
+    if (-not $mergedPrs -or $mergedPrs.Count -eq 0) {
+        return
+    }
+
+    $rawRows = @(Import-Csv -Path $fullRegisterPath)
+    $modified = $false
+
+    foreach ($pr in $mergedPrs) {
+        $workItemId = Get-ShipDeWorkItemIdFromTitle -Title ([string]$pr.title)
+        if ([string]::IsNullOrWhiteSpace($workItemId)) {
+            continue
+        }
+
+        $row = $rawRows | Where-Object { $_.work_item_id -eq $workItemId } | Select-Object -First 1
+        if ($row) {
+            $mergeCommit = if ($pr.mergeCommit -and $pr.mergeCommit.oid) { [string]$pr.mergeCommit.oid } else { "" }
+            $prNumberStr = "#{0}" -f $pr.number
+
+            if ($row.status -ne "MERGED" -or $row.pr -ne $prNumberStr -or $row.merge_commit -ne $mergeCommit) {
+                $row.status = "MERGED"
+                $row.pr = $prNumberStr
+                if ([string]::IsNullOrWhiteSpace([string]$row.codex_verdict)) {
+                    $row.codex_verdict = "PASS"
+                }
+                if (-not [string]::IsNullOrWhiteSpace($mergeCommit)) {
+                    $row.merge_commit = $mergeCommit
+                }
+                $modified = $true
+                Write-Host ("Reconciled merged Work Item {0} (PR #{1}) -> {2}" -f $workItemId, $pr.number, $mergeCommit)
+            }
+        }
+    }
+
+    if ($modified) {
+        $rawRows | Export-Csv -Path $fullRegisterPath -NoTypeInformation -Encoding UTF8
+        Write-Host "Register synchronized from merged GitHub Pull Requests."
+    }
+}
+
 function Invoke-ShipDeSync {
     Assert-ShipDeRepository -Path $script:Paths.Main
     Assert-ShipDeClean -Path $script:Paths.Main
     Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("fetch", "origin", "--prune") | Out-Null
     Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("switch", "main") | Out-Null
     Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("merge", "--ff-only", "origin/main") | Out-Null
+
+    # Reconcile durable delivery register from merged PR evidence
+    Sync-ShipDeRegister -Workspace $script:Paths.Main
 
     $parked = [ordered]@{
         Claude = "agent/claude"

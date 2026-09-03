@@ -1,6 +1,14 @@
 # Change log
 
-## Human-gated semi-automatic AI workflow — 2026-08-25
+## Governed ecosystem toolchain — 2026-09-03
+
+- Established the machine-readable ecosystem manifest `tools/ecosystem-manifest.json` governing exactly 37 adopted repositories and capabilities across 5 layers, with 12 fail-closed ecosystem policies (`AI-TOOL-01` through `AI-TOOL-12`).
+- Isolated 10 candidate technologies (`pact-js`, `nock`, `hoverfly`, `toxiproxy`, `k6`, `semgrep`, `syft`, `ast-grep`, `llmlingua`, `opa`) in explicit `PILOT`/`WATCH` lifecycle states with installation and enablement disabled by default.
+- Established 9 activity-based activation profiles in `tools/ecosystem-profiles.json` (`FOUNDATION`, `BACKEND_FEATURE`, `CARRIER_INTEGRATION`, `COD_AND_SETTLEMENT`, `UI_FEATURE`, `SECURITY_REVIEW`, `RESEARCH_ONLY`, `PR_REVIEW`, `NIGHTLY_MAINTENANCE`) enforcing least-privilege tool subsets, concurrency limits (max 1 implementation, max 1 research), localhost-only network policy, and automatic post-task service cleanup.
+- Added `scripts/ai/ecosystem.ps1` for deterministic manifest validation, profile activation/deactivation, ecosystem status querying, register synchronization, and automated negative policy test proofs.
+- Added preview-first `scripts/ai/install-ecosystem.ps1` to inventory machine CLIs, preserve existing installations without upgrade, defer later Foundation 03/04 dependencies without modifying package manifests or lockfiles, and install missing machine tools safely with `-Apply`.
+- Extended `scripts/ai/doctor.ps1` to validate ecosystem manifest health, verify stopped state of optional MCP servers and background services, and enforce workspace path containment inside `%USERPROFILE%\AI`.
+- Reconciled merged GitHub Pull Request evidence for PR #2 (`TASK-AI-02`), PR #3 (`TASK-FOUND-01`), and PR #4 (`TASK-FOUND-02`) in `FEATURE-DELIVERY-REGISTER.csv`, making future post-merge synchronization idempotent in `scripts/ai/control.ps1`.
 
 - Replaced the ZCode-only handoff with explicit 9Router, Gemini and Codex roles.
 - Added deterministic worker routing, author risk/path boundaries and human control points.

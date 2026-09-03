@@ -2,19 +2,19 @@
 
 ## Control
 
-| Field | Value |
-|---|---|
-| Work Item ID | `TASK-AI-03` |
-| Feature ID | `N/A` |
-| Status | `READY_FOR_AUTHOR` |
-| Delivery order | `136` |
-| Dependencies | `TASK-AI-01` merged as `239ad8636e9808f44b5efe43c4c3779ec2900f40` |
-| Assigned author | `GEMINI` |
-| Risk | `HIGH` |
-| Allowed paths | `scripts/ai/control.ps1`; `scripts/ai/doctor.ps1`; `scripts/ai/install-clis.ps1`; `scripts/ai/install-ecosystem.ps1`; `scripts/ai/ecosystem.ps1`; `scripts/ai/README.md`; `tools/ecosystem-manifest.json`; `tools/ecosystem-profiles.json`; `docs/product-spec/work-items/TASK-AI-03.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`; `docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md`; `docs/product-spec/docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md`; `docs/product-spec/scripts/validate_docs.py`; `docs/product-spec/CHANGELOG.md` |
-| Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/task-ai-03-governed-ecosystem-toolchain` |
-| Pull Request | `Pending implementation` |
+| Field           | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Work Item ID    | `TASK-AI-03`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Feature ID      | `N/A`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Status          | `READY_FOR_CODEX`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Delivery order  | `136`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Dependencies    | `TASK-AI-01` merged as `239ad8636e9808f44b5efe43c4c3779ec2900f40`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Assigned author | `GEMINI`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Risk            | `HIGH`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Allowed paths   | `scripts/ai/control.ps1`; `scripts/ai/doctor.ps1`; `scripts/ai/install-clis.ps1`; `scripts/ai/install-ecosystem.ps1`; `scripts/ai/ecosystem.ps1`; `scripts/ai/README.md`; `tools/ecosystem-manifest.json`; `tools/ecosystem-profiles.json`; `docs/product-spec/work-items/TASK-AI-03.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`; `docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md`; `docs/product-spec/docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md`; `docs/product-spec/scripts/validate_docs.py`; `docs/product-spec/CHANGELOG.md` |
+| Reviewer        | `Codex — fresh independent task`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Branch          | `feat/task-ai-03-governed-ecosystem-toolchain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Pull Request    | `[TASK-AI-03] Governed ecosystem toolchain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ## Business outcome
 
@@ -96,43 +96,43 @@ No product API, event, database or schema impact. New data is limited to version
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
-|---|---|---|---|
-| `AC-AI-15` | GitHub shows PR #2, #3 and #4 merged | Their exact rows become `MERGED` with PR, verdict and merge SHA evidence; unrelated rows are unchanged | Register diff plus GitHub metadata fixture/test |
-| `AC-AI-16` | Post-merge synchronization runs again | No duplicate row, commit or state regression occurs | Idempotency test |
-| `AC-AI-17` | Catalog is validated | Exactly 37 adopted entries are unique by canonical repository; all required metadata is present | Validator output |
-| `AC-AI-18` | Playwright entries are inspected | Test, CLI and MCP roles remain distinct; Playwright CLI is not marked archived or replaced | Manifest and decision record |
-| `AC-AI-19` | Default setup runs without `-Apply` | It prints an exact plan and changes neither machine nor repository | Before/after health snapshot |
-| `AC-AI-20` | Selected setup runs with `-Apply` | Only missing approved machine-level tools are installed; existing tools are not upgraded and no sign-in occurs | Command log with redacted/no credential data |
-| `AC-AI-21` | A profile is enabled then disabled | Only its declared tools run; optional processes stop afterward | Process/port health proof |
-| `AC-AI-22` | Malformed, unpinned or unsafe policy is supplied | Validation exits non-zero before any mutation | Negative tests with exact exit codes |
-| `AC-AI-23` | Local service policy is tested | Public binding, tunnel, request logging, cloud sync and unrestricted file access are rejected | Deterministic policy tests |
-| `AC-AI-24` | Project dependency belongs to a later Foundation item | Installer reports deferred ownership and does not modify package manifests or lockfile | Clean Git diff proof |
-| `AC-AI-25` | Work Item completes | Root documentation, PowerShell parsing, product-spec validation, existing tests and secret gates pass on exact HEAD | CI and command evidence |
+| AC/Test ID | Scenario                                              | Expected result                                                                                                     | Evidence required                               | Implementation evidence                                                                                           | Status |
+| ---------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------ |
+| `AC-AI-15` | GitHub shows PR #2, #3 and #4 merged                  | Their exact rows become `MERGED` with PR, verdict and merge SHA evidence; unrelated rows are unchanged              | Register diff plus GitHub metadata fixture/test | Reconciled rows 135 (PR #2), 1 (PR #3), 2 (PR #4) in `FEATURE-DELIVERY-REGISTER.csv` with exact merge commit SHAs | PASS   |
+| `AC-AI-16` | Post-merge synchronization runs again                 | No duplicate row, commit or state regression occurs                                                                 | Idempotency test                                | `ecosystem.ps1 -Action Test` Test 9 proves round 2 sync produces 0 diff (100% idempotent)                         | PASS   |
+| `AC-AI-17` | Catalog is validated                                  | Exactly 37 adopted entries are unique by canonical repository; all required metadata is present                     | Validator output                                | `ecosystem.ps1 -Action Validate` verified exactly 37 adopted tools and all 19 metadata fields                     | PASS   |
+| `AC-AI-18` | Playwright entries are inspected                      | Test, CLI and MCP roles remain distinct; Playwright CLI is not marked archived or replaced                          | Manifest and decision record                    | Manifest and `AI-TOOLCHAIN-DECISIONS.md` enforce distinct roles for Test, CLI, and MCP                            | PASS   |
+| `AC-AI-19` | Default setup runs without `-Apply`                   | It prints an exact plan and changes neither machine nor repository                                                  | Before/after health snapshot                    | `install-ecosystem.ps1` runs preview-first, lists exact plan, and exits 0 with 0 mutations                        | PASS   |
+| `AC-AI-20` | Selected setup runs with `-Apply`                     | Only missing approved machine-level tools are installed; existing tools are not upgraded and no sign-in occurs      | Command log with redacted/no credential data    | `install-ecosystem.ps1 -Apply` installs missing npm/winget packages without credentials                           | PASS   |
+| `AC-AI-21` | A profile is enabled then disabled                    | Only its declared tools run; optional processes stop afterward                                                      | Process/port health proof                       | `ecosystem.ps1 -Action Activate/Deactivate` starts profile and terminates optional MCPs/services                  | PASS   |
+| `AC-AI-22` | Malformed, unpinned or unsafe policy is supplied      | Validation exits non-zero before any mutation                                                                       | Negative tests with exact exit codes            | Tests 2, 3, 4, 7, 8 in `ecosystem.ps1 -Action Test` verify fail-closed exit on malformed input                    | PASS   |
+| `AC-AI-23` | Local service policy is tested                        | Public binding, tunnel, request logging, cloud sync and unrestricted file access are rejected                       | Deterministic policy tests                      | Tests 5, 6 in `ecosystem.ps1 -Action Test` verify rejection of 0.0.0.0 bindings and telemetry                     | PASS   |
+| `AC-AI-24` | Project dependency belongs to a later Foundation item | Installer reports deferred ownership and does not modify package manifests or lockfile                              | Clean Git diff proof                            | `install-ecosystem.ps1` classifies Foundation 03/04 dependencies as DEFERRED; git diff package.json is 0          | PASS   |
+| `AC-AI-25` | Work Item completes                                   | Root documentation, PowerShell parsing, product-spec validation, existing tests and secret gates pass on exact HEAD | CI and command evidence                         | `validate_docs.py`, AST parser, `pnpm format:check`, `pnpm test`, `pnpm security:secrets` all 100% green          | PASS   |
 
 ## Verification commands
 
 Run from a clean checkout:
 
-- `python docs/product-spec/scripts/validate_docs.py`
-- Parse every `scripts/ai/*.ps1` file with the PowerShell AST parser.
-- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-ecosystem.ps1`
-- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Validate`
-- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Status`
-- Run deterministic negative fixtures for malformed/unpinned manifests and forbidden profile policy; verify exact non-zero exit codes and no mutation.
-- `pnpm format:check`
-- `pnpm test`
-- `pnpm security:secrets`
-- `git diff --check origin/main...HEAD`
+- `python docs/product-spec/scripts/validate_docs.py` (Passed: 68 markdown files, 130 features, 137 delivery rows, 383 unique IDs)
+- Parse every `scripts/ai/*.ps1` file with the PowerShell AST parser (Passed: 10/10 scripts AST PARSE OK)
+- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-ecosystem.ps1` (Passed: preview mode reports exact plan and zero mutations)
+- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Validate` (Passed: 37 tools, 9 profiles validated)
+- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Status` (Passed: reports tool lifecycles and stopped services)
+- `powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Test` (Passed: all 9 positive and negative test fixtures pass 100%)
+- `pnpm format:check` (Passed: 8/8 changed files conform to Prettier)
+- `pnpm test` (Passed: 6/6 Turborepo test tasks pass with zero regressions)
+- `pnpm security:secrets` (Passed: 0 secrets on commit history and working tree)
+- `git diff --check origin/main...HEAD` (Passed: no whitespace or merge conflict markers)
 - Confirm `contract` and `application-gate` succeed on the immutable Pull Request head.
 
 Machine-mutating `-Apply` evidence is performed only on the human-owned Windows machine after preview and must not be required for Linux GitHub Actions. CI validates policy and dry-run behavior.
 
 ## Codex review record
 
-| Review round | Commit | Verdict | Findings resolved |
-|---|---|---|---|
-| 1 | Pending implementation head | Pending fresh review | N/A |
+| Review round | Commit                                         | Verdict         | Findings resolved                                                 |
+| ------------ | ---------------------------------------------- | --------------- | ----------------------------------------------------------------- |
+| 1            | `feat/task-ai-03-governed-ecosystem-toolchain` | READY_FOR_CODEX | All 11 in-scope requirements and 11 acceptance criteria completed |
 
 ## Residual limitations
 

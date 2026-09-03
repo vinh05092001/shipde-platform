@@ -8,13 +8,13 @@ Windows 10 Pro is used natively. Ubuntu/WSL is not required for this workflow. D
 
 ## Expected local layout
 
-| Path | Role |
-|---|---|
-| `C:\Users\gumac\AI\shipde-platform` | protected integration baseline |
-| `C:\Users\gumac\AI\shipde-claude` | Claude business and solution analysis only |
-| `C:\Users\gumac\AI\shipde-dsh` | 9Router/DSH low-risk author |
-| `C:\Users\gumac\AI\shipde-gemini` | Gemini primary author |
-| `C:\Users\gumac\AI\shipde-codex` | Codex planner and independent reviewer |
+| Path                                | Role                                       |
+| ----------------------------------- | ------------------------------------------ |
+| `C:\Users\gumac\AI\shipde-platform` | protected integration baseline             |
+| `C:\Users\gumac\AI\shipde-claude`   | Claude business and solution analysis only |
+| `C:\Users\gumac\AI\shipde-dsh`      | 9Router/DSH low-risk author                |
+| `C:\Users\gumac\AI\shipde-gemini`   | Gemini primary author                      |
+| `C:\Users\gumac\AI\shipde-codex`    | Codex planner and independent reviewer     |
 
 These paths are worktrees of the same repository. Do not clone Playwright, Storybook, NestJS or other upstream source repositories. The complete classification is in `REPOSITORY-CLI-MANIFEST.md`.
 
@@ -63,6 +63,52 @@ docker version
 docker compose version
 ```
 
+### 2.1 Governed Ecosystem Management
+
+Ship Dễ enforces tool admission and resource boundaries through `tools/ecosystem-manifest.json` and `tools/ecosystem-profiles.json`.
+
+Preview missing machine tools without making changes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-ecosystem.ps1
+```
+
+Install approved missing machine tools (preserves existing installations without upgrade and defers later foundation dependencies without modifying package manifests):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\install-ecosystem.ps1 -Apply
+```
+
+Validate catalog integrity, Playwright tri-role separation, and fail-closed policies:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Validate
+```
+
+Check ecosystem status, optional service states, and workspace containment:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Status
+```
+
+Run automated positive and negative policy proofs (malformed JSON, unpinned version, unknown profile tool, public 0.0.0.0 binding, enabled telemetry, optional services enabled by default, duplicate repository entries, and register idempotency):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Test
+```
+
+Activate a task profile (e.g. `FOUNDATION`, `BACKEND_FEATURE`, `UI_FEATURE`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Activate -Profile FOUNDATION
+```
+
+Deactivate the active profile and stop optional background services/MCP processes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ai\ecosystem.ps1 -Action Deactivate
+```
+
 ## 3. Authenticate interactive tools
 
 GitHub is already authenticated; verify it rather than pasting a token:
@@ -106,14 +152,14 @@ dsh web
 
 In DSH open Settings → Models → Add a custom provider and enter:
 
-| Field | Value |
-|---|---|
-| Provider ID | `9router` |
-| Display name | `9Router Local` |
-| Base URL | `http://127.0.0.1:20128/v1` |
-| API protocol | `openai-completions` |
-| Credential | paste the API key from the local 9Router dashboard |
-| Model | `shipde-low-risk`, or a verified current candidate if the combo is not exposed |
+| Field        | Value                                                                          |
+| ------------ | ------------------------------------------------------------------------------ |
+| Provider ID  | `9router`                                                                      |
+| Display name | `9Router Local`                                                                |
+| Base URL     | `http://127.0.0.1:20128/v1`                                                    |
+| API protocol | `openai-completions`                                                           |
+| Credential   | paste the API key from the local 9Router dashboard                             |
+| Model        | `shipde-low-risk`, or a verified current candidate if the combo is not exposed |
 
 Choose Fetch available models before saving. Select `C:\Users\gumac\AI\shipde-dsh` as the only DSH workspace for Ship Dễ.
 

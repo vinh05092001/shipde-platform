@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "updated_at": "2026-09-03T13:40:00Z",
+  "title": "Ship Dễ Governed Activation Profiles",
+  "description": "Standardized activation profiles enabling the minimum safe toolset per engineering activity, enforcing resource limits and automated cleanup.",
+  "profiles": {
+    "FOUNDATION": {
+      "name": "FOUNDATION",
+      "description": "Monorepo structure, tooling baseline, shared packages, and repository quality gates.",
+      "allowed_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "nine-router",
+        "deepseek-harness",
+        "gemini-cli",
+        "antigravity-cli",
+        "codex-cli",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "prisma",
+        "vitest",
+        "openapi-typescript",
+        "gitleaks",
+        "promptfoo"
+      ],
+      "required_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "gitleaks"
+      ],
+      "optional_services": ["nine-router", "deepseek-harness"],
+      "network_policy": "localhost-only",
+      "concurrency_limits": {
+        "max_implementation_agents": 1,
+        "max_research_agents": 1
+      },
+      "post_execution_cleanup": ["Stop-ShipDeOptionalServices"]
+    },
+    "BACKEND_FEATURE": {
+      "name": "BACKEND_FEATURE",
+      "description": "API routes, background workers, database models, transactions, and business rule services.",
+      "allowed_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "docker-compose",
+        "gemini-cli",
+        "antigravity-cli",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "nestjs",
+        "prisma",
+        "bullmq",
+        "vitest",
+        "supertest",
+        "openapi-typescript",
+        "opentelemetry-js"
+      ],
+      "required_tools": [
+        "shipde-platform",
+        "git",
+        "node",
+        "pnpm",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "prisma"
+      ],
+      "optional_services": ["docker-compose"],
+      "network_policy": "localhost-only",
+      "concurrency_limits": {
+        "max_implementation_agents": 1,
+        "max_research_agents": 1
+      },
+      "post_execution_cleanup": ["Stop-ShipDeOptionalServices"]
+    },
+    "CARRIER_INTEGRATION": {
+      "name": "CARRIER_INTEGRATION",
+      "description": "Carrier connectors, tracking adapters, quote normalization, and idempotent external webhooks.",
+      "allowed_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "docker-compose",
+        "gemini-cli",
+        "antigravity-cli",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "nestjs",
+        "prisma",
+        "bullmq",
+        "vitest",
+        "supertest",
+        "msw",
+        "opentelemetry-js",
+        "vietnamese-provinces-database"
+      ],
+      "required_tools": [
+        "shipde-platform",
+        "git",
+        "node",
+        "pnpm",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "vietnamese-provinces-database"
+      ],
+      "optional_services": ["docker-compose"],
+      "network_policy": "localhost-only-strict-carrier-mock",
+      "concurrency_limits": {
+        "max_implementation_agents": 1,
+        "max_research_agents": 1
+      },
+      "post_execution_cleanup": ["Stop-ShipDeOptionalServices"]
+    },
+    "COD_AND_SETTLEMENT": {
+      "name": "COD_AND_SETTLEMENT",
+      "description": "Three-ledger reconciliation, statement parsing, settlement batches, and financial audit engine.",
+      "allowed_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "docker-compose",
+        "gemini-cli",
+        "antigravity-cli",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "nestjs",
+        "prisma",
+        "bullmq",
+        "vitest",
+        "supertest",
+        "vietnamese-provinces-database"
+      ],
+      "required_tools": [
+        "shipde-platform",
+        "git",
+        "node",
+        "pnpm",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "prisma"
+      ],
+      "optional_services": ["docker-compose"],
+      "network_policy": "air-gapped-preferred-no-leakage",
+      "concurrency_limits": {
+        "max_implementation_agents": 1,
+        "max_research_agents": 1
+      },
+      "post_execution_cleanup": ["Stop-ShipDeOptionalServices"]
+    },
+    "UI_FEATURE": {
+      "name": "UI_FEATURE",
+      "description": "Next.js pages, accessible components, user journeys, responsive layouts, and UI state flows.",
+      "allowed_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "gemini-cli",
+        "antigravity-cli",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "vitest",
+        "playwright",
+        "playwright-cli",
+        "storybook",
+        "storybook-addon-a11y",
+        "msw",
+        "msw-storybook-addon",
+        "lighthouse-ci",
+        "vercel-agent-skills",
+        "chrome-devtools-mcp",
+        "axe-core",
+        "playwright-mcp"
+      ],
+      "required_tools": [
+        "shipde-platform",
+        "git",
+        "node",
+        "pnpm",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "vercel-agent-skills"
+      ],
+      "optional_services": ["chrome-devtools-mcp", "playwright-mcp"],
+      "network_policy": "localhost-only",
+      "concurrency_limits": {
+        "max_implementation_agents": 1,
+        "max_research_agents": 1
+      },
+      "post_execution_cleanup": ["Stop-ShipDeOptionalServices"]
+    },
+    "SECURITY_REVIEW": {
+      "name": "SECURITY_REVIEW",
+      "description": "Secret scanning, vulnerability audit, AST patterns, dependency hygiene, and tenant boundary verification.",
+      "allowed_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "eslint",
+        "prettier",
+        "gitleaks",
+        "promptfoo",
+        "trivy"
+      ],
+      "required_tools": ["shipde-platform", "git", "gitleaks", "eslint"],
+      "optional_services": [],
+      "network_policy": "local-scan-only",
+      "concurrency_limits": {
+        "max_implementation_agents": 1,
+        "max_research_agents": 1
+      },
+      "post_execution_cleanup": ["Stop-ShipDeOptionalServices"]
+    },
+    "RESEARCH_ONLY": {
+      "name": "RESEARCH_ONLY",
+      "description": "Read-only exploration, architecture analysis, external documentation, and specification research.",
+      "allowed_tools": [
+        "shipde-platform",
+        "git",
+        "node",
+        "nine-router",
+        "deepseek-harness",
+        "claude-code",
+        "playwright-cli",
+        "vercel-agent-skills",
+        "chrome-devtools-mcp",
+        "playwright-mcp",
+        "promptfoo"
+      ],
+      "required_tools": ["shipde-platform", "git"],
+      "optional_services": [
+        "nine-router",
+        "deepseek-harness",
+        "chrome-devtools-mcp",
+        "playwright-mcp"
+      ],
+      "network_policy": "read-only-localhost",
+      "concurrency_limits": {
+        "max_implementation_agents": 0,
+        "max_research_agents": 1
+      },
+      "post_execution_cleanup": ["Stop-ShipDeOptionalServices"]
+    },
+    "PR_REVIEW": {
+      "name": "PR_REVIEW",
+      "description": "Independent Codex review, immutable HEAD verification, contract checks, and quality gates.",
+      "allowed_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "codex-cli",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "playwright",
+        "openapi-typescript",
+        "gitleaks",
+        "axe-core"
+      ],
+      "required_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "codex-cli",
+        "eslint",
+        "prettier",
+        "gitleaks"
+      ],
+      "optional_services": [],
+      "network_policy": "github-api-and-localhost-only",
+      "concurrency_limits": {
+        "max_implementation_agents": 0,
+        "max_research_agents": 1
+      },
+      "post_execution_cleanup": ["Stop-ShipDeOptionalServices"]
+    },
+    "NIGHTLY_MAINTENANCE": {
+      "name": "NIGHTLY_MAINTENANCE",
+      "description": "Scheduled maintenance, dependency health verification, full secret scans, and testkit assertions.",
+      "allowed_tools": [
+        "shipde-platform",
+        "git",
+        "gh",
+        "node",
+        "pnpm",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "lighthouse-ci",
+        "gitleaks",
+        "trivy"
+      ],
+      "required_tools": [
+        "shipde-platform",
+        "git",
+        "pnpm",
+        "eslint",
+        "prettier",
+        "turborepo",
+        "gitleaks"
+      ],
+      "optional_services": [],
+      "network_policy": "local-and-registry-only",
+      "concurrency_limits": {
+        "max_implementation_agents": 1,
+        "max_research_agents": 0
+      },
+      "post_execution_cleanup": ["Stop-ShipDeOptionalServices"]
+    }
+  }
+}
