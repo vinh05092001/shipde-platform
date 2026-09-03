@@ -20,9 +20,13 @@ REPOSITORY_REQUIRED = [
     "scripts/ai/install-control-shortcut.ps1",
     "scripts/ai/bootstrap-worktrees.ps1",
     "scripts/ai/doctor.ps1",
+    "scripts/ai/ecosystem.ps1",
+    "scripts/ai/install-ecosystem.ps1",
     "scripts/ai/start-work-item.ps1",
     "scripts/ai/review-pr.ps1",
     "scripts/ai/protect-main.ps1",
+    "tools/ecosystem-manifest.json",
+    "tools/ecosystem-profiles.json",
 ]
 REQUIRED = [
     "AGENTS.md",

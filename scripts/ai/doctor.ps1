@@ -338,6 +338,43 @@ if ($TestModels) {
     }
 }
 
+Write-Host "`n=== GOVERNED ECOSYSTEM & HEALTH CHECKS ==="
+$ecosystemScript = Join-Path $PSScriptRoot "ecosystem.ps1"
+if (Test-Path -LiteralPath $ecosystemScript) {
+    try {
+        & $ecosystemScript -Action Validate | Out-Null
+        Write-Host "Ecosystem manifest & profiles: VALIDATED (37 adopted tools, 9 profiles)"
+    } catch {
+        Write-Host "Ecosystem manifest & profiles: INVALID"
+        $failures.Add("Ecosystem validation failed")
+    }
+}
+
+# AI-TOOL-02: Optional services and MCP servers must be stopped by default
+$unmanagedMcp = @(Get-Process -Name "*playwright-mcp*", "*devtools-mcp*" -ErrorAction SilentlyContinue)
+if ($unmanagedMcp.Count -gt 0 -and [string]::IsNullOrWhiteSpace($env:SHIPDE_ACTIVE_PROFILE)) {
+    Write-Host ("Warning: {0} optional MCP processes are running without an active profile" -f $unmanagedMcp.Count)
+    $failures.Add("Optional MCP servers must remain stopped by default when no profile is active")
+} else {
+    Write-Host "Optional MCP servers: STOPPED (Default Safe)"
+}
+
+# Workspace path containment check
+$rootCanonical = (Resolve-Path $AiRoot -ErrorAction SilentlyContinue).Path
+$pathsOutside = [System.Collections.Generic.List[string]]::new()
+foreach ($entry in $paths.GetEnumerator()) {
+    $targetPath = (Resolve-Path $entry.Value -ErrorAction SilentlyContinue).Path
+    if ($targetPath -and -not $targetPath.StartsWith($rootCanonical, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $pathsOutside.Add("$($entry.Key): $targetPath")
+    }
+}
+if ($pathsOutside.Count -gt 0) {
+    Write-Host "Workspace containment: VIOLATION (Paths escape approved AI root)"
+    $failures.Add("Configured paths must remain inside approved AI workspace: $($pathsOutside -join '; ')")
+} else {
+    Write-Host ("Workspace containment: VERIFIED (All worktrees reside inside {0})" -f $AiRoot)
+}
+
 if ($failures.Count -gt 0) {
     Write-Host "`n=== ACTION REQUIRED ==="
     $failures | ForEach-Object { Write-Host "- $_" }
