@@ -606,7 +606,9 @@ function Invoke-ShipDeActivate {
                     throw "Unsupported optional service requested: '$svc'."
                 }
 
+                $newlyLaunched = $false
                 if ($proc) {
+                    $newlyLaunched = $true
                     $startedPids.Add($proc.Id)
                     $procPath = try {
                         if ($proc.Path) { $proc.Path }
@@ -641,47 +643,88 @@ function Invoke-ShipDeActivate {
                     if (-not $healthy) {
                         throw ("Optional service '{0}' failed to start and bind port {1} within timeout. Activation rolled back." -f $svc, $port)
                     }
+                }
 
-                    # Enforce localhost-only listener invariant against real OS TCP listeners (Finding 3)
-                    if ($port -gt 0) {
-                        $listenerCheck = Test-ShipDeLoopbackOnlyListener -Port $port
-                        if (-not $listenerCheck.IsLoopbackOnly) {
-                            throw ("Security policy violation: Optional service '{0}' listener on port {1} is not restricted to localhost ({2}). Activation rolled back." -f $svc, $port, $listenerCheck.ViolationReason)
-                        }
-                        Write-Host ("  [SECURITY] Verified port {0} is bound exclusively to loopback ({1})." -f $port, ($listenerCheck.BoundAddresses -join ", "))
+                # Postcondition checks: Must pass for EVERY requested optional service, whether newly launched or pre-existing (Round 5 Finding 1)
+                if ($port -gt 0) {
+                    # Require port to be open and responding on localhost
+                    if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $port)) {
+                        throw ("Optional service '{0}' is not listening on port {1}. Activation rolled back." -f $svc, $port)
                     }
 
-                    # Also discover and track any child/owning listener process for the port (e.g. cmd.exe wrapper spawning node.exe)
-                    if ($port -gt 0) {
-                        try {
-                            $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-                            if ($conns) {
-                                foreach ($c in $conns) {
-                                    $ownPid = [int]$c.OwningProcess
-                                    if ($ownPid -gt 0 -and $ownPid -ne $proc.Id) {
-                                        $owningProc = Get-Process -Id $ownPid -ErrorAction SilentlyContinue
-                                        if ($owningProc -and -not ($startedServices | Where-Object { $_.pid -eq $ownPid })) {
-                                            $startedPids.Add($ownPid)
-                                            $childPath = try {
-                                                if ($owningProc.Path) { $owningProc.Path }
-                                                elseif ($owningProc.MainModule) { $owningProc.MainModule.FileName }
-                                                else { $null }
-                                            } catch { $null }
-                                            $childStartTime = try { $owningProc.StartTime.ToString("o") } catch { $null }
-                                            $childRecord = [PSCustomObject]@{
-                                                service_id   = $svc
-                                                pid          = $ownPid
-                                                process_name = $owningProc.ProcessName
-                                                path         = $childPath
-                                                start_time   = $childStartTime
-                                                port         = $port
-                                            }
-                                            $startedServices.Add($childRecord)
-                                        }
+                    # Enforce localhost-only listener invariant against real OS TCP listeners (Round 5 Finding 1)
+                    $listenerCheck = Test-ShipDeLoopbackOnlyListener -Port $port
+                    if (-not $listenerCheck.IsLoopbackOnly) {
+                        throw ("Security policy violation: Optional service '{0}' listener on port {1} is not restricted to localhost ({2}). Activation rolled back." -f $svc, $port, $listenerCheck.ViolationReason)
+                    }
+                    Write-Host ("  [SECURITY] Verified port {0} is bound exclusively to loopback ({1})." -f $port, ($listenerCheck.BoundAddresses -join ", "))
+
+                    # Discover all owning listener processes for the port
+                    $owningProcesses = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+                    try {
+                        $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+                        if ($conns) {
+                            foreach ($c in $conns) {
+                                $ownPid = [int]$c.OwningProcess
+                                if ($ownPid -gt 0) {
+                                    $owningProc = Get-Process -Id $ownPid -ErrorAction SilentlyContinue
+                                    if ($owningProc -and -not ($owningProcesses | Where-Object { $_.Id -eq $ownPid })) {
+                                        $owningProcesses.Add($owningProc)
                                     }
                                 }
                             }
-                        } catch {}
+                        }
+                    } catch {}
+
+                    if ($newlyLaunched) {
+                        # Newly launched: track any child/wrapper listener processes for rollback and safe deactivation
+                        foreach ($pTrack in $owningProcesses) {
+                            if ($pTrack.Id -ne $proc.Id -and -not ($startedServices | Where-Object { $_.pid -eq $pTrack.Id })) {
+                                $startedPids.Add($pTrack.Id)
+                                $childPath = try {
+                                    if ($pTrack.Path) { $pTrack.Path }
+                                    elseif ($pTrack.MainModule) { $pTrack.MainModule.FileName }
+                                    else { $null }
+                                } catch { $null }
+                                $childStartTime = try { $pTrack.StartTime.ToString("o") } catch { $null }
+                                $childRecord = [PSCustomObject]@{
+                                    service_id   = $svc
+                                    pid          = $pTrack.Id
+                                    process_name = $pTrack.ProcessName
+                                    path         = $childPath
+                                    start_time   = $childStartTime
+                                    port         = $port
+                                }
+                                $startedServices.Add($childRecord)
+                            }
+                        }
+                    } else {
+                        # Pre-existing service on port: Verify that the port belongs to an approved service process (Round 5 Finding 1)
+                        $expectedProcesses = switch ($svc) {
+                            "nine-router"      { @("node", "9router", "cmd") }
+                            "deepseek-harness" { @("dsh", "python", "python3", "node", "cmd") }
+                            default            { @() }
+                        }
+
+                        $isVerifiedService = $false
+                        if ($owningProcesses.Count -gt 0) {
+                            foreach ($op in $owningProcesses) {
+                                foreach ($exp in $expectedProcesses) {
+                                    if ($op.ProcessName -ilike "*$exp*") {
+                                        $isVerifiedService = $true
+                                        break
+                                    }
+                                }
+                                if ($isVerifiedService) { break }
+                            }
+                        }
+
+                        if (-not $isVerifiedService) {
+                            $observedNames = if ($owningProcesses.Count -gt 0) { (($owningProcesses | ForEach-Object { $_.ProcessName }) -join ", ") } else { "none" }
+                            throw ("Security policy violation: Port {0} for optional service '{1}' is already in use by an unverified or unexpected process ('{2}'). Activation rolled back." -f $port, $svc, $observedNames)
+                        }
+
+                        Write-Host ("  [SECURITY] Verified pre-existing listener for service '{0}' on port {1} belongs to approved process ({2})." -f $svc, $port, (($owningProcesses | ForEach-Object { $_.ProcessName }) -join ", "))
                     }
                 }
             }
@@ -738,17 +781,8 @@ function Invoke-ShipDeDeactivate {
                 } catch {}
             }
         } elseif ($state.started_pids) {
-            # Legacy fallback if started_services is absent
-            foreach ($ownedPid in @($state.started_pids)) {
-                try {
-                    $proc = Get-Process -Id $ownedPid -ErrorAction SilentlyContinue
-                    if ($proc) {
-                        Write-Host ("Stopping Ship Dễ-owned process: {0} (PID {1})" -f $proc.ProcessName, $ownedPid)
-                        Stop-Process -Id $ownedPid -Force -ErrorAction SilentlyContinue
-                        Start-Sleep -Milliseconds 100
-                    }
-                } catch {}
-            }
+            # Legacy records containing only bare PIDs are unverifiable: warn, never terminate, and clean state (Round 5 Finding 2)
+            Write-Warning "Legacy or unverifiable profile state containing only bare PIDs detected without process identity metadata. To prevent terminating unrelated processes on PID reuse, no processes will be stopped. Reconciling state file."
         }
     }
 
@@ -1173,6 +1207,33 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Stale / reused PID was preserved without termination, and state was safely reconciled."
 
+        # 13b: Legacy state containing only bare PIDs must be treated as unverifiable and not kill process (Round 5 Finding 2)
+        $legacyDummyProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Seconds 30" -PassThru
+        $legacyDummyPid = $legacyDummyProc.Id
+
+        $mockLegacyState = [PSCustomObject]@{
+            profile      = "FOUNDATION"
+            activated_at = (Get-Date).ToString("o")
+            started_pids = @($legacyDummyPid)
+        }
+        $mockLegacyState | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShipDeProfileStatePath) -Encoding UTF8
+
+        Invoke-ShipDeDeactivate -ProfilesPath $ProfilesPath
+        Start-Sleep -Milliseconds 200
+
+        $legacyStillRunning = Get-Process -Id $legacyDummyPid -ErrorAction SilentlyContinue
+        if ($null -eq $legacyStillRunning) {
+            throw "Failed negative test: Deactivate terminated process for legacy state with only bare PIDs!"
+        }
+
+        Stop-Process -Id $legacyDummyPid -Force -ErrorAction SilentlyContinue
+
+        $stateAfterLegacyDeactivate = Get-ShipDeProfileState
+        if ($null -ne $stateAfterLegacyDeactivate) {
+            throw "Failed negative test: State file was not cleaned up after legacy PID reconciliation!"
+        }
+        Write-Host "  [PASS] Legacy bare-PID state treated as unverifiable, unrelated process preserved, and state safely cleaned."
+
         # Negative Test 14: Present CLI with version mismatch fails closed without upgrading under -Apply (Finding 1)
         Write-Host "`nTest 14 [Negative / Installation]: Present CLI with version mismatch fails closed without upgrading under -Apply..."
         $mismatchManifestPath = Join-Path $testTempDir "mismatch-manifest.json"
@@ -1202,8 +1263,54 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Present CLI with version mismatch failed closed under -Apply without attempting package upgrade or overwrite."
 
+        # Negative Test 15: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved (Round 5 Finding 1)
+        Write-Host "`nTest 15 [Negative / Security]: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved..."
+        $prePort = 20128
+        $preScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $prePort); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
+        $preProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $preScript -PassThru
+        $prePid = $preProc.Id
+
+        # Wait up to 5s for port to become active on 0.0.0.0
+        for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Milliseconds 200
+            if (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort) { break }
+        }
+
+        $preOpenCaught = $false
+        try {
+            # Invoke activation WITHOUT a custom launcher on FOUNDATION (which requests nine-router on 20128)
+            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices
+        } catch {
+            if ($_ -match "not restricted to localhost" -or $_ -match "violates localhost-only" -or $_ -match "unverified or unexpected") {
+                $preOpenCaught = $true
+            }
+        }
+
+        # 1. Activation must be rejected
+        if (-not $preOpenCaught) {
+            Stop-Process -Id $prePid -Force -ErrorAction SilentlyContinue
+            throw "Failed negative test: Pre-existing non-loopback listener on port $prePort was not rejected by activation!"
+        }
+
+        # 2. Pre-existing process must NOT be killed by rollback
+        $preStillRunning = Get-Process -Id $prePid -ErrorAction SilentlyContinue
+        if ($null -eq $preStillRunning) {
+            throw "Failed negative test: Pre-existing process on port $prePort was killed during activation rollback!"
+        }
+
+        # Clean up pre-existing process
+        Stop-Process -Id $prePid -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 200
+
+        # 3. State file must not be written
+        $stateAfterPreOpen = Get-ShipDeProfileState
+        if ($null -ne $stateAfterPreOpen) {
+            throw "Failed negative test: State file was written despite rejection of pre-existing non-loopback listener!"
+        }
+        Write-Host "  [PASS] Pre-existing non-loopback (0.0.0.0) listener rejected without launcher, and pre-existing process safely preserved."
+
         Write-Host "`n================================================================"
-        Write-Host "ALL 14 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
+        Write-Host "ALL 15 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
         Write-Host "================================================================"
     } finally {
         Remove-Item -LiteralPath $testTempDir -Recurse -Force -ErrorAction SilentlyContinue
