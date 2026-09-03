@@ -155,6 +155,121 @@ function Test-ShipDeProcessIdentity {
     return $true
 }
 
+function Test-ShipDeServiceIdentity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ServiceId,
+
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process,
+
+        [int]$Port = 0
+    )
+
+    $procName = [string]$Process.ProcessName
+    $procPath = try {
+        if ($Process.Path) { [string]$Process.Path }
+        elseif ($Process.MainModule) { [string]$Process.MainModule.FileName }
+        else { "" }
+    } catch { "" }
+
+    $cmdLine = try {
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($Process.Id)" -ErrorAction SilentlyContinue
+        if ($cim -and $cim.CommandLine) { [string]$cim.CommandLine } else { "" }
+    } catch { "" }
+
+    if ([string]::IsNullOrWhiteSpace($cmdLine)) {
+        try {
+            $wmi = Get-WmiObject Win32_Process -Filter "ProcessId = $($Process.Id)" -ErrorAction SilentlyContinue
+            if ($wmi -and $wmi.CommandLine) { $cmdLine = [string]$wmi.CommandLine }
+        } catch {}
+    }
+
+    $combinedIdentity = "$procPath $cmdLine"
+
+    # Reject generic wrapper/runtime name alone without service-specific identity (Round 6 Finding 1)
+    switch ($ServiceId) {
+        "nine-router" {
+            # Must identify 9Router in executable path or command line
+            if ($combinedIdentity -match '(?i)(?:\\|/|@|\b)9router(?:\b|\.exe|\.cmd|\.js|/)') {
+                return [PSCustomObject]@{
+                    IsVerified  = $true
+                    ServiceId   = $ServiceId
+                    ProcessId   = $Process.Id
+                    ProcessName = $procName
+                    CommandLine = $cmdLine
+                    Path        = $procPath
+                }
+            }
+
+            # Also check service-specific HTTP signature if port is responding
+            if ($Port -gt 0) {
+                try {
+                    $httpResp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 1 -ErrorAction SilentlyContinue
+                    if ($httpResp -and ($httpResp.Content -match '(?i)9router' -or $httpResp.Headers["Server"] -match '(?i)9router')) {
+                        return [PSCustomObject]@{
+                            IsVerified  = $true
+                            ServiceId   = $ServiceId
+                            ProcessId   = $Process.Id
+                            ProcessName = $procName
+                            CommandLine = $cmdLine
+                            Path        = $procPath
+                        }
+                    }
+                } catch {}
+            }
+
+            $displayCmd = if ($cmdLine) { $cmdLine } elseif ($procPath) { $procPath } else { $procName }
+            return [PSCustomObject]@{
+                IsVerified  = $false
+                Reason      = ("Process PID {0} ({1}) command line/path '{2}' does not contain required '9router' identity, and no 9Router HTTP signature was detected on port {3}." -f $Process.Id, $procName, $displayCmd, $Port)
+            }
+        }
+        "deepseek-harness" {
+            # Must identify DSH or deepseek-harness in executable path or command line
+            if ($combinedIdentity -match '(?i)(?:\\|/|@|\b)(?:dsh|deepseek-harness)(?:\b|\.exe|\.cmd|\.py|\.js|/)') {
+                return [PSCustomObject]@{
+                    IsVerified  = $true
+                    ServiceId   = $ServiceId
+                    ProcessId   = $Process.Id
+                    ProcessName = $procName
+                    CommandLine = $cmdLine
+                    Path        = $procPath
+                }
+            }
+
+            # Also check service-specific HTTP signature if port is responding
+            if ($Port -gt 0) {
+                try {
+                    $httpResp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 1 -ErrorAction SilentlyContinue
+                    if ($httpResp -and ($httpResp.Content -match '(?i)(?:dsh|deepseek)' -or $httpResp.Headers["Server"] -match '(?i)dsh')) {
+                        return [PSCustomObject]@{
+                            IsVerified  = $true
+                            ServiceId   = $ServiceId
+                            ProcessId   = $Process.Id
+                            ProcessName = $procName
+                            CommandLine = $cmdLine
+                            Path        = $procPath
+                        }
+                    }
+                } catch {}
+            }
+
+            $displayCmd = if ($cmdLine) { $cmdLine } elseif ($procPath) { $procPath } else { $procName }
+            return [PSCustomObject]@{
+                IsVerified  = $false
+                Reason      = ("Process PID {0} ({1}) command line/path '{2}' does not contain required 'dsh' or 'deepseek-harness' identity, and no DSH HTTP signature was detected on port {3}." -f $Process.Id, $procName, $displayCmd, $Port)
+            }
+        }
+        default {
+            return [PSCustomObject]@{
+                IsVerified = $false
+                Reason     = "Unknown service id: $ServiceId"
+            }
+        }
+    }
+}
+
 function Get-ShipDeManifestContent {
     param([string]$Path)
 
@@ -699,32 +814,29 @@ function Invoke-ShipDeActivate {
                             }
                         }
                     } else {
-                        # Pre-existing service on port: Verify that the port belongs to an approved service process (Round 5 Finding 1)
-                        $expectedProcesses = switch ($svc) {
-                            "nine-router"      { @("node", "9router", "cmd") }
-                            "deepseek-harness" { @("dsh", "python", "python3", "node", "cmd") }
-                            default            { @() }
-                        }
+                        # Pre-existing service on port: Verify that the port belongs to an approved service process by service-specific command line / executable path / HTTP signature (Round 6 Finding 1)
+                        $verifiedIdentity = $null
+                        $rejectionReasons = [System.Collections.Generic.List[string]]::new()
 
-                        $isVerifiedService = $false
                         if ($owningProcesses.Count -gt 0) {
                             foreach ($op in $owningProcesses) {
-                                foreach ($exp in $expectedProcesses) {
-                                    if ($op.ProcessName -ilike "*$exp*") {
-                                        $isVerifiedService = $true
-                                        break
-                                    }
+                                $idCheck = Test-ShipDeServiceIdentity -ServiceId $svc -Process $op -Port $port
+                                if ($idCheck.IsVerified) {
+                                    $verifiedIdentity = $idCheck
+                                    break
+                                } else {
+                                    $rejectionReasons.Add($idCheck.Reason)
                                 }
-                                if ($isVerifiedService) { break }
                             }
                         }
 
-                        if (-not $isVerifiedService) {
-                            $observedNames = if ($owningProcesses.Count -gt 0) { (($owningProcesses | ForEach-Object { $_.ProcessName }) -join ", ") } else { "none" }
-                            throw ("Security policy violation: Port {0} for optional service '{1}' is already in use by an unverified or unexpected process ('{2}'). Activation rolled back." -f $port, $svc, $observedNames)
+                        if ($null -eq $verifiedIdentity) {
+                            $observedDetails = if ($rejectionReasons.Count -gt 0) { ($rejectionReasons -join "; ") } else { "No discoverable owning process on port $port" }
+                            throw ("Security policy violation: Port {0} for optional service '{1}' is already in use by an unverified or unexpected process. {2}. Generic runtime/wrapper names alone never authorize a listener. Activation rolled back." -f $port, $svc, $observedDetails)
                         }
 
-                        Write-Host ("  [SECURITY] Verified pre-existing listener for service '{0}' on port {1} belongs to approved process ({2})." -f $svc, $port, (($owningProcesses | ForEach-Object { $_.ProcessName }) -join ", "))
+                        $idDisplay = if ($verifiedIdentity.CommandLine) { $verifiedIdentity.CommandLine } else { $verifiedIdentity.Path }
+                        Write-Host ("  [SECURITY] Verified pre-existing listener for service '{0}' on port {1} belongs to approved service identity (PID {2}: {3})." -f $svc, $port, $verifiedIdentity.ProcessId, $idDisplay)
                     }
                 }
             }
@@ -1263,8 +1375,8 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Present CLI with version mismatch failed closed under -Apply without attempting package upgrade or overwrite."
 
-        # Negative Test 15: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved (Round 5 Finding 1)
-        Write-Host "`nTest 15 [Negative / Security]: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved..."
+        # Negative Test 15a: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved (Round 5 Finding 1)
+        Write-Host "`nTest 15a [Negative / Security]: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved..."
         $prePort = 20128
         $preScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $prePort); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
         $preProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $preScript -PassThru
@@ -1300,7 +1412,10 @@ function Invoke-ShipDeTests {
 
         # Clean up pre-existing process
         Stop-Process -Id $prePid -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Milliseconds 200
+        for ($i = 0; $i -lt 10; $i++) {
+            if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort)) { break }
+            Start-Sleep -Milliseconds 200
+        }
 
         # 3. State file must not be written
         $stateAfterPreOpen = Get-ShipDeProfileState
@@ -1308,6 +1423,105 @@ function Invoke-ShipDeTests {
             throw "Failed negative test: State file was written despite rejection of pre-existing non-loopback listener!"
         }
         Write-Host "  [PASS] Pre-existing non-loopback (0.0.0.0) listener rejected without launcher, and pre-existing process safely preserved."
+
+        # Negative Test 15b: Unrelated loopback listener with generic runtime process rejected by command line identity check (Round 6 Finding 1)
+        Write-Host "`nTest 15b [Negative / Security]: Unrelated loopback listener with generic runtime process must be rejected by service identity check..."
+        $unrelatedScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $prePort); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
+        $unrelatedProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $unrelatedScript -PassThru
+        $unrelatedPid = $unrelatedProc.Id
+
+        # Wait up to 5s for port to become active on loopback
+        for ($i = 0; $i -lt 15; $i++) {
+            Start-Sleep -Milliseconds 200
+            if (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort) { break }
+        }
+
+        $unrelatedCaught = $false
+        try {
+            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices
+        } catch {
+            if ($_ -match "does not contain required '9router' identity" -or $_ -match "unverified or unexpected process") {
+                $unrelatedCaught = $true
+            }
+        }
+
+        if (-not $unrelatedCaught) {
+            Stop-Process -Id $unrelatedPid -Force -ErrorAction SilentlyContinue
+            throw "Failed negative test: Unrelated listener on port $prePort was not rejected by service identity verification!"
+        }
+
+        $unrelatedStillRunning = Get-Process -Id $unrelatedPid -ErrorAction SilentlyContinue
+        if ($null -eq $unrelatedStillRunning) {
+            throw "Failed negative test: Unrelated process on port $prePort was killed during activation rollback!"
+        }
+
+        Stop-Process -Id $unrelatedPid -Force -ErrorAction SilentlyContinue
+        for ($i = 0; $i -lt 10; $i++) {
+            if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort)) { break }
+            Start-Sleep -Milliseconds 200
+        }
+
+        $stateAfterUnrelated = Get-ShipDeProfileState
+        if ($null -ne $stateAfterUnrelated) {
+            throw "Failed negative test: State file was written despite rejection of unrelated listener!"
+        }
+        Write-Host "  [PASS] Unrelated loopback listener with generic process name rejected by command line identity without killing process."
+
+        # Positive Test 15c: Pre-existing listeners with approved service identities in command line are verified and accepted (Round 6 Finding 1)
+        Write-Host "`nTest 15c [Positive / Operational]: Pre-existing listeners with approved service identities in command line must be accepted..."
+        $preDshPort = 3080
+
+        # Launch mock 9Router listener whose command line explicitly contains the approved 9Router identity
+        $approvedScript9r = "# 9router service listener`n[System.Net.Sockets.TcpListener]`$l1 = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $prePort); `$l1.Start(); Start-Sleep -Seconds 30; `$l1.Stop()"
+        $approvedProc9r = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $approvedScript9r -PassThru
+        $approvedPid9r = $approvedProc9r.Id
+
+        # Launch mock DSH listener whose command line explicitly contains the approved DSH identity
+        $approvedScriptDsh = "# dsh web service listener`n[System.Net.Sockets.TcpListener]`$l2 = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $preDshPort); `$l2.Start(); Start-Sleep -Seconds 30; `$l2.Stop()"
+        $approvedProcDsh = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $approvedScriptDsh -PassThru
+        $approvedPidDsh = $approvedProcDsh.Id
+
+        # Wait up to 5s for both ports to become active on loopback
+        for ($i = 0; $i -lt 15; $i++) {
+            Start-Sleep -Milliseconds 200
+            if ((Test-ShipDePort -HostName "127.0.0.1" -Port $prePort) -and (Test-ShipDePort -HostName "127.0.0.1" -Port $preDshPort)) { break }
+        }
+
+        $approvedPassed = $false
+        try {
+            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices
+            $approvedPassed = $true
+        } catch {
+            Write-Warning "Approved listener activation threw: $_"
+        }
+
+        if (-not $approvedPassed) {
+            Stop-Process -Id $approvedPid9r -Force -ErrorAction SilentlyContinue
+            Stop-Process -Id $approvedPidDsh -Force -ErrorAction SilentlyContinue
+            throw "Failed positive test: Pre-existing listeners with approved service identities were rejected unexpectedly!"
+        }
+
+        $stateAfterApproved = Get-ShipDeProfileState
+        if ($null -eq $stateAfterApproved -or $stateAfterApproved.profile -ne "FOUNDATION") {
+            Stop-Process -Id $approvedPid9r -Force -ErrorAction SilentlyContinue
+            Stop-Process -Id $approvedPidDsh -Force -ErrorAction SilentlyContinue
+            throw "Failed positive test: State file was not created for approved pre-existing services!"
+        }
+
+        # Deactivate profile cleanly
+        Invoke-ShipDeDeactivate -ProfilesPath $ProfilesPath
+        Stop-Process -Id $approvedPid9r -Force -ErrorAction SilentlyContinue
+        Stop-Process -Id $approvedPidDsh -Force -ErrorAction SilentlyContinue
+        for ($i = 0; $i -lt 10; $i++) {
+            if ((-not (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort)) -and (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $preDshPort))) { break }
+            Start-Sleep -Milliseconds 200
+        }
+
+        $stateAfterDeactivateApproved = Get-ShipDeProfileState
+        if ($null -ne $stateAfterDeactivateApproved) {
+            throw "Failed positive test: State file remained after deactivation of approved pre-existing service!"
+        }
+        Write-Host "  [PASS] Pre-existing listeners with approved 9Router and DSH command line identities verified, accepted, and safely deactivated."
 
         Write-Host "`n================================================================"
         Write-Host "ALL 15 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
