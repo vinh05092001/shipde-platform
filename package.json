@@ -3,42 +3,36 @@
   "version": "3.3.0",
   "description": "Ship Dễ (shipde.net) - Nền tảng điều hành & kiểm soát vận chuyển cho Shop Online",
   "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint .",
-    "format:check": "tsx scripts/verify-formatting.ts",
-    "format:write": "prettier --write .",
-    "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
-    "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
-    "security:secrets": "tsx scripts/verify-secrets.ts",
-    "concierge:audit": "tsx scripts/concierge-audit.ts"
-  },
+  "packageManager": "pnpm@11.23.0",
   "engines": {
     "node": ">=24.0.0",
-    "npm": ">=11.0.0"
+    "pnpm": ">=11.0.0"
   },
-  "dependencies": {
-    "@prisma/client": "^6.19.2",
-    "framer-motion": "^12.35.0",
-    "lucide-react": "^0.577.0",
-    "next": "16.1.6",
-    "prisma": "^6.19.2",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "recharts": "^3.8.0"
+  "scripts": {
+    "dev": "turbo dev --cache-dir=.turbo/cache",
+    "build": "pnpm db:generate && turbo build --cache-dir=.turbo/cache",
+    "lint": "turbo lint --cache-dir=.turbo/cache && eslint scripts",
+    "format:check": "tsx scripts/verify-formatting.ts",
+    "format:write": "prettier --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && turbo typecheck --cache-dir=.turbo/cache",
+    "test": "turbo test --cache-dir=.turbo/cache && turbo test:audit --cache-dir=.turbo/cache",
+    "test:audit": "turbo test:audit --cache-dir=.turbo/cache",
+    "test:e2e": "turbo test:e2e --cache-dir=.turbo/cache",
+    "test:baseline": "tsx apps/web/src/tests/preservation-smoke.test.ts",
+    "db:generate": "prisma generate --schema=prisma/schema.prisma",
+    "security:secrets": "tsx scripts/verify-secrets.ts",
+    "verify:inventory": "tsx scripts/verify-inventory.ts",
+    "concierge:audit": "tsx scripts/concierge-audit.ts"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
+    "@prisma/client": "^6.19.2",
     "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
+    "@typescript-eslint/parser": "^8.68.0",
     "eslint": "^9.39.5",
-    "eslint-config-next": "^16.1.6",
     "prettier": "^3.9.6",
-    "tailwindcss": "^4.2.1",
+    "prisma": "^6.19.2",
     "tsx": "^4.21.0",
+    "turbo": "^2.4.4",
     "typescript": "^5"
   }
 }

@@ -5,87 +5,33 @@
 export type CurrencyAmount = number; // Số nguyên đơn vị VNĐ (Ví dụ: 30000 = 30,000 VND)
 export type WeightGram = number; // Gram (Ví dụ: 500 = 0.5kg)
 
-export enum UserRole {
-  OWNER = 'OWNER', // Chủ shop
-  OPS_CSKH = 'OPS_CSKH', // Vận hành / Chăm sóc khách hàng
-  WAREHOUSE = 'WAREHOUSE', // Nhân viên kho
-  ACCOUNTANT = 'ACCOUNTANT', // Kế toán
-}
+import {
+  UserRole,
+  Role,
+  PrototypePersona,
+  CarrierCode,
+  CarrierCapabilityTier,
+  ShipmentStatus,
+  ExceptionType,
+  ExceptionCaseStatus,
+  DiscrepancyType,
+  DiscrepancyResolution,
+  MatchingStatus,
+} from '@shipde/contracts';
 
-export enum CarrierCode {
-  GHN = 'GHN',
-  GHTK = 'GHTK',
-  VIETTEL_POST = 'VIETTEL_POST',
-  JT = 'JT',
-}
-
-export enum CarrierCapabilityTier {
-  L0_OBSERVE = 'L0', // Chỉ quan sát: trạng thái, cước, COD (Không đủ làm hãng chính)
-  L1_ASSIST = 'L1', // Ship Dễ chuẩn bị hồ sơ/checklist, shop bấm gửi trên portal (GHTK R1)
-  L2_EXECUTE = 'L2', // Ship Dễ gọi API trực tiếp, webhook & callback (GHN R1)
-}
-
-export enum ShipmentStatus {
-  DRAFT = 'draft',
-  PICKING = 'picking',
-  IN_TRANSIT = 'in_transit',
-  OUT_FOR_DELIVERY = 'out_for_delivery',
-  DELIVERED = 'delivered', // Trạng thái kết thúc
-  RETURNING = 'returning',
-  RETURNED = 'returned', // Trạng thái kết thúc
-  CANCELLED = 'cancelled', // Trạng thái kết thúc
-  LOST = 'lost', // Trạng thái kết thúc
-  DAMAGED = 'damaged', // Trạng thái kết thúc
-}
-
-export enum ExceptionType {
-  PICKUP_DELAY = 'pickup_delay', // Chậm lấy hàng
-  STUCK_IN_TRANSIT = 'stuck_in_transit', // Đứng trạng thái quá lâu
-  DELIVERY_FAIL = 'delivery_fail', // Giao hàng không thành công
-  STATUS_MISMATCH = 'status_mismatch', // Sai lệch trạng thái
-}
-
-export enum ExceptionCaseStatus {
-  OPEN = 'open',
-  ASSIGNED = 'assigned',
-  CONTACTING = 'contacting',
-  WAITING_CUSTOMER = 'waiting_customer',
-  REATTEMPT_REQUESTED = 'reattempt_requested',
-  WAITING_REATTEMPT = 'waiting_reattempt',
-  RESCUED = 'rescued', // Trạng thái kết thúc thành công (vào Sổ 2)
-  RETURNING = 'returning',
-  RETURNED = 'returned', // Trạng thái kết thúc thất bại
-  UNRESOLVED = 'unresolved', // Trạng thái kết thúc
-}
-
-export enum DiscrepancyType {
-  D1_WEIGHT = 'D1_WEIGHT', // Lệch cân tính phí
-  D2_FREIGHT = 'D2_FREIGHT', // Lệch cước vận chuyển so với biểu giá
-  D3_SURCHARGE = 'D3_SURCHARGE', // Phụ phí vùng xa (Hoãn sang R2)
-  D4_DUPLICATE_DEDUCTION = 'D4_DUPLICATE', // Khấu trừ trùng cùng mã vận đơn & loại phí
-  D5_COD_MISMATCH = 'D5_COD_MISMATCH', // Lệch tiền thu hộ COD
-  D6_OVERDUE_COD = 'D6_OVERDUE_COD', // COD quá hạn thanh toán
-  D7_MISSING_STATEMENT_ROW = 'D7_MISSING', // Đơn đã giao nhưng thiếu dòng sao kê
-}
-
-export enum DiscrepancyResolution {
-  OPEN = 'open', // Mới phát hiện, đang chờ xử lý
-  CONFIRMED = 'confirm', // Chấp nhận số liệu hãng
-  DISPUTE = 'dispute', // Mở hồ sơ khiếu nại (Chuyển sang CLM)
-  WAIVE = 'waive', // Bỏ qua (yêu cầu lý do bắt buộc BR-22)
-  CARRY_FORWARD = 'carry_forward', // Chuyển sang kỳ sau
-  RESOLVED = 'resolved', // Đã giải quyết xong
-}
-
-export enum MatchingStatus {
-  MATCHED_EXACT = 'matched_exact', // Khóa 1 (tracking) hoặc Khóa 2 (order_code)
-  MATCHED_FUZZY = 'matched_fuzzy', // Khóa 3 (COD + ngày +/- 3 ngày)
-  UNMATCHED = 'unmatched', // Không khớp -> vào hàng đợi ghép tay
-  AMBIGUOUS = 'ambiguous', // 1 mã khớp nhiều đơn
-}
-
-export type Role = UserRole;
-export const Role = UserRole;
+export {
+  UserRole,
+  Role,
+  PrototypePersona,
+  CarrierCode,
+  CarrierCapabilityTier,
+  ShipmentStatus,
+  ExceptionType,
+  ExceptionCaseStatus,
+  DiscrepancyType,
+  DiscrepancyResolution,
+  MatchingStatus,
+};
 
 export interface Merchant {
   id: string;

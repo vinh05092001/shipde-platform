@@ -157,41 +157,42 @@ export function validateInventory(): {
   const areaValidations: { area: string; declared: number; actual: number }[] = [];
 
   const areaCalculators: Record<string, () => number> = {
-    'App Routes & Shell': () => getDirectFiles(path.join(ROOT, 'src/app')).length,
+    'App Routes & Shell': () => getDirectFiles(path.join(ROOT, 'apps/web/src/app')).length,
     'UI Tab Workspaces': () => {
-      const compFiles = getDirectFiles(path.join(ROOT, 'src/components'));
+      const compFiles = getDirectFiles(path.join(ROOT, 'apps/web/src/components'));
       return compFiles.filter((f) => {
         const b = path.basename(f);
         return b.endsWith('Tab.tsx') || b === 'SettingsWorkspace.tsx';
       }).length;
     },
     'UI Modals & Forms': () => {
-      const compModals = getDirectFiles(path.join(ROOT, 'src/components')).filter((f) =>
+      const compModals = getDirectFiles(path.join(ROOT, 'apps/web/src/components')).filter((f) =>
         path.basename(f).endsWith('Modal.tsx')
       );
-      const formFiles = getDirectFiles(path.join(ROOT, 'src/components/forms'));
+      const formFiles = getDirectFiles(path.join(ROOT, 'apps/web/src/components/forms'));
       return compModals.length + formFiles.length;
     },
-    'UI Primitives': () => getDirectFiles(path.join(ROOT, 'src/components/ui')).length,
-    'Auth UI': () => getDirectFiles(path.join(ROOT, 'src/components/auth')).length,
+    'UI Primitives': () => getDirectFiles(path.join(ROOT, 'apps/web/src/components/ui')).length,
+    'Auth UI': () => getDirectFiles(path.join(ROOT, 'apps/web/src/components/auth')).length,
     'UI Mock Data & Types': () => {
-      const compFiles = getDirectFiles(path.join(ROOT, 'src/components'));
+      const compFiles = getDirectFiles(path.join(ROOT, 'apps/web/src/components'));
       return compFiles.filter((f) => {
         const b = path.basename(f);
         return b === 'mock-data.ts' || b === 'types.ts';
       }).length;
     },
-    'Context & State': () => getDirectFiles(path.join(ROOT, 'src/context')).length,
-    'Core Domain Engines': () => getDirectFiles(path.join(ROOT, 'src/core')).length,
-    Adapters: () => getDirectFiles(path.join(ROOT, 'src/adapters')).length,
-    'Server & In-Memory DB': () => getDirectFiles(path.join(ROOT, 'src/server')).length,
+    'Context & State': () => getDirectFiles(path.join(ROOT, 'apps/web/src/context')).length,
+    'Core Domain Engines': () => getDirectFiles(path.join(ROOT, 'apps/web/src/core')).length,
+    Adapters: () => getDirectFiles(path.join(ROOT, 'apps/web/src/adapters')).length,
+    'Server & In-Memory DB': () => getDirectFiles(path.join(ROOT, 'apps/web/src/server')).length,
     'API Route Handlers': () =>
-      getAllFiles(path.join(ROOT, 'src/app/api')).filter((f) => path.basename(f) === 'route.ts')
-        .length,
-    'Data Stores & Services': () => getDirectFiles(path.join(ROOT, 'src/services')).length,
-    'Types & Error Catalog': () => getDirectFiles(path.join(ROOT, 'src/types')).length,
+      getAllFiles(path.join(ROOT, 'apps/web/src/app/api')).filter(
+        (f) => path.basename(f) === 'route.ts'
+      ).length,
+    'Data Stores & Services': () => getDirectFiles(path.join(ROOT, 'apps/web/src/services')).length,
+    'Types & Error Catalog': () => getDirectFiles(path.join(ROOT, 'apps/web/src/types')).length,
     'Database Schema': () => getDirectFiles(path.join(ROOT, 'prisma')).length,
-    'Verification & Tests': () => getDirectFiles(path.join(ROOT, 'src/tests')).length,
+    'Verification & Tests': () => getDirectFiles(path.join(ROOT, 'apps/web/src/tests')).length,
     'Automation & Scripts': () => getAllFiles(path.join(ROOT, 'scripts')).length,
   };
 

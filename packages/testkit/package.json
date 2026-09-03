@@ -1,0 +1,33 @@
+{
+  "name": "@shipde/testkit",
+  "version": "0.1.0",
+  "description": "Shared test utilities, assertions, and test fixtures for Ship Dễ",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint .",
+    "test": "tsc && tsx src/index.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@shipde/config": "workspace:*",
+    "@shipde/contracts": "workspace:*",
+    "@shipde/ui": "workspace:*",
+    "@types/node": "^20",
+    "@typescript-eslint/parser": "^8.68.0",
+    "eslint": "^9.39.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}

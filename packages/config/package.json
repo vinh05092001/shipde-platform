@@ -1,0 +1,29 @@
+{
+  "name": "@shipde/config",
+  "version": "0.1.0",
+  "description": "Ship Dễ — Shared workspace configuration, tsconfig base, and toolchain defaults",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./eslint.base.mjs": "./eslint.base.mjs",
+    "./tsconfig.base.json": "./tsconfig.base.json"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@typescript-eslint/parser": "^8.68.0",
+    "eslint": "^9.39.5",
+    "typescript": "^5"
+  }
+}

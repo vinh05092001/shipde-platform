@@ -29,9 +29,12 @@ const EXCLUDED_PATTERNS = [
   /(?:^|[\\/])node_modules[\\/]/,
   /(?:^|[\\/])out[\\/]/,
   /(?:^|[\\/])build[\\/]/,
+  /(?:^|[\\/])dist[\\/]/,
+  /(?:^|[\\/])\.turbo[\\/]/,
   /(?:^|[\\/])coverage[\\/]/,
   /(?:^|[\\/])\.git[\\/]/,
   /(?:^|[\\/])\.gemini[\\/]/,
+  /pnpm-lock\.yaml$/,
   /package-lock\.json$/,
   /next-env\.d\.ts$/,
   /\.log$/,
@@ -54,18 +57,59 @@ export function isPrettierSupported(filePath: string): boolean {
   return SUPPORTED_EXTENSIONS.has(ext);
 }
 
+function getSafeDirectoryArgs(cwd: string): string[] {
+  const normalizedCwd = path.resolve(cwd).replace(/\\/g, '/');
+  const safeDirs = new Set<string>([normalizedCwd]);
+  const dotGitPath = path.join(cwd, '.git');
+  try {
+    if (fs.existsSync(dotGitPath)) {
+      const stat = fs.statSync(dotGitPath);
+      if (stat.isFile()) {
+        const dotGitContent = fs.readFileSync(dotGitPath, 'utf-8');
+        const match = dotGitContent.match(/gitdir:\s*(.+)/i);
+        if (match && match[1]) {
+          const gitDirPath = path.resolve(cwd, match[1].trim()).replace(/\\/g, '/');
+          safeDirs.add(gitDirPath);
+          const parts = gitDirPath.split('/');
+          const worktreesIdx = parts.lastIndexOf('worktrees');
+          if (worktreesIdx > 0 && parts[worktreesIdx - 1] === '.git') {
+            const parentRepo = parts.slice(0, worktreesIdx - 1).join('/');
+            if (parentRepo) safeDirs.add(parentRepo);
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const args: string[] = [];
+  for (const dir of safeDirs) {
+    args.push('-c', `safe.directory=${dir}`);
+  }
+  return args;
+}
+
+function execSafeGit(
+  args: string[],
+  options: { cwd: string; encoding?: BufferEncoding; stdio?: any }
+): Buffer | string {
+  const safeArgs = getSafeDirectoryArgs(options.cwd);
+  return execFileSync('git', [...safeArgs, ...args], options as any);
+}
+
 function tryResolveMergeBase(cand: string, rootDir: string): string | null {
   try {
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${cand}^{commit}`], {
+    execSafeGit(['rev-parse', '--verify', '--quiet', `${cand}^{commit}`], {
       cwd: rootDir,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    const mergeBase = execFileSync('git', ['merge-base', cand, 'HEAD'], {
-      cwd: rootDir,
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
+    const mergeBase = (
+      execSafeGit(['merge-base', cand, 'HEAD'], {
+        cwd: rootDir,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }) as string
+    ).trim();
 
     if (mergeBase) {
       return mergeBase;
@@ -122,14 +166,10 @@ export function getChangedFiles(baseRef?: string, rootDir: string = process.cwd(
 
   // 2. Diff between merge base and HEAD
   try {
-    const diffBuffer = execFileSync(
-      'git',
-      ['diff', '--name-only', '-z', '--diff-filter=d', base, 'HEAD'],
-      {
-        cwd: rootDir,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }
-    );
+    const diffBuffer = execSafeGit(['diff', '--name-only', '-z', '--diff-filter=d', base, 'HEAD'], {
+      cwd: rootDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }) as Buffer;
     const diffOutput = diffBuffer.toString('utf-8');
     for (const f of diffOutput.split('\0')) {
       const trimmed = f.trim();
@@ -145,10 +185,10 @@ export function getChangedFiles(baseRef?: string, rootDir: string = process.cwd(
 
   // 3. Uncommitted staged and untracked/modified working tree files
   try {
-    const statusBuffer = execFileSync('git', ['status', '--porcelain', '-z', '-uall'], {
+    const statusBuffer = execSafeGit(['status', '--porcelain', '-z', '-uall'], {
       cwd: rootDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    }) as Buffer;
     const statusOutput = statusBuffer.toString('utf-8');
     const parts = statusOutput.split('\0');
     for (const part of parts) {
@@ -277,7 +317,10 @@ if (require.main === module) {
         if (fs.existsSync(tempFixture)) {
           try {
             fs.unlinkSync(tempFixture);
-          } catch {}
+          } catch (cleanupErr: any) {
+            console.error(`❌ LỖI XÓA FIXTURE ÂM TÍNH: ${cleanupErr.message}`);
+            executionError = cleanupErr;
+          }
         }
       }
 

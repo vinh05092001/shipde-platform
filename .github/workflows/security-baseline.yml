@@ -16,24 +16,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.23.0
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Install Pinned Gitleaks
         run: |
           GITLEAKS_VERSION="8.24.0"
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
       - name: Run Clean Secret Scan
-        run: npm run security:secrets
+        run: pnpm security:secrets
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
       - name: Verify Secret Scan Negative Proof
         run: |
           set +e
-          npm run security:secrets -- --test-negative
+          pnpm security:secrets -- --test-negative
           EXIT_CODE=$?
           set -e
           echo "Negative proof returned exit code: $EXIT_CODE"

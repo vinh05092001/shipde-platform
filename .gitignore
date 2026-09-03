@@ -4,6 +4,10 @@ node_modules/
 .DS_Store
 dist/
 build/
+.turbo/
+pnpm-debug.log*
+.pnpm-store/
+next-env.d.ts
 
 # Local credentials and agent state
 .env
@@ -23,3 +27,5 @@ build/
 coverage/
 playwright-report/
 test-results/
+__pycache__/
+*.pyc

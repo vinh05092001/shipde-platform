@@ -58,21 +58,29 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.23.0
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: npm
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run format:check
+          cache: pnpm
+      - name: Verify clean production-only install
+        run: pnpm install --prod --frozen-lockfile
+      - name: Install full development dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Generate Prisma Client from canonical schema
+        run: pnpm db:generate
+      - run: pnpm lint
+      - run: pnpm format:check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
       - name: Verify Formatting Invalid BASE_SHA Fail-Closed Proof
         run: |
           set +e
-          BASE_SHA="invalid-sha-deadbeef-00000000000000000000" npm run format:check
+          BASE_SHA="invalid-sha-deadbeef-00000000000000000000" pnpm format:check
           NORMAL_EXIT_CODE=$?
-          BASE_SHA="invalid-sha-deadbeef-00000000000000000000" npm run format:check -- --test-negative
+          BASE_SHA="invalid-sha-deadbeef-00000000000000000000" pnpm format:check -- --test-negative
           NEGATIVE_EXIT_CODE=$?
           set -e
           echo "Invalid BASE_SHA normal check returned exit code: $NORMAL_EXIT_CODE"
@@ -86,7 +94,7 @@ jobs:
       - name: Verify Formatting Negative Proof
         run: |
           set +e
-          npm run format:check -- --test-negative
+          pnpm format:check -- --test-negative
           EXIT_CODE=$?
           set -e
           echo "Formatting negative proof returned exit code: $EXIT_CODE"
@@ -100,17 +108,43 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
       - name: Verify Git Diff Whitespace & Conflict Markers
         run: git diff --check origin/main...HEAD
-      - run: npm run build
-      - run: npm run test:e2e
-      - run: npm run test:baseline
       - name: Install Pinned Gitleaks
         run: |
           GITLEAKS_VERSION="8.24.0"
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
-      - run: npm run security:secrets
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:e2e
+      - run: pnpm test:baseline
+      - name: Verify Preservation Baseline Negative Proof
+        run: |
+          set +e
+          pnpm test:baseline -- --test-negative
+          EXIT_CODE=$?
+          set -e
+          echo "Preservation baseline negative proof returned exit code: $EXIT_CODE"
+          if [ "$EXIT_CODE" -eq 1 ]; then
+            echo "Success: Preservation baseline negative proof exited with exact code 1 as required by AC-FOUND-02-04."
+          else
+            echo "Error: Expected preservation baseline negative proof to exit with exact code 1, but got code $EXIT_CODE!"
+            exit 1
+          fi
+      - run: pnpm build
+      - run: pnpm security:secrets
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}
+      - name: Verify Build Output Preserved After Secret Scan
+        run: |
+          if [ ! -d "apps/web/.next" ]; then
+            echo "Error: apps/web/.next was deleted or missing after security scan!"
+            exit 1
+          fi
+          if [ ! -f "apps/web/.next/prerender-manifest.json" ]; then
+            echo "Error: apps/web/.next/prerender-manifest.json is missing!"
+            exit 1
+          fi
+          echo "Success: apps/web/.next build output remains intact and untouched after secret scan."
 
   application-gate:
     needs: [detect-application-scope, current-application]

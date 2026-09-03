@@ -81,7 +81,7 @@ export async function runAll12E2ETests(): Promise<{
     const occurredInTransit = new Date('2026-08-16T08:00:00Z');
 
     // Sự kiện 1: delivered đến trước lúc 10h05
-    let currentStatus = ShipmentStatus.DELIVERED;
+    let currentStatus: ShipmentStatus = ShipmentStatus.DELIVERED;
     let latestOccurredAt = occurredDelivered;
 
     // Sự kiện 2: in_transit (bị trễ mạng) đến sau lúc 10h10 nhưng occurred_at = 08:00
