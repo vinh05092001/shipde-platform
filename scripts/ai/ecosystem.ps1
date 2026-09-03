@@ -33,6 +33,128 @@ function Test-ShipDePort {
     }
 }
 
+function Test-ShipDeLoopbackOnlyListener {
+    param(
+        [Parameter(Mandatory = $true)][int]$Port
+    )
+
+    $listeners = [System.Collections.Generic.List[string]]::new()
+    try {
+        $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+        if ($conns) {
+            foreach ($c in $conns) {
+                $addr = [string]$c.LocalAddress
+                if ($addr -and -not $listeners.Contains($addr)) {
+                    $listeners.Add($addr)
+                }
+            }
+        }
+    } catch {}
+
+    if ($listeners.Count -eq 0) {
+        # Fallback to netstat if Get-NetTCPConnection returned nothing
+        try {
+            $netstatOut = netstat -ano -p tcp 2>$null
+            foreach ($line in ($netstatOut -split "`r?`n")) {
+                $trimmed = $line.Trim()
+                if ($trimmed -match '^TCP\s+([\[\]a-fA-F0-9\.:]+):' + $Port + '\s+.*LISTENING') {
+                    $addr = $matches[1].Trim('[').Trim(']')
+                    if ($addr -and -not $listeners.Contains($addr)) {
+                        $listeners.Add($addr)
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    if ($listeners.Count -eq 0) {
+        return [PSCustomObject]@{
+            HasListener     = $false
+            IsLoopbackOnly  = $false
+            BoundAddresses  = @()
+            ViolationReason = "No active TCP listener detected on port $Port"
+        }
+    }
+
+    $nonLoopback = [System.Collections.Generic.List[string]]::new()
+    foreach ($addr in $listeners) {
+        $cleanAddr = $addr.Trim().ToLowerInvariant()
+        $isLoopback = ($cleanAddr -eq "127.0.0.1" -or $cleanAddr -eq "::1" -or $cleanAddr -like "127.*")
+        if (-not $isLoopback) {
+            $nonLoopback.Add($addr)
+        }
+    }
+
+    if ($nonLoopback.Count -gt 0) {
+        return [PSCustomObject]@{
+            HasListener     = $true
+            IsLoopbackOnly  = $false
+            BoundAddresses  = @($listeners)
+            ViolationReason = ("Port {0} is bound to non-loopback address(es): {1}" -f $Port, ($nonLoopback -join ", "))
+        }
+    }
+
+    return [PSCustomObject]@{
+        HasListener     = $true
+        IsLoopbackOnly  = $true
+        BoundAddresses  = @($listeners)
+        ViolationReason = $null
+    }
+}
+
+function Test-ShipDeProcessIdentity {
+    param(
+        [Parameter(Mandatory = $true)]$Process,
+        [Parameter(Mandatory = $true)]$ExpectedRecord
+    )
+
+    if ($null -eq $Process) { return $false }
+
+    # 1. Process Name check (allow matching with or without .exe)
+    if ($ExpectedRecord.process_name) {
+        $pName = [string]$Process.ProcessName
+        $expectedName = [string]$ExpectedRecord.process_name
+        if ($pName.EndsWith(".exe", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $pName = $pName.Substring(0, $pName.Length - 4)
+        }
+        if ($expectedName.EndsWith(".exe", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $expectedName = $expectedName.Substring(0, $expectedName.Length - 4)
+        }
+        if (($pName -ne $expectedName) -and ($pName -inotlike "*$expectedName*") -and ($expectedName -inotlike "*$pName*")) {
+            return $false
+        }
+    }
+
+    # 2. Start Time check (tolerating serialization rounding up to 2 seconds)
+    if ($ExpectedRecord.start_time) {
+        try {
+            $expectedTime = [DateTime]::Parse([string]$ExpectedRecord.start_time)
+            $diffSec = [Math]::Abs(($Process.StartTime.ToUniversalTime() - $expectedTime.ToUniversalTime()).TotalSeconds)
+            if ($diffSec -gt 2.0) {
+                return $false
+            }
+        } catch {
+            return $false
+        }
+    }
+
+    # 3. Executable path check if available
+    if ($ExpectedRecord.path) {
+        try {
+            $currentPath = if ($Process.Path) { $Process.Path } elseif ($Process.MainModule) { $Process.MainModule.FileName } else { $null }
+            if ($currentPath) {
+                $expectedFile = [System.IO.Path]::GetFileName($ExpectedRecord.path)
+                $currentFile = [System.IO.Path]::GetFileName($currentPath)
+                if ($expectedFile -and $currentFile -and $expectedFile -ine $currentFile) {
+                    return $false
+                }
+            }
+        } catch {}
+    }
+
+    return $true
+}
+
 function Get-ShipDeManifestContent {
     param([string]$Path)
 
@@ -419,6 +541,7 @@ function Invoke-ShipDeActivate {
     }
 
     $startedPids = [System.Collections.Generic.List[int]]::new()
+    $startedServices = [System.Collections.Generic.List[object]]::new()
     $activationSucceeded = $false
 
     try {
@@ -445,7 +568,18 @@ function Invoke-ShipDeActivate {
                             throw "Required command for optional service 'nine-router' (9router) was not found in PATH."
                         }
                         Write-Host "Starting requested optional service: 9Router on localhost:$port..."
-                        $proc = Start-Process -FilePath $cmd.Source -ArgumentList "--port", "$port" -PassThru -WindowStyle Hidden
+                        $execPath = $cmd.Source
+                        $execArgs = @("--host", "127.0.0.1", "--port", "$port", "--no-browser")
+                        if ($cmd.CommandType -eq "ExternalScript" -or $cmd.Source.EndsWith(".ps1")) {
+                            $cmdApp = Get-Command "9router.cmd" -ErrorAction SilentlyContinue
+                            if ($cmdApp) {
+                                $execPath = $cmdApp.Source
+                            } else {
+                                $execPath = "powershell.exe"
+                                $execArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $cmd.Source) + $execArgs
+                            }
+                        }
+                        $proc = Start-Process -FilePath $execPath -ArgumentList $execArgs -PassThru -WindowStyle Hidden
                     }
                 } elseif ($svc -eq "deepseek-harness") {
                     $port = 3080
@@ -455,7 +589,18 @@ function Invoke-ShipDeActivate {
                             throw "Required command for optional service 'deepseek-harness' (dsh) was not found in PATH."
                         }
                         Write-Host "Starting requested optional service: DSH web on localhost:$port..."
-                        $proc = Start-Process -FilePath $cmd.Source -ArgumentList "web", "--port", "$port" -PassThru -WindowStyle Hidden
+                        $execPath = $cmd.Source
+                        $execArgs = @("web", "--port", "$port")
+                        if ($cmd.CommandType -eq "ExternalScript" -or $cmd.Source.EndsWith(".ps1")) {
+                            $cmdApp = Get-Command "dsh.cmd" -ErrorAction SilentlyContinue
+                            if ($cmdApp) {
+                                $execPath = $cmdApp.Source
+                            } else {
+                                $execPath = "powershell.exe"
+                                $execArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $cmd.Source) + $execArgs
+                            }
+                        }
+                        $proc = Start-Process -FilePath $execPath -ArgumentList $execArgs -PassThru -WindowStyle Hidden
                     }
                 } else {
                     throw "Unsupported optional service requested: '$svc'."
@@ -463,6 +608,23 @@ function Invoke-ShipDeActivate {
 
                 if ($proc) {
                     $startedPids.Add($proc.Id)
+                    $procPath = try {
+                        if ($proc.Path) { $proc.Path }
+                        elseif ($proc.MainModule) { $proc.MainModule.FileName }
+                        else { $null }
+                    } catch { $null }
+                    $startTimeStr = try { $proc.StartTime.ToString("o") } catch { $null }
+
+                    $serviceRecord = [PSCustomObject]@{
+                        service_id   = $svc
+                        pid          = $proc.Id
+                        process_name = $proc.ProcessName
+                        path         = $procPath
+                        start_time   = $startTimeStr
+                        port         = $port
+                    }
+                    $startedServices.Add($serviceRecord)
+
                     # Require expected port/service health check before recording activation (fail closed on timeout)
                     $healthy = $false
                     for ($i = 0; $i -lt 10; $i++) {
@@ -479,18 +641,61 @@ function Invoke-ShipDeActivate {
                     if (-not $healthy) {
                         throw ("Optional service '{0}' failed to start and bind port {1} within timeout. Activation rolled back." -f $svc, $port)
                     }
+
+                    # Enforce localhost-only listener invariant against real OS TCP listeners (Finding 3)
+                    if ($port -gt 0) {
+                        $listenerCheck = Test-ShipDeLoopbackOnlyListener -Port $port
+                        if (-not $listenerCheck.IsLoopbackOnly) {
+                            throw ("Security policy violation: Optional service '{0}' listener on port {1} is not restricted to localhost ({2}). Activation rolled back." -f $svc, $port, $listenerCheck.ViolationReason)
+                        }
+                        Write-Host ("  [SECURITY] Verified port {0} is bound exclusively to loopback ({1})." -f $port, ($listenerCheck.BoundAddresses -join ", "))
+                    }
+
+                    # Also discover and track any child/owning listener process for the port (e.g. cmd.exe wrapper spawning node.exe)
+                    if ($port -gt 0) {
+                        try {
+                            $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+                            if ($conns) {
+                                foreach ($c in $conns) {
+                                    $ownPid = [int]$c.OwningProcess
+                                    if ($ownPid -gt 0 -and $ownPid -ne $proc.Id) {
+                                        $owningProc = Get-Process -Id $ownPid -ErrorAction SilentlyContinue
+                                        if ($owningProc -and -not ($startedServices | Where-Object { $_.pid -eq $ownPid })) {
+                                            $startedPids.Add($ownPid)
+                                            $childPath = try {
+                                                if ($owningProc.Path) { $owningProc.Path }
+                                                elseif ($owningProc.MainModule) { $owningProc.MainModule.FileName }
+                                                else { $null }
+                                            } catch { $null }
+                                            $childStartTime = try { $owningProc.StartTime.ToString("o") } catch { $null }
+                                            $childRecord = [PSCustomObject]@{
+                                                service_id   = $svc
+                                                pid          = $ownPid
+                                                process_name = $owningProc.ProcessName
+                                                path         = $childPath
+                                                start_time   = $childStartTime
+                                                port         = $port
+                                            }
+                                            $startedServices.Add($childRecord)
+                                        }
+                                    }
+                                }
+                            }
+                        } catch {}
+                    }
                 }
             }
         }
 
         # Record active state in durable session state file only after all health checks succeed
         $stateObj = [PSCustomObject]@{
-            profile      = $ProfileName
-            activated_at = (Get-Date).ToString("o")
-            started_pids = @($startedPids)
+            profile          = $ProfileName
+            activated_at     = (Get-Date).ToString("o")
+            started_pids     = @($startedPids)
+            started_services = @($startedServices)
         }
         $statePath = Get-ShipDeProfileStatePath
-        $stateObj | ConvertTo-Json | Set-Content -Path $statePath -Encoding UTF8
+        $stateObj | ConvertTo-Json -Depth 5 | Set-Content -Path $statePath -Encoding UTF8
 
         $env:SHIPDE_ACTIVE_PROFILE = $ProfileName
         Write-Host "Profile '$ProfileName' operational with state tracking file: $statePath"
@@ -499,7 +704,9 @@ function Invoke-ShipDeActivate {
         if (-not $activationSucceeded) {
             Write-Warning "Profile activation failed or was incomplete. Rolling back all started processes..."
             foreach ($pidToKill in $startedPids) {
-                Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
+                try {
+                    Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
+                } catch {}
             }
         }
     }
@@ -511,16 +718,37 @@ function Invoke-ShipDeDeactivate {
     Write-Host "Deactivating current ecosystem profile..."
 
     $state = Get-ShipDeProfileState
-    if ($state -and $state.started_pids) {
-        foreach ($ownedPid in @($state.started_pids)) {
-            try {
-                $proc = Get-Process -Id $ownedPid -ErrorAction SilentlyContinue
-                if ($proc) {
-                    Write-Host ("Stopping Ship Dễ-owned process: {0} (PID {1})" -f $proc.ProcessName, $ownedPid)
-                    Stop-Process -Id $ownedPid -Force -ErrorAction SilentlyContinue
-                    Start-Sleep -Milliseconds 100
-                }
-            } catch {}
+    if ($state) {
+        if ($state.started_services) {
+            foreach ($svcRecord in @($state.started_services)) {
+                $pidToStop = [int]$svcRecord.pid
+                try {
+                    $proc = Get-Process -Id $pidToStop -ErrorAction SilentlyContinue
+                    if ($proc) {
+                        # Verify process identity before stopping to prevent killing unrelated processes on PID reuse (Finding 2)
+                        $isMatch = Test-ShipDeProcessIdentity -Process $proc -ExpectedRecord $svcRecord
+                        if ($isMatch) {
+                            Write-Host ("Stopping Ship Dễ-owned process: {0} (PID {1}, service: {2})" -f $proc.ProcessName, $pidToStop, $svcRecord.service_id)
+                            Stop-Process -Id $pidToStop -Force -ErrorAction SilentlyContinue
+                            Start-Sleep -Milliseconds 100
+                        } else {
+                            Write-Warning ("Stale or reused PID detected: PID {0} ({1}) does not match expected Ship Dễ identity for service '{2}' (expected start {3}, actual start {4}). Process will NOT be stopped." -f $pidToStop, $proc.ProcessName, $svcRecord.service_id, $svcRecord.start_time, $proc.StartTime.ToString("o"))
+                        }
+                    }
+                } catch {}
+            }
+        } elseif ($state.started_pids) {
+            # Legacy fallback if started_services is absent
+            foreach ($ownedPid in @($state.started_pids)) {
+                try {
+                    $proc = Get-Process -Id $ownedPid -ErrorAction SilentlyContinue
+                    if ($proc) {
+                        Write-Host ("Stopping Ship Dễ-owned process: {0} (PID {1})" -f $proc.ProcessName, $ownedPid)
+                        Stop-Process -Id $ownedPid -Force -ErrorAction SilentlyContinue
+                        Start-Sleep -Milliseconds 100
+                    }
+                } catch {}
+            }
         }
     }
 
@@ -867,8 +1095,115 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Multiline GitHub PR comment JSON parsing successfully verified exact head and terminal verdict."
 
+        # Negative Test 12: Real non-loopback (0.0.0.0) listener rejection and rollback (Finding 3)
+        Write-Host "`nTest 12 [Negative / Security]: Real non-loopback (0.0.0.0) listener must be rejected and rolled back..."
+        $publicTestPort = 29113
+        $publicLauncher = {
+            param($svc)
+            # Bind to 0.0.0.0 (public / all interfaces)
+            $listenerScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $publicTestPort); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
+            $proc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $listenerScript -PassThru
+            return [PSCustomObject]@{
+                Process = $proc
+                Port    = $publicTestPort
+            }
+        }
+
+        $publicBindingCaught = $false
+        try {
+            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices -ServiceLauncher $publicLauncher
+        } catch {
+            if ($_ -match "not restricted to localhost" -or $_ -match "violates localhost-only") {
+                $publicBindingCaught = $true
+            }
+        }
+
+        if (-not $publicBindingCaught) {
+            throw "Failed negative test: Non-loopback 0.0.0.0 listener was not rejected by runtime listener enforcement!"
+        }
+        Start-Sleep -Milliseconds 300
+        if (Test-ShipDePort -HostName "127.0.0.1" -Port $publicTestPort) {
+            throw "Failed negative test: Public listener process on port $publicTestPort was leaked after rollback!"
+        }
+        $stateAfterPublicTest = Get-ShipDeProfileState
+        if ($null -ne $stateAfterPublicTest) {
+            throw "Failed negative test: State file was written despite non-loopback listener rejection!"
+        }
+        Write-Host "  [PASS] Non-loopback (0.0.0.0) listener caught by real OS socket inspection, rejected, and cleanly rolled back."
+
+        # Negative Test 13: Stale / reused PID protection (Finding 2)
+        Write-Host "`nTest 13 [Negative / Safety]: Stale or reused PID must not be terminated by Deactivate..."
+        # Launch an unrelated dummy process
+        $dummyProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Seconds 30" -PassThru
+        $dummyPid = $dummyProc.Id
+
+        # Create a mock active profile state file pointing to dummy PID but with a stale start time (e.g. 5 years ago)
+        $mockStaleState = [PSCustomObject]@{
+            profile          = "FOUNDATION"
+            activated_at     = (Get-Date).ToString("o")
+            started_pids     = @($dummyPid)
+            started_services = @(
+                [PSCustomObject]@{
+                    service_id   = "nine-router"
+                    pid          = $dummyPid
+                    process_name = "powershell"
+                    path         = $dummyProc.Path
+                    start_time   = (Get-Date "2020-01-01T00:00:00Z").ToString("o")
+                    port         = 20128
+                }
+            )
+        }
+        $mockStaleState | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShipDeProfileStatePath) -Encoding UTF8
+
+        # Invoke Deactivate: It must detect the start time mismatch, NOT kill the process, and clean the state file
+        Invoke-ShipDeDeactivate -ProfilesPath $ProfilesPath
+        Start-Sleep -Milliseconds 200
+
+        $dummyStillRunning = Get-Process -Id $dummyPid -ErrorAction SilentlyContinue
+        if ($null -eq $dummyStillRunning) {
+            throw "Failed negative test: Deactivate terminated process with stale/reused PID identity mismatch!"
+        }
+
+        # Clean up dummy process safely
+        Stop-Process -Id $dummyPid -Force -ErrorAction SilentlyContinue
+
+        $stateAfterStaleDeactivate = Get-ShipDeProfileState
+        if ($null -ne $stateAfterStaleDeactivate) {
+            throw "Failed negative test: State file was not cleaned up after stale PID reconciliation!"
+        }
+        Write-Host "  [PASS] Stale / reused PID was preserved without termination, and state was safely reconciled."
+
+        # Negative Test 14: Present CLI with version mismatch fails closed without upgrading under -Apply (Finding 1)
+        Write-Host "`nTest 14 [Negative / Installation]: Present CLI with version mismatch fails closed without upgrading under -Apply..."
+        $mismatchManifestPath = Join-Path $testTempDir "mismatch-manifest.json"
+        $mismatchManifest = $baseManifest | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $routerEntry = $mismatchManifest.adopted | Where-Object { $_.id -eq "nine-router" } | Select-Object -First 1
+        $routerEntry.pinned_version_or_commit = "99.99.99"
+        $mismatchManifest | ConvertTo-Json -Depth 20 | Set-Content -Path $mismatchManifestPath -Encoding UTF8
+
+        $installScriptPath = Join-Path (Split-Path $ManifestPath -Parent | Split-Path -Parent) "scripts\ai\install-ecosystem.ps1"
+        $testOutFile = Join-Path $testTempDir "install-out.txt"
+        $testErrFile = Join-Path $testTempDir "install-err.txt"
+
+        $installProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$mismatchManifestPath`"", "-Tools", "nine-router", "-Apply" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile -RedirectStandardError $testErrFile
+
+        $stdoutText = if (Test-Path $testOutFile) { Get-Content $testOutFile -Raw } else { "" }
+        $stderrText = if (Test-Path $testErrFile) { Get-Content $testErrFile -Raw } else { "" }
+        $combinedText = "$stdoutText`n$stderrText"
+
+        if ($installProc.ExitCode -eq 0) {
+            throw "Failed negative test: install-ecosystem.ps1 -Apply exited 0 despite version mismatch on installed tool!"
+        }
+        if ($combinedText -notmatch "version differs from pin" -and $combinedText -notmatch "VERSION_MISMATCH") {
+            throw "Failed negative test: Output did not report version mismatch! Output: $combinedText"
+        }
+        if ($combinedText -match "Installing npm CLI package") {
+            throw "Failed negative test: install-ecosystem.ps1 -Apply attempted to run npm install for mismatched existing tool!"
+        }
+        Write-Host "  [PASS] Present CLI with version mismatch failed closed under -Apply without attempting package upgrade or overwrite."
+
         Write-Host "`n================================================================"
-        Write-Host "ALL 11 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
+        Write-Host "ALL 14 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
         Write-Host "================================================================"
     } finally {
         Remove-Item -LiteralPath $testTempDir -Recurse -Force -ErrorAction SilentlyContinue

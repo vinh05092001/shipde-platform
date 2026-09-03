@@ -191,6 +191,7 @@ Write-Host ("Mode    : {0}" -f $(if ($Apply) { "APPLY (Execution)" } else { "PRE
 
 $installedTools = [System.Collections.Generic.List[object]]::new()
 $missingMachineTools = [System.Collections.Generic.List[object]]::new()
+$mismatchedTools = [System.Collections.Generic.List[object]]::new()
 $deferredDependencies = [System.Collections.Generic.List[object]]::new()
 $integratedAssets = [System.Collections.Generic.List[object]]::new()
 
@@ -248,7 +249,7 @@ if ($manifest.product_dependencies) {
             continue
         }
 
-        # Health-check active/installed product dependencies with exact version pin comparison (Finding 4)
+        # Health-check active/installed product dependencies with exact version pin comparison
         $depId = [string]$pDep.id
         $pin = [string]$pDep.pinned_version_or_commit
         $observedVer = Get-ShipDeCommandVersion -ToolId $depId -CommandName $depId
@@ -257,6 +258,13 @@ if ($manifest.product_dependencies) {
                 Tool = $pDep
                 Status = "INSTALLED"
                 Location = "$depId v$observedVer (pinned: $pin)"
+            })
+        } elseif ($observedVer) {
+            $mismatchedTools.Add([PSCustomObject]@{
+                Tool     = $pDep
+                Observed = $observedVer
+                Expected = $pin
+                Type     = "product-dependency"
             })
         } else {
             $missingMachineTools.Add($pDep)
@@ -316,7 +324,7 @@ foreach ($tool in $adopted) {
         continue
     }
 
-    # Check machine-level CLI / package with exact-version verification (Finding 2)
+    # Check machine-level CLI / package with exact-version verification (Finding 1)
     if ($npmPackageMap.ContainsKey($toolId)) {
         $pkgName = $npmPackageMap[$toolId]
         $npmVer = Get-ShipDeNpmGlobalVersion -PackageName $pkgName
@@ -327,18 +335,35 @@ foreach ($tool in $adopted) {
                 Status = "INSTALLED"
                 Location = "npm global: $pkgName@$npmVer"
             })
+        } elseif ($npmVer) {
+            # Present globally but version differs from pin: preserve without modification
+            $mismatchedTools.Add([PSCustomObject]@{
+                Tool     = $tool
+                Observed = $npmVer
+                Expected = $pin
+                Type     = "npm-global"
+            })
         } else {
             $missingMachineTools.Add($tool)
         }
     } elseif ($tool.install_method -eq "pip") {
         $cmdName = $cliCommandMap[$toolId]
         $observedVer = Get-ShipDeCommandVersion -ToolId $toolId -CommandName $cmdName
+        $resolvedCmd = if ($cmdName) { Get-Command $cmdName -ErrorAction SilentlyContinue } else { $null }
         $pin = [string]$tool.pinned_version_or_commit
         if ($observedVer -and $observedVer -eq $pin) {
             $installedTools.Add([PSCustomObject]@{
                 Tool = $tool
                 Status = "INSTALLED"
                 Location = "pip: $toolId@$observedVer"
+            })
+        } elseif ($observedVer -or $resolvedCmd) {
+            $obs = if ($observedVer) { $observedVer } else { "unknown" }
+            $mismatchedTools.Add([PSCustomObject]@{
+                Tool     = $tool
+                Observed = $obs
+                Expected = $pin
+                Type     = "pip"
             })
         } else {
             $missingMachineTools.Add($tool)
@@ -358,7 +383,13 @@ foreach ($tool in $adopted) {
                         Location = "$loc (pinned: $pin)"
                     })
                 } else {
-                    $missingMachineTools.Add($tool)
+                    $obs = if ($observedVer) { $observedVer } else { "unversioned" }
+                    $mismatchedTools.Add([PSCustomObject]@{
+                        Tool     = $tool
+                        Observed = $obs
+                        Expected = $pin
+                        Type     = "system-cli"
+                    })
                 }
             } else {
                 $loc = if ($observedVer) { "$($resolvedCmd.Source) (v$observedVer)" } else { $resolvedCmd.Source }
@@ -422,6 +453,15 @@ if ($missingMachineTools.Count -eq 0) {
     }
 }
 
+Write-Host "`n=== 5. VERSION MISMATCHED TOOLS (FAIL-CLOSED: PRESERVED WITHOUT UPGRADE) ==="
+if ($mismatchedTools.Count -eq 0) {
+    Write-Host "None"
+} else {
+    foreach ($item in $mismatchedTools) {
+        Write-Host ("  [VERSION_MISMATCH] {0,-22} observed: '{1}', expected: '{2}' (Preserved without modification; upgrades require explicit governed action)" -f $item.Tool.name, $item.Observed, $item.Expected)
+    }
+}
+
 if (-not $Apply) {
     Write-Host "`n================================================================"
     Write-Host "INFO: PREVIEW ONLY (AC-AI-19): No machine or repository mutation occurred."
@@ -437,6 +477,15 @@ Write-Host "================================================================"
 
 $executionFailed = $false
 $failedTools = [System.Collections.Generic.List[string]]::new()
+
+# Handle version mismatches (Finding 1): Fail-closed, do not upgrade or overwrite
+if ($mismatchedTools.Count -gt 0) {
+    foreach ($item in $mismatchedTools) {
+        Write-Error ("Tool '{0}' is already installed but version differs from pin (observed: '{1}', expected: '{2}'). Preserved without modification; upgrades require an explicit, separately governed action." -f $item.Tool.id, $item.Observed, $item.Expected)
+        $executionFailed = $true
+        $failedTools.Add("$($item.Tool.id) (version mismatch: observed '$($item.Observed)', expected '$($item.Expected)')")
+    }
+}
 
 # Verify all required integrated assets and snapshots (Finding 3)
 foreach ($asset in $integratedAssets) {
@@ -519,7 +568,7 @@ if ($executionFailed) {
 
 Write-Host "`nECOSYSTEM INSTALLATION COMPLETE:"
 Write-Host "  - Only missing approved tools were installed"
-Write-Host "  - Existing tools were not upgraded"
+Write-Host "  - Existing tools were preserved without upgrade or overwrite"
 Write-Host "  - Pinned versions strictly verified without latest fallback"
 Write-Host "  - No user sign-in or secret access was performed"
 Write-Host "  - Deferred project dependencies were not touched"
