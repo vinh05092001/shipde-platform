@@ -56,7 +56,7 @@ if ($Profile -and $Profile -ne "ALL") {
     }
     if ($manifest.product_dependencies) {
         foreach ($p in @($manifest.product_dependencies)) {
-            if ($p.lifecycle_state -ne "DEFERRED" -and $p.foundation_item -notmatch "^TASK-FOUND-(03|04)") {
+            if ($p.lifecycle_state -ne "DEFERRED") {
                 $requiredToolIds.Add($p.id) | Out-Null
             }
         }
@@ -153,6 +153,10 @@ function Get-ShipDeCommandVersion {
                 $out = (& agy --version 2>$null) -join " "
                 if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
             }
+            "docker-compose" {
+                $out = (& docker compose version 2>$null) -join " "
+                if ($out -match 'v?(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
             "gitleaks" {
                 $out = (& gitleaks version 2>$null) -join " "
                 if ($out -match 'v?(\d+\.\d+\.\d+)') { return $matches[1] }
@@ -239,16 +243,16 @@ if ($manifest.product_dependencies) {
         if ($Tools -and $Tools.Count -gt 0 -and $pDep.id -notin $Tools) {
             continue
         }
-        if ($pDep.lifecycle_state -eq "DEFERRED" -or $pDep.foundation_item -match "^TASK-FOUND-(03|04)") {
+        if ($pDep.lifecycle_state -eq "DEFERRED") {
             $deferredDependencies.Add($pDep)
             continue
         }
 
-        # Health-check active/installed product dependencies
+        # Health-check active/installed product dependencies with exact version pin comparison (Finding 4)
         $depId = [string]$pDep.id
         $pin = [string]$pDep.pinned_version_or_commit
         $observedVer = Get-ShipDeCommandVersion -ToolId $depId -CommandName $depId
-        if ($observedVer) {
+        if ($observedVer -and $observedVer -eq $pin) {
             $installedTools.Add([PSCustomObject]@{
                 Tool = $pDep
                 Status = "INSTALLED"
@@ -344,12 +348,26 @@ foreach ($tool in $adopted) {
         $resolvedCmd = if ($commandName) { Get-Command $commandName -ErrorAction SilentlyContinue } else { $null }
         if ($resolvedCmd) {
             $observedVer = Get-ShipDeCommandVersion -ToolId $toolId -CommandName $commandName
-            $loc = if ($observedVer) { "$($resolvedCmd.Source) (v$observedVer)" } else { $resolvedCmd.Source }
-            $installedTools.Add([PSCustomObject]@{
-                Tool = $tool
-                Status = "INSTALLED"
-                Location = $loc
-            })
+            $pin = [string]$tool.pinned_version_or_commit
+            if (-not [string]::IsNullOrWhiteSpace($pin) -and $pin -notin @("latest", "unpinned", "any")) {
+                if ($observedVer -and $observedVer -eq $pin) {
+                    $loc = if ($observedVer) { "$($resolvedCmd.Source) (v$observedVer)" } else { $resolvedCmd.Source }
+                    $installedTools.Add([PSCustomObject]@{
+                        Tool = $tool
+                        Status = "INSTALLED"
+                        Location = "$loc (pinned: $pin)"
+                    })
+                } else {
+                    $missingMachineTools.Add($tool)
+                }
+            } else {
+                $loc = if ($observedVer) { "$($resolvedCmd.Source) (v$observedVer)" } else { $resolvedCmd.Source }
+                $installedTools.Add([PSCustomObject]@{
+                    Tool = $tool
+                    Status = "INSTALLED"
+                    Location = $loc
+                })
+            }
         } else {
             $missingMachineTools.Add($tool)
         }
@@ -419,6 +437,18 @@ Write-Host "================================================================"
 
 $executionFailed = $false
 $failedTools = [System.Collections.Generic.List[string]]::new()
+
+# Verify all required integrated assets and snapshots (Finding 3)
+foreach ($asset in $integratedAssets) {
+    $toolId = [string]$asset.Tool.id
+    if ($requiredToolIds.Contains($toolId)) {
+        if ($asset.Status -ne "VERIFIED") {
+            Write-Error ("Required ecosystem asset '{0}' ({1}) is not verified: {2}" -f $toolId, $asset.Tool.name, $asset.Details)
+            $executionFailed = $true
+            $failedTools.Add("$toolId ($($asset.Details))")
+        }
+    }
+}
 
 foreach ($tool in $missingMachineTools) {
     $toolId = [string]$tool.id

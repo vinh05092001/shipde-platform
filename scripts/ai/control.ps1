@@ -753,25 +753,31 @@ function Get-ShipDeExactHeadCodexVerdict {
 
     # 2. Check GitHub PR comments for a Codex review for HeadSha
     try {
-        $rawJson = @(& gh pr view $PullRequestNumber --repo $Repository --json comments --jq ".comments[].body" 2>$null)
-        foreach ($body in $rawJson) {
-            if ([string]::IsNullOrWhiteSpace($body)) { continue }
-            $targetMatch = [regex]::Match($body, '(?im)(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
-            if (-not $targetMatch.Success) {
-                $targetMatch = [regex]::Match($body, '(?im)immutable head\s+`?([a-f0-9]{7,40})`?')
-            }
-            if (-not $targetMatch.Success) {
-                $targetMatch = [regex]::Match($body, '(?im)Reviewed PR #\d+ at\s+`?([a-f0-9]{7,40})`?')
-            }
+        $rawComments = & gh pr view $PullRequestNumber --repo $Repository --json comments 2>$null
+        if ($rawComments) {
+            $parsed = ($rawComments -join [Environment]::NewLine) | ConvertFrom-Json
+            if ($parsed -and $parsed.comments) {
+                foreach ($commentObj in @($parsed.comments)) {
+                    $body = [string]$commentObj.body
+                    if ([string]::IsNullOrWhiteSpace($body)) { continue }
+                    $targetMatch = [regex]::Match($body, '(?im)(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
+                    if (-not $targetMatch.Success) {
+                        $targetMatch = [regex]::Match($body, '(?im)immutable head\s+`?([a-f0-9]{7,40})`?')
+                    }
+                    if (-not $targetMatch.Success) {
+                        $targetMatch = [regex]::Match($body, '(?im)Reviewed PR #\d+ at\s+`?([a-f0-9]{7,40})`?')
+                    }
 
-            if ($targetMatch.Success) {
-                $targetSha = $targetMatch.Groups[1].Value
-                if ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase) -or $targetSha.StartsWith($HeadSha, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $lines = @($body -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                    if ($lines.Count -gt 0) {
-                        $lastLine = $lines[-1].Trim()
-                        if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
-                            return $matches[1].ToUpperInvariant()
+                    if ($targetMatch.Success) {
+                        $targetSha = $targetMatch.Groups[1].Value
+                        if ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase) -or $targetSha.StartsWith($HeadSha, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $lines = @($body -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                            if ($lines.Count -gt 0) {
+                                $lastLine = $lines[-1].Trim()
+                                if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
+                                    return $matches[1].ToUpperInvariant()
+                                }
+                            }
                         }
                     }
                 }

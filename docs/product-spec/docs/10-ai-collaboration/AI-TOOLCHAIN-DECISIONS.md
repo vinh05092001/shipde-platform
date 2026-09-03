@@ -132,6 +132,21 @@ Playwright capabilities are divided across three separate tools with strict role
 
 Additionally, `ChromeDevTools/chrome-devtools-mcp` is reserved for deep Chrome DevTools Protocol (CDP) performance and network debugging. Both MCP servers remain stopped by default.
 
+### Outbound Network & Credential Boundaries (Context7 & Snyk Agent Scan)
+
+To prevent data exfiltration and ensure data isolation under `AI-TOOL-04`, `AI-TOOL-05`, and `AI-TOOL-11`, tools interacting with external networks are explicitly governed:
+
+- **Context7 CLI (`upstash/context7`)**:
+  - **Network Behavior**: Outbound HTTPS (`context7-api-outbound-https`) to `https://context7.com/api` for retrieving external library/framework documentation.
+  - **Credentials**: Optional `CONTEXT7_API_KEY` for elevated rate limits; unauthenticated public doc search is supported.
+  - **Data Sent**: Search query terms and target package/library names only. No proprietary codebase source code is sent.
+  - **Telemetry**: Disabled by default. Local cached mode (`read-only-cache`) supported.
+- **Snyk Agent Scan (`snyk/agent-scan`)**:
+  - **Network Behavior**: Outbound HTTPS (`snyk-api-outbound-https`) to `https://api.snyk.io` and `https://app.snyk.io`.
+  - **Credentials**: Requires `SNYK_TOKEN` for Snyk platform analysis and Evo reporting.
+  - **Data Sent**: Scanned prompt text, skill definitions, and tool schemas evaluated against Snyk's policy database.
+  - **Telemetry**: Bound by corporate Snyk CLI telemetry policy. Local rule evaluation requires token for catalog synchronization.
+
 ## Evaluation Candidates (PILOT / WATCH)
 
 Candidate technologies are inventoried in `tools/ecosystem-manifest.json` under `candidates`. They are never installed or enabled by default:
