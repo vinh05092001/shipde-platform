@@ -395,8 +395,8 @@ function Invoke-ShipDeActivate {
     param(
         [Parameter(Mandatory = $true)][string]$ProfileName,
         [string]$ProfilesPath,
-        [int[]]$ProcessIdsToTrack,
-        [switch]$StartOptionalServices
+        [switch]$StartOptionalServices,
+        [scriptblock]$ServiceLauncher = $null
     )
 
     $profiles = Get-ShipDeProfilesContent -Path $ProfilesPath
@@ -412,50 +412,74 @@ function Invoke-ShipDeActivate {
     Write-Host ("Network policy     : {0}" -f $prof.network_policy)
 
     $startedPids = [System.Collections.Generic.List[int]]::new()
-    if ($ProcessIdsToTrack) {
-        foreach ($pidToTrack in $ProcessIdsToTrack) {
-            $startedPids.Add($pidToTrack)
-        }
-    }
 
-    # If requested, start declared optional services and track their PIDs
+    # If requested, start declared optional services and verify real health checks before activation (Finding 4)
     if ($StartOptionalServices -and $prof.optional_services) {
         foreach ($svc in @($prof.optional_services)) {
-            if ($svc -eq "nine-router") {
-                if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port 20128)) {
+            $proc = $null
+            $port = 0
+
+            if ($ServiceLauncher) {
+                # Dependency-injected service launch adapter (e.g. for deterministic operational tests)
+                $res = & $ServiceLauncher $svc
+                if ($res -and $res.Process) {
+                    $proc = $res.Process
+                    $port = if ($res.Port) { [int]$res.Port } else { 0 }
+                } else {
+                    throw "Service launch adapter failed to start service '$svc'."
+                }
+            } elseif ($svc -eq "nine-router") {
+                $port = 20128
+                if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $port)) {
                     $cmd = Get-Command "9router" -ErrorAction SilentlyContinue
-                    if ($cmd) {
-                        Write-Host "Starting requested optional service: 9Router on localhost:20128..."
-                        $p = Start-Process -FilePath $cmd.Source -ArgumentList "--port", "20128" -PassThru -WindowStyle Hidden
-                        if ($p) {
-                            $startedPids.Add($p.Id)
-                            for ($i = 0; $i -lt 6; $i++) {
-                                Start-Sleep -Milliseconds 500
-                                if (Test-ShipDePort -HostName "127.0.0.1" -Port 20128) { break }
-                            }
-                        }
+                    if (-not $cmd) {
+                        throw "Required command for optional service 'nine-router' (9router) was not found in PATH."
                     }
+                    Write-Host "Starting requested optional service: 9Router on localhost:$port..."
+                    $proc = Start-Process -FilePath $cmd.Source -ArgumentList "--port", "$port" -PassThru -WindowStyle Hidden
                 }
             } elseif ($svc -eq "deepseek-harness") {
-                if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port 3080)) {
+                $port = 3080
+                if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $port)) {
                     $cmd = Get-Command "dsh" -ErrorAction SilentlyContinue
-                    if ($cmd) {
-                        Write-Host "Starting requested optional service: DSH on localhost:3080..."
-                        $p = Start-Process -FilePath $cmd.Source -ArgumentList "--port", "3080" -PassThru -WindowStyle Hidden
-                        if ($p) {
-                            $startedPids.Add($p.Id)
-                            for ($i = 0; $i -lt 6; $i++) {
-                                Start-Sleep -Milliseconds 500
-                                if (Test-ShipDePort -HostName "127.0.0.1" -Port 3080) { break }
-                            }
-                        }
+                    if (-not $cmd) {
+                        throw "Required command for optional service 'deepseek-harness' (dsh) was not found in PATH."
                     }
+                    Write-Host "Starting requested optional service: DSH web on localhost:$port..."
+                    $proc = Start-Process -FilePath $cmd.Source -ArgumentList "web", "--port", "$port" -PassThru -WindowStyle Hidden
+                }
+            } else {
+                throw "Unsupported optional service requested: '$svc'."
+            }
+
+            if ($proc) {
+                $startedPids.Add($proc.Id)
+                # Require expected port/service health check before recording activation (fail closed on timeout)
+                $healthy = $false
+                for ($i = 0; $i -lt 10; $i++) {
+                    Start-Sleep -Milliseconds 500
+                    if ($proc.HasExited) {
+                        break
+                    }
+                    if ($port -gt 0 -and (Test-ShipDePort -HostName "127.0.0.1" -Port $port)) {
+                        $healthy = $true
+                        break
+                    }
+                }
+
+                if (-not $healthy) {
+                    # Roll back on timeout or launch failure: terminate any processes started during this activation
+                    Write-Error ("Optional service '{0}' failed to pass health check on port {1}. Rolling back profile activation..." -f $svc, $port)
+                    foreach ($pidToKill in $startedPids) {
+                        Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
+                    }
+                    throw ("Optional service '{0}' failed to start and bind port {1} within timeout. Activation rolled back." -f $svc, $port)
                 }
             }
         }
     }
 
-    # Record active state in durable session state file
+    # Record active state in durable session state file only after all health checks succeed
     $stateObj = [PSCustomObject]@{
         profile      = $ProfileName
         activated_at = (Get-Date).ToString("o")
@@ -678,39 +702,30 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Synchronization round 2 produced 0 diff (100% idempotent)."
 
-        # Operational Test 11: Real process & port lifecycle with PID tracking (Finding 2)
-        Write-Host "`nTest 11 [Operational]: Process and port tracking, activation, and safe termination..."
+        # Operational Test 11: Real service launch adapter, health check verification, rollback on failure, and safe deactivation (Finding 4)
+        Write-Host "`nTest 11 [Operational]: Service launch adapter, port health check, rollback on failure, and safe termination..."
         $testPort = 29111
-        $listenerScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $testPort); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
-        $testProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $listenerScript -PassThru
-        $testPid = $testProc.Id
-        Write-Host "  Started simulated test service (PID $testPid) listening on port $testPort"
-
-        # Wait up to 3s for port to open
-        $portOpen = $false
-        for ($i = 0; $i -lt 6; $i++) {
-            Start-Sleep -Milliseconds 500
-            if (Test-ShipDePort -HostName "127.0.0.1" -Port $testPort) {
-                $portOpen = $true
-                break
+        $testLauncher = {
+            param($svc)
+            $listenerScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $testPort); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
+            $proc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $listenerScript -PassThru
+            return [PSCustomObject]@{
+                Process = $proc
+                Port    = $testPort
             }
         }
-        if (-not $portOpen) {
-            Stop-Process -Id $testPid -Force -ErrorAction SilentlyContinue
-            throw "Failed operational test: Simulated service failed to bind port $testPort within 3 seconds!"
-        }
-        Write-Host "  [PASS] Observed port $testPort is open and responding."
 
-        # Activate profile tracking this PID
-        Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -ProcessIdsToTrack @($testPid)
+        # 11a: Successful activation with health check verification
+        Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices -ServiceLauncher $testLauncher
 
         $stateAfterActivate = Get-ShipDeProfileState
-        if (-not $stateAfterActivate -or $stateAfterActivate.started_pids -notcontains $testPid) {
-            throw "Failed operational test: Active profile state did not record test PID $testPid!"
+        if (-not $stateAfterActivate -or $stateAfterActivate.started_pids.Count -eq 0) {
+            throw "Failed operational test: Active profile state did not record service PID!"
         }
-        Write-Host "  [PASS] Active profile recorded and tracked owned PID $testPid."
+        $testPid = $stateAfterActivate.started_pids[0]
+        Write-Host ("  [PASS] Launch adapter started service (PID {0}) and passed port {1} health check." -f $testPid, $testPort)
 
-        # Deactivate profile and verify real process termination and port closure
+        # 11b: Deactivate profile and verify real process termination and port closure
         Invoke-ShipDeDeactivate -ProfilesPath $ProfilesPath
         Start-Sleep -Milliseconds 300
 
@@ -727,7 +742,35 @@ function Invoke-ShipDeTests {
         if ($null -ne $stateAfterDeactivate) {
             throw "Failed operational test: Deactivate failed to clean up profile state file!"
         }
-        Write-Host "  [PASS] Deactivate successfully terminated tracked PID $testPid, closed port $testPort, and removed state file."
+        Write-Host "  [PASS] Deactivate successfully terminated service PID $testPid, closed port $testPort, and removed state file."
+
+        # 11c: Rollback on health check failure: failing adapter must roll back and not write state
+        $failingPort = 29112
+        $failingLauncher = {
+            param($svc)
+            # Starts a process that exits immediately without binding port
+            $proc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Milliseconds 100" -PassThru
+            return [PSCustomObject]@{
+                Process = $proc
+                Port    = $failingPort
+            }
+        }
+
+        $rollbackPassed = $false
+        try {
+            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices -ServiceLauncher $failingLauncher
+        } catch {
+            $rollbackPassed = $true
+        }
+
+        if (-not $rollbackPassed) {
+            throw "Failed operational test: Activation should have failed and rolled back for non-responding service!"
+        }
+        $stateAfterRollback = Get-ShipDeProfileState
+        if ($null -ne $stateAfterRollback) {
+            throw "Failed operational test: State file was written despite activation failure!"
+        }
+        Write-Host "  [PASS] Health check failure triggered clean rollback without recording active profile state."
 
         Write-Host "`n================================================================"
         Write-Host "ALL 11 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"

@@ -597,8 +597,6 @@ function Invoke-ShipDeReview {
         Pop-Location
     }
 
-    $output | Set-Content -Path $reviewFile -Encoding UTF8
-    $output | ForEach-Object { Write-Host $_ }
     if ($exitCode -ne 0) {
         throw "Codex review failed with exit code $exitCode. Diagnostics: $diagnosticFile"
     }
@@ -610,6 +608,13 @@ function Invoke-ShipDeReview {
     Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
 
     $reviewText = $output -join [Environment]::NewLine
+    $targetHeader = '**Review target:** `{0}`' -f $reviewHeadSha
+    if ($reviewText -notmatch [regex]::Escape($reviewHeadSha)) {
+        $reviewText = $targetHeader + [Environment]::NewLine + [Environment]::NewLine + $reviewText
+        $output = @($reviewText -split '\r?\n')
+    }
+    $output | Set-Content -Path $reviewFile -Encoding UTF8
+    $output | ForEach-Object { Write-Host $_ }
     $nonEmptyReviewLines = @($reviewText -split '\r?\n' | Where-Object {
         -not [string]::IsNullOrWhiteSpace($_)
     })
@@ -704,36 +709,69 @@ function Invoke-ShipDeReview {
 function Get-ShipDeExactHeadCodexVerdict {
     param(
         [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [Parameter(Mandatory = $true)][string]$HeadSha,
         [string]$MergeCommitOid
     )
 
-    # 1. Check local handoff files for an exact-HEAD review with terminal PASS
+    if ([string]::IsNullOrWhiteSpace($HeadSha)) {
+        return $null
+    }
+
+    # 1. Check local handoff files for an exact-HEAD review with terminal verdict
     $handoffFiles = @(Get-ChildItem -Path $script:HandoffRoot -Filter "pr-$PullRequestNumber-*-review*.txt" -ErrorAction SilentlyContinue)
     foreach ($hf in $handoffFiles) {
         $content = Get-Content -LiteralPath $hf.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
         if ($content) {
-            $lines = @($content -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            if ($lines.Count -gt 0) {
-                $lastLine = $lines[-1].Trim()
-                if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?PASS(?:\*\*)?)$') {
-                    return "PASS"
+            $matchesTarget = $false
+            $targetMatch = [regex]::Match($content, '(?im)^\s*(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
+            if (-not $targetMatch.Success) {
+                $targetMatch = [regex]::Match($content, '(?im)Reviewed PR #\d+ at\s+`?([a-f0-9]{7,40})`?')
+            }
+            if ($targetMatch.Success) {
+                $targetSha = $targetMatch.Groups[1].Value
+                if ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase) -or $targetSha.StartsWith($HeadSha, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $matchesTarget = $true
+                }
+            } elseif ($hf.Name -match ("pr-{0}-([a-f0-9]{{7,40}})" -f $PullRequestNumber)) {
+                $targetSha = $matches[1]
+                if ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $matchesTarget = $true
+                }
+            }
+
+            if ($matchesTarget) {
+                $lines = @($content -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                if ($lines.Count -gt 0) {
+                    $lastLine = $lines[-1].Trim()
+                    if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
+                        return $matches[1].ToUpperInvariant()
+                    }
                 }
             }
         }
     }
 
-    # 2. Check GitHub PR comments for a Codex review with terminal PASS
+    # 2. Check GitHub PR comments for a Codex review for HeadSha
     try {
-        $rawJson = @(& gh pr view $PullRequestNumber --repo $Repository --json comments --jq ".comments[].body" 2>$null) -join "`n"
-        if (-not [string]::IsNullOrWhiteSpace($rawJson)) {
-            $parts = $rawJson -split "## Codex "
-            foreach ($part in $parts) {
-                if ($part -match '(?i)(?:independent|final|self-review)') {
-                    $lines = @($part -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $rawJson = @(& gh pr view $PullRequestNumber --repo $Repository --json comments --jq ".comments[].body" 2>$null)
+        foreach ($body in $rawJson) {
+            if ([string]::IsNullOrWhiteSpace($body)) { continue }
+            $targetMatch = [regex]::Match($body, '(?im)(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
+            if (-not $targetMatch.Success) {
+                $targetMatch = [regex]::Match($body, '(?im)immutable head\s+`?([a-f0-9]{7,40})`?')
+            }
+            if (-not $targetMatch.Success) {
+                $targetMatch = [regex]::Match($body, '(?im)Reviewed PR #\d+ at\s+`?([a-f0-9]{7,40})`?')
+            }
+
+            if ($targetMatch.Success) {
+                $targetSha = $targetMatch.Groups[1].Value
+                if ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase) -or $targetSha.StartsWith($HeadSha, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $lines = @($body -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
                     if ($lines.Count -gt 0) {
                         $lastLine = $lines[-1].Trim()
-                        if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?PASS(?:\*\*)?)$') {
-                            return "PASS"
+                        if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
+                            return $matches[1].ToUpperInvariant()
                         }
                     }
                 }
@@ -759,10 +797,10 @@ function Sync-ShipDeRegister {
     # If workspace is the protected main worktree, prevent leaving main dirty
     $isMainWorkspace = ($Workspace -eq $script:Paths.Main)
 
-    # Fetch merged PRs from GitHub if gh is authenticated
+    # Fetch merged PRs from GitHub including headRefOid
     $mergedPrs = $null
     try {
-        $rawJson = @(& gh pr list --repo $Repository --state merged --json number,title,headRefName,mergeCommit --limit 100 2>$null) -join "`n"
+        $rawJson = @(& gh pr list --repo $Repository --state merged --json number,title,headRefName,headRefOid,mergeCommit --limit 100 2>$null) -join "`n"
         if (-not [string]::IsNullOrWhiteSpace($rawJson)) {
             $mergedPrs = @($rawJson | ConvertFrom-Json)
         }
@@ -788,13 +826,19 @@ function Sync-ShipDeRegister {
             $mergeCommit = if ($pr.mergeCommit -and $pr.mergeCommit.oid) { [string]$pr.mergeCommit.oid } else { "" }
             $prNumberStr = "#{0}" -f $pr.number
 
-            # Reconcile verdict only from durable exact-HEAD review evidence; fail closed when absent (Finding 3)
-            $verdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pr.number) -MergeCommitOid $mergeCommit
+            $headSha = if ($pr.headRefOid) { [string]$pr.headRefOid } else { "" }
+            if ([string]::IsNullOrWhiteSpace($headSha)) {
+                try {
+                    $headSha = (& gh pr view ([int]$pr.number) --repo $Repository --json headRefOid --jq .headRefOid 2>$null)
+                    if ($headSha) { $headSha = $headSha.Trim() }
+                } catch {}
+            }
+
+            # Reconcile verdict only from durable exact-HEAD review evidence; fail closed when absent without stale fallback (Finding 1)
+            $exactVerdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pr.number) -HeadSha $headSha -MergeCommitOid $mergeCommit
+            $verdict = if ($exactVerdict -eq "PASS") { "PASS" } else { "" }
             if ([string]::IsNullOrWhiteSpace($verdict)) {
-                $verdict = [string]$row.codex_verdict
-                if ([string]::IsNullOrWhiteSpace($verdict)) {
-                    Write-Warning ("No durable exact-HEAD Codex review PASS found for merged PR #{0} ({1}). Retaining empty verdict (fail-closed)." -f $pr.number, $workItemId)
-                }
+                Write-Warning ("No durable exact-HEAD Codex review PASS found for merged PR #{0} ({1}) at head {2}. Retaining empty verdict (fail-closed)." -f $pr.number, $workItemId, $headSha)
             }
 
             if ($row.status -ne "MERGED" -or $row.pr -ne $prNumberStr -or $row.codex_verdict -ne $verdict -or $row.merge_commit -ne $mergeCommit) {
@@ -854,7 +898,8 @@ function Show-ShipDeStatus {
             Write-Host ("{0,-8} MISSING {1}" -f $entry.Key, $entry.Value)
             continue
         }
-        $branch = (& git -C $entry.Value branch --show-current).Trim()
+        $branchRaw = & git -C $entry.Value branch --show-current 2>$null
+        $branch = if ($null -ne $branchRaw) { ([string]$branchRaw).Trim() } else { "" }
         if ([string]::IsNullOrWhiteSpace($branch)) { $branch = "DETACHED" }
         $dirty = @(& git -C $entry.Value status --porcelain).Count -gt 0
         Write-Host ("{0,-8} {1,-8} [{2}]" -f $entry.Key, $(if ($dirty) { "DIRTY" } else { "CLEAN" }), $branch)
@@ -890,6 +935,29 @@ function Invoke-ShipDeResume {
         Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
     })
     if ($pullRequests.Count -gt 0) {
+        $pr = $pullRequests[0]
+        $headSha = if ($pr.headRefOid) { [string]$pr.headRefOid } else { "" }
+        if ([string]::IsNullOrWhiteSpace($headSha)) {
+            try {
+                $headSha = (& gh pr view ([int]$pr.number) --repo $Repository --json headRefOid --jq .headRefOid 2>$null)
+                if ($headSha) { $headSha = $headSha.Trim() }
+            } catch {}
+        }
+
+        $exactVerdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pr.number) -HeadSha $headSha
+        if ($exactVerdict -eq "CHANGES_REQUIRED") {
+            $item = Get-ShipDePrWorkItem -PullRequest $pr
+            if ($item) {
+                Write-Host ("PR #{0} has exact-head Codex verdict CHANGES_REQUIRED for head {1}." -f $pr.number, $headSha)
+                Write-Host ("Routing to fix round for {0}..." -f $item.Author)
+                Start-ShipDeFixRound -PullRequest $pr -Item $item
+                return
+            }
+        } elseif ($exactVerdict -eq "PASS") {
+            Write-Host ("PR #{0} has exact-head Codex verdict PASS for head {1}. Awaiting human merge." -f $pr.number, $headSha)
+            return
+        }
+
         Invoke-ShipDeReview
         return
     }

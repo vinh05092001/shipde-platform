@@ -20,6 +20,17 @@ $adopted = @($manifest.adopted)
 $profileFilter = $null
 $requiredToolIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
+# Build catalog tool lookup from both adopted and product_dependencies
+$allCatalogTools = @{}
+foreach ($t in $adopted) {
+    $allCatalogTools[$t.id] = $t
+}
+if ($manifest.product_dependencies) {
+    foreach ($p in @($manifest.product_dependencies)) {
+        $allCatalogTools[$p.id] = $p
+    }
+}
+
 if ($Profile -and $Profile -ne "ALL") {
     if (-not (Test-Path -LiteralPath $ProfilesPath)) {
         throw "Profiles configuration not found: $ProfilesPath"
@@ -31,12 +42,30 @@ if ($Profile -and $Profile -ne "ALL") {
     }
     $profileFilter = @($pObj.Value.allowed_tools)
     foreach ($rId in @($pObj.Value.required_tools)) {
+        if (-not $allCatalogTools.ContainsKey($rId)) {
+            throw "Profile '$Profile' requires unknown tool '$rId' not present in adopted or product_dependencies catalog."
+        }
         $requiredToolIds.Add($rId) | Out-Null
+    }
+} else {
+    # Default Profile ALL: Every non-deferred adopted tool and non-deferred product dependency is required
+    foreach ($t in $adopted) {
+        if ($t.blocking_policy -notmatch "^DEFERRED_TO_FOUNDATION") {
+            $requiredToolIds.Add($t.id) | Out-Null
+        }
+    }
+    if ($manifest.product_dependencies) {
+        foreach ($p in @($manifest.product_dependencies)) {
+            if ($p.lifecycle_state -ne "DEFERRED" -and $p.foundation_item -notmatch "^TASK-FOUND-(03|04)") {
+                $requiredToolIds.Add($p.id) | Out-Null
+            }
+        }
     }
 }
 
 # Preload global npm package inventory once (fast, 0 network overhead)
 $globalNpmPackages = @{}
+$globalNpmInitialized = $false
 try {
     $raw = @(& npm list --global --depth=0 --json 2>$null) -join "`n"
     if (-not [string]::IsNullOrWhiteSpace($raw)) {
@@ -46,17 +75,106 @@ try {
                 $globalNpmPackages[$prop.Name] = [string]$prop.Value.version
             }
         }
+        $globalNpmInitialized = $true
     }
 } catch {
     # npm unavailable or error
 }
 
 function Get-ShipDeNpmGlobalVersion {
-    param([Parameter(Mandatory = $true)][string]$PackageName)
+    param(
+        [Parameter(Mandatory = $true)][string]$PackageName,
+        [switch]$Fresh
+    )
+
+    if ($Fresh -or -not $globalNpmInitialized) {
+        try {
+            $raw = @(& npm list --global $PackageName --depth=0 --json 2>$null) -join "`n"
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $parsed = $raw | ConvertFrom-Json
+                if ($parsed.dependencies -and $parsed.dependencies.PSObject.Properties[$PackageName]) {
+                    $ver = [string]$parsed.dependencies.PSObject.Properties[$PackageName].Value.version
+                    $globalNpmPackages[$PackageName] = $ver
+                    return $ver
+                }
+            }
+        } catch {}
+        $globalNpmPackages[$PackageName] = $null
+        return $null
+    }
 
     if ($globalNpmPackages.ContainsKey($PackageName)) {
         return $globalNpmPackages[$PackageName]
     }
+    return $null
+}
+
+function Get-ShipDeCommandVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolId,
+        [Parameter(Mandatory = $true)][string]$CommandName
+    )
+
+    try {
+        switch ($ToolId) {
+            "git" {
+                $out = (& git --version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "node" {
+                $out = (& node --version 2>$null) -join " "
+                if ($out -match 'v?(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "pnpm" {
+                $out = (& pnpm --version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "gh" {
+                $out = (& gh --version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "eslint" {
+                $out = (& pnpm eslint --version 2>$null) -join " "
+                if ($out -match 'v?(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "prettier" {
+                $out = (& pnpm prettier --version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "turborepo" {
+                $out = (& pnpm turbo --version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "prisma" {
+                $out = (& pnpm prisma --version 2>$null) -join " "
+                if ($out -match 'prisma\s*:\s*(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "antigravity-cli" {
+                $out = (& agy --version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "gitleaks" {
+                $out = (& gitleaks version 2>$null) -join " "
+                if ($out -match 'v?(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "trivy" {
+                $out = (& trivy --version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "lefthook" {
+                $out = (& lefthook version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "agent-scan" {
+                $out = (& snyk-agent-scan --version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+            "context7" {
+                $out = (& ctx7 --version 2>$null) -join " "
+                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+            }
+        }
+    } catch {}
     return $null
 }
 
@@ -81,8 +199,7 @@ $npmPackageMap = @{
     "claude-code"      = "@anthropic-ai/claude-code"
     "playwright-cli"   = "@playwright/cli"
     "promptfoo"        = "promptfoo"
-    "context7"         = "context7"
-    "agent-scan"       = "agent-scan"
+    "context7"         = "ctx7"
     "renovate"         = "renovate"
     "repomix"          = "repomix"
     "prism"            = "@stoplight/prism-cli"
@@ -105,15 +222,15 @@ $cliCommandMap = @{
     "gitleaks"         = "gitleaks"
     "promptfoo"        = "promptfoo"
     "trivy"            = "trivy"
-    "context7"         = "context7"
-    "agent-scan"       = "agent-scan"
+    "context7"         = "ctx7"
+    "agent-scan"       = "snyk-agent-scan"
     "renovate"         = "renovate"
     "lefthook"         = "lefthook"
     "repomix"          = "repomix"
     "prism"            = "prism"
 }
 
-# 1. Process deferred product dependencies from manifest
+# 1. Process product dependencies from manifest across both catalogs (Finding 3)
 if ($manifest.product_dependencies) {
     foreach ($pDep in @($manifest.product_dependencies)) {
         if ($profileFilter -and $pDep.id -notin $profileFilter) {
@@ -124,6 +241,21 @@ if ($manifest.product_dependencies) {
         }
         if ($pDep.lifecycle_state -eq "DEFERRED" -or $pDep.foundation_item -match "^TASK-FOUND-(03|04)") {
             $deferredDependencies.Add($pDep)
+            continue
+        }
+
+        # Health-check active/installed product dependencies
+        $depId = [string]$pDep.id
+        $pin = [string]$pDep.pinned_version_or_commit
+        $observedVer = Get-ShipDeCommandVersion -ToolId $depId -CommandName $depId
+        if ($observedVer) {
+            $installedTools.Add([PSCustomObject]@{
+                Tool = $pDep
+                Status = "INSTALLED"
+                Location = "$depId v$observedVer (pinned: $pin)"
+            })
+        } else {
+            $missingMachineTools.Add($pDep)
         }
     }
 }
@@ -180,20 +312,12 @@ foreach ($tool in $adopted) {
         continue
     }
 
-    # Check machine-level CLI / package
-    $commandName = $cliCommandMap[$toolId]
-    $resolvedCmd = if ($commandName) { Get-Command $commandName -ErrorAction SilentlyContinue } else { $null }
-
-    if ($resolvedCmd) {
-        $installedTools.Add([PSCustomObject]@{
-            Tool = $tool
-            Status = "INSTALLED"
-            Location = $resolvedCmd.Source
-        })
-    } elseif ($npmPackageMap.ContainsKey($toolId)) {
+    # Check machine-level CLI / package with exact-version verification (Finding 2)
+    if ($npmPackageMap.ContainsKey($toolId)) {
         $pkgName = $npmPackageMap[$toolId]
         $npmVer = Get-ShipDeNpmGlobalVersion -PackageName $pkgName
-        if ($npmVer) {
+        $pin = [string]$tool.pinned_version_or_commit
+        if ($npmVer -and $npmVer -eq $pin) {
             $installedTools.Add([PSCustomObject]@{
                 Tool = $tool
                 Status = "INSTALLED"
@@ -202,8 +326,33 @@ foreach ($tool in $adopted) {
         } else {
             $missingMachineTools.Add($tool)
         }
+    } elseif ($tool.install_method -eq "pip") {
+        $cmdName = $cliCommandMap[$toolId]
+        $observedVer = Get-ShipDeCommandVersion -ToolId $toolId -CommandName $cmdName
+        $pin = [string]$tool.pinned_version_or_commit
+        if ($observedVer -and $observedVer -eq $pin) {
+            $installedTools.Add([PSCustomObject]@{
+                Tool = $tool
+                Status = "INSTALLED"
+                Location = "pip: $toolId@$observedVer"
+            })
+        } else {
+            $missingMachineTools.Add($tool)
+        }
     } else {
-        $missingMachineTools.Add($tool)
+        $commandName = $cliCommandMap[$toolId]
+        $resolvedCmd = if ($commandName) { Get-Command $commandName -ErrorAction SilentlyContinue } else { $null }
+        if ($resolvedCmd) {
+            $observedVer = Get-ShipDeCommandVersion -ToolId $toolId -CommandName $commandName
+            $loc = if ($observedVer) { "$($resolvedCmd.Source) (v$observedVer)" } else { $resolvedCmd.Source }
+            $installedTools.Add([PSCustomObject]@{
+                Tool = $tool
+                Status = "INSTALLED"
+                Location = $loc
+            })
+        } else {
+            $missingMachineTools.Add($tool)
+        }
     }
 }
 
@@ -242,6 +391,9 @@ if ($missingMachineTools.Count -eq 0) {
     foreach ($tool in $missingMachineTools) {
         $spec = if ($npmPackageMap.ContainsKey($tool.id)) {
             "npm install --global $($npmPackageMap[$tool.id])@$($tool.pinned_version_or_commit)"
+        } elseif ($tool.install_method -eq "pip") {
+            $pipPkg = if ($tool.id -eq "agent-scan") { "snyk-agent-scan" } else { $tool.id }
+            "python -m pip install $pipPkg==$($tool.pinned_version_or_commit)"
         } elseif ($tool.install_method -eq "winget") {
             "winget install $($tool.id)"
         } else {
@@ -287,7 +439,28 @@ foreach ($tool in $missingMachineTools) {
             $failedTools.Add("$($toolId) ($spec)")
             continue
         }
-        $installedVer = Get-ShipDeNpmGlobalVersion -PackageName $pkgName
+        $installedVer = Get-ShipDeNpmGlobalVersion -PackageName $pkgName -Fresh
+        if ($installedVer -ne $pin) {
+            Write-Error "Post-install verification failed for $($toolId): expected '$pin', got '$installedVer'."
+            $executionFailed = $true
+            $failedTools.Add("$($toolId) (version mismatch)")
+        }
+    } elseif ($tool.install_method -eq "pip") {
+        $pin = [string]$tool.pinned_version_or_commit
+        if ([string]::IsNullOrWhiteSpace($pin) -or $pin -in @("latest", "unpinned", "any") -or $pin -match '[*<>=~^]') {
+            throw "Tool '$($toolId)' has nondeterministic version spec '$($pin)'. AI-TOOL-11 strictly forbids fallback to latest."
+        }
+        $pipPkg = if ($toolId -eq "agent-scan") { "snyk-agent-scan" } else { $toolId }
+        $spec = "$pipPkg==$pin"
+        Write-Host ("Installing pip CLI package: {0}" -f $spec)
+        & python -m pip install $spec
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Installation failed for $spec."
+            $executionFailed = $true
+            $failedTools.Add("$($toolId) ($spec)")
+            continue
+        }
+        $installedVer = Get-ShipDeCommandVersion -ToolId $toolId -CommandName ($cliCommandMap[$toolId])
         if ($installedVer -ne $pin) {
             Write-Error "Post-install verification failed for $($toolId): expected '$pin', got '$installedVer'."
             $executionFailed = $true
@@ -303,11 +476,9 @@ foreach ($tool in $missingMachineTools) {
         }
     } else {
         Write-Host ("Skipping manual/system tool: {0} ({1})" -f $tool.name, $tool.install_method)
-        if ($isReq) {
-            Write-Warning "Required tool '$($toolId)' is a manual/system installation and cannot be auto-installed."
-            $executionFailed = $true
-            $failedTools.Add("$($toolId) (unsupported automatic install)")
-        }
+        Write-Warning "Tool '$($toolId)' is a manual/system installation and cannot be auto-installed."
+        $executionFailed = $true
+        $failedTools.Add("$($toolId) (manual/system tool not installed)")
     }
 }
 
