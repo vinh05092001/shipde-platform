@@ -93,7 +93,7 @@ Do not install all skills from a public collection. Do not install remote skills
 
 ## Explicit exclusions
 
-- No BMAD, Spec Kit, SuperClaude, Superpowers or second orchestration framework.
+- No BMAD, SuperClaude, Superpowers or second orchestration framework.
 - No Ponytail, Caveman, generic dashboard/theme repository or auto-generated design system.
 - No duplicate OpenCode/Cline/Cursor author while DSH and Gemini already own implementation routes.
 - No WSL or Ubuntu requirement for the current Windows-native workflow.

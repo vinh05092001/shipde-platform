@@ -88,13 +88,39 @@ Do not auto-upgrade 9Router, DSH, Codex CLI, Gemini/Antigravity CLI, Claude Code
 
 ## Governed Ecosystem Catalog (37 Adopted Repositories)
 
-The machine-readable source of truth is `tools/ecosystem-manifest.json`. The catalog spans 5 distinct governance layers:
+The machine-readable source of truth is `tools/ecosystem-manifest.json`. The catalog comprises exactly **37 adopted repositories** (2 internal + 28 external baseline + 7 approved additions) alongside a distinct **14 product runtime/build dependencies** inventory:
 
-1. **Workspaces (1)**: `shipde-platform` across 5 isolated worktrees.
-2. **Machine-wide CLIs & Runtimes (14)**: `git`, `gh`, `node`, `pnpm`, `docker-compose`, `9router`, `deepseek-harness`, `gemini-cli`, `antigravity-cli`, `codex-cli`, `claude-code`, `playwright-cli`, `gitleaks`, `promptfoo`, `trivy`.
-3. **Project Dependencies (16)**: `eslint`, `prettier`, `turborepo`, `nestjs`, `prisma`, `bullmq`, `vitest`, `supertest`, `playwright`, `storybook`, `storybook-addon-a11y`, `msw`, `msw-storybook-addon`, `openapi-typescript`, `lighthouse-ci`, `axe-core`, `opentelemetry-js`.
-4. **Local Services & On-Demand MCPs (4)**: `chrome-devtools-mcp`, `playwright-mcp`, Docker Compose Postgres, Redis.
-5. **Guidance & Curated Datasets (2)**: `vercel-agent-skills`, `vietnamese-provinces-database`.
+### 1. Internal Repositories (2)
+
+- `vinh05092001/shipde-platform`: Primary monorepo across 5 isolated worktrees.
+- `vinh05092001/shipde-brain`: Agent brain, memory, prompts, and knowledge base.
+
+### 2. External Baseline Repositories (28)
+
+- Gateway & Execution: `decolua/9router`, `deepseek-ai/deepseek-harness`, `google-gemini/gemini-cli`, `google/antigravity`, `openai/codex`, `anthropic-ai/claude-code`, `microsoft/playwright-cli`, `cli/cli`, `docker/compose`.
+- MCP & Diagnostic: `ChromeDevTools/chrome-devtools-mcp`.
+- Testing & Quality Guidance: `vercel-labs/agent-skills`, `GoogleChrome/lighthouse-ci`, `storybookjs/storybook`, `mswjs/msw`, `openapi-ts/openapi-typescript`.
+- Knowledge & Specification: `Fission-AI/OpenSpec`, `github/spec-kit`, `gastownhall/beads`, `getnao/sylph`, `upstash/context7`, `NousResearch/hermes-agent`.
+- Security & Hygiene: `snyk/agent-scan`, `xiufengsun/TokenTracker`, `renovatebot/renovate`, `evilmartians/lefthook`.
+- Development Toolkits: `oraios/serena`, `yamadashy/repomix`, `stoplightio/prism`.
+
+### 3. Approved Additions (7)
+
+- `gitleaks/gitleaks` (Secret scanning gate)
+- `dequelabs/axe-core` (Accessibility audit engine)
+- `microsoft/playwright-mcp` (Playwright MCP server)
+- `promptfoo/promptfoo` (LLM & prompt evaluation harness)
+- `aquasecurity/trivy` (Container & vulnerability scanner)
+- `open-telemetry/opentelemetry-js` (Distributed tracing & observability)
+- `thanglequoc/vietnamese-provinces-database` (Address normalization database)
+
+### 4. Separate Product Runtime / Build Dependencies (14)
+
+- Runtime & Package Management: `git-for-windows/git`, `nodejs/node`, `pnpm/pnpm`.
+- Build & Quality Tooling: `eslint/eslint`, `prettier/prettier`, `vercel/turborepo`.
+- Backend Stack: `nestjs/nest`, `prisma/prisma`, `taskforcesh/bullmq`.
+- Test Suites: `vitest-dev/vitest`, `ladjs/supertest`, `microsoft/playwright` (Playwright Test).
+- Storybook Ecosystem: `storybookjs/addon-a11y`, `mswjs/msw-storybook-addon`.
 
 ### Distinct Playwright Roles
 

@@ -81,6 +81,47 @@ function Assert-ShipDeManifest {
         $errors.Add("Manifest adopted count must be exactly 37; found $($adopted.Count).")
     }
 
+    # Approved canonical repository identities (Finding 1: 30 baseline + 7 additions)
+    $canonicalApprovedRepos = @(
+        "vinh05092001/shipde-platform",
+        "vinh05092001/shipde-brain",
+        "decolua/9router",
+        "deepseek-ai/deepseek-harness",
+        "google-gemini/gemini-cli",
+        "google/antigravity",
+        "openai/codex",
+        "anthropic-ai/claude-code",
+        "microsoft/playwright-cli",
+        "cli/cli",
+        "docker/compose",
+        "ChromeDevTools/chrome-devtools-mcp",
+        "vercel-labs/agent-skills",
+        "GoogleChrome/lighthouse-ci",
+        "storybookjs/storybook",
+        "mswjs/msw",
+        "openapi-ts/openapi-typescript",
+        "Fission-AI/OpenSpec",
+        "github/spec-kit",
+        "gastownhall/beads",
+        "getnao/sylph",
+        "upstash/context7",
+        "NousResearch/hermes-agent",
+        "snyk/agent-scan",
+        "xiufengsun/TokenTracker",
+        "renovatebot/renovate",
+        "evilmartians/lefthook",
+        "oraios/serena",
+        "yamadashy/repomix",
+        "stoplightio/prism",
+        "gitleaks/gitleaks",
+        "dequelabs/axe-core",
+        "microsoft/playwright-mcp",
+        "promptfoo/promptfoo",
+        "aquasecurity/trivy",
+        "open-telemetry/opentelemetry-js",
+        "thanglequoc/vietnamese-provinces-database"
+    )
+
     # 2. Uniqueness checks for id, canonical_url, repository
     $seenIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $seenUrls = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -119,9 +160,13 @@ function Assert-ShipDeManifest {
             }
         }
 
-        # Check unpinned version policy (AC-AI-22): must have pinned version or commit or valid spec
-        if ($entry.pinned_version_or_commit -eq "unpinned" -or $entry.pinned_version_or_commit -eq "any") {
-            $errors.Add("Tool '$($entry.id)' has unpinned version: '$($entry.pinned_version_or_commit)'.")
+        # Check deterministic pinned version policy (Finding 4 & AI-TOOL-11):
+        # Reject unpinned, any, latest, or wildcard/range patterns
+        $pin = [string]$entry.pinned_version_or_commit
+        if ([string]::IsNullOrWhiteSpace($pin) -or $pin -in @("unpinned", "any", "latest")) {
+            $errors.Add("Tool '$($entry.id)' has nondeterministic or unpinned version: '$pin'.")
+        } elseif ($pin -match '[*<>=~^]') {
+            $errors.Add("Tool '$($entry.id)' has range or wildcard in version spec: '$pin'. Must be an exact pinned version or commit.")
         }
 
         # Check network & telemetry policy (AC-AI-23): reject non-local binding (0.0.0.0, public listeners, tunnels)
@@ -141,22 +186,33 @@ function Assert-ShipDeManifest {
         }
     }
 
+    # Verify every canonical approved repository identity is present in adopted catalog (Finding 1)
+    foreach ($canonRepo in $canonicalApprovedRepos) {
+        if (-not $seenRepos.Contains($canonRepo)) {
+            $errors.Add("Missing approved canonical repository identity: '$canonRepo'.")
+        }
+    }
+
     # 3. Playwright tri-role check (AC-AI-18)
-    $pwTest = $adopted | Where-Object { $_.id -eq "playwright" }
     $pwCli = $adopted | Where-Object { $_.id -eq "playwright-cli" }
     $pwMcp = $adopted | Where-Object { $_.id -eq "playwright-mcp" }
+    $pwTest = if ($Manifest.product_dependencies) {
+        $Manifest.product_dependencies | Where-Object { $_.id -eq "playwright" }
+    } else {
+        $adopted | Where-Object { $_.id -eq "playwright" }
+    }
 
-    if (-not $pwTest -or -not $pwCli -or -not $pwMcp) {
+    if (-not $pwCli -or -not $pwMcp -or -not $pwTest) {
         $errors.Add("Manifest must contain distinct entries for Playwright Test ('playwright'), Playwright CLI ('playwright-cli'), and Playwright MCP ('playwright-mcp').")
     } else {
-        if ($pwTest.repository -ne "microsoft/playwright") {
-            $errors.Add("Playwright Test repository must be 'microsoft/playwright'.")
-        }
         if ($pwCli.repository -ne "microsoft/playwright-cli") {
             $errors.Add("Playwright CLI repository must be 'microsoft/playwright-cli'.")
         }
         if ($pwMcp.repository -ne "microsoft/playwright-mcp") {
             $errors.Add("Playwright MCP repository must be 'microsoft/playwright-mcp'.")
+        }
+        if ($pwTest.repository -ne "microsoft/playwright") {
+            $errors.Add("Playwright Test repository must be 'microsoft/playwright'.")
         }
         if ($pwCli.role -match "(?i)archived" -or $pwCli.role -match "(?i)deprecated" -or $pwCli.role -match "(?i)replaced") {
             $errors.Add("Playwright CLI must remain active and distinct, not marked archived or replaced.")
@@ -196,6 +252,17 @@ function Assert-ShipDeManifest {
         return $errors
     }
 
+    # Build known tool IDs lookup from both adopted and product_dependencies
+    $allKnownToolIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $adopted) {
+        $allKnownToolIds.Add($entry.id) | Out-Null
+    }
+    if ($Manifest.product_dependencies) {
+        foreach ($pDep in @($Manifest.product_dependencies)) {
+            $allKnownToolIds.Add($pDep.id) | Out-Null
+        }
+    }
+
     foreach ($pName in $expectedProfiles) {
         $pObj = $Profiles.profiles.PSObject.Properties[$pName]
         if (-not $pObj) {
@@ -209,13 +276,13 @@ function Assert-ShipDeManifest {
         }
 
         foreach ($tId in @($prof.allowed_tools)) {
-            if (-not $seenIds.Contains($tId)) {
+            if (-not $allKnownToolIds.Contains($tId)) {
                 $errors.Add("Profile '$pName' references unknown tool '$tId'.")
             }
         }
 
         foreach ($tId in @($prof.required_tools)) {
-            if (-not $seenIds.Contains($tId)) {
+            if (-not $allKnownToolIds.Contains($tId)) {
                 $errors.Add("Profile '$pName' references unknown required tool '$tId'.")
             }
         }
@@ -249,20 +316,14 @@ function Invoke-ShipDeValidate {
 
     $errors = Assert-ShipDeManifest -Manifest $manifest -Profiles $profiles
     if ($errors.Count -gt 0) {
-        Write-Host "`n[FAIL] ECOSYSTEM VALIDATION FAILED ($($errors.Count) errors):" -ForegroundColor Red
+        Write-Error "Validation failed with $($errors.Count) errors:"
         foreach ($err in $errors) {
-            Write-Host "  - $err" -ForegroundColor Red
+            Write-Host ("  [ERROR] $err") -ForegroundColor Red
         }
         exit 1
     }
 
-    Write-Host "`n[PASS] ECOSYSTEM VALIDATION PASSED:" -ForegroundColor Green
-    Write-Host "  - Exactly 37 adopted repositories/capabilities validated"
-    Write-Host "  - Playwright Test, CLI, and MCP roles distinct"
-    Write-Host "  - 10 evaluation candidates isolated with PILOT/WATCH status"
-    Write-Host "  - 9 activation profiles validated against tool catalog"
-    Write-Host "  - All network, telemetry, and concurrency constraints enforced"
-    return
+    Write-Host "VALIDATION PASSED: All 37 approved adopted repositories, 14 product dependencies, 10 candidates, and 9 profiles conform to ecosystem policy." -ForegroundColor Green
 }
 
 function Invoke-ShipDeStatus {
@@ -276,44 +337,30 @@ function Invoke-ShipDeStatus {
     $profiles = Get-ShipDeProfilesContent -Path $ProfilesPath
 
     Write-Host "================================================================"
-    Write-Host "SHIP DE - ECOSYSTEM STATUS"
+    Write-Host "SHIP DE - GOVERNED ECOSYSTEM STATUS"
     Write-Host "================================================================"
+    Write-Host ("Manifest Version : {0}" -f $manifest.version)
+    Write-Host ("Profiles Defined : {0}" -f ($profiles.profiles.PSObject.Properties | Measure-Object).Count)
+    Write-Host ("Adopted Repos    : {0}" -f @($manifest.adopted).Count)
+    Write-Host ("Product Deps     : {0}" -f @($manifest.product_dependencies).Count)
+    Write-Host ("Candidates       : {0}" -f @($manifest.candidates).Count)
 
-    $adopted = @($manifest.adopted)
-    $installedCount = 0
-    $deferredCount = 0
-    $integratedCount = 0
-
-    foreach ($tool in $adopted) {
-        switch ($tool.lifecycle_state) {
-            "INSTALLED" { $installedCount++ }
-            "INTEGRATED" { $integratedCount++ }
-            "DEFERRED" { $deferredCount++ }
-        }
-    }
-
-    Write-Host ("Catalog Total      : {0} adopted tools, {1} candidates" -f $adopted.Count, @($manifest.candidates).Count)
-    Write-Host ("Tool Lifecycle     : {0} INSTALLED, {1} INTEGRATED, {2} DEFERRED" -f $installedCount, $integratedCount, $deferredCount)
-
-    Write-Host "`n=== OPTIONAL SERVICES & MCP SERVERS ==="
+    Write-Host "`n=== LOCAL SERVICES HEALTH ==="
     $routerUp = Test-ShipDePort -HostName "127.0.0.1" -Port 20128
     $dshUp = Test-ShipDePort -HostName "127.0.0.1" -Port 3080
     Write-Host ("9Router (port 20128)      : {0}" -f $(if ($routerUp) { "RUNNING" } else { "STOPPED (Default Safe)" }))
     Write-Host ("DSH (port 3080)           : {0}" -f $(if ($dshUp) { "RUNNING" } else { "STOPPED (Default Safe)" }))
 
-    $mcpProcesses = @(Get-Process -Name "*playwright-mcp*", "*devtools-mcp*" -ErrorAction SilentlyContinue)
-    Write-Host ("Optional MCP Servers      : {0} active" -f $mcpProcesses.Count)
+    $activeProfileState = Get-ShipDeProfileState
+    Write-Host ("Active Profile            : {0}" -f $(if ($activeProfileState) { $activeProfileState.profile } else { "NONE (Inactive/Stopped)" }))
+    if ($activeProfileState -and $activeProfileState.started_pids) {
+        Write-Host ("Tracked Owned PIDs        : {0}" -f ($activeProfileState.started_pids -join ", "))
+    }
 
     Write-Host "`n=== CONCURRENCY & WORKSPACE POLICY ==="
     Write-Host "Max Implementation Agents : 1 (Enforced)"
     Write-Host "Max Research Agents       : 1 (Enforced)"
     Write-Host "Parallel Writers per Item : 1 (Enforced)"
-
-    $activeProfile = $env:SHIPDE_ACTIVE_PROFILE
-    if ([string]::IsNullOrWhiteSpace($activeProfile)) {
-        $activeProfile = "NONE (Inactive/Stopped)"
-    }
-    Write-Host ("Active Profile            : {0}" -f $activeProfile)
 
     Write-Host "`n=== AI WORKSPACE INTEGRITY ==="
     $workspaces = @("shipde-platform", "shipde-claude", "shipde-dsh", "shipde-gemini", "shipde-codex")
@@ -327,10 +374,27 @@ function Invoke-ShipDeStatus {
     Write-Host "`nEcosystem state evaluated successfully."
 }
 
+function Get-ShipDeProfileStatePath {
+    return (Join-Path ([System.IO.Path]::GetTempPath()) "shipde-active-profile-state.json")
+}
+
+function Get-ShipDeProfileState {
+    $statePath = Get-ShipDeProfileStatePath
+    if (Test-Path -LiteralPath $statePath) {
+        try {
+            return (Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json)
+        } catch {
+            return $null
+        }
+    }
+    return $null
+}
+
 function Invoke-ShipDeActivate {
     param(
         [Parameter(Mandatory = $true)][string]$ProfileName,
-        [string]$ProfilesPath
+        [string]$ProfilesPath,
+        [int[]]$ProcessIdsToTrack
     )
 
     $profiles = Get-ShipDeProfilesContent -Path $ProfilesPath
@@ -345,8 +409,24 @@ function Invoke-ShipDeActivate {
     Write-Host ("Required tools     : {0}" -f (@($prof.required_tools) -join ", "))
     Write-Host ("Network policy     : {0}" -f $prof.network_policy)
 
+    $startedPids = [System.Collections.Generic.List[int]]::new()
+    if ($ProcessIdsToTrack) {
+        foreach ($pidToTrack in $ProcessIdsToTrack) {
+            $startedPids.Add($pidToTrack)
+        }
+    }
+
+    # Record active state in durable session state file
+    $stateObj = [PSCustomObject]@{
+        profile      = $ProfileName
+        activated_at = (Get-Date).ToString("o")
+        started_pids = @($startedPids)
+    }
+    $statePath = Get-ShipDeProfileStatePath
+    $stateObj | ConvertTo-Json | Set-Content -Path $statePath -Encoding UTF8
+
     $env:SHIPDE_ACTIVE_PROFILE = $ProfileName
-    Write-Host "Profile '$ProfileName' successfully activated for current session."
+    Write-Host "Profile '$ProfileName' operational with state tracking file: $statePath"
 }
 
 function Invoke-ShipDeDeactivate {
@@ -354,15 +434,28 @@ function Invoke-ShipDeDeactivate {
 
     Write-Host "Deactivating current ecosystem profile..."
 
-    # Stop any background optional services / MCP processes
-    $mcpProcesses = @(Get-Process -Name "*playwright-mcp*", "*devtools-mcp*" -ErrorAction SilentlyContinue)
-    foreach ($proc in $mcpProcesses) {
-        Write-Host "Stopping MCP process: $($proc.ProcessName) ($($proc.Id))"
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    $state = Get-ShipDeProfileState
+    if ($state -and $state.started_pids) {
+        foreach ($ownedPid in @($state.started_pids)) {
+            try {
+                $proc = Get-Process -Id $ownedPid -ErrorAction SilentlyContinue
+                if ($proc) {
+                    Write-Host ("Stopping Ship Dễ-owned process: {0} (PID {1})" -f $proc.ProcessName, $ownedPid)
+                    Stop-Process -Id $ownedPid -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Milliseconds 100
+                }
+            } catch {}
+        }
+    }
+
+    # Clean up state file
+    $statePath = Get-ShipDeProfileStatePath
+    if (Test-Path -LiteralPath $statePath) {
+        Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
     }
 
     $env:SHIPDE_ACTIVE_PROFILE = $null
-    Write-Host "All optional services stopped. Ecosystem returned to safe inactive state."
+    Write-Host "All owned services stopped. Ecosystem returned to safe inactive state."
 }
 
 function Invoke-ShipDeSyncRegister {
@@ -398,7 +491,6 @@ function Invoke-ShipDeSyncRegister {
     }
 
     if ($modified) {
-        # Export back to CSV preserving headers and formatting
         $rawRows | Export-Csv -Path $RegisterPath -NoTypeInformation -Encoding UTF8
         Write-Host "Register updated with merged evidence."
     } else {
@@ -428,7 +520,7 @@ function Invoke-ShipDeTests {
         if ($errors.Count -ne 0) {
             throw "Base validation failed unexpectedly: $($errors -join '; ')"
         }
-        Write-Host "  [PASS] 37 adopted tools and 9 profiles validated cleanly with 0 errors."
+        Write-Host "  [PASS] 37 approved adopted tools and 9 profiles validated cleanly with 0 errors."
 
         # Negative Test 1: Malformed JSON syntax
         Write-Host "`nTest 2 [Negative]: Malformed JSON must fail closed with exact exit code..."
@@ -445,18 +537,35 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Malformed JSON threw exception and failed closed."
 
-        # Negative Test 2: Unpinned version
-        Write-Host "`nTest 3 [Negative]: Unpinned version in manifest must be rejected..."
+        # Negative Test 2: Unpinned / latest version
+        Write-Host "`nTest 3 [Negative]: Unpinned, latest, and range versions must be rejected (Finding 4)..."
         $unpinnedManifest = $baseManifest | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-        $unpinnedManifest.adopted[1].pinned_version_or_commit = "unpinned"
+        $unpinnedManifest.adopted[1].pinned_version_or_commit = "latest"
         $unpinnedErrors = Assert-ShipDeManifest -Manifest $unpinnedManifest -Profiles $baseProfiles
-        if (-not ($unpinnedErrors -match "unpinned version")) {
-            throw "Failed negative test: Unpinned version was not rejected!"
+        if (-not ($unpinnedErrors -match "nondeterministic or unpinned version")) {
+            throw "Failed negative test: 'latest' version was not rejected!"
         }
-        Write-Host "  [PASS] Unpinned version rejected ($($unpinnedErrors.Count) error caught)."
 
-        # Negative Test 3: Unknown profile tool reference
-        Write-Host "`nTest 4 [Negative]: Unknown tool reference in profile must be rejected..."
+        $rangeManifest = $baseManifest | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $rangeManifest.adopted[1].pinned_version_or_commit = ">=2.0.0"
+        $rangeErrors = Assert-ShipDeManifest -Manifest $rangeManifest -Profiles $baseProfiles
+        if (-not ($rangeErrors -match "range or wildcard in version spec")) {
+            throw "Failed negative test: Range '>=2.0.0' was not rejected!"
+        }
+        Write-Host "  [PASS] Unpinned and range versions rejected cleanly."
+
+        # Negative Test 3: Missing canonical repository identity (Finding 1)
+        Write-Host "`nTest 4 [Negative]: Missing canonical repository identity must be rejected..."
+        $missingRepoManifest = $baseManifest | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $missingRepoManifest.adopted[10].repository = "some-random/non-canonical"
+        $repoErrors = Assert-ShipDeManifest -Manifest $missingRepoManifest -Profiles $baseProfiles
+        if (-not ($repoErrors -match "Missing approved canonical repository identity")) {
+            throw "Failed negative test: Altered/missing canonical repository was not rejected!"
+        }
+        Write-Host "  [PASS] Missing canonical repository identity rejected."
+
+        # Negative Test 4: Unknown profile tool reference
+        Write-Host "`nTest 5 [Negative]: Unknown tool reference in profile must be rejected..."
         $badProfiles = $baseProfiles | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         $badProfiles.profiles.FOUNDATION.allowed_tools += "non-existent-tool-xyz"
         $profileErrors = Assert-ShipDeManifest -Manifest $baseManifest -Profiles $badProfiles
@@ -465,18 +574,18 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Unknown tool reference in profile rejected."
 
-        # Negative Test 4: Forbidden public network binding (0.0.0.0)
-        Write-Host "`nTest 5 [Negative]: Non-local public network binding must be rejected..."
+        # Negative Test 5: Forbidden public network binding (0.0.0.0)
+        Write-Host "`nTest 6 [Negative]: Non-local public network binding must be rejected..."
         $publicBindingManifest = $baseManifest | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-        $publicBindingManifest.adopted[6].telemetry_network_behavior = "0.0.0.0:20128-public"
+        $publicBindingManifest.adopted[2].telemetry_network_behavior = "0.0.0.0:20128-public"
         $netErrors = Assert-ShipDeManifest -Manifest $publicBindingManifest -Profiles $baseProfiles
         if (-not ($netErrors -match "violates network policy")) {
             throw "Failed negative test: Public network binding was not rejected!"
         }
         Write-Host "  [PASS] Public binding 0.0.0.0 rejected."
 
-        # Negative Test 5: Enabled telemetry
-        Write-Host "`nTest 6 [Negative]: Enabled telemetry must be rejected..."
+        # Negative Test 6: Enabled telemetry
+        Write-Host "`nTest 7 [Negative]: Enabled telemetry must be rejected..."
         $telemetryManifest = $baseManifest | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         $telemetryManifest.adopted[0].telemetry_network_behavior = "telemetry-enabled"
         $telErrors = Assert-ShipDeManifest -Manifest $telemetryManifest -Profiles $baseProfiles
@@ -485,8 +594,8 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Telemetry violation rejected."
 
-        # Negative Test 6: Optional service with default_enabled: true
-        Write-Host "`nTest 7 [Negative]: Optional service/MCP with default_enabled=true must be rejected..."
+        # Negative Test 7: Optional service with default_enabled: true
+        Write-Host "`nTest 8 [Negative]: Optional service/MCP with default_enabled=true must be rejected..."
         $badMcpManifest = $baseManifest | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         $mcpEntry = $badMcpManifest.adopted | Where-Object { $_.kind -eq "mcp-server" } | Select-Object -First 1
         $mcpEntry.default_enabled = $true
@@ -496,8 +605,8 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] MCP server default_enabled=true rejected."
 
-        # Negative Test 7: Duplicate repository
-        Write-Host "`nTest 8 [Negative]: Duplicate repository entry must be rejected..."
+        # Negative Test 8: Duplicate repository
+        Write-Host "`nTest 9 [Negative]: Duplicate repository entry must be rejected..."
         $dupManifest = $baseManifest | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         $dupManifest.adopted += $dupManifest.adopted[0]
         $dupErrors = Assert-ShipDeManifest -Manifest $dupManifest -Profiles $baseProfiles
@@ -506,8 +615,8 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Duplicate repository entry rejected."
 
-        # Positive Test 9: Register reconciliation idempotency
-        Write-Host "`nTest 9 [Idempotency]: Register synchronization idempotency proof..."
+        # Positive Test 10: Register reconciliation idempotency
+        Write-Host "`nTest 10 [Idempotency]: Register synchronization idempotency proof..."
         $testRegPath = Join-Path $testTempDir "test-register.csv"
         $testRegContent = @"
 "delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
@@ -530,8 +639,39 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Synchronization round 2 produced 0 diff (100% idempotent)."
 
+        # Operational Test 11: Real process lifecycle and PID tracking (Finding 2)
+        Write-Host "`nTest 11 [Operational]: Process tracking, activation, and safe termination..."
+        # Start a local background sleep process to simulate an owned optional service
+        $testProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -Command Start-Sleep -Seconds 60" -PassThru
+        $testPid = $testProc.Id
+        Write-Host "  Started simulated test service (PID $testPid)"
+
+        # Activate profile tracking this PID
+        Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -ProcessIdsToTrack @($testPid)
+
+        $stateAfterActivate = Get-ShipDeProfileState
+        if (-not $stateAfterActivate -or $stateAfterActivate.started_pids -notcontains $testPid) {
+            throw "Failed operational test: Active profile state did not record test PID $testPid!"
+        }
+        Write-Host "  [PASS] Active profile recorded and tracked owned PID $testPid."
+
+        # Deactivate profile and verify real process termination
+        Invoke-ShipDeDeactivate -ProfilesPath $ProfilesPath
+        Start-Sleep -Milliseconds 200
+
+        $procStillAlive = Get-Process -Id $testPid -ErrorAction SilentlyContinue
+        if ($null -ne $procStillAlive) {
+            Stop-Process -Id $testPid -Force -ErrorAction SilentlyContinue
+            throw "Failed operational test: Deactivate failed to terminate tracked PID $testPid!"
+        }
+        $stateAfterDeactivate = Get-ShipDeProfileState
+        if ($null -ne $stateAfterDeactivate) {
+            throw "Failed operational test: Deactivate failed to clean up profile state file!"
+        }
+        Write-Host "  [PASS] Deactivate successfully terminated tracked PID $testPid and removed state file."
+
         Write-Host "`n================================================================"
-        Write-Host "ALL 9 POSITIVE & NEGATIVE ECOSYSTEM TESTS PASSED (100%)"
+        Write-Host "ALL 11 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
         Write-Host "================================================================"
     } finally {
         Remove-Item -LiteralPath $testTempDir -Recurse -Force -ErrorAction SilentlyContinue

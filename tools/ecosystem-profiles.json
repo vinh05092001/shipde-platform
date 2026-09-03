@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "version": "1.0.0",
-  "updated_at": "2026-09-03T13:40:00Z",
+  "version": "1.1.0",
+  "updated_at": "2026-09-03T14:30:00Z",
   "title": "Ship Dễ Governed Activation Profiles",
   "description": "Standardized activation profiles enabling the minimum safe toolset per engineering activity, enforcing resource limits and automated cleanup.",
   "profiles": {
@@ -10,6 +10,7 @@
       "description": "Monorepo structure, tooling baseline, shared packages, and repository quality gates.",
       "allowed_tools": [
         "shipde-platform",
+        "shipde-brain",
         "git",
         "gh",
         "node",
@@ -26,7 +27,11 @@
         "vitest",
         "openapi-typescript",
         "gitleaks",
-        "promptfoo"
+        "promptfoo",
+        "lefthook",
+        "open-spec",
+        "spec-kit",
+        "token-tracker"
       ],
       "required_tools": [
         "shipde-platform",
@@ -68,7 +73,8 @@
         "vitest",
         "supertest",
         "openapi-typescript",
-        "opentelemetry-js"
+        "opentelemetry-js",
+        "prism"
       ],
       "required_tools": [
         "shipde-platform",
@@ -80,7 +86,7 @@
         "turborepo",
         "prisma"
       ],
-      "optional_services": ["docker-compose"],
+      "optional_services": ["docker-compose", "prism"],
       "network_policy": "localhost-only",
       "concurrency_limits": {
         "max_implementation_agents": 1,
@@ -109,6 +115,7 @@
         "vitest",
         "supertest",
         "msw",
+        "prism",
         "opentelemetry-js",
         "vietnamese-provinces-database"
       ],
@@ -119,10 +126,9 @@
         "pnpm",
         "eslint",
         "prettier",
-        "turborepo",
-        "vietnamese-provinces-database"
+        "turborepo"
       ],
-      "optional_services": ["docker-compose"],
+      "optional_services": ["docker-compose", "prism"],
       "network_policy": "localhost-only-strict-carrier-mock",
       "concurrency_limits": {
         "max_implementation_agents": 1,
@@ -204,8 +210,7 @@
         "pnpm",
         "eslint",
         "prettier",
-        "turborepo",
-        "vercel-agent-skills"
+        "turborepo"
       ],
       "optional_services": ["chrome-devtools-mcp", "playwright-mcp"],
       "network_policy": "localhost-only",
@@ -228,7 +233,10 @@
         "prettier",
         "gitleaks",
         "promptfoo",
-        "trivy"
+        "trivy",
+        "agent-scan",
+        "lefthook",
+        "sylph"
       ],
       "required_tools": ["shipde-platform", "git", "gitleaks", "eslint"],
       "optional_services": [],
@@ -244,6 +252,7 @@
       "description": "Read-only exploration, architecture analysis, external documentation, and specification research.",
       "allowed_tools": [
         "shipde-platform",
+        "shipde-brain",
         "git",
         "node",
         "nine-router",
@@ -253,7 +262,14 @@
         "vercel-agent-skills",
         "chrome-devtools-mcp",
         "playwright-mcp",
-        "promptfoo"
+        "promptfoo",
+        "open-spec",
+        "spec-kit",
+        "beads",
+        "hermes-agent",
+        "context7",
+        "serena",
+        "repomix"
       ],
       "required_tools": ["shipde-platform", "git"],
       "optional_services": [
@@ -285,7 +301,11 @@
         "playwright",
         "openapi-typescript",
         "gitleaks",
-        "axe-core"
+        "axe-core",
+        "open-spec",
+        "context7",
+        "repomix",
+        "agent-scan"
       ],
       "required_tools": [
         "shipde-platform",
@@ -320,7 +340,9 @@
         "turborepo",
         "lighthouse-ci",
         "gitleaks",
-        "trivy"
+        "trivy",
+        "renovate",
+        "token-tracker"
       ],
       "required_tools": [
         "shipde-platform",

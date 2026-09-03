@@ -701,16 +701,63 @@ function Invoke-ShipDeReview {
     }
 }
 
+function Get-ShipDeExactHeadCodexVerdict {
+    param(
+        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [string]$MergeCommitOid
+    )
+
+    # 1. Check local handoff files for an exact-HEAD review with terminal PASS
+    $handoffFiles = @(Get-ChildItem -Path $script:HandoffRoot -Filter "pr-$PullRequestNumber-*-review*.txt" -ErrorAction SilentlyContinue)
+    foreach ($hf in $handoffFiles) {
+        $content = Get-Content -LiteralPath $hf.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($content) {
+            $lines = @($content -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($lines.Count -gt 0) {
+                $lastLine = $lines[-1].Trim()
+                if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?PASS(?:\*\*)?)$') {
+                    return "PASS"
+                }
+            }
+        }
+    }
+
+    # 2. Check GitHub PR comments for a Codex review with terminal PASS
+    try {
+        $rawJson = @(& gh pr view $PullRequestNumber --repo $Repository --json comments --jq ".comments[].body" 2>$null) -join "`n"
+        if (-not [string]::IsNullOrWhiteSpace($rawJson)) {
+            $parts = $rawJson -split "## Codex "
+            foreach ($part in $parts) {
+                if ($part -match '(?i)(?:independent|final|self-review)') {
+                    $lines = @($part -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    if ($lines.Count -gt 0) {
+                        $lastLine = $lines[-1].Trim()
+                        if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?PASS(?:\*\*)?)$') {
+                            return "PASS"
+                        }
+                    }
+                }
+            }
+        }
+    } catch {}
+
+    return $null
+}
+
 function Sync-ShipDeRegister {
     param(
         [string]$Workspace = $script:Paths.Main,
-        [string]$RegisterRelativePath = $script:RegisterPath
+        [string]$RegisterRelativePath = $script:RegisterPath,
+        [switch]$CheckOnly
     )
 
     $fullRegisterPath = Join-Path $Workspace $RegisterRelativePath
     if (-not (Test-Path -LiteralPath $fullRegisterPath)) {
         return
     }
+
+    # If workspace is the protected main worktree, prevent leaving main dirty
+    $isMainWorkspace = ($Workspace -eq $script:Paths.Main)
 
     # Fetch merged PRs from GitHub if gh is authenticated
     $mergedPrs = $null
@@ -741,24 +788,36 @@ function Sync-ShipDeRegister {
             $mergeCommit = if ($pr.mergeCommit -and $pr.mergeCommit.oid) { [string]$pr.mergeCommit.oid } else { "" }
             $prNumberStr = "#{0}" -f $pr.number
 
-            if ($row.status -ne "MERGED" -or $row.pr -ne $prNumberStr -or $row.merge_commit -ne $mergeCommit) {
+            # Reconcile verdict only from durable exact-HEAD review evidence; fail closed when absent (Finding 3)
+            $verdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pr.number) -MergeCommitOid $mergeCommit
+            if ([string]::IsNullOrWhiteSpace($verdict)) {
+                $verdict = [string]$row.codex_verdict
+                if ([string]::IsNullOrWhiteSpace($verdict)) {
+                    Write-Warning ("No durable exact-HEAD Codex review PASS found for merged PR #{0} ({1}). Retaining empty verdict (fail-closed)." -f $pr.number, $workItemId)
+                }
+            }
+
+            if ($row.status -ne "MERGED" -or $row.pr -ne $prNumberStr -or $row.codex_verdict -ne $verdict -or $row.merge_commit -ne $mergeCommit) {
                 $row.status = "MERGED"
                 $row.pr = $prNumberStr
-                if ([string]::IsNullOrWhiteSpace([string]$row.codex_verdict)) {
-                    $row.codex_verdict = "PASS"
-                }
+                $row.codex_verdict = $verdict
                 if (-not [string]::IsNullOrWhiteSpace($mergeCommit)) {
                     $row.merge_commit = $mergeCommit
                 }
                 $modified = $true
-                Write-Host ("Reconciled merged Work Item {0} (PR #{1}) -> {2}" -f $workItemId, $pr.number, $mergeCommit)
+                Write-Host ("Reconciled merged Work Item {0} (PR #{1}) -> {2} [Verdict: {3}]" -f $workItemId, $pr.number, $mergeCommit, $(if ($verdict) { $verdict } else { "NONE" }))
             }
         }
     }
 
     if ($modified) {
-        $rawRows | Export-Csv -Path $fullRegisterPath -NoTypeInformation -Encoding UTF8
-        Write-Host "Register synchronized from merged GitHub Pull Requests."
+        if ($isMainWorkspace -or $CheckOnly) {
+            Write-Warning "Register synchronization detected merge evidence, but protected main worktree is not edited directly to prevent dirty state."
+            Write-Host "Reconcile register changes through an author/planner worktree Pull Request."
+        } else {
+            $rawRows | Export-Csv -Path $fullRegisterPath -NoTypeInformation -Encoding UTF8
+            Write-Host "Register synchronized from merged GitHub Pull Requests with verified review evidence."
+        }
     }
 }
 
@@ -769,8 +828,8 @@ function Invoke-ShipDeSync {
     Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("switch", "main") | Out-Null
     Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("merge", "--ff-only", "origin/main") | Out-Null
 
-    # Reconcile durable delivery register from merged PR evidence
-    Sync-ShipDeRegister -Workspace $script:Paths.Main
+    # Reconcile check only; never leave protected main worktree dirty
+    Sync-ShipDeRegister -Workspace $script:Paths.Main -CheckOnly
 
     $parked = [ordered]@{
         Claude = "agent/claude"
