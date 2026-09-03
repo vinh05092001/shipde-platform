@@ -5,7 +5,8 @@ param(
     [string]$Profile = "FOUNDATION",
     [string]$ManifestPath = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "tools\ecosystem-manifest.json"),
     [string]$ProfilesPath = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "tools\ecosystem-profiles.json"),
-    [string]$AiRoot = (Join-Path $env:USERPROFILE "AI")
+    [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
+    [switch]$StartServices
 )
 
 $ErrorActionPreference = "Stop"
@@ -394,7 +395,8 @@ function Invoke-ShipDeActivate {
     param(
         [Parameter(Mandatory = $true)][string]$ProfileName,
         [string]$ProfilesPath,
-        [int[]]$ProcessIdsToTrack
+        [int[]]$ProcessIdsToTrack,
+        [switch]$StartOptionalServices
     )
 
     $profiles = Get-ShipDeProfilesContent -Path $ProfilesPath
@@ -413,6 +415,43 @@ function Invoke-ShipDeActivate {
     if ($ProcessIdsToTrack) {
         foreach ($pidToTrack in $ProcessIdsToTrack) {
             $startedPids.Add($pidToTrack)
+        }
+    }
+
+    # If requested, start declared optional services and track their PIDs
+    if ($StartOptionalServices -and $prof.optional_services) {
+        foreach ($svc in @($prof.optional_services)) {
+            if ($svc -eq "nine-router") {
+                if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port 20128)) {
+                    $cmd = Get-Command "9router" -ErrorAction SilentlyContinue
+                    if ($cmd) {
+                        Write-Host "Starting requested optional service: 9Router on localhost:20128..."
+                        $p = Start-Process -FilePath $cmd.Source -ArgumentList "--port", "20128" -PassThru -WindowStyle Hidden
+                        if ($p) {
+                            $startedPids.Add($p.Id)
+                            for ($i = 0; $i -lt 6; $i++) {
+                                Start-Sleep -Milliseconds 500
+                                if (Test-ShipDePort -HostName "127.0.0.1" -Port 20128) { break }
+                            }
+                        }
+                    }
+                }
+            } elseif ($svc -eq "deepseek-harness") {
+                if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port 3080)) {
+                    $cmd = Get-Command "dsh" -ErrorAction SilentlyContinue
+                    if ($cmd) {
+                        Write-Host "Starting requested optional service: DSH on localhost:3080..."
+                        $p = Start-Process -FilePath $cmd.Source -ArgumentList "--port", "3080" -PassThru -WindowStyle Hidden
+                        if ($p) {
+                            $startedPids.Add($p.Id)
+                            for ($i = 0; $i -lt 6; $i++) {
+                                Start-Sleep -Milliseconds 500
+                                if (Test-ShipDePort -HostName "127.0.0.1" -Port 3080) { break }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -639,12 +678,28 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Synchronization round 2 produced 0 diff (100% idempotent)."
 
-        # Operational Test 11: Real process lifecycle and PID tracking (Finding 2)
-        Write-Host "`nTest 11 [Operational]: Process tracking, activation, and safe termination..."
-        # Start a local background sleep process to simulate an owned optional service
-        $testProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -Command Start-Sleep -Seconds 60" -PassThru
+        # Operational Test 11: Real process & port lifecycle with PID tracking (Finding 2)
+        Write-Host "`nTest 11 [Operational]: Process and port tracking, activation, and safe termination..."
+        $testPort = 29111
+        $listenerScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $testPort); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
+        $testProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $listenerScript -PassThru
         $testPid = $testProc.Id
-        Write-Host "  Started simulated test service (PID $testPid)"
+        Write-Host "  Started simulated test service (PID $testPid) listening on port $testPort"
+
+        # Wait up to 3s for port to open
+        $portOpen = $false
+        for ($i = 0; $i -lt 6; $i++) {
+            Start-Sleep -Milliseconds 500
+            if (Test-ShipDePort -HostName "127.0.0.1" -Port $testPort) {
+                $portOpen = $true
+                break
+            }
+        }
+        if (-not $portOpen) {
+            Stop-Process -Id $testPid -Force -ErrorAction SilentlyContinue
+            throw "Failed operational test: Simulated service failed to bind port $testPort within 3 seconds!"
+        }
+        Write-Host "  [PASS] Observed port $testPort is open and responding."
 
         # Activate profile tracking this PID
         Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -ProcessIdsToTrack @($testPid)
@@ -655,20 +710,24 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Active profile recorded and tracked owned PID $testPid."
 
-        # Deactivate profile and verify real process termination
+        # Deactivate profile and verify real process termination and port closure
         Invoke-ShipDeDeactivate -ProfilesPath $ProfilesPath
-        Start-Sleep -Milliseconds 200
+        Start-Sleep -Milliseconds 300
 
         $procStillAlive = Get-Process -Id $testPid -ErrorAction SilentlyContinue
         if ($null -ne $procStillAlive) {
             Stop-Process -Id $testPid -Force -ErrorAction SilentlyContinue
             throw "Failed operational test: Deactivate failed to terminate tracked PID $testPid!"
         }
+        $portStillOpen = Test-ShipDePort -HostName "127.0.0.1" -Port $testPort
+        if ($portStillOpen) {
+            throw "Failed operational test: Port $testPort remains open after deactivation!"
+        }
         $stateAfterDeactivate = Get-ShipDeProfileState
         if ($null -ne $stateAfterDeactivate) {
             throw "Failed operational test: Deactivate failed to clean up profile state file!"
         }
-        Write-Host "  [PASS] Deactivate successfully terminated tracked PID $testPid and removed state file."
+        Write-Host "  [PASS] Deactivate successfully terminated tracked PID $testPid, closed port $testPort, and removed state file."
 
         Write-Host "`n================================================================"
         Write-Host "ALL 11 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
@@ -681,7 +740,7 @@ function Invoke-ShipDeTests {
 switch ($Action) {
     "Validate"   { Invoke-ShipDeValidate -ManifestPath $ManifestPath -ProfilesPath $ProfilesPath }
     "Status"     { Invoke-ShipDeStatus -ManifestPath $ManifestPath -ProfilesPath $ProfilesPath -AiRoot $AiRoot }
-    "Activate"   { Invoke-ShipDeActivate -ProfileName $Profile -ProfilesPath $ProfilesPath }
+    "Activate"   { Invoke-ShipDeActivate -ProfileName $Profile -ProfilesPath $ProfilesPath -StartOptionalServices:$StartServices }
     "Deactivate" { Invoke-ShipDeDeactivate -ProfilesPath $ProfilesPath }
     "Test"       { Invoke-ShipDeTests -ManifestPath $ManifestPath -ProfilesPath $ProfilesPath }
     "SyncRegister" { Invoke-ShipDeSyncRegister }
