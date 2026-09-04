@@ -170,8 +170,48 @@ function Get-ShipDeCommandVersion {
                 if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
             }
             "agent-scan" {
-                $out = (& snyk-agent-scan --version 2>$null) -join " "
-                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+                # AI-COMPAT-02: Strict Agent Scan metadata parsing (Round 2 Finding 3, Round 3 Finding 2)
+                # - Exactly one Name: field, must equal "snyk-agent-scan"
+                # - Exactly one Version: field, must match complete version format with no trailing text
+                # - Exit code must be zero (Round 3 Finding 2)
+                # - Missing, duplicate, conflicting or malformed fields return null
+                try {
+                    $pipOut = & python -m pip show snyk-agent-scan 2>$null
+                    $exitCode = $LASTEXITCODE
+
+                    # Reject if pip show failed (Round 3 Finding 2)
+                    if ($exitCode -ne 0) { return $null }
+                    if (-not $pipOut) { return $null }
+
+                    $nameLines = @($pipOut | Where-Object { $_ -match '^Name:\s*(.+)$' })
+                    $versionLines = @($pipOut | Where-Object { $_ -match '^Version:\s*(.+)$' })
+
+                    # Require exactly one Name: field
+                    if ($nameLines.Count -ne 1) { return $null }
+
+                    # Validate Name field value is exactly "snyk-agent-scan" (trimmed)
+                    $nameLine = $nameLines[0]
+                    if ($nameLine -match '^Name:\s*(.+)$') {
+                        $nameValue = $matches[1].Trim()
+                        if ($nameValue -ne "snyk-agent-scan") { return $null }
+                    } else {
+                        return $null
+                    }
+
+                    # Require exactly one Version: field
+                    if ($versionLines.Count -ne 1) { return $null }
+
+                    # Parse version - must match complete format with no trailing text
+                    $versionLine = $versionLines[0]
+                    if ($versionLine -match '^Version:\s*(\d+\.\d+\.\d+)\s*$') {
+                        return $matches[1]
+                    }
+
+                    # Malformed version (missing, trailing garbage, etc.)
+                    return $null
+                } catch {
+                    return $null
+                }
             }
             "context7" {
                 $out = (& ctx7 --version 2>$null) -join " "
