@@ -33,6 +33,27 @@ function Test-ShipDePort {
     }
 }
 
+function Get-AvailableLoopbackPort {
+    # Allocates an OS-selected available port for test isolation.
+    # Binds to port 0 (OS assigns an available port), captures the assigned port,
+    # releases the binding, and returns the port number.
+    # Caller must immediately start its own listener to claim the port before another process takes it.
+
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $listener.Start()
+        $assignedPort = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+        $listener.Stop()
+        $listener = $null
+        return $assignedPort
+    } finally {
+        if ($null -ne $listener) {
+            try { $listener.Stop() } catch {}
+        }
+    }
+}
+
 function Test-ShipDeLoopbackOnlyListener {
     param(
         [Parameter(Mandatory = $true)][int]$Port
@@ -1377,9 +1398,9 @@ function Invoke-ShipDeTests {
         Write-Host "  [PASS] Present CLI with version mismatch failed closed under -Apply without attempting package upgrade or overwrite."
 
         # Negative Test 15a: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved (Round 5 Finding 1)
-        # CRITICAL FIX (Round 1): Use isolated test port to avoid interfering with real 9Router on production port 20128
+        # CRITICAL FIX (Round 2 Finding 2): Use dynamically allocated port for complete test isolation
         Write-Host "`nTest 15a [Negative / Security]: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved..."
-        $isolatedPort15a = 29114
+        $isolatedPort15a = Get-AvailableLoopbackPort
         $preScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $isolatedPort15a); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
         $preProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $preScript -PassThru
         $prePid = $preProc.Id
@@ -1429,9 +1450,9 @@ function Invoke-ShipDeTests {
         Write-Host "  [PASS] Pre-existing non-loopback (0.0.0.0) listener rejected without launcher, and pre-existing process safely preserved (isolated port $isolatedPort15a, real 9Router on production port 20128 preserved)."
 
         # Negative Test 15b: Unrelated loopback listener with generic runtime process rejected by command line identity check (Round 6 Finding 1)
-        # CRITICAL FIX (Round 1): Use isolated test port via TestPortOverrides to avoid interfering with real 9Router service on production port 20128
+        # CRITICAL FIX (Round 2 Finding 2): Use dynamically allocated port for complete test isolation
         Write-Host "`nTest 15b [Negative / Security]: Unrelated loopback listener with generic runtime process must be rejected by service identity check..."
-        $isolatedTestPort15b = 29115
+        $isolatedTestPort15b = Get-AvailableLoopbackPort
 
         # Start unrelated generic listener on isolated test port (no 9router identity in command line)
         $unrelatedScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $isolatedTestPort15b); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
@@ -1485,10 +1506,10 @@ function Invoke-ShipDeTests {
         Write-Host "  [PASS] Unrelated loopback listener with generic process name rejected by service identity verification without killing process (isolated test port $isolatedTestPort15b, real 9Router on production port 20128 preserved and untouched)."
 
         # Positive Test 15c: Pre-existing listeners with approved service identities in command line are verified and accepted (Round 6 Finding 1)
-        # CRITICAL FIX (Round 1): Use isolated test ports to avoid interfering with real services on production ports 20128 and 3080
+        # CRITICAL FIX (Round 2 Finding 2): Use dynamically allocated ports for complete test isolation
         Write-Host "`nTest 15c [Positive / Operational]: Pre-existing listeners with approved service identities in command line must be accepted..."
-        $isolatedPort9r15c = 29117
-        $isolatedPortDsh15c = 29118
+        $isolatedPort9r15c = Get-AvailableLoopbackPort
+        $isolatedPortDsh15c = Get-AvailableLoopbackPort
 
         # Launch mock 9Router listener whose command line explicitly contains the approved 9Router identity
         $approvedScript9r = "# 9router service listener`n[System.Net.Sockets.TcpListener]`$l1 = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $isolatedPort9r15c); `$l1.Start(); Start-Sleep -Seconds 30; `$l1.Stop()"
@@ -1588,40 +1609,68 @@ exit /b 1
             $env:Path = $originalPath
         }
 
-        # Test 17 (AC-AI-27): Promptfoo 0.122.2 pin verification
-        Write-Host "`nTest 17 [Positive / AC-AI-27]: Promptfoo 0.122.2 pin verification..."
-        $manifestContent = Get-Content -Path $ManifestPath -Raw | ConvertFrom-Json
-        $promptfooEntry = $manifestContent.adopted | Where-Object { $_.id -eq "promptfoo" }
-        if (-not $promptfooEntry) {
-            throw "Failed AC-AI-27: Promptfoo entry not found in manifest!"
-        }
-        if ($promptfooEntry.pinned_version_or_commit -ne "0.122.2") {
-            throw "Failed AC-AI-27: Promptfoo pin is '$($promptfooEntry.pinned_version_or_commit)', expected '0.122.2'!"
-        }
+        # Test 17 (AC-AI-27 / Round 2 Finding 4): Promptfoo 0.122.2 behavioral verification
+        Write-Host "`nTest 17 [Positive / AC-AI-27]: Promptfoo 0.122.2 detection via controlled npm metadata..."
+        $promptfooFixtureDir = Join-Path $testTempDir "promptfoo-fixture"
+        New-Item -ItemType Directory -Path $promptfooFixtureDir -Force | Out-Null
 
-        # Verify documentation alignment
-        $docPath = Join-Path (Split-Path $ManifestPath -Parent | Split-Path -Parent) "docs\product-spec\docs\10-ai-collaboration\REPOSITORY-CLI-MANIFEST.md"
-        $docContent = Get-Content -Path $docPath -Raw
-        if ($docContent -match 'promptfoo@0\.111\.0') {
-            throw "Failed AC-AI-27: Documentation still references old Promptfoo version 0.111.0!"
+        # Create mock npm.cmd that returns controlled global package metadata
+        $mockNpmCmd = Join-Path $promptfooFixtureDir "npm.cmd"
+        $mockNpmContent = @'
+@echo off
+rem Handle both "npm list --global --depth=0 --json" and "npm list --global promptfoo --depth=0 --json"
+if "%1"=="list" if "%2"=="--global" (
+    echo {"dependencies":{"promptfoo":{"version":"0.122.2"}}}
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockNpmCmd -Value $mockNpmContent -Encoding ASCII
+
+        $originalPathPromptfoo = $env:Path
+        try {
+            $env:Path = "$promptfooFixtureDir;$originalPathPromptfoo"
+            $testOutFile17 = Join-Path $testTempDir "test17-out.txt"
+            $installProc17 = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$ManifestPath`"", "-Tools", "promptfoo" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile17 -RedirectStandardError (Join-Path $testTempDir "test17-err.txt")
+
+            $output17 = Get-Content $testOutFile17 -Raw
+            if ($output17 -notmatch '\[OK\]\s+Promptfoo\s+.*0\.122\.2') {
+                throw "Failed AC-AI-27: Promptfoo 0.122.2 was not detected as [OK] via npm metadata! Output: $output17"
+            }
+
+            # Also verify manifest pin and documentation alignment (governance requirement)
+            $manifestContent = Get-Content -Path $ManifestPath -Raw | ConvertFrom-Json
+            $promptfooEntry = $manifestContent.adopted | Where-Object { $_.id -eq "promptfoo" }
+            if ($promptfooEntry.pinned_version_or_commit -ne "0.122.2") {
+                throw "Failed AC-AI-27: Promptfoo pin is '$($promptfooEntry.pinned_version_or_commit)', expected '0.122.2'!"
+            }
+
+            $docPath = Join-Path (Split-Path $ManifestPath -Parent | Split-Path -Parent) "docs\product-spec\docs\10-ai-collaboration\REPOSITORY-CLI-MANIFEST.md"
+            $docContent = Get-Content -Path $docPath -Raw
+            if ($docContent -match 'promptfoo@0\.111\.0') {
+                throw "Failed AC-AI-27: Documentation still references old Promptfoo version 0.111.0!"
+            }
+            if ($docContent -notmatch 'promptfoo@0\.122\.2') {
+                throw "Failed AC-AI-27: Documentation does not reference new Promptfoo version 0.122.2!"
+            }
+
+            Write-Host "  [PASS] Promptfoo 0.122.2 detected via npm metadata and pin verified in manifest/docs (AC-AI-27)."
+        } finally {
+            $env:Path = $originalPathPromptfoo
         }
-        if ($docContent -notmatch 'promptfoo@0\.122\.2') {
-            throw "Failed AC-AI-27: Documentation does not reference new Promptfoo version 0.122.2!"
-        }
-        Write-Host "  [PASS] Promptfoo 0.122.2 pin verified in manifest and documentation (AC-AI-27)."
 
         # Test 18 (AC-AI-28): Missing Agent Scan pip metadata must report MISSING
         Write-Host "`nTest 18 [Negative / AC-AI-28]: Missing Agent Scan pip metadata must report MISSING..."
         $missingPipFixtureDir = Join-Path $testTempDir "missing-pip-fixture"
         New-Item -ItemType Directory -Path $missingPipFixtureDir -Force | Out-Null
 
-        # Create mock python.cmd that returns no package found
+        # Create mock python.cmd that returns no package found (Round 2 Finding 4: realistic non-zero exit code)
         $mockPythonMissingCmd = Join-Path $missingPipFixtureDir "python.cmd"
         $mockMissingCmdContent = @'
 @echo off
 if "%1"=="-m" if "%2"=="pip" if "%3"=="show" (
     echo WARNING: Package^(s^) not found: snyk-agent-scan 1>&2
-    exit /b 0
+    exit /b 1
 )
 exit /b 1
 '@
@@ -1684,7 +1733,146 @@ exit /b 1
             $env:Path = $originalPathMismatch
         }
 
-        # Test 20 (AC-AI-32): Paths with spaces handling
+        # Test 19a (Round 2 Finding 3): Trailing garbage in version field must be rejected
+        Write-Host "`nTest 19a [Negative / Round 2 Finding 3]: Agent Scan version with trailing garbage must be rejected..."
+        $trailingGarbageFixtureDir = Join-Path $testTempDir "trailing-garbage-fixture"
+        New-Item -ItemType Directory -Path $trailingGarbageFixtureDir -Force | Out-Null
+
+        $mockPythonTrailingCmd = Join-Path $trailingGarbageFixtureDir "python.cmd"
+        $mockTrailingCmdContent = @'
+@echo off
+if "%1"=="-m" if "%2"=="pip" if "%3"=="show" (
+    echo Name: snyk-agent-scan
+    echo Version: 0.6.1-beta extra text
+    echo Summary: Snyk Agent Scan
+    echo Home-page: https://github.com/snyk/agent-scan
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockPythonTrailingCmd -Value $mockTrailingCmdContent -Encoding ASCII
+
+        $originalPathTrailing = $env:Path
+        try {
+            $env:Path = "$trailingGarbageFixtureDir;$originalPathTrailing"
+            $testOutFile19a = Join-Path $testTempDir "test19a-out.txt"
+            $installProc19a = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$ManifestPath`"", "-Tools", "agent-scan" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile19a -RedirectStandardError (Join-Path $testTempDir "test19a-err.txt")
+
+            $output19a = Get-Content $testOutFile19a -Raw
+            if ($output19a -match '\[OK\]\s+Snyk Agent Scan') {
+                throw "Failed Round 2 Finding 3: Version with trailing garbage was accepted! Output: $output19a"
+            }
+            if ($output19a -notmatch 'MISSING MACHINE-LEVEL TOOLS' -and $output19a -notmatch 'VERSION MISMATCHED TOOLS') {
+                throw "Failed Round 2 Finding 3: Malformed version was not reported as MISSING or MISMATCH! Output: $output19a"
+            }
+            Write-Host "  [PASS] Agent Scan version with trailing garbage correctly rejected (Round 2 Finding 3)."
+        } finally {
+            $env:Path = $originalPathTrailing
+        }
+
+        # Test 19b (Round 2 Finding 3): Duplicate Version fields must be rejected
+        Write-Host "`nTest 19b [Negative / Round 2 Finding 3]: Duplicate Version fields must be rejected..."
+        $duplicateVersionFixtureDir = Join-Path $testTempDir "duplicate-version-fixture"
+        New-Item -ItemType Directory -Path $duplicateVersionFixtureDir -Force | Out-Null
+
+        $mockPythonDuplicateCmd = Join-Path $duplicateVersionFixtureDir "python.cmd"
+        $mockDuplicateCmdContent = @'
+@echo off
+if "%1"=="-m" if "%2"=="pip" if "%3"=="show" (
+    echo Name: snyk-agent-scan
+    echo Version: 0.6.1
+    echo Version: 0.5.0
+    echo Summary: Snyk Agent Scan
+    echo Home-page: https://github.com/snyk/agent-scan
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockPythonDuplicateCmd -Value $mockDuplicateCmdContent -Encoding ASCII
+
+        $originalPathDuplicate = $env:Path
+        try {
+            $env:Path = "$duplicateVersionFixtureDir;$originalPathDuplicate"
+            $testOutFile19b = Join-Path $testTempDir "test19b-out.txt"
+            $installProc19b = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$ManifestPath`"", "-Tools", "agent-scan" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile19b -RedirectStandardError (Join-Path $testTempDir "test19b-err.txt")
+
+            $output19b = Get-Content $testOutFile19b -Raw
+            if ($output19b -match '\[OK\]\s+Snyk Agent Scan') {
+                throw "Failed Round 2 Finding 3: Duplicate Version fields were accepted! Output: $output19b"
+            }
+            Write-Host "  [PASS] Duplicate Version fields correctly rejected (Round 2 Finding 3)."
+        } finally {
+            $env:Path = $originalPathDuplicate
+        }
+
+        # Test 19c (Round 2 Finding 3): Wrong package name must be rejected
+        Write-Host "`nTest 19c [Negative / Round 2 Finding 3]: Wrong package name must be rejected..."
+        $wrongNameFixtureDir = Join-Path $testTempDir "wrong-name-fixture"
+        New-Item -ItemType Directory -Path $wrongNameFixtureDir -Force | Out-Null
+
+        $mockPythonWrongNameCmd = Join-Path $wrongNameFixtureDir "python.cmd"
+        $mockWrongNameCmdContent = @'
+@echo off
+if "%1"=="-m" if "%2"=="pip" if "%3"=="show" (
+    echo Name: different-package
+    echo Version: 0.6.1
+    echo Summary: Different Package
+    echo Home-page: https://example.com
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockPythonWrongNameCmd -Value $mockWrongNameCmdContent -Encoding ASCII
+
+        $originalPathWrongName = $env:Path
+        try {
+            $env:Path = "$wrongNameFixtureDir;$originalPathWrongName"
+            $testOutFile19c = Join-Path $testTempDir "test19c-out.txt"
+            $installProc19c = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$ManifestPath`"", "-Tools", "agent-scan" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile19c -RedirectStandardError (Join-Path $testTempDir "test19c-err.txt")
+
+            $output19c = Get-Content $testOutFile19c -Raw
+            if ($output19c -match '\[OK\]\s+Snyk Agent Scan') {
+                throw "Failed Round 2 Finding 3: Wrong package name was accepted! Output: $output19c"
+            }
+            Write-Host "  [PASS] Wrong package name correctly rejected (Round 2 Finding 3)."
+        } finally {
+            $env:Path = $originalPathWrongName
+        }
+
+        # Test 19d (Round 2 Finding 3): Missing Name field must be rejected
+        Write-Host "`nTest 19d [Negative / Round 2 Finding 3]: Missing Name field must be rejected..."
+        $missingNameFixtureDir = Join-Path $testTempDir "missing-name-fixture"
+        New-Item -ItemType Directory -Path $missingNameFixtureDir -Force | Out-Null
+
+        $mockPythonMissingNameCmd = Join-Path $missingNameFixtureDir "python.cmd"
+        $mockMissingNameCmdContent = @'
+@echo off
+if "%1"=="-m" if "%2"=="pip" if "%3"=="show" (
+    echo Version: 0.6.1
+    echo Summary: Snyk Agent Scan
+    echo Home-page: https://github.com/snyk/agent-scan
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockPythonMissingNameCmd -Value $mockMissingNameCmdContent -Encoding ASCII
+
+        $originalPathMissingName = $env:Path
+        try {
+            $env:Path = "$missingNameFixtureDir;$originalPathMissingName"
+            $testOutFile19d = Join-Path $testTempDir "test19d-out.txt"
+            $installProc19d = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$ManifestPath`"", "-Tools", "agent-scan" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile19d -RedirectStandardError (Join-Path $testTempDir "test19d-err.txt")
+
+            $output19d = Get-Content $testOutFile19d -Raw
+            if ($output19d -match '\[OK\]\s+Snyk Agent Scan') {
+                throw "Failed Round 2 Finding 3: Missing Name field was accepted! Output: $output19d"
+            }
+            Write-Host "  [PASS] Missing Name field correctly rejected (Round 2 Finding 3)."
+        } finally {
+            $env:Path = $originalPathMissingName
+        }
+
+        # Test 20 (AC-AI-32 / Round 2 Finding 4): Paths with spaces handling
         Write-Host "`nTest 20 [Positive / AC-AI-32]: Paths with spaces must work correctly..."
         $spacedDir = Join-Path $testTempDir "test dir with spaces"
         New-Item -ItemType Directory -Path $spacedDir -Force | Out-Null
@@ -1692,44 +1880,127 @@ exit /b 1
         $spacedManifestPath = Join-Path $spacedDir "manifest.json"
         Copy-Item -LiteralPath $ManifestPath -Destination $spacedManifestPath -Force
 
+        # Round 2 Finding 4: Place Python/CMD fixture and redirected output beneath spaced directory
+        $spacedFixtureDir = Join-Path $spacedDir "fixtures with spaces"
+        New-Item -ItemType Directory -Path $spacedFixtureDir -Force | Out-Null
+
+        # Create mock python.cmd in spaced path
+        $mockPythonSpacedCmd = Join-Path $spacedFixtureDir "python.cmd"
+        $mockPythonSpacedContent = @'
+@echo off
+if "%1"=="-m" if "%2"=="pip" if "%3"=="show" (
+    echo Name: snyk-agent-scan
+    echo Version: 0.6.1
+    echo Summary: Snyk Agent Scan
+    echo Home-page: https://github.com/snyk/agent-scan
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockPythonSpacedCmd -Value $mockPythonSpacedContent -Encoding ASCII
+
+        # Create mock npm.cmd in spaced path
+        $mockNpmSpacedCmd = Join-Path $spacedFixtureDir "npm.cmd"
+        $mockNpmSpacedContent = @'
+@echo off
+rem Handle npm list with various argument combinations
+if "%1"=="list" if "%2"=="--global" (
+    echo {"dependencies":{}}
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockNpmSpacedCmd -Value $mockNpmSpacedContent -Encoding ASCII
+
         $testOutFile20 = Join-Path $spacedDir "output with spaces.txt"
-        $installProc20 = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$spacedManifestPath`"" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile20 -RedirectStandardError (Join-Path $spacedDir "error.txt")
+        $testErrFile20 = Join-Path $spacedDir "error with spaces.txt"
 
-        if ($installProc20.ExitCode -ne 0) {
-            throw "Failed AC-AI-32: Installer failed with paths containing spaces!"
+        $originalPathSpaced = $env:Path
+        try {
+            $env:Path = "$spacedFixtureDir;$originalPathSpaced"
+
+            $installProc20 = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$spacedManifestPath`"", "-Tools", "agent-scan" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile20 -RedirectStandardError $testErrFile20
+
+            if ($installProc20.ExitCode -ne 0) {
+                $errContent = Get-Content $testErrFile20 -Raw -ErrorAction SilentlyContinue
+                throw "Failed AC-AI-32: Installer failed with paths containing spaces! Error: $errContent"
+            }
+
+            $output20 = Get-Content $testOutFile20 -Raw
+            if ($output20 -match 'not found' -or $output20 -match 'cannot find') {
+                throw "Failed AC-AI-32: Path with spaces caused path resolution failure! Output: $output20"
+            }
+
+            # Verify Agent Scan was detected correctly from spaced fixture path
+            if ($output20 -notmatch '\[OK\]\s+Snyk Agent Scan\s+.*0\.6\.1') {
+                throw "Failed AC-AI-32: Agent Scan not detected from fixture in spaced path! Output: $output20"
+            }
+
+            Write-Host "  [PASS] Paths with spaces handled correctly (manifest, fixtures, output all in spaced paths) (AC-AI-32)."
+        } finally {
+            $env:Path = $originalPathSpaced
         }
 
-        $output20 = Get-Content $testOutFile20 -Raw
-        if ($output20 -match 'not found' -or $output20 -match 'cannot find') {
-            throw "Failed AC-AI-32: Path with spaces caused path resolution failure! Output: $output20"
-        }
-        Write-Host "  [PASS] Paths with spaces handled correctly (AC-AI-32)."
+        # Test 21 (AC-AI-33 / Round 2 Finding 4): npm metadata tools behavioral verification
+        Write-Host "`nTest 21 [Positive / AC-AI-33]: npm metadata tools detection (Renovate example with noisy CLI)..."
+        $npmMetadataFixtureDir = Join-Path $testTempDir "npm-metadata-fixture"
+        New-Item -ItemType Directory -Path $npmMetadataFixtureDir -Force | Out-Null
 
-        # Test 21 (AC-AI-33): npm metadata tools preserved (Renovate, Repomix, Prism, Context7, Playwright CLI)
-        Write-Host "`nTest 21 [Positive / AC-AI-33]: npm metadata tools detection preserved..."
-        $npmTools = @("renovate", "repomix", "prism", "context7", "playwright-cli")
-        foreach ($tool in $npmTools) {
-            $toolEntry = $manifestContent.adopted | Where-Object { $_.id -eq $tool }
-            if (-not $toolEntry) {
-                throw "Failed AC-AI-33: npm tool '$tool' not found in manifest!"
+        # Create mock npm.cmd that returns controlled global package metadata
+        # Simulates Renovate installed with noisy CLI output but clean npm metadata
+        $mockNpmMetadataCmd = Join-Path $npmMetadataFixtureDir "npm.cmd"
+        $mockNpmMetadataContent = @'
+@echo off
+rem Handle npm list with various argument combinations
+if "%1"=="list" if "%2"=="--global" (
+    echo {"dependencies":{"renovate":{"version":"39.191.0"}}}
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockNpmMetadataCmd -Value $mockNpmMetadataContent -Encoding ASCII
+
+        # Create stub renovate CLI that simulates noisy/unusable output
+        # This should NOT be used for version detection; only npm metadata should be authoritative
+        $stubRenovateCmd = Join-Path $npmMetadataFixtureDir "renovate.cmd"
+        Set-Content -Path $stubRenovateCmd -Value "@echo off`necho WARNING: re2 module not found, falling back to RegExp`necho Renovate version info corrupted`nexit /b 1" -Encoding ASCII
+
+        $originalPathNpmMeta = $env:Path
+        try {
+            $env:Path = "$npmMetadataFixtureDir;$originalPathNpmMeta"
+            $testOutFile21 = Join-Path $testTempDir "test21-out.txt"
+            $installProc21 = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$ManifestPath`"", "-Tools", "renovate" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile21 -RedirectStandardError (Join-Path $testTempDir "test21-err.txt")
+
+            $output21 = Get-Content $testOutFile21 -Raw
+
+            # Renovate must be [OK] from npm metadata despite noisy/failing CLI output
+            if ($output21 -notmatch '\[OK\]\s+Renovate\s+.*39\.191\.0') {
+                throw "Failed AC-AI-33: Renovate 39.191.0 was not detected as [OK] via npm metadata despite noisy CLI! Output: $output21"
             }
-            $pkgName = switch ($tool) {
-                "renovate" { "renovate" }
-                "repomix" { "repomix" }
-                "prism" { "@stoplight/prism-cli" }
-                "context7" { "ctx7" }
-                "playwright-cli" { "@playwright/cli" }
-            }
-            # Verify tool is in npm package map in installer script
+
+            # Also verify package name mappings exist for other tools (structural check)
             $installerContent = Get-Content -Path $installScriptPath -Raw
-            if ($installerContent -notmatch [regex]::Escape("`"$tool`"") -or $installerContent -notmatch [regex]::Escape("`"$pkgName`"")) {
-                throw "Failed AC-AI-33: npm tool '$tool' -> '$pkgName' mapping missing in installer!"
+            $requiredMappings = @{
+                "renovate" = "renovate"
+                "repomix" = "repomix"
+                "prism" = "@stoplight/prism-cli"
+                "context7" = "ctx7"
+                "playwright-cli" = "@playwright/cli"
             }
+            foreach ($toolId in $requiredMappings.Keys) {
+                $pkgName = $requiredMappings[$toolId]
+                if ($installerContent -notmatch [regex]::Escape("`"$toolId`"") -or $installerContent -notmatch [regex]::Escape("`"$pkgName`"")) {
+                    throw "Failed AC-AI-33: npm tool '$toolId' -> '$pkgName' mapping missing in installer!"
+                }
+            }
+
+            Write-Host "  [PASS] npm metadata tools detected correctly (Renovate behavioral + package mappings verified) (AC-AI-33)."
+        } finally {
+            $env:Path = $originalPathNpmMeta
         }
-        Write-Host "  [PASS] All npm metadata tools preserved with correct package name mappings (AC-AI-33)."
 
         Write-Host "`n================================================================"
-        Write-Host "ALL 21 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
+        Write-Host "ALL 25 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
         Write-Host "================================================================"
     } finally {
         Remove-Item -LiteralPath $testTempDir -Recurse -Force -ErrorAction SilentlyContinue
