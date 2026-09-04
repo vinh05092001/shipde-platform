@@ -158,6 +158,32 @@ function Assert-ShipDePullRequestRecord {
     }
 }
 
+function ConvertFrom-ShipDeMergedPullRequestList {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Json
+    )
+
+    $pullRequests = @(ConvertFrom-ShipDeJsonList -Json $Json)
+    foreach ($pullRequest in $pullRequests) {
+        Assert-ShipDePullRequestRecord -PullRequest $pullRequest
+
+        $numberProperty = $pullRequest.PSObject.Properties["number"]
+        $number = 0
+        if (
+            -not $numberProperty -or
+            $numberProperty.Value -is [System.Array] -or
+            -not [int]::TryParse([string]$numberProperty.Value, [ref]$number) -or
+            $number -le 0
+        ) {
+            throw "GitHub returned a malformed merged Pull Request record without one positive scalar integer number."
+        }
+
+        Write-Output $pullRequest
+    }
+}
+
 function Assert-ShipDeJsonListCompatibility {
     $empty = @(ConvertFrom-ShipDeJsonList -Json "[]")
     $single = @(ConvertFrom-ShipDeJsonList -Json '[{"title":"one"}]')
@@ -185,6 +211,43 @@ function Assert-ShipDeJsonListCompatibility {
     }
     if (-not $nullRejected) {
         throw "Controller JSON compatibility check accepted a null list record."
+    }
+
+    # Windows PowerShell 5.1 can otherwise wrap the complete merged-PR JSON
+    # array as one System.Object[] record. Exercise the exact sync parser.
+    $mergedEmpty = @(ConvertFrom-ShipDeMergedPullRequestList -Json "[]")
+    $mergedSingle = @(ConvertFrom-ShipDeMergedPullRequestList -Json '[{"number":6,"title":"[TASK-AI-04] one"}]')
+    $mergedMultiple = @(ConvertFrom-ShipDeMergedPullRequestList -Json '[{"number":5,"title":"[TASK-AI-03] one"},{"number":6,"title":"[TASK-AI-04] two"}]')
+    if ($mergedEmpty.Count -ne 0) {
+        throw "Controller merged Pull Request compatibility check failed for an empty list."
+    }
+    if ($mergedSingle.Count -ne 1 -or [int]$mergedSingle[0].number -ne 6) {
+        throw "Controller merged Pull Request compatibility check failed for a single-item list."
+    }
+    if (
+        $mergedMultiple.Count -ne 2 -or
+        [int]$mergedMultiple[0].number -ne 5 -or
+        [int]$mergedMultiple[1].number -ne 6
+    ) {
+        throw "Controller merged Pull Request compatibility check failed for a multi-item list."
+    }
+
+    foreach ($invalidMergedJson in @(
+        '[{"title":"missing number"}]',
+        '[{"number":"","title":"blank number"}]',
+        '[{"number":"not-a-number","title":"invalid number"}]',
+        '[{"number":0,"title":"nonpositive number"}]',
+        '[{"number":[6],"title":"array number"}]'
+    )) {
+        $invalidMergedRejected = $false
+        try {
+            @(ConvertFrom-ShipDeMergedPullRequestList -Json $invalidMergedJson) | Out-Null
+        } catch {
+            $invalidMergedRejected = $true
+        }
+        if (-not $invalidMergedRejected) {
+            throw "Controller merged Pull Request compatibility check accepted a malformed number."
+        }
     }
 
     foreach ($invalidRecord in @(
@@ -808,7 +871,7 @@ function Sync-ShipDeRegister {
     try {
         $rawJson = @(& gh pr list --repo $Repository --state merged --json number,title,headRefName,headRefOid,mergeCommit --limit 100 2>$null) -join "`n"
         if (-not [string]::IsNullOrWhiteSpace($rawJson)) {
-            $mergedPrs = @($rawJson | ConvertFrom-Json)
+            $mergedPrs = @(ConvertFrom-ShipDeMergedPullRequestList -Json $rawJson)
         }
     } catch {
         $mergedPrs = $null
