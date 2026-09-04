@@ -866,18 +866,18 @@ function Sync-ShipDeRegister {
     # If workspace is the protected main worktree, prevent leaving main dirty
     $isMainWorkspace = ($Workspace -eq $script:Paths.Main)
 
-    # Fetch merged PRs from GitHub including headRefOid
-    $mergedPrs = $null
-    try {
-        $rawJson = @(& gh pr list --repo $Repository --state merged --json number,title,headRefName,headRefOid,mergeCommit --limit 100 2>$null) -join "`n"
-        if (-not [string]::IsNullOrWhiteSpace($rawJson)) {
-            $mergedPrs = @(ConvertFrom-ShipDeMergedPullRequestList -Json $rawJson)
-        }
-    } catch {
-        $mergedPrs = $null
+    # Fetch merged PRs from GitHub including headRefOid. Fail closed on
+    # command or record errors instead of silently skipping reconciliation.
+    $rawJson = @(& gh pr list --repo $Repository --state merged --json number,title,headRefName,headRefOid,mergeCommit --limit 100 2>$null) -join "`n"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot read merged Pull Requests from GitHub."
+    }
+    if ([string]::IsNullOrWhiteSpace($rawJson)) {
+        return
     }
 
-    if (-not $mergedPrs -or $mergedPrs.Count -eq 0) {
+    $mergedPrs = @(ConvertFrom-ShipDeMergedPullRequestList -Json $rawJson)
+    if ($mergedPrs.Count -eq 0) {
         return
     }
 
