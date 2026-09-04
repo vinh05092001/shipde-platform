@@ -166,9 +166,9 @@ No machine rollback is expected because this Work Item authorizes no installatio
 
 ## Codex review record
 
-| Review round | Commit                      | Verdict              | Findings resolved |
-| ------------ | --------------------------- | -------------------- | ----------------- |
-| 1            | Pending implementation head | Pending fresh review | Not yet reviewed  |
+| Review round | Commit                      | Verdict           | Findings resolved                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------ | --------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1            | TBD (pending commit)        | CHANGES_REQUIRED  | **Blocking:** Test 15b used production port 20128 while user-managed 9Router service was already listening, causing environment-dependent failure. **Resolution:** Refactored Tests 15a, 15b, and 15c to use isolated dynamically selected loopback ports (29114, 29115, 29117-29118) via new `TestPortOverrides` parameter. All 21 ecosystem tests now pass deterministically while preserving real 9Router on production port 20128. Also fixed Python mock fixtures in Tests 16-19 to use proper CMD batch file escaping for Windows compatibility. |
 
 ## Residual limitations
 

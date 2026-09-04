@@ -633,7 +633,8 @@ function Invoke-ShipDeActivate {
         [Parameter(Mandatory = $true)][string]$ProfileName,
         [string]$ProfilesPath,
         [switch]$StartOptionalServices,
-        [scriptblock]$ServiceLauncher = $null
+        [scriptblock]$ServiceLauncher = $null,
+        [hashtable]$TestPortOverrides = $null  # Test-only: override hardcoded service ports for isolated testing
     )
 
     $profiles = Get-ShipDeProfilesContent -Path $ProfilesPath
@@ -676,7 +677,7 @@ function Invoke-ShipDeActivate {
                         throw "Service launch adapter failed to start service '$svc'."
                     }
                 } elseif ($svc -eq "nine-router") {
-                    $port = 20128
+                    $port = if ($TestPortOverrides -and $TestPortOverrides.ContainsKey("nine-router")) { $TestPortOverrides["nine-router"] } else { 20128 }
                     if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $port)) {
                         $cmd = Get-Command "9router" -ErrorAction SilentlyContinue
                         if (-not $cmd) {
@@ -697,7 +698,7 @@ function Invoke-ShipDeActivate {
                         $proc = Start-Process -FilePath $execPath -ArgumentList $execArgs -PassThru -WindowStyle Hidden
                     }
                 } elseif ($svc -eq "deepseek-harness") {
-                    $port = 3080
+                    $port = if ($TestPortOverrides -and $TestPortOverrides.ContainsKey("deepseek-harness")) { $TestPortOverrides["deepseek-harness"] } else { 3080 }
                     if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $port)) {
                         $cmd = Get-Command "dsh" -ErrorAction SilentlyContinue
                         if (-not $cmd) {
@@ -1376,22 +1377,25 @@ function Invoke-ShipDeTests {
         Write-Host "  [PASS] Present CLI with version mismatch failed closed under -Apply without attempting package upgrade or overwrite."
 
         # Negative Test 15a: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved (Round 5 Finding 1)
+        # CRITICAL FIX (Round 1): Use isolated test port to avoid interfering with real 9Router on production port 20128
         Write-Host "`nTest 15a [Negative / Security]: Pre-existing non-loopback (0.0.0.0) listener must be rejected without launcher and pre-existing process preserved..."
-        $prePort = 20128
-        $preScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $prePort); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
+        $isolatedPort15a = 29114
+        $preScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $isolatedPort15a); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
         $preProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $preScript -PassThru
         $prePid = $preProc.Id
 
         # Wait up to 5s for port to become active on 0.0.0.0
         for ($i = 0; $i -lt 10; $i++) {
             Start-Sleep -Milliseconds 200
-            if (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort) { break }
+            if (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPort15a) { break }
         }
+
+        # Use TestPortOverrides to make activation check the isolated port instead of production port 20128
+        $testPortMap15a = @{ "nine-router" = $isolatedPort15a }
 
         $preOpenCaught = $false
         try {
-            # Invoke activation WITHOUT a custom launcher on FOUNDATION (which requests nine-router on 20128)
-            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices
+            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices -TestPortOverrides $testPortMap15a
         } catch {
             if ($_ -match "not restricted to localhost" -or $_ -match "violates localhost-only" -or $_ -match "unverified or unexpected") {
                 $preOpenCaught = $true
@@ -1401,19 +1405,19 @@ function Invoke-ShipDeTests {
         # 1. Activation must be rejected
         if (-not $preOpenCaught) {
             Stop-Process -Id $prePid -Force -ErrorAction SilentlyContinue
-            throw "Failed negative test: Pre-existing non-loopback listener on port $prePort was not rejected by activation!"
+            throw "Failed negative test: Pre-existing non-loopback listener on isolated port $isolatedPort15a was not rejected by activation!"
         }
 
         # 2. Pre-existing process must NOT be killed by rollback
         $preStillRunning = Get-Process -Id $prePid -ErrorAction SilentlyContinue
         if ($null -eq $preStillRunning) {
-            throw "Failed negative test: Pre-existing process on port $prePort was killed during activation rollback!"
+            throw "Failed negative test: Pre-existing process on isolated port $isolatedPort15a was killed during activation rollback!"
         }
 
         # Clean up pre-existing process
         Stop-Process -Id $prePid -Force -ErrorAction SilentlyContinue
         for ($i = 0; $i -lt 10; $i++) {
-            if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort)) { break }
+            if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPort15a)) { break }
             Start-Sleep -Milliseconds 200
         }
 
@@ -1422,23 +1426,32 @@ function Invoke-ShipDeTests {
         if ($null -ne $stateAfterPreOpen) {
             throw "Failed negative test: State file was written despite rejection of pre-existing non-loopback listener!"
         }
-        Write-Host "  [PASS] Pre-existing non-loopback (0.0.0.0) listener rejected without launcher, and pre-existing process safely preserved."
+        Write-Host "  [PASS] Pre-existing non-loopback (0.0.0.0) listener rejected without launcher, and pre-existing process safely preserved (isolated port $isolatedPort15a, real 9Router on production port 20128 preserved)."
 
         # Negative Test 15b: Unrelated loopback listener with generic runtime process rejected by command line identity check (Round 6 Finding 1)
+        # CRITICAL FIX (Round 1): Use isolated test port via TestPortOverrides to avoid interfering with real 9Router service on production port 20128
         Write-Host "`nTest 15b [Negative / Security]: Unrelated loopback listener with generic runtime process must be rejected by service identity check..."
-        $unrelatedScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $prePort); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
-        $unrelatedProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $unrelatedScript -PassThru
-        $unrelatedPid = $unrelatedProc.Id
+        $isolatedTestPort15b = 29115
+
+        # Start unrelated generic listener on isolated test port (no 9router identity in command line)
+        $unrelatedScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $isolatedTestPort15b); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
+        $unrelatedProc15b = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $unrelatedScript -PassThru
+        $unrelatedPid15b = $unrelatedProc15b.Id
 
         # Wait up to 5s for port to become active on loopback
         for ($i = 0; $i -lt 15; $i++) {
             Start-Sleep -Milliseconds 200
-            if (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort) { break }
+            if (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedTestPort15b) { break }
         }
+
+        # Use TestPortOverrides to make activation check the isolated port instead of production port 20128
+        # This triggers the pre-existing service identity verification path without a launcher
+        $testPortMap = @{ "nine-router" = $isolatedTestPort15b }
 
         $unrelatedCaught = $false
         try {
-            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices
+            # Activation will check isolated port 29115, find the unrelated listener, and reject it due to missing 9router identity
+            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices -TestPortOverrides $testPortMap
         } catch {
             if ($_ -match "does not contain required '9router' identity" -or $_ -match "unverified or unexpected process") {
                 $unrelatedCaught = $true
@@ -1446,50 +1459,62 @@ function Invoke-ShipDeTests {
         }
 
         if (-not $unrelatedCaught) {
-            Stop-Process -Id $unrelatedPid -Force -ErrorAction SilentlyContinue
-            throw "Failed negative test: Unrelated listener on port $prePort was not rejected by service identity verification!"
+            Stop-Process -Id $unrelatedPid15b -Force -ErrorAction SilentlyContinue
+            throw "Failed negative test: Unrelated listener on isolated test port $isolatedTestPort15b was not rejected by service identity verification!"
         }
 
-        $unrelatedStillRunning = Get-Process -Id $unrelatedPid -ErrorAction SilentlyContinue
+        # Verify unrelated process was NOT killed during rollback (safety check)
+        $unrelatedStillRunning = Get-Process -Id $unrelatedPid15b -ErrorAction SilentlyContinue
         if ($null -eq $unrelatedStillRunning) {
-            throw "Failed negative test: Unrelated process on port $prePort was killed during activation rollback!"
+            throw "Failed negative test: Unrelated process on isolated test port $isolatedTestPort15b was killed during activation rollback!"
         }
 
-        Stop-Process -Id $unrelatedPid -Force -ErrorAction SilentlyContinue
+        # Clean up test-owned process
+        Stop-Process -Id $unrelatedPid15b -Force -ErrorAction SilentlyContinue
         for ($i = 0; $i -lt 10; $i++) {
-            if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort)) { break }
+            if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedTestPort15b)) { break }
             Start-Sleep -Milliseconds 200
         }
 
+        # Verify no state file was written (activation must have been rejected)
         $stateAfterUnrelated = Get-ShipDeProfileState
         if ($null -ne $stateAfterUnrelated) {
             throw "Failed negative test: State file was written despite rejection of unrelated listener!"
         }
-        Write-Host "  [PASS] Unrelated loopback listener with generic process name rejected by command line identity without killing process."
+
+        Write-Host "  [PASS] Unrelated loopback listener with generic process name rejected by service identity verification without killing process (isolated test port $isolatedTestPort15b, real 9Router on production port 20128 preserved and untouched)."
 
         # Positive Test 15c: Pre-existing listeners with approved service identities in command line are verified and accepted (Round 6 Finding 1)
+        # CRITICAL FIX (Round 1): Use isolated test ports to avoid interfering with real services on production ports 20128 and 3080
         Write-Host "`nTest 15c [Positive / Operational]: Pre-existing listeners with approved service identities in command line must be accepted..."
-        $preDshPort = 3080
+        $isolatedPort9r15c = 29117
+        $isolatedPortDsh15c = 29118
 
         # Launch mock 9Router listener whose command line explicitly contains the approved 9Router identity
-        $approvedScript9r = "# 9router service listener`n[System.Net.Sockets.TcpListener]`$l1 = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $prePort); `$l1.Start(); Start-Sleep -Seconds 30; `$l1.Stop()"
+        $approvedScript9r = "# 9router service listener`n[System.Net.Sockets.TcpListener]`$l1 = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $isolatedPort9r15c); `$l1.Start(); Start-Sleep -Seconds 30; `$l1.Stop()"
         $approvedProc9r = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $approvedScript9r -PassThru
         $approvedPid9r = $approvedProc9r.Id
 
         # Launch mock DSH listener whose command line explicitly contains the approved DSH identity
-        $approvedScriptDsh = "# dsh web service listener`n[System.Net.Sockets.TcpListener]`$l2 = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $preDshPort); `$l2.Start(); Start-Sleep -Seconds 30; `$l2.Stop()"
+        $approvedScriptDsh = "# dsh web service listener`n[System.Net.Sockets.TcpListener]`$l2 = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $isolatedPortDsh15c); `$l2.Start(); Start-Sleep -Seconds 30; `$l2.Stop()"
         $approvedProcDsh = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $approvedScriptDsh -PassThru
         $approvedPidDsh = $approvedProcDsh.Id
 
         # Wait up to 5s for both ports to become active on loopback
         for ($i = 0; $i -lt 15; $i++) {
             Start-Sleep -Milliseconds 200
-            if ((Test-ShipDePort -HostName "127.0.0.1" -Port $prePort) -and (Test-ShipDePort -HostName "127.0.0.1" -Port $preDshPort)) { break }
+            if ((Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPort9r15c) -and (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPortDsh15c)) { break }
+        }
+
+        # Use TestPortOverrides to make activation check the isolated ports instead of production ports
+        $testPortMap15c = @{
+            "nine-router"      = $isolatedPort9r15c
+            "deepseek-harness" = $isolatedPortDsh15c
         }
 
         $approvedPassed = $false
         try {
-            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices
+            Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices -TestPortOverrides $testPortMap15c
             $approvedPassed = $true
         } catch {
             Write-Warning "Approved listener activation threw: $_"
@@ -1513,7 +1538,7 @@ function Invoke-ShipDeTests {
         Stop-Process -Id $approvedPid9r -Force -ErrorAction SilentlyContinue
         Stop-Process -Id $approvedPidDsh -Force -ErrorAction SilentlyContinue
         for ($i = 0; $i -lt 10; $i++) {
-            if ((-not (Test-ShipDePort -HostName "127.0.0.1" -Port $prePort)) -and (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $preDshPort))) { break }
+            if ((-not (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPort9r15c)) -and (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPortDsh15c))) { break }
             Start-Sleep -Milliseconds 200
         }
 
@@ -1521,31 +1546,27 @@ function Invoke-ShipDeTests {
         if ($null -ne $stateAfterDeactivateApproved) {
             throw "Failed positive test: State file remained after deactivation of approved pre-existing service!"
         }
-        Write-Host "  [PASS] Pre-existing listeners with approved 9Router and DSH command line identities verified, accepted, and safely deactivated."
+        Write-Host "  [PASS] Pre-existing listeners with approved 9Router and DSH command line identities verified, accepted, and safely deactivated (isolated ports $isolatedPort9r15c and $isolatedPortDsh15c, real services on production ports preserved)."
 
         # Test 16 (AC-AI-26): Agent Scan pip metadata detection with controlled fixture
         Write-Host "`nTest 16 [Positive / AC-AI-26]: Agent Scan 0.6.1 detection via pip metadata..."
         $pipFixtureDir = Join-Path $testTempDir "pip-fixture"
         New-Item -ItemType Directory -Path $pipFixtureDir -Force | Out-Null
 
-        # Create mock python.exe that returns controlled pip show output
-        $mockPythonScript = @"
-`$args0 = `$args[0]
-`$args1 = `$args[1]
-`$args2 = `$args[2]
-if (`$args0 -eq '-m' -and `$args1 -eq 'pip' -and `$args2 -eq 'show') {
-    Write-Output 'Name: snyk-agent-scan'
-    Write-Output 'Version: 0.6.1'
-    Write-Output 'Summary: Snyk Agent Scan'
-    Write-Output 'Home-page: https://github.com/snyk/agent-scan'
-}
-"@
-        $mockPythonPath = Join-Path $pipFixtureDir "python.exe"
-        Set-Content -Path $mockPythonPath -Value $mockPythonScript -Encoding UTF8
-
-        # Create a wrapper CMD that calls PowerShell with the script content
+        # Create mock python.cmd that returns controlled pip show output
         $mockPythonCmd = Join-Path $pipFixtureDir "python.cmd"
-        Set-Content -Path $mockPythonCmd -Value "@echo off`r`npowershell.exe -NoProfile -Command `"$mockPythonScript`" %*" -Encoding ASCII
+        $mockCmdContent = @'
+@echo off
+if "%1"=="-m" if "%2"=="pip" if "%3"=="show" (
+    echo Name: snyk-agent-scan
+    echo Version: 0.6.1
+    echo Summary: Snyk Agent Scan
+    echo Home-page: https://github.com/snyk/agent-scan
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockPythonCmd -Value $mockCmdContent -Encoding ASCII
 
         # Temporarily add fixture to PATH
         $originalPath = $env:Path
@@ -1594,15 +1615,17 @@ if (`$args0 -eq '-m' -and `$args1 -eq 'pip' -and `$args2 -eq 'show') {
         $missingPipFixtureDir = Join-Path $testTempDir "missing-pip-fixture"
         New-Item -ItemType Directory -Path $missingPipFixtureDir -Force | Out-Null
 
-        # Create mock python that returns no package found
-        $mockPythonMissingScript = @"
-if (`$args[0] -eq '-m' -and `$args[1] -eq 'pip' -and `$args[2] -eq 'show') {
-    Write-Error 'WARNING: Package(s) not found: snyk-agent-scan'
-    exit 0
-}
-"@
+        # Create mock python.cmd that returns no package found
         $mockPythonMissingCmd = Join-Path $missingPipFixtureDir "python.cmd"
-        Set-Content -Path $mockPythonMissingCmd -Value "@echo off`r`npowershell.exe -NoProfile -Command `"$mockPythonMissingScript`" %*" -Encoding ASCII
+        $mockMissingCmdContent = @'
+@echo off
+if "%1"=="-m" if "%2"=="pip" if "%3"=="show" (
+    echo WARNING: Package^(s^) not found: snyk-agent-scan 1>&2
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockPythonMissingCmd -Value $mockMissingCmdContent -Encoding ASCII
 
         $originalPathMissing = $env:Path
         try {
@@ -1625,15 +1648,20 @@ if (`$args[0] -eq '-m' -and `$args[1] -eq 'pip' -and `$args[2] -eq 'show') {
         $mismatchPipFixtureDir = Join-Path $testTempDir "mismatch-pip-fixture"
         New-Item -ItemType Directory -Path $mismatchPipFixtureDir -Force | Out-Null
 
-        # Create mock python that returns wrong version
-        $mockPythonMismatchScript = @"
-if (`$args[0] -eq '-m' -and `$args[1] -eq 'pip' -and `$args[2] -eq 'show') {
-    Write-Output 'Name: snyk-agent-scan'
-    Write-Output 'Version: 0.5.0'
-}
-"@
+        # Create mock python.cmd that returns wrong version
         $mockPythonMismatchCmd = Join-Path $mismatchPipFixtureDir "python.cmd"
-        Set-Content -Path $mockPythonMismatchCmd -Value "@echo off`r`npowershell.exe -NoProfile -Command `"$mockPythonMismatchScript`" %*" -Encoding ASCII
+        $mockMismatchCmdContent = @'
+@echo off
+if "%1"=="-m" if "%2"=="pip" if "%3"=="show" (
+    echo Name: snyk-agent-scan
+    echo Version: 0.5.0
+    echo Summary: Snyk Agent Scan
+    echo Home-page: https://github.com/snyk/agent-scan
+    exit /b 0
+)
+exit /b 1
+'@
+        Set-Content -Path $mockPythonMismatchCmd -Value $mockMismatchCmdContent -Encoding ASCII
 
         $originalPathMismatch = $env:Path
         try {
