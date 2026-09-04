@@ -1,0 +1,60 @@
+{
+  "pr_number": 6,
+  "work_item": "TASK-AI-04",
+  "branch": "fix/task-ai-04-ecosystem-installer-compatibility",
+  "base_branch": "main",
+  "base_sha": "5ec80ae9ab31999fd88fa784a1c88b8434ece9c2",
+  "head_sha": "81398be070915e4c971bbd94aa5b89704b6fd548",
+  "head_sha_short": "81398be",
+  "title": "[TASK-AI-04] Restore ecosystem installer compatibility",
+  "author": "9ROUTER",
+  "review_status": "READY_FOR_CODEX",
+  "round_1_commit": "bcc9094cfc8aecada9aef9febeb179da9ce87653",
+  "round_1_verdict": "CHANGES_REQUIRED",
+  "round_2_commit": "81398be070915e4c971bbd94aa5b89704b6fd548",
+  "round_2_verdict": "CHANGES_REQUIRED",
+  "changed_files": [
+    "docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv",
+    "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md",
+    "docs/product-spec/work-items/TASK-AI-04.md",
+    "scripts/ai/ecosystem.ps1",
+    "scripts/ai/install-ecosystem.ps1",
+    "tools/ecosystem-manifest.json"
+  ],
+  "changed_files_count": 6,
+  "commits": [
+    {
+      "sha": "81398be070915e4c971bbd94aa5b89704b6fd548",
+      "message": "fix(ecosystem): resolve Round 2 review findings"
+    },
+    {
+      "sha": "bcc9094cfc8aecada9aef9febeb179da9ce87653",
+      "message": "fix(ecosystem): isolate Test 15b from production 9Router port"
+    },
+    {
+      "sha": "3cf1f40a0dcdc8c7c33bb31e9a8838b36e48b9b4",
+      "message": "docs(ai): mark TASK-AI-04 as READY_FOR_CODEX with PR #6"
+    },
+    {
+      "sha": "41febf28c49a0db0f08faed0b74b8e5e96cb9c50",
+      "message": "[TASK-AI-04] Restore ecosystem installer compatibility"
+    },
+    {
+      "sha": "ea55c5588fe33c7097ac5dc37f6ff9e10c55d542",
+      "message": "docs(ai): prepare TASK-AI-04 compatibility hotfix"
+    }
+  ],
+  "local_verification": {
+    "ecosystem_tests": "PASS - All 25 tests",
+    "manifest_validation": "PASS - 37 adopted, 14 dependencies, 10 candidates, 9 profiles",
+    "format_check": "PASS",
+    "scope_check": "PASS - All within allowed paths"
+  },
+  "round_2_corrections": [
+    "Dynamic port allocation via Get-AvailableLoopbackPort()",
+    "Strict Agent Scan metadata parsing with Tests 19a-19d",
+    "Behavioral test fixtures for Tests 17, 18, 20, 21",
+    "Updated review record with exact commit SHAs"
+  ],
+  "exported_at": "2026-09-04T04:35:00Z"
+}
