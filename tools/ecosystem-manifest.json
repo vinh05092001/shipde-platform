@@ -769,7 +769,7 @@
       "role": "Prompt security assertions, adversarial testing, and LLM output evaluation suites.",
       "source_of_truth_boundary": "Prompt vulnerability and security regression testing before production agent deployment.",
       "install_method": "npm-global",
-      "pinned_version_or_commit": "0.111.0",
+      "pinned_version_or_commit": "0.122.2",
       "platform": "windows",
       "lifecycle_state": "ADOPTED",
       "default_enabled": false,

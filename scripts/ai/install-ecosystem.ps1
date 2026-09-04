@@ -170,8 +170,16 @@ function Get-ShipDeCommandVersion {
                 if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
             }
             "agent-scan" {
-                $out = (& snyk-agent-scan --version 2>$null) -join " "
-                if ($out -match '(\d+\.\d+\.\d+)') { return $matches[1] }
+                try {
+                    $pipOut = & python -m pip show snyk-agent-scan 2>$null
+                    if ($pipOut) {
+                        $versionLine = $pipOut | Where-Object { $_ -match '^Version:\s*(.+)$' } | Select-Object -First 1
+                        if ($versionLine -match '^Version:\s*(\d+\.\d+\.\d+)') {
+                            return $matches[1]
+                        }
+                    }
+                } catch {}
+                return $null
             }
             "context7" {
                 $out = (& ctx7 --version 2>$null) -join " "

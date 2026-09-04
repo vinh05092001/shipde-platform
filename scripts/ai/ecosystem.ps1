@@ -1523,8 +1523,185 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Pre-existing listeners with approved 9Router and DSH command line identities verified, accepted, and safely deactivated."
 
+        # Test 16 (AC-AI-26): Agent Scan pip metadata detection with controlled fixture
+        Write-Host "`nTest 16 [Positive / AC-AI-26]: Agent Scan 0.6.1 detection via pip metadata..."
+        $pipFixtureDir = Join-Path $testTempDir "pip-fixture"
+        New-Item -ItemType Directory -Path $pipFixtureDir -Force | Out-Null
+
+        # Create mock python.exe that returns controlled pip show output
+        $mockPythonScript = @"
+`$args0 = `$args[0]
+`$args1 = `$args[1]
+`$args2 = `$args[2]
+if (`$args0 -eq '-m' -and `$args1 -eq 'pip' -and `$args2 -eq 'show') {
+    Write-Output 'Name: snyk-agent-scan'
+    Write-Output 'Version: 0.6.1'
+    Write-Output 'Summary: Snyk Agent Scan'
+    Write-Output 'Home-page: https://github.com/snyk/agent-scan'
+}
+"@
+        $mockPythonPath = Join-Path $pipFixtureDir "python.exe"
+        Set-Content -Path $mockPythonPath -Value $mockPythonScript -Encoding UTF8
+
+        # Create a wrapper CMD that calls PowerShell with the script content
+        $mockPythonCmd = Join-Path $pipFixtureDir "python.cmd"
+        Set-Content -Path $mockPythonCmd -Value "@echo off`r`npowershell.exe -NoProfile -Command `"$mockPythonScript`" %*" -Encoding ASCII
+
+        # Temporarily add fixture to PATH
+        $originalPath = $env:Path
+        try {
+            $env:Path = "$pipFixtureDir;$originalPath"
+
+            # Call install-ecosystem.ps1 in preview mode with Agent Scan filter
+            $installScriptPath = Join-Path (Split-Path $ManifestPath -Parent | Split-Path -Parent) "scripts\ai\install-ecosystem.ps1"
+            $testOutFile16 = Join-Path $testTempDir "test16-out.txt"
+
+            $installProc16 = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$ManifestPath`"", "-Tools", "agent-scan" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile16 -RedirectStandardError (Join-Path $testTempDir "test16-err.txt")
+
+            $output16 = Get-Content $testOutFile16 -Raw
+            if ($output16 -notmatch '\[OK\]\s+Snyk Agent Scan\s+.*0\.6\.1') {
+                throw "Failed AC-AI-26: Agent Scan 0.6.1 was not detected as [OK] via pip metadata! Output: $output16"
+            }
+            Write-Host "  [PASS] Agent Scan 0.6.1 detected correctly via pip metadata (AC-AI-26)."
+        } finally {
+            $env:Path = $originalPath
+        }
+
+        # Test 17 (AC-AI-27): Promptfoo 0.122.2 pin verification
+        Write-Host "`nTest 17 [Positive / AC-AI-27]: Promptfoo 0.122.2 pin verification..."
+        $manifestContent = Get-Content -Path $ManifestPath -Raw | ConvertFrom-Json
+        $promptfooEntry = $manifestContent.adopted | Where-Object { $_.id -eq "promptfoo" }
+        if (-not $promptfooEntry) {
+            throw "Failed AC-AI-27: Promptfoo entry not found in manifest!"
+        }
+        if ($promptfooEntry.pinned_version_or_commit -ne "0.122.2") {
+            throw "Failed AC-AI-27: Promptfoo pin is '$($promptfooEntry.pinned_version_or_commit)', expected '0.122.2'!"
+        }
+
+        # Verify documentation alignment
+        $docPath = Join-Path (Split-Path $ManifestPath -Parent | Split-Path -Parent) "docs\product-spec\docs\10-ai-collaboration\REPOSITORY-CLI-MANIFEST.md"
+        $docContent = Get-Content -Path $docPath -Raw
+        if ($docContent -match 'promptfoo@0\.111\.0') {
+            throw "Failed AC-AI-27: Documentation still references old Promptfoo version 0.111.0!"
+        }
+        if ($docContent -notmatch 'promptfoo@0\.122\.2') {
+            throw "Failed AC-AI-27: Documentation does not reference new Promptfoo version 0.122.2!"
+        }
+        Write-Host "  [PASS] Promptfoo 0.122.2 pin verified in manifest and documentation (AC-AI-27)."
+
+        # Test 18 (AC-AI-28): Missing Agent Scan pip metadata must report MISSING
+        Write-Host "`nTest 18 [Negative / AC-AI-28]: Missing Agent Scan pip metadata must report MISSING..."
+        $missingPipFixtureDir = Join-Path $testTempDir "missing-pip-fixture"
+        New-Item -ItemType Directory -Path $missingPipFixtureDir -Force | Out-Null
+
+        # Create mock python that returns no package found
+        $mockPythonMissingScript = @"
+if (`$args[0] -eq '-m' -and `$args[1] -eq 'pip' -and `$args[2] -eq 'show') {
+    Write-Error 'WARNING: Package(s) not found: snyk-agent-scan'
+    exit 0
+}
+"@
+        $mockPythonMissingCmd = Join-Path $missingPipFixtureDir "python.cmd"
+        Set-Content -Path $mockPythonMissingCmd -Value "@echo off`r`npowershell.exe -NoProfile -Command `"$mockPythonMissingScript`" %*" -Encoding ASCII
+
+        $originalPathMissing = $env:Path
+        try {
+            $env:Path = "$missingPipFixtureDir;$originalPathMissing"
+
+            $testOutFile18 = Join-Path $testTempDir "test18-out.txt"
+            $installProc18 = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$ManifestPath`"", "-Tools", "agent-scan" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile18 -RedirectStandardError (Join-Path $testTempDir "test18-err.txt")
+
+            $output18 = Get-Content $testOutFile18 -Raw
+            if ($output18 -notmatch 'MISSING MACHINE-LEVEL TOOLS' -or $output18 -match '\[OK\]\s+Snyk Agent Scan') {
+                throw "Failed AC-AI-28: Missing Agent Scan was not reported as MISSING! Output: $output18"
+            }
+            Write-Host "  [PASS] Missing Agent Scan correctly reported as MISSING (AC-AI-28)."
+        } finally {
+            $env:Path = $originalPathMissing
+        }
+
+        # Test 19 (AC-AI-29): Agent Scan version mismatch must fail closed under -Apply
+        Write-Host "`nTest 19 [Negative / AC-AI-29]: Agent Scan version mismatch must fail closed under -Apply..."
+        $mismatchPipFixtureDir = Join-Path $testTempDir "mismatch-pip-fixture"
+        New-Item -ItemType Directory -Path $mismatchPipFixtureDir -Force | Out-Null
+
+        # Create mock python that returns wrong version
+        $mockPythonMismatchScript = @"
+if (`$args[0] -eq '-m' -and `$args[1] -eq 'pip' -and `$args[2] -eq 'show') {
+    Write-Output 'Name: snyk-agent-scan'
+    Write-Output 'Version: 0.5.0'
+}
+"@
+        $mockPythonMismatchCmd = Join-Path $mismatchPipFixtureDir "python.cmd"
+        Set-Content -Path $mockPythonMismatchCmd -Value "@echo off`r`npowershell.exe -NoProfile -Command `"$mockPythonMismatchScript`" %*" -Encoding ASCII
+
+        $originalPathMismatch = $env:Path
+        try {
+            $env:Path = "$mismatchPipFixtureDir;$originalPathMismatch"
+
+            $testOutFile19 = Join-Path $testTempDir "test19-out.txt"
+            $testErrFile19 = Join-Path $testTempDir "test19-err.txt"
+            $installProc19 = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$ManifestPath`"", "-Tools", "agent-scan", "-Apply" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile19 -RedirectStandardError $testErrFile19
+
+            if ($installProc19.ExitCode -eq 0) {
+                throw "Failed AC-AI-29: install-ecosystem.ps1 -Apply exited 0 despite Agent Scan version mismatch!"
+            }
+
+            $output19 = (Get-Content $testOutFile19 -Raw) + (Get-Content $testErrFile19 -Raw)
+            if ($output19 -notmatch 'VERSION_MISMATCH' -and $output19 -notmatch 'version differs from pin') {
+                throw "Failed AC-AI-29: Output did not report version mismatch! Output: $output19"
+            }
+            Write-Host "  [PASS] Agent Scan version mismatch failed closed under -Apply (AC-AI-29)."
+        } finally {
+            $env:Path = $originalPathMismatch
+        }
+
+        # Test 20 (AC-AI-32): Paths with spaces handling
+        Write-Host "`nTest 20 [Positive / AC-AI-32]: Paths with spaces must work correctly..."
+        $spacedDir = Join-Path $testTempDir "test dir with spaces"
+        New-Item -ItemType Directory -Path $spacedDir -Force | Out-Null
+
+        $spacedManifestPath = Join-Path $spacedDir "manifest.json"
+        Copy-Item -LiteralPath $ManifestPath -Destination $spacedManifestPath -Force
+
+        $testOutFile20 = Join-Path $spacedDir "output with spaces.txt"
+        $installProc20 = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installScriptPath`"", "-ManifestPath", "`"$spacedManifestPath`"" -PassThru -NoNewWindow -Wait -RedirectStandardOutput $testOutFile20 -RedirectStandardError (Join-Path $spacedDir "error.txt")
+
+        if ($installProc20.ExitCode -ne 0) {
+            throw "Failed AC-AI-32: Installer failed with paths containing spaces!"
+        }
+
+        $output20 = Get-Content $testOutFile20 -Raw
+        if ($output20 -match 'not found' -or $output20 -match 'cannot find') {
+            throw "Failed AC-AI-32: Path with spaces caused path resolution failure! Output: $output20"
+        }
+        Write-Host "  [PASS] Paths with spaces handled correctly (AC-AI-32)."
+
+        # Test 21 (AC-AI-33): npm metadata tools preserved (Renovate, Repomix, Prism, Context7, Playwright CLI)
+        Write-Host "`nTest 21 [Positive / AC-AI-33]: npm metadata tools detection preserved..."
+        $npmTools = @("renovate", "repomix", "prism", "context7", "playwright-cli")
+        foreach ($tool in $npmTools) {
+            $toolEntry = $manifestContent.adopted | Where-Object { $_.id -eq $tool }
+            if (-not $toolEntry) {
+                throw "Failed AC-AI-33: npm tool '$tool' not found in manifest!"
+            }
+            $pkgName = switch ($tool) {
+                "renovate" { "renovate" }
+                "repomix" { "repomix" }
+                "prism" { "@stoplight/prism-cli" }
+                "context7" { "ctx7" }
+                "playwright-cli" { "@playwright/cli" }
+            }
+            # Verify tool is in npm package map in installer script
+            $installerContent = Get-Content -Path $installScriptPath -Raw
+            if ($installerContent -notmatch [regex]::Escape("`"$tool`"") -or $installerContent -notmatch [regex]::Escape("`"$pkgName`"")) {
+                throw "Failed AC-AI-33: npm tool '$tool' -> '$pkgName' mapping missing in installer!"
+            }
+        }
+        Write-Host "  [PASS] All npm metadata tools preserved with correct package name mappings (AC-AI-33)."
+
         Write-Host "`n================================================================"
-        Write-Host "ALL 15 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
+        Write-Host "ALL 21 POSITIVE, NEGATIVE & OPERATIONAL ECOSYSTEM TESTS PASSED"
         Write-Host "================================================================"
     } finally {
         Remove-Item -LiteralPath $testTempDir -Recurse -Force -ErrorAction SilentlyContinue
