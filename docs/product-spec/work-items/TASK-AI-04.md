@@ -177,4 +177,3 @@ No machine rollback is expected because this Work Item authorizes no installatio
 - Compatibility is governed for the confirmed Windows 10, Node.js `24.15.0` and npm `11.12.1` baseline. A future Node.js or package-manager upgrade requires separate evidence and governance.
 - Promptfoo `0.122.2` being installable and inventory-compatible does not authorize live prompt evaluation, provider credentials or production use.
 - Agent Scan being detectable does not authorize a scan or prove that any MCP configuration is safe.
-
