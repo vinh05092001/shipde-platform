@@ -14,7 +14,7 @@
 | Allowed paths   | `scripts/ai/control.ps1`; `docs/product-spec/work-items/TASK-AI-05.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer        | `Codex — fresh independent task`                                                                                                                   |
 | Branch          | `fix/task-ai-05-sync-json-list`                                                                                                                    |
-| Pull Request    | Pending                                                                                                                                            |
+| Pull Request    | `#7`                                                                                                                                               |
 
 ## Business outcome
 
