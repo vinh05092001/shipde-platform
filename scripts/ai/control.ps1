@@ -152,9 +152,10 @@ function Assert-ShipDePullRequestRecord {
     $titleProperty = $PullRequest.PSObject.Properties["title"]
     if (
         -not $titleProperty -or
-        [string]::IsNullOrWhiteSpace([string]$titleProperty.Value)
+        $titleProperty.Value -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($titleProperty.Value)
     ) {
-        throw "GitHub returned a malformed Pull Request record without a usable title."
+        throw "GitHub returned a malformed Pull Request record without one nonblank scalar string title."
     }
 }
 
@@ -237,7 +238,10 @@ function Assert-ShipDeJsonListCompatibility {
         '[{"number":"","title":"blank number"}]',
         '[{"number":"not-a-number","title":"invalid number"}]',
         '[{"number":0,"title":"nonpositive number"}]',
-        '[{"number":[6],"title":"array number"}]'
+        '[{"number":[6],"title":"array number"}]',
+        '[{"number":6,"title":["array title"]}]',
+        '[{"number":6,"title":42}]',
+        '[{"number":6,"title":{"text":"object title"}}]'
     )) {
         $invalidMergedRejected = $false
         try {
@@ -246,7 +250,7 @@ function Assert-ShipDeJsonListCompatibility {
             $invalidMergedRejected = $true
         }
         if (-not $invalidMergedRejected) {
-            throw "Controller merged Pull Request compatibility check accepted a malformed number."
+            throw "Controller merged Pull Request compatibility check accepted a malformed record."
         }
     }
 
@@ -254,7 +258,10 @@ function Assert-ShipDeJsonListCompatibility {
         [PSCustomObject]@{},
         [PSCustomObject]@{ title = $null },
         [PSCustomObject]@{ title = "" },
-        [PSCustomObject]@{ title = " " }
+        [PSCustomObject]@{ title = " " },
+        [PSCustomObject]@{ title = @("array title") },
+        [PSCustomObject]@{ title = 42 },
+        [PSCustomObject]@{ title = [PSCustomObject]@{ text = "object title" } }
     )) {
         $invalidRejected = $false
         try {
