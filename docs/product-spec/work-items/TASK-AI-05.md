@@ -44,8 +44,9 @@ This is a bounded, low-risk controller compatibility correction suitable for the
 1. Route merged-Pull-Request JSON through the existing `ConvertFrom-ShipDeJsonList` compatibility boundary.
 2. Validate each merged Pull Request has one nonblank scalar string title and one positive scalar integer number before synchronization consumes it.
 3. Add deterministic startup self-tests covering empty, single, multiple and malformed merged Pull Request records on Windows PowerShell 5.1.
-4. Preserve exact-HEAD Codex verdict reconciliation, protected-main behavior, clean-worktree checks and fast-forward-only synchronization.
-5. Reconcile `TASK-AI-04` as merged and register this hotfix as the sole active Work Item.
+4. Complete the merged Pull Request query and record validation before the first Git operation can update any worktree.
+5. Preserve exact-HEAD Codex verdict reconciliation, protected-main behavior, clean-worktree checks and fast-forward-only synchronization.
+6. Reconcile `TASK-AI-04` as merged and register this hotfix as the sole active Work Item.
 
 ## Out of scope
 
@@ -64,6 +65,7 @@ This is a bounded, low-risk controller compatibility correction suitable for the
 - `AI-SYNC-05`: Register reconciliation remains check-only on protected `main`; tracked files are never edited there.
 - `AI-SYNC-06`: All worktree updates remain clean-check guarded and `--ff-only`; a failed prerequisite stops without reset, force or merge fallback.
 - `AI-SYNC-07`: Exact-head `PASS` evidence and human-only merge rules remain unchanged.
+- `AI-SYNC-08`: Merged Pull Request query and validation complete before the first worktree Git operation; reconciliation reuses that validated snapshot without querying again.
 
 ## UI states
 
@@ -80,14 +82,14 @@ No product API, event, schema, migration, job or tenant-data impact. The change 
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario                                                                                                   | Expected result                                                                                                   | Evidence required                                  |
-| ---------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `AC-AI-36` | Merged PR query returns `[]`                                                                               | Zero records are emitted; no number conversion occurs                                                             | Deterministic Windows PowerShell startup assertion |
-| `AC-AI-37` | Merged PR query returns one or multiple records                                                            | Each record remains individually enumerable and its number converts to one `Int32`                                | Deterministic one/multiple record assertions       |
-| `AC-AI-38` | Record has a missing, blank or non-string title, or a missing, invalid, nonpositive or array-valued number | Controller stops with a specific malformed merged PR error before synchronization                                 | Deterministic negative assertions                  |
-| `AC-AI-39` | `Sync-ShipDeRegister` consumes GitHub JSON                                                                 | It calls the shared JSON-list normalizer rather than direct `ConvertFrom-Json` list wrapping                      | Controller diff and source trace                   |
-| `AC-AI-40` | Existing controller safety behavior is exercised                                                           | Exact-head review, check-only register reconciliation, clean checks and fast-forward-only merges remain unchanged | Diff audit, AST validation and CI                  |
-| `AC-AI-41` | Human reruns action 6 after merge                                                                          | No `System.Object[]` to `System.Int32` error occurs and clean worktrees synchronize                               | Post-merge Windows PowerShell 5.1 smoke test       |
+| AC/Test ID | Scenario                                                                                                   | Expected result                                                                                                                                                                                   | Evidence required                                                        |
+| ---------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `AC-AI-36` | Merged PR query returns `[]`                                                                               | Zero records are emitted; no number conversion occurs                                                                                                                                             | Deterministic Windows PowerShell startup assertion                       |
+| `AC-AI-37` | Merged PR query returns one or multiple records                                                            | Each record remains individually enumerable and its number converts to one `Int32`                                                                                                                | Deterministic one/multiple record assertions                             |
+| `AC-AI-38` | Record has a missing, blank or non-string title, or a missing, invalid, nonpositive or array-valued number | Controller stops with a specific malformed merged PR error before synchronization                                                                                                                 | Deterministic negative assertions                                        |
+| `AC-AI-39` | `Sync-ShipDeRegister` consumes GitHub JSON                                                                 | It calls the shared JSON-list normalizer rather than direct `ConvertFrom-Json` list wrapping                                                                                                      | Controller diff and source trace                                         |
+| `AC-AI-40` | Existing controller safety behavior is exercised                                                           | External merged-PR data is preflighted before the first worktree Git operation; exact-head review, check-only register reconciliation, clean checks and fast-forward-only merges remain unchanged | Deterministic command-order assertion, diff audit, AST validation and CI |
+| `AC-AI-41` | Human reruns action 6 after merge                                                                          | No `System.Object[]` to `System.Int32` error occurs and clean worktrees synchronize                                                                                                               | Post-merge Windows PowerShell 5.1 smoke test                             |
 
 ## Verification commands
 
@@ -103,10 +105,11 @@ From a clean checkout:
 
 ## Codex review record
 
-| Review round | Commit                                     | Verdict              | Findings resolved                                                                                   |
-| ------------ | ------------------------------------------ | -------------------- | --------------------------------------------------------------------------------------------------- |
-| 1            | `9f903b13a0b048eb15b0f082e6800bf1951e240b` | CHANGES_REQUIRED     | Reject array and other non-string Pull Request titles before reconciliation                         |
-| 2            | Pending immutable correction head          | Pending fresh review | Added scalar-string title validation and deterministic array/number/object malformed-title fixtures |
+| Review round | Commit                                     | Verdict          | Findings resolved                                                                                                        |
+| ------------ | ------------------------------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 1            | `9f903b13a0b048eb15b0f082e6800bf1951e240b` | CHANGES_REQUIRED | Reject array and other non-string Pull Request titles before reconciliation                                              |
+| 2            | `077e7b50c408392ddc91367a9f2e89a1c98c031a` | CHANGES_REQUIRED | Preflight merged Pull Request query and validation before any worktree update                                            |
+| 3            | Pending immutable correction head          | Pending review   | Moved query/validation before the first Git operation, reused its snapshot and added a deterministic command-order guard |
 
 ## Residual limitations
 
