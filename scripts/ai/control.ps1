@@ -152,9 +152,36 @@ function Assert-ShipDePullRequestRecord {
     $titleProperty = $PullRequest.PSObject.Properties["title"]
     if (
         -not $titleProperty -or
-        [string]::IsNullOrWhiteSpace([string]$titleProperty.Value)
+        $titleProperty.Value -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($titleProperty.Value)
     ) {
-        throw "GitHub returned a malformed Pull Request record without a usable title."
+        throw "GitHub returned a malformed Pull Request record without one nonblank scalar string title."
+    }
+}
+
+function ConvertFrom-ShipDeMergedPullRequestList {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Json
+    )
+
+    $pullRequests = @(ConvertFrom-ShipDeJsonList -Json $Json)
+    foreach ($pullRequest in $pullRequests) {
+        Assert-ShipDePullRequestRecord -PullRequest $pullRequest
+
+        $numberProperty = $pullRequest.PSObject.Properties["number"]
+        $number = 0
+        if (
+            -not $numberProperty -or
+            $numberProperty.Value -is [System.Array] -or
+            -not [int]::TryParse([string]$numberProperty.Value, [ref]$number) -or
+            $number -le 0
+        ) {
+            throw "GitHub returned a malformed merged Pull Request record without one positive scalar integer number."
+        }
+
+        Write-Output $pullRequest
     }
 }
 
@@ -187,11 +214,54 @@ function Assert-ShipDeJsonListCompatibility {
         throw "Controller JSON compatibility check accepted a null list record."
     }
 
+    # Windows PowerShell 5.1 can otherwise wrap the complete merged-PR JSON
+    # array as one System.Object[] record. Exercise the exact sync parser.
+    $mergedEmpty = @(ConvertFrom-ShipDeMergedPullRequestList -Json "[]")
+    $mergedSingle = @(ConvertFrom-ShipDeMergedPullRequestList -Json '[{"number":6,"title":"[TASK-AI-04] one"}]')
+    $mergedMultiple = @(ConvertFrom-ShipDeMergedPullRequestList -Json '[{"number":5,"title":"[TASK-AI-03] one"},{"number":6,"title":"[TASK-AI-04] two"}]')
+    if ($mergedEmpty.Count -ne 0) {
+        throw "Controller merged Pull Request compatibility check failed for an empty list."
+    }
+    if ($mergedSingle.Count -ne 1 -or [int]$mergedSingle[0].number -ne 6) {
+        throw "Controller merged Pull Request compatibility check failed for a single-item list."
+    }
+    if (
+        $mergedMultiple.Count -ne 2 -or
+        [int]$mergedMultiple[0].number -ne 5 -or
+        [int]$mergedMultiple[1].number -ne 6
+    ) {
+        throw "Controller merged Pull Request compatibility check failed for a multi-item list."
+    }
+
+    foreach ($invalidMergedJson in @(
+        '[{"title":"missing number"}]',
+        '[{"number":"","title":"blank number"}]',
+        '[{"number":"not-a-number","title":"invalid number"}]',
+        '[{"number":0,"title":"nonpositive number"}]',
+        '[{"number":[6],"title":"array number"}]',
+        '[{"number":6,"title":["array title"]}]',
+        '[{"number":6,"title":42}]',
+        '[{"number":6,"title":{"text":"object title"}}]'
+    )) {
+        $invalidMergedRejected = $false
+        try {
+            @(ConvertFrom-ShipDeMergedPullRequestList -Json $invalidMergedJson) | Out-Null
+        } catch {
+            $invalidMergedRejected = $true
+        }
+        if (-not $invalidMergedRejected) {
+            throw "Controller merged Pull Request compatibility check accepted a malformed record."
+        }
+    }
+
     foreach ($invalidRecord in @(
         [PSCustomObject]@{},
         [PSCustomObject]@{ title = $null },
         [PSCustomObject]@{ title = "" },
-        [PSCustomObject]@{ title = " " }
+        [PSCustomObject]@{ title = " " },
+        [PSCustomObject]@{ title = @("array title") },
+        [PSCustomObject]@{ title = 42 },
+        [PSCustomObject]@{ title = [PSCustomObject]@{ text = "object title" } }
     )) {
         $invalidRejected = $false
         try {
@@ -788,11 +858,28 @@ function Get-ShipDeExactHeadCodexVerdict {
     return $null
 }
 
+function Get-ShipDeMergedPullRequests {
+    # Query and validate every merged Pull Request before synchronization
+    # mutates any worktree. This is the fail-before-sync preflight boundary.
+    $rawJson = @(& gh pr list --repo $Repository --state merged --json number,title,headRefName,headRefOid,mergeCommit --limit 100 2>$null) -join "`n"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot read merged Pull Requests from GitHub."
+    }
+    if ([string]::IsNullOrWhiteSpace($rawJson)) {
+        return @()
+    }
+
+    return @(ConvertFrom-ShipDeMergedPullRequestList -Json $rawJson)
+}
+
 function Sync-ShipDeRegister {
     param(
         [string]$Workspace = $script:Paths.Main,
         [string]$RegisterRelativePath = $script:RegisterPath,
-        [switch]$CheckOnly
+        [switch]$CheckOnly,
+        [Parameter(Mandatory = $false)]
+        [AllowEmptyCollection()]
+        [object[]]$MergedPullRequests
     )
 
     $fullRegisterPath = Join-Path $Workspace $RegisterRelativePath
@@ -803,18 +890,14 @@ function Sync-ShipDeRegister {
     # If workspace is the protected main worktree, prevent leaving main dirty
     $isMainWorkspace = ($Workspace -eq $script:Paths.Main)
 
-    # Fetch merged PRs from GitHub including headRefOid
-    $mergedPrs = $null
-    try {
-        $rawJson = @(& gh pr list --repo $Repository --state merged --json number,title,headRefName,headRefOid,mergeCommit --limit 100 2>$null) -join "`n"
-        if (-not [string]::IsNullOrWhiteSpace($rawJson)) {
-            $mergedPrs = @($rawJson | ConvertFrom-Json)
-        }
-    } catch {
-        $mergedPrs = $null
+    # Direct callers retain fail-closed behavior. Invoke-ShipDeSync supplies
+    # the already validated preflight snapshot so no query occurs after merge.
+    $mergedPrs = if ($PSBoundParameters.ContainsKey("MergedPullRequests")) {
+        @($MergedPullRequests)
+    } else {
+        @(Get-ShipDeMergedPullRequests)
     }
-
-    if (-not $mergedPrs -or $mergedPrs.Count -eq 0) {
+    if ($mergedPrs.Count -eq 0) {
         return
     }
 
@@ -874,12 +957,18 @@ function Sync-ShipDeRegister {
 function Invoke-ShipDeSync {
     Assert-ShipDeRepository -Path $script:Paths.Main
     Assert-ShipDeClean -Path $script:Paths.Main
+
+    # Complete the external-data preflight before the first Git operation can
+    # update main or any parked worktree.
+    $mergedPullRequests = @(Get-ShipDeMergedPullRequests)
+
     Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("fetch", "origin", "--prune") | Out-Null
     Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("switch", "main") | Out-Null
     Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("merge", "--ff-only", "origin/main") | Out-Null
 
-    # Reconcile check only; never leave protected main worktree dirty
-    Sync-ShipDeRegister -Workspace $script:Paths.Main -CheckOnly
+    # Reconcile from the immutable preflight snapshot; never leave protected
+    # main dirty and never re-query GitHub after worktree synchronization starts.
+    Sync-ShipDeRegister -Workspace $script:Paths.Main -CheckOnly -MergedPullRequests $mergedPullRequests
 
     $parked = [ordered]@{
         Claude = "agent/claude"
@@ -895,6 +984,31 @@ function Invoke-ShipDeSync {
         Invoke-ShipDeGit -Path $workspace -Arguments @("merge", "--ff-only", "origin/main") | Out-Null
     }
     Write-Host "All clean worktrees are parked and synchronized with origin/main."
+}
+
+function Assert-ShipDeSyncPreflightOrdering {
+    $syncAst = (Get-Command Invoke-ShipDeSync -CommandType Function).ScriptBlock.Ast
+    $preflightCommands = @($syncAst.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -eq "Get-ShipDeMergedPullRequests"
+    }, $true))
+    $gitCommands = @($syncAst.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -eq "Invoke-ShipDeGit"
+    }, $true))
+
+    if ($preflightCommands.Count -ne 1 -or $gitCommands.Count -eq 0) {
+        throw "Controller sync preflight ordering check could not identify the required command boundary."
+    }
+
+    $firstGitCommand = $gitCommands |
+        Sort-Object -Property { $_.Extent.StartOffset } |
+        Select-Object -First 1
+    if ($preflightCommands[0].Extent.StartOffset -ge $firstGitCommand.Extent.StartOffset) {
+        throw "Controller sync preflight must complete before any worktree Git operation."
+    }
 }
 
 function Show-ShipDeStatus {
@@ -1008,6 +1122,7 @@ function Show-ShipDeMenu {
 }
 
 Assert-ShipDeJsonListCompatibility
+Assert-ShipDeSyncPreflightOrdering
 Assert-ShipDeCommand git
 Assert-ShipDeCommand gh
 New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
