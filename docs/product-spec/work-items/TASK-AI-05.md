@@ -42,7 +42,7 @@ This is a bounded, low-risk controller compatibility correction suitable for the
 ## In scope
 
 1. Route merged-Pull-Request JSON through the existing `ConvertFrom-ShipDeJsonList` compatibility boundary.
-2. Validate each merged Pull Request has a usable title and one positive scalar integer number before synchronization consumes it.
+2. Validate each merged Pull Request has one nonblank scalar string title and one positive scalar integer number before synchronization consumes it.
 3. Add deterministic startup self-tests covering empty, single, multiple and malformed merged Pull Request records on Windows PowerShell 5.1.
 4. Preserve exact-HEAD Codex verdict reconciliation, protected-main behavior, clean-worktree checks and fast-forward-only synchronization.
 5. Reconcile `TASK-AI-04` as merged and register this hotfix as the sole active Work Item.
@@ -59,7 +59,7 @@ This is a bounded, low-risk controller compatibility correction suitable for the
 
 - `AI-SYNC-01`: JSON `[]` emits zero merged Pull Request records and synchronization remains a no-op for register reconciliation.
 - `AI-SYNC-02`: One or many merged Pull Requests are emitted as individual records in source order.
-- `AI-SYNC-03`: Every consumed record must contain a nonblank title and one positive scalar integer `number`; malformed records stop before register mutation or worktree synchronization.
+- `AI-SYNC-03`: Every consumed record must contain one nonblank scalar string `title` and one positive scalar integer `number`; malformed records stop before register mutation or worktree synchronization.
 - `AI-SYNC-04`: The same JSON-list compatibility boundary is used for open and merged Pull Request lists; direct list conversion must not reintroduce Windows PowerShell 5.1 array wrapping.
 - `AI-SYNC-05`: Register reconciliation remains check-only on protected `main`; tracked files are never edited there.
 - `AI-SYNC-06`: All worktree updates remain clean-check guarded and `--ff-only`; a failed prerequisite stops without reset, force or merge fallback.
@@ -80,14 +80,14 @@ No product API, event, schema, migration, job or tenant-data impact. The change 
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario                                                                  | Expected result                                                                                                   | Evidence required                                  |
-| ---------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `AC-AI-36` | Merged PR query returns `[]`                                              | Zero records are emitted; no number conversion occurs                                                             | Deterministic Windows PowerShell startup assertion |
-| `AC-AI-37` | Merged PR query returns one or multiple records                           | Each record remains individually enumerable and its number converts to one `Int32`                                | Deterministic one/multiple record assertions       |
-| `AC-AI-38` | Record has missing, blank, nonnumeric, nonpositive or array-valued number | Controller stops with a specific malformed merged PR error before synchronization                                 | Deterministic negative assertions                  |
-| `AC-AI-39` | `Sync-ShipDeRegister` consumes GitHub JSON                                | It calls the shared JSON-list normalizer rather than direct `ConvertFrom-Json` list wrapping                      | Controller diff and source trace                   |
-| `AC-AI-40` | Existing controller safety behavior is exercised                          | Exact-head review, check-only register reconciliation, clean checks and fast-forward-only merges remain unchanged | Diff audit, AST validation and CI                  |
-| `AC-AI-41` | Human reruns action 6 after merge                                         | No `System.Object[]` to `System.Int32` error occurs and clean worktrees synchronize                               | Post-merge Windows PowerShell 5.1 smoke test       |
+| AC/Test ID | Scenario                                                                                                   | Expected result                                                                                                   | Evidence required                                  |
+| ---------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `AC-AI-36` | Merged PR query returns `[]`                                                                               | Zero records are emitted; no number conversion occurs                                                             | Deterministic Windows PowerShell startup assertion |
+| `AC-AI-37` | Merged PR query returns one or multiple records                                                            | Each record remains individually enumerable and its number converts to one `Int32`                                | Deterministic one/multiple record assertions       |
+| `AC-AI-38` | Record has a missing, blank or non-string title, or a missing, invalid, nonpositive or array-valued number | Controller stops with a specific malformed merged PR error before synchronization                                 | Deterministic negative assertions                  |
+| `AC-AI-39` | `Sync-ShipDeRegister` consumes GitHub JSON                                                                 | It calls the shared JSON-list normalizer rather than direct `ConvertFrom-Json` list wrapping                      | Controller diff and source trace                   |
+| `AC-AI-40` | Existing controller safety behavior is exercised                                                           | Exact-head review, check-only register reconciliation, clean checks and fast-forward-only merges remain unchanged | Diff audit, AST validation and CI                  |
+| `AC-AI-41` | Human reruns action 6 after merge                                                                          | No `System.Object[]` to `System.Int32` error occurs and clean worktrees synchronize                               | Post-merge Windows PowerShell 5.1 smoke test       |
 
 ## Verification commands
 
@@ -103,9 +103,10 @@ From a clean checkout:
 
 ## Codex review record
 
-| Review round | Commit                                | Verdict              | Findings resolved      |
-| ------------ | ------------------------------------- | -------------------- | ---------------------- |
-| 1            | Pending immutable implementation head | Pending fresh review | Initial implementation |
+| Review round | Commit                                     | Verdict              | Findings resolved                                                                                   |
+| ------------ | ------------------------------------------ | -------------------- | --------------------------------------------------------------------------------------------------- |
+| 1            | `9f903b13a0b048eb15b0f082e6800bf1951e240b` | CHANGES_REQUIRED     | Reject array and other non-string Pull Request titles before reconciliation                         |
+| 2            | Pending immutable correction head          | Pending fresh review | Added scalar-string title validation and deterministic array/number/object malformed-title fixtures |
 
 ## Residual limitations
 
