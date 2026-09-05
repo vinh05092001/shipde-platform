@@ -188,6 +188,7 @@ From a clean checkout:
 - Parse every `scripts/ai/*.ps1` file through the PowerShell AST parser in the contract job.
 - Run `powershell -ExecutionPolicy Bypass -File .\scripts\ai\control.ps1 -Action Status` and confirm all startup assertions pass.
 - Run `python docs/product-spec/scripts/validate_docs.py`.
+- Validate that the Pull Request body contains every required contract heading and `Review status: READY_FOR_CODEX`.
 - Run `pnpm format:check`.
 - Run `pnpm security:secrets`.
 - Run `git diff --check origin/main...HEAD`.
