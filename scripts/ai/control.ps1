@@ -1184,7 +1184,11 @@ function Assert-ShipDeAgentRouterProfile {
         -not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$uri) -or
         $uri.Scheme -ne "http" -or
         $uri.Host -notin @("localhost", "127.0.0.1") -or
-        $uri.Port -ne $script:AgentRouterPort
+        $uri.Port -ne $script:AgentRouterPort -or
+        $uri.AbsolutePath.TrimEnd('/') -ne "/v1" -or
+        -not [string]::IsNullOrWhiteSpace($uri.Query) -or
+        -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
+        -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
     ) {
         throw "AgentRouter Claude profile must use http://localhost:$($script:AgentRouterPort)/v1."
     }
@@ -1268,6 +1272,16 @@ function Get-ShipDeNextPreparedItem {
     return $items[0]
 }
 
+function Get-ShipDeAoWorkerName {
+    param([Parameter(Mandatory = $true)][object]$Item)
+
+    $name = ("{0}-worker" -f $Item.WorkItemId.ToLowerInvariant())
+    if ($name.Length -gt 20) {
+        $name = $name.Substring(0, 20)
+    }
+    return $name
+}
+
 function New-ShipDeAuthorPrompt {
     param([Parameter(Mandatory = $true)][object]$Item)
 
@@ -1298,10 +1312,7 @@ function New-ShipDeAoSpawnArguments {
         [string]$Project = "shipde-platform"
     )
 
-    $name = ("{0}-worker" -f $Item.WorkItemId.ToLowerInvariant())
-    if ($name.Length -gt 20) {
-        $name = $name.Substring(0, 20)
-    }
+    $name = Get-ShipDeAoWorkerName -Item $Item
     $mode = if ($Harness -eq "claude-code") { "chat" } else { "tui" }
 
     return @(
@@ -1312,9 +1323,47 @@ function New-ShipDeAoSpawnArguments {
         "--mode", $mode,
         "--branch", $Item.Branch,
         "--harness", $Harness,
-        "--prompt", $Prompt,
-        "--json"
+        "--prompt", $Prompt
     )
+}
+
+function Get-ShipDeAoSessions {
+    param([string]$Project = "shipde-platform")
+
+    $output = @(& ao session ls --project $Project --json 2>&1)
+    $exitCode = $LASTEXITCODE
+    $text = Join-ShipDeNativeOutput -Output $output
+    if ($exitCode -ne 0) {
+        throw "Cannot query AO sessions for project '$Project': $text"
+    }
+
+    $response = ConvertFrom-ShipDeAoJson -Json $text -Operation "session ls"
+    if ($response -is [System.Array]) {
+        return @($response)
+    }
+
+    foreach ($candidate in @(
+        $response,
+        (Get-ShipDeObjectProperty -Object $response -Names @("result", "data"))
+    )) {
+        if ($null -eq $candidate) {
+            continue
+        }
+        if ($candidate -is [System.Array]) {
+            return @($candidate)
+        }
+        $sessions = Get-ShipDeObjectProperty -Object $candidate -Names @("sessions", "items")
+        if ($null -ne $sessions) {
+            return @($sessions)
+        }
+    }
+    throw "AO session ls JSON does not contain a session collection."
+}
+
+function Get-ShipDeAoSessionName {
+    param([Parameter(Mandatory = $true)][object]$Session)
+
+    return [string](Get-ShipDeObjectProperty -Object $Session -Names @("name", "displayName", "display_name"))
 }
 
 function Start-ShipDeAoWorker {
@@ -1333,15 +1382,38 @@ function Start-ShipDeAoWorker {
             return [PSCustomObject]@{ SessionId = "dry-run-$($Item.WorkItemId.ToLowerInvariant())"; Harness = $harness }
         }
 
+        $beforeIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($session in @(Get-ShipDeAoSessions -Project $Project)) {
+            try {
+                $null = $beforeIds.Add((Get-ShipDeAoSessionId -Response $session))
+            } catch {}
+        }
+
         $output = @(& ao @arguments 2>&1)
         $exitCode = $LASTEXITCODE
         $text = Join-ShipDeNativeOutput -Output $output
         if ($exitCode -eq 0) {
-            $response = ConvertFrom-ShipDeAoJson -Json $text -Operation "spawn"
-            return [PSCustomObject]@{
-                SessionId = Get-ShipDeAoSessionId -Response $response
-                Harness = $harness
+            $expectedName = Get-ShipDeAoWorkerName -Item $Item
+            for ($attempt = 0; $attempt -lt 10; $attempt++) {
+                $matches = @(
+                    Get-ShipDeAoSessions -Project $Project | Where-Object {
+                        $sessionId = Get-ShipDeAoSessionId -Response $_
+                        -not $beforeIds.Contains($sessionId) -and
+                        (Get-ShipDeAoSessionName -Session $_) -eq $expectedName
+                    }
+                )
+                if ($matches.Count -gt 1) {
+                    throw "AO created multiple sessions named '$expectedName'; refusing an ambiguous worker binding."
+                }
+                if ($matches.Count -eq 1) {
+                    return [PSCustomObject]@{
+                        SessionId = Get-ShipDeAoSessionId -Response $matches[0]
+                        Harness = $harness
+                    }
+                }
+                Start-Sleep -Milliseconds 500
             }
+            throw "AO spawn succeeded but the new session '$expectedName' could not be identified through ao session ls. Output: $text"
         }
         $failures.Add(("{0} => exit {1}: {2}" -f $harness, $exitCode, $text))
     }
@@ -1492,6 +1564,10 @@ function Invoke-ShipDeSupervisorLoop {
             throw "AgentRouter exhausted its approved fallback routes for session $($State.SessionId)."
         }
 
+        if ($activity -in @("FAILED", "STOPPED", "MISSING")) {
+            throw "AO worker ended before the governed lifecycle completed. State: $activity"
+        }
+
         if ($pullRequest) {
             $headSha = [string]$pullRequest.headRefOid
             $State.PullRequestNumber = [int]$pullRequest.number
@@ -1507,7 +1583,7 @@ function Invoke-ShipDeSupervisorLoop {
                     }
                     $State.LastCiRepairHead = $headSha
                 }
-            } elseif ($gate -eq "GREEN") {
+            } elseif ($gate -eq "GREEN" -and -not $pullRequest.isDraft) {
                 $verdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha
                 $State.ExactHeadVerdict = $verdict
 
@@ -1528,6 +1604,11 @@ function Invoke-ShipDeSupervisorLoop {
                         throw "CI is green but the independent Codex review could not be started."
                     }
                     $State.LastReviewTriggeredHead = $headSha
+                }
+            } elseif ($gate -eq "GREEN" -and $pullRequest.isDraft) {
+                $State.CiGate = "GREEN_DRAFT"
+                if ($activity -eq "COMPLETED") {
+                    throw "AO worker completed while PR #$($pullRequest.number) is still draft. Mark the same PR ready before review."
                 }
             }
             $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
@@ -1553,8 +1634,6 @@ function Invoke-ShipDeSupervisorLoop {
             }
         } elseif ($activity -eq "COMPLETED") {
             throw "AO worker completed without creating a governed Pull Request."
-        } elseif ($activity -in @("FAILED", "STOPPED", "MISSING")) {
-            throw "AO worker ended without creating a governed Pull Request. State: $activity"
         } elseif ($activity -eq "UNKNOWN") {
             $State.UnknownPollCount = [int]$State.UnknownPollCount + 1
             if ([int]$State.UnknownPollCount -ge 3) {
@@ -1584,6 +1663,7 @@ function Assert-ShipDeSupervisorCompatibility {
     $spawnArgs = New-ShipDeAoSpawnArguments -Item $fixtureItem -Harness "agy" -Prompt "fixture" -Project "shipde-platform"
     if (
         $spawnArgs[0] -ne "spawn" -or
+        $spawnArgs -contains "--json" -or
         $spawnArgs -contains "--worktree" -or
         $spawnArgs -contains "--prompt-file" -or
         ($spawnArgs[0..1] -join " ") -eq "session spawn"
@@ -1615,6 +1695,16 @@ function Invoke-ShipDeSupervise {
     if ($state -and $state.SessionId -and $state.WorkItemId) {
         Write-Host "[SUPERVISOR] Resuming $($state.WorkItemId) in AO session $($state.SessionId)."
     } else {
+        $openImplementationPullRequests = @(Get-ShipDeOpenPullRequests | Where-Object {
+            Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
+        })
+        if ($openImplementationPullRequests.Count -gt 0) {
+            $openSummary = @($openImplementationPullRequests | ForEach-Object {
+                "#{0} {1}" -f $_.number, $_.title
+            }) -join "; "
+            throw "Open implementation Pull Request(s) exist without a resumable supervisor checkpoint: $openSummary. Resume or recover that Work Item before consuming another prepared row."
+        }
+
         $item = Get-ShipDeNextPreparedItem
         if (-not $item) {
             Write-Host "[SUPERVISOR] No prepared dependency-ready remote Work Item exists."
@@ -1622,6 +1712,7 @@ function Invoke-ShipDeSupervise {
         }
 
         $prompt = New-ShipDeAuthorPrompt -Item $item
+        Park-ShipDeCodex
         $spawned = Start-ShipDeAoWorker -Item $item -Prompt $prompt
         $state = @{
             WorkItemId = $item.WorkItemId
