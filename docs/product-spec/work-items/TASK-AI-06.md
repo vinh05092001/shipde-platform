@@ -99,8 +99,9 @@ The implementation must:
 
 - Use the current AO command contract: `ao spawn --kind worker --branch ... --harness ...`.
 - Use `agy`, then `gemini`, for a Gemini-assigned Work Item; use router-backed `claude-code` only for a `9ROUTER` assignment.
-- Never use removed commands or flags such as `ao session spawn`, `--worktree`, or `--prompt-file`.
-- Record the session ID for monitoring
+- Never use removed or unsupported commands and flags such as `ao session spawn`, `ao spawn --json`, `--worktree`, or `--prompt-file`.
+- Snapshot `ao session ls --project <project> --json` before and after spawning, then bind exactly one newly created session with the governed worker name.
+- Record the unambiguous session ID for monitoring; stop fail-closed if no unique session can be identified.
 
 ### 5. Monitoring and lifecycle loop
 
@@ -175,7 +176,7 @@ The implementation must:
 | `AC-AI-42` | AO CLI not available                   | Supervisor stops with `Missing required command: ao`                             | Deterministic assertion         |
 | `AC-AI-43` | No prepared remote Work Item           | Supervisor reports that no prepared remote Work Item exists                      | Deterministic assertion         |
 | `AC-AI-44` | Valid dependency-ready Work Item found | Supervisor generates prompt and spawns AO worker                                 | Log output and session ID       |
-| `AC-AI-45` | Supported AO spawn contract            | Uses `ao spawn`; removed subcommands/flags are absent                            | Deterministic assertion         |
+| `AC-AI-45` | Supported AO spawn contract            | Uses `ao spawn` without `--json`; obtains the new ID through `ao session ls`     | Deterministic assertion         |
 | `AC-AI-46` | AO session monitoring                  | State transitions logged with timestamps                                         | Log output                      |
 | `AC-AI-47` | Session idle for 10+ minutes           | Supervisor nudges session once                                                   | Nudge log and session state     |
 | `AC-AI-48` | Session completes successfully         | Supervisor reports completion and awaits CI/review                               | Log output                      |
@@ -220,9 +221,9 @@ From a clean checkout:
 
 ## Codex review record
 
-| Review round | Commit    | Verdict | Findings resolved |
-| ------------ | --------- | ------- | ----------------- |
-| 1            | `pending` | Pending | N/A               |
+| Review round | Commit         | Verdict                                                            | Findings resolved                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------ | -------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1            | `db58e97757c0` | Not posted; terminal verdict marker was missing, so it failed shut | Removed unsupported `ao spawn --json` and resolve the new session through `ao session ls`; park the Codex worktree before AO spawn; block a second Work Item when an implementation PR already exists without a checkpoint; honor terminal AO failures even after PR creation; skip review for draft PRs; require the exact local AgentRouter `/v1` endpoint. All changes require a fresh exact-HEAD review after CI passes. |
 
 ## Residual limitations
 
