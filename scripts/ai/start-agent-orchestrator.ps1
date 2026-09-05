@@ -33,7 +33,11 @@ if (
     -not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$uri) -or
     $uri.Scheme -ne "http" -or
     $uri.Host -notin @("localhost", "127.0.0.1") -or
-    $uri.Port -ne $AgentRouterPort
+    $uri.Port -ne $AgentRouterPort -or
+    $uri.AbsolutePath.TrimEnd('/') -ne "/v1" -or
+    -not [string]::IsNullOrWhiteSpace($uri.Query) -or
+    -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
+    -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
 ) {
     throw "The .claude profile must route to http://localhost:$AgentRouterPort/v1."
 }
