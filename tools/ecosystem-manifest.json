@@ -306,11 +306,7 @@
       "telemetry_network_behavior": "localhost-containers-only",
       "health_check": "docker compose version",
       "rollback": "docker compose down",
-      "profiles": [
-        "BACKEND_FEATURE",
-        "CARRIER_INTEGRATION",
-        "COD_AND_SETTLEMENT"
-      ]
+      "profiles": ["BACKEND_FEATURE", "CARRIER_INTEGRATION", "COD_AND_SETTLEMENT"]
     },
     {
       "id": "chrome-devtools-mcp",
@@ -436,12 +432,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "openapi-typescript --version",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "BACKEND_FEATURE",
-        "CARRIER_INTEGRATION",
-        "PR_REVIEW"
-      ]
+      "profiles": ["FOUNDATION", "BACKEND_FEATURE", "CARRIER_INTEGRATION", "PR_REVIEW"]
     },
     {
       "id": "open-spec",
@@ -745,12 +736,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "gitleaks version",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "SECURITY_REVIEW",
-        "PR_REVIEW",
-        "NIGHTLY_MAINTENANCE"
-      ]
+      "profiles": ["FOUNDATION", "SECURITY_REVIEW", "PR_REVIEW", "NIGHTLY_MAINTENANCE"]
     },
     {
       "id": "axe-core",
