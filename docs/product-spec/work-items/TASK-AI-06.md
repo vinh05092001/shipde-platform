@@ -115,6 +115,7 @@ The implementation must:
 ### 7. CI and independent review routing
 
 - Detect the Work Item's open PR without consuming another row.
+- Permit a bootstrap review to select one exact open PR with `-PullRequestNumber`; never guess when several implementation PRs are open.
 - Route each failed exact HEAD back to the same worker once.
 - Trigger AO's configured Codex reviewer only after required CI is green.
 - Route durable exact-HEAD `CHANGES_REQUIRED` findings back to the worker once per HEAD.
@@ -160,6 +161,7 @@ The implementation must:
 - `AI-SUP-09`: Maximum 1 nudge attempt per inactivity window before reporting stalled.
 - `AI-SUP-10`: The supervisor respects existing controller gates (CI must pass, Codex must approve).
 - `AI-SUP-11`: Starting `Supervise` repairs AO runtime drift by relaunching AO through AgentRouter before consuming a Work Item.
+- `AI-SUP-12`: Manual bootstrap review requires an exact PR number when more than one implementation PR is open.
 
 ## Acceptance matrix
 
@@ -181,6 +183,7 @@ The implementation must:
 | `AC-AI-55` | CI green without verdict               | AO triggers configured independent Codex review             | AO review record                |
 | `AC-AI-56` | Exact-HEAD Codex PASS                  | Supervisor stops for human merge without merge invocation   | Durable verdict and code audit  |
 | `AC-AI-57` | AO stopped, stale, or on wrong profile | `Supervise` relaunches AO through `.claude` and AgentRouter | Launcher output and live PID    |
+| `AC-AI-58` | Multiple implementation PRs are open   | Explicit `-PullRequestNumber` selects exactly one review PR | Deterministic PR filter         |
 
 ## Verification commands
 
@@ -190,6 +193,7 @@ From a clean checkout:
 - Run `powershell -ExecutionPolicy Bypass -File .\scripts\ai\control.ps1 -Action Status` and confirm all startup assertions pass.
 - Run `python docs/product-spec/scripts/validate_docs.py`.
 - Validate that the Pull Request body contains every required contract heading and `Review status: READY_FOR_CODEX`.
+- With multiple open PRs, run `control.ps1 -Action Review -PullRequestNumber 9` and verify the immutable fetched HEAD matches PR #9.
 - Run `pnpm format:check`.
 - Run `pnpm security:secrets`.
 - Run `git diff --check origin/main...HEAD`.
