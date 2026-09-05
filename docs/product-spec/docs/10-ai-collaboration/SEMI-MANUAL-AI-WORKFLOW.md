@@ -68,6 +68,8 @@ The `contract` check runs for every Pull Request and validates the product speci
 
 When `Resume` detects one non-draft implementation Pull Request and every required check is green, it detaches `shipde-codex` at the immutable PR head and runs `codex review --base origin/main`. The review is saved outside the repository. The human confirms before it is posted to GitHub. The reviewer reads repository evidence rather than planning or author chat and returns `PASS`, `CHANGES_REQUIRED` or `BLOCKED`.
 
+If more than one implementation Pull Request is open during bootstrap or recovery, use `control.ps1 -Action Review -PullRequestNumber <number>`. The controller must select that exact open PR or stop; it never guesses between active Work Items.
+
 ### 5. Correction loop
 
 `CHANGES_REQUIRED` returns to the same implementation author and same branch. The author fixes findings, reruns the complete validation set and updates the PR evidence. Two failed 9Router correction rounds escalate the item to Gemini; record the author change in the Work Item. Every updated commit requires a fresh Codex verdict.
