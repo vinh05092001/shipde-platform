@@ -108,22 +108,22 @@ Normal daily operation uses only `control.ps1 -Action Resume` (or **Continue pip
 
 ## Unattended supervisor mode (TASK-AI-06+)
 
-For extended unattended operation, run `control.ps1 -Action Supervise`. The deterministic supervisor automates the entire per-Work-Item procedure:
+Run `control.ps1 -Action Supervise`. It validates AO and, when AO is stopped, stale, or running with the wrong profile, invokes `scripts/ai/start-agent-orchestrator.ps1 -Restart` automatically. The launcher forces AO to use the existing `.claude` profile routed to localhost AgentRouter; AgentRouter handles Claude/provider quota fallback without replacing the AO session. The deterministic supervisor automates the per-Work-Item procedure:
 
-1. **Reads** the delivery register and selects the next dependency-ready Work Item.
+1. **Discovers** normal remote `feat/*` and `fix/*` refs and selects the earliest prepared `READY_FOR_AUTHOR` Work Item.
 2. **Generates** the implementation prompt automatically (no clipboard/paste).
-3. **Spawns** an isolated AO worker session for the assigned author.
+3. **Spawns** an isolated AO worker using the current public `ao spawn` contract.
 4. **Monitors** session state, detecting inactivity and completion.
 5. **Nudges** stalled sessions before escalating.
-6. **Checks** CI status after worker completion.
-7. **Notifies** the human when merge is ready.
-8. **Fails over** to alternative providers when transient errors occur (TASK-AI-07+).
+6. **Routes** each failed CI HEAD back to the same worker once.
+7. **Triggers** independent Codex review after CI is green and routes exact-HEAD findings back to the worker.
+8. **Notifies** the human only after durable exact-HEAD PASS; it never merges.
 
 The supervisor is a PowerShell state machine, not an LLM agent loop. It:
 
 - Preserves fail-closed behavior (stops on unrecoverable errors).
 - Never auto-merges (human merge is always required).
-- Distinguishes provider failures from implementation failures.
+- Relies on AgentRouter for provider/model fallback and treats surfaced exhaustion as a real blocker.
 - Writes checkpoints for restart recovery.
 - Respects all existing CI and review gates.
 
@@ -142,7 +142,7 @@ delivery register → supervisor → assigned worker → local verification
 | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | Business rule missing or contradictory                                   | Mark `BLOCKED`; no agent may invent it                                           |
 | Carrier capability unverified                                            | Use explicit unverified/unsupported state and deterministic mock/manual fallback |
-| 9Router reaches a prohibited domain or fails twice                       | Stop and escalate same Work Item to Gemini                                       |
+| AgentRouter exhausts every approved route                                | Preserve checkpoint and stop fail-closed for human credential/provider action    |
 | 9Router injects Ponytail/Caveman or changes evidence through compression | Stop, disable the feature and repeat verification from uncompressed evidence     |
 | DSH/9Router version or model catalog changes mid-item                    | Pin the working version/model or mark `BLOCKED`; never silently substitute       |
 | Author cannot open a PR                                                  | Push branch and provide commit; human opens PR with the template                 |
