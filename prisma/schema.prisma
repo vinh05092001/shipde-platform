@@ -505,3 +505,33 @@ model AuditLog {
   @@index([merchant_id, created_at])
   @@map("audit_logs")
 }
+
+// ----------------------------------------------------------------------------
+// 8. Technical Outbox & Durable Dispatch Foundation (ENT-FOUND-OUTBOX)
+// ----------------------------------------------------------------------------
+
+enum OutboxStatusEnum {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+}
+
+model OutboxEvent {
+  id              String            @id @default(uuid()) @db.Uuid
+  event_type      String            @db.VarChar(128)
+  payload         Json
+  correlation_id  String            @db.VarChar(128)
+  status          OutboxStatusEnum  @default(PENDING)
+  attempts        Int               @default(0)
+  last_error      String?           @db.Text
+  idempotency_key String?           @unique @db.VarChar(128)
+  created_at      DateTime          @default(now()) @db.Timestamptz
+  scheduled_at    DateTime          @default(now()) @db.Timestamptz
+  published_at    DateTime?         @db.Timestamptz
+
+  @@index([status, scheduled_at])
+  @@index([correlation_id])
+  @@map("outbox_events")
+}
+
