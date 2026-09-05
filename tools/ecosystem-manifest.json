@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "version": "1.1.0",
-  "updated_at": "2026-09-03T14:30:00Z",
+  "version": "1.2.0",
+  "updated_at": "2026-09-05T10:00:00Z",
   "title": "Ship Dễ Governed Ecosystem Toolchain Manifest",
   "description": "Authoritative catalog of adopted repositories, capabilities, and pilot candidates governed by role separation, minimal profile activation, and fail-closed safety.",
   "policies": {
@@ -22,6 +22,27 @@
     "max_implementation_agents": 1,
     "max_research_agents": 1,
     "parallel_writers_per_work_item": 1
+  },
+  "orchestrator_runtime": {
+    "id": "agent-orchestrator",
+    "name": "Agent Orchestrator",
+    "canonical_url": "https://github.com/Untrivial-ai/agent-orchestrator",
+    "repository": "Untrivial-ai/agent-orchestrator",
+    "owner": "Untrivial-ai",
+    "kind": "external-orchestration-layer",
+    "role": "Supervise one implementation agent and one research agent, isolate worktrees, and route governed CI/review lifecycle events.",
+    "source_of_truth_boundary": "External control layer around the adopted ecosystem; it is not counted as an adopted Ship De repository or provider.",
+    "install_method": "windows-installer",
+    "pinned_version_or_commit": "0.12.10",
+    "platform": "windows",
+    "lifecycle_state": "INSTALLED",
+    "default_enabled": false,
+    "blocking_policy": "BLOCKING_WHEN_SUPERVISING",
+    "permissions": "governed-worktrees-and-loopback-daemon",
+    "telemetry_network_behavior": "agent-provider-and-git-origin-only",
+    "health_check": "ao status --json",
+    "rollback": "ao stop",
+    "activation_rule": "Start only through scripts/ai/start-agent-orchestrator.ps1 when Resume or Supervise requires it."
   },
   "adopted": [
     {
@@ -285,7 +306,11 @@
       "telemetry_network_behavior": "localhost-containers-only",
       "health_check": "docker compose version",
       "rollback": "docker compose down",
-      "profiles": ["BACKEND_FEATURE", "CARRIER_INTEGRATION", "COD_AND_SETTLEMENT"]
+      "profiles": [
+        "BACKEND_FEATURE",
+        "CARRIER_INTEGRATION",
+        "COD_AND_SETTLEMENT"
+      ]
     },
     {
       "id": "chrome-devtools-mcp",
@@ -411,7 +436,12 @@
       "telemetry_network_behavior": "none",
       "health_check": "openapi-typescript --version",
       "rollback": "N/A",
-      "profiles": ["FOUNDATION", "BACKEND_FEATURE", "CARRIER_INTEGRATION", "PR_REVIEW"]
+      "profiles": [
+        "FOUNDATION",
+        "BACKEND_FEATURE",
+        "CARRIER_INTEGRATION",
+        "PR_REVIEW"
+      ]
     },
     {
       "id": "open-spec",
@@ -715,7 +745,12 @@
       "telemetry_network_behavior": "none",
       "health_check": "gitleaks version",
       "rollback": "N/A",
-      "profiles": ["FOUNDATION", "SECURITY_REVIEW", "PR_REVIEW", "NIGHTLY_MAINTENANCE"]
+      "profiles": [
+        "FOUNDATION",
+        "SECURITY_REVIEW",
+        "PR_REVIEW",
+        "NIGHTLY_MAINTENANCE"
+      ]
     },
     {
       "id": "axe-core",
