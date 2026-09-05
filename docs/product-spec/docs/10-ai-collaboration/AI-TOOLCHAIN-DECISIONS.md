@@ -207,13 +207,13 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 4. **AI-SUP-04**: Implementation/test failures are NOT provider failures; they return to the author.
 5. **AI-SUP-05**: The supervisor never auto-merges; human merge is always required.
 
-### Provider failover chain (TASK-AI-07+)
+### AgentRouter-backed orchestration
 
-6. **AI-SUP-06**: Primary provider: Claude Code using direct profile at `%USERPROFILE%\.claude-orchestrator`.
-7. **AI-SUP-07**: First fallback: existing Claude Code configuration routed through 9Router.
-8. **AI-SUP-08**: Second fallback: Gemini CLI OAuth (authenticated `agy` or `gemini`).
-9. **AI-SUP-09**: Third fallback: GitHub Copilot OAuth where supported by the existing harness.
-10. **AI-SUP-10**: Bounded attempts: retry once on same provider, then fail over; maximum 4 total attempts.
+6. **AI-SUP-06**: Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost AgentRouter endpoint. The direct `%USERPROFILE%\.claude-orchestrator` profile is reserved for explicit diagnosis, not unattended operation.
+7. **AI-SUP-07**: AgentRouter owns Claude/provider quota fallback below AO. AO sees one stable endpoint and must not retry a quota-exhausted direct profile ten times.
+8. **AI-SUP-08**: Gemini implementation uses the installed `agy` harness first and `gemini` only when AO cannot start `agy`.
+9. **AI-SUP-09**: Cross-harness replacement after AgentRouter exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch and worktree.
+10. **AI-SUP-10**: Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
 
 ### State preservation
 
@@ -221,14 +221,14 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 12. **AI-SUP-12**: State includes: Work Item ID, session ID, branch, provider, activity state, nudge count.
 13. **AI-SUP-13**: Restart resumes from checkpoint without duplicating PRs or tasks.
 
-### Reviewer failover
+### Independent review
 
-14. **AI-SUP-14**: Codex Sol High is the primary independent reviewer.
-15. **AI-SUP-15**: Luna is used only when Sol is unavailable; stale reviews never authorize merge.
+14. **AI-SUP-14**: Codex Sol High is the independent exact-HEAD reviewer and is never routed through AgentRouter.
+15. **AI-SUP-15**: If the configured independent reviewer is unavailable, delivery waits fail-closed; stale, routed or self-review verdicts never authorize merge.
 
 ### Transient failure classification
 
-The supervisor distinguishes these transient provider failures (trigger failover) from implementation failures (return to author):
+AgentRouter handles transient provider failures internally. If one of these failures reaches the supervisor, every approved router fallback is treated as exhausted and delivery stops fail-closed; implementation failures still return to the author:
 
 | Classification            | Trigger failover | Return to author |
 | ------------------------- | ---------------- | ---------------- |
