@@ -103,6 +103,7 @@ The implementation must:
 - Poll exact session state using `ao session get <id> --json`.
 - Detect idle, active, completed, or failed states
 - Bounded inactivity timer (default 10 minutes idle triggers nudge)
+- Stop after three consecutive unknown states or a completed worker that did not create its governed Pull Request; never poll forever.
 - Log state transitions with timestamps
 
 ### 6. Inactivity handling (first tier only)
