@@ -1,9 +1,13 @@
 param(
-    [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync")]
+    [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync", "Supervise")]
     [string]$Action = "Menu",
 
     [string]$Repository = "vinh05092001/shipde-platform",
-    [string]$AiRoot = (Join-Path $env:USERPROFILE "AI")
+    [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
+
+    [int]$SupervisorPollIntervalSeconds = 30,
+    [int]$SupervisorInactivityTimeoutMinutes = 10,
+    [int]$SupervisorMaxNudges = 1
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -1050,6 +1054,558 @@ function Show-ShipDeStatus {
     }
 }
 
+# ============================================================================
+# SUPERVISOR FUNCTIONS (TASK-AI-06)
+# Deterministic orchestrator supervisor for unattended Work Item processing
+# ============================================================================
+
+$script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.json"
+
+function Assert-ShipDeAoCommand {
+    if (-not (Get-Command "ao" -ErrorAction SilentlyContinue)) {
+        throw "Missing required command: ao. The AO CLI must be installed for supervisor mode."
+    }
+}
+
+function Test-ShipDeAoReadiness {
+    try {
+        $versionOutput = & ao --version 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return @{
+                Ready = $false
+                Reason = "ao --version failed with exit code $LASTEXITCODE"
+            }
+        }
+        return @{
+            Ready = $true
+            Version = [string]$versionOutput
+        }
+    } catch {
+        return @{
+            Ready = $false
+            Reason = $_.Exception.Message
+        }
+    }
+}
+
+function Get-ShipDeAoSessions {
+    param([string]$Project = "shipde-platform")
+
+    try {
+        $jsonOutput = & ao session list --project $Project --json 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($jsonOutput)) {
+            return @()
+        }
+        $sessions = $jsonOutput | ConvertFrom-Json
+        return @($sessions)
+    } catch {
+        return @()
+    }
+}
+
+function Get-ShipDeAoSessionById {
+    param(
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [string]$Project = "shipde-platform"
+    )
+
+    try {
+        $jsonOutput = & ao session show $SessionId --project $Project --json 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($jsonOutput)) {
+            return $null
+        }
+        return $jsonOutput | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+}
+
+function Get-ShipDeLocalRegisterRows {
+    $localRegisterPath = Join-Path $script:Paths.Main $script:RegisterPath
+    if (-not (Test-Path $localRegisterPath)) {
+        throw "Delivery register not found: $localRegisterPath"
+    }
+    return @(Import-Csv -Path $localRegisterPath)
+}
+
+function Get-ShipDeNextDependencyReadyItem {
+    $rows = Get-ShipDeLocalRegisterRows
+
+    $dependencyReadyRows = @($rows | Where-Object {
+        $status = [string]$_.status
+        if ($status -eq "READY_FOR_AUTHOR") {
+            return $true
+        }
+        if ($status -eq "BLOCKED_DEPENDENCY") {
+            $deps = [string]$_.dependencies
+            if ([string]::IsNullOrWhiteSpace($deps)) {
+                return $true
+            }
+            $depIds = $deps -split '[;,\s]+' | Where-Object { $_ -match '^\s*(TASK-|FEAT-)' } | ForEach-Object { $_.Trim() }
+            foreach ($depId in $depIds) {
+                $depRow = $rows | Where-Object { $_.work_item_id -eq $depId } | Select-Object -First 1
+                if (-not $depRow -or $depRow.status -ne "MERGED") {
+                    return $false
+                }
+            }
+            return $true
+        }
+        return $false
+    } | Sort-Object { [int]$_.delivery_order })
+
+    if ($dependencyReadyRows.Count -eq 0) {
+        return $null
+    }
+
+    return $dependencyReadyRows[0]
+}
+
+function Get-ShipDeWorkItemContent {
+    param([Parameter(Mandatory = $true)][string]$WorkItemPath)
+
+    $fullPath = Join-Path $script:Paths.Main $WorkItemPath
+    if (-not (Test-Path $fullPath)) {
+        throw "Work Item file not found: $fullPath"
+    }
+    return Get-Content $fullPath -Raw -Encoding UTF8
+}
+
+function Get-ShipDeWorkItemFields {
+    param([Parameter(Mandatory = $true)][string]$Content)
+
+    $fields = @{}
+
+    $authorMatch = [regex]::Match($Content, '(?im)^\|\s*Assigned author\s*\|\s*`?(?<author>GEMINI|9ROUTER)`?\s*\|')
+    if ($authorMatch.Success) {
+        $fields.Author = $authorMatch.Groups["author"].Value.ToUpperInvariant()
+    }
+
+    $branchMatch = [regex]::Match($Content, '(?im)^\|\s*Branch\s*\|\s*`?(?<branch>[a-z0-9/\-]+)`?\s*\|')
+    if ($branchMatch.Success) {
+        $fields.Branch = $branchMatch.Groups["branch"].Value
+    }
+
+    $idMatch = [regex]::Match($Content, '(?im)^\|\s*Work Item ID\s*\|\s*`?(?<id>[A-Z0-9\-]+)`?\s*\|')
+    if ($idMatch.Success) {
+        $fields.WorkItemId = $idMatch.Groups["id"].Value
+    }
+
+    $pathsMatch = [regex]::Match($Content, '(?im)^\|\s*Allowed paths\s*\|\s*(?<paths>[^\|]+)\|')
+    if ($pathsMatch.Success) {
+        $fields.AllowedPaths = $pathsMatch.Groups["paths"].Value.Trim()
+    }
+
+    return $fields
+}
+
+function New-ShipDeAuthorPrompt {
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkItemId,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [Parameter(Mandatory = $true)][string]$Author
+    )
+
+    $promptName = if ($Author -eq "GEMINI") { "GEMINI-START-PROMPT.md" } else { "NINEROUTER-START-PROMPT.md" }
+    $promptPath = Join-Path $script:Paths.Main "docs\product-spec\docs\10-ai-collaboration\$promptName"
+
+    if (-not (Test-Path $promptPath)) {
+        throw "Author prompt template not found: $promptPath"
+    }
+
+    $prompt = Get-Content $promptPath -Raw -Encoding UTF8
+    $prompt = $prompt.Replace("<WORK_ITEM_ID>", $WorkItemId)
+    $prompt = $prompt.Replace("<BRANCH>", $Branch)
+    return $prompt
+}
+
+function Get-ShipDeAoWorkerType {
+    param([Parameter(Mandatory = $true)][string]$Author)
+
+    switch ($Author) {
+        "GEMINI" { return "gemini" }
+        "9ROUTER" { return "claude" }
+        default { return "claude" }
+    }
+}
+
+function Start-ShipDeAoWorker {
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkItemId,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [Parameter(Mandatory = $true)][string]$Author,
+        [Parameter(Mandatory = $true)][string]$Prompt,
+        [string]$Project = "shipde-platform"
+    )
+
+    $workerType = Get-ShipDeAoWorkerType -Author $Author
+    $sessionName = "$WorkItemId-worker"
+
+    $promptFile = Join-Path $script:HandoffRoot "$sessionName-prompt.txt"
+    $Prompt | Set-Content -Path $promptFile -Encoding UTF8
+
+    Write-Host "[SUPERVISOR] Spawning AO worker session: $sessionName"
+    Write-Host "[SUPERVISOR] Worker type: $workerType"
+    Write-Host "[SUPERVISOR] Branch: $Branch"
+
+    try {
+        $spawnOutput = & ao session spawn `
+            --project $Project `
+            --name $sessionName `
+            --branch $Branch `
+            --worktree `
+            --prompt-file $promptFile `
+            --json 2>&1
+
+        if ($LASTEXITCODE -ne 0) {
+            $errorMsg = if ($spawnOutput) { [string]$spawnOutput } else { "Unknown error" }
+            throw "Failed to spawn AO worker: $errorMsg"
+        }
+
+        $sessionInfo = $spawnOutput | ConvertFrom-Json
+        $sessionId = $sessionInfo.id
+        if ([string]::IsNullOrWhiteSpace($sessionId)) {
+            $sessionId = $sessionInfo.sessionId
+        }
+        if ([string]::IsNullOrWhiteSpace($sessionId)) {
+            $sessionId = $sessionName
+        }
+
+        Write-Host "[SUPERVISOR] Worker spawned with session ID: $sessionId"
+        return $sessionId
+
+    } catch {
+        throw "Failed to spawn AO worker: $($_.Exception.Message)"
+    }
+}
+
+function Send-ShipDeAoNudge {
+    param(
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [string]$Project = "shipde-platform"
+    )
+
+    $nudgePrompt = "The supervisor has detected inactivity. Please continue working on the assigned Work Item, or report if you are blocked."
+
+    Write-Host "[SUPERVISOR] Nudging session $SessionId..."
+
+    try {
+        & ao send --session $SessionId --project $Project --message $nudgePrompt 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "[SUPERVISOR] Nudge failed for session $SessionId"
+            return $false
+        }
+        Write-Host "[SUPERVISOR] Nudge sent to session $SessionId"
+        return $true
+    } catch {
+        Write-Warning "[SUPERVISOR] Nudge exception: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Write-ShipDeSupervisorCheckpoint {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State
+    )
+
+    $State.CheckpointTime = (Get-Date).ToString("o")
+    $json = $State | ConvertTo-Json -Depth 10
+    $json | Set-Content -Path $script:SupervisorStateFile -Encoding UTF8
+    Write-Host "[SUPERVISOR] Checkpoint saved"
+}
+
+function Read-ShipDeSupervisorCheckpoint {
+    if (-not (Test-Path $script:SupervisorStateFile)) {
+        return $null
+    }
+
+    try {
+        $json = Get-Content $script:SupervisorStateFile -Raw -Encoding UTF8
+        $state = $json | ConvertFrom-Json
+        $hashtable = @{}
+        foreach ($prop in $state.PSObject.Properties) {
+            $hashtable[$prop.Name] = $prop.Value
+        }
+        return $hashtable
+    } catch {
+        Write-Warning "[SUPERVISOR] Failed to read checkpoint: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Get-ShipDeSessionActivityState {
+    param([Parameter(Mandatory = $true)][object]$Session)
+
+    $status = [string]$Session.status
+    if ([string]::IsNullOrWhiteSpace($status)) {
+        $status = [string]$Session.state
+    }
+
+    switch ($status.ToLowerInvariant()) {
+        "idle" { return "IDLE" }
+        "active" { return "ACTIVE" }
+        "busy" { return "ACTIVE" }
+        "running" { return "ACTIVE" }
+        "completed" { return "COMPLETED" }
+        "done" { return "COMPLETED" }
+        "failed" { return "FAILED" }
+        "error" { return "FAILED" }
+        "stopped" { return "STOPPED" }
+        default { return "UNKNOWN" }
+    }
+}
+
+function Invoke-ShipDeSupervisorLoop {
+    param(
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [Parameter(Mandatory = $true)][string]$WorkItemId,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [int]$PollIntervalSeconds = 30,
+        [int]$InactivityTimeoutMinutes = 10,
+        [int]$MaxNudges = 1
+    )
+
+    $nudgeCount = 0
+    $lastActivityTime = Get-Date
+    $inactivityThreshold = [TimeSpan]::FromMinutes($InactivityTimeoutMinutes)
+
+    Write-Host "[SUPERVISOR] Starting monitoring loop for session $SessionId"
+    Write-Host "[SUPERVISOR] Poll interval: ${PollIntervalSeconds}s, Inactivity timeout: ${InactivityTimeoutMinutes}m"
+
+    while ($true) {
+        Start-Sleep -Seconds $PollIntervalSeconds
+
+        $session = Get-ShipDeAoSessionById -SessionId $SessionId
+        if (-not $session) {
+            Write-Host "[SUPERVISOR] Session $SessionId not found. It may have completed or been terminated."
+            break
+        }
+
+        $activityState = Get-ShipDeSessionActivityState -Session $session
+        $timestamp = (Get-Date).ToString("HH:mm:ss")
+        Write-Host "[SUPERVISOR] [$timestamp] Session state: $activityState"
+
+        Write-ShipDeSupervisorCheckpoint -State @{
+            WorkItemId = $WorkItemId
+            SessionId = $SessionId
+            Branch = $Branch
+            State = $activityState
+            LastActivityTime = $lastActivityTime.ToString("o")
+            NudgeCount = $nudgeCount
+        }
+
+        switch ($activityState) {
+            "ACTIVE" {
+                $lastActivityTime = Get-Date
+                $nudgeCount = 0
+            }
+            "COMPLETED" {
+                Write-Host "[SUPERVISOR] Session completed. Checking for PR and CI status..."
+                return "COMPLETED"
+            }
+            "FAILED" {
+                Write-Host "[SUPERVISOR] Session reported failure. Checking error details..."
+                return "FAILED"
+            }
+            "STOPPED" {
+                Write-Host "[SUPERVISOR] Session was stopped externally."
+                return "STOPPED"
+            }
+            "IDLE" {
+                $idleDuration = (Get-Date) - $lastActivityTime
+                if ($idleDuration -gt $inactivityThreshold) {
+                    if ($nudgeCount -lt $MaxNudges) {
+                        Write-Host "[SUPERVISOR] Inactivity detected ($([int]$idleDuration.TotalMinutes) minutes). Nudging..."
+                        $nudged = Send-ShipDeAoNudge -SessionId $SessionId
+                        if ($nudged) {
+                            $nudgeCount++
+                            $lastActivityTime = Get-Date
+                        }
+                    } else {
+                        Write-Host "[SUPERVISOR] Maximum nudges ($MaxNudges) reached. Reporting stalled session."
+                        return "STALLED"
+                    }
+                }
+            }
+            default {
+                Write-Host "[SUPERVISOR] Unknown session state: $activityState"
+            }
+        }
+    }
+
+    return "UNKNOWN"
+}
+
+function Assert-ShipDeSupervisorCompatibility {
+    $stateRoundTrip = @{
+        TestField = "test-value"
+        NestedObject = @{ Inner = 123 }
+    }
+    $tempFile = Join-Path $env:TEMP "supervisor-test-$(Get-Random).json"
+    try {
+        $stateRoundTrip | ConvertTo-Json -Depth 10 | Set-Content -Path $tempFile -Encoding UTF8
+        $restored = Get-Content $tempFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($restored.TestField -ne "test-value" -or $restored.NestedObject.Inner -ne 123) {
+            throw "Supervisor state file round-trip failed."
+        }
+    } finally {
+        if (Test-Path $tempFile) {
+            Remove-Item $tempFile -Force
+        }
+    }
+
+    $testRows = @(
+        [PSCustomObject]@{ delivery_order = "10"; status = "MERGED"; dependencies = "" },
+        [PSCustomObject]@{ delivery_order = "20"; status = "READY_FOR_AUTHOR"; dependencies = "" }
+    )
+    $ready = @($testRows | Where-Object { $_.status -eq "READY_FOR_AUTHOR" })
+    if ($ready.Count -ne 1) {
+        throw "Supervisor register filtering self-test failed."
+    }
+}
+
+function Invoke-ShipDeSupervise {
+    Write-Host "=============================================="
+    Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR"
+    Write-Host "=============================================="
+    Write-Host ""
+
+    Assert-ShipDeAoCommand
+
+    $aoReadiness = Test-ShipDeAoReadiness
+    if (-not $aoReadiness.Ready) {
+        throw "AO CLI is not ready: $($aoReadiness.Reason)"
+    }
+    Write-Host "[SUPERVISOR] AO CLI ready: $($aoReadiness.Version)"
+
+    $existingCheckpoint = Read-ShipDeSupervisorCheckpoint
+    if ($existingCheckpoint -and $existingCheckpoint.SessionId) {
+        Write-Host "[SUPERVISOR] Found existing checkpoint for session: $($existingCheckpoint.SessionId)"
+        $existingSession = Get-ShipDeAoSessionById -SessionId $existingCheckpoint.SessionId
+        if ($existingSession) {
+            $state = Get-ShipDeSessionActivityState -Session $existingSession
+            if ($state -in @("ACTIVE", "IDLE")) {
+                Write-Host "[SUPERVISOR] Resuming monitoring of existing session..."
+                $result = Invoke-ShipDeSupervisorLoop `
+                    -SessionId $existingCheckpoint.SessionId `
+                    -WorkItemId $existingCheckpoint.WorkItemId `
+                    -Branch $existingCheckpoint.Branch `
+                    -PollIntervalSeconds $SupervisorPollIntervalSeconds `
+                    -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes `
+                    -MaxNudges $SupervisorMaxNudges
+
+                Write-Host "[SUPERVISOR] Session monitoring ended with result: $result"
+                return
+            }
+        }
+        Write-Host "[SUPERVISOR] Existing session is no longer active. Selecting next Work Item..."
+    }
+
+    Assert-ShipDeRepository -Path $script:Paths.Main
+    Invoke-ShipDeGit -Path $script:Paths.Main -Arguments @("fetch", "origin", "--prune") | Out-Null
+
+    $nextItem = Get-ShipDeNextDependencyReadyItem
+    if (-not $nextItem) {
+        Write-Host "[SUPERVISOR] No dependency-ready Work Item found in the delivery register."
+        Write-Host "[SUPERVISOR] Supervisor has nothing to process. Exiting."
+        return
+    }
+
+    $workItemId = [string]$nextItem.work_item_id
+    $workItemPath = [string]$nextItem.work_item_path
+    Write-Host "[SUPERVISOR] Selected Work Item: $workItemId"
+    Write-Host "[SUPERVISOR] Work Item path: $workItemPath"
+
+    $workItemContent = Get-ShipDeWorkItemContent -WorkItemPath $workItemPath
+    $fields = Get-ShipDeWorkItemFields -Content $workItemContent
+
+    if (-not $fields.Author) {
+        throw "Work Item $workItemId does not specify an assigned author."
+    }
+    if (-not $fields.Branch) {
+        throw "Work Item $workItemId does not specify a branch."
+    }
+
+    Write-Host "[SUPERVISOR] Assigned author: $($fields.Author)"
+    Write-Host "[SUPERVISOR] Branch: $($fields.Branch)"
+    if ($fields.AllowedPaths) {
+        Write-Host "[SUPERVISOR] Allowed paths: $($fields.AllowedPaths)"
+    }
+
+    $prompt = New-ShipDeAuthorPrompt `
+        -WorkItemId $workItemId `
+        -Branch $fields.Branch `
+        -Author $fields.Author
+
+    Write-Host "[SUPERVISOR] Generated prompt ($($prompt.Length) characters)"
+
+    $sessionId = Start-ShipDeAoWorker `
+        -WorkItemId $workItemId `
+        -Branch $fields.Branch `
+        -Author $fields.Author `
+        -Prompt $prompt
+
+    Write-ShipDeSupervisorCheckpoint -State @{
+        WorkItemId = $workItemId
+        SessionId = $sessionId
+        Branch = $fields.Branch
+        Author = $fields.Author
+        State = "STARTED"
+        StartTime = (Get-Date).ToString("o")
+        NudgeCount = 0
+    }
+
+    $result = Invoke-ShipDeSupervisorLoop `
+        -SessionId $sessionId `
+        -WorkItemId $workItemId `
+        -Branch $fields.Branch `
+        -PollIntervalSeconds $SupervisorPollIntervalSeconds `
+        -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes `
+        -MaxNudges $SupervisorMaxNudges
+
+    Write-Host ""
+    Write-Host "=============================================="
+    Write-Host "[SUPERVISOR] Session monitoring ended: $result"
+    Write-Host "=============================================="
+
+    switch ($result) {
+        "COMPLETED" {
+            Write-Host "[SUPERVISOR] Worker session completed. Checking PR and CI status..."
+            $pullRequests = @(Get-ShipDeOpenPullRequests | Where-Object {
+                Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
+            })
+            if ($pullRequests.Count -gt 0) {
+                $pr = $pullRequests | Where-Object {
+                    (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq $workItemId
+                } | Select-Object -First 1
+                if ($pr) {
+                    $gate = Get-ShipDePrGate -PullRequest $pr
+                    Write-Host "[SUPERVISOR] PR #$($pr.number) CI gate status: $gate"
+                    if ($gate -eq "GREEN") {
+                        Write-Host "[SUPERVISOR] CI is green. Independent Codex review is required before merge."
+                        Write-Host "[SUPERVISOR] Run: .\scripts\ai\control.ps1 -Action Review"
+                    } else {
+                        Write-Host "[SUPERVISOR] CI is not green yet. Waiting for CI to complete."
+                    }
+                }
+            }
+        }
+        "FAILED" {
+            Write-Host "[SUPERVISOR] Worker session failed. This is an implementation failure, not a provider failure."
+            Write-Host "[SUPERVISOR] Review the session logs and fix the issues."
+        }
+        "STALLED" {
+            Write-Host "[SUPERVISOR] Worker session is stalled after maximum nudges."
+            Write-Host "[SUPERVISOR] Manual intervention required."
+        }
+        default {
+            Write-Host "[SUPERVISOR] Unexpected result: $result"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "[SUPERVISOR] REMINDER: Human merge is ALWAYS required. Auto-merge is never performed."
+}
+
 function Invoke-ShipDeResume {
     $pullRequests = @(Get-ShipDeOpenPullRequests | Where-Object {
         Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
@@ -1101,6 +1657,7 @@ function Show-ShipDeMenu {
         Write-Host "4. Start prepared author"
         Write-Host "5. Run Codex review"
         Write-Host "6. Sync after human merge"
+        Write-Host "7. Supervise (unattended automation)"
         Write-Host "0. Exit"
         $choice = Read-Host "Choose"
         try {
@@ -1111,6 +1668,7 @@ function Show-ShipDeMenu {
                 "4" { Invoke-ShipDeStart }
                 "5" { Invoke-ShipDeReview }
                 "6" { Invoke-ShipDeSync }
+                "7" { Invoke-ShipDeSupervise }
                 "0" { return }
                 default { Write-Warning "Invalid choice." }
             }
@@ -1123,6 +1681,7 @@ function Show-ShipDeMenu {
 
 Assert-ShipDeJsonListCompatibility
 Assert-ShipDeSyncPreflightOrdering
+Assert-ShipDeSupervisorCompatibility
 Assert-ShipDeCommand git
 Assert-ShipDeCommand gh
 New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
@@ -1134,5 +1693,6 @@ switch ($Action) {
     "Start" { Invoke-ShipDeStart }
     "Review" { Invoke-ShipDeReview }
     "Sync" { Invoke-ShipDeSync }
+    "Supervise" { Invoke-ShipDeSupervise }
     default { Show-ShipDeMenu }
 }

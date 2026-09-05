@@ -194,3 +194,72 @@ Profiles enforce concurrency limits (maximum 1 implementation author and 1 resea
 10. **AI-TOOL-10**: A failed or partial installation reports exact state and rollback; it must not be recorded as installed or healthy.
 11. **AI-TOOL-11**: A supplied authoritative version/ref/path is fail closed; no fallback to latest, another branch or a broader filesystem path.
 12. **AI-TOOL-12**: GitHub merged state is reconciled by PR identity and merge SHA; repeated synchronization is a no-op and never rewrites unrelated rows.
+
+## Orchestrator Supervisor Policy (`AI-SUP-01` to `AI-SUP-15`)
+
+The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Supervise`) automates routine Work Item processing while preserving human merge authority and fail-closed safety. It is a PowerShell state machine, not an LLM agent loop.
+
+### Core principles
+
+1. **AI-SUP-01**: The supervisor is a deterministic PowerShell loop, not an LLM agent.
+2. **AI-SUP-02**: Only one Work Item is active at a time; parallel orchestration is not supported.
+3. **AI-SUP-03**: The supervisor polls AO session state; it does not modify AO internals.
+4. **AI-SUP-04**: Implementation/test failures are NOT provider failures; they return to the author.
+5. **AI-SUP-05**: The supervisor never auto-merges; human merge is always required.
+
+### Provider failover chain (TASK-AI-07+)
+
+6. **AI-SUP-06**: Primary provider: Claude Code using direct profile at `%USERPROFILE%\.claude-orchestrator`.
+7. **AI-SUP-07**: First fallback: existing Claude Code configuration routed through 9Router.
+8. **AI-SUP-08**: Second fallback: Gemini CLI OAuth (authenticated `agy` or `gemini`).
+9. **AI-SUP-09**: Third fallback: GitHub Copilot OAuth where supported by the existing harness.
+10. **AI-SUP-10**: Bounded attempts: retry once on same provider, then fail over; maximum 4 total attempts.
+
+### State preservation
+
+11. **AI-SUP-11**: Checkpoints are written after every state transition to `$HandoffRoot/supervisor-state.json`.
+12. **AI-SUP-12**: State includes: Work Item ID, session ID, branch, provider, activity state, nudge count.
+13. **AI-SUP-13**: Restart resumes from checkpoint without duplicating PRs or tasks.
+
+### Reviewer failover
+
+14. **AI-SUP-14**: Codex Sol High is the primary independent reviewer.
+15. **AI-SUP-15**: Luna is used only when Sol is unavailable; stale reviews never authorize merge.
+
+### Transient failure classification
+
+The supervisor distinguishes these transient provider failures (trigger failover) from implementation failures (return to author):
+
+| Classification            | Trigger failover | Return to author |
+| ------------------------- | ---------------- | ---------------- |
+| Quota exhausted           | Yes              | No               |
+| Rate limited (429)        | Yes              | No               |
+| Authentication error      | Yes (immediate)  | No               |
+| Model unavailable         | Yes              | No               |
+| Timeout (>30s)            | Yes              | No               |
+| Non-zero exit (transient) | Yes              | No               |
+| Lint/type/test failure    | No               | Yes              |
+| Assertion failure         | No               | Yes              |
+| User code exception       | No               | Yes              |
+
+### Permission boundaries (TASK-AI-10+)
+
+The supervisor operates with least-privilege permissions:
+
+**Allowed (routine operations):**
+
+- Read files and repository state
+- Run lint, typecheck, test commands
+- Create commits and push to feature branches
+- Create and update Pull Requests
+- Inspect CI status and review comments
+- Send messages to AO sessions
+
+**Explicitly denied:**
+
+- Auto-merge any Pull Request
+- Force-push or rewrite history
+- Delete branches or worktrees destructively
+- Bypass CI or review gates
+- Broad unrestricted shell access
+- Install, remove, or upgrade machine tools
