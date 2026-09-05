@@ -534,4 +534,3 @@ model OutboxEvent {
   @@index([correlation_id])
   @@map("outbox_events")
 }
-

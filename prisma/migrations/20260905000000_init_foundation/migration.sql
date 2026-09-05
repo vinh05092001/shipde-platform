@@ -520,4 +520,3 @@ ALTER TABLE "claims" ADD CONSTRAINT "claims_discrepancy_id_fkey" FOREIGN KEY ("d
 
 -- AddForeignKey
 ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_merchant_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
