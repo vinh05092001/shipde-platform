@@ -1462,14 +1462,21 @@ function Invoke-ShipDeSupervisorLoop {
     if (-not $State.ContainsKey("NudgeCount")) {
         $State.NudgeCount = 0
     }
+    if (-not $State.ContainsKey("UnknownPollCount")) {
+        $State.UnknownPollCount = 0
+    }
 
     while ($true) {
         $session = Get-ShipDeAoSessionById -SessionId ([string]$State.SessionId) -Project $Project
         $activity = Get-ShipDeSessionActivityState -Session $session
         $pullRequest = Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId)
 
+        $previousActivity = [string]$State.State
         $State.State = $activity
         $State.ProviderFailure = Test-ShipDeSessionProviderFailure -Session $session
+        if ($previousActivity -ne $activity) {
+            Write-Host ("[SUPERVISOR] {0} session {1}: {2} -> {3}" -f (Get-Date).ToUniversalTime().ToString("o"), $State.SessionId, $previousActivity, $activity)
+        }
         Write-ShipDeSupervisorCheckpoint -State $State
 
         if ($State.ProviderFailure) {
@@ -1519,7 +1526,9 @@ function Invoke-ShipDeSupervisorLoop {
         } elseif ($activity -eq "ACTIVE") {
             $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
             $State.NudgeCount = 0
+            $State.UnknownPollCount = 0
         } elseif ($activity -eq "IDLE") {
+            $State.UnknownPollCount = 0
             $lastActivity = [DateTime]::Parse([string]$State.LastActivityTime).ToUniversalTime()
             $idleDuration = (Get-Date).ToUniversalTime() - $lastActivity
             if ($idleDuration.TotalMinutes -ge $InactivityTimeoutMinutes) {
@@ -1533,8 +1542,15 @@ function Invoke-ShipDeSupervisorLoop {
                 $State.NudgeCount = [int]$State.NudgeCount + 1
                 $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
             }
+        } elseif ($activity -eq "COMPLETED") {
+            throw "AO worker completed without creating a governed Pull Request."
         } elseif ($activity -in @("FAILED", "STOPPED", "MISSING")) {
             throw "AO worker ended without creating a governed Pull Request. State: $activity"
+        } elseif ($activity -eq "UNKNOWN") {
+            $State.UnknownPollCount = [int]$State.UnknownPollCount + 1
+            if ([int]$State.UnknownPollCount -ge 3) {
+                throw "AO returned an unknown session state for 3 consecutive polls."
+            }
         }
 
         Write-ShipDeSupervisorCheckpoint -State $State
