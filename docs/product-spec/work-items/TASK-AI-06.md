@@ -20,6 +20,8 @@
 
 The deterministic supervisor is split into ordered governed Work Items. TASK-AI-06 owns the runnable core, the governed AgentRouter-backed AO launcher, current AO CLI integration, durable checkpointing, and automatic CI/review routing. Follow-up Work Items harden or extend this foundation:
 
+Completing TASK-AI-06 does not mean the end-to-end orchestrator is complete. The automation is complete only after TASK-AI-07 through TASK-AI-12 satisfy the final `Resume` acceptance case below.
+
 | Work Item ID | Scope                                                           | Dependency   |
 | ------------ | --------------------------------------------------------------- | ------------ |
 | `TASK-AI-06` | AO/AgentRouter launch, worker spawn, checkpoint, CI/review loop | `TASK-AI-05` |
@@ -41,6 +43,7 @@ The operator launches AO through the existing localhost AgentRouter profile and 
 - `docs/product-spec/docs/10-ai-collaboration/GEMINI-START-PROMPT.md` — implementation author prompt template.
 - `docs/product-spec/docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md` — 9Router author prompt template.
 - `scripts/ai/control.ps1` — existing controller patterns to extend.
+- Agent Orchestrator canonical source: `https://github.com/Untrivial-ai/agent-orchestrator`; installed version `0.12.10`; health check `ao status --json`.
 - AO CLI documentation at `C:/Users/gumac/.ao/data/skills/using-ao/`.
 
 ## Preconditions and dependencies
@@ -50,6 +53,7 @@ The operator launches AO through the existing localhost AgentRouter profile and 
 - `%USERPROFILE%\.claude\settings.json` routes Claude to `http://localhost:20128/v1`.
 - `control.ps1 -Action Supervise` can invoke `scripts/ai/start-agent-orchestrator.ps1` automatically when AO is stopped, stale, or running outside the governed AgentRouter profile. The launcher verifies and records runtime metadata without storing its token.
 - The prepared Work Item exists on a normal remote `feat/*` or `fix/*` ref and is `READY_FOR_AUTHOR` there.
+- `tools/ecosystem-manifest.json` records AO as a separate external orchestration runtime. AO is not counted as one of the adopted repositories or providers.
 
 ## Author boundary
 
@@ -162,28 +166,44 @@ The implementation must:
 - `AI-SUP-10`: The supervisor respects existing controller gates (CI must pass, Codex must approve).
 - `AI-SUP-11`: Starting `Supervise` repairs AO runtime drift by relaunching AO through AgentRouter before consuming a Work Item.
 - `AI-SUP-12`: Manual bootstrap review requires an exact PR number when more than one implementation PR is open.
+- `AI-SUP-13`: AO is an external control layer with pinned provenance and health check; it is never silently counted as an adopted repository/provider.
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario                               | Expected result                                             | Evidence required               |
-| ---------- | -------------------------------------- | ----------------------------------------------------------- | ------------------------------- |
-| `AC-AI-42` | AO CLI not available                   | Supervisor stops with `Missing required command: ao`        | Deterministic assertion         |
-| `AC-AI-43` | No prepared remote Work Item           | Supervisor reports that no prepared remote Work Item exists | Deterministic assertion         |
-| `AC-AI-44` | Valid dependency-ready Work Item found | Supervisor generates prompt and spawns AO worker            | Log output and session ID       |
-| `AC-AI-45` | Supported AO spawn contract            | Uses `ao spawn`; removed subcommands/flags are absent       | Deterministic assertion         |
-| `AC-AI-46` | AO session monitoring                  | State transitions logged with timestamps                    | Log output                      |
-| `AC-AI-47` | Session idle for 10+ minutes           | Supervisor nudges session once                              | Nudge log and session state     |
-| `AC-AI-48` | Session completes successfully         | Supervisor reports completion and awaits CI/review          | Log output                      |
-| `AC-AI-49` | State file written and readable        | Checkpoint survives supervisor restart                      | State file round-trip assertion |
-| `AC-AI-50` | CI green and review PASS               | Supervisor notifies human "Ready for merge"                 | Notification output             |
-| `AC-AI-51` | Never auto-merge                       | No `gh pr merge` command in any code path                   | Code audit                      |
-| `AC-AI-52` | Windows PowerShell 5.1 compatible      | All startup assertions pass on Windows PowerShell 5.1       | CI validation                   |
-| `AC-AI-53` | AO starts through AgentRouter          | Runtime marker matches `.claude` and localhost port 20128   | Launcher output and marker      |
-| `AC-AI-54` | CI failure on exact HEAD               | Same worker receives one repair instruction for that HEAD   | Checkpoint and AO activity      |
-| `AC-AI-55` | CI green without verdict               | AO triggers configured independent Codex review             | AO review record                |
-| `AC-AI-56` | Exact-HEAD Codex PASS                  | Supervisor stops for human merge without merge invocation   | Durable verdict and code audit  |
-| `AC-AI-57` | AO stopped, stale, or on wrong profile | `Supervise` relaunches AO through `.claude` and AgentRouter | Launcher output and live PID    |
-| `AC-AI-58` | Multiple implementation PRs are open   | Explicit `-PullRequestNumber` selects exactly one review PR | Deterministic PR filter         |
+| AC/Test ID | Scenario                               | Expected result                                                                  | Evidence required               |
+| ---------- | -------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------- |
+| `AC-AI-42` | AO CLI not available                   | Supervisor stops with `Missing required command: ao`                             | Deterministic assertion         |
+| `AC-AI-43` | No prepared remote Work Item           | Supervisor reports that no prepared remote Work Item exists                      | Deterministic assertion         |
+| `AC-AI-44` | Valid dependency-ready Work Item found | Supervisor generates prompt and spawns AO worker                                 | Log output and session ID       |
+| `AC-AI-45` | Supported AO spawn contract            | Uses `ao spawn`; removed subcommands/flags are absent                            | Deterministic assertion         |
+| `AC-AI-46` | AO session monitoring                  | State transitions logged with timestamps                                         | Log output                      |
+| `AC-AI-47` | Session idle for 10+ minutes           | Supervisor nudges session once                                                   | Nudge log and session state     |
+| `AC-AI-48` | Session completes successfully         | Supervisor reports completion and awaits CI/review                               | Log output                      |
+| `AC-AI-49` | State file written and readable        | Checkpoint survives supervisor restart                                           | State file round-trip assertion |
+| `AC-AI-50` | CI green and review PASS               | Supervisor notifies human "Ready for merge"                                      | Notification output             |
+| `AC-AI-51` | Never auto-merge                       | No `gh pr merge` command in any code path                                        | Code audit                      |
+| `AC-AI-52` | Windows PowerShell 5.1 compatible      | All startup assertions pass on Windows PowerShell 5.1                            | CI validation                   |
+| `AC-AI-53` | AO starts through AgentRouter          | Runtime marker matches `.claude` and localhost port 20128                        | Launcher output and marker      |
+| `AC-AI-54` | CI failure on exact HEAD               | Same worker receives one repair instruction for that HEAD                        | Checkpoint and AO activity      |
+| `AC-AI-55` | CI green without verdict               | AO triggers configured independent Codex review                                  | AO review record                |
+| `AC-AI-56` | Exact-HEAD Codex PASS                  | Supervisor stops for human merge without merge invocation                        | Durable verdict and code audit  |
+| `AC-AI-57` | AO stopped, stale, or on wrong profile | `Supervise` relaunches AO through `.claude` and AgentRouter                      | Launcher output and live PID    |
+| `AC-AI-58` | Multiple implementation PRs are open   | Explicit `-PullRequestNumber` selects exactly one review PR                      | Deterministic PR filter         |
+| `AC-AI-59` | AO provenance is inspected             | Manifest identifies canonical source, version and health check outside `adopted` | Manifest validation             |
+
+## Deferred final automation acceptance case
+
+TASK-AI-07 through TASK-AI-12 must converge on one operator entrypoint:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ai\control.ps1 -Action Resume
+```
+
+From that single invocation, the controller must select the dependency-ready Work Item, compile the minimum tool profile from the governed manifest, create or reuse the assigned branch/worktree, invoke the correct worker, implement and test, open the PR, monitor and repair CI, request an independent exact-HEAD Codex review, return `CHANGES_REQUIRED` to the same worker, stop for human merge after durable `PASS`, and reconcile `main` before selecting the next Work Item.
+
+The operator intervenes only for initial credential/login, destructive actions, conflicting or missing business rules, and Pull Request merge. No clipboard prompt transfer, manual quota watching, or manual stalled-agent polling is part of the accepted flow.
+
+TASK-AI-11 must simulate direct-Claude quota exhaustion, provider `429`/`5xx`, a stalled agent, CI failure, Codex `CHANGES_REQUIRED`, machine restart, and a merged-but-unsynchronized PR. TASK-AI-12 must make the controller and AO daemon restartable on Windows while activating only the profile required by the current Work Item.
 
 ## Verification commands
 
