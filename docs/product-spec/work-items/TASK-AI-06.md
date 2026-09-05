@@ -1,4 +1,4 @@
-# TASK-AI-06 — Deterministic orchestrator supervisor (core slice)
+# TASK-AI-06 — Deterministic AO supervisor and AgentRouter runtime
 
 ## Control
 
@@ -6,33 +6,33 @@
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Work Item ID    | `TASK-AI-06`                                                                                                                                        |
 | Feature ID      | `N/A`                                                                                                                                               |
-| Status          | `READY_FOR_AUTHOR`                                                                                                                                  |
+| Status          | `READY_FOR_CODEX`                                                                                                                                   |
 | Delivery order  | `139`                                                                                                                                               |
-| Dependencies    | `TASK-AI-05` merged through PR #7 as `a344b69`                                                                                                      |
+| Dependencies    | `TASK-AI-05` merged through PR #7 as `a344b69af3c1c9dc4469d0ccdefe15c130bb2188`                                                                     |
 | Assigned author | `GEMINI` (requires architectural decisions for supervisor design and AO integration)                                                                |
 | Risk            | `HIGH`                                                                                                                                              |
 | Allowed paths   | `scripts/ai/*.ps1`; `docs/product-spec/work-items/TASK-AI-*.md`; `docs/product-spec/docs/10-ai-collaboration/*.md`; `tools/ecosystem-manifest.json` |
-| Reviewer        | `Codex — fresh independent task (Sol High primary; Luna only when Sol unavailable)`                                                                 |
+| Reviewer        | `Codex — fresh independent task using Sol High; no routed or self-review verdict`                                                                   |
 | Branch          | `feat/task-ai-06-orchestrator-supervisor`                                                                                                           |
-| Pull Request    | `TBD`                                                                                                                                               |
+| Pull Request    | `#9`                                                                                                                                                |
 
 ## Scope split rationale
 
-The complete deterministic supervisor system is split into ordered governed Work Items. This Work Item (TASK-AI-06) implements the smallest end-to-end automation slice that removes human copy/paste from the normal flow. Follow-up Work Items extend this foundation:
+The deterministic supervisor is split into ordered governed Work Items. TASK-AI-06 owns the runnable core, the governed AgentRouter-backed AO launcher, current AO CLI integration, durable checkpointing, and automatic CI/review routing. Follow-up Work Items harden or extend this foundation:
 
-| Work Item ID | Scope                                                      | Dependency   |
-| ------------ | ---------------------------------------------------------- | ------------ |
-| `TASK-AI-06` | Core supervisor loop, AO spawn, auto-prompt, basic monitor | `TASK-AI-05` |
-| `TASK-AI-07` | Provider failover chain and bounded recovery               | `TASK-AI-06` |
-| `TASK-AI-08` | Automatic CI/review routing and repair                     | `TASK-AI-07` |
-| `TASK-AI-09` | Full checkpoint persistence and restart recovery           | `TASK-AI-08` |
-| `TASK-AI-10` | Permission allowlist and security hardening                | `TASK-AI-09` |
-| `TASK-AI-11` | Preview/DryRun modes and comprehensive tests               | `TASK-AI-10` |
-| `TASK-AI-12` | Optional Windows startup/scheduling script                 | `TASK-AI-11` |
+| Work Item ID | Scope                                                           | Dependency   |
+| ------------ | --------------------------------------------------------------- | ------------ |
+| `TASK-AI-06` | AO/AgentRouter launch, worker spawn, checkpoint, CI/review loop | `TASK-AI-05` |
+| `TASK-AI-07` | Cross-harness worker failover after AgentRouter exhaustion      | `TASK-AI-06` |
+| `TASK-AI-08` | Extended CI/review diagnostics and bounded repair policy        | `TASK-AI-07` |
+| `TASK-AI-09` | Full checkpoint persistence and restart recovery                | `TASK-AI-08` |
+| `TASK-AI-10` | Permission allowlist and security hardening                     | `TASK-AI-09` |
+| `TASK-AI-11` | Preview/DryRun modes and comprehensive tests                    | `TASK-AI-10` |
+| `TASK-AI-12` | Optional Windows startup/scheduling script                      | `TASK-AI-11` |
 
 ## Business outcome
 
-The operator can run a single `Supervise` action that automatically: reads the delivery register, selects the next dependency-ready Work Item, generates the implementation prompt, spawns an isolated AO worker session, monitors progress, and notifies when human action is needed. No manual prompt copying, no routine progress monitoring, no manual recovery of ordinary stalled sessions.
+The operator launches AO through the existing localhost AgentRouter profile and runs one `Supervise` action. The deterministic supervisor discovers prepared remote Work Items, spawns the assigned author through the supported AO CLI, monitors the same session and worktree, routes CI/review corrections, triggers independent Codex review, persists checkpoints, and stops only at exact-HEAD PASS for human merge or a genuine fail-closed blocker.
 
 ## Source references
 
@@ -47,8 +47,9 @@ The operator can run a single `Supervise` action that automatically: reads the d
 
 - PR #7 (TASK-AI-05) is human-merged.
 - AO CLI is installed and `ao` command is available.
-- At least one provider (Claude Code, Gemini CLI, or 9Router) is configured.
-- The delivery register has at least one `READY_FOR_AUTHOR` or `BLOCKED_DEPENDENCY` Work Item with met dependencies.
+- `%USERPROFILE%\.claude\settings.json` routes Claude to `http://localhost:20128/v1`.
+- `control.ps1 -Action Supervise` can invoke `scripts/ai/start-agent-orchestrator.ps1` automatically when AO is stopped, stale, or running outside the governed AgentRouter profile. The launcher verifies and records runtime metadata without storing its token.
+- The prepared Work Item exists on a normal remote `feat/*` or `fix/*` ref and is `READY_FOR_AUTHOR` there.
 
 ## Author boundary
 
@@ -69,36 +70,37 @@ The implementation must:
 
 ## In scope
 
-### 1. AO readiness check
+### 1. Governed AO and AgentRouter startup
 
-- Verify `ao` command is available
-- Verify project is registered with AO
-- Verify at least one provider is configured and responsive
+- Verify the existing `.claude` profile points only to the localhost AgentRouter endpoint on port 20128.
+- Start AgentRouter when its installed command is available but its loopback port is stopped.
+- Launch or explicitly restart AO with `CLAUDE_CONFIG_DIR=%USERPROFILE%\.claude`.
+- Let `Supervise` replace an absent, stale, or incorrectly launched AO runtime automatically; no profile-switching step is required from the operator.
+- Remove inherited direct Anthropic environment overrides before launching AO.
+- Persist only runtime metadata; never persist or print authentication tokens.
 
 ### 2. Delivery register automation
 
-- Read `FEATURE-DELIVERY-REGISTER.csv` from current branch
-- Identify the next dependency-ready Work Item (status `READY_FOR_AUTHOR` or `BLOCKED_DEPENDENCY` with all dependencies `MERGED`)
+- Discover normal prepared remote feature/fix refs using the established controller function.
+- Select only a Work Item marked `READY_FOR_AUTHOR` on its own prepared remote branch.
 - Validate Work Item file exists and contains required fields
 
 ### 3. Automatic prompt generation
 
-- Read the Work Item document
-- Extract assigned author, allowed paths, acceptance criteria, verification commands
-- Read the appropriate prompt template (`GEMINI-START-PROMPT.md` or `NINEROUTER-START-PROMPT.md`)
-- Substitute placeholders (`<WORK_ITEM_ID>`, `<BRANCH>`)
-- Deliver the prompt directly to the AO worker (no clipboard)
+- Generate a bounded continuation prompt naming the Work Item, branch, source document, allowed-path contract and governed completion behavior.
+- Require the worker to read the complete repository instructions and author template from its own worktree.
+- Deliver the prompt directly through `ao spawn --prompt`; do not use the clipboard.
 
 ### 4. AO worker spawning
 
-- Create or switch to the feature branch
-- Spawn an isolated AO worker session for the assigned author type
-- Pass the generated prompt to the worker
+- Use the current AO command contract: `ao spawn --kind worker --branch ... --harness ...`.
+- Use `agy`, then `gemini`, for a Gemini-assigned Work Item; use router-backed `claude-code` only for a `9ROUTER` assignment.
+- Never use removed commands or flags such as `ao session spawn`, `--worktree`, or `--prompt-file`.
 - Record the session ID for monitoring
 
-### 5. Basic monitoring loop
+### 5. Monitoring and lifecycle loop
 
-- Poll session state every 30 seconds using `ao session list --json`
+- Poll exact session state using `ao session get <id> --json`.
 - Detect idle, active, completed, or failed states
 - Bounded inactivity timer (default 10 minutes idle triggers nudge)
 - Log state transitions with timestamps
@@ -107,21 +109,29 @@ The implementation must:
 
 - Nudge the existing session with a reminder prompt after inactivity timeout
 - One nudge attempt before marking as stalled
-- Report stalled sessions to the operator
+- Report a genuine stall only after the bounded nudge fails.
 
-### 7. State file checkpointing
+### 7. CI and independent review routing
+
+- Detect the Work Item's open PR without consuming another row.
+- Route each failed exact HEAD back to the same worker once.
+- Trigger AO's configured Codex reviewer only after required CI is green.
+- Route durable exact-HEAD `CHANGES_REQUIRED` findings back to the worker once per HEAD.
+- Stop at durable exact-HEAD `PASS`; never merge.
+
+### 8. State file checkpointing
 
 - Write supervisor state to `$HandoffRoot/supervisor-state.json`
 - Include: Work Item ID, session ID, branch, state, last activity timestamp, nudge count
 - Allow restart to resume from checkpoint
 
-### 8. Human notification
+### 9. Human notification
 
 - Print clear status when human action is needed
 - Never auto-merge regardless of review verdict
 - Notify when CI is green and Codex review passes
 
-### 9. Deterministic self-tests
+### 10. Deterministic self-tests
 
 - Startup assertions for AO availability
 - Startup assertions for register parsing
@@ -129,9 +139,9 @@ The implementation must:
 
 ## Out of scope (deferred to follow-up Work Items)
 
-- Provider failover chain (TASK-AI-07)
-- Automatic CI/review routing and repair (TASK-AI-08)
-- Full restart recovery and duplicate prevention (TASK-AI-09)
+- Cross-harness worker replacement after all AgentRouter routes are exhausted (TASK-AI-07).
+- Rich CI log diagnosis and bounded repair budgeting beyond one dispatch per exact HEAD (TASK-AI-08).
+- Recovery from deleted/corrupted AO state or an externally removed worktree (TASK-AI-09).
 - Permission allowlist enforcement (TASK-AI-10)
 - Preview/DryRun modes and comprehensive tests (TASK-AI-11)
 - Windows startup/scheduling script (TASK-AI-12)
@@ -140,30 +150,36 @@ The implementation must:
 
 - `AI-SUP-01`: The supervisor is a deterministic PowerShell loop, not an LLM agent.
 - `AI-SUP-02`: Only one Work Item is active at a time; parallel orchestration is not supported.
-- `AI-SUP-03`: The supervisor polls AO session state; it does not modify AO internals.
+- `AI-SUP-03`: The supervisor uses only supported public AO CLI commands; it does not modify AO internals.
 - `AI-SUP-04`: Implementation/test failures are NOT provider failures; they return to the author.
 - `AI-SUP-05`: The supervisor never auto-merges; human merge is always required.
-- `AI-SUP-06`: Checkpoints are written after every state transition.
-- `AI-SUP-07`: The supervisor stops fail-closed on: missing AO, no providers, malformed register, missing Work Item file.
+- `AI-SUP-06`: AO uses the existing `.claude` AgentRouter profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
+- `AI-SUP-07`: AgentRouter owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
 - `AI-SUP-08`: Inactivity timeout is configurable (default 10 minutes).
 - `AI-SUP-09`: Maximum 1 nudge attempt per inactivity window before reporting stalled.
 - `AI-SUP-10`: The supervisor respects existing controller gates (CI must pass, Codex must approve).
+- `AI-SUP-11`: Starting `Supervise` repairs AO runtime drift by relaunching AO through AgentRouter before consuming a Work Item.
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario                                 | Expected result                                              | Evidence required               |
-| ---------- | ---------------------------------------- | ------------------------------------------------------------ | ------------------------------- |
-| `AC-AI-42` | AO CLI not available                     | Supervisor stops with `Missing required command: ao`         | Deterministic assertion         |
-| `AC-AI-43` | No dependency-ready Work Item            | Supervisor reports "No dependency-ready Work Item" and stops | Deterministic assertion         |
-| `AC-AI-44` | Valid dependency-ready Work Item found   | Supervisor generates prompt and spawns AO worker             | Log output and session ID       |
-| `AC-AI-45` | Prompt template placeholder substitution | `<WORK_ITEM_ID>` and `<BRANCH>` replaced correctly           | Generated prompt inspection     |
-| `AC-AI-46` | AO session monitoring                    | State transitions logged with timestamps                     | Log output                      |
-| `AC-AI-47` | Session idle for 10+ minutes             | Supervisor nudges session once                               | Nudge log and session state     |
-| `AC-AI-48` | Session completes successfully           | Supervisor reports completion and awaits CI/review           | Log output                      |
-| `AC-AI-49` | State file written and readable          | Checkpoint survives supervisor restart                       | State file round-trip assertion |
-| `AC-AI-50` | CI green and review PASS                 | Supervisor notifies human "Ready for merge"                  | Notification output             |
-| `AC-AI-51` | Never auto-merge                         | No `gh pr merge` command in any code path                    | Code audit                      |
-| `AC-AI-52` | Windows PowerShell 5.1 compatible        | All startup assertions pass on Windows PowerShell 5.1        | CI validation                   |
+| AC/Test ID | Scenario                               | Expected result                                             | Evidence required               |
+| ---------- | -------------------------------------- | ----------------------------------------------------------- | ------------------------------- |
+| `AC-AI-42` | AO CLI not available                   | Supervisor stops with `Missing required command: ao`        | Deterministic assertion         |
+| `AC-AI-43` | No prepared remote Work Item           | Supervisor reports that no prepared remote Work Item exists | Deterministic assertion         |
+| `AC-AI-44` | Valid dependency-ready Work Item found | Supervisor generates prompt and spawns AO worker            | Log output and session ID       |
+| `AC-AI-45` | Supported AO spawn contract            | Uses `ao spawn`; removed subcommands/flags are absent       | Deterministic assertion         |
+| `AC-AI-46` | AO session monitoring                  | State transitions logged with timestamps                    | Log output                      |
+| `AC-AI-47` | Session idle for 10+ minutes           | Supervisor nudges session once                              | Nudge log and session state     |
+| `AC-AI-48` | Session completes successfully         | Supervisor reports completion and awaits CI/review          | Log output                      |
+| `AC-AI-49` | State file written and readable        | Checkpoint survives supervisor restart                      | State file round-trip assertion |
+| `AC-AI-50` | CI green and review PASS               | Supervisor notifies human "Ready for merge"                 | Notification output             |
+| `AC-AI-51` | Never auto-merge                       | No `gh pr merge` command in any code path                   | Code audit                      |
+| `AC-AI-52` | Windows PowerShell 5.1 compatible      | All startup assertions pass on Windows PowerShell 5.1       | CI validation                   |
+| `AC-AI-53` | AO starts through AgentRouter          | Runtime marker matches `.claude` and localhost port 20128   | Launcher output and marker      |
+| `AC-AI-54` | CI failure on exact HEAD               | Same worker receives one repair instruction for that HEAD   | Checkpoint and AO activity      |
+| `AC-AI-55` | CI green without verdict               | AO triggers configured independent Codex review             | AO review record                |
+| `AC-AI-56` | Exact-HEAD Codex PASS                  | Supervisor stops for human merge without merge invocation   | Durable verdict and code audit  |
+| `AC-AI-57` | AO stopped, stale, or on wrong profile | `Supervise` relaunches AO through `.claude` and AgentRouter | Launcher output and live PID    |
 
 ## Verification commands
 
@@ -184,7 +200,7 @@ From a clean checkout:
 
 ## Residual limitations
 
-- This slice does not implement automatic provider failover (deferred to TASK-AI-07).
-- This slice does not implement automatic CI/review repair (deferred to TASK-AI-08).
-- Full restart recovery without duplication is deferred to TASK-AI-09.
+- AgentRouter performs provider/model fallback inside one AO-facing endpoint; replacing the worker with another AO harness after every approved route is exhausted remains TASK-AI-07.
+- The supervisor dispatches CI/review correction once per exact HEAD; richer diagnosis and retry budgeting remain TASK-AI-08.
+- Checkpoint restart is included; recovery from externally deleted AO sessions/worktrees remains TASK-AI-09.
 - Permission allowlist enforcement is deferred to TASK-AI-10.
