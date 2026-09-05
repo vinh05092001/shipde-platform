@@ -5,6 +5,9 @@ param(
     [string]$Repository = "vinh05092001/shipde-platform",
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
 
+    [ValidateRange(0, [int]::MaxValue)]
+    [int]$PullRequestNumber = 0,
+
     [int]$SupervisorPollIntervalSeconds = 30,
     [int]$SupervisorInactivityTimeoutMinutes = 10,
     [int]$SupervisorMaxNudges = 1
@@ -601,13 +604,19 @@ function Invoke-ShipDeReview {
     $pullRequests = @(Get-ShipDeOpenPullRequests | Where-Object {
         Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
     })
+    if ($PullRequestNumber -gt 0) {
+        $pullRequests = @($pullRequests | Where-Object { [int]$_.number -eq $PullRequestNumber })
+        if ($pullRequests.Count -eq 0) {
+            throw "Open implementation Pull Request #$PullRequestNumber was not found."
+        }
+    }
     if ($pullRequests.Count -eq 0) {
         Write-Host "No implementation Pull Request is ready. Starting or preparing the next item instead."
         Invoke-ShipDeStart
         return
     }
     if ($pullRequests.Count -gt 1) {
-        throw "More than one active implementation Pull Request exists. Park extras before automated routing."
+        throw "More than one active implementation Pull Request exists. Supply -PullRequestNumber to select one exact review target."
     }
 
     $pr = $pullRequests[0]
