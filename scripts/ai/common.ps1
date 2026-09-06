@@ -68,6 +68,36 @@ function Resolve-ShipDeAoExecutable {
     throw "Missing required command: ao. The canonical Windows desktop executable was not found at C:\Program Files\agent-orchestrator\resources\daemon\ao.exe."
 }
 
+function Get-ShipDePinnedAoVersion {
+    param(
+        [string]$ManifestPath = $null
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
+        $ManifestPath = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "tools\ecosystem-manifest.json"
+    }
+    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+        throw "Ecosystem manifest not found: $ManifestPath"
+    }
+
+    try {
+        $manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        throw "Failed to parse ecosystem manifest as JSON: $ManifestPath"
+    }
+
+    $runtime = $manifest.orchestrator_runtime
+    if ($null -eq $runtime) {
+        throw "Ecosystem manifest is missing orchestrator_runtime section: $ManifestPath"
+    }
+    $pinned = [string]$runtime.pinned_version_or_commit
+    if ([string]::IsNullOrWhiteSpace($pinned) -or $pinned -notmatch '^\d+\.\d+\.\d+$') {
+        throw "Ecosystem manifest has invalid or missing pinned_version_or_commit for orchestrator_runtime: '$pinned'. Must be an exact semantic version without ranges."
+    }
+
+    return $pinned
+}
+
 function Get-ShipDeAoVersionProbe {
     param([Parameter(Mandatory = $true)][string]$AoExecutable)
 
@@ -88,7 +118,11 @@ function Assert-ShipDeAoVersionEvidence {
         [scriptblock]$ProductVersionReader = $null
     )
 
-    if ($null -eq $VersionText) {
+    if ([string]::IsNullOrWhiteSpace($ExpectedVersion) -or $ExpectedVersion -notmatch '^\d+\.\d+\.\d+$') {
+        throw "Expected AO version must be an exact semantic version without ranges: '$ExpectedVersion'"
+    }
+
+    if (-not $PSBoundParameters.ContainsKey('VersionText')) {
         $probe = Get-ShipDeAoVersionProbe -AoExecutable $AoExecutable
         $VersionText = $probe.Text
         $VersionExitCode = $probe.ExitCode

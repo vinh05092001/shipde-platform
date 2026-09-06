@@ -1859,7 +1859,7 @@ $script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.js
 $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.json"
 $script:AgentRouterProfile = Join-Path $env:USERPROFILE ".claude"
 $script:AgentRouterPort = 20128
-$script:ExpectedAoVersion = "0.12.10"
+$script:ExpectedAoVersion = Get-ShipDePinnedAoVersion
 $script:AoExecutablePath = $null
 
 function Assert-ShipDeAoCommand {
@@ -2747,7 +2747,7 @@ function Assert-ShipDeSupervisorCompatibility {
         $semanticEvidence = Assert-ShipDeAoVersionEvidence `
             -AoExecutable $resolvedCanonicalAo `
             -ExpectedVersion $script:ExpectedAoVersion `
-            -VersionText "ao version 0.12.10+desktop.1" `
+            -VersionText "ao version $($script:ExpectedAoVersion)+desktop.1" `
             -ProgramFilesRoot $aoFixtureRoot `
             -ProductVersionReader { throw "ProductVersion must not be consulted when AO returns semantic build metadata." }
         if ($semanticEvidence.Source -ne "semantic-build-metadata" -or $semanticEvidence.EffectiveVersion -ne $script:ExpectedAoVersion) {
@@ -2759,7 +2759,7 @@ function Assert-ShipDeSupervisorCompatibility {
             -ExpectedVersion $script:ExpectedAoVersion `
             -VersionText "ao version dev" `
             -ProgramFilesRoot $aoFixtureRoot `
-            -ProductVersionReader { param($path) return "0.12.10" }
+            -ProductVersionReader { param($path) return $script:ExpectedAoVersion }
         if ($devEvidence.Source -ne "windows-product-version" -or $devEvidence.BinaryVersion -ne $script:ExpectedAoVersion) {
             throw "AO dev ProductVersion compatibility test failed."
         }
@@ -2769,7 +2769,7 @@ function Assert-ShipDeSupervisorCompatibility {
             -ExpectedVersion $script:ExpectedAoVersion `
             -VersionText "dev" `
             -ProgramFilesRoot $aoFixtureRoot `
-            -ProductVersionReader { param($path) return "0.12.10" }
+            -ProductVersionReader { param($path) return $script:ExpectedAoVersion }
         if ($plainDevEvidence.Source -ne "windows-product-version" -or $plainDevEvidence.BinaryVersion -ne $script:ExpectedAoVersion) {
             throw "AO plain dev ProductVersion compatibility test failed."
         }
@@ -2836,6 +2836,39 @@ function Assert-ShipDeSupervisorCompatibility {
         }
         if (-not $missingVersionRejected) {
             throw "AO missing version fail-closed compatibility test failed."
+        }
+
+        $versionRangeRejected = $false
+        try {
+            Assert-ShipDeAoVersionEvidence `
+                -AoExecutable $resolvedCanonicalAo `
+                -ExpectedVersion "^$($script:ExpectedAoVersion)" `
+                -VersionText "ao version $($script:ExpectedAoVersion)" `
+                -ProgramFilesRoot $aoFixtureRoot | Out-Null
+        } catch {
+            $versionRangeRejected = $true
+        }
+        if (-not $versionRangeRejected) {
+            throw "AO version range fail-closed compatibility test failed."
+        }
+
+        $newerVersionRejected = $false
+        try {
+            Assert-ShipDeAoVersionEvidence `
+                -AoExecutable $resolvedCanonicalAo `
+                -ExpectedVersion $script:ExpectedAoVersion `
+                -VersionText "ao version 0.12.99" `
+                -ProgramFilesRoot $aoFixtureRoot | Out-Null
+        } catch {
+            $newerVersionRejected = $true
+        }
+        if (-not $newerVersionRejected) {
+            throw "AO newer version fail-closed compatibility test failed."
+        }
+
+        $canonicalPinned = Get-ShipDePinnedAoVersion
+        if ($canonicalPinned -ne "0.12.12" -or $canonicalPinned -ne $script:ExpectedAoVersion) {
+            throw "Canonical pinned AO version test failed: expected 0.12.12, got $canonicalPinned"
         }
     } finally {
         if (Test-Path -LiteralPath $aoFixtureRoot) {

@@ -27,7 +27,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 
 ## External orchestration layer
 
-[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is the control layer around the adopted ecosystem, not another adopted repository/provider. Ship Dễ pins the installed Windows runtime at `0.12.10`, checks it with `ao status --json`, and starts it only through `scripts/ai/start-agent-orchestrator.ps1`. Its provenance is recorded in the top-level `orchestrator_runtime` object of `tools/ecosystem-manifest.json`, outside `adopted`.
+[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is the control layer around the adopted ecosystem, not another adopted repository/provider. Ship Dễ pins the installed Windows runtime at `0.12.12`, checks it with `ao status --json`, and starts it only through `scripts/ai/start-agent-orchestrator.ps1`. Its provenance is recorded in the top-level `orchestrator_runtime` object of `tools/ecosystem-manifest.json`, outside `adopted`.
 
 ## Explicitly not adopted
 

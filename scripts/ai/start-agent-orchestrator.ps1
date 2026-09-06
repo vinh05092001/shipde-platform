@@ -2,13 +2,19 @@ param(
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
     [string]$AoExecutable = "",
     [int]$AgentRouterPort = 20128,
-    [string]$ExpectedAoVersion = "0.12.10",
+    [string]$ExpectedAoVersion = "",
     [int]$StartupTimeoutSeconds = 30,
     [switch]$Restart,
     [scriptblock]$ProcessStarter = $null
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
+
+if ([string]::IsNullOrWhiteSpace($ExpectedAoVersion)) {
+    $ExpectedAoVersion = Get-ShipDePinnedAoVersion
+} elseif ($ExpectedAoVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Expected AO version must be an exact semantic version without ranges: '$ExpectedAoVersion'"
+}
 
 $profilePath = Join-Path $env:USERPROFILE ".claude"
 $settingsPath = Join-Path $profilePath "settings.json"
