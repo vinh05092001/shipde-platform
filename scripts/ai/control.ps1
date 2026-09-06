@@ -287,11 +287,12 @@ function Assert-ShipDeJsonListCompatibility {
 
 function Get-ShipDeOpenPullRequests {
     Assert-ShipDeCommand gh
+    # Enumerate all open implementation PRs without the default 30-PR truncation
     $json = & gh pr list `
         --repo $Repository `
         --base main `
         --state open `
-        --limit 30 `
+        --limit 1000 `
         --json number,title,url,isDraft,headRefName,headRefOid,statusCheckRollup
     if ($LASTEXITCODE -ne 0) {
         throw "Cannot read open Pull Requests from GitHub."
@@ -667,6 +668,93 @@ function Assert-ShipDeReviewTarget {
     }
 }
 
+function ConvertFrom-ShipDeCodexReviewOutput {
+    param(
+        [Parameter(Mandatory = $true)][string]$OutputText
+    )
+
+    $verdict = $null
+    $reportMarkdown = $null
+    $summary = $null
+
+    try {
+        $json = $OutputText | ConvertFrom-Json
+        if ($json) {
+            $parsedVerdict = [string](Get-ShipDeObjectProperty -Object $json -Names @("verdict", "Verdict"))
+            if ($parsedVerdict -in @("PASS", "CHANGES_REQUIRED", "BLOCKED")) {
+                $verdict = $parsedVerdict
+            }
+            $summary = [string](Get-ShipDeObjectProperty -Object $json -Names @("summary", "Summary"))
+            $reportMarkdown = [string](Get-ShipDeObjectProperty -Object $json -Names @("report", "Report", "markdown", "Markdown"))
+            if ([string]::IsNullOrWhiteSpace($reportMarkdown)) {
+                $sb = [System.Text.StringBuilder]::new()
+                [void]$sb.AppendLine("## Codex Review Summary")
+                if (-not [string]::IsNullOrWhiteSpace($summary)) {
+                    [void]$sb.AppendLine($summary)
+                    [void]$sb.AppendLine()
+                }
+                $findings = Get-ShipDeObjectProperty -Object $json -Names @("findings", "Findings")
+                if ($findings) {
+                    [void]$sb.AppendLine("### Actionable Findings")
+                    foreach ($f in @($findings)) {
+                        $p = [string](Get-ShipDeObjectProperty -Object $f -Names @("priority", "Priority"))
+                        $t = [string](Get-ShipDeObjectProperty -Object $f -Names @("title", "Title"))
+                        $desc = [string](Get-ShipDeObjectProperty -Object $f -Names @("description", "Description"))
+                        $file = [string](Get-ShipDeObjectProperty -Object $f -Names @("file", "File"))
+                        $line = [string](Get-ShipDeObjectProperty -Object $f -Names @("line", "Line"))
+                        $loc = if ($file) { " ($file" + $(if ($line) { ":$line" }) + ")" } else { "" }
+                        [void]$sb.AppendLine("- **[$p] $t**$($loc): $desc")
+                    }
+                    [void]$sb.AppendLine()
+                }
+                [void]$sb.AppendLine("Verdict: $verdict")
+                $reportMarkdown = $sb.ToString().Trim()
+            }
+        }
+    } catch {}
+
+    if (-not $verdict) {
+        $jsonBlockMatch = [regex]::Match($OutputText, '(?s)```(?:json)?\s*(\{.*?\})\s*```')
+        if ($jsonBlockMatch.Success) {
+            try {
+                $blockJson = $jsonBlockMatch.Groups[1].Value | ConvertFrom-Json
+                $parsedVerdict = [string](Get-ShipDeObjectProperty -Object $blockJson -Names @("verdict", "Verdict"))
+                if ($parsedVerdict -in @("PASS", "CHANGES_REQUIRED", "BLOCKED")) {
+                    $verdict = $parsedVerdict
+                    if ([string]::IsNullOrWhiteSpace($reportMarkdown)) {
+                        $reportMarkdown = [string](Get-ShipDeObjectProperty -Object $blockJson -Names @("report", "Report"))
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    if (-not $verdict) {
+        $nonEmptyLines = @($OutputText -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($nonEmptyLines.Count -gt 0) {
+            $lastLine = $nonEmptyLines[$nonEmptyLines.Count - 1].Trim()
+            $m = [regex]::Match($lastLine, '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$')
+            if ($m.Success) {
+                $verdict = $m.Groups[1].Value.ToUpperInvariant()
+            }
+        }
+    }
+
+    if (-not $verdict) {
+        throw "Codex review output does not satisfy the structured review contract and has no valid verdict (PASS, CHANGES_REQUIRED, BLOCKED)."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($reportMarkdown)) {
+        $reportMarkdown = $OutputText
+    }
+
+    return [PSCustomObject]@{
+        Verdict = $verdict
+        Report = $reportMarkdown
+        Summary = $summary
+    }
+}
+
 function Invoke-ShipDeReview {
     Assert-ShipDeCommand codex
     Assert-ShipDeCommand gh
@@ -735,35 +823,37 @@ function Invoke-ShipDeReview {
     New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
     $reviewStem = "pr-{0}-{1}-codex-review" -f $pr.number, $reviewHeadSha.Substring(0, 8)
     $reviewFile = Join-Path $script:HandoffRoot "$reviewStem.txt"
+    $schemaFile = Join-Path $script:HandoffRoot "$reviewStem-schema.json"
     $diagnosticFile = Join-Path $script:HandoffRoot "$reviewStem-diagnostics.txt"
     $executionFile = Join-Path $script:HandoffRoot "$reviewStem-execution.txt"
+    $schemaJson = '{"type":"object","properties":{"verdict":{"type":"string","enum":["PASS","CHANGES_REQUIRED","BLOCKED"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"priority":{"type":"string"},"file":{"type":"string"},"line":{"type":"integer"},"title":{"type":"string"},"description":{"type":"string"}},"required":["priority","title","description"]}},"report":{"type":"string"}},"required":["verdict","summary","report"]}'
+
     $reviewPrompt = @"
 Perform an independent, read-only code review of Pull Request #$($pr.number) at the exact detached HEAD $reviewHeadSha.
 
 Review only the changes introduced against the merge base with origin/main. Inspect the full diff with git diff origin/main...HEAD and inspect any surrounding code needed to validate correctness. Do not modify files.
 
-Report every actionable correctness, security, governance, lifecycle, or test-coverage problem as a prioritized finding with an exact file and line reference. Do not write any of the verdict words below anywhere else in the report.
+Report every actionable correctness, security, governance, lifecycle, or test-coverage problem as a prioritized finding with an exact file and line reference.
 
-The final non-empty line must be exactly one of these three standalone values:
-PASS
-CHANGES_REQUIRED
-BLOCKED
-
-Use CHANGES_REQUIRED when at least one actionable finding remains. Use BLOCKED only when the review cannot be completed. Otherwise use PASS.
+Provide your review output according to the output schema:
+- verdict: exactly one of PASS, CHANGES_REQUIRED, BLOCKED. Use CHANGES_REQUIRED when at least one actionable finding remains. Use BLOCKED only when the review cannot be completed. Otherwise use PASS.
+- summary: concise high-level summary.
+- report: full markdown review report.
 "@
 
     # A stale file from a failed attempt must never satisfy the verdict parser.
     Remove-Item -Path $reviewFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $schemaFile -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $diagnosticFile -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $executionFile -Force -ErrorAction SilentlyContinue
+    [System.IO.File]::WriteAllText($schemaFile, $schemaJson, [System.Text.UTF8Encoding]::new($false))
     Push-Location $script:Paths.Codex
     $previousErrorActionPreference = $ErrorActionPreference
     try {
-        # `codex review --base` does not accept custom output instructions.
-        # The non-interactive review subcommand accepts a prompt and writes the
-        # final model message atomically, while progress stays in local logs.
+        # The non-interactive review subcommand accepts an explicit JSON schema
+        # and writes the structured model message atomically.
         $ErrorActionPreference = "Continue"
-        $reviewPrompt | & codex exec --output-last-message $reviewFile review - 1> $executionFile 2> $diagnosticFile
+        $reviewPrompt | & codex exec --output-schema $schemaFile --output-last-message $reviewFile review - 1> $executionFile 2> $diagnosticFile
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -777,11 +867,14 @@ Use CHANGES_REQUIRED when at least one actionable finding remains. Use BLOCKED o
         throw "Codex returned no final review. Diagnostics: $diagnosticFile"
     }
 
-    $reviewText = Get-Content -LiteralPath $reviewFile -Raw
-    if ([string]::IsNullOrWhiteSpace($reviewText)) {
+    $rawReviewText = Get-Content -LiteralPath $reviewFile -Raw
+    if ([string]::IsNullOrWhiteSpace($rawReviewText)) {
         throw "Codex returned an empty final review. Diagnostics: $diagnosticFile"
     }
-    $output = @($reviewText -split '\r?\n')
+
+    $parsedResult = ConvertFrom-ShipDeCodexReviewOutput -OutputText $rawReviewText
+    $verdict = $parsedResult.Verdict
+    $reviewText = $parsedResult.Report
 
     $currentPr = Get-ShipDePullRequestByNumber -Number ([int]$pr.number)
     Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
@@ -789,29 +882,13 @@ Use CHANGES_REQUIRED when at least one actionable finding remains. Use BLOCKED o
     $targetHeader = '**Review target:** `{0}`' -f $reviewHeadSha
     if ($reviewText -notmatch [regex]::Escape($reviewHeadSha)) {
         $reviewText = $targetHeader + [Environment]::NewLine + [Environment]::NewLine + $reviewText
-        $output = @($reviewText -split '\r?\n')
     }
+    if ($reviewText -notmatch "(?im)^Verdict:\s*$verdict") {
+        $reviewText = $reviewText + [Environment]::NewLine + [Environment]::NewLine + "Verdict: $verdict"
+    }
+    $output = @($reviewText -split '\r?\n')
     $output | Set-Content -Path $reviewFile -Encoding UTF8
     $output | ForEach-Object { Write-Host $_ }
-    $nonEmptyReviewLines = @($reviewText -split '\r?\n' | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_)
-    })
-    if ($nonEmptyReviewLines.Count -lt 2) {
-        throw "Codex review output is incomplete. No verdict was accepted or posted."
-    }
-
-    # A verdict is trustworthy only when it is the sole standalone verdict
-    # marker and the final non-empty line of a non-empty report.
-    $verdictPattern = '(?im)^[\t ]*(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?[\t ]*$'
-    $verdictMatches = [regex]::Matches($reviewText, $verdictPattern)
-    $terminalVerdict = [regex]::Match(
-        [string]$nonEmptyReviewLines[$nonEmptyReviewLines.Count - 1],
-        '(?i)^[\t ]*(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?[\t ]*$'
-    )
-    if ($verdictMatches.Count -ne 1 -or -not $terminalVerdict.Success) {
-        throw "Codex review output is incomplete or ambiguous. The final non-empty line must contain the only PASS, CHANGES_REQUIRED or BLOCKED verdict. Nothing was posted."
-    }
-    $verdict = $terminalVerdict.Groups[1].Value.ToUpperInvariant()
 
     # GitHub limits one comment to 65,536 bytes. Keep the complete local report,
     # and split large reports into safe ordered comments without dropping text.
@@ -949,6 +1026,9 @@ function Get-ShipDeAoVerdictFromReviewResponse {
             }
             return "CHANGES_REQUIRED"
         }
+        "blocked" {
+            return "BLOCKED"
+        }
         default { throw "AO Codex review completed without a governed verdict." }
     }
 }
@@ -979,39 +1059,116 @@ function Get-ShipDeGitHubExactHeadCodexVerdict {
     if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
         throw "Repository must use the owner/name form before reading GitHub reviews."
     }
+
+    $candidates = [System.Collections.Generic.List[object]]::new()
+
+    # 1. Enumerate GitHub Reviews
     $raw = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/reviews" --paginate --slurp 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Cannot read GitHub review records for PR #$PullRequestNumber."
-    }
-    if ($raw.Count -eq 0) {
-        return $null
+    if ($LASTEXITCODE -eq 0 -and $raw.Count -gt 0) {
+        try {
+            $pages = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+            foreach ($page in @($pages)) {
+                foreach ($review in @($page)) {
+                    if ([string]$review.commit_id -ine $HeadSha) { continue }
+                    $login = [string]$review.user.login
+                    if ($script:TrustedCodexReviewerLogins -notcontains $login) { continue }
+                    $submittedAtStr = [string](Get-ShipDeObjectProperty -Object $review -Names @("submitted_at", "submittedAt"))
+                    $submittedAt = [DateTime]::MinValue
+                    if (-not [string]::IsNullOrWhiteSpace($submittedAtStr)) {
+                        [void][DateTime]::TryParse($submittedAtStr, [ref]$submittedAt)
+                    }
+                    $revVerdict = $null
+                    switch (([string]$review.state).ToUpperInvariant()) {
+                        "APPROVED" { $revVerdict = "PASS" }
+                        "CHANGES_REQUESTED" { $revVerdict = "CHANGES_REQUIRED" }
+                        default {
+                            $reviewBody = [string]$review.body
+                            if (-not [string]::IsNullOrWhiteSpace($reviewBody)) {
+                                $lines = @($reviewBody -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                                if ($lines.Count -gt 0) {
+                                    $lastLine = $lines[-1].Trim()
+                                    if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
+                                        $revVerdict = $matches[1].ToUpperInvariant()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if ($revVerdict) {
+                        $candidates.Add([PSCustomObject]@{
+                            Id = [string]$review.id
+                            CreatedAt = $submittedAt.ToUniversalTime()
+                            Verdict = $revVerdict
+                        })
+                    }
+                }
+            }
+        } catch {}
     }
 
+    # 2. Enumerate GitHub PR comments
     try {
-        $pages = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
-    } catch {
-        throw "GitHub returned malformed review JSON for PR #$PullRequestNumber."
-    }
-    $candidates = [System.Collections.Generic.List[object]]::new()
-    foreach ($page in @($pages)) {
-        foreach ($review in @($page)) {
-            if ([string]$review.commit_id -ine $HeadSha) { continue }
-            $login = [string]$review.user.login
-            if ($script:TrustedCodexReviewerLogins -notcontains $login) { continue }
-            switch (([string]$review.state).ToUpperInvariant()) {
-                "APPROVED" {
-                    $candidates.Add([PSCustomObject]@{ Id = [long]$review.id; Verdict = "PASS" })
-                }
-                "CHANGES_REQUESTED" {
-                    $candidates.Add([PSCustomObject]@{ Id = [long]$review.id; Verdict = "CHANGES_REQUIRED" })
+        $rawComments = & gh pr view $PullRequestNumber --repo $Repository --json comments 2>$null
+        if ($rawComments) {
+            $parsed = ($rawComments -join [Environment]::NewLine) | ConvertFrom-Json
+            if ($parsed -and $parsed.comments) {
+                foreach ($commentObj in @($parsed.comments)) {
+                    $author = Get-ShipDeObjectProperty -Object $commentObj -Names @("author", "user")
+                    $authorLogin = [string](Get-ShipDeObjectProperty -Object $author -Names @("login"))
+                    if ($script:TrustedCodexReviewerLogins -notcontains $authorLogin) { continue }
+                    $body = [string]$commentObj.body
+                    if ([string]::IsNullOrWhiteSpace($body)) { continue }
+                    $targetMatch = [regex]::Match($body, '(?im)(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head|Reviewed commit)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
+                    if (-not $targetMatch.Success) {
+                        $targetMatch = [regex]::Match($body, '(?im)immutable head\s+`?([a-f0-9]{7,40})`?')
+                    }
+                    if (-not $targetMatch.Success) {
+                        $targetMatch = [regex]::Match($body, '(?im)Reviewed PR #\d+ at\s+`?([a-f0-9]{7,40})`?')
+                    }
+
+                    if ($targetMatch.Success) {
+                        $targetSha = $targetMatch.Groups[1].Value
+                        if ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase) -or $targetSha.StartsWith($HeadSha, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $lines = @($body -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                            if ($lines.Count -gt 0) {
+                                $lastLine = $lines[-1].Trim()
+                                if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
+                                    $cVerdict = $matches[1].ToUpperInvariant()
+                                    $createdAtStr = [string](Get-ShipDeObjectProperty -Object $commentObj -Names @("createdAt", "created_at"))
+                                    $createdTime = [DateTime]::MinValue
+                                    if (-not [string]::IsNullOrWhiteSpace($createdAtStr)) {
+                                        [void][DateTime]::TryParse($createdAtStr, [ref]$createdTime)
+                                    }
+                                    $cId = [string](Get-ShipDeObjectProperty -Object $commentObj -Names @("id", "databaseId"))
+                                    $candidates.Add([PSCustomObject]@{
+                                        Id = $cId
+                                        CreatedAt = $createdTime.ToUniversalTime()
+                                        Verdict = $cVerdict
+                                    })
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
+    } catch {
+        if ($_.Exception.Message -like "*Conflicting Codex review verdicts*") {
+            throw
+        }
     }
+
     if ($candidates.Count -gt 0) {
-        $latestCandidate = @($candidates | Sort-Object Id -Descending | Select-Object -First 1)[0]
-        return [string]$latestCandidate.Verdict
+        $sortedCandidates = @($candidates | Sort-Object -Property @{ Expression = { $_.CreatedAt }; Descending = $true }, @{ Expression = { $_.Id }; Descending = $true })
+        $newest = $sortedCandidates[0]
+        $equalTimeCandidates = @($sortedCandidates | Where-Object { $_.CreatedAt -eq $newest.CreatedAt })
+        $conflicting = @($equalTimeCandidates | Where-Object { $_.Verdict -ne $newest.Verdict })
+        if ($conflicting.Count -gt 0) {
+            throw "Conflicting Codex review verdicts with identical timestamp for exact HEAD $HeadSha."
+        }
+        return [string]$newest.Verdict
     }
+
     return $null
 }
 
@@ -1036,52 +1193,12 @@ function Get-ShipDeExactHeadCodexVerdict {
         }
     }
 
-    # A merged PR may no longer have a resumable AO session. Preserve the
-    # independent exact-commit verdict from GitHub's durable review collection.
-    $githubReviewVerdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
-    if ($githubReviewVerdict) {
-        return $githubReviewVerdict
+    # Recover exact-commit verdict from GitHub durable review and comment records
+    # using newest trusted evidence, rejecting equal-time conflicts.
+    $githubVerdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
+    if ($githubVerdict) {
+        return $githubVerdict
     }
-
-    # Local handoff files are operator-readable diagnostics, not trusted review
-    # evidence. A same-user implementation worker could forge them.
-
-    # Check GitHub PR comments from the exact allowlisted Codex App identity.
-    try {
-        $rawComments = & gh pr view $PullRequestNumber --repo $Repository --json comments 2>$null
-        if ($rawComments) {
-            $parsed = ($rawComments -join [Environment]::NewLine) | ConvertFrom-Json
-            if ($parsed -and $parsed.comments) {
-                foreach ($commentObj in @($parsed.comments)) {
-                    $author = Get-ShipDeObjectProperty -Object $commentObj -Names @("author", "user")
-                    $authorLogin = [string](Get-ShipDeObjectProperty -Object $author -Names @("login"))
-                    if ($script:TrustedCodexReviewerLogins -notcontains $authorLogin) { continue }
-                    $body = [string]$commentObj.body
-                    if ([string]::IsNullOrWhiteSpace($body)) { continue }
-                    $targetMatch = [regex]::Match($body, '(?im)(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
-                    if (-not $targetMatch.Success) {
-                        $targetMatch = [regex]::Match($body, '(?im)immutable head\s+`?([a-f0-9]{7,40})`?')
-                    }
-                    if (-not $targetMatch.Success) {
-                        $targetMatch = [regex]::Match($body, '(?im)Reviewed PR #\d+ at\s+`?([a-f0-9]{7,40})`?')
-                    }
-
-                    if ($targetMatch.Success) {
-                        $targetSha = $targetMatch.Groups[1].Value
-                        if ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase) -or $targetSha.StartsWith($HeadSha, [System.StringComparison]::OrdinalIgnoreCase)) {
-                            $lines = @($body -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                            if ($lines.Count -gt 0) {
-                                $lastLine = $lines[-1].Trim()
-                                if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
-                                    return $matches[1].ToUpperInvariant()
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } catch {}
 
     return $null
 }
@@ -1918,8 +2035,10 @@ function Invoke-ShipDeSupervisorLoop {
                         throw "Cannot route CI failure back to the implementation worker."
                     }
                     $State.LastCiRepairHead = $headSha
+                    $State.LastRepairDispatchedAt = (Get-Date).ToUniversalTime().ToString("o")
                     $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                     $State.NudgeCount = 0
+                    Write-ShipDeSupervisorCheckpoint -State $State
                 }
             } elseif ($gate -eq "GREEN" -and -not $pullRequest.isDraft) {
                 $verdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -SessionId ([string]$State.SessionId)
@@ -1929,6 +2048,10 @@ function Invoke-ShipDeSupervisorLoop {
                     Write-ShipDeSupervisorCheckpoint -State $State
                     return "READY_FOR_HUMAN_MERGE"
                 }
+                if ($verdict -eq "BLOCKED") {
+                    Write-ShipDeSupervisorCheckpoint -State $State
+                    throw "Independent Codex review returned durable BLOCKED for PR #$($pullRequest.number) at exact HEAD $headSha. Stopping fail-closed for human action."
+                }
                 if ($verdict -eq "CHANGES_REQUIRED") {
                     $workerActionExpected = $true
                     if ([string]$State.LastReviewRepairHead -ne $headSha) {
@@ -1937,8 +2060,10 @@ function Invoke-ShipDeSupervisorLoop {
                             throw "Cannot route review findings back to the implementation worker."
                         }
                         $State.LastReviewRepairHead = $headSha
+                        $State.LastRepairDispatchedAt = (Get-Date).ToUniversalTime().ToString("o")
                         $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                         $State.NudgeCount = 0
+                        Write-ShipDeSupervisorCheckpoint -State $State
                     }
                 } elseif ([string]$State.LastReviewTriggeredHead -ne $headSha) {
                     if (-not (Start-ShipDeAoReview -SessionId ([string]$State.SessionId))) {
@@ -1961,6 +2086,7 @@ function Invoke-ShipDeSupervisorLoop {
                 }
             } elseif ($gate -eq "GREEN" -and $pullRequest.isDraft) {
                 $State.CiGate = "GREEN_DRAFT"
+                $workerActionExpected = $true
                 if ($activity -eq "COMPLETED") {
                     throw "AO worker completed while PR #$($pullRequest.number) is still draft. Mark the same PR ready before review."
                 }
@@ -1970,6 +2096,7 @@ function Invoke-ShipDeSupervisorLoop {
         if ($activity -eq "ACTIVE") {
             $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
             $State.NudgeCount = 0
+            $State.LastRepairDispatchedAt = $null
         } elseif ($activity -in @("IDLE", "WAITING_INPUT") -and ((-not $pullRequest) -or $workerActionExpected)) {
             $lastActivity = [DateTime]::Parse([string]$State.LastActivityTime).ToUniversalTime()
             $idleDuration = (Get-Date).ToUniversalTime() - $lastActivity
@@ -1985,7 +2112,23 @@ function Invoke-ShipDeSupervisorLoop {
                 $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
             }
         } elseif ($activity -eq "COMPLETED" -and ((-not $pullRequest) -or $workerActionExpected)) {
-            throw "AO worker completed while governed implementation or repair work is still required."
+            $reactivationGraceSeconds = 120
+            $inReactivationWindow = $false
+            if (-not [string]::IsNullOrWhiteSpace([string]$State.LastRepairDispatchedAt)) {
+                $dispatchedTime = [DateTime]::MinValue
+                if ([DateTime]::TryParse([string]$State.LastRepairDispatchedAt, [ref]$dispatchedTime)) {
+                    $elapsed = (Get-Date).ToUniversalTime() - $dispatchedTime.ToUniversalTime()
+                    if ($elapsed.TotalSeconds -ge 0 -and $elapsed.TotalSeconds -lt $reactivationGraceSeconds) {
+                        $inReactivationWindow = $true
+                    }
+                }
+            }
+
+            if ($inReactivationWindow) {
+                Write-Host ("[SUPERVISOR] Repair was dispatched at {0}. Permitting reactivation window for completed worker." -f $State.LastRepairDispatchedAt)
+            } else {
+                throw "AO worker completed while governed implementation or repair work is still required."
+            }
         }
 
         Write-ShipDeSupervisorCheckpoint -State $State
@@ -2063,6 +2206,38 @@ function Assert-ShipDeSupervisorCompatibility {
     }
     if (-not $ambiguousRerunRejected) {
         throw "GitHub ambiguous check-attempt compatibility test failed."
+    }
+
+    $registerCsvFixture = @"
+delivery_order,work_item_id,feature_id,status,author,branch,work_item_path,title
+10,TASK-TEST-01,,BACKLOG,GEMINI,feat/task-test-01,docs/product-spec/work-items/TASK-TEST-01.md,Backlog item
+20,TASK-TEST-02,,READY_FOR_AUTHOR,GEMINI,feat/task-test-02,docs/product-spec/work-items/TASK-TEST-02.md,Ready item
+30,TASK-TEST-03,,CHANGES_REQUIRED,9ROUTER,feat/task-test-03,docs/product-spec/work-items/TASK-TEST-03.md,Changes item
+"@
+    $parsedRegisterRows = @($registerCsvFixture | ConvertFrom-Csv)
+    if ($parsedRegisterRows.Count -ne 3) {
+        throw "Delivery register CSV parser compatibility test failed: incorrect row count."
+    }
+    $readyRegisterRows = @($parsedRegisterRows | Where-Object { $_.status -eq "READY_FOR_AUTHOR" })
+    if ($readyRegisterRows.Count -ne 1 -or $readyRegisterRows[0].work_item_id -ne "TASK-TEST-02") {
+        throw "Delivery register READY_FOR_AUTHOR selection compatibility test failed."
+    }
+
+    $structuredReviewFixture = '{"verdict":"CHANGES_REQUIRED","summary":"Changes required on error handling","findings":[{"priority":"P1","file":"test.ps1","line":10,"title":"Unhandled error","description":"Missing catch block"}],"report":"## Report`nMissing catch block`n`nVerdict: CHANGES_REQUIRED"}'
+    $parsedStructuredReview = ConvertFrom-ShipDeCodexReviewOutput -OutputText $structuredReviewFixture
+    if ($parsedStructuredReview.Verdict -ne "CHANGES_REQUIRED" -or [string]::IsNullOrWhiteSpace($parsedStructuredReview.Report)) {
+        throw "Structured Codex review output parser compatibility test failed."
+    }
+
+    $conflictCand1 = [PSCustomObject]@{ Id = "1"; CreatedAt = [DateTime]::Parse("2026-09-06T00:00:00Z"); Verdict = "PASS" }
+    $conflictCand2 = [PSCustomObject]@{ Id = "2"; CreatedAt = [DateTime]::Parse("2026-09-06T00:00:00Z"); Verdict = "CHANGES_REQUIRED" }
+    $conflictCandidates = @($conflictCand1, $conflictCand2)
+    $sortedConflict = @($conflictCandidates | Sort-Object -Property @{ Expression = { $_.CreatedAt }; Descending = $true }, @{ Expression = { $_.Id }; Descending = $true })
+    $newestC = $sortedConflict[0]
+    $equalTimeC = @($sortedConflict | Where-Object { $_.CreatedAt -eq $newestC.CreatedAt })
+    $differingEqualTimeC = @($equalTimeC | Where-Object { $_.Verdict -ne $newestC.Verdict })
+    if ($differingEqualTimeC.Count -eq 0) {
+        throw "Equal-time verdict conflict compatibility test failed: expected rejection."
     }
 
     $stateRoundTrip = @{ TestField = "test-value"; NestedObject = @{ Inner = 123 } }

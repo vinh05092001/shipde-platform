@@ -142,24 +142,37 @@ $aoProcess = Start-Process -FilePath $AoExecutable -PassThru
 
 $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
 $ready = $false
-while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Milliseconds 500
-    if ($aoProcess.HasExited) {
-        throw "Agent Orchestrator exited during startup with code $($aoProcess.ExitCode)."
+try {
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        if ($aoProcess.HasExited) {
+            Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
+            throw "Agent Orchestrator exited during startup with code $($aoProcess.ExitCode)."
+        }
+        $statusOutput = @(& ao status --json 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $statusOutput.Count -gt 0) {
+            try {
+                $status = ($statusOutput -join [Environment]::NewLine) | ConvertFrom-Json
+                if ([string]$status.state -eq "ready") {
+                    $ready = $true
+                    break
+                }
+            } catch {}
+        }
     }
-    $statusOutput = @(& ao status --json 2>$null)
-    if ($LASTEXITCODE -eq 0 -and $statusOutput.Count -gt 0) {
-        try {
-            $status = ($statusOutput -join [Environment]::NewLine) | ConvertFrom-Json
-            if ([string]$status.state -eq "ready") {
-                $ready = $true
-                break
-            }
-        } catch {}
+    if (-not $ready) {
+        if ($aoProcess -and -not $aoProcess.HasExited) {
+            $aoProcess | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
+        throw "Agent Orchestrator did not report ready within $StartupTimeoutSeconds seconds."
     }
-}
-if (-not $ready) {
-    throw "Agent Orchestrator did not report ready within $StartupTimeoutSeconds seconds."
+} catch {
+    if ($aoProcess -and -not $aoProcess.HasExited) {
+        $aoProcess | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
+    throw
 }
 
 New-Item -ItemType Directory -Path $handoffRoot -Force | Out-Null

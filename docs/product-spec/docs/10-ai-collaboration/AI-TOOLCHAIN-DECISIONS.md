@@ -202,7 +202,7 @@ Profiles enforce concurrency limits (maximum 1 implementation author and 1 resea
 14. **AI-TOOL-14**: TASK-AI-06 through TASK-AI-12 add no repositories or providers. Profile compilation resolves only governed manifest IDs and stops fail-closed when a required capability is absent.
 15. **AI-TOOL-15**: The final unattended entrypoint is `control.ps1 -Action Resume`; `Supervise` remains a stage-specific recovery action until TASK-AI-12 completes convergence.
 
-## Orchestrator Supervisor Policy (`AI-SUP-01` to `AI-SUP-15`)
+## Orchestrator Supervisor Policy (`AI-SUP-01` to `AI-SUP-21`)
 
 The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Supervise`) automates routine Work Item processing while preserving human merge authority and fail-closed safety. It is a PowerShell state machine, not an LLM agent loop.
 
@@ -210,28 +210,32 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 1. **AI-SUP-01**: The supervisor is a deterministic PowerShell loop, not an LLM agent.
 2. **AI-SUP-02**: Only one Work Item is active at a time; parallel orchestration is not supported.
-3. **AI-SUP-03**: The supervisor polls AO session state; it does not modify AO internals.
+3. **AI-SUP-03**: The supervisor uses only supported public AO CLI commands; it does not modify AO internals.
 4. **AI-SUP-04**: Implementation/test failures are NOT provider failures; they return to the author.
 5. **AI-SUP-05**: The supervisor never auto-merges; human merge is always required.
 
-### AgentRouter-backed orchestration
+### AgentRouter-backed orchestration and lifecycle
 
-6. **AI-SUP-06**: Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost AgentRouter endpoint. The direct `%USERPROFILE%\.claude-orchestrator` profile is reserved for explicit diagnosis, not unattended operation.
-7. **AI-SUP-07**: AgentRouter owns Claude/provider quota fallback below AO. AO sees one stable endpoint and must not retry a quota-exhausted direct profile ten times.
-8. **AI-SUP-08**: Gemini implementation uses the installed `agy` harness first and `gemini` only when AO cannot start `agy`.
-9. **AI-SUP-09**: Cross-harness replacement after AgentRouter exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch and worktree.
-10. **AI-SUP-10**: Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
+6. **AI-SUP-06**: AO uses the existing `.claude` AgentRouter profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
+7. **AI-SUP-07**: AgentRouter owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
+8. **AI-SUP-08**: Inactivity timeout is configurable (default 10 minutes).
+9. **AI-SUP-09**: Maximum 1 nudge attempt per inactivity window before reporting stalled.
+10. **AI-SUP-10**: The supervisor respects existing controller gates (CI must pass, Codex must approve).
+11. **AI-SUP-11**: Starting `Supervise` repairs AO runtime drift by relaunching AO through AgentRouter before consuming a Work Item.
+12. **AI-SUP-12**: Manual bootstrap review requires an exact PR number when more than one implementation PR is open.
+13. **AI-SUP-13**: AO is an external control layer with pinned provenance and health check; it is never silently counted as an adopted repository/provider.
+14. **AI-SUP-14**: Manual bootstrap review uses Codex's non-interactive custom-review contract with machine-readable schema output and parses that contract; stale output is deleted, and the local file never authorizes the supervisor gate.
+15. **AI-SUP-15**: An open implementation PR belongs to the active Work Item only when both the Work Item ID and exact governed head branch match; zero, ambiguous, or wrong-branch matches fail closed.
+16. **AI-SUP-16**: GitHub check attempts are grouped by name and provider identity; only the unambiguous newest attempt in each group participates, and required gates must come from GitHub Actions.
+17. **AI-SUP-17**: An AO review trigger is checkpointed with its timestamp and must reach a supported terminal state within the configured bounded timeout.
+18. **AI-SUP-18**: Bounded 9Router error records are diagnostic metadata after a terminal AO state. One failed request never proves that every fallback route was exhausted, and AO session DTO text is not treated as a provider transcript.
+19. **AI-SUP-19**: Post-merge synchronization may recover Codex's exact-commit verdict from GitHub's durable Pull Request review collection when the AO session is no longer available.
+20. **AI-SUP-20**: The governed launcher and controller require both the live AO CLI and the launched executable's observed file version to match the manifest pin.
+21. **AI-SUP-21**: Durable GitHub review evidence is accepted only from the exact allowlisted Codex GitHub App identity `chatgpt-codex-connector[bot]`; review-shaped text from any other author is untrusted.
 
-### State preservation
+### Provider and harness policy
 
-11. **AI-SUP-11**: Checkpoints are written after every state transition to `$HandoffRoot/supervisor-state.json`.
-12. **AI-SUP-12**: State includes: Work Item ID, session ID, branch, provider, activity state, nudge count.
-13. **AI-SUP-13**: Restart resumes from checkpoint without duplicating PRs or tasks.
-
-### Independent review
-
-14. **AI-SUP-14**: Codex Sol High is the independent exact-HEAD reviewer and is never routed through AgentRouter.
-15. **AI-SUP-15**: If the configured independent reviewer is unavailable, delivery waits fail-closed; stale, routed or self-review verdicts never authorize merge.
+Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost 9Router endpoint (`http://localhost:20128/v1`). The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after AgentRouter exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
 
 ### Transient failure classification
 
