@@ -667,13 +667,34 @@ function Invoke-ShipDeReview {
     $reviewStem = "pr-{0}-{1}-codex-review" -f $pr.number, $reviewHeadSha.Substring(0, 8)
     $reviewFile = Join-Path $script:HandoffRoot "$reviewStem.txt"
     $diagnosticFile = Join-Path $script:HandoffRoot "$reviewStem-diagnostics.txt"
+    $executionFile = Join-Path $script:HandoffRoot "$reviewStem-execution.txt"
+    $reviewPrompt = @"
+Perform an independent, read-only code review of Pull Request #$($pr.number) at the exact detached HEAD $reviewHeadSha.
+
+Review only the changes introduced against the merge base with origin/main. Inspect the full diff with git diff origin/main...HEAD and inspect any surrounding code needed to validate correctness. Do not modify files.
+
+Report every actionable correctness, security, governance, lifecycle, or test-coverage problem as a prioritized finding with an exact file and line reference. Do not write any of the verdict words below anywhere else in the report.
+
+The final non-empty line must be exactly one of these three standalone values:
+PASS
+CHANGES_REQUIRED
+BLOCKED
+
+Use CHANGES_REQUIRED when at least one actionable finding remains. Use BLOCKED only when the review cannot be completed. Otherwise use PASS.
+"@
+
+    # A stale file from a failed attempt must never satisfy the verdict parser.
+    Remove-Item -Path $reviewFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $diagnosticFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $executionFile -Force -ErrorAction SilentlyContinue
     Push-Location $script:Paths.Codex
     $previousErrorActionPreference = $ErrorActionPreference
     try {
-        # Codex emits progress diagnostics on native stderr. Keep those in a
-        # separate local file so GitHub receives only the final review.
+        # `codex review --base` does not accept custom output instructions.
+        # The non-interactive review subcommand accepts a prompt and writes the
+        # final model message atomically, while progress stays in local logs.
         $ErrorActionPreference = "Continue"
-        $output = @(& codex review --base origin/main 2> $diagnosticFile)
+        $reviewPrompt | & codex exec --output-last-message $reviewFile review - 1> $executionFile 2> $diagnosticFile
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -683,14 +704,19 @@ function Invoke-ShipDeReview {
     if ($exitCode -ne 0) {
         throw "Codex review failed with exit code $exitCode. Diagnostics: $diagnosticFile"
     }
-    if ($output.Count -eq 0) {
+    if (-not (Test-Path -LiteralPath $reviewFile)) {
         throw "Codex returned no final review. Diagnostics: $diagnosticFile"
     }
+
+    $reviewText = Get-Content -LiteralPath $reviewFile -Raw
+    if ([string]::IsNullOrWhiteSpace($reviewText)) {
+        throw "Codex returned an empty final review. Diagnostics: $diagnosticFile"
+    }
+    $output = @($reviewText -split '\r?\n')
 
     $currentPr = Get-ShipDePullRequestByNumber -Number ([int]$pr.number)
     Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
 
-    $reviewText = $output -join [Environment]::NewLine
     $targetHeader = '**Review target:** `{0}`' -f $reviewHeadSha
     if ($reviewText -notmatch [regex]::Escape($reviewHeadSha)) {
         $reviewText = $targetHeader + [Environment]::NewLine + [Environment]::NewLine + $reviewText
@@ -763,6 +789,7 @@ function Invoke-ShipDeReview {
     Write-Host ("Review target : {0}" -f $reviewHeadSha)
     Write-Host ("Review file   : {0}" -f $reviewFile)
     Write-Host ("Diagnostics   : {0}" -f $diagnosticFile)
+    Write-Host ("Execution log : {0}" -f $executionFile)
     Write-Host ("Verdict       : {0}" -f $verdict)
     Write-Host ("GitHub parts  : {0}" -f $commentFiles.Count)
     $post = Read-Host "Post the complete Codex review to PR #$($pr.number)? (Y/N)"
