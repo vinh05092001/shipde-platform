@@ -29,7 +29,7 @@ Before the foundation migration, validate with the commands present in the curre
 - `shipde-gemini`: primary implementation author.
 - `shipde-codex`: independent planning, documentation and review workspace.
 
-Never assume chat history is shared. The Work Item, branch, commits, Pull Request, CI evidence and review comments are the complete handoff package. `scripts/ai/control.ps1` may route these artifacts. In unattended supervisor mode (`-Action Supervise`), the controller automatically dispatches routine CI/review gates, monitors session activity, and routes repair instructions, while human intervention remains strictly required for initial credentials, destructive actions, conflicting or missing business rules, and final Pull Request merge. It may not invent product meaning, bypass a dirty worktree, approve a failed gate or merge.
+Never assume chat history is shared. The Work Item, branch, commits, Pull Request, CI evidence and review comments are the complete handoff package. `scripts/ai/control.ps1` may route these artifacts, but it may not invent product meaning, bypass a dirty worktree, approve a failed gate or merge.
 
 ## Role separation
 
@@ -38,7 +38,7 @@ Never assume chat history is shared. The Work Item, branch, commits, Pull Reques
 - **9Router worker — constrained author:** handles only explicitly assigned, low-risk, deterministic work such as fixtures, mocks, types, small CRUD, focused tests, lint or mechanical changes. It must stop when scope reaches architecture, authentication, authorization, tenant isolation, money, carrier side effects, database ownership or product UX decisions.
 - **Gemini — primary author:** plans and implements complete foundation or vertical product Work Items, adds evidence and opens/updates the Pull Request.
 - **Codex — independent reviewer:** uses a fresh review-only task, checks the full Pull Request against the Work Item and source specifications, and returns `PASS`, `CHANGES_REQUIRED` or `BLOCKED`. It does not merge or silently fix the author's branch during review.
-- **Human — product and merge owner:** provides initial credentials, resolves conflicting or missing business specifications, approves destructive actions, accepts residual risk, and merges only after CI is green and Codex returns durable exact-HEAD `PASS`. In unattended supervisor mode, routine CI and review gates are dispatched automatically by the controller.
+- **Human — product and merge owner:** resolves product decisions, triggers each controller gate, accepts residual risk and merges only after CI is green and Codex returns `PASS`.
 
 The author never approves its own work. A feature is not complete because an author says it is complete.
 

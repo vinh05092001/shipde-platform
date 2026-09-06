@@ -102,6 +102,7 @@ function Get-ShipDeAssignment {
     if (-not $declaredBranchMatch.Success) {
         return $null
     }
+    $declaredBranch = $declaredBranchMatch.Groups["branch"].Value.Trim()
 
     $riskMatch = [regex]::Match($workItemText, '(?im)^\|\s*Risk\s*\|\s*`?(?<risk>LOW|MEDIUM|HIGH)`?\s*\|')
     if (-not $riskMatch.Success) {
@@ -113,11 +114,17 @@ function Get-ShipDeAssignment {
         return $null
     }
 
-    $branch = [string]$Row.branch
-    if ([string]::IsNullOrWhiteSpace($branch)) {
-        $branch = $Ref -replace '^origin/', ''
+    $rowBranch = if ($Row.branch) { ([string]$Row.branch).Trim() } else { "" }
+    if ([string]::IsNullOrWhiteSpace($rowBranch) -or $rowBranch -ne $declaredBranch) {
+        return $null
     }
 
+    $expectedRef = if ($Ref.StartsWith("origin/")) { "origin/$declaredBranch" } else { $declaredBranch }
+    if ($Ref -ne $expectedRef) {
+        return $null
+    }
+
+    $branch = $declaredBranch
     $leaf = Split-Path $branch -Leaf
     $prefix = "$(([string]$Row.work_item_id).ToLowerInvariant())-"
     if (-not $leaf.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -125,7 +132,10 @@ function Get-ShipDeAssignment {
     }
 
     $order = 0
-    [void][int]::TryParse([string]$Row.delivery_order, [ref]$order)
+    $orderText = if ($Row.delivery_order) { ([string]$Row.delivery_order).Trim() } else { "" }
+    if ([string]::IsNullOrWhiteSpace($orderText) -or -not [int]::TryParse($orderText, [ref]$order) -or $order -lt 0) {
+        throw "Delivery order '$orderText' for Work Item '$([string]$Row.work_item_id)' is invalid or non-numeric. Failing closed."
+    }
 
     return [PSCustomObject]@{
         DeliveryOrder = $order
@@ -356,6 +366,13 @@ query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
         isDraft
         headRefName
         headRefOid
+        isCrossRepository
+        headRepository {
+          nameWithOwner
+        }
+        headRepositoryOwner {
+          login
+        }
         commits(last: 1) {
           nodes {
             commit {
@@ -419,14 +436,50 @@ query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
             $checks = [System.Collections.Generic.List[object]]::new()
             $commitNodes = $node.commits.nodes
             if ($commitNodes -and $commitNodes.Count -gt 0) {
-                $rollupContexts = $commitNodes[0].commit.statusCheckRollup.contexts.nodes
-                if ($rollupContexts) {
-                    foreach ($ctx in @($rollupContexts)) {
-                        if ($ctx) {
-                            $checks.Add($ctx)
+                $commit = $commitNodes[0].commit
+                if ($commit -and
+                    $commit.PSObject.Properties['statusCheckRollup'] -and
+                    $commit.statusCheckRollup -and
+                    $commit.statusCheckRollup.PSObject.Properties['contexts'] -and
+                    $commit.statusCheckRollup.contexts -and
+                    $commit.statusCheckRollup.contexts.PSObject.Properties['nodes'] -and
+                    $commit.statusCheckRollup.contexts.nodes) {
+                    $rollupContexts = $commit.statusCheckRollup.contexts.nodes
+                    if ($rollupContexts) {
+                        foreach ($ctx in @($rollupContexts)) {
+                            if ($ctx) {
+                                $wfName = $null
+                                try {
+                                    if ($ctx.checkSuite -and
+                                        $ctx.checkSuite.workflowRun -and
+                                        $ctx.checkSuite.workflowRun.workflow -and
+                                        $ctx.checkSuite.workflowRun.workflow.name) {
+                                        $wfName = [string]$ctx.checkSuite.workflowRun.workflow.name
+                                    }
+                                } catch {}
+                                if (-not [string]::IsNullOrWhiteSpace($wfName) -and -not $ctx.PSObject.Properties['workflowName']) {
+                                    $ctx | Add-Member -NotePropertyName "workflowName" -NotePropertyValue $wfName -Force
+                                }
+                                $checks.Add($ctx)
+                            }
                         }
                     }
                 }
+            }
+
+            $headRepoName = ""
+            if ($node.PSObject.Properties['headRepository'] -and $node.headRepository -and
+                $node.headRepository.PSObject.Properties['nameWithOwner'] -and $node.headRepository.nameWithOwner) {
+                $headRepoName = [string]$node.headRepository.nameWithOwner
+            }
+            $headRepoOwner = ""
+            if ($node.PSObject.Properties['headRepositoryOwner'] -and $node.headRepositoryOwner -and
+                $node.headRepositoryOwner.PSObject.Properties['login'] -and $node.headRepositoryOwner.login) {
+                $headRepoOwner = [string]$node.headRepositoryOwner.login
+            }
+            $isCrossRepo = $false
+            if ($node.PSObject.Properties['isCrossRepository'] -and $null -ne $node.isCrossRepository) {
+                $isCrossRepo = [bool]$node.isCrossRepository
             }
 
             $pullRequest = [PSCustomObject]@{
@@ -436,6 +489,9 @@ query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
                 isDraft = [bool]$node.isDraft
                 headRefName = [string]$node.headRefName
                 headRefOid = [string]$node.headRefOid
+                isCrossRepository = $isCrossRepo
+                headRepository = $headRepoName
+                headRepositoryOwner = $headRepoOwner
                 statusCheckRollup = $checks.ToArray()
             }
 
@@ -472,6 +528,16 @@ function Get-ShipDeCheckProvider {
     param([Parameter(Mandatory = $true)][object]$Check)
 
     $workflowName = Get-ShipDeCheckField -Check $Check -Field "workflowName"
+    if ([string]::IsNullOrWhiteSpace($workflowName)) {
+        try {
+            if ($Check.checkSuite -and
+                $Check.checkSuite.workflowRun -and
+                $Check.checkSuite.workflowRun.workflow -and
+                $Check.checkSuite.workflowRun.workflow.name) {
+                $workflowName = [string]$Check.checkSuite.workflowRun.workflow.name
+            }
+        } catch {}
+    }
     if (-not [string]::IsNullOrWhiteSpace($workflowName)) {
         return "github-actions/$workflowName"
     }
@@ -528,6 +594,9 @@ function Get-ShipDePrGate {
         $timestampText = Get-ShipDeCheckField -Check $check -Field "startedAt"
         if ([string]::IsNullOrWhiteSpace($timestampText)) {
             $timestampText = Get-ShipDeCheckField -Check $check -Field "completedAt"
+        }
+        if ([string]::IsNullOrWhiteSpace($timestampText)) {
+            $timestampText = Get-ShipDeCheckField -Check $check -Field "createdAt"
         }
         $provider = Get-ShipDeCheckProvider -Check $check
         $key = "{0}`n{1}" -f $name, $provider
@@ -1947,13 +2016,36 @@ function Start-ShipDeAoWorker {
         [switch]$DryRun
     )
 
+    if ($DryRun) {
+        $candidate = @(Get-ShipDeAoHarnessCandidates -Author $Item.Author)[0]
+        $arguments = New-ShipDeAoSpawnArguments -Item $Item -Harness $candidate -Prompt $Prompt -Project $Project
+        Write-Host ("[SUPERVISOR][DRY-RUN] ao {0}" -f ($arguments -join " "))
+        return [PSCustomObject]@{ SessionId = "dry-run-$($Item.WorkItemId.ToLowerInvariant())"; Harness = $candidate }
+    }
+
+    $expectedName = Get-ShipDeAoWorkerName -Item $Item
+    $existingSessions = @(
+        Get-ShipDeAoSessions -Project $Project | Where-Object {
+            $sessionName = Get-ShipDeAoSessionName -Session $_
+            $sessionName -eq $expectedName
+        }
+    )
+    if ($existingSessions.Count -eq 1) {
+        $sessionId = Get-ShipDeAoSessionId -Response $existingSessions[0]
+        Write-Host "[SUPERVISOR] Found existing governed AO session '$sessionId' for worker '$expectedName'; reusing."
+        $candidates = @(Get-ShipDeAoHarnessCandidates -Author $Item.Author)
+        $harness = if ($candidates.Count -gt 0) { $candidates[0] } else { "agy" }
+        return [PSCustomObject]@{
+            SessionId = $sessionId
+            Harness = $harness
+        }
+    } elseif ($existingSessions.Count -gt 1) {
+        throw "Multiple existing AO sessions found for worker '$expectedName'. Cannot safely bind to an ambiguous worker."
+    }
+
     $failures = [System.Collections.Generic.List[string]]::new()
     foreach ($harness in @(Get-ShipDeAoHarnessCandidates -Author $Item.Author)) {
         $arguments = New-ShipDeAoSpawnArguments -Item $Item -Harness $harness -Prompt $Prompt -Project $Project
-        if ($DryRun) {
-            Write-Host ("[SUPERVISOR][DRY-RUN] ao {0}" -f ($arguments -join " "))
-            return [PSCustomObject]@{ SessionId = "dry-run-$($Item.WorkItemId.ToLowerInvariant())"; Harness = $harness }
-        }
 
         $beforeIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         foreach ($session in @(Get-ShipDeAoSessions -Project $Project)) {
@@ -2123,6 +2215,30 @@ function Get-ShipDeAgentRouterFailureSince {
     }
 }
 
+function Assert-ShipDeGovernedPullRequest {
+    param(
+        [Parameter(Mandatory = $true)][object]$PullRequest,
+        [Parameter(Mandatory = $true)][string]$WorkItemId,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [string]$ExpectedRepository = $Repository
+    )
+
+    $isCross = $false
+    if ($PullRequest.PSObject.Properties['isCrossRepository'] -and $null -ne $PullRequest.isCrossRepository) {
+        $isCross = [bool]$PullRequest.isCrossRepository
+    }
+    if ($isCross) {
+        throw "Open PR for $WorkItemId originates from a cross-repository fork, which is not governed."
+    }
+    $headRepo = if ($PullRequest.PSObject.Properties['headRepository'] -and $PullRequest.headRepository) { [string]$PullRequest.headRepository } else { "" }
+    if (-not [string]::IsNullOrWhiteSpace($headRepo) -and -not [string]::IsNullOrWhiteSpace($ExpectedRepository) -and $headRepo -ne $ExpectedRepository) {
+        throw "Open PR for $WorkItemId originates from head repository '$headRepo', expected governed repository '$ExpectedRepository'."
+    }
+    if ([string]$PullRequest.headRefName -cne $Branch) {
+        throw "Open PR for $WorkItemId does not use exact governed branch '$Branch'."
+    }
+}
+
 function Get-ShipDeOpenPullRequestForWorkItem {
     param(
         [Parameter(Mandatory = $true)][string]$WorkItemId,
@@ -2138,10 +2254,9 @@ function Get-ShipDeOpenPullRequestForWorkItem {
     if ($workItemMatches.Count -ne 1) {
         throw "Expected exactly one open PR for $WorkItemId; found $($workItemMatches.Count)."
     }
-    if ([string]$workItemMatches[0].headRefName -cne $Branch) {
-        throw "Open PR for $WorkItemId does not use exact governed branch '$Branch'."
-    }
-    return $workItemMatches[0]
+    $pr = $workItemMatches[0]
+    Assert-ShipDeGovernedPullRequest -PullRequest $pr -WorkItemId $WorkItemId -Branch $Branch -ExpectedRepository $Repository
+    return $pr
 }
 
 function Invoke-ShipDeSupervisorLoop {
@@ -2392,6 +2507,109 @@ function Assert-ShipDeSupervisorCompatibility {
         throw "GitHub ambiguous check-attempt compatibility test failed."
     }
 
+    $statusContextRerunFixture = [PSCustomObject]@{
+        statusCheckRollup = @(
+            [PSCustomObject]@{ context = "contract"; targetUrl = "https://github.com/org/repo/actions/runs/1"; state = "FAILURE"; createdAt = "2026-09-06T01:00:00Z" },
+            [PSCustomObject]@{ context = "contract"; targetUrl = "https://github.com/org/repo/actions/runs/2"; state = "SUCCESS"; createdAt = "2026-09-06T01:05:00Z" },
+            [PSCustomObject]@{ context = "application-gate"; targetUrl = "https://github.com/org/repo/actions/runs/3"; state = "SUCCESS"; createdAt = "2026-09-06T01:05:00Z" }
+        )
+    }
+    if ((Get-ShipDePrGate -PullRequest $statusContextRerunFixture) -ne "GREEN") {
+        throw "GitHub StatusContext createdAt superseded attempt compatibility test failed."
+    }
+
+    $emptyRollupFixture = [PSCustomObject]@{
+        statusCheckRollup = @()
+    }
+    if ((Get-ShipDePrGate -PullRequest $emptyRollupFixture) -ne "PENDING") {
+        throw "Empty status check rollup compatibility test failed."
+    }
+
+    $nestedWorkflowCheck = [PSCustomObject]@{
+        name = "gate"
+        checkSuite = [PSCustomObject]@{
+            workflowRun = [PSCustomObject]@{
+                workflow = [PSCustomObject]@{
+                    name = "Application CI"
+                }
+            }
+        }
+    }
+    if ((Get-ShipDeCheckProvider -Check $nestedWorkflowCheck) -ne "github-actions/Application CI") {
+        throw "Check provider workflow identity preservation compatibility test failed."
+    }
+
+    $workflowCollisionFixture = [PSCustomObject]@{
+        statusCheckRollup = @(
+            [PSCustomObject]@{ name = "contract"; workflowName = "Workflow A"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" },
+            [PSCustomObject]@{ name = "contract"; workflowName = "Workflow B"; conclusion = "FAILURE"; startedAt = "2026-09-06T01:05:00Z" },
+            [PSCustomObject]@{ name = "application-gate"; workflowName = "Workflow A"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" }
+        )
+    }
+    if ((Get-ShipDePrGate -PullRequest $workflowCollisionFixture) -ne "FAILED") {
+        throw "Workflow collision gate test failed: failed job in different workflow was improperly suppressed."
+    }
+
+    $governedTestPr = [PSCustomObject]@{
+        number = 99
+        title = "feat: TASK-AI-99"
+        headRefName = "feat/task-ai-99-governed"
+        isCrossRepository = $false
+        headRepository = "vinh05092001/shipde-platform"
+    }
+    Assert-ShipDeGovernedPullRequest -PullRequest $governedTestPr -WorkItemId "TASK-AI-99" -Branch "feat/task-ai-99-governed" -ExpectedRepository "vinh05092001/shipde-platform"
+
+    $crossRepoTestPr = [PSCustomObject]@{
+        number = 99
+        title = "feat: TASK-AI-99"
+        headRefName = "feat/task-ai-99-governed"
+        isCrossRepository = $true
+        headRepository = "forker/shipde-platform"
+    }
+    $crossRepoCaught = $false
+    try {
+        Assert-ShipDeGovernedPullRequest -PullRequest $crossRepoTestPr -WorkItemId "TASK-AI-99" -Branch "feat/task-ai-99-governed" -ExpectedRepository "vinh05092001/shipde-platform"
+    } catch {
+        $crossRepoCaught = $true
+    }
+    if (-not $crossRepoCaught) {
+        throw "Cross-repository pull request rejection test failed."
+    }
+
+    $wrongRepoTestPr = [PSCustomObject]@{
+        number = 99
+        title = "feat: TASK-AI-99"
+        headRefName = "feat/task-ai-99-governed"
+        isCrossRepository = $false
+        headRepository = "attacker/shipde-platform"
+    }
+    $wrongRepoCaught = $false
+    try {
+        Assert-ShipDeGovernedPullRequest -PullRequest $wrongRepoTestPr -WorkItemId "TASK-AI-99" -Branch "feat/task-ai-99-governed" -ExpectedRepository "vinh05092001/shipde-platform"
+    } catch {
+        $wrongRepoCaught = $true
+    }
+    if (-not $wrongRepoCaught) {
+        throw "Wrong head repository pull request rejection test failed."
+    }
+
+    $wrongBranchTestPr = [PSCustomObject]@{
+        number = 99
+        title = "feat: TASK-AI-99"
+        headRefName = "feat/wrong-branch"
+        isCrossRepository = $false
+        headRepository = "vinh05092001/shipde-platform"
+    }
+    $wrongBranchCaught = $false
+    try {
+        Assert-ShipDeGovernedPullRequest -PullRequest $wrongBranchTestPr -WorkItemId "TASK-AI-99" -Branch "feat/task-ai-99-governed" -ExpectedRepository "vinh05092001/shipde-platform"
+    } catch {
+        $wrongBranchCaught = $true
+    }
+    if (-not $wrongBranchCaught) {
+        throw "Wrong head branch pull request rejection test failed."
+    }
+
     $testRegisterCsv = @"
 delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
 10,TASK-AI-91,,BACKLOG,feat/task-ai-91-one,docs/product-spec/work-items/TASK-AI-91.md,Backlog item
@@ -2423,6 +2641,67 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
     $selectedNextItem = Get-ShipDeNextPreparedItem -Items $discoveredAssignments
     if ($null -eq $selectedNextItem -or $selectedNextItem.WorkItemId -ne "TASK-AI-92") {
         throw "Delivery register next prepared item selection compatibility test failed."
+    }
+
+    $invalidOrderRegisterCsv = @"
+delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
+not_a_number,TASK-AI-94,,READY_FOR_AUTHOR,feat/task-ai-94-four,docs/product-spec/work-items/TASK-AI-94.md,Invalid order item
+"@
+    $invalidOrderTextResolver = {
+        param($ref, $path)
+        if ($path -eq $script:RegisterPath) { return $invalidOrderRegisterCsv }
+        if ($path -eq "docs/product-spec/work-items/TASK-AI-94.md") {
+            return "| Field | Value |`n| Work Item ID | ``TASK-AI-94`` |`n| Status | ``READY_FOR_AUTHOR`` |`n| Assigned author | ``GEMINI`` |`n| Branch | ``feat/task-ai-94-four`` |`n| Risk | ``LOW`` |`n| Allowed paths | ``scripts/ai/*`` |`n"
+        }
+        return $null
+    }
+    $invalidOrderRejected = $false
+    try {
+        Get-ShipDePreparedAssignments -Refs @("origin/feat/task-ai-94-four") -RowResolver { param($r) Get-ShipDeRowsAtRef -Ref $r -TextResolver $invalidOrderTextResolver } -TextResolver $invalidOrderTextResolver | Out-Null
+    } catch {
+        $invalidOrderRejected = $true
+    }
+    if (-not $invalidOrderRejected) {
+        throw "Delivery register non-numeric delivery_order fail-closed compatibility test failed."
+    }
+
+    $negativeOrderRegisterCsv = @"
+delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
+-5,TASK-AI-95,,READY_FOR_AUTHOR,feat/task-ai-95-five,docs/product-spec/work-items/TASK-AI-95.md,Negative order item
+"@
+    $negativeOrderTextResolver = {
+        param($ref, $path)
+        if ($path -eq $script:RegisterPath) { return $negativeOrderRegisterCsv }
+        if ($path -eq "docs/product-spec/work-items/TASK-AI-95.md") {
+            return "| Field | Value |`n| Work Item ID | ``TASK-AI-95`` |`n| Status | ``READY_FOR_AUTHOR`` |`n| Assigned author | ``GEMINI`` |`n| Branch | ``feat/task-ai-95-five`` |`n| Risk | ``LOW`` |`n| Allowed paths | ``scripts/ai/*`` |`n"
+        }
+        return $null
+    }
+    $negativeOrderRejected = $false
+    try {
+        Get-ShipDePreparedAssignments -Refs @("origin/feat/task-ai-95-five") -RowResolver { param($r) Get-ShipDeRowsAtRef -Ref $r -TextResolver $negativeOrderTextResolver } -TextResolver $negativeOrderTextResolver | Out-Null
+    } catch {
+        $negativeOrderRejected = $true
+    }
+    if (-not $negativeOrderRejected) {
+        throw "Delivery register negative delivery_order fail-closed compatibility test failed."
+    }
+
+    $mismatchedBranchRegisterCsv = @"
+delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
+35,TASK-AI-96,,READY_FOR_AUTHOR,feat/task-ai-96-declared,docs/product-spec/work-items/TASK-AI-96.md,Mismatched branch item
+"@
+    $mismatchedBranchTextResolver = {
+        param($ref, $path)
+        if ($path -eq $script:RegisterPath) { return $mismatchedBranchRegisterCsv }
+        if ($path -eq "docs/product-spec/work-items/TASK-AI-96.md") {
+            return "| Field | Value |`n| Work Item ID | ``TASK-AI-96`` |`n| Status | ``READY_FOR_AUTHOR`` |`n| Assigned author | ``GEMINI`` |`n| Branch | ``feat/task-ai-96-declared`` |`n| Risk | ``LOW`` |`n| Allowed paths | ``scripts/ai/*`` |`n"
+        }
+        return $null
+    }
+    $mismatchedRefAssignments = @(Get-ShipDePreparedAssignments -Refs @("origin/feat/task-ai-96-different") -RowResolver { param($r) Get-ShipDeRowsAtRef -Ref $r -TextResolver $mismatchedBranchTextResolver } -TextResolver $mismatchedBranchTextResolver)
+    if ($mismatchedRefAssignments.Count -ne 0) {
+        throw "Assignment branch binding test failed: mismatched ref was accepted."
     }
 
     $structuredReviewFixture = '{"verdict":"CHANGES_REQUIRED","summary":"Changes required on error handling","findings":[{"priority":"P1","file":"test.ps1","line":10,"title":"Unhandled error","description":"Missing catch block"}],"report":"## Report`nMissing catch block`n`nVerdict: CHANGES_REQUIRED"}'
@@ -2525,9 +2804,40 @@ Full review comments:
         if ($restored.TestField -ne "test-value" -or $restored.NestedObject.Inner -ne 123) {
             throw "Supervisor checkpoint round-trip test failed."
         }
+
+        # Test SPAWNING state intent persistence round-trip
+        $spawningIntent = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            State = "SPAWNING"
+            StartTime = (Get-Date).ToUniversalTime().ToString("o")
+        }
+        $spawningIntent | ConvertTo-Json -Depth 5 | Set-Content -Path $temporaryPath -Encoding UTF8
+        $restoredIntent = Get-Content $temporaryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($restoredIntent.State -ne "SPAWNING" -or $restoredIntent.WorkItemId -ne "TASK-AI-06") {
+            throw "Supervisor SPAWNING state checkpoint round-trip test failed."
+        }
     } finally {
         if (Test-Path $temporaryPath) {
             Remove-Item $temporaryPath -Force
+        }
+    }
+
+    if (Test-Path "AGENTS.md") {
+        $rootAgentsText = Get-Content "AGENTS.md" -Raw -Encoding UTF8
+        if ($rootAgentsText -match "In unattended supervisor mode") {
+            throw "Root AGENTS.md regression test failed: unauthorized contract change found."
+        }
+    }
+
+    $aiToolchainPath = "docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md"
+    if (Test-Path $aiToolchainPath) {
+        $aiToolchainContent = Get-Content $aiToolchainPath -Raw -Encoding UTF8
+        if ($aiToolchainContent -match "every approved router fallback is treated as exhausted and delivery stops fail-closed") {
+            throw "AI-TOOLCHAIN-DECISIONS.md policy regression test failed: contradictory fallback exhaustion statement found."
+        }
+        if ($aiToolchainContent -notmatch "In accordance with AI-SUP-18, bounded 9Router error records are diagnostic metadata") {
+            throw "AI-TOOLCHAIN-DECISIONS.md policy regression test failed: AI-SUP-18 harmonization missing."
         }
     }
 }
@@ -2552,27 +2862,41 @@ function Invoke-ShipDeSupervise {
             throw "Open implementation Pull Request(s) exist without a resumable supervisor checkpoint: $openSummary. Resume or recover that Work Item before consuming another prepared row."
         }
 
-        $item = Get-ShipDeNextPreparedItem
-        if (-not $item) {
-            Write-Host "[SUPERVISOR] No prepared dependency-ready remote Work Item exists."
-            return
+        $item = $null
+        if ($state -and $state.WorkItemId -and $state.State -eq "SPAWNING") {
+            Write-Host "[SUPERVISOR] Resuming spawn intent for $($state.WorkItemId) on $($state.Branch)."
+            $item = [PSCustomObject]@{
+                WorkItemId = [string]$state.WorkItemId
+                WorkItemPath = [string]$state.WorkItemPath
+                Branch = [string]$state.Branch
+                Author = [string]$state.Author
+            }
+        } else {
+            $item = Get-ShipDeNextPreparedItem
+            if (-not $item) {
+                Write-Host "[SUPERVISOR] No prepared dependency-ready remote Work Item exists."
+                return
+            }
+
+            $state = @{
+                WorkItemId = $item.WorkItemId
+                WorkItemPath = $item.WorkItemPath
+                Branch = $item.Branch
+                Author = $item.Author
+                State = "SPAWNING"
+                StartTime = (Get-Date).ToUniversalTime().ToString("o")
+                LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                NudgeCount = 0
+            }
+            Write-ShipDeSupervisorCheckpoint -State $state
         }
 
         $prompt = New-ShipDeAuthorPrompt -Item $item
         Park-ShipDeCodex
         $spawned = Start-ShipDeAoWorker -Item $item -Prompt $prompt
-        $state = @{
-            WorkItemId = $item.WorkItemId
-            WorkItemPath = $item.WorkItemPath
-            Branch = $item.Branch
-            Author = $item.Author
-            Harness = $spawned.Harness
-            SessionId = $spawned.SessionId
-            State = "STARTED"
-            StartTime = (Get-Date).ToUniversalTime().ToString("o")
-            LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
-            NudgeCount = 0
-        }
+        $state.Harness = $spawned.Harness
+        $state.SessionId = $spawned.SessionId
+        $state.State = "STARTED"
         Write-ShipDeSupervisorCheckpoint -State $state
     }
 

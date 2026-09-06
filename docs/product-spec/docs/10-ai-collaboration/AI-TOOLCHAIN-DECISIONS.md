@@ -239,7 +239,7 @@ Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the
 
 ### Transient failure classification
 
-AgentRouter handles transient provider failures internally. If one of these failures reaches the supervisor, every approved router fallback is treated as exhausted and delivery stops fail-closed; implementation failures still return to the author:
+AgentRouter handles transient provider failures internally. In accordance with AI-SUP-18, bounded 9Router error records are diagnostic metadata captured after a terminal AO state; one failed request never proves that every fallback route was exhausted. If a terminal provider failure or exhaustion reaches the supervisor, delivery stops fail-closed; implementation failures still return to the author:
 
 | Classification            | Trigger failover | Return to author |
 | ------------------------- | ---------------- | ---------------- |
