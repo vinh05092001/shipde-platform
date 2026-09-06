@@ -10,7 +10,8 @@ param(
 
     [int]$SupervisorPollIntervalSeconds = 30,
     [int]$SupervisorInactivityTimeoutMinutes = 10,
-    [int]$SupervisorMaxNudges = 1
+    [int]$SupervisorMaxNudges = 1,
+    [int]$SupervisorReviewTimeoutMinutes = 20
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -19,6 +20,8 @@ $script:RegisterPath = "docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIV
 $script:HandoffRoot = Join-Path $AiRoot "handoff"
 $script:Paths = Get-ShipDePaths -AiRoot $AiRoot
 $script:RequiredPrChecks = @("contract", "application-gate")
+$script:RequiredPrCheckProviderPrefix = "github-actions"
+$script:TrustedCodexReviewerLogins = @("chatgpt-codex-connector[bot]")
 
 function Get-ShipDeTextAtRef {
     param(
@@ -324,6 +327,33 @@ function Get-ShipDeCheckName {
     return Get-ShipDeCheckField -Check $Check -Field "context"
 }
 
+function Get-ShipDeCheckProvider {
+    param([Parameter(Mandatory = $true)][object]$Check)
+
+    $workflowName = Get-ShipDeCheckField -Check $Check -Field "workflowName"
+    if (-not [string]::IsNullOrWhiteSpace($workflowName)) {
+        return "github-actions/$workflowName"
+    }
+
+    $urlText = Get-ShipDeCheckField -Check $Check -Field "detailsUrl"
+    if ([string]::IsNullOrWhiteSpace($urlText)) {
+        $urlText = Get-ShipDeCheckField -Check $Check -Field "targetUrl"
+    }
+    $uri = $null
+    if ([Uri]::TryCreate($urlText, [UriKind]::Absolute, [ref]$uri)) {
+        if ($uri.Host -eq "github.com" -and $uri.AbsolutePath -match '/actions/runs/') {
+            return "github-actions"
+        }
+        return $uri.Host.ToLowerInvariant()
+    }
+
+    $typeName = Get-ShipDeCheckField -Check $Check -Field "__typename"
+    if (-not [string]::IsNullOrWhiteSpace($typeName)) {
+        return $typeName.ToLowerInvariant()
+    }
+    return "unknown"
+}
+
 function Get-ShipDeCheckResult {
     param([Parameter(Mandatory = $true)][object]$Check)
 
@@ -347,7 +377,42 @@ function Get-ShipDeCheckResult {
 function Get-ShipDePrGate {
     param([Parameter(Mandatory = $true)][object]$PullRequest)
 
-    $checks = @($PullRequest.statusCheckRollup)
+    # GitHub can retain superseded attempts for one check name on the same
+    # immutable head. Only the newest attempt for each name is authoritative.
+    $latestByName = @{}
+    foreach ($check in @($PullRequest.statusCheckRollup)) {
+        $name = Get-ShipDeCheckName -Check $check
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+
+        $timestampText = Get-ShipDeCheckField -Check $check -Field "startedAt"
+        if ([string]::IsNullOrWhiteSpace($timestampText)) {
+            $timestampText = Get-ShipDeCheckField -Check $check -Field "completedAt"
+        }
+        $provider = Get-ShipDeCheckProvider -Check $check
+        $key = "{0}`n{1}" -f $name, $provider
+        $timestamp = [DateTime]::MinValue
+        $parsedTimestamp = [DateTime]::MinValue
+        if (
+            -not [string]::IsNullOrWhiteSpace($timestampText) -and
+            [DateTime]::TryParse($timestampText, [ref]$parsedTimestamp)
+        ) {
+            $timestamp = $parsedTimestamp.ToUniversalTime()
+        }
+        if ($latestByName.ContainsKey($key)) {
+            if (
+                $timestamp -eq [DateTime]::MinValue -or
+                $latestByName[$key].Timestamp -eq [DateTime]::MinValue -or
+                $timestamp -eq $latestByName[$key].Timestamp
+            ) {
+                throw "GitHub returned ambiguous attempts for check '$name' from provider '$provider'."
+            }
+            if ($timestamp -lt $latestByName[$key].Timestamp) {
+                continue
+            }
+        }
+        $latestByName[$key] = @{ Check = $check; Timestamp = $timestamp; Provider = $provider }
+    }
+    $checks = @($latestByName.Values | ForEach-Object { $_.Check })
     if ($checks.Count -eq 0) {
         return "PENDING"
     }
@@ -361,7 +426,11 @@ function Get-ShipDePrGate {
 
     foreach ($requiredName in $script:RequiredPrChecks) {
         $matches = @($checks | Where-Object {
-            (Get-ShipDeCheckName -Check $_) -eq $requiredName
+            (Get-ShipDeCheckName -Check $_) -eq $requiredName -and
+            (Get-ShipDeCheckProvider -Check $_).StartsWith(
+                $script:RequiredPrCheckProviderPrefix,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
         })
         if ($matches.Count -eq 0) {
             return "PENDING"
@@ -826,7 +895,7 @@ function Get-ShipDeAoVerdictFromReviewResponse {
     $reviews = @(Get-ShipDeObjectProperty -Object $Response -Names @("reviews"))
     $matches = @($reviews | Where-Object {
         [int](Get-ShipDeObjectProperty -Object $_ -Names @("prNumber", "pr_number")) -eq $PullRequestNumber -and
-        [string](Get-ShipDeObjectProperty -Object $_ -Names @("targetSha", "target_sha")) -eq $HeadSha
+        [string](Get-ShipDeObjectProperty -Object $_ -Names @("targetSha", "target_sha")) -ieq $HeadSha
     })
     if ($matches.Count -gt 1) {
         throw "AO returned multiple review records for PR #$PullRequestNumber at exact HEAD $HeadSha."
@@ -836,23 +905,51 @@ function Get-ShipDeAoVerdictFromReviewResponse {
     }
 
     $review = $matches[0]
+    $reviewStatus = ([string](Get-ShipDeObjectProperty -Object $review -Names @("status", "state"))).ToLowerInvariant()
+    switch ($reviewStatus) {
+        "needs_review" { return $null }
+        "ineligible" { throw "AO marked PR #$PullRequestNumber at exact HEAD $HeadSha ineligible for review." }
+        "running" {}
+        "up_to_date" {}
+        "changes_requested" {}
+        default { throw "AO returned unsupported review state '$reviewStatus' for exact HEAD $HeadSha." }
+    }
     $run = Get-ShipDeObjectProperty -Object $review -Names @("latestRun", "latest_run")
     if ($null -eq $run) {
-        return $null
+        throw "AO review state '$reviewStatus' has no latest run for exact HEAD $HeadSha."
     }
     $harness = [string](Get-ShipDeObjectProperty -Object $run -Names @("harness"))
     if ($harness -ne "codex") {
         throw "AO exact-HEAD review used unsupported reviewer '$harness'; Codex is required."
     }
-    $status = [string](Get-ShipDeObjectProperty -Object $run -Names @("status"))
+    $status = ([string](Get-ShipDeObjectProperty -Object $run -Names @("status"))).ToLowerInvariant()
     $verdict = [string](Get-ShipDeObjectProperty -Object $run -Names @("verdict"))
     if ($status -in @("failed", "cancelled")) {
         throw "AO Codex review ended without an acceptable verdict. State: $status"
     }
+    if ($status -eq "running") {
+        if ($reviewStatus -ne "running") {
+            throw "AO review state '$reviewStatus' conflicts with a running Codex run."
+        }
+        return $null
+    }
+    if ($status -notin @("complete", "completed", "delivered")) {
+        throw "AO Codex review returned unsupported terminal state '$status'."
+    }
     switch ($verdict.ToLowerInvariant()) {
-        "approved" { return "PASS" }
-        "changes_requested" { return "CHANGES_REQUIRED" }
-        default { return $null }
+        "approved" {
+            if ($reviewStatus -ne "up_to_date") {
+                throw "AO approved run conflicts with review state '$reviewStatus'."
+            }
+            return "PASS"
+        }
+        "changes_requested" {
+            if ($reviewStatus -ne "changes_requested") {
+                throw "AO changes-requested run conflicts with review state '$reviewStatus'."
+            }
+            return "CHANGES_REQUIRED"
+        }
+        default { throw "AO Codex review completed without a governed verdict." }
     }
 }
 
@@ -871,6 +968,51 @@ function Get-ShipDeAoExactHeadCodexVerdict {
     }
     $response = ConvertFrom-ShipDeAoJson -Json $text -Operation "review ls"
     return Get-ShipDeAoVerdictFromReviewResponse -Response $response -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
+}
+
+function Get-ShipDeGitHubExactHeadCodexVerdict {
+    param(
+        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [Parameter(Mandatory = $true)][string]$HeadSha
+    )
+
+    if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+        throw "Repository must use the owner/name form before reading GitHub reviews."
+    }
+    $raw = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/reviews" --paginate --slurp 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot read GitHub review records for PR #$PullRequestNumber."
+    }
+    if ($raw.Count -eq 0) {
+        return $null
+    }
+
+    try {
+        $pages = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+    } catch {
+        throw "GitHub returned malformed review JSON for PR #$PullRequestNumber."
+    }
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    foreach ($page in @($pages)) {
+        foreach ($review in @($page)) {
+            if ([string]$review.commit_id -ine $HeadSha) { continue }
+            $login = [string]$review.user.login
+            if ($script:TrustedCodexReviewerLogins -notcontains $login) { continue }
+            switch (([string]$review.state).ToUpperInvariant()) {
+                "APPROVED" {
+                    $candidates.Add([PSCustomObject]@{ Id = [long]$review.id; Verdict = "PASS" })
+                }
+                "CHANGES_REQUESTED" {
+                    $candidates.Add([PSCustomObject]@{ Id = [long]$review.id; Verdict = "CHANGES_REQUIRED" })
+                }
+            }
+        }
+    }
+    if ($candidates.Count -gt 0) {
+        $latestCandidate = @($candidates | Sort-Object Id -Descending | Select-Object -First 1)[0]
+        return [string]$latestCandidate.Verdict
+    }
+    return $null
 }
 
 function Get-ShipDeExactHeadCodexVerdict {
@@ -894,47 +1036,26 @@ function Get-ShipDeExactHeadCodexVerdict {
         }
     }
 
-    # 1. Check local handoff files for an exact-HEAD review with terminal verdict
-    $handoffFiles = @(Get-ChildItem -Path $script:HandoffRoot -Filter "pr-$PullRequestNumber-*-review*.txt" -ErrorAction SilentlyContinue)
-    foreach ($hf in $handoffFiles) {
-        $content = Get-Content -LiteralPath $hf.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-        if ($content) {
-            $matchesTarget = $false
-            $targetMatch = [regex]::Match($content, '(?im)^\s*(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
-            if (-not $targetMatch.Success) {
-                $targetMatch = [regex]::Match($content, '(?im)Reviewed PR #\d+ at\s+`?([a-f0-9]{7,40})`?')
-            }
-            if ($targetMatch.Success) {
-                $targetSha = $targetMatch.Groups[1].Value
-                if ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase) -or $targetSha.StartsWith($HeadSha, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $matchesTarget = $true
-                }
-            } elseif ($hf.Name -match ("pr-{0}-([a-f0-9]{{7,40}})" -f $PullRequestNumber)) {
-                $targetSha = $matches[1]
-                if ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $matchesTarget = $true
-                }
-            }
-
-            if ($matchesTarget) {
-                $lines = @($content -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                if ($lines.Count -gt 0) {
-                    $lastLine = $lines[-1].Trim()
-                    if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
-                        return $matches[1].ToUpperInvariant()
-                    }
-                }
-            }
-        }
+    # A merged PR may no longer have a resumable AO session. Preserve the
+    # independent exact-commit verdict from GitHub's durable review collection.
+    $githubReviewVerdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
+    if ($githubReviewVerdict) {
+        return $githubReviewVerdict
     }
 
-    # 2. Check GitHub PR comments for a Codex review for HeadSha
+    # Local handoff files are operator-readable diagnostics, not trusted review
+    # evidence. A same-user implementation worker could forge them.
+
+    # Check GitHub PR comments from the exact allowlisted Codex App identity.
     try {
         $rawComments = & gh pr view $PullRequestNumber --repo $Repository --json comments 2>$null
         if ($rawComments) {
             $parsed = ($rawComments -join [Environment]::NewLine) | ConvertFrom-Json
             if ($parsed -and $parsed.comments) {
                 foreach ($commentObj in @($parsed.comments)) {
+                    $author = Get-ShipDeObjectProperty -Object $commentObj -Names @("author", "user")
+                    $authorLogin = [string](Get-ShipDeObjectProperty -Object $author -Names @("login"))
+                    if ($script:TrustedCodexReviewerLogins -notcontains $authorLogin) { continue }
                     $body = [string]$commentObj.body
                     if ([string]::IsNullOrWhiteSpace($body)) { continue }
                     $targetMatch = [regex]::Match($body, '(?im)(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
@@ -1167,10 +1288,29 @@ $script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.js
 $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.json"
 $script:AgentRouterProfile = Join-Path $env:USERPROFILE ".claude"
 $script:AgentRouterPort = 20128
+$script:ExpectedAoVersion = "0.12.10"
 
 function Assert-ShipDeAoCommand {
     if (-not (Get-Command "ao" -ErrorAction SilentlyContinue)) {
         throw "Missing required command: ao. Install the AO CLI before supervisor mode."
+    }
+}
+
+function Assert-ShipDeAoVersion {
+    $output = @(& ao version 2>&1)
+    $exitCode = $LASTEXITCODE
+    $text = Join-ShipDeNativeOutput -Output $output
+    if ($exitCode -ne 0) {
+        throw "Cannot determine AO version: $text"
+    }
+
+    $versions = @(
+        [regex]::Matches($text, '(?<!\d)(\d+\.\d+\.\d+)(?!\d)') |
+            ForEach-Object { $_.Groups[1].Value } |
+            Select-Object -Unique
+    )
+    if ($versions.Count -ne 1 -or $versions[0] -ne $script:ExpectedAoVersion) {
+        throw "AO version '$($versions -join ', ')' does not match pinned version $($script:ExpectedAoVersion)."
     }
 }
 
@@ -1254,6 +1394,14 @@ function Test-ShipDeAoReadiness {
             return @{ Ready = $false; Reason = ("ao status failed with exit code {0}: {1}" -f $exitCode, $text) }
         }
         $status = ConvertFrom-ShipDeAoJson -Json $text -Operation "status"
+        $state = [string](Get-ShipDeObjectProperty -Object $status -Names @("state"))
+        if ($state -ne "ready") {
+            return @{
+                Ready = $false
+                Reason = "AO status state is '$state', not 'ready'."
+                Status = $status
+            }
+        }
         return @{ Ready = $true; Status = $status }
     } catch {
         return @{ Ready = $false; Reason = $_.Exception.Message }
@@ -1318,6 +1466,12 @@ function Assert-ShipDeAgentRouterProfile {
     if ([string]$runtime.profile -ne $script:AgentRouterProfile -or [string]$runtime.base_url -ne $baseUrl) {
         throw "AO was not launched with the current AgentRouter Claude profile."
     }
+    if ([string]$runtime.ao_version -ne $script:ExpectedAoVersion) {
+        throw "AO CLI runtime marker version does not match pinned version $($script:ExpectedAoVersion)."
+    }
+    if ([string]$runtime.ao_binary_version -ne $script:ExpectedAoVersion) {
+        throw "AO binary runtime marker version does not match pinned version $($script:ExpectedAoVersion)."
+    }
     $clearedOverrides = @($runtime.credential_overrides_cleared)
     foreach ($requiredOverride in @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")) {
         if ($clearedOverrides -notcontains $requiredOverride) {
@@ -1354,7 +1508,7 @@ function Ensure-ShipDeAgentRouterRuntime {
 
     Write-Host "[SUPERVISOR] Starting AO through the AgentRouter Claude profile..."
     try {
-        & $launcherPath -AiRoot $AiRoot -AgentRouterPort $script:AgentRouterPort -Restart
+        & $launcherPath -AiRoot $AiRoot -AgentRouterPort $script:AgentRouterPort -ExpectedAoVersion $script:ExpectedAoVersion -Restart
     } catch {
         throw "The governed AO launcher failed: $($_.Exception.Message)"
     }
@@ -1628,29 +1782,65 @@ function Get-ShipDeSessionActivityState {
     }
 }
 
-function Test-ShipDeSessionProviderFailure {
-    param([AllowNull()][object]$Session)
+function Get-ShipDeAgentRouterFailureSince {
+    param([Parameter(Mandatory = $true)][string]$Since)
 
-    if ($null -eq $Session) {
-        return $false
+    $sinceDate = [DateTime]::MinValue
+    if (-not [DateTime]::TryParse($Since, [ref]$sinceDate)) {
+        throw "Supervisor start time is invalid; cannot bound 9Router diagnostics."
     }
-    $text = $Session | ConvertTo-Json -Depth 20
-    return [regex]::IsMatch(
-        $text,
-        '(?i)(quota (?:exceeded|exhausted)|usage[ _-]?limit|rate[ _-]?limit|too many requests|out of credits|insufficient credits|model unavailable|authentication failed|unauthorized|forbidden|(?:http|status|code)[^0-9]{0,8}(?:401|403|429)\b)'
-    )
+    $encodedStart = [Uri]::EscapeDataString($sinceDate.ToUniversalTime().ToString("o"))
+    $uri = "http://127.0.0.1:$($script:AgentRouterPort)/api/usage/request-details?status=error&startDate=$encodedStart&page=1&pageSize=100"
+    try {
+        $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10
+    } catch {
+        throw "Cannot read bounded 9Router failure diagnostics: $($_.Exception.Message)"
+    }
+
+    $details = @(Get-ShipDeObjectProperty -Object $response -Names @("details", "items"))
+    if ($details.Count -eq 0) {
+        return $null
+    }
+    $datedDetails = @($details | ForEach-Object {
+        $timestampText = [string](Get-ShipDeObjectProperty -Object $_ -Names @("timestamp", "createdAt", "created_at"))
+        $timestamp = [DateTime]::MinValue
+        $parsed = [DateTime]::MinValue
+        if ([DateTime]::TryParse($timestampText, [ref]$parsed)) {
+            $timestamp = $parsed.ToUniversalTime()
+        }
+        [PSCustomObject]@{ Detail = $_; Timestamp = $timestamp }
+    })
+    $latest = @($datedDetails | Sort-Object Timestamp -Descending | Select-Object -First 1)
+    if ($latest.Count -eq 0) {
+        return $null
+    }
+    return [PSCustomObject]@{
+        Timestamp = [string](Get-ShipDeObjectProperty -Object $latest[0].Detail -Names @("timestamp", "createdAt", "created_at"))
+        Provider = [string](Get-ShipDeObjectProperty -Object $latest[0].Detail -Names @("provider"))
+        Model = [string](Get-ShipDeObjectProperty -Object $latest[0].Detail -Names @("model"))
+        Status = [string](Get-ShipDeObjectProperty -Object $latest[0].Detail -Names @("status"))
+    }
 }
 
 function Get-ShipDeOpenPullRequestForWorkItem {
-    param([Parameter(Mandatory = $true)][string]$WorkItemId)
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkItemId,
+        [Parameter(Mandatory = $true)][string]$Branch
+    )
 
-    $matches = @(Get-ShipDeOpenPullRequests | Where-Object {
+    $workItemMatches = @(Get-ShipDeOpenPullRequests | Where-Object {
         (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq $WorkItemId
     })
-    if ($matches.Count -eq 0) {
+    if ($workItemMatches.Count -eq 0) {
         return $null
     }
-    return $matches[0]
+    if ($workItemMatches.Count -ne 1) {
+        throw "Expected exactly one open PR for $WorkItemId; found $($workItemMatches.Count)."
+    }
+    if ([string]$workItemMatches[0].headRefName -cne $Branch) {
+        throw "Open PR for $WorkItemId does not use exact governed branch '$Branch'."
+    }
+    return $workItemMatches[0]
 }
 
 function Invoke-ShipDeSupervisorLoop {
@@ -1659,7 +1849,8 @@ function Invoke-ShipDeSupervisorLoop {
         [string]$Project = "shipde-platform",
         [int]$PollIntervalSeconds = 30,
         [int]$InactivityTimeoutMinutes = 10,
-        [int]$MaxNudges = 1
+        [int]$MaxNudges = 1,
+        [int]$ReviewTimeoutMinutes = 20
     )
 
     if (-not $State.ContainsKey("LastActivityTime")) {
@@ -1675,21 +1866,25 @@ function Invoke-ShipDeSupervisorLoop {
     while ($true) {
         $session = Get-ShipDeAoSessionById -SessionId ([string]$State.SessionId) -Project $Project
         $activity = Get-ShipDeSessionActivityState -Session $session
-        $pullRequest = Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId)
+        $pullRequest = Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch)
 
         $previousActivity = [string]$State.State
         $State.State = $activity
-        $State.ProviderFailure = Test-ShipDeSessionProviderFailure -Session $session
+        $State.ProviderFailure = $false
         if ($previousActivity -ne $activity) {
             Write-Host ("[SUPERVISOR] {0} session {1}: {2} -> {3}" -f (Get-Date).ToUniversalTime().ToString("o"), $State.SessionId, $previousActivity, $activity)
         }
         Write-ShipDeSupervisorCheckpoint -State $State
 
-        if ($State.ProviderFailure) {
-            throw "AgentRouter exhausted its approved fallback routes for session $($State.SessionId)."
-        }
-
         if ($activity -in @("FAILED", "STOPPED", "MISSING")) {
+            if ($activity -in @("FAILED", "STOPPED")) {
+                $routerFailure = Get-ShipDeAgentRouterFailureSince -Since ([string]$State.StartTime)
+                if ($routerFailure) {
+                    $State.RouterFailure = $routerFailure
+                    Write-ShipDeSupervisorCheckpoint -State $State
+                    throw "AO worker ended in state $activity. 9Router recorded a failed request for $($routerFailure.Provider)/$($routerFailure.Model), but that diagnostic alone does not prove complete fallback exhaustion."
+                }
+            }
             throw "AO worker ended before the governed lifecycle completed. State: $activity"
         }
         if ($activity -eq "BLOCKED") {
@@ -1707,6 +1902,9 @@ function Invoke-ShipDeSupervisorLoop {
         $workerActionExpected = $false
         if ($pullRequest) {
             $headSha = [string]$pullRequest.headRefOid
+            if ([string]$State.HeadSha -ne $headSha) {
+                $State.ExactHeadVerdict = $null
+            }
             $State.PullRequestNumber = [int]$pullRequest.number
             $State.HeadSha = $headSha
             $gate = Get-ShipDePrGate -PullRequest $pullRequest
@@ -1747,6 +1945,19 @@ function Invoke-ShipDeSupervisorLoop {
                         throw "CI is green but the independent Codex review could not be started."
                     }
                     $State.LastReviewTriggeredHead = $headSha
+                    $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
+                } else {
+                    if ([string]::IsNullOrWhiteSpace([string]$State.LastReviewTriggeredAt)) {
+                        $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
+                    }
+                    $reviewStarted = [DateTime]::MinValue
+                    if (-not [DateTime]::TryParse([string]$State.LastReviewTriggeredAt, [ref]$reviewStarted)) {
+                        throw "Supervisor review checkpoint timestamp is invalid."
+                    }
+                    $reviewElapsed = (Get-Date).ToUniversalTime() - $reviewStarted.ToUniversalTime()
+                    if ($reviewElapsed.TotalMinutes -ge $ReviewTimeoutMinutes) {
+                        throw "AO Codex review timed out after $ReviewTimeoutMinutes minute(s) for exact HEAD $headSha."
+                    }
                 }
             } elseif ($gate -eq "GREEN" -and $pullRequest.isDraft) {
                 $State.CiGate = "GREEN_DRAFT"
@@ -1821,10 +2032,37 @@ function Assert-ShipDeSupervisorCompatibility {
     }
 
     $reviewHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    $reviewFixture = ConvertFrom-ShipDeAoJson -Json '{"reviews":[{"prNumber":9,"targetSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","latestRun":{"harness":"codex","status":"completed","verdict":"approved"}}]}' -Operation "self-test"
+    $reviewFixture = ConvertFrom-ShipDeAoJson -Json '{"reviews":[{"prNumber":9,"targetSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"up_to_date","latestRun":{"harness":"codex","status":"complete","verdict":"approved"}}]}' -Operation "self-test"
     $reviewVerdict = Get-ShipDeAoVerdictFromReviewResponse -Response $reviewFixture -PullRequestNumber 9 -HeadSha $reviewHead
     if ($reviewVerdict -ne "PASS") {
         throw "AO exact-HEAD review record compatibility test failed."
+    }
+
+    $rerunFixture = [PSCustomObject]@{
+        statusCheckRollup = @(
+            [PSCustomObject]@{ name = "contract"; workflowName = "Current application"; conclusion = "FAILURE"; startedAt = "2026-09-06T01:00:00Z" },
+            [PSCustomObject]@{ name = "contract"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:05:00Z" },
+            [PSCustomObject]@{ name = "application-gate"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:05:00Z" }
+        )
+    }
+    if ((Get-ShipDePrGate -PullRequest $rerunFixture) -ne "GREEN") {
+        throw "GitHub superseded check-attempt compatibility test failed."
+    }
+    $ambiguousRerunFixture = [PSCustomObject]@{
+        statusCheckRollup = @(
+            [PSCustomObject]@{ name = "contract"; workflowName = "Current application"; conclusion = "FAILURE" },
+            [PSCustomObject]@{ name = "contract"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:05:00Z" },
+            [PSCustomObject]@{ name = "application-gate"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:05:00Z" }
+        )
+    }
+    $ambiguousRerunRejected = $false
+    try {
+        Get-ShipDePrGate -PullRequest $ambiguousRerunFixture | Out-Null
+    } catch {
+        $ambiguousRerunRejected = $true
+    }
+    if (-not $ambiguousRerunRejected) {
+        throw "GitHub ambiguous check-attempt compatibility test failed."
     }
 
     $stateRoundTrip = @{ TestField = "test-value"; NestedObject = @{ Inner = 123 } }
@@ -1845,6 +2083,7 @@ function Assert-ShipDeSupervisorCompatibility {
 function Invoke-ShipDeSupervise {
     Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR"
     Assert-ShipDeAoCommand
+    Assert-ShipDeAoVersion
     Ensure-ShipDeAgentRouterRuntime
 
     $state = Read-ShipDeSupervisorCheckpoint
@@ -1885,7 +2124,7 @@ function Invoke-ShipDeSupervise {
         Write-ShipDeSupervisorCheckpoint -State $state
     }
 
-    $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges
+    $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes
 
     if ($result -eq "READY_FOR_HUMAN_MERGE") {
         Write-Host ("[SUPERVISOR] PR #{0} at {1} has CI GREEN and durable exact-HEAD Codex PASS." -f $state.PullRequestNumber, $state.HeadSha)
