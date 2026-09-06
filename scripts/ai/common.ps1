@@ -78,3 +78,20 @@ function Test-ShipDeTcpPort {
         $client.Dispose()
     }
 }
+
+function Get-ShipDeObjectProperty {
+    param(
+        [AllowNull()][object]$Object,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+    if ($null -eq $Object) {
+        return $null
+    }
+    foreach ($name in $Names) {
+        $property = $Object.PSObject.Properties[$name]
+        if ($property) {
+            return $property.Value
+        }
+    }
+    return $null
+}

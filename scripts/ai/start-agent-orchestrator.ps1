@@ -78,7 +78,7 @@ function Test-AgentRouterEndpoint {
         $version = Invoke-RestMethod -Uri "http://127.0.0.1:$AgentRouterPort/api/version" -Method Get -TimeoutSec 6
         return (
             $health.ok -eq $true -and
-            [string]$version.currentVersion -match '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$'
+            [string]$version.currentVersion -eq "0.5.55"
         )
     } catch {
         return $false
