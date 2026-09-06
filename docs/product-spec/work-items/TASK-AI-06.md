@@ -194,7 +194,7 @@ The implementation must:
 | `AC-AI-57` | AO stopped, stale, or on wrong profile | `Supervise` relaunches AO through `.claude` and AgentRouter                       | Launcher output and live PID    |
 | `AC-AI-58` | Multiple implementation PRs are open   | Explicit `-PullRequestNumber` selects exactly one review PR                       | Deterministic PR filter         |
 | `AC-AI-59` | AO provenance is inspected             | Manifest identifies canonical source, version and health check outside `adopted`  | Manifest validation             |
-| `AC-AI-60` | Codex emits a machine-readable verdict | Custom exact-HEAD review ends in one standalone governed verdict                   | Review output parser            |
+| `AC-AI-60` | Codex emits a machine-readable verdict | Custom exact-HEAD review ends in one standalone governed verdict                  | Review output parser            |
 
 ## Deferred final automation acceptance case
 
