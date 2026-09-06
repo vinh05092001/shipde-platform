@@ -4,7 +4,8 @@ param(
     [int]$AgentRouterPort = 20128,
     [string]$ExpectedAoVersion = "0.12.10",
     [int]$StartupTimeoutSeconds = 30,
-    [switch]$Restart
+    [switch]$Restart,
+    [scriptblock]$ProcessStarter = $null
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -79,21 +80,32 @@ if (-not (Test-AgentRouterEndpoint)) {
     $escapedRouterPath = $routerCommand.Source.Replace("'", "''")
     $routerScript = "& '$escapedRouterPath'"
     $encodedRouterScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($routerScript))
-    Start-Process powershell.exe -WindowStyle Minimized -ArgumentList @(
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-EncodedCommand", $encodedRouterScript
-    ) | Out-Null
+    $routerProcess = $null
+    try {
+        $routerProcess = Start-Process powershell.exe -WindowStyle Minimized -ArgumentList @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-EncodedCommand", $encodedRouterScript
+        ) -PassThru
 
-    $routerDeadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
-    while (
-        (Get-Date) -lt $routerDeadline -and
-        -not (Test-AgentRouterEndpoint)
-    ) {
-        Start-Sleep -Milliseconds 500
-    }
-    if (-not (Test-AgentRouterEndpoint)) {
-        throw "Port $AgentRouterPort is not serving the expected local 9Router health and version contract."
+        $routerDeadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
+        while (
+            (Get-Date) -lt $routerDeadline -and
+            -not (Test-AgentRouterEndpoint)
+        ) {
+            Start-Sleep -Milliseconds 500
+            if ($routerProcess -and $routerProcess.HasExited) {
+                throw "9Router process exited during startup with code $($routerProcess.ExitCode)."
+            }
+        }
+        if (-not (Test-AgentRouterEndpoint)) {
+            throw "Port $AgentRouterPort is not serving the expected local 9Router health and version contract."
+        }
+    } catch {
+        if ($routerProcess -and -not $routerProcess.HasExited) {
+            $routerProcess | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+        throw
     }
 }
 
@@ -121,7 +133,11 @@ Remove-Item Env:ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
 Remove-Item Env:ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
 Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 
-$aoProcess = Start-Process -FilePath $AoExecutable -PassThru
+$aoProcess = if ($null -ne $ProcessStarter) {
+    & $ProcessStarter $aoExecutablePath
+} else {
+    Start-Process -FilePath $aoExecutablePath -PassThru
+}
 
 $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
 $ready = $false

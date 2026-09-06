@@ -97,13 +97,16 @@ function Assert-ShipDeAoVersionEvidence {
         throw "Cannot determine AO version: $VersionText"
     }
 
-    $versionLines = @(
+    $trimmedLines = @(
         $VersionText -split "`r?`n" |
-            Where-Object { $_ -match '(?i)^\s*ao\s+version(?:\s|$)' }
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
-    if ($versionLines.Count -eq 0) {
+    if ($trimmedLines.Count -eq 0) {
         throw "AO version '$VersionText' is missing or unverifiable."
     }
+    $prefixedLines = @($trimmedLines | Where-Object { $_ -match '(?i)^\s*ao\s+version(?:\s|$)' })
+    $versionLines = if ($prefixedLines.Count -gt 0) { $prefixedLines } else { $trimmedLines }
     $versionMetadataText = $versionLines -join [Environment]::NewLine
 
     $semanticPattern = '(?<![0-9A-Za-z])v?(?<version>\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?)(?![0-9A-Za-z])'
@@ -145,6 +148,12 @@ function Assert-ShipDeAoVersionEvidence {
     } else {
         try {
             $productVersion = [string](Get-Item -LiteralPath $AoExecutable -ErrorAction Stop).VersionInfo.ProductVersion
+            if ([string]::IsNullOrWhiteSpace($productVersion)) {
+                $desktopExe = Join-Path (Split-Path (Split-Path (Split-Path $AoExecutable -Parent) -Parent) -Parent) "agent-orchestrator.exe"
+                if (Test-Path -LiteralPath $desktopExe -PathType Leaf) {
+                    $productVersion = [string](Get-Item -LiteralPath $desktopExe -ErrorAction Stop).VersionInfo.ProductVersion
+                }
+            }
         } catch {
             throw "AO ProductVersion could not be read from canonical executable '$AoExecutable'."
         }

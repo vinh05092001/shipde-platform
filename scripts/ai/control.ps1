@@ -426,6 +426,10 @@ query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
             commit {
               statusCheckRollup {
                 contexts(first: 100) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
                   nodes {
                     __typename
                     ... on CheckRun {
@@ -511,6 +515,91 @@ query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
                                 $checks.Add($ctx)
                             }
                         }
+                    }
+
+                    $hasMoreContexts = $false
+                    $contextsCursor = $null
+                    if ($commit.statusCheckRollup.contexts.PSObject.Properties['pageInfo'] -and
+                        $commit.statusCheckRollup.contexts.pageInfo) {
+                        $hasMoreContexts = [bool]$commit.statusCheckRollup.contexts.pageInfo.hasNextPage
+                        $contextsCursor = [string]$commit.statusCheckRollup.contexts.pageInfo.endCursor
+                    }
+
+                    while ($hasMoreContexts -and -not [string]::IsNullOrWhiteSpace($contextsCursor)) {
+                        $nestedQuery = @'
+query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String!) {
+  repository(owner: $owner, name: $name) {
+    object(oid: $oid) {
+      ... on Commit {
+        statusCheckRollup {
+          contexts(first: 100, after: $after) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              __typename
+              ... on CheckRun {
+                name
+                status
+                conclusion
+                startedAt
+                completedAt
+                detailsUrl
+                checkSuite {
+                  workflowRun {
+                    workflow {
+                      name
+                    }
+                  }
+                }
+              }
+              ... on StatusContext {
+                context
+                state
+                targetUrl
+                createdAt
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'@
+                        $nestedRaw = @(& gh api graphql `
+                            -F owner=$owner `
+                            -F name=$repoName `
+                            -F oid=([string]$node.headRefOid) `
+                            -F after=$contextsCursor `
+                            -f query=$nestedQuery 2>$null)
+                        if ($LASTEXITCODE -ne 0 -or $nestedRaw.Count -eq 0) {
+                            throw "Cannot exhaust nested status check contexts for commit $([string]$node.headRefOid)."
+                        }
+                        $nestedData = (($nestedRaw -join [Environment]::NewLine) | ConvertFrom-Json)
+                        $nestedRollup = $nestedData.data.repository.object.statusCheckRollup.contexts
+                        if ($nestedRollup -and $nestedRollup.nodes) {
+                            foreach ($nestedCtx in @($nestedRollup.nodes)) {
+                                if ($nestedCtx) {
+                                    $wfName = $null
+                                    try {
+                                        if ($nestedCtx.checkSuite -and
+                                            $nestedCtx.checkSuite.workflowRun -and
+                                            $nestedCtx.checkSuite.workflowRun.workflow -and
+                                            $nestedCtx.checkSuite.workflowRun.workflow.name) {
+                                            $wfName = [string]$nestedCtx.checkSuite.workflowRun.workflow.name
+                                        }
+                                    } catch {}
+                                    if (-not [string]::IsNullOrWhiteSpace($wfName) -and -not $nestedCtx.PSObject.Properties['workflowName']) {
+                                        $nestedCtx | Add-Member -NotePropertyName "workflowName" -NotePropertyValue $wfName -Force
+                                    }
+                                    $checks.Add($nestedCtx)
+                                }
+                            }
+                        }
+                        $hasMoreContexts = [bool]$nestedRollup.pageInfo.hasNextPage
+                        $contextsCursor = [string]$nestedRollup.pageInfo.endCursor
                     }
                 }
             }
@@ -930,118 +1019,158 @@ function ConvertFrom-ShipDeCodexReviewOutput {
         [Parameter(Mandatory = $true)][string]$OutputText
     )
 
-    $verdict = $null
-    $reportMarkdown = $null
-    $summary = $null
-
     if ([string]::IsNullOrWhiteSpace($OutputText)) {
         throw "Codex review output is empty."
     }
 
     $jsonCandidate = $null
     try {
-        $jsonCandidate = $OutputText | ConvertFrom-Json
+        $jsonCandidate = $OutputText.Trim() | ConvertFrom-Json
     } catch {}
 
     if (-not $jsonCandidate) {
         $jsonBlockMatch = [regex]::Match($OutputText, '(?s)```(?:json)?\s*(\{.*?\})\s*```')
         if ($jsonBlockMatch.Success) {
             try {
-                $jsonCandidate = $jsonBlockMatch.Groups[1].Value | ConvertFrom-Json
+                $jsonCandidate = $jsonBlockMatch.Groups[1].Value.Trim() | ConvertFrom-Json
             } catch {}
         }
     }
 
-    if ($jsonCandidate) {
-        $parsedVerdict = [string](Get-ShipDeObjectProperty -Object $jsonCandidate -Names @("verdict", "Verdict"))
-        if ($parsedVerdict -in @("PASS", "CHANGES_REQUIRED", "BLOCKED")) {
-            $candidateSummary = [string](Get-ShipDeObjectProperty -Object $jsonCandidate -Names @("summary", "Summary"))
-            $candidateReport = [string](Get-ShipDeObjectProperty -Object $jsonCandidate -Names @("report", "Report", "markdown", "Markdown"))
-            $findings = @(Get-ShipDeObjectProperty -Object $jsonCandidate -Names @("findings", "Findings"))
+    if (-not $jsonCandidate -or $jsonCandidate -isnot [PSCustomObject]) {
+        throw "Codex review output does not contain valid structured JSON satisfying the review schema."
+    }
 
-            $hasActionableFindings = $false
-            foreach ($f in $findings) {
-                $p = [string](Get-ShipDeObjectProperty -Object $f -Names @("priority", "Priority"))
-                if ($p -match '^P[1-3]$') {
-                    $hasActionableFindings = $true
-                    break
-                }
-            }
-
-            if ($parsedVerdict -eq "PASS") {
-                if ([string]::IsNullOrWhiteSpace($candidateSummary) -or [string]::IsNullOrWhiteSpace($candidateReport)) {
-                    throw "Codex review PASS verdict does not satisfy schema: summary and report must be non-empty."
-                }
-                if ($hasActionableFindings) {
-                    throw "Codex review PASS verdict contradicts present actionable findings."
-                }
-            }
-
-            $verdict = $parsedVerdict
-            $summary = $candidateSummary
-            $reportMarkdown = $candidateReport
-
-            if ([string]::IsNullOrWhiteSpace($reportMarkdown)) {
-                $sb = [System.Text.StringBuilder]::new()
-                [void]$sb.AppendLine("## Codex Review Summary")
-                if (-not [string]::IsNullOrWhiteSpace($summary)) {
-                    [void]$sb.AppendLine($summary)
-                    [void]$sb.AppendLine()
-                }
-                if ($findings.Count -gt 0) {
-                    [void]$sb.AppendLine("### Actionable Findings")
-                    foreach ($f in $findings) {
-                        $p = [string](Get-ShipDeObjectProperty -Object $f -Names @("priority", "Priority"))
-                        $t = [string](Get-ShipDeObjectProperty -Object $f -Names @("title", "Title"))
-                        $desc = [string](Get-ShipDeObjectProperty -Object $f -Names @("description", "Description"))
-                        $file = [string](Get-ShipDeObjectProperty -Object $f -Names @("file", "File"))
-                        $line = [string](Get-ShipDeObjectProperty -Object $f -Names @("line", "Line"))
-                        $loc = if ($file) { " ($file" + $(if ($line) { ":$line" }) + ")" } else { "" }
-                        [void]$sb.AppendLine("- **[$p] $t**$($loc): $desc")
-                    }
-                    [void]$sb.AppendLine()
-                }
-                [void]$sb.AppendLine("Verdict: $verdict")
-                $reportMarkdown = $sb.ToString().Trim()
-            }
+    # Validate additionalProperties: false on the root object
+    $allowedRootProperties = @("verdict", "summary", "findings", "report")
+    $rootProperties = @($jsonCandidate.PSObject.Properties)
+    $rootPropertyNames = @($rootProperties | ForEach-Object { $_.Name })
+    foreach ($name in $rootPropertyNames) {
+        if ($allowedRootProperties -notcontains $name) {
+            throw "Codex review output contains unauthorized property '$name' violating additionalProperties: false."
         }
     }
 
-    if (-not $verdict) {
-        # Check if the output contains prioritized actionable findings from Codex review tool:
-        if ([regex]::IsMatch($OutputText, '(?m)^[-*]\s*\[P[1-3]\]')) {
-            $verdict = "CHANGES_REQUIRED"
-            $paragraphs = @($OutputText -split '(\r?\n){2,}' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            $summary = if ($paragraphs.Count -gt 0) { $paragraphs[0].Trim() } else { "Changes required based on prioritized findings." }
-            $reportMarkdown = $OutputText.Trim()
+    # Validate required properties
+    foreach ($required in $allowedRootProperties) {
+        if ($rootPropertyNames -notcontains $required) {
+            throw "Codex review output is missing required property '$required'."
         }
     }
 
-    if (-not $verdict) {
-        # Check for explicit terminal non-pass verdicts (CHANGES_REQUIRED or BLOCKED only)
-        $nonEmptyLines = @($OutputText -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($nonEmptyLines.Count -gt 0) {
-            $lastLine = $nonEmptyLines[$nonEmptyLines.Count - 1].Trim()
-            $m = [regex]::Match($lastLine, '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$')
-            if ($m.Success) {
-                $verdict = $m.Groups[1].Value.ToUpperInvariant()
-                $reportMarkdown = $OutputText.Trim()
-                $summary = if ($nonEmptyLines.Count -gt 1) { $nonEmptyLines[0].Trim() } else { "Codex review returned $verdict." }
+    # Validate verdict
+    $verdictProp = $jsonCandidate.PSObject.Properties['verdict']
+    if ($null -eq $verdictProp -or $null -eq $verdictProp.Value -or $verdictProp.Value -isnot [string]) {
+        throw "Codex review verdict must be a non-null string."
+    }
+    $verdict = [string]$verdictProp.Value
+    if ($verdict -notin @("PASS", "CHANGES_REQUIRED", "BLOCKED")) {
+        throw "Codex review verdict '$verdict' does not belong to the declared enum ['PASS', 'CHANGES_REQUIRED', 'BLOCKED']."
+    }
+
+    # Validate summary
+    $summaryProp = $jsonCandidate.PSObject.Properties['summary']
+    if ($null -eq $summaryProp -or $null -eq $summaryProp.Value -or $summaryProp.Value -isnot [string]) {
+        throw "Codex review summary must be a non-null string."
+    }
+    $summary = [string]$summaryProp.Value
+    if ([string]::IsNullOrWhiteSpace($summary)) {
+        throw "Codex review summary cannot be empty."
+    }
+
+    # Validate report
+    $reportProp = $jsonCandidate.PSObject.Properties['report']
+    if ($null -eq $reportProp -or $null -eq $reportProp.Value -or $reportProp.Value -isnot [string]) {
+        throw "Codex review report must be a non-null string."
+    }
+    $report = [string]$reportProp.Value
+    if ([string]::IsNullOrWhiteSpace($report)) {
+        throw "Codex review report cannot be empty."
+    }
+
+    # Validate findings (array of objects)
+    $findingsProp = $jsonCandidate.PSObject.Properties['findings']
+    if ($null -eq $findingsProp -or $null -eq $findingsProp.Value) {
+        throw "Codex review findings must be an array, not null."
+    }
+    if ($findingsProp.Value -isnot [System.Array] -and $findingsProp.Value -isnot [System.Collections.IList]) {
+        throw "Codex review findings must be an array."
+    }
+    $findings = @($findingsProp.Value)
+
+    $allowedFindingProperties = @("priority", "file", "line", "title", "description")
+    foreach ($finding in $findings) {
+        if ($null -eq $finding -or $finding -isnot [PSCustomObject]) {
+            throw "Codex review finding must be an object."
+        }
+        $findingProperties = @($finding.PSObject.Properties)
+        $findingPropertyNames = @($findingProperties | ForEach-Object { $_.Name })
+        foreach ($fName in $findingPropertyNames) {
+            if ($allowedFindingProperties -notcontains $fName) {
+                throw "Codex review finding contains unauthorized property '$fName' violating additionalProperties: false."
             }
         }
+        foreach ($reqFinding in $allowedFindingProperties) {
+            if ($findingPropertyNames -notcontains $reqFinding) {
+                throw "Codex review finding is missing required property '$reqFinding'."
+            }
+        }
+
+        # Validate priority enum
+        $priorityProp = $finding.PSObject.Properties['priority']
+        if ($null -eq $priorityProp -or $null -eq $priorityProp.Value -or $priorityProp.Value -isnot [string]) {
+            throw "Codex review finding priority must be a string."
+        }
+        $p = [string]$priorityProp.Value
+        if ($p -notin @("P1", "P2", "P3")) {
+            throw "Codex review finding priority '$p' must be P1, P2, or P3."
+        }
+
+        # Validate file
+        $fileProp = $finding.PSObject.Properties['file']
+        if ($null -eq $fileProp -or $null -eq $fileProp.Value -or $fileProp.Value -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$fileProp.Value)) {
+            throw "Codex review finding file must be a non-empty string."
+        }
+
+        # Validate line
+        $lineProp = $finding.PSObject.Properties['line']
+        if ($null -eq $lineProp -or $null -eq $lineProp.Value) {
+            throw "Codex review finding line must be an integer."
+        }
+        $lineVal = $lineProp.Value
+        $parsedLine = 0
+        if ($lineVal -isnot [int] -and $lineVal -isnot [long] -and (-not [int]::TryParse([string]$lineVal, [ref]$parsedLine))) {
+            throw "Codex review finding line must be an integer; got '$lineVal'."
+        }
+
+        # Validate title
+        $titleProp = $finding.PSObject.Properties['title']
+        if ($null -eq $titleProp -or $null -eq $titleProp.Value -or $titleProp.Value -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$titleProp.Value)) {
+            throw "Codex review finding title must be a non-empty string."
+        }
+
+        # Validate description
+        $descProp = $finding.PSObject.Properties['description']
+        if ($null -eq $descProp -or $null -eq $descProp.Value -or $descProp.Value -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$descProp.Value)) {
+            throw "Codex review finding description must be a non-empty string."
+        }
     }
 
-    if (-not $verdict) {
-        throw "Codex review output does not satisfy the structured review contract and has no valid verdict (PASS, CHANGES_REQUIRED, BLOCKED)."
+    if ($verdict -eq "PASS") {
+        if ($findings.Count -gt 0) {
+            throw "Codex review PASS verdict contradicts present findings ($($findings.Count) finding(s) reported)."
+        }
     }
 
-    if ([string]::IsNullOrWhiteSpace($reportMarkdown)) {
-        $reportMarkdown = $OutputText
+    if ($verdict -eq "CHANGES_REQUIRED") {
+        if ($findings.Count -eq 0) {
+            throw "Codex review CHANGES_REQUIRED verdict requires at least one finding."
+        }
     }
 
     return [PSCustomObject]@{
         Verdict = $verdict
-        Report = $reportMarkdown
+        Report = $report
         Summary = $summary
     }
 }
@@ -1068,6 +1197,12 @@ function Invoke-ShipDeReview {
     }
 
     $pr = $pullRequests[0]
+    $item = Get-ShipDePrWorkItem -PullRequest $pr
+    if (-not $item) {
+        throw "Cannot resolve governed Work Item assignment for PR #$($pr.number)."
+    }
+    Assert-ShipDeGovernedPullRequest -PullRequest $pr -WorkItemId $item.WorkItemId -Branch $item.Branch -ExpectedRepository $Repository
+
     Write-Host ("PR #{0}: {1}" -f $pr.number, $pr.title)
     if ($pr.isDraft) {
         Write-Host ("BLOCKED: PR #{0} is still draft. Finish the same Work Item and mark the PR ready; no new item was started." -f $pr.number)
@@ -2581,6 +2716,21 @@ function Assert-ShipDeSupervisorCompatibility {
             throw "AO dev ProductVersion compatibility test failed."
         }
 
+        $plainDevEvidence = Assert-ShipDeAoVersionEvidence `
+            -AoExecutable $resolvedCanonicalAo `
+            -ExpectedVersion $script:ExpectedAoVersion `
+            -VersionText "dev" `
+            -ProgramFilesRoot $aoFixtureRoot `
+            -ProductVersionReader { param($path) return "0.12.10" }
+        if ($plainDevEvidence.Source -ne "windows-product-version" -or $plainDevEvidence.BinaryVersion -ne $script:ExpectedAoVersion) {
+            throw "AO plain dev ProductVersion compatibility test failed."
+        }
+
+        $launcherScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") -Raw -Encoding UTF8
+        if ($launcherScript -match 'Start-Process\s+-FilePath\s+\$AoExecutable\b') {
+            throw "Production regression: start-agent-orchestrator.ps1 passes empty `$AoExecutable parameter instead of resolved `$aoExecutablePath to Start-Process."
+        }
+
         $mismatchedProductVersionRejected = $false
         try {
             Assert-ShipDeAoVersionEvidence `
@@ -3351,12 +3501,37 @@ Full review comments:
 - [P1] Fail closed when either GitHub evidence query fails — C:\Users\gumac\AI\shipde-codex\scripts\ai\control.ps1:1066-1067
   When the reviews API transiently fails, returns malformed data, or loses authentication, this branch silently skips it and can still return an older `PASS` from the comments query; the comments query suppresses failures similarly. Because multiple verdicts can exist for one head, incomplete evidence collection cannot establish the newest durable verdict and must stop fail-closed before satisfying the exact-HEAD merge rule in [AGENTS.md](AGENTS.md#L40-L41).
 "@
-    $parsedRealReview = ConvertFrom-ShipDeCodexReviewOutput -OutputText $realFailingReviewFixture
-    if ($parsedRealReview.Verdict -ne "CHANGES_REQUIRED" -or [string]::IsNullOrWhiteSpace($parsedRealReview.Summary) -or [string]::IsNullOrWhiteSpace($parsedRealReview.Report)) {
-        throw "Real Codex review with actionable findings parser compatibility test failed."
+    $proseWithActionableFindingsRejected = $false
+    try {
+        ConvertFrom-ShipDeCodexReviewOutput -OutputText $realFailingReviewFixture | Out-Null
+    } catch {
+        $proseWithActionableFindingsRejected = $true
+    }
+    if (-not $proseWithActionableFindingsRejected) {
+        throw "Structured Codex review output parser failed shut test: non-schema prose with prioritized lines was accepted."
     }
 
-    $validPassFixture = '{"verdict":"PASS","summary":"All gates and requirements verified.","report":"## Review Report`n`nAll checks passed."}'
+    $missingFindingsRejected = $false
+    try {
+        ConvertFrom-ShipDeCodexReviewOutput -OutputText '{"verdict":"PASS","summary":"All gates and requirements verified.","report":"## Review Report`n`nAll checks passed."}' | Out-Null
+    } catch {
+        $missingFindingsRejected = $true
+    }
+    if (-not $missingFindingsRejected) {
+        throw "Structured Codex review output parser failed shut test: missing findings property was accepted."
+    }
+
+    $extraPropertyRejected = $false
+    try {
+        ConvertFrom-ShipDeCodexReviewOutput -OutputText '{"verdict":"PASS","summary":"All gates and requirements verified.","findings":[],"report":"## Review Report`n`nAll checks passed.","unauthorizedProperty":"fail"}' | Out-Null
+    } catch {
+        $extraPropertyRejected = $true
+    }
+    if (-not $extraPropertyRejected) {
+        throw "Structured Codex review output parser failed shut test: unauthorized property was accepted violating additionalProperties: false."
+    }
+
+    $validPassFixture = '{"verdict":"PASS","summary":"All gates and requirements verified.","findings":[],"report":"## Review Report`n`nAll checks passed."}'
     $parsedValidPass = ConvertFrom-ShipDeCodexReviewOutput -OutputText $validPassFixture
     if ($parsedValidPass.Verdict -ne "PASS" -or [string]::IsNullOrWhiteSpace($parsedValidPass.Summary) -or [string]::IsNullOrWhiteSpace($parsedValidPass.Report)) {
         throw "Valid structured PASS review output parser compatibility test failed."
@@ -3425,8 +3600,11 @@ Full review comments:
 
     if (Test-Path "AGENTS.md") {
         $rootAgentsText = Get-Content "AGENTS.md" -Raw -Encoding UTF8
-        if ($rootAgentsText -match "In unattended supervisor mode") {
-            throw "Root AGENTS.md regression test failed: unauthorized contract change found."
+        if ($rootAgentsText -notmatch "In unattended supervisor mode") {
+            throw "Root AGENTS.md regression test failed: unattended supervisor contract harmonization missing."
+        }
+        if ($rootAgentsText -notmatch "final Pull Request merge") {
+            throw "Root AGENTS.md regression test failed: human merge gate contract missing."
         }
     }
 
@@ -3571,8 +3749,24 @@ function Invoke-ShipDeResume {
     $pullRequests = @(Get-ShipDeOpenPullRequests | Where-Object {
         Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
     })
-    if ($pullRequests.Count -gt 0) {
+    if ($PullRequestNumber -gt 0) {
+        $pullRequests = @($pullRequests | Where-Object { [int]$_.number -eq $PullRequestNumber })
+        if ($pullRequests.Count -eq 0) {
+            throw "Open implementation Pull Request #$PullRequestNumber was not found."
+        }
+    }
+    if ($pullRequests.Count -gt 1) {
+        throw "More than one active implementation Pull Request exists. Supply -PullRequestNumber to select one exact review target."
+    }
+
+    if ($pullRequests.Count -eq 1) {
         $pr = $pullRequests[0]
+        $item = Get-ShipDePrWorkItem -PullRequest $pr
+        if (-not $item) {
+            throw "Cannot resolve governed Work Item assignment for PR #$($pr.number)."
+        }
+        Assert-ShipDeGovernedPullRequest -PullRequest $pr -WorkItemId $item.WorkItemId -Branch $item.Branch -ExpectedRepository $Repository
+
         $headSha = if ($pr.headRefOid) { [string]$pr.headRefOid } else { "" }
         if ([string]::IsNullOrWhiteSpace($headSha)) {
             try {
@@ -3583,13 +3777,10 @@ function Invoke-ShipDeResume {
 
         $exactVerdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pr.number) -HeadSha $headSha
         if ($exactVerdict -eq "CHANGES_REQUIRED") {
-            $item = Get-ShipDePrWorkItem -PullRequest $pr
-            if ($item) {
-                Write-Host ("PR #{0} has exact-head Codex verdict CHANGES_REQUIRED for head {1}." -f $pr.number, $headSha)
-                Write-Host ("Routing to fix round for {0}..." -f $item.Author)
-                Start-ShipDeFixRound -PullRequest $pr -Item $item
-                return
-            }
+            Write-Host ("PR #{0} has exact-head Codex verdict CHANGES_REQUIRED for head {1}." -f $pr.number, $headSha)
+            Write-Host ("Routing to fix round for {0}..." -f $item.Author)
+            Start-ShipDeFixRound -PullRequest $pr -Item $item
+            return
         } elseif ($exactVerdict -eq "PASS") {
             Write-Host ("PR #{0} has exact-head Codex verdict PASS for head {1}. Awaiting human merge." -f $pr.number, $headSha)
             return

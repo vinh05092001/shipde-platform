@@ -61,7 +61,10 @@ DSH stores credentials outside the project and keeps only a credential reference
 
 ## AgentRouter provider policy
 
-AgentRouter is used directly by Claude Code for business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. The repository stores no token, provider session or request log. AgentRouter is not chained through 9Router, is not an implementation-author route and its promotional balance is treated as temporary capacity rather than a permanent free entitlement.
+AgentRouter provides Claude model access under two separate topologies:
+
+1. **Manual direct profile (`%USERPROFILE%\.claude-orchestrator`):** Used directly by Claude Code for manual business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. It connects directly to AgentRouter upstream without chaining through 9Router, and is not an implementation-author route. Its promotional balance is treated as temporary capacity rather than a permanent free entitlement. The repository stores no token, provider session or request log.
+2. **Unattended routed topology (`%USERPROFILE%\.claude`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
 
 ## Low-cost model route
 
@@ -230,7 +233,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 17. **AI-SUP-17**: An AO review trigger is checkpointed with its timestamp and must reach a supported terminal state within the configured bounded timeout.
 18. **AI-SUP-18**: Bounded 9Router error records are diagnostic metadata after a terminal AO state. One failed request never proves that every fallback route was exhausted, and AO session DTO text is not treated as a provider transcript.
 19. **AI-SUP-19**: Post-merge synchronization may recover Codex's exact-commit verdict from GitHub's durable Pull Request review collection when the AO session is no longer available.
-20. **AI-SUP-20**: The governed launcher and controller require both the live AO CLI and the launched executable's observed file version to match the manifest pin.
+20. **AI-SUP-20**: The governed launcher and controller prefer semantic build metadata from the live AO CLI matching the manifest pin; when AO reports `dev`, the observed ProductVersion from the canonical executable must match the manifest pin.
 21. **AI-SUP-21**: Durable GitHub review evidence is accepted only from the exact allowlisted Codex GitHub App identity `chatgpt-codex-connector[bot]`; review-shaped text from any other author is untrusted.
 
 ### Provider and harness policy
