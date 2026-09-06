@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "version": "1.2.0",
-  "updated_at": "2026-09-05T10:00:00Z",
+  "updated_at": "2026-09-06T15:00:00Z",
   "title": "Ship Dễ Governed Ecosystem Toolchain Manifest",
   "description": "Authoritative catalog of adopted repositories, capabilities, and pilot candidates governed by role separation, minimal profile activation, and fail-closed safety.",
   "policies": {
@@ -40,7 +40,7 @@
     "blocking_policy": "BLOCKING_WHEN_SUPERVISING",
     "permissions": "governed-worktrees-and-loopback-daemon",
     "telemetry_network_behavior": "agent-provider-and-git-origin-only",
-    "health_check": "ao status --json",
+    "health_check": "ao version == 0.12.10 && ao status --json state == ready",
     "rollback": "ao stop",
     "activation_rule": "Start only through scripts/ai/start-agent-orchestrator.ps1 when Resume or Supervise requires it."
   },
