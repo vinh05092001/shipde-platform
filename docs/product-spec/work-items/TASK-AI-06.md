@@ -43,7 +43,7 @@ The operator launches AO through the existing localhost AgentRouter profile and 
 - `docs/product-spec/docs/10-ai-collaboration/GEMINI-START-PROMPT.md` — implementation author prompt template.
 - `docs/product-spec/docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md` — 9Router author prompt template.
 - `scripts/ai/control.ps1` — existing controller patterns to extend.
-- Agent Orchestrator canonical source: `https://github.com/Untrivial-ai/agent-orchestrator`; installed version `0.12.10`; health check `ao status --json`.
+- Agent Orchestrator canonical source: `https://github.com/Untrivial-ai/agent-orchestrator`; installed version `0.12.10`; health check requires `ao version` to match the pin and `ao status --json` to report `state=ready`.
 - AO CLI contract: `ao session ls --json`, `ao session get --json`, and `ao review ls <session> --json` from the pinned canonical source and installed skill documentation.
 
 ## Preconditions and dependencies
@@ -120,7 +120,7 @@ The implementation must:
 ### 7. CI and independent review routing
 
 - Detect the Work Item's open PR without consuming another row.
-- Read exact-HEAD terminal verdicts from `ao review ls <session> --json` after AO-triggered review; manual handoff files remain a separate bootstrap path.
+- Read exact-HEAD terminal verdicts from `ao review ls <session> --json` after AO-triggered review; manual handoff files remain diagnostics and never satisfy the automated review gate.
 - Keep inactivity and bounded unknown-state handling active after a PR appears whenever CI/review repair is waiting on the worker.
 - Permit a bootstrap review to select one exact open PR with `-PullRequestNumber`; never guess when several implementation PRs are open.
 - Route each failed exact HEAD back to the same worker once.
@@ -170,7 +170,14 @@ The implementation must:
 - `AI-SUP-11`: Starting `Supervise` repairs AO runtime drift by relaunching AO through AgentRouter before consuming a Work Item.
 - `AI-SUP-12`: Manual bootstrap review requires an exact PR number when more than one implementation PR is open.
 - `AI-SUP-13`: AO is an external control layer with pinned provenance and health check; it is never silently counted as an adopted repository/provider.
-- `AI-SUP-14`: Manual bootstrap review uses Codex's non-interactive custom-review contract and accepts only one terminal standalone verdict; stale output from an earlier attempt is deleted before invocation.
+- `AI-SUP-14`: Manual bootstrap review uses Codex's non-interactive custom-review contract and parses one terminal standalone verdict for operator diagnostics; stale output is deleted, and the local file never authorizes the supervisor gate.
+- `AI-SUP-15`: An open implementation PR belongs to the active Work Item only when both the Work Item ID and exact governed head branch match; zero, ambiguous, or wrong-branch matches fail closed.
+- `AI-SUP-16`: GitHub check attempts are grouped by name and provider identity; only the unambiguous newest attempt in each group participates, and required gates must come from GitHub Actions.
+- `AI-SUP-17`: An AO review trigger is checkpointed with its timestamp and must reach a supported terminal state within the configured bounded timeout.
+- `AI-SUP-18`: Bounded 9Router error records are diagnostic metadata after a terminal AO state. One failed request never proves that every fallback route was exhausted, and AO session DTO text is not treated as a provider transcript.
+- `AI-SUP-19`: Post-merge synchronization may recover Codex's exact-commit verdict from GitHub's durable Pull Request review collection when the AO session is no longer available.
+- `AI-SUP-20`: The governed launcher and controller require both the live AO CLI and the launched executable's observed file version to match the manifest pin.
+- `AI-SUP-21`: Durable GitHub review evidence is accepted only from the exact allowlisted Codex GitHub App identity `chatgpt-codex-connector[bot]`; review-shaped text from any other author is untrusted.
 
 ## Acceptance matrix
 
@@ -195,6 +202,15 @@ The implementation must:
 | `AC-AI-58` | Multiple implementation PRs are open   | Explicit `-PullRequestNumber` selects exactly one review PR                       | Deterministic PR filter         |
 | `AC-AI-59` | AO provenance is inspected             | Manifest identifies canonical source, version and health check outside `adopted`  | Manifest validation             |
 | `AC-AI-60` | Codex emits a machine-readable verdict | Custom exact-HEAD review ends in one standalone governed verdict                  | Review output parser            |
+| `AC-AI-61` | AO command exits zero but is not ready | Supervisor rejects stopped, stale, unhealthy, and not-ready states                | Parsed AO status state          |
+| `AC-AI-62` | AO version differs from manifest pin   | Launcher and supervisor stop before consuming or resuming a Work Item             | Version assertion and marker    |
+| `AC-AI-63` | Review remains running past timeout    | Supervisor stops fail-closed with the exact review HEAD                           | Checkpoint timestamp            |
+| `AC-AI-64` | Same Work Item ID appears on wrong PR  | Supervisor rejects the PR unless its head branch exactly matches the checkpoint   | Deterministic PR filter         |
+| `AC-AI-65` | A failed check is rerun successfully   | Newest same-name/provider attempt controls the gate; ambiguity fails closed       | Deterministic gate fixture      |
+| `AC-AI-66` | AO worker ends after routed failures   | Supervisor records bounded 9Router metadata without claiming complete exhaustion  | Redacted diagnostic metadata    |
+| `AC-AI-67` | Merged PR has no resumable AO session  | Exact-commit Codex verdict is recovered from GitHub's durable review collection   | GitHub review record            |
+| `AC-AI-68` | Untrusted review-shaped text is posted | Supervisor ignores it even when it names the exact HEAD and a terminal verdict    | Reviewer identity allowlist     |
+| `AC-AI-69` | A local handoff file claims PASS       | Supervisor ignores it as unauthenticated diagnostic output                        | Verdict source audit            |
 
 ## Deferred final automation acceptance case
 
@@ -225,10 +241,11 @@ From a clean checkout:
 
 ## Codex review record
 
-| Review round | Commit         | Verdict                                                            | Findings resolved                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------ | -------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1            | `db58e97757c0` | Not posted; terminal verdict marker was missing, so it failed shut | Removed unsupported `ao spawn --json` and resolved the new session through `ao session ls`; parked the Codex worktree before AO spawn; blocked a second Work Item when an implementation PR already exists without a checkpoint; honored terminal AO failures even after PR creation; skipped review for draft PRs; required the exact local AgentRouter `/v1` endpoint.                                                                                     |
-| 2            | `0af05b50f8ec` | Not posted; terminal verdict marker was missing, so it failed shut | Resolve one new session ID from before/after snapshots and verify its name with `session get`; consume exact-HEAD AO Codex review records; preserve bounded inactivity after PR creation; distinguish `waiting_input` from `blocked`; clear inherited `ANTHROPIC_API_KEY`; verify 9Router health/version rather than an arbitrary port listener; remove the unsupported AO `gemini` harness fallback. A fresh exact-HEAD review is required after CI passes. |
+| Review round | Commit         | Verdict                                                            | Findings resolved                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------ | -------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1            | `db58e97757c0` | Not posted; terminal verdict marker was missing, so it failed shut | Removed unsupported `ao spawn --json` and resolved the new session through `ao session ls`; parked the Codex worktree before AO spawn; blocked a second Work Item when an implementation PR already exists without a checkpoint; honored terminal AO failures even after PR creation; skipped review for draft PRs; required the exact local AgentRouter `/v1` endpoint.                                                                                                                                                   |
+| 2            | `0af05b50f8ec` | Not posted; terminal verdict marker was missing, so it failed shut | Resolve one new session ID from before/after snapshots and verify its name with `session get`; consume exact-HEAD AO Codex review records; preserve bounded inactivity after PR creation; distinguish `waiting_input` from `blocked`; clear inherited `ANTHROPIC_API_KEY`; verify 9Router health/version rather than an arbitrary port listener; remove the unsupported AO `gemini` harness fallback. A fresh exact-HEAD review is required after CI passes.                                                               |
+| 3            | `89f12d702385` | `CHANGES_REQUIRED` by independent exact-HEAD review                | Require parsed AO `ready` state and both observed CLI/binary versions; enforce consistent AO review states and bounded execution; bind exactly one PR to an exact case-sensitive branch; use bounded 9Router metadata without inferring exhaustion; group duplicate CI attempts by provider and reject timestamp ambiguity in either order; trust only AO's contract or the exact Codex App identity, never local handoff files, for governed verdicts. A fresh exact-HEAD review is required after these repairs pass CI. |
 
 ## Residual limitations
 
