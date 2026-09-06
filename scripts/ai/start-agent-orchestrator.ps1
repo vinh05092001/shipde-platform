@@ -2,6 +2,7 @@ param(
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
     [string]$AoExecutable = "C:\Program Files\agent-orchestrator\agent-orchestrator.exe",
     [int]$AgentRouterPort = 20128,
+    [string]$ExpectedAoVersion = "0.12.10",
     [int]$StartupTimeoutSeconds = 30,
     [switch]$Restart
 )
@@ -18,6 +19,32 @@ if (-not (Test-Path $settingsPath)) {
 }
 if (-not (Test-Path $AoExecutable)) {
     throw "Agent Orchestrator executable is missing: $AoExecutable"
+}
+if (-not (Get-Command "ao" -ErrorAction SilentlyContinue)) {
+    throw "Missing required command: ao. Install the AO CLI before launching Agent Orchestrator."
+}
+
+$versionOutput = @(& ao version 2>&1)
+$versionText = (@($versionOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "Cannot determine AO version: $versionText"
+}
+$versions = @(
+    [regex]::Matches($versionText, '(?<!\d)(\d+\.\d+\.\d+)(?!\d)') |
+        ForEach-Object { $_.Groups[1].Value } |
+        Select-Object -Unique
+)
+if ($versions.Count -ne 1 -or $versions[0] -ne $ExpectedAoVersion) {
+    throw "AO version '$($versions -join ', ')' does not match pinned version $ExpectedAoVersion."
+}
+$binaryVersionText = [string](Get-Item -LiteralPath $AoExecutable).VersionInfo.ProductVersion
+$binaryVersions = @(
+    [regex]::Matches($binaryVersionText, '(?<!\d)(\d+\.\d+\.\d+)(?!\d)') |
+        ForEach-Object { $_.Groups[1].Value } |
+        Select-Object -Unique
+)
+if ($binaryVersions.Count -ne 1 -or $binaryVersions[0] -ne $ExpectedAoVersion) {
+    throw "Agent Orchestrator binary version '$binaryVersionText' does not match pinned version $ExpectedAoVersion."
 }
 
 try {
@@ -120,12 +147,15 @@ while ((Get-Date) -lt $deadline) {
     if ($aoProcess.HasExited) {
         throw "Agent Orchestrator exited during startup with code $($aoProcess.ExitCode)."
     }
-    if (Get-Command "ao" -ErrorAction SilentlyContinue) {
-        & ao status --json 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            $ready = $true
-            break
-        }
+    $statusOutput = @(& ao status --json 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $statusOutput.Count -gt 0) {
+        try {
+            $status = ($statusOutput -join [Environment]::NewLine) | ConvertFrom-Json
+            if ([string]$status.state -eq "ready") {
+                $ready = $true
+                break
+            }
+        } catch {}
     }
 }
 if (-not $ready) {
@@ -138,6 +168,8 @@ $runtime = @{
     profile = $profilePath
     base_url = $baseUrl
     router_port = $AgentRouterPort
+    ao_version = $versions[0]
+    ao_binary_version = $binaryVersions[0]
     credential_overrides_cleared = @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
     started_at = (Get-Date).ToUniversalTime().ToString("o")
 }
