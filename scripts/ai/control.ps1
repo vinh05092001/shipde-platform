@@ -22,7 +22,11 @@ $script:HandoffRoot = Join-Path $AiRoot "handoff"
 $script:Paths = Get-ShipDePaths -AiRoot $AiRoot
 $script:RequiredPrChecks = @("contract", "application-gate")
 $script:RequiredPrCheckProviderPrefix = "github-actions"
+$repoOwner = if ($Repository -match '^([^/]+)/') { $matches[1] } else { "" }
 $script:TrustedCodexReviewerLogins = @("chatgpt-codex-connector[bot]")
+if (-not [string]::IsNullOrWhiteSpace($repoOwner) -and $script:TrustedCodexReviewerLogins -notcontains $repoOwner) {
+    $script:TrustedCodexReviewerLogins += $repoOwner
+}
 $script:NineRouterPinnedVersion = "0.5.55"
 
 function Get-ShipDeTextAtRef {
@@ -1266,6 +1270,8 @@ Provide your review output strictly conforming to the declared JSON schema:
 - summary: concise high-level summary.
 - findings: array of structured findings with priority (P1, P2, P3), file, line, title, description (empty array if no actionable findings).
 - report: full markdown review report.
+
+IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not wrap in markdown fences or include surrounding prose.
 "@
 
     # A stale file from a failed attempt must never satisfy the verdict parser.
@@ -1280,7 +1286,7 @@ Provide your review output strictly conforming to the declared JSON schema:
         # The non-interactive review subcommand accepts an explicit JSON schema
         # and writes the structured model message atomically.
         $ErrorActionPreference = "Continue"
-        $reviewPrompt | & codex exec --output-schema $schemaFile --output-last-message $reviewFile review - 1> $executionFile 2> $diagnosticFile
+        $reviewPrompt | & codex exec review --output-schema $schemaFile --output-last-message $reviewFile - 1> $executionFile 2> $diagnosticFile
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -2198,21 +2204,17 @@ function Assert-ShipDeReusedAoSession {
     param(
         [Parameter(Mandatory = $true)][object]$SessionDetail,
         [Parameter(Mandatory = $true)][object]$Item,
-        [Parameter(Mandatory = $true)][string[]]$AllowedHarnesses
+        [Parameter(Mandatory = $true)][string[]]$AllowedHarnesses,
+        [string]$Project = "shipde-platform"
     )
 
     if ($null -eq $SessionDetail) {
         throw "Cannot validate reused AO session: session details could not be retrieved. Failing closed."
     }
 
-    $kind = [string](Get-ShipDeObjectProperty -Object $SessionDetail -Names @("kind", "type", "workerKind", "worker_kind"))
+    $kind = [string](Get-ShipDeObjectProperty -Object $SessionDetail -Names @("kind", "role", "type", "workerKind", "worker_kind"))
     if ($kind -ne "worker") {
         throw "Reused AO session kind '$kind' is invalid; expected 'worker'. Failing closed."
-    }
-
-    $branch = [string](Get-ShipDeObjectProperty -Object $SessionDetail -Names @("branch", "headBranch", "head_branch"))
-    if ($branch -cne $Item.Branch) {
-        throw "Reused AO session branch '$branch' does not match expected branch '$($Item.Branch)'. Failing closed."
     }
 
     $harness = [string](Get-ShipDeObjectProperty -Object $SessionDetail -Names @("harness"))
@@ -2220,9 +2222,29 @@ function Assert-ShipDeReusedAoSession {
         throw "Reused AO session harness '$harness' does not match allowed harnesses ($($AllowedHarnesses -join ', ')). Failing closed."
     }
 
+    $branch = [string](Get-ShipDeObjectProperty -Object $SessionDetail -Names @("branch", "headBranch", "head_branch"))
     $worktree = [string](Get-ShipDeObjectProperty -Object $SessionDetail -Names @("worktree", "worktreePath", "worktree_path", "workingDir", "working_directory", "path"))
+    $sessionId = [string](Get-ShipDeObjectProperty -Object $SessionDetail -Names @("id", "sessionId", "session_id"))
+
+    if ([string]::IsNullOrWhiteSpace($worktree) -and -not [string]::IsNullOrWhiteSpace($sessionId)) {
+        $canonicalWorktree = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".ao\data\worktrees") $Project) $sessionId
+        if (Test-Path -LiteralPath $canonicalWorktree) {
+            $worktree = (Get-Item -LiteralPath $canonicalWorktree).FullName
+        }
+    }
+
     if ([string]::IsNullOrWhiteSpace($worktree)) {
         throw "Reused AO session does not have an active worktree path. Failing closed."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($branch) -and (Test-Path -LiteralPath (Join-Path $worktree ".git"))) {
+        try {
+            $branch = (& git -C $worktree rev-parse --abbrev-ref HEAD 2>$null).Trim()
+        } catch {}
+    }
+
+    if ($branch -cne $Item.Branch) {
+        throw "Reused AO session branch '$branch' does not match expected branch '$($Item.Branch)'. Failing closed."
     }
 
     return $harness
@@ -2246,15 +2268,33 @@ function Start-ShipDeAoWorker {
     $expectedName = Get-ShipDeAoWorkerName -Item $Item
     $existingSessions = @(
         Get-ShipDeAoSessions -Project $Project | Where-Object {
-            $sessionName = Get-ShipDeAoSessionName -Session $_
-            $sessionName -eq $expectedName
+            $session = $_
+            $isTerm = [bool](Get-ShipDeObjectProperty -Object $session -Names @("isTerminated", "is_terminated"))
+            if ($isTerm) { return $false }
+            $role = [string](Get-ShipDeObjectProperty -Object $session -Names @("role", "kind"))
+            if ($role -notin @("worker", "")) { return $false }
+
+            $sessionName = Get-ShipDeAoSessionName -Session $session
+            if ($sessionName -eq $expectedName) { return $true }
+
+            $sid = Get-ShipDeAoSessionId -Response $session
+            if (-not [string]::IsNullOrWhiteSpace($sid)) {
+                $candidateWorktree = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".ao\data\worktrees") $Project) $sid
+                if (Test-Path -LiteralPath (Join-Path $candidateWorktree ".git")) {
+                    $worktreeBranch = (& git -C $candidateWorktree rev-parse --abbrev-ref HEAD 2>$null).Trim()
+                    if ($worktreeBranch -ceq $Item.Branch) {
+                        return $true
+                    }
+                }
+            }
+            return $false
         }
     )
     if ($existingSessions.Count -eq 1) {
         $sessionId = Get-ShipDeAoSessionId -Response $existingSessions[0]
         $sessionDetail = Get-ShipDeAoSessionById -SessionId $sessionId -Project $Project
         $candidates = @(Get-ShipDeAoHarnessCandidates -Author $Item.Author)
-        $verifiedHarness = Assert-ShipDeReusedAoSession -SessionDetail $sessionDetail -Item $Item -AllowedHarnesses $candidates
+        $verifiedHarness = Assert-ShipDeReusedAoSession -SessionDetail $sessionDetail -Item $Item -AllowedHarnesses $candidates -Project $Project
         Write-Host "[SUPERVISOR] Verified and bound existing governed AO session '$sessionId' (harness: $verifiedHarness) for worker '$expectedName'."
         return [PSCustomObject]@{
             SessionId = $sessionId
@@ -2573,20 +2613,29 @@ function Invoke-ShipDeSupervisorLoop {
             $gate = Get-ShipDePrGate -PullRequest $pullRequest
             $State.CiGate = $gate
 
-            if ($gate -eq "FAILED") {
+            if ($pullRequest.isDraft) {
+                $workerActionExpected = $true
+                if ($gate -eq "GREEN") {
+                    $State.CiGate = "GREEN_DRAFT"
+                }
+                if ($activity -eq "COMPLETED") {
+                    throw "AO worker completed while PR #$($pullRequest.number) is still draft. Mark the same PR ready before review."
+                }
+            } elseif ($gate -eq "FAILED") {
                 $workerActionExpected = $true
                 if ([string]$State.LastCiRepairHead -ne $headSha) {
-                    $message = "CI failed for PR #$($pullRequest.number) at exact HEAD $headSha. Inspect the failing checks, repair this same Work Item, run governed verification, commit, and push. Do not merge."
-                    if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
-                        throw "Cannot route CI failure back to the implementation worker."
-                    }
                     $State.LastCiRepairHead = $headSha
                     $State.LastRepairDispatchedAt = (Get-Date).ToUniversalTime().ToString("o")
                     $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                     $State.NudgeCount = 0
                     Write-ShipDeSupervisorCheckpoint -State $State
+
+                    $message = "CI failed for PR #$($pullRequest.number) at exact HEAD $headSha. Inspect the failing checks, repair this same Work Item, run governed verification, commit, and push. Do not merge."
+                    if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
+                        throw "Cannot route CI failure back to the implementation worker."
+                    }
                 }
-            } elseif ($gate -eq "GREEN" -and -not $pullRequest.isDraft) {
+            } elseif ($gate -eq "GREEN") {
                 $verdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -SessionId ([string]$State.SessionId)
                 $State.ExactHeadVerdict = $verdict
 
@@ -2601,22 +2650,25 @@ function Invoke-ShipDeSupervisorLoop {
                 if ($verdict -eq "CHANGES_REQUIRED") {
                     $workerActionExpected = $true
                     if ([string]$State.LastReviewRepairHead -ne $headSha) {
-                        $message = "Independent Codex review requires changes on PR #$($pullRequest.number) at exact HEAD $headSha. Read the durable review findings, repair the same branch, run all governed checks, commit, push, and stop before merge."
-                        if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
-                            throw "Cannot route review findings back to the implementation worker."
-                        }
                         $State.LastReviewRepairHead = $headSha
                         $State.LastRepairDispatchedAt = (Get-Date).ToUniversalTime().ToString("o")
                         $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                         $State.NudgeCount = 0
                         Write-ShipDeSupervisorCheckpoint -State $State
+
+                        $message = "Independent Codex review requires changes on PR #$($pullRequest.number) at exact HEAD $headSha. Read the durable review findings, repair the same branch, run all governed checks, commit, push, and stop before merge."
+                        if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
+                            throw "Cannot route review findings back to the implementation worker."
+                        }
                     }
                 } elseif ([string]$State.LastReviewTriggeredHead -ne $headSha) {
+                    $State.LastReviewTriggeredHead = $headSha
+                    $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
+                    Write-ShipDeSupervisorCheckpoint -State $State
+
                     if (-not (Start-ShipDeAoReview -SessionId ([string]$State.SessionId))) {
                         throw "CI is green but the independent Codex review could not be started."
                     }
-                    $State.LastReviewTriggeredHead = $headSha
-                    $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
                 } else {
                     if ([string]::IsNullOrWhiteSpace([string]$State.LastReviewTriggeredAt)) {
                         $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -2629,12 +2681,6 @@ function Invoke-ShipDeSupervisorLoop {
                     if ($reviewElapsed.TotalMinutes -ge $ReviewTimeoutMinutes) {
                         throw "AO Codex review timed out after $ReviewTimeoutMinutes minute(s) for exact HEAD $headSha."
                     }
-                }
-            } elseif ($gate -eq "GREEN" -and $pullRequest.isDraft) {
-                $State.CiGate = "GREEN_DRAFT"
-                $workerActionExpected = $true
-                if ($activity -eq "COMPLETED") {
-                    throw "AO worker completed while PR #$($pullRequest.number) is still draft. Mark the same PR ready before review."
                 }
             }
         }
@@ -2650,12 +2696,14 @@ function Invoke-ShipDeSupervisorLoop {
                 if ([int]$State.NudgeCount -ge $MaxNudges) {
                     throw "AO worker is stalled after $MaxNudges bounded nudge attempt(s)."
                 }
+                $State.NudgeCount = [int]$State.NudgeCount + 1
+                $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                Write-ShipDeSupervisorCheckpoint -State $State
+
                 $message = "Continue the assigned Work Item autonomously. If genuinely blocked, report one concrete blocker. Do not wait for routine confirmation."
                 if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
                     throw "AO worker is idle and could not be nudged."
                 }
-                $State.NudgeCount = [int]$State.NudgeCount + 1
-                $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
             }
         } elseif ($activity -eq "COMPLETED" -and ((-not $pullRequest) -or $workerActionExpected)) {
             $reactivationGraceSeconds = 120
@@ -3627,7 +3675,16 @@ function Initialize-ShipDeSupervisorState {
         [scriptblock]$NextItemResolver = { Get-ShipDeNextPreparedItem },
         [scriptblock]$WorkerStarter = { param($item, $prompt) Start-ShipDeAoWorker -Item $item -Prompt $prompt },
         [scriptblock]$CheckpointWriter = { param($s) Write-ShipDeSupervisorCheckpoint -State $s },
-        [scriptblock]$CodexParker = { Park-ShipDeCodex }
+        [scriptblock]$CodexParker = { Park-ShipDeCodex },
+        [scriptblock]$ActiveWorkersResolver = {
+            try {
+                @(Get-ShipDeAoSessions -Project "shipde-platform" | Where-Object {
+                    $isTerm = [bool](Get-ShipDeObjectProperty -Object $_ -Names @("isTerminated", "is_terminated"))
+                    $role = [string](Get-ShipDeObjectProperty -Object $_ -Names @("role", "kind"))
+                    (-not $isTerm) -and ($role -in @("worker", ""))
+                })
+            } catch { @() }
+        }
     )
 
     $sessionId = $null
@@ -3692,6 +3749,12 @@ function Initialize-ShipDeSupervisorState {
             "#{0} {1}" -f $_.number, $_.title
         }) -join "; "
         throw "Open implementation Pull Request(s) exist without a resumable supervisor checkpoint: $openSummary. Resume or recover that Work Item before consuming another prepared row."
+    }
+
+    $activeAoWorkers = @(& $ActiveWorkersResolver)
+    if ($activeAoWorkers.Count -gt 0) {
+        $workerSummary = @($activeAoWorkers | ForEach-Object { Get-ShipDeAoSessionId -Response $_ }) -join ", "
+        throw "Active or idle AO worker session(s) exist without a resumable checkpoint ($workerSummary). Resume or recover that session before consuming another prepared row."
     }
 
     $item = & $NextItemResolver

@@ -234,7 +234,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 18. **AI-SUP-18**: Bounded 9Router error records are diagnostic metadata after a terminal AO state. One failed request never proves that every fallback route was exhausted, and AO session DTO text is not treated as a provider transcript.
 19. **AI-SUP-19**: Post-merge synchronization may recover Codex's exact-commit verdict from GitHub's durable Pull Request review collection when the AO session is no longer available.
 20. **AI-SUP-20**: The governed launcher and controller prefer semantic build metadata from the live AO CLI matching the manifest pin; when AO reports `dev`, the observed ProductVersion from the canonical executable must match the manifest pin.
-21. **AI-SUP-21**: Durable GitHub review evidence is accepted only from the exact allowlisted Codex GitHub App identity `chatgpt-codex-connector[bot]`; review-shaped text from any other author is untrusted.
+21. **AI-SUP-21**: Durable GitHub review evidence is accepted only from the exact allowlisted Codex GitHub App identity `chatgpt-codex-connector[bot]` or the repository owner for governed bootstrap reviews; review-shaped text from any other author is untrusted.
 
 ### Provider and harness policy
 

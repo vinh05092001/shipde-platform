@@ -78,7 +78,7 @@ if (-not (Test-AgentRouterEndpoint)) {
     }
 
     $escapedRouterPath = $routerCommand.Source.Replace("'", "''")
-    $routerScript = "& '$escapedRouterPath'"
+    $routerScript = "& '$escapedRouterPath' --host 127.0.0.1 --port $AgentRouterPort"
     $encodedRouterScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($routerScript))
     $routerProcess = $null
     try {
@@ -133,10 +133,14 @@ Remove-Item Env:ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
 Remove-Item Env:ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
 Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 
+$aoArgs = @()
+if ((Split-Path $aoExecutablePath -Leaf) -ieq "ao.exe") {
+    $aoArgs = @("daemon")
+}
 $aoProcess = if ($null -ne $ProcessStarter) {
-    & $ProcessStarter $aoExecutablePath
+    & $ProcessStarter $aoExecutablePath $aoArgs
 } else {
-    Start-Process -FilePath $aoExecutablePath -PassThru
+    Start-Process -FilePath $aoExecutablePath -ArgumentList $aoArgs -PassThru
 }
 
 $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
@@ -163,12 +167,18 @@ try {
         if ($aoProcess -and -not $aoProcess.HasExited) {
             $aoProcess | Stop-Process -Force -ErrorAction SilentlyContinue
         }
+        if ($routerProcess -and -not $routerProcess.HasExited) {
+            $routerProcess | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
         Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
         throw "Agent Orchestrator did not report ready within $StartupTimeoutSeconds seconds."
     }
 } catch {
     if ($aoProcess -and -not $aoProcess.HasExited) {
         $aoProcess | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    if ($routerProcess -and -not $routerProcess.HasExited) {
+        $routerProcess | Stop-Process -Force -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
     throw
