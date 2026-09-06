@@ -44,7 +44,7 @@ The operator launches AO through the existing localhost AgentRouter profile and 
 - `docs/product-spec/docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md` — 9Router author prompt template.
 - `scripts/ai/control.ps1` — existing controller patterns to extend.
 - Agent Orchestrator canonical source: `https://github.com/Untrivial-ai/agent-orchestrator`; installed version `0.12.10`; health check `ao status --json`.
-- AO CLI documentation at `C:/Users/gumac/.ao/data/skills/using-ao/`.
+- AO CLI contract: `ao session ls --json`, `ao session get --json`, and `ao review ls <session> --json` from the pinned canonical source and installed skill documentation.
 
 ## Preconditions and dependencies
 
@@ -76,11 +76,11 @@ The implementation must:
 
 ### 1. Governed AO and AgentRouter startup
 
-- Verify the existing `.claude` profile points only to the localhost AgentRouter endpoint on port 20128.
+- Verify the existing `.claude` profile points only to the localhost AgentRouter endpoint on port 20128, and require 9Router's `/api/health` plus `/api/version` response instead of trusting an arbitrary listener.
 - Start AgentRouter when its installed command is available but its loopback port is stopped.
 - Launch or explicitly restart AO with `CLAUDE_CONFIG_DIR=%USERPROFILE%\.claude`.
 - Let `Supervise` replace an absent, stale, or incorrectly launched AO runtime automatically; no profile-switching step is required from the operator.
-- Remove inherited direct Anthropic environment overrides before launching AO.
+- Remove inherited `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_API_KEY` overrides before launching AO.
 - Persist only runtime metadata; never persist or print authentication tokens.
 
 ### 2. Delivery register automation
@@ -98,15 +98,15 @@ The implementation must:
 ### 4. AO worker spawning
 
 - Use the current AO command contract: `ao spawn --kind worker --branch ... --harness ...`.
-- Use `agy`, then `gemini`, for a Gemini-assigned Work Item; use router-backed `claude-code` only for a `9ROUTER` assignment.
+- Use the supported `agy` harness for a Gemini-assigned Work Item; the pinned AO runtime does not advertise a `gemini` harness. Cross-harness replacement remains TASK-AI-07.
 - Never use removed or unsupported commands and flags such as `ao session spawn`, `ao spawn --json`, `--worktree`, or `--prompt-file`.
-- Snapshot `ao session ls --project <project> --json` before and after spawning, then bind exactly one newly created session with the governed worker name.
+- Snapshot `ao session ls --project <project> --json` before and after spawning, resolve exactly one new ID, then verify its governed worker name through `ao session get <id> --json`.
 - Record the unambiguous session ID for monitoring; stop fail-closed if no unique session can be identified.
 
 ### 5. Monitoring and lifecycle loop
 
 - Poll exact session state using `ao session get <id> --json`.
-- Detect idle, active, completed, or failed states
+- Detect `active`, `idle`, `waiting_input`, `blocked`, completed, or failed states; nudge `waiting_input`, but stop for human action on `blocked`.
 - Bounded inactivity timer (default 10 minutes idle triggers nudge)
 - Stop after three consecutive unknown states or a completed worker that did not create its governed Pull Request; never poll forever.
 - Log state transitions with timestamps
@@ -120,6 +120,8 @@ The implementation must:
 ### 7. CI and independent review routing
 
 - Detect the Work Item's open PR without consuming another row.
+- Read exact-HEAD terminal verdicts from `ao review ls <session> --json` after AO-triggered review; manual handoff files remain a separate bootstrap path.
+- Keep inactivity and bounded unknown-state handling active after a PR appears whenever CI/review repair is waiting on the worker.
 - Permit a bootstrap review to select one exact open PR with `-PullRequestNumber`; never guess when several implementation PRs are open.
 - Route each failed exact HEAD back to the same worker once.
 - Trigger AO's configured Codex reviewer only after required CI is green.
@@ -171,26 +173,26 @@ The implementation must:
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario                               | Expected result                                                                  | Evidence required               |
-| ---------- | -------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------- |
-| `AC-AI-42` | AO CLI not available                   | Supervisor stops with `Missing required command: ao`                             | Deterministic assertion         |
-| `AC-AI-43` | No prepared remote Work Item           | Supervisor reports that no prepared remote Work Item exists                      | Deterministic assertion         |
-| `AC-AI-44` | Valid dependency-ready Work Item found | Supervisor generates prompt and spawns AO worker                                 | Log output and session ID       |
-| `AC-AI-45` | Supported AO spawn contract            | Uses `ao spawn` without `--json`; obtains the new ID through `ao session ls`     | Deterministic assertion         |
-| `AC-AI-46` | AO session monitoring                  | State transitions logged with timestamps                                         | Log output                      |
-| `AC-AI-47` | Session idle for 10+ minutes           | Supervisor nudges session once                                                   | Nudge log and session state     |
-| `AC-AI-48` | Session completes successfully         | Supervisor reports completion and awaits CI/review                               | Log output                      |
-| `AC-AI-49` | State file written and readable        | Checkpoint survives supervisor restart                                           | State file round-trip assertion |
-| `AC-AI-50` | CI green and review PASS               | Supervisor notifies human "Ready for merge"                                      | Notification output             |
-| `AC-AI-51` | Never auto-merge                       | No `gh pr merge` command in any code path                                        | Code audit                      |
-| `AC-AI-52` | Windows PowerShell 5.1 compatible      | All startup assertions pass on Windows PowerShell 5.1                            | CI validation                   |
-| `AC-AI-53` | AO starts through AgentRouter          | Runtime marker matches `.claude` and localhost port 20128                        | Launcher output and marker      |
-| `AC-AI-54` | CI failure on exact HEAD               | Same worker receives one repair instruction for that HEAD                        | Checkpoint and AO activity      |
-| `AC-AI-55` | CI green without verdict               | AO triggers configured independent Codex review                                  | AO review record                |
-| `AC-AI-56` | Exact-HEAD Codex PASS                  | Supervisor stops for human merge without merge invocation                        | Durable verdict and code audit  |
-| `AC-AI-57` | AO stopped, stale, or on wrong profile | `Supervise` relaunches AO through `.claude` and AgentRouter                      | Launcher output and live PID    |
-| `AC-AI-58` | Multiple implementation PRs are open   | Explicit `-PullRequestNumber` selects exactly one review PR                      | Deterministic PR filter         |
-| `AC-AI-59` | AO provenance is inspected             | Manifest identifies canonical source, version and health check outside `adopted` | Manifest validation             |
+| AC/Test ID | Scenario                               | Expected result                                                                   | Evidence required               |
+| ---------- | -------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------- |
+| `AC-AI-42` | AO CLI not available                   | Supervisor stops with `Missing required command: ao`                              | Deterministic assertion         |
+| `AC-AI-43` | No prepared remote Work Item           | Supervisor reports that no prepared remote Work Item exists                       | Deterministic assertion         |
+| `AC-AI-44` | Valid dependency-ready Work Item found | Supervisor generates prompt and spawns AO worker                                  | Log output and session ID       |
+| `AC-AI-45` | Supported AO spawn contract            | Uses `ao spawn` without `--json`; obtains the new ID through `ao session ls`      | Deterministic assertion         |
+| `AC-AI-46` | AO session monitoring                  | State transitions logged with timestamps                                          | Log output                      |
+| `AC-AI-47` | Session idle for 10+ minutes           | Supervisor nudges session once                                                    | Nudge log and session state     |
+| `AC-AI-48` | Session completes successfully         | Supervisor reports completion and awaits CI/review                                | Log output                      |
+| `AC-AI-49` | State file written and readable        | Checkpoint survives supervisor restart                                            | State file round-trip assertion |
+| `AC-AI-50` | CI green and review PASS               | Supervisor notifies human "Ready for merge"                                       | Notification output             |
+| `AC-AI-51` | Never auto-merge                       | No `gh pr merge` command in any code path                                         | Code audit                      |
+| `AC-AI-52` | Windows PowerShell 5.1 compatible      | All startup assertions pass on Windows PowerShell 5.1                             | CI validation                   |
+| `AC-AI-53` | AO starts through AgentRouter          | Marker proves `.claude`, cleared direct keys, and 9Router health/version contract | Launcher output and marker      |
+| `AC-AI-54` | CI failure on exact HEAD               | Same worker receives one repair instruction for that HEAD                         | Checkpoint and AO activity      |
+| `AC-AI-55` | CI green without verdict               | AO triggers configured independent Codex review                                   | AO review record                |
+| `AC-AI-56` | Exact-HEAD Codex PASS                  | Supervisor stops for human merge without merge invocation                         | Durable verdict and code audit  |
+| `AC-AI-57` | AO stopped, stale, or on wrong profile | `Supervise` relaunches AO through `.claude` and AgentRouter                       | Launcher output and live PID    |
+| `AC-AI-58` | Multiple implementation PRs are open   | Explicit `-PullRequestNumber` selects exactly one review PR                       | Deterministic PR filter         |
+| `AC-AI-59` | AO provenance is inspected             | Manifest identifies canonical source, version and health check outside `adopted`  | Manifest validation             |
 
 ## Deferred final automation acceptance case
 
@@ -221,9 +223,10 @@ From a clean checkout:
 
 ## Codex review record
 
-| Review round | Commit         | Verdict                                                            | Findings resolved                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------ | -------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1            | `db58e97757c0` | Not posted; terminal verdict marker was missing, so it failed shut | Removed unsupported `ao spawn --json` and resolve the new session through `ao session ls`; park the Codex worktree before AO spawn; block a second Work Item when an implementation PR already exists without a checkpoint; honor terminal AO failures even after PR creation; skip review for draft PRs; require the exact local AgentRouter `/v1` endpoint. All changes require a fresh exact-HEAD review after CI passes. |
+| Review round | Commit         | Verdict                                                            | Findings resolved                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------ | -------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1            | `db58e97757c0` | Not posted; terminal verdict marker was missing, so it failed shut | Removed unsupported `ao spawn --json` and resolved the new session through `ao session ls`; parked the Codex worktree before AO spawn; blocked a second Work Item when an implementation PR already exists without a checkpoint; honored terminal AO failures even after PR creation; skipped review for draft PRs; required the exact local AgentRouter `/v1` endpoint.                                                                                     |
+| 2            | `0af05b50f8ec` | Not posted; terminal verdict marker was missing, so it failed shut | Resolve one new session ID from before/after snapshots and verify its name with `session get`; consume exact-HEAD AO Codex review records; preserve bounded inactivity after PR creation; distinguish `waiting_input` from `blocked`; clear inherited `ANTHROPIC_API_KEY`; verify 9Router health/version rather than an arbitrary port listener; remove the unsupported AO `gemini` harness fallback. A fresh exact-HEAD review is required after CI passes. |
 
 ## Residual limitations
 
