@@ -170,6 +170,7 @@ The implementation must:
 - `AI-SUP-11`: Starting `Supervise` repairs AO runtime drift by relaunching AO through AgentRouter before consuming a Work Item.
 - `AI-SUP-12`: Manual bootstrap review requires an exact PR number when more than one implementation PR is open.
 - `AI-SUP-13`: AO is an external control layer with pinned provenance and health check; it is never silently counted as an adopted repository/provider.
+- `AI-SUP-14`: Manual bootstrap review uses Codex's non-interactive custom-review contract and accepts only one terminal standalone verdict; stale output from an earlier attempt is deleted before invocation.
 
 ## Acceptance matrix
 
@@ -193,6 +194,7 @@ The implementation must:
 | `AC-AI-57` | AO stopped, stale, or on wrong profile | `Supervise` relaunches AO through `.claude` and AgentRouter                       | Launcher output and live PID    |
 | `AC-AI-58` | Multiple implementation PRs are open   | Explicit `-PullRequestNumber` selects exactly one review PR                       | Deterministic PR filter         |
 | `AC-AI-59` | AO provenance is inspected             | Manifest identifies canonical source, version and health check outside `adopted`  | Manifest validation             |
+| `AC-AI-60` | Codex emits a machine-readable verdict | Custom exact-HEAD review ends in one standalone governed verdict                   | Review output parser            |
 
 ## Deferred final automation acceptance case
 
