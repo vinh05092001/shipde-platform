@@ -789,15 +789,82 @@ function Invoke-ShipDeReview {
     }
 }
 
+function Get-ShipDeAoVerdictFromReviewResponse {
+    param(
+        [Parameter(Mandatory = $true)][object]$Response,
+        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [Parameter(Mandatory = $true)][string]$HeadSha
+    )
+
+    $reviews = @(Get-ShipDeObjectProperty -Object $Response -Names @("reviews"))
+    $matches = @($reviews | Where-Object {
+        [int](Get-ShipDeObjectProperty -Object $_ -Names @("prNumber", "pr_number")) -eq $PullRequestNumber -and
+        [string](Get-ShipDeObjectProperty -Object $_ -Names @("targetSha", "target_sha")) -eq $HeadSha
+    })
+    if ($matches.Count -gt 1) {
+        throw "AO returned multiple review records for PR #$PullRequestNumber at exact HEAD $HeadSha."
+    }
+    if ($matches.Count -eq 0) {
+        return $null
+    }
+
+    $review = $matches[0]
+    $run = Get-ShipDeObjectProperty -Object $review -Names @("latestRun", "latest_run")
+    if ($null -eq $run) {
+        return $null
+    }
+    $harness = [string](Get-ShipDeObjectProperty -Object $run -Names @("harness"))
+    if ($harness -ne "codex") {
+        throw "AO exact-HEAD review used unsupported reviewer '$harness'; Codex is required."
+    }
+    $status = [string](Get-ShipDeObjectProperty -Object $run -Names @("status"))
+    $verdict = [string](Get-ShipDeObjectProperty -Object $run -Names @("verdict"))
+    if ($status -in @("failed", "cancelled")) {
+        throw "AO Codex review ended without an acceptable verdict. State: $status"
+    }
+    switch ($verdict.ToLowerInvariant()) {
+        "approved" { return "PASS" }
+        "changes_requested" { return "CHANGES_REQUIRED" }
+        default { return $null }
+    }
+}
+
+function Get-ShipDeAoExactHeadCodexVerdict {
+    param(
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [Parameter(Mandatory = $true)][string]$HeadSha
+    )
+
+    $output = @(& ao review ls $SessionId --json 2>&1)
+    $exitCode = $LASTEXITCODE
+    $text = Join-ShipDeNativeOutput -Output $output
+    if ($exitCode -ne 0) {
+        throw "Cannot read AO review records for session '$SessionId': $text"
+    }
+    $response = ConvertFrom-ShipDeAoJson -Json $text -Operation "review ls"
+    return Get-ShipDeAoVerdictFromReviewResponse -Response $response -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
+}
+
 function Get-ShipDeExactHeadCodexVerdict {
     param(
         [Parameter(Mandatory = $true)][int]$PullRequestNumber,
         [Parameter(Mandatory = $true)][string]$HeadSha,
-        [string]$MergeCommitOid
+        [string]$MergeCommitOid,
+        [string]$SessionId
     )
 
     if ([string]::IsNullOrWhiteSpace($HeadSha)) {
         return $null
+    }
+
+    # AO-triggered Codex reviews are recorded in AO's review contract rather
+    # than in the manual handoff files used by Invoke-ShipDeReview.
+    if (-not [string]::IsNullOrWhiteSpace($SessionId)) {
+        $aoVerdict = Get-ShipDeAoExactHeadCodexVerdict -SessionId $SessionId -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
+        if ($aoVerdict) {
+            return $aoVerdict
+        }
     }
 
     # 1. Check local handoff files for an exact-HEAD review with terminal verdict
@@ -1166,6 +1233,24 @@ function Test-ShipDeAoReadiness {
     }
 }
 
+function Test-ShipDeAgentRouterEndpoint {
+    param([Parameter(Mandatory = $true)][int]$Port)
+
+    if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $Port)) {
+        return $false
+    }
+    try {
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -Method Get -TimeoutSec 5
+        $version = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/version" -Method Get -TimeoutSec 6
+        return (
+            $health.ok -eq $true -and
+            [string]$version.currentVersion -match '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$'
+        )
+    } catch {
+        return $false
+    }
+}
+
 function Assert-ShipDeAgentRouterProfile {
     $settingsPath = Join-Path $script:AgentRouterProfile "settings.json"
     if (-not (Test-Path $settingsPath)) {
@@ -1192,8 +1277,8 @@ function Assert-ShipDeAgentRouterProfile {
     ) {
         throw "AgentRouter Claude profile must use http://localhost:$($script:AgentRouterPort)/v1."
     }
-    if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $script:AgentRouterPort)) {
-        throw "AgentRouter is not listening on 127.0.0.1:$($script:AgentRouterPort)."
+    if (-not (Test-ShipDeAgentRouterEndpoint -Port $script:AgentRouterPort)) {
+        throw "Port $($script:AgentRouterPort) is not serving the expected local 9Router health and version contract."
     }
     if (-not (Test-Path $script:AoRouterRuntimeFile)) {
         throw "AO router runtime marker is missing. Start AO with scripts/ai/start-agent-orchestrator.ps1."
@@ -1205,6 +1290,12 @@ function Assert-ShipDeAgentRouterProfile {
     }
     if ([string]$runtime.profile -ne $script:AgentRouterProfile -or [string]$runtime.base_url -ne $baseUrl) {
         throw "AO was not launched with the current AgentRouter Claude profile."
+    }
+    $clearedOverrides = @($runtime.credential_overrides_cleared)
+    foreach ($requiredOverride in @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+        if ($clearedOverrides -notcontains $requiredOverride) {
+            throw "AO runtime marker does not prove that $requiredOverride was cleared before launch."
+        }
     }
 
     $processId = 0
@@ -1298,7 +1389,7 @@ function Get-ShipDeAoHarnessCandidates {
     param([Parameter(Mandatory = $true)][string]$Author)
 
     switch ($Author.ToUpperInvariant()) {
-        "GEMINI" { return @("agy", "gemini") }
+        "GEMINI" { return @("agy") }
         "9ROUTER" { return @("claude-code") }
         default { throw "Unsupported implementation author: $Author" }
     }
@@ -1393,27 +1484,32 @@ function Start-ShipDeAoWorker {
         $exitCode = $LASTEXITCODE
         $text = Join-ShipDeNativeOutput -Output $output
         if ($exitCode -eq 0) {
-            $expectedName = Get-ShipDeAoWorkerName -Item $Item
             for ($attempt = 0; $attempt -lt 10; $attempt++) {
-                $matches = @(
+                $newSessions = @(
                     Get-ShipDeAoSessions -Project $Project | Where-Object {
                         $sessionId = Get-ShipDeAoSessionId -Response $_
-                        -not $beforeIds.Contains($sessionId) -and
-                        (Get-ShipDeAoSessionName -Session $_) -eq $expectedName
+                        -not $beforeIds.Contains($sessionId)
                     }
                 )
-                if ($matches.Count -gt 1) {
-                    throw "AO created multiple sessions named '$expectedName'; refusing an ambiguous worker binding."
+                if ($newSessions.Count -gt 1) {
+                    throw "AO created or exposed multiple new sessions after spawn; refusing an ambiguous worker binding."
                 }
-                if ($matches.Count -eq 1) {
+                if ($newSessions.Count -eq 1) {
+                    $sessionId = Get-ShipDeAoSessionId -Response $newSessions[0]
+                    $spawnedSession = Get-ShipDeAoSessionById -SessionId $sessionId -Project $Project
+                    $expectedName = Get-ShipDeAoWorkerName -Item $Item
+                    $actualName = Get-ShipDeAoSessionName -Session $spawnedSession
+                    if ($actualName -ne $expectedName) {
+                        throw "The unique new AO session '$sessionId' is named '$actualName', not governed worker '$expectedName'."
+                    }
                     return [PSCustomObject]@{
-                        SessionId = Get-ShipDeAoSessionId -Response $matches[0]
+                        SessionId = $sessionId
                         Harness = $harness
                     }
                 }
                 Start-Sleep -Milliseconds 500
             }
-            throw "AO spawn succeeded but the new session '$expectedName' could not be identified through ao session ls. Output: $text"
+            throw "AO spawn succeeded but one unique new session could not be identified through before/after session snapshots. Output: $text"
         }
         $failures.Add(("{0} => exit {1}: {2}" -f $harness, $exitCode, $text))
     }
@@ -1488,8 +1584,10 @@ function Get-ShipDeSessionActivityState {
     }
     switch ($status.ToLowerInvariant()) {
         "idle" { return "IDLE" }
-        "waiting_for_input" { return "IDLE" }
-        "input_needed" { return "IDLE" }
+        "waiting_input" { return "WAITING_INPUT" }
+        "waiting_for_input" { return "WAITING_INPUT" }
+        "input_needed" { return "WAITING_INPUT" }
+        "blocked" { return "BLOCKED" }
         "active" { return "ACTIVE" }
         "busy" { return "ACTIVE" }
         "running" { return "ACTIVE" }
@@ -1567,7 +1665,19 @@ function Invoke-ShipDeSupervisorLoop {
         if ($activity -in @("FAILED", "STOPPED", "MISSING")) {
             throw "AO worker ended before the governed lifecycle completed. State: $activity"
         }
+        if ($activity -eq "BLOCKED") {
+            throw "AO worker is blocked on a permission or approval decision. Human input is required; the supervisor will not inject a response."
+        }
+        if ($activity -eq "UNKNOWN") {
+            $State.UnknownPollCount = [int]$State.UnknownPollCount + 1
+            if ([int]$State.UnknownPollCount -ge 3) {
+                throw "AO returned an unknown session state for 3 consecutive polls."
+            }
+        } else {
+            $State.UnknownPollCount = 0
+        }
 
+        $workerActionExpected = $false
         if ($pullRequest) {
             $headSha = [string]$pullRequest.headRefOid
             $State.PullRequestNumber = [int]$pullRequest.number
@@ -1576,15 +1686,18 @@ function Invoke-ShipDeSupervisorLoop {
             $State.CiGate = $gate
 
             if ($gate -eq "FAILED") {
+                $workerActionExpected = $true
                 if ([string]$State.LastCiRepairHead -ne $headSha) {
                     $message = "CI failed for PR #$($pullRequest.number) at exact HEAD $headSha. Inspect the failing checks, repair this same Work Item, run governed verification, commit, and push. Do not merge."
                     if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
                         throw "Cannot route CI failure back to the implementation worker."
                     }
                     $State.LastCiRepairHead = $headSha
+                    $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                    $State.NudgeCount = 0
                 }
             } elseif ($gate -eq "GREEN" -and -not $pullRequest.isDraft) {
-                $verdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha
+                $verdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -SessionId ([string]$State.SessionId)
                 $State.ExactHeadVerdict = $verdict
 
                 if ($verdict -eq "PASS") {
@@ -1592,12 +1705,15 @@ function Invoke-ShipDeSupervisorLoop {
                     return "READY_FOR_HUMAN_MERGE"
                 }
                 if ($verdict -eq "CHANGES_REQUIRED") {
+                    $workerActionExpected = $true
                     if ([string]$State.LastReviewRepairHead -ne $headSha) {
                         $message = "Independent Codex review requires changes on PR #$($pullRequest.number) at exact HEAD $headSha. Read the durable review findings, repair the same branch, run all governed checks, commit, push, and stop before merge."
                         if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
                             throw "Cannot route review findings back to the implementation worker."
                         }
                         $State.LastReviewRepairHead = $headSha
+                        $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                        $State.NudgeCount = 0
                     }
                 } elseif ([string]$State.LastReviewTriggeredHead -ne $headSha) {
                     if (-not (Start-ShipDeAoReview -SessionId ([string]$State.SessionId))) {
@@ -1611,14 +1727,12 @@ function Invoke-ShipDeSupervisorLoop {
                     throw "AO worker completed while PR #$($pullRequest.number) is still draft. Mark the same PR ready before review."
                 }
             }
+        }
+
+        if ($activity -eq "ACTIVE") {
             $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
             $State.NudgeCount = 0
-        } elseif ($activity -eq "ACTIVE") {
-            $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
-            $State.NudgeCount = 0
-            $State.UnknownPollCount = 0
-        } elseif ($activity -eq "IDLE") {
-            $State.UnknownPollCount = 0
+        } elseif ($activity -in @("IDLE", "WAITING_INPUT") -and ((-not $pullRequest) -or $workerActionExpected)) {
             $lastActivity = [DateTime]::Parse([string]$State.LastActivityTime).ToUniversalTime()
             $idleDuration = (Get-Date).ToUniversalTime() - $lastActivity
             if ($idleDuration.TotalMinutes -ge $InactivityTimeoutMinutes) {
@@ -1632,13 +1746,8 @@ function Invoke-ShipDeSupervisorLoop {
                 $State.NudgeCount = [int]$State.NudgeCount + 1
                 $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
             }
-        } elseif ($activity -eq "COMPLETED") {
-            throw "AO worker completed without creating a governed Pull Request."
-        } elseif ($activity -eq "UNKNOWN") {
-            $State.UnknownPollCount = [int]$State.UnknownPollCount + 1
-            if ([int]$State.UnknownPollCount -ge 3) {
-                throw "AO returned an unknown session state for 3 consecutive polls."
-            }
+        } elseif ($activity -eq "COMPLETED" -and ((-not $pullRequest) -or $workerActionExpected)) {
+            throw "AO worker completed while governed implementation or repair work is still required."
         }
 
         Write-ShipDeSupervisorCheckpoint -State $State
@@ -1669,6 +1778,26 @@ function Assert-ShipDeSupervisorCompatibility {
         ($spawnArgs[0..1] -join " ") -eq "session spawn"
     ) {
         throw "AO spawn command compatibility test failed."
+    }
+    $geminiHarnesses = @(Get-ShipDeAoHarnessCandidates -Author "GEMINI")
+    if ($geminiHarnesses.Count -ne 1 -or $geminiHarnesses[0] -ne "agy") {
+        throw "AO Gemini author harness compatibility test failed."
+    }
+
+    $waitingFixture = [PSCustomObject]@{ activity = [PSCustomObject]@{ state = "waiting_input" } }
+    $blockedFixture = [PSCustomObject]@{ activity = [PSCustomObject]@{ state = "blocked" } }
+    if ((Get-ShipDeSessionActivityState -Session $waitingFixture) -ne "WAITING_INPUT") {
+        throw "AO waiting_input activity compatibility test failed."
+    }
+    if ((Get-ShipDeSessionActivityState -Session $blockedFixture) -ne "BLOCKED") {
+        throw "AO blocked activity compatibility test failed."
+    }
+
+    $reviewHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    $reviewFixture = ConvertFrom-ShipDeAoJson -Json '{"reviews":[{"prNumber":9,"targetSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","latestRun":{"harness":"codex","status":"completed","verdict":"approved"}}]}' -Operation "self-test"
+    $reviewVerdict = Get-ShipDeAoVerdictFromReviewResponse -Response $reviewFixture -PullRequestNumber 9 -HeadSha $reviewHead
+    if ($reviewVerdict -ne "PASS") {
+        throw "AO exact-HEAD review record compatibility test failed."
     }
 
     $stateRoundTrip = @{ TestField = "test-value"; NestedObject = @{ Inner = 123 } }
