@@ -42,10 +42,26 @@ if (
     throw "The .claude profile must route to http://localhost:$AgentRouterPort/v1."
 }
 
-if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $AgentRouterPort)) {
+function Test-AgentRouterEndpoint {
+    if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $AgentRouterPort)) {
+        return $false
+    }
+    try {
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$AgentRouterPort/api/health" -Method Get -TimeoutSec 5
+        $version = Invoke-RestMethod -Uri "http://127.0.0.1:$AgentRouterPort/api/version" -Method Get -TimeoutSec 6
+        return (
+            $health.ok -eq $true -and
+            [string]$version.currentVersion -match '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$'
+        )
+    } catch {
+        return $false
+    }
+}
+
+if (-not (Test-AgentRouterEndpoint)) {
     $routerCommand = Get-Command "9router" -ErrorAction SilentlyContinue
     if (-not $routerCommand) {
-        throw "AgentRouter is stopped and the 9router command is unavailable."
+        throw "The expected local 9Router endpoint is unavailable and the 9router command is missing."
     }
 
     $escapedRouterPath = $routerCommand.Source.Replace("'", "''")
@@ -60,12 +76,12 @@ if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $AgentRouterPort)) {
     $routerDeadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
     while (
         (Get-Date) -lt $routerDeadline -and
-        -not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $AgentRouterPort)
+        -not (Test-AgentRouterEndpoint)
     ) {
         Start-Sleep -Milliseconds 500
     }
-    if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $AgentRouterPort)) {
-        throw "AgentRouter did not become ready on port $AgentRouterPort."
+    if (-not (Test-AgentRouterEndpoint)) {
+        throw "Port $AgentRouterPort is not serving the expected local 9Router health and version contract."
     }
 }
 
@@ -93,6 +109,7 @@ if ($existing.Count -gt 0) {
 $env:CLAUDE_CONFIG_DIR = $profilePath
 Remove-Item Env:ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
 Remove-Item Env:ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
+Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 
 $aoProcess = Start-Process -FilePath $AoExecutable -PassThru
 
@@ -121,6 +138,7 @@ $runtime = @{
     profile = $profilePath
     base_url = $baseUrl
     router_port = $AgentRouterPort
+    credential_overrides_cleared = @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
     started_at = (Get-Date).ToUniversalTime().ToString("o")
 }
 $temporaryPath = "$runtimePath.tmp"
