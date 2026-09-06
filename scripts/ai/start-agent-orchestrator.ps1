@@ -1,6 +1,6 @@
 param(
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
-    [string]$AoExecutable = "C:\Program Files\agent-orchestrator\agent-orchestrator.exe",
+    [string]$AoExecutable = "",
     [int]$AgentRouterPort = 20128,
     [string]$ExpectedAoVersion = "0.12.10",
     [int]$StartupTimeoutSeconds = 30,
@@ -17,35 +17,20 @@ $runtimePath = Join-Path $handoffRoot "ao-router-runtime.json"
 if (-not (Test-Path $settingsPath)) {
     throw "AgentRouter Claude profile is missing: $settingsPath"
 }
-if (-not (Test-Path $AoExecutable)) {
-    throw "Agent Orchestrator executable is missing: $AoExecutable"
+$aoExecutablePath = if ([string]::IsNullOrWhiteSpace($AoExecutable)) {
+    Resolve-ShipDeAoExecutable
+} else {
+    if (-not (Test-Path -LiteralPath $AoExecutable -PathType Leaf)) {
+        throw "Agent Orchestrator executable is missing: $AoExecutable"
+    }
+    (Get-Item -LiteralPath $AoExecutable).FullName
 }
-if (-not (Get-Command "ao" -ErrorAction SilentlyContinue)) {
-    throw "Missing required command: ao. Install the AO CLI before launching Agent Orchestrator."
-}
-
-$versionOutput = @(& ao version 2>&1)
-$versionText = (@($versionOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
-if ($LASTEXITCODE -ne 0) {
-    throw "Cannot determine AO version: $versionText"
-}
-$versions = @(
-    [regex]::Matches($versionText, '(?<!\d)(\d+\.\d+\.\d+)(?!\d)') |
-        ForEach-Object { $_.Groups[1].Value } |
-        Select-Object -Unique
-)
-if ($versions.Count -ne 1 -or $versions[0] -ne $ExpectedAoVersion) {
-    throw "AO version '$($versions -join ', ')' does not match pinned version $ExpectedAoVersion."
-}
-$binaryVersionText = [string](Get-Item -LiteralPath $AoExecutable).VersionInfo.ProductVersion
-$binaryVersions = @(
-    [regex]::Matches($binaryVersionText, '(?<!\d)(\d+\.\d+\.\d+)(?!\d)') |
-        ForEach-Object { $_.Groups[1].Value } |
-        Select-Object -Unique
-)
-if ($binaryVersions.Count -ne 1 -or $binaryVersions[0] -ne $ExpectedAoVersion) {
-    throw "Agent Orchestrator binary version '$binaryVersionText' does not match pinned version $ExpectedAoVersion."
-}
+$aoVersionProbe = Get-ShipDeAoVersionProbe -AoExecutable $aoExecutablePath
+$aoVersionEvidence = Assert-ShipDeAoVersionEvidence `
+    -AoExecutable $aoExecutablePath `
+    -ExpectedVersion $ExpectedAoVersion `
+    -VersionText $aoVersionProbe.Text `
+    -VersionExitCode $aoVersionProbe.ExitCode
 
 try {
     $config = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -118,9 +103,7 @@ if ($existing.Count -gt 0) {
         throw "Agent Orchestrator is already running. Re-run with -Restart to replace it with the governed AgentRouter profile."
     }
 
-    if (Get-Command "ao" -ErrorAction SilentlyContinue) {
-        & ao stop --timeout 15s 2>$null | Out-Null
-    }
+    & $aoExecutablePath stop --timeout 15s 2>$null | Out-Null
     foreach ($process in $existing) {
         if (-not $process.HasExited -and $process.MainWindowHandle -ne 0) {
             $process.CloseMainWindow() | Out-Null
@@ -149,7 +132,7 @@ try {
             Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
             throw "Agent Orchestrator exited during startup with code $($aoProcess.ExitCode)."
         }
-        $statusOutput = @(& ao status --json 2>$null)
+        $statusOutput = @(& $aoExecutablePath status --json 2>$null)
         if ($LASTEXITCODE -eq 0 -and $statusOutput.Count -gt 0) {
             try {
                 $status = ($statusOutput -join [Environment]::NewLine) | ConvertFrom-Json
@@ -181,8 +164,10 @@ $runtime = @{
     profile = $profilePath
     base_url = $baseUrl
     router_port = $AgentRouterPort
-    ao_version = $versions[0]
-    ao_binary_version = $binaryVersions[0]
+    ao_version = $aoVersionEvidence.EffectiveVersion
+    ao_binary_version = $aoVersionEvidence.BinaryVersion
+    ao_version_source = $aoVersionEvidence.Source
+    ao_executable = $aoExecutablePath
     credential_overrides_cleared = @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
     started_at = (Get-Date).ToUniversalTime().ToString("o")
 }

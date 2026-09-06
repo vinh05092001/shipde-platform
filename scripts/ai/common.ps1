@@ -10,6 +10,161 @@ function Assert-ShipDeCommand {
     }
 }
 
+function Get-ShipDeCanonicalAoExecutablePath {
+    param(
+        [string]$ProgramFilesRoot = $null
+    )
+
+    $roots = @()
+    if (-not [string]::IsNullOrWhiteSpace($ProgramFilesRoot)) {
+        $roots += $ProgramFilesRoot
+    } else {
+        foreach ($environmentName in @("ProgramW6432", "ProgramFiles")) {
+            $environmentValue = [Environment]::GetEnvironmentVariable($environmentName)
+            if (-not [string]::IsNullOrWhiteSpace($environmentValue) -and $roots -notcontains $environmentValue) {
+                $roots += $environmentValue
+            }
+        }
+    }
+
+    foreach ($root in $roots) {
+        $candidate = Join-Path $root "agent-orchestrator\resources\daemon\ao.exe"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Get-Item -LiteralPath $candidate).FullName
+        }
+    }
+    return $null
+}
+
+function Resolve-ShipDeAoExecutable {
+    param(
+        [scriptblock]$CommandResolver = { Get-Command "ao" -CommandType Application -ErrorAction SilentlyContinue },
+        [string]$ProgramFilesRoot = $null
+    )
+
+    $command = & $CommandResolver
+    if ($null -ne $command) {
+        $commandPath = @(
+            $command | ForEach-Object {
+                foreach ($propertyName in @("Path", "Source", "Definition")) {
+                    $property = $_.PSObject.Properties[$propertyName]
+                    if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                        [string]$property.Value
+                        break
+                    }
+                }
+            }
+        ) | Select-Object -First 1
+        if (-not [string]::IsNullOrWhiteSpace([string]$commandPath)) {
+            return [string]$commandPath
+        }
+    }
+
+    $canonicalPath = Get-ShipDeCanonicalAoExecutablePath -ProgramFilesRoot $ProgramFilesRoot
+    if (-not [string]::IsNullOrWhiteSpace($canonicalPath)) {
+        return $canonicalPath
+    }
+
+    throw "Missing required command: ao. The canonical Windows desktop executable was not found at C:\Program Files\agent-orchestrator\resources\daemon\ao.exe."
+}
+
+function Get-ShipDeAoVersionProbe {
+    param([Parameter(Mandatory = $true)][string]$AoExecutable)
+
+    $output = @(& $AoExecutable version 2>&1)
+    return [PSCustomObject]@{
+        Text = (@($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+        ExitCode = $LASTEXITCODE
+    }
+}
+
+function Assert-ShipDeAoVersionEvidence {
+    param(
+        [Parameter(Mandatory = $true)][string]$AoExecutable,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion,
+        [AllowEmptyString()][string]$VersionText = $null,
+        [int]$VersionExitCode = 0,
+        [string]$ProgramFilesRoot = $null,
+        [scriptblock]$ProductVersionReader = $null
+    )
+
+    if ($null -eq $VersionText) {
+        $probe = Get-ShipDeAoVersionProbe -AoExecutable $AoExecutable
+        $VersionText = $probe.Text
+        $VersionExitCode = $probe.ExitCode
+    }
+    if ($VersionExitCode -ne 0) {
+        throw "Cannot determine AO version: $VersionText"
+    }
+
+    $versionLines = @(
+        $VersionText -split "`r?`n" |
+            Where-Object { $_ -match '(?i)^\s*ao\s+version(?:\s|$)' }
+    )
+    if ($versionLines.Count -eq 0) {
+        throw "AO version '$VersionText' is missing or unverifiable."
+    }
+    $versionMetadataText = $versionLines -join [Environment]::NewLine
+
+    $semanticPattern = '(?<![0-9A-Za-z])v?(?<version>\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?)(?![0-9A-Za-z])'
+    $semanticVersions = @(
+        [regex]::Matches($versionMetadataText, $semanticPattern) |
+            ForEach-Object { $_.Groups["version"].Value } |
+            Select-Object -Unique
+    )
+    if ($semanticVersions.Count -gt 1) {
+        throw "AO returned ambiguous semantic build metadata '$versionMetadataText'."
+    }
+    if ($semanticVersions.Count -eq 1) {
+        $semanticVersion = [string]$semanticVersions[0]
+        $semanticCore = ($semanticVersion -split '\+', 2)[0]
+        if ($semanticCore -ne $ExpectedVersion) {
+            throw "AO version '$semanticVersion' does not match pinned version $ExpectedVersion."
+        }
+        return [PSCustomObject]@{
+            EffectiveVersion = $ExpectedVersion
+            ReportedVersion = $semanticVersion
+            BinaryVersion = $null
+            Source = "semantic-build-metadata"
+            Executable = $AoExecutable
+        }
+    }
+
+    if ($versionMetadataText -notmatch '(?i)(?<![0-9A-Za-z-])dev(?![0-9A-Za-z-])') {
+        throw "AO version '$versionMetadataText' is missing or unverifiable."
+    }
+
+    $canonicalPath = Get-ShipDeCanonicalAoExecutablePath -ProgramFilesRoot $ProgramFilesRoot
+    if ([string]::IsNullOrWhiteSpace($canonicalPath) -or
+        -not [string]::Equals($canonicalPath, $AoExecutable, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "AO reported dev from a non-canonical executable; its pinned version is unverifiable."
+    }
+
+    if ($null -ne $ProductVersionReader) {
+        $productVersion = [string](& $ProductVersionReader $AoExecutable)
+    } else {
+        try {
+            $productVersion = [string](Get-Item -LiteralPath $AoExecutable -ErrorAction Stop).VersionInfo.ProductVersion
+        } catch {
+            throw "AO ProductVersion could not be read from canonical executable '$AoExecutable'."
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($productVersion) -or $productVersion -notmatch '^\d+\.\d+\.\d+$') {
+        throw "AO ProductVersion '$productVersion' is missing or malformed; expected exact pinned version $ExpectedVersion."
+    }
+    if ($productVersion -cne $ExpectedVersion) {
+        throw "AO ProductVersion '$productVersion' does not match pinned version $ExpectedVersion."
+    }
+
+    return [PSCustomObject]@{
+        EffectiveVersion = $ExpectedVersion
+        ReportedVersion = "dev"
+        BinaryVersion = $productVersion
+        Source = "windows-product-version"
+        Executable = $AoExecutable
+    }
+}
+
 function Get-ShipDePaths {
     param([string]$AiRoot = (Join-Path $env:USERPROFILE "AI"))
 

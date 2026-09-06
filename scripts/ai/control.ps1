@@ -1332,7 +1332,7 @@ function Get-ShipDeAoExactHeadCodexVerdict {
         [Parameter(Mandatory = $true)][string]$HeadSha
     )
 
-    $output = @(& ao review ls $SessionId --json 2>&1)
+$output = @(& (Get-ShipDeAoInvocationPath) review ls $SessionId --json 2>&1)
     $exitCode = $LASTEXITCODE
     $text = Join-ShipDeNativeOutput -Output $output
     if ($exitCode -ne 0) {
@@ -1719,29 +1719,28 @@ $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.j
 $script:AgentRouterProfile = Join-Path $env:USERPROFILE ".claude"
 $script:AgentRouterPort = 20128
 $script:ExpectedAoVersion = "0.12.10"
+$script:AoExecutablePath = $null
 
 function Assert-ShipDeAoCommand {
-    if (-not (Get-Command "ao" -ErrorAction SilentlyContinue)) {
-        throw "Missing required command: ao. Install the AO CLI before supervisor mode."
+    $script:AoExecutablePath = Resolve-ShipDeAoExecutable
+    return $script:AoExecutablePath
+}
+
+function Get-ShipDeAoInvocationPath {
+    if ([string]::IsNullOrWhiteSpace([string]$script:AoExecutablePath)) {
+        $script:AoExecutablePath = Assert-ShipDeAoCommand
     }
+    return $script:AoExecutablePath
 }
 
 function Assert-ShipDeAoVersion {
-    $output = @(& ao version 2>&1)
-    $exitCode = $LASTEXITCODE
-    $text = Join-ShipDeNativeOutput -Output $output
-    if ($exitCode -ne 0) {
-        throw "Cannot determine AO version: $text"
-    }
-
-    $versions = @(
-        [regex]::Matches($text, '(?<!\d)(\d+\.\d+\.\d+)(?!\d)') |
-            ForEach-Object { $_.Groups[1].Value } |
-            Select-Object -Unique
-    )
-    if ($versions.Count -ne 1 -or $versions[0] -ne $script:ExpectedAoVersion) {
-        throw "AO version '$($versions -join ', ')' does not match pinned version $($script:ExpectedAoVersion)."
-    }
+    $aoExecutable = Get-ShipDeAoInvocationPath
+    $probe = Get-ShipDeAoVersionProbe -AoExecutable $aoExecutable
+    return (Assert-ShipDeAoVersionEvidence `
+        -AoExecutable $aoExecutable `
+        -ExpectedVersion $script:ExpectedAoVersion `
+        -VersionText $probe.Text `
+        -VersionExitCode $probe.ExitCode)
 }
 
 function Join-ShipDeNativeOutput {
@@ -1801,7 +1800,7 @@ function Get-ShipDeAoSessionId {
 
 function Test-ShipDeAoReadiness {
     try {
-        $output = @(& ao status --json 2>&1)
+$output = @(& (Get-ShipDeAoInvocationPath) status --json 2>&1)
         $exitCode = $LASTEXITCODE
         $text = Join-ShipDeNativeOutput -Output $output
         if ($exitCode -ne 0) {
@@ -1883,7 +1882,11 @@ function Assert-ShipDeAgentRouterProfile {
     if ([string]$runtime.ao_version -ne $script:ExpectedAoVersion) {
         throw "AO CLI runtime marker version does not match pinned version $($script:ExpectedAoVersion)."
     }
-    if ([string]$runtime.ao_binary_version -ne $script:ExpectedAoVersion) {
+    $versionSource = [string]$runtime.ao_version_source
+    if ($versionSource -notin @("semantic-build-metadata", "windows-product-version")) {
+        throw "AO runtime marker has an unsupported version evidence source."
+    }
+    if ($versionSource -eq "windows-product-version" -and [string]$runtime.ao_binary_version -ne $script:ExpectedAoVersion) {
         throw "AO binary runtime marker version does not match pinned version $($script:ExpectedAoVersion)."
     }
     $clearedOverrides = @($runtime.credential_overrides_cleared)
@@ -1940,7 +1943,7 @@ function Get-ShipDeAoSessionById {
         [string]$Project = "shipde-platform"
     )
 
-    $output = @(& ao session get $SessionId --project $Project --json 2>&1)
+$output = @(& (Get-ShipDeAoInvocationPath) session get $SessionId --project $Project --json 2>&1)
     $exitCode = $LASTEXITCODE
     $text = Join-ShipDeNativeOutput -Output $output
     if ($exitCode -ne 0) {
@@ -2020,7 +2023,7 @@ function New-ShipDeAoSpawnArguments {
 function Get-ShipDeAoSessions {
     param([string]$Project = "shipde-platform")
 
-    $output = @(& ao session ls --project $Project --json 2>&1)
+$output = @(& (Get-ShipDeAoInvocationPath) session ls --project $Project --json 2>&1)
     $exitCode = $LASTEXITCODE
     $text = Join-ShipDeNativeOutput -Output $output
     if ($exitCode -ne 0) {
@@ -2137,7 +2140,7 @@ function Start-ShipDeAoWorker {
             } catch {}
         }
 
-        $output = @(& ao @arguments 2>&1)
+        $output = @(& (Get-ShipDeAoInvocationPath) @arguments 2>&1)
         $exitCode = $LASTEXITCODE
         $text = Join-ShipDeNativeOutput -Output $output
         if ($exitCode -eq 0) {
@@ -2180,7 +2183,7 @@ function Send-ShipDeAoMessage {
         [Parameter(Mandatory = $true)][string]$Message
     )
 
-    $output = @(& ao send --session $SessionId --message $Message 2>&1)
+    $output = @(& (Get-ShipDeAoInvocationPath) send --session $SessionId --message $Message 2>&1)
     if ($LASTEXITCODE -ne 0) {
         Write-Warning ("AO message failed for {0}: {1}" -f $SessionId, (Join-ShipDeNativeOutput -Output $output))
         return $false
@@ -2191,7 +2194,7 @@ function Send-ShipDeAoMessage {
 function Start-ShipDeAoReview {
     param([Parameter(Mandatory = $true)][string]$SessionId)
 
-    $output = @(& ao review trigger $SessionId 2>&1)
+    $output = @(& (Get-ShipDeAoInvocationPath) review trigger $SessionId 2>&1)
     if ($LASTEXITCODE -ne 0) {
         Write-Warning ("AO Codex review trigger failed: {0}" -f (Join-ShipDeNativeOutput -Output $output))
         return $false
@@ -2545,6 +2548,103 @@ function Invoke-ShipDeSupervisorLoop {
 }
 
 function Assert-ShipDeSupervisorCompatibility {
+    $aoFixtureRoot = Join-Path $env:TEMP "task-ai-06-ao-$([Guid]::NewGuid().ToString('N'))"
+    $aoFixturePath = Join-Path $aoFixtureRoot "agent-orchestrator\resources\daemon\ao.exe"
+    try {
+        New-Item -ItemType Directory -Path (Split-Path $aoFixturePath -Parent) -Force | Out-Null
+        New-Item -ItemType File -Path $aoFixturePath -Force | Out-Null
+
+        $resolvedCanonicalAo = Resolve-ShipDeAoExecutable `
+            -CommandResolver { return $null } `
+            -ProgramFilesRoot $aoFixtureRoot
+        if ($resolvedCanonicalAo -ne (Get-Item -LiteralPath $aoFixturePath).FullName) {
+            throw "AO PATH-absence canonical discovery compatibility test failed."
+        }
+
+        $semanticEvidence = Assert-ShipDeAoVersionEvidence `
+            -AoExecutable $resolvedCanonicalAo `
+            -ExpectedVersion $script:ExpectedAoVersion `
+            -VersionText "ao version 0.12.10+desktop.1" `
+            -ProgramFilesRoot $aoFixtureRoot `
+            -ProductVersionReader { throw "ProductVersion must not be consulted when AO returns semantic build metadata." }
+        if ($semanticEvidence.Source -ne "semantic-build-metadata" -or $semanticEvidence.EffectiveVersion -ne $script:ExpectedAoVersion) {
+            throw "AO semantic build metadata preference compatibility test failed."
+        }
+
+        $devEvidence = Assert-ShipDeAoVersionEvidence `
+            -AoExecutable $resolvedCanonicalAo `
+            -ExpectedVersion $script:ExpectedAoVersion `
+            -VersionText "ao version dev" `
+            -ProgramFilesRoot $aoFixtureRoot `
+            -ProductVersionReader { param($path) return "0.12.10" }
+        if ($devEvidence.Source -ne "windows-product-version" -or $devEvidence.BinaryVersion -ne $script:ExpectedAoVersion) {
+            throw "AO dev ProductVersion compatibility test failed."
+        }
+
+        $mismatchedProductVersionRejected = $false
+        try {
+            Assert-ShipDeAoVersionEvidence `
+                -AoExecutable $resolvedCanonicalAo `
+                -ExpectedVersion $script:ExpectedAoVersion `
+                -VersionText "ao version dev" `
+                -ProgramFilesRoot $aoFixtureRoot `
+                -ProductVersionReader { param($path) return "0.12.11" } | Out-Null
+        } catch {
+            $mismatchedProductVersionRejected = $true
+        }
+        if (-not $mismatchedProductVersionRejected) {
+            throw "AO mismatched ProductVersion fail-closed compatibility test failed."
+        }
+
+        $unverifiableVersionRejected = $false
+        try {
+            Assert-ShipDeAoVersionEvidence `
+                -AoExecutable $resolvedCanonicalAo `
+                -ExpectedVersion $script:ExpectedAoVersion `
+                -VersionText "ao version dev" `
+                -ProgramFilesRoot $aoFixtureRoot `
+                -ProductVersionReader { param($path) return "not-a-version" } | Out-Null
+        } catch {
+            $unverifiableVersionRejected = $true
+        }
+        if (-not $unverifiableVersionRejected) {
+            throw "AO malformed ProductVersion fail-closed compatibility test failed."
+        }
+
+        $missingProductVersionRejected = $false
+        try {
+            Assert-ShipDeAoVersionEvidence `
+                -AoExecutable $resolvedCanonicalAo `
+                -ExpectedVersion $script:ExpectedAoVersion `
+                -VersionText "ao version dev" `
+                -ProgramFilesRoot $aoFixtureRoot `
+                -ProductVersionReader { param($path) return "" } | Out-Null
+        } catch {
+            $missingProductVersionRejected = $true
+        }
+        if (-not $missingProductVersionRejected) {
+            throw "AO missing ProductVersion fail-closed compatibility test failed."
+        }
+
+        $missingVersionRejected = $false
+        try {
+            Assert-ShipDeAoVersionEvidence `
+                -AoExecutable $resolvedCanonicalAo `
+                -ExpectedVersion $script:ExpectedAoVersion `
+                -VersionText "" `
+                -ProgramFilesRoot $aoFixtureRoot | Out-Null
+        } catch {
+            $missingVersionRejected = $true
+        }
+        if (-not $missingVersionRejected) {
+            throw "AO missing version fail-closed compatibility test failed."
+        }
+    } finally {
+        if (Test-Path -LiteralPath $aoFixtureRoot) {
+            Remove-Item -LiteralPath $aoFixtureRoot -Recurse -Force
+        }
+    }
+
     $plain = ConvertFrom-ShipDeAoJson -Json '{"id":"ao-1"}' -Operation "self-test"
     if ((Get-ShipDeAoSessionId -Response $plain) -ne "ao-1") {
         throw "AO plain session JSON compatibility test failed."
