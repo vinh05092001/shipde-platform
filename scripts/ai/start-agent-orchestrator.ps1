@@ -77,6 +77,7 @@ function Test-AgentRouterEndpoint {
     }
 }
 
+$routerProcess = $null
 if (-not (Test-AgentRouterEndpoint)) {
     $routerCommand = Get-Command "9router" -ErrorAction SilentlyContinue
     if (-not $routerCommand) {
@@ -86,7 +87,6 @@ if (-not (Test-AgentRouterEndpoint)) {
     $escapedRouterPath = $routerCommand.Source.Replace("'", "''")
     $routerScript = "& '$escapedRouterPath' --host 127.0.0.1 --port $AgentRouterPort"
     $encodedRouterScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($routerScript))
-    $routerProcess = $null
     try {
         $routerProcess = Start-Process powershell.exe -WindowStyle Minimized -ArgumentList @(
             "-NoProfile",
@@ -115,7 +115,38 @@ if (-not (Test-AgentRouterEndpoint)) {
     }
 }
 
-$existing = @(Get-Process "agent-orchestrator" -ErrorAction SilentlyContinue)
+function Get-ExistingAoProcess {
+    param([Parameter(Mandatory = $true)][string]$ExecutablePath)
+
+    $processes = @()
+    foreach ($processName in @("ao", "agent-orchestrator")) {
+        $processes += @(Get-Process -Name $processName -ErrorAction SilentlyContinue)
+    }
+
+    $seen = @{}
+    foreach ($process in $processes) {
+        if ($seen.ContainsKey([string]$process.Id)) {
+            continue
+        }
+        $seen[[string]$process.Id] = $true
+
+        $identity = Get-ShipDeProcessIdentity -Process $process
+        if ($null -eq $identity) {
+            throw "AO process identity could not be verified; refusing to start a duplicate."
+        }
+
+        $sameExecutable = [StringComparer]::OrdinalIgnoreCase.Equals(
+            [string]$identity.Path,
+            [string]$ExecutablePath
+        )
+        if (-not $sameExecutable) {
+            throw "AO process identity cannot be verified for '$($identity.Name)' at '$($identity.Path)'; refusing to start a duplicate."
+        }
+        $process
+    }
+}
+
+$existing = @(Get-ExistingAoProcess -ExecutablePath $aoExecutablePath)
 if ($existing.Count -gt 0) {
     if (-not $Restart) {
         throw "Agent Orchestrator is already running. Re-run with -Restart to replace it with the governed AgentRouter profile."
@@ -128,7 +159,7 @@ if ($existing.Count -gt 0) {
         }
     }
     Start-Sleep -Seconds 2
-    $remaining = @(Get-Process "agent-orchestrator" -ErrorAction SilentlyContinue)
+    $remaining = @(Get-ExistingAoProcess -ExecutablePath $aoExecutablePath)
     if ($remaining.Count -gt 0) {
         $remaining | Stop-Process -Force
     }
@@ -143,15 +174,24 @@ $aoArgs = @()
 if ((Split-Path $aoExecutablePath -Leaf) -ieq "ao.exe") {
     $aoArgs = @("daemon")
 }
-$aoProcess = if ($null -ne $ProcessStarter) {
-    & $ProcessStarter $aoExecutablePath $aoArgs
-} else {
-    Start-Process -FilePath $aoExecutablePath -ArgumentList $aoArgs -PassThru
-}
-
-$deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
-$ready = $false
+$aoProcess = $null
+$aoIdentity = $null
 try {
+    $aoProcess = if ($null -ne $ProcessStarter) {
+        & $ProcessStarter $aoExecutablePath $aoArgs
+    } else {
+        Start-Process -FilePath $aoExecutablePath -ArgumentList $aoArgs -PassThru
+    }
+    if ($null -eq $aoProcess) {
+        throw "Agent Orchestrator process was not created."
+    }
+    $aoIdentity = Get-ShipDeProcessIdentity -Process $aoProcess
+    if ($null -eq $aoIdentity) {
+        throw "Agent Orchestrator process identity could not be verified; refusing to write a runtime marker."
+    }
+
+    $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
+    $ready = $false
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 500
         if ($aoProcess.HasExited) {
@@ -179,6 +219,27 @@ try {
         Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
         throw "Agent Orchestrator did not report ready within $StartupTimeoutSeconds seconds."
     }
+
+    New-Item -ItemType Directory -Path $handoffRoot -Force | Out-Null
+    $runtime = @{
+        marker_version = 2
+        process_id = $aoIdentity.Id
+        process_name = $aoIdentity.Name
+        process_path = $aoIdentity.Path
+        process_start_time = $aoIdentity.StartTimeUtc
+        profile = $profilePath
+        base_url = $baseUrl
+        router_port = $AgentRouterPort
+        ao_version = $aoVersionEvidence.EffectiveVersion
+        ao_binary_version = $aoVersionEvidence.BinaryVersion
+        ao_version_source = $aoVersionEvidence.Source
+        ao_executable = $aoExecutablePath
+        credential_overrides_cleared = @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+        started_at = (Get-Date).ToUniversalTime().ToString("o")
+    }
+    $temporaryPath = "$runtimePath.tmp"
+    $runtime | ConvertTo-Json | Set-Content -Path $temporaryPath -Encoding UTF8
+    Move-Item -LiteralPath $temporaryPath -Destination $runtimePath -Force
 } catch {
     if ($aoProcess -and -not $aoProcess.HasExited) {
         $aoProcess | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -189,23 +250,6 @@ try {
     Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
     throw
 }
-
-New-Item -ItemType Directory -Path $handoffRoot -Force | Out-Null
-$runtime = @{
-    process_id = $aoProcess.Id
-    profile = $profilePath
-    base_url = $baseUrl
-    router_port = $AgentRouterPort
-    ao_version = $aoVersionEvidence.EffectiveVersion
-    ao_binary_version = $aoVersionEvidence.BinaryVersion
-    ao_version_source = $aoVersionEvidence.Source
-    ao_executable = $aoExecutablePath
-    credential_overrides_cleared = @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
-    started_at = (Get-Date).ToUniversalTime().ToString("o")
-}
-$temporaryPath = "$runtimePath.tmp"
-$runtime | ConvertTo-Json | Set-Content -Path $temporaryPath -Encoding UTF8
-Move-Item -LiteralPath $temporaryPath -Destination $runtimePath -Force
 
 Write-Host "Agent Orchestrator is ready through AgentRouter."
 Write-Host "Profile : $profilePath"

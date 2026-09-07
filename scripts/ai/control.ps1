@@ -1980,6 +1980,91 @@ function Test-ShipDeAgentRouterEndpoint {
     }
 }
 
+function Assert-ShipDeAoRuntimeMarker {
+    param(
+        [Parameter(Mandatory = $true)][object]$Runtime,
+        [Parameter(Mandatory = $true)][string]$ExpectedProfile,
+        [Parameter(Mandatory = $true)][string]$ExpectedBaseUrl,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion,
+        [Parameter(Mandatory = $true)][string]$ExpectedExecutable,
+        [scriptblock]$ProcessResolver = { param($id) Get-Process -Id $id -ErrorAction SilentlyContinue }
+    )
+
+    if ([int]$Runtime.marker_version -ne 2) {
+        throw "AO router runtime marker is stale. Restart AO through the governed launcher."
+    }
+    if ([string]$Runtime.profile -ne $ExpectedProfile -or [string]$Runtime.base_url -ne $ExpectedBaseUrl) {
+        throw "AO was not launched with the current AgentRouter Claude profile."
+    }
+    if ([string]$Runtime.ao_version -ne $ExpectedVersion) {
+        throw "AO CLI runtime marker version does not match pinned version $ExpectedVersion."
+    }
+    $versionSource = [string]$Runtime.ao_version_source
+    if ($versionSource -notin @("semantic-build-metadata", "windows-product-version")) {
+        throw "AO runtime marker has an unsupported version evidence source."
+    }
+    if ($versionSource -eq "windows-product-version" -and [string]$Runtime.ao_binary_version -ne $ExpectedVersion) {
+        throw "AO binary runtime marker version does not match pinned version $ExpectedVersion."
+    }
+
+    $clearedOverrides = @($Runtime.credential_overrides_cleared)
+    foreach ($requiredOverride in @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+        if ($clearedOverrides -notcontains $requiredOverride) {
+            throw "AO runtime marker does not prove that $requiredOverride was cleared before launch."
+        }
+    }
+
+    $processId = 0
+    if (-not [int]::TryParse([string]$Runtime.process_id, [ref]$processId) -or $processId -le 0) {
+        throw "AO router runtime marker does not contain a valid process ID."
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$Runtime.ao_executable) -or
+        -not [StringComparer]::OrdinalIgnoreCase.Equals([string]$Runtime.ao_executable, $ExpectedExecutable) -or
+        [string]::IsNullOrWhiteSpace([string]$Runtime.process_path) -or
+        -not [StringComparer]::OrdinalIgnoreCase.Equals([string]$Runtime.process_path, [string]$Runtime.ao_executable) -or
+        [string]::IsNullOrWhiteSpace([string]$Runtime.process_name) -or
+        [string]::IsNullOrWhiteSpace([string]$Runtime.process_start_time)) {
+        throw "AO router runtime marker identity cannot be verified. Restart AO through the governed launcher."
+    }
+
+    $markerTimeStyles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+    $markerStartTime = [DateTime]::MinValue
+    $markerStartTimeValid = $true
+    try {
+        $markerStartTime = [DateTime]::Parse([string]$Runtime.process_start_time, [Globalization.CultureInfo]::InvariantCulture, $markerTimeStyles)
+    } catch {
+        $markerStartTimeValid = $false
+    }
+    if (-not $markerStartTimeValid) {
+        throw "AO router runtime marker identity cannot be verified. Restart AO through the governed launcher."
+    }
+    $markerWrittenAt = [DateTime]::MinValue
+    $markerWrittenAtValid = $true
+    try {
+        $markerWrittenAt = [DateTime]::Parse([string]$Runtime.started_at, [Globalization.CultureInfo]::InvariantCulture, $markerTimeStyles)
+    } catch {
+        $markerWrittenAtValid = $false
+    }
+    if (-not $markerWrittenAtValid -or
+        $markerWrittenAt.ToUniversalTime() -lt $markerStartTime.ToUniversalTime()) {
+        throw "AO router runtime marker is stale. Restart AO through the governed launcher."
+    }
+
+    $aoProcess = & $ProcessResolver $processId
+    $identity = Get-ShipDeProcessIdentity -Process $aoProcess
+    if ($null -eq $identity) {
+        throw "AO router runtime marker identity cannot be verified. Restart AO through the governed launcher."
+    }
+    if (
+        $identity.Id -ne $processId -or
+        [string]$identity.Name -cne [string]$Runtime.process_name -or
+        -not [StringComparer]::OrdinalIgnoreCase.Equals([string]$identity.Path, [string]$Runtime.process_path) -or
+        [DateTime]::Parse([string]$identity.StartTimeUtc, [Globalization.CultureInfo]::InvariantCulture, $markerTimeStyles).Ticks -ne $markerStartTime.ToUniversalTime().Ticks
+    ) {
+        throw "AO router runtime marker identity cannot be verified. Restart AO through the governed launcher."
+    }
+}
+
 function Assert-ShipDeAgentRouterProfile {
     $settingsPath = Join-Path $script:AgentRouterProfile "settings.json"
     if (-not (Test-Path $settingsPath)) {
@@ -2017,40 +2102,27 @@ function Assert-ShipDeAgentRouterProfile {
     } catch {
         throw "AO router runtime marker is malformed. Restart AO through the governed launcher."
     }
-    if ([string]$runtime.profile -ne $script:AgentRouterProfile -or [string]$runtime.base_url -ne $baseUrl) {
-        throw "AO was not launched with the current AgentRouter Claude profile."
-    }
-    if ([string]$runtime.ao_version -ne $script:ExpectedAoVersion) {
-        throw "AO CLI runtime marker version does not match pinned version $($script:ExpectedAoVersion)."
-    }
-    $versionSource = [string]$runtime.ao_version_source
-    if ($versionSource -notin @("semantic-build-metadata", "windows-product-version")) {
-        throw "AO runtime marker has an unsupported version evidence source."
-    }
-    if ($versionSource -eq "windows-product-version" -and [string]$runtime.ao_binary_version -ne $script:ExpectedAoVersion) {
-        throw "AO binary runtime marker version does not match pinned version $($script:ExpectedAoVersion)."
-    }
-    $clearedOverrides = @($runtime.credential_overrides_cleared)
-    foreach ($requiredOverride in @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")) {
-        if ($clearedOverrides -notcontains $requiredOverride) {
-            throw "AO runtime marker does not prove that $requiredOverride was cleared before launch."
-        }
-    }
-
-    $processId = 0
-    if (-not [int]::TryParse([string]$runtime.process_id, [ref]$processId) -or $processId -le 0) {
-        throw "AO router runtime marker does not contain a valid process ID."
-    }
-    $aoProcess = Get-Process -Id $processId -ErrorAction SilentlyContinue
-    if ($null -eq $aoProcess -or $aoProcess.ProcessName -ne "agent-orchestrator") {
-        throw "AO router runtime marker is stale. Restart AO through the governed launcher."
-    }
+    Assert-ShipDeAoRuntimeMarker `
+        -Runtime $runtime `
+        -ExpectedProfile $script:AgentRouterProfile `
+        -ExpectedBaseUrl $baseUrl `
+        -ExpectedVersion $script:ExpectedAoVersion `
+        -ExpectedExecutable (Get-ShipDeAoInvocationPath)
 }
 
 function Ensure-ShipDeAgentRouterRuntime {
+    param(
+        [scriptblock]$ProfileValidator = { Assert-ShipDeAgentRouterProfile },
+        [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
+        [scriptblock]$Launcher = {
+            param($Path, $Root, $Port, $Version)
+            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -Restart
+        }
+    )
+
     try {
-        Assert-ShipDeAgentRouterProfile
-        $readiness = Test-ShipDeAoReadiness
+        & $ProfileValidator
+        $readiness = & $ReadinessResolver
         if ($readiness.Ready) {
             return
         }
@@ -2066,13 +2138,13 @@ function Ensure-ShipDeAgentRouterRuntime {
 
     Write-Host "[SUPERVISOR] Starting AO through the AgentRouter Claude profile..."
     try {
-        & $launcherPath -AiRoot $AiRoot -AgentRouterPort $script:AgentRouterPort -ExpectedAoVersion $script:ExpectedAoVersion -Restart
+        & $Launcher $launcherPath $AiRoot $script:AgentRouterPort $script:ExpectedAoVersion
     } catch {
         throw "The governed AO launcher failed: $($_.Exception.Message)"
     }
 
-    Assert-ShipDeAgentRouterProfile
-    $readiness = Test-ShipDeAoReadiness
+    & $ProfileValidator
+    $readiness = & $ReadinessResolver
     if (-not $readiness.Ready) {
         throw "AO is not ready after governed restart: $($readiness.Reason)"
     }
@@ -2777,6 +2849,89 @@ function Assert-ShipDeSupervisorCompatibility {
         $launcherScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") -Raw -Encoding UTF8
         if ($launcherScript -match 'Start-Process\s+-FilePath\s+\$AoExecutable\b') {
             throw "Production regression: start-agent-orchestrator.ps1 passes empty `$AoExecutable parameter instead of resolved `$aoExecutablePath to Start-Process."
+        }
+
+        # TASK-AI-06 bootstrap regressions: preserve launcher failures and bind
+        # the marker to the exact live AO process before Supervise can reuse it.
+        $routerInitialization = $launcherScript.IndexOf('$routerProcess = $null', [StringComparison]::Ordinal)
+        $routerStartupBranch = $launcherScript.IndexOf('if (-not (Test-AgentRouterEndpoint))', [StringComparison]::Ordinal)
+        if ($routerInitialization -lt 0 -or $routerStartupBranch -lt 0 -or $routerInitialization -gt $routerStartupBranch) {
+            throw "AO bootstrap regression: routerProcess is not initialized before the startup branch."
+        }
+        $aoInitialization = $launcherScript.IndexOf('$aoProcess = $null', [StringComparison]::Ordinal)
+        $processStarterInvocation = $launcherScript.IndexOf('& $ProcessStarter', [StringComparison]::Ordinal)
+        $startupTry = $launcherScript.IndexOf('try {', $processStarterInvocation, [StringComparison]::Ordinal)
+        if ($aoInitialization -lt 0 -or $processStarterInvocation -lt 0 -or $startupTry -lt 0 -or $aoInitialization -gt $startupTry) {
+            throw "AO bootstrap regression: launcher failure before process creation is not covered by the startup catch."
+        }
+        $startupCatch = $launcherScript.IndexOf('} catch {', $startupTry, [StringComparison]::Ordinal)
+        $startupRethrow = $launcherScript.IndexOf('    throw', $startupCatch, [StringComparison]::Ordinal)
+        if ($startupCatch -lt 0 -or $startupRethrow -lt 0) {
+            throw "AO bootstrap regression: original launcher startup error is not rethrown."
+        }
+
+        $bootstrapExecutable = Join-Path $env:TEMP "task-ai-06-ao-marker-$([Guid]::NewGuid().ToString('N'))\ao.exe"
+        $bootstrapStartTime = (Get-Date).ToUniversalTime().AddMinutes(-1)
+        $bootstrapProcess = [PSCustomObject]@{
+            Id = 61006
+            HasExited = $false
+            ProcessName = "ao"
+            Path = $bootstrapExecutable
+            StartTime = $bootstrapStartTime
+        }
+        $bootstrapMarker = [PSCustomObject]@{
+            marker_version = 2
+            process_id = $bootstrapProcess.Id
+            process_name = $bootstrapProcess.ProcessName
+            process_path = $bootstrapProcess.Path
+            process_start_time = $bootstrapStartTime.ToString("o")
+            profile = "C:\fixture\.claude"
+            base_url = "http://localhost:20128/v1"
+            ao_version = $script:ExpectedAoVersion
+            ao_binary_version = $null
+            ao_version_source = "semantic-build-metadata"
+            ao_executable = $bootstrapExecutable
+            credential_overrides_cleared = @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+            started_at = (Get-Date).ToUniversalTime().ToString("o")
+        }
+        Assert-ShipDeAoRuntimeMarker `
+            -Runtime $bootstrapMarker `
+            -ExpectedProfile "C:\fixture\.claude" `
+            -ExpectedBaseUrl "http://localhost:20128/v1" `
+            -ExpectedVersion $script:ExpectedAoVersion `
+            -ExpectedExecutable $bootstrapExecutable `
+            -ProcessResolver { param($id) $bootstrapProcess }
+
+        $staleMarkerRejected = $false
+        try {
+            $staleProcess = [PSCustomObject]@{
+                Id = $bootstrapProcess.Id
+                HasExited = $false
+                ProcessName = "ao"
+                Path = "$bootstrapExecutable.stale"
+                StartTime = $bootstrapStartTime
+            }
+            Assert-ShipDeAoRuntimeMarker `
+                -Runtime $bootstrapMarker `
+                -ExpectedProfile "C:\fixture\.claude" `
+                -ExpectedBaseUrl "http://localhost:20128/v1" `
+                -ExpectedVersion $script:ExpectedAoVersion `
+                -ExpectedExecutable $bootstrapExecutable `
+                -ProcessResolver { param($id) $staleProcess } | Out-Null
+        } catch {
+            $staleMarkerRejected = $_.Exception.Message -match "identity cannot be verified"
+        }
+        if (-not $staleMarkerRejected) {
+            throw "AO bootstrap regression: a live AO with a stale marker was accepted."
+        }
+
+        $duplicateLaunches = @{ Count = 0 }
+        Ensure-ShipDeAgentRouterRuntime `
+            -ProfileValidator { } `
+            -ReadinessResolver { return @{ Ready = $true } } `
+            -Launcher { $duplicateLaunches.Count++ }
+        if ($duplicateLaunches.Count -ne 0) {
+            throw "AO bootstrap regression: a governed ready AO would be launched a second time."
         }
 
         $mismatchedProductVersionRejected = $false

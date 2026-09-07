@@ -293,3 +293,50 @@ function Get-ShipDeObjectProperty {
     }
     return $null
 }
+
+function Get-ShipDeProcessIdentity {
+    param([Parameter(Mandatory = $true)][object]$Process)
+
+    if ($null -eq $Process) {
+        return $null
+    }
+
+    try {
+        $refreshMethod = $Process.PSObject.Methods['Refresh']
+        if ($refreshMethod) {
+            $Process.Refresh()
+        }
+        if ([bool]$Process.HasExited) {
+            return $null
+        }
+
+        $processId = 0
+        if (-not [int]::TryParse([string]$Process.Id, [ref]$processId) -or $processId -le 0) {
+            return $null
+        }
+
+        $pathProperty = $Process.PSObject.Properties['Path']
+        $processPath = if ($pathProperty) { [string]$pathProperty.Value } else { "" }
+        if ([string]::IsNullOrWhiteSpace($processPath)) {
+            $mainModule = $Process.PSObject.Properties['MainModule']
+            if ($mainModule -and $mainModule.Value) {
+                $processPath = [string]$mainModule.Value.FileName
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($processPath)) {
+            return $null
+        }
+
+        $startTime = [DateTime]$Process.StartTime
+        return [PSCustomObject]@{
+            Id = $processId
+            Name = [string]$Process.ProcessName
+            Path = $processPath
+            StartTimeUtc = $startTime.ToUniversalTime().ToString('o')
+        }
+    } catch {
+        # Process identity is security-sensitive. An inaccessible or exited
+        # process is unverifiable, not evidence that the marker is valid.
+        return $null
+    }
+}
