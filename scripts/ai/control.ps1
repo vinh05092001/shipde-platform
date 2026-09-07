@@ -2869,6 +2869,11 @@ function Assert-ShipDeSupervisorCompatibility {
         if ($startupCatch -lt 0 -or $startupRethrow -lt 0) {
             throw "AO bootstrap regression: original launcher startup error is not rethrown."
         }
+        $liveProcessResolution = $launcherScript.IndexOf('Get-LiveAoProcess', [StringComparison]::Ordinal)
+        $markerProcessBinding = $launcherScript.IndexOf('process_id = $aoIdentity.Id', [StringComparison]::Ordinal)
+        if ($liveProcessResolution -lt 0 -or $markerProcessBinding -lt 0 -or $liveProcessResolution -gt $markerProcessBinding) {
+            throw "AO bootstrap regression: runtime marker is not bound to the verified live daemon process."
+        }
 
         $bootstrapExecutable = Join-Path $env:TEMP "task-ai-06-ao-marker-$([Guid]::NewGuid().ToString('N'))\ao.exe"
         $bootstrapStartTime = (Get-Date).ToUniversalTime().AddMinutes(-1)

@@ -146,6 +146,37 @@ function Get-ExistingAoProcess {
     }
 }
 
+function Get-LiveAoProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [AllowNull()][object]$StartedProcess
+    )
+
+    $processes = @()
+    if ($null -ne $StartedProcess) {
+        $processes += $StartedProcess
+    }
+    # AO may hand daemon ownership to a child process. Resolve the process
+    # again after readiness instead of trusting Start-Process -PassThru's PID.
+    $processes += @(Get-Process -ErrorAction SilentlyContinue)
+
+    $seen = @{}
+    foreach ($process in $processes) {
+        $processId = [string](Get-ShipDeObjectProperty -Object $process -Names @("Id"))
+        if ([string]::IsNullOrWhiteSpace($processId) -or $seen.ContainsKey($processId)) {
+            continue
+        }
+        $seen[$processId] = $true
+
+        $identity = Get-ShipDeProcessIdentity -Process $process
+        if ($null -ne $identity -and
+            [StringComparer]::OrdinalIgnoreCase.Equals([string]$identity.Path, $ExecutablePath)) {
+            return $process
+        }
+    }
+    return $null
+}
+
 $existing = @(Get-ExistingAoProcess -ExecutablePath $aoExecutablePath)
 if ($existing.Count -gt 0) {
     if (-not $Restart) {
@@ -185,19 +216,11 @@ try {
     if ($null -eq $aoProcess) {
         throw "Agent Orchestrator process was not created."
     }
-    $aoIdentity = Get-ShipDeProcessIdentity -Process $aoProcess
-    if ($null -eq $aoIdentity) {
-        throw "Agent Orchestrator process identity could not be verified; refusing to write a runtime marker."
-    }
 
     $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
     $ready = $false
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 500
-        if ($aoProcess.HasExited) {
-            Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
-            throw "Agent Orchestrator exited during startup with code $($aoProcess.ExitCode)."
-        }
         $statusOutput = @(& $aoExecutablePath status --json 2>$null)
         if ($LASTEXITCODE -eq 0 -and $statusOutput.Count -gt 0) {
             try {
@@ -207,6 +230,10 @@ try {
                     break
                 }
             } catch {}
+        }
+        if ($aoProcess.HasExited -and -not $ready) {
+            Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
+            throw "Agent Orchestrator exited during startup with code $($aoProcess.ExitCode)."
         }
     }
     if (-not $ready) {
@@ -218,6 +245,16 @@ try {
         }
         Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
         throw "Agent Orchestrator did not report ready within $StartupTimeoutSeconds seconds."
+    }
+
+    $liveAoProcess = Get-LiveAoProcess -ExecutablePath $aoExecutablePath -StartedProcess $aoProcess
+    if ($null -eq $liveAoProcess) {
+        throw "AO reported ready, but its live daemon process could not be verified; refusing to write a runtime marker."
+    }
+    $aoProcess = $liveAoProcess
+    $aoIdentity = Get-ShipDeProcessIdentity -Process $aoProcess
+    if ($null -eq $aoIdentity) {
+        throw "AO reported ready, but its daemon process identity could not be verified; refusing to write a runtime marker."
     }
 
     New-Item -ItemType Directory -Path $handoffRoot -Force | Out-Null
