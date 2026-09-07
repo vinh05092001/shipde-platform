@@ -9,6 +9,7 @@ param(
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
+$routerProcess = $null
 
 if ([string]::IsNullOrWhiteSpace($ExpectedAoVersion)) {
     $ExpectedAoVersion = Get-ShipDePinnedAoVersion
@@ -77,7 +78,40 @@ function Test-AgentRouterEndpoint {
     }
 }
 
-$routerProcess = $null
+function Stop-StartedRouterProcess {
+    param([AllowNull()][object]$Process)
+
+    if ($null -eq $Process) {
+        return
+    }
+
+    try {
+        if (-not (Test-StartedRouterProcessExited -Process $Process)) {
+            $Process | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        # Cleanup must never replace the original launcher error.
+    }
+}
+
+function Test-StartedRouterProcessExited {
+    param([AllowNull()][object]$Process)
+
+    if ($null -eq $Process) {
+        return $false
+    }
+
+    try {
+        $refreshMethod = $Process.PSObject.Methods['Refresh']
+        if ($null -ne $refreshMethod) {
+            $Process.Refresh()
+        }
+        return [bool]$Process.HasExited
+    } catch {
+        return $true
+    }
+}
+
 if (-not (Test-AgentRouterEndpoint)) {
     $routerCommand = Get-Command "9router" -ErrorAction SilentlyContinue
     if (-not $routerCommand) {
@@ -100,7 +134,7 @@ if (-not (Test-AgentRouterEndpoint)) {
             -not (Test-AgentRouterEndpoint)
         ) {
             Start-Sleep -Milliseconds 500
-            if ($routerProcess -and $routerProcess.HasExited) {
+            if (Test-StartedRouterProcessExited -Process $routerProcess) {
                 throw "9Router process exited during startup with code $($routerProcess.ExitCode)."
             }
         }
@@ -108,9 +142,7 @@ if (-not (Test-AgentRouterEndpoint)) {
             throw "Port $AgentRouterPort is not serving the expected local 9Router health and version contract."
         }
     } catch {
-        if ($routerProcess -and -not $routerProcess.HasExited) {
-            $routerProcess | Stop-Process -Force -ErrorAction SilentlyContinue
-        }
+        Stop-StartedRouterProcess -Process $routerProcess
         throw
     }
 }
@@ -240,9 +272,7 @@ try {
         if ($aoProcess -and -not $aoProcess.HasExited) {
             $aoProcess | Stop-Process -Force -ErrorAction SilentlyContinue
         }
-        if ($routerProcess -and -not $routerProcess.HasExited) {
-            $routerProcess | Stop-Process -Force -ErrorAction SilentlyContinue
-        }
+        Stop-StartedRouterProcess -Process $routerProcess
         Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
         throw "Agent Orchestrator did not report ready within $StartupTimeoutSeconds seconds."
     }
@@ -281,9 +311,7 @@ try {
     if ($aoProcess -and -not $aoProcess.HasExited) {
         $aoProcess | Stop-Process -Force -ErrorAction SilentlyContinue
     }
-    if ($routerProcess -and -not $routerProcess.HasExited) {
-        $routerProcess | Stop-Process -Force -ErrorAction SilentlyContinue
-    }
+    Stop-StartedRouterProcess -Process $routerProcess
     Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
     throw
 }

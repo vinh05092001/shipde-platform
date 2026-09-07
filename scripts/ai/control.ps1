@@ -2858,6 +2858,13 @@ function Assert-ShipDeSupervisorCompatibility {
         if ($routerInitialization -lt 0 -or $routerStartupBranch -lt 0 -or $routerInitialization -gt $routerStartupBranch) {
             throw "AO bootstrap regression: routerProcess is not initialized before the startup branch."
         }
+        $firstLauncherThrow = $launcherScript.IndexOf('throw ', [StringComparison]::Ordinal)
+        $routerCleanupHelper = $launcherScript.IndexOf('function Stop-StartedRouterProcess', [StringComparison]::Ordinal)
+        $routerCleanupCalls = ([regex]::Matches($launcherScript, 'Stop-StartedRouterProcess\s+-Process\s+\$routerProcess')).Count
+        $unsafeRouterDereferences = ([regex]::Matches($launcherScript, '\$routerProcess\.HasExited')).Count
+        if ($firstLauncherThrow -lt 0 -or $routerInitialization -gt $firstLauncherThrow -or $routerCleanupHelper -lt 0 -or $routerCleanupCalls -lt 3 -or $unsafeRouterDereferences -ne 0) {
+            throw "AO bootstrap regression: routerProcess is not initialized and cleaned up safely on every launcher path."
+        }
         $aoInitialization = $launcherScript.IndexOf('$aoProcess = $null', [StringComparison]::Ordinal)
         $processStarterInvocation = $launcherScript.IndexOf('& $ProcessStarter', [StringComparison]::Ordinal)
         $startupTry = $launcherScript.IndexOf('try {', $processStarterInvocation, [StringComparison]::Ordinal)
