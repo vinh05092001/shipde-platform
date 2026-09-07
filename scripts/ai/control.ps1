@@ -249,9 +249,15 @@ function ConvertFrom-ShipDeJsonList {
         return
     }
 
-    # Windows PowerShell 5.1 can emit a JSON array as one pipeline object.
-    # Assign first, then enumerate explicitly so [] produces zero records.
-    $parsed = $Json | ConvertFrom-Json
+    # Windows PowerShell 5.1 emits a JSON array as one pipeline object.
+    # PowerShell Core (6+) unrolls pipeline arrays by default, unrolling [null] to a bare $null.
+    # Passing -NoEnumerate on Core or assigning directly on Windows PowerShell 5.1 preserves
+    # the underlying array structure across both runtime environments.
+    $parsed = if ($PSVersionTable.PSVersion.Major -ge 6) {
+        ConvertFrom-Json -InputObject $Json -NoEnumerate
+    } else {
+        $Json | ConvertFrom-Json
+    }
     foreach ($item in $parsed) {
         if ($null -eq $item) {
             throw "Controller JSON list contains a null record."
