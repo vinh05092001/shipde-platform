@@ -295,7 +295,7 @@ function Get-ShipDeObjectProperty {
 }
 
 function Get-ShipDeProcessIdentity {
-    param([Parameter(Mandatory = $true)][object]$Process)
+    param([AllowNull()][object]$Process)
 
     if ($null -eq $Process) {
         return $null

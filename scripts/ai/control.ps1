@@ -2050,6 +2050,9 @@ function Assert-ShipDeAoRuntimeMarker {
     }
 
     $aoProcess = & $ProcessResolver $processId
+    if ($null -eq $aoProcess) {
+        throw "AO router runtime marker process ID $processId is not running. Restart AO through the governed launcher."
+    }
     $identity = Get-ShipDeProcessIdentity -Process $aoProcess
     if ($null -eq $identity) {
         throw "AO router runtime marker identity cannot be verified. Restart AO through the governed launcher."
@@ -2992,7 +2995,7 @@ function Assert-ShipDeSupervisorCompatibility {
                 -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
                 -EndpointTester { return $true } `
                 -ProcessStarter { param($p, $a) return [PSCustomObject]@{ Id = 71100; HasExited = $false; Path = $p; ProcessName = "ao"; StartTime = $liveStartTime } } `
-                -StatusProbe { param($p) return '{"state":"ready"}' }
+                -StatusProbe { param($p) return '{"state":"ready"}' } 6>$null
 
             if (-not (Test-Path -LiteralPath $behavioralMarker)) {
                 throw "AO bootstrap behavioral regression: runtime marker was not created on successful launch."
@@ -3789,22 +3792,24 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
     }
     $workerSpawnStats = @{ Count = 0 }
     $checkpointWriteStats = @{ Count = 0; LastState = $null }
-    $reusedSessionResult = Initialize-ShipDeSupervisorState `
-        -State $spawnRestartState `
-        -Repository "vinh05092001/shipde-platform" `
-        -OpenPrResolver { @($simulatedMatchingPr, $simulatedUnrelatedPr) } `
-        -ActiveWorkersResolver { @() } `
-        -CodexParker { } `
-        -WorkerStarter {
-            param($it, $pr)
-            $workerSpawnStats.Count++
-            throw "WorkerStarter must NOT be invoked when matching implementation PR already exists!"
-        } `
-        -CheckpointWriter {
-            param($s)
-            $checkpointWriteStats.Count++
-            $checkpointWriteStats.LastState = $s
-        }
+    $reusedSessionResult = & {
+        Initialize-ShipDeSupervisorState `
+            -State $spawnRestartState `
+            -Repository "vinh05092001/shipde-platform" `
+            -OpenPrResolver { @($simulatedMatchingPr, $simulatedUnrelatedPr) } `
+            -ActiveWorkersResolver { @() } `
+            -CodexParker { } `
+            -WorkerStarter {
+                param($it, $pr)
+                $workerSpawnStats.Count++
+                throw "WorkerStarter must NOT be invoked when matching implementation PR already exists!"
+            } `
+            -CheckpointWriter {
+                param($s)
+                $checkpointWriteStats.Count++
+                $checkpointWriteStats.LastState = $s
+            }
+    } 6>$null
 
     if (
         $null -eq $reusedSessionResult -or
@@ -3817,21 +3822,102 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         throw "SPAWNING state recovery with matching PR #9 and unrelated PR #8 failed: did not recover PR #9 without spawning duplicate worker."
     }
 
-    # Negative test: Null state with open implementation PR must fail closed
-    $nullStateWithPrCaught = $false
+    # Governed missing-checkpoint recovery tests:
+    # 1. No checkpoint + PR #8 and #9 open + selector 9 => recover only #9 without duplicate spawn
+    $mockItem9 = [PSCustomObject]@{
+        WorkItemId = "TASK-AI-06"
+        WorkItemPath = "docs/product-spec/work-items/TASK-AI-06.md"
+        Branch = "feat/task-ai-06-orchestrator-supervisor"
+        Author = "GEMINI"
+    }
+    $mockItem8 = [PSCustomObject]@{
+        WorkItemId = "TASK-FOUND-03"
+        WorkItemPath = "docs/product-spec/work-items/TASK-FOUND-03.md"
+        Branch = "feat/task-found-03-api-worker-infrastructure"
+        Author = "GEMINI"
+    }
+
+    $missingCpSpawnStats = @{ Count = 0 }
+    $missingCpCheckpointStats = @{ Count = 0; LastState = $null }
+    $recoveredSelectedResult = & {
+        Initialize-ShipDeSupervisorState `
+            -State $null `
+            -PullRequestNumber 9 `
+            -Repository "vinh05092001/shipde-platform" `
+            -OpenPrResolver { @($simulatedMatchingPr, $simulatedUnrelatedPr) } `
+            -ActiveWorkersResolver { @() } `
+            -PrWorkItemResolver {
+                param($pr)
+                if ($pr.number -eq 9) { return $mockItem9 }
+                if ($pr.number -eq 8) { return $mockItem8 }
+                return $null
+            } `
+            -CodexParker { } `
+            -WorkerStarter {
+                param($it, $pr)
+                $missingCpSpawnStats.Count++
+                throw "WorkerStarter must NOT be called when recovering missing checkpoint from open PR!"
+            } `
+            -CheckpointWriter {
+                param($s)
+                $missingCpCheckpointStats.Count++
+                $missingCpCheckpointStats.LastState = $s
+            }
+    } 6>$null
+
+    if (
+        $null -eq $recoveredSelectedResult -or
+        $recoveredSelectedResult.State -ne "STARTED" -or
+        $recoveredSelectedResult.WorkItemId -ne "TASK-AI-06" -or
+        $recoveredSelectedResult.PullRequestNumber -ne 9 -or
+        $recoveredSelectedResult.HeadSha -ne "fb02d345bbffeb40b21a75bcf6c296a12f49c575" -or
+        $missingCpSpawnStats.Count -ne 0 -or
+        $missingCpCheckpointStats.Count -ne 1 -or
+        $null -eq $missingCpCheckpointStats.LastState -or
+        $missingCpCheckpointStats.LastState.PullRequestNumber -ne 9
+    ) {
+        throw "Missing checkpoint recovery with selector 9 failed: did not reconstruct state for PR #9 properly without duplicate spawn."
+    }
+
+    # 2. No checkpoint + PR #8 and #9 open + no selector => fail closed
+    $noSelectorFailClosedCaught = $false
     try {
         Initialize-ShipDeSupervisorState `
             -State $null `
-            -OpenPrResolver { @($simulatedMatchingPr) } `
+            -PullRequestNumber 0 `
+            -Repository "vinh05092001/shipde-platform" `
+            -OpenPrResolver { @($simulatedMatchingPr, $simulatedUnrelatedPr) } `
+            -WorkerStarter {
+                param($it, $pr)
+                throw "WorkerStarter must NOT be called when failing closed!"
+            } `
+            -CheckpointWriter { param($s) } | Out-Null
+    } catch {
+        if ($_.Exception.Message -match "Supply -PullRequestNumber to recover one exact Work Item") {
+            $noSelectorFailClosedCaught = $true
+        }
+    }
+    if (-not $noSelectorFailClosedCaught) {
+        throw "Missing checkpoint with multiple open PRs and no selector fail-closed test failed: expected exception."
+    }
+
+    # 3. No checkpoint + invalid selector => fail closed
+    $invalidSelectorCaught = $false
+    try {
+        Initialize-ShipDeSupervisorState `
+            -State $null `
+            -PullRequestNumber 999 `
+            -Repository "vinh05092001/shipde-platform" `
+            -OpenPrResolver { @($simulatedMatchingPr, $simulatedUnrelatedPr) } `
             -WorkerStarter { param($it, $pr) throw "Should not spawn" } `
             -CheckpointWriter { param($s) } | Out-Null
     } catch {
-        if ($_.Exception.Message -match "Open implementation Pull Request\(s\) exist without a resumable supervisor checkpoint") {
-            $nullStateWithPrCaught = $true
+        if ($_.Exception.Message -match "Open implementation Pull Request #999 was not found") {
+            $invalidSelectorCaught = $true
         }
     }
-    if (-not $nullStateWithPrCaught) {
-        throw "Null state with open implementation PR fail-closed test failed: expected exception."
+    if (-not $invalidSelectorCaught) {
+        throw "Missing checkpoint with invalid selector fail-closed test failed: expected exception."
     }
 
     # Finding 5 tests: Enforce one-nudge limit
@@ -4019,7 +4105,10 @@ function Initialize-ShipDeSupervisorState {
                 $role = [string](Get-ShipDeObjectProperty -Object $_ -Names @("role", "kind"))
                 (-not $isTerm) -and ($role -in @("worker", ""))
             })
-        }
+        },
+        [int]$PullRequestNumber = 0,
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [scriptblock]$PrWorkItemResolver = { param($pr) Get-ShipDePrWorkItem -PullRequest $pr }
     )
 
     $sessionId = $null
@@ -4129,11 +4218,69 @@ function Initialize-ShipDeSupervisorState {
     $openImplementationPullRequests = @(& $OpenPrResolver | Where-Object {
         Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
     })
+
+    if ($PullRequestNumber -gt 0) {
+        $matchingSelectedPrs = @($openImplementationPullRequests | Where-Object { [int]$_.number -eq $PullRequestNumber })
+        if ($matchingSelectedPrs.Count -eq 0) {
+            throw "Open implementation Pull Request #$PullRequestNumber was not found among open implementation PRs. Failing closed."
+        }
+        $selectedPr = $matchingSelectedPrs[0]
+        $item = & $PrWorkItemResolver $selectedPr
+        if (-not $item) {
+            throw "Cannot resolve governed Work Item assignment for PR #$($selectedPr.number)."
+        }
+        Assert-ShipDeGovernedPullRequest -PullRequest $selectedPr -WorkItemId $item.WorkItemId -Branch $item.Branch -ExpectedRepository $Repository
+
+        $headSha = if ($selectedPr.headRefOid) { [string]$selectedPr.headRefOid } else { "" }
+        if ([string]::IsNullOrWhiteSpace($headSha)) {
+            try {
+                $headSha = (& gh pr view ([int]$selectedPr.number) --repo $Repository --json headRefOid --jq .headRefOid 2>$null)
+                if ($headSha) { $headSha = $headSha.Trim() }
+            } catch {}
+        }
+
+        $recoveredSessionId = $null
+        $recoveredHarness = $null
+        try {
+            $expectedWorkerName = "worker-$($item.WorkItemId.ToLowerInvariant())"
+            $matchingSessions = @(
+                & $ActiveWorkersResolver | Where-Object {
+                    (Get-ShipDeAoSessionName -Session $_) -eq $expectedWorkerName
+                }
+            )
+            if ($matchingSessions.Count -eq 1) {
+                $recoveredSessionId = Get-ShipDeAoSessionId -Response $matchingSessions[0]
+                $sessionDetail = Get-ShipDeAoSessionById -SessionId $recoveredSessionId -Project "shipde-platform"
+                $recoveredHarness = Assert-ShipDeReusedAoSession -SessionDetail $sessionDetail -Item $item -AllowedHarnesses @("agy", "claude-code", "open-code") -Project "shipde-platform"
+            }
+        } catch {}
+
+        $reconstructedState = @{
+            WorkItemId = $item.WorkItemId
+            WorkItemPath = $item.WorkItemPath
+            Branch = $item.Branch
+            Author = $item.Author
+            State = "STARTED"
+            PullRequestNumber = [int]$selectedPr.number
+            HeadSha = $headSha
+            StartTime = (Get-Date).ToUniversalTime().ToString("o")
+            LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+            NudgeCount = 0
+        }
+        if ($recoveredSessionId) {
+            $reconstructedState["SessionId"] = $recoveredSessionId
+            $reconstructedState["Harness"] = $recoveredHarness
+        }
+        Write-Host "[SUPERVISOR] Reconstructed missing checkpoint for PR #$($selectedPr.number) ($($item.WorkItemId)) on $($item.Branch). Continuing without spawning duplicate worker."
+        & $CheckpointWriter $reconstructedState
+        return $reconstructedState
+    }
+
     if ($openImplementationPullRequests.Count -gt 0) {
         $openSummary = @($openImplementationPullRequests | ForEach-Object {
             "#{0} {1}" -f $_.number, $_.title
         }) -join "; "
-        throw "Open implementation Pull Request(s) exist without a resumable supervisor checkpoint: $openSummary. Resume or recover that Work Item before consuming another prepared row."
+        throw "Open implementation Pull Request(s) exist without a resumable supervisor checkpoint: $openSummary. Supply -PullRequestNumber to recover one exact Work Item or resume it before consuming another prepared row."
     }
 
     $activeAoWorkers = @(& $ActiveWorkersResolver)
@@ -4171,6 +4318,10 @@ function Initialize-ShipDeSupervisorState {
 }
 
 function Invoke-ShipDeSupervise {
+    param(
+        [int]$PullRequestNumber = 0
+    )
+
     Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR"
     Assert-ShipDeSupervisorMaxNudges -MaxNudges $SupervisorMaxNudges
     Assert-ShipDeAoCommand
@@ -4178,7 +4329,7 @@ function Invoke-ShipDeSupervise {
     Ensure-ShipDeAgentRouterRuntime
 
     $state = Read-ShipDeSupervisorCheckpoint
-    $state = Initialize-ShipDeSupervisorState -State $state
+    $state = Initialize-ShipDeSupervisorState -State $state -PullRequestNumber $PullRequestNumber -Repository $Repository
     if ($null -eq $state) {
         return
     }
@@ -4270,7 +4421,7 @@ function Show-ShipDeMenu {
                 "4" { Invoke-ShipDeStart }
                 "5" { Invoke-ShipDeReview }
                 "6" { Invoke-ShipDeSync }
-                "7" { Invoke-ShipDeSupervise }
+                "7" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber }
                 "0" { return }
                 default { Write-Warning "Invalid choice." }
             }
@@ -4295,6 +4446,6 @@ switch ($Action) {
     "Start" { Invoke-ShipDeStart }
     "Review" { Invoke-ShipDeReview }
     "Sync" { Invoke-ShipDeSync }
-    "Supervise" { Invoke-ShipDeSupervise }
+    "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber }
     default { Show-ShipDeMenu }
 }
