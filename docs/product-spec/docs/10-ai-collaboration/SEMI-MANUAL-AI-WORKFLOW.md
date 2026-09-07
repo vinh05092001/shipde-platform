@@ -66,7 +66,7 @@ The `contract` check runs for every Pull Request and validates the product speci
 
 ### 4. Controller starts independent Codex review
 
-When `Resume` detects one non-draft implementation Pull Request and every required check is green, it detaches `shipde-codex` at the immutable PR head and runs `codex review --base origin/main`. The review is saved outside the repository. The human confirms before it is posted to GitHub. The reviewer reads repository evidence rather than planning or author chat and returns `PASS`, `CHANGES_REQUIRED` or `BLOCKED`.
+When `Resume` detects one non-draft implementation Pull Request and every required check is green, it detaches `shipde-codex` at the immutable PR head and runs a governed read-only review with structured schema output (`codex exec --sandbox read-only --output-schema <schema-file> --output-last-message <review-file> -` with the review prompt piped via stdin). The review is saved outside the repository. The human confirms before it is posted to GitHub. The reviewer reads repository evidence rather than planning or author chat and returns `PASS`, `CHANGES_REQUIRED` or `BLOCKED`.
 
 If more than one implementation Pull Request is open during bootstrap or recovery, use `control.ps1 -Action Review -PullRequestNumber <number>`. The controller must select that exact open PR or stop; it never guesses between active Work Items.
 
