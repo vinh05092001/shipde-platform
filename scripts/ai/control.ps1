@@ -1121,7 +1121,17 @@ function ConvertFrom-ShipDeCodexReviewOutput {
         Verdict = $verdict
         Report = $report
         Summary = $summary
+        Findings = $findings
     }
+}
+
+function Get-ShipDeCodexReviewArgs {
+    param(
+        [Parameter(Mandatory = $true)][string]$SchemaFile,
+        [Parameter(Mandatory = $true)][string]$LastMessageFile
+    )
+
+    return @("exec", "--sandbox", "read-only", "--output-schema", $SchemaFile, "--output-last-message", $LastMessageFile, "-")
 }
 
 function Invoke-ShipDeReview {
@@ -1130,6 +1140,7 @@ function Invoke-ShipDeReview {
         [switch]$NonInteractive,
         [scriptblock]$GitPreparer = $null,
         [scriptblock]$CodexExecutor = $null,
+        [scriptblock]$CodexInvoker = $null,
         [scriptblock]$CommentPoster = $null,
         [scriptblock]$OpenPrResolver = $null,
         [scriptblock]$PrByNumberResolver = $null,
@@ -1242,17 +1253,21 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
     Remove-Item -Path $diagnosticFile -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $executionFile -Force -ErrorAction SilentlyContinue
     [System.IO.File]::WriteAllText($schemaFile, $schemaJson, [System.Text.UTF8Encoding]::new($false))
-    if ($null -ne $CodexExecutor) {
+    $codexArgs = Get-ShipDeCodexReviewArgs -SchemaFile $schemaFile -LastMessageFile $reviewFile
+    if ($null -ne $CodexInvoker) {
+        $exitCode = & $CodexInvoker $codexArgs $reviewPrompt $schemaFile $reviewFile $executionFile $diagnosticFile
+        if ($null -eq $exitCode) { $exitCode = 0 }
+    } elseif ($null -ne $CodexExecutor) {
         & $CodexExecutor $schemaFile $reviewFile $executionFile $diagnosticFile
         $exitCode = 0
     } else {
         $previousErrorActionPreference = $ErrorActionPreference
         Push-Location $script:Paths.Codex
         try {
-            # The non-interactive review subcommand accepts an explicit JSON schema
-            # and writes the structured model message atomically.
+            # Non-interactive Codex execution with machine-readable structured output schema.
+            # Use read-only sandbox and stdin for the review prompt.
             $ErrorActionPreference = "Continue"
-            $reviewPrompt | & codex exec review --output-schema $schemaFile --output-last-message $reviewFile - 1> $executionFile 2> $diagnosticFile
+            $reviewPrompt | & codex @codexArgs 1> $executionFile 2> $diagnosticFile
             $exitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -1272,9 +1287,32 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
         throw "Codex returned an empty final review. Diagnostics: $diagnosticFile"
     }
 
-    $parsedResult = ConvertFrom-ShipDeCodexReviewOutput -OutputText $rawReviewText
+    $parsedResult = $null
+    try {
+        $parsedResult = ConvertFrom-ShipDeCodexReviewOutput -OutputText $rawReviewText
+    } catch {
+        throw "$($_.Exception.Message) Diagnostics: $diagnosticFile"
+    }
     $verdict = $parsedResult.Verdict
     $reviewText = $parsedResult.Report
+
+    if ($parsedResult.Findings -and $parsedResult.Findings.Count -gt 0) {
+        $missingFindings = @()
+        foreach ($f in $parsedResult.Findings) {
+            $marker = "{0}:{1}" -f $f.file, $f.line
+            if ($reviewText -notmatch [regex]::Escape($marker)) {
+                $missingFindings += $f
+            }
+        }
+        if ($missingFindings.Count -gt 0) {
+            $formattedMissing = @(
+                $missingFindings | ForEach-Object {
+                    "- [{0}] {1} - {2}:{3}`n  {4}" -f $_.priority, $_.title, $_.file, $_.line, $_.description
+                }
+            ) -join "`n`n"
+            $reviewText = $reviewText + [Environment]::NewLine + [Environment]::NewLine + "### Structured Findings" + [Environment]::NewLine + [Environment]::NewLine + $formattedMissing
+        }
+    }
 
     $currentPr = if ($null -ne $PrByNumberResolver) { & $PrByNumberResolver ([int]$pr.number) } else { Get-ShipDePullRequestByNumber -Number ([int]$pr.number) }
     Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
@@ -4253,6 +4291,126 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         }
     }
 
+    # Behavioral test: validate exact Codex argument vector, read-only sandbox, and structured final-message parsing
+    & {
+        $testSchemaFile = "C:\fake\review-schema.json"
+        $testOutputFile = "C:\fake\review-output.json"
+        $actualArgs = Get-ShipDeCodexReviewArgs -SchemaFile $testSchemaFile -LastMessageFile $testOutputFile
+        $expectedArgs = @("exec", "--sandbox", "read-only", "--output-schema", $testSchemaFile, "--output-last-message", $testOutputFile, "-")
+
+        if ($actualArgs.Count -ne $expectedArgs.Count) {
+            throw "Behavioral test failed: Codex argument vector length mismatch ($($actualArgs.Count) vs $($expectedArgs.Count))."
+        }
+        for ($i = 0; $i -lt $expectedArgs.Count; $i++) {
+            if ($actualArgs[$i] -ne $expectedArgs[$i]) {
+                throw "Behavioral test failed: Codex argument vector mismatch at index $i. Expected '$($expectedArgs[$i])', got '$($actualArgs[$i])'."
+            }
+        }
+
+        if ($actualArgs -contains "review") {
+            throw "Behavioral test failed: Codex argument vector must not contain the 'review' subcommand."
+        }
+        $sandboxIdx = [array]::IndexOf($actualArgs, "--sandbox")
+        if ($sandboxIdx -lt 0 -or $sandboxIdx -ge $actualArgs.Count - 1 -or $actualArgs[$sandboxIdx + 1] -ne "read-only") {
+            throw "Behavioral test failed: Codex argument vector must include '--sandbox read-only'."
+        }
+
+        # Invocation test: Invoke-ShipDeReview passing exact argument vector to invoker and parsing final message
+        $capturedInvokerArgs = $null
+        $capturedInvokerPrompt = $null
+        $invokerComments = [System.Collections.Generic.List[string]]::new()
+        $samplePr = [PSCustomObject]@{
+            number = 9
+            title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
+            isDraft = $false
+            isCrossRepository = $false
+            headRepository = "vinh05092001/shipde-platform"
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" },
+                [PSCustomObject]@{ name = "application-gate"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" }
+            )
+            url = "https://github.com/vinh05092001/shipde-platform/pull/9"
+        }
+        $sampleItem = [PSCustomObject]@{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+        }
+
+        $invokerVerdict = Invoke-ShipDeReview `
+            -PullRequestNumber 9 `
+            -NonInteractive `
+            -OpenPrResolver { return @($samplePr) } `
+            -PrByNumberResolver { param($n) return $samplePr } `
+            -ItemResolver { param($p) return $sampleItem } `
+            -GitPreparer { param($p, $sha) } `
+            -CodexInvoker {
+                param($argsVector, $stdinPrompt, $sFile, $rFile, $eFile, $dFile)
+                $script:capturedInvokerArgs = @($argsVector)
+                $script:capturedInvokerPrompt = $stdinPrompt
+                $sampleValidJson = '{"verdict":"CHANGES_REQUIRED","summary":"Actionable findings discovered","findings":[{"priority":"P1","file":"scripts/ai/control.ps1","line":1255,"title":"Exact codex syntax","description":"Use codex exec without review subcommand"}],"report":"## Review Report`n`n- [P1] Exact codex syntax - scripts/ai/control.ps1:1255`n  Use codex exec without review subcommand`n`nVerdict: CHANGES_REQUIRED"}'
+                [System.IO.File]::WriteAllText($rFile, $sampleValidJson, [System.Text.UTF8Encoding]::new($false))
+                [System.IO.File]::WriteAllText($eFile, "sample stdout", [System.Text.UTF8Encoding]::new($false))
+                [System.IO.File]::WriteAllText($dFile, "sample stderr", [System.Text.UTF8Encoding]::new($false))
+                return 0
+            } `
+            -CommentPoster {
+                param($prNum, $commentFile)
+                $invokerComments.Add((Get-Content $commentFile -Raw -Encoding UTF8))
+            }
+
+        if ($invokerVerdict -ne "CHANGES_REQUIRED") {
+            throw "Behavioral test failed: expected CHANGES_REQUIRED verdict, got '$invokerVerdict'."
+        }
+        if ($null -eq $script:capturedInvokerArgs -or $script:capturedInvokerArgs -contains "review" -or $script:capturedInvokerArgs -notcontains "--sandbox") {
+            throw "Behavioral test failed: Codex invoker did not receive expected arguments without review subcommand."
+        }
+        if ([string]::IsNullOrWhiteSpace($script:capturedInvokerPrompt) -or $script:capturedInvokerPrompt -notmatch "detached HEAD") {
+            throw "Behavioral test failed: Codex review prompt was not supplied to stdin."
+        }
+        if ($invokerComments.Count -eq 0 -or $invokerComments[0] -notmatch "Exact codex syntax") {
+            throw "Behavioral test failed: review comments did not include parsed structured findings."
+        }
+
+        # Failure preservation test: verify diagnostics are preserved and reported on exit failure
+        $failureHandledCorrectly = $false
+        try {
+            Invoke-ShipDeReview `
+                -PullRequestNumber 9 `
+                -NonInteractive `
+                -OpenPrResolver { return @($samplePr) } `
+                -PrByNumberResolver { param($n) return $samplePr } `
+                -ItemResolver { param($p) return $sampleItem } `
+                -GitPreparer { param($p, $sha) } `
+                -CodexInvoker {
+                    param($argsVector, $stdinPrompt, $sFile, $rFile, $eFile, $dFile)
+                    [System.IO.File]::WriteAllText($dFile, "Simulated failure diagnostics", [System.Text.UTF8Encoding]::new($false))
+                    return 2
+                } `
+                -CommentPoster { param($prNum, $commentFile) }
+        } catch {
+            if ($_.Exception.Message -match "Codex review failed with exit code 2.*Diagnostics: .*pr-9-.*-diagnostics\.txt") {
+                $failureHandledCorrectly = $true
+            }
+        }
+        if (-not $failureHandledCorrectly) {
+            throw "Behavioral test failed: execution failure did not preserve and report diagnostics path."
+        }
+
+        # Strict schema parser validation: verify parser was not weakened to accept arbitrary prose
+        $proseWasRejected = $false
+        try {
+            ConvertFrom-ShipDeCodexReviewOutput -OutputText "This is prose without JSON`n`nVerdict: PASS" | Out-Null
+        } catch {
+            $proseWasRejected = $true
+        }
+        if (-not $proseWasRejected) {
+            throw "Behavioral test failed: ConvertFrom-ShipDeCodexReviewOutput was weakened to accept prose."
+        }
+    }
+
     # Acceptance test 4: no duplicate worker (PR-only recovery when no reusable AO session exists)
     & {
         $workerStarterStats = @{ Called = $false }
@@ -4534,23 +4692,22 @@ function Initialize-ShipDeSupervisorState {
         if ($matchingPrs.Count -eq 1) {
             $matchedPr = $matchingPrs[0]
             Assert-ShipDeGovernedPullRequest -PullRequest $matchedPr -WorkItemId $workItemId -Branch $branch -ExpectedRepository $Repository
-            Write-Host "[SUPERVISOR] Recovered matching open implementation PR #$($matchedPr.number) for $workItemId on $branch during SPAWNING recovery. Continuing without spawning duplicate worker."
-
             $recoveredSessionId = $null
             $recoveredHarness = $null
-            try {
-                $expectedWorkerName = "worker-$($workItemId.ToLowerInvariant())"
-                $matchingSessions = @(
-                    & $ActiveWorkersResolver | Where-Object {
-                        (Get-ShipDeAoSessionName -Session $_) -eq $expectedWorkerName
-                    }
-                )
-                if ($matchingSessions.Count -eq 1) {
-                    $recoveredSessionId = Get-ShipDeAoSessionId -Response $matchingSessions[0]
-                    $sessionDetail = Get-ShipDeAoSessionById -SessionId $recoveredSessionId -Project "shipde-platform"
-                    $recoveredHarness = Assert-ShipDeReusedAoSession -SessionDetail $sessionDetail -Item ([PSCustomObject]@{ WorkItemId = $workItemId; Branch = $branch }) -AllowedHarnesses @("agy", "claude-code", "open-code") -Project "shipde-platform"
+            $expectedWorkerName = Get-ShipDeAoWorkerName -Item ([PSCustomObject]@{ WorkItemId = $workItemId })
+            $matchingSessions = @(
+                & $ActiveWorkersResolver | Where-Object {
+                    (Get-ShipDeAoSessionName -Session $_) -eq $expectedWorkerName
                 }
-            } catch {}
+            )
+            if ($matchingSessions.Count -gt 1) {
+                throw "Multiple active AO worker sessions match expected worker name '$expectedWorkerName' during SPAWNING recovery."
+            }
+            if ($matchingSessions.Count -eq 1) {
+                $recoveredSessionId = Get-ShipDeAoSessionId -Response $matchingSessions[0]
+                $sessionDetail = Get-ShipDeAoSessionById -SessionId $recoveredSessionId -Project "shipde-platform"
+                $recoveredHarness = Assert-ShipDeReusedAoSession -SessionDetail $sessionDetail -Item ([PSCustomObject]@{ WorkItemId = $workItemId; Branch = $branch }) -AllowedHarnesses @("agy", "claude-code", "open-code") -Project "shipde-platform"
+            }
 
             if ($State -is [System.Collections.IDictionary]) {
                 if ($recoveredSessionId) {
@@ -4626,19 +4783,20 @@ function Initialize-ShipDeSupervisorState {
 
         $recoveredSessionId = $null
         $recoveredHarness = $null
-        try {
-            $expectedWorkerName = "worker-$($item.WorkItemId.ToLowerInvariant())"
-            $matchingSessions = @(
-                & $ActiveWorkersResolver | Where-Object {
-                    (Get-ShipDeAoSessionName -Session $_) -eq $expectedWorkerName
-                }
-            )
-            if ($matchingSessions.Count -eq 1) {
-                $recoveredSessionId = Get-ShipDeAoSessionId -Response $matchingSessions[0]
-                $sessionDetail = Get-ShipDeAoSessionById -SessionId $recoveredSessionId -Project "shipde-platform"
-                $recoveredHarness = Assert-ShipDeReusedAoSession -SessionDetail $sessionDetail -Item $item -AllowedHarnesses @("agy", "claude-code", "open-code") -Project "shipde-platform"
+        $expectedWorkerName = Get-ShipDeAoWorkerName -Item $item
+        $matchingSessions = @(
+            & $ActiveWorkersResolver | Where-Object {
+                (Get-ShipDeAoSessionName -Session $_) -eq $expectedWorkerName
             }
-        } catch {}
+        )
+        if ($matchingSessions.Count -gt 1) {
+            throw "Multiple active AO worker sessions match expected worker name '$expectedWorkerName' during PR recovery."
+        }
+        if ($matchingSessions.Count -eq 1) {
+            $recoveredSessionId = Get-ShipDeAoSessionId -Response $matchingSessions[0]
+            $sessionDetail = Get-ShipDeAoSessionById -SessionId $recoveredSessionId -Project "shipde-platform"
+            $recoveredHarness = Assert-ShipDeReusedAoSession -SessionDetail $sessionDetail -Item $item -AllowedHarnesses @("agy", "claude-code", "open-code") -Project "shipde-platform"
+        }
 
         $reconstructedState = @{
             WorkItemId = $item.WorkItemId
