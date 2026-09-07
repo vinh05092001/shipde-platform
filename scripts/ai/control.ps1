@@ -2106,7 +2106,12 @@ function ConvertFrom-ShipDeAoJson {
         throw "AO returned no JSON for $Operation."
     }
     try {
-        return $Json | ConvertFrom-Json
+        if ($PSVersionTable.PSVersion.Major -ge 6) {
+            $val = ConvertFrom-Json -InputObject $Json -NoEnumerate
+        } else {
+            $val = $Json | ConvertFrom-Json
+        }
+        return ,$val
     } catch {
         throw ("AO returned malformed JSON for {0}: {1}" -f $Operation, $_.Exception.Message)
     }
@@ -2460,6 +2465,13 @@ function ConvertFrom-ShipDeAoSessionResponse {
 
     if (-not ($Response -is [System.Management.Automation.PSCustomObject] -or $Response -is [System.Collections.IDictionary])) {
         throw "AO session ls JSON does not contain a session collection."
+    }
+
+    # If the response is a single worker/session record (e.g. unrolled single-item array from bare JSON)
+    $hasSessionId = ($null -ne (Get-ShipDeObjectProperty -Object $Response -Names @("id", "sessionId", "session_id")))
+    $hasSessionRole = ($null -ne (Get-ShipDeObjectProperty -Object $Response -Names @("role", "kind", "harness", "status", "state")))
+    if ($hasSessionId -and $hasSessionRole) {
+        return @($Response)
     }
 
     # Explicit Shape 2: Observed AO 0.12.12 response { "data": [ ... ], "meta": ... }
