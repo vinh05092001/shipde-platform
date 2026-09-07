@@ -1196,7 +1196,9 @@ function Invoke-ShipDeReview {
         [scriptblock]$ItemResolver = $null,
         [scriptblock]$CurrentGhUserResolver = $null
     )
-    Assert-ShipDeCommand codex
+    if ($null -eq $CodexInvoker -and $null -eq $CodexExecutor) {
+        Assert-ShipDeCommand codex
+    }
     Assert-ShipDeCommand gh
 
     $targetPrNumber = if ($PullRequestNumber -gt 0) { $PullRequestNumber } elseif ($script:PullRequestNumber -gt 0) { $script:PullRequestNumber } else { 0 }
