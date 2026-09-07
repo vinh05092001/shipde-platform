@@ -9,7 +9,8 @@ param(
     [scriptblock]$ProcessStarter = $null,
     [scriptblock]$StatusProbe = $null,
     [scriptblock]$EndpointTester = $null,
-    [scriptblock]$VersionProbe = $null
+    [scriptblock]$VersionProbe = $null,
+    [scriptblock]$ExistingProcessResolver = $null
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -191,6 +192,10 @@ if (-not (Test-AgentRouterEndpoint)) {
 
 function Get-ExistingAoProcess {
     param([Parameter(Mandatory = $true)][string]$ExecutablePath)
+
+    if ($null -ne $ExistingProcessResolver) {
+        return @(& $ExistingProcessResolver $ExecutablePath)
+    }
 
     $processes = @()
     foreach ($processName in @("ao", "agent-orchestrator")) {

@@ -1125,15 +1125,28 @@ function ConvertFrom-ShipDeCodexReviewOutput {
 }
 
 function Invoke-ShipDeReview {
+    param(
+        [int]$PullRequestNumber = 0,
+        [switch]$NonInteractive,
+        [scriptblock]$GitPreparer = $null,
+        [scriptblock]$CodexExecutor = $null,
+        [scriptblock]$CommentPoster = $null,
+        [scriptblock]$OpenPrResolver = $null,
+        [scriptblock]$PrByNumberResolver = $null,
+        [scriptblock]$ItemResolver = $null
+    )
     Assert-ShipDeCommand codex
     Assert-ShipDeCommand gh
-    $pullRequests = @(Get-ShipDeOpenPullRequests | Where-Object {
+
+    $targetPrNumber = if ($PullRequestNumber -gt 0) { $PullRequestNumber } elseif ($script:PullRequestNumber -gt 0) { $script:PullRequestNumber } else { 0 }
+    $openPrs = if ($null -ne $OpenPrResolver) { @(& $OpenPrResolver) } else { @(Get-ShipDeOpenPullRequests) }
+    $pullRequests = @($openPrs | Where-Object {
         Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
     })
-    if ($PullRequestNumber -gt 0) {
-        $pullRequests = @($pullRequests | Where-Object { [int]$_.number -eq $PullRequestNumber })
+    if ($targetPrNumber -gt 0) {
+        $pullRequests = @($pullRequests | Where-Object { [int]$_.number -eq $targetPrNumber })
         if ($pullRequests.Count -eq 0) {
-            throw "Open implementation Pull Request #$PullRequestNumber was not found."
+            throw "Open implementation Pull Request #$targetPrNumber was not found."
         }
     }
     if ($pullRequests.Count -eq 0) {
@@ -1146,7 +1159,7 @@ function Invoke-ShipDeReview {
     }
 
     $pr = $pullRequests[0]
-    $item = Get-ShipDePrWorkItem -PullRequest $pr
+    $item = if ($null -ne $ItemResolver) { & $ItemResolver $pr } else { Get-ShipDePrWorkItem -PullRequest $pr }
     if (-not $item) {
         throw "Cannot resolve governed Work Item assignment for PR #$($pr.number)."
     }
@@ -1172,27 +1185,31 @@ function Invoke-ShipDeReview {
         throw "Pull Request did not provide a valid immutable head SHA."
     }
 
-    Assert-ShipDeRepository -Path $script:Paths.Codex
-    Assert-ShipDeClean -Path $script:Paths.Codex
-    Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @("fetch", "origin", "--prune") | Out-Null
-    Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @(
-        "fetch",
-        "origin",
-        ("refs/pull/{0}/head" -f $pr.number)
-    ) | Out-Null
+    if ($null -ne $GitPreparer) {
+        & $GitPreparer $pr $reviewHeadSha
+    } else {
+        Assert-ShipDeRepository -Path $script:Paths.Codex
+        Assert-ShipDeClean -Path $script:Paths.Codex
+        Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @("fetch", "origin", "--prune") | Out-Null
+        Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @(
+            "fetch",
+            "origin",
+            ("refs/pull/{0}/head" -f $pr.number)
+        ) | Out-Null
 
-    $fetchedHeadSha = (& git -C $script:Paths.Codex rev-parse FETCH_HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $fetchedHeadSha -ne $reviewHeadSha) {
-        throw "Fetched PR head does not match the CI-approved head $reviewHeadSha."
-    }
+        $fetchedHeadSha = (& git -C $script:Paths.Codex rev-parse FETCH_HEAD).Trim()
+        if ($LASTEXITCODE -ne 0 -or $fetchedHeadSha -ne $reviewHeadSha) {
+            throw "Fetched PR head does not match the CI-approved head $reviewHeadSha."
+        }
 
-    $currentPr = Get-ShipDePullRequestByNumber -Number ([int]$pr.number)
-    Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
-    Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @("switch", "--detach", $reviewHeadSha) | Out-Null
+        $currentPr = if ($null -ne $PrByNumberResolver) { & $PrByNumberResolver ([int]$pr.number) } else { Get-ShipDePullRequestByNumber -Number ([int]$pr.number) }
+        Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
+        Invoke-ShipDeGit -Path $script:Paths.Codex -Arguments @("switch", "--detach", $reviewHeadSha) | Out-Null
 
-    $detachedHeadSha = (& git -C $script:Paths.Codex rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $detachedHeadSha -ne $reviewHeadSha) {
-        throw "Codex worktree is not detached at the approved head $reviewHeadSha."
+        $detachedHeadSha = (& git -C $script:Paths.Codex rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0 -or $detachedHeadSha -ne $reviewHeadSha) {
+            throw "Codex worktree is not detached at the approved head $reviewHeadSha."
+        }
     }
 
     New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
@@ -1225,17 +1242,22 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
     Remove-Item -Path $diagnosticFile -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $executionFile -Force -ErrorAction SilentlyContinue
     [System.IO.File]::WriteAllText($schemaFile, $schemaJson, [System.Text.UTF8Encoding]::new($false))
-    $previousErrorActionPreference = $ErrorActionPreference
-    Push-Location $script:Paths.Codex
-    try {
-        # The non-interactive review subcommand accepts an explicit JSON schema
-        # and writes the structured model message atomically.
-        $ErrorActionPreference = "Continue"
-        $reviewPrompt | & codex exec review --output-schema $schemaFile --output-last-message $reviewFile - 1> $executionFile 2> $diagnosticFile
-        $exitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-        Pop-Location
+    if ($null -ne $CodexExecutor) {
+        & $CodexExecutor $schemaFile $reviewFile $executionFile $diagnosticFile
+        $exitCode = 0
+    } else {
+        $previousErrorActionPreference = $ErrorActionPreference
+        Push-Location $script:Paths.Codex
+        try {
+            # The non-interactive review subcommand accepts an explicit JSON schema
+            # and writes the structured model message atomically.
+            $ErrorActionPreference = "Continue"
+            $reviewPrompt | & codex exec review --output-schema $schemaFile --output-last-message $reviewFile - 1> $executionFile 2> $diagnosticFile
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+            Pop-Location
+        }
     }
 
     if ($exitCode -ne 0) {
@@ -1254,7 +1276,7 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
     $verdict = $parsedResult.Verdict
     $reviewText = $parsedResult.Report
 
-    $currentPr = Get-ShipDePullRequestByNumber -Number ([int]$pr.number)
+    $currentPr = if ($null -ne $PrByNumberResolver) { & $PrByNumberResolver ([int]$pr.number) } else { Get-ShipDePullRequestByNumber -Number ([int]$pr.number) }
     Assert-ShipDeReviewTarget -PullRequest $currentPr -ExpectedHeadSha $reviewHeadSha
 
     $targetHeader = '**Review target:** `{0}`' -f $reviewHeadSha
@@ -1316,19 +1338,30 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
     Write-Host ("Execution log : {0}" -f $executionFile)
     Write-Host ("Verdict       : {0}" -f $verdict)
     Write-Host ("GitHub parts  : {0}" -f $commentFiles.Count)
-    $post = Read-Host "Post the complete Codex review to PR #$($pr.number)? (Y/N)"
-    if ($post -match '(?i)^y(?:es)?$') {
+
+    $shouldPost = $false
+    if ($NonInteractive) {
+        $shouldPost = $true
+    } else {
+        $post = Read-Host "Post the complete Codex review to PR #$($pr.number)? (Y/N)"
+        $shouldPost = ($post -match '(?i)^y(?:es)?$')
+    }
+    if ($shouldPost) {
         foreach ($commentFile in $commentFiles) {
-            & gh pr comment $pr.number --repo $Repository --body-file $commentFile
-            if ($LASTEXITCODE -ne 0) {
-                throw "Could not post every review comment. Local review files are preserved."
+            if ($null -ne $CommentPoster) {
+                & $CommentPoster ([int]$pr.number) $commentFile
+            } else {
+                & gh pr comment $pr.number --repo $Repository --body-file $commentFile
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Could not post every review comment. Local review files are preserved."
+                }
             }
         }
     }
 
     if ($verdict -eq "CHANGES_REQUIRED") {
-        $item = Get-ShipDePrWorkItem -PullRequest $pr
-        if ($item) {
+        $item = if ($null -ne $ItemResolver) { & $ItemResolver $pr } else { Get-ShipDePrWorkItem -PullRequest $pr }
+        if ($item -and -not $NonInteractive) {
             $fix = Read-Host "Return findings to $($item.Author) now? (Y/N)"
             if ($fix -match '(?i)^y(?:es)?$') {
                 Start-ShipDeFixRound -PullRequest $pr -Item $item
@@ -1338,6 +1371,8 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
         Write-Host ([string]$pr.url)
         Write-Host "PASS recorded for the immutable head above. Only the human merge owner may merge."
     }
+
+    return $verdict
 }
 
 function Get-ShipDeAoVerdictFromReviewResponse {
@@ -2452,12 +2487,64 @@ function Start-ShipDeAoReview {
     return $true
 }
 
+function Normalize-ShipDeSupervisorState {
+    param([AllowNull()][object]$State)
+
+    if ($null -eq $State) {
+        return $null
+    }
+
+    $now = (Get-Date).ToUniversalTime().ToString("o")
+    $normalized = @{
+        WorkItemId = ""
+        WorkItemPath = ""
+        Branch = ""
+        Author = ""
+        SessionId = $null
+        Harness = $null
+        State = "STARTED"
+        PullRequestNumber = $null
+        HeadSha = $null
+        StartTime = $now
+        LastActivityTime = $now
+        CheckpointTime = $now
+        NudgeCount = 0
+        UnknownPollCount = 0
+        ProviderFailure = $false
+        CiGate = $null
+        ExactHeadVerdict = $null
+        LastCiRepairHead = $null
+        LastAcknowledgedCiRepairHead = $null
+        LastReviewRepairHead = $null
+        LastAcknowledgedReviewRepairHead = $null
+        LastReviewTriggeredHead = $null
+        LastAcknowledgedReviewTriggerHead = $null
+        LastReviewTriggeredAt = $null
+        LastRepairDispatchedAt = $null
+        PendingDispatch = $null
+        RouterFailure = $null
+    }
+
+    if ($State -is [System.Collections.IDictionary]) {
+        foreach ($key in $State.Keys) {
+            $normalized[[string]$key] = $State[$key]
+        }
+    } else {
+        foreach ($prop in $State.PSObject.Properties) {
+            $normalized[$prop.Name] = $prop.Value
+        }
+    }
+
+    return $normalized
+}
+
 function Write-ShipDeSupervisorCheckpoint {
     param([Parameter(Mandatory = $true)][hashtable]$State)
 
-    $State.CheckpointTime = (Get-Date).ToUniversalTime().ToString("o")
+    $normalized = Normalize-ShipDeSupervisorState -State $State
+    $normalized.CheckpointTime = (Get-Date).ToUniversalTime().ToString("o")
     $temporaryPath = "$script:SupervisorStateFile.tmp"
-    $State | ConvertTo-Json -Depth 12 | Set-Content -Path $temporaryPath -Encoding UTF8
+    $normalized | ConvertTo-Json -Depth 12 | Set-Content -Path $temporaryPath -Encoding UTF8
     Move-Item -LiteralPath $temporaryPath -Destination $script:SupervisorStateFile -Force
 }
 
@@ -2470,11 +2557,27 @@ function Read-ShipDeSupervisorCheckpoint {
     } catch {
         throw "Supervisor checkpoint is malformed. Preserve it for diagnosis and stop fail-closed."
     }
-    $state = @{}
-    foreach ($property in $stateObject.PSObject.Properties) {
-        $state[$property.Name] = $property.Value
+    return (Normalize-ShipDeSupervisorState -State $stateObject)
+}
+
+function Start-ShipDeExternalCodexReview {
+    param(
+        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [Parameter(Mandatory = $true)][string]$HeadSha,
+        [scriptblock]$ReviewInvoker = $null
+    )
+
+    try {
+        if ($null -ne $ReviewInvoker) {
+            & $ReviewInvoker $PullRequestNumber $HeadSha
+        } else {
+            $null = Invoke-ShipDeReview -PullRequestNumber $PullRequestNumber -NonInteractive
+        }
+        return $true
+    } catch {
+        Write-Warning ("External Codex review failed for PR #{0}: {1}" -f $PullRequestNumber, $_.Exception.Message)
+        return $false
     }
-    return $state
 }
 
 function Get-ShipDeSessionActivityState {
@@ -2626,50 +2729,53 @@ function Invoke-ShipDeSupervisorLoop {
         [int]$PollIntervalSeconds = 30,
         [int]$InactivityTimeoutMinutes = 10,
         [int]$MaxNudges = 1,
-        [int]$ReviewTimeoutMinutes = 20
+        [int]$ReviewTimeoutMinutes = 20,
+        [scriptblock]$PrResolver = $null,
+        [scriptblock]$ExternalReviewLauncher = $null,
+        [scriptblock]$SleepHandler = $null,
+        [scriptblock]$CheckpointWriter = $null,
+        [scriptblock]$VerdictResolver = $null
     )
 
     Assert-ShipDeSupervisorMaxNudges -MaxNudges $MaxNudges
 
-    if (-not $State.ContainsKey("LastActivityTime")) {
-        $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
-    }
-    if (-not $State.ContainsKey("NudgeCount")) {
-        $State.NudgeCount = 0
-    }
-    if (-not $State.ContainsKey("UnknownPollCount")) {
-        $State.UnknownPollCount = 0
-    }
+    $State = Normalize-ShipDeSupervisorState -State $State
 
     while ($true) {
-        $session = if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
-            Get-ShipDeAoSessionById -SessionId ([string]$State.SessionId) -Project $Project
+        $sessionId = if ($State.ContainsKey("SessionId") -and $null -ne $State["SessionId"]) { [string]$State["SessionId"] } else { "" }
+        $session = if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+            Get-ShipDeAoSessionById -SessionId $sessionId -Project $Project
         } else {
             $null
         }
         $activity = if ($null -ne $session) {
             Get-ShipDeSessionActivityState -Session $session
-        } elseif (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
+        } elseif (-not [string]::IsNullOrWhiteSpace($sessionId)) {
             "MISSING"
         } else {
             "EXTERNAL"
         }
-        $pullRequest = Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch)
+        $pullRequest = if ($null -ne $PrResolver) {
+            & $PrResolver ([string]$State.WorkItemId) ([string]$State.Branch)
+        } else {
+            Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch)
+        }
 
         $previousActivity = [string]$State.State
         $State.State = $activity
         $State.ProviderFailure = $false
         if ($previousActivity -ne $activity) {
-            Write-Host ("[SUPERVISOR] {0} session {1}: {2} -> {3}" -f (Get-Date).ToUniversalTime().ToString("o"), $State.SessionId, $previousActivity, $activity)
+            $displaySessionId = if (-not [string]::IsNullOrWhiteSpace($sessionId)) { $sessionId } else { "external" }
+            Write-Host ("[SUPERVISOR] {0} session {1}: {2} -> {3}" -f (Get-Date).ToUniversalTime().ToString("o"), $displaySessionId, $previousActivity, $activity)
         }
-        Write-ShipDeSupervisorCheckpoint -State $State
+        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
 
         if ($activity -in @("FAILED", "STOPPED", "MISSING")) {
             if ($activity -in @("FAILED", "STOPPED")) {
                 $routerFailure = Get-ShipDeAgentRouterFailureSince -Since ([string]$State.StartTime)
                 if ($routerFailure) {
                     $State.RouterFailure = $routerFailure
-                    Write-ShipDeSupervisorCheckpoint -State $State
+                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                     throw "AO worker ended in state $activity. 9Router recorded a failed request for $($routerFailure.Provider)/$($routerFailure.Model), but that diagnostic alone does not prove complete fallback exhaustion."
                 }
             }
@@ -2714,12 +2820,15 @@ function Invoke-ShipDeSupervisorLoop {
                         Head = $headSha
                         Time = (Get-Date).ToUniversalTime().ToString("o")
                     }
-                    Write-ShipDeSupervisorCheckpoint -State $State
+                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
 
                     $message = "CI failed for PR #$($pullRequest.number) at exact HEAD $headSha. Inspect the failing checks, repair this same Work Item, run governed verification, commit, and push. Do not merge."
                     $delivered = $false
-                    if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
-                        $delivered = Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message
+                    if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+                        $delivered = Send-ShipDeAoMessage -SessionId $sessionId -Message $message
+                    } else {
+                        Write-Host ("[SUPERVISOR] CI failed for PR #{0} at exact HEAD {1}. In external review mode; awaiting author repair." -f $pullRequest.number, $headSha)
+                        $delivered = $true
                     }
                     if (-not $delivered) {
                         throw "Cannot route CI failure back to the implementation worker."
@@ -2731,18 +2840,22 @@ function Invoke-ShipDeSupervisorLoop {
                     $State.LastRepairDispatchedAt = (Get-Date).ToUniversalTime().ToString("o")
                     $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                     $State.NudgeCount = 0
-                    Write-ShipDeSupervisorCheckpoint -State $State
+                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                 }
             } elseif ($gate -eq "GREEN") {
-                $verdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -SessionId ([string]$State.SessionId)
+                $verdict = if ($null -ne $VerdictResolver) {
+                    & $VerdictResolver ([int]$pullRequest.number) $headSha $sessionId
+                } else {
+                    Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -SessionId $sessionId
+                }
                 $State.ExactHeadVerdict = $verdict
 
                 if ($verdict -eq "PASS") {
-                    Write-ShipDeSupervisorCheckpoint -State $State
+                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                     return "READY_FOR_HUMAN_MERGE"
                 }
                 if ($verdict -eq "BLOCKED") {
-                    Write-ShipDeSupervisorCheckpoint -State $State
+                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                     throw "Independent Codex review returned durable BLOCKED for PR #$($pullRequest.number) at exact HEAD $headSha. Stopping fail-closed for human action."
                 }
                 if ($verdict -eq "CHANGES_REQUIRED") {
@@ -2753,12 +2866,15 @@ function Invoke-ShipDeSupervisorLoop {
                             Head = $headSha
                             Time = (Get-Date).ToUniversalTime().ToString("o")
                         }
-                        Write-ShipDeSupervisorCheckpoint -State $State
+                        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
 
                         $message = "Independent Codex review requires changes on PR #$($pullRequest.number) at exact HEAD $headSha. Read the durable review findings, repair the same branch, run all governed checks, commit, push, and stop before merge."
                         $delivered = $false
-                        if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
-                            $delivered = Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message
+                        if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+                            $delivered = Send-ShipDeAoMessage -SessionId $sessionId -Message $message
+                        } else {
+                            Write-Host ("[SUPERVISOR] PR #{0} at exact HEAD {1} requires changes. External review findings posted to PR; awaiting author repair." -f $pullRequest.number, $headSha)
+                            $delivered = $true
                         }
                         if (-not $delivered) {
                             throw "Cannot route review findings back to the implementation worker."
@@ -2770,7 +2886,7 @@ function Invoke-ShipDeSupervisorLoop {
                         $State.LastRepairDispatchedAt = (Get-Date).ToUniversalTime().ToString("o")
                         $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                         $State.NudgeCount = 0
-                        Write-ShipDeSupervisorCheckpoint -State $State
+                        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                     }
                 } elseif ([string]$State.LastAcknowledgedReviewTriggerHead -ne $headSha) {
                     $State.PendingDispatch = @{
@@ -2778,11 +2894,18 @@ function Invoke-ShipDeSupervisorLoop {
                         Head = $headSha
                         Time = (Get-Date).ToUniversalTime().ToString("o")
                     }
-                    Write-ShipDeSupervisorCheckpoint -State $State
+                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
 
                     $started = $false
-                    if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
-                        $started = Start-ShipDeAoReview -SessionId ([string]$State.SessionId)
+                    if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+                        $started = Start-ShipDeAoReview -SessionId $sessionId
+                    } else {
+                        Write-Host ("[SUPERVISOR] PR #{0} at {1} has no active AO session. Launching governed non-interactive exact-HEAD Codex review..." -f $pullRequest.number, $headSha)
+                        if ($null -ne $ExternalReviewLauncher) {
+                            $started = & $ExternalReviewLauncher ([int]$pullRequest.number) $headSha
+                        } else {
+                            $started = Start-ShipDeExternalCodexReview -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha
+                        }
                     }
                     if (-not $started) {
                         throw "CI is green but the independent Codex review could not be started."
@@ -2792,7 +2915,7 @@ function Invoke-ShipDeSupervisorLoop {
                     $State.LastAcknowledgedReviewTriggerHead = $headSha
                     $State.PendingDispatch = $null
                     $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
-                    Write-ShipDeSupervisorCheckpoint -State $State
+                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                 } else {
                     if ([string]::IsNullOrWhiteSpace([string]$State.LastReviewTriggeredAt)) {
                         $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -2824,12 +2947,12 @@ function Invoke-ShipDeSupervisorLoop {
                     Type = "NUDGE"
                     Time = (Get-Date).ToUniversalTime().ToString("o")
                 }
-                Write-ShipDeSupervisorCheckpoint -State $State
+                if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
 
                 $message = "Continue the assigned Work Item autonomously. If genuinely blocked, report one concrete blocker. Do not wait for routine confirmation."
                 $delivered = $false
-                if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
-                    $delivered = Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message
+                if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+                    $delivered = Send-ShipDeAoMessage -SessionId $sessionId -Message $message
                 }
                 if (-not $delivered) {
                     throw "AO worker is idle and could not be nudged."
@@ -2838,7 +2961,7 @@ function Invoke-ShipDeSupervisorLoop {
                 $State.NudgeCount = [int]$State.NudgeCount + 1
                 $State.PendingDispatch = $null
                 $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
-                Write-ShipDeSupervisorCheckpoint -State $State
+                if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
             }
         } elseif ($activity -eq "COMPLETED" -and ((-not $pullRequest) -or $workerActionExpected)) {
             $reactivationGraceSeconds = 120
@@ -2860,8 +2983,12 @@ function Invoke-ShipDeSupervisorLoop {
             }
         }
 
-        Write-ShipDeSupervisorCheckpoint -State $State
-        Start-Sleep -Seconds $PollIntervalSeconds
+        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+        if ($null -ne $SleepHandler) {
+            & $SleepHandler $PollIntervalSeconds
+        } else {
+            Start-Sleep -Seconds $PollIntervalSeconds
+        }
     }
 }
 
@@ -2953,6 +3080,7 @@ function Assert-ShipDeSupervisorCompatibility {
                     -AiRoot $behavioralAiRoot `
                     -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
                     -EndpointTester { return $true } `
+                    -ExistingProcessResolver { param($p) return @() } `
                     -ProcessStarter { param($p, $a) throw "Simulated pre-creation failure: process cannot be spawned" }
             } catch {
                 $preCreationCaught = $_.Exception.Message -match "Simulated pre-creation failure: process cannot be spawned"
@@ -2973,6 +3101,7 @@ function Assert-ShipDeSupervisorCompatibility {
                     -AiRoot $behavioralAiRoot `
                     -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
                     -EndpointTester { return $true } `
+                    -ExistingProcessResolver { param($p) return @() } `
                     -ProcessStarter { param($p, $a) return [PSCustomObject]@{ Id = 71099; HasExited = $true; ExitCode = 42; Path = $p; ProcessName = "ao"; StartTime = (Get-Date) } } `
                     -StatusProbe { param($p) return @() } `
                     -StartupTimeoutSeconds 2
@@ -2994,6 +3123,7 @@ function Assert-ShipDeSupervisorCompatibility {
                 -AiRoot $behavioralAiRoot `
                 -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
                 -EndpointTester { return $true } `
+                -ExistingProcessResolver { param($p) return @() } `
                 -ProcessStarter { param($p, $a) return [PSCustomObject]@{ Id = 71100; HasExited = $false; Path = $p; ProcessName = "ao"; StartTime = $liveStartTime } } `
                 -StatusProbe { param($p) return '{"state":"ready"}' } 6>$null
 
@@ -3920,6 +4050,267 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         throw "Missing checkpoint with invalid selector fail-closed test failed: expected exception."
     }
 
+    # Acceptance test 1: missing SessionId under StrictMode
+    & {
+        Set-StrictMode -Version Latest
+        $rawIncomplete = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            State = "STARTED"
+        }
+        $missingKeyThrows = $false
+        try {
+            $val = $rawIncomplete.SessionId
+        } catch {
+            $missingKeyThrows = $_.Exception.Message -match "The property 'SessionId' cannot be found on this object"
+        }
+        if (-not $missingKeyThrows) {
+            throw "Test setup precondition failed: raw incomplete state did not trigger PropertyNotFoundStrict."
+        }
+
+        $normalizedState = Normalize-ShipDeSupervisorState -State $rawIncomplete
+        if ($null -ne $normalizedState.SessionId) {
+            throw "Normalized state SessionId was expected to be null."
+        }
+        if ($normalizedState.WorkItemId -ne "TASK-AI-06" -or $normalizedState.Branch -ne "feat/task-ai-06-orchestrator-supervisor") {
+            throw "Normalized state did not preserve input properties."
+        }
+        $null = $normalizedState.PendingDispatch
+        $null = $normalizedState.CiGate
+        $null = $normalizedState.ExactHeadVerdict
+        $null = $normalizedState.LastReviewTriggeredHead
+        $null = $normalizedState.Harness
+
+        $greenPr = [PSCustomObject]@{
+            number = 9
+            title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
+            isDraft = $false
+            isCrossRepository = $false
+            headRepository = "vinh05092001/shipde-platform"
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" },
+                [PSCustomObject]@{ name = "application-gate"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" }
+            )
+        }
+        $loopResult = Invoke-ShipDeSupervisorLoop `
+            -State $rawIncomplete `
+            -PrResolver { param($w, $b) return $greenPr } `
+            -VerdictResolver { param($prNum, $head, $sId) return "PASS" } `
+            -SleepHandler { param($i) } `
+            -CheckpointWriter { param($s) }
+        if ($loopResult -ne "READY_FOR_HUMAN_MERGE") {
+            throw "Invoke-ShipDeSupervisorLoop failed to handle incomplete state under StrictMode."
+        }
+    }
+
+    # Acceptance test 2: external lifecycle review (green PR triggers non-interactive review when SessionId is null)
+    & {
+        $externalState = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            SessionId = $null
+            State = "STARTED"
+            PullRequestNumber = 9
+            HeadSha = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
+        }
+        $greenPr = [PSCustomObject]@{
+            number = 9
+            title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
+            isDraft = $false
+            isCrossRepository = $false
+            headRepository = "vinh05092001/shipde-platform"
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" },
+                [PSCustomObject]@{ name = "application-gate"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" }
+            )
+        }
+        $externalLauncherCalls = [System.Collections.Generic.List[object]]::new()
+        $writtenCheckpoints = [System.Collections.Generic.List[object]]::new()
+        $pollStats = @{ Count = 0 }
+
+        $loopResult = Invoke-ShipDeSupervisorLoop `
+            -State $externalState `
+            -PrResolver { param($w, $b) return $greenPr } `
+            -ExternalReviewLauncher {
+                param($prNumber, $head)
+                $externalLauncherCalls.Add([PSCustomObject]@{ PrNumber = $prNumber; HeadSha = $head })
+                return $true
+            } `
+            -VerdictResolver {
+                param($prNumber, $head, $sId)
+                if ($pollStats.Count -eq 0) { return $null }
+                return "PASS"
+            } `
+            -SleepHandler {
+                param($interval)
+                $pollStats.Count++
+            } `
+            -CheckpointWriter {
+                param($s)
+                $writtenCheckpoints.Add($s)
+            }
+
+        if ($loopResult -ne "READY_FOR_HUMAN_MERGE") {
+            throw "External lifecycle review failed: expected READY_FOR_HUMAN_MERGE, got '$loopResult'."
+        }
+        if ($externalLauncherCalls.Count -ne 1) {
+            throw "External lifecycle review failed: ExternalReviewLauncher was called $($externalLauncherCalls.Count) times; expected 1."
+        }
+        if ($externalLauncherCalls[0].PrNumber -ne 9 -or $externalLauncherCalls[0].HeadSha -ne "fb02d345bbffeb40b21a75bcf6c296a12f49c575") {
+            throw "External lifecycle review failed: launcher received incorrect PR number or head SHA."
+        }
+        $lastCp = $writtenCheckpoints[-1]
+        if ($lastCp.LastReviewTriggeredHead -ne "fb02d345bbffeb40b21a75bcf6c296a12f49c575" -or
+            $lastCp.LastAcknowledgedReviewTriggerHead -ne "fb02d345bbffeb40b21a75bcf6c296a12f49c575" -or
+            $lastCp.ExactHeadVerdict -ne "PASS") {
+            throw "External lifecycle review failed: checkpoint was not properly updated with review trigger head and PASS verdict."
+        }
+    }
+
+    # Acceptance test 3: no interactive prompt (Invoke-ShipDeReview -NonInteractive runs without Read-Host)
+    & {
+        $reviewPr = [PSCustomObject]@{
+            number = 9
+            title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
+            isDraft = $false
+            isCrossRepository = $false
+            headRepository = "vinh05092001/shipde-platform"
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" },
+                [PSCustomObject]@{ name = "application-gate"; workflowName = "Current application"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z" }
+            )
+            url = "https://github.com/vinh05092001/shipde-platform/pull/9"
+        }
+        $mockItem = [PSCustomObject]@{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+        }
+        $postedComments = [System.Collections.Generic.List[string]]::new()
+        $gitPrepStats = @{ Prepared = $false }
+
+        # Test CHANGES_REQUIRED: must post review comment and return verdict without prompting for fix round
+        $changesVerdict = Invoke-ShipDeReview `
+            -PullRequestNumber 9 `
+            -NonInteractive `
+            -OpenPrResolver { return @($reviewPr) } `
+            -PrByNumberResolver { param($n) return $reviewPr } `
+            -ItemResolver { param($p) return $mockItem } `
+            -GitPreparer { param($p, $sha) $gitPrepStats.Prepared = $true } `
+            -CodexExecutor {
+                param($schemaFile, $reviewFile, $execFile, $diagFile)
+                $fixture = '{"verdict":"CHANGES_REQUIRED","summary":"Changes required","findings":[{"priority":"P1","file":"scripts/ai/control.ps1","line":10,"title":"Test finding","description":"Must be fixed"}],"report":"## Review Report`n`n- [P1] Test finding`n`nVerdict: CHANGES_REQUIRED"}'
+                [System.IO.File]::WriteAllText($reviewFile, $fixture, [System.Text.UTF8Encoding]::new($false))
+            } `
+            -CommentPoster {
+                param($prNum, $commentFile)
+                $postedComments.Add((Get-Content $commentFile -Raw -Encoding UTF8))
+            }
+
+        if ($changesVerdict -ne "CHANGES_REQUIRED") {
+            throw "Non-interactive review failed: expected CHANGES_REQUIRED, got '$changesVerdict'."
+        }
+        if (-not $gitPrepStats.Prepared) {
+            throw "Non-interactive review failed: GitPreparer was not invoked."
+        }
+        if ($postedComments.Count -eq 0) {
+            throw "Non-interactive review failed: review comments were not posted."
+        }
+        if ($postedComments[0] -notmatch "Test finding") {
+            throw "Non-interactive review failed: posted comment did not contain expected review findings."
+        }
+
+        # Test PASS: must post review comment and return PASS without Read-Host
+        $passComments = [System.Collections.Generic.List[string]]::new()
+        $passVerdict = Invoke-ShipDeReview `
+            -PullRequestNumber 9 `
+            -NonInteractive `
+            -OpenPrResolver { return @($reviewPr) } `
+            -PrByNumberResolver { param($n) return $reviewPr } `
+            -ItemResolver { param($p) return $mockItem } `
+            -GitPreparer { param($p, $sha) } `
+            -CodexExecutor {
+                param($schemaFile, $reviewFile, $execFile, $diagFile)
+                $fixture = '{"verdict":"PASS","summary":"All requirements satisfied","findings":[],"report":"## Review Report`n`nAll checks passed.`n`nVerdict: PASS"}'
+                [System.IO.File]::WriteAllText($reviewFile, $fixture, [System.Text.UTF8Encoding]::new($false))
+            } `
+            -CommentPoster {
+                param($prNum, $commentFile)
+                $passComments.Add((Get-Content $commentFile -Raw -Encoding UTF8))
+            }
+
+        if ($passVerdict -ne "PASS") {
+            throw "Non-interactive review failed: expected PASS, got '$passVerdict'."
+        }
+        if ($passComments.Count -eq 0) {
+            throw "Non-interactive review failed: PASS review comment was not posted."
+        }
+    }
+
+    # Acceptance test 4: no duplicate worker (PR-only recovery when no reusable AO session exists)
+    & {
+        $workerStarterStats = @{ Called = $false }
+        $checkpointSavedStats = @{ State = $null }
+        $reconstructed = Initialize-ShipDeSupervisorState `
+            -State $null `
+            -PullRequestNumber 9 `
+            -Repository "vinh05092001/shipde-platform" `
+            -OpenPrResolver { @($simulatedMatchingPr, $simulatedUnrelatedPr) } `
+            -ActiveWorkersResolver { @() } `
+            -PrWorkItemResolver {
+                param($pr)
+                if ($pr.number -eq 9) { return $mockItem9 }
+                return $null
+            } `
+            -WorkerStarter {
+                param($it, $pr)
+                $workerStarterStats.Called = $true
+                throw "WorkerStarter must NEVER be called when recovering state for existing open PR!"
+            } `
+            -CheckpointWriter {
+                param($s)
+                $checkpointSavedStats.State = $s
+            }
+
+        if ($workerStarterStats.Called) {
+            throw "No duplicate worker test failed: WorkerStarter was invoked."
+        }
+        if ($null -eq $reconstructed) {
+            throw "No duplicate worker test failed: reconstructed state was null."
+        }
+        if ($reconstructed.State -ne "STARTED" -or
+            $reconstructed.WorkItemId -ne "TASK-AI-06" -or
+            $reconstructed.PullRequestNumber -ne 9 -or
+            $null -ne $reconstructed.SessionId -or
+            $null -ne $reconstructed.Harness) {
+            throw "No duplicate worker test failed: reconstructed state properties mismatch."
+        }
+        $savedState = $checkpointSavedStats.State
+        if ($null -eq $savedState -or $savedState.PullRequestNumber -ne 9 -or $null -ne $savedState.SessionId) {
+            throw "No duplicate worker test failed: saved checkpoint did not match reconstructed state."
+        }
+        # StrictMode validation: verify all 27 properties can be accessed on reconstructed state
+        & {
+            Set-StrictMode -Version Latest
+            $null = $reconstructed.SessionId
+            $null = $reconstructed.Harness
+            $null = $reconstructed.PendingDispatch
+            $null = $reconstructed.CiGate
+            $null = $reconstructed.ExactHeadVerdict
+            $null = $reconstructed.LastReviewTriggeredHead
+            $null = $reconstructed.LastAcknowledgedReviewTriggerHead
+            $null = $reconstructed.LastCiRepairHead
+            $null = $reconstructed.LastReviewRepairHead
+            $null = $reconstructed.RouterFailure
+        }
+    }
+
     # Finding 5 tests: Enforce one-nudge limit
     Assert-ShipDeSupervisorMaxNudges -MaxNudges 1
 
@@ -4119,21 +4510,13 @@ function Initialize-ShipDeSupervisorState {
     $author = $null
 
     if ($null -ne $State) {
-        if ($State -is [System.Collections.IDictionary]) {
-            if ($State.ContainsKey("SessionId")) { $sessionId = [string]$State["SessionId"] }
-            if ($State.ContainsKey("WorkItemId")) { $workItemId = [string]$State["WorkItemId"] }
-            if ($State.ContainsKey("State")) { $stateValue = [string]$State["State"] }
-            if ($State.ContainsKey("Branch")) { $branch = [string]$State["Branch"] }
-            if ($State.ContainsKey("WorkItemPath")) { $workItemPath = [string]$State["WorkItemPath"] }
-            if ($State.ContainsKey("Author")) { $author = [string]$State["Author"] }
-        } else {
-            if ($null -ne $State.PSObject.Properties["SessionId"]) { $sessionId = [string]$State.SessionId }
-            if ($null -ne $State.PSObject.Properties["WorkItemId"]) { $workItemId = [string]$State.WorkItemId }
-            if ($null -ne $State.PSObject.Properties["State"]) { $stateValue = [string]$State.State }
-            if ($null -ne $State.PSObject.Properties["Branch"]) { $branch = [string]$State.Branch }
-            if ($null -ne $State.PSObject.Properties["WorkItemPath"]) { $workItemPath = [string]$State.WorkItemPath }
-            if ($null -ne $State.PSObject.Properties["Author"]) { $author = [string]$State.Author }
-        }
+        $State = Normalize-ShipDeSupervisorState -State $State
+        $sessionId = [string]$State["SessionId"]
+        $workItemId = [string]$State["WorkItemId"]
+        $stateValue = [string]$State["State"]
+        $branch = [string]$State["Branch"]
+        $workItemPath = [string]$State["WorkItemPath"]
+        $author = [string]$State["Author"]
     }
 
     if (-not [string]::IsNullOrWhiteSpace($sessionId) -and -not [string]::IsNullOrWhiteSpace($workItemId)) {
@@ -4186,6 +4569,7 @@ function Initialize-ShipDeSupervisorState {
                 $State.HeadSha = [string]$matchedPr.headRefOid
                 $State.State = "STARTED"
             }
+            $State = Normalize-ShipDeSupervisorState -State $State
             & $CheckpointWriter $State
             return $State
         } elseif ($matchingPrs.Count -gt 1) {
@@ -4211,6 +4595,7 @@ function Initialize-ShipDeSupervisorState {
             $State.SessionId = $spawned.SessionId
             $State.State = "STARTED"
         }
+        $State = Normalize-ShipDeSupervisorState -State $State
         & $CheckpointWriter $State
         return $State
     }
@@ -4266,11 +4651,10 @@ function Initialize-ShipDeSupervisorState {
             StartTime = (Get-Date).ToUniversalTime().ToString("o")
             LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
             NudgeCount = 0
+            SessionId = $recoveredSessionId
+            Harness = $recoveredHarness
         }
-        if ($recoveredSessionId) {
-            $reconstructedState["SessionId"] = $recoveredSessionId
-            $reconstructedState["Harness"] = $recoveredHarness
-        }
+        $reconstructedState = Normalize-ShipDeSupervisorState -State $reconstructedState
         Write-Host "[SUPERVISOR] Reconstructed missing checkpoint for PR #$($selectedPr.number) ($($item.WorkItemId)) on $($item.Branch). Continuing without spawning duplicate worker."
         & $CheckpointWriter $reconstructedState
         return $reconstructedState
@@ -4304,15 +4688,19 @@ function Initialize-ShipDeSupervisorState {
         StartTime = (Get-Date).ToUniversalTime().ToString("o")
         LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
         NudgeCount = 0
+        SessionId = $null
+        Harness = $null
     }
+    $State = Normalize-ShipDeSupervisorState -State $State
     & $CheckpointWriter $State
 
     $prompt = New-ShipDeAuthorPrompt -Item $item
     & $CodexParker
     $spawned = & $WorkerStarter $item $prompt
-    $State.Harness = $spawned.Harness
-    $State.SessionId = $spawned.SessionId
-    $State.State = "STARTED"
+    $State["Harness"] = $spawned.Harness
+    $State["SessionId"] = $spawned.SessionId
+    $State["State"] = "STARTED"
+    $State = Normalize-ShipDeSupervisorState -State $State
     & $CheckpointWriter $State
     return $State
 }
