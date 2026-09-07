@@ -6403,6 +6403,8 @@ Full review comments:
             Invoke-ShipDeSupervisorLoop `
                 -State $statePendingCrash `
                 -PrResolver { param($w, $b) return $t5Pr } `
+                -VerdictResolver { param($n, $h, $s) return $null } `
+                -BotReviewRequester { param($n, $h) return "bot-comment-5a" } `
                 -SessionsResolver { param($p) return @() } `
                 -SessionDetailResolver { param($id, $p) return $null } `
                 -WorkerStarter { param($i, $p) return [PSCustomObject]@{ SessionId = "sess-agy-5"; Harness = "agy" } } `
