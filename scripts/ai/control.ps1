@@ -1,9 +1,12 @@
 param(
-    [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync", "Supervise")]
+    [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync", "Supervise", "Test")]
     [string]$Action = "Menu",
 
     [string]$Repository = "vinh05092001/shipde-platform",
-    [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
+    [string]$AiRoot = $(
+        $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
+        Join-Path $userHome "AI"
+    ),
 
     [ValidateRange(0, [int]::MaxValue)]
     [int]$PullRequestNumber = 0,
@@ -23,9 +26,6 @@ $script:Paths = Get-ShipDePaths -AiRoot $AiRoot
 $script:RequiredPrChecks = @("contract", "application-gate")
 $script:RequiredPrCheckProviderPrefix = "github-actions"
 $script:TrustedCodexReviewerLogins = @("chatgpt-codex-connector[bot]")
-if (-not [string]::IsNullOrWhiteSpace($env:CODEX_REVIEWER_LOGIN) -and $script:TrustedCodexReviewerLogins -notcontains $env:CODEX_REVIEWER_LOGIN.Trim()) {
-    $script:TrustedCodexReviewerLogins += $env:CODEX_REVIEWER_LOGIN.Trim()
-}
 $script:NineRouterPinnedVersion = "0.5.55"
 
 function Get-ShipDeTextAtRef {
@@ -491,6 +491,10 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String) {
                 completedAt
                 detailsUrl
                 checkSuite {
+                  app {
+                    slug
+                    name
+                  }
                   workflowRun {
                     workflow {
                       name
@@ -639,6 +643,26 @@ function Get-ShipDeCheckProvider {
         return "status-context"
     }
 
+    $appSlug = $null
+    $appName = $null
+    try {
+        if ($Check.checkSuite -and $Check.checkSuite.app) {
+            $appSlug = [string](Get-ShipDeObjectProperty -Object $Check.checkSuite.app -Names @("slug"))
+            $appName = [string](Get-ShipDeObjectProperty -Object $Check.checkSuite.app -Names @("name"))
+        }
+    } catch {}
+
+    $hasApp = (-not [string]::IsNullOrWhiteSpace($appSlug)) -or (-not [string]::IsNullOrWhiteSpace($appName))
+    $isAppGitHubActions = (-not [string]::IsNullOrWhiteSpace($appSlug) -and $appSlug.ToLowerInvariant() -eq "github-actions") -or
+                          (-not [string]::IsNullOrWhiteSpace($appName) -and $appName -ieq "GitHub Actions")
+
+    # If an app identity is explicitly present and is NOT GitHub Actions, reject immediately.
+    # A caller-controlled detailsUrl or check name must NEVER forge GitHub Actions provenance.
+    if ($hasApp -and -not $isAppGitHubActions) {
+        if (-not [string]::IsNullOrWhiteSpace($appSlug)) { return $appSlug.ToLowerInvariant() }
+        return $appName.ToLowerInvariant()
+    }
+
     $workflowName = Get-ShipDeCheckField -Check $Check -Field "workflowName"
     if ([string]::IsNullOrWhiteSpace($workflowName)) {
         try {
@@ -650,17 +674,19 @@ function Get-ShipDeCheckProvider {
             }
         } catch {}
     }
+
     if (-not [string]::IsNullOrWhiteSpace($workflowName)) {
         return "github-actions/$workflowName"
+    }
+
+    if ($isAppGitHubActions) {
+        return "github-actions"
     }
 
     $urlText = Get-ShipDeCheckField -Check $Check -Field "detailsUrl"
     if (-not [string]::IsNullOrWhiteSpace($urlText)) {
         $uri = $null
         if ([Uri]::TryCreate($urlText, [UriKind]::Absolute, [ref]$uri)) {
-            if ($uri.Host -eq "github.com" -and $uri.AbsolutePath -match '/actions/runs/') {
-                return "github-actions"
-            }
             return $uri.Host.ToLowerInvariant()
         }
     }
@@ -1702,6 +1728,57 @@ function Get-ShipDeGitHubExactHeadCodexVerdict {
     return $null
 }
 
+function Get-ShipDeGitHubExactHeadCodexFindings {
+    param(
+        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [Parameter(Mandatory = $true)][string]$HeadSha,
+        [string]$Repository = "vinh05092001/shipde-platform"
+    )
+
+    $findingsList = [System.Collections.Generic.List[string]]::new()
+
+    $rawReviews = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/reviews" --paginate --slurp 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $rawReviews.Count -gt 0) {
+        try {
+            $pages = (($rawReviews -join [Environment]::NewLine) | ConvertFrom-Json)
+            foreach ($page in @($pages)) {
+                foreach ($review in @($page)) {
+                    if ([string]$review.commit_id -ine $HeadSha) { continue }
+                    $login = [string]$review.user.login
+                    if ($script:TrustedCodexReviewerLogins -notcontains $login) { continue }
+                    $body = [string]$review.body
+                    if (-not [string]::IsNullOrWhiteSpace($body)) {
+                        $findingsList.Add($body)
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    $rawComments = @(& gh api "repos/$Repository/issues/$PullRequestNumber/comments" --paginate --slurp 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $rawComments.Count -gt 0) {
+        try {
+            $commentPages = (($rawComments -join [Environment]::NewLine) | ConvertFrom-Json)
+            foreach ($page in @($commentPages)) {
+                foreach ($commentObj in @($page)) {
+                    $author = Get-ShipDeObjectProperty -Object $commentObj -Names @("author", "user")
+                    $authorLogin = [string](Get-ShipDeObjectProperty -Object $author -Names @("login"))
+                    if ($script:TrustedCodexReviewerLogins -notcontains $authorLogin) { continue }
+                    $body = [string]$commentObj.body
+                    if (-not [string]::IsNullOrWhiteSpace($body) -and $body -match [regex]::Escape($HeadSha)) {
+                        $findingsList.Add($body)
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    if ($findingsList.Count -gt 0) {
+        return $findingsList[-1]
+    }
+    return ""
+}
+
 function Get-ShipDeExactHeadCodexVerdict {
     param(
         [Parameter(Mandatory = $true)][int]$PullRequestNumber,
@@ -1714,17 +1791,9 @@ function Get-ShipDeExactHeadCodexVerdict {
         return $null
     }
 
-    # AO-triggered Codex reviews are recorded in AO's review contract rather
-    # than in the manual handoff files used by Invoke-ShipDeReview.
-    if (-not [string]::IsNullOrWhiteSpace($SessionId)) {
-        $aoVerdict = Get-ShipDeAoExactHeadCodexVerdict -SessionId $SessionId -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
-        if ($aoVerdict) {
-            return $aoVerdict
-        }
-    }
-
     # Recover exact-commit verdict from GitHub durable review and comment records
-    # using newest trusted evidence, rejecting equal-time conflicts.
+    # using newest trusted bot evidence (chatgpt-codex-connector[bot]), rejecting equal-time conflicts.
+    # Local Codex CLI / AO results are diagnostic only and must not authorize durable PASS or advance state.
     $githubVerdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
     if ($githubVerdict) {
         return $githubVerdict
@@ -2675,15 +2744,19 @@ function Normalize-ShipDeSupervisorState {
         LastReviewTriggeredHead = $null
         LastAcknowledgedReviewTriggerHead = $null
         LastReviewTriggeredAt = $null
+        ReviewRequestCommentId = $null
         LastRepairDispatchedAt = $null
         PendingDispatch = $null
         RouterFailure = $null
     }
 
     if ($State -is [System.Collections.IDictionary]) {
-        foreach ($key in $State.Keys) {
-            $normalized[[string]$key] = $State[$key]
+        foreach ($key in $normalized.Keys) {
+            if (-not $State.Contains($key)) {
+                $State[$key] = $normalized[$key]
+            }
         }
+        return $State
     } else {
         foreach ($prop in $State.PSObject.Properties) {
             $normalized[$prop.Name] = $prop.Value
@@ -2723,6 +2796,19 @@ function Assert-ShipDeSupervisorLock {
         [scriptblock]$ProcessResolver = { param($id) Get-Process -Id $id -ErrorAction SilentlyContinue }
     )
 
+    $lockDir = Split-Path $LockFile -Parent
+    if (-not [string]::IsNullOrWhiteSpace($lockDir) -and -not (Test-Path -LiteralPath $lockDir)) {
+        New-Item -ItemType Directory -Path $lockDir -Force | Out-Null
+    }
+
+    $lockPayload = @{
+        process_id = $CurrentPid
+        work_item_id = $WorkItemId
+        acquired_at = (Get-Date).ToUniversalTime().ToString("o")
+        host = $env:COMPUTERNAME
+    }
+    $lockJson = $lockPayload | ConvertTo-Json
+
     if (Test-Path -LiteralPath $LockFile) {
         try {
             $lockContent = Get-Content -LiteralPath $LockFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -2735,25 +2821,62 @@ function Assert-ShipDeSupervisorLock {
                     throw "Another supervisor instance (PID $holderPid, Work Item '$holderWorkItem') is actively supervising. Rejecting concurrent supervisor lock."
                 }
             }
+            Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
         } catch {
             if ($_.Exception.Message -match "Another supervisor instance") {
                 throw
             }
-            Write-Warning "Overriding stale or corrupted supervisor lock '$LockFile'."
+            Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
         }
     }
 
-    $lockPayload = @{
-        process_id = $CurrentPid
-        work_item_id = $WorkItemId
-        acquired_at = (Get-Date).ToUniversalTime().ToString("o")
-        host = $env:COMPUTERNAME
+    try {
+        $fileStream = [System.IO.File]::Open($LockFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($lockJson)
+            $fileStream.Write($bytes, 0, $bytes.Length)
+        } finally {
+            $fileStream.Close()
+            $fileStream.Dispose()
+        }
+    } catch [System.IO.IOException] {
+        if (Test-Path -LiteralPath $LockFile) {
+            try {
+                $existing = Get-Content -LiteralPath $LockFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                $holderPid = [int](Get-ShipDeObjectProperty -Object $existing -Names @("process_id", "processId"))
+                $holderWorkItem = [string](Get-ShipDeObjectProperty -Object $existing -Names @("work_item_id", "workItemId"))
+                if ($holderPid -gt 0 -and $holderPid -ne $CurrentPid) {
+                    $proc = & $ProcessResolver $holderPid
+                    if ($null -ne $proc -and -not [bool]$proc.HasExited) {
+                        throw "Another supervisor instance (PID $holderPid, Work Item '$holderWorkItem') is actively supervising. Rejecting concurrent supervisor lock."
+                    }
+                }
+            } catch {
+                if ($_.Exception.Message -match "Another supervisor instance") { throw }
+            }
+        }
+        throw "Failed to acquire exclusive supervisor lock '$LockFile': $($_.Exception.Message)"
     }
-    $lockDir = Split-Path $LockFile -Parent
-    if (-not [string]::IsNullOrWhiteSpace($lockDir) -and -not (Test-Path -LiteralPath $lockDir)) {
-        New-Item -ItemType Directory -Path $lockDir -Force | Out-Null
+}
+
+function Update-ShipDeSupervisorLock {
+    param(
+        [string]$LockFile = $script:SupervisorLockFile,
+        [string]$WorkItemId = "",
+        [int]$CurrentPid = $PID
+    )
+
+    if (Test-Path -LiteralPath $LockFile) {
+        try {
+            $lockPayload = @{
+                process_id = $CurrentPid
+                work_item_id = $WorkItemId
+                acquired_at = (Get-Date).ToUniversalTime().ToString("o")
+                host = $env:COMPUTERNAME
+            }
+            $lockPayload | ConvertTo-Json | Set-Content -LiteralPath $LockFile -Encoding UTF8
+        } catch {}
     }
-    $lockPayload | ConvertTo-Json | Set-Content -LiteralPath $LockFile -Encoding UTF8
 }
 
 function Release-ShipDeSupervisorLock {
@@ -2775,23 +2898,101 @@ function Release-ShipDeSupervisorLock {
     }
 }
 
+function Request-ShipDeCodexBotReview {
+    param(
+        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [Parameter(Mandatory = $true)][string]$HeadSha,
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [scriptblock]$CommentsFinder = $null,
+        [scriptblock]$CommentPoster = $null
+    )
+
+    # 1. Idempotently check if an exact-HEAD "@codex review" request comment already exists
+    $existingComments = @()
+    if ($null -ne $CommentsFinder) {
+        $existingComments = @(& $CommentsFinder $PullRequestNumber)
+    } else {
+        $raw = @(& gh api "repos/$Repository/issues/$PullRequestNumber/comments" --paginate --slurp 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $raw.Count -gt 0) {
+            try {
+                $pages = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+                foreach ($page in @($pages)) {
+                    foreach ($c in @($page)) {
+                        $existingComments += $c
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    foreach ($comm in $existingComments) {
+        $body = [string](Get-ShipDeObjectProperty -Object $comm -Names @("body"))
+        if (-not [string]::IsNullOrWhiteSpace($body) -and $body -match '(?i)@codex\s+review' -and $body -match [regex]::Escape($HeadSha)) {
+            $existingId = [string](Get-ShipDeObjectProperty -Object $comm -Names @("id", "databaseId"))
+            if (-not [string]::IsNullOrWhiteSpace($existingId)) {
+                Write-Host ("[SUPERVISOR] Found existing @codex review request comment {0} for exact HEAD {1} on PR #{2}." -f $existingId, $HeadSha, $PullRequestNumber)
+                return $existingId
+            }
+        }
+    }
+
+    # 2. Post exact-HEAD "@codex review" request
+    $requestBody = "@codex review $HeadSha"
+    Write-Host ("[SUPERVISOR] Posting exact-HEAD '@codex review' request for PR #{0} at {1}..." -f $PullRequestNumber, $HeadSha)
+
+    if ($null -ne $CommentPoster) {
+        $newId = & $CommentPoster $PullRequestNumber $requestBody
+        if ([string]::IsNullOrWhiteSpace($newId)) {
+            throw "Comment poster failed to return a comment ID for PR #$PullRequestNumber."
+        }
+        return [string]$newId
+    }
+
+    $rawPost = @(& gh api "repos/$Repository/issues/$PullRequestNumber/comments" -f body=$requestBody 2>&1)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        $err = Join-ShipDeNativeOutput -Output $rawPost
+        throw "Failed to post '@codex review' request to PR #$($PullRequestNumber): $err"
+    }
+
+    $postText = ($rawPost -join [Environment]::NewLine).Trim()
+    $postedObj = $null
+    try {
+        $postedObj = $postText | ConvertFrom-Json
+    } catch {
+        throw "Failed to parse GitHub response after posting review request: $($_.Exception.Message)"
+    }
+
+    $commentId = [string](Get-ShipDeObjectProperty -Object $postedObj -Names @("id", "databaseId"))
+    if ([string]::IsNullOrWhiteSpace($commentId)) {
+        throw "GitHub response did not contain a valid comment ID."
+    }
+
+    Write-Host ("[SUPERVISOR] Successfully posted @codex review request comment {0} on PR #{1} for exact HEAD {2}." -f $commentId, $PullRequestNumber, $HeadSha)
+    return $commentId
+}
+
 function Start-ShipDeExternalCodexReview {
     param(
         [Parameter(Mandatory = $true)][int]$PullRequestNumber,
         [Parameter(Mandatory = $true)][string]$HeadSha,
+        [string]$Repository = "vinh05092001/shipde-platform",
         [scriptblock]$ReviewInvoker = $null
     )
 
     try {
         if ($null -ne $ReviewInvoker) {
-            & $ReviewInvoker $PullRequestNumber $HeadSha
-        } else {
-            $null = Invoke-ShipDeReview -PullRequestNumber $PullRequestNumber -NonInteractive
+            $res = & $ReviewInvoker $PullRequestNumber $HeadSha
+            if ($res -is [string] -and (-not [string]::IsNullOrWhiteSpace($res)) -and $res -ne "True" -and $res -ne "False") {
+                return $res
+            }
+            return if ($res -eq $true) { "comment-mocked" } else { $null }
         }
-        return $true
+        $commentId = Request-ShipDeCodexBotReview -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha -Repository $Repository
+        return $commentId
     } catch {
-        Write-Warning ("External Codex review failed for PR #{0}: {1}" -f $PullRequestNumber, $_.Exception.Message)
-        return $false
+        Write-Warning ("External Codex review request failed for PR #{0}: {1}" -f $PullRequestNumber, $_.Exception.Message)
+        return $null
     }
 }
 
@@ -2949,7 +3150,7 @@ function Stop-ShipDeAoSession {
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
         $text = Join-ShipDeNativeOutput -Output $output
-        Write-Warning ("Could not kill/archive AO session {0}: {1}" -f $SessionId, $text)
+        throw "Could not kill/archive AO session $($SessionId): $text"
     }
 }
 
@@ -3115,10 +3316,24 @@ function Ensure-ShipDeRepairWorker {
 
             # Requirement 5 & 6: Safely release/archive only that session, never run claude-code and agy concurrently
             Write-Host ("[SUPERVISOR] Proven supervisor ownership for parked disallowed session '{0}' (harness: {1}). Releasing session before spawning {2}..." -f $sid, $harness, $targetHarness)
-            if ($null -ne $SessionReleaser) {
-                & $SessionReleaser $sid $Project
-            } else {
-                Stop-ShipDeAoSession -SessionId $sid -Project $Project
+            try {
+                if ($null -ne $SessionReleaser) {
+                    & $SessionReleaser $sid $Project
+                } else {
+                    Stop-ShipDeAoSession -SessionId $sid -Project $Project
+                }
+            } catch {
+                throw "Failed to safely release disallowed AO session '$sid': $($_.Exception.Message)"
+            }
+
+            # Verify session is terminated before spawning replacement worker
+            $postKillDetail = if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $sid $Project } else { Get-ShipDeAoSessionById -SessionId $sid -Project $Project }
+            if ($null -ne $postKillDetail) {
+                $isTerm = [bool](Get-ShipDeObjectProperty -Object $postKillDetail -Names @("isTerminated", "is_terminated"))
+                $postStatus = [string](Get-ShipDeObjectProperty -Object $postKillDetail -Names @("status", "state"))
+                if (-not $isTerm -and $postStatus -notin @("terminated", "failed", "completed", "stopped", "exited", "pr_open", "parked")) {
+                    throw "Disallowed AO session '$sid' remained active after release attempt. Failing closed before spawning replacement worker."
+                }
             }
         }
     }
@@ -3150,6 +3365,7 @@ function Invoke-ShipDeSupervisorLoop {
         [int]$MaxRepairBudget = 10,
         [scriptblock]$PrResolver = $null,
         [scriptblock]$ExternalReviewLauncher = $null,
+        [scriptblock]$BotReviewRequester = $null,
         [scriptblock]$SleepHandler = $null,
         [scriptblock]$CheckpointWriter = $null,
         [scriptblock]$VerdictResolver = $null,
@@ -3222,15 +3438,32 @@ function Invoke-ShipDeSupervisorLoop {
             $pHead = [string](Get-ShipDeObjectProperty -Object $State.PendingDispatch -Names @("Head", "head"))
             $curHead = if ($pullRequest) { [string]$pullRequest.headRefOid } else { "" }
 
-            switch ($pType) {
-                "NUDGE" {
-                    $State.NudgeCount = [int]$State.NudgeCount + 1
-                    $State.PendingDispatch = $null
-                    $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
-                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
-                }
-                "CI_REPAIR" {
-                    if (-not [string]::IsNullOrWhiteSpace($curHead) -and $pHead -eq $curHead) {
+            $isAlreadyAcknowledged = switch ($pType) {
+                "CI_REPAIR" { [string]$State.LastAcknowledgedCiRepairHead -eq $pHead }
+                "REVIEW_REPAIR" { [string]$State.LastAcknowledgedReviewRepairHead -eq $pHead }
+                "REVIEW_TRIGGER" { [string]$State.LastAcknowledgedReviewTriggerHead -eq $pHead }
+                default { $false }
+            }
+
+            if ($isAlreadyAcknowledged -or [string]::IsNullOrWhiteSpace($curHead) -or $pHead -ne $curHead) {
+                $State.PendingDispatch = $null
+                if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+            } else {
+                switch ($pType) {
+                    "CI_REPAIR" {
+                        $message = "CI failed for PR #$($pullRequest.number) at exact HEAD $curHead. Inspect the failing checks, repair this same Work Item, run governed verification, commit, and push. Do not merge."
+                        $targetSessionId = Ensure-ShipDeRepairWorker -State $State -PullRequest $pullRequest -Project $Project -WorkerStarter $WorkerStarter -SessionReleaser $SessionReleaser -SessionDetailResolver $SessionDetailResolver -SessionsResolver $SessionsResolver -OwnershipVerifier $OwnershipVerifier -CheckpointWriter $CheckpointWriter
+                        $delivered = $false
+                        if (-not [string]::IsNullOrWhiteSpace($targetSessionId)) {
+                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeAoMessage -SessionId $targetSessionId -Message $message }
+                        } else {
+                            Write-Host ("[SUPERVISOR] CI failed for PR #{0} at exact HEAD {1}. In external review mode; awaiting author repair." -f $pullRequest.number, $curHead)
+                            $delivered = $true
+                        }
+                        if (-not $delivered) {
+                            throw "Cannot route unacknowledged CI repair back to the implementation worker during crash recovery."
+                        }
+
                         $State.LastCiRepairHead = $curHead
                         $State.LastAcknowledgedCiRepairHead = $curHead
                         $State.PendingDispatch = $null
@@ -3238,13 +3471,31 @@ function Invoke-ShipDeSupervisorLoop {
                         $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                         $State.NudgeCount = 0
                         if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
-                    } else {
-                        $State.PendingDispatch = $null
-                        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                     }
-                }
-                "REVIEW_REPAIR" {
-                    if (-not [string]::IsNullOrWhiteSpace($curHead) -and $pHead -eq $curHead) {
+                    "REVIEW_REPAIR" {
+                        $findingsText = ""
+                        try {
+                            $findingsText = Get-ShipDeGitHubExactHeadCodexFindings -PullRequestNumber ([int]$pullRequest.number) -HeadSha $curHead -Repository "vinh05092001/shipde-platform"
+                        } catch {}
+                        $message = "Independent Codex review requires changes on PR #$($pullRequest.number) at exact HEAD $curHead."
+                        if (-not [string]::IsNullOrWhiteSpace($findingsText)) {
+                            $message += "`n`nReview findings:`n$findingsText`n`nRepair this same branch, run all governed checks, commit, push, and stop before merge."
+                        } else {
+                            $message += " Read the durable review findings, repair the same branch, run all governed checks, commit, push, and stop before merge."
+                        }
+
+                        $targetSessionId = Ensure-ShipDeRepairWorker -State $State -PullRequest $pullRequest -Project $Project -WorkerStarter $WorkerStarter -SessionReleaser $SessionReleaser -SessionDetailResolver $SessionDetailResolver -SessionsResolver $SessionsResolver -OwnershipVerifier $OwnershipVerifier -CheckpointWriter $CheckpointWriter
+                        $delivered = $false
+                        if (-not [string]::IsNullOrWhiteSpace($targetSessionId)) {
+                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeAoMessage -SessionId $targetSessionId -Message $message }
+                        } else {
+                            Write-Host ("[SUPERVISOR] PR #{0} at exact HEAD {1} requires changes. External review findings posted to PR; awaiting author repair." -f $pullRequest.number, $curHead)
+                            $delivered = $true
+                        }
+                        if (-not $delivered) {
+                            throw "Cannot route unacknowledged review findings back to the implementation worker during crash recovery."
+                        }
+
                         $State.LastReviewRepairHead = $curHead
                         $State.LastAcknowledgedReviewRepairHead = $curHead
                         $State.PendingDispatch = $null
@@ -3252,18 +3503,53 @@ function Invoke-ShipDeSupervisorLoop {
                         $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                         $State.NudgeCount = 0
                         if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
-                    } else {
+                    }
+                    "REVIEW_TRIGGER" {
+                        $commentId = $null
+                        try {
+                            if ($null -ne $BotReviewRequester) {
+                                $commentId = & $BotReviewRequester ([int]$pullRequest.number) $curHead
+                            } elseif ($null -ne $ExternalReviewLauncher) {
+                                $commentId = & $ExternalReviewLauncher ([int]$pullRequest.number) $curHead
+                            } else {
+                                $commentId = Request-ShipDeCodexBotReview -PullRequestNumber ([int]$pullRequest.number) -HeadSha $curHead -Repository "vinh05092001/shipde-platform"
+                            }
+                        } catch {
+                            $commentId = $null
+                        }
+
+                        if ([string]::IsNullOrWhiteSpace($commentId)) {
+                            $State.PendingDispatch = $null
+                            if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                            throw "Unacknowledged review trigger could not post or find exact-HEAD bot review request on PR #$($pullRequest.number) at exact HEAD $curHead."
+                        }
+
+                        $State.ReviewRequestCommentId = [string]$commentId
+                        $State.LastReviewTriggeredHead = $curHead
+                        $State.LastAcknowledgedReviewTriggerHead = $curHead
+                        $State.PendingDispatch = $null
+                        $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
+                        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                    }
+                    "NUDGE" {
+                        $message = "Continue the assigned Work Item autonomously. If genuinely blocked, report one concrete blocker. Do not wait for routine confirmation."
+                        $delivered = $false
+                        if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $sessionId $message } else { Send-ShipDeAoMessage -SessionId $sessionId -Message $message }
+                        }
+                        if ($delivered) {
+                            $State.NudgeCount = [int]$State.NudgeCount + 1
+                            $State.PendingDispatch = $null
+                            $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                            if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                        } else {
+                            throw "Cannot deliver unacknowledged nudge during crash recovery."
+                        }
+                    }
+                    default {
                         $State.PendingDispatch = $null
                         if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                     }
-                }
-                "REVIEW_TRIGGER" {
-                    $State.PendingDispatch = $null
-                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
-                }
-                default {
-                    $State.PendingDispatch = $null
-                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                 }
             }
         }
@@ -3273,6 +3559,7 @@ function Invoke-ShipDeSupervisorLoop {
             $headSha = [string]$pullRequest.headRefOid
             if ([string]$State.HeadSha -ne $headSha) {
                 $State.ExactHeadVerdict = $null
+                $State.ReviewRequestCommentId = $null
             }
             $State.PullRequestNumber = [int]$pullRequest.number
             $State.HeadSha = $headSha
@@ -3284,8 +3571,8 @@ function Invoke-ShipDeSupervisorLoop {
                 if ($gate -eq "GREEN") {
                     $State.CiGate = "GREEN_DRAFT"
                 }
-                if ($activity -eq "COMPLETED") {
-                    throw "AO worker completed while PR #$($pullRequest.number) is still draft. Mark the same PR ready before review."
+                if ($activity -in @("COMPLETED", "PARKED")) {
+                    throw "AO worker is $activity while PR #$($pullRequest.number) is still draft. Mark the same PR ready before review."
                 }
             } elseif ($gate -eq "FAILED") {
                 $workerActionExpected = $true
@@ -3352,7 +3639,18 @@ function Invoke-ShipDeSupervisorLoop {
                         }
                         if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
 
-                        $message = "Independent Codex review requires changes on PR #$($pullRequest.number) at exact HEAD $headSha. Read the durable review findings, repair the same branch, run all governed checks, commit, push, and stop before merge."
+                        $findingsText = ""
+                        try {
+                            $findingsText = Get-ShipDeGitHubExactHeadCodexFindings -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -Repository "vinh05092001/shipde-platform"
+                        } catch {}
+
+                        $message = "Independent Codex review requires changes on PR #$($pullRequest.number) at exact HEAD $headSha."
+                        if (-not [string]::IsNullOrWhiteSpace($findingsText)) {
+                            $message += "`n`nReview findings:`n$findingsText`n`nRepair this same branch, run all governed checks, commit, push, and stop before merge."
+                        } else {
+                            $message += " Read the durable review findings, repair the same branch, run all governed checks, commit, push, and stop before merge."
+                        }
+
                         $targetSessionId = Ensure-ShipDeRepairWorker -State $State -PullRequest $pullRequest -Project $Project -WorkerStarter $WorkerStarter -SessionReleaser $SessionReleaser -SessionDetailResolver $SessionDetailResolver -SessionsResolver $SessionsResolver -OwnershipVerifier $OwnershipVerifier -CheckpointWriter $CheckpointWriter
                         $delivered = $false
                         if (-not [string]::IsNullOrWhiteSpace($targetSessionId)) {
@@ -3381,21 +3679,28 @@ function Invoke-ShipDeSupervisorLoop {
                     }
                     if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
 
-                    $started = $false
-                    if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
-                        $started = Start-ShipDeAoReview -SessionId $sessionId
-                    } else {
-                        Write-Host ("[SUPERVISOR] PR #{0} at {1} has no active AO session. Launching governed non-interactive exact-HEAD Codex review..." -f $pullRequest.number, $headSha)
-                        if ($null -ne $ExternalReviewLauncher) {
-                            $started = & $ExternalReviewLauncher ([int]$pullRequest.number) $headSha
+                    Write-Host ("[SUPERVISOR] PR #{0} is CI GREEN at {1}. Requesting governed exact-HEAD @codex review..." -f $pullRequest.number, $headSha)
+                    $commentId = $null
+                    try {
+                        if ($null -ne $BotReviewRequester) {
+                            $commentId = & $BotReviewRequester ([int]$pullRequest.number) $headSha
+                        } elseif ($null -ne $ExternalReviewLauncher) {
+                            $commentId = & $ExternalReviewLauncher ([int]$pullRequest.number) $headSha
                         } else {
-                            $started = Start-ShipDeExternalCodexReview -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha
+                            $commentId = Request-ShipDeCodexBotReview -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -Repository "vinh05092001/shipde-platform"
                         }
-                    }
-                    if (-not $started) {
-                        throw "CI is green but the independent Codex review could not be started."
+                    } catch {
+                        Write-Warning ("[SUPERVISOR] Failed to request @codex review for PR #{0}: {1}" -f $pullRequest.number, $_.Exception.Message)
+                        $commentId = $null
                     }
 
+                    if ([string]::IsNullOrWhiteSpace($commentId)) {
+                        $State.PendingDispatch = $null
+                        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                        throw "CI is green but the trusted GitHub @codex review request comment could not be created or found for PR #$($pullRequest.number) at exact HEAD $headSha. Stopped fail-closed."
+                    }
+
+                    $State.ReviewRequestCommentId = [string]$commentId
                     $State.LastReviewTriggeredHead = $headSha
                     $State.LastAcknowledgedReviewTriggerHead = $headSha
                     $State.PendingDispatch = $null
@@ -3448,7 +3753,15 @@ function Invoke-ShipDeSupervisorLoop {
                 $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                 if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
             }
-        } elseif ($activity -eq "COMPLETED" -and ((-not $pullRequest) -or $workerActionExpected)) {
+        } elseif ($activity -in @("COMPLETED", "PARKED") -and ((-not $pullRequest) -or $workerActionExpected)) {
+            if (-not $pullRequest) {
+                $statusDesc = if ($activity -eq "PARKED") { "parked" } else { "completed" }
+                throw "AO worker is $statusDesc but no open Pull Request was found for Work Item '$($State.WorkItemId)' on branch '$($State.Branch)'."
+            }
+            if ($pullRequest.isDraft) {
+                $statusDesc = if ($activity -eq "PARKED") { "parked" } else { "completed" }
+                throw "AO worker is $statusDesc while PR #$($pullRequest.number) is still draft. Mark the same PR ready before review."
+            }
             $reactivationGraceSeconds = 120
             $inReactivationWindow = $false
             if (-not [string]::IsNullOrWhiteSpace([string]$State.LastRepairDispatchedAt)) {
@@ -3462,10 +3775,12 @@ function Invoke-ShipDeSupervisorLoop {
             }
 
             if ($inReactivationWindow) {
-                Write-Host ("[SUPERVISOR] Repair was dispatched at {0}. Permitting reactivation window for completed worker." -f $State.LastRepairDispatchedAt)
+                Write-Host ("[SUPERVISOR] Repair was dispatched at {0}. Permitting reactivation window for {1} worker." -f $State.LastRepairDispatchedAt, $activity)
             } else {
-                throw "AO worker completed while governed implementation or repair work is still required."
+                throw "AO worker is in state $activity while governed implementation or repair work is still required."
             }
+        } elseif ($activity -eq "PARKED" -and (-not $pullRequest)) {
+            throw "AO worker is parked but no open Pull Request was found for Work Item '$($State.WorkItemId)' on branch '$($State.Branch)'."
         }
 
         if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
@@ -3493,7 +3808,7 @@ function Assert-ShipDeSupervisorCompatibility {
         $startupSelfTestHostLeaks.Add("WARNING: $msg")
     }
 
-    $aoFixtureRoot = Join-Path $env:TEMP "task-ai-06-ao-$([Guid]::NewGuid().ToString('N'))"
+    $aoFixtureRoot = Join-Path (Get-ShipDeTempDir) "task-ai-06-ao-$([Guid]::NewGuid().ToString('N'))"
     $aoFixturePath = Join-Path $aoFixtureRoot "agent-orchestrator\resources\daemon\ao.exe"
     try {
         New-Item -ItemType Directory -Path (Split-Path $aoFixturePath -Parent) -Force | Out-Null
@@ -3548,7 +3863,7 @@ function Assert-ShipDeSupervisorCompatibility {
         # 2. Pre-creation failure & original error preservation: launcher preserves original error and cleans up.
         # 3. Early process exit detection: detects exited process and records exit code without leaving marker.
         # 4. Successful startup & live process marker binding: binds verified live daemon identity.
-        $behavioralTestRoot = Join-Path $env:TEMP "task-ai-06-behavioral-$([Guid]::NewGuid().ToString('N'))"
+        $behavioralTestRoot = Join-Path (Get-ShipDeTempDir) "task-ai-06-behavioral-$([Guid]::NewGuid().ToString('N'))"
         $behavioralAiRoot = Join-Path $behavioralTestRoot "AI"
         $behavioralProfile = Join-Path $behavioralTestRoot ".claude"
         $behavioralSettings = Join-Path $behavioralProfile "settings.json"
@@ -3665,7 +3980,7 @@ function Assert-ShipDeSupervisorCompatibility {
             throw "AO bootstrap behavioral regression: ANTHROPIC_API_KEY was not restored after self-tests."
         }
 
-        $bootstrapExecutable = Join-Path $env:TEMP "task-ai-06-ao-marker-$([Guid]::NewGuid().ToString('N'))\ao.exe"
+        $bootstrapExecutable = Join-Path (Get-ShipDeTempDir) "task-ai-06-ao-marker-$([Guid]::NewGuid().ToString('N'))\ao.exe"
         $bootstrapStartTime = (Get-Date).ToUniversalTime().AddMinutes(-1)
         $bootstrapProcess = [PSCustomObject]@{
             Id = 61006
@@ -4706,7 +5021,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
 
     # Acceptance test 3: no interactive prompt (Invoke-ShipDeReview -NonInteractive runs without Read-Host)
     & {
-        $testHandoffDir = Join-Path $env:TEMP "task-ai-06-test-handoff-$([Guid]::NewGuid().ToString('N'))"
+        $testHandoffDir = Join-Path (Get-ShipDeTempDir) "task-ai-06-test-handoff-$([Guid]::NewGuid().ToString('N'))"
         try {
             New-Item -ItemType Directory -Path $testHandoffDir -Force | Out-Null
             $testPrNumber = 99999
@@ -4826,7 +5141,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         # Invocation test: Invoke-ShipDeReview passing exact argument vector to invoker and parsing final message
         $capturedInvokerArgs = $null
         $capturedInvokerPrompt = $null
-        $testHandoffDir2 = Join-Path $env:TEMP "task-ai-06-behavioral-handoff-$([Guid]::NewGuid().ToString('N'))"
+        $testHandoffDir2 = Join-Path (Get-ShipDeTempDir) "task-ai-06-behavioral-handoff-$([Guid]::NewGuid().ToString('N'))"
         try {
             New-Item -ItemType Directory -Path $testHandoffDir2 -Force | Out-Null
             $invokerComments = [System.Collections.Generic.List[string]]::new()
@@ -5123,7 +5438,7 @@ Full review comments:
     }
 
     $stateRoundTrip = @{ TestField = "test-value"; NestedObject = @{ Inner = 123 } }
-    $temporaryPath = Join-Path $env:TEMP "supervisor-test-$(Get-Random).json"
+    $temporaryPath = Join-Path (Get-ShipDeTempDir) "supervisor-test-$(Get-Random).json"
     try {
         $stateRoundTrip | ConvertTo-Json -Depth 10 | Set-Content -Path $temporaryPath -Encoding UTF8
         $restored = Get-Content $temporaryPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -5330,7 +5645,7 @@ Full review comments:
     }
 
     # 1. Single-supervisor locking behavioral test
-    $testLockFile = Join-Path $env:TEMP "supervisor-test-$([Guid]::NewGuid().ToString('N')).lock"
+    $testLockFile = Join-Path (Get-ShipDeTempDir) "supervisor-test-$([Guid]::NewGuid().ToString('N')).lock"
     try {
         Assert-ShipDeSupervisorLock -LockFile $testLockFile -WorkItemId "TASK-AI-06" -CurrentPid 12345
         if (-not (Test-Path -LiteralPath $testLockFile)) {
@@ -5707,6 +6022,455 @@ Full review comments:
         }
     }
 
+    # ------------------------------------------------------------------------------------------------
+    # TASK-AI-06 Round 19 Regression Test Suite:
+    # 1. Untrusted skipped posting does NOT acknowledge review trigger or start bot-wait timer
+    # 2. Exact-HEAD bot request created once and persists comment ID idempotently
+    # 3. Timeout starts only after successful bot request creation
+    # 4. Trusted CHANGES_REQUIRED automatically dispatches all findings to agy
+    # 5. Crash/restart during PendingDispatch does not drop repairs and does not duplicate
+    # 6. Bounded PARKED lifecycle fail-closed validation
+    # ------------------------------------------------------------------------------------------------
+
+    # Test 1: Untrusted skipped posting does NOT acknowledge review trigger or start bot-wait timer
+    & {
+        $testPr = [PSCustomObject]@{
+            number = 9
+            headRefOid = "c0ffee112233445566778899aabbccddeeff0011"
+            isDraft = $false
+            title = "[TASK-AI-06] Test PR"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRepository = "vinh05092001/shipde-platform"
+            isCrossRepository = $false
+            statusCheckRollup = @(
+                [PSCustomObject]@{
+                    name = "contract"
+                    conclusion = "SUCCESS"
+                    checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } }
+                },
+                [PSCustomObject]@{
+                    name = "application-gate"
+                    conclusion = "SUCCESS"
+                    checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } }
+                }
+            )
+        }
+        $stateUntrusted = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            State = "STARTED"
+            HeadSha = "c0ffee112233445566778899aabbccddeeff0011"
+            PullRequestNumber = 9
+            LastAcknowledgedReviewTriggerHead = $null
+            LastReviewTriggeredAt = $null
+            ReviewRequestCommentId = $null
+        }
+
+        $caughtUntrusted = $false
+        try {
+            Invoke-ShipDeSupervisorLoop `
+                -State $stateUntrusted `
+                -PrResolver { param($w, $b) return $testPr } `
+                -VerdictResolver { param($n, $h, $s) return $null } `
+                -BotReviewRequester { param($n, $h) return $null } `
+                -SleepHandler { param($s) throw "LOOP_END" }
+        } catch {
+            if ($_.Exception.Message -match "could not be created or found") {
+                $caughtUntrusted = $true
+            }
+        }
+        if (-not $caughtUntrusted) {
+            throw "Regression Test 1 failed: untrusted review requester did not fail closed."
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stateUntrusted.LastAcknowledgedReviewTriggerHead)) {
+            throw "Regression Test 1 failed: LastAcknowledgedReviewTriggerHead was acknowledged on skipped review request."
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stateUntrusted.LastReviewTriggeredAt)) {
+            throw "Regression Test 1 failed: LastReviewTriggeredAt timer was started on skipped review request."
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stateUntrusted.ReviewRequestCommentId)) {
+            throw "Regression Test 1 failed: ReviewRequestCommentId was populated on skipped review request."
+        }
+    }
+
+    # Test 2: Exact-HEAD bot request created once and persists comment ID idempotently
+    & {
+        $postStats = @{ Count = 0 }
+        $postedCommentsStore = [System.Collections.Generic.List[object]]::new()
+        $mockPoster = {
+            param($prNum, $body)
+            $postStats.Count++
+            $newId = "comment-bot-12345"
+            $postedCommentsStore.Add([PSCustomObject]@{
+                id = $newId
+                body = $body
+            })
+            return $newId
+        }
+        $mockFinder = {
+            param($prNum)
+            return @($postedCommentsStore)
+        }
+
+        # First call creates the comment
+        $commentId1 = Request-ShipDeCodexBotReview -PullRequestNumber 9 -HeadSha "aabbcc001122" -CommentPoster $mockPoster -CommentsFinder $mockFinder
+        if ($commentId1 -ne "comment-bot-12345") {
+            throw "Regression Test 2 failed: Request-ShipDeCodexBotReview did not return expected comment ID on creation."
+        }
+        if ($postedCommentsStore.Count -ne 1) {
+            throw "Regression Test 2 failed: Comment was not added to store."
+        }
+
+        # Second call with same exact HEAD must find existing comment without invoking poster again
+        $commentId2 = Request-ShipDeCodexBotReview -PullRequestNumber 9 -HeadSha "aabbcc001122" -CommentPoster { throw "Poster must not be called when comment exists" } -CommentsFinder $mockFinder
+        if ($commentId2 -ne "comment-bot-12345") {
+            throw "Regression Test 2 failed: Idempotent lookup did not find existing comment ID."
+        }
+
+        # Verify loop integration persists ReviewRequestCommentId and advances state
+        $testPr2 = [PSCustomObject]@{
+            number = 9
+            headRefOid = "aabbcc001122"
+            isDraft = $false
+            title = "[TASK-AI-06] Test PR"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRepository = "vinh05092001/shipde-platform"
+            isCrossRepository = $false
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } },
+                [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+            )
+        }
+        $stateBotSuccess = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            State = "STARTED"
+            HeadSha = "aabbcc001122"
+            PullRequestNumber = 9
+        }
+        $loopStopped = $false
+        try {
+            Invoke-ShipDeSupervisorLoop `
+                -State $stateBotSuccess `
+                -PrResolver { param($w, $b) return $testPr2 } `
+                -VerdictResolver { param($n, $h, $s) return $null } `
+                -BotReviewRequester { param($n, $h) return "comment-bot-12345" } `
+                -SleepHandler { param($s) throw "STOP_LOOP" }
+        } catch {
+            if ($_.Exception.Message -match "STOP_LOOP") { $loopStopped = $true }
+        }
+        if (-not $loopStopped) {
+            throw "Regression Test 2 failed: Supervisor loop did not progress to sleep handler after posting review request."
+        }
+        if ($stateBotSuccess.ReviewRequestCommentId -ne "comment-bot-12345") {
+            throw "Regression Test 2 failed: ReviewRequestCommentId was not persisted in supervisor state."
+        }
+        if ($stateBotSuccess.LastAcknowledgedReviewTriggerHead -ne "aabbcc001122") {
+            throw "Regression Test 2 failed: LastAcknowledgedReviewTriggerHead was not acknowledged."
+        }
+        if ([string]::IsNullOrWhiteSpace($stateBotSuccess.LastReviewTriggeredAt)) {
+            throw "Regression Test 2 failed: LastReviewTriggeredAt was not recorded."
+        }
+    }
+
+    # Test 3: Timeout starts only after successful bot request creation
+    & {
+        $testPr3 = [PSCustomObject]@{
+            number = 9
+            headRefOid = "112233445566"
+            isDraft = $false
+            title = "[TASK-AI-06] Test PR"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRepository = "vinh05092001/shipde-platform"
+            isCrossRepository = $false
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } },
+                [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+            )
+        }
+        $expiredTime = (Get-Date).ToUniversalTime().AddMinutes(-25).ToString("o")
+        $stateTimedOut = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            State = "STARTED"
+            HeadSha = "112233445566"
+            PullRequestNumber = 9
+            ReviewRequestCommentId = "comment-existing-1"
+            LastReviewTriggeredHead = "112233445566"
+            LastAcknowledgedReviewTriggerHead = "112233445566"
+            LastReviewTriggeredAt = $expiredTime
+        }
+        $timedOutCaught = $false
+        try {
+            Invoke-ShipDeSupervisorLoop `
+                -State $stateTimedOut `
+                -ReviewTimeoutMinutes 20 `
+                -PrResolver { param($w, $b) return $testPr3 } `
+                -VerdictResolver { param($n, $h, $s) return $null } `
+                -SleepHandler { param($s) throw "SHOULD_NOT_SLEEP" }
+        } catch {
+            if ($_.Exception.Message -match "timed out after 20 minute\(s\)") {
+                $timedOutCaught = $true
+            }
+        }
+        if (-not $timedOutCaught) {
+            throw "Regression Test 3 failed: Supervisor did not enforce timeout from LastReviewTriggeredAt."
+        }
+    }
+
+    # Test 4: Trusted CHANGES_REQUIRED automatically dispatches all findings to agy
+    & {
+        $testPr4 = [PSCustomObject]@{
+            number = 9
+            headRefOid = "445566778899"
+            isDraft = $false
+            title = "[TASK-AI-06] Test PR"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRepository = "vinh05092001/shipde-platform"
+            isCrossRepository = $false
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } },
+                [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+            )
+        }
+        $stateChangesReq = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            HeadSha = "445566778899"
+            PullRequestNumber = 9
+            LastAcknowledgedReviewRepairHead = $null
+        }
+        $t4Released = [System.Collections.Generic.List[string]]::new()
+        $t4DispatchedMessages = [System.Collections.Generic.List[object]]::new()
+        $t4MockSessions = @(
+            [PSCustomObject]@{ id = "session-claude-old"; role = "worker"; harness = "claude-code"; branch = "feat/task-ai-06-orchestrator-supervisor"; status = "pr_open"; isTerminated = $false }
+        )
+
+        try {
+            Invoke-ShipDeSupervisorLoop `
+                -State $stateChangesReq `
+                -PrResolver { param($w, $b) return $testPr4 } `
+                -VerdictResolver { param($n, $h, $s) return "CHANGES_REQUIRED" } `
+                -SessionsResolver { param($p) return $t4MockSessions } `
+                -SessionDetailResolver {
+                    param($id, $p)
+                    $isTerm = ($t4Released -contains $id)
+                    $st = if ($isTerm) { "terminated" } else { "pr_open" }
+                    return [PSCustomObject]@{ id = $id; harness = "claude-code"; branch = "feat/task-ai-06-orchestrator-supervisor"; status = $st; isTerminated = $isTerm }
+                } `
+                -OwnershipVerifier { param($sess, $item, $p) return $true } `
+                -SessionReleaser { param($sid, $p) $t4Released.Add($sid) } `
+                -WorkerStarter {
+                    param($item, $prompt)
+                    return [PSCustomObject]@{ SessionId = "session-agy-new"; Harness = "agy" }
+                } `
+                -MessageSender {
+                    param($sid, $msg)
+                    $t4DispatchedMessages.Add([PSCustomObject]@{ SessionId = $sid; Message = $msg })
+                    return $true
+                } `
+                -SleepHandler { param($s) throw "STOP_T4" }
+        } catch {}
+
+        if ($t4Released.Count -ne 1 -or $t4Released[0] -ne "session-claude-old") {
+            throw "Regression Test 4 failed: claude-code session was not safely released before agy dispatch."
+        }
+        if ($t4DispatchedMessages.Count -ne 1 -or $t4DispatchedMessages[0].SessionId -ne "session-agy-new") {
+            throw "Regression Test 4 failed: changes required message was not dispatched to agy."
+        }
+        if ($stateChangesReq.LastAcknowledgedReviewRepairHead -ne "445566778899") {
+            throw "Regression Test 4 failed: LastAcknowledgedReviewRepairHead was not acknowledged."
+        }
+    }
+
+    # Test 5: Crash/restart during PendingDispatch does not drop repairs and does not duplicate
+    & {
+        # 5A: Unacknowledged crash -> delivers repair and acknowledges
+        $t5Pr = [PSCustomObject]@{
+            number = 9
+            headRefOid = "556677889900"
+            isDraft = $false
+            title = "[TASK-AI-06] Test PR"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRepository = "vinh05092001/shipde-platform"
+            isCrossRepository = $false
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } },
+                [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+            )
+        }
+        $statePendingCrash = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            HeadSha = "556677889900"
+            PullRequestNumber = 9
+            PendingDispatch = @{ Type = "CI_REPAIR"; Head = "556677889900"; Time = (Get-Date).ToUniversalTime().ToString("o") }
+            LastAcknowledgedCiRepairHead = $null
+        }
+        $t5Delivered = [System.Collections.Generic.List[object]]::new()
+        try {
+            Invoke-ShipDeSupervisorLoop `
+                -State $statePendingCrash `
+                -PrResolver { param($w, $b) return $t5Pr } `
+                -SessionsResolver { param($p) return @() } `
+                -SessionDetailResolver { param($id, $p) return $null } `
+                -WorkerStarter { param($i, $p) return [PSCustomObject]@{ SessionId = "sess-agy-5"; Harness = "agy" } } `
+                -MessageSender {
+                    param($sid, $msg)
+                    $t5Delivered.Add([PSCustomObject]@{ SessionId = $sid; Message = $msg })
+                    return $true
+                } `
+                -SleepHandler { param($s) throw "STOP_T5" }
+        } catch {
+            if ($_.Exception.Message -ne "STOP_T5") {
+                throw "TEST 5A CAUGHT UNEXPECTED ERROR: $($_.Exception.Message)"
+            }
+        }
+
+        if ($t5Delivered.Count -ne 1) {
+            throw "Regression Test 5A failed: Unacknowledged crash did not deliver pending CI repair."
+        }
+        if ($statePendingCrash.LastAcknowledgedCiRepairHead -ne "556677889900") {
+            throw "Regression Test 5A failed: Unacknowledged crash did not acknowledge HEAD after delivery."
+        }
+        if ($null -ne $statePendingCrash.PendingDispatch) {
+            throw "Regression Test 5A failed: PendingDispatch was not cleared after delivery."
+        }
+
+        # 5B: Already acknowledged crash -> clears PendingDispatch without duplicate delivery
+        $stateAlreadyAck = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            HeadSha = "556677889900"
+            PullRequestNumber = 9
+            PendingDispatch = @{ Type = "CI_REPAIR"; Head = "556677889900"; Time = (Get-Date).ToUniversalTime().ToString("o") }
+            LastAcknowledgedCiRepairHead = "556677889900"
+        }
+        $t5bDelivered = [System.Collections.Generic.List[object]]::new()
+        try {
+            $null = Invoke-ShipDeSupervisorLoop `
+                -State $stateAlreadyAck `
+                -PrResolver { param($w, $b) return $t5Pr } `
+                -MessageSender { param($sid, $msg) $t5bDelivered.Add($msg); return $true } `
+                -VerdictResolver { param($n, $h, $s) return "PASS" } `
+                -SleepHandler { param($s) throw "STOP_T5B" }
+        } catch {}
+
+        if ($t5bDelivered.Count -ne 0) {
+            throw "Regression Test 5B failed: Already acknowledged pending dispatch re-delivered duplicate message."
+        }
+        if ($null -ne $stateAlreadyAck.PendingDispatch) {
+            throw "Regression Test 5B failed: PendingDispatch was not cleared for already acknowledged intent."
+        }
+    }
+
+    # Test 6: Bounded PARKED lifecycle validation
+    & {
+        # 6A: PARKED without open PR throws fail-closed
+        $stateParkedNoPr = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            State = "STARTED"
+            SessionId = "sess-parked-1"
+        }
+        $parkedNoPrCaught = $false
+        try {
+            Invoke-ShipDeSupervisorLoop `
+                -State $stateParkedNoPr `
+                -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
+                -PrResolver { param($w, $b) return $null } `
+                -SleepHandler { param($s) throw "LOOP" }
+        } catch {
+            if ($_.Exception.Message -match "AO worker is parked but no open Pull Request was found") {
+                $parkedNoPrCaught = $true
+            }
+        }
+        if (-not $parkedNoPrCaught) {
+            throw "Regression Test 6A failed: Parked worker without open PR did not fail closed."
+        }
+
+        # 6B: PARKED with draft PR throws fail-closed
+        $draftPr = [PSCustomObject]@{
+            number = 9
+            headRefOid = "667788990011"
+            isDraft = $true
+            title = "[TASK-AI-06] Draft PR"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRepository = "vinh05092001/shipde-platform"
+            isCrossRepository = $false
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } },
+                [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+            )
+        }
+        $stateParkedDraft = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            State = "STARTED"
+            SessionId = "sess-parked-2"
+        }
+        $parkedDraftCaught = $false
+        try {
+            Invoke-ShipDeSupervisorLoop `
+                -State $stateParkedDraft `
+                -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
+                -PrResolver { param($w, $b) return $draftPr } `
+                -SleepHandler { param($s) throw "LOOP" }
+        } catch {
+            if ($_.Exception.Message -match "while PR #9 is still draft") {
+                $parkedDraftCaught = $true
+            }
+        }
+        if (-not $parkedDraftCaught) {
+            throw "Regression Test 6B failed: Parked worker with draft PR did not fail closed."
+        }
+
+        # 6C: PARKED when repair is required outside grace window throws fail-closed
+        $failedPr = [PSCustomObject]@{
+            number = 9
+            headRefOid = "778899001122"
+            isDraft = $false
+            title = "[TASK-AI-06] Failed CI PR"
+            headRefName = "feat/task-ai-06-orchestrator-supervisor"
+            headRepository = "vinh05092001/shipde-platform"
+            isCrossRepository = $false
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; conclusion = "FAILURE"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+            )
+        }
+        $stateParkedExpired = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            SessionId = "sess-parked-3"
+            HeadSha = "778899001122"
+            LastAcknowledgedCiRepairHead = "778899001122"
+            LastRepairDispatchedAt = (Get-Date).ToUniversalTime().AddMinutes(-5).ToString("o")
+        }
+        $parkedExpiredCaught = $false
+        try {
+            Invoke-ShipDeSupervisorLoop `
+                -State $stateParkedExpired `
+                -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
+                -PrResolver { param($w, $b) return $failedPr } `
+                -SleepHandler { param($s) throw "LOOP" }
+        } catch {
+            if ($_.Exception.Message -match "while governed implementation or repair work is still required") {
+                $parkedExpiredCaught = $true
+            }
+        }
+        if (-not $parkedExpiredCaught) {
+            throw "Regression Test 6C failed: Parked worker when repair work is required outside grace window did not fail closed."
+        }
+    }
+
     # Startup self-test host output leak assertion (AC-AI-63 / TASK-AI-06):
     # Verify that all production-looking messages generated during self-tests
     # (PASS, CHANGES_REQUIRED, PR data, reconstructed-checkpoint notices)
@@ -5967,18 +6731,23 @@ function Invoke-ShipDeSupervise {
 
     Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR"
     Assert-ShipDeSupervisorMaxNudges -MaxNudges $SupervisorMaxNudges
-    Assert-ShipDeAoCommand
-    Assert-ShipDeAoVersion
-    Ensure-ShipDeAgentRouterRuntime
 
-    $state = Read-ShipDeSupervisorCheckpoint
-    $state = Initialize-ShipDeSupervisorState -State $state -PullRequestNumber $PullRequestNumber -Repository $Repository
-    if ($null -eq $state) {
-        return
-    }
-
-    Assert-ShipDeSupervisorLock -WorkItemId ([string]$state.WorkItemId)
+    # Finding 3: Acquire exclusive supervisor lock BEFORE any stateful startup operations
+    # (AO restart, checkpoint initialization, Codex parking, worker spawning)
+    Assert-ShipDeSupervisorLock -WorkItemId ""
     try {
+        Assert-ShipDeAoCommand
+        Assert-ShipDeAoVersion
+        Ensure-ShipDeAgentRouterRuntime
+
+        $state = Read-ShipDeSupervisorCheckpoint
+        $state = Initialize-ShipDeSupervisorState -State $state -PullRequestNumber $PullRequestNumber -Repository $Repository
+        if ($null -eq $state) {
+            return
+        }
+
+        Update-ShipDeSupervisorLock -WorkItemId ([string]$state.WorkItemId)
+
         $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes
 
         if ($result -eq "READY_FOR_HUMAN_MERGE") {
@@ -6095,5 +6864,6 @@ switch ($Action) {
     "Review" { Invoke-ShipDeReview }
     "Sync" { Invoke-ShipDeSync }
     "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber }
+    "Test" { Write-Host "ALL SUPERVISOR BEHAVIORAL TESTS PASSED"; return }
     default { Show-ShipDeMenu }
 }

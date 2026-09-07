@@ -28,7 +28,7 @@ function Get-ShipDeCanonicalAoExecutablePath {
     }
 
     foreach ($root in $roots) {
-        $candidate = Join-Path $root "agent-orchestrator\resources\daemon\ao.exe"
+        $candidate = [System.IO.Path]::Combine($root, "agent-orchestrator", "resources", "daemon", "ao.exe")
         if (Test-Path -LiteralPath $candidate -PathType Leaf) {
             return (Get-Item -LiteralPath $candidate).FullName
         }
@@ -208,8 +208,18 @@ function Assert-ShipDeAoVersionEvidence {
     }
 }
 
+function Get-ShipDeTempDir {
+    if (-not [string]::IsNullOrWhiteSpace($env:TEMP) -and (Test-Path -LiteralPath $env:TEMP)) {
+        return $env:TEMP
+    }
+    return [System.IO.Path]::GetTempPath()
+}
+
 function Get-ShipDePaths {
-    param([string]$AiRoot = (Join-Path $env:USERPROFILE "AI"))
+    param([string]$AiRoot = $(
+        $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
+        Join-Path $userHome "AI"
+    ))
 
     return [ordered]@{
         Main   = Join-Path $AiRoot "shipde-platform"
@@ -284,6 +294,13 @@ function Get-ShipDeObjectProperty {
     )
     if ($null -eq $Object) {
         return $null
+    }
+    if ($Object -is [System.Collections.IDictionary]) {
+        foreach ($name in $Names) {
+            if ($Object.Contains($name)) {
+                return $Object[$name]
+            }
+        }
     }
     foreach ($name in $Names) {
         $property = $Object.PSObject.Properties[$name]
