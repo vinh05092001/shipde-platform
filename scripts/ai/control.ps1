@@ -2308,37 +2308,90 @@ function New-ShipDeAoSpawnArguments {
     )
 }
 
-function Get-ShipDeAoSessions {
-    param([string]$Project = "shipde-platform")
+function ConvertFrom-ShipDeAoSessionResponse {
+    param(
+        [Parameter(Mandatory = $true)][AllowNull()][object]$Response
+    )
 
-$output = @(& (Get-ShipDeAoInvocationPath) session ls --project $Project --json 2>&1)
-    $exitCode = $LASTEXITCODE
-    $text = Join-ShipDeNativeOutput -Output $output
-    if ($exitCode -ne 0) {
-        throw "Cannot query AO sessions for project '$Project': $text"
+    if ($null -eq $Response) {
+        throw "AO session ls JSON does not contain a session collection."
+    }
+
+    # Explicit Shape 1: Top-level array of sessions
+    if ($Response -is [System.Array]) {
+        return @($Response)
+    }
+
+    if (-not ($Response -is [System.Management.Automation.PSCustomObject] -or $Response -is [System.Collections.IDictionary])) {
+        throw "AO session ls JSON does not contain a session collection."
+    }
+
+    # Explicit Shape 2: Observed AO 0.12.12 response { "data": [ ... ], "meta": ... }
+    # or nested { "data": { "sessions": [ ... ] } } / { "data": { "items": [ ... ] } }
+    $dataProp = $Response.PSObject.Properties["data"]
+    if ($null -ne $dataProp) {
+        $val = $dataProp.Value
+        if ($val -is [System.Array]) {
+            return @($val)
+        }
+        if ($val -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($nestedName in @("sessions", "items")) {
+                $nestedProp = $val.PSObject.Properties[$nestedName]
+                if ($null -ne $nestedProp -and $nestedProp.Value -is [System.Array]) {
+                    return @($nestedProp.Value)
+                }
+            }
+        }
+    }
+
+    # Explicit Shape 3: Direct { "sessions": [ ... ] } or { "items": [ ... ] }
+    foreach ($propName in @("sessions", "items")) {
+        $prop = $Response.PSObject.Properties[$propName]
+        if ($null -ne $prop -and $prop.Value -is [System.Array]) {
+            return @($prop.Value)
+        }
+    }
+
+    # Explicit Shape 4: Wrapped { "result": [ ... ] } or { "result": { "sessions" | "items" | "data": [ ... ] } }
+    $resultProp = $Response.PSObject.Properties["result"]
+    if ($null -ne $resultProp) {
+        $rVal = $resultProp.Value
+        if ($rVal -is [System.Array]) {
+            return @($rVal)
+        }
+        if ($rVal -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($nestedName in @("sessions", "items", "data")) {
+                $nestedProp = $rVal.PSObject.Properties[$nestedName]
+                if ($null -ne $nestedProp -and $nestedProp.Value -is [System.Array]) {
+                    return @($nestedProp.Value)
+                }
+            }
+        }
+    }
+
+    throw "AO session ls JSON does not contain a session collection."
+}
+
+function Get-ShipDeAoSessions {
+    param(
+        [string]$Project = "shipde-platform",
+        [scriptblock]$TextResolver = $null
+    )
+
+    $text = if ($null -ne $TextResolver) {
+        & $TextResolver $Project
+    } else {
+        $output = @(& (Get-ShipDeAoInvocationPath) session ls --project $Project --json 2>&1)
+        $exitCode = $LASTEXITCODE
+        $rawText = Join-ShipDeNativeOutput -Output $output
+        if ($exitCode -ne 0) {
+            throw "Cannot query AO sessions for project '$Project': $rawText"
+        }
+        $rawText
     }
 
     $response = ConvertFrom-ShipDeAoJson -Json $text -Operation "session ls"
-    if ($response -is [System.Array]) {
-        return @($response)
-    }
-
-    foreach ($candidate in @(
-        $response,
-        (Get-ShipDeObjectProperty -Object $response -Names @("result", "data"))
-    )) {
-        if ($null -eq $candidate) {
-            continue
-        }
-        if ($candidate -is [System.Array]) {
-            return @($candidate)
-        }
-        $sessions = Get-ShipDeObjectProperty -Object $candidate -Names @("sessions", "items")
-        if ($null -ne $sessions) {
-            return @($sessions)
-        }
-    }
-    throw "AO session ls JSON does not contain a session collection."
+    return @(ConvertFrom-ShipDeAoSessionResponse -Response $response)
 }
 
 function Get-ShipDeAoSessionName {
@@ -3031,6 +3084,16 @@ function Invoke-ShipDeSupervisorLoop {
 }
 
 function Assert-ShipDeSupervisorCompatibility {
+    # Silence all host output during startup self-tests to prevent leaking PASS,
+    # CHANGES_REQUIRED, PR data, and reconstructed-checkpoint messages
+    # before the real supervisor banner is printed.
+    $startupSelfTestHostLeaks = [System.Collections.Generic.List[string]]::new()
+    function Write-Host {
+        param([Parameter(ValueFromRemainingArguments = $true)]$Arguments)
+        $msg = if ($null -ne $Arguments) { $Arguments -join " " } else { "" }
+        $startupSelfTestHostLeaks.Add($msg)
+    }
+
     $aoFixtureRoot = Join-Path $env:TEMP "task-ai-06-ao-$([Guid]::NewGuid().ToString('N'))"
     $aoFixturePath = Join-Path $aoFixtureRoot "agent-orchestrator\resources\daemon\ao.exe"
     try {
@@ -4637,6 +4700,150 @@ Full review comments:
         if ($aiToolchainContent -notmatch "In accordance with AI-SUP-18, bounded 9Router error records are diagnostic metadata") {
             throw "AI-TOOLCHAIN-DECISIONS.md policy regression test failed: AI-SUP-18 harmonization missing."
         }
+    }
+
+    # Pinned AO 0.12.12 session list behavioral fixtures (AC-AI-63 / TASK-AI-06):
+    $ao01212ObservedNonEmptyJson = @'
+{
+  "data": [
+    {
+      "id": "shipde-platform-3",
+      "projectId": "shipde-platform",
+      "role": "worker",
+      "status": "exited",
+      "harness": "claude-code",
+      "isTerminated": false,
+      "lastActivityAt": "2026-09-07T07:20:49.1217509Z",
+      "createdAt": "2026-09-05T05:32:08.7228602Z",
+      "updatedAt": "2026-09-07T07:24:59.1438863Z"
+    }
+  ],
+  "meta": {
+    "hiddenTerminatedCount": 0,
+    "hiddenOrchestratorCount": 2
+  }
+}
+'@
+
+    $nonEmptySessions = @(Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return $ao01212ObservedNonEmptyJson })
+    if ($nonEmptySessions.Count -ne 1) {
+        throw "AO 0.12.12 observed non-empty session collection fixture failed: expected 1 session, got $($nonEmptySessions.Count)."
+    }
+    $observedSession = $nonEmptySessions[0]
+    if ((Get-ShipDeAoSessionId -Response $observedSession) -ne "shipde-platform-3" -or
+        [string]$observedSession.projectId -ne "shipde-platform" -or
+        [string]$observedSession.role -ne "worker" -or
+        [string]$observedSession.harness -ne "claude-code" -or
+        [string]$observedSession.status -ne "exited" -or
+        [bool]$observedSession.isTerminated -ne $false) {
+        throw "AO 0.12.12 observed non-empty session collection properties verification failed."
+    }
+
+    $ao01212ObservedEmptyJson = @'
+{
+  "data": [],
+  "meta": {
+    "hiddenTerminatedCount": 0,
+    "hiddenOrchestratorCount": 0
+  }
+}
+'@
+
+    $emptySessions = @(Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return $ao01212ObservedEmptyJson })
+    if ($emptySessions.Count -ne 0) {
+        throw "AO 0.12.12 observed empty session collection fixture failed: expected 0 sessions, got $($emptySessions.Count)."
+    }
+
+    # Already-supported shapes:
+    # 1. Bare array
+    $bareSessions = @(Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return '[{"id":"bare-1","role":"worker"}]' })
+    if ($bareSessions.Count -ne 1 -or (Get-ShipDeAoSessionId -Response $bareSessions[0]) -ne "bare-1") {
+        throw "Bare array session collection fixture failed."
+    }
+
+    # 2. Wrapped result array
+    $resultSessions = @(Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return '{"result":[{"id":"res-1","role":"worker"}]}' })
+    if ($resultSessions.Count -ne 1 -or (Get-ShipDeAoSessionId -Response $resultSessions[0]) -ne "res-1") {
+        throw "Result array session collection fixture failed."
+    }
+
+    # 3. Wrapped result with nested sessions
+    $resultNestedSessions = @(Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return '{"result":{"sessions":[{"id":"nested-1","role":"worker"}]}}' })
+    if ($resultNestedSessions.Count -ne 1 -or (Get-ShipDeAoSessionId -Response $resultNestedSessions[0]) -ne "nested-1") {
+        throw "Result nested sessions collection fixture failed."
+    }
+
+    # 4. Top-level sessions
+    $directSessions = @(Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return '{"sessions":[{"id":"dir-1","role":"worker"}]}' })
+    if ($directSessions.Count -ne 1 -or (Get-ShipDeAoSessionId -Response $directSessions[0]) -ne "dir-1") {
+        throw "Direct sessions collection fixture failed."
+    }
+
+    # Fail-closed checks:
+    # 1. Unrelated array rejected
+    $unrelatedArrayRejected = $false
+    try {
+        Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return '{"logs":["log line 1","log line 2"],"errors":["err 1"]}' } | Out-Null
+    } catch {
+        $unrelatedArrayRejected = $_.Exception.Message -match "AO session ls JSON does not contain a session collection"
+    }
+    if (-not $unrelatedArrayRejected) {
+        throw "Fail-closed check failed: unrelated array was accepted as session collection."
+    }
+
+    # 2. Missing collection rejected
+    $missingCollectionRejected = $false
+    try {
+        Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return '{"meta":{"count":0}}' } | Out-Null
+    } catch {
+        $missingCollectionRejected = $_.Exception.Message -match "AO session ls JSON does not contain a session collection"
+    }
+    if (-not $missingCollectionRejected) {
+        throw "Fail-closed check failed: missing session collection was accepted."
+    }
+
+    # 3. Log-contaminated JSON rejected
+    $logContaminatedRejected = $false
+    try {
+        Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return "time=2026-09-07 level=INFO msg=ready`n" + $ao01212ObservedNonEmptyJson } | Out-Null
+    } catch {
+        $logContaminatedRejected = $true
+    }
+    if (-not $logContaminatedRejected) {
+        throw "Fail-closed check failed: log-contaminated JSON was accepted."
+    }
+
+    # 4. Non-JSON string rejected
+    $malformedRejected = $false
+    try {
+        Get-ShipDeAoSessions -Project "shipde-platform" -TextResolver { param($p) return "not json at all" } | Out-Null
+    } catch {
+        $malformedRejected = $true
+    }
+    if (-not $malformedRejected) {
+        throw "Fail-closed check failed: malformed JSON was accepted."
+    }
+
+    # Startup self-test host output leak assertion (AC-AI-63 / TASK-AI-06):
+    # Verify that all production-looking messages generated during self-tests
+    # (PASS, CHANGES_REQUIRED, PR data, reconstructed-checkpoint notices)
+    # were completely intercepted by the local Write-Host suppressor and
+    # none were leaked to the host prior to the supervisor banner.
+    $productionPatterns = @(
+        '(?i)\b(PASS|CHANGES_REQUIRED)\b',
+        '(?i)PR\s*#\d+',
+        '(?i)\[SUPERVISOR\]',
+        '(?i)Reconstructed missing checkpoint'
+    )
+    $interceptedLeakedMessages = @($startupSelfTestHostLeaks | Where-Object {
+        $msg = $_
+        foreach ($pat in $productionPatterns) {
+            if ($msg -match $pat) { return $true }
+        }
+        return $false
+    })
+    if ($interceptedLeakedMessages.Count -eq 0) {
+        throw "Startup self-test host output leak assertion failed: self-tests did not exercise supervisor host-writing code through the silenced interceptor."
     }
 }
 
