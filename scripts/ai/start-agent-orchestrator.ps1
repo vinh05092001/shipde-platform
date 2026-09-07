@@ -10,6 +10,9 @@ param(
 
 . (Join-Path $PSScriptRoot "common.ps1")
 $routerProcess = $null
+$aoProcess = $null
+$aoIdentity = $null
+$temporaryPath = $null
 
 if ([string]::IsNullOrWhiteSpace($ExpectedAoVersion)) {
     $ExpectedAoVersion = Get-ShipDePinnedAoVersion
@@ -237,8 +240,6 @@ $aoArgs = @()
 if ((Split-Path $aoExecutablePath -Leaf) -ieq "ao.exe") {
     $aoArgs = @("daemon")
 }
-$aoProcess = $null
-$aoIdentity = $null
 try {
     $aoProcess = if ($null -ne $ProcessStarter) {
         & $ProcessStarter $aoExecutablePath $aoArgs
@@ -312,6 +313,9 @@ try {
         $aoProcess | Stop-Process -Force -ErrorAction SilentlyContinue
     }
     Stop-StartedRouterProcess -Process $routerProcess
+    if ($null -ne $temporaryPath) {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    }
     Remove-Item -LiteralPath $runtimePath -Force -ErrorAction SilentlyContinue
     throw
 }

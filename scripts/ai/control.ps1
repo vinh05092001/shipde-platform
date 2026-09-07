@@ -1280,8 +1280,8 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
     Remove-Item -Path $diagnosticFile -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $executionFile -Force -ErrorAction SilentlyContinue
     [System.IO.File]::WriteAllText($schemaFile, $schemaJson, [System.Text.UTF8Encoding]::new($false))
-    Push-Location $script:Paths.Codex
     $previousErrorActionPreference = $ErrorActionPreference
+    Push-Location $script:Paths.Codex
     try {
         # The non-interactive review subcommand accepts an explicit JSON schema
         # and writes the structured model message atomically.
@@ -2864,6 +2864,30 @@ function Assert-ShipDeSupervisorCompatibility {
         $unsafeRouterDereferences = ([regex]::Matches($launcherScript, '\$routerProcess\.HasExited')).Count
         if ($firstLauncherThrow -lt 0 -or $routerInitialization -gt $firstLauncherThrow -or $routerCleanupHelper -lt 0 -or $routerCleanupCalls -lt 3 -or $unsafeRouterDereferences -ne 0) {
             throw "AO bootstrap regression: routerProcess is not initialized and cleaned up safely on every launcher path."
+        }
+        $processStarterInvocationForCleanup = $launcherScript.IndexOf('& $ProcessStarter', [StringComparison]::Ordinal)
+        $aoStartupTryForCleanup = $launcherScript.IndexOf('try {', $processStarterInvocationForCleanup, [StringComparison]::Ordinal)
+        $launcherCleanupStart = $launcherScript.IndexOf('} catch {', $aoStartupTryForCleanup, [StringComparison]::Ordinal)
+        $aoProcessInitialization = $launcherScript.IndexOf('$aoProcess = $null', [StringComparison]::Ordinal)
+        $aoIdentityInitialization = $launcherScript.IndexOf('$aoIdentity = $null', [StringComparison]::Ordinal)
+        $temporaryPathInitialization = $launcherScript.IndexOf('$temporaryPath = $null', [StringComparison]::Ordinal)
+        $aoCleanupReference = $launcherScript.IndexOf('$aoProcess -and', $launcherCleanupStart, [StringComparison]::Ordinal)
+        $routerCleanupReference = $launcherScript.IndexOf('Stop-StartedRouterProcess -Process $routerProcess', $launcherCleanupStart, [StringComparison]::Ordinal)
+        $temporaryPathCleanupReference = $launcherScript.IndexOf('$temporaryPath)', $launcherCleanupStart, [StringComparison]::Ordinal)
+        $runtimePathCleanupReference = $launcherScript.IndexOf('Remove-Item -LiteralPath $runtimePath', $launcherCleanupStart, [StringComparison]::Ordinal)
+        if ($processStarterInvocationForCleanup -lt 0 -or $aoStartupTryForCleanup -lt 0 -or $launcherCleanupStart -lt 0 -or
+            $aoProcessInitialization -lt 0 -or $aoProcessInitialization -gt $aoCleanupReference -or
+            $aoIdentityInitialization -lt 0 -or $aoIdentityInitialization -gt $launcherCleanupStart -or
+            $temporaryPathInitialization -lt 0 -or $temporaryPathInitialization -gt $temporaryPathCleanupReference -or
+            $routerCleanupReference -lt 0 -or $routerInitialization -gt $routerCleanupReference -or
+            $runtimePathCleanupReference -lt 0) {
+            throw "AO bootstrap regression: cleanup references state that is not initialized before the governed launcher catch."
+        }
+        $controllerScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot "control.ps1") -Raw -Encoding UTF8
+        $finallyIndex = $controllerScript.IndexOf('} finally {', [StringComparison]::Ordinal)
+        $finallyStateInitialization = $controllerScript.IndexOf('$previousErrorActionPreference = $ErrorActionPreference', [StringComparison]::Ordinal)
+        if ($finallyIndex -lt 0 -or $finallyStateInitialization -lt 0 -or $finallyStateInitialization -gt $finallyIndex) {
+            throw "Controller regression: finally restores state that was not initialized before entering the protected operation."
         }
         $aoInitialization = $launcherScript.IndexOf('$aoProcess = $null', [StringComparison]::Ordinal)
         $processStarterInvocation = $launcherScript.IndexOf('& $ProcessStarter', [StringComparison]::Ordinal)
