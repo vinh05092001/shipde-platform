@@ -1,11 +1,15 @@
 param(
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
     [string]$AoExecutable = "",
+    [string]$ProfilePath = (Join-Path $env:USERPROFILE ".claude"),
     [int]$AgentRouterPort = 20128,
     [string]$ExpectedAoVersion = "",
     [int]$StartupTimeoutSeconds = 30,
     [switch]$Restart,
-    [scriptblock]$ProcessStarter = $null
+    [scriptblock]$ProcessStarter = $null,
+    [scriptblock]$StatusProbe = $null,
+    [scriptblock]$EndpointTester = $null,
+    [scriptblock]$VersionProbe = $null
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -14,13 +18,13 @@ $aoProcess = $null
 $aoIdentity = $null
 $temporaryPath = $null
 
-if ([string]::IsNullOrWhiteSpace($ExpectedAoVersion)) {
-    $ExpectedAoVersion = Get-ShipDePinnedAoVersion
-} elseif ($ExpectedAoVersion -notmatch '^\d+\.\d+\.\d+$') {
-    throw "Expected AO version must be an exact semantic version without ranges: '$ExpectedAoVersion'"
+$canonicalAoVersion = Get-ShipDePinnedAoVersion
+if (-not [string]::IsNullOrWhiteSpace($ExpectedAoVersion) -and $ExpectedAoVersion -ne $canonicalAoVersion) {
+    throw "Caller-supplied ExpectedAoVersion '$ExpectedAoVersion' contradicts canonical manifest pin '$canonicalAoVersion'. Bypassing the ecosystem manifest is prohibited."
 }
+$ExpectedAoVersion = $canonicalAoVersion
 
-$profilePath = Join-Path $env:USERPROFILE ".claude"
+$profilePath = $ProfilePath
 $settingsPath = Join-Path $profilePath "settings.json"
 $handoffRoot = Join-Path $AiRoot "handoff"
 $runtimePath = Join-Path $handoffRoot "ao-router-runtime.json"
@@ -36,7 +40,11 @@ $aoExecutablePath = if ([string]::IsNullOrWhiteSpace($AoExecutable)) {
     }
     (Get-Item -LiteralPath $AoExecutable).FullName
 }
-$aoVersionProbe = Get-ShipDeAoVersionProbe -AoExecutable $aoExecutablePath
+$aoVersionProbe = if ($null -ne $VersionProbe) {
+    & $VersionProbe $aoExecutablePath
+} else {
+    Get-ShipDeAoVersionProbe -AoExecutable $aoExecutablePath
+}
 $aoVersionEvidence = Assert-ShipDeAoVersionEvidence `
     -AoExecutable $aoExecutablePath `
     -ExpectedVersion $ExpectedAoVersion `
@@ -66,6 +74,9 @@ if (
 }
 
 function Test-AgentRouterEndpoint {
+    if ($null -ne $EndpointTester) {
+        return (& $EndpointTester)
+    }
     if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $AgentRouterPort)) {
         return $false
     }
@@ -89,12 +100,40 @@ function Stop-StartedRouterProcess {
     }
 
     try {
+        $pidToKill = $null
+        if ($Process -is [int]) {
+            $pidToKill = $Process
+        } elseif ($Process.PSObject.Properties['Id']) {
+            $pidToKill = [int]$Process.Id
+        }
+
+        if ($pidToKill) {
+            try {
+                $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $pidToKill" -ErrorAction SilentlyContinue)
+                foreach ($child in $children) {
+                    try {
+                        Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+                    } catch {}
+                }
+            } catch {}
+
+            try {
+                $null = & taskkill.exe /PID $pidToKill /T /F 2>$null
+            } catch {}
+        }
         if (-not (Test-StartedRouterProcessExited -Process $Process)) {
             $Process | Stop-Process -Force -ErrorAction SilentlyContinue
         }
     } catch {
         # Cleanup must never replace the original launcher error.
     }
+
+    try {
+        $cleanupDeadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $cleanupDeadline -and (Test-AgentRouterEndpoint)) {
+            Start-Sleep -Milliseconds 200
+        }
+    } catch {}
 }
 
 function Test-StartedRouterProcessExited {
@@ -254,8 +293,14 @@ try {
     $ready = $false
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 500
-        $statusOutput = @(& $aoExecutablePath status --json 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $statusOutput.Count -gt 0) {
+        $statusOutput = @(
+            if ($null -ne $StatusProbe) {
+                & $StatusProbe $aoExecutablePath
+            } else {
+                & $aoExecutablePath status --json 2>$null
+            }
+        )
+        if (($null -ne $StatusProbe -or $LASTEXITCODE -eq 0) -and $statusOutput.Count -gt 0) {
             try {
                 $status = ($statusOutput -join [Environment]::NewLine) | ConvertFrom-Json
                 if ([string]$status.state -eq "ready") {

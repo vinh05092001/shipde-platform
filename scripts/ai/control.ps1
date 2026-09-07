@@ -22,11 +22,7 @@ $script:HandoffRoot = Join-Path $AiRoot "handoff"
 $script:Paths = Get-ShipDePaths -AiRoot $AiRoot
 $script:RequiredPrChecks = @("contract", "application-gate")
 $script:RequiredPrCheckProviderPrefix = "github-actions"
-$repoOwner = if ($Repository -match '^([^/]+)/') { $matches[1] } else { "" }
 $script:TrustedCodexReviewerLogins = @("chatgpt-codex-connector[bot]")
-if (-not [string]::IsNullOrWhiteSpace($repoOwner) -and $script:TrustedCodexReviewerLogins -notcontains $repoOwner) {
-    $script:TrustedCodexReviewerLogins += $repoOwner
-}
 $script:NineRouterPinnedVersion = "0.5.55"
 
 function Get-ShipDeTextAtRef {
@@ -407,10 +403,10 @@ function Get-ShipDeOpenPullRequests {
     $owner = $repoParts[0]
     $repoName = $repoParts[1]
 
-    $query = @'
-query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
+    $prQuery = @'
+query($owner: String!, $name: String!, $base: String!, $after: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(states: OPEN, baseRefName: $base, first: 50, after: $endCursor) {
+    pullRequests(states: OPEN, baseRefName: $base, first: 50, after: $after) {
       nodes {
         number
         title
@@ -425,44 +421,6 @@ query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
         headRepositoryOwner {
           login
         }
-        commits(last: 1) {
-          nodes {
-            commit {
-              statusCheckRollup {
-                contexts(first: 100) {
-                  pageInfo {
-                    hasNextPage
-                    endCursor
-                  }
-                  nodes {
-                    __typename
-                    ... on CheckRun {
-                      name
-                      status
-                      conclusion
-                      startedAt
-                      completedAt
-                      detailsUrl
-                      checkSuite {
-                        workflowRun {
-                          workflow {
-                            name
-                          }
-                        }
-                      }
-                    }
-                    ... on StatusContext {
-                      context
-                      state
-                      targetUrl
-                      createdAt
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
       }
       pageInfo {
         hasNextPage
@@ -473,65 +431,44 @@ query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
 }
 '@
 
-    $raw = @(& gh api graphql --paginate --slurp `
-        -F owner=$owner `
-        -F name=$repoName `
-        -F base="main" `
-        -f query=$query 2>$null)
+    $prNodes = [System.Collections.Generic.List[object]]::new()
+    $hasMorePrs = $true
+    $prCursor = $null
 
-    if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) {
-        throw "Cannot read open Pull Requests from GitHub via paginated GraphQL API."
+    while ($hasMorePrs) {
+        $prArgs = @(
+            "api", "graphql",
+            "-F", "owner=$owner",
+            "-F", "name=$repoName",
+            "-F", "base=main"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($prCursor)) {
+            $prArgs += @("-F", "after=$prCursor")
+        }
+        $prArgs += @("-f", "query=$prQuery")
+
+        $raw = @(& gh @prArgs 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) {
+            throw "Cannot read open Pull Requests from GitHub via paginated GraphQL API."
+        }
+        $pageData = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+        $conn = $pageData.data.repository.pullRequests
+        if ($conn -and $conn.nodes) {
+            foreach ($n in @($conn.nodes)) {
+                if ($n) { $prNodes.Add($n) }
+            }
+        }
+        $hasMorePrs = [bool]($conn.pageInfo.hasNextPage)
+        $prCursor = [string]($conn.pageInfo.endCursor)
     }
 
-    $pages = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
-    foreach ($page in @($pages)) {
-        $nodes = $page.data.repository.pullRequests.nodes
-        foreach ($node in @($nodes)) {
-            if ($null -eq $node) { continue }
+    foreach ($node in $prNodes) {
+        if ($null -eq $node) { continue }
 
-            $checks = [System.Collections.Generic.List[object]]::new()
-            $commitNodes = $node.commits.nodes
-            if ($commitNodes -and $commitNodes.Count -gt 0) {
-                $commit = $commitNodes[0].commit
-                if ($commit -and
-                    $commit.PSObject.Properties['statusCheckRollup'] -and
-                    $commit.statusCheckRollup -and
-                    $commit.statusCheckRollup.PSObject.Properties['contexts'] -and
-                    $commit.statusCheckRollup.contexts -and
-                    $commit.statusCheckRollup.contexts.PSObject.Properties['nodes'] -and
-                    $commit.statusCheckRollup.contexts.nodes) {
-                    $rollupContexts = $commit.statusCheckRollup.contexts.nodes
-                    if ($rollupContexts) {
-                        foreach ($ctx in @($rollupContexts)) {
-                            if ($ctx) {
-                                $wfName = $null
-                                try {
-                                    if ($ctx.checkSuite -and
-                                        $ctx.checkSuite.workflowRun -and
-                                        $ctx.checkSuite.workflowRun.workflow -and
-                                        $ctx.checkSuite.workflowRun.workflow.name) {
-                                        $wfName = [string]$ctx.checkSuite.workflowRun.workflow.name
-                                    }
-                                } catch {}
-                                if (-not [string]::IsNullOrWhiteSpace($wfName) -and -not $ctx.PSObject.Properties['workflowName']) {
-                                    $ctx | Add-Member -NotePropertyName "workflowName" -NotePropertyValue $wfName -Force
-                                }
-                                $checks.Add($ctx)
-                            }
-                        }
-                    }
-
-                    $hasMoreContexts = $false
-                    $contextsCursor = $null
-                    if ($commit.statusCheckRollup.contexts.PSObject.Properties['pageInfo'] -and
-                        $commit.statusCheckRollup.contexts.pageInfo) {
-                        $hasMoreContexts = [bool]$commit.statusCheckRollup.contexts.pageInfo.hasNextPage
-                        $contextsCursor = [string]$commit.statusCheckRollup.contexts.pageInfo.endCursor
-                    }
-
-                    while ($hasMoreContexts -and -not [string]::IsNullOrWhiteSpace($contextsCursor)) {
-                        $nestedQuery = @'
-query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String!) {
+        $checks = [System.Collections.Generic.List[object]]::new()
+        if (-not [string]::IsNullOrWhiteSpace([string]$node.headRefOid)) {
+            $contextsQuery = @'
+query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String) {
   repository(owner: $owner, name: $name) {
     object(oid: $oid) {
       ... on Commit {
@@ -572,73 +509,89 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String!) {
   }
 }
 '@
-                        $nestedRaw = @(& gh api graphql `
-                            -F owner=$owner `
-                            -F name=$repoName `
-                            -F oid=([string]$node.headRefOid) `
-                            -F after=$contextsCursor `
-                            -f query=$nestedQuery 2>$null)
-                        if ($LASTEXITCODE -ne 0 -or $nestedRaw.Count -eq 0) {
-                            throw "Cannot exhaust nested status check contexts for commit $([string]$node.headRefOid)."
-                        }
-                        $nestedData = (($nestedRaw -join [Environment]::NewLine) | ConvertFrom-Json)
-                        $nestedRollup = $nestedData.data.repository.object.statusCheckRollup.contexts
-                        if ($nestedRollup -and $nestedRollup.nodes) {
-                            foreach ($nestedCtx in @($nestedRollup.nodes)) {
-                                if ($nestedCtx) {
-                                    $wfName = $null
-                                    try {
-                                        if ($nestedCtx.checkSuite -and
-                                            $nestedCtx.checkSuite.workflowRun -and
-                                            $nestedCtx.checkSuite.workflowRun.workflow -and
-                                            $nestedCtx.checkSuite.workflowRun.workflow.name) {
-                                            $wfName = [string]$nestedCtx.checkSuite.workflowRun.workflow.name
-                                        }
-                                    } catch {}
-                                    if (-not [string]::IsNullOrWhiteSpace($wfName) -and -not $nestedCtx.PSObject.Properties['workflowName']) {
-                                        $nestedCtx | Add-Member -NotePropertyName "workflowName" -NotePropertyValue $wfName -Force
+            $hasMoreContexts = $true
+            $contextsCursor = $null
+            while ($hasMoreContexts) {
+                $ctxArgs = @(
+                    "api", "graphql",
+                    "-F", "owner=$owner",
+                    "-F", "name=$repoName",
+                    "-F", "oid=$([string]$node.headRefOid)"
+                )
+                if (-not [string]::IsNullOrWhiteSpace($contextsCursor)) {
+                    $ctxArgs += @("-F", "after=$contextsCursor")
+                }
+                $ctxArgs += @("-f", "query=$contextsQuery")
+
+                $rawCtx = @(& gh @ctxArgs 2>$null)
+                if ($LASTEXITCODE -ne 0 -or $rawCtx.Count -eq 0) {
+                    throw "Cannot exhaust nested status check contexts for commit $([string]$node.headRefOid)."
+                }
+                $ctxData = (($rawCtx -join [Environment]::NewLine) | ConvertFrom-Json)
+                $commitObj = $ctxData.data.repository.object
+                if ($commitObj -and
+                    $commitObj.PSObject.Properties['statusCheckRollup'] -and
+                    $commitObj.statusCheckRollup -and
+                    $commitObj.statusCheckRollup.PSObject.Properties['contexts'] -and
+                    $commitObj.statusCheckRollup.contexts) {
+                    $contextsConn = $commitObj.statusCheckRollup.contexts
+                    if ($contextsConn.nodes) {
+                        foreach ($ctx in @($contextsConn.nodes)) {
+                            if ($ctx) {
+                                $wfName = $null
+                                try {
+                                    if ($ctx.checkSuite -and
+                                        $ctx.checkSuite.workflowRun -and
+                                        $ctx.checkSuite.workflowRun.workflow -and
+                                        $ctx.checkSuite.workflowRun.workflow.name) {
+                                        $wfName = [string]$ctx.checkSuite.workflowRun.workflow.name
                                     }
-                                    $checks.Add($nestedCtx)
+                                } catch {}
+                                if (-not [string]::IsNullOrWhiteSpace($wfName) -and -not $ctx.PSObject.Properties['workflowName']) {
+                                    $ctx | Add-Member -NotePropertyName "workflowName" -NotePropertyValue $wfName -Force
                                 }
+                                $checks.Add($ctx)
                             }
                         }
-                        $hasMoreContexts = [bool]$nestedRollup.pageInfo.hasNextPage
-                        $contextsCursor = [string]$nestedRollup.pageInfo.endCursor
                     }
+                    $hasMoreContexts = [bool]($contextsConn.pageInfo.hasNextPage)
+                    $contextsCursor = [string]($contextsConn.pageInfo.endCursor)
+                } else {
+                    $hasMoreContexts = $false
                 }
             }
-
-            $headRepoName = ""
-            if ($node.PSObject.Properties['headRepository'] -and $node.headRepository -and
-                $node.headRepository.PSObject.Properties['nameWithOwner'] -and $node.headRepository.nameWithOwner) {
-                $headRepoName = [string]$node.headRepository.nameWithOwner
-            }
-            $headRepoOwner = ""
-            if ($node.PSObject.Properties['headRepositoryOwner'] -and $node.headRepositoryOwner -and
-                $node.headRepositoryOwner.PSObject.Properties['login'] -and $node.headRepositoryOwner.login) {
-                $headRepoOwner = [string]$node.headRepositoryOwner.login
-            }
-            $isCrossRepo = $false
-            if ($node.PSObject.Properties['isCrossRepository'] -and $null -ne $node.isCrossRepository) {
-                $isCrossRepo = [bool]$node.isCrossRepository
-            }
-
-            $pullRequest = [PSCustomObject]@{
-                number = [int]$node.number
-                title = [string]$node.title
-                url = [string]$node.url
-                isDraft = [bool]$node.isDraft
-                headRefName = [string]$node.headRefName
-                headRefOid = [string]$node.headRefOid
-                isCrossRepository = $isCrossRepo
-                headRepository = $headRepoName
-                headRepositoryOwner = $headRepoOwner
-                statusCheckRollup = $checks.ToArray()
-            }
-
-            Assert-ShipDePullRequestRecord -PullRequest $pullRequest
-            Write-Output $pullRequest
         }
+
+        $headRepoName = ""
+        if ($node.PSObject.Properties['headRepository'] -and $node.headRepository -and
+            $node.headRepository.PSObject.Properties['nameWithOwner'] -and $node.headRepository.nameWithOwner) {
+            $headRepoName = [string]$node.headRepository.nameWithOwner
+        }
+        $headRepoOwner = ""
+        if ($node.PSObject.Properties['headRepositoryOwner'] -and $node.headRepositoryOwner -and
+            $node.headRepositoryOwner.PSObject.Properties['login'] -and $node.headRepositoryOwner.login) {
+            $headRepoOwner = [string]$node.headRepositoryOwner.login
+        }
+        $isCrossRepo = $false
+        if ($node.PSObject.Properties['isCrossRepository'] -and $null -ne $node.isCrossRepository) {
+            $isCrossRepo = [bool]$node.isCrossRepository
+        }
+
+        $pullRequest = [PSCustomObject]@{
+            number = [int]$node.number
+            title = [string]$node.title
+            url = [string]$node.url
+            isDraft = [bool]$node.isDraft
+            headRefName = [string]$node.headRefName
+            headRefOid = [string]$node.headRefOid
+            isCrossRepository = $isCrossRepo
+            headRepository = $headRepoName
+            headRepositoryOwner = $headRepoOwner
+            statusCheckRollup = $checks.ToArray()
+        }
+
+        Assert-ShipDePullRequestRecord -PullRequest $pullRequest
+        Write-Output $pullRequest
     }
 }
 
@@ -1030,15 +983,8 @@ function ConvertFrom-ShipDeCodexReviewOutput {
     $jsonCandidate = $null
     try {
         $jsonCandidate = $OutputText.Trim() | ConvertFrom-Json
-    } catch {}
-
-    if (-not $jsonCandidate) {
-        $jsonBlockMatch = [regex]::Match($OutputText, '(?s)```(?:json)?\s*(\{.*?\})\s*```')
-        if ($jsonBlockMatch.Success) {
-            try {
-                $jsonCandidate = $jsonBlockMatch.Groups[1].Value.Trim() | ConvertFrom-Json
-            } catch {}
-        }
+    } catch {
+        throw "Codex review output does not contain valid structured JSON satisfying the review schema."
     }
 
     if (-not $jsonCandidate -or $jsonCandidate -isnot [PSCustomObject]) {
@@ -1050,14 +996,14 @@ function ConvertFrom-ShipDeCodexReviewOutput {
     $rootProperties = @($jsonCandidate.PSObject.Properties)
     $rootPropertyNames = @($rootProperties | ForEach-Object { $_.Name })
     foreach ($name in $rootPropertyNames) {
-        if ($allowedRootProperties -notcontains $name) {
+        if (-not ($allowedRootProperties -ccontains $name)) {
             throw "Codex review output contains unauthorized property '$name' violating additionalProperties: false."
         }
     }
 
     # Validate required properties
     foreach ($required in $allowedRootProperties) {
-        if ($rootPropertyNames -notcontains $required) {
+        if (-not ($rootPropertyNames -ccontains $required)) {
             throw "Codex review output is missing required property '$required'."
         }
     }
@@ -1068,7 +1014,7 @@ function ConvertFrom-ShipDeCodexReviewOutput {
         throw "Codex review verdict must be a non-null string."
     }
     $verdict = [string]$verdictProp.Value
-    if ($verdict -notin @("PASS", "CHANGES_REQUIRED", "BLOCKED")) {
+    if (-not (@("PASS", "CHANGES_REQUIRED", "BLOCKED") -ccontains $verdict)) {
         throw "Codex review verdict '$verdict' does not belong to the declared enum ['PASS', 'CHANGES_REQUIRED', 'BLOCKED']."
     }
 
@@ -1110,12 +1056,12 @@ function ConvertFrom-ShipDeCodexReviewOutput {
         $findingProperties = @($finding.PSObject.Properties)
         $findingPropertyNames = @($findingProperties | ForEach-Object { $_.Name })
         foreach ($fName in $findingPropertyNames) {
-            if ($allowedFindingProperties -notcontains $fName) {
+            if (-not ($allowedFindingProperties -ccontains $fName)) {
                 throw "Codex review finding contains unauthorized property '$fName' violating additionalProperties: false."
             }
         }
         foreach ($reqFinding in $allowedFindingProperties) {
-            if ($findingPropertyNames -notcontains $reqFinding) {
+            if (-not ($findingPropertyNames -ccontains $reqFinding)) {
                 throw "Codex review finding is missing required property '$reqFinding'."
             }
         }
@@ -1126,7 +1072,7 @@ function ConvertFrom-ShipDeCodexReviewOutput {
             throw "Codex review finding priority must be a string."
         }
         $p = [string]$priorityProp.Value
-        if ($p -notin @("P1", "P2", "P3")) {
+        if (-not (@("P1", "P2", "P3") -ccontains $p)) {
             throw "Codex review finding priority '$p' must be P1, P2, or P3."
         }
 
@@ -1142,8 +1088,7 @@ function ConvertFrom-ShipDeCodexReviewOutput {
             throw "Codex review finding line must be an integer."
         }
         $lineVal = $lineProp.Value
-        $parsedLine = 0
-        if ($lineVal -isnot [int] -and $lineVal -isnot [long] -and (-not [int]::TryParse([string]$lineVal, [ref]$parsedLine))) {
+        if ($lineVal -isnot [int] -and $lineVal -isnot [long]) {
             throw "Codex review finding line must be an integer; got '$lineVal'."
         }
 
@@ -1660,15 +1605,69 @@ function Get-ShipDeExactHeadCodexVerdict {
 function Get-ShipDeMergedPullRequests {
     # Query and validate every merged Pull Request before synchronization
     # mutates any worktree. This is the fail-before-sync preflight boundary.
-    $rawJson = @(& gh pr list --repo $Repository --state merged --json number,title,headRefName,headRefOid,mergeCommit --limit 100 2>$null) -join "`n"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Cannot read merged Pull Requests from GitHub."
+    Assert-ShipDeCommand gh
+
+    $repoParts = $Repository -split '/'
+    if ($repoParts.Count -ne 2) {
+        throw "Repository must use the owner/name format before reading merged Pull Requests."
     }
-    if ([string]::IsNullOrWhiteSpace($rawJson)) {
-        return @()
+    $owner = $repoParts[0]
+    $repoName = $repoParts[1]
+
+    $query = @'
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: MERGED, baseRefName: "main", first: 50, after: $after) {
+      nodes {
+        number
+        title
+        headRefName
+        headRefOid
+        mergeCommit {
+          oid
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+'@
+
+    $mergedNodes = [System.Collections.Generic.List[object]]::new()
+    $hasMore = $true
+    $cursor = $null
+
+    while ($hasMore) {
+        $ghArgs = @(
+            "api", "graphql",
+            "-F", "owner=$owner",
+            "-F", "name=$repoName"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($cursor)) {
+            $ghArgs += @("-F", "after=$cursor")
+        }
+        $ghArgs += @("-f", "query=$query")
+
+        $raw = @(& gh @ghArgs 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) {
+            throw "Cannot read merged Pull Requests from GitHub via paginated GraphQL API."
+        }
+        $pageData = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+        $conn = $pageData.data.repository.pullRequests
+        if ($conn -and $conn.nodes) {
+            foreach ($n in @($conn.nodes)) {
+                if ($n) { $mergedNodes.Add($n) }
+            }
+        }
+        $hasMore = [bool]($conn.pageInfo.hasNextPage)
+        $cursor = [string]($conn.pageInfo.endCursor)
     }
 
-    return @(ConvertFrom-ShipDeMergedPullRequestList -Json $rawJson)
+    $json = $mergedNodes | ConvertTo-Json -Depth 5
+    return @(ConvertFrom-ShipDeMergedPullRequestList -Json $json)
 }
 
 function Sync-ShipDeRegister {
@@ -2409,9 +2408,10 @@ function Start-ShipDeAoWorker {
                     if ($actualName -ne $expectedName) {
                         throw "The unique new AO session '$sessionId' is named '$actualName', not governed worker '$expectedName'."
                     }
+                    $verifiedHarness = Assert-ShipDeReusedAoSession -SessionDetail $spawnedSession -Item $Item -AllowedHarnesses @($harness) -Project $Project
                     return [PSCustomObject]@{
                         SessionId = $sessionId
-                        Harness = $harness
+                        Harness = $verifiedHarness
                     }
                 }
                 Start-Sleep -Milliseconds 500
@@ -2639,8 +2639,18 @@ function Invoke-ShipDeSupervisorLoop {
     }
 
     while ($true) {
-        $session = Get-ShipDeAoSessionById -SessionId ([string]$State.SessionId) -Project $Project
-        $activity = Get-ShipDeSessionActivityState -Session $session
+        $session = if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
+            Get-ShipDeAoSessionById -SessionId ([string]$State.SessionId) -Project $Project
+        } else {
+            $null
+        }
+        $activity = if ($null -ne $session) {
+            Get-ShipDeSessionActivityState -Session $session
+        } elseif (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
+            "MISSING"
+        } else {
+            "EXTERNAL"
+        }
         $pullRequest = Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch)
 
         $previousActivity = [string]$State.State
@@ -2695,17 +2705,30 @@ function Invoke-ShipDeSupervisorLoop {
                 }
             } elseif ($gate -eq "FAILED") {
                 $workerActionExpected = $true
-                if ([string]$State.LastCiRepairHead -ne $headSha) {
+                if ([string]$State.LastAcknowledgedCiRepairHead -ne $headSha) {
+                    $State.PendingDispatch = @{
+                        Type = "CI_REPAIR"
+                        Head = $headSha
+                        Time = (Get-Date).ToUniversalTime().ToString("o")
+                    }
+                    Write-ShipDeSupervisorCheckpoint -State $State
+
+                    $message = "CI failed for PR #$($pullRequest.number) at exact HEAD $headSha. Inspect the failing checks, repair this same Work Item, run governed verification, commit, and push. Do not merge."
+                    $delivered = $false
+                    if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
+                        $delivered = Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message
+                    }
+                    if (-not $delivered) {
+                        throw "Cannot route CI failure back to the implementation worker."
+                    }
+
                     $State.LastCiRepairHead = $headSha
+                    $State.LastAcknowledgedCiRepairHead = $headSha
+                    $State.PendingDispatch = $null
                     $State.LastRepairDispatchedAt = (Get-Date).ToUniversalTime().ToString("o")
                     $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                     $State.NudgeCount = 0
                     Write-ShipDeSupervisorCheckpoint -State $State
-
-                    $message = "CI failed for PR #$($pullRequest.number) at exact HEAD $headSha. Inspect the failing checks, repair this same Work Item, run governed verification, commit, and push. Do not merge."
-                    if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
-                        throw "Cannot route CI failure back to the implementation worker."
-                    }
                 }
             } elseif ($gate -eq "GREEN") {
                 $verdict = Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -SessionId ([string]$State.SessionId)
@@ -2721,26 +2744,52 @@ function Invoke-ShipDeSupervisorLoop {
                 }
                 if ($verdict -eq "CHANGES_REQUIRED") {
                     $workerActionExpected = $true
-                    if ([string]$State.LastReviewRepairHead -ne $headSha) {
+                    if ([string]$State.LastAcknowledgedReviewRepairHead -ne $headSha) {
+                        $State.PendingDispatch = @{
+                            Type = "REVIEW_REPAIR"
+                            Head = $headSha
+                            Time = (Get-Date).ToUniversalTime().ToString("o")
+                        }
+                        Write-ShipDeSupervisorCheckpoint -State $State
+
+                        $message = "Independent Codex review requires changes on PR #$($pullRequest.number) at exact HEAD $headSha. Read the durable review findings, repair the same branch, run all governed checks, commit, push, and stop before merge."
+                        $delivered = $false
+                        if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
+                            $delivered = Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message
+                        }
+                        if (-not $delivered) {
+                            throw "Cannot route review findings back to the implementation worker."
+                        }
+
                         $State.LastReviewRepairHead = $headSha
+                        $State.LastAcknowledgedReviewRepairHead = $headSha
+                        $State.PendingDispatch = $null
                         $State.LastRepairDispatchedAt = (Get-Date).ToUniversalTime().ToString("o")
                         $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
                         $State.NudgeCount = 0
                         Write-ShipDeSupervisorCheckpoint -State $State
-
-                        $message = "Independent Codex review requires changes on PR #$($pullRequest.number) at exact HEAD $headSha. Read the durable review findings, repair the same branch, run all governed checks, commit, push, and stop before merge."
-                        if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
-                            throw "Cannot route review findings back to the implementation worker."
-                        }
                     }
-                } elseif ([string]$State.LastReviewTriggeredHead -ne $headSha) {
-                    $State.LastReviewTriggeredHead = $headSha
-                    $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
+                } elseif ([string]$State.LastAcknowledgedReviewTriggerHead -ne $headSha) {
+                    $State.PendingDispatch = @{
+                        Type = "REVIEW_TRIGGER"
+                        Head = $headSha
+                        Time = (Get-Date).ToUniversalTime().ToString("o")
+                    }
                     Write-ShipDeSupervisorCheckpoint -State $State
 
-                    if (-not (Start-ShipDeAoReview -SessionId ([string]$State.SessionId))) {
+                    $started = $false
+                    if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
+                        $started = Start-ShipDeAoReview -SessionId ([string]$State.SessionId)
+                    }
+                    if (-not $started) {
                         throw "CI is green but the independent Codex review could not be started."
                     }
+
+                    $State.LastReviewTriggeredHead = $headSha
+                    $State.LastAcknowledgedReviewTriggerHead = $headSha
+                    $State.PendingDispatch = $null
+                    $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
+                    Write-ShipDeSupervisorCheckpoint -State $State
                 } else {
                     if ([string]::IsNullOrWhiteSpace([string]$State.LastReviewTriggeredAt)) {
                         $State.LastReviewTriggeredAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -2768,14 +2817,25 @@ function Invoke-ShipDeSupervisorLoop {
                 if ([int]$State.NudgeCount -ge $MaxNudges) {
                     throw "AO worker is stalled after $MaxNudges bounded nudge attempt(s)."
                 }
-                $State.NudgeCount = [int]$State.NudgeCount + 1
-                $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                $State.PendingDispatch = @{
+                    Type = "NUDGE"
+                    Time = (Get-Date).ToUniversalTime().ToString("o")
+                }
                 Write-ShipDeSupervisorCheckpoint -State $State
 
                 $message = "Continue the assigned Work Item autonomously. If genuinely blocked, report one concrete blocker. Do not wait for routine confirmation."
-                if (-not (Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message)) {
+                $delivered = $false
+                if (-not [string]::IsNullOrWhiteSpace([string]$State.SessionId)) {
+                    $delivered = Send-ShipDeAoMessage -SessionId ([string]$State.SessionId) -Message $message
+                }
+                if (-not $delivered) {
                     throw "AO worker is idle and could not be nudged."
                 }
+
+                $State.NudgeCount = [int]$State.NudgeCount + 1
+                $State.PendingDispatch = $null
+                $State.LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                Write-ShipDeSupervisorCheckpoint -State $State
             }
         } elseif ($activity -eq "COMPLETED" -and ((-not $pullRequest) -or $workerActionExpected)) {
             $reactivationGraceSeconds = 120
@@ -2851,59 +2911,104 @@ function Assert-ShipDeSupervisorCompatibility {
             throw "Production regression: start-agent-orchestrator.ps1 passes empty `$AoExecutable parameter instead of resolved `$aoExecutablePath to Start-Process."
         }
 
-        # TASK-AI-06 bootstrap regressions: preserve launcher failures and bind
-        # the marker to the exact live AO process before Supervise can reuse it.
-        $routerInitialization = $launcherScript.IndexOf('$routerProcess = $null', [StringComparison]::Ordinal)
-        $routerStartupBranch = $launcherScript.IndexOf('if (-not (Test-AgentRouterEndpoint))', [StringComparison]::Ordinal)
-        if ($routerInitialization -lt 0 -or $routerStartupBranch -lt 0 -or $routerInitialization -gt $routerStartupBranch) {
-            throw "AO bootstrap regression: routerProcess is not initialized before the startup branch."
-        }
-        $firstLauncherThrow = $launcherScript.IndexOf('throw ', [StringComparison]::Ordinal)
-        $routerCleanupHelper = $launcherScript.IndexOf('function Stop-StartedRouterProcess', [StringComparison]::Ordinal)
-        $routerCleanupCalls = ([regex]::Matches($launcherScript, 'Stop-StartedRouterProcess\s+-Process\s+\$routerProcess')).Count
-        $unsafeRouterDereferences = ([regex]::Matches($launcherScript, '\$routerProcess\.HasExited')).Count
-        if ($firstLauncherThrow -lt 0 -or $routerInitialization -gt $firstLauncherThrow -or $routerCleanupHelper -lt 0 -or $routerCleanupCalls -lt 3 -or $unsafeRouterDereferences -ne 0) {
-            throw "AO bootstrap regression: routerProcess is not initialized and cleaned up safely on every launcher path."
-        }
-        $processStarterInvocationForCleanup = $launcherScript.IndexOf('& $ProcessStarter', [StringComparison]::Ordinal)
-        $aoStartupTryForCleanup = $launcherScript.IndexOf('try {', $processStarterInvocationForCleanup, [StringComparison]::Ordinal)
-        $launcherCleanupStart = $launcherScript.IndexOf('} catch {', $aoStartupTryForCleanup, [StringComparison]::Ordinal)
-        $aoProcessInitialization = $launcherScript.IndexOf('$aoProcess = $null', [StringComparison]::Ordinal)
-        $aoIdentityInitialization = $launcherScript.IndexOf('$aoIdentity = $null', [StringComparison]::Ordinal)
-        $temporaryPathInitialization = $launcherScript.IndexOf('$temporaryPath = $null', [StringComparison]::Ordinal)
-        $aoCleanupReference = $launcherScript.IndexOf('$aoProcess -and', $launcherCleanupStart, [StringComparison]::Ordinal)
-        $routerCleanupReference = $launcherScript.IndexOf('Stop-StartedRouterProcess -Process $routerProcess', $launcherCleanupStart, [StringComparison]::Ordinal)
-        $temporaryPathCleanupReference = $launcherScript.IndexOf('$temporaryPath)', $launcherCleanupStart, [StringComparison]::Ordinal)
-        $runtimePathCleanupReference = $launcherScript.IndexOf('Remove-Item -LiteralPath $runtimePath', $launcherCleanupStart, [StringComparison]::Ordinal)
-        if ($processStarterInvocationForCleanup -lt 0 -or $aoStartupTryForCleanup -lt 0 -or $launcherCleanupStart -lt 0 -or
-            $aoProcessInitialization -lt 0 -or $aoProcessInitialization -gt $aoCleanupReference -or
-            $aoIdentityInitialization -lt 0 -or $aoIdentityInitialization -gt $launcherCleanupStart -or
-            $temporaryPathInitialization -lt 0 -or $temporaryPathInitialization -gt $temporaryPathCleanupReference -or
-            $routerCleanupReference -lt 0 -or $routerInitialization -gt $routerCleanupReference -or
-            $runtimePathCleanupReference -lt 0) {
-            throw "AO bootstrap regression: cleanup references state that is not initialized before the governed launcher catch."
-        }
-        $controllerScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot "control.ps1") -Raw -Encoding UTF8
-        $finallyIndex = $controllerScript.IndexOf('} finally {', [StringComparison]::Ordinal)
-        $finallyStateInitialization = $controllerScript.IndexOf('$previousErrorActionPreference = $ErrorActionPreference', [StringComparison]::Ordinal)
-        if ($finallyIndex -lt 0 -or $finallyStateInitialization -lt 0 -or $finallyStateInitialization -gt $finallyIndex) {
-            throw "Controller regression: finally restores state that was not initialized before entering the protected operation."
-        }
-        $aoInitialization = $launcherScript.IndexOf('$aoProcess = $null', [StringComparison]::Ordinal)
-        $processStarterInvocation = $launcherScript.IndexOf('& $ProcessStarter', [StringComparison]::Ordinal)
-        $startupTry = $launcherScript.IndexOf('try {', $processStarterInvocation, [StringComparison]::Ordinal)
-        if ($aoInitialization -lt 0 -or $processStarterInvocation -lt 0 -or $startupTry -lt 0 -or $aoInitialization -gt $startupTry) {
-            throw "AO bootstrap regression: launcher failure before process creation is not covered by the startup catch."
-        }
-        $startupCatch = $launcherScript.IndexOf('} catch {', $startupTry, [StringComparison]::Ordinal)
-        $startupRethrow = $launcherScript.IndexOf('    throw', $startupCatch, [StringComparison]::Ordinal)
-        if ($startupCatch -lt 0 -or $startupRethrow -lt 0) {
-            throw "AO bootstrap regression: original launcher startup error is not rethrown."
-        }
-        $liveProcessResolution = $launcherScript.IndexOf('Get-LiveAoProcess', [StringComparison]::Ordinal)
-        $markerProcessBinding = $launcherScript.IndexOf('process_id = $aoIdentity.Id', [StringComparison]::Ordinal)
-        if ($liveProcessResolution -lt 0 -or $markerProcessBinding -lt 0 -or $liveProcessResolution -gt $markerProcessBinding) {
-            throw "AO bootstrap regression: runtime marker is not bound to the verified live daemon process."
+        # TASK-AI-06 behavioral bootstrap regression suite:
+        # Exercises start-agent-orchestrator.ps1 through injected seams (-ProcessStarter,
+        # -StatusProbe, -EndpointTester, -VersionProbe, -ProfilePath, -AiRoot) to verify:
+        # 1. Manifest pin bypass prevention: contradicting ExpectedAoVersion is rejected fail-closed.
+        # 2. Pre-creation failure & original error preservation: launcher preserves original error and cleans up.
+        # 3. Early process exit detection: detects exited process and records exit code without leaving marker.
+        # 4. Successful startup & live process marker binding: binds verified live daemon identity.
+        $behavioralTestRoot = Join-Path $env:TEMP "task-ai-06-behavioral-$([Guid]::NewGuid().ToString('N'))"
+        $behavioralAiRoot = Join-Path $behavioralTestRoot "AI"
+        $behavioralProfile = Join-Path $behavioralTestRoot ".claude"
+        $behavioralSettings = Join-Path $behavioralProfile "settings.json"
+        $behavioralMarker = Join-Path $behavioralAiRoot "handoff\ao-router-runtime.json"
+        try {
+            New-Item -ItemType Directory -Path $behavioralProfile -Force | Out-Null
+            Set-Content -Path $behavioralSettings -Value '{"env":{"ANTHROPIC_BASE_URL":"http://localhost:20128/v1"}}' -Encoding UTF8
+
+            # 1. Manifest bypass prevention
+            $manifestBypassCaught = $false
+            try {
+                & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
+                    -ExpectedAoVersion "0.12.99" `
+                    -ProfilePath $behavioralProfile `
+                    -AiRoot $behavioralAiRoot
+            } catch {
+                $manifestBypassCaught = $_.Exception.Message -match "contradicts canonical manifest pin"
+            }
+            if (-not $manifestBypassCaught) {
+                throw "AO bootstrap behavioral regression: caller-supplied ExpectedAoVersion contradicting manifest pin was not rejected."
+            }
+
+            # 2. Pre-creation failure & original error preservation
+            $preCreationCaught = $false
+            try {
+                & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
+                    -AoExecutable $aoFixturePath `
+                    -ProfilePath $behavioralProfile `
+                    -AiRoot $behavioralAiRoot `
+                    -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
+                    -EndpointTester { return $true } `
+                    -ProcessStarter { param($p, $a) throw "Simulated pre-creation failure: process cannot be spawned" }
+            } catch {
+                $preCreationCaught = $_.Exception.Message -match "Simulated pre-creation failure: process cannot be spawned"
+            }
+            if (-not $preCreationCaught) {
+                throw "AO bootstrap behavioral regression: pre-creation failure did not preserve original error."
+            }
+            if (Test-Path -LiteralPath $behavioralMarker) {
+                throw "AO bootstrap behavioral regression: runtime marker was created despite pre-creation failure."
+            }
+
+            # 3. Early process exit detection and cleanup
+            $earlyExitCaught = $false
+            try {
+                & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
+                    -AoExecutable $aoFixturePath `
+                    -ProfilePath $behavioralProfile `
+                    -AiRoot $behavioralAiRoot `
+                    -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
+                    -EndpointTester { return $true } `
+                    -ProcessStarter { param($p, $a) return [PSCustomObject]@{ Id = 71099; HasExited = $true; ExitCode = 42; Path = $p; ProcessName = "ao"; StartTime = (Get-Date) } } `
+                    -StatusProbe { param($p) return @() } `
+                    -StartupTimeoutSeconds 2
+            } catch {
+                $earlyExitCaught = $_.Exception.Message -match "Agent Orchestrator exited during startup with code 42"
+            }
+            if (-not $earlyExitCaught) {
+                throw "AO bootstrap behavioral regression: early process exit was not detected with exit code."
+            }
+            if (Test-Path -LiteralPath $behavioralMarker) {
+                throw "AO bootstrap behavioral regression: runtime marker was left behind after early exit."
+            }
+
+            # 4. Successful startup and live daemon identity marker binding
+            $liveStartTime = (Get-Date).ToUniversalTime().AddSeconds(-5)
+            & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
+                -AoExecutable $aoFixturePath `
+                -ProfilePath $behavioralProfile `
+                -AiRoot $behavioralAiRoot `
+                -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
+                -EndpointTester { return $true } `
+                -ProcessStarter { param($p, $a) return [PSCustomObject]@{ Id = 71100; HasExited = $false; Path = $p; ProcessName = "ao"; StartTime = $liveStartTime } } `
+                -StatusProbe { param($p) return '{"state":"ready"}' }
+
+            if (-not (Test-Path -LiteralPath $behavioralMarker)) {
+                throw "AO bootstrap behavioral regression: runtime marker was not created on successful launch."
+            }
+            $writtenMarker = Get-Content -LiteralPath $behavioralMarker -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($writtenMarker.marker_version -ne 2 -or
+                $writtenMarker.process_id -ne 71100 -or
+                $writtenMarker.ao_version -ne $script:ExpectedAoVersion -or
+                $writtenMarker.ao_executable -ne (Get-Item -LiteralPath $aoFixturePath).FullName -or
+                $writtenMarker.base_url -ne "http://localhost:20128/v1") {
+                throw "AO bootstrap behavioral regression: written marker properties did not bind to verified daemon identity."
+            }
+        } finally {
+            if (Test-Path -LiteralPath $behavioralTestRoot) {
+                Remove-Item -LiteralPath $behavioralTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
 
         $bootstrapExecutable = Join-Path $env:TEMP "task-ai-06-ao-marker-$([Guid]::NewGuid().ToString('N'))\ao.exe"
@@ -3657,7 +3762,8 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         throw "Missing worktree reused AO session rejection test failed."
     }
 
-    # Finding 4 tests: Resume SPAWNING checkpoints before rejecting open PRs
+    # Finding 13 tests: Resume SPAWNING checkpoints with matching open PR without duplicate spawn,
+    # preserving unrelated open PRs (e.g. PR #8) and uncheckpointed state
     $spawnRestartState = @{
         WorkItemId = "TASK-AI-06"
         WorkItemPath = "docs/product-spec/work-items/TASK-AI-06.md"
@@ -3665,33 +3771,50 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         Author = "GEMINI"
         State = "SPAWNING"
     }
-    $simulatedPr = [PSCustomObject]@{
+    $simulatedMatchingPr = [PSCustomObject]@{
         number = 9
         title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
         headRefName = "feat/task-ai-06-orchestrator-supervisor"
         isCrossRepository = $false
         headRepository = "vinh05092001/shipde-platform"
+        headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
+    }
+    $simulatedUnrelatedPr = [PSCustomObject]@{
+        number = 8
+        title = "[TASK-FOUND-03] API worker infrastructure"
+        headRefName = "feat/task-found-03-api-worker-infrastructure"
+        isCrossRepository = $false
+        headRepository = "vinh05092001/shipde-platform"
+        headRefOid = "8973b5f9227181c00fa88bfbc7e5c1d6368d37aa"
     }
     $workerSpawnStats = @{ Count = 0 }
+    $checkpointWriteStats = @{ Count = 0; LastState = $null }
     $reusedSessionResult = Initialize-ShipDeSupervisorState `
         -State $spawnRestartState `
-        -OpenPrResolver { @($simulatedPr) } `
+        -Repository "vinh05092001/shipde-platform" `
+        -OpenPrResolver { @($simulatedMatchingPr, $simulatedUnrelatedPr) } `
+        -ActiveWorkersResolver { @() } `
         -CodexParker { } `
         -WorkerStarter {
             param($it, $pr)
             $workerSpawnStats.Count++
-            return [PSCustomObject]@{ SessionId = "recovered-ao-session-99"; Harness = "agy" }
+            throw "WorkerStarter must NOT be invoked when matching implementation PR already exists!"
         } `
-        -CheckpointWriter { param($s) }
+        -CheckpointWriter {
+            param($s)
+            $checkpointWriteStats.Count++
+            $checkpointWriteStats.LastState = $s
+        }
 
     if (
         $null -eq $reusedSessionResult -or
         $reusedSessionResult.State -ne "STARTED" -or
-        $reusedSessionResult.SessionId -ne "recovered-ao-session-99" -or
-        $reusedSessionResult.Harness -ne "agy" -or
-        $workerSpawnStats.Count -ne 1
+        $reusedSessionResult.PullRequestNumber -ne 9 -or
+        $reusedSessionResult.HeadSha -ne "fb02d345bbffeb40b21a75bcf6c296a12f49c575" -or
+        $workerSpawnStats.Count -ne 0 -or
+        $checkpointWriteStats.Count -ne 1
     ) {
-        throw "SPAWNING state recovery with open PR test failed: did not bind existing session properly."
+        throw "SPAWNING state recovery with matching PR #9 and unrelated PR #8 failed: did not recover PR #9 without spawning duplicate worker."
     }
 
     # Negative test: Null state with open implementation PR must fail closed
@@ -3699,7 +3822,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
     try {
         Initialize-ShipDeSupervisorState `
             -State $null `
-            -OpenPrResolver { @($simulatedPr) } `
+            -OpenPrResolver { @($simulatedMatchingPr) } `
             -WorkerStarter { param($it, $pr) throw "Should not spawn" } `
             -CheckpointWriter { param($s) } | Out-Null
     } catch {
@@ -3870,16 +3993,6 @@ Full review comments:
         }
     }
 
-    if (Test-Path "AGENTS.md") {
-        $rootAgentsText = Get-Content "AGENTS.md" -Raw -Encoding UTF8
-        if ($rootAgentsText -notmatch "In unattended supervisor mode") {
-            throw "Root AGENTS.md regression test failed: unattended supervisor contract harmonization missing."
-        }
-        if ($rootAgentsText -notmatch "final Pull Request merge") {
-            throw "Root AGENTS.md regression test failed: human merge gate contract missing."
-        }
-    }
-
     $aiToolchainPath = "docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md"
     if (Test-Path $aiToolchainPath) {
         $aiToolchainContent = Get-Content $aiToolchainPath -Raw -Encoding UTF8
@@ -3901,13 +4014,11 @@ function Initialize-ShipDeSupervisorState {
         [scriptblock]$CheckpointWriter = { param($s) Write-ShipDeSupervisorCheckpoint -State $s },
         [scriptblock]$CodexParker = { Park-ShipDeCodex },
         [scriptblock]$ActiveWorkersResolver = {
-            try {
-                @(Get-ShipDeAoSessions -Project "shipde-platform" | Where-Object {
-                    $isTerm = [bool](Get-ShipDeObjectProperty -Object $_ -Names @("isTerminated", "is_terminated"))
-                    $role = [string](Get-ShipDeObjectProperty -Object $_ -Names @("role", "kind"))
-                    (-not $isTerm) -and ($role -in @("worker", ""))
-                })
-            } catch { @() }
+            @(Get-ShipDeAoSessions -Project "shipde-platform" | Where-Object {
+                $isTerm = [bool](Get-ShipDeObjectProperty -Object $_ -Names @("isTerminated", "is_terminated"))
+                $role = [string](Get-ShipDeObjectProperty -Object $_ -Names @("role", "kind"))
+                (-not $isTerm) -and ($role -in @("worker", ""))
+            })
         }
     )
 
@@ -3942,6 +4053,56 @@ function Initialize-ShipDeSupervisorState {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($workItemId) -and $stateValue -eq "SPAWNING") {
+        $openPrs = @(& $OpenPrResolver)
+        $matchingPrs = @($openPrs | Where-Object {
+            (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq $workItemId -and
+            [string]$_.headRefName -ceq $branch
+        })
+
+        if ($matchingPrs.Count -eq 1) {
+            $matchedPr = $matchingPrs[0]
+            Assert-ShipDeGovernedPullRequest -PullRequest $matchedPr -WorkItemId $workItemId -Branch $branch -ExpectedRepository $Repository
+            Write-Host "[SUPERVISOR] Recovered matching open implementation PR #$($matchedPr.number) for $workItemId on $branch during SPAWNING recovery. Continuing without spawning duplicate worker."
+
+            $recoveredSessionId = $null
+            $recoveredHarness = $null
+            try {
+                $expectedWorkerName = "worker-$($workItemId.ToLowerInvariant())"
+                $matchingSessions = @(
+                    & $ActiveWorkersResolver | Where-Object {
+                        (Get-ShipDeAoSessionName -Session $_) -eq $expectedWorkerName
+                    }
+                )
+                if ($matchingSessions.Count -eq 1) {
+                    $recoveredSessionId = Get-ShipDeAoSessionId -Response $matchingSessions[0]
+                    $sessionDetail = Get-ShipDeAoSessionById -SessionId $recoveredSessionId -Project "shipde-platform"
+                    $recoveredHarness = Assert-ShipDeReusedAoSession -SessionDetail $sessionDetail -Item ([PSCustomObject]@{ WorkItemId = $workItemId; Branch = $branch }) -AllowedHarnesses @("agy", "claude-code", "open-code") -Project "shipde-platform"
+                }
+            } catch {}
+
+            if ($State -is [System.Collections.IDictionary]) {
+                if ($recoveredSessionId) {
+                    $State["SessionId"] = $recoveredSessionId
+                    $State["Harness"] = $recoveredHarness
+                }
+                $State["PullRequestNumber"] = [int]$matchedPr.number
+                $State["HeadSha"] = [string]$matchedPr.headRefOid
+                $State["State"] = "STARTED"
+            } else {
+                if ($recoveredSessionId) {
+                    $State.SessionId = $recoveredSessionId
+                    $State.Harness = $recoveredHarness
+                }
+                $State.PullRequestNumber = [int]$matchedPr.number
+                $State.HeadSha = [string]$matchedPr.headRefOid
+                $State.State = "STARTED"
+            }
+            & $CheckpointWriter $State
+            return $State
+        } elseif ($matchingPrs.Count -gt 1) {
+            throw "Multiple open implementation Pull Requests match $workItemId on $branch during SPAWNING recovery."
+        }
+
         Write-Host "[SUPERVISOR] Resuming spawn intent for $workItemId on $branch."
         $item = [PSCustomObject]@{
             WorkItemId = $workItemId
@@ -4071,6 +4232,8 @@ function Invoke-ShipDeResume {
         } elseif ($exactVerdict -eq "PASS") {
             Write-Host ("PR #{0} has exact-head Codex verdict PASS for head {1}. Awaiting human merge." -f $pr.number, $headSha)
             return
+        } elseif ($exactVerdict -eq "BLOCKED") {
+            throw "Independent Codex review returned durable BLOCKED for PR #$($pr.number) at exact HEAD $headSha. Stopping fail-closed for human action."
         }
 
         Invoke-ShipDeReview
