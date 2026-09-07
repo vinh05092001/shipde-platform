@@ -2057,7 +2057,7 @@ function Show-ShipDeStatus {
 $script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.json"
 $script:SupervisorLockFile = Join-Path $script:HandoffRoot "supervisor.lock"
 $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.json"
-$script:AgentRouterProfile = Join-Path $env:USERPROFILE ".claude"
+$script:AgentRouterProfile = Join-Path (Get-ShipDeUserHome) ".claude"
 $script:AgentRouterPort = 20128
 $script:ExpectedAoVersion = Get-ShipDePinnedAoVersion
 $script:AoExecutablePath = $null
@@ -2555,7 +2555,7 @@ function Assert-ShipDeReusedAoSession {
     $sessionId = [string](Get-ShipDeObjectProperty -Object $SessionDetail -Names @("id", "sessionId", "session_id"))
 
     if ([string]::IsNullOrWhiteSpace($worktree) -and -not [string]::IsNullOrWhiteSpace($sessionId)) {
-        $canonicalWorktree = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".ao\data\worktrees") $Project) $sessionId
+        $canonicalWorktree = Join-Path (Get-ShipDeAoWorktreesDir -Project $Project) $sessionId
         if (Test-Path -LiteralPath $canonicalWorktree) {
             $worktree = (Get-Item -LiteralPath $canonicalWorktree).FullName
         }
@@ -2612,7 +2612,7 @@ function Start-ShipDeAoWorker {
 
             $sid = Get-ShipDeAoSessionId -Response $session
             if (-not [string]::IsNullOrWhiteSpace($sid)) {
-                $candidateWorktree = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".ao\data\worktrees") $Project) $sid
+                $candidateWorktree = Join-Path (Get-ShipDeAoWorktreesDir -Project $Project) $sid
                 if (Test-Path -LiteralPath (Join-Path $candidateWorktree ".git")) {
                     $worktreeBranch = (& git -C $candidateWorktree rev-parse --abbrev-ref HEAD 2>$null).Trim()
                     if ($worktreeBranch -ceq $Item.Branch) {
@@ -3179,7 +3179,7 @@ function Test-ShipDeSupervisorSessionOwnership {
     # 3. Check worktree git commits and branch
     $worktree = [string](Get-ShipDeObjectProperty -Object $Session -Names @("worktree", "worktreePath", "worktree_path", "workingDir", "path"))
     if ([string]::IsNullOrWhiteSpace($worktree) -and -not [string]::IsNullOrWhiteSpace($sid)) {
-        $worktree = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".ao\data\worktrees") $Project) $sid
+        $worktree = Join-Path (Get-ShipDeAoWorktreesDir -Project $Project) $sid
     }
     if (-not [string]::IsNullOrWhiteSpace($worktree) -and (Test-Path -LiteralPath (Join-Path $worktree ".git"))) {
         $worktreeBranch = (& git -C $worktree rev-parse --abbrev-ref HEAD 2>$null).Trim()
@@ -3264,7 +3264,7 @@ function Ensure-ShipDeRepairWorker {
         } else {
             $candWorktree = [string](Get-ShipDeObjectProperty -Object $sessionToCheck -Names @("worktree", "worktreePath", "worktree_path", "workingDir", "path"))
             if ([string]::IsNullOrWhiteSpace($candWorktree) -and -not [string]::IsNullOrWhiteSpace($sid)) {
-                $candWorktree = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".ao\data\worktrees") $Project) $sid
+                $candWorktree = Join-Path (Get-ShipDeAoWorktreesDir -Project $Project) $sid
             }
             if (-not [string]::IsNullOrWhiteSpace($candWorktree) -and (Test-Path -LiteralPath (Join-Path $candWorktree ".git"))) {
                 $worktreeBranch = (& git -C $candWorktree rev-parse --abbrev-ref HEAD 2>$null).Trim()
@@ -3388,17 +3388,48 @@ function Invoke-ShipDeSupervisorLoop {
         } else {
             $null
         }
-        $activity = if ($null -ne $session) {
-            Get-ShipDeSessionActivityState -Session $session
-        } elseif (-not [string]::IsNullOrWhiteSpace($sessionId)) {
-            "MISSING"
-        } else {
-            "EXTERNAL"
-        }
         $pullRequest = if ($null -ne $PrResolver) {
             & $PrResolver ([string]$State.WorkItemId) ([string]$State.Branch)
         } else {
             Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch)
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($sessionId) -and $null -eq $session) {
+            # Requirement 5: Recovery for a checkpoint whose SessionId no longer exists
+            if ($null -ne $pullRequest -and -not [bool]$pullRequest.isDraft) {
+                $hasPendingDispatch = ($null -ne $State.PendingDispatch)
+                $ciFailing = $false
+                if ($null -ne $pullRequest.statusCheckRollup -and @($pullRequest.statusCheckRollup).Count -gt 0) {
+                    $gate = Get-ShipDePrGate -PullRequest $pullRequest
+                    if ($gate -eq "FAILED") {
+                        $ciFailing = $true
+                    }
+                }
+                $reviewRequiresChanges = ([string]$State.ExactHeadVerdict -eq "CHANGES_REQUIRED")
+                $hasPendingRepair = ($hasPendingDispatch -or $ciFailing -or $reviewRequiresChanges)
+
+                if ($hasPendingRepair) {
+                    $State.State = "BLOCKED"
+                    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                    throw "AO session '$sessionId' no longer exists while implementation or repair work is pending for PR #$($pullRequest.number). Stopping BLOCKED for human action."
+                }
+
+                Write-Host ("[SUPERVISOR] Checkpoint AO session '{0}' no longer exists, but PR #{1} is open with no pending repair. Clearing SessionId/Harness and resuming PR-only review." -f $sessionId, $pullRequest.number)
+                $State.SessionId = $null
+                $State.Harness = $null
+                $sessionId = ""
+                $activity = "EXTERNAL"
+            } else {
+                $activity = "MISSING"
+            }
+        } else {
+            $activity = if ($null -ne $session) {
+                Get-ShipDeSessionActivityState -Session $session
+            } elseif (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+                "MISSING"
+            } else {
+                "EXTERNAL"
+            }
         }
 
         $previousActivity = [string]$State.State
@@ -3793,6 +3824,37 @@ function Invoke-ShipDeSupervisorLoop {
 }
 
 function Assert-ShipDeSupervisorCompatibility {
+    # Requirement 4: Snapshot real production supervisor state file before running tests
+    $realStateFile = $script:SupervisorStateFile
+    $realStateFileExisted = Test-Path -LiteralPath $realStateFile
+    $realStateFileBytes = if ($realStateFileExisted) { [System.IO.File]::ReadAllBytes($realStateFile) } else { $null }
+    $realStateFileMtime = if ($realStateFileExisted) { (Get-Item -LiteralPath $realStateFile).LastWriteTimeUtc } else { $null }
+
+    # Requirement 3: Snapshot script paths and environment in finally
+    $origHandoffRoot = $script:HandoffRoot
+    $origSupervisorStateFile = $script:SupervisorStateFile
+    $origSupervisorLockFile = $script:SupervisorLockFile
+    $origAoRouterRuntimeFile = $script:AoRouterRuntimeFile
+    $origAgentRouterProfile = $script:AgentRouterProfile
+    $origExpectedAoVersion = $script:ExpectedAoVersion
+    $origAoExecutablePath = $script:AoExecutablePath
+
+    $origEnvClaudeConfig = $env:CLAUDE_CONFIG_DIR
+    $origEnvBaseUrl = $env:ANTHROPIC_BASE_URL
+    $origEnvAuthToken = $env:ANTHROPIC_AUTH_TOKEN
+    $origEnvApiKey = $env:ANTHROPIC_API_KEY
+
+    # Requirement 2: Run the entire compatibility/test suite under a unique temporary HandoffRoot and SupervisorStateFile
+    $compatSuiteTempRoot = Join-Path (Get-ShipDeTempDir) "task-ai-06-compat-$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $compatSuiteTempRoot -Force | Out-Null
+    $compatHandoffRoot = Join-Path $compatSuiteTempRoot "handoff"
+    New-Item -ItemType Directory -Path $compatHandoffRoot -Force | Out-Null
+
+    $script:HandoffRoot = $compatHandoffRoot
+    $script:SupervisorStateFile = Join-Path $compatHandoffRoot "supervisor-state.json"
+    $script:SupervisorLockFile = Join-Path $compatHandoffRoot "supervisor.lock"
+    $script:AoRouterRuntimeFile = Join-Path $compatHandoffRoot "ao-router-runtime.json"
+
     # Silence all host output during startup self-tests to prevent leaking PASS,
     # CHANGES_REQUIRED, PR data, and reconstructed-checkpoint messages
     # before the real supervisor banner is printed.
@@ -3808,10 +3870,11 @@ function Assert-ShipDeSupervisorCompatibility {
         $startupSelfTestHostLeaks.Add("WARNING: $msg")
     }
 
-    $aoFixtureRoot = Join-Path (Get-ShipDeTempDir) "task-ai-06-ao-$([Guid]::NewGuid().ToString('N'))"
-    $aoFixturePath = Join-Path $aoFixtureRoot "agent-orchestrator\resources\daemon\ao.exe"
     try {
-        New-Item -ItemType Directory -Path (Split-Path $aoFixturePath -Parent) -Force | Out-Null
+        $aoFixtureRoot = Join-Path (Get-ShipDeTempDir) "task-ai-06-ao-$([Guid]::NewGuid().ToString('N'))"
+        $aoFixturePath = Join-Path $aoFixtureRoot "agent-orchestrator\resources\daemon\ao.exe"
+        try {
+            New-Item -ItemType Directory -Path (Split-Path $aoFixturePath -Parent) -Force | Out-Null
         New-Item -ItemType File -Path $aoFixturePath -Force | Out-Null
 
         $resolvedCanonicalAo = Resolve-ShipDeAoExecutable `
@@ -6073,7 +6136,8 @@ Full review comments:
                 -PrResolver { param($w, $b) return $testPr } `
                 -VerdictResolver { param($n, $h, $s) return $null } `
                 -BotReviewRequester { param($n, $h) return $null } `
-                -SleepHandler { param($s) throw "LOOP_END" }
+                -SleepHandler { param($s) throw "LOOP_END" } `
+                -CheckpointWriter { param($s) }
         } catch {
             if ($_.Exception.Message -match "could not be created or found") {
                 $caughtUntrusted = $true
@@ -6155,7 +6219,8 @@ Full review comments:
                 -PrResolver { param($w, $b) return $testPr2 } `
                 -VerdictResolver { param($n, $h, $s) return $null } `
                 -BotReviewRequester { param($n, $h) return "comment-bot-12345" } `
-                -SleepHandler { param($s) throw "STOP_LOOP" }
+                -SleepHandler { param($s) throw "STOP_LOOP" } `
+                -CheckpointWriter { param($s) }
         } catch {
             if ($_.Exception.Message -match "STOP_LOOP") { $loopStopped = $true }
         }
@@ -6207,7 +6272,8 @@ Full review comments:
                 -ReviewTimeoutMinutes 20 `
                 -PrResolver { param($w, $b) return $testPr3 } `
                 -VerdictResolver { param($n, $h, $s) return $null } `
-                -SleepHandler { param($s) throw "SHOULD_NOT_SLEEP" }
+                -SleepHandler { param($s) throw "SHOULD_NOT_SLEEP" } `
+                -CheckpointWriter { param($s) }
         } catch {
             if ($_.Exception.Message -match "timed out after 20 minute\(s\)") {
                 $timedOutCaught = $true
@@ -6271,7 +6337,8 @@ Full review comments:
                     $t4DispatchedMessages.Add([PSCustomObject]@{ SessionId = $sid; Message = $msg })
                     return $true
                 } `
-                -SleepHandler { param($s) throw "STOP_T4" }
+                -SleepHandler { param($s) throw "STOP_T4" } `
+                -CheckpointWriter { param($s) }
         } catch {}
 
         if ($t4Released.Count -ne 1 -or $t4Released[0] -ne "session-claude-old") {
@@ -6324,7 +6391,8 @@ Full review comments:
                     $t5Delivered.Add([PSCustomObject]@{ SessionId = $sid; Message = $msg })
                     return $true
                 } `
-                -SleepHandler { param($s) throw "STOP_T5" }
+                -SleepHandler { param($s) throw "STOP_T5" } `
+                -CheckpointWriter { param($s) }
         } catch {
             if ($_.Exception.Message -ne "STOP_T5") {
                 throw "TEST 5A CAUGHT UNEXPECTED ERROR: $($_.Exception.Message)"
@@ -6359,7 +6427,8 @@ Full review comments:
                 -PrResolver { param($w, $b) return $t5Pr } `
                 -MessageSender { param($sid, $msg) $t5bDelivered.Add($msg); return $true } `
                 -VerdictResolver { param($n, $h, $s) return "PASS" } `
-                -SleepHandler { param($s) throw "STOP_T5B" }
+                -SleepHandler { param($s) throw "STOP_T5B" } `
+                -CheckpointWriter { param($s) }
         } catch {}
 
         if ($t5bDelivered.Count -ne 0) {
@@ -6385,7 +6454,8 @@ Full review comments:
                 -State $stateParkedNoPr `
                 -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
                 -PrResolver { param($w, $b) return $null } `
-                -SleepHandler { param($s) throw "LOOP" }
+                -SleepHandler { param($s) throw "LOOP" } `
+                -CheckpointWriter { param($s) }
         } catch {
             if ($_.Exception.Message -match "AO worker is parked but no open Pull Request was found") {
                 $parkedNoPrCaught = $true
@@ -6421,7 +6491,8 @@ Full review comments:
                 -State $stateParkedDraft `
                 -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
                 -PrResolver { param($w, $b) return $draftPr } `
-                -SleepHandler { param($s) throw "LOOP" }
+                -SleepHandler { param($s) throw "LOOP" } `
+                -CheckpointWriter { param($s) }
         } catch {
             if ($_.Exception.Message -match "while PR #9 is still draft") {
                 $parkedDraftCaught = $true
@@ -6460,7 +6531,8 @@ Full review comments:
                 -State $stateParkedExpired `
                 -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
                 -PrResolver { param($w, $b) return $failedPr } `
-                -SleepHandler { param($s) throw "LOOP" }
+                -SleepHandler { param($s) throw "LOOP" } `
+                -CheckpointWriter { param($s) }
         } catch {
             if ($_.Exception.Message -match "while governed implementation or repair work is still required") {
                 $parkedExpiredCaught = $true
@@ -6468,6 +6540,273 @@ Full review comments:
         }
         if (-not $parkedExpiredCaught) {
             throw "Regression Test 6C failed: Parked worker when repair work is required outside grace window did not fail closed."
+        }
+    }
+
+    # ------------------------------------------------------------------------------------------------
+    # TASK-AI-06 Round 20 Regression Test Suite: Missing Checkpoint SessionId Recovery (Requirement 5)
+    # 5.1: Initialize-ShipDeSupervisorState with nonexistent SessionId, open PR, no pending repair
+    #      clears SessionId/Harness, sets State = STARTED, keeps PR/HeadSha, resumes PR-only review
+    # 5.2: Initialize-ShipDeSupervisorState with nonexistent SessionId, open PR, pending dispatch
+    #      sets State = BLOCKED and throws fail-closed error
+    # 5.3: Initialize-ShipDeSupervisorState with nonexistent SessionId, open PR, failing CI
+    #      sets State = BLOCKED and throws fail-closed error
+    # 5.4: Initialize-ShipDeSupervisorState with nonexistent SessionId, open PR, CHANGES_REQUIRED
+    #      sets State = BLOCKED and throws fail-closed error
+    # 5.5: Initialize-ShipDeSupervisorState with nonexistent SessionId, NO open PR
+    #      sets State = MISSING and throws fail-closed error
+    # 5.6: Invoke-ShipDeSupervisorLoop with nonexistent SessionId, open PR, no pending repair
+    #      clears SessionId/Harness, transitions to EXTERNAL, returns READY_FOR_HUMAN_MERGE on PASS
+    # 5.7: Invoke-ShipDeSupervisorLoop with nonexistent SessionId, open PR, failing CI
+    #      sets State = BLOCKED and throws fail-closed error
+    # ------------------------------------------------------------------------------------------------
+
+    $req5Pr = [PSCustomObject]@{
+        number = 9
+        headRefOid = "8899aabbccddeeff00112233445566778899aabb"
+        isDraft = $false
+        title = "[TASK-AI-06] Test PR"
+        headRefName = "feat/task-ai-06-orchestrator-supervisor"
+        headRepository = "vinh05092001/shipde-platform"
+        isCrossRepository = $false
+        statusCheckRollup = @(
+            [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } },
+            [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+        )
+    }
+
+    $req5FailedPr = [PSCustomObject]@{
+        number = 9
+        headRefOid = "8899aabbccddeeff00112233445566778899aabb"
+        isDraft = $false
+        title = "[TASK-AI-06] Test PR"
+        headRefName = "feat/task-ai-06-orchestrator-supervisor"
+        headRepository = "vinh05092001/shipde-platform"
+        isCrossRepository = $false
+        statusCheckRollup = @(
+            [PSCustomObject]@{ name = "contract"; conclusion = "FAILURE"; startedAt = "2026-09-06T01:00:00Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+        )
+    }
+
+    # 5.1: Initialize-ShipDeSupervisorState with nonexistent SessionId, open PR, no pending repair -> clears SessionId/Harness, resumes PR-only review
+    & {
+        $state51 = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            SessionId = "sess-nonexistent-1"
+            Harness = "agy"
+            PullRequestNumber = 9
+            HeadSha = "8899aabbccddeeff00112233445566778899aabb"
+        }
+        $writtenCheckpoints51 = [System.Collections.Generic.List[object]]::new()
+        $res51 = Initialize-ShipDeSupervisorState `
+            -State $state51 `
+            -Repository "vinh05092001/shipde-platform" `
+            -OpenPrResolver { return @($req5Pr) } `
+            -SessionDetailResolver { param($id, $p) return $null } `
+            -WorkerStarter { param($i, $p) throw "WorkerStarter must NOT be called" } `
+            -CheckpointWriter { param($s) $writtenCheckpoints51.Add($s) }
+
+        if ($null -eq $res51 -or $null -ne $res51["SessionId"] -or $null -ne $res51["Harness"] -or $res51["State"] -ne "STARTED" -or $res51["PullRequestNumber"] -ne 9) {
+            throw "Requirement 5.1 failed: Initialize-ShipDeSupervisorState did not clear SessionId/Harness and resume PR-only review."
+        }
+        if ($writtenCheckpoints51.Count -eq 0 -or $null -ne $writtenCheckpoints51[-1]["SessionId"]) {
+            throw "Requirement 5.1 failed: Cleared state was not persisted to checkpoint."
+        }
+    }
+
+    # 5.2: Initialize-ShipDeSupervisorState with nonexistent SessionId, open PR, pending dispatch -> BLOCKED fail-closed
+    & {
+        $state52 = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            SessionId = "sess-nonexistent-2"
+            Harness = "agy"
+            PendingDispatch = @{ Type = "CI_REPAIR"; Head = "8899aabbccddeeff00112233445566778899aabb" }
+        }
+        $writtenCheckpoints52 = [System.Collections.Generic.List[object]]::new()
+        $blockedCaught52 = $false
+        try {
+            Initialize-ShipDeSupervisorState `
+                -State $state52 `
+                -Repository "vinh05092001/shipde-platform" `
+                -OpenPrResolver { return @($req5Pr) } `
+                -SessionDetailResolver { param($id, $p) return $null } `
+                -CheckpointWriter { param($s) $writtenCheckpoints52.Add($s) } | Out-Null
+        } catch {
+            if ($_.Exception.Message -match "Stopping BLOCKED for human action") {
+                $blockedCaught52 = $true
+            }
+        }
+        if (-not $blockedCaught52) {
+            throw "Requirement 5.2 failed: Did not stop BLOCKED for pending dispatch."
+        }
+        if ($writtenCheckpoints52.Count -eq 0 -or $writtenCheckpoints52[-1]["State"] -ne "BLOCKED") {
+            throw "Requirement 5.2 failed: BLOCKED state was not persisted to checkpoint."
+        }
+    }
+
+    # 5.3: Initialize-ShipDeSupervisorState with nonexistent SessionId, open PR, failing CI -> BLOCKED fail-closed
+    & {
+        $state53 = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            SessionId = "sess-nonexistent-3"
+            Harness = "agy"
+        }
+        $writtenCheckpoints53 = [System.Collections.Generic.List[object]]::new()
+        $blockedCaught53 = $false
+        try {
+            Initialize-ShipDeSupervisorState `
+                -State $state53 `
+                -Repository "vinh05092001/shipde-platform" `
+                -OpenPrResolver { return @($req5FailedPr) } `
+                -SessionDetailResolver { param($id, $p) return $null } `
+                -CheckpointWriter { param($s) $writtenCheckpoints53.Add($s) } | Out-Null
+        } catch {
+            if ($_.Exception.Message -match "Stopping BLOCKED for human action") {
+                $blockedCaught53 = $true
+            }
+        }
+        if (-not $blockedCaught53) {
+            throw "Requirement 5.3 failed: Did not stop BLOCKED for failing CI."
+        }
+        if ($writtenCheckpoints53.Count -eq 0 -or $writtenCheckpoints53[-1]["State"] -ne "BLOCKED") {
+            throw "Requirement 5.3 failed: BLOCKED state was not persisted to checkpoint."
+        }
+    }
+
+    # 5.4: Initialize-ShipDeSupervisorState with nonexistent SessionId, open PR, CHANGES_REQUIRED verdict -> BLOCKED fail-closed
+    & {
+        $state54 = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            SessionId = "sess-nonexistent-4"
+            Harness = "agy"
+            ExactHeadVerdict = "CHANGES_REQUIRED"
+        }
+        $writtenCheckpoints54 = [System.Collections.Generic.List[object]]::new()
+        $blockedCaught54 = $false
+        try {
+            Initialize-ShipDeSupervisorState `
+                -State $state54 `
+                -Repository "vinh05092001/shipde-platform" `
+                -OpenPrResolver { return @($req5Pr) } `
+                -SessionDetailResolver { param($id, $p) return $null } `
+                -CheckpointWriter { param($s) $writtenCheckpoints54.Add($s) } | Out-Null
+        } catch {
+            if ($_.Exception.Message -match "Stopping BLOCKED for human action") {
+                $blockedCaught54 = $true
+            }
+        }
+        if (-not $blockedCaught54) {
+            throw "Requirement 5.4 failed: Did not stop BLOCKED for CHANGES_REQUIRED."
+        }
+        if ($writtenCheckpoints54.Count -eq 0 -or $writtenCheckpoints54[-1]["State"] -ne "BLOCKED") {
+            throw "Requirement 5.4 failed: BLOCKED state was not persisted to checkpoint."
+        }
+    }
+
+    # 5.5: Initialize-ShipDeSupervisorState with nonexistent SessionId, NO open PR -> MISSING fail-closed
+    & {
+        $state55 = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            SessionId = "sess-nonexistent-5"
+            Harness = "agy"
+        }
+        $writtenCheckpoints55 = [System.Collections.Generic.List[object]]::new()
+        $missingCaught55 = $false
+        try {
+            Initialize-ShipDeSupervisorState `
+                -State $state55 `
+                -Repository "vinh05092001/shipde-platform" `
+                -OpenPrResolver { return @() } `
+                -SessionDetailResolver { param($id, $p) return $null } `
+                -CheckpointWriter { param($s) $writtenCheckpoints55.Add($s) } | Out-Null
+        } catch {
+            if ($_.Exception.Message -match "no open PR for TASK-AI-06 was found") {
+                $missingCaught55 = $true
+            }
+        }
+        if (-not $missingCaught55) {
+            throw "Requirement 5.5 failed: Did not stop fail-closed when no PR was found."
+        }
+        if ($writtenCheckpoints55.Count -eq 0 -or $writtenCheckpoints55[-1]["State"] -ne "MISSING") {
+            throw "Requirement 5.5 failed: MISSING state was not persisted to checkpoint."
+        }
+    }
+
+    # 5.6: Invoke-ShipDeSupervisorLoop with nonexistent SessionId, open PR, no pending repair -> resumes PR-only, returns READY_FOR_HUMAN_MERGE
+    & {
+        $state56 = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            SessionId = "sess-nonexistent-6"
+            Harness = "agy"
+            PullRequestNumber = 9
+            HeadSha = "8899aabbccddeeff00112233445566778899aabb"
+        }
+        $writtenCheckpoints56 = [System.Collections.Generic.List[object]]::new()
+        $loopResult56 = Invoke-ShipDeSupervisorLoop `
+            -State $state56 `
+            -SessionDetailResolver { param($id, $p) return $null } `
+            -PrResolver { param($w, $b) return $req5Pr } `
+            -VerdictResolver { param($n, $h, $s) return "PASS" } `
+            -SleepHandler { param($s) throw "SHOULD_NOT_SLEEP" } `
+            -CheckpointWriter { param($s) $writtenCheckpoints56.Add($s) }
+
+        if ($loopResult56 -ne "READY_FOR_HUMAN_MERGE") {
+            throw "Requirement 5.6 failed: Expected READY_FOR_HUMAN_MERGE, got '$loopResult56'."
+        }
+        if ($null -ne $state56.SessionId -or $null -ne $state56.Harness) {
+            throw "Requirement 5.6 failed: SessionId and Harness were not cleared."
+        }
+    }
+
+    # 5.7: Invoke-ShipDeSupervisorLoop with nonexistent SessionId, open PR, failing CI -> BLOCKED fail-closed
+    & {
+        $state57 = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            Author = "GEMINI"
+            State = "STARTED"
+            SessionId = "sess-nonexistent-7"
+            Harness = "agy"
+            PullRequestNumber = 9
+            HeadSha = "8899aabbccddeeff00112233445566778899aabb"
+        }
+        $writtenCheckpoints57 = [System.Collections.Generic.List[object]]::new()
+        $blockedCaught57 = $false
+        try {
+            Invoke-ShipDeSupervisorLoop `
+                -State $state57 `
+                -SessionDetailResolver { param($id, $p) return $null } `
+                -PrResolver { param($w, $b) return $req5FailedPr } `
+                -SleepHandler { param($s) throw "LOOP" } `
+                -CheckpointWriter { param($s) $writtenCheckpoints57.Add($s) } | Out-Null
+        } catch {
+            if ($_.Exception.Message -match "Stopping BLOCKED for human action") {
+                $blockedCaught57 = $true
+            }
+        }
+        if (-not $blockedCaught57) {
+            throw "Requirement 5.7 failed: Did not stop BLOCKED in Invoke-ShipDeSupervisorLoop for pending repair."
+        }
+        if ($state57.State -ne "BLOCKED") {
+            throw "Requirement 5.7 failed: State was not set to BLOCKED."
         }
     }
 
@@ -6492,6 +6831,50 @@ Full review comments:
     if ($interceptedLeakedMessages.Count -eq 0) {
         throw "Startup self-test host output leak assertion failed: self-tests did not exercise supervisor host-writing code through the silenced interceptor."
     }
+} finally {
+    # Requirement 3: Restore all script paths/state/environment in finally
+    $script:HandoffRoot = $origHandoffRoot
+    $script:SupervisorStateFile = $origSupervisorStateFile
+    $script:SupervisorLockFile = $origSupervisorLockFile
+    $script:AoRouterRuntimeFile = $origAoRouterRuntimeFile
+    $script:AgentRouterProfile = $origAgentRouterProfile
+    $script:ExpectedAoVersion = $origExpectedAoVersion
+    $script:AoExecutablePath = $origAoExecutablePath
+
+    if ($null -ne $origEnvClaudeConfig) { $env:CLAUDE_CONFIG_DIR = $origEnvClaudeConfig } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+    if ($null -ne $origEnvBaseUrl) { $env:ANTHROPIC_BASE_URL = $origEnvBaseUrl } else { Remove-Item Env:ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue }
+    if ($null -ne $origEnvAuthToken) { $env:ANTHROPIC_AUTH_TOKEN = $origEnvAuthToken } else { Remove-Item Env:ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue }
+    if ($null -ne $origEnvApiKey) { $env:ANTHROPIC_API_KEY = $origEnvApiKey } else { Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue }
+
+    if (Test-Path -LiteralPath $compatSuiteTempRoot) {
+        Remove-Item -LiteralPath $compatSuiteTempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # Requirement 4: Add an integration assertion that Action Test and startup compatibility
+    # leave the real supervisor-state.json byte-for-byte and mtime unchanged.
+    if ($realStateFileExisted) {
+        if (-not (Test-Path -LiteralPath $realStateFile)) {
+            throw "Integration assertion failed: real supervisor state file was deleted during tests: $realStateFile"
+        }
+        $postBytes = [System.IO.File]::ReadAllBytes($realStateFile)
+        $postMtime = (Get-Item -LiteralPath $realStateFile).LastWriteTimeUtc
+        if ($postBytes.Length -ne $realStateFileBytes.Length) {
+            throw "Integration assertion failed: real supervisor state file byte count changed from $($realStateFileBytes.Length) to $($postBytes.Length) during tests: $realStateFile"
+        }
+        for ($bi = 0; $bi -lt $postBytes.Length; $bi++) {
+            if ($postBytes[$bi] -ne $realStateFileBytes[$bi]) {
+                throw "Integration assertion failed: real supervisor state file byte-for-byte mismatch at offset $bi during tests: $realStateFile"
+            }
+        }
+        if ($postMtime -ne $realStateFileMtime) {
+            throw "Integration assertion failed: real supervisor state file mtime changed from $($realStateFileMtime.ToString('o')) to $($postMtime.ToString('o')) during tests: $realStateFile"
+        }
+    } else {
+        if (Test-Path -LiteralPath $realStateFile) {
+            throw "Integration assertion failed: real supervisor state file was created during tests where none existed: $realStateFile"
+        }
+    }
+}
 }
 
 function Initialize-ShipDeSupervisorState {
@@ -6512,7 +6895,8 @@ function Initialize-ShipDeSupervisorState {
         },
         [int]$PullRequestNumber = 0,
         [string]$Repository = "vinh05092001/shipde-platform",
-        [scriptblock]$PrWorkItemResolver = { param($pr) Get-ShipDePrWorkItem -PullRequest $pr }
+        [scriptblock]$PrWorkItemResolver = { param($pr) Get-ShipDePrWorkItem -PullRequest $pr },
+        [scriptblock]$SessionDetailResolver = $null
     )
 
     $sessionId = $null
@@ -6534,8 +6918,60 @@ function Initialize-ShipDeSupervisorState {
 
     if (-not [string]::IsNullOrWhiteSpace($workItemId)) {
         if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
-            Write-Host "[SUPERVISOR] Resuming $workItemId in AO session $sessionId."
-            return $State
+            $sessDetail = if ($null -ne $SessionDetailResolver) {
+                & $SessionDetailResolver $sessionId "shipde-platform"
+            } else {
+                Get-ShipDeAoSessionById -SessionId $sessionId -Project "shipde-platform"
+            }
+
+            if ($null -ne $sessDetail) {
+                Write-Host "[SUPERVISOR] Resuming $workItemId in AO session $sessionId."
+                return $State
+            }
+
+            # Requirement 5: Checkpoint SessionId no longer exists
+            $openPrs = @(& $OpenPrResolver)
+            $matchingPrs = @($openPrs | Where-Object {
+                (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq $workItemId -and
+                [string]$_.headRefName -ceq $branch
+            })
+
+            if ($matchingPrs.Count -eq 1 -and -not [bool]$matchingPrs[0].isDraft) {
+                $matchedPr = $matchingPrs[0]
+                Assert-ShipDeGovernedPullRequest -PullRequest $matchedPr -WorkItemId $workItemId -Branch $branch -ExpectedRepository $Repository
+
+                $hasPendingDispatch = ($null -ne $State["PendingDispatch"])
+                $ciFailing = $false
+                if ($null -ne $matchedPr.statusCheckRollup -and @($matchedPr.statusCheckRollup).Count -gt 0) {
+                    $gate = Get-ShipDePrGate -PullRequest $matchedPr
+                    if ($gate -eq "FAILED") {
+                        $ciFailing = $true
+                    }
+                }
+                $reviewRequiresChanges = ([string]$State["ExactHeadVerdict"] -eq "CHANGES_REQUIRED")
+                $hasPendingRepair = ($hasPendingDispatch -or $ciFailing -or $reviewRequiresChanges)
+
+                if ($hasPendingRepair) {
+                    $State["State"] = "BLOCKED"
+                    $State["PullRequestNumber"] = [int]$matchedPr.number
+                    $State["HeadSha"] = [string]$matchedPr.headRefOid
+                    & $CheckpointWriter $State
+                    throw "Checkpoint AO session '$sessionId' no longer exists while implementation or repair work is pending for PR #$($matchedPr.number). Stopping BLOCKED for human action."
+                }
+
+                Write-Host ("[SUPERVISOR] Checkpoint AO session '{0}' no longer exists, but PR #{1} is open with no pending repair. Clearing SessionId/Harness and resuming PR-only review." -f $sessionId, $matchedPr.number)
+                $State["SessionId"] = $null
+                $State["Harness"] = $null
+                $State["PullRequestNumber"] = [int]$matchedPr.number
+                $State["HeadSha"] = [string]$matchedPr.headRefOid
+                $State["State"] = "STARTED"
+                & $CheckpointWriter $State
+                return $State
+            } else {
+                $State["State"] = "MISSING"
+                & $CheckpointWriter $State
+                throw "Checkpoint AO session '$sessionId' no longer exists and no open PR for $workItemId was found. Stopping fail-closed."
+            }
         } elseif ([int]$State["PullRequestNumber"] -gt 0) {
             Write-Host "[SUPERVISOR] Resuming PR-only supervisor state for PR #$($State['PullRequestNumber']) ($workItemId)."
             return $State
@@ -6565,7 +7001,7 @@ function Initialize-ShipDeSupervisorState {
                 }
                 $sid = Get-ShipDeAoSessionId -Response $candSession
                 if (-not [string]::IsNullOrWhiteSpace($sid)) {
-                    $candidateWorktree = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".ao\data\worktrees") "shipde-platform") $sid
+                    $candidateWorktree = Join-Path (Get-ShipDeAoWorktreesDir -Project "shipde-platform") $sid
                     if (Test-Path -LiteralPath (Join-Path $candidateWorktree ".git")) {
                         $worktreeBranch = (& git -C $candidateWorktree rev-parse --abbrev-ref HEAD 2>$null).Trim()
                         if ($worktreeBranch -ceq $branch) {

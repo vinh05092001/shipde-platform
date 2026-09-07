@@ -1,7 +1,13 @@
 param(
-    [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
+    [string]$AiRoot = $(
+        $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
+        Join-Path $userHome "AI"
+    ),
     [string]$AoExecutable = "",
-    [string]$ProfilePath = (Join-Path $env:USERPROFILE ".claude"),
+    [string]$ProfilePath = $(
+        $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
+        Join-Path $userHome ".claude"
+    ),
     [int]$AgentRouterPort = 20128,
     [string]$ExpectedAoVersion = "",
     [int]$StartupTimeoutSeconds = 30,

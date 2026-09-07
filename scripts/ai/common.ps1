@@ -215,9 +215,30 @@ function Get-ShipDeTempDir {
     return [System.IO.Path]::GetTempPath()
 }
 
+function Get-ShipDeUserHome {
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        return $env:USERPROFILE
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:HOME)) {
+        return $env:HOME
+    }
+    return [System.IO.Path]::GetTempPath()
+}
+
+function Get-ShipDeAoWorktreesDir {
+    param([string]$Project = "")
+
+    $userHome = Get-ShipDeUserHome
+    $base = Join-Path (Join-Path (Join-Path $userHome ".ao") "data") "worktrees"
+    if (-not [string]::IsNullOrWhiteSpace($Project)) {
+        return (Join-Path $base $Project)
+    }
+    return $base
+}
+
 function Get-ShipDePaths {
     param([string]$AiRoot = $(
-        $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
+        $userHome = Get-ShipDeUserHome
         Join-Path $userHome "AI"
     ))
 
