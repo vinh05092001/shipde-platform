@@ -98,13 +98,112 @@ function Get-ShipDePinnedAoVersion {
     return $pinned
 }
 
+function Invoke-ShipDeNativeProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [string]$WorkingDirectory = $null,
+        [int]$TimeoutMilliseconds = 30000,
+        [string]$StandardInput = $null
+    )
+
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $FilePath
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    if ($null -ne $StandardInput) {
+        $psi.RedirectStandardInput = $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+        $psi.WorkingDirectory = $WorkingDirectory
+    }
+
+    $argListProp = [System.Diagnostics.ProcessStartInfo].GetProperty("ArgumentList")
+    if ($null -ne $argListProp) {
+        $argCollection = $argListProp.GetValue($psi, $null)
+        foreach ($arg in $ArgumentList) {
+            if ($null -ne $arg) {
+                [void]$argCollection.Add([string]$arg)
+            }
+        }
+    } else {
+        $formattedArgs = [System.Collections.Generic.List[string]]::new()
+        foreach ($arg in $ArgumentList) {
+            if ($null -eq $arg) { continue }
+            $str = [string]$arg
+            if ($str -match '[\s"]') {
+                $escaped = $str -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1'
+                $formattedArgs.Add("`"$escaped`"")
+            } else {
+                $formattedArgs.Add($str)
+            }
+        }
+        $psi.Arguments = ($formattedArgs -join " ")
+    }
+
+    $proc = [System.Diagnostics.Process]::new()
+    $proc.StartInfo = $psi
+
+    $started = $false
+    try {
+        $started = $proc.Start()
+    } catch {
+        return [PSCustomObject]@{
+            ExitCode = 1
+            Stdout = ""
+            Stderr = "Failed to start process '$FilePath': $($_.Exception.Message)"
+        }
+    }
+    if (-not $started) {
+        return [PSCustomObject]@{
+            ExitCode = 1
+            Stdout = ""
+            Stderr = "Failed to start process '$FilePath'."
+        }
+    }
+
+    if ($null -ne $StandardInput) {
+        $proc.StandardInput.Write($StandardInput)
+        $proc.StandardInput.Close()
+    }
+
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+
+    if ($TimeoutMilliseconds -gt 0) {
+        $exited = $proc.WaitForExit($TimeoutMilliseconds)
+        if (-not $exited) {
+            try { $proc.Kill() } catch {}
+            return [PSCustomObject]@{
+                ExitCode = 1
+                Stdout = ""
+                Stderr = "Process '$FilePath' timed out after $TimeoutMilliseconds ms."
+            }
+        }
+    } else {
+        $proc.WaitForExit()
+    }
+
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+
+    return [PSCustomObject]@{
+        ExitCode = [int]$proc.ExitCode
+        Stdout = if ($null -ne $stdout) { $stdout } else { "" }
+        Stderr = if ($null -ne $stderr) { $stderr } else { "" }
+    }
+}
+
 function Get-ShipDeAoVersionProbe {
     param([Parameter(Mandatory = $true)][string]$AoExecutable)
 
-    $output = @(& $AoExecutable version 2>&1)
+    $res = Invoke-ShipDeNativeProcess -FilePath $AoExecutable -ArgumentList @("version")
+    $text = if (-not [string]::IsNullOrWhiteSpace($res.Stdout)) { $res.Stdout.Trim() } else { $res.Stderr.Trim() }
     return [PSCustomObject]@{
-        Text = (@($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
-        ExitCode = $LASTEXITCODE
+        Text = $text
+        ExitCode = $res.ExitCode
     }
 }
 

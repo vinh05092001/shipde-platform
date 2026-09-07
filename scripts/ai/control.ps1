@@ -1580,15 +1580,16 @@ function Get-ShipDeAoExactHeadCodexVerdict {
     param(
         [Parameter(Mandatory = $true)][string]$SessionId,
         [Parameter(Mandatory = $true)][int]$PullRequestNumber,
-        [Parameter(Mandatory = $true)][string]$HeadSha
+        [Parameter(Mandatory = $true)][string]$HeadSha,
+        [scriptblock]$CommandRunner = $null
     )
 
-$output = @(& (Get-ShipDeAoInvocationPath) review ls $SessionId --json 2>&1)
-    $exitCode = $LASTEXITCODE
-    $text = Join-ShipDeNativeOutput -Output $output
-    if ($exitCode -ne 0) {
-        throw "Cannot read AO review records for session '$SessionId': $text"
+    $res = Invoke-ShipDeAoNativeCommand -Arguments @("review", "ls", $SessionId, "--json") -CommandRunner $CommandRunner
+    if ($res.ExitCode -ne 0) {
+        $err = if (-not [string]::IsNullOrWhiteSpace($res.Stderr)) { $res.Stderr.Trim() } else { $res.Stdout.Trim() }
+        throw "Cannot read AO review records for session '$SessionId': $err"
     }
+    $text = $res.Stdout.Trim()
     $response = ConvertFrom-ShipDeAoJson -Json $text -Operation "review ls"
     return Get-ShipDeAoVerdictFromReviewResponse -Response $response -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
 }
@@ -1640,6 +1641,9 @@ function Get-ShipDeGitHubExactHeadCodexVerdict {
                                     $revVerdict = $matches[1].ToUpperInvariant()
                                 }
                             }
+                            if (-not $revVerdict -and ($reviewBody -match '(?i)###.*Codex Review' -or $reviewBody -match '(?i)automated review suggestions')) {
+                                $revVerdict = "CHANGES_REQUIRED"
+                            }
                         }
                     }
                     default {
@@ -1657,7 +1661,34 @@ function Get-ShipDeGitHubExactHeadCodexVerdict {
         }
     }
 
-    # 2. Enumerate GitHub PR comments with pagination to exhaustion
+    # 2. Enumerate GitHub PR review comments (pulls/$PullRequestNumber/comments)
+    $rawPullComments = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/comments" --paginate --slurp 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $rawPullComments.Count -gt 0) {
+        try {
+            $pullCommentPages = (($rawPullComments -join [Environment]::NewLine) | ConvertFrom-Json)
+            foreach ($page in @($pullCommentPages)) {
+                foreach ($pComment in @($page)) {
+                    $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "original_commit_id"))
+                    if ($commCommit -ine $HeadSha) { continue }
+                    $commUser = Get-ShipDeObjectProperty -Object $pComment -Names @("user", "author")
+                    $commLogin = [string](Get-ShipDeObjectProperty -Object $commUser -Names @("login"))
+                    if ($script:TrustedCodexReviewerLogins -notcontains $commLogin) { continue }
+                    $commCreated = [DateTime]::MinValue
+                    $commCreatedStr = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("created_at", "createdAt"))
+                    if (-not [string]::IsNullOrWhiteSpace($commCreatedStr)) {
+                        [void][DateTime]::TryParse($commCreatedStr, [ref]$commCreated)
+                    }
+                    $candidates.Add([PSCustomObject]@{
+                        Id = "pc-" + [string](Get-ShipDeObjectProperty -Object $pComment -Names @("id", "databaseId"))
+                        CreatedAt = $commCreated.ToUniversalTime()
+                        Verdict = "CHANGES_REQUIRED"
+                    })
+                }
+            }
+        } catch {}
+    }
+
+    # 3. Enumerate GitHub PR comments with pagination to exhaustion
     $rawComments = @(& gh api "repos/$Repository/issues/$PullRequestNumber/comments" --paginate --slurp 2>$null)
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to query GitHub Pull Request comments for PR #$PullRequestNumber."
@@ -1718,6 +1749,36 @@ function Get-ShipDeGitHubExactHeadCodexVerdict {
                         }
                     }
                 }
+
+                if ($body -match '(?i)@codex\s+review' -and $body -match [regex]::Escape($HeadSha)) {
+                    # Check reactions on this exact review request comment for bot approval (+1 reaction from bot indicates PASS)
+                    $commId = [string](Get-ShipDeObjectProperty -Object $commentObj -Names @("id", "databaseId"))
+                    if (-not [string]::IsNullOrWhiteSpace($commId)) {
+                        $rawReactions = @(& gh api "repos/$Repository/issues/comments/$commId/reactions" 2>$null)
+                        if ($LASTEXITCODE -eq 0 -and $rawReactions.Count -gt 0) {
+                            try {
+                                $reactions = (($rawReactions -join [Environment]::NewLine) | ConvertFrom-Json)
+                                foreach ($rx in @($reactions)) {
+                                    $rxUser = Get-ShipDeObjectProperty -Object $rx -Names @("user", "author")
+                                    $rxLogin = [string](Get-ShipDeObjectProperty -Object $rxUser -Names @("login"))
+                                    $rxContent = [string](Get-ShipDeObjectProperty -Object $rx -Names @("content"))
+                                    if ($script:TrustedCodexReviewerLogins -contains $rxLogin -and $rxContent -eq "+1") {
+                                        $rxCreated = [DateTime]::MinValue
+                                        $rxCreatedStr = [string](Get-ShipDeObjectProperty -Object $rx -Names @("createdAt", "created_at"))
+                                        if (-not [string]::IsNullOrWhiteSpace($rxCreatedStr)) {
+                                            [void][DateTime]::TryParse($rxCreatedStr, [ref]$rxCreated)
+                                        }
+                                        $candidates.Add([PSCustomObject]@{
+                                            Id = "rx-" + [string](Get-ShipDeObjectProperty -Object $rx -Names @("id", "databaseId"))
+                                            CreatedAt = $rxCreated.ToUniversalTime()
+                                            Verdict = "PASS"
+                                        })
+                                    }
+                                }
+                            } catch {}
+                        }
+                    }
+                }
             }
         }
     }
@@ -1745,6 +1806,7 @@ function Get-ShipDeGitHubExactHeadCodexFindings {
 
     $findingsList = [System.Collections.Generic.List[string]]::new()
 
+    # 1. PR reviews
     $rawReviews = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/reviews" --paginate --slurp 2>$null)
     if ($LASTEXITCODE -eq 0 -and $rawReviews.Count -gt 0) {
         try {
@@ -1763,6 +1825,31 @@ function Get-ShipDeGitHubExactHeadCodexFindings {
         } catch {}
     }
 
+    # 2. PR inline review comments (pulls/$PullRequestNumber/comments)
+    $rawPullComments = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/comments" --paginate --slurp 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $rawPullComments.Count -gt 0) {
+        try {
+            $pullCommentPages = (($rawPullComments -join [Environment]::NewLine) | ConvertFrom-Json)
+            foreach ($page in @($pullCommentPages)) {
+                foreach ($pComment in @($page)) {
+                    $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "original_commit_id"))
+                    if ($commCommit -ine $HeadSha) { continue }
+                    $commUser = Get-ShipDeObjectProperty -Object $pComment -Names @("user", "author")
+                    $commLogin = [string](Get-ShipDeObjectProperty -Object $commUser -Names @("login"))
+                    if ($script:TrustedCodexReviewerLogins -notcontains $commLogin) { continue }
+                    $pBody = [string]$pComment.body
+                    $pPath = [string]$pComment.path
+                    $pLine = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("line", "original_line"))
+                    if (-not [string]::IsNullOrWhiteSpace($pBody)) {
+                        $loc = if (-not [string]::IsNullOrWhiteSpace($pPath)) { "$($pPath):$($pLine)`n" } else { "" }
+                        $findingsList.Add("$loc$pBody")
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    # 3. Issue comments (issues/$PullRequestNumber/comments)
     $rawComments = @(& gh api "repos/$Repository/issues/$PullRequestNumber/comments" --paginate --slurp 2>$null)
     if ($LASTEXITCODE -eq 0 -and $rawComments.Count -gt 0) {
         try {
@@ -1782,7 +1869,7 @@ function Get-ShipDeGitHubExactHeadCodexFindings {
     }
 
     if ($findingsList.Count -gt 0) {
-        return $findingsList[-1]
+        return ($findingsList -join "`n`n---`n`n")
     }
     return ""
 }
@@ -2152,15 +2239,46 @@ function Get-ShipDeAoSessionId {
     return [string]$id
 }
 
-function Test-ShipDeAoReadiness {
+function Invoke-ShipDeAoNativeCommand {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [scriptblock]$CommandRunner = $null,
+        [string]$StandardInput = $null,
+        [int]$TimeoutMilliseconds = 30000
+    )
+
+    if ($null -ne $CommandRunner) {
+        return (& $CommandRunner $Arguments)
+    }
+
+    $aoExecutable = $null
     try {
-$output = @(& (Get-ShipDeAoInvocationPath) status --json 2>&1)
-        $exitCode = $LASTEXITCODE
-        $text = Join-ShipDeNativeOutput -Output $output
-        if ($exitCode -ne 0) {
-            return @{ Ready = $false; Reason = ("ao status failed with exit code {0}: {1}" -f $exitCode, $text) }
+        $aoExecutable = Get-ShipDeAoInvocationPath
+    } catch {
+        return [PSCustomObject]@{
+            ExitCode = 1
+            Stdout = ""
+            Stderr = "Cannot resolve AO executable: $($_.Exception.Message)"
         }
-        $status = ConvertFrom-ShipDeAoJson -Json $text -Operation "status"
+    }
+
+    return (Invoke-ShipDeNativeProcess `
+        -FilePath $aoExecutable `
+        -ArgumentList $Arguments `
+        -StandardInput $StandardInput `
+        -TimeoutMilliseconds $TimeoutMilliseconds)
+}
+
+function Test-ShipDeAoReadiness {
+    param([scriptblock]$CommandRunner = $null)
+
+    try {
+        $res = Invoke-ShipDeAoNativeCommand -Arguments @("status", "--json") -CommandRunner $CommandRunner
+        if ($res.ExitCode -ne 0) {
+            $err = if (-not [string]::IsNullOrWhiteSpace($res.Stderr)) { $res.Stderr.Trim() } else { $res.Stdout.Trim() }
+            return @{ Ready = $false; Reason = ("ao status failed with exit code {0}: {1}" -f $res.ExitCode, $err) }
+        }
+        $status = ConvertFrom-ShipDeAoJson -Json $res.Stdout -Operation "status"
         $state = [string](Get-ShipDeObjectProperty -Object $status -Names @("state"))
         if ($state -ne "ready") {
             return @{
@@ -2369,17 +2487,51 @@ function Ensure-ShipDeAgentRouterRuntime {
 function Get-ShipDeAoSessionById {
     param(
         [Parameter(Mandatory = $true)][string]$SessionId,
-        [string]$Project = "shipde-platform"
+        [string]$Project = "shipde-platform",
+        [scriptblock]$CommandRunner = $null
     )
 
-$output = @(& (Get-ShipDeAoInvocationPath) session get $SessionId --project $Project --json 2>&1)
-    $exitCode = $LASTEXITCODE
-    $text = Join-ShipDeNativeOutput -Output $output
+    $res = Invoke-ShipDeAoNativeCommand `
+        -Arguments @("session", "get", $SessionId, "--project", $Project, "--json") `
+        -CommandRunner $CommandRunner
+
+    $exitCode = [int]$res.ExitCode
+    $stdout = if ($null -ne $res.Stdout) { [string]$res.Stdout } else { "" }
+    $stderr = if ($null -ne $res.Stderr) { [string]$res.Stderr } else { "" }
+    $combinedText = ($stdout + [Environment]::NewLine + $stderr).Trim()
+
     if ($exitCode -ne 0) {
-        return $null
+        # Requirement 2: Map only a verified AO SESSION_NOT_FOUND / HTTP 404 response to $null.
+        $isNotFound = ($combinedText -match '(?i)\bSESSION_NOT_FOUND\b' -or
+                       $combinedText -match '(?i)\b404\b' -or
+                       $combinedText -match '(?i)\bUnknown session\b' -or
+                       $combinedText -match '(?i)\bsession not found\b')
+        if ($isNotFound) {
+            return $null
+        }
+
+        # Requirement 3: Authentication, network, malformed output and other non-zero failures
+        # must remain fail-closed and preserve diagnostics.
+        $diag = if (-not [string]::IsNullOrWhiteSpace($stderr)) { $stderr.Trim() } else { $stdout.Trim() }
+        throw "AO session query failed for '$SessionId' (exit code $exitCode): $diag"
     }
-    $response = ConvertFrom-ShipDeAoJson -Json $text -Operation "session get"
-    return Get-ShipDeAoSessionPayload -Response $response
+
+    # Exit code 0 (success):
+    if ([string]::IsNullOrWhiteSpace($stdout)) {
+        throw "AO session query succeeded with exit code 0 but returned empty output for '$SessionId'."
+    }
+
+    # Requirement 3: Parse JSON, malformed output throws and preserves diagnostics.
+    try {
+        $response = ConvertFrom-ShipDeAoJson -Json $stdout.Trim() -Operation "session get"
+        $payload = Get-ShipDeAoSessionPayload -Response $response
+        if ($null -eq $payload) {
+            throw "AO session query returned JSON without a valid session payload for '$SessionId'."
+        }
+        return $payload
+    } catch {
+        throw "Failed to parse AO session JSON for '$SessionId' (exit code 0): $($_.Exception.Message). Output: $stdout"
+    }
 }
 
 function Get-ShipDeNextPreparedItem {
@@ -2523,19 +2675,19 @@ function ConvertFrom-ShipDeAoSessionResponse {
 function Get-ShipDeAoSessions {
     param(
         [string]$Project = "shipde-platform",
-        [scriptblock]$TextResolver = $null
+        [scriptblock]$TextResolver = $null,
+        [scriptblock]$CommandRunner = $null
     )
 
     $text = if ($null -ne $TextResolver) {
         & $TextResolver $Project
     } else {
-        $output = @(& (Get-ShipDeAoInvocationPath) session ls --project $Project --json 2>&1)
-        $exitCode = $LASTEXITCODE
-        $rawText = Join-ShipDeNativeOutput -Output $output
-        if ($exitCode -ne 0) {
-            throw "Cannot query AO sessions for project '$Project': $rawText"
+        $res = Invoke-ShipDeAoNativeCommand -Arguments @("session", "ls", "--project", $Project, "--json") -CommandRunner $CommandRunner
+        if ($res.ExitCode -ne 0) {
+            $err = if (-not [string]::IsNullOrWhiteSpace($res.Stderr)) { $res.Stderr.Trim() } else { $res.Stdout.Trim() }
+            throw "Cannot query AO sessions for project '$Project': $err"
         }
-        $rawText
+        $res.Stdout
     }
 
     $response = ConvertFrom-ShipDeAoJson -Json $text -Operation "session ls"
@@ -2667,9 +2819,9 @@ function Start-ShipDeAoWorker {
             } catch {}
         }
 
-        $output = @(& (Get-ShipDeAoInvocationPath) @arguments 2>&1)
-        $exitCode = $LASTEXITCODE
-        $text = Join-ShipDeNativeOutput -Output $output
+        $res = Invoke-ShipDeAoNativeCommand -Arguments $arguments
+        $exitCode = $res.ExitCode
+        $text = if (-not [string]::IsNullOrWhiteSpace($res.Stdout)) { $res.Stdout } else { $res.Stderr }
         if ($exitCode -eq 0) {
             for ($attempt = 0; $attempt -lt 10; $attempt++) {
                 $newSessions = @(
@@ -2708,26 +2860,42 @@ function Start-ShipDeAoWorker {
 function Send-ShipDeAoMessage {
     param(
         [Parameter(Mandatory = $true)][string]$SessionId,
-        [Parameter(Mandatory = $true)][string]$Message
+        [Parameter(Mandatory = $true)][string]$Message,
+        [scriptblock]$CommandRunner = $null
     )
 
-    $output = @(& (Get-ShipDeAoInvocationPath) send --session $SessionId --message $Message 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning ("AO message failed for {0}: {1}" -f $SessionId, (Join-ShipDeNativeOutput -Output $output))
+    try {
+        $res = Invoke-ShipDeAoNativeCommand -Arguments @("send", "--session", $SessionId, "--message", $Message) -CommandRunner $CommandRunner
+        if ($res.ExitCode -ne 0) {
+            $err = if (-not [string]::IsNullOrWhiteSpace($res.Stderr)) { $res.Stderr.Trim() } else { $res.Stdout.Trim() }
+            Write-Warning ("AO message failed for {0}: {1}" -f $SessionId, $err)
+            return $false
+        }
+        return $true
+    } catch {
+        Write-Warning ("AO message failed for {0}: {1}" -f $SessionId, $_.Exception.Message)
         return $false
     }
-    return $true
 }
 
 function Start-ShipDeAoReview {
-    param([Parameter(Mandatory = $true)][string]$SessionId)
+    param(
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [scriptblock]$CommandRunner = $null
+    )
 
-    $output = @(& (Get-ShipDeAoInvocationPath) review trigger $SessionId 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning ("AO Codex review trigger failed: {0}" -f (Join-ShipDeNativeOutput -Output $output))
+    try {
+        $res = Invoke-ShipDeAoNativeCommand -Arguments @("review", "trigger", $SessionId) -CommandRunner $CommandRunner
+        if ($res.ExitCode -ne 0) {
+            $err = if (-not [string]::IsNullOrWhiteSpace($res.Stderr)) { $res.Stderr.Trim() } else { $res.Stdout.Trim() }
+            Write-Warning ("AO Codex review trigger failed: {0}" -f $err)
+            return $false
+        }
+        return $true
+    } catch {
+        Write-Warning ("AO Codex review trigger failed: {0}" -f $_.Exception.Message)
         return $false
     }
-    return $true
 }
 
 function Normalize-ShipDeSupervisorState {
@@ -2968,8 +3136,14 @@ function Request-ShipDeCodexBotReview {
         return [string]$newId
     }
 
-    $rawPost = @(& gh api "repos/$Repository/issues/$PullRequestNumber/comments" -f body=$requestBody 2>&1)
-    $exitCode = $LASTEXITCODE
+    $rawPost = $null
+    $exitCode = 0
+    try {
+        $rawPost = @(& gh api "repos/$Repository/issues/$PullRequestNumber/comments" -f body=$requestBody 2>&1)
+        $exitCode = $LASTEXITCODE
+    } catch {
+        throw "Failed to post '@codex review' request to PR #$($PullRequestNumber): $($_.Exception.Message)"
+    }
     if ($exitCode -ne 0) {
         $err = Join-ShipDeNativeOutput -Output $rawPost
         throw "Failed to post '@codex review' request to PR #$($PullRequestNumber): $err"
@@ -3163,14 +3337,14 @@ function Get-ShipDeOpenPullRequestForWorkItem {
 function Stop-ShipDeAoSession {
     param(
         [Parameter(Mandatory = $true)][string]$SessionId,
-        [string]$Project = "shipde-platform"
+        [string]$Project = "shipde-platform",
+        [scriptblock]$CommandRunner = $null
     )
 
-    $output = @(& (Get-ShipDeAoInvocationPath) session kill $SessionId --project $Project 2>&1)
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        $text = Join-ShipDeNativeOutput -Output $output
-        throw "Could not kill/archive AO session $($SessionId): $text"
+    $res = Invoke-ShipDeAoNativeCommand -Arguments @("session", "kill", $SessionId, "--project", $Project) -CommandRunner $CommandRunner
+    if ($res.ExitCode -ne 0) {
+        $err = if (-not [string]::IsNullOrWhiteSpace($res.Stderr)) { $res.Stderr.Trim() } else { $res.Stdout.Trim() }
+        throw "Could not kill/archive AO session $($SessionId): $err"
     }
 }
 
@@ -6829,6 +7003,187 @@ Full review comments:
         }
         if ($state57.State -ne "BLOCKED") {
             throw "Requirement 5.7 failed: State was not set to BLOCKED."
+        }
+    }
+
+    # ------------------------------------------------------------------------------------------------
+    # TASK-AI-06 Native Command Adapter & Missing Checkpoint Recovery Suite (Requirement 5)
+    # Tested strictly under Set-StrictMode -Version Latest and $ErrorActionPreference = "Stop"
+    # - SESSION_NOT_FOUND written to stderr returns null;
+    # - valid JSON returns the session;
+    # - auth/network errors throw;
+    # - malformed success output throws;
+    # - existing sess-parked-3 checkpoint recovers without manual deletion.
+    # ------------------------------------------------------------------------------------------------
+    & {
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Stop"
+        try {
+            # 1. SESSION_NOT_FOUND written to stderr returns null
+            $notFoundRunner = {
+                param($cmdArgs)
+                return [PSCustomObject]@{
+                    ExitCode = 1
+                    Stdout = ""
+                    Stderr = "Unknown session (SESSION_NOT_FOUND)"
+                }
+            }
+            $notFoundResult = Get-ShipDeAoSessionById -SessionId "sess-test-not-found" -CommandRunner $notFoundRunner
+            if ($null -ne $notFoundResult) {
+                throw "Requirement 5.1 failed: SESSION_NOT_FOUND written to stderr must return `$null, got '$notFoundResult'."
+            }
+
+            # 2. Valid JSON returns the session
+            $validJsonRunner = {
+                param($cmdArgs)
+                return [PSCustomObject]@{
+                    ExitCode = 0
+                    Stdout = '{"result":{"session":{"id":"sess-valid-test","role":"worker","status":"running","harness":"agy"}}}'
+                    Stderr = ""
+                }
+            }
+            $validResult = Get-ShipDeAoSessionById -SessionId "sess-valid-test" -CommandRunner $validJsonRunner
+            if ($null -eq $validResult -or (Get-ShipDeAoSessionId -Response $validResult) -ne "sess-valid-test") {
+                throw "Requirement 5.2 failed: valid JSON must return the session object."
+            }
+
+            # 3. Auth/network errors throw and preserve diagnostics
+            $authErrorRunner = {
+                param($cmdArgs)
+                return [PSCustomObject]@{
+                    ExitCode = 1
+                    Stdout = ""
+                    Stderr = "Error: Unauthorized (HTTP 401) - invalid authentication token"
+                }
+            }
+            $authCaught = $false
+            try {
+                Get-ShipDeAoSessionById -SessionId "sess-auth-fail" -CommandRunner $authErrorRunner | Out-Null
+            } catch {
+                if ($_.Exception.Message -match "invalid authentication token" -and $_.Exception.Message -match "exit code 1") {
+                    $authCaught = $true
+                }
+            }
+            if (-not $authCaught) {
+                throw "Requirement 5.3a failed: authentication error did not throw or preserve diagnostics."
+            }
+
+            $networkErrorRunner = {
+                param($cmdArgs)
+                return [PSCustomObject]@{
+                    ExitCode = 1
+                    Stdout = ""
+                    Stderr = "AO daemon is not running (stale run-file at C:\fixture\running.json) - start it with ao start"
+                }
+            }
+            $networkCaught = $false
+            try {
+                Get-ShipDeAoSessionById -SessionId "sess-net-fail" -CommandRunner $networkErrorRunner | Out-Null
+            } catch {
+                if ($_.Exception.Message -match "AO daemon is not running" -and $_.Exception.Message -match "exit code 1") {
+                    $networkCaught = $true
+                }
+            }
+            if (-not $networkCaught) {
+                throw "Requirement 5.3b failed: network/daemon error did not throw or preserve diagnostics."
+            }
+
+            # 4. Malformed success output throws and preserves diagnostics
+            $malformedJsonRunner = {
+                param($cmdArgs)
+                return [PSCustomObject]@{
+                    ExitCode = 0
+                    Stdout = "{ this is not valid json }"
+                    Stderr = ""
+                }
+            }
+            $malformedCaught = $false
+            try {
+                Get-ShipDeAoSessionById -SessionId "sess-malformed" -CommandRunner $malformedJsonRunner | Out-Null
+            } catch {
+                if ($_.Exception.Message -match "Failed to parse AO session JSON") {
+                    $malformedCaught = $true
+                }
+            }
+            if (-not $malformedCaught) {
+                throw "Requirement 5.4a failed: malformed success output did not throw with diagnostics."
+            }
+
+            $emptySuccessRunner = {
+                param($cmdArgs)
+                return [PSCustomObject]@{
+                    ExitCode = 0
+                    Stdout = ""
+                    Stderr = ""
+                }
+            }
+            $emptySuccessCaught = $false
+            try {
+                Get-ShipDeAoSessionById -SessionId "sess-empty" -CommandRunner $emptySuccessRunner | Out-Null
+            } catch {
+                if ($_.Exception.Message -match "returned empty output") {
+                    $emptySuccessCaught = $true
+                }
+            }
+            if (-not $emptySuccessCaught) {
+                throw "Requirement 5.4b failed: empty success output did not throw with diagnostics."
+            }
+
+            # 5. Existing sess-parked-3 checkpoint recovers without manual deletion
+            $realDiskCheckpoint = if ($realStateFileExisted) {
+                Get-Content -LiteralPath $realStateFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            } else {
+                [PSCustomObject]@{
+                    WorkItemId = "TASK-AI-06"
+                    Branch = "feat/task-ai-06-orchestrator-supervisor"
+                    Author = "GEMINI"
+                    State = "PARKED"
+                    SessionId = "sess-parked-3"
+                    Harness = $null
+                    PullRequestNumber = $null
+                    HeadSha = "778899001122"
+                    ExactHeadVerdict = $null
+                    PendingDispatch = $null
+                }
+            }
+            $openPr9 = [PSCustomObject]@{
+                number = 9
+                headRefOid = "778899001122"
+                isDraft = $false
+                title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+                headRefName = "feat/task-ai-06-orchestrator-supervisor"
+                headRepository = "vinh05092001/shipde-platform"
+                isCrossRepository = $false
+                statusCheckRollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } },
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; startedAt = "2026-09-06T01:00:00Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+                )
+            }
+            $savedCheckpointsP3 = [System.Collections.Generic.List[object]]::new()
+            $recoveredP3 = Initialize-ShipDeSupervisorState `
+                -State $realDiskCheckpoint `
+                -Repository "vinh05092001/shipde-platform" `
+                -OpenPrResolver { return @($openPr9) } `
+                -SessionDetailResolver {
+                    param($id, $p)
+                    return (Get-ShipDeAoSessionById -SessionId $id -Project $p -CommandRunner $notFoundRunner)
+                } `
+                -CheckpointWriter { param($s) $savedCheckpointsP3.Add($s) }
+
+            if ($null -eq $recoveredP3) {
+                throw "Requirement 5.5 failed: sess-parked-3 recovery returned null."
+            }
+            if ($recoveredP3.State -ne "STARTED" -or
+                $null -ne $recoveredP3.SessionId -or
+                $null -ne $recoveredP3.Harness -or
+                $recoveredP3.PullRequestNumber -ne 9) {
+                throw "Requirement 5.5 failed: sess-parked-3 recovery did not clear SessionId/Harness and resume PR-only review."
+            }
+            if ($savedCheckpointsP3.Count -eq 0 -or $savedCheckpointsP3[-1].State -ne "STARTED") {
+                throw "Requirement 5.5 failed: sess-parked-3 recovered state was not saved to checkpoint."
+            }
+        } finally {
+            $ErrorActionPreference = $prevEap
         }
     }
 
