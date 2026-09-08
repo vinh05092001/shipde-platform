@@ -1663,29 +1663,34 @@ function Get-ShipDeGitHubExactHeadCodexVerdict {
 
     # 2. Enumerate GitHub PR review comments (pulls/$PullRequestNumber/comments)
     $rawPullComments = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/comments" --paginate --slurp 2>$null)
-    if ($LASTEXITCODE -eq 0 -and $rawPullComments.Count -gt 0) {
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to query GitHub Pull Request review comments for PR #$PullRequestNumber."
+    }
+    if ($rawPullComments.Count -gt 0) {
         try {
             $pullCommentPages = (($rawPullComments -join [Environment]::NewLine) | ConvertFrom-Json)
-            foreach ($page in @($pullCommentPages)) {
-                foreach ($pComment in @($page)) {
-                    $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "original_commit_id"))
-                    if ($commCommit -ine $HeadSha) { continue }
-                    $commUser = Get-ShipDeObjectProperty -Object $pComment -Names @("user", "author")
-                    $commLogin = [string](Get-ShipDeObjectProperty -Object $commUser -Names @("login"))
-                    if ($script:TrustedCodexReviewerLogins -notcontains $commLogin) { continue }
-                    $commCreated = [DateTime]::MinValue
-                    $commCreatedStr = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("created_at", "createdAt"))
-                    if (-not [string]::IsNullOrWhiteSpace($commCreatedStr)) {
-                        [void][DateTime]::TryParse($commCreatedStr, [ref]$commCreated)
-                    }
-                    $candidates.Add([PSCustomObject]@{
-                        Id = "pc-" + [string](Get-ShipDeObjectProperty -Object $pComment -Names @("id", "databaseId"))
-                        CreatedAt = $commCreated.ToUniversalTime()
-                        Verdict = "CHANGES_REQUIRED"
-                    })
+        } catch {
+            throw "Failed to parse GitHub Pull Request review comments response for PR #$($PullRequestNumber): $($_.Exception.Message)"
+        }
+        foreach ($page in @($pullCommentPages)) {
+            foreach ($pComment in @($page)) {
+                $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "original_commit_id"))
+                if ($commCommit -ine $HeadSha) { continue }
+                $commUser = Get-ShipDeObjectProperty -Object $pComment -Names @("user", "author")
+                $commLogin = [string](Get-ShipDeObjectProperty -Object $commUser -Names @("login"))
+                if ($script:TrustedCodexReviewerLogins -notcontains $commLogin) { continue }
+                $commCreated = [DateTime]::MinValue
+                $commCreatedStr = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("created_at", "createdAt"))
+                if (-not [string]::IsNullOrWhiteSpace($commCreatedStr)) {
+                    [void][DateTime]::TryParse($commCreatedStr, [ref]$commCreated)
                 }
+                $candidates.Add([PSCustomObject]@{
+                    Id = "pc-" + [string](Get-ShipDeObjectProperty -Object $pComment -Names @("id", "databaseId"))
+                    CreatedAt = $commCreated.ToUniversalTime()
+                    Verdict = "CHANGES_REQUIRED"
+                })
             }
-        } catch {}
+        }
     }
 
     # 3. Enumerate GitHub PR comments with pagination to exhaustion
@@ -1746,36 +1751,6 @@ function Get-ShipDeGitHubExactHeadCodexVerdict {
                                     Verdict = $cVerdict
                                 })
                             }
-                        }
-                    }
-                }
-
-                if ($body -match '(?i)@codex\s+review' -and $body -match [regex]::Escape($HeadSha)) {
-                    # Check reactions on this exact review request comment for bot approval (+1 reaction from bot indicates PASS)
-                    $commId = [string](Get-ShipDeObjectProperty -Object $commentObj -Names @("id", "databaseId"))
-                    if (-not [string]::IsNullOrWhiteSpace($commId)) {
-                        $rawReactions = @(& gh api "repos/$Repository/issues/comments/$commId/reactions" 2>$null)
-                        if ($LASTEXITCODE -eq 0 -and $rawReactions.Count -gt 0) {
-                            try {
-                                $reactions = (($rawReactions -join [Environment]::NewLine) | ConvertFrom-Json)
-                                foreach ($rx in @($reactions)) {
-                                    $rxUser = Get-ShipDeObjectProperty -Object $rx -Names @("user", "author")
-                                    $rxLogin = [string](Get-ShipDeObjectProperty -Object $rxUser -Names @("login"))
-                                    $rxContent = [string](Get-ShipDeObjectProperty -Object $rx -Names @("content"))
-                                    if ($script:TrustedCodexReviewerLogins -contains $rxLogin -and $rxContent -eq "+1") {
-                                        $rxCreated = [DateTime]::MinValue
-                                        $rxCreatedStr = [string](Get-ShipDeObjectProperty -Object $rx -Names @("createdAt", "created_at"))
-                                        if (-not [string]::IsNullOrWhiteSpace($rxCreatedStr)) {
-                                            [void][DateTime]::TryParse($rxCreatedStr, [ref]$rxCreated)
-                                        }
-                                        $candidates.Add([PSCustomObject]@{
-                                            Id = "rx-" + [string](Get-ShipDeObjectProperty -Object $rx -Names @("id", "databaseId"))
-                                            CreatedAt = $rxCreated.ToUniversalTime()
-                                            Verdict = "PASS"
-                                        })
-                                    }
-                                }
-                            } catch {}
                         }
                     }
                 }
@@ -2998,6 +2973,7 @@ function Assert-ShipDeSupervisorLock {
     $lockJson = $lockPayload | ConvertTo-Json
 
     if (Test-Path -LiteralPath $LockFile) {
+        $isStale = $false
         try {
             $lockContent = Get-Content -LiteralPath $LockFile -Raw -Encoding UTF8 | ConvertFrom-Json
             $holderPid = [int](Get-ShipDeObjectProperty -Object $lockContent -Names @("process_id", "processId"))
@@ -3008,12 +2984,18 @@ function Assert-ShipDeSupervisorLock {
                 if ($null -ne $proc -and -not [bool]$proc.HasExited) {
                     throw "Another supervisor instance (PID $holderPid, Work Item '$holderWorkItem') is actively supervising. Rejecting concurrent supervisor lock."
                 }
+                $isStale = $true
+            } elseif ($holderPid -eq $CurrentPid) {
+                $isStale = $true
             }
-            Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
         } catch {
             if ($_.Exception.Message -match "Another supervisor instance") {
                 throw
             }
+            throw "Failed to inspect supervisor lock '$LockFile': $($_.Exception.Message)"
+        }
+
+        if ($isStale) {
             Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
         }
     }
@@ -3055,6 +3037,8 @@ function Update-ShipDeSupervisorLock {
     )
 
     if (Test-Path -LiteralPath $LockFile) {
+        $tempLockFile = "$LockFile.$([Guid]::NewGuid().ToString('N')).tmp"
+        $backupLockFile = "$LockFile.$([Guid]::NewGuid().ToString('N')).bak"
         try {
             $lockPayload = @{
                 process_id = $CurrentPid
@@ -3062,8 +3046,23 @@ function Update-ShipDeSupervisorLock {
                 acquired_at = (Get-Date).ToUniversalTime().ToString("o")
                 host = $env:COMPUTERNAME
             }
-            $lockPayload | ConvertTo-Json | Set-Content -LiteralPath $LockFile -Encoding UTF8
-        } catch {}
+            $json = $lockPayload | ConvertTo-Json
+            [System.IO.File]::WriteAllText($tempLockFile, $json, [System.Text.UTF8Encoding]::new($false))
+            if (Test-Path -LiteralPath $LockFile) {
+                [System.IO.File]::Replace($tempLockFile, $LockFile, $backupLockFile, $true)
+            } else {
+                Move-Item -LiteralPath $tempLockFile -Destination $LockFile -Force
+            }
+        } catch {
+            throw "Failed to update supervisor lock '$LockFile': $($_.Exception.Message)"
+        } finally {
+            if (Test-Path -LiteralPath $tempLockFile) {
+                Remove-Item -LiteralPath $tempLockFile -Force -ErrorAction SilentlyContinue
+            }
+            if (Test-Path -LiteralPath $backupLockFile) {
+                Remove-Item -LiteralPath $backupLockFile -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 
@@ -5919,6 +5918,39 @@ Full review comments:
             throw "Single-supervisor locking test failed: concurrent active lock was not rejected."
         }
         Assert-ShipDeSupervisorLock -LockFile $testLockFile -WorkItemId "TASK-AI-06" -CurrentPid 67890 -ProcessResolver { param($id) return $null }
+
+        # Lock update atomicity test (Finding 4)
+        Update-ShipDeSupervisorLock -LockFile $testLockFile -WorkItemId "TASK-AI-07" -CurrentPid 67890
+        $updatedLockContent = Get-Content -LiteralPath $testLockFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ((Get-ShipDeObjectProperty -Object $updatedLockContent -Names @("work_item_id", "workItemId")) -ne "TASK-AI-07") {
+            throw "Supervisor lock atomic update test failed: WorkItemId was not updated."
+        }
+        $lockDir = Split-Path $testLockFile -Parent
+        $leftoverTempFiles = @(Get-ChildItem -LiteralPath $lockDir -File | Where-Object { $_.FullName -like "$testLockFile.*" -and $_.FullName -ne $testLockFile })
+        if ($leftoverTempFiles.Count -gt 0) {
+            throw "Supervisor lock atomic update test failed: temporary or backup files were left behind: $(($leftoverTempFiles | ForEach-Object { $_.Name }) -join ', ')."
+        }
+
+        # Corrupt / unparseable lock fail-closed test (Finding 4)
+        [System.IO.File]::WriteAllText($testLockFile, "{ invalid json", [System.Text.UTF8Encoding]::new($false))
+        $corruptLockCaught = $false
+        try {
+            Assert-ShipDeSupervisorLock -LockFile $testLockFile -WorkItemId "TASK-AI-07" -CurrentPid 67890 | Out-Null
+        } catch {
+            if ($_.Exception.Message -match "Failed to inspect supervisor lock") {
+                $corruptLockCaught = $true
+            }
+        }
+        if (-not $corruptLockCaught) {
+            throw "Corrupt supervisor lock fail-closed test failed: did not throw fail-closed error."
+        }
+        if (-not (Test-Path -LiteralPath $testLockFile)) {
+            throw "Corrupt supervisor lock fail-closed test failed: unparseable lock file was improperly deleted."
+        }
+
+        # Stale lock cleanup and release test
+        Remove-Item -LiteralPath $testLockFile -Force -ErrorAction SilentlyContinue
+        Assert-ShipDeSupervisorLock -LockFile $testLockFile -WorkItemId "TASK-AI-06" -CurrentPid 67890
         Release-ShipDeSupervisorLock -LockFile $testLockFile -CurrentPid 67890
         if (Test-Path -LiteralPath $testLockFile) {
             throw "Single-supervisor locking test failed: lock file was not removed on release."
@@ -7130,21 +7162,17 @@ Full review comments:
             }
 
             # 5. Existing sess-parked-3 checkpoint recovers without manual deletion
-            $realDiskCheckpoint = if ($realStateFileExisted) {
-                Get-Content -LiteralPath $realStateFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            } else {
-                [PSCustomObject]@{
-                    WorkItemId = "TASK-AI-06"
-                    Branch = "feat/task-ai-06-orchestrator-supervisor"
-                    Author = "GEMINI"
-                    State = "PARKED"
-                    SessionId = "sess-parked-3"
-                    Harness = $null
-                    PullRequestNumber = $null
-                    HeadSha = "778899001122"
-                    ExactHeadVerdict = $null
-                    PendingDispatch = $null
-                }
+            $parkedCheckpointFixture = [PSCustomObject]@{
+                WorkItemId = "TASK-AI-06"
+                Branch = "feat/task-ai-06-orchestrator-supervisor"
+                Author = "GEMINI"
+                State = "PARKED"
+                SessionId = "sess-parked-3"
+                Harness = $null
+                PullRequestNumber = $null
+                HeadSha = "778899001122"
+                ExactHeadVerdict = $null
+                PendingDispatch = $null
             }
             $openPr9 = [PSCustomObject]@{
                 number = 9
@@ -7161,7 +7189,7 @@ Full review comments:
             }
             $savedCheckpointsP3 = [System.Collections.Generic.List[object]]::new()
             $recoveredP3 = Initialize-ShipDeSupervisorState `
-                -State $realDiskCheckpoint `
+                -State $parkedCheckpointFixture `
                 -Repository "vinh05092001/shipde-platform" `
                 -OpenPrResolver { return @($openPr9) } `
                 -SessionDetailResolver {
@@ -7184,6 +7212,102 @@ Full review comments:
             }
         } finally {
             $ErrorActionPreference = $prevEap
+        }
+    }
+
+    # Exact-HEAD Codex Verdict review comments fail-closed & reaction tests (Finding 2 & Finding 3)
+    & {
+        $prevRepo = $Repository
+        $Repository = "vinh05092001/shipde-platform"
+        try {
+            # 1. PR review comments endpoint failure throws fail-closed (Finding 3)
+            & {
+                function gh {
+                    param([Parameter(ValueFromRemainingArguments = $true)]$args)
+                    $cmdStr = $args -join " "
+                    if ($cmdStr -match "pulls/\d+/reviews") {
+                        $global:LASTEXITCODE = 0
+                        return "[]"
+                    }
+                    if ($cmdStr -match "pulls/\d+/comments") {
+                        $global:LASTEXITCODE = 1
+                        return @("Error querying pull comments")
+                    }
+                    $global:LASTEXITCODE = 0
+                    return "[]"
+                }
+                $caughtReviewCommFail = $false
+                try {
+                    Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber 9999 -HeadSha "aabbccddeeff00112233445566778899aabbccdd" | Out-Null
+                } catch {
+                    if ($_.Exception.Message -match "Failed to query GitHub Pull Request review comments") {
+                        $caughtReviewCommFail = $true
+                    }
+                }
+                if (-not $caughtReviewCommFail) {
+                    throw "Finding 3 test failed: PR review comments endpoint query failure did not throw fail-closed."
+                }
+            }
+
+            # 2. PR review comments invalid JSON throws fail-closed (Finding 3)
+            & {
+                function gh {
+                    param([Parameter(ValueFromRemainingArguments = $true)]$args)
+                    $cmdStr = $args -join " "
+                    if ($cmdStr -match "pulls/\d+/reviews") {
+                        $global:LASTEXITCODE = 0
+                        return "[]"
+                    }
+                    if ($cmdStr -match "pulls/\d+/comments") {
+                        $global:LASTEXITCODE = 0
+                        return @("{ not valid json }")
+                    }
+                    $global:LASTEXITCODE = 0
+                    return "[]"
+                }
+                $caughtJsonParseFail = $false
+                try {
+                    Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber 9999 -HeadSha "aabbccddeeff00112233445566778899aabbccdd" | Out-Null
+                } catch {
+                    if ($_.Exception.Message -match "Failed to parse GitHub Pull Request review comments response") {
+                        $caughtJsonParseFail = $true
+                    }
+                }
+                if (-not $caughtJsonParseFail) {
+                    throw "Finding 3 test failed: PR review comments invalid JSON did not throw fail-closed."
+                }
+            }
+
+            # 3. Trusted bot reaction on review request comment does NOT produce PASS (Finding 2)
+            & {
+                function gh {
+                    param([Parameter(ValueFromRemainingArguments = $true)]$args)
+                    $cmdStr = $args -join " "
+                    if ($cmdStr -match "pulls/\d+/reviews") {
+                        $global:LASTEXITCODE = 0
+                        return "[]"
+                    }
+                    if ($cmdStr -match "pulls/\d+/comments") {
+                        $global:LASTEXITCODE = 0
+                        return "[]"
+                    }
+                    if ($cmdStr -match "issues/\d+/comments") {
+                        $global:LASTEXITCODE = 0
+                        return '[{"id":"comm-1","author":{"login":"chatgpt-codex-connector[bot]"},"body":"@codex review aabbccddeeff00112233445566778899aabbccdd"}]'
+                    }
+                    $global:LASTEXITCODE = 0
+                    return "[]"
+                }
+                $verdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber 9999 -HeadSha "aabbccddeeff00112233445566778899aabbccdd"
+                if ($verdict -eq "PASS") {
+                    throw "Finding 2 test failed: Bot reaction/comment without terminal verdict was promoted to PASS."
+                }
+                if ($null -ne $verdict) {
+                    throw "Finding 2 test failed: Expected null verdict when no terminal review verdict exists, got '$verdict'."
+                }
+            }
+        } finally {
+            $Repository = $prevRepo
         }
     }
 
