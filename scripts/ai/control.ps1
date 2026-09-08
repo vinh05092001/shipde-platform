@@ -10969,6 +10969,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 -WorkerStarter { param($item, $prompt) return [PSCustomObject]@{ SessionId = "sess-round6-ai07"; Harness = "claude" } } `
                 -CodexParker { } `
                 -RegisterSynchronizer { param($s) } `
+                -ActiveWorkersResolver { return @() } `
                 -CheckpointWriter { param($s) $writtenCheckpoints.Add($s) } `
                 -CheckpointClearer { $clearedTracker.Cleared = $true } `
                 -DeliveryRegisterRows $inMemoryRegRows
