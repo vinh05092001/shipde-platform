@@ -502,6 +502,7 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String) {
                 detailsUrl
                 checkSuite {
                   app {
+                    databaseId
                     slug
                     name
                   }
@@ -727,6 +728,40 @@ function Get-ShipDeCheckResult {
     return "PENDING"
 }
 
+function Get-ShipDeCheckAppId {
+    param([Parameter(Mandatory = $true)][object]$Check)
+
+    $idVal = Get-ShipDeObjectProperty -Object $Check -Names @("appId", "app_id")
+    if ($null -ne $idVal -and -not [string]::IsNullOrWhiteSpace([string]$idVal)) {
+        return [int]$idVal
+    }
+
+    try {
+        if ($Check.checkSuite -and $Check.checkSuite.app) {
+            $suiteAppId = Get-ShipDeObjectProperty -Object $Check.checkSuite.app -Names @("databaseId", "id", "appId", "app_id")
+            if ($null -ne $suiteAppId -and -not [string]::IsNullOrWhiteSpace([string]$suiteAppId)) {
+                return [int]$suiteAppId
+            }
+        }
+    } catch {}
+
+    try {
+        if ($Check.app) {
+            $appId = Get-ShipDeObjectProperty -Object $Check.app -Names @("databaseId", "id", "appId", "app_id")
+            if ($null -ne $appId -and -not [string]::IsNullOrWhiteSpace([string]$appId)) {
+                return [int]$appId
+            }
+        }
+    } catch {}
+
+    $prov = Get-ShipDeCheckProvider -Check $Check
+    if ($prov.StartsWith($script:RequiredPrCheckProviderPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return 15368
+    }
+
+    return $null
+}
+
 function Get-ShipDePrGate {
     param(
         [Parameter(Mandatory = $true)][object]$PullRequest,
@@ -790,8 +825,9 @@ function Get-ShipDePrGate {
     }
 
     foreach ($req in $targetChecks) {
-        $requiredName = if ($req -is [string]) { $req } elseif ($req.PSObject.Properties['Context']) { [string]$req.Context } else { [string]$req }
-        $expectedAppId = if ($req -is [PSCustomObject] -and $req.PSObject.Properties['AppId'] -and $null -ne $req.AppId) { [int]$req.AppId } else { $null }
+        $requiredName = if ($req -is [string]) { $req } else { [string](Get-ShipDeObjectProperty -Object $req -Names @("Context", "context", "name")) }
+        $expectedAppIdRaw = if ($req -is [string]) { $null } else { Get-ShipDeObjectProperty -Object $req -Names @("AppId", "app_id", "appId") }
+        $expectedAppId = if ($null -ne $expectedAppIdRaw -and -not [string]::IsNullOrWhiteSpace([string]$expectedAppIdRaw)) { [int]$expectedAppIdRaw } else { $null }
 
         $matches = @($checks | Where-Object {
             $nameMatches = (Get-ShipDeCheckName -Check $_) -eq $requiredName
@@ -801,10 +837,14 @@ function Get-ShipDePrGate {
                 $script:RequiredPrCheckProviderPrefix,
                 [System.StringComparison]::OrdinalIgnoreCase
             )
-            if ($null -ne $expectedAppId -and $expectedAppId -eq 15368) {
-                if (-not $isActions) { return $false }
+            if (-not $isActions) { return $false }
+            if ($null -ne $expectedAppId) {
+                $actualAppId = Get-ShipDeCheckAppId -Check $_
+                if ($null -eq $actualAppId -or $actualAppId -ne $expectedAppId) {
+                    return $false
+                }
             }
-            return $isActions
+            return $true
         })
         if ($matches.Count -eq 0) {
             return "PENDING"
@@ -3039,7 +3079,7 @@ function Reset-ShipDeSupervisorHeadState {
         $State["LastReviewTriggeredAt"] = $null
         $State["NudgeCount"] = 0
         $State["UnknownPollCount"] = 0
-        $State["RepairCount"] = 0
+        # RepairCount is a Work Item-level counter that accumulates across repair cycles/heads; do not reset it on head changes.
         $State["LastCiRepairHead"] = $null
         $State["LastAcknowledgedCiRepairHead"] = $null
         $State["LastReviewRepairHead"] = $null
@@ -3063,7 +3103,7 @@ function Reset-ShipDeSupervisorHeadState {
         $State.LastReviewTriggeredAt = $null
         $State.NudgeCount = 0
         $State.UnknownPollCount = 0
-        $State.RepairCount = 0
+        # RepairCount is a Work Item-level counter that accumulates across repair cycles/heads; do not reset it on head changes.
         $State.LastCiRepairHead = $null
         $State.LastAcknowledgedCiRepairHead = $null
         $State.LastReviewRepairHead = $null
@@ -7071,6 +7111,20 @@ Full review comments:
         throw "Repair budget exhaustion test failed: exceeding MaxRepairBudget did not stop fail-closed."
     }
 
+    # 5b. Repair budget preservation across head changes test
+    $headChangeState = @{
+        WorkItemId = "TASK-AI-06"
+        Branch = "feat/task-ai-06-orchestrator-supervisor"
+        State = "STARTED"
+        HeadSha = "1111111111111111111111111111111111111111"
+        RepairCount = 3
+    }
+    $headChangeState = Normalize-ShipDeSupervisorState -State $headChangeState
+    $resetState = Reset-ShipDeSupervisorHeadState -State $headChangeState -NewHeadSha "2222222222222222222222222222222222222222"
+    if ($resetState.RepairCount -ne 3) {
+        throw "Repair budget preservation test failed: RepairCount was not preserved across head change ($($resetState.RepairCount))."
+    }
+
     # Real-response regression fixture: AO 0.12.12 session with status=pr_open, isTerminated=false, harness=claude-code, author=GEMINI
     $ao01212ObservedPrOpenJson = @'
 {
@@ -8547,16 +8601,34 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 @{ Name = "non_actions_app"; Rollup = @(
                     [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "untrusted-bot"; name = "Untrusted Bot"; id = 99999 } } },
                     [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                ) },
+                @{ Name = "mismatched_app_id"; Rollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                ); RequiredChecks = @(
+                    [PSCustomObject]@{ context = "contract"; app_id = 15368 },
+                    [PSCustomObject]@{ context = "application-gate"; app_id = 99999 }
                 ) }
             )
 
             foreach ($case in $negativeCases) {
                 $testPrNeg = $validPr.PSObject.Copy()
                 $testPrNeg.statusCheckRollup = $case.Rollup
-                $gateRes = Get-ShipDePrGate -PullRequest $testPrNeg
+                $reqChecks = if ($case.ContainsKey("RequiredChecks")) { $case.RequiredChecks } else { $null }
+                $gateRes = Get-ShipDePrGate -PullRequest $testPrNeg -RequiredChecks $reqChecks
                 if ($gateRes -eq "GREEN") {
                     throw "AC-AI-13-05 failed: expected check to not be GREEN for case '$($case.Name)'."
                 }
+            }
+
+            # Explicit regression: branch protection with AppId other than 15368 rejects GitHub Actions check with mismatched AppId
+            $mismatchedProtectionChecks = @(
+                [PSCustomObject]@{ context = "contract"; app_id = 12345 },
+                [PSCustomObject]@{ context = "application-gate"; app_id = 15368 }
+            )
+            $mismatchedGate = Get-ShipDePrGate -PullRequest $validPr -RequiredChecks $mismatchedProtectionChecks
+            if ($mismatchedGate -eq "GREEN") {
+                throw "AC-AI-13-05 failed: expected PENDING when required check context binds to App ID 12345 but check run is Actions (15368)."
             }
         }
 
@@ -9592,7 +9664,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 LastActivityTime = "2026-09-08T10:11:50.4785478Z"
                 CheckpointTime = "2026-09-08T10:21:49.7158902Z"
                 NudgeCount = 1
-                RepairCount = 5
+                RepairCount = 1
                 ProviderFailure = $true
                 RouterFailure = [PSCustomObject]@{ Provider = "google"; Model = "gemini-2.5-pro" }
                 ExactHeadVerdict = "CHANGES_REQUIRED"
@@ -9645,8 +9717,8 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             if ($reconciledInit.NudgeCount -ne 0) {
                 throw "Recovery regression failed: NudgeCount was not reset to 0."
             }
-            if ($reconciledInit.RepairCount -ne 0) {
-                throw "Recovery regression failed: RepairCount was not reset to 0."
+            if ($reconciledInit.RepairCount -ne 1) {
+                throw "Recovery regression failed: RepairCount was not preserved across head reconciliation ($($reconciledInit.RepairCount))."
             }
             if ($null -ne $reconciledInit.LastReviewTriggeredAt -or $null -ne $reconciledInit.LastReviewTriggeredHead -or $null -ne $reconciledInit.LastAcknowledgedReviewTriggerHead) {
                 throw "Recovery regression failed: Review trigger markers/timers were not cleared."
@@ -9724,8 +9796,8 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             if ($loopState.ExactHeadVerdict -ne "CHANGES_REQUIRED") {
                 throw "Recovery regression failed: expected ExactHeadVerdict CHANGES_REQUIRED, got $($loopState.ExactHeadVerdict)."
             }
-            if ($loopState.RepairCount -ne 1) {
-                throw "Recovery regression failed: expected RepairCount to be 1 after fresh budget dispatch, got $($loopState.RepairCount)."
+            if ($loopState.RepairCount -ne 2) {
+                throw "Recovery regression failed: expected RepairCount to be 2 after fresh budget dispatch, got $($loopState.RepairCount)."
             }
             if ($loopState.LastAcknowledgedReviewRepairHead -ne $exactPr10Head) {
                 throw "Recovery regression failed: LastAcknowledgedReviewRepairHead was not set to $exactPr10Head."
