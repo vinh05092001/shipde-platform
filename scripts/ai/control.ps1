@@ -987,12 +987,36 @@ function Invoke-ShipDeStart {
     Start-ShipDeAssignedAuthor -Item $items[0]
 }
 
+function Test-ShipDeReconciliationPullRequest {
+    param([Parameter(Mandatory = $true)][object]$PullRequest)
+
+    $headRef = [string](Get-ShipDeObjectProperty -Object $PullRequest -Names @("headRefName", "HeadRefName", "head", "Head"))
+    $title = [string](Get-ShipDeObjectProperty -Object $PullRequest -Names @("title", "Title"))
+    if ($headRef -match '^fix/[^/]+-register-reconciliation-[0-9a-fA-F]+$') {
+        return $true
+    }
+    if ($title -match '^\[[A-Z0-9_-]+\]\s+Reconcile delivery register\b') {
+        return $true
+    }
+    return $false
+}
+
 function Get-ShipDePrWorkItem {
     param([Parameter(Mandatory = $true)][object]$PullRequest)
 
     $workItemId = Get-ShipDeWorkItemIdFromTitle -Title ([string]$PullRequest.title)
     if ([string]::IsNullOrWhiteSpace($workItemId)) {
         return $null
+    }
+
+    if (Test-ShipDeReconciliationPullRequest -PullRequest $PullRequest) {
+        return [PSCustomObject]@{
+            WorkItemId = $workItemId
+            WorkItemPath = "docs/product-spec/work-items/$workItemId.md"
+            Branch = [string]$PullRequest.headRefName
+            Author = "CONTROLLER"
+            IsReconciliation = $true
+        }
     }
 
     $ref = "origin/$($PullRequest.headRefName)"
@@ -3737,8 +3761,15 @@ function Assert-ShipDeGovernedPullRequest {
         throw "Open PR for $WorkItemId originates from head repository '$headRepo', expected governed repository '$ExpectedRepository'."
     }
 
-    if ([string]$PullRequest.headRefName -cne $Branch) {
-        throw "Open PR for $WorkItemId does not use exact governed branch '$Branch'."
+    $isReconciliation = Test-ShipDeReconciliationPullRequest -PullRequest $PullRequest
+    if ($isReconciliation) {
+        if ([string]$PullRequest.headRefName -notmatch '^fix/[^/]+-register-reconciliation-[0-9a-fA-F]+$') {
+            throw "Open reconciliation PR for $WorkItemId does not use governed reconciliation branch format."
+        }
+    } else {
+        if ([string]$PullRequest.headRefName -cne $Branch) {
+            throw "Open PR for $WorkItemId does not use exact governed branch '$Branch'."
+        }
     }
 }
 
@@ -5203,6 +5234,18 @@ function Sync-ShipDeRegisterAfterAutoMerge {
 
     $row = $rawRows | Where-Object { $_.work_item_id -eq $workItemId } | Select-Object -First 1
     if ($row) {
+        $isReconciliation = [bool](Get-ShipDeObjectProperty -Object $State -Names @("IsReconciliation", "isReconciliation"))
+        if ($isReconciliation) {
+            Write-Host ("[SUPERVISOR] Administrative reconciliation PR #{0} merged for {1}. Register on main is now updated." -f $prNumber, $workItemId)
+            Set-ShipDePersistedRegisterReconciliation `
+                -WorkItemId $workItemId `
+                -PullRequestNumber $prNumber `
+                -MergeCommitOid $mergeCommit `
+                -CodexVerdict "PASS" `
+                -HandoffRoot $HandoffRoot
+            return
+        }
+
         $prNumberStr = "#{0}" -f $prNumber
         $row.status = "MERGED"
         $row.pr = $prNumberStr
@@ -10181,7 +10224,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             }
         }
 
-        # AC-AI-13-23: TASK-AI-13 is merged -> Controller parks PR #8 and selects dependency-ready TASK-AI-07
+        # AC-AI-13-23: TASK-AI-13 is merged -> Controller selects existing PR #8 repair before TASK-AI-07
         & {
             $mockPr8 = [PSCustomObject]@{
                 number = 8
@@ -10195,7 +10238,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 [PSCustomObject]@{ work_item_id = "TASK-AI-12"; status = "BLOCKED_DEPENDENCY" },
                 [PSCustomObject]@{ work_item_id = "TASK-AI-13"; status = "MERGED" }
             )
-            $selectedAi07State = Initialize-ShipDeSupervisorState `
+            $selectedPr8State = Initialize-ShipDeSupervisorState `
                 -State $null `
                 -DeliveryRegisterRows $regAi13Merged `
                 -OpenPrResolver { return @($mockPr8) } `
@@ -10220,8 +10263,95 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                     }
                 } `
                 -CheckpointWriter { param($s) }
-            if ($selectedAi07State.WorkItemId -ne "TASK-AI-07" -or $selectedAi07State.SessionId -ne "sess-ai07" -or $selectedAi07State.PullRequestNumber -eq 8) {
-                throw "AC-AI-13-23 failed: controller did not park PR #8 and dispatch dependency-ready TASK-AI-07."
+            if ($selectedPr8State.WorkItemId -ne "TASK-FOUND-03" -or $selectedPr8State.PullRequestNumber -ne 8) {
+                throw "AC-AI-13-23 failed: controller did not select existing PR #8 for repair after TASK-AI-13 merge."
+            }
+        }
+
+        # Reconciliation PR Governance: Supervisor identifies, recovers, and automatically processes reconciliation PRs
+        & {
+            $mockRecPr = [PSCustomObject]@{
+                number = 16
+                title = "[TASK-AI-13] Reconcile delivery register after PR #10"
+                headRefName = "fix/task-ai-13-register-reconciliation-999999999999"
+                headRefOid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                baseRefName = "main"
+                headRepository = "vinh05092001/shipde-platform"
+                headRepositoryOwner = [PSCustomObject]@{ login = "vinh05092001" }
+                isDraft = $false
+                isCrossRepository = $false
+                mergeable = "MERGEABLE"
+                mergeStateStatus = "CLEAN"
+                statusCheckRollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                )
+            }
+
+            # 1. Test-ShipDeReconciliationPullRequest discriminator
+            if (-not (Test-ShipDeReconciliationPullRequest -PullRequest $mockRecPr)) {
+                throw "Reconciliation PR test failed: Test-ShipDeReconciliationPullRequest did not recognize reconciliation PR."
+            }
+            if (Test-ShipDeReconciliationPullRequest -PullRequest $validPr) {
+                throw "Reconciliation PR test failed: regular implementation PR was falsely classified as reconciliation PR."
+            }
+
+            # 2. Get-ShipDePrWorkItem and Assert-ShipDeGovernedPullRequest on reconciliation PR
+            $recItem = Get-ShipDePrWorkItem -PullRequest $mockRecPr
+            if ($null -eq $recItem -or -not [bool](Get-ShipDeObjectProperty -Object $recItem -Names @("IsReconciliation", "isReconciliation")) -or $recItem.Branch -ne $mockRecPr.headRefName) {
+                throw "Reconciliation PR test failed: Get-ShipDePrWorkItem did not return valid reconciliation assignment."
+            }
+            Assert-ShipDeGovernedPullRequest -PullRequest $mockRecPr -WorkItemId $recItem.WorkItemId -Branch $recItem.Branch -ExpectedRepository "vinh05092001/shipde-platform"
+
+            # 3. Unattended progression: Initialize-ShipDeSupervisorState automatically selects open reconciliation PR
+            $regAfterAi13 = @(
+                [PSCustomObject]@{ work_item_id = "TASK-AI-12"; status = "BLOCKED_DEPENDENCY" },
+                [PSCustomObject]@{ work_item_id = "TASK-AI-13"; status = "MERGED" }
+            )
+            $autoSelectedRecState = Initialize-ShipDeSupervisorState `
+                -State $null `
+                -DeliveryRegisterRows $regAfterAi13 `
+                -OpenPrResolver { return @($mockRecPr) } `
+                -ActiveWorkersResolver { return @() } `
+                -NextItemResolver { throw "NextItemResolver should not be called when an open reconciliation PR exists!" } `
+                -WorkerStarter { param($item, $prompt) throw "WorkerStarter should not be called for administrative reconciliation PR!" } `
+                -CodexParker { } `
+                -PrWorkItemResolver { param($pr) return Get-ShipDePrWorkItem -PullRequest $pr } `
+                -CheckpointWriter { param($s) }
+            if ($null -eq $autoSelectedRecState -or $autoSelectedRecState.PullRequestNumber -ne 16 -or -not [bool](Get-ShipDeObjectProperty -Object $autoSelectedRecState -Names @("IsReconciliation", "isReconciliation"))) {
+                throw "Reconciliation PR test failed: Initialize-ShipDeSupervisorState did not automatically select open reconciliation PR."
+            }
+
+            # 4. Explicit recovery via -PullRequestNumber 16
+            $recoveredRecState = Initialize-ShipDeSupervisorState `
+                -State $null `
+                -PullRequestNumber 16 `
+                -DeliveryRegisterRows $regAfterAi13 `
+                -OpenPrResolver { return @($mockRecPr) } `
+                -ActiveWorkersResolver { return @() } `
+                -NextItemResolver { throw "NextItemResolver should not be called during explicit PR recovery!" } `
+                -WorkerStarter { param($item, $prompt) throw "WorkerStarter should not be called for administrative PR!" } `
+                -CodexParker { } `
+                -PrWorkItemResolver { param($pr) return Get-ShipDePrWorkItem -PullRequest $pr } `
+                -CheckpointWriter { param($s) }
+            if ($null -eq $recoveredRecState -or $recoveredRecState.PullRequestNumber -ne 16 -or -not [bool](Get-ShipDeObjectProperty -Object $recoveredRecState -Names @("IsReconciliation", "isReconciliation"))) {
+                throw "Reconciliation PR test failed: Initialize-ShipDeSupervisorState failed to recover reconciliation PR by number."
+            }
+
+            # 5. Preflight on reconciliation PR passes with exact-HEAD Codex PASS and CI GREEN
+            $recPreflight = Test-ShipDeMergePreflight `
+                -PullRequest $mockRecPr `
+                -WorkItemId "TASK-AI-13" `
+                -Branch $mockRecPr.headRefName `
+                -Repository "vinh05092001/shipde-platform" `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -FindingsResolver { return "" } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $mockRecPr }
+            if ($recPreflight.Gate -ne "PASS") {
+                throw "Reconciliation PR test failed: Test-ShipDeMergePreflight failed with gate '$($recPreflight.Gate)' ($($recPreflight.Reason))."
             }
         }
 
@@ -10981,8 +11111,8 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             if ($regRow13.status -ne "MERGED" -or $regRow13.merge_commit -ne "3333333333333333333333333333333333333333") {
                 throw "Round 6 Finding 2 failed: DeliveryRegisterRows for TASK-AI-13 was not updated to MERGED with merge commit."
             }
-            if ($nextStateAfterBootstrap.WorkItemId -ne "TASK-AI-07" -or $nextStateAfterBootstrap.SessionId -ne "sess-round6-ai07" -or $nextStateAfterBootstrap.PullRequestNumber -eq 8) {
-                throw "Round 6 Finding 2 failed: supervisor did not park PR #8 and advance to dependency-ready TASK-AI-07 after human bootstrap merge."
+            if ($nextStateAfterBootstrap.WorkItemId -ne "TASK-FOUND-03" -or $nextStateAfterBootstrap.PullRequestNumber -ne 8) {
+                throw "Round 6 Finding 2 failed: supervisor did not select PR #8 for repair after human bootstrap merge."
             }
 
             # Round 7 Finding: PR review comments re-anchored by GitHub to a newer commit_id must NOT match HeadSha if original_commit_id was on an earlier commit
@@ -11697,12 +11827,19 @@ function Initialize-ShipDeSupervisorState {
     $isTaskAi13Merged = Test-ShipDeWorkItemMerged -WorkItemId "TASK-AI-13" -Rows $DeliveryRegisterRows
     $allOpenPrs = @(& $OpenPrResolver)
 
+    $openReconciliationPullRequests = @($allOpenPrs | Where-Object {
+        Test-ShipDeReconciliationPullRequest -PullRequest $_
+    })
+
     $openImplementationPullRequests = @($allOpenPrs | Where-Object {
+        if (Test-ShipDeReconciliationPullRequest -PullRequest $_) {
+            return $false
+        }
         $prItem = Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
         if (-not $prItem) { return $false }
-        # PR #8 / TASK-FOUND-03 is parked and never consumed by automatic selection.
-        # An operator must explicitly target it with -PullRequestNumber in a separate recovery scope.
-        if ([int]$_.number -eq 8 -or $prItem -eq "TASK-FOUND-03") {
+        # Rule AI-MERGE-12 & AC-AI-13-22: During TASK-AI-13 bootstrap (when TASK-AI-13 is not yet MERGED),
+        # PR #8 ([TASK-FOUND-03]) is preserved unchanged and ignored from unmanaged PR collision checks.
+        if (-not $isTaskAi13Merged -and ([int]$_.number -eq 8 -or $prItem -eq "TASK-FOUND-03")) {
             return $false
         }
         return $true
@@ -11743,11 +11880,99 @@ function Initialize-ShipDeSupervisorState {
             NudgeCount = 0
             SessionId = $null
             Harness = $null
+            IsReconciliation = [bool](Get-ShipDeObjectProperty -Object $item -Names @("IsReconciliation", "isReconciliation"))
         }
         $reconstructedState = Normalize-ShipDeSupervisorState -State $reconstructedState
         Write-Host "[SUPERVISOR] Initialized PR-only review for PR #$($selectedPr.number) ($($item.WorkItemId)) on $($item.Branch) without binding an implementation session."
         & $CheckpointWriter $reconstructedState
         return $reconstructedState
+    }
+
+    # Prioritize open administrative reconciliation PRs before selecting next implementation work
+    if ($openReconciliationPullRequests.Count -gt 0) {
+        $selectedReconciliationPr = $openReconciliationPullRequests[0]
+        $recItem = & $PrWorkItemResolver $selectedReconciliationPr
+        if ($recItem) {
+            Write-Host ("[SUPERVISOR] Processing open administrative reconciliation PR #{0} ({1}) on {2}." -f $selectedReconciliationPr.number, $recItem.WorkItemId, $recItem.Branch)
+            Assert-ShipDeGovernedPullRequest -PullRequest $selectedReconciliationPr -WorkItemId $recItem.WorkItemId -Branch $recItem.Branch -ExpectedRepository $Repository
+
+            $headSha = if ($selectedReconciliationPr.headRefOid) { [string]$selectedReconciliationPr.headRefOid } else { "" }
+            if ([string]::IsNullOrWhiteSpace($headSha)) {
+                try {
+                    $headSha = (& gh pr view ([int]$selectedReconciliationPr.number) --repo $Repository --json headRefOid --jq .headRefOid 2>$null)
+                    if ($headSha) { $headSha = $headSha.Trim() }
+                } catch {}
+            }
+
+            $reconstructedState = @{
+                WorkItemId = $recItem.WorkItemId
+                WorkItemPath = $recItem.WorkItemPath
+                Branch = $recItem.Branch
+                Author = $recItem.Author
+                State = "STARTED"
+                PullRequestNumber = [int]$selectedReconciliationPr.number
+                HeadSha = $headSha
+                StartTime = (Get-Date).ToUniversalTime().ToString("o")
+                LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                NudgeCount = 0
+                SessionId = $null
+                Harness = $null
+                IsReconciliation = $true
+            }
+            $reconstructedState = Normalize-ShipDeSupervisorState -State $reconstructedState
+            & $CheckpointWriter $reconstructedState
+            return $reconstructedState
+        }
+    }
+
+    # AC-AI-13-23: Once TASK-AI-13 is MERGED, the supervisor selects PR #8 for repair before preparing TASK-AI-07.
+    if ($isTaskAi13Merged) {
+        $pr8Candidate = @($allOpenPrs | Where-Object {
+            if (Test-ShipDeReconciliationPullRequest -PullRequest $_) { return $false }
+            [int]$_.number -eq 8 -or (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq "TASK-FOUND-03"
+        })
+        if ($pr8Candidate.Count -eq 1) {
+            $otherImplementationPrs = @($openImplementationPullRequests | Where-Object {
+                [int]$_.number -ne 8 -and (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -ne "TASK-FOUND-03"
+            })
+            if ($otherImplementationPrs.Count -gt 0) {
+                $otherSummary = @($otherImplementationPrs | ForEach-Object { "#{0} {1}" -f $_.number, $_.title }) -join "; "
+                throw "Open implementation Pull Request(s) exist alongside PR #8 without a resumable supervisor checkpoint: $otherSummary. Supply -PullRequestNumber to recover one exact Work Item."
+            }
+
+            $selectedPr = $pr8Candidate[0]
+            $item = & $PrWorkItemResolver $selectedPr
+            if ($item) {
+                Write-Host "[SUPERVISOR] TASK-AI-13 is merged. Selecting existing PR #$($selectedPr.number) ($($item.WorkItemId)) for repair before TASK-AI-07."
+                Assert-ShipDeGovernedPullRequest -PullRequest $selectedPr -WorkItemId $item.WorkItemId -Branch $item.Branch -ExpectedRepository $Repository
+
+                $headSha = if ($selectedPr.headRefOid) { [string]$selectedPr.headRefOid } else { "" }
+                if ([string]::IsNullOrWhiteSpace($headSha)) {
+                    try {
+                        $headSha = (& gh pr view ([int]$selectedPr.number) --repo $Repository --json headRefOid --jq .headRefOid 2>$null)
+                        if ($headSha) { $headSha = $headSha.Trim() }
+                    } catch {}
+                }
+
+                $reconstructedState = @{
+                    WorkItemId = $item.WorkItemId
+                    WorkItemPath = $item.WorkItemPath
+                    Branch = $item.Branch
+                    Author = $item.Author
+                    State = "STARTED"
+                    PullRequestNumber = [int]$selectedPr.number
+                    HeadSha = $headSha
+                    StartTime = (Get-Date).ToUniversalTime().ToString("o")
+                    LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                    NudgeCount = 0
+                    SessionId = $null
+                    Harness = $null
+                }
+                $reconstructedState = Normalize-ShipDeSupervisorState -State $reconstructedState
+                & $CheckpointWriter $reconstructedState
+                return $reconstructedState
+            }
+        }
     }
 
     if ($openImplementationPullRequests.Count -gt 0) {
@@ -11848,7 +12073,8 @@ function Invoke-ShipDeSupervise {
         if ($result -eq "READY_FOR_HUMAN_MERGE") {
             Write-Host ("[SUPERVISOR] PR #{0} at {1} has CI GREEN and durable exact-HEAD Codex PASS." -f $state.PullRequestNumber, $state.HeadSha)
             # Check if this is the bootstrap PR TASK-AI-13
-            if ($state.WorkItemId -eq "TASK-AI-13") {
+            $isRecState = [bool](Get-ShipDeObjectProperty -Object $state -Names @("IsReconciliation", "isReconciliation"))
+            if ($state.WorkItemId -eq "TASK-AI-13" -and -not $isRecState) {
                 Write-Host "[SUPERVISOR] Human merge is required for bootstrap PR TASK-AI-13. No automatic merge was attempted."
                 return "READY_FOR_HUMAN_MERGE"
             }
