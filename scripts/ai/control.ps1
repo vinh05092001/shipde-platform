@@ -11458,6 +11458,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 try {
                     Initialize-ShipDeSupervisorState `
                         -State $mergedStateForAdvance `
+                        -OpenPrResolver { return @() } `
                         -RegisterSynchronizer { param($s) throw "simulated durable publish failure before advancement" } `
                         -CheckpointClearer { $advanceTracker.Cleared = $true } `
                         -NextItemResolver { $advanceTracker.Selected = $true; return $null } | Out-Null
