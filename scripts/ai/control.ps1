@@ -1758,7 +1758,10 @@ function Get-ShipDeGitHubExactHeadCodexVerdict {
         }
     }
     foreach ($pComment in $pullCommentItems) {
-        $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "original_commit_id"))
+        $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("original_commit_id", "originalCommitId"))
+        if ([string]::IsNullOrWhiteSpace($commCommit)) {
+            $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "commitId"))
+        }
         if ($commCommit -ine $HeadSha) { continue }
         $commUser = Get-ShipDeObjectProperty -Object $pComment -Names @("user", "author")
         $commLogin = [string](Get-ShipDeObjectProperty -Object $commUser -Names @("login"))
@@ -1901,7 +1904,10 @@ function Get-ShipDeGitHubExactHeadCodexFindings {
             $pullCommentPages = (($rawPullComments -join [Environment]::NewLine) | ConvertFrom-Json)
             foreach ($page in @($pullCommentPages)) {
                 foreach ($pComment in @($page)) {
-                    $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "original_commit_id"))
+                    $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("original_commit_id", "originalCommitId"))
+                    if ([string]::IsNullOrWhiteSpace($commCommit)) {
+                        $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "commitId"))
+                    }
                     if ($commCommit -ine $HeadSha) { continue }
                     $commUser = Get-ShipDeObjectProperty -Object $pComment -Names @("user", "author")
                     $commLogin = [string](Get-ShipDeObjectProperty -Object $commUser -Names @("login"))
@@ -10047,6 +10053,25 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             }
             if ($nextStateAfterBootstrap.PullRequestNumber -ne 8 -or $nextStateAfterBootstrap.WorkItemId -ne "TASK-FOUND-03") {
                 throw "Round 6 Finding 2 failed: Supervisor did not advance to PR #8 (TASK-FOUND-03) after human bootstrap merge, got PR #$($nextStateAfterBootstrap.PullRequestNumber) ($($nextStateAfterBootstrap.WorkItemId))."
+            }
+
+            # Round 7 Finding: PR review comments re-anchored by GitHub to a newer commit_id must NOT match HeadSha if original_commit_id was on an earlier commit
+            $earlierCommitSha = "0dc6bdc87c134c9af094448c3ab9da326519a4d0"
+            $reanchoredPullComment = [PSCustomObject]@{
+                id = 9999999999
+                commit_id = $exactPr10Head
+                original_commit_id = $earlierCommitSha
+                user = [PSCustomObject]@{ login = "chatgpt-codex-connector[bot]" }
+                created_at = "2026-09-08T09:19:40Z"
+                body = "Verify the reconciled head before recording MERGED"
+            }
+            $staleCommentVerdict = Get-ShipDeGitHubExactHeadCodexVerdict `
+                -PullRequestNumber 10 `
+                -HeadSha $exactPr10Head `
+                -Reviews @() `
+                -PullComments @($reanchoredPullComment)
+            if ($null -ne $staleCommentVerdict) {
+                throw "Round 7 Finding failed: Re-anchored pull comment with original_commit_id on earlier commit was falsely attributed to new HeadSha as verdict '$staleCommentVerdict'."
             }
         }
     } finally {
