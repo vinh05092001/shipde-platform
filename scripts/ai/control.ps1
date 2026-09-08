@@ -3019,6 +3019,67 @@ function Clear-ShipDeSupervisorCheckpoint {
     }
 }
 
+function Reset-ShipDeSupervisorHeadState {
+    param(
+        [Parameter(Mandatory = $true)][object]$State,
+        [Parameter(Mandatory = $true)][string]$NewHeadSha
+    )
+
+    $now = (Get-Date).ToUniversalTime().ToString("o")
+
+    if ($State -is [System.Collections.IDictionary]) {
+        $State["HeadSha"] = $NewHeadSha
+        $State["State"] = "STARTED"
+        $State["StartTime"] = $now
+        $State["LastActivityTime"] = $now
+        $State["ExactHeadVerdict"] = $null
+        $State["ReviewRequestCommentId"] = $null
+        $State["LastReviewTriggeredHead"] = $null
+        $State["LastAcknowledgedReviewTriggerHead"] = $null
+        $State["LastReviewTriggeredAt"] = $null
+        $State["NudgeCount"] = 0
+        $State["UnknownPollCount"] = 0
+        $State["RepairCount"] = 0
+        $State["LastCiRepairHead"] = $null
+        $State["LastAcknowledgedCiRepairHead"] = $null
+        $State["LastReviewRepairHead"] = $null
+        $State["LastAcknowledgedReviewRepairHead"] = $null
+        $State["LastRepairDispatchedAt"] = $null
+        $State["PendingDispatch"] = $null
+        $State["CiGate"] = $null
+        $State["MergeIntent"] = $null
+        $State["MergeCommitOid"] = $null
+        $State["ProviderFailure"] = $false
+        $State["RouterFailure"] = $null
+    } else {
+        $State.HeadSha = $NewHeadSha
+        $State.State = "STARTED"
+        $State.StartTime = $now
+        $State.LastActivityTime = $now
+        $State.ExactHeadVerdict = $null
+        $State.ReviewRequestCommentId = $null
+        $State.LastReviewTriggeredHead = $null
+        $State.LastAcknowledgedReviewTriggerHead = $null
+        $State.LastReviewTriggeredAt = $null
+        $State.NudgeCount = 0
+        $State.UnknownPollCount = 0
+        $State.RepairCount = 0
+        $State.LastCiRepairHead = $null
+        $State.LastAcknowledgedCiRepairHead = $null
+        $State.LastReviewRepairHead = $null
+        $State.LastAcknowledgedReviewRepairHead = $null
+        $State.LastRepairDispatchedAt = $null
+        $State.PendingDispatch = $null
+        $State.CiGate = $null
+        if ($State.PSObject.Properties['MergeIntent']) { $State.MergeIntent = $null }
+        if ($State.PSObject.Properties['MergeCommitOid']) { $State.MergeCommitOid = $null }
+        $State.ProviderFailure = $false
+        $State.RouterFailure = $null
+    }
+
+    return $State
+}
+
 function Assert-ShipDeSupervisorLock {
     param(
         [string]$LockFile = $script:SupervisorLockFile,
@@ -3999,7 +4060,10 @@ function Reconcile-ShipDeMergeIntent {
         }
 
         $remoteBase = [string](Get-ShipDeObjectProperty -Object $remotePr -Names @("baseRefName", "BaseRefName"))
-        if (-not [string]::IsNullOrWhiteSpace($remoteBase) -and $remoteBase -ne "main") {
+        if ([string]::IsNullOrWhiteSpace($remoteBase)) {
+            throw "Remote PR #$prNumber is MERGED but baseRefName is missing during reconciliation. Stopping fail-closed."
+        }
+        if ($remoteBase -ne "main") {
             throw "Remote PR #$prNumber was merged into base '$remoteBase', expected 'main'. Stopping fail-closed."
         }
 
@@ -4076,7 +4140,8 @@ function Test-ShipDeMergePreflight {
         [scriptblock]$ReviewThreadsResolver = $null,
         [scriptblock]$FindingsResolver = $null,
         [scriptblock]$PermissionResolver = $null,
-        [scriptblock]$PrViewResolver = $null
+        [scriptblock]$PrViewResolver = $null,
+        [scriptblock]$StatusCheckRollupResolver = $null
     )
 
     # 1. PR Identity & Boundary Validation (AC-AI-13-01, AC-AI-13-02, AC-AI-13-03)
@@ -4130,7 +4195,7 @@ function Test-ShipDeMergePreflight {
         & $PrViewResolver ([int]$PullRequest.number)
     } else {
         Assert-ShipDeCommand gh
-        $rawView = @(& gh pr view ([int]$PullRequest.number) --repo $Repository --json id,number,headRefOid,baseRefName,mergeable,mergeStateStatus,state,isDraft 2>$null)
+        $rawView = @(& gh pr view ([int]$PullRequest.number) --repo $Repository --json id,number,headRefOid,baseRefName,mergeable,mergeStateStatus,state,isDraft,statusCheckRollup 2>$null)
         if ($LASTEXITCODE -ne 0 -or $rawView.Count -eq 0) {
             throw "Failed to query fresh Pull Request view for PR #$($PullRequest.number)."
         }
@@ -4148,7 +4213,7 @@ function Test-ShipDeMergePreflight {
 
     $freshBase = [string](Get-ShipDeObjectProperty -Object $freshPr -Names @("baseRefName", "BaseRefName"))
     if ([string]::IsNullOrWhiteSpace($freshBase)) {
-        $freshBase = $baseRef
+        throw "Fresh Pull Request view is missing baseRefName for PR #$($PullRequest.number); merge is blocked fail-closed."
     }
     if ($freshBase -ne "main") {
         throw "Fresh Pull Request view targets base '$freshBase', expected 'main'; merge is blocked."
@@ -4176,7 +4241,20 @@ function Test-ShipDeMergePreflight {
         }
     }
 
-    $ciGate = Get-ShipDePrGate -PullRequest $PullRequest -RequiredChecks $protection.Checks
+    # Re-query checks before persisting merge intent (P1 Finding 1)
+    $evalPr = if ($null -ne $StatusCheckRollupResolver) {
+        [PSCustomObject]@{
+            number = [int]$PullRequest.number
+            headRefOid = $headSha
+            statusCheckRollup = @(& $StatusCheckRollupResolver ([int]$PullRequest.number) $headSha)
+        }
+    } elseif ($null -ne $freshPr -and $freshPr.PSObject.Properties['statusCheckRollup'] -and $null -ne $freshPr.statusCheckRollup) {
+        $freshPr
+    } else {
+        return @{ Gate = "BLOCKED"; Reason = "Fresh Pull Request view did not include statusCheckRollup for exact HEAD $headSha." }
+    }
+
+    $ciGate = Get-ShipDePrGate -PullRequest $evalPr -RequiredChecks $protection.Checks
     if ($ciGate -ne "GREEN") {
         if ($ciGate -eq "PENDING") {
             return @{ Gate = "WAIT_CI"; Reason = "Required CI checks are pending or in-progress." }
@@ -4299,6 +4377,7 @@ function Invoke-ShipDeAutoMerge {
         [scriptblock]$FindingsResolver = $null,
         [scriptblock]$PermissionResolver = $null,
         [scriptblock]$PrViewResolver = $null,
+        [scriptblock]$StatusCheckRollupResolver = $null,
         [scriptblock]$MergeMutationRunner = $null,
         [scriptblock]$CheckpointWriter = $null,
         [scriptblock]$RegisterSynchronizer = $null
@@ -4332,7 +4411,8 @@ function Invoke-ShipDeAutoMerge {
         -ReviewThreadsResolver $ReviewThreadsResolver `
         -FindingsResolver $FindingsResolver `
         -PermissionResolver $PermissionResolver `
-        -PrViewResolver $PrViewResolver
+        -PrViewResolver $PrViewResolver `
+        -StatusCheckRollupResolver $StatusCheckRollupResolver
 
     if ($preflight.Gate -ne "PASS") {
         $gateState = [string]$preflight.Gate
@@ -4417,7 +4497,12 @@ function Invoke-ShipDeAutoMerge {
     }
 
     if (-not $isMerged) {
-        throw "Merge mutation completed but postcondition verification failed: PR state is not MERGED or mergeCommit.oid is missing."
+        Write-Warning ("[SUPERVISOR] Merge mutation response was incomplete or propagation-delayed. Reconciling remote state...")
+        $reconciledState = Reconcile-ShipDeMergeIntent -State $State -Repository $Repository -PrQueryResolver $PrViewResolver -CheckpointWriter $CheckpointWriter -RegisterSynchronizer $RegisterSynchronizer
+        if ($reconciledState.State -eq "MERGED") {
+            return "MERGED"
+        }
+        throw "Merge mutation completed but postcondition verification failed and remote PR state could not be confirmed as MERGED: PR state is not MERGED or mergeCommit.oid is missing."
     }
 
     Write-Host ("[SUPERVISOR] State: MERGED. PR #{0} merged as commit {1}." -f $pr.number, $mergeCommitOid)
@@ -4473,6 +4558,18 @@ function Invoke-ShipDeSupervisorLoop {
             & $PrResolver ([string]$State.WorkItemId) ([string]$State.Branch)
         } else {
             Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch)
+        }
+
+        if ($null -ne $pullRequest) {
+            $prHead = [string]$pullRequest.headRefOid
+            $State.PullRequestNumber = [int]$pullRequest.number
+            if (-not [string]::IsNullOrWhiteSpace($prHead) -and -not [string]::IsNullOrWhiteSpace([string]$State.HeadSha) -and [string]$State.HeadSha -ne $prHead) {
+                Write-Host ("[SUPERVISOR] PR #{0} head moved from {1} to {2}. Discarding prior-head supervisor state." -f $pullRequest.number, $State.HeadSha, $prHead)
+                $State = Reset-ShipDeSupervisorHeadState -State $State -NewHeadSha $prHead
+                if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+            } elseif ([string]::IsNullOrWhiteSpace([string]$State.HeadSha) -and -not [string]::IsNullOrWhiteSpace($prHead)) {
+                $State.HeadSha = $prHead
+            }
         }
 
         if (-not [string]::IsNullOrWhiteSpace($sessionId) -and $null -eq $session) {
@@ -4670,8 +4767,8 @@ function Invoke-ShipDeSupervisorLoop {
         if ($pullRequest) {
             $headSha = [string]$pullRequest.headRefOid
             if ([string]$State.HeadSha -ne $headSha) {
-                $State.ExactHeadVerdict = $null
-                $State.ReviewRequestCommentId = $null
+                $State = Reset-ShipDeSupervisorHeadState -State $State -NewHeadSha $headSha
+                if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
             }
             $State.PullRequestNumber = [int]$pullRequest.number
             $State.HeadSha = $headSha
@@ -8835,6 +8932,32 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 throw "AC-AI-13-17 failed: Reconcile-ShipDeMergeIntent did not fail-closed when remote PR baseRefName was not main."
             }
 
+            # Reconcile fail-closed on missing or empty baseRefName (P1 Finding 3)
+            $caughtMissingBase = $false
+            try {
+                Reconcile-ShipDeMergeIntent `
+                    -State $stateInterrupted `
+                    -PrQueryResolver {
+                        param($num)
+                        return [PSCustomObject]@{
+                            number = 12
+                            title = "[TASK-AI-07] Cross-harness worker failover"
+                            baseRefName = $null
+                            state = "MERGED"
+                            headRefOid = $validHeadSha
+                            mergeCommit = [PSCustomObject]@{ oid = "reconciled-merge-commit-sha" }
+                        }
+                    } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                if ($_.Exception.Message -match "baseRefName is missing") {
+                    $caughtMissingBase = $true
+                }
+            }
+            if (-not $caughtMissingBase) {
+                throw "P1 Finding 3 failed: Reconcile-ShipDeMergeIntent did not fail closed when remote PR baseRefName was null or missing."
+            }
+
             # Reconcile fail-closed on mismatching title / WorkItemId
             $caughtTitleMismatch = $false
             try {
@@ -8877,6 +9000,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 -ReviewVerdictResolver { return "PASS" } `
                 -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
                 -PermissionResolver { return $true } `
+                -StatusCheckRollupResolver { param($num, $head) return @($validPr.statusCheckRollup) } `
                 -PrViewResolver {
                     param($num)
                     return [PSCustomObject]@{
@@ -8905,6 +9029,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 HeadSha = $validHeadSha
                 PullRequestNumber = 12
             }
+            $timeoutBQueries = @{ Count = 0 }
             $caughtAmbiguous = $false
             try {
                 $null = Invoke-ShipDeAutoMerge `
@@ -8914,7 +9039,12 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                     -ReviewVerdictResolver { return "PASS" } `
                     -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
                     -PermissionResolver { return $true } `
-                    -PrViewResolver { param($num) throw "GitHub status endpoint offline" } `
+                    -PrViewResolver {
+                        param($num)
+                        $timeoutBQueries.Count++
+                        if ($timeoutBQueries.Count -eq 1) { return $validPr }
+                        throw "GitHub status endpoint offline"
+                    } `
                     -MergeMutationRunner { param($id, $head, $method) throw "API connection timeout" } `
                     -CheckpointWriter { param($s) }
             } catch {
@@ -9201,6 +9331,412 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 throw "Initialize-ShipDeSupervisorState failed: expected CORE_COMPLETE when resuming MERGED checkpoint completes core."
             }
         }
+
+        # P1 Finding 1: Re-query statusCheckRollup before persisting merge intent
+        & {
+            $prWithOldChecks = $validPr.PSObject.Copy()
+            $mockProtection = [PSCustomObject]@{
+                strict = $true
+                contexts = @("contract", "application-gate")
+                checks = @(
+                    [PSCustomObject]@{ context = "contract"; app_id = 15368 },
+                    [PSCustomObject]@{ context = "application-gate"; app_id = 15368 }
+                )
+            }
+            # Snapshot was green, but fresh statusCheckRollup query returns pending rerun check
+            $rerunPendingRollup = @(
+                [PSCustomObject]@{ name = "contract"; status = "IN_PROGRESS"; conclusion = $null; startedAt = "2026-09-08T10:00:00Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                [PSCustomObject]@{ name = "application-gate"; status = "COMPLETED"; conclusion = "SUCCESS"; startedAt = "2026-09-08T09:50:00Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+            )
+            $freshPrWithRerun = $validPr.PSObject.Copy()
+            $freshPrWithRerun.statusCheckRollup = $rerunPendingRollup
+
+            $preflightRerunPending = Test-ShipDeMergePreflight `
+                -PullRequest $prWithOldChecks `
+                -WorkItemId "TASK-AI-07" `
+                -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                -BranchProtectionResolver { return $mockProtection } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $freshPrWithRerun }
+
+            if ($preflightRerunPending.Gate -ne "WAIT_CI") {
+                throw "P1 Finding 1 failed: expected WAIT_CI when fresh statusCheckRollup contains in-progress rerun check, got $($preflightRerunPending.Gate)."
+            }
+
+            # Snapshot was green, but fresh statusCheckRollup query returns failed rerun check
+            $rerunFailedRollup = @(
+                [PSCustomObject]@{ name = "contract"; status = "COMPLETED"; conclusion = "FAILURE"; startedAt = "2026-09-08T10:00:00Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                [PSCustomObject]@{ name = "application-gate"; status = "COMPLETED"; conclusion = "SUCCESS"; startedAt = "2026-09-08T09:50:00Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+            )
+            $freshPrWithRerunFailed = $validPr.PSObject.Copy()
+            $freshPrWithRerunFailed.statusCheckRollup = $rerunFailedRollup
+
+            $preflightRerunFailed = Test-ShipDeMergePreflight `
+                -PullRequest $prWithOldChecks `
+                -WorkItemId "TASK-AI-07" `
+                -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                -BranchProtectionResolver { return $mockProtection } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $freshPrWithRerunFailed }
+
+            if ($preflightRerunFailed.Gate -ne "BLOCKED") {
+                throw "P1 Finding 1 failed: expected BLOCKED when fresh statusCheckRollup contains failed rerun check, got $($preflightRerunFailed.Gate)."
+            }
+
+            # Missing exact-head rollup must never fall back to the green snapshot.
+            $freshWithoutRollup = [PSCustomObject]@{
+                id = $validPr.id
+                number = $validPr.number
+                title = $validPr.title
+                headRefName = $validPr.headRefName
+                headRefOid = $validPr.headRefOid
+                baseRefName = "main"
+                isDraft = $false
+                isCrossRepository = $false
+                mergeable = "MERGEABLE"
+                mergeStateStatus = "CLEAN"
+            }
+            $preflightMissingRollup = Test-ShipDeMergePreflight `
+                -PullRequest $prWithOldChecks `
+                -WorkItemId "TASK-AI-07" `
+                -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                -BranchProtectionResolver { return $mockProtection } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $freshWithoutRollup }
+            if ($preflightMissingRollup.Gate -ne "BLOCKED") {
+                throw "P1 Finding 1 failed: missing fresh statusCheckRollup did not fail closed."
+            }
+
+            # The same final snapshot must independently prove the base identity.
+            $freshWithoutBase = $validPr.PSObject.Copy()
+            $freshWithoutBase.baseRefName = $null
+            $caughtFreshMissingBase = $false
+            try {
+                Test-ShipDeMergePreflight `
+                    -PullRequest $prWithOldChecks `
+                    -WorkItemId "TASK-AI-07" `
+                    -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                    -BranchProtectionResolver { return $mockProtection } `
+                    -ReviewVerdictResolver { return "PASS" } `
+                    -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                    -PermissionResolver { return $true } `
+                    -PrViewResolver { return $freshWithoutBase } | Out-Null
+            } catch {
+                if ($_.Exception.Message -match "missing baseRefName") {
+                    $caughtFreshMissingBase = $true
+                }
+            }
+            if (-not $caughtFreshMissingBase) {
+                throw "Fresh-preflight regression failed: missing baseRefName did not fail closed."
+            }
+        }
+
+        # P1 Finding 2: Reconcile incomplete mutation results immediately without throwing or exiting
+        & {
+            $stateIncomplete = @{
+                WorkItemId = "TASK-AI-07"
+                Branch = "feat/task-ai-07-cross-harness-worker-failover"
+                Author = "GEMINI"
+                State = "READY_FOR_HUMAN_MERGE"
+                HeadSha = $validHeadSha
+                PullRequestNumber = 12
+            }
+            # The first query is the exact-head preflight; the second is the
+            # immediate remote reconciliation after GitHub returns no payload.
+            $incompletePrQueries = @{ Count = 0 }
+            $outcomeIncomplete = Invoke-ShipDeAutoMerge `
+                -State $stateIncomplete `
+                -PrResolver { param($w, $b) return $validPr } `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver {
+                    param($num)
+                    $incompletePrQueries.Count++
+                    if ($incompletePrQueries.Count -eq 1) {
+                        return $validPr
+                    }
+                    return [PSCustomObject]@{
+                        number = 12
+                        title = "[TASK-AI-07] Cross-harness worker failover"
+                        baseRefName = "main"
+                        state = "MERGED"
+                        headRefOid = $validHeadSha
+                        mergeable = "MERGEABLE"
+                        mergeStateStatus = "CLEAN"
+                        mergeCommit = [PSCustomObject]@{ oid = "reconciled-from-incomplete-mutation" }
+                    }
+                } `
+                -MergeMutationRunner { param($id, $head, $method) return $null } `
+                -CheckpointWriter { param($s) } `
+                -RegisterSynchronizer { param($s) }
+
+            if ($outcomeIncomplete -ne "MERGED" -or $stateIncomplete.MergeCommitOid -ne "reconciled-from-incomplete-mutation") {
+                throw "P1 Finding 2 failed: incomplete mutation response was not immediately reconciled to MERGED."
+            }
+        }
+
+        # Recovery regression: Stale-HEAD checkpoint reconciliation defect with production review 5140304027 shape
+        & {
+            $exactPr10Head = "4a67c62280c060095640d83a32186d9f70ebd556"
+            $stalePr10Head = "0dc6bdc87c134c9af094448c3ab9da326519a4d0"
+
+            # Production GitHub REST review 5140304027
+            $prodReview5140304027 = [PSCustomObject]@{
+                id = 5140304027
+                node_id = "PRR_kwDOT6-EBs8AAAABMmLQmw"
+                user = [PSCustomObject]@{ login = "chatgpt-codex-connector[bot]"; id = 199175422; type = "Bot" }
+                body = "`n### 💡 Codex Review`n`nHere are some automated review suggestions for this pull request.`n`n**Reviewed commit:** ``4a67c62280``"
+                state = "COMMENTED"
+                submitted_at = "2026-09-08T10:05:22Z"
+                commit_id = $exactPr10Head
+            }
+
+            # Production GitHub REST pull review comments
+            $prodPullComments = @(
+                [PSCustomObject]@{
+                    id = 3956701582
+                    node_id = "PRRC_kwDOT6-EBs7r1nmO"
+                    pull_request_review_id = 5140304027
+                    commit_id = $exactPr10Head
+                    original_commit_id = $exactPr10Head
+                    path = "scripts/ai/control.ps1"
+                    line = 4179
+                    side = "RIGHT"
+                    start_line = $null
+                    start_side = $null
+                    original_line = 4179
+                    created_at = "2026-09-08T10:05:22Z"
+                    updated_at = "2026-09-08T10:05:23Z"
+                    user = [PSCustomObject]@{ login = "chatgpt-codex-connector[bot]"; id = 199175422; type = "Bot" }
+                    body = (@(
+                        '**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Re-query checks before persisting merge intent'
+                        ''
+                        'When a required workflow is rerun after `$PullRequest` was resolved but before the mutation, this evaluates the old `statusCheckRollup`; the fresh PR query does not include checks, while the head can remain unchanged. An administrator permitted to bypass unenforced protection could therefore merge while the newest required attempt is pending or failed. Fetch the exact-head rollup as part of the final preflight rather than reusing the earlier snapshot.'
+                    ) -join "`n")
+                },
+                [PSCustomObject]@{
+                    id = 3956701588
+                    node_id = "PRRC_kwDOT6-EBs7r1nmU"
+                    pull_request_review_id = 5140304027
+                    commit_id = $exactPr10Head
+                    original_commit_id = $exactPr10Head
+                    path = "scripts/ai/control.ps1"
+                    line = 4420
+                    side = "RIGHT"
+                    start_line = 4419
+                    start_side = "RIGHT"
+                    original_line = 4420
+                    original_start_line = 4419
+                    created_at = "2026-09-08T10:05:22Z"
+                    updated_at = "2026-09-08T10:05:23Z"
+                    user = [PSCustomObject]@{ login = "chatgpt-codex-connector[bot]"; id = 199175422; type = "Bot" }
+                    body = (@(
+                        '**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Reconcile incomplete mutation results immediately'
+                        ''
+                        'When GitHub accepts the merge but returns a null or propagation-delayed `pullRequest`/`mergeCommit` payload without raising an API error, this path throws instead of calling `Reconcile-ShipDeMergeIntent`. The supervisor process then exits even though the PR may already be merged, breaking unattended progression until an operator manually restarts it; handle this ambiguous response through the same remote reconciliation path used by the catch block.'
+                    ) -join "`n")
+                },
+                [PSCustomObject]@{
+                    id = 3956701596
+                    node_id = "PRRC_kwDOT6-EBs7r1nmc"
+                    pull_request_review_id = 5140304027
+                    commit_id = $exactPr10Head
+                    original_commit_id = $exactPr10Head
+                    path = "scripts/ai/control.ps1"
+                    line = 4002
+                    side = "RIGHT"
+                    start_line = 4001
+                    start_side = "RIGHT"
+                    original_line = 4002
+                    original_start_line = 4001
+                    created_at = "2026-09-08T10:05:23Z"
+                    updated_at = "2026-09-08T10:05:23Z"
+                    user = [PSCustomObject]@{ login = "chatgpt-codex-connector[bot]"; id = 199175422; type = "Bot" }
+                    body = (@(
+                        '**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Reject absent base identity during reconciliation'
+                        ''
+                        'If the reconciliation response is partial or malformed and omits `baseRefName`, this new check treats the missing identity as acceptable and proceeds to mark the Work Item `MERGED`. Fresh evidence from the current fix is that only a nonempty mismatching base is rejected; require a nonempty `main` value before recording the postcondition.'
+                    ) -join "`n")
+                }
+            )
+
+            $productionVerdict = Get-ShipDeGitHubExactHeadCodexVerdict `
+                -PullRequestNumber 10 `
+                -HeadSha $exactPr10Head `
+                -Reviews @($prodReview5140304027) `
+                -PullComments $prodPullComments
+            if ($productionVerdict -ne "CHANGES_REQUIRED") {
+                throw "Recovery regression failed: production-shaped review 5140304027 did not ingest its 3 inline P1 findings as CHANGES_REQUIRED."
+            }
+
+            # Stale checkpoint carrying head 0dc6bdc87c134c9af094448c3ab9da326519a4d0
+            $staleCheckpoint = @{
+                WorkItemId = "TASK-AI-13"
+                WorkItemPath = "docs/product-spec/work-items/TASK-AI-13.md"
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = "GEMINI"
+                SessionId = "shipde-platform-5"
+                Harness = "agy"
+                State = "BLOCKED"
+                PullRequestNumber = 10
+                HeadSha = $stalePr10Head
+                StartTime = "2026-09-08T08:21:21.2254061Z"
+                LastActivityTime = "2026-09-08T10:11:50.4785478Z"
+                CheckpointTime = "2026-09-08T10:21:49.7158902Z"
+                NudgeCount = 1
+                RepairCount = 5
+                ProviderFailure = $true
+                RouterFailure = [PSCustomObject]@{ Provider = "google"; Model = "gemini-2.5-pro" }
+                ExactHeadVerdict = "CHANGES_REQUIRED"
+                CiGate = "GREEN"
+                LastReviewTriggeredAt = "2026-09-08T09:12:48.4146831Z"
+                LastReviewTriggeredHead = $stalePr10Head
+                LastAcknowledgedReviewTriggerHead = $stalePr10Head
+                LastCiRepairHead = $stalePr10Head
+                LastAcknowledgedCiRepairHead = $stalePr10Head
+                LastReviewRepairHead = $stalePr10Head
+                LastAcknowledgedReviewRepairHead = $stalePr10Head
+                LastRepairDispatchedAt = "2026-09-08T09:15:00.0000000Z"
+                PendingDispatch = @{ Type = "REVIEW_REPAIR"; Head = $stalePr10Head; Time = "2026-09-08T09:12:48Z" }
+                MergeIntent = @{ PullRequestNumber = 10; ExpectedHeadOid = $stalePr10Head; WorkItemId = "TASK-AI-13" }
+                MergeCommitOid = "stale-merge-evidence"
+            }
+
+            # PR 10 updated to exact head 4a67c62280c060095640d83a32186d9f70ebd556
+            $pr10NewHead = [PSCustomObject]@{
+                number = 10
+                title = "[TASK-AI-13] Governed exact-HEAD auto-merge"
+                headRefName = "feat/task-ai-13-governed-auto-merge"
+                baseRefName = "main"
+                headRefOid = $exactPr10Head
+                isDraft = $false
+                isCrossRepository = $false
+                headRepository = "vinh05092001/shipde-platform"
+                headRepositoryOwner = "vinh05092001"
+                statusCheckRollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; startedAt = "2026-09-08T10:00:07Z"; completedAt = "2026-09-08T10:00:20Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; startedAt = "2026-09-08T09:59:40Z"; completedAt = "2026-09-08T09:59:43Z"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                )
+            }
+
+            # Phase 1: Initialize-ShipDeSupervisorState reconciles stale checkpoint to exact head
+            $reconciledInit = Initialize-ShipDeSupervisorState `
+                -State $staleCheckpoint `
+                -OpenPrResolver { return @($pr10NewHead) } `
+                -ActiveWorkersResolver { return @() } `
+                -SessionDetailResolver {
+                    param($sid, $project)
+                    return [PSCustomObject]@{ id = $sid; status = "terminated"; isTerminated = $true; activity = [PSCustomObject]@{ state = "exited" } }
+                } `
+                -NextItemResolver { throw "Should not be called" } `
+                -CheckpointWriter { param($s) }
+
+            if ($reconciledInit.HeadSha -ne $exactPr10Head) {
+                throw "Recovery regression failed: HeadSha was not updated to $exactPr10Head."
+            }
+            if ($reconciledInit.NudgeCount -ne 0) {
+                throw "Recovery regression failed: NudgeCount was not reset to 0."
+            }
+            if ($reconciledInit.RepairCount -ne 0) {
+                throw "Recovery regression failed: RepairCount was not reset to 0."
+            }
+            if ($null -ne $reconciledInit.LastReviewTriggeredAt -or $null -ne $reconciledInit.LastReviewTriggeredHead -or $null -ne $reconciledInit.LastAcknowledgedReviewTriggerHead) {
+                throw "Recovery regression failed: Review trigger markers/timers were not cleared."
+            }
+            if ($null -ne $reconciledInit.LastCiRepairHead -or $null -ne $reconciledInit.LastAcknowledgedCiRepairHead -or $null -ne $reconciledInit.LastReviewRepairHead -or $null -ne $reconciledInit.LastAcknowledgedReviewRepairHead) {
+                throw "Recovery regression failed: Head-scoped repair markers were not cleared."
+            }
+            if ($null -ne $reconciledInit.LastRepairDispatchedAt) {
+                throw "Recovery regression failed: LastRepairDispatchedAt was not cleared."
+            }
+            if ($null -ne $reconciledInit.PendingDispatch) {
+                throw "Recovery regression failed: PendingDispatch was not cleared."
+            }
+            if ($null -ne $reconciledInit.MergeIntent -or $null -ne $reconciledInit.MergeCommitOid) {
+                throw "Recovery regression failed: stale-head merge evidence was not cleared."
+            }
+            if ($reconciledInit.ProviderFailure -or $null -ne $reconciledInit.RouterFailure) {
+                throw "Recovery regression failed: stale-head provider diagnostics were not reset."
+            }
+            if ($null -ne $reconciledInit.SessionId -or $null -ne $reconciledInit.Harness) {
+                throw "Recovery regression failed: Dead session shipde-platform-5 was not cleared."
+            }
+            if ($reconciledInit.State -ne "STARTED") {
+                throw "Recovery regression failed: State was not set to STARTED for PR-only review."
+            }
+
+            # Phase 2: Invoke-ShipDeSupervisorLoop evaluates exact-head review 5140304027 and dispatches REVIEW_REPAIR exactly once
+            $reviewRepairDispatches = [System.Collections.Generic.List[string]]::new()
+            $mockVerdictResolver = {
+                param($prNum, $hSha, $sId)
+                return Get-ShipDeGitHubExactHeadCodexVerdict `
+                    -PullRequestNumber $prNum `
+                    -HeadSha $hSha `
+                    -Reviews @($prodReview5140304027) `
+                    -PullComments $prodPullComments
+            }
+
+            $loopPoll = @{ Count = 0 }
+            $workerStarts = @{ Count = 0 }
+            $loopState = $reconciledInit
+            try {
+                Invoke-ShipDeSupervisorLoop `
+                    -State $loopState `
+                    -PrResolver { param($w, $b) return $pr10NewHead } `
+                    -VerdictResolver $mockVerdictResolver `
+                    -SessionsResolver { param($project) return @() } `
+                    -SessionDetailResolver {
+                        param($sid, $project)
+                        return [PSCustomObject]@{ id = $sid; harness = "agy"; status = "working"; isTerminated = $false; activity = [PSCustomObject]@{ state = "active" } }
+                    } `
+                    -WorkerStarter {
+                        param($item, $prompt)
+                        $workerStarts.Count++
+                        return [PSCustomObject]@{ SessionId = "shipde-platform-regression"; Harness = "agy" }
+                    } `
+                    -MessageSender {
+                        param($sid, $msg)
+                        $reviewRepairDispatches.Add($msg)
+                        return $true
+                    } `
+                    -SleepHandler {
+                        param($interval)
+                        $loopPoll.Count++
+                        if ($loopPoll.Count -ge 2) {
+                            throw "STOP_REGRESSION_LOOP"
+                        }
+                    } `
+                    -CheckpointWriter { param($s) } | Out-Null
+            } catch {
+                if ($_.Exception.Message -ne "STOP_REGRESSION_LOOP") {
+                    throw
+                }
+            }
+
+            if ($loopState.ExactHeadVerdict -ne "CHANGES_REQUIRED") {
+                throw "Recovery regression failed: expected ExactHeadVerdict CHANGES_REQUIRED, got $($loopState.ExactHeadVerdict)."
+            }
+            if ($loopState.RepairCount -ne 1) {
+                throw "Recovery regression failed: expected RepairCount to be 1 after fresh budget dispatch, got $($loopState.RepairCount)."
+            }
+            if ($loopState.LastAcknowledgedReviewRepairHead -ne $exactPr10Head) {
+                throw "Recovery regression failed: LastAcknowledgedReviewRepairHead was not set to $exactPr10Head."
+            }
+            if ($reviewRepairDispatches.Count -ne 1) {
+                throw "Recovery regression failed: expected exactly 1 REVIEW_REPAIR dispatch across 2 polls, got $($reviewRepairDispatches.Count)."
+            }
+            if ($workerStarts.Count -ne 1) {
+                throw "Recovery regression failed: expected exactly 1 synthetic repair worker start, got $($workerStarts.Count)."
+            }
+        }
     } finally {
         $script:HandoffRoot = $origHandoffRoot
         $script:SupervisorStateFile = $origSupervisorStateFile
@@ -9298,7 +9834,17 @@ function Initialize-ShipDeSupervisorState {
                 Get-ShipDeAoSessionById -SessionId $sessionId -Project "shipde-platform"
             }
 
+            $isSessionActive = $false
             if ($null -ne $sessDetail) {
+                $sessTerm = [bool](Get-ShipDeObjectProperty -Object $sessDetail -Names @("isTerminated", "is_terminated"))
+                $sessStatus = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("status", "state"))
+                $actState = Get-ShipDeSessionActivityState -Session $sessDetail
+                if (-not $sessTerm -and $sessStatus -notin @("terminated", "exited", "failed", "completed", "stopped") -and $actState -notin @("STOPPED", "FAILED", "COMPLETED", "MISSING")) {
+                    $isSessionActive = $true
+                }
+            }
+
+            if ($isSessionActive) {
                 Write-Host "[SUPERVISOR] Resuming $workItemId in AO session $sessionId."
                 return $State
             }
@@ -9313,6 +9859,15 @@ function Initialize-ShipDeSupervisorState {
             if ($matchingPrs.Count -eq 1 -and -not [bool]$matchingPrs[0].isDraft) {
                 $matchedPr = $matchingPrs[0]
                 Assert-ShipDeGovernedPullRequest -PullRequest $matchedPr -WorkItemId $workItemId -Branch $branch -ExpectedRepository $Repository
+
+                $matchedHead = [string]$matchedPr.headRefOid
+                if (-not [string]::IsNullOrWhiteSpace($matchedHead) -and -not [string]::IsNullOrWhiteSpace([string]$State["HeadSha"]) -and [string]$State["HeadSha"] -ne $matchedHead) {
+                    Write-Host ("[SUPERVISOR] PR #{0} head moved from {1} to {2}. Discarding prior-head supervisor state." -f $matchedPr.number, $State["HeadSha"], $matchedHead)
+                    $State = Reset-ShipDeSupervisorHeadState -State $State -NewHeadSha $matchedHead
+                    & $CheckpointWriter $State
+                } elseif ([string]::IsNullOrWhiteSpace([string]$State["HeadSha"]) -and -not [string]::IsNullOrWhiteSpace($matchedHead)) {
+                    $State["HeadSha"] = $matchedHead
+                }
 
                 $hasPendingDispatch = ($null -ne $State["PendingDispatch"])
                 $ciFailing = $false
@@ -9353,6 +9908,15 @@ function Initialize-ShipDeSupervisorState {
                 [string]$_.headRefName -ceq $branch
             })
             if ($matchingPrs.Count -eq 1) {
+                $matchedPr = $matchingPrs[0]
+                $matchedHead = [string]$matchedPr.headRefOid
+                if (-not [string]::IsNullOrWhiteSpace($matchedHead) -and -not [string]::IsNullOrWhiteSpace([string]$State["HeadSha"]) -and [string]$State["HeadSha"] -ne $matchedHead) {
+                    Write-Host ("[SUPERVISOR] PR #{0} head moved from {1} to {2}. Discarding prior-head supervisor state." -f $matchedPr.number, $State["HeadSha"], $matchedHead)
+                    $State = Reset-ShipDeSupervisorHeadState -State $State -NewHeadSha $matchedHead
+                    & $CheckpointWriter $State
+                } elseif ([string]::IsNullOrWhiteSpace([string]$State["HeadSha"]) -and -not [string]::IsNullOrWhiteSpace($matchedHead)) {
+                    $State["HeadSha"] = $matchedHead
+                }
                 Write-Host "[SUPERVISOR] Resuming PR-only supervisor state for PR #$($State['PullRequestNumber']) ($workItemId)."
                 return $State
             } else {
