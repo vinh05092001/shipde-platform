@@ -4183,129 +4183,6 @@ function Reconcile-ShipDeMergeIntent {
     throw "Remote PR #$prNumber is in unexpected state '$remoteState' during merge intent reconciliation. Stopping fail-closed."
 }
 
-function Get-ShipDeExactHeadCheckRollup {
-    param(
-        [Parameter(Mandatory = $true)][string]$HeadSha,
-        [string]$Repository = "vinh05092001/shipde-platform",
-        [scriptblock]$GraphQLInvoker = $null
-    )
-
-    $repoParts = $Repository -split '/'
-    if ($repoParts.Count -ne 2) {
-        throw "Repository must use the owner/name format before querying check rollup."
-    }
-    $owner = $repoParts[0]
-    $repoName = $repoParts[1]
-
-    $contextsQuery = @'
-query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    object(oid: $oid) {
-      ... on Commit {
-        statusCheckRollup {
-          contexts(first: 100, after: $after) {
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-            nodes {
-              __typename
-              ... on CheckRun {
-                name
-                status
-                conclusion
-                startedAt
-                completedAt
-                detailsUrl
-                checkSuite {
-                  app {
-                    databaseId
-                    slug
-                    name
-                  }
-                  workflowRun {
-                    workflow {
-                      name
-                    }
-                  }
-                }
-              }
-              ... on StatusContext {
-                context
-                state
-                targetUrl
-                createdAt
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-'@
-
-    $checks = [System.Collections.Generic.List[object]]::new()
-    $hasMoreContexts = $true
-    $contextsCursor = $null
-    while ($hasMoreContexts) {
-        $ctxArgs = @(
-            "api", "graphql",
-            "-F", "owner=$owner",
-            "-F", "name=$repoName",
-            "-F", "oid=$HeadSha"
-        )
-        if (-not [string]::IsNullOrWhiteSpace($contextsCursor)) {
-            $ctxArgs += @("-F", "after=$contextsCursor")
-        }
-        $ctxArgs += @("-f", "query=$contextsQuery")
-
-        $raw = if ($null -ne $GraphQLInvoker) {
-            & $GraphQLInvoker $ctxArgs
-        } else {
-            Assert-ShipDeCommand gh
-            @(& gh @ctxArgs 2>$null)
-        }
-        if ($LASTEXITCODE -ne 0 -or ($null -eq $raw -or @($raw).Count -eq 0)) {
-            throw "Cannot read statusCheckRollup for exact HEAD '$HeadSha' via GraphQL API."
-        }
-        $ctxPage = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
-        $commitObj = $ctxPage.data.repository.object
-        if ($commitObj -and
-            $commitObj.PSObject.Properties['statusCheckRollup'] -and
-            $commitObj.statusCheckRollup -and
-            $commitObj.statusCheckRollup.PSObject.Properties['contexts'] -and
-            $commitObj.statusCheckRollup.contexts) {
-            $contextsConn = $commitObj.statusCheckRollup.contexts
-            if ($contextsConn.nodes) {
-                foreach ($ctx in @($contextsConn.nodes)) {
-                    if ($ctx) {
-                        $wfName = $null
-                        try {
-                            if ($ctx.checkSuite -and
-                                $ctx.checkSuite.workflowRun -and
-                                $ctx.checkSuite.workflowRun.workflow -and
-                                $ctx.checkSuite.workflowRun.workflow.name) {
-                                $wfName = [string]$ctx.checkSuite.workflowRun.workflow.name
-                            }
-                        } catch {}
-                        if (-not [string]::IsNullOrWhiteSpace($wfName) -and -not $ctx.PSObject.Properties['workflowName']) {
-                            $ctx | Add-Member -NotePropertyName "workflowName" -NotePropertyValue $wfName -Force
-                        }
-                        $checks.Add($ctx)
-                    }
-                }
-            }
-            $hasMoreContexts = [bool]($contextsConn.pageInfo.hasNextPage)
-            $contextsCursor = [string]($contextsConn.pageInfo.endCursor)
-        } else {
-            $hasMoreContexts = $false
-        }
-    }
-
-    return $checks.ToArray()
-}
-
 function Test-ShipDeMergePreflight {
     param(
         [Parameter(Mandatory = $true)][object]$PullRequest,
@@ -4427,18 +4304,10 @@ function Test-ShipDeMergePreflight {
             headRefOid = $headSha
             statusCheckRollup = @(& $StatusCheckRollupResolver ([int]$PullRequest.number) $headSha)
         }
-    } elseif ($null -ne $freshPr -and $freshPr.PSObject.Properties['statusCheckRollup'] -and $null -ne $freshPr.statusCheckRollup -and @($freshPr.statusCheckRollup).Count -gt 0 -and $null -ne (Get-ShipDeCheckAppId -Check $freshPr.statusCheckRollup[0])) {
+    } elseif ($null -ne $freshPr -and $freshPr.PSObject.Properties['statusCheckRollup'] -and $null -ne $freshPr.statusCheckRollup) {
         $freshPr
     } else {
-        $rollupChecks = Get-ShipDeExactHeadCheckRollup -HeadSha $headSha -Repository $Repository
-        if ($null -eq $rollupChecks -or @($rollupChecks).Count -eq 0) {
-            return @{ Gate = "BLOCKED"; Reason = "Fresh Pull Request view did not include statusCheckRollup for exact HEAD $headSha." }
-        }
-        [PSCustomObject]@{
-            number = [int]$PullRequest.number
-            headRefOid = $headSha
-            statusCheckRollup = $rollupChecks
-        }
+        return @{ Gate = "BLOCKED"; Reason = "Fresh Pull Request view did not include statusCheckRollup for exact HEAD $headSha." }
     }
 
     $ciGate = Get-ShipDePrGate -PullRequest $evalPr -RequiredChecks $protection.Checks
