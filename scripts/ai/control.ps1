@@ -732,14 +732,14 @@ function Get-ShipDeCheckAppId {
     param([Parameter(Mandatory = $true)][object]$Check)
 
     $idVal = Get-ShipDeObjectProperty -Object $Check -Names @("appId", "app_id")
-    if ($null -ne $idVal -and -not [string]::IsNullOrWhiteSpace([string]$idVal)) {
+    if ($null -ne $idVal -and [string]$idVal -match '^\d+$') {
         return [int]$idVal
     }
 
     try {
         if ($Check.checkSuite -and $Check.checkSuite.app) {
             $suiteAppId = Get-ShipDeObjectProperty -Object $Check.checkSuite.app -Names @("databaseId", "id", "appId", "app_id")
-            if ($null -ne $suiteAppId -and -not [string]::IsNullOrWhiteSpace([string]$suiteAppId)) {
+            if ($null -ne $suiteAppId -and [string]$suiteAppId -match '^\d+$') {
                 return [int]$suiteAppId
             }
         }
@@ -748,16 +748,11 @@ function Get-ShipDeCheckAppId {
     try {
         if ($Check.app) {
             $appId = Get-ShipDeObjectProperty -Object $Check.app -Names @("databaseId", "id", "appId", "app_id")
-            if ($null -ne $appId -and -not [string]::IsNullOrWhiteSpace([string]$appId)) {
+            if ($null -ne $appId -and [string]$appId -match '^\d+$') {
                 return [int]$appId
             }
         }
     } catch {}
-
-    $prov = Get-ShipDeCheckProvider -Check $Check
-    if ($prov.StartsWith($script:RequiredPrCheckProviderPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return 15368
-    }
 
     return $null
 }
@@ -4048,6 +4043,7 @@ function Reconcile-ShipDeMergeIntent {
         [scriptblock]$RegisterSynchronizer = $null
     )
 
+    $hasIntent = ($null -ne $State.MergeIntent)
     $intent = $State.MergeIntent
     if ($null -eq $intent) {
         $prNum = [int](Get-ShipDeObjectProperty -Object $State -Names @("PullRequestNumber", "pullRequestNumber"))
@@ -4071,10 +4067,17 @@ function Reconcile-ShipDeMergeIntent {
     if ([string]::IsNullOrWhiteSpace($expectedHead)) {
         throw "Persisted merge intent for PR #$prNumber is missing expectedHeadOid. Stopping fail-closed."
     }
+    if ([string]::IsNullOrWhiteSpace($workItemId)) {
+        throw "Persisted merge intent for PR #$prNumber is missing WorkItemId. Stopping fail-closed."
+    }
 
-    Write-Host ("[SUPERVISOR] State: MERGE_RECONCILING. Reconciling pending merge intent for PR #{0} ({1}) at expected head {2}..." -f $prNumber, $workItemId, $expectedHead)
-    $State.State = "MERGE_RECONCILING"
-    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+    if ($hasIntent) {
+        Write-Host ("[SUPERVISOR] State: MERGE_RECONCILING. Reconciling pending merge intent for PR #{0} ({1}) at expected head {2}..." -f $prNumber, $workItemId, $expectedHead)
+        if ($State -is [System.Collections.IDictionary]) { $State["State"] = "MERGE_RECONCILING" } else { $State.State = "MERGE_RECONCILING" }
+        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+    } else {
+        Write-Host ("[SUPERVISOR] PR #{0} ({1}) is no longer open. Reconciling remote merge state for head {2}..." -f $prNumber, $workItemId, $expectedHead)
+    }
 
     $remotePr = if ($null -ne $PrQueryResolver) {
         & $PrQueryResolver $prNumber
@@ -4111,21 +4114,16 @@ function Reconcile-ShipDeMergeIntent {
         if ([string]::IsNullOrWhiteSpace($remoteHead)) {
             throw "Remote PR #$prNumber is MERGED but headRefOid is missing during reconciliation. Stopping fail-closed."
         }
-        if (-not [string]::IsNullOrWhiteSpace($expectedHead) -and $remoteHead -ne $expectedHead) {
+        if ($remoteHead -ne $expectedHead) {
             throw "Remote PR #$prNumber was merged at head '$remoteHead', which does not match expected head '$expectedHead' in persisted merge intent. Stopping fail-closed."
         }
 
         $remoteTitle = [string](Get-ShipDeObjectProperty -Object $remotePr -Names @("title", "Title"))
-        if (-not [string]::IsNullOrWhiteSpace($remoteTitle)) {
-            $remoteTitleWorkItemId = Get-ShipDeWorkItemIdFromTitle -Title $remoteTitle
-            if (-not [string]::IsNullOrWhiteSpace($workItemId) -and $remoteTitleWorkItemId -ne $workItemId) {
-                throw "Remote PR #$prNumber title '$remoteTitle' does not match expected Work Item '$workItemId' during reconciliation. Stopping fail-closed."
-            }
-        } elseif (-not [string]::IsNullOrWhiteSpace($workItemId)) {
-            $remoteWorkItem = [string](Get-ShipDeObjectProperty -Object $remotePr -Names @("workItemId", "WorkItemId"))
-            if (-not [string]::IsNullOrWhiteSpace($remoteWorkItem) -and $remoteWorkItem -ne $workItemId) {
-                throw "Remote PR #$prNumber Work Item '$remoteWorkItem' does not match expected Work Item '$workItemId' during reconciliation. Stopping fail-closed."
-            }
+        $remoteTitleWorkItemId = if (-not [string]::IsNullOrWhiteSpace($remoteTitle)) { Get-ShipDeWorkItemIdFromTitle -Title $remoteTitle } else { "" }
+        $remoteWorkItem = [string](Get-ShipDeObjectProperty -Object $remotePr -Names @("workItemId", "WorkItemId"))
+        $observedWorkItemId = if (-not [string]::IsNullOrWhiteSpace($remoteTitleWorkItemId)) { $remoteTitleWorkItemId } else { $remoteWorkItem }
+        if ([string]::IsNullOrWhiteSpace($observedWorkItemId) -or $observedWorkItemId -ne $workItemId) {
+            throw "Remote PR #$prNumber Work Item identity '$observedWorkItemId' does not match expected Work Item '$workItemId' during reconciliation. Stopping fail-closed."
         }
 
         $mergeCommitOid = [string](Get-ShipDeObjectProperty -Object $remotePr.mergeCommit -Names @("oid", "id"))
@@ -4134,9 +4132,15 @@ function Reconcile-ShipDeMergeIntent {
         }
 
         Write-Host ("[SUPERVISOR] State: MERGED. PR #{0} confirmed MERGED remotely with merge commit {1}." -f $prNumber, $mergeCommitOid)
-        $State.State = "MERGED"
-        $State.MergeCommitOid = $mergeCommitOid
-        $State.MergeIntent = $null
+        if ($State -is [System.Collections.IDictionary]) {
+            $State["State"] = "MERGED"
+            $State["MergeCommitOid"] = $mergeCommitOid
+            $State["MergeIntent"] = $null
+        } else {
+            $State.State = "MERGED"
+            $State.MergeCommitOid = $mergeCommitOid
+            $State.MergeIntent = $null
+        }
         if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
         if ($null -ne $RegisterSynchronizer) {
             & $RegisterSynchronizer $State
@@ -4150,21 +4154,156 @@ function Reconcile-ShipDeMergeIntent {
         $curHead = [string]$remotePr.headRefOid
         if ($curHead -ne $expectedHead) {
             Write-Host ("[SUPERVISOR] Remote PR #{0} head changed from {1} to {2}. Discarding stale merge intent." -f $prNumber, $expectedHead, $curHead)
-            $State.MergeIntent = $null
-            $State.State = "STARTED"
-            $State.HeadSha = $curHead
-            $State.ExactHeadVerdict = $null
+            if ($State -is [System.Collections.IDictionary]) {
+                $State["MergeIntent"] = $null
+                $State["State"] = "STARTED"
+                $State["HeadSha"] = $curHead
+                $State["ExactHeadVerdict"] = $null
+            } else {
+                $State.MergeIntent = $null
+                $State.State = "STARTED"
+                $State.HeadSha = $curHead
+                $State.ExactHeadVerdict = $null
+            }
             if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
             return $State
         }
         Write-Host ("[SUPERVISOR] Remote PR #{0} is still OPEN at head {1}. Re-evaluating gates before attempting merge." -f $prNumber, $expectedHead)
-        $State.MergeIntent = $null
-        $State.State = "READY_FOR_HUMAN_MERGE"
+        if ($State -is [System.Collections.IDictionary]) {
+            $State["MergeIntent"] = $null
+            $State["State"] = "READY_FOR_HUMAN_MERGE"
+        } else {
+            $State.MergeIntent = $null
+            $State.State = "READY_FOR_HUMAN_MERGE"
+        }
         if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
         return $State
     }
 
     throw "Remote PR #$prNumber is in unexpected state '$remoteState' during merge intent reconciliation. Stopping fail-closed."
+}
+
+function Get-ShipDeExactHeadCheckRollup {
+    param(
+        [Parameter(Mandatory = $true)][string]$HeadSha,
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [scriptblock]$GraphQLInvoker = $null
+    )
+
+    $repoParts = $Repository -split '/'
+    if ($repoParts.Count -ne 2) {
+        throw "Repository must use the owner/name format before querying check rollup."
+    }
+    $owner = $repoParts[0]
+    $repoName = $repoParts[1]
+
+    $contextsQuery = @'
+query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    object(oid: $oid) {
+      ... on Commit {
+        statusCheckRollup {
+          contexts(first: 100, after: $after) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              __typename
+              ... on CheckRun {
+                name
+                status
+                conclusion
+                startedAt
+                completedAt
+                detailsUrl
+                checkSuite {
+                  app {
+                    databaseId
+                    slug
+                    name
+                  }
+                  workflowRun {
+                    workflow {
+                      name
+                    }
+                  }
+                }
+              }
+              ... on StatusContext {
+                context
+                state
+                targetUrl
+                createdAt
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'@
+
+    $checks = [System.Collections.Generic.List[object]]::new()
+    $hasMoreContexts = $true
+    $contextsCursor = $null
+    while ($hasMoreContexts) {
+        $ctxArgs = @(
+            "api", "graphql",
+            "-F", "owner=$owner",
+            "-F", "name=$repoName",
+            "-F", "oid=$HeadSha"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($contextsCursor)) {
+            $ctxArgs += @("-F", "after=$contextsCursor")
+        }
+        $ctxArgs += @("-f", "query=$contextsQuery")
+
+        $raw = if ($null -ne $GraphQLInvoker) {
+            & $GraphQLInvoker $ctxArgs
+        } else {
+            Assert-ShipDeCommand gh
+            @(& gh @ctxArgs 2>$null)
+        }
+        if ($LASTEXITCODE -ne 0 -or ($null -eq $raw -or @($raw).Count -eq 0)) {
+            throw "Cannot read statusCheckRollup for exact HEAD '$HeadSha' via GraphQL API."
+        }
+        $ctxPage = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+        $commitObj = $ctxPage.data.repository.object
+        if ($commitObj -and
+            $commitObj.PSObject.Properties['statusCheckRollup'] -and
+            $commitObj.statusCheckRollup -and
+            $commitObj.statusCheckRollup.PSObject.Properties['contexts'] -and
+            $commitObj.statusCheckRollup.contexts) {
+            $contextsConn = $commitObj.statusCheckRollup.contexts
+            if ($contextsConn.nodes) {
+                foreach ($ctx in @($contextsConn.nodes)) {
+                    if ($ctx) {
+                        $wfName = $null
+                        try {
+                            if ($ctx.checkSuite -and
+                                $ctx.checkSuite.workflowRun -and
+                                $ctx.checkSuite.workflowRun.workflow -and
+                                $ctx.checkSuite.workflowRun.workflow.name) {
+                                $wfName = [string]$ctx.checkSuite.workflowRun.workflow.name
+                            }
+                        } catch {}
+                        if (-not [string]::IsNullOrWhiteSpace($wfName) -and -not $ctx.PSObject.Properties['workflowName']) {
+                            $ctx | Add-Member -NotePropertyName "workflowName" -NotePropertyValue $wfName -Force
+                        }
+                        $checks.Add($ctx)
+                    }
+                }
+            }
+            $hasMoreContexts = [bool]($contextsConn.pageInfo.hasNextPage)
+            $contextsCursor = [string]($contextsConn.pageInfo.endCursor)
+        } else {
+            $hasMoreContexts = $false
+        }
+    }
+
+    return $checks.ToArray()
 }
 
 function Test-ShipDeMergePreflight {
@@ -4288,10 +4427,18 @@ function Test-ShipDeMergePreflight {
             headRefOid = $headSha
             statusCheckRollup = @(& $StatusCheckRollupResolver ([int]$PullRequest.number) $headSha)
         }
-    } elseif ($null -ne $freshPr -and $freshPr.PSObject.Properties['statusCheckRollup'] -and $null -ne $freshPr.statusCheckRollup) {
+    } elseif ($null -ne $freshPr -and $freshPr.PSObject.Properties['statusCheckRollup'] -and $null -ne $freshPr.statusCheckRollup -and @($freshPr.statusCheckRollup).Count -gt 0 -and $null -ne (Get-ShipDeCheckAppId -Check $freshPr.statusCheckRollup[0])) {
         $freshPr
     } else {
-        return @{ Gate = "BLOCKED"; Reason = "Fresh Pull Request view did not include statusCheckRollup for exact HEAD $headSha." }
+        $rollupChecks = Get-ShipDeExactHeadCheckRollup -HeadSha $headSha -Repository $Repository
+        if ($null -eq $rollupChecks -or @($rollupChecks).Count -eq 0) {
+            return @{ Gate = "BLOCKED"; Reason = "Fresh Pull Request view did not include statusCheckRollup for exact HEAD $headSha." }
+        }
+        [PSCustomObject]@{
+            number = [int]$PullRequest.number
+            headRefOid = $headSha
+            statusCheckRollup = $rollupChecks
+        }
     }
 
     $ciGate = Get-ShipDePrGate -PullRequest $evalPr -RequiredChecks $protection.Checks
@@ -4386,6 +4533,22 @@ function Sync-ShipDeRegisterAfterAutoMerge {
         }
     }
 
+    $isMainWorkspace = $false
+    try {
+        $resolvedReg = (Resolve-Path -LiteralPath $fullRegisterPath -ErrorAction Stop).Path
+        $mainPath = if (-not [string]::IsNullOrWhiteSpace($script:Paths.Main) -and (Test-Path -LiteralPath $script:Paths.Main)) {
+            (Resolve-Path -LiteralPath $script:Paths.Main -ErrorAction SilentlyContinue).Path
+        } else { "" }
+        if (-not [string]::IsNullOrWhiteSpace($mainPath) -and $resolvedReg.StartsWith($mainPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $isMainWorkspace = $true
+        }
+        $regDir = Split-Path -Parent $resolvedReg
+        $currentBranch = (& git -C $regDir rev-parse --abbrev-ref HEAD 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $currentBranch.Trim() -eq "main") {
+            $isMainWorkspace = $true
+        }
+    } catch {}
+
     $rawRows = @(Import-Csv -Path $fullRegisterPath)
     $workItemId = [string](Get-ShipDeObjectProperty -Object $State -Names @("WorkItemId", "workItemId"))
     $prNumber = [int](Get-ShipDeObjectProperty -Object $State -Names @("PullRequestNumber", "pullRequestNumber", "PrNumber", "prNumber"))
@@ -4400,8 +4563,13 @@ function Sync-ShipDeRegisterAfterAutoMerge {
         if (-not [string]::IsNullOrWhiteSpace($mergeCommit)) {
             $row.merge_commit = $mergeCommit
         }
-        $rawRows | Export-Csv -Path $fullRegisterPath -NoTypeInformation -Encoding UTF8
-        Write-Host ("[SUPERVISOR] Delivery register updated: {0} marked MERGED (PR #{1}, Commit {2})." -f $workItemId, $prNumber, $mergeCommit)
+        if ($isMainWorkspace) {
+            Write-Warning "Register synchronization detected merge evidence for $workItemId, but protected main worktree is not edited directly to prevent dirty state."
+            Write-Host "Stage this reconciliation through a governed follow-up branch/PR instead."
+        } else {
+            $rawRows | Export-Csv -Path $fullRegisterPath -NoTypeInformation -Encoding UTF8
+            Write-Host ("[SUPERVISOR] Delivery register updated: {0} marked MERGED (PR #{1}, Commit {2})." -f $workItemId, $prNumber, $mergeCommit)
+        }
     }
 }
 
@@ -9808,6 +9976,209 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             if ($workerStarts.Count -ne 1) {
                 throw "Recovery regression failed: expected exactly 1 synthetic repair worker start, got $($workerStarts.Count)."
             }
+
+            # Round 6 Finding 4: Get-ShipDeCheckAppId rejects checks lacking genuine numeric App ID
+            $checkWithSyntheticPrefix = [PSCustomObject]@{
+                name = "contract"
+                workflowName = "CI"
+                checkSuite = [PSCustomObject]@{
+                    app = [PSCustomObject]@{
+                        slug = "github-actions"
+                        name = "GitHub Actions"
+                    }
+                }
+            }
+            $syntheticAppId = Get-ShipDeCheckAppId -Check $checkWithSyntheticPrefix
+            if ($null -ne $syntheticAppId) {
+                throw "Round 6 Finding 4 failed: expected `$null when check lacks numeric App ID, got $syntheticAppId"
+            }
+
+            $checkWithNumericAppId = [PSCustomObject]@{
+                name = "contract"
+                workflowName = "CI"
+                checkSuite = [PSCustomObject]@{
+                    app = [PSCustomObject]@{
+                        databaseId = 15368
+                        slug = "github-actions"
+                        name = "GitHub Actions"
+                    }
+                }
+            }
+            $numericAppId = Get-ShipDeCheckAppId -Check $checkWithNumericAppId
+            if ($numericAppId -ne 15368) {
+                throw "Round 6 Finding 4 failed: expected 15368, got $numericAppId"
+            }
+
+            # Round 6 Finding 1: Reconcile-ShipDeMergeIntent strictly validates head, base, WorkItem, number, merge commit
+            $validIntentState = @{
+                State = "MERGE_IN_PROGRESS"
+                WorkItemId = "TASK-AI-13"
+                PullRequestNumber = 10
+                HeadSha = "4a67c62280c060095640d83a32186d9f70ebd556"
+                MergeIntent = @{
+                    PullRequestNumber = 10
+                    ExpectedHeadOid = "4a67c62280c060095640d83a32186d9f70ebd556"
+                    WorkItemId = "TASK-AI-13"
+                }
+            }
+
+            # Subcase A: Remote head mismatch fails closed
+            $mismatchedHeadPr = [PSCustomObject]@{
+                number = 10
+                title = "[TASK-AI-13] Governed exact-HEAD auto-merge"
+                state = "MERGED"
+                baseRefName = "main"
+                headRefOid = "0000000000000000000000000000000000000000"
+                mergeCommit = [PSCustomObject]@{ oid = "1111111111111111111111111111111111111111" }
+            }
+            $caughtHeadMismatch = $false
+            try {
+                Reconcile-ShipDeMergeIntent `
+                    -State $validIntentState `
+                    -PrQueryResolver { param($n) return $mismatchedHeadPr } `
+                    -CheckpointWriter { param($s) } `
+                    -RegisterSynchronizer { param($s) }
+            } catch {
+                if ($_.Exception.Message -match "does not match expected head") {
+                    $caughtHeadMismatch = $true
+                }
+            }
+            if (-not $caughtHeadMismatch) {
+                throw "Round 6 Finding 1 failed: Reconcile-ShipDeMergeIntent accepted mismatched remote headRefOid."
+            }
+
+            # Subcase B: Remote WorkItemId mismatch fails closed
+            $mismatchedItemPr = [PSCustomObject]@{
+                number = 10
+                title = "[TASK-AI-99] Unexpected item"
+                state = "MERGED"
+                baseRefName = "main"
+                headRefOid = "4a67c62280c060095640d83a32186d9f70ebd556"
+                mergeCommit = [PSCustomObject]@{ oid = "1111111111111111111111111111111111111111" }
+            }
+            $caughtItemMismatch = $false
+            try {
+                Reconcile-ShipDeMergeIntent `
+                    -State $validIntentState `
+                    -PrQueryResolver { param($n) return $mismatchedItemPr } `
+                    -CheckpointWriter { param($s) } `
+                    -RegisterSynchronizer { param($s) }
+            } catch {
+                if ($_.Exception.Message -match "does not match expected Work Item") {
+                    $caughtItemMismatch = $true
+                }
+            }
+            if (-not $caughtItemMismatch) {
+                throw "Round 6 Finding 1 failed: Reconcile-ShipDeMergeIntent accepted mismatched remote Work Item."
+            }
+
+            # Subcase C: Matching identities accept MERGED
+            $matchingPr = [PSCustomObject]@{
+                number = 10
+                title = "[TASK-AI-13] Governed exact-HEAD auto-merge"
+                state = "MERGED"
+                baseRefName = "main"
+                headRefOid = "4a67c62280c060095640d83a32186d9f70ebd556"
+                mergeCommit = [PSCustomObject]@{ oid = "1111111111111111111111111111111111111111" }
+            }
+            $reconciledOk = Reconcile-ShipDeMergeIntent `
+                -State ($validIntentState.Clone()) `
+                -PrQueryResolver { param($n) return $matchingPr } `
+                -CheckpointWriter { param($s) } `
+                -RegisterSynchronizer { param($s) }
+            if ($reconciledOk.State -ne "MERGED" -or $reconciledOk.MergeCommitOid -ne "1111111111111111111111111111111111111111" -or $null -ne $reconciledOk.MergeIntent) {
+                throw "Round 6 Finding 1 failed: Reconcile-ShipDeMergeIntent did not record MERGED with merge commit and cleared intent."
+            }
+
+            # Round 6 Finding 3: Sync-ShipDeRegisterAfterAutoMerge skips Export-Csv when workspace is main
+            $mockMainDir = Join-Path $origAutoMergeTempRoot "mock-main"
+            $mockRegDir = Join-Path $mockMainDir "docs\product-spec\docs\10-ai-collaboration"
+            New-Item -ItemType Directory -Path $mockRegDir -Force | Out-Null
+            $mockRegCsv = Join-Path $mockRegDir "FEATURE-DELIVERY-REGISTER.csv"
+            Set-Content -Path $mockRegCsv -Value "work_item_id,feature_id,feature_name,status,owner,author,pr,codex_verdict,merge_commit`nTASK-AI-13,FEAT-AI-01,Auto Merge,READY_FOR_HUMAN_MERGE,HUMAN,GEMINI,#10,PASS," -Encoding UTF8
+
+            $origPathsMain = $script:Paths.Main
+            try {
+                $script:Paths.Main = $mockMainDir
+                $stateForSync = @{
+                    WorkItemId = "TASK-AI-13"
+                    PullRequestNumber = 10
+                    MergeCommitOid = "2222222222222222222222222222222222222222"
+                }
+                Sync-ShipDeRegisterAfterAutoMerge -State $stateForSync -Workspace $mockMainDir
+                $regContentAfter = Get-Content -Path $mockRegCsv -Raw
+                if ($regContentAfter -match "2222222222222222222222222222222222222222") {
+                    throw "Round 6 Finding 3 failed: Sync-ShipDeRegisterAfterAutoMerge modified register file inside protected main worktree."
+                }
+            } finally {
+                $script:Paths.Main = $origPathsMain
+            }
+
+            # Round 6 Finding 2: Initialize-ShipDeSupervisorState reconciles human-merged bootstrap without intent and advances to PR #8
+            $humanMergedPr10 = [PSCustomObject]@{
+                number = 10
+                title = "[TASK-AI-13] Governed exact-HEAD auto-merge"
+                state = "MERGED"
+                baseRefName = "main"
+                headRefOid = "4a67c62280c060095640d83a32186d9f70ebd556"
+                mergeCommit = [PSCustomObject]@{ oid = "3333333333333333333333333333333333333333" }
+            }
+            $openPr8 = [PSCustomObject]@{
+                number = 8
+                title = "[TASK-FOUND-03] Database schema and migrations"
+                headRefName = "feat/task-found-03-database-schema"
+                baseRefName = "main"
+                headRefOid = "8888888888888888888888888888888888888888"
+                isDraft = $false
+                isCrossRepository = $false
+                headRepository = "vinh05092001/shipde-platform"
+                headRepositoryOwner = "vinh05092001"
+            }
+            $humanMergeCheckpoint = @{
+                WorkItemId = "TASK-AI-13"
+                WorkItemPath = "docs/product-spec/work-items/TASK-AI-13.md"
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = "GEMINI"
+                State = "READY_FOR_HUMAN_MERGE"
+                PullRequestNumber = 10
+                HeadSha = "4a67c62280c060095640d83a32186d9f70ebd556"
+                MergeIntent = $null
+            }
+            $inMemoryRegRows = @(
+                [PSCustomObject]@{ work_item_id = "TASK-AI-13"; status = "READY_FOR_HUMAN_MERGE"; pr = "#10"; codex_verdict = "PASS"; merge_commit = "" },
+                [PSCustomObject]@{ work_item_id = "TASK-FOUND-03"; status = "CHANGES_REQUIRED"; pr = "#8"; codex_verdict = "CHANGES_REQUIRED"; merge_commit = "" },
+                [PSCustomObject]@{ work_item_id = "TASK-AI-07"; status = "READY_FOR_AUTHOR"; pr = ""; codex_verdict = ""; merge_commit = "" }
+            )
+            $clearedTracker = @{ Cleared = $false }
+            $writtenCheckpoints = [System.Collections.Generic.List[object]]::new()
+
+            $nextStateAfterBootstrap = Initialize-ShipDeSupervisorState `
+                -State $humanMergeCheckpoint `
+                -OpenPrResolver { return @($openPr8) } `
+                -PrQueryResolver { param($n) if ($n -eq 10) { return $humanMergedPr10 } else { return $openPr8 } } `
+                -PrWorkItemResolver {
+                    param($pr)
+                    return [PSCustomObject]@{
+                        WorkItemId = "TASK-FOUND-03"
+                        WorkItemPath = "docs/product-spec/work-items/TASK-FOUND-03.md"
+                        Branch = "feat/task-found-03-database-schema"
+                        Author = "GEMINI"
+                    }
+                } `
+                -CheckpointWriter { param($s) $writtenCheckpoints.Add($s) } `
+                -CheckpointClearer { $clearedTracker.Cleared = $true } `
+                -DeliveryRegisterRows $inMemoryRegRows
+
+            if (-not $clearedTracker.Cleared) {
+                throw "Round 6 Finding 2 failed: Checkpoint was not cleared after manual bootstrap PR #10 was confirmed MERGED."
+            }
+            $regRow13 = $inMemoryRegRows | Where-Object { $_.work_item_id -eq "TASK-AI-13" } | Select-Object -First 1
+            if ($regRow13.status -ne "MERGED" -or $regRow13.merge_commit -ne "3333333333333333333333333333333333333333") {
+                throw "Round 6 Finding 2 failed: DeliveryRegisterRows for TASK-AI-13 was not updated to MERGED with merge commit."
+            }
+            if ($nextStateAfterBootstrap.PullRequestNumber -ne 8 -or $nextStateAfterBootstrap.WorkItemId -ne "TASK-FOUND-03") {
+                throw "Round 6 Finding 2 failed: Supervisor did not advance to PR #8 (TASK-FOUND-03) after human bootstrap merge, got PR #$($nextStateAfterBootstrap.PullRequestNumber) ($($nextStateAfterBootstrap.WorkItemId))."
+            }
         }
     } finally {
         $script:HandoffRoot = $origHandoffRoot
@@ -9842,7 +10213,8 @@ function Initialize-ShipDeSupervisorState {
         [string]$Repository = "vinh05092001/shipde-platform",
         [scriptblock]$PrWorkItemResolver = { param($pr) Get-ShipDePrWorkItem -PullRequest $pr },
         [scriptblock]$SessionDetailResolver = $null,
-        [object[]]$DeliveryRegisterRows = $null
+        [object[]]$DeliveryRegisterRows = $null,
+        [scriptblock]$PrQueryResolver = $null
     )
 
     if (Test-ShipDeCoreComplete -Rows $DeliveryRegisterRows) {
@@ -9992,18 +10364,34 @@ function Initialize-ShipDeSupervisorState {
                 Write-Host "[SUPERVISOR] Resuming PR-only supervisor state for PR #$($State['PullRequestNumber']) ($workItemId)."
                 return $State
             } else {
-                $reconciledState = Reconcile-ShipDeMergeIntent -State $State -Repository $Repository -RegisterSynchronizer $RegisterSynchronizer
-                if ($reconciledState.State -eq "MERGED") {
+                $reconciledState = Reconcile-ShipDeMergeIntent `
+                    -State $State `
+                    -Repository $Repository `
+                    -PrQueryResolver $PrQueryResolver `
+                    -CheckpointWriter $CheckpointWriter `
+                    -RegisterSynchronizer $RegisterSynchronizer
+                $recStateVal = [string](Get-ShipDeObjectProperty -Object $reconciledState -Names @("State", "state"))
+                if ($recStateVal -eq "MERGED") {
                     Write-Host ("[SUPERVISOR] PR #{0} for {1} was confirmed MERGED remotely." -f $State["PullRequestNumber"], $workItemId)
                     if ($null -ne $DeliveryRegisterRows) {
                         $matchingRow = $DeliveryRegisterRows | Where-Object { $_.work_item_id -eq $workItemId } | Select-Object -First 1
                         if ($null -ne $matchingRow) {
                             $matchingRow.status = "MERGED"
+                            $matchingRow.pr = "#{0}" -f $State["PullRequestNumber"]
+                            $matchingRow.codex_verdict = "PASS"
+                            $mCommit = [string](Get-ShipDeObjectProperty -Object $reconciledState -Names @("MergeCommitOid", "mergeCommitOid"))
+                            if (-not [string]::IsNullOrWhiteSpace($mCommit)) {
+                                $matchingRow.merge_commit = $mCommit
+                            }
                         }
                     }
                     if (Test-ShipDeCoreComplete -Rows $DeliveryRegisterRows) {
                         Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
-                        $reconciledState["State"] = "CORE_COMPLETE"
+                        if ($reconciledState -is [System.Collections.IDictionary]) {
+                            $reconciledState["State"] = "CORE_COMPLETE"
+                        } else {
+                            $reconciledState.State = "CORE_COMPLETE"
+                        }
                         & $CheckpointWriter $reconciledState
                         return $reconciledState
                     }
