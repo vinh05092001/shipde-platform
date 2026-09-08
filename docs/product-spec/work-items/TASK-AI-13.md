@@ -14,7 +14,7 @@
 | Allowed paths   | `AGENTS.md`; `.github/workflows/*.yml`; `scripts/ai/*.ps1`; `scripts/ai/README.md`; `docs/product-spec/work-items/TASK-AI-06.md`; `docs/product-spec/work-items/TASK-AI-13.md`; `docs/product-spec/docs/10-ai-collaboration/*.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer        | `Codex — fresh independent task; durable verdict only from chatgpt-codex-connector[bot]`                                                                                                                                                                                                                      |
 | Branch          | `feat/task-ai-13-governed-auto-merge`                                                                                                                                                                                                                                                                         |
-| Pull Request    | To be opened by the implementation author                                                                                                                                                                                                                                                                     |
+| Pull Request    | `#10`                                                                                                                                                                                                                                                                                                         |
 
 ## Priority and bootstrap decision
 
