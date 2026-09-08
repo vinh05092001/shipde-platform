@@ -199,6 +199,10 @@ function Get-ShipDePreparedAssignments {
         foreach ($row in @($rows | Where-Object { [string]$_.status -eq "READY_FOR_AUTHOR" })) {
             $assignment = Get-ShipDeAssignment -Ref $ref -Row $row -TextResolver $TextResolver
             if ($assignment) {
+                # Rule AI-MERGE-14: TASK-AI-14 and TASK-AI-15 are outside the approved core run
+                if ($assignment.WorkItemId -in @("TASK-AI-14", "TASK-AI-15")) {
+                    continue
+                }
                 $items.Add($assignment)
             }
         }
@@ -724,7 +728,10 @@ function Get-ShipDeCheckResult {
 }
 
 function Get-ShipDePrGate {
-    param([Parameter(Mandatory = $true)][object]$PullRequest)
+    param(
+        [Parameter(Mandatory = $true)][object]$PullRequest,
+        [object[]]$RequiredChecks = $null
+    )
 
     # GitHub can retain superseded attempts for one check name on the same
     # immutable head. Only the newest attempt for each name is authoritative.
@@ -776,13 +783,28 @@ function Get-ShipDePrGate {
         return "FAILED"
     }
 
-    foreach ($requiredName in $script:RequiredPrChecks) {
+    $targetChecks = if ($null -ne $RequiredChecks -and @($RequiredChecks).Count -gt 0) {
+        $RequiredChecks
+    } else {
+        $script:RequiredPrChecks
+    }
+
+    foreach ($req in $targetChecks) {
+        $requiredName = if ($req -is [string]) { $req } elseif ($req.PSObject.Properties['Context']) { [string]$req.Context } else { [string]$req }
+        $expectedAppId = if ($req -is [PSCustomObject] -and $req.PSObject.Properties['AppId'] -and $null -ne $req.AppId) { [int]$req.AppId } else { $null }
+
         $matches = @($checks | Where-Object {
-            (Get-ShipDeCheckName -Check $_) -eq $requiredName -and
-            (Get-ShipDeCheckProvider -Check $_).StartsWith(
+            $nameMatches = (Get-ShipDeCheckName -Check $_) -eq $requiredName
+            if (-not $nameMatches) { return $false }
+            $prov = Get-ShipDeCheckProvider -Check $_
+            $isActions = $prov.StartsWith(
                 $script:RequiredPrCheckProviderPrefix,
                 [System.StringComparison]::OrdinalIgnoreCase
             )
+            if ($null -ne $expectedAppId -and $expectedAppId -eq 15368) {
+                if (-not $isActions) { return $false }
+            }
+            return $isActions
         })
         if ($matches.Count -eq 0) {
             return "PENDING"
@@ -1597,7 +1619,12 @@ function Get-ShipDeAoExactHeadCodexVerdict {
 function Get-ShipDeGitHubExactHeadCodexVerdict {
     param(
         [Parameter(Mandatory = $true)][int]$PullRequestNumber,
-        [Parameter(Mandatory = $true)][string]$HeadSha
+        [Parameter(Mandatory = $true)][string]$HeadSha,
+        [string]$AuthorLogin = $null,
+        [string]$RepoOwner = $null,
+        [object[]]$Reviews = $null,
+        [object[]]$Comments = $null,
+        [object[]]$PullComments = $null
     )
 
     if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
@@ -1606,152 +1633,184 @@ function Get-ShipDeGitHubExactHeadCodexVerdict {
 
     $candidates = [System.Collections.Generic.List[object]]::new()
 
+    $isMocked = ($PSBoundParameters.ContainsKey("Reviews") -or $PSBoundParameters.ContainsKey("Comments") -or $PSBoundParameters.ContainsKey("PullComments"))
+
     # 1. Enumerate GitHub Reviews
-    $raw = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/reviews" --paginate --slurp 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to query GitHub Pull Request reviews for PR #$PullRequestNumber."
-    }
-    if ($raw.Count -gt 0) {
-        try {
-            $pages = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
-        } catch {
-            throw "Failed to parse GitHub Pull Request review response for PR #$($PullRequestNumber): $($_.Exception.Message)"
+    $reviewItems = [System.Collections.Generic.List[object]]::new()
+    if ($isMocked) {
+        if ($PSBoundParameters.ContainsKey("Reviews") -and $null -ne $Reviews) {
+            foreach ($r in @($Reviews)) { [void]$reviewItems.Add($r) }
         }
-        foreach ($page in @($pages)) {
-            foreach ($review in @($page)) {
-                if ([string]$review.commit_id -ine $HeadSha) { continue }
-                $login = [string]$review.user.login
-                if ($script:TrustedCodexReviewerLogins -notcontains $login) { continue }
-                $submittedAtStr = [string](Get-ShipDeObjectProperty -Object $review -Names @("submitted_at", "submittedAt"))
-                $submittedAt = [DateTime]::MinValue
-                if (-not [string]::IsNullOrWhiteSpace($submittedAtStr)) {
-                    [void][DateTime]::TryParse($submittedAtStr, [ref]$submittedAt)
+    } else {
+        $raw = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/reviews" --paginate --slurp 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to query GitHub Pull Request reviews for PR #$PullRequestNumber."
+        }
+        if ($raw.Count -gt 0) {
+            try {
+                $pages = (($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+                foreach ($page in @($pages)) {
+                    foreach ($r in @($page)) { [void]$reviewItems.Add($r) }
                 }
-                $revVerdict = $null
-                switch (([string]$review.state).ToUpperInvariant()) {
-                    "APPROVED" { $revVerdict = "PASS" }
-                    "CHANGES_REQUESTED" { $revVerdict = "CHANGES_REQUIRED" }
-                    "COMMENTED" {
-                        $reviewBody = [string]$review.body
-                        if (-not [string]::IsNullOrWhiteSpace($reviewBody)) {
-                            $lines = @($reviewBody -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                            if ($lines.Count -gt 0) {
-                                $lastLine = $lines[-1].Trim()
-                                if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
-                                    $revVerdict = $matches[1].ToUpperInvariant()
-                                }
-                            }
-                            if (-not $revVerdict -and ($reviewBody -match '(?i)###.*Codex Review' -or $reviewBody -match '(?i)automated review suggestions')) {
-                                $revVerdict = "CHANGES_REQUIRED"
-                            }
+            } catch {
+                throw "Failed to parse GitHub Pull Request review response for PR #$($PullRequestNumber): $($_.Exception.Message)"
+            }
+        }
+    }
+    foreach ($review in $reviewItems) {
+        if ([string]$review.commit_id -ine $HeadSha) { continue }
+        $login = [string]$review.user.login
+        if ($script:TrustedCodexReviewerLogins -notcontains $login) { continue }
+        if (-not [string]::IsNullOrWhiteSpace($AuthorLogin) -and $login -ieq $AuthorLogin) { continue }
+        if (-not [string]::IsNullOrWhiteSpace($RepoOwner) -and $login -ieq $RepoOwner) { continue }
+        $submittedAtStr = [string](Get-ShipDeObjectProperty -Object $review -Names @("submitted_at", "submittedAt"))
+        $submittedAt = [DateTime]::MinValue
+        if (-not [string]::IsNullOrWhiteSpace($submittedAtStr)) {
+            [void][DateTime]::TryParse($submittedAtStr, [ref]$submittedAt)
+        }
+        $revVerdict = $null
+        switch (([string]$review.state).ToUpperInvariant()) {
+            "APPROVED" { $revVerdict = "PASS" }
+            "CHANGES_REQUESTED" { $revVerdict = "CHANGES_REQUIRED" }
+            "COMMENTED" {
+                $reviewBody = [string]$review.body
+                if (-not [string]::IsNullOrWhiteSpace($reviewBody)) {
+                    $lines = @($reviewBody -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    if ($lines.Count -gt 0) {
+                        $lastLine = $lines[-1].Trim()
+                        if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
+                            $revVerdict = $matches[1].ToUpperInvariant()
                         }
                     }
-                    default {
-                        # Explicitly ignore DISMISSED, PENDING, and any non-governed/non-terminal state.
+                    if (-not $revVerdict -and ($reviewBody -match '(?i)###.*Codex Review' -or $reviewBody -match '(?i)automated review suggestions')) {
+                        $revVerdict = "CHANGES_REQUIRED"
                     }
                 }
-                if ($revVerdict) {
-                    $candidates.Add([PSCustomObject]@{
-                        Id = [string]$review.id
-                        CreatedAt = $submittedAt.ToUniversalTime()
-                        Verdict = $revVerdict
-                    })
-                }
             }
+            default {
+                # Explicitly ignore DISMISSED, PENDING, and any non-governed/non-terminal state.
+            }
+        }
+        if ($revVerdict) {
+            $candidates.Add([PSCustomObject]@{
+                Id = [string]$review.id
+                CreatedAt = $submittedAt.ToUniversalTime()
+                Verdict = $revVerdict
+            })
         }
     }
 
     # 2. Enumerate GitHub PR review comments (pulls/$PullRequestNumber/comments)
-    $rawPullComments = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/comments" --paginate --slurp 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to query GitHub Pull Request review comments for PR #$PullRequestNumber."
-    }
-    if ($rawPullComments.Count -gt 0) {
-        try {
-            $pullCommentPages = (($rawPullComments -join [Environment]::NewLine) | ConvertFrom-Json)
-        } catch {
-            throw "Failed to parse GitHub Pull Request review comments response for PR #$($PullRequestNumber): $($_.Exception.Message)"
+    $pullCommentItems = [System.Collections.Generic.List[object]]::new()
+    if ($isMocked) {
+        if ($PSBoundParameters.ContainsKey("PullComments") -and $null -ne $PullComments) {
+            foreach ($pc in @($PullComments)) { [void]$pullCommentItems.Add($pc) }
         }
-        foreach ($page in @($pullCommentPages)) {
-            foreach ($pComment in @($page)) {
-                $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "original_commit_id"))
-                if ($commCommit -ine $HeadSha) { continue }
-                $commUser = Get-ShipDeObjectProperty -Object $pComment -Names @("user", "author")
-                $commLogin = [string](Get-ShipDeObjectProperty -Object $commUser -Names @("login"))
-                if ($script:TrustedCodexReviewerLogins -notcontains $commLogin) { continue }
-                $commCreated = [DateTime]::MinValue
-                $commCreatedStr = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("created_at", "createdAt"))
-                if (-not [string]::IsNullOrWhiteSpace($commCreatedStr)) {
-                    [void][DateTime]::TryParse($commCreatedStr, [ref]$commCreated)
+    } else {
+        $rawPullComments = @(& gh api "repos/$Repository/pulls/$PullRequestNumber/comments" --paginate --slurp 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to query GitHub Pull Request review comments for PR #$PullRequestNumber."
+        }
+        if ($rawPullComments.Count -gt 0) {
+            try {
+                $pages = (($rawPullComments -join [Environment]::NewLine) | ConvertFrom-Json)
+                foreach ($page in @($pages)) {
+                    foreach ($pc in @($page)) { [void]$pullCommentItems.Add($pc) }
                 }
-                $candidates.Add([PSCustomObject]@{
-                    Id = "pc-" + [string](Get-ShipDeObjectProperty -Object $pComment -Names @("id", "databaseId"))
-                    CreatedAt = $commCreated.ToUniversalTime()
-                    Verdict = "CHANGES_REQUIRED"
-                })
+            } catch {
+                throw "Failed to parse GitHub Pull Request review comments response for PR #$($PullRequestNumber): $($_.Exception.Message)"
             }
         }
     }
+    foreach ($pComment in $pullCommentItems) {
+        $commCommit = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("commit_id", "original_commit_id"))
+        if ($commCommit -ine $HeadSha) { continue }
+        $commUser = Get-ShipDeObjectProperty -Object $pComment -Names @("user", "author")
+        $commLogin = [string](Get-ShipDeObjectProperty -Object $commUser -Names @("login"))
+        if ($script:TrustedCodexReviewerLogins -notcontains $commLogin) { continue }
+        if (-not [string]::IsNullOrWhiteSpace($AuthorLogin) -and $commLogin -ieq $AuthorLogin) { continue }
+        if (-not [string]::IsNullOrWhiteSpace($RepoOwner) -and $commLogin -ieq $RepoOwner) { continue }
+        $commCreated = [DateTime]::MinValue
+        $commCreatedStr = [string](Get-ShipDeObjectProperty -Object $pComment -Names @("created_at", "createdAt"))
+        if (-not [string]::IsNullOrWhiteSpace($commCreatedStr)) {
+            [void][DateTime]::TryParse($commCreatedStr, [ref]$commCreated)
+        }
+        $candidates.Add([PSCustomObject]@{
+            Id = "pc-" + [string](Get-ShipDeObjectProperty -Object $pComment -Names @("id", "databaseId"))
+            CreatedAt = $commCreated.ToUniversalTime()
+            Verdict = "CHANGES_REQUIRED"
+        })
+    }
 
     # 3. Enumerate GitHub PR comments with pagination to exhaustion
-    $rawComments = @(& gh api "repos/$Repository/issues/$PullRequestNumber/comments" --paginate --slurp 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to query GitHub Pull Request comments for PR #$PullRequestNumber."
-    }
-    if ($rawComments.Count -gt 0) {
-        try {
-            $commentPages = (($rawComments -join [Environment]::NewLine) | ConvertFrom-Json)
-        } catch {
-            throw "Failed to parse GitHub Pull Request comments response for PR #$($PullRequestNumber): $($_.Exception.Message)"
+    $commentItems = [System.Collections.Generic.List[object]]::new()
+    if ($isMocked) {
+        if ($PSBoundParameters.ContainsKey("Comments") -and $null -ne $Comments) {
+            foreach ($c in @($Comments)) { [void]$commentItems.Add($c) }
         }
-        foreach ($page in @($commentPages)) {
-            foreach ($commentObj in @($page)) {
-                $author = Get-ShipDeObjectProperty -Object $commentObj -Names @("author", "user")
-                $authorLogin = [string](Get-ShipDeObjectProperty -Object $author -Names @("login"))
-                if ($script:TrustedCodexReviewerLogins -notcontains $authorLogin) { continue }
-                $body = [string]$commentObj.body
-                if ([string]::IsNullOrWhiteSpace($body)) { continue }
-                $targetMatch = [regex]::Match($body, '(?im)(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head|Reviewed commit)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
-                if (-not $targetMatch.Success) {
-                    $targetMatch = [regex]::Match($body, '(?im)immutable head\s+`?([a-f0-9]{7,40})`?')
+    } else {
+        $rawComments = @(& gh api "repos/$Repository/issues/$PullRequestNumber/comments" --paginate --slurp 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to query GitHub Pull Request comments for PR #$PullRequestNumber."
+        }
+        if ($rawComments.Count -gt 0) {
+            try {
+                $pages = (($rawComments -join [Environment]::NewLine) | ConvertFrom-Json)
+                foreach ($page in @($pages)) {
+                    foreach ($c in @($page)) { [void]$commentItems.Add($c) }
                 }
-                if (-not $targetMatch.Success) {
-                    $targetMatch = [regex]::Match($body, '(?im)Reviewed PR #\d+ at\s+`?([a-f0-9]{7,40})`?')
-                }
+            } catch {
+                throw "Failed to parse GitHub Pull Request comments response for PR #$($PullRequestNumber): $($_.Exception.Message)"
+            }
+        }
+    }
+    foreach ($commentObj in $commentItems) {
+        $commAuthor = Get-ShipDeObjectProperty -Object $commentObj -Names @("author", "user")
+        $commAuthorLogin = [string](Get-ShipDeObjectProperty -Object $commAuthor -Names @("login"))
+        if ($script:TrustedCodexReviewerLogins -notcontains $commAuthorLogin) { continue }
+        if (-not [string]::IsNullOrWhiteSpace($AuthorLogin) -and $commAuthorLogin -ieq $AuthorLogin) { continue }
+        if (-not [string]::IsNullOrWhiteSpace($RepoOwner) -and $commAuthorLogin -ieq $RepoOwner) { continue }
+        $body = [string]$commentObj.body
+        if ([string]::IsNullOrWhiteSpace($body)) { continue }
+        $targetMatch = [regex]::Match($body, '(?im)(?:\*\*)?(?:Review target|Reviewed exact head|Reviewed immutable head|Reviewed commit)\s*:\s*(?:\*\*)?\s*`?([a-f0-9]{7,40})`?')
+        if (-not $targetMatch.Success) {
+            $targetMatch = [regex]::Match($body, '(?im)immutable head\s+`?([a-f0-9]{7,40})`?')
+        }
+        if (-not $targetMatch.Success) {
+            $targetMatch = [regex]::Match($body, '(?im)Reviewed PR #\d+ at\s+`?([a-f0-9]{7,40})`?')
+        }
 
-                if ($targetMatch.Success) {
-                    $targetSha = $targetMatch.Groups[1].Value
-                    $shaMatches = $false
-                    if ($targetSha.Length -eq 40) {
-                        $shaMatches = ($targetSha -ieq $HeadSha)
-                    } elseif ($targetSha.Length -ge 7 -and $HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase)) {
-                        try {
-                            $resolvedSha = (& git rev-parse --verify "$targetSha^{commit}" 2>$null).Trim()
-                            if ($LASTEXITCODE -eq 0 -and $resolvedSha -ieq $HeadSha) {
-                                $shaMatches = $true
-                            }
-                        } catch {}
+        if ($targetMatch.Success) {
+            $targetSha = $targetMatch.Groups[1].Value
+            $shaMatches = $false
+            if ($targetSha.Length -eq 40) {
+                $shaMatches = ($targetSha -ieq $HeadSha)
+            } elseif ($targetSha.Length -ge 7 -and $HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase)) {
+                try {
+                    $resolvedSha = (& git rev-parse --verify "$targetSha^{commit}" 2>$null).Trim()
+                    if ($LASTEXITCODE -eq 0 -and $resolvedSha -ieq $HeadSha) {
+                        $shaMatches = $true
                     }
+                } catch {}
+            }
 
-                    if ($shaMatches) {
-                        $lines = @($body -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                        if ($lines.Count -gt 0) {
-                            $lastLine = $lines[-1].Trim()
-                            if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
-                                $cVerdict = $matches[1].ToUpperInvariant()
-                                $createdAtStr = [string](Get-ShipDeObjectProperty -Object $commentObj -Names @("createdAt", "created_at"))
-                                $createdTime = [DateTime]::MinValue
-                                if (-not [string]::IsNullOrWhiteSpace($createdAtStr)) {
-                                    [void][DateTime]::TryParse($createdAtStr, [ref]$createdTime)
-                                }
-                                $cId = [string](Get-ShipDeObjectProperty -Object $commentObj -Names @("id", "databaseId"))
-                                $candidates.Add([PSCustomObject]@{
-                                    Id = $cId
-                                    CreatedAt = $createdTime.ToUniversalTime()
-                                    Verdict = $cVerdict
-                                })
-                            }
+            if ($shaMatches) {
+                $lines = @($body -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                if ($lines.Count -gt 0) {
+                    $lastLine = $lines[-1].Trim()
+                    if ($lastLine -match '(?i)^(?:(?:\*\*)?(?:(?:FINAL[\t ]+)?VERDICT[\t ]*:[\t ]*)?(PASS|CHANGES_REQUIRED|BLOCKED)(?:\*\*)?)$') {
+                        $cVerdict = $matches[1].ToUpperInvariant()
+                        $createdAtStr = [string](Get-ShipDeObjectProperty -Object $commentObj -Names @("createdAt", "created_at"))
+                        $createdTime = [DateTime]::MinValue
+                        if (-not [string]::IsNullOrWhiteSpace($createdAtStr)) {
+                            [void][DateTime]::TryParse($createdAtStr, [ref]$createdTime)
                         }
+                        $cId = [string](Get-ShipDeObjectProperty -Object $commentObj -Names @("id", "databaseId"))
+                        $candidates.Add([PSCustomObject]@{
+                            Id = $cId
+                            CreatedAt = $createdTime.ToUniversalTime()
+                            Verdict = $cVerdict
+                        })
                     }
                 }
             }
@@ -1854,7 +1913,9 @@ function Get-ShipDeExactHeadCodexVerdict {
         [Parameter(Mandatory = $true)][int]$PullRequestNumber,
         [Parameter(Mandatory = $true)][string]$HeadSha,
         [string]$MergeCommitOid,
-        [string]$SessionId
+        [string]$SessionId,
+        [string]$AuthorLogin = $null,
+        [string]$RepoOwner = $null
     )
 
     if ([string]::IsNullOrWhiteSpace($HeadSha)) {
@@ -1864,7 +1925,7 @@ function Get-ShipDeExactHeadCodexVerdict {
     # Recover exact-commit verdict from GitHub durable review and comment records
     # using newest trusted bot evidence (chatgpt-codex-connector[bot]), rejecting equal-time conflicts.
     # Local Codex CLI / AO results are diagnostic only and must not authorize durable PASS or advance state.
-    $githubVerdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha
+    $githubVerdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha -AuthorLogin $AuthorLogin -RepoOwner $RepoOwner
     if ($githubVerdict) {
         return $githubVerdict
     }
@@ -3316,10 +3377,17 @@ function Assert-ShipDeGovernedPullRequest {
 function Get-ShipDeOpenPullRequestForWorkItem {
     param(
         [Parameter(Mandatory = $true)][string]$WorkItemId,
-        [Parameter(Mandatory = $true)][string]$Branch
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [scriptblock]$OpenPrResolver = $null
     )
 
-    $workItemMatches = @(Get-ShipDeOpenPullRequests | Where-Object {
+    $allPrs = if ($null -ne $OpenPrResolver) {
+        @(& $OpenPrResolver)
+    } else {
+        @(Get-ShipDeOpenPullRequests)
+    }
+
+    $workItemMatches = @($allPrs | Where-Object {
         (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq $WorkItemId
     })
     if ($workItemMatches.Count -eq 0) {
@@ -3545,6 +3613,709 @@ function Ensure-ShipDeRepairWorker {
     $State["State"] = "STARTED"
     if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
     return [string]$spawned.SessionId
+}
+
+function Get-ShipDeBranchProtectionRequiredChecks {
+    param(
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [string]$Branch = "main",
+        [scriptblock]$ApiInvoker = $null
+    )
+
+    if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+        throw "Repository must use the owner/name format before reading branch protection."
+    }
+
+    $raw = if ($null -ne $ApiInvoker) {
+        & $ApiInvoker "repos/$Repository/branches/$Branch/protection/required_status_checks"
+    } else {
+        Assert-ShipDeCommand gh
+        @(& gh api "repos/$Repository/branches/$Branch/protection/required_status_checks" 2>$null)
+    }
+
+    if ($LASTEXITCODE -ne 0 -or ($null -eq $raw -or @($raw).Count -eq 0)) {
+        throw "Failed to query branch protection required status checks for '$Branch' on repository '$Repository'."
+    }
+
+    $jsonText = if ($raw -is [string]) { $raw } else { ($raw -join [Environment]::NewLine) }
+    try {
+        $protection = $jsonText | ConvertFrom-Json
+    } catch {
+        throw "Failed to parse branch protection required status checks JSON for '$Branch' on repository '$Repository': $($_.Exception.Message)"
+    }
+
+    $strict = $false
+    if ($protection.PSObject.Properties['strict'] -and $null -ne $protection.strict) {
+        $strict = [bool]$protection.strict
+    }
+
+    $requiredChecks = [System.Collections.Generic.List[object]]::new()
+    if ($protection.PSObject.Properties['checks'] -and $protection.checks) {
+        foreach ($c in @($protection.checks)) {
+            if ($c -and $c.context) {
+                $appId = if ($c.PSObject.Properties['app_id'] -and $null -ne $c.app_id) { [int]$c.app_id } else { $null }
+                $requiredChecks.Add([PSCustomObject]@{
+                    Context = [string]$c.context
+                    AppId = $appId
+                })
+            }
+        }
+    } elseif ($protection.PSObject.Properties['contexts'] -and $protection.contexts) {
+        foreach ($ctxName in @($protection.contexts)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$ctxName)) {
+                $requiredChecks.Add([PSCustomObject]@{
+                    Context = [string]$ctxName
+                    AppId = $null
+                })
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        Strict = $strict
+        Checks = $requiredChecks.ToArray()
+    }
+}
+
+function Get-ShipDePullRequestReviewThreads {
+    param(
+        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [scriptblock]$GraphQLInvoker = $null
+    )
+
+    $repoParts = $Repository -split '/'
+    if ($repoParts.Count -ne 2) {
+        throw "Repository must use the owner/name format before reading review threads."
+    }
+    $owner = $repoParts[0]
+    $repoName = $repoParts[1]
+
+    $query = @'
+query($owner: String!, $name: String!, $pr: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+        nodes {
+          id
+          isResolved
+          isOutdated
+        }
+      }
+    }
+  }
+}
+'@
+
+    $threads = [System.Collections.Generic.List[object]]::new()
+    $hasMore = $true
+    $cursor = $null
+
+    while ($hasMore) {
+        $raw = if ($null -ne $GraphQLInvoker) {
+            & $GraphQLInvoker $query @{ owner = $owner; name = $repoName; pr = $PullRequestNumber; after = $cursor }
+        } else {
+            Assert-ShipDeCommand gh
+            $ghArgs = @(
+                "api", "graphql",
+                "-F", "owner=$owner",
+                "-F", "name=$repoName",
+                "-F", "pr=$PullRequestNumber"
+            )
+            if (-not [string]::IsNullOrWhiteSpace($cursor)) {
+                $ghArgs += @("-F", "after=$cursor")
+            }
+            $ghArgs += @("-f", "query=$query")
+            @(& gh @ghArgs 2>$null)
+        }
+
+        if ($null -ne $GraphQLInvoker) {
+            if ($null -eq $raw) {
+                throw "Failed to query review threads for PR #$PullRequestNumber via GraphQL API."
+            }
+        } elseif ($LASTEXITCODE -ne 0 -or ($null -eq $raw -or @($raw).Count -eq 0)) {
+            throw "Failed to query review threads for PR #$PullRequestNumber via GraphQL API."
+        }
+
+        $parsed = if ($raw -is [string]) {
+            $raw | ConvertFrom-Json
+        } elseif ($raw -is [System.Array] -and $raw.Length -gt 0 -and $raw[0] -is [string]) {
+            ($raw -join [Environment]::NewLine) | ConvertFrom-Json
+        } else {
+            $raw
+        }
+
+        if ($null -eq $parsed) {
+            throw "Failed to parse review threads response for PR #$PullRequestNumber."
+        }
+
+        if ($parsed.PSObject.Properties['errors'] -and $null -ne $parsed.errors -and @($parsed.errors).Count -gt 0) {
+            $errMsgs = @($parsed.errors | ForEach-Object { $_.message }) -join "; "
+            throw "GraphQL errors returned while querying review threads for PR #$PullRequestNumber : $errMsgs"
+        }
+
+        $prNode = $parsed.data.repository.pullRequest
+        if ($null -eq $prNode) {
+            throw "Pull Request #$PullRequestNumber was not found in repository '$Repository'."
+        }
+
+        $conn = $prNode.reviewThreads
+        if ($conn -and $conn.nodes) {
+            foreach ($t in @($conn.nodes)) {
+                if ($t) { $threads.Add($t) }
+            }
+        }
+        $hasMore = [bool]($conn.pageInfo.hasNextPage)
+        $cursor = [string]($conn.pageInfo.endCursor)
+    }
+
+    $unresolvedCount = 0
+    foreach ($t in $threads) {
+        if (-not [bool]$t.isResolved) {
+            $unresolvedCount++
+        }
+    }
+
+    return [PSCustomObject]@{
+        TotalCount = $threads.Count
+        UnresolvedCount = $unresolvedCount
+        Threads = $threads.ToArray()
+    }
+}
+
+function Assert-ShipDeMergePermission {
+    param(
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [scriptblock]$ApiInvoker = $null
+    )
+
+    $raw = if ($null -ne $ApiInvoker) {
+        & $ApiInvoker "repos/$Repository"
+    } else {
+        Assert-ShipDeCommand gh
+        @(& gh api "repos/$Repository" 2>$null)
+    }
+
+    if ($null -ne $ApiInvoker) {
+        if ($null -eq $raw) {
+            throw "Failed to verify repository permissions for '$Repository'."
+        }
+    } elseif ($LASTEXITCODE -ne 0 -or ($null -eq $raw -or @($raw).Count -eq 0)) {
+        throw "Failed to verify repository permissions for '$Repository'."
+    }
+
+    $repoInfo = if ($raw -is [string]) {
+        $raw | ConvertFrom-Json
+    } elseif ($raw -is [System.Array] -and $raw.Length -gt 0 -and $raw[0] -is [string]) {
+        ($raw -join [Environment]::NewLine) | ConvertFrom-Json
+    } else {
+        $raw
+    }
+
+    $hasPush = $false
+    if ($repoInfo.PSObject.Properties['permissions'] -and $null -ne $repoInfo.permissions) {
+        $perms = $repoInfo.permissions
+        if ([bool]$perms.push -or [bool]$perms.admin -or [bool]$perms.maintain) {
+            $hasPush = $true
+        }
+    }
+
+    if (-not $hasPush) {
+        throw "Current GitHub credential lacks merge/push permission for repository '$Repository'. Stopping fail-closed."
+    }
+}
+
+function Invoke-ShipDeGraphQLMergeMutation {
+    param(
+        [Parameter(Mandatory = $true)][string]$PullRequestId,
+        [Parameter(Mandatory = $true)][string]$ExpectedHeadOid,
+        [string]$MergeMethod = "SQUASH",
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [scriptblock]$MutationInvoker = $null
+    )
+
+    if ($null -ne $MutationInvoker) {
+        return & $MutationInvoker $PullRequestId $ExpectedHeadOid $MergeMethod
+    }
+
+    $mutation = @'
+mutation($input: MergePullRequestInput!) {
+  mergePullRequest(input: $input) {
+    pullRequest {
+      state
+      merged
+      mergedAt
+      mergeCommit {
+        oid
+      }
+    }
+  }
+}
+'@
+
+    $payload = @{
+        query = $mutation
+        variables = @{
+            input = @{
+                pullRequestId = $PullRequestId
+                expectedHeadOid = $ExpectedHeadOid
+                mergeMethod = $MergeMethod
+            }
+        }
+    }
+
+    $jsonBody = $payload | ConvertTo-Json -Depth 5
+    $raw = @($jsonBody | gh api graphql --input - 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) {
+        $err = ($raw -join "`n")
+        throw "Merge mutation failed via GraphQL API: $err"
+    }
+
+    $respJson = ($raw -join [Environment]::NewLine)
+    $resp = $respJson | ConvertFrom-Json
+    if ($resp.PSObject.Properties['errors'] -and $resp.errors -and @($resp.errors).Count -gt 0) {
+        $errMsgs = @($resp.errors | ForEach-Object { $_.message }) -join "; "
+        throw "GraphQL merge mutation returned error(s): $errMsgs"
+    }
+
+    return $resp.data.mergePullRequest.pullRequest
+}
+
+function Test-ShipDeWorkItemMerged {
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkItemId,
+        [object[]]$Rows = $null,
+        [string]$Workspace = $script:Paths.Main,
+        [string]$RegisterRelativePath = $script:RegisterPath
+    )
+
+    if ($null -eq $Rows) {
+        $fullRegisterPath = Join-Path $Workspace $RegisterRelativePath
+        if (Test-Path -LiteralPath $fullRegisterPath) {
+            try {
+                $Rows = @(Import-Csv -Path $fullRegisterPath)
+            } catch {
+                $Rows = @()
+            }
+        } else {
+            $Rows = @()
+        }
+    }
+
+    foreach ($row in $Rows) {
+        if ([string]$row.work_item_id -eq $WorkItemId -and [string]$row.status -eq "MERGED") {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-ShipDeCoreComplete {
+    param(
+        [object[]]$Rows = $null,
+        [string]$Workspace = $script:Paths.Main,
+        [string]$RegisterRelativePath = $script:RegisterPath
+    )
+
+    $ai12Merged = Test-ShipDeWorkItemMerged -WorkItemId "TASK-AI-12" -Rows $Rows -Workspace $Workspace -RegisterRelativePath $RegisterRelativePath
+    $ai13Merged = Test-ShipDeWorkItemMerged -WorkItemId "TASK-AI-13" -Rows $Rows -Workspace $Workspace -RegisterRelativePath $RegisterRelativePath
+    return ($ai12Merged -and $ai13Merged)
+}
+
+function Reconcile-ShipDeMergeIntent {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [scriptblock]$PrQueryResolver = $null,
+        [scriptblock]$CheckpointWriter = $null,
+        [scriptblock]$RegisterSynchronizer = $null
+    )
+
+    $intent = $State.MergeIntent
+    if ($null -eq $intent) {
+        return $State
+    }
+
+    $prNumber = [int](Get-ShipDeObjectProperty -Object $intent -Names @("PullRequestNumber", "pullRequestNumber"))
+    $expectedHead = [string](Get-ShipDeObjectProperty -Object $intent -Names @("ExpectedHeadOid", "expectedHeadOid"))
+    $workItemId = [string](Get-ShipDeObjectProperty -Object $intent -Names @("WorkItemId", "workItemId"))
+
+    Write-Host ("[SUPERVISOR] State: MERGE_RECONCILING. Reconciling pending merge intent for PR #{0} ({1}) at expected head {2}..." -f $prNumber, $workItemId, $expectedHead)
+    $State.State = "MERGE_RECONCILING"
+    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+
+    $remotePr = if ($null -ne $PrQueryResolver) {
+        & $PrQueryResolver $prNumber
+    } else {
+        Assert-ShipDeCommand gh
+        $raw = @(& gh pr view $prNumber --repo $Repository --json number,title,state,headRefOid,mergeCommit,baseRefName 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) {
+            throw "Failed to query remote PR #$prNumber during merge intent reconciliation. Stopping fail-closed."
+        }
+        ($raw -join [Environment]::NewLine) | ConvertFrom-Json
+    }
+
+    if ($null -eq $remotePr) {
+        throw "Remote PR #$prNumber could not be verified during merge intent reconciliation. Stopping fail-closed."
+    }
+
+    $remoteState = [string]$remotePr.state
+    if ($remoteState -eq "MERGED") {
+        $mergeCommitOid = [string](Get-ShipDeObjectProperty -Object $remotePr.mergeCommit -Names @("oid", "id"))
+        if ([string]::IsNullOrWhiteSpace($mergeCommitOid)) {
+            throw "Remote PR #$prNumber is MERGED but mergeCommit.oid is missing. Stopping fail-closed."
+        }
+        Write-Host ("[SUPERVISOR] State: MERGED. PR #{0} confirmed MERGED remotely with merge commit {1}." -f $prNumber, $mergeCommitOid)
+        $State.State = "MERGED"
+        $State.MergeCommitOid = $mergeCommitOid
+        $State.MergeIntent = $null
+        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+        if ($null -ne $RegisterSynchronizer) { & $RegisterSynchronizer $State }
+        return $State
+    }
+
+    if ($remoteState -eq "OPEN") {
+        $curHead = [string]$remotePr.headRefOid
+        if ($curHead -ne $expectedHead) {
+            Write-Host ("[SUPERVISOR] Remote PR #{0} head changed from {1} to {2}. Discarding stale merge intent." -f $prNumber, $expectedHead, $curHead)
+            $State.MergeIntent = $null
+            $State.State = "STARTED"
+            $State.HeadSha = $curHead
+            $State.ExactHeadVerdict = $null
+            if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+            return $State
+        }
+        Write-Host ("[SUPERVISOR] Remote PR #{0} is still OPEN at head {1}. Re-evaluating gates before attempting merge." -f $prNumber, $expectedHead)
+        $State.MergeIntent = $null
+        $State.State = "READY_FOR_HUMAN_MERGE"
+        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+        return $State
+    }
+
+    throw "Remote PR #$prNumber is in unexpected state '$remoteState' during merge intent reconciliation. Stopping fail-closed."
+}
+
+function Test-ShipDeMergePreflight {
+    param(
+        [Parameter(Mandatory = $true)][object]$PullRequest,
+        [Parameter(Mandatory = $true)][string]$WorkItemId,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [string]$AuthorLogin = $null,
+        [string]$RepoOwner = $null,
+        [scriptblock]$BranchProtectionResolver = $null,
+        [scriptblock]$ReviewVerdictResolver = $null,
+        [scriptblock]$ReviewThreadsResolver = $null,
+        [scriptblock]$FindingsResolver = $null,
+        [scriptblock]$PermissionResolver = $null,
+        [scriptblock]$PrViewResolver = $null
+    )
+
+    # 1. PR Identity & Boundary Validation (AC-AI-13-01, AC-AI-13-02, AC-AI-13-03)
+    $titleWorkItemId = Get-ShipDeWorkItemIdFromTitle -Title ([string]$PullRequest.title)
+    if ($titleWorkItemId -ne $WorkItemId) {
+        throw "Pull Request title does not match target Work Item ID '$WorkItemId' (found '$titleWorkItemId')."
+    }
+
+    if ([string]$PullRequest.headRefName -cne $Branch) {
+        throw "Pull Request head branch '$($PullRequest.headRefName)' does not match target branch '$Branch'."
+    }
+
+    $isCross = $false
+    if ($PullRequest.PSObject.Properties['isCrossRepository'] -and $null -ne $PullRequest.isCrossRepository) {
+        $isCross = [bool]$PullRequest.isCrossRepository
+    }
+    if ($isCross) {
+        throw "Pull Request originates from a cross-repository fork; merge is blocked."
+    }
+
+    $baseRef = if ($PullRequest.PSObject.Properties['baseRefName'] -and $PullRequest.baseRefName) {
+        [string]$PullRequest.baseRefName
+    } else {
+        "main"
+    }
+    if ($baseRef -ne "main") {
+        throw "Pull Request targets base '$baseRef', expected 'main'; merge is blocked."
+    }
+
+    if ([bool]$PullRequest.isDraft) {
+        return @{ Gate = "DRAFT"; Reason = "Pull Request is marked as draft." }
+    }
+
+    $prState = if ($PullRequest.PSObject.Properties['state'] -and $PullRequest.state) {
+        [string]$PullRequest.state
+    } else {
+        "OPEN"
+    }
+    if ($prState -ne "OPEN") {
+        return @{ Gate = "CLOSED"; Reason = "Pull Request state is '$prState' (not OPEN)." }
+    }
+
+    # 2. Exact Head SHA (AI-MERGE-02)
+    $headSha = [string]$PullRequest.headRefOid
+    if ($headSha -notmatch '^[a-f0-9]{40}$') {
+        throw "Pull Request headRefOid '$headSha' is invalid; expected 40-character hexadecimal SHA."
+    }
+
+    # 3. Fresh PR View for Freshness, Mergeability, and Node ID (AC-AI-13-13, AC-AI-13-14)
+    $freshPr = if ($null -ne $PrViewResolver) {
+        & $PrViewResolver ([int]$PullRequest.number)
+    } else {
+        Assert-ShipDeCommand gh
+        $rawView = @(& gh pr view ([int]$PullRequest.number) --repo $Repository --json id,number,headRefOid,mergeable,mergeStateStatus,state,isDraft 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $rawView.Count -eq 0) {
+            throw "Failed to query fresh Pull Request view for PR #$($PullRequest.number)."
+        }
+        ($rawView -join [Environment]::NewLine) | ConvertFrom-Json
+    }
+
+    if ($null -eq $freshPr) {
+        throw "Fresh Pull Request view returned null for PR #$($PullRequest.number)."
+    }
+
+    $currentHead = [string](Get-ShipDeObjectProperty -Object $freshPr -Names @("headRefOid", "headRefName"))
+    if ($currentHead -ne $headSha) {
+        return @{ Gate = "STALE_HEAD"; Reason = "Pull Request head has changed from snapshot head '$headSha' to '$currentHead'." }
+    }
+
+    $mergeable = [string](Get-ShipDeObjectProperty -Object $freshPr -Names @("mergeable", "Mergeable"))
+    if ($mergeable -eq "CONFLICTING") {
+        return @{ Gate = "CONFLICTING"; Reason = "Pull Request mergeability is CONFLICTING." }
+    }
+    if ($mergeable -eq "UNKNOWN") {
+        return @{ Gate = "WAIT_MERGEABLE"; Reason = "Pull Request mergeability is UNKNOWN; recheck required." }
+    }
+
+    # 4. Branch Protection Required Status Checks (AC-AI-13-04, AC-AI-13-05, AC-AI-13-06)
+    $protection = if ($null -ne $BranchProtectionResolver) {
+        & $BranchProtectionResolver $Repository "main"
+    } else {
+        Get-ShipDeBranchProtectionRequiredChecks -Repository $Repository -Branch "main"
+    }
+
+    if ($protection.Strict) {
+        $mergeStatus = [string](Get-ShipDeObjectProperty -Object $freshPr -Names @("mergeStateStatus", "MergeStateStatus"))
+        if ($mergeStatus -eq "BEHIND") {
+            return @{ Gate = "WAIT_MERGEABLE"; Reason = "Pull Request is BEHIND base branch under strict branch protection." }
+        }
+    }
+
+    $ciGate = Get-ShipDePrGate -PullRequest $PullRequest -RequiredChecks $protection.Checks
+    if ($ciGate -ne "GREEN") {
+        if ($ciGate -eq "PENDING") {
+            return @{ Gate = "WAIT_CI"; Reason = "Required CI checks are pending or in-progress." }
+        }
+        return @{ Gate = "BLOCKED"; Reason = "Required CI checks failed or do not satisfy GitHub Actions SUCCESS requirement." }
+    }
+
+    # 5. Independent Codex Review Authority and Exact-HEAD PASS (AC-AI-13-07, AC-AI-13-08, AC-AI-13-09, AC-AI-13-21)
+    $verdict = if ($null -ne $ReviewVerdictResolver) {
+        & $ReviewVerdictResolver ([int]$PullRequest.number) $headSha $AuthorLogin $RepoOwner
+    } else {
+        Get-ShipDeExactHeadCodexVerdict -PullRequestNumber ([int]$PullRequest.number) -HeadSha $headSha -AuthorLogin $AuthorLogin -RepoOwner $RepoOwner
+    }
+
+    if ($verdict -ne "PASS") {
+        if ($null -eq $verdict -or $verdict -eq "PENDING") {
+            return @{ Gate = "WAIT_REVIEW"; Reason = "Awaiting terminal Codex review PASS for exact HEAD $headSha." }
+        }
+        return @{ Gate = "BLOCKED"; Reason = "Durable Codex review returned verdict '$verdict' for exact HEAD $headSha." }
+    }
+
+    # 6. Actionable Review Findings Gate
+    if ($null -ne $FindingsResolver) {
+        $findings = & $FindingsResolver ([int]$PullRequest.number) $headSha $Repository
+        if (-not [string]::IsNullOrWhiteSpace($findings)) {
+            return @{ Gate = "BLOCKED"; Reason = "Actionable review findings exist for exact HEAD $headSha." }
+        }
+    }
+
+    # 7. Review Threads Gate (AC-AI-13-10, AC-AI-13-11, AC-AI-13-12)
+    $threadsResult = if ($null -ne $ReviewThreadsResolver) {
+        & $ReviewThreadsResolver ([int]$PullRequest.number) $Repository
+    } else {
+        Get-ShipDePullRequestReviewThreads -PullRequestNumber ([int]$PullRequest.number) -Repository $Repository
+    }
+
+    if ($threadsResult.UnresolvedCount -gt 0) {
+        return @{ Gate = "WAIT_THREADS"; Reason = "Pull Request has $($threadsResult.UnresolvedCount) unresolved review thread(s)." }
+    }
+
+    # 8. Merge Permission Gate (AC-AI-13-20)
+    if ($null -ne $PermissionResolver) {
+        $hasPerm = & $PermissionResolver $Repository
+        if ($hasPerm -is [bool] -and -not $hasPerm) {
+            throw "Current GitHub credential lacks merge/push permission for repository '$Repository'. Stopping fail-closed."
+        }
+    } else {
+        Assert-ShipDeMergePermission -Repository $Repository
+    }
+
+    $nodeId = if ($freshPr.PSObject.Properties['id'] -and $freshPr.id) {
+        [string]$freshPr.id
+    } elseif ($PullRequest.PSObject.Properties['id'] -and $PullRequest.id) {
+        [string]$PullRequest.id
+    } else {
+        ""
+    }
+
+    return @{
+        Gate = "PASS"
+        HeadSha = $headSha
+        PullRequestId = $nodeId
+        Number = [int]$PullRequest.number
+    }
+}
+
+function Invoke-ShipDeAutoMerge {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [object]$PullRequest = $null,
+        [scriptblock]$PrResolver = $null,
+        [scriptblock]$BranchProtectionResolver = $null,
+        [scriptblock]$ReviewVerdictResolver = $null,
+        [scriptblock]$ReviewThreadsResolver = $null,
+        [scriptblock]$FindingsResolver = $null,
+        [scriptblock]$PermissionResolver = $null,
+        [scriptblock]$PrViewResolver = $null,
+        [scriptblock]$MergeMutationRunner = $null,
+        [scriptblock]$CheckpointWriter = $null,
+        [scriptblock]$RegisterSynchronizer = $null
+    )
+
+    $pr = $PullRequest
+    if ($null -eq $pr) {
+        $pr = if ($null -ne $PrResolver) {
+            & $PrResolver ([string]$State.WorkItemId) ([string]$State.Branch)
+        } else {
+            Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch)
+        }
+    }
+
+    if ($null -eq $pr) {
+        throw "Cannot perform auto-merge: open Pull Request for '$($State.WorkItemId)' on '$($State.Branch)' was not found."
+    }
+
+    $repoParts = $Repository -split '/'
+    $repoOwner = if ($repoParts.Count -eq 2) { $repoParts[0] } else { "" }
+
+    $preflight = Test-ShipDeMergePreflight `
+        -PullRequest $pr `
+        -WorkItemId ([string]$State.WorkItemId) `
+        -Branch ([string]$State.Branch) `
+        -Repository $Repository `
+        -AuthorLogin ([string]$State.Author) `
+        -RepoOwner $repoOwner `
+        -BranchProtectionResolver $BranchProtectionResolver `
+        -ReviewVerdictResolver $ReviewVerdictResolver `
+        -ReviewThreadsResolver $ReviewThreadsResolver `
+        -FindingsResolver $FindingsResolver `
+        -PermissionResolver $PermissionResolver `
+        -PrViewResolver $PrViewResolver
+
+    if ($preflight.Gate -ne "PASS") {
+        $gateState = [string]$preflight.Gate
+        $reason = [string]$preflight.Reason
+        Write-Host ("[SUPERVISOR] Auto-merge preflight check not satisfied: Gate={0}, Reason={1}" -f $gateState, $reason)
+
+        $mappedState = switch ($gateState) {
+            "WAIT_CI" { "WAIT_CI" }
+            "WAIT_REVIEW" { "WAIT_REVIEW" }
+            "WAIT_THREADS" { "WAIT_THREADS" }
+            "WAIT_MERGEABLE" { "WAIT_MERGEABLE" }
+            default { "BLOCKED" }
+        }
+        $State.State = $mappedState
+        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+
+        if ($mappedState -eq "BLOCKED") {
+            throw "Auto-merge blocked fail-closed for PR #$($pr.number): $reason"
+        }
+        return $mappedState
+    }
+
+    $headSha = [string]$preflight.HeadSha
+    $nodeId = [string]$preflight.PullRequestId
+    if ([string]::IsNullOrWhiteSpace($nodeId) -and $pr.PSObject.Properties['id']) {
+        $nodeId = [string]$pr.id
+    }
+
+    # Persist merge intent BEFORE external side-effect (Rule AI-MERGE-10)
+    $State.MergeIntent = @{
+        Repository = $Repository
+        PullRequestNumber = [int]$pr.number
+        WorkItemId = [string]$State.WorkItemId
+        ExpectedHeadOid = $headSha
+        State = "MERGE_INTENT_PERSISTED"
+        CreatedAt = (Get-Date).ToUniversalTime().ToString("o")
+    }
+    $State.State = "MERGE_INTENT_PERSISTED"
+    Write-Host ("[SUPERVISOR] State: MERGE_INTENT_PERSISTED for PR #{0} at exact HEAD {1}." -f $pr.number, $headSha)
+    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+
+    # Execute merge mutation with expectedHeadOid
+    Write-Host ("[SUPERVISOR] Submitting GitHub merge mutation for PR #{0} with expectedHeadOid {1}..." -f $pr.number, $headSha)
+    $mutationResult = $null
+    try {
+        if ($null -ne $MergeMutationRunner) {
+            $mutationResult = & $MergeMutationRunner $nodeId $headSha "SQUASH"
+        } else {
+            $mutationResult = Invoke-ShipDeGraphQLMergeMutation -PullRequestId $nodeId -ExpectedHeadOid $headSha -MergeMethod "SQUASH" -Repository $Repository
+        }
+    } catch {
+        $errMsg = $_.Exception.Message
+        if ($errMsg -match "(?i)expectedHeadOid|head commit.*not.*expected") {
+            Write-Host ("[SUPERVISOR] GitHub rejected expectedHeadOid {0} (head changed). Discarding stale evidence." -f $headSha)
+            $State.MergeIntent = $null
+            $State.State = "STARTED"
+            $State.ExactHeadVerdict = $null
+            if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+            return "STALE_HEAD"
+        }
+
+        Write-Warning ("[SUPERVISOR] Merge mutation encountered error: {0}. Reconciling remote state..." -f $errMsg)
+        $reconciledState = Reconcile-ShipDeMergeIntent -State $State -Repository $Repository -PrQueryResolver $PrViewResolver -CheckpointWriter $CheckpointWriter -RegisterSynchronizer $RegisterSynchronizer
+        if ($reconciledState.State -eq "MERGED") {
+            return "MERGED"
+        }
+        throw "Merge mutation failed and remote PR state could not be confirmed as MERGED: $errMsg"
+    }
+
+    # Postcondition verification (AC-AI-13-19)
+    $isMerged = $false
+    $mergeCommitOid = ""
+    if ($null -ne $mutationResult) {
+        $mState = [string](Get-ShipDeObjectProperty -Object $mutationResult -Names @("state", "State"))
+        $mMerged = [bool](Get-ShipDeObjectProperty -Object $mutationResult -Names @("merged", "Merged"))
+        $mCommit = Get-ShipDeObjectProperty -Object $mutationResult -Names @("mergeCommit", "MergeCommit")
+        $mergeCommitOid = [string](Get-ShipDeObjectProperty -Object $mCommit -Names @("oid", "Oid", "id"))
+
+        if ($mState -eq "MERGED" -and $mMerged -and -not [string]::IsNullOrWhiteSpace($mergeCommitOid)) {
+            $isMerged = $true
+        }
+    }
+
+    if (-not $isMerged) {
+        throw "Merge mutation completed but postcondition verification failed: PR state is not MERGED or mergeCommit.oid is missing."
+    }
+
+    Write-Host ("[SUPERVISOR] State: MERGED. PR #{0} merged as commit {1}." -f $pr.number, $mergeCommitOid)
+    $State.State = "MERGED"
+    $State.MergeCommitOid = $mergeCommitOid
+    $State.MergeIntent = $null
+    if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+
+    if ($null -ne $RegisterSynchronizer) {
+        & $RegisterSynchronizer $State
+    }
+
+    return "MERGED"
 }
 
 function Invoke-ShipDeSupervisorLoop {
@@ -7378,6 +8149,728 @@ Full review comments:
 }
 }
 
+function Assert-ShipDeAutoMergeCompatibility {
+    $origHandoffRoot = $script:HandoffRoot
+    $origSupervisorStateFile = $script:SupervisorStateFile
+    $origSupervisorLockFile = $script:SupervisorLockFile
+    $origAutoMergeTempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("shipde-automerge-test-" + [System.Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $origAutoMergeTempRoot -Force | Out-Null
+
+    try {
+        $script:HandoffRoot = Join-Path $origAutoMergeTempRoot "handoff"
+        $script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.json"
+        $script:SupervisorLockFile = Join-Path $script:HandoffRoot "supervisor.lock"
+        New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
+
+        $validHeadSha = "1122334455667788990011223344556677889900"
+        $validPr = [PSCustomObject]@{
+            id = "PR_kwDOtest123"
+            number = 12
+            title = "[TASK-AI-07] Cross-harness worker failover"
+            headRefName = "feat/task-ai-07-cross-harness-worker-failover"
+            headRefOid = $validHeadSha
+            baseRefName = "main"
+            headRepository = "vinh05092001/shipde-platform"
+            isDraft = $false
+            isCrossRepository = $false
+            mergeable = "MERGEABLE"
+            mergeStateStatus = "CLEAN"
+            statusCheckRollup = @(
+                [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+            )
+        }
+
+        # AC-AI-13-01: Exactly one governed PR matches Work Item and branch -> Controller selects that PR only
+        & {
+            $matchingPr = Get-ShipDeOpenPullRequestForWorkItem `
+                -WorkItemId "TASK-AI-07" `
+                -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                -OpenPrResolver { return @($validPr) }
+            if ($null -eq $matchingPr -or $matchingPr.number -ne 12) {
+                throw "AC-AI-13-01 failed: did not select exactly matching PR."
+            }
+        }
+
+        # AC-AI-13-02: Zero or multiple matching PRs -> Stop without merge
+        & {
+            $zeroPr = Get-ShipDeOpenPullRequestForWorkItem `
+                -WorkItemId "TASK-AI-07" `
+                -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                -OpenPrResolver { return @() }
+            if ($null -ne $zeroPr) {
+                throw "AC-AI-13-02 failed: expected null for zero matching PRs."
+            }
+
+            $prDup = [PSCustomObject]@{
+                number = 13
+                title = "[TASK-AI-07] Duplicate PR"
+                headRefName = "feat/task-ai-07-cross-harness-worker-failover"
+                headRepository = "vinh05092001/shipde-platform"
+            }
+            $caughtMulti = $false
+            try {
+                $null = Get-ShipDeOpenPullRequestForWorkItem `
+                    -WorkItemId "TASK-AI-07" `
+                    -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                    -OpenPrResolver { return @($validPr, $prDup) }
+            } catch {
+                if ($_.Exception.Message -match "Expected exactly one open PR") {
+                    $caughtMulti = $true
+                }
+            }
+            if (-not $caughtMulti) {
+                throw "AC-AI-13-02 failed: did not throw on multiple matching PRs."
+            }
+        }
+
+        # AC-AI-13-03: PR is draft, closed, forked, or targets a base other than main -> Stop without merge
+        & {
+            $draftPr = $validPr.PSObject.Copy()
+            $draftPr.isDraft = $true
+            $draftRes = Test-ShipDeMergePreflight -PullRequest $draftPr -WorkItemId "TASK-AI-07" -Branch "feat/task-ai-07-cross-harness-worker-failover" -PrViewResolver { return $draftPr }
+            if ($draftRes.Gate -eq "PASS") { throw "AC-AI-13-03 failed: draft PR was not rejected." }
+
+            $forkPr = $validPr.PSObject.Copy()
+            $forkPr.isCrossRepository = $true
+            $caughtFork = $false
+            try {
+                Test-ShipDeMergePreflight -PullRequest $forkPr -WorkItemId "TASK-AI-07" -Branch "feat/task-ai-07-cross-harness-worker-failover" -PrViewResolver { return $forkPr } | Out-Null
+            } catch {
+                if ($_.Exception.Message -match "cross-repository fork") { $caughtFork = $true }
+            }
+            if (-not $caughtFork) { throw "AC-AI-13-03 failed: forked PR was not rejected." }
+
+            $nonMainPr = $validPr.PSObject.Copy()
+            $nonMainPr.baseRefName = "dev"
+            $caughtBase = $false
+            try {
+                Test-ShipDeMergePreflight -PullRequest $nonMainPr -WorkItemId "TASK-AI-07" -Branch "feat/task-ai-07-cross-harness-worker-failover" -PrViewResolver { return $nonMainPr } | Out-Null
+            } catch {
+                if ($_.Exception.Message -match "targets base") { $caughtBase = $true }
+            }
+            if (-not $caughtBase) { throw "AC-AI-13-03 failed: non-main base PR was not rejected." }
+        }
+
+        # AC-AI-13-04: Current branch protection lists required checks -> Controller requires every listed context and expected App source
+        & {
+            $mockProtection = [PSCustomObject]@{
+                strict = $true
+                contexts = @("contract", "application-gate")
+                checks = @(
+                    [PSCustomObject]@{ context = "contract"; app_id = 15368 },
+                    [PSCustomObject]@{ context = "application-gate"; app_id = 15368 }
+                )
+            }
+            $gateRes = Get-ShipDePrGate -PullRequest $validPr -RequiredChecks $mockProtection.checks
+            if ($gateRes -ne "GREEN") {
+                throw "AC-AI-13-04 failed: expected GREEN with matching branch protection checks."
+            }
+        }
+
+        # AC-AI-13-05: Required check is missing, pending, skipped, neutral, cancelled, failed, stale, duplicated ambiguously, or not from GitHub Actions
+        & {
+            $negativeCases = @(
+                @{ Name = "missing_check"; Rollup = @([PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }) },
+                @{ Name = "pending_check"; Rollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                    [PSCustomObject]@{ name = "application-gate"; status = "IN_PROGRESS"; conclusion = $null; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                ) },
+                @{ Name = "skipped_check"; Rollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "SKIPPED"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                ) },
+                @{ Name = "neutral_check"; Rollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "NEUTRAL"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                ) },
+                @{ Name = "cancelled_check"; Rollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "CANCELLED"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                ) },
+                @{ Name = "failed_check"; Rollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } },
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "FAILURE"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                ) },
+                @{ Name = "non_actions_app"; Rollup = @(
+                    [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "untrusted-bot"; name = "Untrusted Bot"; id = 99999 } } },
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions"; id = 15368 } } }
+                ) }
+            )
+
+            foreach ($case in $negativeCases) {
+                $testPrNeg = $validPr.PSObject.Copy()
+                $testPrNeg.statusCheckRollup = $case.Rollup
+                $gateRes = Get-ShipDePrGate -PullRequest $testPrNeg
+                if ($gateRes -eq "GREEN") {
+                    throw "AC-AI-13-05 failed: expected check to not be GREEN for case '$($case.Name)'."
+                }
+            }
+        }
+
+        # AC-AI-13-06: All required newest exact-head GitHub Actions attempts are SUCCESS -> CI gate becomes GREEN
+        & {
+            $gateRes = Get-ShipDePrGate -PullRequest $validPr
+            if ($gateRes -ne "GREEN") {
+                throw "AC-AI-13-06 failed: all checks are SUCCESS from GitHub Actions, expected GREEN."
+            }
+        }
+
+        # AC-AI-13-07 & AC-AI-13-21: PASS comes from repo owner, PR author, implementation author, non-allowlisted bot -> Reject as untrusted
+        & {
+            $untrustedAuthors = @("vinh05092001", "author-user", "gemini-author", "untrusted-bot", "chatgpt-codex-connector")
+            foreach ($badAuthor in $untrustedAuthors) {
+                $badComments = @(
+                    [PSCustomObject]@{
+                        author = [PSCustomObject]@{ login = $badAuthor }
+                        body = "Reviewed exact head: $validHeadSha`n`nVERDICT: PASS"
+                        createdAt = "2026-09-08T12:00:00Z"
+                    }
+                )
+                $verdict = Get-ShipDeGitHubExactHeadCodexVerdict `
+                    -PullRequestNumber 12 `
+                    -Comments $badComments `
+                    -Reviews @() `
+                    -HeadSha $validHeadSha `
+                    -AuthorLogin "gemini-author" `
+                    -RepoOwner "vinh05092001"
+                if ($null -ne $verdict) {
+                    throw "AC-AI-13-07/AC-AI-13-21 failed: verdict from '$badAuthor' was not rejected."
+                }
+            }
+        }
+
+        # AC-AI-13-08: Trusted bot supplies explicit terminal PASS for exact head with no newer negative evidence -> Review gate becomes PASS
+        & {
+            $trustedComments = @(
+                [PSCustomObject]@{
+                    author = [PSCustomObject]@{ login = "chatgpt-codex-connector[bot]" }
+                    body = "Reviewed exact head: $validHeadSha`n`nVERDICT: PASS"
+                    createdAt = "2026-09-08T12:00:00Z"
+                }
+            )
+            $verdict = Get-ShipDeGitHubExactHeadCodexVerdict `
+                -PullRequestNumber 12 `
+                -Comments $trustedComments `
+                -Reviews @() `
+                -HeadSha $validHeadSha
+            if ($verdict -ne "PASS") {
+                throw "AC-AI-13-08 failed: expected PASS from trusted bot."
+            }
+        }
+
+        # AC-AI-13-09: Review endpoint fails, evidence conflicts, verdict is stale, or newer exact-head finding exists -> Stop fail-closed
+        & {
+            $staleComments = @(
+                [PSCustomObject]@{
+                    author = [PSCustomObject]@{ login = "chatgpt-codex-connector[bot]" }
+                    body = "Reviewed exact head: 9988776655443322110099887766554433221100`n`nVERDICT: PASS"
+                    createdAt = "2026-09-08T12:00:00Z"
+                }
+            )
+            $staleVerdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber 12 -Comments $staleComments -Reviews @() -HeadSha $validHeadSha
+            if ($null -ne $staleVerdict) {
+                throw "AC-AI-13-09 failed: stale verdict was not rejected."
+            }
+
+            $conflictingComments = @(
+                [PSCustomObject]@{
+                    author = [PSCustomObject]@{ login = "chatgpt-codex-connector[bot]" }
+                    body = "Reviewed exact head: $validHeadSha`n`nVERDICT: PASS"
+                    createdAt = "2026-09-08T12:00:00Z"
+                },
+                [PSCustomObject]@{
+                    author = [PSCustomObject]@{ login = "chatgpt-codex-connector[bot]" }
+                    body = "Reviewed exact head: $validHeadSha`n`nVERDICT: CHANGES_REQUIRED"
+                    createdAt = "2026-09-08T12:05:00Z"
+                }
+            )
+            $confVerdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber 12 -Comments $conflictingComments -Reviews @() -HeadSha $validHeadSha
+            if ($confVerdict -ne "CHANGES_REQUIRED") {
+                throw "AC-AI-13-09 failed: newer CHANGES_REQUIRED verdict did not supersede earlier PASS."
+            }
+        }
+
+        # AC-AI-13-10: Review-thread pagination returns one unresolved thread on any page -> No merge mutation
+        & {
+            $page1Threads = [PSCustomObject]@{
+                data = [PSCustomObject]@{
+                    repository = [PSCustomObject]@{
+                        pullRequest = [PSCustomObject]@{
+                            reviewThreads = [PSCustomObject]@{
+                                pageInfo = [PSCustomObject]@{ hasNextPage = $true; endCursor = "cursor1" }
+                                nodes = @([PSCustomObject]@{ id = "thread1"; isResolved = $true; isOutdated = $false })
+                            }
+                        }
+                    }
+                }
+            }
+            $page2Threads = [PSCustomObject]@{
+                data = [PSCustomObject]@{
+                    repository = [PSCustomObject]@{
+                        pullRequest = [PSCustomObject]@{
+                            reviewThreads = [PSCustomObject]@{
+                                pageInfo = [PSCustomObject]@{ hasNextPage = $false; endCursor = $null }
+                                nodes = @([PSCustomObject]@{ id = "thread2"; isResolved = $false; isOutdated = $false })
+                            }
+                        }
+                    }
+                }
+            }
+
+            $unresolvedResult = Get-ShipDePullRequestReviewThreads -PullRequestNumber 12 -GraphQLInvoker {
+                param($q, $v)
+                if ([string]::IsNullOrWhiteSpace($v.after)) { return $page1Threads }
+                return $page2Threads
+            }
+            if ($unresolvedResult.UnresolvedCount -ne 1) {
+                throw "AC-AI-13-10 failed: did not find unresolved thread on page 2."
+            }
+        }
+
+        # AC-AI-13-11: Review-thread query succeeds and every thread is resolved -> Thread gate returns zero unresolved
+        & {
+            $pageResolved = [PSCustomObject]@{
+                data = [PSCustomObject]@{
+                    repository = [PSCustomObject]@{
+                        pullRequest = [PSCustomObject]@{
+                            reviewThreads = [PSCustomObject]@{
+                                pageInfo = [PSCustomObject]@{ hasNextPage = $false; endCursor = $null }
+                                nodes = @(
+                                    [PSCustomObject]@{ id = "thread1"; isResolved = $true; isOutdated = $false },
+                                    [PSCustomObject]@{ id = "thread2"; isResolved = $true; isOutdated = $false }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            $resolvedResult = Get-ShipDePullRequestReviewThreads -PullRequestNumber 12 -GraphQLInvoker {
+                param($q, $v) return $pageResolved
+            }
+            if ($resolvedResult.UnresolvedCount -ne 0) {
+                throw "AC-AI-13-11 failed: expected 0 unresolved threads."
+            }
+        }
+
+        # AC-AI-13-12: Review-thread query/parse fails -> Stop; never interpret as zero
+        & {
+            $caughtFail = $false
+            try {
+                $null = Get-ShipDePullRequestReviewThreads -PullRequestNumber 12 -GraphQLInvoker {
+                    param($q, $v)
+                    throw "GraphQL network timeout"
+                }
+            } catch {
+                $caughtFail = $true
+            }
+            if (-not $caughtFail) {
+                throw "AC-AI-13-12 failed: review thread query error was swallowed."
+            }
+
+            $caughtMalformed = $false
+            try {
+                $null = Get-ShipDePullRequestReviewThreads -PullRequestNumber 12 -GraphQLInvoker {
+                    param($q, $v) return [PSCustomObject]@{ badPayload = $true }
+                }
+            } catch {
+                $caughtMalformed = $true
+            }
+            if (-not $caughtMalformed) {
+                throw "AC-AI-13-12 failed: malformed GraphQL response was not rejected."
+            }
+        }
+
+        # AC-AI-13-13: Mergeability is UNKNOWN, CONFLICTING, or stale/behind under strict protection -> Bounded wait or blocker; no mutation
+        & {
+            $prUnknown = $validPr.PSObject.Copy()
+            $prUnknown.mergeable = "UNKNOWN"
+            $res = Test-ShipDeMergePreflight `
+                -PullRequest $prUnknown `
+                -WorkItemId "TASK-AI-07" `
+                -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $prUnknown }
+            if ($res.Gate -ne "WAIT_MERGEABLE") {
+                throw "AC-AI-13-13 failed: UNKNOWN mergeable did not return WAIT_MERGEABLE."
+            }
+
+            $prConf = $validPr.PSObject.Copy()
+            $prConf.mergeable = "CONFLICTING"
+            $resConf = Test-ShipDeMergePreflight `
+                -PullRequest $prConf `
+                -WorkItemId "TASK-AI-07" `
+                -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $prConf }
+            if ($resConf.Gate -ne "CONFLICTING") {
+                throw "AC-AI-13-13 failed: CONFLICTING mergeable did not return CONFLICTING."
+            }
+
+            $prBehind = $validPr.PSObject.Copy()
+            $prBehind.mergeStateStatus = "BEHIND"
+            $resBehind = Test-ShipDeMergePreflight `
+                -PullRequest $prBehind `
+                -WorkItemId "TASK-AI-07" `
+                -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $prBehind }
+            if ($resBehind.Gate -ne "WAIT_MERGEABLE") {
+                throw "AC-AI-13-13 failed: BEHIND mergeStateStatus did not return WAIT_MERGEABLE under strict protection."
+            }
+        }
+
+        # AC-AI-13-14 & AC-AI-13-16: PR head changes after preflight / GitHub rejects expectedHeadOid -> Discard stale evidence
+        & {
+            $stateStale = @{
+                WorkItemId = "TASK-AI-07"
+                Branch = "feat/task-ai-07-cross-harness-worker-failover"
+                Author = "GEMINI"
+                State = "READY_FOR_HUMAN_MERGE"
+                HeadSha = $validHeadSha
+                PullRequestNumber = 12
+            }
+            $staleRes = Invoke-ShipDeAutoMerge `
+                -State $stateStale `
+                -PrResolver { param($w, $b) return $validPr } `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $validPr } `
+                -MergeMutationRunner {
+                    param($id, $head, $method)
+                    throw "GraphQL merge mutation returned error(s): Head commit was not the expected commit: expectedHeadOid mismatch"
+                } `
+                -CheckpointWriter { param($s) }
+            if ($staleRes -ne "STALE_HEAD") {
+                throw "AC-AI-13-14/AC-AI-13-16 failed: expected STALE_HEAD on expectedHeadOid rejection."
+            }
+            if ($stateStale.State -ne "STARTED" -or $null -ne $stateStale.MergeIntent) {
+                throw "AC-AI-13-14/AC-AI-13-16 failed: state was not reset to STARTED with cleared MergeIntent."
+            }
+        }
+
+        # AC-AI-13-15: All gates pass -> Exactly one merge request includes the full captured SHA as expectedHeadOid
+        & {
+            $statePass = @{
+                WorkItemId = "TASK-AI-07"
+                Branch = "feat/task-ai-07-cross-harness-worker-failover"
+                Author = "GEMINI"
+                State = "READY_FOR_HUMAN_MERGE"
+                HeadSha = $validHeadSha
+                PullRequestNumber = 12
+            }
+            $mergeTracker = @{ Args = $null }
+            $mergeOutcome = Invoke-ShipDeAutoMerge `
+                -State $statePass `
+                -PrResolver { param($w, $b) return $validPr } `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $validPr } `
+                -MergeMutationRunner {
+                    param($id, $head, $method)
+                    $mergeTracker.Args = @{ PullRequestId = $id; HeadSha = $head; Method = $method }
+                    return [PSCustomObject]@{
+                        state = "MERGED"
+                        merged = $true
+                        mergeCommit = [PSCustomObject]@{ oid = "merge-commit-sha-12345" }
+                    }
+                } `
+                -CheckpointWriter { param($s) } `
+                -RegisterSynchronizer { param($s) }
+            if ($mergeOutcome -ne "MERGED") {
+                throw "AC-AI-13-15 failed: expected MERGED outcome."
+            }
+            if ($null -eq $mergeTracker.Args -or $mergeTracker.Args.HeadSha -ne $validHeadSha -or $mergeTracker.Args.Method -ne "SQUASH") {
+                throw "AC-AI-13-15 failed: merge mutation was not invoked with exact expectedHeadOid and SQUASH method."
+            }
+        }
+
+        # AC-AI-13-17: Process stops after persisting intent but before response -> Restart reconciles PR state before retry
+        & {
+            $stateInterrupted = @{
+                WorkItemId = "TASK-AI-07"
+                Branch = "feat/task-ai-07-cross-harness-worker-failover"
+                Author = "GEMINI"
+                State = "MERGE_INTENT_PERSISTED"
+                HeadSha = $validHeadSha
+                PullRequestNumber = 12
+                MergeIntent = @{
+                    PullRequestNumber = 12
+                    WorkItemId = "TASK-AI-07"
+                    ExpectedHeadOid = $validHeadSha
+                }
+            }
+            $reconciledState = Reconcile-ShipDeMergeIntent `
+                -State $stateInterrupted `
+                -PrQueryResolver {
+                    param($num)
+                    return [PSCustomObject]@{
+                        state = "MERGED"
+                        headRefOid = $validHeadSha
+                        mergeCommit = [PSCustomObject]@{ oid = "reconciled-merge-commit-sha" }
+                    }
+                } `
+                -CheckpointWriter { param($s) } `
+                -RegisterSynchronizer { param($s) }
+            if ($reconciledState.State -ne "MERGED" -or $reconciledState.MergeCommitOid -ne "reconciled-merge-commit-sha" -or $null -ne $reconciledState.MergeIntent) {
+                throw "AC-AI-13-17 failed: did not reconcile crashed MERGE_INTENT_PERSISTED to MERGED."
+            }
+        }
+
+        # AC-AI-13-18: Merge response times out or is malformed -> Reconcile remote PR/head/merge commit; fail closed if ambiguous
+        & {
+            $stateTimeout = @{
+                WorkItemId = "TASK-AI-07"
+                Branch = "feat/task-ai-07-cross-harness-worker-failover"
+                Author = "GEMINI"
+                State = "READY_FOR_HUMAN_MERGE"
+                HeadSha = $validHeadSha
+                PullRequestNumber = 12
+            }
+            $timeoutOutcomeA = Invoke-ShipDeAutoMerge `
+                -State $stateTimeout `
+                -PrResolver { param($w, $b) return $validPr } `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver {
+                    param($num)
+                    return [PSCustomObject]@{
+                        state = "MERGED"
+                        headRefOid = $validHeadSha
+                        mergeable = "MERGEABLE"
+                        mergeStateStatus = "CLEAN"
+                        mergeCommit = [PSCustomObject]@{ oid = "recovered-timeout-commit" }
+                    }
+                } `
+                -MergeMutationRunner { param($id, $head, $method) throw "API connection timeout" } `
+                -CheckpointWriter { param($s) } `
+                -RegisterSynchronizer { param($s) }
+            if ($timeoutOutcomeA -ne "MERGED" -or $stateTimeout.MergeCommitOid -ne "recovered-timeout-commit") {
+                throw "AC-AI-13-18 failed: timeout recovery did not confirm remote MERGED."
+            }
+
+            $stateTimeoutB = @{
+                WorkItemId = "TASK-AI-07"
+                Branch = "feat/task-ai-07-cross-harness-worker-failover"
+                Author = "GEMINI"
+                State = "READY_FOR_HUMAN_MERGE"
+                HeadSha = $validHeadSha
+                PullRequestNumber = 12
+            }
+            $caughtAmbiguous = $false
+            try {
+                $null = Invoke-ShipDeAutoMerge `
+                    -State $stateTimeoutB `
+                    -PrResolver { param($w, $b) return $validPr } `
+                    -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                    -ReviewVerdictResolver { return "PASS" } `
+                    -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                    -PermissionResolver { return $true } `
+                    -PrViewResolver { param($num) throw "GitHub status endpoint offline" } `
+                    -MergeMutationRunner { param($id, $head, $method) throw "API connection timeout" } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $caughtAmbiguous = $true
+            }
+            if (-not $caughtAmbiguous) {
+                throw "AC-AI-13-18 failed: ambiguous timeout did not fail closed."
+            }
+        }
+
+        # AC-AI-13-19: Merge succeeds -> Confirm MERGED and merge commit before advancing register
+        & {
+            $syncTracker = @{ Advanced = $false }
+            $stateAdvance = @{
+                WorkItemId = "TASK-AI-07"
+                Branch = "feat/task-ai-07-cross-harness-worker-failover"
+                Author = "GEMINI"
+                State = "READY_FOR_HUMAN_MERGE"
+                HeadSha = $validHeadSha
+                PullRequestNumber = 12
+            }
+            $null = Invoke-ShipDeAutoMerge `
+                -State $stateAdvance `
+                -PrResolver { param($w, $b) return $validPr } `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return "PASS" } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $validPr } `
+                -MergeMutationRunner {
+                    param($id, $head, $method)
+                    return [PSCustomObject]@{
+                        state = "MERGED"
+                        merged = $true
+                        mergeCommit = [PSCustomObject]@{ oid = "confirmed-merge-commit-789" }
+                    }
+                } `
+                -CheckpointWriter { param($s) } `
+                -RegisterSynchronizer { param($s) $syncTracker.Advanced = $true }
+            if (-not $syncTracker.Advanced -or $stateAdvance.MergeCommitOid -ne "confirmed-merge-commit-789") {
+                throw "AC-AI-13-19 failed: register synchronizer was not called after confirming MERGED and merge commit."
+            }
+        }
+
+        # AC-AI-13-20: Current GitHub credential lacks merge permission -> Report credential/permission blocker without bypass
+        & {
+            $caughtPerm = $false
+            try {
+                Test-ShipDeMergePreflight `
+                    -PullRequest $validPr `
+                    -WorkItemId "TASK-AI-07" `
+                    -Branch "feat/task-ai-07-cross-harness-worker-failover" `
+                    -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                    -ReviewVerdictResolver { return "PASS" } `
+                    -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                    -PermissionResolver { return $false } `
+                    -PrViewResolver { return $validPr } | Out-Null
+            } catch {
+                if ($_.Exception.Message -match "permission") { $caughtPerm = $true }
+            }
+            if (-not $caughtPerm) {
+                throw "AC-AI-13-20 failed: missing merge permission did not throw blocker."
+            }
+        }
+
+        # AC-AI-13-22: TASK-AI-13 bootstrap runs while PR #8 exists -> No PR #8 write, close, merge, branch deletion, or duplicate PR
+        & {
+            $mockPr8 = [PSCustomObject]@{
+                number = 8
+                title = "[TASK-FOUND-03] Add API, worker and local infrastructure"
+                headRefName = "feat/task-found-03-api-worker-infrastructure"
+                headRefOid = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                headRepository = "vinh05092001/shipde-platform"
+                isDraft = $false
+            }
+            $mockAi13Item = [PSCustomObject]@{
+                WorkItemId = "TASK-AI-13"
+                WorkItemPath = "docs/product-spec/work-items/TASK-AI-13.md"
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = "GEMINI"
+            }
+            $regNotMerged = @(
+                [PSCustomObject]@{ work_item_id = "TASK-AI-12"; status = "BLOCKED_DEPENDENCY" },
+                [PSCustomObject]@{ work_item_id = "TASK-AI-13"; status = "READY_FOR_AUTHOR" }
+            )
+            $bootstrapState = Initialize-ShipDeSupervisorState `
+                -State $null `
+                -DeliveryRegisterRows $regNotMerged `
+                -OpenPrResolver { return @($mockPr8) } `
+                -NextItemResolver { return $mockAi13Item } `
+                -ActiveWorkersResolver { return @() } `
+                -WorkerStarter { param($item, $prompt) return [PSCustomObject]@{ SessionId = "sess-ai13"; Harness = "agy" } } `
+                -CheckpointWriter { param($s) } `
+                -CodexParker { }
+            if ($bootstrapState.WorkItemId -ne "TASK-AI-13") {
+                throw "AC-AI-13-22 failed: supervisor did not ignore parked PR #8 during TASK-AI-13 bootstrap."
+            }
+        }
+
+        # AC-AI-13-23: TASK-AI-13 is merged -> Controller selects existing PR #8 repair before TASK-AI-07
+        & {
+            $mockPr8 = [PSCustomObject]@{
+                number = 8
+                title = "[TASK-FOUND-03] Add API, worker and local infrastructure"
+                headRefName = "feat/task-found-03-api-worker-infrastructure"
+                headRefOid = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                headRepository = "vinh05092001/shipde-platform"
+                isDraft = $false
+            }
+            $regAi13Merged = @(
+                [PSCustomObject]@{ work_item_id = "TASK-AI-12"; status = "BLOCKED_DEPENDENCY" },
+                [PSCustomObject]@{ work_item_id = "TASK-AI-13"; status = "MERGED" }
+            )
+            $selectedPr8State = Initialize-ShipDeSupervisorState `
+                -State $null `
+                -DeliveryRegisterRows $regAi13Merged `
+                -OpenPrResolver { return @($mockPr8) } `
+                -ActiveWorkersResolver { return @() } `
+                -NextItemResolver { return [PSCustomObject]@{ WorkItemId = "TASK-AI-07" } } `
+                -PrWorkItemResolver {
+                    param($pr)
+                    return [PSCustomObject]@{
+                        WorkItemId = "TASK-FOUND-03"
+                        WorkItemPath = "docs/product-spec/work-items/TASK-FOUND-03.md"
+                        Branch = "feat/task-found-03-api-worker-infrastructure"
+                        Author = "GEMINI"
+                    }
+                } `
+                -CheckpointWriter { param($s) }
+            if ($selectedPr8State.WorkItemId -ne "TASK-FOUND-03" -or $selectedPr8State.PullRequestNumber -ne 8) {
+                throw "AC-AI-13-23 failed: controller did not select PR #8 for repair after TASK-AI-13 was merged."
+            }
+        }
+
+        # AC-AI-13-24: TASK-AI-12 and TASK-AI-13 are both reconciled MERGED -> Controller returns CORE_COMPLETE and does not select AI-14/AI-15
+        & {
+            $regCoreComplete = @(
+                [PSCustomObject]@{ work_item_id = "TASK-AI-12"; status = "MERGED" },
+                [PSCustomObject]@{ work_item_id = "TASK-AI-13"; status = "MERGED" }
+            )
+            $coreCompleteState = Initialize-ShipDeSupervisorState `
+                -State $null `
+                -DeliveryRegisterRows $regCoreComplete `
+                -OpenPrResolver { return @() } `
+                -ActiveWorkersResolver { return @() } `
+                -NextItemResolver { throw "AC-AI-13-24 failure: NextItemResolver called when CORE_COMPLETE!" } `
+                -CheckpointWriter { param($s) }
+            if ($coreCompleteState.State -ne "CORE_COMPLETE") {
+                throw "AC-AI-13-24 failed: controller did not return CORE_COMPLETE."
+            }
+        }
+
+        # AC-AI-13-25: Any required evidence is absent or contradictory -> Terminal or bounded fail-closed state; never merge
+        & {
+            $stateContradictory = @{
+                WorkItemId = "TASK-AI-07"
+                Branch = "feat/task-ai-07-cross-harness-worker-failover"
+                Author = "GEMINI"
+                State = "READY_FOR_HUMAN_MERGE"
+                HeadSha = $validHeadSha
+                PullRequestNumber = 12
+            }
+            $resAbsent = Invoke-ShipDeAutoMerge `
+                -State $stateContradictory `
+                -PrResolver { param($w, $b) return $validPr } `
+                -BranchProtectionResolver { return [PSCustomObject]@{ strict = $true; checks = @() } } `
+                -ReviewVerdictResolver { return $null } `
+                -ReviewThreadsResolver { return [PSCustomObject]@{ UnresolvedCount = 0 } } `
+                -PermissionResolver { return $true } `
+                -PrViewResolver { return $validPr } `
+                -MergeMutationRunner { param($id, $head, $method) throw "Should not be called!" } `
+                -CheckpointWriter { param($s) }
+            if ($resAbsent -eq "MERGED") {
+                throw "AC-AI-13-25 failed: merged when review verdict was absent."
+            }
+            if ($stateContradictory.State -ne "WAIT_REVIEW") {
+                throw "AC-AI-13-25 failed: did not transition to WAIT_REVIEW when review was absent."
+            }
+        }
+    } finally {
+        $script:HandoffRoot = $origHandoffRoot
+        $script:SupervisorStateFile = $origSupervisorStateFile
+        $script:SupervisorLockFile = $origSupervisorLockFile
+        if (Test-Path -LiteralPath $origAutoMergeTempRoot) {
+            Remove-Item -LiteralPath $origAutoMergeTempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Initialize-ShipDeSupervisorState {
     param(
         [object]$State,
@@ -7397,8 +8890,17 @@ function Initialize-ShipDeSupervisorState {
         [int]$PullRequestNumber = 0,
         [string]$Repository = "vinh05092001/shipde-platform",
         [scriptblock]$PrWorkItemResolver = { param($pr) Get-ShipDePrWorkItem -PullRequest $pr },
-        [scriptblock]$SessionDetailResolver = $null
+        [scriptblock]$SessionDetailResolver = $null,
+        [object[]]$DeliveryRegisterRows = $null
     )
+
+    if (Test-ShipDeCoreComplete -Rows $DeliveryRegisterRows) {
+        Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
+        return @{
+            State = "CORE_COMPLETE"
+            WorkItemId = "TASK-AI-13"
+        }
+    }
 
     $sessionId = $null
     $workItemId = $null
@@ -7409,6 +8911,10 @@ function Initialize-ShipDeSupervisorState {
 
     if ($null -ne $State) {
         $State = Normalize-ShipDeSupervisorState -State $State
+        if ([string]$State["State"] -eq "CORE_COMPLETE") {
+            Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
+            return $State
+        }
         $sessionId = [string]$State["SessionId"]
         $workItemId = [string]$State["WorkItemId"]
         $stateValue = [string]$State["State"]
@@ -7570,12 +9076,22 @@ function Initialize-ShipDeSupervisorState {
         return $State
     }
 
-    $openImplementationPullRequests = @(& $OpenPrResolver | Where-Object {
-        Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
+    $isTaskAi13Merged = Test-ShipDeWorkItemMerged -WorkItemId "TASK-AI-13" -Rows $DeliveryRegisterRows
+    $allOpenPrs = @(& $OpenPrResolver)
+
+    $openImplementationPullRequests = @($allOpenPrs | Where-Object {
+        $prItem = Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)
+        if (-not $prItem) { return $false }
+        # Rule AI-MERGE-12 & AC-AI-13-22: During TASK-AI-13 bootstrap (when TASK-AI-13 is not yet MERGED),
+        # PR #8 ([TASK-FOUND-03]) is preserved unchanged and ignored from unmanaged PR collision checks.
+        if (-not $isTaskAi13Merged -and ([int]$_.number -eq 8 -or $prItem -eq "TASK-FOUND-03")) {
+            return $false
+        }
+        return $true
     })
 
     if ($PullRequestNumber -gt 0) {
-        $matchingSelectedPrs = @($openImplementationPullRequests | Where-Object { [int]$_.number -eq $PullRequestNumber })
+        $matchingSelectedPrs = @($allOpenPrs | Where-Object { [int]$_.number -eq $PullRequestNumber })
         if ($matchingSelectedPrs.Count -eq 0) {
             throw "Open implementation Pull Request #$PullRequestNumber was not found among open implementation PRs. Failing closed."
         }
@@ -7614,6 +9130,45 @@ function Initialize-ShipDeSupervisorState {
         Write-Host "[SUPERVISOR] Initialized PR-only review for PR #$($selectedPr.number) ($($item.WorkItemId)) on $($item.Branch) without binding an implementation session."
         & $CheckpointWriter $reconstructedState
         return $reconstructedState
+    }
+
+    # AC-AI-13-23: Once TASK-AI-13 is MERGED, the supervisor selects PR #8 for repair before preparing TASK-AI-07.
+    if ($isTaskAi13Merged) {
+        $pr8Candidate = @($allOpenPrs | Where-Object { [int]$_.number -eq 8 -or (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq "TASK-FOUND-03" })
+        if ($pr8Candidate.Count -eq 1) {
+            $selectedPr = $pr8Candidate[0]
+            $item = & $PrWorkItemResolver $selectedPr
+            if ($item) {
+                Write-Host "[SUPERVISOR] TASK-AI-13 is merged. Selecting existing PR #$($selectedPr.number) ($($item.WorkItemId)) for repair before TASK-AI-07."
+                Assert-ShipDeGovernedPullRequest -PullRequest $selectedPr -WorkItemId $item.WorkItemId -Branch $item.Branch -ExpectedRepository $Repository
+
+                $headSha = if ($selectedPr.headRefOid) { [string]$selectedPr.headRefOid } else { "" }
+                if ([string]::IsNullOrWhiteSpace($headSha)) {
+                    try {
+                        $headSha = (& gh pr view ([int]$selectedPr.number) --repo $Repository --json headRefOid --jq .headRefOid 2>$null)
+                        if ($headSha) { $headSha = $headSha.Trim() }
+                    } catch {}
+                }
+
+                $reconstructedState = @{
+                    WorkItemId = $item.WorkItemId
+                    WorkItemPath = $item.WorkItemPath
+                    Branch = $item.Branch
+                    Author = $item.Author
+                    State = "STARTED"
+                    PullRequestNumber = [int]$selectedPr.number
+                    HeadSha = $headSha
+                    StartTime = (Get-Date).ToUniversalTime().ToString("o")
+                    LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                    NudgeCount = 0
+                    SessionId = $null
+                    Harness = $null
+                }
+                $reconstructedState = Normalize-ShipDeSupervisorState -State $reconstructedState
+                & $CheckpointWriter $reconstructedState
+                return $reconstructedState
+            }
+        }
     }
 
     if ($openImplementationPullRequests.Count -gt 0) {
@@ -7683,14 +9238,38 @@ function Invoke-ShipDeSupervise {
             return
         }
 
+        if ([string]$state.State -eq "CORE_COMPLETE") {
+            Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
+            return "CORE_COMPLETE"
+        }
+
         Update-ShipDeSupervisorLock -WorkItemId ([string]$state.WorkItemId)
+
+        # Crash recovery for pending merge intent (Rule AI-MERGE-10, AI-MERGE-11, AC-AI-13-17)
+        if ($state.State -in @("MERGE_INTENT_PERSISTED", "MERGE_RECONCILING") -or $null -ne $state.MergeIntent) {
+            $state = Reconcile-ShipDeMergeIntent -State $state -Repository $Repository
+            if ($state.State -eq "MERGED") {
+                Write-Host ("[SUPERVISOR] Reconciled pending merge intent: PR #{0} confirmed MERGED." -f $state.PullRequestNumber)
+                return "MERGED"
+            }
+        }
 
         $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes
 
         if ($result -eq "READY_FOR_HUMAN_MERGE") {
             Write-Host ("[SUPERVISOR] PR #{0} at {1} has CI GREEN and durable exact-HEAD Codex PASS." -f $state.PullRequestNumber, $state.HeadSha)
-            Write-Host "[SUPERVISOR] Human merge is required. No automatic merge was attempted."
-            return
+            # Check if this is the bootstrap PR TASK-AI-13
+            if ($state.WorkItemId -eq "TASK-AI-13") {
+                Write-Host "[SUPERVISOR] Human merge is required for bootstrap PR TASK-AI-13. No automatic merge was attempted."
+                return "READY_FOR_HUMAN_MERGE"
+            }
+            Write-Host "[SUPERVISOR] Initiating governed exact-HEAD auto-merge..."
+            $mergeResult = Invoke-ShipDeAutoMerge -State $state -Repository $Repository
+            if ($mergeResult -eq "MERGED") {
+                Write-Host ("[SUPERVISOR] PR #{0} successfully auto-merged." -f $state.PullRequestNumber)
+                return "MERGED"
+            }
+            return $mergeResult
         }
         throw "Unexpected supervisor result: $result"
     } finally {
@@ -7789,6 +9368,7 @@ function Show-ShipDeMenu {
 Assert-ShipDeJsonListCompatibility
 Assert-ShipDeSyncPreflightOrdering
 Assert-ShipDeSupervisorCompatibility
+Assert-ShipDeAutoMergeCompatibility
 Assert-ShipDeCommand git
 Assert-ShipDeCommand gh
 New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null
@@ -7801,6 +9381,6 @@ switch ($Action) {
     "Review" { Invoke-ShipDeReview }
     "Sync" { Invoke-ShipDeSync }
     "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber }
-    "Test" { Write-Host "ALL SUPERVISOR BEHAVIORAL TESTS PASSED"; return }
+    "Test" { Write-Host "ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED"; return }
     default { Show-ShipDeMenu }
 }

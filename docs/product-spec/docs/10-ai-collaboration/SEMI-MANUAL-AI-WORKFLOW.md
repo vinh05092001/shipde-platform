@@ -6,16 +6,16 @@ The tools do not share chat history. They coordinate through one GitHub reposito
 
 ## Responsibility map
 
-| Artifact/action                   | Claude |        Codex planner |           9Router worker |              Gemini |       Codex reviewer |             Human |
-| --------------------------------- | -----: | -------------------: | -----------------------: | ------------------: | -------------------: | ----------------: |
-| Propose business/solution updates |  Owner | Validate and version |                       No |                  No |        Verify source | Approve decisions |
-| Prepare executable Work Item      |     No |                Owner |                       No |                  No |                   No |  Resolve blockers |
-| Choose implementation author      |     No |            Recommend |                       No |                  No |  Challenge if unsafe |     Confirm/start |
-| Implement production code         |     No |                   No |            Low-risk only |       Primary owner |                   No |                No |
-| Add and run tests                 |     No |      Define evidence | Owner for assigned scope |               Owner | Verify independently |           Observe |
-| Open/update Pull Request          |     No | Planning commit only |      Owner when assigned | Owner when assigned |         Read/comment |           Observe |
-| Approve implementation            |     No |                   No |         No self-approval |    No self-approval |            Recommend |       Final owner |
-| Merge to `main`                   |     No |                   No |                       No |                  No |                   No |             Owner |
+| Artifact/action                   | Claude |        Codex planner |           9Router worker |              Gemini |       Codex reviewer |                                           Human |
+| --------------------------------- | -----: | -------------------: | -----------------------: | ------------------: | -------------------: | ----------------------------------------------: |
+| Propose business/solution updates |  Owner | Validate and version |                       No |                  No |        Verify source |                               Approve decisions |
+| Prepare executable Work Item      |     No |                Owner |                       No |                  No |                   No |                                Resolve blockers |
+| Choose implementation author      |     No |            Recommend |                       No |                  No |  Challenge if unsafe |                                   Confirm/start |
+| Implement production code         |     No |                   No |            Low-risk only |       Primary owner |                   No |                                              No |
+| Add and run tests                 |     No |      Define evidence | Owner for assigned scope |               Owner | Verify independently |                                         Observe |
+| Open/update Pull Request          |     No | Planning commit only |      Owner when assigned | Owner when assigned |         Read/comment |                                         Observe |
+| Approve implementation            |     No |                   No |         No self-approval |    No self-approval |            Recommend |                                     Final owner |
+| Merge to `main`                   |     No |                   No |                       No |                  No |                   No | Owner (or controller auto-merge per TASK-AI-13) |
 
 ## State flow
 
@@ -27,7 +27,10 @@ stateDiagram-v2
     ReadyForCodex --> ChangesRequired: Codex finds gaps
     ChangesRequired --> ReadyForCodex: same author fixes same PR
     ReadyForCodex --> CodexPass: every gate passes
-    CodexPass --> Merged: human merges
+    CodexPass --> ReadyForHumanMerge: gate passed
+    ReadyForHumanMerge --> GovernedAutoMerge: exact-HEAD preflight pass
+    GovernedAutoMerge --> Merged: expectedHeadOid confirmed
+    ReadyForHumanMerge --> Merged: manual human merge
     InProgress --> Blocked: missing decision or dependency
     ReadyForCodex --> Blocked: evidence cannot be verified
 ```
@@ -74,9 +77,13 @@ If more than one implementation Pull Request is open during bootstrap or recover
 
 `CHANGES_REQUIRED` returns to the same implementation author and same branch. The author fixes findings, reruns the complete validation set and updates the PR evidence. Two failed 9Router correction rounds escalate the item to Gemini; record the author change in the Work Item. Every updated commit requires a fresh Codex verdict.
 
-### 6. Human merge and workspace sync
+### 6. Human merge, governed auto-merge and workspace sync
 
-The human merges only when CI is green, every acceptance row has evidence, Codex returns `PASS`, review conversations are resolved and residual limitations are explicitly accepted. After merge, reconcile the register to `MERGED`, record PR/merge commit, then run `control.ps1 -Action Sync` to park and fast-forward each clean agent worktree from `origin/main` before preparing another item.
+The human merges only when CI is green, every acceptance row has evidence, Codex returns `PASS`, review conversations are resolved and residual limitations are explicitly accepted.
+
+Under `TASK-AI-13` (`HUMAN-DECISION-ORCHESTRATOR-CORE-PRIORITY-2026-09-08`), the supervisor supports deterministic exact-HEAD auto-merge after `READY_FOR_HUMAN_MERGE`. The controller performs single-snapshot preflight (exact 40-character commit OID, required GitHub Actions `SUCCESS` checks, trusted `chatgpt-codex-connector[bot]` terminal `PASS`, zero unresolved threads, mergeable status, push permission), persists a crash-safe `MERGE_INTENT_PERSISTED` checkpoint, and executes one GraphQL `mergePullRequest` mutation with `expectedHeadOid`.
+
+The bootstrap of `TASK-AI-13` itself requires manual human merge; subsequent items leverage governed auto-merge. After merge is confirmed by GitHub with its merge commit OID, reconcile the register to `MERGED`, record PR/merge commit, then run `control.ps1 -Action Sync` to park and fast-forward each clean agent worktree from `origin/main` before preparing another item.
 
 ## Routing rules
 
