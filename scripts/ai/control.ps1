@@ -1143,6 +1143,30 @@ function Test-ShipDeReconciliationPullRequest {
         return $false
     }
 
+    # Finding (Round 15): Require exact 40-character head commit OID match against persisted handoff
+    $expectedHeadSha = [string](Get-ShipDeObjectProperty -Object $entry -Names @("HandoffCommitOid", "handoffCommitOid"))
+    if ($expectedHeadSha -notmatch '^[0-9a-fA-F]{40}$') {
+        return $false
+    }
+
+    $prHeadSha = [string](Get-ShipDeObjectProperty -Object $PullRequest -Names @("headRefOid", "HeadRefOid", "headSha", "HeadSha", "oid", "Oid"))
+    if ([string]::IsNullOrWhiteSpace($prHeadSha) -and $prNumber -gt 0) {
+        try {
+            if (Get-Command gh -ErrorAction SilentlyContinue) {
+                $rawHead = & gh pr view $prNumber --repo $Repository --json headRefOid --jq .headRefOid 2>$null
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($rawHead)) {
+                    $prHeadSha = [string]$rawHead.Trim()
+                }
+            }
+        } catch {
+            $prHeadSha = ""
+        }
+    }
+
+    if ($prHeadSha -notmatch '^[0-9a-fA-F]{40}$' -or $prHeadSha.Trim().ToLowerInvariant() -ne $expectedHeadSha.Trim().ToLowerInvariant()) {
+        return $false
+    }
+
     # Finding 2: Verify register-only change
     if (-not (Test-ShipDeRegisterOnlyPullRequest -PullRequest $PullRequest -Repository $Repository)) {
         return $false
@@ -3960,6 +3984,21 @@ function Assert-ShipDeGovernedPullRequest {
         }
         if ($headRef -cne $Branch) {
             throw "Open reconciliation PR for $WorkItemId does not use exact governed handoff branch '$Branch'."
+        }
+        $expectedHandoffHead = [string](Get-ShipDeObjectProperty -Object $recEntry -Names @("HandoffCommitOid", "handoffCommitOid"))
+        $prHeadSha = [string](Get-ShipDeObjectProperty -Object $PullRequest -Names @("headRefOid", "HeadRefOid", "headSha", "HeadSha", "oid", "Oid"))
+        if ([string]::IsNullOrWhiteSpace($prHeadSha) -and [int]$PullRequest.number -gt 0) {
+            try {
+                if (Get-Command gh -ErrorAction SilentlyContinue) {
+                    $rawHead = & gh pr view ([int]$PullRequest.number) --repo $ExpectedRepository --json headRefOid --jq .headRefOid 2>$null
+                    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($rawHead)) {
+                        $prHeadSha = [string]$rawHead.Trim()
+                    }
+                }
+            } catch {}
+        }
+        if ($expectedHandoffHead -notmatch '^[0-9a-fA-F]{40}$' -or $prHeadSha -notmatch '^[0-9a-fA-F]{40}$' -or $prHeadSha.Trim().ToLowerInvariant() -ne $expectedHandoffHead.Trim().ToLowerInvariant()) {
+            throw "Open reconciliation PR for $WorkItemId head commit '$prHeadSha' does not match persisted handoff commit '$expectedHandoffHead'."
         }
         if (-not (Test-ShipDeRegisterOnlyPullRequest -PullRequest $PullRequest -Repository $ExpectedRepository)) {
             throw "Open reconciliation PR for $WorkItemId modifies files other than the delivery register."
@@ -10729,6 +10768,37 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                     throw "Finding 2 negative proof failed: Assert-ShipDeGovernedPullRequest did not reject reconciliation PR modifying non-register files."
                 }
 
+                # 1f. PR with headRefOid mismatching persisted HandoffCommitOid (e.g. force-pushed branch) is rejected
+                $mismatchedHeadRecPr = [PSCustomObject]@{
+                    number = 16
+                    title = "[TASK-AI-13] Reconcile delivery register after PR #10"
+                    headRefName = "fix/task-ai-13-register-reconciliation-999999999999"
+                    headRefOid = "ffffffffffffffffffffffffffffffffffffffff"
+                    baseRefName = "main"
+                    headRepository = "vinh05092001/shipde-platform"
+                    changedFiles = 1
+                    files = @("docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv")
+                }
+                if (Test-ShipDeReconciliationPullRequest -PullRequest $mismatchedHeadRecPr -HandoffRoot $tempHandoffGov) {
+                    throw "Finding 1 negative proof failed: reconciliation PR with mismatched head commit OID was accepted."
+                }
+
+                # 1g. Assert-ShipDeGovernedPullRequest rejects reconciliation PR with mismatched head commit OID
+                $caughtMismatchedHeadGovAssert = $false
+                try {
+                    Assert-ShipDeGovernedPullRequest `
+                        -PullRequest $mismatchedHeadRecPr `
+                        -WorkItemId "TASK-AI-13" `
+                        -Branch "fix/task-ai-13-register-reconciliation-999999999999" `
+                        -ExpectedRepository "vinh05092001/shipde-platform" `
+                        -HandoffRoot $tempHandoffGov
+                } catch {
+                    $caughtMismatchedHeadGovAssert = $true
+                }
+                if (-not $caughtMismatchedHeadGovAssert) {
+                    throw "Finding 1 negative proof failed: Assert-ShipDeGovernedPullRequest did not reject reconciliation PR with mismatched head commit OID."
+                }
+
                 # 2. Get-ShipDePrWorkItem and Assert-ShipDeGovernedPullRequest on reconciliation PR
                 $recItem = Get-ShipDePrWorkItem -PullRequest $mockRecPr -HandoffRoot $tempHandoffGov
                 if ($null -eq $recItem -or -not [bool](Get-ShipDeObjectProperty -Object $recItem -Names @("IsReconciliation", "isReconciliation")) -or $recItem.Branch -ne $mockRecPr.headRefName -or $recItem.Author -ne "9ROUTER") {
@@ -12933,7 +13003,7 @@ function Invoke-ShipDeSupervise {
                     $hasOpenRecPr = $false
                     try {
                         $openPrsAfterMerge = @(Get-ShipDeOpenPullRequests)
-                        $hasOpenRecPr = @($openPrsAfterMerge | Where-Object { Test-ShipDeReconciliationPullRequest -PullRequest $_ }).Count -gt 0
+                        $hasOpenRecPr = @($openPrsAfterMerge | Where-Object { Test-ShipDeReconciliationPullRequest -PullRequest $_ -HandoffRoot $script:HandoffRoot -Repository $Repository }).Count -gt 0
                     } catch {}
                     if (-not $hasOpenRecPr) {
                         Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
@@ -12966,7 +13036,7 @@ function Invoke-ShipDeSupervise {
                     $hasOpenRecPr = $false
                     try {
                         $openPrsAfterMerge = @(Get-ShipDeOpenPullRequests)
-                        $hasOpenRecPr = @($openPrsAfterMerge | Where-Object { Test-ShipDeReconciliationPullRequest -PullRequest $_ }).Count -gt 0
+                        $hasOpenRecPr = @($openPrsAfterMerge | Where-Object { Test-ShipDeReconciliationPullRequest -PullRequest $_ -HandoffRoot $script:HandoffRoot -Repository $Repository }).Count -gt 0
                     } catch {}
                     if (-not $hasOpenRecPr) {
                         Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
