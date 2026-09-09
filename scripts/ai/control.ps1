@@ -1096,11 +1096,159 @@ function Test-ShipDeRegisterOnlyPullRequest {
     return $false
 }
 
+function Confirm-ShipDeAuthorizedReconciliationRepairTransition {
+    param(
+        [Parameter(Mandatory = $true)][object]$PullRequest,
+        [Parameter(Mandatory = $true)][string]$WorkItemId,
+        [string]$HandoffRoot = $script:HandoffRoot,
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [hashtable]$State = $null,
+        [scriptblock]$AncestryVerifier = $null
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WorkItemId)) {
+        return $false
+    }
+
+    $reconciledLedger = Get-ShipDePersistedRegisterReconciliations -HandoffRoot $HandoffRoot
+    if (-not $reconciledLedger.ContainsKey($WorkItemId)) {
+        return $false
+    }
+    $recEntry = $reconciledLedger[$WorkItemId]
+
+    $expectedBranch = [string](Get-ShipDeObjectProperty -Object $recEntry -Names @("HandoffBranch", "handoffBranch"))
+    $expectedPrNumber = [int](Get-ShipDeObjectProperty -Object $recEntry -Names @("HandoffPullRequestNumber", "handoffPullRequestNumber"))
+    $expectedHeadSha = [string](Get-ShipDeObjectProperty -Object $recEntry -Names @("HandoffCommitOid", "handoffCommitOid"))
+
+    if ([string]::IsNullOrWhiteSpace($expectedBranch) -or $expectedPrNumber -le 0 -or $expectedHeadSha -notmatch '^[0-9a-fA-F]{40}$') {
+        return $false
+    }
+
+    $headRef = [string](Get-ShipDeObjectProperty -Object $PullRequest -Names @("headRefName", "HeadRefName", "head", "Head"))
+    $prNumber = [int](Get-ShipDeObjectProperty -Object $PullRequest -Names @("number", "Number"))
+    if ($headRef -cne $expectedBranch) {
+        return $false
+    }
+    if ($prNumber -gt 0 -and $prNumber -ne $expectedPrNumber) {
+        return $false
+    }
+
+    $prHeadSha = [string](Get-ShipDeObjectProperty -Object $PullRequest -Names @("headRefOid", "HeadRefOid", "headSha", "HeadSha", "oid", "Oid"))
+    if ([string]::IsNullOrWhiteSpace($prHeadSha) -and $prNumber -gt 0) {
+        try {
+            if (Get-Command gh -ErrorAction SilentlyContinue) {
+                $rawHead = & gh pr view $prNumber --repo $Repository --json headRefOid --jq .headRefOid 2>$null
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($rawHead)) {
+                    $prHeadSha = [string]$rawHead.Trim()
+                }
+            }
+        } catch {}
+    }
+    if ($prHeadSha -notmatch '^[0-9a-fA-F]{40}$') {
+        return $false
+    }
+    if ($prHeadSha.Trim().ToLowerInvariant() -eq $expectedHeadSha.Trim().ToLowerInvariant()) {
+        return $true
+    }
+
+    # Validate that the PR changes exclusively the delivery register
+    if (-not (Test-ShipDeRegisterOnlyPullRequest -PullRequest $PullRequest -Repository $Repository)) {
+        return $false
+    }
+
+    # Resolve active supervisor state / checkpoint to verify repair authorization
+    $activeState = $State
+    if ($null -eq $activeState) {
+        $stateFile = if (-not [string]::IsNullOrWhiteSpace($HandoffRoot)) { Join-Path $HandoffRoot "supervisor-state.json" } else { $script:SupervisorStateFile }
+        if (Test-Path -LiteralPath $stateFile) {
+            try {
+                $activeState = Normalize-ShipDeSupervisorState -State (Get-Content $stateFile -Raw -Encoding UTF8 | ConvertFrom-Json)
+            } catch {}
+        }
+    }
+    if ($null -eq $activeState) {
+        return $false
+    }
+
+    $stateItem = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("WorkItemId", "workItemId"))
+    $isRec = [bool](Get-ShipDeObjectProperty -Object $activeState -Names @("IsReconciliation", "isReconciliation"))
+    $stateBranch = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("Branch", "branch"))
+    $matchesState = ($stateBranch -eq $expectedBranch) -or (($stateItem -eq $WorkItemId) -and ($isRec -or $stateBranch -eq $expectedBranch))
+    if (-not $matchesState) {
+        return $false
+    }
+
+    # Check for affirmative repair dispatch / failure evidence on the previous head
+    $repCount = [int](Get-ShipDeObjectProperty -Object $activeState -Names @("RepairCount", "repairCount"))
+    $lastCiHead = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("LastCiRepairHead", "lastCiRepairHead"))
+    $lastRevHead = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("LastReviewRepairHead", "lastReviewRepairHead"))
+    $stateHead = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("HeadSha", "headSha"))
+    $verdict = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("ExactHeadVerdict", "exactHeadVerdict"))
+    $ciGate = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("CiGate", "ciGate"))
+    $pendingDisp = Get-ShipDeObjectProperty -Object $activeState -Names @("PendingDispatch", "pendingDispatch")
+
+    $hasRepairAuth = ($repCount -gt 0) -or `
+                     (-not [string]::IsNullOrWhiteSpace($lastCiHead)) -or `
+                     (-not [string]::IsNullOrWhiteSpace($lastRevHead)) -or `
+                     ($verdict -eq "CHANGES_REQUIRED") -or `
+                     ($ciGate -eq "FAILED") -or `
+                     ($null -ne $pendingDisp)
+    if (-not $hasRepairAuth) {
+        return $false
+    }
+
+    # Verify the head under repair corresponds to the expected handoff commit
+    $pendingHead = if ($null -ne $pendingDisp) { [string](Get-ShipDeObjectProperty -Object $pendingDisp -Names @("Head", "head")) } else { "" }
+    $headMatchesPrevious = ($stateHead.Trim().ToLowerInvariant() -eq $expectedHeadSha.Trim().ToLowerInvariant()) -or `
+                           ($lastCiHead.Trim().ToLowerInvariant() -eq $expectedHeadSha.Trim().ToLowerInvariant()) -or `
+                           ($lastRevHead.Trim().ToLowerInvariant() -eq $expectedHeadSha.Trim().ToLowerInvariant()) -or `
+                           ($pendingHead.Trim().ToLowerInvariant() -eq $expectedHeadSha.Trim().ToLowerInvariant())
+    if (-not $headMatchesPrevious) {
+        return $false
+    }
+
+    # Distinguish authorized repair from arbitrary force-push: verify fast-forward git ancestry
+    if ($null -ne $AncestryVerifier) {
+        $isAncestor = & $AncestryVerifier $expectedHeadSha $prHeadSha
+        if (-not $isAncestor) {
+            Write-Warning ("[SUPERVISOR] Reconciliation PR #{0} head {1} is not a fast-forward descendant of pinned head {2} (force-push detected). Rejecting transition." -f $expectedPrNumber, $prHeadSha, $expectedHeadSha)
+            return $false
+        }
+    } elseif (Get-Command git -ErrorAction SilentlyContinue) {
+        $hasOld = & git rev-parse --quiet --verify "$expectedHeadSha^{commit}" 2>$null
+        $hasNew = & git rev-parse --quiet --verify "$prHeadSha^{commit}" 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($hasOld) -and -not [string]::IsNullOrWhiteSpace($hasNew)) {
+            & git merge-base --is-ancestor $expectedHeadSha $prHeadSha 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning ("[SUPERVISOR] Reconciliation PR #{0} head {1} is not a fast-forward descendant of pinned head {2} (force-push detected). Rejecting transition." -f $expectedPrNumber, $prHeadSha, $expectedHeadSha)
+                return $false
+            }
+        }
+    }
+
+    # Durably update the pinned handoff in register-reconciliations.json
+    Set-ShipDePersistedRegisterReconciliation `
+        -WorkItemId $WorkItemId `
+        -PullRequestNumber ([int](Get-ShipDeObjectProperty -Object $recEntry -Names @("PullRequestNumber", "pullRequestNumber"))) `
+        -MergeCommitOid ([string](Get-ShipDeObjectProperty -Object $recEntry -Names @("MergeCommitOid", "mergeCommitOid"))) `
+        -CodexVerdict ([string](Get-ShipDeObjectProperty -Object $recEntry -Names @("CodexVerdict", "codexVerdict"))) `
+        -HandoffBranch $expectedBranch `
+        -HandoffCommitOid $prHeadSha `
+        -HandoffPullRequestNumber $expectedPrNumber `
+        -HandoffPullRequestUrl ([string](Get-ShipDeObjectProperty -Object $recEntry -Names @("HandoffPullRequestUrl", "handoffPullRequestUrl"))) `
+        -HandoffRoot $HandoffRoot
+
+    Write-Host ("[SUPERVISOR] Authorized reconciliation repair head transition validated for {0} (PR #{1}): {2} -> {3}. Durably updated pinned handoff." -f $WorkItemId, $expectedPrNumber, $expectedHeadSha, $prHeadSha)
+    return $true
+}
+
 function Test-ShipDeReconciliationPullRequest {
     param(
         [Parameter(Mandatory = $true)][object]$PullRequest,
         [string]$HandoffRoot = $script:HandoffRoot,
-        [string]$Repository = "vinh05092001/shipde-platform"
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [hashtable]$State = $null,
+        [scriptblock]$AncestryVerifier = $null
     )
 
     $headRef = [string](Get-ShipDeObjectProperty -Object $PullRequest -Names @("headRefName", "HeadRefName", "head", "Head"))
@@ -1164,7 +1312,17 @@ function Test-ShipDeReconciliationPullRequest {
     }
 
     if ($prHeadSha -notmatch '^[0-9a-fA-F]{40}$' -or $prHeadSha.Trim().ToLowerInvariant() -ne $expectedHeadSha.Trim().ToLowerInvariant()) {
-        return $false
+        # Finding (Round 16): Distinguish authorized, validated repair head transition from arbitrary force-push
+        $isAuthorizedRepair = Confirm-ShipDeAuthorizedReconciliationRepairTransition `
+            -PullRequest $PullRequest `
+            -WorkItemId $workItemId `
+            -HandoffRoot $HandoffRoot `
+            -Repository $Repository `
+            -State $State `
+            -AncestryVerifier $AncestryVerifier
+        if (-not $isAuthorizedRepair) {
+            return $false
+        }
     }
 
     # Finding 2: Verify register-only change
@@ -3927,7 +4085,9 @@ function Assert-ShipDeGovernedPullRequest {
         [Parameter(Mandatory = $true)][string]$WorkItemId,
         [Parameter(Mandatory = $true)][string]$Branch,
         [string]$ExpectedRepository = $Repository,
-        [string]$HandoffRoot = $script:HandoffRoot
+        [string]$HandoffRoot = $script:HandoffRoot,
+        [hashtable]$State = $null,
+        [scriptblock]$AncestryVerifier = $null
     )
 
     $isCross = $false
@@ -3967,8 +4127,8 @@ function Assert-ShipDeGovernedPullRequest {
                                ($Branch -match '^fix/[^/]+-register-reconciliation-[0-9a-fA-F]+$')
 
     if ($looksLikeReconciliation) {
-        if (-not (Test-ShipDeReconciliationPullRequest -PullRequest $PullRequest -HandoffRoot $HandoffRoot -Repository $ExpectedRepository)) {
-            throw "Open PR for $WorkItemId claims or appears to be a reconciliation PR but is not bound to a persisted register reconciliation handoff or modifies non-register files."
+        if (-not (Test-ShipDeReconciliationPullRequest -PullRequest $PullRequest -HandoffRoot $HandoffRoot -Repository $ExpectedRepository -State $State -AncestryVerifier $AncestryVerifier)) {
+            throw "Open PR for $WorkItemId claims or appears to be a reconciliation PR but is not bound to a persisted register reconciliation handoff, has mismatched head commit, or modifies non-register files."
         }
         $reconciledLedger = Get-ShipDePersistedRegisterReconciliations -HandoffRoot $HandoffRoot
         if (-not $reconciledLedger.ContainsKey($WorkItemId)) {
@@ -3998,7 +4158,17 @@ function Assert-ShipDeGovernedPullRequest {
             } catch {}
         }
         if ($expectedHandoffHead -notmatch '^[0-9a-fA-F]{40}$' -or $prHeadSha -notmatch '^[0-9a-fA-F]{40}$' -or $prHeadSha.Trim().ToLowerInvariant() -ne $expectedHandoffHead.Trim().ToLowerInvariant()) {
-            throw "Open reconciliation PR for $WorkItemId head commit '$prHeadSha' does not match persisted handoff commit '$expectedHandoffHead'."
+            # Finding (Round 16): Check for authorized reconciliation repair transition before failing
+            $isAuthorizedRepair = Confirm-ShipDeAuthorizedReconciliationRepairTransition `
+                -PullRequest $PullRequest `
+                -WorkItemId $WorkItemId `
+                -HandoffRoot $HandoffRoot `
+                -Repository $ExpectedRepository `
+                -State $State `
+                -AncestryVerifier $AncestryVerifier
+            if (-not $isAuthorizedRepair) {
+                throw "Open reconciliation PR for $WorkItemId head commit '$prHeadSha' does not match persisted handoff commit '$expectedHandoffHead'."
+            }
         }
         if (-not (Test-ShipDeRegisterOnlyPullRequest -PullRequest $PullRequest -Repository $ExpectedRepository)) {
             throw "Open reconciliation PR for $WorkItemId modifies files other than the delivery register."
@@ -4014,7 +4184,11 @@ function Get-ShipDeOpenPullRequestForWorkItem {
     param(
         [Parameter(Mandatory = $true)][string]$WorkItemId,
         [Parameter(Mandatory = $true)][string]$Branch,
-        [scriptblock]$OpenPrResolver = $null
+        [scriptblock]$OpenPrResolver = $null,
+        [string]$HandoffRoot = $script:HandoffRoot,
+        [string]$Repository = "vinh05092001/shipde-platform",
+        [hashtable]$State = $null,
+        [scriptblock]$AncestryVerifier = $null
     )
 
     $allPrs = if ($null -ne $OpenPrResolver) {
@@ -4033,7 +4207,7 @@ function Get-ShipDeOpenPullRequestForWorkItem {
         throw "Expected exactly one open PR for $WorkItemId; found $($workItemMatches.Count)."
     }
     $pr = $workItemMatches[0]
-    Assert-ShipDeGovernedPullRequest -PullRequest $pr -WorkItemId $WorkItemId -Branch $Branch -ExpectedRepository $Repository
+    Assert-ShipDeGovernedPullRequest -PullRequest $pr -WorkItemId $WorkItemId -Branch $Branch -ExpectedRepository $Repository -HandoffRoot $HandoffRoot -State $State -AncestryVerifier $AncestryVerifier
     return $pr
 }
 
@@ -5574,7 +5748,7 @@ function Invoke-ShipDeAutoMerge {
         $pr = if ($null -ne $PrResolver) {
             & $PrResolver ([string]$State.WorkItemId) ([string]$State.Branch)
         } else {
-            Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch)
+            Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch) -Repository $Repository -HandoffRoot $script:HandoffRoot -State $State
         }
     }
 
@@ -5744,7 +5918,7 @@ function Invoke-ShipDeSupervisorLoop {
         $pullRequest = if ($null -ne $PrResolver) {
             & $PrResolver ([string]$State.WorkItemId) ([string]$State.Branch)
         } else {
-            Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch)
+            Get-ShipDeOpenPullRequestForWorkItem -WorkItemId ([string]$State.WorkItemId) -Branch ([string]$State.Branch) -HandoffRoot $script:HandoffRoot -State $State
         }
 
         if ($null -ne $pullRequest) {
@@ -10797,6 +10971,138 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 }
                 if (-not $caughtMismatchedHeadGovAssert) {
                     throw "Finding 1 negative proof failed: Assert-ShipDeGovernedPullRequest did not reject reconciliation PR with mismatched head commit OID."
+                }
+
+                # 1h. Round 16 Finding: Authorized reconciliation repair transition updates pinned handoff head
+                $repairCommitOld = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                $repairCommitNew = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                $authorizedRepairPr = [PSCustomObject]@{
+                    number = 16
+                    title = "[TASK-AI-13] Reconcile delivery register after PR #10"
+                    headRefName = "fix/task-ai-13-register-reconciliation-999999999999"
+                    headRefOid = $repairCommitNew
+                    baseRefName = "main"
+                    headRepository = "vinh05092001/shipde-platform"
+                    changedFiles = 1
+                    files = @("docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv")
+                }
+                # Simulate active supervisor repair dispatch in checkpoint
+                $activeRepairState = @{
+                    WorkItemId = "TASK-AI-13"
+                    Branch = "fix/task-ai-13-register-reconciliation-999999999999"
+                    RepairCount = 1
+                    LastCiRepairHead = $repairCommitOld
+                    HeadSha = $repairCommitOld
+                    CiGate = "FAILED"
+                    IsReconciliation = $true
+                }
+                $repairStateFile = Join-Path $tempHandoffGov "supervisor-state.json"
+                $activeRepairState | ConvertTo-Json | Set-Content -Path $repairStateFile -Encoding UTF8
+
+                # Test-ShipDeReconciliationPullRequest with fast-forward ancestry verifier succeeds
+                $passedRecRepairTest = Test-ShipDeReconciliationPullRequest `
+                    -PullRequest $authorizedRepairPr `
+                    -HandoffRoot $tempHandoffGov `
+                    -AncestryVerifier { param($o, $n) return ($o -eq $repairCommitOld -and $n -eq $repairCommitNew) }
+                if (-not $passedRecRepairTest) {
+                    throw "Round 16 test failed: Test-ShipDeReconciliationPullRequest did not accept authorized reconciliation repair transition."
+                }
+
+                # Durable handoff ledger must now reflect the new repaired commit
+                $updatedLedger = Get-ShipDePersistedRegisterReconciliations -HandoffRoot $tempHandoffGov
+                $updatedEntry = $updatedLedger["TASK-AI-13"]
+                if ($updatedEntry.HandoffCommitOid -ne $repairCommitNew) {
+                    throw "Round 16 test failed: Persisted HandoffCommitOid was not durably updated to '$repairCommitNew' (was '$($updatedEntry.HandoffCommitOid)')."
+                }
+
+                # Assert-ShipDeGovernedPullRequest now succeeds on the repaired PR
+                Assert-ShipDeGovernedPullRequest `
+                    -PullRequest $authorizedRepairPr `
+                    -WorkItemId "TASK-AI-13" `
+                    -Branch "fix/task-ai-13-register-reconciliation-999999999999" `
+                    -ExpectedRepository "vinh05092001/shipde-platform" `
+                    -HandoffRoot $tempHandoffGov `
+                    -AncestryVerifier { param($o, $n) return $true }
+
+                # 1i. Negative proof: Force-push / non-ancestor repair is rejected
+                # Reset handoff to repairCommitOld
+                Set-ShipDePersistedRegisterReconciliation `
+                    -WorkItemId "TASK-AI-13" `
+                    -PullRequestNumber 16 `
+                    -MergeCommitOid "1111111111111111111111111111111111111111" `
+                    -CodexVerdict "PASS" `
+                    -HandoffBranch "fix/task-ai-13-register-reconciliation-999999999999" `
+                    -HandoffCommitOid $repairCommitOld `
+                    -HandoffPullRequestNumber 16 `
+                    -HandoffPullRequestUrl "https://github.com/vinh05092001/shipde-platform/pull/16" `
+                    -HandoffRoot $tempHandoffGov
+
+                $forcePushedRecPr = [PSCustomObject]@{
+                    number = 16
+                    title = "[TASK-AI-13] Reconcile delivery register after PR #10"
+                    headRefName = "fix/task-ai-13-register-reconciliation-999999999999"
+                    headRefOid = "cccccccccccccccccccccccccccccccccccccccc"
+                    baseRefName = "main"
+                    headRepository = "vinh05092001/shipde-platform"
+                    changedFiles = 1
+                    files = @("docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv")
+                }
+                $caughtForcePush = $false
+                try {
+                    Assert-ShipDeGovernedPullRequest `
+                        -PullRequest $forcePushedRecPr `
+                        -WorkItemId "TASK-AI-13" `
+                        -Branch "fix/task-ai-13-register-reconciliation-999999999999" `
+                        -ExpectedRepository "vinh05092001/shipde-platform" `
+                        -HandoffRoot $tempHandoffGov `
+                        -AncestryVerifier { param($o, $n) return $false }
+                } catch {
+                    $caughtForcePush = $true
+                }
+                if (-not $caughtForcePush) {
+                    throw "Round 16 negative proof failed: Assert-ShipDeGovernedPullRequest accepted non-ancestor force-push."
+                }
+
+                # 1j. Negative proof: Repair modifying non-register files is rejected
+                $invalidFileRepairPr = [PSCustomObject]@{
+                    number = 16
+                    title = "[TASK-AI-13] Reconcile delivery register after PR #10"
+                    headRefName = "fix/task-ai-13-register-reconciliation-999999999999"
+                    headRefOid = "dddddddddddddddddddddddddddddddddddddddd"
+                    baseRefName = "main"
+                    headRepository = "vinh05092001/shipde-platform"
+                    changedFiles = 2
+                    files = @("docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv", "src/evil.ts")
+                }
+                $caughtInvalidFileRepair = $false
+                try {
+                    Assert-ShipDeGovernedPullRequest `
+                        -PullRequest $invalidFileRepairPr `
+                        -WorkItemId "TASK-AI-13" `
+                        -Branch "fix/task-ai-13-register-reconciliation-999999999999" `
+                        -ExpectedRepository "vinh05092001/shipde-platform" `
+                        -HandoffRoot $tempHandoffGov `
+                        -AncestryVerifier { param($o, $n) return $true }
+                } catch {
+                    $caughtInvalidFileRepair = $true
+                }
+                if (-not $caughtInvalidFileRepair) {
+                    throw "Round 16 negative proof failed: Assert-ShipDeGovernedPullRequest accepted repair modifying non-register files."
+                }
+
+                # Reset state/ledger back to mockRecPr head so downstream tests (2, 3, 4, 5) continue cleanly
+                Set-ShipDePersistedRegisterReconciliation `
+                    -WorkItemId "TASK-AI-13" `
+                    -PullRequestNumber 16 `
+                    -MergeCommitOid "1111111111111111111111111111111111111111" `
+                    -CodexVerdict "PASS" `
+                    -HandoffBranch "fix/task-ai-13-register-reconciliation-999999999999" `
+                    -HandoffCommitOid "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" `
+                    -HandoffPullRequestNumber 16 `
+                    -HandoffPullRequestUrl "https://github.com/vinh05092001/shipde-platform/pull/16" `
+                    -HandoffRoot $tempHandoffGov
+                if (Test-Path -LiteralPath $repairStateFile) {
+                    Remove-Item -LiteralPath $repairStateFile -Force -ErrorAction SilentlyContinue
                 }
 
                 # 2. Get-ShipDePrWorkItem and Assert-ShipDeGovernedPullRequest on reconciliation PR
