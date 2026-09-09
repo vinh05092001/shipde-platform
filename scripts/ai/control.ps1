@@ -2872,6 +2872,19 @@ function Get-ShipDeAoWorkerName {
 function New-ShipDeAuthorPrompt {
     param([Parameter(Mandatory = $true)][object]$Item)
 
+    $isReconciliation = [bool](Get-ShipDeObjectProperty -Object $Item -Names @("IsReconciliation", "isReconciliation"))
+    if ($isReconciliation) {
+        return @"
+Repair administrative register reconciliation for $($Item.WorkItemId) on branch $($Item.Branch).
+This is a low-risk, mechanical 9Router task strictly bounded to updating docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv.
+Allowed files: ONLY docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv.
+Do NOT touch scripts/ai/control.ps1, architecture, controller scripts, or any application/source code.
+Ensure the delivery register row for $($Item.WorkItemId) accurately reflects the merged PR and commit.
+Verify with python docs/product-spec/scripts/validate_docs.py and pnpm format:check.
+Commit, push to $($Item.Branch), and stop before merge. Do not start another Work Item.
+"@
+    }
+
     return @"
 Implement $($Item.WorkItemId) on branch $($Item.Branch).
 Read AGENTS.md, $($Item.WorkItemPath), and the complete author prompt under docs/product-spec/docs/10-ai-collaboration before editing.
@@ -3869,17 +3882,27 @@ function Ensure-ShipDeRepairWorker {
         [scriptblock]$CheckpointWriter = $null
     )
 
+    $isReconciliation = [bool](Get-ShipDeObjectProperty -Object $State -Names @("IsReconciliation", "isReconciliation"))
+    if (-not $isReconciliation -and $null -ne $PullRequest) {
+        $isReconciliation = Test-ShipDeReconciliationPullRequest -PullRequest $PullRequest
+    }
     $item = [PSCustomObject]@{
         WorkItemId = [string]$State["WorkItemId"]
-        WorkItemPath = [string]$State["WorkItemPath"]
+        WorkItemPath = if ($isReconciliation) { $script:RegisterPath } else { [string]$State["WorkItemPath"] }
         Branch = [string]$State["Branch"]
         Author = [string]$State["Author"]
+        IsReconciliation = $isReconciliation
     }
     if ([string]::IsNullOrWhiteSpace($item.Author) -or $item.Author -eq "CONTROLLER") {
         $resolvedItem = Get-ShipDePrWorkItem -PullRequest $PullRequest
         if ($resolvedItem) {
             $item.Author = $resolvedItem.Author
             $State["Author"] = $resolvedItem.Author
+            if ($resolvedItem.IsReconciliation) {
+                $item.IsReconciliation = $true
+                $item.WorkItemPath = $script:RegisterPath
+                $State["IsReconciliation"] = $true
+            }
         }
     }
 
@@ -4554,7 +4577,10 @@ function Test-ShipDeWorkItemMerged {
     if ($reconciledLedger.ContainsKey($WorkItemId)) {
         $entry = $reconciledLedger[$WorkItemId]
         $st = [string](Get-ShipDeObjectProperty -Object $entry -Names @("Status", "status"))
-        if ($st -eq "MERGED") {
+        $handoffPr = [int](Get-ShipDeObjectProperty -Object $entry -Names @("HandoffPullRequestNumber", "handoffPullRequestNumber"))
+        # An entry with an active or pending handoff PR has not yet landed on protected main.
+        # Only landed reconciliation (handoffPr <= 0) or affirmative status in main's register counts as MERGED.
+        if ($st -eq "MERGED" -and $handoffPr -le 0) {
             return $true
         }
     }
@@ -10367,6 +10393,34 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             if (-not $caughtBootstrapReplacement) {
                 throw "AC-AI-13-22 negative proof failed: replacement PR #99 titled TASK-FOUND-03 was falsely ignored during bootstrap."
             }
+
+            # Negative proof 4: When preserved PR #8 is absent (e.g. externally closed/deleted), advancement is blocked fail-closed
+            $caughtAbsentPr8 = $false
+            $nextItemCalledOnAbsentPr8 = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $null `
+                    -DeliveryRegisterRows $regAi13Merged `
+                    -OpenPrResolver { return @() } `
+                    -ActiveWorkersResolver { return @() } `
+                    -NextItemResolver {
+                        $nextItemCalledOnAbsentPr8 = $true
+                        return [PSCustomObject]@{
+                            WorkItemId = "TASK-AI-07"
+                            WorkItemPath = "docs/product-spec/work-items/TASK-AI-07.md"
+                            Branch = "feat/task-ai-07-cross-harness-worker-failover"
+                            Author = "GEMINI"
+                        }
+                    } `
+                    -PrWorkItemResolver { param($pr) return $null } | Out-Null
+            } catch {
+                if ($_.Exception.Message -match "Preserved implementation Pull Request #8 for TASK-FOUND-03 was not found among open Pull Requests after TASK-AI-13 merge") {
+                    $caughtAbsentPr8 = $true
+                }
+            }
+            if (-not $caughtAbsentPr8 -or $nextItemCalledOnAbsentPr8) {
+                throw "AC-AI-13-23 negative proof failed: absent preserved PR #8 did not fail closed or allowed advancement to NextItemResolver."
+            }
         }
 
         # Reconciliation PR Governance: Supervisor identifies, recovers, and automatically processes reconciliation PRs
@@ -10469,18 +10523,27 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 IsReconciliation = $true
             }
             $spawnedRecRepairWorkers = [System.Collections.Generic.List[object]]::new()
+            $spawnedRecRepairPrompts = [System.Collections.Generic.List[string]]::new()
             $recRepairSessionId = Ensure-ShipDeRepairWorker `
                 -State $recStateNeedingRepair `
                 -PullRequest $mockRecPr `
                 -WorkerStarter {
                     param($it, $pr)
                     $spawnedRecRepairWorkers.Add($it)
+                    $spawnedRecRepairPrompts.Add($pr)
                     return [PSCustomObject]@{ SessionId = "sess-rec-repair-01"; Harness = "claude-code" }
                 } `
                 -SessionsResolver { return @() } `
                 -CheckpointWriter { param($s) }
             if ($recRepairSessionId -ne "sess-rec-repair-01" -or $spawnedRecRepairWorkers.Count -ne 1 -or $spawnedRecRepairWorkers[0].Author -ne "9ROUTER") {
                 throw "Reconciliation PR test failed: Ensure-ShipDeRepairWorker did not dispatch reconciliation repair to 9ROUTER."
+            }
+            if ($spawnedRecRepairPrompts.Count -ne 1 -or
+                $spawnedRecRepairPrompts[0] -notmatch "Repair administrative register reconciliation" -or
+                $spawnedRecRepairPrompts[0] -notmatch "ONLY docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER\.csv" -or
+                $spawnedRecRepairPrompts[0] -notmatch "Do NOT touch scripts/ai/control\.ps1" -or
+                $spawnedRecRepairWorkers[0].WorkItemPath -ne $script:RegisterPath) {
+                throw "Reconciliation PR test failed: Ensure-ShipDeRepairWorker did not generate bounded register reconciliation prompt for 9Router."
             }
 
             # 7. Defensive harness candidate test for CONTROLLER author
@@ -10528,6 +10591,69 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 -CheckpointWriter { param($s) }
             if ($openRecPrState.State -eq "CORE_COMPLETE" -or $openRecPrState.PullRequestNumber -ne 17 -or -not [bool](Get-ShipDeObjectProperty -Object $openRecPrState -Names @("IsReconciliation", "isReconciliation"))) {
                 throw "AC-AI-13-24 proof failed: open reconciliation PR did not prevent premature CORE_COMPLETE."
+            }
+
+            # Proof: Closed-without-merging reconciliation PR does NOT declare CORE_COMPLETE; controller recreates handoff and processes it
+            $tempHandoffForFinding2 = Join-Path ([System.IO.Path]::GetTempPath()) ("shipde-finding2-test-" + [System.Guid]::NewGuid().ToString("N"))
+            New-Item -ItemType Directory -Path $tempHandoffForFinding2 -Force | Out-Null
+            try {
+                # Staged reconciliation in local ledger with handoff PR 16 (which was closed externally without merging)
+                Set-ShipDePersistedRegisterReconciliation `
+                    -WorkItemId "TASK-AI-13" `
+                    -PullRequestNumber 10 `
+                    -MergeCommitOid "9999999999999999999999999999999999999999" `
+                    -CodexVerdict "PASS" `
+                    -HandoffBranch "fix/task-ai-13-register-reconciliation-999999999999" `
+                    -HandoffCommitOid "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" `
+                    -HandoffPullRequestNumber 16 `
+                    -HandoffPullRequestUrl "https://github.com/vinh05092001/shipde-platform/pull/16" `
+                    -HandoffRoot $tempHandoffForFinding2
+
+                $regUnreconciledAi13 = @(
+                    [PSCustomObject]@{ work_item_id = "TASK-AI-12"; status = "MERGED" },
+                    [PSCustomObject]@{ work_item_id = "TASK-AI-13"; status = "READY_FOR_AUTHOR" }
+                )
+                $recreatedHandoffTracker = @{ Called = $false; WorkItemId = "" }
+                $mockRecreatedPr = [PSCustomObject]@{
+                    number = 18
+                    title = "[TASK-AI-13] Reconcile delivery register after PR #10"
+                    headRefName = "fix/task-ai-13-register-reconciliation-999999999999"
+                    headRefOid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    baseRefName = "main"
+                    headRepository = "vinh05092001/shipde-platform"
+                    headRepositoryOwner = [PSCustomObject]@{ login = "vinh05092001" }
+                    isDraft = $false
+                }
+                $openPrTracker = @{ Count = 0 }
+                $closedRecState = Initialize-ShipDeSupervisorState `
+                    -State $null `
+                    -DeliveryRegisterRows $regUnreconciledAi13 `
+                    -HandoffRoot $tempHandoffForFinding2 `
+                    -OpenPrResolver {
+                        $openPrTracker.Count++
+                        if ($openPrTracker.Count -eq 1) { return @() }
+                        return @($mockRecreatedPr)
+                    } `
+                    -RegisterSynchronizer {
+                        param($s)
+                        $recreatedHandoffTracker.Called = $true
+                        $recreatedHandoffTracker.WorkItemId = $s.WorkItemId
+                    } `
+                    -ActiveWorkersResolver { return @() } `
+                    -NextItemResolver { throw "AC-AI-13-24 failure: NextItemResolver called when reconciliation pending!" } `
+                    -PrWorkItemResolver { param($pr) return Get-ShipDePrWorkItem -PullRequest $pr } `
+                    -CheckpointWriter { param($s) }
+
+                if (-not $recreatedHandoffTracker.Called -or $recreatedHandoffTracker.WorkItemId -ne "TASK-AI-13") {
+                    throw "Finding 2 test failed: controller did not recreate missing reconciliation handoff."
+                }
+                if ($closedRecState.State -eq "CORE_COMPLETE" -or $closedRecState.PullRequestNumber -ne 18) {
+                    throw "Finding 2 test failed: controller declared premature CORE_COMPLETE instead of processing recreated reconciliation PR."
+                }
+            } finally {
+                if (Test-Path -LiteralPath $tempHandoffForFinding2) {
+                    Remove-Item -LiteralPath $tempHandoffForFinding2 -Recurse -Force -ErrorAction SilentlyContinue
+                }
             }
         }
 
@@ -11700,7 +11826,8 @@ function Initialize-ShipDeSupervisorState {
         [scriptblock]$PrWorkItemResolver = { param($pr) Get-ShipDePrWorkItem -PullRequest $pr },
         [scriptblock]$SessionDetailResolver = $null,
         [object[]]$DeliveryRegisterRows = $null,
-        [scriptblock]$PrQueryResolver = $null
+        [scriptblock]$PrQueryResolver = $null,
+        [string]$HandoffRoot = $script:HandoffRoot
     )
 
     $allOpenPrs = @(& $OpenPrResolver)
@@ -11708,7 +11835,37 @@ function Initialize-ShipDeSupervisorState {
         Test-ShipDeReconciliationPullRequest -PullRequest $_
     })
 
-    if ($openReconciliationPullRequests.Count -eq 0 -and (Test-ShipDeCoreComplete -Rows $DeliveryRegisterRows)) {
+    # Finding 2: Recreate missing or closed-without-merging reconciliation handoffs before evaluating CORE_COMPLETE.
+    $reconciledLedger = Get-ShipDePersistedRegisterReconciliations -HandoffRoot $HandoffRoot
+    foreach ($recId in $reconciledLedger.Keys) {
+        $ledgerEntry = $reconciledLedger[$recId]
+        $isMergedOnMain = Test-ShipDeWorkItemMerged -WorkItemId $recId -Rows $DeliveryRegisterRows -HandoffRoot $HandoffRoot
+        if (-not $isMergedOnMain) {
+            $hasOpenRec = @($openReconciliationPullRequests | Where-Object {
+                (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq $recId
+            }).Count -gt 0
+            if (-not $hasOpenRec) {
+                Write-Host ("[SUPERVISOR] Register reconciliation for {0} has not landed on main and no open reconciliation PR exists. Recreating durable handoff..." -f $recId)
+                $syncState = @{
+                    WorkItemId = $recId
+                    PullRequestNumber = [int](Get-ShipDeObjectProperty -Object $ledgerEntry -Names @("PullRequestNumber", "pullRequestNumber"))
+                    MergeCommitOid = [string](Get-ShipDeObjectProperty -Object $ledgerEntry -Names @("MergeCommitOid", "mergeCommitOid"))
+                    State = "MERGED"
+                }
+                if ($null -ne $RegisterSynchronizer) {
+                    & $RegisterSynchronizer $syncState
+                } else {
+                    Sync-ShipDeRegisterAfterAutoMerge -State $syncState -Repository $Repository -HandoffRoot $HandoffRoot
+                }
+                $allOpenPrs = @(& $OpenPrResolver)
+                $openReconciliationPullRequests = @($allOpenPrs | Where-Object {
+                    Test-ShipDeReconciliationPullRequest -PullRequest $_
+                })
+            }
+        }
+    }
+
+    if ($openReconciliationPullRequests.Count -eq 0 -and (Test-ShipDeCoreComplete -Rows $DeliveryRegisterRows -HandoffRoot $HandoffRoot)) {
         Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
         return @{
             State = "CORE_COMPLETE"
@@ -11726,11 +11883,11 @@ function Initialize-ShipDeSupervisorState {
     if ($null -ne $State) {
         $State = Normalize-ShipDeSupervisorState -State $State
         if ([string]$State["State"] -eq "CORE_COMPLETE") {
-            if ($openReconciliationPullRequests.Count -eq 0) {
+            if ($openReconciliationPullRequests.Count -eq 0 -and (Test-ShipDeCoreComplete -Rows $DeliveryRegisterRows -HandoffRoot $HandoffRoot)) {
                 Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
                 return $State
             }
-            Write-Host "[SUPERVISOR] Open administrative reconciliation PR exists. Clearing premature CORE_COMPLETE checkpoint to process reconciliation."
+            Write-Host "[SUPERVISOR] Delivery register reconciliation not landed on main or open reconciliation PR exists. Clearing premature CORE_COMPLETE checkpoint."
             & $CheckpointClearer
             $State = $null
         }
@@ -11739,15 +11896,16 @@ function Initialize-ShipDeSupervisorState {
             if ($null -ne $RegisterSynchronizer) {
                 & $RegisterSynchronizer $State
             } else {
-                Sync-ShipDeRegisterAfterAutoMerge -State $State -Repository $Repository
+                Sync-ShipDeRegisterAfterAutoMerge -State $State -Repository $Repository -HandoffRoot $HandoffRoot
             }
-            if ($null -ne $DeliveryRegisterRows) {
+            $isReconciliationState = [bool](Get-ShipDeObjectProperty -Object $State -Names @("IsReconciliation", "isReconciliation"))
+            if ($isReconciliationState -and $null -ne $DeliveryRegisterRows) {
                 $matchingRow = $DeliveryRegisterRows | Where-Object { $_.work_item_id -eq $State["WorkItemId"] } | Select-Object -First 1
                 if ($null -ne $matchingRow) {
                     $matchingRow.status = "MERGED"
                 }
             }
-            if ($openReconciliationPullRequests.Count -eq 0 -and (Test-ShipDeCoreComplete -Rows $DeliveryRegisterRows)) {
+            if ($openReconciliationPullRequests.Count -eq 0 -and (Test-ShipDeCoreComplete -Rows $DeliveryRegisterRows -HandoffRoot $HandoffRoot)) {
                 Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
                 $State["State"] = "CORE_COMPLETE"
                 & $CheckpointWriter $State
@@ -11993,7 +12151,8 @@ function Initialize-ShipDeSupervisorState {
         return $State
     }
 
-    $isTaskAi13Merged = Test-ShipDeWorkItemMerged -WorkItemId "TASK-AI-13" -Rows $DeliveryRegisterRows
+    $isTaskAi13Merged = Test-ShipDeWorkItemMerged -WorkItemId "TASK-AI-13" -Rows $DeliveryRegisterRows -HandoffRoot $HandoffRoot
+    $isTaskFound03Merged = Test-ShipDeWorkItemMerged -WorkItemId "TASK-FOUND-03" -Rows $DeliveryRegisterRows -HandoffRoot $HandoffRoot
 
     $openImplementationPullRequests = @($allOpenPrs | Where-Object {
         if (Test-ShipDeReconciliationPullRequest -PullRequest $_) {
@@ -12090,11 +12249,14 @@ function Initialize-ShipDeSupervisorState {
     }
 
     # AC-AI-13-23: Once TASK-AI-13 is MERGED, the supervisor selects PR #8 for repair before preparing TASK-AI-07.
-    if ($isTaskAi13Merged) {
+    if ($isTaskAi13Merged -and -not $isTaskFound03Merged) {
         $pr8Candidate = @($allOpenPrs | Where-Object {
             if (Test-ShipDeReconciliationPullRequest -PullRequest $_) { return $false }
             [int]$_.number -eq 8 -and (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq "TASK-FOUND-03"
         })
+        if ($pr8Candidate.Count -gt 1) {
+            throw "Multiple candidates found matching preserved Pull Request #8 for TASK-FOUND-03. Failing closed."
+        }
         if ($pr8Candidate.Count -eq 1) {
             $otherImplementationPrs = @($openImplementationPullRequests | Where-Object {
                 -not ([int]$_.number -eq 8 -and (Get-ShipDeWorkItemIdFromTitle -Title ([string]$_.title)) -eq "TASK-FOUND-03")
@@ -12106,36 +12268,37 @@ function Initialize-ShipDeSupervisorState {
 
             $selectedPr = $pr8Candidate[0]
             $item = & $PrWorkItemResolver $selectedPr
-            if ($item) {
-                Write-Host "[SUPERVISOR] TASK-AI-13 is merged. Selecting existing PR #$($selectedPr.number) ($($item.WorkItemId)) for repair before TASK-AI-07."
-                Assert-ShipDeGovernedPullRequest -PullRequest $selectedPr -WorkItemId $item.WorkItemId -Branch $item.Branch -ExpectedRepository $Repository
-
-                $headSha = if ($selectedPr.headRefOid) { [string]$selectedPr.headRefOid } else { "" }
-                if ([string]::IsNullOrWhiteSpace($headSha)) {
-                    try {
-                        $headSha = (& gh pr view ([int]$selectedPr.number) --repo $Repository --json headRefOid --jq .headRefOid 2>$null)
-                        if ($headSha) { $headSha = $headSha.Trim() }
-                    } catch {}
-                }
-
-                $reconstructedState = @{
-                    WorkItemId = $item.WorkItemId
-                    WorkItemPath = $item.WorkItemPath
-                    Branch = $item.Branch
-                    Author = $item.Author
-                    State = "STARTED"
-                    PullRequestNumber = [int]$selectedPr.number
-                    HeadSha = $headSha
-                    StartTime = (Get-Date).ToUniversalTime().ToString("o")
-                    LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
-                    NudgeCount = 0
-                    SessionId = $null
-                    Harness = $null
-                }
-                $reconstructedState = Normalize-ShipDeSupervisorState -State $reconstructedState
-                & $CheckpointWriter $reconstructedState
-                return $reconstructedState
+            if (-not $item) {
+                throw "Cannot resolve governed Work Item assignment for PR #$($selectedPr.number)."
             }
+            Write-Host "[SUPERVISOR] TASK-AI-13 is merged. Selecting existing PR #$($selectedPr.number) ($($item.WorkItemId)) for repair before TASK-AI-07."
+            Assert-ShipDeGovernedPullRequest -PullRequest $selectedPr -WorkItemId $item.WorkItemId -Branch $item.Branch -ExpectedRepository $Repository
+
+            $headSha = if ($selectedPr.headRefOid) { [string]$selectedPr.headRefOid } else { "" }
+            if ([string]::IsNullOrWhiteSpace($headSha)) {
+                try {
+                    $headSha = (& gh pr view ([int]$selectedPr.number) --repo $Repository --json headRefOid --jq .headRefOid 2>$null)
+                    if ($headSha) { $headSha = $headSha.Trim() }
+                } catch {}
+            }
+
+            $reconstructedState = @{
+                WorkItemId = $item.WorkItemId
+                WorkItemPath = $item.WorkItemPath
+                Branch = $item.Branch
+                Author = $item.Author
+                State = "STARTED"
+                PullRequestNumber = [int]$selectedPr.number
+                HeadSha = $headSha
+                StartTime = (Get-Date).ToUniversalTime().ToString("o")
+                LastActivityTime = (Get-Date).ToUniversalTime().ToString("o")
+                NudgeCount = 0
+                SessionId = $null
+                Harness = $null
+            }
+            $reconstructedState = Normalize-ShipDeSupervisorState -State $reconstructedState
+            & $CheckpointWriter $reconstructedState
+            return $reconstructedState
         }
     }
 
@@ -12150,6 +12313,11 @@ function Initialize-ShipDeSupervisorState {
     if ($activeAoWorkers.Count -gt 0) {
         $workerSummary = @($activeAoWorkers | ForEach-Object { Get-ShipDeAoSessionId -Response $_ }) -join ", "
         throw "Active or idle AO worker session(s) exist without a resumable checkpoint ($workerSummary). Resume or recover that session before consuming another prepared row."
+    }
+
+    # Finding 1: When preserved PR #8 for TASK-FOUND-03 is absent after TASK-AI-13 merge, advancement is blocked fail-closed.
+    if ($isTaskAi13Merged -and -not $isTaskFound03Merged) {
+        throw "Preserved implementation Pull Request #8 for TASK-FOUND-03 was not found among open Pull Requests after TASK-AI-13 merge. Advancement blocked until preserved PR #8 is recovered."
     }
 
     $item = & $NextItemResolver
