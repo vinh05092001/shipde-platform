@@ -210,7 +210,7 @@ From durable Git/GitHub state the controller performs exactly one next safe tran
 - `CHANGES_REQUIRED`: offer to return the findings to the same author and branch;
 - `PASS`: open the PR for the human merge owner.
 
-The human pastes a prepared prompt when an interactive client opens, approves posting a review comment, resolves material product choices and performs the merge. The controller never merges, invents a product decision, bypasses red CI or resets a dirty worktree.
+The human pastes a prepared prompt when an interactive client opens, approves posting a review comment, resolves material product choices and performs the merge (or relies on governed exact-HEAD auto-merge under TASK-AI-13). The controller never invents a product decision, bypasses red CI or resets a dirty worktree.
 
 ## 9. Synchronize after human merge
 

@@ -5401,9 +5401,10 @@ function Test-ShipDeMergePreflight {
         throw "Fresh Pull Request number #$freshNumber does not match target PR #$($PullRequest.number); merge is blocked fail-closed."
     }
 
-    $freshState = if ($freshPr.PSObject.Properties['state'] -and $freshPr.state) { [string]$freshPr.state } else { "OPEN" }
-    if ($freshState -eq "CLOSED") {
-        return @{ Gate = "CLOSED"; Reason = "Fresh Pull Request state is '$freshState' (not OPEN)." }
+    # Finding (Round 19): Require an affirmative explicit OPEN state from the fresh PR view
+    $freshState = if ($freshPr.PSObject.Properties['state'] -and $null -ne $freshPr.state) { [string]$freshPr.state } else { "" }
+    if ([string]::IsNullOrWhiteSpace($freshState) -or $freshState.Trim().ToUpperInvariant() -ne "OPEN") {
+        return @{ Gate = "CLOSED"; Reason = "Fresh Pull Request state is '$freshState' (expected affirmative explicit 'OPEN')." }
     }
 
     $freshIsDraft = $false
@@ -9849,6 +9850,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             headRefOid = $validHeadSha
             baseRefName = "main"
             headRepository = "vinh05092001/shipde-platform"
+            state = "OPEN"
             isDraft = $false
             isCrossRepository = $false
             mergeable = "MERGEABLE"
@@ -10487,6 +10489,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 HeadSha = $validHeadSha
                 PullRequestNumber = 12
             }
+            $timeoutAQueries = @{ Count = 0 }
             $timeoutOutcomeA = Invoke-ShipDeAutoMerge `
                 -State $stateTimeout `
                 -PrResolver { param($w, $b) return $validPr } `
@@ -10498,6 +10501,8 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 -StatusCheckRollupResolver { param($num, $head) return @($validPr.statusCheckRollup) } `
                 -PrViewResolver {
                     param($num)
+                    $timeoutAQueries.Count++
+                    if ($timeoutAQueries.Count -eq 1) { return $validPr }
                     return [PSCustomObject]@{
                         number = 12
                         title = "[TASK-AI-07] Cross-harness worker failover"
@@ -10876,6 +10881,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                     baseRefName = "main"
                     headRepository = "vinh05092001/shipde-platform"
                     headRepositoryOwner = [PSCustomObject]@{ login = "vinh05092001" }
+                    state = "OPEN"
                     isDraft = $false
                     isCrossRepository = $false
                     mergeable = "MERGEABLE"
@@ -11903,6 +11909,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 isCrossRepository = $false
                 headRepository = [PSCustomObject]@{ nameWithOwner = "vinh05092001/shipde-platform"; name = "shipde-platform" }
                 headRepositoryOwner = [PSCustomObject]@{ login = "vinh05092001" }
+                state = "OPEN"
                 mergeable = "MERGEABLE"
                 mergeStateStatus = "CLEAN"
             }
@@ -12706,6 +12713,23 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 $resNa = Test-ShipDeMergePreflight -PullRequest $testPr -WorkItemId "TASK-AI-07" -Branch "feat/task-ai-07-cross-harness-worker-failover" -PrViewResolver { return $testPr }
                 if ($resNa.Gate -ne "BLOCKED" -or $resNa.Reason -notmatch "not affirmatively MERGEABLE") {
                     throw "Finding 4 test failed: non-affirmative mergeable value '$($na.mergeable)' did not return Gate=BLOCKED."
+                }
+            }
+
+            # Round 19 Finding 1: Test-ShipDeMergePreflight requires an affirmative explicit OPEN state from fresh PR view
+            $nonOpenPrs = @(
+                [PSCustomObject]@{ state = $null },
+                [PSCustomObject]@{ state = "" },
+                [PSCustomObject]@{ state = "CLOSED" },
+                [PSCustomObject]@{ state = "MERGED" },
+                [PSCustomObject]@{ state = "UNKNOWN" }
+            )
+            foreach ($no in $nonOpenPrs) {
+                $testPr = $validPr.PSObject.Copy()
+                $testPr.state = $no.state
+                $resNo = Test-ShipDeMergePreflight -PullRequest $validPr -WorkItemId "TASK-AI-07" -Branch "feat/task-ai-07-cross-harness-worker-failover" -PrViewResolver { return $testPr }
+                if ($resNo.Gate -ne "CLOSED" -or $resNo.Reason -notmatch "expected affirmative explicit 'OPEN'") {
+                    throw "Round 19 Finding 1 test failed: non-OPEN state '$($no.state)' did not return Gate=CLOSED."
                 }
             }
 

@@ -128,12 +128,12 @@ AO is an external orchestration layer, not one of the adopted repositories/provi
 5. **Nudges** stalled sessions before escalating.
 6. **Routes** each failed CI HEAD back to the same worker once.
 7. **Triggers** independent Codex review after CI is green and routes exact-HEAD findings back to the worker.
-8. **Notifies** the human only after durable exact-HEAD PASS; it never merges.
+8. **Under `TASK-AI-13` (`HUMAN-DECISION-ORCHESTRATOR-CORE-PRIORITY-2026-09-08`), executes** exact-HEAD auto-merge after durable exact-HEAD PASS when strict preflight passes; falls back to human notification when any preflight signal fails or during bootstrap.
 
 The supervisor is a PowerShell state machine, not an LLM agent loop. It:
 
 - Preserves fail-closed behavior (stops on unrecoverable errors).
-- Never auto-merges (human merge is always required).
+- Authorizes deterministic exact-HEAD auto-merge under `TASK-AI-13` only when strict preflight passes; human merge remains authoritative during bootstrap and whenever any preflight signal fails.
 - Relies on AgentRouter for provider/model fallback and treats surfaced exhaustion as a real blocker.
 - Writes checkpoints for restart recovery.
 - Respects all existing CI and review gates.
@@ -143,7 +143,7 @@ Normal unattended flow:
 ```
 delivery register → supervisor → assigned worker → local verification
 → commit/push/PR → CI → automatic CI repair → independent Codex review
-→ automatic review repair → exact-HEAD PASS → human merge notification
+→ automatic review repair → exact-HEAD PASS → governed exact-HEAD auto-merge (or human merge fallback on preflight failure)
 → post-merge synchronization → next Work Item
 ```
 
@@ -155,9 +155,9 @@ The completed orchestrator must perform the full governed flow from one command:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ai\control.ps1 -Action Resume
 ```
 
-The resulting sequence is: select the dependency-ready Work Item; compile the minimum profile; start the assigned worker in its branch/worktree; implement and test; open the PR; monitor and repair CI; invoke independent exact-HEAD Codex review; return review findings to the worker; stop for human merge after durable `PASS`; then reconcile `main` and continue with the next dependency-ready item.
+The resulting sequence is: select the dependency-ready Work Item; compile the minimum profile; start the assigned worker in its branch/worktree; implement and test; open the PR; monitor and repair CI; invoke independent exact-HEAD Codex review; return review findings to the worker; perform governed exact-HEAD auto-merge after durable `PASS` (or stop for human merge if preflight fails); then reconcile `main` and continue with the next dependency-ready item.
 
-The operator intervenes only for initial credential/login, destructive actions, conflicting or missing business rules, and Pull Request merge. Routine prompt copying, agent-stall watching, CI comment transfer and quota-driven provider switching are controller responsibilities.
+The operator intervenes only for initial credential/login, destructive actions, conflicting or missing business rules, and Pull Request merge when auto-merge preflight fails or during TASK-AI-13 bootstrap. Routine prompt copying, agent-stall watching, CI comment transfer, quota-driven provider switching, and governed exact-HEAD auto-merge are controller responsibilities.
 
 AO session controls keep **Automatically fix CI failures**, **Automatically fix review comments**, and **Terminate on merge** enabled. The controller remains authoritative for exact-HEAD gates, retry budgets, checkpoints and selecting the next Work Item.
 
