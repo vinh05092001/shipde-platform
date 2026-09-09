@@ -1178,7 +1178,8 @@ function Confirm-ShipDeAuthorizedReconciliationRepairTransition {
         return $false
     }
 
-    # Finding (Round 17): Require head-scoped repair authorization tied explicitly to currently pinned head
+    # Finding (Round 17 & Round 18): Require head-scoped repair authorization tied explicitly to currently pinned head
+    # and restrict pending authorization strictly to CI_REPAIR or REVIEW_REPAIR dispatches (rejecting REVIEW_TRIGGER or NUDGE).
     $lastCiHead = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("LastCiRepairHead", "lastCiRepairHead"))
     $lastRevHead = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("LastReviewRepairHead", "lastReviewRepairHead"))
     $stateHead = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("HeadSha", "headSha"))
@@ -1186,11 +1187,14 @@ function Confirm-ShipDeAuthorizedReconciliationRepairTransition {
     $ciGate = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("CiGate", "ciGate"))
     $pendingDisp = Get-ShipDeObjectProperty -Object $activeState -Names @("PendingDispatch", "pendingDispatch")
     $pendingHead = if ($null -ne $pendingDisp) { [string](Get-ShipDeObjectProperty -Object $pendingDisp -Names @("Head", "head")) } else { "" }
+    $pendingType = if ($null -ne $pendingDisp) { [string](Get-ShipDeObjectProperty -Object $pendingDisp -Names @("Type", "type")) } else { "" }
 
     $expectedHeadNorm = $expectedHeadSha.Trim().ToLowerInvariant()
     $isCiRepairHead = (-not [string]::IsNullOrWhiteSpace($lastCiHead)) -and ($lastCiHead.Trim().ToLowerInvariant() -eq $expectedHeadNorm)
     $isRevRepairHead = (-not [string]::IsNullOrWhiteSpace($lastRevHead)) -and ($lastRevHead.Trim().ToLowerInvariant() -eq $expectedHeadNorm)
-    $isPendingRepairHead = (-not [string]::IsNullOrWhiteSpace($pendingHead)) -and ($pendingHead.Trim().ToLowerInvariant() -eq $expectedHeadNorm)
+    $isPendingRepairHead = (-not [string]::IsNullOrWhiteSpace($pendingHead)) -and `
+                           ($pendingHead.Trim().ToLowerInvariant() -eq $expectedHeadNorm) -and `
+                           (($pendingType.Trim().ToUpperInvariant() -eq "CI_REPAIR") -or ($pendingType.Trim().ToUpperInvariant() -eq "REVIEW_REPAIR"))
     $isCurrentStateHeadFailed = (-not [string]::IsNullOrWhiteSpace($stateHead)) -and `
                                 ($stateHead.Trim().ToLowerInvariant() -eq $expectedHeadNorm) -and `
                                 ($verdict -eq "CHANGES_REQUIRED" -or $ciGate -eq "FAILED")
@@ -11250,6 +11254,56 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 $realGitReverseState | ConvertTo-Json | Set-Content -Path $repairStateFile -Encoding UTF8
                 if (Test-ShipDeReconciliationPullRequest -PullRequest $realGitReversePr -HandoffRoot $tempHandoffGov) {
                     throw "Round 17 Finding 1 negative proof failed: Test-ShipDeReconciliationPullRequest accepted non-descendant real git commit."
+                }
+
+                # 1o. Round 18 Finding 1 negative proof: PendingDispatch with Type REVIEW_TRIGGER or NUDGE on pinned head does NOT authorize repair
+                # Re-pin ledger to repairCommitOld
+                Set-ShipDePersistedRegisterReconciliation `
+                    -WorkItemId "TASK-AI-13" `
+                    -PullRequestNumber 16 `
+                    -MergeCommitOid "1111111111111111111111111111111111111111" `
+                    -CodexVerdict "PASS" `
+                    -HandoffBranch "fix/task-ai-13-register-reconciliation-999999999999" `
+                    -HandoffCommitOid $repairCommitOld `
+                    -HandoffPullRequestNumber 16 `
+                    -HandoffPullRequestUrl "https://github.com/vinh05092001/shipde-platform/pull/16" `
+                    -HandoffRoot $tempHandoffGov
+
+                $pendingTriggerState = @{
+                    WorkItemId = "TASK-AI-13"
+                    Branch = "fix/task-ai-13-register-reconciliation-999999999999"
+                    HeadSha = $repairCommitOld
+                    PendingDispatch = @{ Type = "REVIEW_TRIGGER"; Head = $repairCommitOld }
+                    IsReconciliation = $true
+                }
+                $pendingTriggerState | ConvertTo-Json | Set-Content -Path $repairStateFile -Encoding UTF8
+                if (Test-ShipDeReconciliationPullRequest -PullRequest $authorizedRepairPr -HandoffRoot $tempHandoffGov -AncestryVerifier { param($o, $n) return $true }) {
+                    throw "Round 18 Finding 1 negative proof failed: Test-ShipDeReconciliationPullRequest accepted repair when PendingDispatch.Type was REVIEW_TRIGGER."
+                }
+
+                $pendingNudgeState = @{
+                    WorkItemId = "TASK-AI-13"
+                    Branch = "fix/task-ai-13-register-reconciliation-999999999999"
+                    HeadSha = $repairCommitOld
+                    PendingDispatch = @{ Type = "NUDGE"; Head = $repairCommitOld }
+                    IsReconciliation = $true
+                }
+                $pendingNudgeState | ConvertTo-Json | Set-Content -Path $repairStateFile -Encoding UTF8
+                if (Test-ShipDeReconciliationPullRequest -PullRequest $authorizedRepairPr -HandoffRoot $tempHandoffGov -AncestryVerifier { param($o, $n) return $true }) {
+                    throw "Round 18 Finding 1 negative proof failed: Test-ShipDeReconciliationPullRequest accepted repair when PendingDispatch.Type was NUDGE."
+                }
+
+                # 1p. Round 18 Finding 1 positive proof: PendingDispatch with Type CI_REPAIR or REVIEW_REPAIR on pinned head DOES authorize repair
+                $pendingCiRepairState = @{
+                    WorkItemId = "TASK-AI-13"
+                    Branch = "fix/task-ai-13-register-reconciliation-999999999999"
+                    HeadSha = $repairCommitOld
+                    PendingDispatch = @{ Type = "CI_REPAIR"; Head = $repairCommitOld }
+                    IsReconciliation = $true
+                }
+                $pendingCiRepairState | ConvertTo-Json | Set-Content -Path $repairStateFile -Encoding UTF8
+                if (-not (Test-ShipDeReconciliationPullRequest -PullRequest $authorizedRepairPr -HandoffRoot $tempHandoffGov -AncestryVerifier { param($o, $n) return $true })) {
+                    throw "Round 18 Finding 1 positive proof failed: Test-ShipDeReconciliationPullRequest rejected repair when PendingDispatch.Type was CI_REPAIR."
                 }
 
                 # Reset state/ledger back to mockRecPr head so downstream tests (2, 3, 4, 5) continue cleanly
