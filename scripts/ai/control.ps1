@@ -1178,51 +1178,77 @@ function Confirm-ShipDeAuthorizedReconciliationRepairTransition {
         return $false
     }
 
-    # Check for affirmative repair dispatch / failure evidence on the previous head
-    $repCount = [int](Get-ShipDeObjectProperty -Object $activeState -Names @("RepairCount", "repairCount"))
+    # Finding (Round 17): Require head-scoped repair authorization tied explicitly to currently pinned head
     $lastCiHead = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("LastCiRepairHead", "lastCiRepairHead"))
     $lastRevHead = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("LastReviewRepairHead", "lastReviewRepairHead"))
     $stateHead = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("HeadSha", "headSha"))
     $verdict = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("ExactHeadVerdict", "exactHeadVerdict"))
     $ciGate = [string](Get-ShipDeObjectProperty -Object $activeState -Names @("CiGate", "ciGate"))
     $pendingDisp = Get-ShipDeObjectProperty -Object $activeState -Names @("PendingDispatch", "pendingDispatch")
+    $pendingHead = if ($null -ne $pendingDisp) { [string](Get-ShipDeObjectProperty -Object $pendingDisp -Names @("Head", "head")) } else { "" }
 
-    $hasRepairAuth = ($repCount -gt 0) -or `
-                     (-not [string]::IsNullOrWhiteSpace($lastCiHead)) -or `
-                     (-not [string]::IsNullOrWhiteSpace($lastRevHead)) -or `
-                     ($verdict -eq "CHANGES_REQUIRED") -or `
-                     ($ciGate -eq "FAILED") -or `
-                     ($null -ne $pendingDisp)
+    $expectedHeadNorm = $expectedHeadSha.Trim().ToLowerInvariant()
+    $isCiRepairHead = (-not [string]::IsNullOrWhiteSpace($lastCiHead)) -and ($lastCiHead.Trim().ToLowerInvariant() -eq $expectedHeadNorm)
+    $isRevRepairHead = (-not [string]::IsNullOrWhiteSpace($lastRevHead)) -and ($lastRevHead.Trim().ToLowerInvariant() -eq $expectedHeadNorm)
+    $isPendingRepairHead = (-not [string]::IsNullOrWhiteSpace($pendingHead)) -and ($pendingHead.Trim().ToLowerInvariant() -eq $expectedHeadNorm)
+    $isCurrentStateHeadFailed = (-not [string]::IsNullOrWhiteSpace($stateHead)) -and `
+                                ($stateHead.Trim().ToLowerInvariant() -eq $expectedHeadNorm) -and `
+                                ($verdict -eq "CHANGES_REQUIRED" -or $ciGate -eq "FAILED")
+
+    $hasRepairAuth = $isCiRepairHead -or $isRevRepairHead -or $isPendingRepairHead -or $isCurrentStateHeadFailed
     if (-not $hasRepairAuth) {
         return $false
     }
 
-    # Verify the head under repair corresponds to the expected handoff commit
-    $pendingHead = if ($null -ne $pendingDisp) { [string](Get-ShipDeObjectProperty -Object $pendingDisp -Names @("Head", "head")) } else { "" }
-    $headMatchesPrevious = ($stateHead.Trim().ToLowerInvariant() -eq $expectedHeadSha.Trim().ToLowerInvariant()) -or `
-                           ($lastCiHead.Trim().ToLowerInvariant() -eq $expectedHeadSha.Trim().ToLowerInvariant()) -or `
-                           ($lastRevHead.Trim().ToLowerInvariant() -eq $expectedHeadSha.Trim().ToLowerInvariant()) -or `
-                           ($pendingHead.Trim().ToLowerInvariant() -eq $expectedHeadSha.Trim().ToLowerInvariant())
-    if (-not $headMatchesPrevious) {
-        return $false
-    }
-
-    # Distinguish authorized repair from arbitrary force-push: verify fast-forward git ancestry
+    # Finding (Round 17): Reject transitions when ancestry cannot be affirmatively verified
     if ($null -ne $AncestryVerifier) {
         $isAncestor = & $AncestryVerifier $expectedHeadSha $prHeadSha
         if (-not $isAncestor) {
             Write-Warning ("[SUPERVISOR] Reconciliation PR #{0} head {1} is not a fast-forward descendant of pinned head {2} (force-push detected). Rejecting transition." -f $expectedPrNumber, $prHeadSha, $expectedHeadSha)
             return $false
         }
-    } elseif (Get-Command git -ErrorAction SilentlyContinue) {
-        $hasOld = & git rev-parse --quiet --verify "$expectedHeadSha^{commit}" 2>$null
-        $hasNew = & git rev-parse --quiet --verify "$prHeadSha^{commit}" 2>$null
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($hasOld) -and -not [string]::IsNullOrWhiteSpace($hasNew)) {
-            & git merge-base --is-ancestor $expectedHeadSha $prHeadSha 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning ("[SUPERVISOR] Reconciliation PR #{0} head {1} is not a fast-forward descendant of pinned head {2} (force-push detected). Rejecting transition." -f $expectedPrNumber, $prHeadSha, $expectedHeadSha)
-                return $false
+    } else {
+        if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+            Write-Warning ("[SUPERVISOR] Git command is unavailable; cannot verify ancestry for reconciliation PR #{0}. Rejecting transition." -f $expectedPrNumber)
+            return $false
+        }
+
+        $hasOld = try { (& git rev-parse --quiet --verify "$expectedHeadSha^{commit}" 2>&1) } catch { "" }
+        if ($LASTEXITCODE -ne 0) { $hasOld = "" }
+        $hasNew = try { (& git rev-parse --quiet --verify "$prHeadSha^{commit}" 2>&1) } catch { "" }
+        if ($LASTEXITCODE -ne 0) { $hasNew = "" }
+
+        if ([string]::IsNullOrWhiteSpace($hasOld) -or [string]::IsNullOrWhiteSpace($hasNew)) {
+            # Attempt to fetch remote branch to locate commits in the local object database
+            try {
+                if (Get-Command cmd.exe -ErrorAction SilentlyContinue) {
+                    & cmd.exe /c "git fetch origin $expectedBranch --quiet 2>nul" | Out-Null
+                } else {
+                    & git fetch origin $expectedBranch --quiet 2>&1 | Out-Null
+                }
+            } catch {}
+
+            if ([string]::IsNullOrWhiteSpace($hasOld)) {
+                $hasOld = try { (& git rev-parse --quiet --verify "$expectedHeadSha^{commit}" 2>&1) } catch { "" }
+                if ($LASTEXITCODE -ne 0) { $hasOld = "" }
             }
+            if ([string]::IsNullOrWhiteSpace($hasNew)) {
+                $hasNew = try { (& git rev-parse --quiet --verify "$prHeadSha^{commit}" 2>&1) } catch { "" }
+                if ($LASTEXITCODE -ne 0) { $hasNew = "" }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($hasOld) -or [string]::IsNullOrWhiteSpace($hasNew)) {
+            Write-Warning ("[SUPERVISOR] Reconciliation PR #{0} commit ancestry cannot be verified (commits not found in git repository: {1}, {2}). Rejecting transition." -f $expectedPrNumber, $expectedHeadSha, $prHeadSha)
+            return $false
+        }
+
+        try {
+            & git merge-base --is-ancestor $expectedHeadSha $prHeadSha 2>&1 | Out-Null
+        } catch {}
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning ("[SUPERVISOR] Reconciliation PR #{0} head {1} is not a fast-forward descendant of pinned head {2} (force-push detected). Rejecting transition." -f $expectedPrNumber, $prHeadSha, $expectedHeadSha)
+            return $false
         }
     }
 
@@ -11088,6 +11114,142 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 }
                 if (-not $caughtInvalidFileRepair) {
                     throw "Round 16 negative proof failed: Assert-ShipDeGovernedPullRequest accepted repair modifying non-register files."
+                }
+
+                # 1k. Round 17 Finding 2 negative proof: Historical RepairCount > 0 without head-scoped repair authorization is rejected
+                $unauthorizedFastForwardPr = [PSCustomObject]@{
+                    number = 16
+                    title = "[TASK-AI-13] Reconcile delivery register after PR #10"
+                    headRefName = "fix/task-ai-13-register-reconciliation-999999999999"
+                    headRefOid = $repairCommitNew
+                    baseRefName = "main"
+                    headRepository = "vinh05092001/shipde-platform"
+                    changedFiles = 1
+                    files = @("docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv")
+                }
+                # Pinned head is repairCommitOld, but active state has NO failure/repair on repairCommitOld (only historical RepairCount=1 from past repairs)
+                $historicalRepairState = @{
+                    WorkItemId = "TASK-AI-13"
+                    Branch = "fix/task-ai-13-register-reconciliation-999999999999"
+                    RepairCount = 1
+                    LastCiRepairHead = $null
+                    LastReviewRepairHead = $null
+                    HeadSha = $repairCommitOld
+                    CiGate = "GREEN"
+                    ExactHeadVerdict = $null
+                    PendingDispatch = $null
+                    IsReconciliation = $true
+                }
+                $historicalRepairState | ConvertTo-Json | Set-Content -Path $repairStateFile -Encoding UTF8
+
+                if (Test-ShipDeReconciliationPullRequest -PullRequest $unauthorizedFastForwardPr -HandoffRoot $tempHandoffGov -AncestryVerifier { param($o, $n) return $true }) {
+                    throw "Round 17 Finding 2 negative proof failed: Test-ShipDeReconciliationPullRequest accepted unrequested push based solely on historical RepairCount."
+                }
+                $caughtHistoricalGovAssert = $false
+                try {
+                    Assert-ShipDeGovernedPullRequest `
+                        -PullRequest $unauthorizedFastForwardPr `
+                        -WorkItemId "TASK-AI-13" `
+                        -Branch "fix/task-ai-13-register-reconciliation-999999999999" `
+                        -ExpectedRepository "vinh05092001/shipde-platform" `
+                        -HandoffRoot $tempHandoffGov `
+                        -AncestryVerifier { param($o, $n) return $true }
+                } catch {
+                    $caughtHistoricalGovAssert = $true
+                }
+                if (-not $caughtHistoricalGovAssert) {
+                    throw "Round 17 Finding 2 negative proof failed: Assert-ShipDeGovernedPullRequest accepted unrequested push based solely on historical RepairCount."
+                }
+
+                # 1l. Round 17 Finding 1 negative proof: Reject transition when ancestry cannot be affirmatively verified in git
+                # Active repair state exists on repairCommitOld, but AncestryVerifier is null and commit SHAs (aaaa..., bbbb...) do not exist in git
+                $activeRepairState | ConvertTo-Json | Set-Content -Path $repairStateFile -Encoding UTF8
+                if (Test-ShipDeReconciliationPullRequest -PullRequest $authorizedRepairPr -HandoffRoot $tempHandoffGov) {
+                    throw "Round 17 Finding 1 negative proof failed: Test-ShipDeReconciliationPullRequest accepted transition when ancestry could not be verified in git."
+                }
+                $caughtUnverifiedAncestryAssert = $false
+                try {
+                    Assert-ShipDeGovernedPullRequest `
+                        -PullRequest $authorizedRepairPr `
+                        -WorkItemId "TASK-AI-13" `
+                        -Branch "fix/task-ai-13-register-reconciliation-999999999999" `
+                        -ExpectedRepository "vinh05092001/shipde-platform" `
+                        -HandoffRoot $tempHandoffGov
+                } catch {
+                    $caughtUnverifiedAncestryAssert = $true
+                }
+                if (-not $caughtUnverifiedAncestryAssert) {
+                    throw "Round 17 Finding 1 negative proof failed: Assert-ShipDeGovernedPullRequest accepted transition when ancestry could not be verified in git."
+                }
+
+                # 1m. Round 17 Finding 1 positive proof: Real git ancestry verification with genuine commits in git repository
+                $realGitOldCommit = "4bf46c2b873be9b7ddd1fbaf8b749c96fe4c419c"
+                $realGitNewCommit = "6672a2ee57906029aea8e6309071e6e3b3e0ae28"
+                Set-ShipDePersistedRegisterReconciliation `
+                    -WorkItemId "TASK-AI-13" `
+                    -PullRequestNumber 16 `
+                    -MergeCommitOid "1111111111111111111111111111111111111111" `
+                    -CodexVerdict "PASS" `
+                    -HandoffBranch "fix/task-ai-13-register-reconciliation-999999999999" `
+                    -HandoffCommitOid $realGitOldCommit `
+                    -HandoffPullRequestNumber 16 `
+                    -HandoffPullRequestUrl "https://github.com/vinh05092001/shipde-platform/pull/16" `
+                    -HandoffRoot $tempHandoffGov
+
+                $realGitRepairPr = [PSCustomObject]@{
+                    number = 16
+                    title = "[TASK-AI-13] Reconcile delivery register after PR #10"
+                    headRefName = "fix/task-ai-13-register-reconciliation-999999999999"
+                    headRefOid = $realGitNewCommit
+                    baseRefName = "main"
+                    headRepository = "vinh05092001/shipde-platform"
+                    changedFiles = 1
+                    files = @("docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv")
+                }
+                $realGitRepairState = @{
+                    WorkItemId = "TASK-AI-13"
+                    Branch = "fix/task-ai-13-register-reconciliation-999999999999"
+                    RepairCount = 1
+                    LastCiRepairHead = $realGitOldCommit
+                    HeadSha = $realGitOldCommit
+                    CiGate = "FAILED"
+                    IsReconciliation = $true
+                }
+                $realGitRepairState | ConvertTo-Json | Set-Content -Path $repairStateFile -Encoding UTF8
+
+                # Without AncestryVerifier, git merge-base --is-ancestor affirmatively verifies genuine commits
+                if (-not (Test-ShipDeReconciliationPullRequest -PullRequest $realGitRepairPr -HandoffRoot $tempHandoffGov)) {
+                    throw "Round 17 Finding 1 positive proof failed: Test-ShipDeReconciliationPullRequest did not accept real git fast-forward descendant."
+                }
+                $realUpdatedLedger = Get-ShipDePersistedRegisterReconciliations -HandoffRoot $tempHandoffGov
+                if ($realUpdatedLedger["TASK-AI-13"].HandoffCommitOid -ne $realGitNewCommit) {
+                    throw "Round 17 Finding 1 positive proof failed: Real git commit handoff was not durably updated to '$realGitNewCommit'."
+                }
+
+                # 1n. Round 17 Finding 1 negative proof: Real git non-ancestor / reversed commits rejected without AncestryVerifier
+                # Re-pin to realGitNewCommit and attempt reverse transition to realGitOldCommit
+                $realGitReversePr = [PSCustomObject]@{
+                    number = 16
+                    title = "[TASK-AI-13] Reconcile delivery register after PR #10"
+                    headRefName = "fix/task-ai-13-register-reconciliation-999999999999"
+                    headRefOid = $realGitOldCommit
+                    baseRefName = "main"
+                    headRepository = "vinh05092001/shipde-platform"
+                    changedFiles = 1
+                    files = @("docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv")
+                }
+                $realGitReverseState = @{
+                    WorkItemId = "TASK-AI-13"
+                    Branch = "fix/task-ai-13-register-reconciliation-999999999999"
+                    RepairCount = 2
+                    LastCiRepairHead = $realGitNewCommit
+                    HeadSha = $realGitNewCommit
+                    CiGate = "FAILED"
+                    IsReconciliation = $true
+                }
+                $realGitReverseState | ConvertTo-Json | Set-Content -Path $repairStateFile -Encoding UTF8
+                if (Test-ShipDeReconciliationPullRequest -PullRequest $realGitReversePr -HandoffRoot $tempHandoffGov) {
+                    throw "Round 17 Finding 1 negative proof failed: Test-ShipDeReconciliationPullRequest accepted non-descendant real git commit."
                 }
 
                 # Reset state/ledger back to mockRecPr head so downstream tests (2, 3, 4, 5) continue cleanly
