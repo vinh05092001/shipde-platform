@@ -4028,7 +4028,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
     if ([string]::IsNullOrWhiteSpace($ckptWorkItemId)) {
         throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber is missing required governed identity 'WorkItemId'. Rejecting before any checkpoint-driven effects."
     }
-    if ([string]::IsNullOrWhiteSpace($ExpectedWorkItemId) -or $ckptWorkItemId -ne $ExpectedWorkItemId) {
+    if ([string]::IsNullOrWhiteSpace($ExpectedWorkItemId) -or $ckptWorkItemId -cne $ExpectedWorkItemId) {
         throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has WorkItemId '$ckptWorkItemId' which does not match live target WorkItemId '$ExpectedWorkItemId'. Rejecting before any checkpoint-driven effects."
     }
 
@@ -4044,7 +4044,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
     if ([string]::IsNullOrWhiteSpace($ckptAuthor)) {
         throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber is missing required governed identity 'Author'. Rejecting before any checkpoint-driven effects."
     }
-    if ([string]::IsNullOrWhiteSpace($ExpectedAuthor) -or $ckptAuthor -ne $ExpectedAuthor) {
+    if ([string]::IsNullOrWhiteSpace($ExpectedAuthor) -or $ckptAuthor -cne $ExpectedAuthor) {
         throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has Author '$ckptAuthor' which does not match live target Author '$ExpectedAuthor'. Rejecting before any checkpoint-driven effects."
     }
 
@@ -4059,7 +4059,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber binds AO session '$ckptSessionId', which could not be found or verified. Rejecting before any checkpoint-driven effects."
         }
         $actualSessionId = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("id", "sessionId"))
-        if ([string]::IsNullOrWhiteSpace($actualSessionId) -or $actualSessionId -ne $ckptSessionId) {
+        if ([string]::IsNullOrWhiteSpace($actualSessionId) -or $actualSessionId -cne $ckptSessionId) {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber binds AO session '$ckptSessionId', but resolved session has ID '$actualSessionId'. Rejecting before any checkpoint-driven effects."
         }
         $sessBranch = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("branch", "headBranch", "head_branch"))
@@ -4067,13 +4067,13 @@ function Assert-ShipDeRestoredCheckpointValidity {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber binds AO session '$ckptSessionId' on branch '$sessBranch', which does not match live target Branch '$ExpectedBranch'. Rejecting before any checkpoint-driven effects."
         }
         $sessKind = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("kind", "role", "type", "workerKind", "worker_kind"))
-        if ([string]::IsNullOrWhiteSpace($sessKind) -or $sessKind -ne "worker") {
+        if ([string]::IsNullOrWhiteSpace($sessKind) -or $sessKind -cne "worker") {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber binds AO session '$ckptSessionId' with kind '$sessKind'; expected 'worker'. Rejecting before any checkpoint-driven effects."
         }
         if (-not [string]::IsNullOrWhiteSpace($ExpectedAuthor)) {
             $allowedHarnesses = @(Get-ShipDeAoHarnessCandidates -Author $ExpectedAuthor)
             $sessHarness = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("harness"))
-            if ([string]::IsNullOrWhiteSpace($sessHarness) -or $allowedHarnesses.Count -eq 0 -or -not ($allowedHarnesses -contains $sessHarness)) {
+            if ([string]::IsNullOrWhiteSpace($sessHarness) -or $allowedHarnesses.Count -eq 0 -or -not ($allowedHarnesses -ccontains $sessHarness)) {
                 throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber binds AO session '$ckptSessionId' with harness '$sessHarness', which does not match allowed harnesses ($($allowedHarnesses -join ', ')) for Author '$ExpectedAuthor'. Rejecting before any checkpoint-driven effects."
             }
         }
@@ -4082,7 +4082,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
     $ckptPendingDispatch = Get-ShipDeObjectProperty -Object $Checkpoint -Names @("PendingDispatch", "pendingDispatch")
     if ($null -ne $ckptPendingDispatch) {
         $pType = [string](Get-ShipDeObjectProperty -Object $ckptPendingDispatch -Names @("Type", "type"))
-        if ($pType -notin @("CI_REPAIR", "REVIEW_REPAIR", "REVIEW_TRIGGER", "NUDGE")) {
+        if ($pType -cnotin @("CI_REPAIR", "REVIEW_REPAIR", "REVIEW_TRIGGER", "NUDGE")) {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has invalid PendingDispatch Type '$pType'. Rejecting before any checkpoint-driven effects."
         }
         $pHead = [string](Get-ShipDeObjectProperty -Object $ckptPendingDispatch -Names @("Head", "head", "HeadSha", "headSha"))
@@ -4093,7 +4093,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
         if ([string]::IsNullOrWhiteSpace($LivePrHead) -or $LivePrHead -notmatch '^[0-9a-fA-F]{40}$') {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has PendingDispatch, but live PR head '$LivePrHead' is missing or not a valid 40-character commit SHA. Rejecting before any checkpoint-driven effects."
         }
-        if ($pHead -ne $LivePrHead) {
+        if ($pHead -cne $LivePrHead) {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has PendingDispatch head '$pHead' which does not match authoritative live PR head '$LivePrHead'. Rejecting before any checkpoint-driven effects."
         }
 
@@ -4101,12 +4101,12 @@ function Assert-ShipDeRestoredCheckpointValidity {
         if ([string]::IsNullOrWhiteSpace($ckptHeadSha) -or $ckptHeadSha -notmatch '^[0-9a-fA-F]{40}$') {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has PendingDispatch, but checkpoint head '$ckptHeadSha' is missing or not a valid 40-character commit SHA. Rejecting before any checkpoint-driven effects."
         }
-        if ($pHead -ne $ckptHeadSha) {
+        if ($pHead -cne $ckptHeadSha) {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has PendingDispatch head '$pHead' which does not match authoritative checkpoint head '$ckptHeadSha'. Rejecting before any checkpoint-driven effects."
         }
 
         $pWorkItemId = [string](Get-ShipDeObjectProperty -Object $ckptPendingDispatch -Names @("WorkItemId", "workItemId"))
-        if ([string]::IsNullOrWhiteSpace($pWorkItemId) -or $pWorkItemId -ne $ExpectedWorkItemId) {
+        if ([string]::IsNullOrWhiteSpace($pWorkItemId) -or $pWorkItemId -cne $ExpectedWorkItemId) {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has PendingDispatch WorkItemId '$pWorkItemId' which does not match target WorkItemId '$ExpectedWorkItemId'. Rejecting before any checkpoint-driven effects."
         }
     }
@@ -12272,6 +12272,148 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             if (-not $threwActiveOmittedDispatchItem) {
                 throw "Round 24 Finding 2 failed: active checkpoint with omitted PendingDispatch WorkItemId did not throw fail-closed."
             }
+
+            # --- Round 25 Regression Tests (Finding 1: Case-Sensitive Restored Identities) ---
+
+            # 25-1a: Case-only session ID mismatch throws fail-closed; archive is preserved
+            $caseSessionIdPr8 = @{
+                WorkItemId = "TASK-FOUND-03"
+                Branch = "feat/task-found-03-api-worker-infrastructure"
+                Author = "GEMINI"
+                PullRequestNumber = 8
+                HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                SessionId = "sess-worker-01"
+                State = "STARTED"
+            }
+            Archive-ShipDeSupervisorCheckpoint -State $caseSessionIdPr8
+            $threwCaseSessionId = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $null `
+                    -PullRequestNumber 0 `
+                    -DeliveryRegisterRows $regAi13Merged `
+                    -OpenPrResolver { return @($mockPr8) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ id = "SESS-WORKER-01"; kind = "worker"; branch = "feat/task-found-03-api-worker-infrastructure"; harness = "agy" } } `
+                    -PrWorkItemResolver { param($pr) return [PSCustomObject]@{ WorkItemId = "TASK-FOUND-03"; Branch = "feat/task-found-03-api-worker-infrastructure"; Author = "GEMINI" } } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwCaseSessionId = $_.Exception.Message -match "resolved session has ID 'SESS-WORKER-01'"
+            }
+            if (-not $threwCaseSessionId) {
+                throw "Round 25 Finding 1 failed: session with case-only mismatched ID did not throw fail-closed."
+            }
+            $archiveStillExists25_1a = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
+            if ($null -eq $archiveStillExists25_1a) {
+                throw "Round 25 Finding 1 failed: archive was deleted when session ID had case-only mismatch."
+            }
+            Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
+
+            # 25-1b: Case-only WorkItemId mismatch in PendingDispatch throws fail-closed; archive is preserved
+            $caseDispatchItemPr8 = @{
+                WorkItemId = "TASK-FOUND-03"
+                Branch = "feat/task-found-03-api-worker-infrastructure"
+                Author = "GEMINI"
+                PullRequestNumber = 8
+                HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                PendingDispatch = @{
+                    Type = "CI_REPAIR"
+                    Head = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                    WorkItemId = "task-found-03"
+                }
+                State = "STARTED"
+            }
+            Archive-ShipDeSupervisorCheckpoint -State $caseDispatchItemPr8
+            $threwCaseDispatchItem = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $null `
+                    -PullRequestNumber 0 `
+                    -DeliveryRegisterRows $regAi13Merged `
+                    -OpenPrResolver { return @($mockPr8) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -SessionDetailResolver { param($id, $p) return $null } `
+                    -PrWorkItemResolver { param($pr) return [PSCustomObject]@{ WorkItemId = "TASK-FOUND-03"; Branch = "feat/task-found-03-api-worker-infrastructure"; Author = "GEMINI" } } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwCaseDispatchItem = $_.Exception.Message -match "PendingDispatch WorkItemId 'task-found-03' which does not match target WorkItemId 'TASK-FOUND-03'"
+            }
+            if (-not $threwCaseDispatchItem) {
+                throw "Round 25 Finding 1 failed: PR #8 restoration did not fail closed on case-only PendingDispatch WorkItemId mismatch."
+            }
+            $archiveStillExists25_1b = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
+            if ($null -eq $archiveStillExists25_1b) {
+                throw "Round 25 Finding 1 failed: archive was deleted when PendingDispatch WorkItemId had case-only mismatch."
+            }
+            Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
+
+            # 25-1c: Case-only session kind mismatch throws fail-closed; archive is preserved
+            $caseKindPr8 = @{
+                WorkItemId = "TASK-FOUND-03"
+                Branch = "feat/task-found-03-api-worker-infrastructure"
+                Author = "GEMINI"
+                PullRequestNumber = 8
+                HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                SessionId = "sess-case-kind"
+                State = "STARTED"
+            }
+            Archive-ShipDeSupervisorCheckpoint -State $caseKindPr8
+            $threwCaseKind = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $null `
+                    -PullRequestNumber 0 `
+                    -DeliveryRegisterRows $regAi13Merged `
+                    -OpenPrResolver { return @($mockPr8) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ id = "sess-case-kind"; kind = "Worker"; branch = "feat/task-found-03-api-worker-infrastructure"; harness = "agy" } } `
+                    -PrWorkItemResolver { param($pr) return [PSCustomObject]@{ WorkItemId = "TASK-FOUND-03"; Branch = "feat/task-found-03-api-worker-infrastructure"; Author = "GEMINI" } } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwCaseKind = $_.Exception.Message -match "with kind 'Worker'; expected 'worker'"
+            }
+            if (-not $threwCaseKind) {
+                throw "Round 25 Finding 1 failed: session with case-mismatched kind did not throw fail-closed."
+            }
+            $archiveStillExists25_1c = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
+            if ($null -eq $archiveStillExists25_1c) {
+                throw "Round 25 Finding 1 failed: archive was deleted when session kind had case mismatch."
+            }
+            Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
+
+            # 25-1d: Case-only session harness mismatch throws fail-closed; archive is preserved
+            $caseHarnessPr8 = @{
+                WorkItemId = "TASK-FOUND-03"
+                Branch = "feat/task-found-03-api-worker-infrastructure"
+                Author = "GEMINI"
+                PullRequestNumber = 8
+                HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                SessionId = "sess-case-harness"
+                State = "STARTED"
+            }
+            Archive-ShipDeSupervisorCheckpoint -State $caseHarnessPr8
+            $threwCaseHarness = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $null `
+                    -PullRequestNumber 0 `
+                    -DeliveryRegisterRows $regAi13Merged `
+                    -OpenPrResolver { return @($mockPr8) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ id = "sess-case-harness"; kind = "worker"; branch = "feat/task-found-03-api-worker-infrastructure"; harness = "AGY" } } `
+                    -PrWorkItemResolver { param($pr) return [PSCustomObject]@{ WorkItemId = "TASK-FOUND-03"; Branch = "feat/task-found-03-api-worker-infrastructure"; Author = "GEMINI" } } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwCaseHarness = $_.Exception.Message -match "does not match allowed harnesses"
+            }
+            if (-not $threwCaseHarness) {
+                throw "Round 25 Finding 1 failed: session with case-mismatched harness did not throw fail-closed."
+            }
+            $archiveStillExists25_1d = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
+            if ($null -eq $archiveStillExists25_1d) {
+                throw "Round 25 Finding 1 failed: archive was deleted when session harness had case mismatch."
+            }
+            Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
         }
 
         # Reconciliation PR Governance: Supervisor identifies, recovers, and automatically processes reconciliation PRs
