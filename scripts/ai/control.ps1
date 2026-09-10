@@ -3679,6 +3679,8 @@ function Normalize-ShipDeSupervisorState {
         LastRepairDispatchedAt = $null
         PendingDispatch = $null
         RouterFailure = $null
+        MergeIntent = $null
+        MergeCommitOid = $null
     }
 
     if ($State -is [System.Collections.IDictionary]) {
@@ -7557,6 +7559,8 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         $null = $normalizedState.ExactHeadVerdict
         $null = $normalizedState.LastReviewTriggeredHead
         $null = $normalizedState.Harness
+        $null = $normalizedState.MergeIntent
+        $null = $normalizedState.MergeCommitOid
 
         $greenPr = [PSCustomObject]@{
             number = 9
@@ -7579,6 +7583,67 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
             -CheckpointWriter { param($s) }
         if ($loopResult -ne "READY_FOR_HUMAN_MERGE") {
             throw "Invoke-ShipDeSupervisorLoop failed to handle incomplete state under StrictMode."
+        }
+    }
+
+    # Round 21 Regression Test: Legacy checkpoint missing MergeIntent does not crash under StrictMode
+    & {
+        Set-StrictMode -Version Latest
+        # 1. Hashtable legacy checkpoint (e.g. TASK-AI-06 in-memory checkpoint)
+        $legacyHash = @{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            State = "STARTED"
+        }
+        $missingIntentThrowsHash = $false
+        try {
+            $val = $legacyHash.MergeIntent
+        } catch {
+            $missingIntentThrowsHash = $_.Exception.Message -match "The property 'MergeIntent' cannot be found on this object"
+        }
+        if (-not $missingIntentThrowsHash) {
+            throw "Test setup precondition failed: legacy hashtable missing MergeIntent did not trigger PropertyNotFoundStrict."
+        }
+
+        $normalizedHash = Normalize-ShipDeSupervisorState -State $legacyHash
+        if ($null -ne $normalizedHash.MergeIntent) {
+            throw "Round 21 regression failed: normalized hashtable MergeIntent was expected to be null."
+        }
+        if ($null -ne $normalizedHash.MergeCommitOid) {
+            throw "Round 21 regression failed: normalized hashtable MergeCommitOid was expected to be null."
+        }
+        # Verify strict condition evaluation does not throw
+        $hasIntentHash = ($normalizedHash.State -in @("MERGE_INTENT_PERSISTED", "MERGE_RECONCILING") -or $null -ne $normalizedHash.MergeIntent)
+        if ($hasIntentHash) {
+            throw "Round 21 regression failed: normalized legacy state evaluated hasIntent as true."
+        }
+
+        # 2. PSCustomObject legacy checkpoint (e.g. loaded from serialized JSON on disk)
+        $legacyPsObject = [PSCustomObject]@{
+            WorkItemId = "TASK-AI-06"
+            Branch = "feat/task-ai-06-orchestrator-supervisor"
+            State = "STARTED"
+        }
+        $missingIntentThrowsPs = $false
+        try {
+            $val = $legacyPsObject.MergeIntent
+        } catch {
+            $missingIntentThrowsPs = $_.Exception.Message -match "The property 'MergeIntent' cannot be found on this object"
+        }
+        if (-not $missingIntentThrowsPs) {
+            throw "Test setup precondition failed: legacy PSCustomObject missing MergeIntent did not trigger PropertyNotFoundStrict."
+        }
+
+        $normalizedPs = Normalize-ShipDeSupervisorState -State $legacyPsObject
+        if ($null -ne $normalizedPs.MergeIntent) {
+            throw "Round 21 regression failed: normalized PSCustomObject MergeIntent was expected to be null."
+        }
+        if ($null -ne $normalizedPs.MergeCommitOid) {
+            throw "Round 21 regression failed: normalized PSCustomObject MergeCommitOid was expected to be null."
+        }
+        $hasIntentPs = ($normalizedPs.State -in @("MERGE_INTENT_PERSISTED", "MERGE_RECONCILING") -or $null -ne $normalizedPs.MergeIntent)
+        if ($hasIntentPs) {
+            throw "Round 21 regression failed: normalized legacy PSCustomObject evaluated hasIntent as true."
         }
     }
 
@@ -10857,6 +10922,140 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             }
         }
 
+        # Round 21 Regression Test: Explicit PR 10 selection supersedes unrelated PR 8 checkpoint without spawning or repairing PR 8
+        & {
+            $mockPr8 = [PSCustomObject]@{
+                number = 8
+                title = "[TASK-FOUND-03] Add API, worker and local infrastructure"
+                headRefName = "feat/task-found-03-api-worker-infrastructure"
+                headRefOid = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                headRepository = "vinh05092001/shipde-platform"
+                isDraft = $false
+                statusCheckRollup = @(
+                    [PSCustomObject]@{ name = "application-gate"; conclusion = "FAILURE"; startedAt = "2026-09-08T00:00:00Z" }
+                )
+            }
+            $mockPr10 = [PSCustomObject]@{
+                number = 10
+                title = "[TASK-AI-13] Governed deterministic auto-merge execution"
+                headRefName = "feat/task-ai-13-governed-auto-merge"
+                headRefOid = "e03cc14b0668f8d94ccb7eb851d1cf29023eba8"
+                headRepository = "vinh05092001/shipde-platform"
+                isDraft = $false
+            }
+            $mockAi13Item = [PSCustomObject]@{
+                WorkItemId = "TASK-AI-13"
+                WorkItemPath = "docs/product-spec/work-items/TASK-AI-13.md"
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = "GEMINI"
+            }
+            $regNotMerged = @(
+                [PSCustomObject]@{ work_item_id = "TASK-FOUND-03"; status = "READY_FOR_CODEX" },
+                [PSCustomObject]@{ work_item_id = "TASK-AI-13"; status = "READY_FOR_AUTHOR" }
+            )
+
+            # Test 1: Active/pending PR 8 checkpoint with dead session and pending CI repair
+            # Before fix, this would crash or attempt to repair PR 8 or resume PR 8 instead of PR 10.
+            $pr8Checkpoint = @{
+                WorkItemId = "TASK-FOUND-03"
+                WorkItemPath = "docs/product-spec/work-items/TASK-FOUND-03.md"
+                Branch = "feat/task-found-03-api-worker-infrastructure"
+                Author = "GEMINI"
+                State = "STARTED"
+                PullRequestNumber = 8
+                HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                SessionId = "sess-dead-pr8"
+                PendingDispatch = @{ Type = "CI_REPAIR"; HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8" }
+            }
+
+            $workerTracker = @{ Spawned = $false }
+            $checkpointTracker = @{ Written = $null }
+            $supersededState = Initialize-ShipDeSupervisorState `
+                -State $pr8Checkpoint `
+                -PullRequestNumber 10 `
+                -DeliveryRegisterRows $regNotMerged `
+                -OpenPrResolver { return @($mockPr8, $mockPr10) } `
+                -ActiveWorkersResolver { return @() } `
+                -SessionDetailResolver { param($id, $p) return $null } `
+                -WorkerStarter { param($item, $prompt) $workerTracker.Spawned = $true; throw "WorkerStarter must NOT be called for PR 8!" } `
+                -CodexParker { } `
+                -PrWorkItemResolver {
+                    param($pr)
+                    if ([int]$pr.number -eq 10) { return $mockAi13Item }
+                    throw "PrWorkItemResolver should not be called for PR #$($pr.number) during explicit PR 10 initialization."
+                } `
+                -CheckpointWriter { param($s) $checkpointTracker.Written = $s }
+
+            if ($workerTracker.Spawned) {
+                throw "Round 21 defect 2 failed: worker was spawned when explicit PR 10 superseded PR 8 checkpoint."
+            }
+            if ($null -eq $supersededState -or $supersededState.PullRequestNumber -ne 10 -or $supersededState.WorkItemId -ne "TASK-AI-13") {
+                throw "Round 21 defect 2 failed: supervisor did not initialize explicit PR #10 when superseding PR 8 checkpoint."
+            }
+            if ($null -ne $supersededState.SessionId -or $null -ne $supersededState.Harness) {
+                throw "Round 21 defect 2 failed: explicit PR 10 review state bound a session prematurely."
+            }
+            if ($null -eq $checkpointTracker.Written -or $checkpointTracker.Written.PullRequestNumber -ne 10 -or $checkpointTracker.Written.WorkItemId -ne "TASK-AI-13") {
+                throw "Round 21 defect 2 failed: supervisor did not persist reconstructed PR 10 checkpoint."
+            }
+
+            # Test 2: Spawning PR 8 checkpoint without PR number
+            $spawningPr8Checkpoint = @{
+                WorkItemId = "TASK-FOUND-03"
+                WorkItemPath = "docs/product-spec/work-items/TASK-FOUND-03.md"
+                Branch = "feat/task-found-03-api-worker-infrastructure"
+                Author = "GEMINI"
+                State = "SPAWNING"
+                PullRequestNumber = $null
+            }
+            $spawningWorkerTracker = @{ Called = $false }
+            $supersededSpawnState = Initialize-ShipDeSupervisorState `
+                -State $spawningPr8Checkpoint `
+                -PullRequestNumber 10 `
+                -DeliveryRegisterRows $regNotMerged `
+                -OpenPrResolver { return @($mockPr8, $mockPr10) } `
+                -ActiveWorkersResolver { return @() } `
+                -WorkerStarter { param($item, $prompt) $spawningWorkerTracker.Called = $true; throw "WorkerStarter must NOT be called for SPAWNING PR 8!" } `
+                -CodexParker { } `
+                -PrWorkItemResolver { param($pr) if ([int]$pr.number -eq 10) { return $mockAi13Item } return $null } `
+                -CheckpointWriter { param($s) }
+
+            if ($spawningWorkerTracker.Called -or $supersededSpawnState.PullRequestNumber -ne 10 -or $supersededSpawnState.WorkItemId -ne "TASK-AI-13") {
+                throw "Round 21 defect 2 failed: spawning PR 8 checkpoint triggered worker spawn instead of superseding to PR 10."
+            }
+
+            # Test 3: Later workflow still reselects PR 8 after TASK-AI-13 merges
+            $regAi13Merged = @(
+                [PSCustomObject]@{ work_item_id = "TASK-FOUND-03"; status = "READY_FOR_CODEX" },
+                [PSCustomObject]@{ work_item_id = "TASK-AI-13"; status = "MERGED" }
+            )
+            $postMergePr8State = Initialize-ShipDeSupervisorState `
+                -State $null `
+                -PullRequestNumber 0 `
+                -DeliveryRegisterRows $regAi13Merged `
+                -OpenPrResolver { return @($mockPr8) } `
+                -ActiveWorkersResolver { return @() } `
+                -NextItemResolver { throw "NextItemResolver should not be called before PR 8 is repaired!" } `
+                -CodexParker { } `
+                -PrWorkItemResolver {
+                    param($pr)
+                    if ([int]$pr.number -eq 8) {
+                        return [PSCustomObject]@{
+                            WorkItemId = "TASK-FOUND-03"
+                            WorkItemPath = "docs/product-spec/work-items/TASK-FOUND-03.md"
+                            Branch = "feat/task-found-03-api-worker-infrastructure"
+                            Author = "GEMINI"
+                        }
+                    }
+                    return $null
+                } `
+                -CheckpointWriter { param($s) }
+
+            if ($null -eq $postMergePr8State -or $postMergePr8State.PullRequestNumber -ne 8 -or $postMergePr8State.WorkItemId -ne "TASK-FOUND-03") {
+                throw "Round 21 defect 2 failed: later workflow failed to reselect PR 8 after TASK-AI-13 merge."
+            }
+        }
+
         # Reconciliation PR Governance: Supervisor identifies, recovers, and automatically processes reconciliation PRs
         & {
             $tempHandoffGov = Join-Path ([System.IO.Path]::GetTempPath()) ("shipde-govrec-test-" + [System.Guid]::NewGuid().ToString("N"))
@@ -13038,6 +13237,34 @@ function Initialize-ShipDeSupervisorState {
 
     if ($null -ne $State) {
         $State = Normalize-ShipDeSupervisorState -State $State
+
+        if ($PullRequestNumber -gt 0) {
+            $statePrNum = [int](Get-ShipDeObjectProperty -Object $State -Names @("PullRequestNumber", "pullRequestNumber"))
+            $stateWorkItemId = [string](Get-ShipDeObjectProperty -Object $State -Names @("WorkItemId", "workItemId"))
+
+            $targetPr = @($allOpenPrs | Where-Object { [int]$_.number -eq $PullRequestNumber }) | Select-Object -First 1
+            $targetWorkItemId = ""
+            if ($null -ne $targetPr) {
+                $targetItem = & $PrWorkItemResolver $targetPr
+                if ($null -ne $targetItem) {
+                    $targetWorkItemId = [string](Get-ShipDeObjectProperty -Object $targetItem -Names @("WorkItemId", "workItemId"))
+                }
+                if ([string]::IsNullOrWhiteSpace($targetWorkItemId)) {
+                    $targetWorkItemId = Get-ShipDeWorkItemIdFromTitle -Title ([string]$targetPr.title)
+                }
+            }
+
+            $isRelated = ($statePrNum -eq $PullRequestNumber) -or `
+                ($statePrNum -le 0 -and -not [string]::IsNullOrWhiteSpace($targetWorkItemId) -and $stateWorkItemId -eq $targetWorkItemId)
+
+            if (-not $isRelated) {
+                Write-Host ("[SUPERVISOR] Explicit PullRequestNumber {0} ({1}) supersedes unrelated checkpoint for {2} (PR #{3})." -f $PullRequestNumber, $targetWorkItemId, $stateWorkItemId, $statePrNum)
+                $State = $null
+            }
+        }
+    }
+
+    if ($null -ne $State) {
         if ([string]$State["State"] -eq "CORE_COMPLETE") {
             if ($openReconciliationPullRequests.Count -eq 0 -and (Test-ShipDeCoreComplete -Rows $DeliveryRegisterRows -HandoffRoot $HandoffRoot)) {
                 Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
@@ -13070,7 +13297,7 @@ function Initialize-ShipDeSupervisorState {
             Write-Host "[SUPERVISOR] Work Item $($State['WorkItemId']) is MERGED. Clearing completed checkpoint for next item."
             & $CheckpointClearer
             $State = $null
-        } else {
+        } elseif ($null -ne $State) {
             $sessionId = [string]$State["SessionId"]
             $workItemId = [string]$State["WorkItemId"]
             $stateValue = [string]$State["State"]
