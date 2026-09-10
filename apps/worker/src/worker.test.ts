@@ -133,6 +133,27 @@ async function runWorkerTests() {
       throw new Error(`Expected worker readiness 200 after recovery, got ${responseStatus}`);
     }
     assertValidReadinessResponse(responseJson, 'ok');
+
+    // Test process-level DB-down liveness resilience (Finding 2)
+    console.log('Testing Worker PrismaService resilience when PostgreSQL is down...');
+    const downPrisma = new PrismaService({
+      datasources: {
+        db: { url: 'postgresql://postgres:postgres@127.0.0.1:54399/shipde_dev?connect_timeout=1' },
+      },
+    });
+    await downPrisma.onModuleInit();
+    const dbReadiness = await downPrisma.checkReadiness();
+    if (dbReadiness !== 'down') {
+      throw new Error(
+        `Expected worker downPrisma.checkReadiness() to be 'down', got ${dbReadiness}`
+      );
+    }
+    // Liveness remains 200 independently of DB state
+    healthController.getLive(mockReqLive, createMockRes() as any);
+    if (responseStatus !== 200) {
+      throw new Error(`Expected worker liveness 200 while DB is down, got ${responseStatus}`);
+    }
+    await downPrisma.onModuleDestroy();
   }
   console.log('✅ Worker HealthService and HealthController tests passed');
 
@@ -145,6 +166,22 @@ async function runWorkerTests() {
     await prismaService.onModuleInit();
 
     const redisService = new RedisService(config);
+    const dbStatus = await prismaService.checkReadiness();
+    const redisStatus = await redisService.checkReadiness();
+
+    if (dbStatus !== 'up' || redisStatus !== 'up') {
+      if (process.env.CI) {
+        throw new Error('PostgreSQL and Redis must be reachable in CI environment');
+      }
+      console.warn(
+        `⚠️ Infrastructure not reachable (DB: ${dbStatus}, Redis: ${redisStatus}). Skipping live worker tests (run 'pnpm infra:up' to enable).`
+      );
+      await redisService.onModuleDestroy();
+      await prismaService.onModuleDestroy();
+      console.log('🎉 All @shipde/worker offline tests passed successfully!');
+      return;
+    }
+
     const redis = redisService.getClient();
 
     const smokeWorker = new SmokeWorker(config, prismaService, redisService);
@@ -216,9 +253,55 @@ async function runWorkerTests() {
         throw new Error(`Expected processedCount to remain 1, got ${smokeWorker.processedCount}`);
       }
 
+      // 3.3 Crash recovery test: Redis dedup key exists but DB is still PROCESSING (crash before PUBLISHED committed)
+      // The worker must reconcile against durable state and mark it PUBLISHED instead of stranding it (Finding 4)
+      const crashSmokeId = `smoke_crash_${Date.now()}`;
+      const crashJobId = `job-crash-${Date.now()}`;
+      const crashDedupKey = `smoke:dedup:${crashJobId}`;
+      const uncommittedEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: crashSmokeId },
+          correlation_id: `corr-uncommitted-${Date.now()}`,
+          idempotency_key: crashJobId,
+          status: OutboxStatusEnum.PROCESSING,
+        },
+      });
+      await redis.set(crashDedupKey, '1', 'EX', 86400);
+
+      const mockCrashJob = {
+        id: crashJobId,
+        data: {
+          outboxId: uncommittedEvent.id,
+          smokeId: crashSmokeId,
+          correlationId: uncommittedEvent.correlation_id,
+          eventType: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: crashSmokeId },
+          idempotencyKey: crashJobId,
+        } as SmokeJobData,
+      } as Job<SmokeJobData>;
+
+      const reconciledResult = await smokeWorker.processJob(mockCrashJob);
+      if (!reconciledResult.success) {
+        throw new Error(
+          `Expected crash reconciliation to succeed, got: ${JSON.stringify(reconciledResult)}`
+        );
+      }
+
+      const reconciledRecord = await prismaService.outboxEvent.findUnique({
+        where: { id: uncommittedEvent.id },
+      });
+      if (!reconciledRecord || reconciledRecord.status !== OutboxStatusEnum.PUBLISHED) {
+        throw new Error(
+          `Expected uncommitted event to be reconciled to PUBLISHED, got ${reconciledRecord?.status}`
+        );
+      }
+
       // Clean up Redis & DB
       await redis.del(dedupKey);
+      await redis.del(crashDedupKey);
       await prismaService.outboxEvent.delete({ where: { id: outboxRecord.id } });
+      await prismaService.outboxEvent.delete({ where: { id: uncommittedEvent.id } });
     } finally {
       await redisService.onModuleDestroy();
       await prismaService.onModuleDestroy();
@@ -484,6 +567,50 @@ async function runWorkerTests() {
       // Clean up DB records
       await prismaService.outboxEvent.delete({ where: { id: event.id } });
       await prismaService.outboxEvent.delete({ where: { id: staleEvent.id } });
+
+      // 6.3 Concurrent dispatcher claim & idempotency race test (Finding 3)
+      console.log('Testing concurrent dispatcher atomic claim...');
+      const concurrentEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: 'concurrent-claim-1' },
+          correlation_id: `corr-race-${Date.now()}`,
+          status: OutboxStatusEnum.PENDING,
+        },
+      });
+
+      // Simulate 2 workers attempting to atomically claim the same PENDING record
+      const claim1 = await prismaService.outboxEvent.updateMany({
+        where: { id: concurrentEvent.id, status: OutboxStatusEnum.PENDING },
+        data: { status: OutboxStatusEnum.PROCESSING },
+      });
+      const claim2 = await prismaService.outboxEvent.updateMany({
+        where: { id: concurrentEvent.id, status: OutboxStatusEnum.PENDING },
+        data: { status: OutboxStatusEnum.PROCESSING },
+      });
+
+      if (claim1.count !== 1) {
+        throw new Error(`Expected claim1 to succeed with count 1, got ${claim1.count}`);
+      }
+      if (claim2.count !== 0) {
+        throw new Error(`Expected claim2 to fail with count 0, got ${claim2.count}`);
+      }
+
+      // Ensure status cannot regress from PUBLISHED back to PROCESSING
+      await prismaService.outboxEvent.update({
+        where: { id: concurrentEvent.id },
+        data: { status: OutboxStatusEnum.PUBLISHED, published_at: new Date() },
+      });
+
+      const regressedAttempt = await prismaService.outboxEvent.updateMany({
+        where: { id: concurrentEvent.id, status: OutboxStatusEnum.PENDING },
+        data: { status: OutboxStatusEnum.PROCESSING },
+      });
+      if (regressedAttempt.count !== 0) {
+        throw new Error('Expected atomic claim to reject regressing PUBLISHED to PROCESSING');
+      }
+
+      await prismaService.outboxEvent.delete({ where: { id: concurrentEvent.id } });
     } finally {
       await dispatcher.onModuleDestroy();
       await prismaService.onModuleDestroy();

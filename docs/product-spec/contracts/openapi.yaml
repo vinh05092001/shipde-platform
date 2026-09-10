@@ -19,6 +19,8 @@ tags:
   - name: Health
 paths:
   /health/live:
+    servers:
+      - url: /
     get:
       tags: [Health]
       summary: Operational liveness probe (API-FOUND-HEALTH-LIVE)
@@ -33,6 +35,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/LivenessResponse'
   /health/ready:
+    servers:
+      - url: /
     get:
       tags: [Health]
       summary: Operational readiness probe (API-FOUND-HEALTH-READY)

@@ -23,6 +23,9 @@ export class RedisService implements OnModuleDestroy {
         connectTimeout: 2000,
         retryStrategy: () => null, // Do not hang indefinitely on health check
       });
+      this.client.on('error', () => {
+        // Prevent unhandled error event on connection loss/refusal
+      });
     }
     return this.client;
   }

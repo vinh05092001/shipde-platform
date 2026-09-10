@@ -87,20 +87,33 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
         }
         const acquired = await redis.set(dedupKey, '1', 'EX', 86400, 'NX');
         if (!acquired) {
-          this.duplicateCount++;
-          console.log(
-            formatStructuredLog({
-              level: 'warn',
-              service: 'worker',
-              correlationId,
-              message: `Duplicate job ${job.id} skipped via Redis deduplication key ${dedupKey}.`,
-              metadata: {
-                jobId: job.id,
-                dedupKey,
-              },
-            })
-          );
-          return { success: true, duplicate: true };
+          // Reconcile against durable database state before acknowledging duplicate (Finding 4)
+          // If outbox event is not yet PUBLISHED (e.g. process crashed before committing),
+          // do NOT drop the work as a duplicate; fall through to process the durable effect.
+          if (data.outboxId) {
+            const outboxRecord = await this.prisma.outboxEvent.findUnique({
+              where: { id: data.outboxId },
+            });
+            if (outboxRecord && outboxRecord.status === OutboxStatusEnum.PUBLISHED) {
+              this.duplicateCount++;
+              console.log(
+                formatStructuredLog({
+                  level: 'warn',
+                  service: 'worker',
+                  correlationId,
+                  message: `Duplicate job ${job.id} skipped via Redis deduplication key ${dedupKey}.`,
+                  metadata: {
+                    jobId: job.id,
+                    dedupKey,
+                  },
+                })
+              );
+              return { success: true, duplicate: true };
+            }
+          } else {
+            this.duplicateCount++;
+            return { success: true, duplicate: true };
+          }
         }
       } catch {
         // Fall through to database guard if Redis fails

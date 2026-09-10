@@ -4,11 +4,20 @@ import { PrismaClient } from '@prisma/client';
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
-    await this.$connect();
+    try {
+      await this.$connect();
+    } catch {
+      // Do not abort API bootstrap when database is unavailable.
+      // Liveness (/health/live) remains available, while readiness (/health/ready) reports 503.
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.$disconnect();
+    try {
+      await this.$disconnect();
+    } catch {
+      // Ignore disconnect errors during teardown
+    }
   }
 
   /**

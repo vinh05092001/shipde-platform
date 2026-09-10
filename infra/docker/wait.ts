@@ -47,7 +47,17 @@ function getComposeStatuses(): ServiceStatus[] {
   }
 }
 
-async function waitForInfrastructure(): Promise<void> {
+export function isServiceHealthy(s: { health?: string; status?: string }): boolean {
+  const health = (s.health || '').trim().toLowerCase();
+  if (health === 'healthy') return true;
+  if (health === 'unhealthy' || health === 'starting') return false;
+
+  const status = (s.status || '').toLowerCase();
+  if (status.includes('(healthy)')) return true;
+  return false;
+}
+
+export async function waitForInfrastructure(): Promise<void> {
   const startTime = Date.now();
   console.log(
     '⏳ Waiting for local infrastructure containers (PostgreSQL, Redis, MinIO) to be healthy...'
@@ -67,11 +77,7 @@ async function waitForInfrastructure(): Promise<void> {
       if (allPresent) {
         const statuses = requiredServices.map((req) => {
           const s = serviceMap.get(req)!;
-          const isHealthy =
-            s.health === 'healthy' ||
-            s.status.toLowerCase().includes('(healthy)') ||
-            (s.status.toLowerCase().startsWith('up') &&
-              !s.status.toLowerCase().includes('unhealthy'));
+          const isHealthy = isServiceHealthy(s);
           return { service: req, status: s.status, health: s.health, isHealthy };
         });
 
@@ -99,7 +105,13 @@ async function waitForInfrastructure(): Promise<void> {
   process.exit(1);
 }
 
-waitForInfrastructure().catch((err) => {
-  console.error('Fatal error waiting for infrastructure:', err);
-  process.exit(1);
-});
+if (
+  (typeof require !== 'undefined' && require.main === module) ||
+  (typeof process !== 'undefined' &&
+    process.argv[1]?.replace(/\\/g, '/').endsWith('infra/docker/wait.ts'))
+) {
+  waitForInfrastructure().catch((err) => {
+    console.error('Fatal error waiting for infrastructure:', err);
+    process.exit(1);
+  });
+}

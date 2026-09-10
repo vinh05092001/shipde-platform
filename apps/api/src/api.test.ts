@@ -218,6 +218,59 @@ async function runApiTests() {
     if ((responseJson.checks.storage as string) !== 'down') {
       throw new Error('Expected storage "down" on storage failure');
     }
+
+    // Process-level dependency-down liveness resilience (AC-FOUND-03-04, AC-FOUND-03-06, Finding 1)
+    console.log('Testing API PrismaService resilience when PostgreSQL is down...');
+    const downPrisma = new PrismaService({
+      datasources: {
+        db: { url: 'postgresql://postgres:postgres@127.0.0.1:54399/shipde_dev?connect_timeout=1' },
+      },
+    });
+    // onModuleInit must not throw or abort API bootstrap
+    await downPrisma.onModuleInit();
+
+    const dbReadiness = await downPrisma.checkReadiness();
+    if (dbReadiness !== 'down') {
+      throw new Error(`Expected downPrisma.checkReadiness() to be 'down', got ${dbReadiness}`);
+    }
+
+    // HealthController must still serve liveness 200 independently of DB state
+    const liveWhenDbDown = healthController.getLive(mockReq);
+    assertValidLivenessResponse(liveWhenDbDown);
+    if (liveWhenDbDown.service !== 'api') {
+      throw new Error(`Expected service 'api', got ${liveWhenDbDown.service}`);
+    }
+    await downPrisma.onModuleDestroy();
+
+    // Test infra wait container health evaluation (AC-FOUND-03-02, Finding 8)
+    console.log('Testing isServiceHealthy logic...');
+    const { isServiceHealthy } = await import('../../../infra/docker/wait');
+    if (!isServiceHealthy({ health: 'healthy', status: 'Up 10 seconds' })) {
+      throw new Error('Expected isServiceHealthy to be true for healthy');
+    }
+    if (!isServiceHealthy({ status: 'Up 10 seconds (healthy)' })) {
+      throw new Error('Expected isServiceHealthy to be true for (healthy)');
+    }
+    if (isServiceHealthy({ status: 'Up 5 seconds (health: starting)' })) {
+      throw new Error('Expected isServiceHealthy to be false for starting');
+    }
+    if (isServiceHealthy({ health: 'starting', status: 'Up 5 seconds' })) {
+      throw new Error('Expected isServiceHealthy to be false for starting health');
+    }
+    if (isServiceHealthy({ status: 'Up 1 minute (unhealthy)' })) {
+      throw new Error('Expected isServiceHealthy to be false for unhealthy');
+    }
+    if (isServiceHealthy({ health: 'unhealthy', status: 'Up 1 minute' })) {
+      throw new Error('Expected isServiceHealthy to be false for unhealthy health');
+    }
+    if (isServiceHealthy({ status: 'Up 1 minute' })) {
+      throw new Error(
+        'Expected isServiceHealthy to be false when health check is missing/not reported'
+      );
+    }
+    if (isServiceHealthy({ status: 'Exited (1) 2 minutes ago' })) {
+      throw new Error('Expected isServiceHealthy to be false for exited container');
+    }
   }
   console.log('✅ HealthService and HealthController tests passed');
 
@@ -233,6 +286,19 @@ async function runApiTests() {
       },
     });
     await prismaService.onModuleInit();
+
+    const dbStatus = await prismaService.checkReadiness();
+    if (dbStatus !== 'up') {
+      if (process.env.CI) {
+        throw new Error('Database must be reachable in CI environment');
+      }
+      console.warn(
+        `⚠️ PostgreSQL is not reachable at ${config.DATABASE_URL}. Skipping live DB tests (run 'pnpm infra:up' to enable).`
+      );
+      await prismaService.onModuleDestroy();
+      console.log('🎉 All @shipde/api offline tests passed successfully!');
+      return;
+    }
 
     const outboxService = new OutboxService(prismaService);
     const correlationId = normalizeCorrelationId('corr-tx-test');

@@ -46,8 +46,9 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
     this.pollInterval = setInterval(async () => {
       try {
         await this.dispatchPending();
+        await this.recoverStaleProcessing();
       } catch {
-        // Errors logged internally in dispatchPending
+        // Errors logged internally in dispatchPending / recoverStaleProcessing
       }
     }, 1000);
   }
@@ -79,8 +80,26 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
     for (const event of pendingEvents) {
       const correlationId = normalizeCorrelationId(event.correlation_id);
       try {
+        // Atomically claim only PENDING record to PROCESSING before enqueuing to BullMQ
+        // This prevents race condition with concurrent workers or overwriting PUBLISHED records (Finding 3)
+        const claimResult = await this.prisma.outboxEvent.updateMany({
+          where: {
+            id: event.id,
+            status: OutboxStatusEnum.PENDING,
+          },
+          data: {
+            status: OutboxStatusEnum.PROCESSING,
+          },
+        });
+
+        if (claimResult.count === 0) {
+          // Event was concurrently claimed or completed, skip
+          continue;
+        }
+
         const queue = this.getQueue();
         const payloadObj = event.payload as Record<string, unknown>;
+        const attemptJobId = `${event.idempotency_key || event.id}-attempt-${event.attempts}`;
 
         await queue.add(
           'smoke-job',
@@ -93,15 +112,9 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
             idempotencyKey: event.idempotency_key || undefined,
           },
           {
-            jobId: event.idempotency_key || event.id,
+            jobId: attemptJobId,
           }
         );
-
-        // Mark as PROCESSING
-        await this.prisma.outboxEvent.update({
-          where: { id: event.id },
-          data: { status: OutboxStatusEnum.PROCESSING },
-        });
 
         dispatched++;
         console.log(
@@ -195,6 +208,35 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
    * Re-queues an exhausted or failed outbox event for deterministic operator recovery.
    */
   async retryFailed(outboxId: string): Promise<OutboxEvent> {
+    const existing = await this.prisma.outboxEvent.findUnique({
+      where: { id: outboxId },
+    });
+    if (!existing) {
+      throw new Error(`Outbox event ${outboxId} not found`);
+    }
+    if (existing.status !== OutboxStatusEnum.FAILED) {
+      throw new Error(
+        `Cannot retry outbox event ${outboxId} with status ${existing.status}; only FAILED events can be retried`
+      );
+    }
+
+    // Safely remove retained failed jobs from BullMQ queue to avoid duplicate jobId rejection
+    try {
+      const queue = this.getQueue();
+      const jobKeys = [
+        existing.idempotency_key || existing.id,
+        `${existing.idempotency_key || existing.id}-attempt-${existing.attempts}`,
+      ];
+      for (const k of jobKeys) {
+        const j = await queue.getJob(k);
+        if (j) {
+          await j.remove();
+        }
+      }
+    } catch {
+      // Best-effort cleanup
+    }
+
     return this.prisma.outboxEvent.update({
       where: { id: outboxId },
       data: {
