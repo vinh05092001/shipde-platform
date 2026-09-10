@@ -215,7 +215,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 2. **AI-SUP-02**: Only one Work Item is active at a time; parallel orchestration is not supported.
 3. **AI-SUP-03**: The supervisor uses only supported public AO CLI commands; it does not modify AO internals.
 4. **AI-SUP-04**: Implementation/test failures are NOT provider failures; they return to the author.
-5. **AI-SUP-05**: The supervisor never auto-merges; human merge is always required.
+5. **AI-SUP-05**: Governed exact-HEAD auto-merge is authorized only through `TASK-AI-13` under `HUMAN-DECISION-ORCHESTRATOR-CORE-PRIORITY-2026-09-08` after `READY_FOR_HUMAN_MERGE` when strict single-snapshot preflight passes (exact 40-character commit OID, required GitHub Actions `SUCCESS` checks, trusted `chatgpt-codex-connector[bot]` `PASS` verdict, zero unresolved review threads, mergeable status, and `expectedHeadOid` squash mutation); human merge remains required for the bootstrap of TASK-AI-13 itself and whenever any preflight signal fails.
 
 ### AgentRouter-backed orchestration and lifecycle
 
