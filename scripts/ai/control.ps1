@@ -3802,37 +3802,40 @@ function Archive-ShipDeSupervisorCheckpoint {
     Write-Host ("[SUPERVISOR] Archived supervisor checkpoint for {0} (PR #{1})." -f $workItemId, $prNum)
 }
 
-function Get-ShipDeArchivedSupervisorCheckpoint {
+function Test-ShipDeArchivedCheckpointMatches {
     param(
+        [Parameter(Mandatory = $true)][object]$Candidate,
         [string]$WorkItemId = "",
-        [int]$PullRequestNumber = 0,
-        [string]$HandoffRoot = $script:HandoffRoot
+        [int]$PullRequestNumber = 0
     )
-    $existing = Get-ShipDeArchivedSupervisorCheckpoints -HandoffRoot $HandoffRoot
-    if ($existing.Count -eq 0) {
-        return $null
+    $candPrNum = [int](Get-ShipDeObjectProperty -Object $Candidate -Names @("PullRequestNumber", "pullRequestNumber"))
+    $candWorkItemId = [string](Get-ShipDeObjectProperty -Object $Candidate -Names @("WorkItemId", "workItemId"))
+
+    $hasWorkItem = -not [string]::IsNullOrWhiteSpace($WorkItemId)
+    $hasPr = $PullRequestNumber -gt 0
+
+    if (-not $hasWorkItem -and -not $hasPr) {
+        return $false
     }
-    if (-not [string]::IsNullOrWhiteSpace($WorkItemId) -and $existing.ContainsKey($WorkItemId)) {
-        return (Normalize-ShipDeSupervisorState -State $existing[$WorkItemId])
+
+    if ($hasWorkItem -and $candWorkItemId -ne $WorkItemId) {
+        return $false
     }
-    if ($PullRequestNumber -gt 0 -and $existing.ContainsKey("PR_$PullRequestNumber")) {
-        return (Normalize-ShipDeSupervisorState -State $existing["PR_$PullRequestNumber"])
-    }
-    foreach ($k in $existing.Keys) {
-        $cand = $existing[$k]
-        $candPrNum = [int](Get-ShipDeObjectProperty -Object $cand -Names @("PullRequestNumber", "pullRequestNumber"))
-        $candWorkItemId = [string](Get-ShipDeObjectProperty -Object $cand -Names @("WorkItemId", "workItemId"))
-        if ($PullRequestNumber -gt 0 -and $candPrNum -eq $PullRequestNumber) {
-            return (Normalize-ShipDeSupervisorState -State $cand)
+
+    if ($hasPr) {
+        if ($candPrNum -gt 0) {
+            if ($candPrNum -ne $PullRequestNumber) {
+                return $false
+            }
+        } elseif (-not $hasWorkItem) {
+            return $false
         }
-        if (-not [string]::IsNullOrWhiteSpace($WorkItemId) -and $candWorkItemId -eq $WorkItemId) {
-            return (Normalize-ShipDeSupervisorState -State $cand)
-        }
     }
-    return $null
+
+    return $true
 }
 
-function Restore-ShipDeArchivedSupervisorCheckpoint {
+function Get-ShipDeArchivedSupervisorCheckpoint {
     param(
         [string]$WorkItemId = "",
         [int]$PullRequestNumber = 0,
@@ -3845,25 +3848,82 @@ function Restore-ShipDeArchivedSupervisorCheckpoint {
     if ($existing.Count -eq 0) {
         return $null
     }
+    foreach ($k in $existing.Keys) {
+        if (Test-ShipDeArchivedCheckpointMatches -Candidate $existing[$k] -WorkItemId $WorkItemId -PullRequestNumber $PullRequestNumber) {
+            return (Normalize-ShipDeSupervisorState -State $existing[$k])
+        }
+    }
+    return $null
+}
+
+function Remove-ShipDeArchivedSupervisorCheckpoint {
+    param(
+        [string]$WorkItemId = "",
+        [int]$PullRequestNumber = 0,
+        [string]$HandoffRoot = $script:HandoffRoot
+    )
+    if ([string]::IsNullOrWhiteSpace($HandoffRoot)) {
+        return
+    }
+    $existing = Get-ShipDeArchivedSupervisorCheckpoints -HandoffRoot $HandoffRoot
+    if ($existing.Count -eq 0) {
+        return
+    }
+
+    $keysToRemove = @()
+    foreach ($k in $existing.Keys) {
+        if (Test-ShipDeArchivedCheckpointMatches -Candidate $existing[$k] -WorkItemId $WorkItemId -PullRequestNumber $PullRequestNumber) {
+            $keysToRemove += $k
+        }
+    }
+
+    if ($keysToRemove.Count -gt 0) {
+        foreach ($k in $keysToRemove) {
+            $existing.Remove($k)
+        }
+        Save-ShipDeArchivedSupervisorCheckpoints -Checkpoints $existing -HandoffRoot $HandoffRoot
+        Write-Host ("[SUPERVISOR] Removed archived supervisor checkpoint for WorkItemId='{0}', PR #{1} from archive." -f $WorkItemId, $PullRequestNumber)
+    }
+}
+
+function Reconcile-ShipDeArchivedSupervisorCheckpoints {
+    param(
+        [object]$ActiveState,
+        [string]$HandoffRoot = $script:HandoffRoot
+    )
+    if ($null -eq $ActiveState -or [string]::IsNullOrWhiteSpace($HandoffRoot)) {
+        return
+    }
+    $activeWorkItemId = [string](Get-ShipDeObjectProperty -Object $ActiveState -Names @("WorkItemId", "workItemId"))
+    $activePrNum = [int](Get-ShipDeObjectProperty -Object $ActiveState -Names @("PullRequestNumber", "pullRequestNumber"))
+
+    if ([string]::IsNullOrWhiteSpace($activeWorkItemId) -and $activePrNum -le 0) {
+        return
+    }
+
+    Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId $activeWorkItemId -PullRequestNumber $activePrNum -HandoffRoot $HandoffRoot
+}
+
+function Restore-ShipDeArchivedSupervisorCheckpoint {
+    param(
+        [string]$WorkItemId = "",
+        [int]$PullRequestNumber = 0,
+        [string]$HandoffRoot = $script:HandoffRoot,
+        [scriptblock]$CheckpointWriter = $null
+    )
+    if ([string]::IsNullOrWhiteSpace($HandoffRoot)) {
+        return $null
+    }
+    $existing = Get-ShipDeArchivedSupervisorCheckpoints -HandoffRoot $HandoffRoot
+    if ($existing.Count -eq 0) {
+        return $null
+    }
 
     $matchedKey = $null
-    if (-not [string]::IsNullOrWhiteSpace($WorkItemId) -and $existing.ContainsKey($WorkItemId)) {
-        $matchedKey = $WorkItemId
-    } elseif ($PullRequestNumber -gt 0 -and $existing.ContainsKey("PR_$PullRequestNumber")) {
-        $matchedKey = "PR_$PullRequestNumber"
-    } else {
-        foreach ($k in $existing.Keys) {
-            $cand = $existing[$k]
-            $candPrNum = [int](Get-ShipDeObjectProperty -Object $cand -Names @("PullRequestNumber", "pullRequestNumber"))
-            $candWorkItemId = [string](Get-ShipDeObjectProperty -Object $cand -Names @("WorkItemId", "workItemId"))
-            if ($PullRequestNumber -gt 0 -and $candPrNum -eq $PullRequestNumber) {
-                $matchedKey = $k
-                break
-            }
-            if (-not [string]::IsNullOrWhiteSpace($WorkItemId) -and $candWorkItemId -eq $WorkItemId) {
-                $matchedKey = $k
-                break
-            }
+    foreach ($k in $existing.Keys) {
+        if (Test-ShipDeArchivedCheckpointMatches -Candidate $existing[$k] -WorkItemId $WorkItemId -PullRequestNumber $PullRequestNumber) {
+            $matchedKey = $k
+            break
         }
     }
 
@@ -3872,9 +3932,15 @@ function Restore-ShipDeArchivedSupervisorCheckpoint {
     }
 
     $restored = Normalize-ShipDeSupervisorState -State $existing[$matchedKey]
-    $existing.Remove($matchedKey)
-    Save-ShipDeArchivedSupervisorCheckpoints -Checkpoints $existing -HandoffRoot $HandoffRoot
-    Write-Host ("[SUPERVISOR] Restored archived supervisor checkpoint for {0} (PR #{1})." -f $restored.WorkItemId, $restored.PullRequestNumber)
+
+    if ($null -ne $CheckpointWriter) {
+        # Finding 1: Persist the active checkpoint before removing the archive
+        & $CheckpointWriter $restored
+        $existing.Remove($matchedKey)
+        Save-ShipDeArchivedSupervisorCheckpoints -Checkpoints $existing -HandoffRoot $HandoffRoot
+        Write-Host ("[SUPERVISOR] Durably restored and persisted supervisor checkpoint for {0} (PR #{1})." -f $restored.WorkItemId, $restored.PullRequestNumber)
+    }
+
     return $restored
 }
 
@@ -11078,7 +11144,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 number = 8
                 title = "[TASK-FOUND-03] Add API, worker and local infrastructure"
                 headRefName = "feat/task-found-03-api-worker-infrastructure"
-                headRefOid = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                headRefOid = "438c5b42b0668f8d94ccb7eb851d1cf29023eba80"
                 headRepository = "vinh05092001/shipde-platform"
                 isDraft = $false
                 statusCheckRollup = @(
@@ -11089,7 +11155,7 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 number = 10
                 title = "[TASK-AI-13] Governed deterministic auto-merge execution"
                 headRefName = "feat/task-ai-13-governed-auto-merge"
-                headRefOid = "e03cc14b0668f8d94ccb7eb851d1cf29023eba8"
+                headRefOid = "e03cc14b0668f8d94ccb7eb851d1cf29023eba80"
                 headRepository = "vinh05092001/shipde-platform"
                 isDraft = $false
             }
@@ -11113,9 +11179,9 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 Author = "GEMINI"
                 State = "STARTED"
                 PullRequestNumber = 8
-                HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba80"
                 SessionId = "sess-dead-pr8"
-                PendingDispatch = @{ Type = "CI_REPAIR"; HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8" }
+                PendingDispatch = @{ Type = "CI_REPAIR"; HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba80" }
                 RepairCount = 2
             }
 
@@ -11330,14 +11396,14 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 throw "Round 22 Finding 2 failed: checkpoint with matching PR number but session on mismatched branch did not throw fail-closed."
             }
 
-            # 4e: Mismatched PendingDispatch (invalid type or mismatched HeadSha)
+            # 4e: Mismatched PendingDispatch (invalid type)
             $mismatchedDispatchCheckpoint = @{
                 WorkItemId = "TASK-AI-13"
                 Branch = "feat/task-ai-13-governed-auto-merge"
                 Author = "GEMINI"
                 PullRequestNumber = 10
-                HeadSha = "e03cc14b0668f8d94ccb7eb851d1cf29023eba8"
-                PendingDispatch = @{ Type = "INVALID_TYPE"; Head = "e03cc14b0668f8d94ccb7eb851d1cf29023eba8" }
+                HeadSha = "e03cc14b0668f8d94ccb7eb851d1cf29023eba80"
+                PendingDispatch = @{ Type = "INVALID_TYPE"; Head = "e03cc14b0668f8d94ccb7eb851d1cf29023eba80" }
                 State = "STARTED"
             }
             $threwDispatchMismatch = $false
@@ -11355,6 +11421,219 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             }
             if (-not $threwDispatchMismatch) {
                 throw "Round 22 Finding 2 failed: checkpoint with matching PR number but invalid PendingDispatch did not throw fail-closed."
+            }
+
+            # 4f: Blank WorkItemId on matching PR checkpoint throws fail-closed (Finding 3)
+            $blankWorkItemCheckpoint = @{
+                WorkItemId = ""
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = "GEMINI"
+                PullRequestNumber = 10
+                State = "STARTED"
+            }
+            $threwBlankWorkItem = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $blankWorkItemCheckpoint `
+                    -PullRequestNumber 10 `
+                    -DeliveryRegisterRows $regNotMerged `
+                    -OpenPrResolver { return @($mockPr10) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -PrWorkItemResolver { param($pr) return $mockAi13Item } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwBlankWorkItem = $_.Exception.Message -match "WorkItemId"
+            }
+            if (-not $threwBlankWorkItem) {
+                throw "Finding 3 failed: checkpoint with matching PR number but blank WorkItemId did not throw fail-closed."
+            }
+
+            # 4g: Blank Branch on matching PR checkpoint throws fail-closed (Finding 3)
+            $blankBranchCheckpoint = @{
+                WorkItemId = "TASK-AI-13"
+                Branch = ""
+                Author = "GEMINI"
+                PullRequestNumber = 10
+                State = "STARTED"
+            }
+            $threwBlankBranch = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $blankBranchCheckpoint `
+                    -PullRequestNumber 10 `
+                    -DeliveryRegisterRows $regNotMerged `
+                    -OpenPrResolver { return @($mockPr10) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -PrWorkItemResolver { param($pr) return $mockAi13Item } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwBlankBranch = $_.Exception.Message -match "Branch"
+            }
+            if (-not $threwBlankBranch) {
+                throw "Finding 3 failed: checkpoint with matching PR number but blank Branch did not throw fail-closed."
+            }
+
+            # 4h: Blank Author on matching PR checkpoint throws fail-closed (Finding 3)
+            $blankAuthorCheckpoint = @{
+                WorkItemId = "TASK-AI-13"
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = ""
+                PullRequestNumber = 10
+                State = "STARTED"
+            }
+            $threwBlankAuthor = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $blankAuthorCheckpoint `
+                    -PullRequestNumber 10 `
+                    -DeliveryRegisterRows $regNotMerged `
+                    -OpenPrResolver { return @($mockPr10) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -PrWorkItemResolver { param($pr) return $mockAi13Item } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwBlankAuthor = $_.Exception.Message -match "Author"
+            }
+            if (-not $threwBlankAuthor) {
+                throw "Finding 3 failed: checkpoint with matching PR number but blank Author did not throw fail-closed."
+            }
+
+            # 4i: Blank PendingDispatch Head throws fail-closed (Finding 4)
+            $blankDispatchHeadCheckpoint = @{
+                WorkItemId = "TASK-AI-13"
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = "GEMINI"
+                PullRequestNumber = 10
+                HeadSha = "e03cc14b0668f8d94ccb7eb851d1cf29023eba80"
+                PendingDispatch = @{ Type = "CI_REPAIR"; Head = "" }
+                State = "STARTED"
+            }
+            $threwBlankDispatchHead = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $blankDispatchHeadCheckpoint `
+                    -PullRequestNumber 10 `
+                    -DeliveryRegisterRows $regNotMerged `
+                    -OpenPrResolver { return @($mockPr10) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -PrWorkItemResolver { param($pr) return $mockAi13Item } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwBlankDispatchHead = $_.Exception.Message -match "PendingDispatch"
+            }
+            if (-not $threwBlankDispatchHead) {
+                throw "Finding 4 failed: checkpoint with blank PendingDispatch head did not throw fail-closed."
+            }
+
+            # 4j: Non-40-hex PendingDispatch Head throws fail-closed (Finding 4)
+            $nonHexDispatchHeadCheckpoint = @{
+                WorkItemId = "TASK-AI-13"
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = "GEMINI"
+                PullRequestNumber = 10
+                HeadSha = "e03cc14b0668f8d94ccb7eb851d1cf29023eba80"
+                PendingDispatch = @{ Type = "CI_REPAIR"; Head = "short-sha" }
+                State = "STARTED"
+            }
+            $threwNonHexDispatchHead = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $nonHexDispatchHeadCheckpoint `
+                    -PullRequestNumber 10 `
+                    -DeliveryRegisterRows $regNotMerged `
+                    -OpenPrResolver { return @($mockPr10) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -PrWorkItemResolver { param($pr) return $mockAi13Item } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwNonHexDispatchHead = $_.Exception.Message -match "PendingDispatch"
+            }
+            if (-not $threwNonHexDispatchHead) {
+                throw "Finding 4 failed: checkpoint with non-40-hex PendingDispatch head did not throw fail-closed."
+            }
+
+            # 4k: PendingDispatch Head mismatched with current PR head throws fail-closed (Finding 4)
+            $staleDispatchHeadCheckpoint = @{
+                WorkItemId = "TASK-AI-13"
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = "GEMINI"
+                PullRequestNumber = 10
+                HeadSha = "e03cc14b0668f8d94ccb7eb851d1cf29023eba80"
+                PendingDispatch = @{ Type = "CI_REPAIR"; Head = "1111111111111111111111111111111111111111" }
+                State = "STARTED"
+            }
+            $threwStaleDispatchHead = $false
+            try {
+                Initialize-ShipDeSupervisorState `
+                    -State $staleDispatchHeadCheckpoint `
+                    -PullRequestNumber 10 `
+                    -DeliveryRegisterRows $regNotMerged `
+                    -OpenPrResolver { return @($mockPr10) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -PrWorkItemResolver { param($pr) return $mockAi13Item } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                $threwStaleDispatchHead = $_.Exception.Message -match "PendingDispatch"
+            }
+            if (-not $threwStaleDispatchHead) {
+                throw "Finding 4 failed: checkpoint with PendingDispatch head mismatched with PR head did not throw fail-closed."
+            }
+
+            # 4l: Valid NUDGE pending dispatch with matching exact head is accepted without throwing (Finding 5)
+            $validNudgeCheckpoint = @{
+                WorkItemId = "TASK-AI-13"
+                Branch = "feat/task-ai-13-governed-auto-merge"
+                Author = "GEMINI"
+                PullRequestNumber = 10
+                HeadSha = "e03cc14b0668f8d94ccb7eb851d1cf29023eba80"
+                PendingDispatch = @{ Type = "NUDGE"; Head = "e03cc14b0668f8d94ccb7eb851d1cf29023eba80" }
+                State = "STARTED"
+            }
+            $nudgeState = Initialize-ShipDeSupervisorState `
+                -State $validNudgeCheckpoint `
+                -PullRequestNumber 10 `
+                -DeliveryRegisterRows $regNotMerged `
+                -OpenPrResolver { return @($mockPr10) } `
+                -ActiveWorkersResolver { return @() } `
+                -PrWorkItemResolver { param($pr) return $mockAi13Item } `
+                -CheckpointWriter { param($s) }
+            if ($null -eq $nudgeState -or $null -eq $nudgeState.PendingDispatch -or $nudgeState.PendingDispatch.Type -ne "NUDGE") {
+                throw "Finding 5 failed: valid pending NUDGE dispatch was rejected or not preserved during recovery."
+            }
+
+            # 4m: Archive lookup requires all supplied identifiers to agree (Finding 2)
+            $mockArchivedPr8 = @{
+                WorkItemId = "TASK-FOUND-03"
+                Branch = "feat/task-found-03-api-worker-infrastructure"
+                Author = "GEMINI"
+                PullRequestNumber = 8
+                State = "STARTED"
+            }
+            Archive-ShipDeSupervisorCheckpoint -State $mockArchivedPr8
+            $mismatchedArchiveLookup = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 10
+            if ($null -ne $mismatchedArchiveLookup) {
+                throw "Finding 2 failed: archive lookup matched entry when PullRequestNumber did not agree."
+            }
+            Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
+
+            # 4n: Crash reconciliation removes duplicate archive entry when active state is present (Finding 1)
+            $dupArchiveKey = "TASK-RECON-TEST"
+            $mockDupState = @{
+                WorkItemId = $dupArchiveKey
+                Branch = "feat/dup-test"
+                Author = "GEMINI"
+                PullRequestNumber = 99
+                State = "STARTED"
+            }
+            Archive-ShipDeSupervisorCheckpoint -State $mockDupState
+            $beforeReconcile = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId $dupArchiveKey -PullRequestNumber 99
+            if ($null -eq $beforeReconcile) {
+                throw "Finding 1 failed: mock state was not archived before reconciliation test."
+            }
+            Reconcile-ShipDeArchivedSupervisorCheckpoints -ActiveState $mockDupState
+            $afterReconcile = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId $dupArchiveKey -PullRequestNumber 99
+            if ($null -ne $afterReconcile) {
+                throw "Finding 1 failed: duplicate archive entry was not cleaned up during crash reconciliation."
             }
         }
 
@@ -13539,128 +13818,167 @@ function Initialize-ShipDeSupervisorState {
 
     if ($null -ne $State) {
         $State = Normalize-ShipDeSupervisorState -State $State
+        # Finding 1: Reconcile duplicate active/archive copies safely after crash
+        Reconcile-ShipDeArchivedSupervisorCheckpoints -ActiveState $State -HandoffRoot $HandoffRoot
+    }
 
-        if ($PullRequestNumber -gt 0) {
+    if ($PullRequestNumber -gt 0) {
+        $targetPr = @($allOpenPrs | Where-Object { [int]$_.number -eq $PullRequestNumber }) | Select-Object -First 1
+        if ($null -eq $targetPr) {
+            throw "Open implementation Pull Request #$PullRequestNumber was not found among open PRs. Failing closed."
+        }
+
+        $targetItem = & $PrWorkItemResolver $targetPr
+        $targetWorkItemId = ""
+        if ($null -ne $targetItem) {
+            $targetWorkItemId = [string](Get-ShipDeObjectProperty -Object $targetItem -Names @("WorkItemId", "workItemId"))
+        }
+        if ([string]::IsNullOrWhiteSpace($targetWorkItemId)) {
+            $targetWorkItemId = Get-ShipDeWorkItemIdFromTitle -Title ([string]$targetPr.title)
+        }
+        $targetBranch = if ($null -ne $targetItem) {
+            [string](Get-ShipDeObjectProperty -Object $targetItem -Names @("Branch", "branch"))
+        } else { "" }
+        if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+            $targetBranch = [string]$targetPr.headRefName
+        }
+        $targetAuthor = if ($null -ne $targetItem) {
+            [string](Get-ShipDeObjectProperty -Object $targetItem -Names @("Author", "author"))
+        } else { "" }
+        if ([string]::IsNullOrWhiteSpace($targetAuthor) -and $null -ne $DeliveryRegisterRows -and -not [string]::IsNullOrWhiteSpace($targetWorkItemId)) {
+            $row = $DeliveryRegisterRows | Where-Object { $_.work_item_id -eq $targetWorkItemId } | Select-Object -First 1
+            if ($row) { $targetAuthor = [string]$row.author }
+        }
+        $targetHead = [string](Get-ShipDeObjectProperty -Object $targetPr -Names @("headRefOid", "headSha"))
+
+        if ($null -ne $State) {
             $statePrNum = [int](Get-ShipDeObjectProperty -Object $State -Names @("PullRequestNumber", "pullRequestNumber"))
             $stateWorkItemId = [string](Get-ShipDeObjectProperty -Object $State -Names @("WorkItemId", "workItemId"))
-
-            $targetPr = @($allOpenPrs | Where-Object { [int]$_.number -eq $PullRequestNumber }) | Select-Object -First 1
-            if ($null -eq $targetPr) {
-                throw "Open implementation Pull Request #$PullRequestNumber was not found among open PRs. Failing closed."
-            }
-
-            $targetItem = & $PrWorkItemResolver $targetPr
-            $targetWorkItemId = ""
-            if ($null -ne $targetItem) {
-                $targetWorkItemId = [string](Get-ShipDeObjectProperty -Object $targetItem -Names @("WorkItemId", "workItemId"))
-            }
-            if ([string]::IsNullOrWhiteSpace($targetWorkItemId)) {
-                $targetWorkItemId = Get-ShipDeWorkItemIdFromTitle -Title ([string]$targetPr.title)
-            }
-            $targetBranch = if ($null -ne $targetItem) {
-                [string](Get-ShipDeObjectProperty -Object $targetItem -Names @("Branch", "branch"))
-            } else { "" }
-            if ([string]::IsNullOrWhiteSpace($targetBranch)) {
-                $targetBranch = [string]$targetPr.headRefName
-            }
-            $targetAuthor = if ($null -ne $targetItem) {
-                [string](Get-ShipDeObjectProperty -Object $targetItem -Names @("Author", "author"))
-            } else { "" }
 
             $isRelated = ($statePrNum -eq $PullRequestNumber) -or `
                 ($statePrNum -le 0 -and -not [string]::IsNullOrWhiteSpace($targetWorkItemId) -and $stateWorkItemId -eq $targetWorkItemId)
 
-            if ($isRelated) {
-                # Finding 2: Require agreement with the live target's governed identity and reject mismatches before any checkpoint-driven effects
-                $stateBranch = [string](Get-ShipDeObjectProperty -Object $State -Names @("Branch", "branch"))
-                $stateAuthor = [string](Get-ShipDeObjectProperty -Object $State -Names @("Author", "author"))
-                $stateSessionId = [string](Get-ShipDeObjectProperty -Object $State -Names @("SessionId", "sessionId"))
-                $statePendingDispatch = Get-ShipDeObjectProperty -Object $State -Names @("PendingDispatch", "pendingDispatch")
-
-                if (-not [string]::IsNullOrWhiteSpace($stateWorkItemId) -and -not [string]::IsNullOrWhiteSpace($targetWorkItemId) -and $stateWorkItemId -ne $targetWorkItemId) {
-                    throw "Supervisor checkpoint for PR #$PullRequestNumber has WorkItemId '$stateWorkItemId' which does not match live target WorkItemId '$targetWorkItemId'. Rejecting before any checkpoint-driven effects."
-                }
-                if (-not [string]::IsNullOrWhiteSpace($stateBranch) -and -not [string]::IsNullOrWhiteSpace($targetBranch) -and $stateBranch -cne $targetBranch) {
-                    throw "Supervisor checkpoint for PR #$PullRequestNumber has Branch '$stateBranch' which does not match live target Branch '$targetBranch'. Rejecting before any checkpoint-driven effects."
-                }
-                if (-not [string]::IsNullOrWhiteSpace($stateAuthor) -and -not [string]::IsNullOrWhiteSpace($targetAuthor) -and $stateAuthor -ne $targetAuthor) {
-                    throw "Supervisor checkpoint for PR #$PullRequestNumber has Author '$stateAuthor' which does not match live target Author '$targetAuthor'. Rejecting before any checkpoint-driven effects."
-                }
-                if (-not [string]::IsNullOrWhiteSpace($stateSessionId)) {
-                    $sessDetail = if ($null -ne $SessionDetailResolver) {
-                        & $SessionDetailResolver $stateSessionId "shipde-platform"
-                    } else {
-                        Get-ShipDeAoSessionById -SessionId $stateSessionId -Project "shipde-platform"
-                    }
-                    if ($null -ne $sessDetail) {
-                        $sessBranch = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("branch", "headBranch", "head_branch"))
-                        if (-not [string]::IsNullOrWhiteSpace($sessBranch) -and -not [string]::IsNullOrWhiteSpace($targetBranch) -and $sessBranch -cne $targetBranch) {
-                            throw "Supervisor checkpoint for PR #$PullRequestNumber binds AO session '$stateSessionId' on branch '$sessBranch', which does not match live target Branch '$targetBranch'. Rejecting before any checkpoint-driven effects."
-                        }
-                        $sessKind = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("kind", "role", "type", "workerKind", "worker_kind"))
-                        if (-not [string]::IsNullOrWhiteSpace($sessKind) -and $sessKind -ne "worker") {
-                            throw "Supervisor checkpoint for PR #$PullRequestNumber binds AO session '$stateSessionId' with kind '$sessKind'; expected 'worker'. Rejecting before any checkpoint-driven effects."
-                        }
-                        if (-not [string]::IsNullOrWhiteSpace($targetAuthor)) {
-                            $allowedHarnesses = @(Get-ShipDeAoHarnessCandidates -Author $targetAuthor)
-                            $sessHarness = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("harness"))
-                            if (-not [string]::IsNullOrWhiteSpace($sessHarness) -and $allowedHarnesses.Count -gt 0 -and -not ($allowedHarnesses -contains $sessHarness)) {
-                                throw "Supervisor checkpoint for PR #$PullRequestNumber binds AO session '$stateSessionId' with harness '$sessHarness', which does not match allowed harnesses ($($allowedHarnesses -join ', ')) for Author '$targetAuthor'. Rejecting before any checkpoint-driven effects."
-                            }
-                        }
-                    }
-                }
-                if ($null -ne $statePendingDispatch) {
-                    $pType = [string](Get-ShipDeObjectProperty -Object $statePendingDispatch -Names @("Type", "type"))
-                    if ($pType -notin @("CI_REPAIR", "REVIEW_REPAIR", "REVIEW_TRIGGER")) {
-                        throw "Supervisor checkpoint for PR #$PullRequestNumber has invalid PendingDispatch Type '$pType'. Rejecting before any checkpoint-driven effects."
-                    }
-                    $pHead = [string](Get-ShipDeObjectProperty -Object $statePendingDispatch -Names @("Head", "head", "HeadSha", "headSha"))
-                    $prHead = [string](Get-ShipDeObjectProperty -Object $targetPr -Names @("headRefOid", "headSha"))
-                    $stateHead = [string](Get-ShipDeObjectProperty -Object $State -Names @("HeadSha", "headSha"))
-                    if (-not [string]::IsNullOrWhiteSpace($pHead)) {
-                        if ($pHead -notmatch '^[0-9a-fA-F]{40}$' -or (-not [string]::IsNullOrWhiteSpace($stateHead) -and $pHead -ne $stateHead -and -not [string]::IsNullOrWhiteSpace($prHead) -and $pHead -ne $prHead)) {
-                            throw "Supervisor checkpoint for PR #$PullRequestNumber has PendingDispatch head '$pHead' which does not match checkpoint head '$stateHead' or PR head '$prHead'. Rejecting before any checkpoint-driven effects."
-                        }
-                    }
-                    $pWorkItemId = [string](Get-ShipDeObjectProperty -Object $statePendingDispatch -Names @("WorkItemId", "workItemId"))
-                    if (-not [string]::IsNullOrWhiteSpace($pWorkItemId) -and -not [string]::IsNullOrWhiteSpace($targetWorkItemId) -and $pWorkItemId -ne $targetWorkItemId) {
-                        throw "Supervisor checkpoint for PR #$PullRequestNumber has PendingDispatch WorkItemId '$pWorkItemId' which does not match target WorkItemId '$targetWorkItemId'. Rejecting before any checkpoint-driven effects."
-                    }
-                }
-            } else {
+            if (-not $isRelated) {
                 # Finding 1: Preserve superseded checkpoint before nulling
                 Archive-ShipDeSupervisorCheckpoint -State $State -HandoffRoot $HandoffRoot
                 Write-Host ("[SUPERVISOR] Explicit PullRequestNumber {0} ({1}) supersedes unrelated checkpoint for {2} (PR #{3}). Preserved checkpoint in archive." -f $PullRequestNumber, $targetWorkItemId, $stateWorkItemId, $statePrNum)
                 $State = $null
             }
         }
-    }
 
-    if ($null -eq $State -and $PullRequestNumber -gt 0) {
-        $targetPr = @($allOpenPrs | Where-Object { [int]$_.number -eq $PullRequestNumber }) | Select-Object -First 1
-        $targetWorkItemId = ""
-        if ($null -ne $targetPr) {
-            $targetItem = & $PrWorkItemResolver $targetPr
-            if ($null -ne $targetItem) {
-                $targetWorkItemId = [string](Get-ShipDeObjectProperty -Object $targetItem -Names @("WorkItemId", "workItemId"))
-            }
-            if ([string]::IsNullOrWhiteSpace($targetWorkItemId)) {
-                $targetWorkItemId = Get-ShipDeWorkItemIdFromTitle -Title ([string]$targetPr.title)
+        # Finding 2: Require Work Item and PR identifiers to agree when selecting an archive
+        $restoredFromArchive = $false
+        if ($null -eq $State) {
+            $archivedCandidate = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId $targetWorkItemId -PullRequestNumber $PullRequestNumber -HandoffRoot $HandoffRoot
+            if ($null -ne $archivedCandidate) {
+                $State = $archivedCandidate
+                $restoredFromArchive = $true
+                if ([int](Get-ShipDeObjectProperty -Object $State -Names @("PullRequestNumber", "pullRequestNumber")) -le 0) {
+                    if ($State -is [System.Collections.IDictionary]) {
+                        $State["PullRequestNumber"] = $PullRequestNumber
+                    } else {
+                        $State.PullRequestNumber = $PullRequestNumber
+                    }
+                }
+                Write-Host ("[SUPERVISOR] Loaded archived supervisor checkpoint for {0} (PR #{1}) for validation." -f $targetWorkItemId, $PullRequestNumber)
             }
         }
-        $restored = Restore-ShipDeArchivedSupervisorCheckpoint -WorkItemId $targetWorkItemId -PullRequestNumber $PullRequestNumber -HandoffRoot $HandoffRoot
-        if ($null -ne $restored) {
-            $State = $restored
-            if ([int](Get-ShipDeObjectProperty -Object $State -Names @("PullRequestNumber", "pullRequestNumber")) -le 0) {
-                if ($State -is [System.Collections.IDictionary]) {
-                    $State["PullRequestNumber"] = $PullRequestNumber
+
+        if ($null -ne $State) {
+            # Governed head transition check
+            $stateHead = [string](Get-ShipDeObjectProperty -Object $State -Names @("HeadSha", "headSha"))
+            if (-not [string]::IsNullOrWhiteSpace($stateHead) -and -not [string]::IsNullOrWhiteSpace($targetHead) -and $stateHead -ne $targetHead) {
+                Write-Host ("[SUPERVISOR] PR #{0} head moved from {1} to {2}. Discarding prior-head supervisor state." -f $PullRequestNumber, $stateHead, $targetHead)
+                $State = Reset-ShipDeSupervisorHeadState -State $State -NewHeadSha $targetHead
+            } elseif ([string]::IsNullOrWhiteSpace($stateHead) -and -not [string]::IsNullOrWhiteSpace($targetHead)) {
+                if ($State -is [System.Collections.IDictionary]) { $State["HeadSha"] = $targetHead } else { $State.HeadSha = $targetHead }
+            }
+
+            # Finding 3: Reject missing checkpoint identity fields even when the PR number matches
+            $stateWorkItemId = [string](Get-ShipDeObjectProperty -Object $State -Names @("WorkItemId", "workItemId"))
+            $stateBranch = [string](Get-ShipDeObjectProperty -Object $State -Names @("Branch", "branch"))
+            $stateAuthor = [string](Get-ShipDeObjectProperty -Object $State -Names @("Author", "author"))
+
+            if ([string]::IsNullOrWhiteSpace($stateWorkItemId)) {
+                throw "Supervisor checkpoint for PR #$PullRequestNumber is missing required governed identity 'WorkItemId'. Rejecting before any checkpoint-driven effects."
+            }
+            if ([string]::IsNullOrWhiteSpace($targetWorkItemId) -or $stateWorkItemId -ne $targetWorkItemId) {
+                throw "Supervisor checkpoint for PR #$PullRequestNumber has WorkItemId '$stateWorkItemId' which does not match live target WorkItemId '$targetWorkItemId'. Rejecting before any checkpoint-driven effects."
+            }
+            if ([string]::IsNullOrWhiteSpace($stateBranch)) {
+                throw "Supervisor checkpoint for PR #$PullRequestNumber is missing required governed identity 'Branch'. Rejecting before any checkpoint-driven effects."
+            }
+            if ([string]::IsNullOrWhiteSpace($targetBranch) -or $stateBranch -cne $targetBranch) {
+                throw "Supervisor checkpoint for PR #$PullRequestNumber has Branch '$stateBranch' which does not match live target Branch '$targetBranch'. Rejecting before any checkpoint-driven effects."
+            }
+            if ([string]::IsNullOrWhiteSpace($stateAuthor)) {
+                throw "Supervisor checkpoint for PR #$PullRequestNumber is missing required governed identity 'Author'. Rejecting before any checkpoint-driven effects."
+            }
+            if ([string]::IsNullOrWhiteSpace($targetAuthor) -or $stateAuthor -ne $targetAuthor) {
+                throw "Supervisor checkpoint for PR #$PullRequestNumber has Author '$stateAuthor' which does not match live target Author '$targetAuthor'. Rejecting before any checkpoint-driven effects."
+            }
+
+            # Session validation
+            $stateSessionId = [string](Get-ShipDeObjectProperty -Object $State -Names @("SessionId", "sessionId"))
+            if (-not [string]::IsNullOrWhiteSpace($stateSessionId)) {
+                $sessDetail = if ($null -ne $SessionDetailResolver) {
+                    & $SessionDetailResolver $stateSessionId "shipde-platform"
                 } else {
-                    $State.PullRequestNumber = $PullRequestNumber
+                    Get-ShipDeAoSessionById -SessionId $stateSessionId -Project "shipde-platform"
+                }
+                if ($null -ne $sessDetail) {
+                    $sessBranch = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("branch", "headBranch", "head_branch"))
+                    if (-not [string]::IsNullOrWhiteSpace($sessBranch) -and -not [string]::IsNullOrWhiteSpace($targetBranch) -and $sessBranch -cne $targetBranch) {
+                        throw "Supervisor checkpoint for PR #$PullRequestNumber binds AO session '$stateSessionId' on branch '$sessBranch', which does not match live target Branch '$targetBranch'. Rejecting before any checkpoint-driven effects."
+                    }
+                    $sessKind = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("kind", "role", "type", "workerKind", "worker_kind"))
+                    if (-not [string]::IsNullOrWhiteSpace($sessKind) -and $sessKind -ne "worker") {
+                        throw "Supervisor checkpoint for PR #$PullRequestNumber binds AO session '$stateSessionId' with kind '$sessKind'; expected 'worker'. Rejecting before any checkpoint-driven effects."
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($targetAuthor)) {
+                        $allowedHarnesses = @(Get-ShipDeAoHarnessCandidates -Author $targetAuthor)
+                        $sessHarness = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("harness"))
+                        if (-not [string]::IsNullOrWhiteSpace($sessHarness) -and $allowedHarnesses.Count -gt 0 -and -not ($allowedHarnesses -contains $sessHarness)) {
+                            throw "Supervisor checkpoint for PR #$PullRequestNumber binds AO session '$stateSessionId' with harness '$sessHarness', which does not match allowed harnesses ($($allowedHarnesses -join ', ')) for Author '$targetAuthor'. Rejecting before any checkpoint-driven effects."
+                        }
+                    }
                 }
             }
-            Write-Host ("[SUPERVISOR] Restored previously archived checkpoint for {0} (PR #{1})." -f $State["WorkItemId"], $State["PullRequestNumber"])
-            & $CheckpointWriter $State
+
+            # Finding 4 & 5: PendingDispatch validation
+            $statePendingDispatch = Get-ShipDeObjectProperty -Object $State -Names @("PendingDispatch", "pendingDispatch")
+            if ($null -ne $statePendingDispatch) {
+                $pType = [string](Get-ShipDeObjectProperty -Object $statePendingDispatch -Names @("Type", "type"))
+                if ($pType -notin @("CI_REPAIR", "REVIEW_REPAIR", "REVIEW_TRIGGER", "NUDGE")) {
+                    throw "Supervisor checkpoint for PR #$PullRequestNumber has invalid PendingDispatch Type '$pType'. Rejecting before any checkpoint-driven effects."
+                }
+                $pHead = [string](Get-ShipDeObjectProperty -Object $statePendingDispatch -Names @("Head", "head", "HeadSha", "headSha"))
+                if ([string]::IsNullOrWhiteSpace($pHead) -or $pHead -notmatch '^[0-9a-fA-F]{40}$') {
+                    throw "Supervisor checkpoint for PR #$PullRequestNumber has invalid or missing PendingDispatch head '$pHead'. Rejecting before any checkpoint-driven effects."
+                }
+
+                $currentPrHead = [string](Get-ShipDeObjectProperty -Object $targetPr -Names @("headRefOid", "headSha"))
+                $currentStateHead = [string](Get-ShipDeObjectProperty -Object $State -Names @("HeadSha", "headSha"))
+
+                if (-not [string]::IsNullOrWhiteSpace($currentPrHead) -and $pHead -ne $currentPrHead) {
+                    throw "Supervisor checkpoint for PR #$PullRequestNumber has PendingDispatch head '$pHead' which does not match authoritative PR head '$currentPrHead'. Rejecting before any checkpoint-driven effects."
+                }
+                if (-not [string]::IsNullOrWhiteSpace($currentStateHead) -and $pHead -ne $currentStateHead) {
+                    throw "Supervisor checkpoint for PR #$PullRequestNumber has PendingDispatch head '$pHead' which does not match authoritative checkpoint head '$currentStateHead'. Rejecting before any checkpoint-driven effects."
+                }
+
+                $pWorkItemId = [string](Get-ShipDeObjectProperty -Object $statePendingDispatch -Names @("WorkItemId", "workItemId"))
+                if (-not [string]::IsNullOrWhiteSpace($pWorkItemId) -and -not [string]::IsNullOrWhiteSpace($targetWorkItemId) -and $pWorkItemId -ne $targetWorkItemId) {
+                    throw "Supervisor checkpoint for PR #$PullRequestNumber has PendingDispatch WorkItemId '$pWorkItemId' which does not match target WorkItemId '$targetWorkItemId'. Rejecting before any checkpoint-driven effects."
+                }
+            }
+
+            if ($restoredFromArchive) {
+                # Finding 1: Persist the active checkpoint before removing the archive
+                & $CheckpointWriter $State
+                Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId $targetWorkItemId -PullRequestNumber $PullRequestNumber -HandoffRoot $HandoffRoot
+                Write-Host ("[SUPERVISOR] Durably restored and persisted supervisor checkpoint for {0} (PR #{1})." -f $targetWorkItemId, $PullRequestNumber)
+            }
         }
     }
 
@@ -14065,7 +14383,7 @@ function Initialize-ShipDeSupervisorState {
                 } catch {}
             }
 
-            $restoredPr8 = Restore-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8 -HandoffRoot $HandoffRoot
+            $restoredPr8 = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8 -HandoffRoot $HandoffRoot
             if ($null -ne $restoredPr8) {
                 Write-Host "[SUPERVISOR] Restored preserved checkpoint for PR #8 (TASK-FOUND-03) from archive."
                 if ([int](Get-ShipDeObjectProperty -Object $restoredPr8 -Names @("PullRequestNumber", "pullRequestNumber")) -le 0) {
@@ -14082,16 +14400,49 @@ function Initialize-ShipDeSupervisorState {
                 } else {
                     if ([string]::IsNullOrWhiteSpace([string]$restoredPr8.Branch)) { $restoredPr8.Branch = $item.Branch }
                     if ([string]::IsNullOrWhiteSpace([string]$restoredPr8.WorkItemPath)) { $restoredPr8.WorkItemPath = $item.WorkItemPath }
-                    if ([string]::IsNullOrWhiteSpace([string]$restoredPr8.Author)) { $restoredPr8.Author = $item.Author }
+                    if ([string]::IsNullOrWhiteSpace($restoredPr8.Author)) { $restoredPr8.Author = $item.Author }
                 }
+
+                # Revalidate restored identity against live target
+                $rWorkItemId = [string](Get-ShipDeObjectProperty -Object $restoredPr8 -Names @("WorkItemId", "workItemId"))
+                if ([string]::IsNullOrWhiteSpace($rWorkItemId) -or $rWorkItemId -ne "TASK-FOUND-03") {
+                    throw "Restored checkpoint for PR #8 has WorkItemId '$rWorkItemId', expected 'TASK-FOUND-03'. Rejecting before any checkpoint-driven effects."
+                }
+                $rBranch = [string](Get-ShipDeObjectProperty -Object $restoredPr8 -Names @("Branch", "branch"))
+                if (-not [string]::IsNullOrWhiteSpace($rBranch) -and $rBranch -cne $item.Branch) {
+                    throw "Restored checkpoint for PR #8 has Branch '$rBranch', expected '$($item.Branch)'. Rejecting before any checkpoint-driven effects."
+                }
+                $rAuthor = [string](Get-ShipDeObjectProperty -Object $restoredPr8 -Names @("Author", "author"))
+                if (-not [string]::IsNullOrWhiteSpace($rAuthor) -and $rAuthor -ne $item.Author) {
+                    throw "Restored checkpoint for PR #8 has Author '$rAuthor', expected '$($item.Author)'. Rejecting before any checkpoint-driven effects."
+                }
+
                 if (-not [string]::IsNullOrWhiteSpace($headSha) -and -not [string]::IsNullOrWhiteSpace([string]$restoredPr8["HeadSha"]) -and [string]$restoredPr8["HeadSha"] -ne $headSha) {
                     Write-Host ("[SUPERVISOR] PR #8 head moved from {0} to {1}. Discarding prior-head supervisor state." -f $restoredPr8["HeadSha"], $headSha)
                     $restoredPr8 = Reset-ShipDeSupervisorHeadState -State $restoredPr8 -NewHeadSha $headSha
                 } elseif ([string]::IsNullOrWhiteSpace([string]$restoredPr8["HeadSha"]) -and -not [string]::IsNullOrWhiteSpace($headSha)) {
                     $restoredPr8["HeadSha"] = $headSha
                 }
+
+                $pr8PendingDispatch = Get-ShipDeObjectProperty -Object $restoredPr8 -Names @("PendingDispatch", "pendingDispatch")
+                if ($null -ne $pr8PendingDispatch) {
+                    $pType = [string](Get-ShipDeObjectProperty -Object $pr8PendingDispatch -Names @("Type", "type"))
+                    if ($pType -notin @("CI_REPAIR", "REVIEW_REPAIR", "REVIEW_TRIGGER", "NUDGE")) {
+                        throw "Restored checkpoint for PR #8 has invalid PendingDispatch Type '$pType'. Rejecting before any checkpoint-driven effects."
+                    }
+                    $pHead = [string](Get-ShipDeObjectProperty -Object $pr8PendingDispatch -Names @("Head", "head", "HeadSha", "headSha"))
+                    if ([string]::IsNullOrWhiteSpace($pHead) -or $pHead -notmatch '^[0-9a-fA-F]{40}$') {
+                        throw "Restored checkpoint for PR #8 has invalid or missing PendingDispatch head '$pHead'. Rejecting before any checkpoint-driven effects."
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($headSha) -and $pHead -ne $headSha) {
+                        throw "Restored checkpoint for PR #8 has PendingDispatch head '$pHead' which does not match PR head '$headSha'. Rejecting before any checkpoint-driven effects."
+                    }
+                }
+
                 $restoredPr8 = Normalize-ShipDeSupervisorState -State $restoredPr8
+                # Finding 1: Persist active checkpoint BEFORE deleting archive copy
                 & $CheckpointWriter $restoredPr8
+                Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8 -HandoffRoot $HandoffRoot
                 return $restoredPr8
             }
 
