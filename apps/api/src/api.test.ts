@@ -84,6 +84,38 @@ async function runApiTests() {
     if (!caughtMalformed) {
       throw new Error('validateConfig failed to throw on malformed port / carrier mode');
     }
+
+    // Regression tests for malformed port strings with trailing characters / whitespace (Finding 3)
+    const malformedPortCases = [
+      { PORT: '3001junk' },
+      { REDIS_PORT: '6379oops' },
+      { WORKER_HEALTH_PORT: '3002extra' },
+      { PORT: ' 3001' },
+      { PORT: '3001 ' },
+      { PORT: '-1' },
+      { PORT: '0' },
+      { PORT: '65536' },
+    ];
+    for (const testCase of malformedPortCases) {
+      let caught = false;
+      try {
+        validateConfig({
+          ...process.env,
+          DATABASE_URL: 'postgresql://postgres:testPassword@localhost:5433/shipde_dev',
+          ...testCase,
+        });
+      } catch (err: unknown) {
+        if (err instanceof ConfigValidationError) {
+          caught = true;
+          assertNoSecretValues(err.message, ['testPassword']);
+        }
+      }
+      if (!caught) {
+        throw new Error(
+          `validateConfig failed to fail-closed on malformed port case: ${JSON.stringify(testCase)}`
+        );
+      }
+    }
   }
   console.log('✅ Configuration validation tests passed');
 

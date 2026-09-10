@@ -45,8 +45,16 @@ export class ConfigValidationError extends Error {
   }
 }
 
+function parseStrictPort(val: string | undefined, defaultVal: number): number | null {
+  if (val === undefined || val === '') return defaultVal;
+  if (!/^\d+$/.test(val)) return null;
+  const num = Number(val);
+  if (!Number.isSafeInteger(num) || num < 1 || num > 65535) return null;
+  return num;
+}
+
 /**
- * Validates environment variables fail-closed.
+ * Validates runtime environment configuration fail-closed.
  * Guarantees that sensitive values are NEVER exposed in error messages.
  */
 export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -58,17 +66,21 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   }
   const NODE_ENV = nodeEnvRaw as EnvironmentMode;
 
-  const portRaw = rawEnv.PORT || '3001';
-  const PORT = Number.parseInt(portRaw, 10);
-  if (Number.isNaN(PORT) || PORT <= 0 || PORT > 65535) {
-    invalidFields.push('PORT (must be a valid port number 1-65535)');
+  const portParsed = parseStrictPort(rawEnv.PORT, 3001);
+  if (portParsed === null) {
+    invalidFields.push(
+      'PORT (must be a valid port number 1-65535 without trailing characters or whitespace)'
+    );
   }
+  const PORT = portParsed ?? 3001;
 
-  const workerHealthPortRaw = rawEnv.WORKER_HEALTH_PORT || '3002';
-  const WORKER_HEALTH_PORT = Number.parseInt(workerHealthPortRaw, 10);
-  if (Number.isNaN(WORKER_HEALTH_PORT) || WORKER_HEALTH_PORT <= 0 || WORKER_HEALTH_PORT > 65535) {
-    invalidFields.push('WORKER_HEALTH_PORT (must be a valid port number 1-65535)');
+  const workerHealthPortParsed = parseStrictPort(rawEnv.WORKER_HEALTH_PORT, 3002);
+  if (workerHealthPortParsed === null) {
+    invalidFields.push(
+      'WORKER_HEALTH_PORT (must be a valid port number 1-65535 without trailing characters or whitespace)'
+    );
   }
+  const WORKER_HEALTH_PORT = workerHealthPortParsed ?? 3002;
 
   const databaseUrlRaw = rawEnv.DATABASE_URL;
   if (
@@ -84,11 +96,13 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     invalidFields.push('REDIS_HOST (cannot be empty)');
   }
 
-  const redisPortRaw = rawEnv.REDIS_PORT || '6379';
-  const REDIS_PORT = Number.parseInt(redisPortRaw, 10);
-  if (Number.isNaN(REDIS_PORT) || REDIS_PORT <= 0 || REDIS_PORT > 65535) {
-    invalidFields.push('REDIS_PORT (must be a valid port number 1-65535)');
+  const redisPortParsed = parseStrictPort(rawEnv.REDIS_PORT, 6379);
+  if (redisPortParsed === null) {
+    invalidFields.push(
+      'REDIS_PORT (must be a valid port number 1-65535 without trailing characters or whitespace)'
+    );
   }
+  const REDIS_PORT = redisPortParsed ?? 6379;
 
   const REDIS_PASSWORD = rawEnv.REDIS_PASSWORD || undefined;
 
@@ -199,11 +213,17 @@ const REDACTED_MARKER = '[REDACTED]';
 export function redactSensitiveData(data: unknown): unknown {
   if (data === null || data === undefined) return data;
   if (typeof data === 'string') {
+    let sanitized = data;
     // Redact potential postgres/http passwords in connection strings
-    if (data.includes('://') && data.includes('@')) {
-      return data.replace(/(:\/\/[^:]+:)[^@]+(@)/g, `$1${REDACTED_MARKER}$2`);
+    if (sanitized.includes('://') && sanitized.includes('@')) {
+      sanitized = sanitized.replace(/(:\/\/[^:]+:)[^@]+(@)/g, `$1${REDACTED_MARKER}$2`);
     }
-    return data;
+    // Redact inline secrets, passwords, and tokens
+    sanitized = sanitized.replace(
+      /(password|passwd|secret|token|api_?key|access_?key|credential)([:=\s]+)([^\s,;]+)/gi,
+      `$1$2${REDACTED_MARKER}`
+    );
+    return sanitized;
   }
   if (typeof data !== 'object') return data;
 

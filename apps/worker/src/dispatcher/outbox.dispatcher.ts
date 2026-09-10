@@ -1,7 +1,12 @@
 import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
-import { AppConfig, formatStructuredLog, normalizeCorrelationId } from '@shipde/config';
+import {
+  AppConfig,
+  formatStructuredLog,
+  normalizeCorrelationId,
+  redactSensitiveData,
+} from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 import { SMOKE_QUEUE_NAME, QUEUE_SMOKE_EVENT_TYPE, QueueSmokePayload } from '@shipde/contracts';
 import { OutboxStatusEnum, OutboxEvent } from '@prisma/client';
@@ -115,12 +120,14 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
         failed++;
         const nextAttempts = event.attempts + 1;
         const isExhausted = nextAttempts >= 3;
+        const rawError = err?.message || 'Dispatch publish failure';
+        const sanitizedError = (redactSensitiveData(rawError) as string) || rawError;
 
         await this.prisma.outboxEvent.update({
           where: { id: event.id },
           data: {
             attempts: nextAttempts,
-            last_error: err.message,
+            last_error: sanitizedError,
             status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
           },
         });
@@ -130,7 +137,7 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
             level: 'error',
             service: 'worker',
             correlationId,
-            message: `Failed to dispatch outbox event ${event.id}: ${err.message}`,
+            message: `Failed to dispatch outbox event ${event.id}: ${sanitizedError}`,
             metadata: {
               outboxId: event.id,
               attempts: nextAttempts,
@@ -142,6 +149,61 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
     }
 
     return { dispatched, failed };
+  }
+
+  /**
+   * Recovers records stranded in PROCESSING beyond a visibility window.
+   * If attempts >= 3, transitions them to FAILED; otherwise restores them to PENDING for retry.
+   */
+  async recoverStaleProcessing(
+    olderThanMs = 60000
+  ): Promise<{ recovered: number; failed: number }> {
+    const cutoff = new Date(Date.now() - olderThanMs);
+    const staleEvents = await this.prisma.outboxEvent.findMany({
+      where: {
+        status: OutboxStatusEnum.PROCESSING,
+        scheduled_at: { lte: cutoff },
+      },
+    });
+
+    let recovered = 0;
+    let failed = 0;
+
+    for (const event of staleEvents) {
+      const isExhausted = event.attempts >= 3;
+      await this.prisma.outboxEvent.update({
+        where: { id: event.id },
+        data: {
+          status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
+          last_error: isExhausted
+            ? event.last_error || 'Exhausted processing attempts'
+            : 'Recovered from stale processing state',
+        },
+      });
+
+      if (isExhausted) {
+        failed++;
+      } else {
+        recovered++;
+      }
+    }
+
+    return { recovered, failed };
+  }
+
+  /**
+   * Re-queues an exhausted or failed outbox event for deterministic operator recovery.
+   */
+  async retryFailed(outboxId: string): Promise<OutboxEvent> {
+    return this.prisma.outboxEvent.update({
+      where: { id: outboxId },
+      data: {
+        status: OutboxStatusEnum.PENDING,
+        attempts: 0,
+        last_error: null,
+        scheduled_at: new Date(),
+      },
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
