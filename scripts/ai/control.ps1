@@ -4093,7 +4093,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
         if ([string]::IsNullOrWhiteSpace($LivePrHead) -or $LivePrHead -notmatch '^[0-9a-fA-F]{40}$') {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has PendingDispatch, but live PR head '$LivePrHead' is missing or not a valid 40-character commit SHA. Rejecting before any checkpoint-driven effects."
         }
-        if ($pHead -cne $LivePrHead) {
+        if ($pHead.ToLowerInvariant() -ne $LivePrHead.ToLowerInvariant()) {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has PendingDispatch head '$pHead' which does not match authoritative live PR head '$LivePrHead'. Rejecting before any checkpoint-driven effects."
         }
 
@@ -4101,7 +4101,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
         if ([string]::IsNullOrWhiteSpace($ckptHeadSha) -or $ckptHeadSha -notmatch '^[0-9a-fA-F]{40}$') {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has PendingDispatch, but checkpoint head '$ckptHeadSha' is missing or not a valid 40-character commit SHA. Rejecting before any checkpoint-driven effects."
         }
-        if ($pHead -cne $ckptHeadSha) {
+        if ($pHead.ToLowerInvariant() -ne $ckptHeadSha.ToLowerInvariant()) {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has PendingDispatch head '$pHead' which does not match authoritative checkpoint head '$ckptHeadSha'. Rejecting before any checkpoint-driven effects."
         }
 
@@ -12414,6 +12414,43 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
                 throw "Round 25 Finding 1 failed: archive was deleted when session harness had case mismatch."
             }
             Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
+
+            # --- Round 26 Regression Test (Finding 1: Case-Insensitive Commit OID Matching) ---
+
+            # 26-1: Uppercase PendingDispatch OID matches lowercase live/checkpoint head without error
+            $upperOidDispatchPr8 = @{
+                WorkItemId = "TASK-FOUND-03"
+                Branch = "feat/task-found-03-api-worker-infrastructure"
+                Author = "GEMINI"
+                PullRequestNumber = 8
+                HeadSha = "438c5b42b0668f8d94ccb7eb851d1cf29023eba8"
+                SessionId = "sess-worker-01"
+                PendingDispatch = @{
+                    Type = "CI_REPAIR"
+                    Head = "438C5B42B0668F8D94CCB7EB851D1CF29023EBA8"
+                    WorkItemId = "TASK-FOUND-03"
+                }
+                State = "STARTED"
+            }
+            Archive-ShipDeSupervisorCheckpoint -State $upperOidDispatchPr8
+            $restoredWithUpperOid = $null
+            try {
+                $restoredWithUpperOid = Initialize-ShipDeSupervisorState `
+                    -State $null `
+                    -PullRequestNumber 0 `
+                    -DeliveryRegisterRows $regAi13Merged `
+                    -OpenPrResolver { return @($mockPr8) } `
+                    -ActiveWorkersResolver { return @() } `
+                    -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ id = "sess-worker-01"; kind = "worker"; branch = "feat/task-found-03-api-worker-infrastructure"; harness = "agy" } } `
+                    -PrWorkItemResolver { param($pr) return [PSCustomObject]@{ WorkItemId = "TASK-FOUND-03"; WorkItemPath = "docs/product-spec/work-items/TASK-FOUND-03.md"; Branch = "feat/task-found-03-api-worker-infrastructure"; Author = "GEMINI" } } `
+                    -CheckpointWriter { param($s) }
+            } catch {
+                throw "Round 26 Finding 1 failed: restoration threw on uppercase PendingDispatch commit OID: $($_.Exception.Message)"
+            }
+            if ($null -eq $restoredWithUpperOid) {
+                throw "Round 26 Finding 1 failed: restoration returned null when PendingDispatch commit OID was uppercase."
+            }
+            Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-FOUND-03" -PullRequestNumber 8
         }
 
         # Reconciliation PR Governance: Supervisor identifies, recovers, and automatically processes reconciliation PRs
@@ -15110,7 +15147,10 @@ function Initialize-ShipDeSupervisorState {
 
                 # Enrich WorkItemPath if missing only after validation has proven all required governed identities
                 if ([string]::IsNullOrWhiteSpace([string](Get-ShipDeObjectProperty -Object $restoredPr8 -Names @("WorkItemPath", "workItemPath")))) {
-                    if ($restoredPr8 -is [System.Collections.IDictionary]) { $restoredPr8["WorkItemPath"] = $item.WorkItemPath } else { $restoredPr8.WorkItemPath = $item.WorkItemPath }
+                    $itemWip = [string](Get-ShipDeObjectProperty -Object $item -Names @("WorkItemPath", "workItemPath", "work_item_path"))
+                    if (-not [string]::IsNullOrWhiteSpace($itemWip)) {
+                        if ($restoredPr8 -is [System.Collections.IDictionary]) { $restoredPr8["WorkItemPath"] = $itemWip } else { $restoredPr8.WorkItemPath = $itemWip }
+                    }
                 }
 
                 $restoredPr8 = Normalize-ShipDeSupervisorState -State $restoredPr8
@@ -15122,7 +15162,7 @@ function Initialize-ShipDeSupervisorState {
 
             $reconstructedState = @{
                 WorkItemId = $item.WorkItemId
-                WorkItemPath = $item.WorkItemPath
+                WorkItemPath = [string](Get-ShipDeObjectProperty -Object $item -Names @("WorkItemPath", "workItemPath", "work_item_path"))
                 Branch = $item.Branch
                 Author = $item.Author
                 State = "STARTED"
