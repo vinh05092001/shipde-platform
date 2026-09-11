@@ -1514,8 +1514,9 @@ async function runWorkerTests() {
             `Expected traceId 4bf92f3577b34da6a3ce929d0e0e4736, got ${smokeSpan.spanContext().traceId}`
           );
         }
-        if (smokeSpan.parentSpanId !== '00f067aa0ba902b7') {
-          throw new Error(`Expected parentSpanId 00f067aa0ba902b7, got ${smokeSpan.parentSpanId}`);
+        const actualParentSpanId = smokeSpan.parentSpanContext?.spanId || smokeSpan.parentSpanId;
+        if (actualParentSpanId !== '00f067aa0ba902b7') {
+          throw new Error(`Expected parentSpanId 00f067aa0ba902b7, got ${actualParentSpanId}`);
         }
         console.log('✅ SmokeWorker distributed trace context continuation verified');
       } finally {
