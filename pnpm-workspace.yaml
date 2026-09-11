@@ -4,11 +4,43 @@ packages:
 
 allowBuilds:
   # 1. Generates Prisma client JavaScript/TypeScript runtime bindings during install
+  '@esbuild/aix-ppc64': false
+  '@esbuild/android-arm': false
+  '@esbuild/android-arm64': false
+  '@esbuild/android-x64': false
+  '@esbuild/darwin-arm64': false
+  '@esbuild/darwin-x64': false
+  '@esbuild/freebsd-arm64': false
+  '@esbuild/freebsd-x64': false
+  '@esbuild/linux-arm': false
+  '@esbuild/linux-arm64': false
+  '@esbuild/linux-ia32': false
+  '@esbuild/linux-loong64': false
+  '@esbuild/linux-mips64el': false
+  '@esbuild/linux-ppc64': false
+  '@esbuild/linux-riscv64': false
+  '@esbuild/linux-s390x': false
+  '@esbuild/linux-x64': false
+  '@esbuild/netbsd-arm64': false
+  '@esbuild/netbsd-x64': false
+  '@esbuild/openbsd-arm64': false
+  '@esbuild/openbsd-x64': false
+  '@esbuild/openharmony-arm64': false
+  '@esbuild/sunos-x64': false
+  '@esbuild/win32-arm64': false
+  '@esbuild/win32-ia32': false
   '@prisma/client': true
   # 2. Downloads and extracts pre-compiled Prisma query engine binaries for schema operations
   '@prisma/engines': true
+  '@turbo/darwin-64': false
+  '@turbo/darwin-arm64': false
+  '@turbo/linux-64': false
+  '@turbo/linux-arm64': false
+  '@turbo/windows-arm64': false
   # 3. Native binary installer required by tsx for script execution and Turborepo builds
   esbuild: true
+  fsevents: false
+  msgpackr-extract: false
   # 4. Prisma CLI setup for database schema generation and validation
   prisma: true
   # 5. Native image processing library required for Next.js image optimization

@@ -29,5 +29,8 @@
     "eslint": "^9.39.5",
     "tsx": "^4.21.0",
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1126.0"
   }
 }

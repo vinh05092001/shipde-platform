@@ -16,7 +16,46 @@ tags:
   - name: Tracking
   - name: Reconciliation
   - name: Claims
+  - name: Health
 paths:
+  /health/live:
+    servers:
+      - url: /
+    get:
+      tags: [Health]
+      summary: Operational liveness probe (API-FOUND-HEALTH-LIVE)
+      description: Returns 200 when the process is alive without querying downstream dependencies.
+      operationId: getHealthLive
+      security: []
+      responses:
+        '200':
+          description: Process event loop is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessResponse'
+  /health/ready:
+    servers:
+      - url: /
+    get:
+      tags: [Health]
+      summary: Operational readiness probe (API-FOUND-HEALTH-READY)
+      description: Returns 200 when all required infrastructure dependencies (PostgreSQL, Redis, S3) are healthy, or 503 if any dependency is unavailable.
+      operationId: getHealthReady
+      security: []
+      responses:
+        '200':
+          description: All required dependencies are healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: One or more dependencies are unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
   /auth/login:
     post:
       tags: [Auth]
@@ -406,6 +445,7 @@ components:
           writeOnly: true
     SourceOrderInput:
       type: object
+      # prettier-ignore
       required: [source_order_code, warehouse_id, recipient, address, parcels, expected_cod_vnd, fee_payer]
       properties:
         source_order_code:
@@ -560,4 +600,51 @@ components:
       properties:
         correlation_id:
           type: string
-
+    LivenessResponse:
+      type: object
+      required: [status, service, timestamp, correlationId]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+          example: api
+        timestamp:
+          type: string
+          format: date-time
+        correlationId:
+          type: string
+          example: 123e4567-e89b-12d3-a456-426614174000
+    ReadinessResponse:
+      type: object
+      required: [status, service, timestamp, correlationId, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        service:
+          type: string
+          example: api
+        timestamp:
+          type: string
+          format: date-time
+        correlationId:
+          type: string
+          example: 123e4567-e89b-12d3-a456-426614174000
+        checks:
+          type: object
+          required: [database, redis, storage]
+          properties:
+            database:
+              type: string
+              enum: [up, down]
+            redis:
+              type: string
+              enum: [up, down]
+            storage:
+              type: string
+              enum: [up, down]
+          additionalProperties:
+            type: string
+            enum: [up, down]
