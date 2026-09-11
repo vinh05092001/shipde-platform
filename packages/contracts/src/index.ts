@@ -183,3 +183,6 @@ export interface QueueSmokePayload {
   message: string;
   metadata?: Record<string, unknown>;
 }
+
+// --- Generated OpenAPI Schema Types ---
+export * from './openapi';

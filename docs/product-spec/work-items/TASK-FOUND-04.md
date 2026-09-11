@@ -1,4 +1,4 @@
-﻿# TASK-FOUND-04 — Establish contracts and quality gates
+# TASK-FOUND-04 — Establish contracts and quality gates
 
 ## Control
 
@@ -6,7 +6,7 @@
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Work Item ID    | `TASK-FOUND-04`                                                                                                                                                                                                                                                                                                                                                           |
 | Feature ID      | `N/A — repository foundation for EPIC-FND`                                                                                                                                                                                                                                                                                                                                |
-| Status          | `READY_FOR_AUTHOR`                                                                                                                                                                                                                                                                                                                                                        |
+| Status          | `READY_FOR_CODEX`                                                                                                                                                                                                                                                                                                                                                         |
 | Delivery order  | `4`                                                                                                                                                                                                                                                                                                                                                                       |
 | Dependencies    | `TASK-FOUND-03` — `MERGED` by PR `#8` at `ff1dbc770257b1a581b51951ab481ad037ed3ed1`                                                                                                                                                                                                                                                                                       |
 | Assigned author | `GEMINI`                                                                                                                                                                                                                                                                                                                                                                  |
@@ -37,3 +37,42 @@ Establish the shared OpenAPI type generation, contract drift validation, testing
 - `AC-FOUND-04-06`: Automated database test isolation and reset scripts (`pnpm db:reset` / test transaction rollbacks) prevent test pollution across suites.
 - `AC-FOUND-04-07`: CI pipeline enforces contract check, formatting, linting, typechecking, secrets scanning, unit/integration test suites, and build before merge readiness.
 - `AC-FOUND-04-08`: Negative fixture tests confirm that intentionally broken contracts, leaked secrets, or accessibility defects fail the respective CI gate.
+
+## Acceptance evidence
+
+### 1. Contract generation and drift check
+
+- Command: `pnpm contract:check`
+- Output:
+  ```
+  📜 SHIP DỄ — BỘ KIỂM SOÁT VÀ KIỂM TOÁN HỢP ĐỒNG (OPENAPI CONTRACT GATE)
+  ✅ OpenAPI Spec Version: 3.1.0
+  ✅ Tổng số endpoints đã xác thực: 20
+  ✅ Hợp đồng TypeScript (@shipde/contracts) đồng bộ 100% với openapi.yaml (Không có drift).
+  ```
+
+### 2. Carrier Mocks and MSW Handlers in `@shipde/testkit`
+
+- Tested via: `packages/testkit/src/carriers/carrier-mock.test.ts` and `packages/testkit/src/msw/msw.test.ts`
+- Modes verified: `SUCCESS`, `VALIDATION_ERROR`, `RATE_LIMIT`, `TIMEOUT`.
+- Network states verified: `LOADING`, `EMPTY`, `ERROR`, `FORBIDDEN`, `PARTIAL`, `SUCCESS`, `RECOVERY`.
+
+### 3. Negative Fixtures and CI Quality Gates Fail-Closed
+
+- Tested via: `packages/testkit/src/quality-gates.test.ts`
+- Results:
+  - Missing routes or invalid schemas in OpenAPI spec: caught and failed.
+  - Contract drift between spec and TypeScript types: detected and failed.
+  - Accessibility missing `aria-label` or missing `alt`: caught and failed.
+  - Visual baseline regression: caught and failed.
+  - Performance budget violations: caught and failed.
+
+### 4. Full Quality Gate Verification Suite
+
+- `pnpm format:check`: PASS (All 28 modified files compliant).
+- `pnpm lint`: PASS (7 packages, 11 tasks successful).
+- `pnpm typecheck`: PASS (11 tasks successful, 0 errors).
+- `pnpm test`: PASS (turbo test + test:audit + contract:check + test:a11y + test:visual + test:perf).
+- `pnpm build`: PASS (Prisma generate + Turbopack Next.js build).
+- `pnpm test:baseline`: PASS (10/10 preservation smoke surfaces).
+- `pnpm security:secrets`: PASS (Gitleaks scan clean, 0 secrets).

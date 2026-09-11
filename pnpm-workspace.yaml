@@ -41,6 +41,7 @@ allowBuilds:
   esbuild: true
   fsevents: false
   msgpackr-extract: false
+  msw: false
   # 4. Prisma CLI setup for database schema generation and validation
   prisma: true
   # 5. Native image processing library required for Next.js image optimization
