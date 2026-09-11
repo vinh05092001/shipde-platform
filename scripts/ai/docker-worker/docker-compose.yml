@@ -1,0 +1,16 @@
+services:
+  gemini-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shipde-gemini-worker
+    volumes:
+      - ${SHIPDE_WORKSPACE:-../../..}:/workspace
+      - gemini_worker_data:/root/.gemini
+    stdin_open: true
+    tty: true
+    environment:
+      - TERM=xterm-256color
+
+volumes:
+  gemini_worker_data:

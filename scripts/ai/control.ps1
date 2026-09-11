@@ -15,7 +15,8 @@ param(
     [int]$SupervisorInactivityTimeoutMinutes = 10,
     [ValidateRange(1, 1)]
     [int]$SupervisorMaxNudges = 1,
-    [int]$SupervisorReviewTimeoutMinutes = 20
+    [int]$SupervisorReviewTimeoutMinutes = 20,
+    [switch]$NonInteractive
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -934,9 +935,12 @@ When finished, return only: Work Item ID, branch, assigned author, Work Item pat
 function Get-ShipDePromptForItem {
     param([Parameter(Mandatory = $true)][object]$Item)
 
-    $workspace = if ($Item.Author -eq "GEMINI") { $script:Paths.Gemini } else { $script:Paths.Dsh }
-    $promptName = if ($Item.Author -eq "GEMINI") { "GEMINI-START-PROMPT.md" } else { "NINEROUTER-START-PROMPT.md" }
+    $workspace = if ($Item.Author -eq "GEMINI") { $script:Paths.Gemini } elseif ($Item.Author -eq "CLAUDE") { $script:Paths.Claude } else { $script:Paths.Dsh }
+    $promptName = if ($Item.Author -eq "GEMINI") { "GEMINI-START-PROMPT.md" } elseif ($Item.Author -eq "CLAUDE") { "CLAUDE-START-PROMPT.md" } else { "NINEROUTER-START-PROMPT.md" }
     $promptPath = Join-Path $workspace "docs\product-spec\docs\10-ai-collaboration\$promptName"
+    if (-not (Test-Path $promptPath)) {
+        $promptPath = Join-Path $workspace "docs\product-spec\docs\10-ai-collaboration\GEMINI-START-PROMPT.md"
+    }
     if (-not (Test-Path $promptPath)) {
         throw "Author prompt is missing after branch checkout: $promptPath"
     }
@@ -959,7 +963,7 @@ function Start-ShipDeAssignedAuthor {
         -Branch $Item.Branch `
         -AiRoot $AiRoot
 
-    $workspace = if ($Item.Author -eq "GEMINI") { $script:Paths.Gemini } else { $script:Paths.Dsh }
+    $workspace = if ($Item.Author -eq "GEMINI") { $script:Paths.Gemini } elseif ($Item.Author -eq "CLAUDE") { $script:Paths.Claude } else { $script:Paths.Dsh }
     $prompt = Get-ShipDePromptForItem -Item $Item
     Set-ShipDeClipboard -Text $prompt
 
@@ -971,6 +975,9 @@ function Start-ShipDeAssignedAuthor {
         } else {
             throw "Neither Antigravity CLI (agy) nor Gemini CLI is available."
         }
+    } elseif ($Item.Author -eq "CLAUDE") {
+        Assert-ShipDeCommand claude
+        Start-ShipDeTerminal -Workspace $workspace -Command "claude"
     } else {
         Assert-ShipDeCommand 9router
         Assert-ShipDeCommand dsh
@@ -1483,9 +1490,14 @@ function ConvertFrom-ShipDeCodexReviewOutput {
         throw "Codex review output is empty."
     }
 
+    $candidateText = $OutputText.Trim()
+    if ($candidateText -match '(?s)^.*?```(?:json)?\s*(\{.*\})\s*```.*?$') {
+        $candidateText = $matches[1].Trim()
+    }
+
     $jsonCandidate = $null
     try {
-        $jsonCandidate = $OutputText.Trim() | ConvertFrom-Json
+        $jsonCandidate = $candidateText | ConvertFrom-Json
     } catch {
         throw "Codex review output does not contain valid structured JSON satisfying the review schema."
     }
@@ -1637,6 +1649,126 @@ function Get-ShipDeCodexReviewArgs {
     return @("exec", "--sandbox", "read-only", "--output-schema", $SchemaFile, "--output-last-message", $LastMessageFile, "-")
 }
 
+function Invoke-ShipDeAgentRouterReviewFallback {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReviewPrompt,
+        [Parameter(Mandatory = $true)][string]$ReviewHeadSha,
+        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
+        [Parameter(Mandatory = $true)][string]$SchemaFile,
+        [Parameter(Mandatory = $true)][string]$ReviewFile,
+        [Parameter(Mandatory = $true)][string]$ExecutionFile,
+        [Parameter(Mandatory = $true)][string]$DiagnosticFile
+    )
+
+    $codexWorktree = $script:Paths.Codex
+    $gitDiff = @(& git -C $codexWorktree diff origin/main...HEAD 2>&1)
+    $gitLog = @(& git -C $codexWorktree log -n 10 --oneline origin/main...HEAD 2>&1)
+    $diffText = if ($gitDiff) { ($gitDiff -join "`n") } else { "(No git diff between origin/main and HEAD)" }
+    $logText = if ($gitLog) { ($gitLog -join "`n") } else { "" }
+
+    $reviewInstruction = @"
+Perform an independent, read-only code review of Pull Request #$PullRequestNumber at the exact detached HEAD $ReviewHeadSha against origin/main.
+Inspect the changes introduced using git diff origin/main...HEAD (and git log -n 10 --oneline origin/main...HEAD).
+Verify business completeness, security, edge cases, error handling, tenancy, and test coverage across the repository.
+Do not start external services or docker containers. Do not edit any files.
+
+Provide your review output strictly conforming to the declared JSON schema:
+- verdict: exactly one of "PASS", "CHANGES_REQUIRED", "BLOCKED". (Use PASS if all requirements and tests pass with no actionable issues; CHANGES_REQUIRED if actionable bugs or missing requirements remain).
+- summary: concise high-level summary string.
+- findings: array of objects { "priority": "P1"|"P2"|"P3", "file": string, "line": integer, "title": string, "description": string } (empty [] if PASS).
+- report: full markdown review report. MUST include these exact lines:
+Reviewed exact head: $ReviewHeadSha
+Verdict: <verdict>
+
+IMPORTANT: You MUST respond ONLY with valid, raw JSON satisfying the schema. Do not output markdown fences or commentary outside the JSON.
+"@
+
+    # 1. Primary fallback: Native Claude Code CLI (authenticated via direct machine login)
+    Write-Host ("[REVIEW-FALLBACK] Attempting review via Native Claude Code CLI on machine for PR #{0} (HEAD: {1})..." -f $PullRequestNumber, $ReviewHeadSha.Substring(0, [Math]::Min(8, $ReviewHeadSha.Length)))
+
+    $tempInNative = Join-Path (Get-ShipDeTempDir) "claude-in-$([Guid]::NewGuid().ToString('N')).txt"
+    $tempOutNative = Join-Path (Get-ShipDeTempDir) "claude-review-$([Guid]::NewGuid().ToString('N')).txt"
+    $tempDiagNative = Join-Path (Get-ShipDeTempDir) "claude-diag-$([Guid]::NewGuid().ToString('N')).txt"
+    [System.IO.File]::WriteAllText($tempInNative, $reviewInstruction, [System.Text.UTF8Encoding]::new($false))
+
+    $originalEnv = @{
+        ANTHROPIC_AUTH_TOKEN = $env:ANTHROPIC_AUTH_TOKEN
+        ANTHROPIC_BASE_URL   = $env:ANTHROPIC_BASE_URL
+        CLAUDE_CONFIG_DIR    = $env:CLAUDE_CONFIG_DIR
+        ANTHROPIC_API_KEY    = $env:ANTHROPIC_API_KEY
+    }
+
+    try {
+        $env:ANTHROPIC_AUTH_TOKEN = $null
+        $env:ANTHROPIC_BASE_URL   = $null
+        $env:CLAUDE_CONFIG_DIR    = $null
+        $env:ANTHROPIC_API_KEY    = $null
+
+        $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c claude -p --dangerously-skip-permissions --output-format text < `"$tempInNative`"" -WorkingDirectory $codexWorktree -RedirectStandardOutput $tempOutNative -RedirectStandardError $tempDiagNative -PassThru -NoNewWindow
+        $hasExited = $false
+        if ($null -ne $proc) {
+            $hasExited = $proc.WaitForExit(900000)
+        }
+        if (-not $hasExited) {
+            Write-Warning "[REVIEW-FALLBACK] Native Claude Code timed out after 900s."
+            if ($null -ne $proc) {
+                & taskkill.exe /F /T /PID $proc.Id 2>&1 | Out-Null
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            $raw = if (Test-Path -LiteralPath $tempOutNative) { [string](Get-Content -LiteralPath $tempOutNative -Raw) } else { "" }
+            $diag = if (Test-Path -LiteralPath $tempDiagNative) { [string](Get-Content -LiteralPath $tempDiagNative -Raw) } else { "" }
+
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $cleanJson = $raw.Trim()
+                if ($cleanJson -match '(?s)^.*?```(?:json)?\s*(\{.*\})\s*```.*?$') {
+                    $cleanJson = $matches[1].Trim()
+                }
+
+                try {
+                    $parsed = ConvertFrom-ShipDeCodexReviewOutput -OutputText $cleanJson
+                    if ($null -ne $parsed -and $null -ne $parsed.Verdict) {
+                        $header = "Reviewed by Claude Code (Machine Native Login)`nReviewed exact head: $ReviewHeadSha`nVerdict: $($parsed.Verdict)`n`n"
+                        if ($parsed.Report -notmatch [regex]::Escape("Reviewed exact head:")) {
+                            $parsed.Report = $header + $parsed.Report
+                        }
+
+                        $cleanPayload = [PSCustomObject]@{
+                            verdict  = $parsed.Verdict
+                            summary  = $parsed.Summary
+                            findings = @($parsed.Findings)
+                            report   = $parsed.Report
+                        } | ConvertTo-Json -Depth 10
+
+                        [System.IO.File]::WriteAllText($ReviewFile, $cleanPayload, [System.Text.UTF8Encoding]::new($false))
+                        try {
+                            [System.IO.File]::WriteAllText($ExecutionFile, "[Claude Code Native]`n$cleanPayload", [System.Text.UTF8Encoding]::new($false))
+                        } catch {
+                            Write-Warning ("[REVIEW-FALLBACK] Could not write execution log: {0}" -f $_.Exception.Message)
+                        }
+                        Write-Host ("[REVIEW-FALLBACK] Successfully completed review via Native Claude Code! Verdict: {0}" -f $parsed.Verdict)
+                        return $true
+                    }
+                } catch {
+                    Write-Warning ("[REVIEW-FALLBACK] Native Claude Code output failed schema validation: {0}" -f $_.Exception.Message)
+                }
+            } else {
+                $diagTrimmed = if (-not [string]::IsNullOrWhiteSpace($diag)) { $diag.Trim() } else { "(no stderr output)" }
+                Write-Warning ("[REVIEW-FALLBACK] Native Claude Code returned no stdout. Stderr: {0}" -f $diagTrimmed)
+            }
+        }
+    } finally {
+        $env:ANTHROPIC_AUTH_TOKEN = $originalEnv.ANTHROPIC_AUTH_TOKEN
+        $env:ANTHROPIC_BASE_URL   = $originalEnv.ANTHROPIC_BASE_URL
+        $env:CLAUDE_CONFIG_DIR    = $originalEnv.CLAUDE_CONFIG_DIR
+        $env:ANTHROPIC_API_KEY    = $originalEnv.ANTHROPIC_API_KEY
+        Remove-Item -LiteralPath $tempInNative -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tempOutNative -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tempDiagNative -Force -ErrorAction SilentlyContinue
+    }
+    return $false
+}
+
 function Invoke-ShipDeReview {
     param(
         [int]$PullRequestNumber = 0,
@@ -1771,15 +1903,40 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
     } else {
         $previousErrorActionPreference = $ErrorActionPreference
         Push-Location $script:Paths.Codex
+        $tempCodexIn = Join-Path (Get-ShipDeTempDir) "codex-in-$([Guid]::NewGuid().ToString('N')).txt"
+        [System.IO.File]::WriteAllText($tempCodexIn, $reviewPrompt, [System.Text.UTF8Encoding]::new($false))
         try {
-            # Non-interactive Codex execution with machine-readable structured output schema.
-            # Use read-only sandbox and stdin for the review prompt.
             $ErrorActionPreference = "Continue"
-            $reviewPrompt | & codex @codexArgs 1> $executionFile 2> $diagnosticFile
-            $exitCode = $LASTEXITCODE
+            $codexProc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c codex $($codexArgs -join ' ') < `"$tempCodexIn`"" -WorkingDirectory $script:Paths.Codex -RedirectStandardOutput $executionFile -RedirectStandardError $diagnosticFile -PassThru -NoNewWindow
+            $completedInTime = $codexProc.WaitForExit(600000)
+            if ($completedInTime) {
+                $exitCode = $codexProc.ExitCode
+            } else {
+                Write-Warning "Codex review process timed out after 600s (network/connection hung). Terminating and falling back..."
+                Stop-Process -Id $codexProc.Id -Force -ErrorAction SilentlyContinue
+                $exitCode = 124
+            }
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
+            Remove-Item -LiteralPath $tempCodexIn -Force -ErrorAction SilentlyContinue
             Pop-Location
+        }
+
+        # Fallback to AgentRouter if Codex execution failed or produced invalid/empty review
+        $codexReviewValid = ($exitCode -eq 0) -and (Test-Path -LiteralPath $reviewFile) -and (-not [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $reviewFile -Raw -ErrorAction SilentlyContinue)))
+        if (-not $codexReviewValid) {
+            Write-Warning "Codex review execution was not successful (Exit code: $exitCode). Initiating AgentRouter fallback chain..."
+            $fallbackSuccess = Invoke-ShipDeAgentRouterReviewFallback `
+                -ReviewPrompt $reviewPrompt `
+                -ReviewHeadSha $reviewHeadSha `
+                -PullRequestNumber $pr.number `
+                -SchemaFile $schemaFile `
+                -ReviewFile $reviewFile `
+                -ExecutionFile $executionFile `
+                -DiagnosticFile $diagnosticFile
+            if ($fallbackSuccess) {
+                $exitCode = 0
+            }
         }
     }
 
@@ -5060,8 +5217,15 @@ mutation($input: MergePullRequestInput!) {
         }
     }
 
-    $jsonBody = $payload | ConvertTo-Json -Depth 5
-    $raw = @($jsonBody | gh api graphql --input - 2>$null)
+    $jsonBody = $payload | ConvertTo-Json -Depth 5 -Compress
+    $prevEncoding = $OutputEncoding
+    $raw = @()
+    try {
+        $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $raw = @($jsonBody | gh api graphql --input - 2>$null)
+    } finally {
+        $OutputEncoding = $prevEncoding
+    }
     if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) {
         $err = ($raw -join "`n")
         throw "Merge mutation failed via GraphQL API: $err"
@@ -5868,7 +6032,7 @@ function Test-ShipDeMergePreflight {
         }
 
         $needsGraphQLRollup = $false
-        if (-not $hasAppEvidence -and ($protection.Checks | Where-Object { $null -ne $_.app_id })) {
+        if (-not $hasAppEvidence -and ($protection.Checks | Where-Object { $null -ne (Get-ShipDeObjectProperty -Object $_ -Names @("AppId", "app_id", "appId")) })) {
             $needsGraphQLRollup = $true
         }
 
@@ -15367,7 +15531,7 @@ function Invoke-ShipDeResume {
             throw "Independent Codex review returned durable BLOCKED for PR #$($pr.number) at exact HEAD $headSha. Stopping fail-closed for human action."
         }
 
-        Invoke-ShipDeReview
+        Invoke-ShipDeReview -PullRequestNumber ([int]$pr.number) -NonInteractive:$NonInteractive
         return
     }
 
@@ -15425,7 +15589,7 @@ switch ($Action) {
     "Status" { Show-ShipDeStatus }
     "Prepare" { Invoke-ShipDePrepare }
     "Start" { Invoke-ShipDeStart }
-    "Review" { Invoke-ShipDeReview }
+    "Review" { Invoke-ShipDeReview -PullRequestNumber $PullRequestNumber -NonInteractive:$NonInteractive }
     "Sync" { Invoke-ShipDeSync }
     "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber }
     "Test" { Write-Host "ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED"; return }

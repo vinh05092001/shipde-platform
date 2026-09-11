@@ -8,7 +8,7 @@ param(
     [string]$Slug,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("GEMINI", "9ROUTER")]
+    [ValidateSet("GEMINI", "9ROUTER", "CLAUDE")]
     [string]$Author,
 
     [string]$Branch,
@@ -20,7 +20,7 @@ param(
 
 Assert-ShipDeCommand git
 $paths = Get-ShipDePaths -AiRoot $AiRoot
-$workspace = if ($Author -eq "GEMINI") { $paths.Gemini } else { $paths.Dsh }
+$workspace = if ($Author -eq "GEMINI") { $paths.Gemini } elseif ($Author -eq "CLAUDE") { $paths.Claude } else { $paths.Dsh }
 $expectedSuffix = "$($WorkItemId.ToLowerInvariant())-$Slug"
 if ([string]::IsNullOrWhiteSpace($Branch)) {
     $Branch = "feat/$expectedSuffix"
@@ -57,8 +57,11 @@ if ($workItemText -notmatch [regex]::Escape("Assigned author") -or $workItemText
     throw "Work Item does not visibly assign author $Author. Stop and return it to Codex planning."
 }
 
-$promptName = if ($Author -eq "GEMINI") { "GEMINI-START-PROMPT.md" } else { "NINEROUTER-START-PROMPT.md" }
+$promptName = if ($Author -eq "GEMINI") { "GEMINI-START-PROMPT.md" } elseif ($Author -eq "CLAUDE") { "CLAUDE-START-PROMPT.md" } else { "NINEROUTER-START-PROMPT.md" }
 $promptPath = Join-Path $workspace "docs\product-spec\docs\10-ai-collaboration\$promptName"
+if (-not (Test-Path $promptPath)) {
+    $promptPath = Join-Path $workspace "docs\product-spec\docs\10-ai-collaboration\GEMINI-START-PROMPT.md"
+}
 
 Write-Host "WORK ITEM READY"
 Write-Host "Workspace : $workspace"
