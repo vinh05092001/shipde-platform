@@ -85,25 +85,22 @@ export async function waitForInfrastructure(): Promise<void> {
         const minioInit = serviceMap.get('minio-init');
         if (!minioInit) {
           // minio-init container not created yet, keep polling
-          continue;
-        }
-
-        const minioInitStatus = (minioInit.status || '').toLowerCase();
-        if (minioInitStatus.includes('exited (') && !minioInitStatus.includes('exited (0)')) {
-          throw new Error(`minio-init container failed with status: ${minioInit.status}`);
-        }
-
-        const minioInitDone = minioInitStatus.includes('exited (0)');
-
-        if (allHealthy && minioInitDone) {
-          console.log('✅ All infrastructure services are healthy:');
-          for (const st of statuses) {
-            console.log(`   - ${st.service}: ${st.status || st.health || 'healthy'}`);
+        } else {
+          const minioInitStatus = (minioInit.status || '').toLowerCase();
+          if (minioInitStatus.includes('exited (') && !minioInitStatus.includes('exited (0)')) {
+            throw new Error(`minio-init container failed with status: ${minioInit.status}`);
           }
-          if (minioInit) {
+
+          const minioInitDone = minioInitStatus.includes('exited (0)');
+
+          if (allHealthy && minioInitDone) {
+            console.log('✅ All infrastructure services are healthy:');
+            for (const st of statuses) {
+              console.log(`   - ${st.service}: ${st.status || st.health || 'healthy'}`);
+            }
             console.log(`   - minio-init: ${minioInit.status}`);
+            process.exit(0);
           }
-          process.exit(0);
         }
       }
     } catch (err: any) {
