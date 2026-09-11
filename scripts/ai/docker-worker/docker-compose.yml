@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: shipde-gemini-worker
     volumes:
-      - C:\Users\gumac\AI\shipde-gemini:/workspace
+      - ${SHIPDE_WORKSPACE:-../../..}:/workspace
       - gemini_worker_data:/root/.gemini
     stdin_open: true
     tty: true

@@ -1,6 +1,6 @@
 @echo off
 title Ship De - Antigravity Docker Worker (Account B)
-cd /d C:\Users\gumac\AI\shipde-platform\scripts\ai\docker-worker
+cd /d "%~dp0"
 
 echo ==========================================================
 echo   SHIP DE - DOCKER WORKER (ISOLATED OAUTH - ACCOUNT B)

@@ -1766,103 +1766,6 @@ IMPORTANT: You MUST respond ONLY with valid, raw JSON satisfying the schema. Do 
         Remove-Item -LiteralPath $tempOutNative -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $tempDiagNative -Force -ErrorAction SilentlyContinue
     }
-
-    # 2. Secondary fallback: AgentRouter models via API
-    $agentRouterKey = [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
-    if ([string]::IsNullOrWhiteSpace($agentRouterKey)) {
-        $agentRouterKey = $env:AGENTROUTER_API_KEY
-    }
-    if ([string]::IsNullOrWhiteSpace($agentRouterKey)) {
-        Write-Warning "[REVIEW-FALLBACK] AgentRouter fallback aborted: AGENTROUTER_API_KEY is not configured."
-        return $false
-    }
-
-    $env:ANTHROPIC_AUTH_TOKEN = $agentRouterKey
-    $env:ANTHROPIC_BASE_URL   = "https://agentrouter.org/"
-    $fallbackModels = @("gpt-5.6-sol", "claude-opus-4-8", "glm-5.3")
-    try {
-        foreach ($model in $fallbackModels) {
-            Write-Host ("[REVIEW-FALLBACK] Attempting review via AgentRouter model '{0}' for PR #{1} (HEAD: {2})..." -f $model, $PullRequestNumber, $ReviewHeadSha.Substring(0, 8))
-
-            $tempIn = Join-Path (Get-ShipDeTempDir) "ar-in-$([Guid]::NewGuid().ToString('N')).txt"
-            $tempOut = Join-Path (Get-ShipDeTempDir) "ar-review-$([Guid]::NewGuid().ToString('N')).txt"
-            $tempDiag = Join-Path (Get-ShipDeTempDir) "ar-diag-$([Guid]::NewGuid().ToString('N')).txt"
-            [System.IO.File]::WriteAllText($tempIn, $reviewInstruction, [System.Text.UTF8Encoding]::new($false))
-
-            $proc = $null
-            try {
-                $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c claude.cmd -p --model $model --dangerously-skip-permissions --output-format text < `"$tempIn`"" -WorkingDirectory $codexWorktree -RedirectStandardOutput $tempOut -RedirectStandardError $tempDiag -PassThru -NoNewWindow
-                $hasExited = $false
-                if ($null -ne $proc) {
-                    $hasExited = $proc.WaitForExit(360000)
-                }
-                if (-not $hasExited) {
-                    Write-Warning ("[REVIEW-FALLBACK] Model '{0}' timed out after 360s. Terminating..." -f $model)
-                    if ($null -ne $proc) {
-                        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-                    }
-                    $code = 124
-                } else {
-                    $code = if ($null -ne $proc -and $null -ne $proc.ExitCode) { $proc.ExitCode } else { 0 }
-                }
-
-                $raw = if (Test-Path -LiteralPath $tempOut) { [string](Get-Content -LiteralPath $tempOut -Raw) } else { "" }
-                $diag = if (Test-Path -LiteralPath $tempDiag) { [string](Get-Content -LiteralPath $tempDiag -Raw) } else { "" }
-
-                if ($diag -match "402" -or $diag -match "quota has been exhausted" -or $raw -match "402" -or $diag -match "503" -or $raw -match "503") {
-                    Write-Warning ("[REVIEW-FALLBACK] Model '{0}' returned quota exhaustion or unavailable channel. Trying next model..." -f $model)
-                    continue
-                }
-
-                if (-not [string]::IsNullOrWhiteSpace($raw)) {
-                    $cleanJson = $raw.Trim()
-                    if ($cleanJson -match '(?s)^.*?```(?:json)?\s*(\{.*\})\s*```.*?$') {
-                        $cleanJson = $matches[1].Trim()
-                    }
-
-                    try {
-                        $parsed = ConvertFrom-ShipDeCodexReviewOutput -OutputText $cleanJson
-                        if ($null -ne $parsed -and $null -ne $parsed.Verdict) {
-                            $header = "Reviewed by AgentRouter Fallback ($model)`nReviewed exact head: $ReviewHeadSha`nVerdict: $($parsed.Verdict)`n`n"
-                            if ($parsed.Report -notmatch [regex]::Escape("Reviewed exact head:")) {
-                                $parsed.Report = $header + $parsed.Report
-                            }
-
-                            $cleanPayload = [PSCustomObject]@{
-                                verdict  = $parsed.Verdict
-                                summary  = $parsed.Summary
-                                findings = @($parsed.Findings)
-                                report   = $parsed.Report
-                            } | ConvertTo-Json -Depth 10
-
-                            [System.IO.File]::WriteAllText($ReviewFile, $cleanPayload, [System.Text.UTF8Encoding]::new($false))
-                            try {
-                                [System.IO.File]::WriteAllText($ExecutionFile, "[AgentRouter Fallback: $model]`n$cleanPayload", [System.Text.UTF8Encoding]::new($false))
-                            } catch {
-                                Write-Warning ("[REVIEW-FALLBACK] Could not write execution log: {0}" -f $_.Exception.Message)
-                            }
-                            Write-Host ("[REVIEW-FALLBACK] Successfully completed review via '{0}'! Verdict: {1}" -f $model, $parsed.Verdict)
-                            return $true
-                        }
-                    } catch {
-                        Write-Warning ("[REVIEW-FALLBACK] Model '{0}' output failed schema validation: {1}" -f $model, $_.Exception.Message)
-                    }
-                } else {
-                    $diagTrimmed = if (-not [string]::IsNullOrWhiteSpace($diag)) { $diag.Trim() } else { "(no stderr output)" }
-                    Write-Warning ("[REVIEW-FALLBACK] Model '{0}' returned exit code {1}: {2}" -f $model, $code, $diagTrimmed)
-                }
-            } finally {
-                Remove-Item -LiteralPath $tempIn -Force -ErrorAction SilentlyContinue
-                Remove-Item -LiteralPath $tempOut -Force -ErrorAction SilentlyContinue
-                Remove-Item -LiteralPath $tempDiag -Force -ErrorAction SilentlyContinue
-            }
-        }
-    } finally {
-        $env:ANTHROPIC_AUTH_TOKEN = $originalEnv.ANTHROPIC_AUTH_TOKEN
-        $env:ANTHROPIC_BASE_URL   = $originalEnv.ANTHROPIC_BASE_URL
-        $env:CLAUDE_CONFIG_DIR    = $originalEnv.CLAUDE_CONFIG_DIR
-    }
-
     return $false
 }
 
@@ -2005,11 +1908,11 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
         try {
             $ErrorActionPreference = "Continue"
             $codexProc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c codex $($codexArgs -join ' ') < `"$tempCodexIn`"" -WorkingDirectory $script:Paths.Codex -RedirectStandardOutput $executionFile -RedirectStandardError $diagnosticFile -PassThru -NoNewWindow
-            $completedInTime = $codexProc.WaitForExit(20000)
+            $completedInTime = $codexProc.WaitForExit(600000)
             if ($completedInTime) {
                 $exitCode = $codexProc.ExitCode
             } else {
-                Write-Warning "Codex review process timed out after 20s (network/connection hung). Terminating and falling back..."
+                Write-Warning "Codex review process timed out after 600s (network/connection hung). Terminating and falling back..."
                 Stop-Process -Id $codexProc.Id -Force -ErrorAction SilentlyContinue
                 $exitCode = 124
             }
@@ -2825,27 +2728,9 @@ function Get-ShipDeExactHeadCodexVerdict {
         return $null
     }
 
-    # 1. Recover exact-commit verdict from local Codex review artifact if present
-    $localReviewFiles = @(Get-ChildItem -Path $script:HandoffRoot -Filter "pr-$PullRequestNumber-*-codex-review.txt" -ErrorAction SilentlyContinue)
-    foreach ($rf in $localReviewFiles) {
-        $text = Get-Content -Raw -Path $rf.FullName -ErrorAction SilentlyContinue
-        if (-not [string]::IsNullOrWhiteSpace($text)) {
-            $targetMatch = [regex]::Match($text, '(?im)(?:Review target|Reviewed exact head|Reviewed immutable head|Reviewed commit)\s*:\s*([a-f0-9]{7,40})')
-            if ($targetMatch.Success) {
-                $targetSha = $targetMatch.Groups[1].Value
-                $match = ($targetSha -ieq $HeadSha) -or ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase)) -or ($targetSha.StartsWith($HeadSha, [System.StringComparison]::OrdinalIgnoreCase))
-                if ($match) {
-                    $verdictMatch = [regex]::Match($text, '(?im)(?:^Verdict|"verdict")\s*:\s*"?\s*(PASS|CHANGES_REQUIRED|BLOCKED)\b')
-                    if ($verdictMatch.Success) {
-                        return $verdictMatch.Groups[1].Value.ToUpperInvariant()
-                    }
-                }
-            }
-        }
-    }
-
-    # 2. Recover exact-commit verdict from GitHub durable review and comment records
+    # Recover exact-commit verdict from GitHub durable review and comment records
     # using newest trusted bot evidence (chatgpt-codex-connector[bot]), rejecting equal-time conflicts.
+    # Local Codex CLI / AO results are diagnostic only and must not authorize durable PASS or advance state.
     $githubVerdict = Get-ShipDeGitHubExactHeadCodexVerdict -PullRequestNumber $PullRequestNumber -HeadSha $HeadSha -AuthorLogin $AuthorLogin -RepoOwner $RepoOwner
     if ($githubVerdict) {
         return $githubVerdict
