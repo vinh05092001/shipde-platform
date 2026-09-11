@@ -173,7 +173,7 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     S3_REGION: 'us-east-1',
     S3_ACCESS_KEY: 'minioadmin',
     S3_SECRET_KEY: 'minioadmin',
-    S3_BUCKET: 'shipde-test',
+    S3_BUCKET: process.env.S3_BUCKET || 'shipde-local',
     S3_FORCE_PATH_STYLE: true,
     CARRIER_MODE: 'mock',
     LOG_LEVEL: 'info',

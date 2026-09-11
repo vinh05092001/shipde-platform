@@ -67,6 +67,7 @@ services:
       /bin/sh -c "
       /usr/bin/mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
       /usr/bin/mc mb --ignore-existing local/${S3_BUCKET:-shipde-local};
+      /usr/bin/mc mb --ignore-existing local/shipde-test;
       exit 0;
       "
 

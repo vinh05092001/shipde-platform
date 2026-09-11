@@ -1399,7 +1399,11 @@ async function runWorkerTests() {
 
       // 6.12 StorageService HeadBucketCommand check (Finding 9)
       console.log('Testing StorageService bucket-scoped HeadBucketCommand check...');
-      const storageService = new StorageService(config);
+      const storageConfig = {
+        ...config,
+        S3_BUCKET: process.env.S3_BUCKET || config.S3_BUCKET || 'shipde-local',
+      };
+      const storageService = new StorageService(storageConfig);
       const storageReadiness = await storageService.checkReadiness(2000);
       if (storageReadiness !== 'up') {
         throw new Error(

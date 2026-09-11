@@ -82,10 +82,25 @@ export async function waitForInfrastructure(): Promise<void> {
         });
 
         const allHealthy = statuses.every((st) => st.isHealthy);
-        if (allHealthy) {
+        const minioInit = serviceMap.get('minio-init');
+        const minioInitStatus = (minioInit?.status || '').toLowerCase();
+        const minioInitDone = !minioInit || minioInitStatus.includes('exited (0)');
+
+        if (
+          minioInit &&
+          minioInitStatus.includes('exited (') &&
+          !minioInitStatus.includes('exited (0)')
+        ) {
+          throw new Error(`minio-init container failed with status: ${minioInit.status}`);
+        }
+
+        if (allHealthy && minioInitDone) {
           console.log('✅ All infrastructure services are healthy:');
           for (const st of statuses) {
             console.log(`   - ${st.service}: ${st.status || st.health || 'healthy'}`);
+          }
+          if (minioInit) {
+            console.log(`   - minio-init: ${minioInit.status}`);
           }
           process.exit(0);
         }
