@@ -1,0 +1,208 @@
+# FEAT-AUTH-01 — Self-registration
+
+## Control
+
+| Field | Value |
+|---|---|
+| Work Item ID | `FEAT-AUTH-01` |
+| Feature ID | `FEAT-AUTH-01` |
+| Status | `READY_FOR_AUTHOR` |
+| Delivery order | `5` |
+| Dependencies | `TASK-FOUND-04` — `MERGED` by PR `#13` at `9d101f4e5d9de9b880cc4311126ce8fe06de4206` (confirmed on `origin/main`; also depends transitively on `TASK-FOUND-03` `MERGED` by PR `#8` at `ff1dbc770257b1a581b51951ab481ad037ed3ed1`) |
+| Assigned author | `GEMINI` |
+| Risk | `HIGH` |
+| Allowed paths | `docs/product-spec/work-items/FEAT-AUTH-01.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/02-business/USE-CASES.md`; `docs/product-spec/docs/02-business/BUSINESS-RULES-DECISION-TABLES.md`; `docs/product-spec/docs/02-business/STATE-MACHINES.md`; `docs/product-spec/docs/03-ux/SCREEN-SPECIFICATIONS.md`; `docs/product-spec/docs/03-ux/INFORMATION-ARCHITECTURE.md`; `docs/product-spec/docs/04-data/DATA-DICTIONARY.md`; `docs/product-spec/docs/08-testing/ACCEPTANCE-AND-E2E.md`; `docs/product-spec/docs/00-control/TRACEABILITY.md`; `docs/product-spec/contracts/openapi.yaml`; `prisma/schema.prisma`; `prisma/migrations/**`; `apps/api/**`; `apps/web/src/components/auth/**`; `apps/web/src/context/AuthContext.tsx`; `apps/web/src/app/register/**`; `packages/contracts/**`; `packages/testkit/**`; `infra/docker/seed.ts` |
+| Reviewer | `Codex — fresh independent task` |
+| Branch | `feat/feat-auth-01-self-registration` |
+| Pull Request | `<none yet>` |
+
+## Business outcome
+
+A prospective shop owner who is not yet a Ship Dễ user can create a new shop (tenant) and become its first `OWNER` user directly from the public web console, without any administrator or manual step. This is the entry point of the platform's primary journey (`PRODUCT-VISION-SCOPE.md` — "Definition of full product": *Create shop → connect carrier → create/import order → ...*). Until this Work Item ships, the platform has no self-service way to onboard a first tenant on the target `apps/api` backend; `FEAT-ONB-01` (guided onboarding) and every later shop-scoped feature depend on an account existing first.
+
+The registration must verify at least one contact channel (email or phone) before the account is usable, require explicit Terms of Service/Privacy Policy acceptance, and apply anti-abuse controls (rate limiting, duplicate-account prevention) — the three behaviors named for this feature in `MASTER-FEATURE-CATALOG.md`.
+
+## Source references
+
+Existing, directly authoritative:
+
+- `docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md:9` — `FEAT-AUTH-01` "Self-registration — Email/phone verification, terms acceptance, anti-abuse".
+- `docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md:10` — `FEAT-AUTH-02` "Admin-created shop account — Operator can create initial owner without public signup" (sibling, still `BLOCKED_BY_FOUNDATION`; confirms FEAT-AUTH-01 is specifically the *public self-service* path and must not assume the admin-created path exists yet).
+- `docs/product-spec/docs/01-product/PRODUCT-VISION-SCOPE.md` — "Definition of full product" journey starts with "Create shop"; "Boundaries" — "No cross-tenant access."
+- `docs/product-spec/docs/03-ux/INFORMATION-ARCHITECTURE.md:46` — `SCR-AUTH-02` route `/register`, "Đăng ký".
+- `docs/product-spec/docs/02-business/USE-CASES.md:7-16` — `UC-AUTH-01` Log in (adjacent use case; login's precondition "active, verified account" is the exact postcondition this Work Item must produce).
+- `docs/product-spec/docs/08-testing/ACCEPTANCE-AND-E2E.md:5-7` — `AC-AUTH-01` (login acceptance; pattern to follow for the new `AC-AUTH-02`).
+- `docs/product-spec/docs/04-data/DATA-DICTIONARY.md:5-15` — Tenant/User/Membership fields, including `User.status` enum `INVITED/ACTIVE/SUSPENDED/DISABLED` (no pending-verification value defined yet — see Business rules).
+- `docs/product-spec/docs/05-api-integrations/INTERNAL-API.md:19` — `/auth` prefix purpose: "Register, verify, login, MFA, refresh, logout, recovery."
+- `docs/product-spec/docs/05-api-integrations/ERROR-IDEMPOTENCY-RETRY.md` — canonical error classes (`VALIDATION_ERROR`, `FORBIDDEN`, `CONFLICT`, ...); no generic (non-carrier) rate-limit code exists yet.
+- `docs/product-spec/docs/06-architecture/SECURITY-NFR-OBSERVABILITY.md:5` — "Password hashing with a current memory-hard algorithm."; line 16 — "Rate limit auth, OTP, public tracking and webhook routes."; line 59 — "No password, OTP, token, full bank data or unmasked recipient PII" in logs.
+- `docs/product-spec/docs/03-ux/SCREEN-SPECIFICATIONS.md:1-13` — shared screen contract (loading/empty/error/forbidden/validation, dirty-form warning, submit lock/idempotency) that `SCR-AUTH-02` must satisfy.
+- `docs/product-spec/docs/03-ux/SCREEN-SPECIFICATIONS.md:15-26` — `SCR-AUTH-01` Login, for downstream consistency (same identifier conventions, unverified/suspended state language).
+- `docs/product-spec/docs/07-ai-build/DEFINITION-OF-READY-DONE.md` — Feature DoR/DoD gates applied below.
+- `docs/product-spec/docs/00-control/GLOSSARY.md:5-9` — Shop/Tenant/Branch/Warehouse definitions.
+- `docs/product-spec/contracts/openapi.yaml` — current `/auth/login`, `AuthResponse`, `ErrorResponse`, `Meta` schemas to extend consistently; no `/auth/register` or `/auth/verify*` paths exist yet.
+- `prisma/schema.prisma:108-153` — frozen prototype `Merchant`/`User`/`DeviceSession` models (implementation evidence only, per `AGENTS.md` line 16 — not business authority): no verification timestamps, no terms-acceptance record, no anti-abuse counters, `status` is a free-text string, not the target enum.
+- `apps/web/src/components/auth/RegisterView.tsx` and `apps/web/src/context/AuthContext.tsx` — existing prototype self-registration UI/client (implementation evidence only; client-only mock, no backend, hard-coded default field values). Must not be presented as complete; reusable only where it satisfies the screen contract.
+- `packages/testkit/src/carriers/**`, `packages/testkit/src/msw/**` (established by `TASK-FOUND-04`) — deterministic mock pattern to replicate for a new deterministic email/SMS verification adapter mock (no such mock exists yet).
+
+Gaps this Work Item must close as part of its own deliverable (per `TRACEABILITY.md`: "New CORE feature IDs cannot be merged without a traceability row"; per `DEFINITION-OF-READY-DONE.md`: "Feature/use-case/rule/screen IDs exist"). No pre-existing document defines these; the IDs below are proposed by this Work Item and become authoritative only once the author adds them to the named documents in the same Pull Request, and Codex review confirms they do not contradict any other approved source:
+
+- `UC-AUTH-02` Self-register — add to `USE-CASES.md` following the `UC-AUTH-01` format.
+- `BR-AUTH-01`..`BR-AUTH-08` — add to `BUSINESS-RULES-DECISION-TABLES.md` (defined below in "Business rules and edge cases").
+- `SCR-AUTH-02` full field/state spec — expand in `SCREEN-SPECIFICATIONS.md` (today only a route/title row exists).
+- `AC-AUTH-02` — add to `ACCEPTANCE-AND-E2E.md` following the `AC-AUTH-01` format.
+- `ST-USER` registration-relevant states (`PENDING_VERIFICATION` before `ACTIVE`) — add to `STATE-MACHINES.md` and to the `User.status` enum in `DATA-DICTIONARY.md`.
+- A `FEAT-AUTH-01`-specific row in `TRACEABILITY.md` (the current single `FEAT-AUTH` row only covers login `UC-AUTH-01`/`AC-AUTH-01`).
+- `API-AUTH-REGISTER`, `API-AUTH-VERIFY-EMAIL`, `API-AUTH-VERIFY-PHONE` (or equivalent operation IDs) in `contracts/openapi.yaml`.
+
+## Preconditions and dependencies
+
+- `TASK-FOUND-04` is `MERGED` on `origin/main` (`9d101f4e5d9de9b880cc4311126ce8fe06de4206`, PR #13): OpenAPI-generated `@shipde/contracts`, `pnpm contract:check` drift gate, `@shipde/testkit` deterministic mocks/MSW handlers, Supertest/NestJS harness for `apps/api`, DB reset/seed scripts, and the full CI quality-gate set are available and must be used, not re-invented.
+  - Note: `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` row 19 (`TASK-FOUND-04`) still reads `status="READY_FOR_CODEX"` — this is stale relative to `origin/main`/PR #13 evidence above. This planning task's mandate covers only the `FEAT-AUTH-01` row (see AGENTS.md/CODEX-PLANNING-PROMPT: "Do not change another row"); the `TASK-FOUND-04` row correction is flagged here for the human/controller to reconcile separately, it is not blocking this Work Item because the dependency is objectively `MERGED` on `origin/main`.
+- `TASK-FOUND-03` is `MERGED` (`ff1dbc770257b1a581b51951ab481ad037ed3ed1`, PR #8): `apps/api` NestJS service, Postgres/Redis/S3 local infra, Prisma wiring, health checks.
+- No verified email/SMS delivery provider is connected or required for this Work Item. Per `DEFINITION-OF-READY-DONE.md` ("Dependency is complete or explicitly mocked under contract") and the `TASK-FOUND-04` precedent for carrier adapters, the author must add a deterministic, swappable verification-delivery adapter interface with a `@shipde/testkit` mock implementation (fixed OTP/token capture, no outbound network), and leave the real provider behind a documented, unimplemented seam (`CARRIER_UNAVAILABLE`-style explicit "not configured" outcome, never a silent no-op).
+- Prisma schema currently models the tenant as `Merchant`, not `Tenant`; this Work Item extends `Merchant`/`User` in place (adding verification/terms/anti-abuse fields) rather than renaming, to avoid an unrelated cross-cutting rename outside this feature's scope.
+
+## Author boundary
+
+`GEMINI` is required, not `9ROUTER`, because this Work Item fails every 9Router precondition in `AGENTS.md`:
+
+- It is authentication and tenant-provisioning (explicitly listed as a `GEMINI`-only domain).
+- It creates the first row of a new tenant boundary (`Merchant`/`User`/`Membership`), a security/tenancy decision, not bounded CRUD.
+- It touches password hashing, verification-token issuance and anti-abuse/rate-limiting — none of these have a fully deterministic, pre-specified implementation to "prove completion" mechanically; judgment on secure defaults is required.
+- It spans frontend (`SCR-AUTH-02` full state coverage), backend (`/auth/register` + verification endpoints), persistence (migration), and new deterministic test mocks — cross-layer, not a small bounded change.
+- Failure cannot be safely escalated from a partial external effect: a half-created tenant/user row is a data-integrity and security concern, not a safely abandonable side effect.
+
+Consequential decisions that remain for human confirmation during PR review (the author must implement a defensible default per the citations in "Source references" above, but must not treat these as silently closed):
+
+1. Whether email verification and phone verification are both mandatory, or whether verifying either channel is sufficient to reach `ACTIVE` (this Work Item's default, per rule `BR-AUTH-02` below, is "at least one verified channel," mirroring `DATA-DICTIONARY.md`'s "at least one verified login identifier").
+2. The concrete anti-abuse thresholds (attempt counts, lockout windows) — defaults are proposed in `BR-AUTH-07`/`BR-AUTH-08` below and must be confirmed, not silently hardened or loosened, during Codex/human review.
+3. Real email/SMS provider selection remains explicitly out of scope (mock-only in this Work Item); a follow-up Work Item is required before production traffic.
+
+## In scope
+
+- Public, unauthenticated `POST /auth/register` command: shop/merchant name, owner full name, owner email, owner phone, password, terms acceptance flag, terms version.
+- Creation of exactly one `Merchant` (tenant) row and exactly one `User` row with role `OWNER` in a single transaction; no partial tenant without an owner and no partial owner without a tenant.
+- Deterministic verification-delivery adapter (mocked) issuing a single-use, expiring verification token/OTP per channel (email link token and/or phone OTP).
+- `POST /auth/verify-email` and `POST /auth/verify-phone` (or equivalent) commands that mark the corresponding channel verified and, once at least one channel is verified, transition the user out of pending-verification into `ACTIVE`.
+- Resend-verification action with its own rate limit, distinct from the registration attempt limit.
+- Terms of Service / Privacy Policy acceptance capture (version + timestamp), blocking submission until accepted.
+- Anti-abuse controls: per-IP and per-identifier registration rate limiting; duplicate email/phone detection within a tenant-agnostic global uniqueness check (self-registration creates a new tenant, so uniqueness is platform-wide on the login identifier, not tenant-scoped).
+- Full `SCR-AUTH-02` UI state coverage (see "UI states" below), replacing the client-only mock in `RegisterView.tsx`/`AuthContext.tsx` with real API calls, real validation errors, and real loading/success/failure states.
+- Canonical error responses (`VALIDATION_ERROR`, new anti-abuse rate-limit code, duplicate-identifier field error) matching `ErrorResponse` schema and `ERROR-IDEMPOTENCY-RETRY.md` conventions.
+- Audit log entry for account creation and for each verification event, without logging password/OTP/token values, per `SECURITY-NFR-OBSERVABILITY.md:59`.
+- Prisma migration adding the new fields/enum values with a working forward migration (and documented rollback approach) against the existing frozen `Merchant`/`User` models.
+- Deterministic seed/fixture data for automated tests (a pre-registered, pre-verified test account; a pending-verification test account; an expired-token test account).
+- Unit tests (validation, password hashing, token generation/expiry), integration tests (Supertest against `apps/api` with a test database, covering every acceptance row below), and MSW-backed frontend tests for `SCR-AUTH-02` states.
+- Required documentation updates enumerated in "Source references" (`UC-AUTH-02`, `BR-AUTH-*`, `SCR-AUTH-02` full spec, `AC-AUTH-02`, `TRACEABILITY.md` row, `STATE-MACHINES.md` `ST-USER` additions, `openapi.yaml` new paths/schemas).
+
+## Out of scope
+
+- `FEAT-AUTH-02` (admin-created shop account) — separate Work Item, separate branch.
+- `FEAT-AUTH-03` (login), `FEAT-AUTH-04` (password recovery), `FEAT-AUTH-05` (MFA), `FEAT-AUTH-06` (session management) — this Work Item only produces an `ACTIVE`, loggable-in account; it does not implement the login flow itself, password reset, MFA enrollment, or session listing/revocation. It may reuse (not duplicate) any password-hashing/session-issuance utility only if already merged; otherwise stub the minimum needed to prove the account is usable (e.g., a documented direct session issuance at the end of registration is acceptable, but building out the full login screen is not).
+- `FEAT-USR-01`/`FEAT-USR-02` (invitations, user lifecycle for *additional* users of an existing shop) — out of scope; this Work Item only creates the first `OWNER`.
+- `FEAT-ORG-01` (shop profile: legal/billing/operating defaults) and `FEAT-ONB-01` (guided onboarding wizard) — registration collects only the minimum identity fields listed in "In scope"; it must not silently fold in shop profile or onboarding-wizard fields.
+- `FEAT-RBAC-01`/`FEAT-RBAC-02` (custom roles, scope assignment) — the `OWNER` role granted here uses the already-decided default role name only; no role/permission editor.
+- Real email/SMS provider integration, deliverability, or spend — mock adapter only (see "Preconditions and dependencies").
+- CAPTCHA/bot-detection vendor selection — anti-abuse in this Work Item is limited to deterministic server-side rate limiting and duplicate-identifier detection; do not add a third-party CAPTCHA dependency without a separate decision.
+- Social/SSO registration — not requested by any source document.
+- Any change to `apps/web` routes/components outside `apps/web/src/components/auth/**`, `apps/web/src/context/AuthContext.tsx`, and the new `/register` route/page.
+
+## Business rules and edge cases
+
+- `BR-AUTH-01`: Registration requires shop/merchant name, owner full name, at least one of email/phone (both may be provided), a password meeting the minimum policy (`BR-AUTH-05`), and explicit terms acceptance (`BR-AUTH-04`). Missing any required field returns `VALIDATION_ERROR` with per-field detail in `ErrorResponse.error.fields`.
+- `BR-AUTH-02`: The new user starts in a pending-verification status (new `PENDING_VERIFICATION` value, added to `User.status`) and is not usable to log in until at least one contact channel (email or phone) is verified; verifying the second channel, if provided, is optional but recorded.
+- `BR-AUTH-03`: Email and phone are globally unique login identifiers across the platform (not per-tenant), consistent with each self-registration creating a brand-new tenant. Submitting an already-registered, already-verified identifier returns a field-level `VALIDATION_ERROR` without confirming which specific record exists beyond "already in use" (do not leak whether the match is by email or phone-only if the client only submitted one; do leak which submitted field collided, since the user supplied it themselves). Submitting an identifier that exists but is still unverified re-issues a verification token to that same pending account instead of creating a duplicate row.
+- `BR-AUTH-04`: Terms acceptance is mandatory; the accepted terms version and acceptance timestamp are persisted with the user record. A request with `terms_accepted=false` or a missing/unknown `terms_version` is rejected with `VALIDATION_ERROR`.
+- `BR-AUTH-05`: Passwords are hashed with a current memory-hard algorithm before storage (per `SECURITY-NFR-OBSERVABILITY.md:5`); the plaintext password is never persisted, logged, or returned. Minimum policy: at least 8 characters. The author documents the exact chosen algorithm/parameters in the PR evidence.
+- `BR-AUTH-06`: A verification token/OTP is single-use, expires after a bounded window, and once consumed cannot be replayed. An expired or already-consumed token returns a distinct, explicit error (not the generic `VALIDATION_ERROR` used for form input) so the UI can offer "resend" rather than "re-enter form."
+- `BR-AUTH-07`: Registration attempts are rate-limited per source IP and per submitted identifier (email/phone), per `SECURITY-NFR-OBSERVABILITY.md:16` ("Rate limit auth, OTP, public tracking and webhook routes"). Exceeding the limit returns a new canonical rate-limit error code (extending `ERROR-IDEMPOTENCY-RETRY.md`'s taxonomy with a generic, non-carrier `RATE_LIMITED`) with a `retryable=true` and a next-allowed-time hint; it must not silently drop the request or return a misleading success.
+- `BR-AUTH-08`: Resend-verification has its own, separate rate limit from initial registration, so a legitimate user retrying a lost email cannot be blocked by the registration-attempt limit alone, while still being bounded to prevent enumeration/spam.
+- `BR-AUTH-09` (audit): Successful registration, each verification success/failure, and each rate-limit rejection produce an audit/security event with actor (anonymous + hashed IP), action, resource, and timestamp, but never the password, OTP, or verification token value, per `SECURITY-NFR-OBSERVABILITY.md:59`.
+- `BR-AUTH-10` (idempotency/concurrency): Two concurrent registration submissions with the same not-yet-verified identifier must not create two `Merchant`/`User` pairs; the second request is treated per `BR-AUTH-03`'s "exists but unverified" branch (re-issue verification), not a duplicate create.
+- Negative paths explicitly covered: missing required field; weak/short password; unaccepted terms; duplicate verified identifier; duplicate unverified identifier (re-issue path); expired verification token; already-consumed verification token; rate limit exceeded on registration; rate limit exceeded on resend; verification-delivery adapter reporting an explicit failure (must surface a recoverable error, never a false "email sent" success).
+
+## UI states
+
+`SCR-AUTH-02` (`/register`) must implement the shared screen contract (`SCREEN-SPECIFICATIONS.md:1-13`) plus:
+
+- **Loading**: submit-in-progress lock on the primary action (button disabled + spinner), preventing duplicate submits (client-side complement to `BR-AUTH-10`).
+- **Empty/default**: clean form, no pre-filled production-like defaults (the current prototype's hard-coded `owner@ananboutique.vn` sample values must not ship as real placeholders/defaults — use empty inputs with placeholder text only).
+- **Validation**: field-level errors sourced from `ErrorResponse.error.fields`, mapped next to each input; terms checkbox required before submit is enabled or clearly blocks submission with an explicit message.
+- **Duplicate-identifier error**: distinct, actionable message ("this email/phone is already registered") with a link to login, not a generic form error.
+- **Rate-limited error**: distinct message explaining the retry window, not shown as a validation error.
+- **Verification-pending success state**: after successful registration, an explicit "check your email/phone" pending screen (not a silent redirect to a working dashboard), with a working resend action and its own loading/cooldown/error states.
+- **Verification error states**: expired-token and already-consumed-token screens/messages, each offering "resend verification" distinctly from "go back to the form."
+- **Verification success**: explicit confirmation leading into session start (or to `SCR-AUTH-01` login per the "Out of scope" boundary, if session auto-start is not implemented this round — the author must pick one and document it, not leave a dead end).
+- **Recovery**: dirty-form navigation warning per the shared screen contract; a network/server error mid-submit must not lose entered field values.
+- **Forbidden/not-found**: N/A for the anonymous registration route itself, but the verification-link route must handle an invalid/garbled token as a distinct not-found-equivalent state, not a crash.
+
+## API, event and data impact
+
+- New `POST /auth/register` (operation id `register`), unauthenticated (`security: []`), request body a new `RegisterRequest` schema (merchant name, full name, email, phone, password, terms_accepted, terms_version), response `201` with a `RegistrationResponse` (`data.status: PENDING_VERIFICATION`, `data.user_id`, `data.merchant_id`, no access token until verified), `400` `VALIDATION_ERROR`/duplicate via `ErrorResponse`, and the new `429`-equivalent canonical rate-limit error.
+- New `POST /auth/verify-email` and `POST /auth/verify-phone` (or a combined `POST /auth/verify` with a `channel` discriminator — author's choice, documented), unauthenticated, token/OTP in the body, `200` success transitioning to `ACTIVE` when it is the first verified channel, `400`/`410`-equivalent for expired/consumed token via `ErrorResponse`.
+- New `POST /auth/verify/resend` with its own rate limit (`BR-AUTH-08`).
+- Extend `contracts/openapi.yaml`: new paths above; new schemas `RegisterRequest`, `RegistrationResponse`, `VerifyRequest`; extend `AuthResponse`/error taxonomy documentation for the new rate-limit code; regenerate `@shipde/contracts` via `pnpm contract:generate` and pass `pnpm contract:check` with zero drift.
+- Prisma migration on `prisma/schema.prisma`: extend `User.status` to include `PENDING_VERIFICATION` (replacing/extending the current free-text default); add `email_verified_at`, `phone_verified_at`, `terms_accepted_at`, `terms_version`, and fields needed for verification-token storage (or a dedicated `VerificationToken` model) and anti-abuse counters (or a dedicated `RegistrationAttempt`/rate-limit store, which may live in Redis instead of Postgres — author's choice, documented). Include a forward migration under `prisma/migrations/**` and confirm `pnpm db:generate`/`pnpm db:migrate` succeed from a clean checkout.
+- No existing endpoint's documented request/response shape changes; this is additive only, so no consumer-compatibility break is expected. `pnpm contract:check` is the authoritative proof.
+- Audit event/log entries per `BR-AUTH-09`, written through the existing audit/log pattern established in `apps/api` (extend, do not fork, the mechanism used elsewhere in `apps/api/src`).
+- Deterministic verification-delivery adapter: a new `packages/testkit` mock (mirroring the carrier-mock pattern from `TASK-FOUND-04`) that captures issued tokens/OTPs for assertions instead of sending real email/SMS.
+
+## Acceptance matrix
+
+| AC/Test ID | Scenario | Expected result | Evidence required |
+|---|---|---|---|
+| `AC-AUTH-02-01` | Valid registration with email only, terms accepted | `201`, `Merchant`+`User(OWNER, PENDING_VERIFICATION)` created, verification token issued via mock adapter | Supertest integration test log |
+| `AC-AUTH-02-02` | Valid registration with phone only, terms accepted | Same as above via phone channel | Supertest integration test log |
+| `AC-AUTH-02-03` | Missing required field (e.g. password) | `400 VALIDATION_ERROR` with field-level detail; no rows created | Supertest integration test log |
+| `AC-AUTH-02-04` | Terms not accepted | `400 VALIDATION_ERROR`; no rows created | Supertest integration test log |
+| `AC-AUTH-02-05` | Duplicate already-verified email | `400 VALIDATION_ERROR` field error on `email`; no new rows created | Supertest integration test log |
+| `AC-AUTH-02-06` | Duplicate unverified email (retry) | Existing pending account re-issued a new verification token; no duplicate `User` row | Supertest integration test log |
+| `AC-AUTH-02-07` | Verify with valid, unexpired token | User transitions `PENDING_VERIFICATION` → `ACTIVE`; channel `*_verified_at` set | Supertest integration test log |
+| `AC-AUTH-02-08` | Verify with expired token | Explicit expired-token error, distinct from validation error; user remains pending | Supertest integration test log |
+| `AC-AUTH-02-09` | Verify with already-consumed token (replay) | Explicit error; no state change; no duplicate audit success event | Supertest integration test log |
+| `AC-AUTH-02-10` | Registration rate limit exceeded (same IP/identifier) | New canonical rate-limit error, `retryable=true`; no row created on the blocked attempt | Supertest integration test log |
+| `AC-AUTH-02-11` | Resend-verification rate limit exceeded | Distinct rate-limit error from `AC-AUTH-02-10`, does not consume the registration-attempt budget | Supertest integration test log |
+| `AC-AUTH-02-12` | Concurrent duplicate submissions, same unverified identifier | Exactly one `Merchant`/`User` pair persists (`BR-AUTH-10`) | Integration test with concurrent requests |
+| `AC-AUTH-02-13` | Password hashing | Stored value is a memory-hard hash, never the plaintext; plaintext absent from logs | Unit test + log inspection |
+| `AC-AUTH-02-14` | `SCR-AUTH-02` full state coverage | Loading, empty, validation, duplicate, rate-limited, pending-verification, verify-error, verify-success, recovery states all render distinctly | Playwright/MSW test + screenshots |
+| `AC-AUTH-02-15` | `openapi.yaml` drift | New paths/schemas match generated `@shipde/contracts` exactly | `pnpm contract:check` output |
+| `AC-AUTH-02-16` | Documentation sync | `UC-AUTH-02`, `BR-AUTH-01..10`, `SCR-AUTH-02` full spec, `AC-AUTH-02-*`, `TRACEABILITY.md` row, `STATE-MACHINES.md` `ST-USER` update all present | Diff review against this Work Item |
+
+## Verification commands
+
+Run from a clean checkout, on the prepared branch, after implementation:
+
+```
+pnpm install --frozen-lockfile
+pnpm db:generate
+pnpm contract:check
+pnpm lint
+pnpm format:check
+pnpm typecheck
+pnpm test
+pnpm test:e2e
+pnpm test:baseline
+pnpm security:secrets
+pnpm build
+```
+
+Additionally, for this Work Item specifically:
+
+```
+pnpm --filter @shipde/api test -- --testPathPattern=auth
+pnpm test:integration
+```
+
+## Codex review record
+
+| Review round | Commit | Verdict | Findings resolved |
+|---|---|---|---|
+| — | — | — | Not yet implemented; no Pull Request opened |
+
+## Residual limitations
+
+- `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` row 19 (`TASK-FOUND-04`) still shows `status="READY_FOR_CODEX"` although `origin/main`/PR #13 evidence confirms it is merged (`9d101f4e5d9de9b880cc4311126ce8fe06de4206`). This planning task updates only the `FEAT-AUTH-01` row per its mandate; the `TASK-FOUND-04` row reconciliation is a separate, non-blocking housekeeping item for the human/controller. Owner: human/controller. Risk: low (documentation-only staleness, does not affect this dependency being satisfied). Next action: reconcile that row (status `MERGED`, PR `#13`, merge commit `9d101f4e5d9de9b880cc4311126ce8fe06de4206`) in a separate, explicitly scoped change.
+- `UC-AUTH-02`, `BR-AUTH-01..10`, the full `SCR-AUTH-02` spec, `AC-AUTH-02-*`, and the dedicated `FEAT-AUTH-01` `TRACEABILITY.md` row do not exist in the approved source documents yet; they are proposed by this Work Item (see "Source references" — Gaps) and become authoritative only once the assigned author adds them to the named documents in the implementation Pull Request and Codex review confirms no conflict with other approved sources. Owner: `GEMINI` (author), verified by Codex reviewer. Risk: medium — if review finds a proposed rule conflicts with a later-discovered source, the PR must be corrected before merge, not merged with a silent contradiction.
+- Real email/SMS delivery provider is not selected or integrated; only a deterministic mock adapter ships in this Work Item. Owner: product/human. Risk: medium — production self-registration cannot go live until a provider decision is made and integrated in a follow-up Work Item. Next action: separate Work Item after a human provider decision.
+- Exact anti-abuse thresholds (`BR-AUTH-07`/`BR-AUTH-08` windows/counts) and password minimum policy (`BR-AUTH-05`) are proposed defaults grounded in the cited security/NFR sources but not independently pre-approved numeric values. Owner: human, confirmed during PR review. Risk: low — conservative defaults are safe to ship and can be tuned without a schema change if implemented as configuration.
