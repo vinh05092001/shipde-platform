@@ -1526,7 +1526,7 @@ async function runWorkerTests() {
 
       // 6.15 Safe Database Reset Fail-Closed Guards (Round 6 Finding 1)
       console.log('Testing assertSafeDatabaseReset fail-closed guards...');
-      const { assertSafeDatabaseReset } = await import('../../infra/docker/reset-db');
+      const { assertSafeDatabaseReset } = await import('../../../infra/docker/reset-db');
 
       // Reject in production
       let caughtProd = false;
