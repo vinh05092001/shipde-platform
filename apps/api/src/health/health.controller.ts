@@ -1,4 +1,4 @@
-import { Controller, Get, Req, Res } from '@nestjs/common';
+import { Controller, Get, Req, Res, Inject } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { HealthService } from './health.service';
 import { LivenessResponse, ReadinessResponse } from '@shipde/contracts';
@@ -6,7 +6,7 @@ import { normalizeCorrelationId } from '@shipde/config';
 
 @Controller('health')
 export class HealthController {
-  constructor(private readonly healthService: HealthService) {}
+  constructor(@Inject(HealthService) private readonly healthService: HealthService) {}
 
   @Get('live')
   getLive(@Req() req: Request): LivenessResponse {

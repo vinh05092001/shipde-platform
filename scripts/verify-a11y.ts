@@ -1,4 +1,4 @@
-﻿import * as fs from 'fs';
+import * as fs from 'fs';
 import * as path from 'path';
 
 export interface A11yCheckResult {
@@ -10,16 +10,30 @@ export function scanFileForA11y(filePath: string): string[] {
   const content = fs.readFileSync(filePath, 'utf8');
   const violations: string[] = [];
 
-  // Check <img> tags without alt
+  // 1. Check <img> tags without alt attribute
   const imgWithoutAlt = /<img(?![^>]*\balt=)[^>]*>/gi;
   if (imgWithoutAlt.test(content)) {
     violations.push('Found <img> tag missing required alt attribute');
   }
 
-  // Check empty buttons
-  const emptyButton = /<button[^>]*>\s*<\/button>/gi;
+  // 2. Check empty buttons without text or aria-label
+  const emptyButton = /<button(?![^>]*\baria-label=)[^>]*>\s*<\/button>/gi;
   if (emptyButton.test(content)) {
     violations.push('Found empty <button> tag without accessible text or aria-label');
+  }
+
+  // 3. Check interactive elements with aria-hidden="true" (blocks assistive tech)
+  const hiddenInteractive =
+    /<(?:button|a|input|select|textarea)[^>]*\baria-hidden=["']true["'][^>]*>/gi;
+  if (hiddenInteractive.test(content)) {
+    violations.push('Found interactive element incorrectly marked with aria-hidden="true"');
+  }
+
+  // 4. Check icon-only buttons without accessible name
+  const iconOnlyButton =
+    /<button(?![^>]*\b(?:aria-label|title)=)[^>]*>\s*<[A-Z][a-zA-Z0-9]*(?:Icon)?(?:\s+[^>]*)?\/>\s*<\/button>/gi;
+  if (iconOnlyButton.test(content)) {
+    violations.push('Found icon-only button without accessible name (missing aria-label or title)');
   }
 
   return violations;
