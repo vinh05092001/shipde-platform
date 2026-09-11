@@ -205,9 +205,15 @@ async function runWorkerTests() {
         }),
         updateMany: async (args: any) => {
           updateManyCalls++;
-          // Ensure query requires status: PROCESSING
-          if (args.where.status !== OutboxStatusEnum.PROCESSING) {
-            throw new Error('updateMany must require status: PROCESSING');
+          // Ensure query requires in-flight status guard
+          const statusClause = args.where.status;
+          const isValidGuard =
+            statusClause === OutboxStatusEnum.PROCESSING ||
+            (statusClause?.in &&
+              Array.isArray(statusClause.in) &&
+              statusClause.in.includes(OutboxStatusEnum.PROCESSING));
+          if (!isValidGuard) {
+            throw new Error('updateMany must require in-flight status guard');
           }
           // First call succeeds (count 1), concurrent call fails (count 0)
           return { count: updateManyCalls === 1 ? 1 : 0 };
@@ -454,7 +460,7 @@ async function runWorkerTests() {
         payload: { smokeId: testSmokeId, message: 'Deduplication smoke test' },
         correlation_id: testCorrelationId,
         idempotency_key: testJobId,
-        status: OutboxStatusEnum.PENDING,
+        status: OutboxStatusEnum.PROCESSING,
       },
     });
 

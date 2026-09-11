@@ -163,11 +163,11 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
         }
 
         // Execute deterministic smoke side effect: transition outbox event to PUBLISHED atomically
-        // Requiring status === PROCESSING prevents read-check-write race between concurrent deliveries (P1 Finding 4)
+        // Requiring in-flight status (PROCESSING or PENDING) prevents read-check-write race between concurrent deliveries (P1 Finding 4)
         const claimEffect = await this.prisma.outboxEvent.updateMany({
           where: {
             id: data.outboxId,
-            status: OutboxStatusEnum.PROCESSING,
+            status: { in: [OutboxStatusEnum.PROCESSING, OutboxStatusEnum.PENDING] },
           },
           data: {
             status: OutboxStatusEnum.PUBLISHED,
