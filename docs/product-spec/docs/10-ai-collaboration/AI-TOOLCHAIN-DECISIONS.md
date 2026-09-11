@@ -8,22 +8,26 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 
 ## Adopted toolchain
 
-| Tool or repository                                                                        | Decision                         | Purpose                                                                      | Boundary                                                                                                    |
-| ----------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Git, GitHub and Git worktrees                                                             | USE NOW                          | Isolated workspaces, durable handoff, CI and review                          | `main` is never an implementation workspace                                                                 |
-| Claude app and Claude Code                                                                | USE NOW                          | Business and solution analysis                                               | Claude Code runs only in `shipde-claude` through AgentRouter; no production implementation or self-approval |
-| AgentRouter                                                                               | USE NOW                          | Direct Claude Code-compatible provider with a user-owned promotional balance | Keep its token outside Git; do not route it through 9Router or assume promotional credit is permanent       |
-| Codex app and Codex CLI                                                                   | USE NOW                          | Work Item planning, documentation and fresh independent review               | Planning and review are separate tasks; no author self-review                                               |
-| Gemini app, Antigravity CLI and [Gemini CLI](https://github.com/google-gemini/gemini-cli) | USE NOW                          | Primary implementation for complete vertical and high-risk work              | Prefer authenticated `agy`; `gemini` is the fallback; one prepared Work Item and branch at a time           |
-| [9Router](https://github.com/decolua/9router)                                             | USE NOW                          | Local OpenAI-compatible gateway, free-model fallback and usage visibility    | Localhost only; Ponytail and Caveman disabled                                                               |
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)                       | USE NOW, PIN                     | Controlled 9Router author workspace                                          | Developer preview; keep `@deepseek-ai/dsh@0.1.1-rc.2` until an upgrade is tested                            |
-| pnpm 11 and Docker Desktop/Compose                                                        | INSTALL NOW                      | Prepare the Node 24 machine for the target monorepo and local infrastructure | Do not migrate the current npm prototype outside its Foundation Work Item                                   |
-| [Playwright](https://github.com/microsoft/playwright)                                     | ADOPT IN `TASK-FOUND-04`         | Browser E2E, trace/video evidence and screenshot comparison                  | Golden images require human-approved baselines                                                              |
-| [Storybook](https://github.com/storybookjs/storybook)                                     | ADOPT IN `TASK-FOUND-04`         | Visible catalog of component states and interaction/accessibility checks     | It documents approved UI; it does not invent the design                                                     |
-| [axe-core](https://github.com/dequelabs/axe-core)                                         | ADOPT IN `TASK-FOUND-04`         | Automated accessibility checks in rendered UI                                | Automated checks supplement, not replace, manual UX review                                                  |
-| [MSW](https://github.com/mswjs/msw)                                                       | ADOPT IN `TASK-FOUND-04`         | Deterministic API and carrier response states for UI/testing                 | Mock behavior is labeled and never presented as live production evidence                                    |
-| [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci)                            | ADOPT IN `TASK-FOUND-04`         | Performance budgets for critical approved routes                             | Targeted CI only; do not consume every local iteration                                                      |
-| [Vercel agent skills](https://github.com/vercel-labs/agent-skills)                        | AUDIT AND PIN IN `TASK-FOUND-04` | React performance and UI review guidance                                     | Only `react-best-practices` and `web-design-guidelines`; Ship Dễ UX sources remain authoritative            |
+| Tool or repository                                                                        | Decision                         | Purpose                                                                      | Boundary                                                                                                                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Git, GitHub and Git worktrees                                                             | USE NOW                          | Isolated workspaces, durable handoff, CI and review                          | `main` is never an implementation workspace                                                                                                                                                                                                                   |
+| Claude app and Claude Code                                                                | USE NOW                          | Business and solution analysis                                               | Interactive analysis stays in `shipde-claude`; unattended AO uses the governed AgentRouter launcher; no self-approval                                                                                                                                         |
+| AgentRouter                                                                               | USE NOW                          | Claude Code-compatible provider and routing runtime                          | Keep upstream credentials outside Git; unattended AO routes via the localhost 9Router endpoint (port 20128) using `%USERPROFILE%\.claude`, while direct AgentRouter access is reserved for the manual `%USERPROFILE%\.claude-orchestrator` diagnostic profile |
+| Codex app and Codex CLI                                                                   | USE NOW                          | Work Item planning, documentation and fresh independent review               | Planning and review are separate tasks; no author self-review                                                                                                                                                                                                 |
+| Gemini app, Antigravity CLI and [Gemini CLI](https://github.com/google-gemini/gemini-cli) | USE NOW                          | Primary implementation for complete vertical and high-risk work              | Prefer authenticated `agy`; `gemini` is the fallback; one prepared Work Item and branch at a time                                                                                                                                                             |
+| [9Router](https://github.com/decolua/9router)                                             | USE NOW                          | Local OpenAI-compatible gateway, free-model fallback and usage visibility    | Localhost only; Ponytail and Caveman disabled                                                                                                                                                                                                                 |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)                       | USE NOW, PIN                     | Controlled 9Router author workspace                                          | Developer preview; keep `@deepseek-ai/dsh@0.1.1-rc.2` until an upgrade is tested                                                                                                                                                                              |
+| pnpm 11 and Docker Desktop/Compose                                                        | INSTALL NOW                      | Prepare the Node 24 machine for the target monorepo and local infrastructure | Do not migrate the current npm prototype outside its Foundation Work Item                                                                                                                                                                                     |
+| [Playwright](https://github.com/microsoft/playwright)                                     | ADOPT IN `TASK-FOUND-04`         | Browser E2E, trace/video evidence and screenshot comparison                  | Golden images require human-approved baselines                                                                                                                                                                                                                |
+| [Storybook](https://github.com/storybookjs/storybook)                                     | ADOPT IN `TASK-FOUND-04`         | Visible catalog of component states and interaction/accessibility checks     | It documents approved UI; it does not invent the design                                                                                                                                                                                                       |
+| [axe-core](https://github.com/dequelabs/axe-core)                                         | ADOPT IN `TASK-FOUND-04`         | Automated accessibility checks in rendered UI                                | Automated checks supplement, not replace, manual UX review                                                                                                                                                                                                    |
+| [MSW](https://github.com/mswjs/msw)                                                       | ADOPT IN `TASK-FOUND-04`         | Deterministic API and carrier response states for UI/testing                 | Mock behavior is labeled and never presented as live production evidence                                                                                                                                                                                      |
+| [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci)                            | ADOPT IN `TASK-FOUND-04`         | Performance budgets for critical approved routes                             | Targeted CI only; do not consume every local iteration                                                                                                                                                                                                        |
+| [Vercel agent skills](https://github.com/vercel-labs/agent-skills)                        | AUDIT AND PIN IN `TASK-FOUND-04` | React performance and UI review guidance                                     | Only `react-best-practices` and `web-design-guidelines`; Ship Dễ UX sources remain authoritative                                                                                                                                                              |
+
+## External orchestration layer
+
+[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is the control layer around the adopted ecosystem, not another adopted repository/provider. Ship Dễ pins the installed Windows runtime at `0.12.12`, checks it with `ao status --json`, and starts it only through `scripts/ai/start-agent-orchestrator.ps1`. Its provenance is recorded in the top-level `orchestrator_runtime` object of `tools/ecosystem-manifest.json`, outside `adopted`.
 
 ## Explicitly not adopted
 
@@ -57,7 +61,10 @@ DSH stores credentials outside the project and keeps only a credential reference
 
 ## AgentRouter provider policy
 
-AgentRouter is used directly by Claude Code for business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. The repository stores no token, provider session or request log. AgentRouter is not chained through 9Router, is not an implementation-author route and its promotional balance is treated as temporary capacity rather than a permanent free entitlement.
+AgentRouter provides Claude model access under two separate topologies:
+
+1. **Manual direct profile (`%USERPROFILE%\.claude-orchestrator`):** Used directly by Claude Code for manual business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. It connects directly to AgentRouter upstream without chaining through 9Router, and is not an implementation-author route. Its promotional balance is treated as temporary capacity rather than a permanent free entitlement. The repository stores no token, provider session or request log.
+2. **Unattended routed topology (`%USERPROFILE%\.claude`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
 
 ## Low-cost model route
 
@@ -180,7 +187,7 @@ Tool usage is governed by 9 task-based activation profiles defined in `tools/eco
 
 Profiles enforce concurrency limits (maximum 1 implementation author and 1 research agent concurrently; 1 writer per Work Item) and invoke automated post-task cleanup (`Stop-ShipDeOptionalServices`).
 
-## Ecosystem Policies (`AI-TOOL-01` to `AI-TOOL-12`)
+## Ecosystem Policies (`AI-TOOL-01` to `AI-TOOL-15`)
 
 1. **AI-TOOL-01**: Installed does not imply integrated, enabled or blocking.
 2. **AI-TOOL-02**: Optional services and MCP servers are stopped by default and after profile completion.
@@ -194,3 +201,79 @@ Profiles enforce concurrency limits (maximum 1 implementation author and 1 resea
 10. **AI-TOOL-10**: A failed or partial installation reports exact state and rollback; it must not be recorded as installed or healthy.
 11. **AI-TOOL-11**: A supplied authoritative version/ref/path is fail closed; no fallback to latest, another branch or a broader filesystem path.
 12. **AI-TOOL-12**: GitHub merged state is reconciled by PR identity and merge SHA; repeated synchronization is a no-op and never rewrites unrelated rows.
+13. **AI-TOOL-13**: AO is a separately versioned external orchestration runtime with canonical source and health check; it is not counted in `adopted`.
+14. **AI-TOOL-14**: TASK-AI-06 through TASK-AI-12 add no repositories or providers. Profile compilation resolves only governed manifest IDs and stops fail-closed when a required capability is absent.
+15. **AI-TOOL-15**: The final unattended entrypoint is `control.ps1 -Action Resume`; `Supervise` remains a stage-specific recovery action until TASK-AI-12 completes convergence.
+
+## Orchestrator Supervisor Policy (`AI-SUP-01` to `AI-SUP-21`)
+
+The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Supervise`) automates routine Work Item processing while preserving human merge authority and fail-closed safety. It is a PowerShell state machine, not an LLM agent loop.
+
+### Core principles
+
+1. **AI-SUP-01**: The supervisor is a deterministic PowerShell loop, not an LLM agent.
+2. **AI-SUP-02**: Only one Work Item is active at a time; parallel orchestration is not supported.
+3. **AI-SUP-03**: The supervisor uses only supported public AO CLI commands; it does not modify AO internals.
+4. **AI-SUP-04**: Implementation/test failures are NOT provider failures; they return to the author.
+5. **AI-SUP-05**: Governed exact-HEAD auto-merge is authorized only through `TASK-AI-13` under `HUMAN-DECISION-ORCHESTRATOR-CORE-PRIORITY-2026-09-08` after `READY_FOR_HUMAN_MERGE` when strict single-snapshot preflight passes (exact 40-character commit OID, required GitHub Actions `SUCCESS` checks, trusted `chatgpt-codex-connector[bot]` `PASS` verdict, zero unresolved review threads, mergeable status, and `expectedHeadOid` squash mutation); human merge remains required for the bootstrap of TASK-AI-13 itself and whenever any preflight signal fails.
+
+### AgentRouter-backed orchestration and lifecycle
+
+6. **AI-SUP-06**: AO uses the existing `.claude` AgentRouter profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
+7. **AI-SUP-07**: AgentRouter owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
+8. **AI-SUP-08**: Inactivity timeout is configurable (default 10 minutes).
+9. **AI-SUP-09**: Maximum 1 nudge attempt per inactivity window before reporting stalled.
+10. **AI-SUP-10**: The supervisor respects existing controller gates (CI must pass, Codex must approve).
+11. **AI-SUP-11**: Starting `Supervise` repairs AO runtime drift by relaunching AO through AgentRouter before consuming a Work Item.
+12. **AI-SUP-12**: Manual bootstrap review requires an exact PR number when more than one implementation PR is open.
+13. **AI-SUP-13**: AO is an external control layer with pinned provenance and health check; it is never silently counted as an adopted repository/provider.
+14. **AI-SUP-14**: Manual bootstrap review uses Codex's non-interactive custom-review contract with machine-readable schema output and parses that contract; stale output is deleted, and the local file never authorizes the supervisor gate.
+15. **AI-SUP-15**: An open implementation PR belongs to the active Work Item only when both the Work Item ID and exact governed head branch match; zero, ambiguous, or wrong-branch matches fail closed.
+16. **AI-SUP-16**: GitHub check attempts are grouped by name and provider identity; only the unambiguous newest attempt in each group participates, and required gates must come from GitHub Actions.
+17. **AI-SUP-17**: An AO review trigger is checkpointed with its timestamp and must reach a supported terminal state within the configured bounded timeout.
+18. **AI-SUP-18**: Bounded 9Router error records are diagnostic metadata after a terminal AO state. One failed request never proves that every fallback route was exhausted, and AO session DTO text is not treated as a provider transcript.
+19. **AI-SUP-19**: Post-merge synchronization may recover Codex's exact-commit verdict from GitHub's durable Pull Request review collection when the AO session is no longer available.
+20. **AI-SUP-20**: The governed launcher and controller prefer semantic build metadata from the live AO CLI matching the manifest pin; when AO reports `dev`, the observed ProductVersion from the canonical executable must match the manifest pin.
+21. **AI-SUP-21**: Durable GitHub review evidence is accepted only from the exact allowlisted Codex GitHub App identity `chatgpt-codex-connector[bot]`; review-shaped text from any other author (including the repository owner or PR author) is untrusted.
+
+### Provider and harness policy
+
+Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost 9Router endpoint (`http://localhost:20128/v1`). The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after AgentRouter exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
+
+### Transient failure classification
+
+AgentRouter handles transient provider failures internally. In accordance with AI-SUP-18, bounded 9Router error records are diagnostic metadata captured after a terminal AO state; one failed request never proves that every fallback route was exhausted. If a terminal provider failure or exhaustion reaches the supervisor, delivery stops fail-closed; implementation failures still return to the author:
+
+| Classification            | Trigger failover | Return to author |
+| ------------------------- | ---------------- | ---------------- |
+| Quota exhausted           | Yes              | No               |
+| Rate limited (429)        | Yes              | No               |
+| Authentication error      | Yes (immediate)  | No               |
+| Model unavailable         | Yes              | No               |
+| Timeout (>30s)            | Yes              | No               |
+| Non-zero exit (transient) | Yes              | No               |
+| Lint/type/test failure    | No               | Yes              |
+| Assertion failure         | No               | Yes              |
+| User code exception       | No               | Yes              |
+
+### Permission boundaries (TASK-AI-10+)
+
+The supervisor operates with least-privilege permissions:
+
+**Allowed (routine operations):**
+
+- Read files and repository state
+- Run lint, typecheck, test commands
+- Create commits and push to feature branches
+- Create and update Pull Requests
+- Inspect CI status and review comments
+- Send messages to AO sessions
+
+**Explicitly denied:**
+
+- Auto-merge any Pull Request
+- Force-push or rewrite history
+- Delete branches or worktrees destructively
+- Bypass CI or review gates
+- Broad unrestricted shell access
+- Install, remove, or upgrade machine tools

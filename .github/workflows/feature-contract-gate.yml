@@ -41,3 +41,7 @@ jobs:
             }
           }
           if ($hasErrors) { exit 1 }
+      - name: Run PowerShell supervisor behavioral tests
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/ai/control.ps1 -Action Test
