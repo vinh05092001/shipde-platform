@@ -68,6 +68,40 @@ async function runWorkerTests() {
         );
       }
     }
+
+    // Regression tests for malformed DATABASE_URL and S3_ENDPOINT (Finding 1)
+    const malformedUrlCases = [
+      { DATABASE_URL: 'postgresql://' },
+      { DATABASE_URL: 'postgres://' },
+      { DATABASE_URL: 'http://localhost:5432' },
+      { DATABASE_URL: 'not-a-url' },
+      { DATABASE_URL: 'postgresql://   ' },
+      { S3_ENDPOINT: 'http://' },
+      { S3_ENDPOINT: 'https://' },
+      { S3_ENDPOINT: 'ftp://localhost:9000' },
+      { S3_ENDPOINT: 'not-a-url' },
+      { S3_ENDPOINT: 'http://   ' },
+    ];
+    for (const testCase of malformedUrlCases) {
+      let caught = false;
+      try {
+        validateConfig({
+          ...process.env,
+          DATABASE_URL: 'postgresql://postgres:secretWorkerPassword123@localhost:5433/shipde_dev',
+          ...testCase,
+        });
+      } catch (err: unknown) {
+        if (err instanceof ConfigValidationError) {
+          caught = true;
+          assertNoSecretValues(err.message, ['secretWorkerPassword123']);
+        }
+      }
+      if (!caught) {
+        throw new Error(
+          `validateConfig failed to fail-closed on malformed URL case: ${JSON.stringify(testCase)}`
+        );
+      }
+    }
   }
   console.log('✅ Worker configuration validation tests passed');
 
@@ -156,6 +190,226 @@ async function runWorkerTests() {
     await downPrisma.onModuleDestroy();
   }
   console.log('✅ Worker HealthService and HealthController tests passed');
+
+  // 2.5 Offline Unit Tests for Worker & Dispatcher logic (Findings 1, 2, 3, 4, 5, 7)
+  console.log('Testing SmokeWorker and OutboxDispatcher offline unit behaviors...');
+  {
+    // A. SmokeWorker atomic deduplication claim race condition (Finding 4)
+    let updateManyCalls = 0;
+    const mockPrismaWorker: any = {
+      outboxEvent: {
+        findUnique: async () => ({
+          id: 'test-outbox-1',
+          status: OutboxStatusEnum.PROCESSING,
+          attempts: 0,
+        }),
+        updateMany: async (args: any) => {
+          updateManyCalls++;
+          // Ensure query requires status: PROCESSING
+          if (args.where.status !== OutboxStatusEnum.PROCESSING) {
+            throw new Error('updateMany must require status: PROCESSING');
+          }
+          // First call succeeds (count 1), concurrent call fails (count 0)
+          return { count: updateManyCalls === 1 ? 1 : 0 };
+        },
+      },
+    };
+    const mockRedisWorker: any = {
+      getClient: () => ({
+        set: async () => 'OK',
+        get: async () => null,
+      }),
+    };
+
+    const workerUnit = new SmokeWorker(config, mockPrismaWorker, mockRedisWorker);
+    const mockJob1 = {
+      id: 'job-unit-1',
+      data: {
+        outboxId: 'test-outbox-1',
+        smokeId: 'smoke-1',
+        correlationId: 'corr-unit-1',
+        eventType: QUEUE_SMOKE_EVENT_TYPE,
+      },
+    } as any;
+
+    // Delivery 1: Atomic update succeeds -> marked processed
+    const res1 = await workerUnit.processJob(mockJob1);
+    if (!res1.success || res1.duplicate) {
+      throw new Error(
+        `Expected delivery 1 to succeed without duplicate, got: ${JSON.stringify(res1)}`
+      );
+    }
+    if (workerUnit.processedCount !== 1 || workerUnit.duplicateCount !== 0) {
+      throw new Error('Expected processedCount 1, duplicateCount 0');
+    }
+
+    // Delivery 2 (Concurrent race where DB already updated): count is 0 -> flagged duplicate
+    const res2 = await workerUnit.processJob(mockJob1);
+    if (!res2.success || !res2.duplicate) {
+      throw new Error(
+        `Expected concurrent delivery 2 to be flagged as duplicate, got: ${JSON.stringify(res2)}`
+      );
+    }
+    if (workerUnit.processedCount !== 1 || workerUnit.duplicateCount !== 1) {
+      throw new Error('Expected processedCount to remain 1, duplicateCount to become 1');
+    }
+
+    // B. SmokeWorker ignores unsupported event types (Finding 5)
+    const mockJobUnsupported = {
+      id: 'job-unit-unsupported',
+      data: {
+        outboxId: 'test-outbox-2',
+        smokeId: 'smoke-2',
+        correlationId: 'corr-unit-2',
+        eventType: 'EVT-UNSUPPORTED-TYPE',
+      },
+    } as any;
+    const resUnsupported = await workerUnit.processJob(mockJobUnsupported);
+    if (resUnsupported.success !== false || resUnsupported.duplicate !== false) {
+      throw new Error('Expected unsupported event type to be ignored by SmokeWorker');
+    }
+
+    // C. OutboxDispatcher offline routing & correlation ID propagation (Findings 5 & 7)
+    let enqueuedJobName = '';
+    let enqueuedJobData: any = null;
+    let enqueuedJobOpts: any = null;
+    const mockQueue: any = {
+      add: async (name: string, data: any, opts: any) => {
+        enqueuedJobName = name;
+        enqueuedJobData = data;
+        enqueuedJobOpts = opts;
+      },
+      getJobs: async () => [],
+    };
+
+    let findManyWhere: any = null;
+    const mockPrismaDispatcher: any = {
+      outboxEvent: {
+        findMany: async (args: any) => {
+          findManyWhere = args.where;
+          return [
+            {
+              id: 'outbox-disp-1',
+              event_type: QUEUE_SMOKE_EVENT_TYPE,
+              payload: { smokeId: 'smoke-disp-1' },
+              correlation_id: 'corr-disp-prop-123',
+              idempotency_key: 'idemp-disp-1',
+              attempts: 0,
+              status: OutboxStatusEnum.PENDING,
+            },
+          ];
+        },
+        updateMany: async () => ({ count: 1 }),
+      },
+    };
+
+    const dispatcherUnit = new OutboxDispatcher(config, mockPrismaDispatcher);
+    (dispatcherUnit as any).queue = mockQueue;
+
+    await dispatcherUnit.dispatchPending(10);
+
+    // Verify filter restricts strictly to QUEUE_SMOKE_EVENT_TYPE (Finding 5)
+    if (findManyWhere?.event_type !== QUEUE_SMOKE_EVENT_TYPE) {
+      throw new Error(
+        `Expected findMany to filter by QUEUE_SMOKE_EVENT_TYPE, got ${findManyWhere?.event_type}`
+      );
+    }
+
+    // Verify correlation ID is propagated to BullMQ job data (Finding 7)
+    if (enqueuedJobData?.correlationId !== 'corr-disp-prop-123') {
+      throw new Error(
+        `Expected BullMQ job correlationId 'corr-disp-prop-123', got ${enqueuedJobData?.correlationId}`
+      );
+    }
+    if (!enqueuedJobOpts?.jobId?.startsWith('idemp-disp-1-del-0-')) {
+      throw new Error(`Expected delivery generation jobId, got ${enqueuedJobOpts?.jobId}`);
+    }
+
+    // D. OutboxDispatcher retryFailed purges retained queue jobs (Finding 2)
+    const removedJobs: string[] = [];
+    const mockRetainedJobs = [
+      {
+        id: 'idemp-disp-1-del-0-1234',
+        data: { outboxId: 'outbox-disp-1' },
+        remove: async () => {
+          removedJobs.push('idemp-disp-1-del-0-1234');
+        },
+      },
+      {
+        id: 'unrelated-job-999',
+        data: { outboxId: 'other-id' },
+        remove: async () => {
+          removedJobs.push('unrelated-job-999');
+        },
+      },
+    ];
+    mockQueue.getJobs = async () => mockRetainedJobs;
+    let updateRecordArgs: any = null;
+    mockPrismaDispatcher.outboxEvent.findUnique = async () => ({
+      id: 'outbox-disp-1',
+      idempotency_key: 'idemp-disp-1',
+      attempts: 3,
+      status: OutboxStatusEnum.FAILED,
+    });
+    mockPrismaDispatcher.outboxEvent.update = async (args: any) => {
+      updateRecordArgs = args;
+      return { id: 'outbox-disp-1', status: OutboxStatusEnum.PENDING, attempts: 0 };
+    };
+
+    await dispatcherUnit.retryFailed('outbox-disp-1');
+    if (
+      !removedJobs.includes('idemp-disp-1-del-0-1234') ||
+      removedJobs.includes('unrelated-job-999')
+    ) {
+      throw new Error(
+        `retryFailed did not purge matching retained jobs correctly: ${JSON.stringify(removedJobs)}`
+      );
+    }
+    if (
+      updateRecordArgs?.data?.status !== OutboxStatusEnum.PENDING ||
+      updateRecordArgs?.data?.attempts !== 0
+    ) {
+      throw new Error('retryFailed did not reset status to PENDING and attempts to 0');
+    }
+
+    // E. OutboxDispatcher recoverStaleProcessing conditional update (Finding 3)
+    let staleWhere: any = null;
+    let staleUpdateManyArgs: any = null;
+    mockPrismaDispatcher.outboxEvent.findMany = async (args: any) => {
+      staleWhere = args.where;
+      return [
+        {
+          id: 'stale-1',
+          attempts: 1,
+          last_error: null,
+        },
+      ];
+    };
+    mockPrismaDispatcher.outboxEvent.updateMany = async (args: any) => {
+      staleUpdateManyArgs = args;
+      return { count: 1 };
+    };
+
+    const staleRes = await dispatcherUnit.recoverStaleProcessing(60000);
+    if (staleRes.recovered !== 1) {
+      throw new Error(`Expected recovered count 1, got ${staleRes.recovered}`);
+    }
+    if (
+      staleWhere?.event_type !== QUEUE_SMOKE_EVENT_TYPE ||
+      staleWhere?.status !== OutboxStatusEnum.PROCESSING
+    ) {
+      throw new Error(
+        'recoverStaleProcessing must filter by QUEUE_SMOKE_EVENT_TYPE and PROCESSING'
+      );
+    }
+    if (staleUpdateManyArgs?.where?.status !== OutboxStatusEnum.PROCESSING) {
+      throw new Error('recoverStaleProcessing updateMany must require status: PROCESSING');
+    }
+    if (staleUpdateManyArgs?.data?.status !== OutboxStatusEnum.PENDING) {
+      throw new Error('recoverStaleProcessing must set status to PENDING');
+    }
+  }
+  console.log('✅ SmokeWorker and OutboxDispatcher offline unit behaviors passed');
 
   // 3. SmokeWorker Redis Deduplication Guard Tests (AC-FOUND-03-10, Finding 2)
   console.log('Testing SmokeWorker Redis deduplication (smoke:dedup:${jobId})...');
@@ -531,11 +785,22 @@ async function runWorkerTests() {
         throw new Error(`Expected outbox event to be PROCESSING, got ${dispatchedRecord?.status}`);
       }
 
-      // Clean up BullMQ queue job
+      // Clean up BullMQ queue job & assert correlation propagation (Finding 7)
       const queue = dispatcher.getQueue();
-      const job = await queue.getJob(event.idempotency_key || event.id);
-      if (job) {
-        await job.remove();
+      const jobs = await queue.getJobs(['waiting', 'active', 'delayed', 'completed', 'failed']);
+      const matchingJob = jobs.find((j) => j.id?.startsWith(event.idempotency_key || event.id));
+      if (!matchingJob) {
+        throw new Error('Expected enqueued BullMQ job to be found in queue');
+      }
+      if (matchingJob.data.correlationId !== testCorrelationId) {
+        throw new Error(
+          `Expected BullMQ job correlationId ${testCorrelationId}, got ${matchingJob.data.correlationId}`
+        );
+      }
+      for (const j of jobs) {
+        if (j.id?.startsWith(event.idempotency_key || event.id)) {
+          await j.remove();
+        }
       }
 
       // 6.2 Stale processing recovery test
@@ -564,9 +829,31 @@ async function runWorkerTests() {
         );
       }
 
+      // 6.2b Ensure recoverStaleProcessing does NOT regress PUBLISHED records (Finding 3)
+      const publishedStaleEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: 'stale-pub-1' },
+          correlation_id: `corr-stale-pub-${Date.now()}`,
+          status: OutboxStatusEnum.PUBLISHED,
+          scheduled_at: new Date(Date.now() - 120000),
+          published_at: new Date(),
+          attempts: 1,
+        },
+      });
+
+      await dispatcher.recoverStaleProcessing(60000);
+      const verifiedPublished = await prismaService.outboxEvent.findUnique({
+        where: { id: publishedStaleEvent.id },
+      });
+      if (verifiedPublished?.status !== OutboxStatusEnum.PUBLISHED) {
+        throw new Error('recoverStaleProcessing regressed PUBLISHED event to PENDING!');
+      }
+
       // Clean up DB records
       await prismaService.outboxEvent.delete({ where: { id: event.id } });
       await prismaService.outboxEvent.delete({ where: { id: staleEvent.id } });
+      await prismaService.outboxEvent.delete({ where: { id: publishedStaleEvent.id } });
 
       // 6.3 Concurrent dispatcher claim & idempotency race test (Finding 3)
       console.log('Testing concurrent dispatcher atomic claim...');
@@ -611,6 +898,100 @@ async function runWorkerTests() {
       }
 
       await prismaService.outboxEvent.delete({ where: { id: concurrentEvent.id } });
+
+      // 6.4 Live retryFailed: purges BullMQ queue and enables clean re-dispatch (Finding 2)
+      console.log('Testing live retryFailed queue purge and re-dispatch...');
+      const liveFailedEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: 'failed-live-1' },
+          correlation_id: `corr-failed-live-${Date.now()}`,
+          idempotency_key: `idemp-failed-live-${Date.now()}`,
+          status: OutboxStatusEnum.FAILED,
+          attempts: 3,
+        },
+      });
+      // Enqueue retained job into queue
+      await queue.add(
+        'smoke-job',
+        { outboxId: liveFailedEvent.id },
+        { jobId: `${liveFailedEvent.idempotency_key}-attempt-0` }
+      );
+
+      const retriedEvent = await dispatcher.retryFailed(liveFailedEvent.id);
+      if (retriedEvent.status !== OutboxStatusEnum.PENDING || retriedEvent.attempts !== 0) {
+        throw new Error('retryFailed failed to reset live event to PENDING with 0 attempts');
+      }
+
+      // Verify retained job was purged from BullMQ
+      const retainedJobs = await queue.getJobs([
+        'waiting',
+        'active',
+        'delayed',
+        'completed',
+        'failed',
+      ]);
+      const stillInQueue = retainedJobs.find((j) =>
+        j.id?.startsWith(liveFailedEvent.idempotency_key!)
+      );
+      if (stillInQueue) {
+        throw new Error('retryFailed failed to purge retained job from BullMQ queue');
+      }
+
+      // Clean re-dispatch succeeds
+      const retryDispatchResult = await dispatcher.dispatchPending(10);
+      if (retryDispatchResult.dispatched < 1) {
+        throw new Error('Expected retried event to be successfully re-dispatched');
+      }
+      const reDispatchedJobs = await queue.getJobs([
+        'waiting',
+        'active',
+        'delayed',
+        'completed',
+        'failed',
+      ]);
+      for (const j of reDispatchedJobs) {
+        if (j.id?.startsWith(liveFailedEvent.idempotency_key!)) {
+          await j.remove();
+        }
+      }
+      await prismaService.outboxEvent.delete({ where: { id: liveFailedEvent.id } });
+
+      // 6.5 Live concurrent worker delivery: atomic DB claim commits effect once (Finding 4)
+      console.log('Testing live concurrent worker delivery atomic claim race...');
+      const raceEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: 'race-effect-live' },
+          correlation_id: `corr-race-live-${Date.now()}`,
+          status: OutboxStatusEnum.PROCESSING,
+          attempts: 0,
+        },
+      });
+      const smokeWorkerConcurrent = new SmokeWorker(config, prismaService, redisService);
+      const raceJob = {
+        id: `race-job-${Date.now()}`,
+        data: {
+          outboxId: raceEvent.id,
+          smokeId: 'race-effect-live',
+          correlationId: raceEvent.correlation_id,
+          eventType: QUEUE_SMOKE_EVENT_TYPE,
+        },
+      } as any;
+
+      const [raceRes1, raceRes2] = await Promise.all([
+        smokeWorkerConcurrent.processJob(raceJob),
+        smokeWorkerConcurrent.processJob(raceJob),
+      ]);
+      const allResults = [raceRes1, raceRes2];
+      const primaryCount = allResults.filter((r) => r.success && !r.duplicate).length;
+      const duplicateCount = allResults.filter((r) => r.success && r.duplicate).length;
+      if (primaryCount !== 1 || duplicateCount !== 1) {
+        throw new Error(
+          `Expected exactly 1 primary effect and 1 duplicate, got: ${JSON.stringify(allResults)}`
+        );
+      }
+      await prismaService.outboxEvent.delete({ where: { id: raceEvent.id } });
     } finally {
       await dispatcher.onModuleDestroy();
       await prismaService.onModuleDestroy();

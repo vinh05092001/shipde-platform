@@ -116,6 +116,40 @@ async function runApiTests() {
         );
       }
     }
+
+    // Regression tests for malformed DATABASE_URL and S3_ENDPOINT (Finding 1)
+    const malformedUrlCases = [
+      { DATABASE_URL: 'postgresql://' },
+      { DATABASE_URL: 'postgres://' },
+      { DATABASE_URL: 'http://localhost:5432' },
+      { DATABASE_URL: 'not-a-url' },
+      { DATABASE_URL: 'postgresql://   ' },
+      { S3_ENDPOINT: 'http://' },
+      { S3_ENDPOINT: 'https://' },
+      { S3_ENDPOINT: 'ftp://localhost:9000' },
+      { S3_ENDPOINT: 'not-a-url' },
+      { S3_ENDPOINT: 'http://   ' },
+    ];
+    for (const testCase of malformedUrlCases) {
+      let caught = false;
+      try {
+        validateConfig({
+          ...process.env,
+          DATABASE_URL: 'postgresql://postgres:testPassword@localhost:5433/shipde_dev',
+          ...testCase,
+        });
+      } catch (err: unknown) {
+        if (err instanceof ConfigValidationError) {
+          caught = true;
+          assertNoSecretValues(err.message, ['testPassword']);
+        }
+      }
+      if (!caught) {
+        throw new Error(
+          `validateConfig failed to fail-closed on malformed URL case: ${JSON.stringify(testCase)}`
+        );
+      }
+    }
   }
   console.log('✅ Configuration validation tests passed');
 

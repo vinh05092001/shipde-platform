@@ -61,6 +61,24 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
     const data = job.data;
     const correlationId = normalizeCorrelationId(data.correlationId);
 
+    // Restrict foundation worker strictly to QUEUE_SMOKE_EVENT_TYPE (P2 Finding 5)
+    if (data.eventType && data.eventType !== QUEUE_SMOKE_EVENT_TYPE) {
+      console.warn(
+        formatStructuredLog({
+          level: 'warn',
+          service: 'worker',
+          correlationId,
+          message: `SmokeWorker ignoring unsupported event type '${data.eventType}' for job ${job.id}`,
+          metadata: {
+            jobId: job.id,
+            eventType: data.eventType,
+            outboxId: data.outboxId,
+          },
+        })
+      );
+      return { success: false, duplicate: false };
+    }
+
     console.log(
       formatStructuredLog({
         level: 'info',
@@ -144,9 +162,13 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
           return { success: true, duplicate: true };
         }
 
-        // Execute deterministic smoke side effect: transition outbox event to PUBLISHED
-        await this.prisma.outboxEvent.update({
-          where: { id: data.outboxId },
+        // Execute deterministic smoke side effect: transition outbox event to PUBLISHED atomically
+        // Requiring status === PROCESSING prevents read-check-write race between concurrent deliveries (P1 Finding 4)
+        const claimEffect = await this.prisma.outboxEvent.updateMany({
+          where: {
+            id: data.outboxId,
+            status: OutboxStatusEnum.PROCESSING,
+          },
           data: {
             status: OutboxStatusEnum.PUBLISHED,
             published_at: new Date(),
@@ -154,6 +176,23 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
             last_error: null,
           },
         });
+
+        if (claimEffect.count === 0) {
+          // Another concurrent delivery already committed the effect to PUBLISHED
+          this.duplicateCount++;
+          console.log(
+            formatStructuredLog({
+              level: 'warn',
+              service: 'worker',
+              correlationId,
+              message: `Duplicate job ${job.id} detected via atomic database claim guard for outbox event ${data.outboxId}. Side effects already committed.`,
+              metadata: {
+                outboxId: data.outboxId,
+              },
+            })
+          );
+          return { success: true, duplicate: true };
+        }
       }
 
       this.processedCount++;

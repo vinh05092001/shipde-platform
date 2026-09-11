@@ -81,7 +81,7 @@ pnpm infra:wait
 # 3. Triển khai migration
 pnpm db:migrate
 
-# 4. Chạy kiểm thử tích hợp
+# 4. Chạy kiểm thử tích hợp (tự động biên dịch API và Worker artifacts trước khi chạy)
 pnpm test:integration
 ```
 

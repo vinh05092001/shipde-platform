@@ -17,7 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && turbo typecheck --cache-dir=.turbo/cache",
     "test": "turbo test --cache-dir=.turbo/cache && turbo test:audit --cache-dir=.turbo/cache",
     "test:audit": "turbo test:audit --cache-dir=.turbo/cache",
-    "test:integration": "tsx packages/testkit/src/integration.ts",
+    "test:integration": "pnpm --filter @shipde/api --filter @shipde/worker build && tsx packages/testkit/src/integration.ts",
     "test:e2e": "turbo test:e2e --cache-dir=.turbo/cache",
     "test:baseline": "tsx apps/web/src/tests/preservation-smoke.test.ts",
     "infra:up": "docker compose -f infra/docker/compose.yml up -d",

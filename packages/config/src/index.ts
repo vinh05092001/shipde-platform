@@ -83,11 +83,19 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   const WORKER_HEALTH_PORT = workerHealthPortParsed ?? 3002;
 
   const databaseUrlRaw = rawEnv.DATABASE_URL;
-  if (
-    !databaseUrlRaw ||
-    (!databaseUrlRaw.startsWith('postgresql://') && !databaseUrlRaw.startsWith('postgres://'))
-  ) {
+  if (!databaseUrlRaw) {
     invalidFields.push('DATABASE_URL (must be a valid postgresql:// connection string)');
+  } else {
+    try {
+      const parsedUrl = new URL(databaseUrlRaw);
+      if (parsedUrl.protocol !== 'postgresql:' && parsedUrl.protocol !== 'postgres:') {
+        invalidFields.push('DATABASE_URL (protocol must be postgresql: or postgres:)');
+      } else if (!parsedUrl.hostname || parsedUrl.hostname.trim().length === 0) {
+        invalidFields.push('DATABASE_URL (must specify a valid host)');
+      }
+    } catch {
+      invalidFields.push('DATABASE_URL (must be a valid postgresql:// connection string)');
+    }
   }
   const DATABASE_URL = databaseUrlRaw || '';
 
@@ -107,8 +115,15 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   const REDIS_PASSWORD = rawEnv.REDIS_PASSWORD || undefined;
 
   const S3_ENDPOINT = rawEnv.S3_ENDPOINT || 'http://localhost:9000';
-  if (!S3_ENDPOINT.startsWith('http://') && !S3_ENDPOINT.startsWith('https://')) {
-    invalidFields.push('S3_ENDPOINT (must start with http:// or https://)');
+  try {
+    const parsedS3 = new URL(S3_ENDPOINT);
+    if (parsedS3.protocol !== 'http:' && parsedS3.protocol !== 'https:') {
+      invalidFields.push('S3_ENDPOINT (must start with http:// or https://)');
+    } else if (!parsedS3.hostname || parsedS3.hostname.trim().length === 0) {
+      invalidFields.push('S3_ENDPOINT (must specify a valid host)');
+    }
+  } catch {
+    invalidFields.push('S3_ENDPOINT (must be a valid, parseable URL)');
   }
 
   const S3_REGION = rawEnv.S3_REGION || 'us-east-1';

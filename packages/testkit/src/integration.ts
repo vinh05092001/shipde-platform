@@ -8,8 +8,9 @@
  * - Durable outbox insert within transaction -> BullMQ dispatch -> Smoke worker processing -> Published state
  * - Clean shutdown of background child processes
  */
-import { spawn, ChildProcess } from 'node:child_process';
+import { spawn, ChildProcess, execSync } from 'node:child_process';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { PrismaClient } from '@prisma/client';
 import { assertValidLivenessResponse, assertValidReadinessResponse } from './index';
 import { QUEUE_SMOKE_EVENT_TYPE } from '@shipde/contracts';
@@ -103,22 +104,45 @@ async function main() {
     await prisma.$queryRaw`SELECT 1 as result`;
     console.log('✅ PostgreSQL connection verified');
 
+    const apiEntry = path.join(ROOT_DIR, 'apps/api/dist/main.js');
+    const workerEntry = path.join(ROOT_DIR, 'apps/worker/dist/main.js');
+
+    // Build prerequisites if missing (Finding 6)
+    if (!fs.existsSync(apiEntry) || !fs.existsSync(workerEntry)) {
+      console.log('Build artifacts missing. Compiling API and Worker services...');
+      execSync('pnpm --filter @shipde/api --filter @shipde/worker build', {
+        cwd: ROOT_DIR,
+        stdio: 'inherit',
+      });
+    }
+
     // 2. Start API Service
     console.log(`2. Spawning API service on port ${API_PORT}...`);
-    const apiEntry = path.join(ROOT_DIR, 'apps/api/dist/main.js');
     apiProc = spawn(process.execPath, [apiEntry], {
       cwd: path.join(ROOT_DIR, 'apps/api'),
       env: childEnv,
       stdio: 'inherit',
     });
 
-    // 3. Start Worker Service
+    // 3. Start Worker Service (capturing stdout/stderr for correlation log assertions - Finding 7)
     console.log(`3. Spawning Worker service on health port ${WORKER_PORT}...`);
-    const workerEntry = path.join(ROOT_DIR, 'apps/worker/dist/main.js');
+    const workerLogs: string[] = [];
     workerProc = spawn(process.execPath, [workerEntry], {
       cwd: path.join(ROOT_DIR, 'apps/worker'),
       env: childEnv,
-      stdio: 'inherit',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    workerProc.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      workerLogs.push(text);
+      process.stdout.write(text);
+    });
+
+    workerProc.stderr?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      workerLogs.push(text);
+      process.stderr.write(text);
     });
 
     // 4. Wait for Both Services to be Live
@@ -262,6 +286,20 @@ async function main() {
     console.log(
       `✅ Outbox event ${outboxRecord.id} transitioned to PUBLISHED with published_at timestamp`
     );
+
+    // 10. Verify correlation ID propagation in Worker structured logs (AC-FOUND-03-09, AC-FOUND-03-11, Finding 7)
+    console.log('10. Verifying Worker structured logs for correlation ID propagation...');
+    const hasCorrelationLog = workerLogs.some(
+      (log) =>
+        log.includes(correlationId) &&
+        log.includes('Successfully executed deterministic smoke effect for job')
+    );
+    if (!hasCorrelationLog) {
+      throw new Error(
+        `Worker structured logs did not capture correlation ID propagation: expected correlationId ${correlationId}`
+      );
+    }
+    console.log(`✅ Worker structured log confirmed correlation ID ${correlationId} propagation`);
 
     // Clean up test record
     await prisma.outboxEvent.delete({ where: { id: outboxRecord.id } });
