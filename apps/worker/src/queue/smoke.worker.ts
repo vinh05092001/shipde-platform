@@ -264,14 +264,33 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
 
     if (job.data?.outboxId) {
       try {
-        await this.prisma.outboxEvent.update({
-          where: { id: job.data.outboxId },
+        // Atomically transition failure state ONLY if still in in-flight status (never overwrite PUBLISHED!) (Finding 4)
+        const updateResult = await this.prisma.outboxEvent.updateMany({
+          where: {
+            id: job.data.outboxId,
+            status: OutboxStatusEnum.PROCESSING,
+          },
           data: {
             attempts,
             last_error: sanitizedError,
             status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PROCESSING,
           },
         });
+
+        if (updateResult.count === 0) {
+          console.log(
+            formatStructuredLog({
+              level: 'warn',
+              service: 'worker',
+              correlationId,
+              message: `Ignoring late failure update for outbox event ${job.data.outboxId}: already transitioned out of PROCESSING`,
+              metadata: {
+                outboxId: job.data.outboxId,
+                jobId: job.id,
+              },
+            })
+          );
+        }
       } catch (dbErr: any) {
         console.error(
           formatStructuredLog({

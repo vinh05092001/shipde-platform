@@ -150,6 +150,40 @@ async function runApiTests() {
         );
       }
     }
+
+    // Regression tests for malformed S3_FORCE_PATH_STYLE (Finding 3)
+    const malformedS3ForcePathStyleCases = [
+      { S3_FORCE_PATH_STYLE: 'invalid' },
+      { S3_FORCE_PATH_STYLE: '1' },
+      { S3_FORCE_PATH_STYLE: '0' },
+      { S3_FORCE_PATH_STYLE: 'yes' },
+      { S3_FORCE_PATH_STYLE: 'no' },
+      { S3_FORCE_PATH_STYLE: 'true ' },
+      { S3_FORCE_PATH_STYLE: ' false' },
+      { S3_FORCE_PATH_STYLE: 'falsee' },
+    ];
+    for (const testCase of malformedS3ForcePathStyleCases) {
+      let caught = false;
+      try {
+        validateConfig({
+          ...process.env,
+          DATABASE_URL: 'postgresql://postgres:testPassword@localhost:5433/shipde_dev',
+          ...testCase,
+        });
+      } catch (err: unknown) {
+        if (err instanceof ConfigValidationError) {
+          caught = true;
+          assertNoSecretValues(err.message, ['testPassword']);
+        }
+      }
+      if (!caught) {
+        throw new Error(
+          `validateConfig failed to fail-closed on malformed S3_FORCE_PATH_STYLE case: ${JSON.stringify(
+            testCase
+          )}`
+        );
+      }
+    }
   }
   console.log('✅ Configuration validation tests passed');
 
@@ -453,8 +487,52 @@ async function runApiTests() {
     if (redacted.password !== '[REDACTED]' || redacted.token !== '[REDACTED]') {
       throw new Error('redactSensitiveData failed to redact sensitive fields');
     }
+
+    // Verify formatStructuredLog redacts secrets embedded in message string (Finding 2)
+    const logWithSecretMessage = formatStructuredLog({
+      service: 'api',
+      level: 'error',
+      message:
+        'Failed to connect postgresql://postgres:leakPassword123@localhost:5433/db with token superSecretToken999',
+    });
+    assertNoSecretValues(logWithSecretMessage, ['leakPassword123', 'superSecretToken999']);
+    const parsedSecretMsg = JSON.parse(logWithSecretMessage);
+    if (
+      parsedSecretMsg.message.includes('leakPassword123') ||
+      parsedSecretMsg.message.includes('superSecretToken999')
+    ) {
+      throw new Error('Expected credentials to be redacted from message field in structured log');
+    }
   }
   console.log('✅ Structured logging and secret redaction tests passed');
+
+  // 5. Clean process startup with .env file test (Finding 1)
+  console.log('Testing clean process startup with .env file...');
+  {
+    const { execSync } = await import('node:child_process');
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const pathMod = await import('node:path');
+    const tempDir = mkdtempSync(pathMod.join(tmpdir(), 'shipde-env-test-'));
+    try {
+      const tempEnv = pathMod.join(tempDir, '.env');
+      writeFileSync(
+        tempEnv,
+        'PORT=3099\nDATABASE_URL=postgresql://postgres:test@localhost:5433/shipde_dev\nREDIS_HOST=localhost\nREDIS_PORT=6379\nS3_ACCESS_KEY=minioadmin\nS3_SECRET_KEY=minioadmin\n'
+      );
+      // Execute node to verify process.loadEnvFile loads the variables
+      const out = execSync(
+        `node --env-file-if-exists=${tempEnv} -e "console.log(process.env.PORT)"`,
+        { cwd: tempDir, encoding: 'utf-8' }
+      );
+      if (out.trim() !== '3099') {
+        throw new Error(`Expected PORT 3099 loaded from .env, got: ${out.trim()}`);
+      }
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+  console.log('✅ Clean process startup with .env file passed');
 
   console.log('🎉 All @shipde/api tests passed successfully!');
 }

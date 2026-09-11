@@ -143,7 +143,15 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   const S3_BUCKET = rawEnv.S3_BUCKET || 'shipde-local';
 
   const s3ForcePathStyleRaw = rawEnv.S3_FORCE_PATH_STYLE;
-  const S3_FORCE_PATH_STYLE = s3ForcePathStyleRaw !== 'false';
+  if (
+    s3ForcePathStyleRaw !== undefined &&
+    s3ForcePathStyleRaw !== 'true' &&
+    s3ForcePathStyleRaw !== 'false'
+  ) {
+    invalidFields.push('S3_FORCE_PATH_STYLE (must be explicit true or false)');
+  }
+  const S3_FORCE_PATH_STYLE =
+    s3ForcePathStyleRaw === undefined ? true : s3ForcePathStyleRaw === 'true';
 
   const carrierModeRaw = (rawEnv.CARRIER_MODE || 'disabled').toLowerCase();
   if (!['disabled', 'mock', 'live'].includes(carrierModeRaw)) {
@@ -233,6 +241,8 @@ export function redactSensitiveData(data: unknown): unknown {
     if (sanitized.includes('://') && sanitized.includes('@')) {
       sanitized = sanitized.replace(/(:\/\/[^:]+:)[^@]+(@)/g, `$1${REDACTED_MARKER}$2`);
     }
+    // Redact Bearer tokens
+    sanitized = sanitized.replace(/(bearer\s+)([^\s,;]+)/gi, `$1${REDACTED_MARKER}`);
     // Redact inline secrets, passwords, and tokens
     sanitized = sanitized.replace(
       /(password|passwd|secret|token|api_?key|access_?key|credential)([:=\s]+)([^\s,;]+)/gi,
@@ -262,6 +272,15 @@ export function redactSensitiveData(data: unknown): unknown {
   return result;
 }
 
+/**
+ * Safely sanitizes an error message or object by stripping passwords, tokens, and credentials (P1 Finding 2)
+ */
+export function sanitizeErrorMessage(err: unknown): string {
+  if (!err) return 'Unknown error';
+  const rawMsg = err instanceof Error ? err.message : String(err);
+  return redactSensitiveData(rawMsg) as string;
+}
+
 export interface StructuredLogEntry {
   level: LogLevel;
   service: string;
@@ -273,18 +292,24 @@ export interface StructuredLogEntry {
 
 /**
  * Formats a log entry into a single line of sanitized, machine-parseable JSON.
+ * Redacts both metadata AND message text to prevent accidental credential leakage (Finding 2).
  */
 export function formatStructuredLog(entry: StructuredLogEntry): string {
   const sanitizedMetadata = entry.metadata
     ? (redactSensitiveData(entry.metadata) as Record<string, unknown>)
     : undefined;
 
+  const sanitizedMessage =
+    typeof entry.message === 'string'
+      ? (redactSensitiveData(entry.message) as string)
+      : entry.message;
+
   const logObject = {
     level: entry.level,
     time: entry.timestamp || new Date().toISOString(),
     service: entry.service,
     correlationId: entry.correlationId,
-    message: entry.message,
+    message: sanitizedMessage,
     ...(sanitizedMetadata && Object.keys(sanitizedMetadata).length > 0
       ? { metadata: sanitizedMetadata }
       : {}),

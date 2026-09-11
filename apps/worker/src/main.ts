@@ -3,6 +3,17 @@ import { WorkerAppModule } from './app.module';
 import { validateConfig, formatStructuredLog, ConfigValidationError } from '@shipde/config';
 
 export async function bootstrap(): Promise<void> {
+  // Explicitly load .env file if present in working directory or parent (Node 24 native, Finding 1)
+  if (typeof (process as any).loadEnvFile === 'function') {
+    try {
+      (process as any).loadEnvFile();
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') {
+        // ignore missing .env file, fallback to environment variables
+      }
+    }
+  }
+
   let config;
   try {
     config = validateConfig();

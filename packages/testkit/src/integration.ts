@@ -85,6 +85,59 @@ function stopProcess(proc: ChildProcess): Promise<void> {
   });
 }
 
+async function testDependencyOutage(
+  serviceType: 'api' | 'worker',
+  brokenEnv: Record<string, string>,
+  expectedDownCheck: 'database' | 'redis' | 'storage',
+  testPort: number
+): Promise<void> {
+  const entry = path.join(
+    ROOT_DIR,
+    serviceType === 'api' ? 'apps/api/dist/main.js' : 'apps/worker/dist/main.js'
+  );
+  const proc = spawn(process.execPath, [entry], {
+    cwd: path.join(ROOT_DIR, serviceType === 'api' ? 'apps/api' : 'apps/worker'),
+    env: {
+      ...childEnv,
+      PORT: String(testPort),
+      WORKER_HEALTH_PORT: String(testPort),
+      ...brokenEnv,
+    },
+    stdio: 'ignore',
+  });
+
+  try {
+    // 1. Wait for process to be live (must return 200 OK despite dependency down!)
+    await waitForHttpOk(`http://localhost:${testPort}/health/live`, 15000);
+    const liveRes = await fetch(`http://localhost:${testPort}/health/live`);
+    if (liveRes.status !== 200) {
+      throw new Error(
+        `Process failed liveness check when ${expectedDownCheck} is down: status ${liveRes.status}`
+      );
+    }
+
+    // 2. Readiness MUST return 503 Service Unavailable with status: error and expected check 'down'
+    const readyRes = await fetch(`http://localhost:${testPort}/health/ready`);
+    if (readyRes.status !== 503) {
+      throw new Error(
+        `Expected readiness 503 when ${expectedDownCheck} is down, got ${readyRes.status}`
+      );
+    }
+    const readyJson: any = await readyRes.json();
+    assertValidReadinessResponse(readyJson, 'error');
+    if (readyJson.checks[expectedDownCheck] !== 'down') {
+      throw new Error(
+        `Expected check ${expectedDownCheck} to be 'down', got: ${readyJson.checks[expectedDownCheck]}`
+      );
+    }
+    console.log(
+      `✅ Process-level outage verified: ${serviceType} retains liveness (200) and reports 503 when ${expectedDownCheck} is down`
+    );
+  } finally {
+    await stopProcess(proc);
+  }
+}
+
 async function main() {
   console.log('====================================================');
   console.log('Starting Ship Dễ Foundation Integration Tests (TASK-FOUND-03)');
@@ -236,6 +289,53 @@ async function main() {
       );
     }
     console.log('✅ Worker readiness probe returned 200 OK (all dependencies healthy)');
+
+    // 8.5 Test Process-Level Dependency Outage & Resilience (AC-FOUND-03-04, AC-FOUND-03-06, Finding 5)
+    console.log(
+      '8.5 Testing process-level dependency outage scenarios (PostgreSQL, Redis, MinIO)...'
+    );
+
+    // 8.5.1 API with PostgreSQL Down (port 54399 unused)
+    await testDependencyOutage(
+      'api',
+      {
+        DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:54399/shipde_dev?connect_timeout=1',
+      },
+      'database',
+      3011
+    );
+
+    // 8.5.2 API with Redis Down (port 63799 unused)
+    await testDependencyOutage('api', { REDIS_PORT: '63799' }, 'redis', 3012);
+
+    // 8.5.3 API with MinIO/Storage Down (port 9999 unused)
+    await testDependencyOutage('api', { S3_ENDPOINT: 'http://127.0.0.1:9999' }, 'storage', 3013);
+
+    // 8.5.4 Worker with PostgreSQL Down
+    await testDependencyOutage(
+      'worker',
+      {
+        DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:54399/shipde_dev?connect_timeout=1',
+      },
+      'database',
+      3014
+    );
+
+    // 8.5.5 Worker with Redis Down
+    await testDependencyOutage('worker', { REDIS_PORT: '63799' }, 'redis', 3015);
+
+    // 8.5.6 Restoration Scenario: Verify primary API and Worker on ports 3001 & 3002 retain 200 OK all checks 'up'
+    const apiRestored: any = await (
+      await fetch(`http://localhost:${API_PORT}/health/ready`)
+    ).json();
+    assertValidReadinessResponse(apiRestored, 'ok');
+    const workerRestored: any = await (
+      await fetch(`http://localhost:${WORKER_PORT}/health/ready`)
+    ).json();
+    assertValidReadinessResponse(workerRestored, 'ok');
+    console.log(
+      '✅ Restoration verified: primary API and Worker services remain healthy with 200 OK'
+    );
 
     // 9. End-to-End Durable Outbox Dispatch to BullMQ and Worker Execution
     console.log('9. Testing durable Outbox -> BullMQ -> SmokeWorker end-to-end flow...');

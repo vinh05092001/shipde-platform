@@ -12,7 +12,12 @@ import { SmokeWorker, SmokeJobData } from './queue/smoke.worker';
 import { OutboxDispatcher } from './dispatcher/outbox.dispatcher';
 import { QUEUE_SMOKE_EVENT_TYPE, SMOKE_QUEUE_NAME } from '@shipde/contracts';
 import { OutboxStatusEnum } from '@prisma/client';
-import { CORRELATION_ID_HEADER, validateConfig, ConfigValidationError } from '@shipde/config';
+import {
+  CORRELATION_ID_HEADER,
+  validateConfig,
+  ConfigValidationError,
+  formatStructuredLog,
+} from '@shipde/config';
 import { Job } from 'bullmq';
 
 async function runWorkerTests() {
@@ -99,6 +104,40 @@ async function runWorkerTests() {
       if (!caught) {
         throw new Error(
           `validateConfig failed to fail-closed on malformed URL case: ${JSON.stringify(testCase)}`
+        );
+      }
+    }
+
+    // Regression tests for malformed S3_FORCE_PATH_STYLE (Finding 3)
+    const malformedS3ForcePathStyleCases = [
+      { S3_FORCE_PATH_STYLE: 'invalid' },
+      { S3_FORCE_PATH_STYLE: '1' },
+      { S3_FORCE_PATH_STYLE: '0' },
+      { S3_FORCE_PATH_STYLE: 'yes' },
+      { S3_FORCE_PATH_STYLE: 'no' },
+      { S3_FORCE_PATH_STYLE: 'true ' },
+      { S3_FORCE_PATH_STYLE: ' false' },
+      { S3_FORCE_PATH_STYLE: 'falsee' },
+    ];
+    for (const testCase of malformedS3ForcePathStyleCases) {
+      let caught = false;
+      try {
+        validateConfig({
+          ...process.env,
+          DATABASE_URL: 'postgresql://postgres:secretWorkerPassword123@localhost:5433/shipde_dev',
+          ...testCase,
+        });
+      } catch (err: unknown) {
+        if (err instanceof ConfigValidationError) {
+          caught = true;
+          assertNoSecretValues(err.message, ['secretWorkerPassword123']);
+        }
+      }
+      if (!caught) {
+        throw new Error(
+          `validateConfig failed to fail-closed on malformed S3_FORCE_PATH_STYLE case: ${JSON.stringify(
+            testCase
+          )}`
         );
       }
     }
@@ -274,6 +313,49 @@ async function runWorkerTests() {
     if (resUnsupported.success !== false || resUnsupported.duplicate !== false) {
       throw new Error('Expected unsupported event type to be ignored by SmokeWorker');
     }
+
+    // B2. Late failure handler race: if event already PUBLISHED, handleJobFailure does NOT overwrite (Finding 4)
+    let lateFailureUpdated = false;
+    const mockPrismaLateFailure: any = {
+      outboxEvent: {
+        updateMany: async (args: any) => {
+          // Status check must require PROCESSING
+          if (args.where.status !== OutboxStatusEnum.PROCESSING) {
+            throw new Error('handleJobFailure updateMany must require status: PROCESSING');
+          }
+          // Returns 0 because event is already PUBLISHED
+          lateFailureUpdated = true;
+          return { count: 0 };
+        },
+      },
+    };
+    const workerLateFailure = new SmokeWorker(config, mockPrismaLateFailure, mockRedisWorker);
+    const mockLateFailedJob = {
+      id: 'job-late-failure',
+      attemptsMade: 1,
+      opts: { attempts: 3 },
+      data: {
+        outboxId: 'published-outbox-id',
+        smokeId: 'smoke-late',
+        correlationId: 'corr-late',
+      },
+    } as any;
+    await workerLateFailure.handleJobFailure(
+      mockLateFailedJob,
+      new Error('Late timeout after published with password secretPassLate999')
+    );
+    if (!lateFailureUpdated) {
+      throw new Error('Expected handleJobFailure to call updateMany with conditional status check');
+    }
+
+    // B3. Verify formatStructuredLog redacts secrets in message string (Finding 2)
+    const logSecretMsg = formatStructuredLog({
+      service: 'worker',
+      level: 'error',
+      message:
+        'Worker failed connecting postgresql://usr:secretWorkerPass123@localhost:5433/db with token superSecret123',
+    });
+    assertNoSecretValues(logSecretMsg, ['secretWorkerPass123', 'superSecret123']);
 
     // C. OutboxDispatcher offline routing & correlation ID propagation (Findings 5 & 7)
     let enqueuedJobName = '';

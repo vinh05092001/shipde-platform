@@ -6,6 +6,7 @@ import {
   formatStructuredLog,
   normalizeCorrelationId,
   redactSensitiveData,
+  sanitizeErrorMessage,
 } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 import { SMOKE_QUEUE_NAME, QUEUE_SMOKE_EVENT_TYPE, QueueSmokePayload } from '@shipde/contracts';
@@ -138,7 +139,7 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
         );
       } catch (err: unknown) {
         failed++;
-        const errorMessage = (err as Error).message || 'Unknown dispatch error';
+        const errorMessage = sanitizeErrorMessage(err);
         console.error(
           formatStructuredLog({
             level: 'error',
