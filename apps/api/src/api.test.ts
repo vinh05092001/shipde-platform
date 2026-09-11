@@ -551,6 +551,182 @@ async function runApiTests() {
   }
   console.log('✅ Clean process startup with .env file passed');
 
+  // 6. Production Mode Dependency Configuration Tests (Finding 7)
+  console.log('Testing production mode explicit dependency requirements (fail-closed)...');
+  {
+    const prodDepCases = [
+      { REDIS_HOST: '' },
+      { REDIS_PORT: '' },
+      { S3_ENDPOINT: '' },
+      { S3_REGION: '' },
+      { S3_ACCESS_KEY: '' },
+      { S3_SECRET_KEY: '' },
+      { S3_BUCKET: '' },
+    ];
+    for (const depCase of prodDepCases) {
+      let caught = false;
+      try {
+        validateConfig({
+          NODE_ENV: 'production',
+          PORT: '3001',
+          WORKER_HEALTH_PORT: '3002',
+          DATABASE_URL: 'postgresql://postgres:pass@remote-host:5432/shipde_prod',
+          REDIS_HOST: 'redis.prod.internal',
+          REDIS_PORT: '6379',
+          S3_ENDPOINT: 'https://s3.prod.internal',
+          S3_REGION: 'ap-southeast-1',
+          S3_ACCESS_KEY: 'prod-access-key',
+          S3_SECRET_KEY: 'prod-secret-key',
+          S3_BUCKET: 'prod-bucket',
+          CARRIER_MODE: 'live',
+          ...depCase,
+        });
+      } catch (err: unknown) {
+        if (err instanceof ConfigValidationError) {
+          caught = true;
+        }
+      }
+      if (!caught) {
+        throw new Error(
+          `Expected validateConfig to fail closed in production for omitted setting: ${JSON.stringify(depCase)}`
+        );
+      }
+    }
+  }
+  console.log('✅ Production dependency fail-closed validation passed');
+
+  // 7. Complete Connection String URI Redaction Tests (Finding 8)
+  console.log('Testing complete connection string URI redaction in structured logs...');
+  {
+    const logWithPgUri = formatStructuredLog({
+      service: 'api',
+      level: 'error',
+      message:
+        'Connection failed to postgresql://postgres:mypassword@db.internal:5432/mydb?sslmode=require',
+      metadata: {
+        databaseUrl: 'postgresql://postgres:mypassword@db.internal:5432/mydb',
+        redisUrl: 'redis://:redispass@redis.internal:6379',
+      },
+    });
+    if (
+      logWithPgUri.includes('postgresql://') ||
+      logWithPgUri.includes('postgres://') ||
+      logWithPgUri.includes('redis://')
+    ) {
+      throw new Error(
+        `Expected connection strings to be completely redacted from structured log: ${logWithPgUri}`
+      );
+    }
+    const parsedPgLog = JSON.parse(logWithPgUri);
+    if (
+      parsedPgLog.message.includes('db.internal') ||
+      parsedPgLog.metadata.databaseUrl.includes('db.internal')
+    ) {
+      throw new Error(`Expected host and database name to be completely redacted: ${logWithPgUri}`);
+    }
+  }
+  console.log('✅ Connection string URI redaction tests passed');
+
+  // 8. OpenTelemetry Distributed Tracing Foundation Tests (Finding 10)
+  console.log('Testing OpenTelemetry distributed tracing foundation...');
+  {
+    const { initTelemetry, withSpan, extractTraceContext, injectTraceContext } =
+      await import('@shipde/config');
+    const { tracer, shutdown, getRecordedSpans } = initTelemetry('test-api');
+    await withSpan(tracer, 'test.foundation_span', async (span) => {
+      span.setAttribute('test.attribute', 'valid');
+    });
+    const spans = getRecordedSpans() as any[];
+    if (spans.length === 0 || !spans.some((s) => s.name === 'test.foundation_span')) {
+      throw new Error('Expected OpenTelemetry span to be recorded');
+    }
+
+    // Test trace context extraction and injection
+    const carrier: Record<string, string> = {
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+    };
+    const extracted = extractTraceContext(carrier);
+    if (!extracted) {
+      throw new Error('Expected trace context to be extracted from carrier');
+    }
+    const injectedCarrier: Record<string, string> = {};
+    injectTraceContext(injectedCarrier);
+
+    await shutdown();
+  }
+  console.log('✅ OpenTelemetry distributed tracing foundation passed');
+
+  // 9. OutboxService Allowlist Enforcement Tests (Finding 6)
+  console.log('Testing OutboxService allowlist enforcement on creation...');
+  {
+    const mockPrismaOutbox: any = {
+      outboxEvent: {
+        create: async (args: any) => ({ id: 'outbox-1', ...args.data }),
+      },
+    };
+    const outboxSvc = new OutboxService(mockPrismaOutbox);
+    let caughtUnsupported = false;
+    try {
+      await outboxSvc.createOutboxEvent({
+        eventType: 'UNSUPPORTED_EVENT_TYPE',
+        payload: { foo: 'bar' },
+        correlationId: 'corr-1',
+      });
+    } catch (err: any) {
+      if (err.message.includes('Unsupported outbox event type')) {
+        caughtUnsupported = true;
+      }
+    }
+    if (!caughtUnsupported) {
+      throw new Error('Expected OutboxService.createOutboxEvent to reject non-smoke event types');
+    }
+  }
+  console.log('✅ OutboxService allowlist enforcement passed');
+
+  // 10. OutboxService Lifecycle Helper Atomic Invariant Tests (Finding 3)
+  console.log(
+    'Testing OutboxService lifecycle helper atomic invariants and regression prevention...'
+  );
+  {
+    let statusState: OutboxStatusEnum = OutboxStatusEnum.PENDING;
+    const mockPrismaLifecycle: any = {
+      outboxEvent: {
+        findUnique: async () => ({ id: 'evt-1', status: statusState, attempts: 0 }),
+        findUniqueOrThrow: async () => ({ id: 'evt-1', status: statusState, attempts: 0 }),
+        updateMany: async (args: any) => {
+          if (args.where.status?.in?.includes(statusState)) {
+            statusState = args.data.status;
+            return { count: 1 };
+          }
+          return { count: 0 };
+        },
+      },
+    };
+    const lifecycleSvc = new OutboxService(mockPrismaLifecycle);
+
+    // Mark published from PENDING -> OK
+    await lifecycleSvc.markPublished('evt-1');
+    if (statusState !== OutboxStatusEnum.PUBLISHED) {
+      throw new Error('Expected markPublished to transition PENDING to PUBLISHED');
+    }
+
+    // Subsequent recordFailure on PUBLISHED event must be rejected and NEVER regress to FAILED or PENDING
+    let caughtRegress = false;
+    try {
+      await lifecycleSvc.recordFailure('evt-1', 'late failure');
+    } catch (err: any) {
+      if (err.message.includes('already PUBLISHED')) {
+        caughtRegress = true;
+      }
+    }
+    if (!caughtRegress || statusState !== OutboxStatusEnum.PUBLISHED) {
+      throw new Error(
+        'Expected recordFailure to reject already PUBLISHED event and prevent regression'
+      );
+    }
+  }
+  console.log('✅ OutboxService lifecycle helper atomic invariants passed');
+
   console.log('🎉 All @shipde/api tests passed successfully!');
 }
 

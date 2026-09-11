@@ -1,5 +1,5 @@
 import { Injectable, Inject, OnModuleDestroy } from '@nestjs/common';
-import { S3Client, ListBucketsCommand } from '@aws-sdk/client-s3';
+import { S3Client, HeadBucketCommand } from '@aws-sdk/client-s3';
 import { AppConfig } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 
@@ -36,12 +36,16 @@ export class StorageService implements OnModuleDestroy {
 
   /**
    * Bounded S3 storage readiness check.
-   * Executes ListBucketsCommand with an internal timeout.
+   * Executes HeadBucketCommand scoped to the configured bucket with an internal timeout (Finding 9).
    */
   async checkReadiness(timeoutMs = 2000): Promise<'up' | 'down'> {
     try {
       const s3 = this.getClient();
-      const checkPromise = s3.send(new ListBucketsCommand({}));
+      const checkPromise = s3.send(
+        new HeadBucketCommand({
+          Bucket: this.config.S3_BUCKET,
+        })
+      );
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('S3 check timeout')), timeoutMs)
       );

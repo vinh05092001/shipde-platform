@@ -11,6 +11,7 @@ import { RedisService } from './redis/redis.service';
 import { SmokeWorker, SmokeJobData } from './queue/smoke.worker';
 import { OutboxDispatcher } from './dispatcher/outbox.dispatcher';
 import { QUEUE_SMOKE_EVENT_TYPE, SMOKE_QUEUE_NAME } from '@shipde/contracts';
+import { StorageService } from './storage/storage.service';
 import { OutboxStatusEnum } from '@prisma/client';
 import {
   CORRELATION_ID_HEADER,
@@ -239,6 +240,8 @@ async function runWorkerTests() {
       outboxEvent: {
         findUnique: async () => ({
           id: 'test-outbox-1',
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          correlation_id: 'corr-unit-1',
           status: OutboxStatusEnum.PROCESSING,
           attempts: 0,
         }),
@@ -434,16 +437,17 @@ async function runWorkerTests() {
     ];
     mockQueue.getJobs = async () => mockRetainedJobs;
     let updateRecordArgs: any = null;
+    mockPrismaDispatcher.outboxEvent.updateMany = async (args: any) => {
+      updateRecordArgs = args;
+      return { count: 1 };
+    };
     mockPrismaDispatcher.outboxEvent.findUnique = async () => ({
       id: 'outbox-disp-1',
       idempotency_key: 'idemp-disp-1',
-      attempts: 3,
-      status: OutboxStatusEnum.FAILED,
+      attempts: 0,
+      status: OutboxStatusEnum.PENDING,
+      event_type: QUEUE_SMOKE_EVENT_TYPE,
     });
-    mockPrismaDispatcher.outboxEvent.update = async (args: any) => {
-      updateRecordArgs = args;
-      return { id: 'outbox-disp-1', status: OutboxStatusEnum.PENDING, attempts: 0 };
-    };
 
     await dispatcherUnit.retryFailed('outbox-disp-1');
     if (
@@ -456,9 +460,10 @@ async function runWorkerTests() {
     }
     if (
       updateRecordArgs?.data?.status !== OutboxStatusEnum.PENDING ||
-      updateRecordArgs?.data?.attempts !== 0
+      updateRecordArgs?.data?.attempts !== 0 ||
+      updateRecordArgs?.where?.status !== OutboxStatusEnum.FAILED
     ) {
-      throw new Error('retryFailed did not reset status to PENDING and attempts to 0');
+      throw new Error('retryFailed did not reset status to PENDING and attempts to 0 atomically');
     }
 
     // E. OutboxDispatcher recoverStaleProcessing conditional update (Finding 3)
@@ -1252,7 +1257,157 @@ async function runWorkerTests() {
           `Expected workerDbReadiness to be 'down' on blackhole, got ${workerDbReadiness}`
         );
       }
-      await blackholeWorkerPrisma.onModuleDestroy();
+      // 6.9 Concurrent manual retry race test (Finding 1)
+      console.log('Testing concurrent manual retries atomic claim safety...');
+      const failedRetryEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: 'concurrent-retry-test' },
+          correlation_id: `corr-retry-${Date.now()}`,
+          status: OutboxStatusEnum.FAILED,
+          attempts: 3,
+          last_error: 'Simulated failure',
+        },
+      });
+
+      // Two concurrent callers race to retry the same failed event
+      const [retryRes1, retryRes2] = await Promise.allSettled([
+        dispatcher.retryFailed(failedRetryEvent.id),
+        dispatcher.retryFailed(failedRetryEvent.id),
+      ]);
+
+      const fulfilledCount = [retryRes1, retryRes2].filter((r) => r.status === 'fulfilled').length;
+      const rejectedCount = [retryRes1, retryRes2].filter((r) => r.status === 'rejected').length;
+
+      if (fulfilledCount !== 1 || rejectedCount !== 1) {
+        throw new Error(
+          `Expected exactly 1 fulfilled and 1 rejected concurrent retry, got fulfilled=${fulfilledCount}, rejected=${rejectedCount}`
+        );
+      }
+
+      // Mark event published
+      await prismaService.outboxEvent.update({
+        where: { id: failedRetryEvent.id },
+        data: { status: OutboxStatusEnum.PUBLISHED, published_at: new Date() },
+      });
+
+      // Subsequent retry on PUBLISHED event MUST be rejected and cannot reset it
+      let caughtPublishReset = false;
+      try {
+        await dispatcher.retryFailed(failedRetryEvent.id);
+      } catch (err: any) {
+        if (err.message.includes('only FAILED events can be retried')) {
+          caughtPublishReset = true;
+        }
+      }
+      if (!caughtPublishReset) {
+        throw new Error('Expected retryFailed to reject PUBLISHED event and prevent reset');
+      }
+      await prismaService.outboxEvent.delete({ where: { id: failedRetryEvent.id } });
+      console.log('✅ Concurrent manual retry atomic claim safety verified');
+
+      // 6.10 Queue cleanup prefix collision test (Finding 4)
+      console.log('Testing queue cleanup prefix collision safety (order-1 vs order-10)...');
+      const prefixQueue = dispatcher.getQueue();
+      // Add two jobs: one for order-1, one for order-10
+      const jobOrder1 = await prefixQueue.add(
+        'smoke-job',
+        {
+          outboxId: 'evt-order-1',
+          smokeId: 'order-1',
+          correlationId: 'corr-1',
+          eventType: QUEUE_SMOKE_EVENT_TYPE,
+          idempotencyKey: 'order-1',
+        },
+        { jobId: 'order-1-del-0-12345' }
+      );
+      const jobOrder10 = await prefixQueue.add(
+        'smoke-job',
+        {
+          outboxId: 'evt-order-10',
+          smokeId: 'order-10',
+          correlationId: 'corr-10',
+          eventType: QUEUE_SMOKE_EVENT_TYPE,
+          idempotencyKey: 'order-10',
+        },
+        { jobId: 'order-10-del-0-12345' }
+      );
+
+      // Create a FAILED event with idempotency_key 'order-1'
+      const eventOrder1 = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: 'order-1' },
+          correlation_id: 'corr-1',
+          idempotency_key: 'order-1',
+          status: OutboxStatusEnum.FAILED,
+          attempts: 3,
+        },
+      });
+
+      await dispatcher.retryFailed(eventOrder1.id);
+
+      // job for order-10 MUST NOT have been removed!
+      const remainingJobOrder10 = await prefixQueue.getJob(jobOrder10.id!);
+      if (!remainingJobOrder10) {
+        throw new Error(
+          'Prefix collision detected: retrying order-1 improperly removed queued job for order-10'
+        );
+      }
+
+      await jobOrder10.remove().catch(() => {});
+      await prismaService.outboxEvent.delete({ where: { id: eventOrder1.id } });
+      console.log('✅ Queue cleanup prefix collision safety verified');
+
+      // 6.11 Malformed job handling and durable outbox requirement in SmokeWorker (Finding 2)
+      console.log('Testing SmokeWorker durable outbox requirement and malformed job rejection...');
+      const malformedWorker = new SmokeWorker(config, prismaService, redisService);
+
+      // Job missing outboxId completely
+      const jobMissingOutboxId = {
+        id: `job-missing-outbox-${Date.now()}`,
+        data: {
+          smokeId: 'missing-outbox',
+          correlationId: 'corr-missing',
+          eventType: QUEUE_SMOKE_EVENT_TYPE,
+        },
+      } as any;
+      const resMissingOutbox = await malformedWorker.processJob(jobMissingOutboxId);
+      if (resMissingOutbox.success !== false) {
+        throw new Error(
+          `Expected job missing outboxId to be rejected, got ${JSON.stringify(resMissingOutbox)}`
+        );
+      }
+
+      // Job referencing non-existent outboxId
+      const jobNonExistentOutbox = {
+        id: `job-nonexistent-outbox-${Date.now()}`,
+        data: {
+          outboxId: 'non-existent-uuid-999',
+          smokeId: 'non-existent',
+          correlationId: 'corr-none',
+          eventType: QUEUE_SMOKE_EVENT_TYPE,
+        },
+      } as any;
+      const resNonExistent = await malformedWorker.processJob(jobNonExistentOutbox);
+      if (resNonExistent.success !== false) {
+        throw new Error(
+          `Expected job referencing non-existent outbox to be rejected, got ${JSON.stringify(resNonExistent)}`
+        );
+      }
+      console.log('✅ SmokeWorker durable outbox requirement verified');
+
+      // 6.12 StorageService HeadBucketCommand check (Finding 9)
+      console.log('Testing StorageService bucket-scoped HeadBucketCommand check...');
+      const storageService = new StorageService(config);
+      const storageReadiness = await storageService.checkReadiness(2000);
+      if (storageReadiness !== 'up') {
+        throw new Error(
+          `Expected storage service checkReadiness to return 'up', got ${storageReadiness}`
+        );
+      }
+      await storageService.onModuleDestroy();
+      console.log('✅ StorageService bucket-scoped readiness check passed');
     } finally {
       await redisService.onModuleDestroy();
       await dispatcher.onModuleDestroy();

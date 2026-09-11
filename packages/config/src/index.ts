@@ -99,6 +99,30 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   }
   const DATABASE_URL = databaseUrlRaw || '';
 
+  if (NODE_ENV === 'production') {
+    if (!rawEnv.REDIS_HOST || rawEnv.REDIS_HOST.trim().length === 0) {
+      invalidFields.push('REDIS_HOST (required in production)');
+    }
+    if (!rawEnv.REDIS_PORT || rawEnv.REDIS_PORT.trim().length === 0) {
+      invalidFields.push('REDIS_PORT (required in production)');
+    }
+    if (!rawEnv.S3_ENDPOINT || rawEnv.S3_ENDPOINT.trim().length === 0) {
+      invalidFields.push('S3_ENDPOINT (required in production)');
+    }
+    if (!rawEnv.S3_REGION || rawEnv.S3_REGION.trim().length === 0) {
+      invalidFields.push('S3_REGION (required in production)');
+    }
+    if (!rawEnv.S3_ACCESS_KEY || rawEnv.S3_ACCESS_KEY.trim().length === 0) {
+      invalidFields.push('S3_ACCESS_KEY (required in production)');
+    }
+    if (!rawEnv.S3_SECRET_KEY || rawEnv.S3_SECRET_KEY.trim().length === 0) {
+      invalidFields.push('S3_SECRET_KEY (required in production)');
+    }
+    if (!rawEnv.S3_BUCKET || rawEnv.S3_BUCKET.trim().length === 0) {
+      invalidFields.push('S3_BUCKET (required in production)');
+    }
+  }
+
   const REDIS_HOST = rawEnv.REDIS_HOST || 'localhost';
   if (!REDIS_HOST || REDIS_HOST.trim().length === 0) {
     invalidFields.push('REDIS_HOST (cannot be empty)');
@@ -129,13 +153,13 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   const S3_REGION = rawEnv.S3_REGION || 'us-east-1';
 
   const rawAccessKey = rawEnv['S3_ACCESS_KEY'];
-  if (!rawAccessKey || rawAccessKey.trim().length === 0) {
+  if (NODE_ENV !== 'production' && (!rawAccessKey || rawAccessKey.trim().length === 0)) {
     invalidFields.push('S3_ACCESS_KEY (cannot be empty)');
   }
   const S3_ACCESS_KEY = rawAccessKey || '';
 
   const rawSecretKey = rawEnv['S3_SECRET_KEY'];
-  if (!rawSecretKey || rawSecretKey.trim().length === 0) {
+  if (NODE_ENV !== 'production' && (!rawSecretKey || rawSecretKey.trim().length === 0)) {
     invalidFields.push('S3_SECRET_KEY (cannot be empty)');
   }
   const S3_SECRET_KEY = rawSecretKey || '';
@@ -228,18 +252,29 @@ const SENSITIVE_PATTERNS = [
   /connection.*string/i,
 ];
 
+import { getCurrentTraceAndSpanId } from './telemetry.js';
+
 const REDACTED_MARKER = '[REDACTED]';
 
 /**
  * Recursively redacts sensitive keys and values from objects, arrays, and error metadata.
+ * Completely redacts database connection strings (PostgreSQL, Redis, etc.) and credential URIs (Finding 8).
  */
 export function redactSensitiveData(data: unknown): unknown {
   if (data === null || data === undefined) return data;
   if (typeof data === 'string') {
     let sanitized = data;
-    // Redact potential postgres/http passwords in connection strings
+    // Redact complete connection string URIs (PostgreSQL, Redis, MongoDB, AMQP)
+    sanitized = sanitized.replace(
+      /(postgresql|postgres|redis|rediss|mongodb|mongodb\+srv|amqp|amqps):\/\/[^\s"',;]+/gi,
+      REDACTED_MARKER
+    );
+    // Redact any other URI containing credentials (user:pass@host)
     if (sanitized.includes('://') && sanitized.includes('@')) {
-      sanitized = sanitized.replace(/(:\/\/[^:]+:)[^@]+(@)/g, `$1${REDACTED_MARKER}$2`);
+      sanitized = sanitized.replace(
+        /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"',;]*@[^\s"',;]+/g,
+        REDACTED_MARKER
+      );
     }
     // Redact Bearer tokens
     sanitized = sanitized.replace(/(bearer\s+)([^\s,;]+)/gi, `$1${REDACTED_MARKER}`);
@@ -263,7 +298,7 @@ export function redactSensitiveData(data: unknown): unknown {
       result[key] = REDACTED_MARKER;
     } else if (typeof value === 'object' && value !== null) {
       result[key] = redactSensitiveData(value);
-    } else if (typeof value === 'string' && value.includes('://') && value.includes('@')) {
+    } else if (typeof value === 'string') {
       result[key] = redactSensitiveData(value);
     } else {
       result[key] = value;
@@ -286,6 +321,8 @@ export interface StructuredLogEntry {
   service: string;
   message: string;
   correlationId?: string;
+  traceId?: string;
+  spanId?: string;
   timestamp?: string;
   metadata?: Record<string, unknown>;
 }
@@ -293,6 +330,7 @@ export interface StructuredLogEntry {
 /**
  * Formats a log entry into a single line of sanitized, machine-parseable JSON.
  * Redacts both metadata AND message text to prevent accidental credential leakage (Finding 2).
+ * Integrates distributed tracing correlation with traceId and spanId (Finding 10).
  */
 export function formatStructuredLog(entry: StructuredLogEntry): string {
   const sanitizedMetadata = entry.metadata
@@ -304,11 +342,17 @@ export function formatStructuredLog(entry: StructuredLogEntry): string {
       ? (redactSensitiveData(entry.message) as string)
       : entry.message;
 
+  const activeIds = getCurrentTraceAndSpanId();
+  const traceId = entry.traceId || activeIds.traceId;
+  const spanId = entry.spanId || activeIds.spanId;
+
   const logObject = {
     level: entry.level,
     time: entry.timestamp || new Date().toISOString(),
     service: entry.service,
     correlationId: entry.correlationId,
+    ...(traceId ? { traceId } : {}),
+    ...(spanId ? { spanId } : {}),
     message: sanitizedMessage,
     ...(sanitizedMetadata && Object.keys(sanitizedMetadata).length > 0
       ? { metadata: sanitizedMetadata }
@@ -317,3 +361,5 @@ export function formatStructuredLog(entry: StructuredLogEntry): string {
 
   return JSON.stringify(logObject);
 }
+
+export * from './telemetry.js';

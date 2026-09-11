@@ -57,6 +57,19 @@ services:
       retries: 15
       start_period: 5s
 
+  minio-init:
+    image: minio/mc:RELEASE.2025-02-15T02-34-39Z
+    container_name: shipde-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
+      /usr/bin/mc mb --ignore-existing local/${S3_BUCKET:-shipde-local};
+      exit 0;
+      "
+
 volumes:
   shipde-postgres-data:
     name: shipde-postgres-data

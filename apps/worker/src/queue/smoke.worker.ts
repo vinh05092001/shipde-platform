@@ -7,18 +7,21 @@ import {
   formatStructuredLog,
   normalizeCorrelationId,
   redactSensitiveData,
+  getTracer,
+  withSpan,
 } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 import { SMOKE_QUEUE_NAME, QUEUE_SMOKE_EVENT_TYPE } from '@shipde/contracts';
 import { OutboxStatusEnum } from '@prisma/client';
 
 export interface SmokeJobData {
-  outboxId?: string;
+  outboxId: string;
   smokeId: string;
   correlationId: string;
   eventType?: string;
   payload?: Record<string, unknown>;
   idempotencyKey?: string;
+  traceContext?: Record<string, string>;
 }
 
 @Injectable()
@@ -59,20 +62,63 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
 
   async processJob(job: Job<SmokeJobData>): Promise<{ success: boolean; duplicate: boolean }> {
     const data = job.data;
-    const correlationId = normalizeCorrelationId(data.correlationId);
+    const initialCorrelationId = normalizeCorrelationId(data?.correlationId);
 
-    // Restrict foundation worker strictly to QUEUE_SMOKE_EVENT_TYPE (Finding 4)
-    // Require data.eventType === QUEUE_SMOKE_EVENT_TYPE; jobs with omitted or non-smoke event type must be rejected.
-    if (data.eventType !== QUEUE_SMOKE_EVENT_TYPE) {
+    // 1. Restrict foundation worker strictly to QUEUE_SMOKE_EVENT_TYPE (Finding 4)
+    if (data?.eventType !== QUEUE_SMOKE_EVENT_TYPE) {
       console.warn(
         formatStructuredLog({
           level: 'warn',
           service: 'worker',
-          correlationId,
-          message: `SmokeWorker ignoring unsupported or missing event type '${data.eventType}' for job ${job.id}`,
+          correlationId: initialCorrelationId,
+          message: `SmokeWorker ignoring unsupported or missing event type '${data?.eventType}' for job ${job.id}`,
           metadata: {
             jobId: job.id,
-            eventType: data.eventType,
+            eventType: data?.eventType,
+            outboxId: data?.outboxId,
+          },
+        })
+      );
+      return { success: false, duplicate: false };
+    }
+
+    // 2. Strictly require durable outboxId (Finding 2)
+    if (!data?.outboxId) {
+      console.error(
+        formatStructuredLog({
+          level: 'error',
+          service: 'worker',
+          correlationId: initialCorrelationId,
+          message: `SmokeWorker rejected job ${job.id}: missing required durable outboxId`,
+          metadata: {
+            jobId: job.id,
+            data,
+          },
+        })
+      );
+      return { success: false, duplicate: false };
+    }
+
+    // 3. Load durable outbox record from database (Finding 2)
+    let outboxRecord = null;
+    try {
+      outboxRecord = await this.prisma.outboxEvent.findUnique({
+        where: { id: data.outboxId },
+      });
+    } catch {
+      // Invalid UUID or database query error
+      outboxRecord = null;
+    }
+
+    if (!outboxRecord) {
+      console.error(
+        formatStructuredLog({
+          level: 'error',
+          service: 'worker',
+          correlationId: initialCorrelationId,
+          message: `SmokeWorker rejected job ${job.id}: durable outbox event ${data.outboxId} not found in database`,
+          metadata: {
+            jobId: job.id,
             outboxId: data.outboxId,
           },
         })
@@ -80,151 +126,167 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
       return { success: false, duplicate: false };
     }
 
-    console.log(
-      formatStructuredLog({
-        level: 'info',
-        service: 'worker',
-        correlationId,
-        message: `Processing smoke job ${job.id} for event ${data.eventType || QUEUE_SMOKE_EVENT_TYPE}`,
-        metadata: {
-          jobId: job.id,
-          smokeId: data.smokeId,
-          outboxId: data.outboxId,
-        },
-      })
-    );
-
-    const jobId = job.id || data.smokeId;
-    const dedupKey = `smoke:dedup:${jobId}`;
-
-    // 1. Redis Deduplication Guard (AC-FOUND-03-10)
-    if (this.redisService) {
-      try {
-        const redis = this.redisService.getClient();
-        if (redis.status !== 'ready') {
-          await redis.connect();
-        }
-        const acquired = await redis.set(dedupKey, '1', 'EX', 86400, 'NX');
-        if (!acquired) {
-          // Reconcile against durable database state before acknowledging duplicate (Finding 4)
-          // If outbox event is not yet PUBLISHED (e.g. process crashed before committing),
-          // do NOT drop the work as a duplicate; fall through to process the durable effect.
-          if (data.outboxId) {
-            const outboxRecord = await this.prisma.outboxEvent.findUnique({
-              where: { id: data.outboxId },
-            });
-            if (outboxRecord && outboxRecord.status === OutboxStatusEnum.PUBLISHED) {
-              this.duplicateCount++;
-              console.log(
-                formatStructuredLog({
-                  level: 'warn',
-                  service: 'worker',
-                  correlationId,
-                  message: `Duplicate job ${job.id} skipped via Redis deduplication key ${dedupKey}.`,
-                  metadata: {
-                    jobId: job.id,
-                    dedupKey,
-                  },
-                })
-              );
-              return { success: true, duplicate: true };
-            }
-          } else {
-            this.duplicateCount++;
-            return { success: true, duplicate: true };
-          }
-        }
-      } catch {
-        // Fall through to database guard if Redis fails
-      }
-    }
-
-    try {
-      // 2. Database Outbox State Deduplication Guard
-      if (data.outboxId) {
-        const outboxRecord = await this.prisma.outboxEvent.findUnique({
-          where: { id: data.outboxId },
-        });
-
-        if (outboxRecord && outboxRecord.status === OutboxStatusEnum.PUBLISHED) {
-          this.duplicateCount++;
-          console.log(
-            formatStructuredLog({
-              level: 'warn',
-              service: 'worker',
-              correlationId,
-              message: `Duplicate job ${job.id} received for already published outbox event ${data.outboxId}. Acknowledged without duplicating side effects.`,
-              metadata: {
-                outboxId: data.outboxId,
-                status: outboxRecord.status,
-              },
-            })
-          );
-          return { success: true, duplicate: true };
-        }
-
-        // Execute deterministic smoke side effect: transition outbox event to PUBLISHED atomically
-        // Requiring in-flight status (PROCESSING or PENDING) and event_type: QUEUE_SMOKE_EVENT_TYPE
-        // prevents read-check-write race and accidental publication of non-smoke events (Finding 4)
-        const claimEffect = await this.prisma.outboxEvent.updateMany({
-          where: {
-            id: data.outboxId,
-            event_type: QUEUE_SMOKE_EVENT_TYPE,
-            status: { in: [OutboxStatusEnum.PROCESSING, OutboxStatusEnum.PENDING] },
-          },
-          data: {
-            status: OutboxStatusEnum.PUBLISHED,
-            published_at: new Date(),
-            attempts: { increment: 1 },
-            last_error: null,
-          },
-        });
-
-        if (claimEffect.count === 0) {
-          // Another concurrent delivery already committed the effect to PUBLISHED
-          this.duplicateCount++;
-          console.log(
-            formatStructuredLog({
-              level: 'warn',
-              service: 'worker',
-              correlationId,
-              message: `Duplicate job ${job.id} detected via atomic database claim guard for outbox event ${data.outboxId}. Side effects already committed.`,
-              metadata: {
-                outboxId: data.outboxId,
-              },
-            })
-          );
-          return { success: true, duplicate: true };
-        }
-      }
-
-      this.processedCount++;
-      console.log(
+    if (outboxRecord.event_type !== QUEUE_SMOKE_EVENT_TYPE) {
+      console.error(
         formatStructuredLog({
-          level: 'info',
+          level: 'error',
           service: 'worker',
-          correlationId,
-          message: `Successfully executed deterministic smoke effect for job ${job.id}`,
+          correlationId: initialCorrelationId,
+          message: `SmokeWorker rejected job ${job.id}: durable outbox event ${data.outboxId} has unsupported type '${outboxRecord.event_type}'`,
           metadata: {
             jobId: job.id,
-            smokeId: data.smokeId,
             outboxId: data.outboxId,
+            eventType: outboxRecord.event_type,
           },
         })
       );
-
-      return { success: true, duplicate: false };
-    } catch (err) {
-      // Clear Redis dedup key on failure so retry attempt can acquire it
-      if (this.redisService) {
-        try {
-          await this.redisService.getClient().del(dedupKey);
-        } catch {
-          // ignore
-        }
-      }
-      throw err;
+      return { success: false, duplicate: false };
     }
+
+    // Derive correlationId and payload strictly from durable outbox record (Finding 2)
+    const correlationId = normalizeCorrelationId(outboxRecord.correlation_id || data.correlationId);
+    const payload = (outboxRecord.payload as Record<string, unknown>) || data.payload;
+
+    const tracer = getTracer('shipde-worker');
+    return withSpan(
+      tracer,
+      'smoke.process',
+      async () => {
+        console.log(
+          formatStructuredLog({
+            level: 'info',
+            service: 'worker',
+            correlationId,
+            message: `Processing smoke job ${job.id} for outbox event ${data.outboxId}`,
+            metadata: {
+              jobId: job.id,
+              smokeId: data.smokeId,
+              outboxId: data.outboxId,
+            },
+          })
+        );
+
+        const jobId = job.id || data.smokeId;
+        const dedupKey = `smoke:dedup:${jobId}`;
+
+        // 4. Redis Deduplication Guard (AC-FOUND-03-10)
+        if (this.redisService) {
+          try {
+            const redis = this.redisService.getClient();
+            if (redis.status !== 'ready') {
+              await redis.connect();
+            }
+            const acquired = await redis.set(dedupKey, '1', 'EX', 86400, 'NX');
+            if (!acquired) {
+              // Reconcile against durable database state before acknowledging duplicate
+              if (outboxRecord.status === OutboxStatusEnum.PUBLISHED) {
+                this.duplicateCount++;
+                console.log(
+                  formatStructuredLog({
+                    level: 'warn',
+                    service: 'worker',
+                    correlationId,
+                    message: `Duplicate job ${job.id} skipped via Redis deduplication key ${dedupKey}.`,
+                    metadata: {
+                      jobId: job.id,
+                      dedupKey,
+                    },
+                  })
+                );
+                return { success: true, duplicate: true };
+              }
+            }
+          } catch {
+            // Fall through to database guard if Redis fails
+          }
+        }
+
+        try {
+          // 5. Database Outbox State Deduplication Guard
+          if (outboxRecord.status === OutboxStatusEnum.PUBLISHED) {
+            this.duplicateCount++;
+            console.log(
+              formatStructuredLog({
+                level: 'warn',
+                service: 'worker',
+                correlationId,
+                message: `Duplicate job ${job.id} received for already published outbox event ${data.outboxId}. Acknowledged without duplicating side effects.`,
+                metadata: {
+                  outboxId: data.outboxId,
+                  status: outboxRecord.status,
+                },
+              })
+            );
+            return { success: true, duplicate: true };
+          }
+
+          // Execute deterministic smoke side effect: transition outbox event to PUBLISHED atomically
+          const claimEffect = await this.prisma.outboxEvent.updateMany({
+            where: {
+              id: data.outboxId,
+              event_type: QUEUE_SMOKE_EVENT_TYPE,
+              status: { in: [OutboxStatusEnum.PROCESSING, OutboxStatusEnum.PENDING] },
+            },
+            data: {
+              status: OutboxStatusEnum.PUBLISHED,
+              published_at: new Date(),
+              attempts: { increment: 1 },
+              last_error: null,
+            },
+          });
+
+          if (claimEffect.count === 0) {
+            // Another concurrent delivery already committed the effect to PUBLISHED
+            this.duplicateCount++;
+            console.log(
+              formatStructuredLog({
+                level: 'warn',
+                service: 'worker',
+                correlationId,
+                message: `Duplicate job ${job.id} detected via atomic database claim guard for outbox event ${data.outboxId}. Side effects already committed.`,
+                metadata: {
+                  outboxId: data.outboxId,
+                },
+              })
+            );
+            return { success: true, duplicate: true };
+          }
+
+          this.processedCount++;
+          console.log(
+            formatStructuredLog({
+              level: 'info',
+              service: 'worker',
+              correlationId,
+              message: `Successfully executed deterministic smoke effect for job ${job.id}`,
+              metadata: {
+                jobId: job.id,
+                smokeId: data.smokeId,
+                outboxId: data.outboxId,
+                payload,
+              },
+            })
+          );
+
+          return { success: true, duplicate: false };
+        } catch (err) {
+          // Clear Redis dedup key on failure so retry attempt can acquire it
+          if (this.redisService) {
+            try {
+              await this.redisService.getClient().del(dedupKey);
+            } catch {
+              // ignore
+            }
+          }
+          throw err;
+        }
+      },
+      {
+        'job.id': job.id || '',
+        'outbox.id': data.outboxId || '',
+        correlation_id: correlationId,
+      }
+    );
   }
 
   /**
@@ -267,7 +329,6 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
 
     if (job.data?.outboxId) {
       try {
-        // Atomically transition failure state ONLY if still in in-flight status and matches smoke event type (never overwrite PUBLISHED!) (Finding 4)
         const updateResult = await this.prisma.outboxEvent.updateMany({
           where: {
             id: job.data.outboxId,

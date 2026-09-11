@@ -7,9 +7,12 @@ import {
   normalizeCorrelationId,
   redactSensitiveData,
   sanitizeErrorMessage,
+  getTracer,
+  withSpan,
+  injectTraceContext,
 } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
-import { SMOKE_QUEUE_NAME, QUEUE_SMOKE_EVENT_TYPE, QueueSmokePayload } from '@shipde/contracts';
+import { SMOKE_QUEUE_NAME, QUEUE_SMOKE_EVENT_TYPE } from '@shipde/contracts';
 import { OutboxStatusEnum, OutboxEvent } from '@prisma/client';
 import { SmokeJobData } from '../queue/smoke.worker';
 
@@ -17,6 +20,7 @@ import { SmokeJobData } from '../queue/smoke.worker';
 export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
   private queue: Queue<SmokeJobData> | null = null;
   private pollInterval: NodeJS.Timeout | null = null;
+  private isTickRunning = false;
   private readonly config: AppConfig;
 
   constructor(
@@ -44,12 +48,19 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
       },
     });
 
+    // Serialize interval ticks to prevent overlapping execution (Finding 5)
     this.pollInterval = setInterval(async () => {
+      if (this.isTickRunning) {
+        return;
+      }
+      this.isTickRunning = true;
       try {
         await this.dispatchPending();
         await this.recoverStaleProcessing();
       } catch {
         // Errors logged internally in dispatchPending / recoverStaleProcessing
+      } finally {
+        this.isTickRunning = false;
       }
     }, 1000);
   }
@@ -63,119 +74,124 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Scans for pending outbox events and dispatches them to BullMQ.
-   * Guarantees at-least-once dispatch with bounded retries and error observability.
+   * Guarantees at-least-once dispatch with bounded retries and OpenTelemetry distributed tracing (Finding 10).
    */
   async dispatchPending(limit = 10): Promise<{ dispatched: number; failed: number }> {
-    const now = new Date();
-    // Restrict foundation dispatcher to QUEUE_SMOKE_EVENT_TYPE only (P2 Finding 5)
-    const pendingEvents = await this.prisma.outboxEvent.findMany({
-      where: {
-        event_type: QUEUE_SMOKE_EVENT_TYPE,
-        status: OutboxStatusEnum.PENDING,
-        scheduled_at: { lte: now },
-      },
-      take: limit,
-      orderBy: { scheduled_at: 'asc' },
-    });
+    const tracer = getTracer('shipde-worker');
+    return withSpan(tracer, 'outbox.dispatch_pending', async () => {
+      const now = new Date();
+      const pendingEvents = await this.prisma.outboxEvent.findMany({
+        where: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          status: OutboxStatusEnum.PENDING,
+          scheduled_at: { lte: now },
+        },
+        take: limit,
+        orderBy: { scheduled_at: 'asc' },
+      });
 
-    let dispatched = 0;
-    let failed = 0;
+      let dispatched = 0;
+      let failed = 0;
 
-    for (const event of pendingEvents) {
-      const correlationId = normalizeCorrelationId(event.correlation_id);
-      try {
-        // Atomically claim only PENDING record to PROCESSING and record processing-start timestamp
-        // This prevents race condition with concurrent workers and ensures stale recovery measures from claim time (Finding 3)
-        const claimResult = await this.prisma.outboxEvent.updateMany({
-          where: {
-            id: event.id,
-            status: OutboxStatusEnum.PENDING,
-          },
-          data: {
-            status: OutboxStatusEnum.PROCESSING,
-            scheduled_at: new Date(),
-          },
-        });
-
-        if (claimResult.count === 0) {
-          // Event was concurrently claimed or completed, skip
-          continue;
-        }
-
-        const queue = this.getQueue();
-        const payloadObj = event.payload as Record<string, unknown>;
-        // Use attempt-specific delivery generation ID to ensure BullMQ never collides with retained jobs (Finding 2)
-        const attemptJobId = `${event.idempotency_key || event.id}-del-${event.attempts}-${Date.now()}`;
-
-        await queue.add(
-          'smoke-job',
-          {
-            outboxId: event.id,
-            smokeId: (payloadObj?.smokeId as string) || event.id,
-            correlationId,
-            eventType: event.event_type,
-            payload: payloadObj,
-            idempotencyKey: event.idempotency_key || undefined,
-          },
-          {
-            jobId: attemptJobId,
-          }
-        );
-
-        dispatched++;
-        console.log(
-          formatStructuredLog({
-            level: 'info',
-            service: 'worker',
-            correlationId,
-            message: `Outbox event ${event.id} (${event.event_type}) dispatched to BullMQ queue ${SMOKE_QUEUE_NAME}`,
-            metadata: {
-              outboxId: event.id,
-              eventType: event.event_type,
-              queue: SMOKE_QUEUE_NAME,
-              jobId: attemptJobId,
+      for (const event of pendingEvents) {
+        const correlationId = normalizeCorrelationId(event.correlation_id);
+        try {
+          // Atomically claim only PENDING record to PROCESSING and record processing-start timestamp
+          const claimResult = await this.prisma.outboxEvent.updateMany({
+            where: {
+              id: event.id,
+              status: OutboxStatusEnum.PENDING,
             },
-          })
-        );
-      } catch (err: unknown) {
-        failed++;
-        const errorMessage = sanitizeErrorMessage(err);
-        console.error(
-          formatStructuredLog({
-            level: 'error',
-            service: 'worker',
-            correlationId,
-            message: `Failed to dispatch outbox event ${event.id}: ${errorMessage}`,
-            metadata: { outboxId: event.id, error: errorMessage },
-          })
-        );
+            data: {
+              status: OutboxStatusEnum.PROCESSING,
+              scheduled_at: new Date(),
+            },
+          });
 
-        // Record error and schedule bounded retry with exponential backoff.
-        // Use conditional update requiring PROCESSING status so we never regress a concurrently PUBLISHED record (Finding 1)
-        const nextAttempts = event.attempts + 1;
-        const isExhausted = nextAttempts >= 3;
-        await this.prisma.outboxEvent.updateMany({
-          where: {
-            id: event.id,
-            status: OutboxStatusEnum.PROCESSING,
-          },
-          data: {
-            status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
-            attempts: nextAttempts,
-            last_error: errorMessage,
-            scheduled_at: new Date(Date.now() + Math.min(1000 * Math.pow(2, nextAttempts), 30000)),
-          },
-        });
+          if (claimResult.count === 0) {
+            // Event was concurrently claimed or completed, skip
+            continue;
+          }
+
+          const queue = this.getQueue();
+          const payloadObj = event.payload as Record<string, unknown>;
+          const attemptJobId = `${event.idempotency_key || event.id}-del-${event.attempts}-${Date.now()}`;
+
+          // Inject active trace context into job carrier
+          const traceCarrier: Record<string, string> = {};
+          injectTraceContext(traceCarrier);
+
+          await queue.add(
+            'smoke-job',
+            {
+              outboxId: event.id,
+              smokeId: (payloadObj?.smokeId as string) || event.id,
+              correlationId,
+              eventType: event.event_type,
+              payload: payloadObj,
+              idempotencyKey: event.idempotency_key || undefined,
+              traceContext: traceCarrier,
+            },
+            {
+              jobId: attemptJobId,
+            }
+          );
+
+          dispatched++;
+          console.log(
+            formatStructuredLog({
+              level: 'info',
+              service: 'worker',
+              correlationId,
+              message: `Outbox event ${event.id} (${event.event_type}) dispatched to BullMQ queue ${SMOKE_QUEUE_NAME}`,
+              metadata: {
+                outboxId: event.id,
+                eventType: event.event_type,
+                queue: SMOKE_QUEUE_NAME,
+                jobId: attemptJobId,
+              },
+            })
+          );
+        } catch (err: unknown) {
+          failed++;
+          const errorMessage = sanitizeErrorMessage(err);
+          console.error(
+            formatStructuredLog({
+              level: 'error',
+              service: 'worker',
+              correlationId,
+              message: `Failed to dispatch outbox event ${event.id}: ${errorMessage}`,
+              metadata: { outboxId: event.id, error: errorMessage },
+            })
+          );
+
+          const nextAttempts = event.attempts + 1;
+          const isExhausted = nextAttempts >= 3;
+          await this.prisma.outboxEvent.updateMany({
+            where: {
+              id: event.id,
+              status: OutboxStatusEnum.PROCESSING,
+            },
+            data: {
+              status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
+              attempts: nextAttempts,
+              last_error: errorMessage,
+              scheduled_at: new Date(
+                Date.now() + Math.min(1000 * Math.pow(2, nextAttempts), 30000)
+              ),
+            },
+          });
+        }
       }
-    }
 
-    return { dispatched, failed };
+      return { dispatched, failed };
+    });
   }
 
   /**
    * Recovers records stranded in PROCESSING beyond a visibility window.
-   * Uses conditional updateMany requiring PROCESSING status to avoid overwriting concurrently PUBLISHED records.
-   * If attempts >= 3, transitions them to FAILED; otherwise restores them to PENDING for retry. (Finding 3)
+   * Includes observed scheduled_at and attempts in the conditional update to prevent regressing
+   * fresh claims or concurrent publications (Finding 5).
    */
   async recoverStaleProcessing(
     olderThanMs = 60000
@@ -195,11 +211,13 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
     for (const event of staleEvents) {
       const nextAttempts = event.attempts + 1;
       const isExhausted = nextAttempts >= 3;
-      // Atomically transition ONLY if still in PROCESSING state (prevents regressing PUBLISHED events!)
+      // Atomically transition ONLY if still in PROCESSING state with observed scheduled_at and attempts (Finding 5)
       const updateResult = await this.prisma.outboxEvent.updateMany({
         where: {
           id: event.id,
           status: OutboxStatusEnum.PROCESSING,
+          scheduled_at: event.scheduled_at,
+          attempts: event.attempts,
         },
         data: {
           status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
@@ -227,41 +245,16 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Manually resets a FAILED outbox event back to PENDING.
-   * Purges all retained jobs for this outbox event from BullMQ to guarantee clean re-dispatch. (Finding 2)
+   * Uses an atomic conditional FAILED-to-PENDING claim to prevent republishing completed events (Finding 1).
+   * Uses exact match or delimited prefix cleanup to avoid prefix collisions (Finding 4).
    */
   async retryFailed(outboxId: string): Promise<OutboxEvent> {
-    const existing = await this.prisma.outboxEvent.findUnique({
-      where: { id: outboxId },
-    });
-    if (!existing) {
-      throw new Error(`Outbox event ${outboxId} not found`);
-    }
-    if (existing.status !== OutboxStatusEnum.FAILED) {
-      throw new Error(
-        `Cannot retry outbox event ${outboxId} with status ${existing.status}; only FAILED events can be retried`
-      );
-    }
-
-    // Safely purge any retained jobs from BullMQ queue to avoid duplicate jobId rejection
-    try {
-      const queue = this.getQueue();
-      const baseKey = existing.idempotency_key || existing.id;
-      const jobs = await queue.getJobs(['failed', 'completed', 'waiting', 'active', 'delayed']);
-      for (const j of jobs) {
-        if (
-          j.id?.startsWith(baseKey) ||
-          j.data?.outboxId === existing.id ||
-          j.data?.idempotencyKey === baseKey
-        ) {
-          await j.remove();
-        }
-      }
-    } catch {
-      // Best-effort cleanup
-    }
-
-    return this.prisma.outboxEvent.update({
-      where: { id: outboxId },
+    // 1. Atomically claim FAILED -> PENDING
+    const claim = await this.prisma.outboxEvent.updateMany({
+      where: {
+        id: outboxId,
+        status: OutboxStatusEnum.FAILED,
+      },
       data: {
         status: OutboxStatusEnum.PENDING,
         attempts: 0,
@@ -269,6 +262,55 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
         scheduled_at: new Date(),
       },
     });
+
+    if (claim.count === 0) {
+      const existing = await this.prisma.outboxEvent.findUnique({
+        where: { id: outboxId },
+      });
+      if (!existing) {
+        throw new Error(`Outbox event ${outboxId} not found`);
+      }
+      throw new Error(
+        `Cannot retry outbox event ${outboxId} with status ${existing.status}; only FAILED events can be retried`
+      );
+    }
+
+    // 2. Safely purge retained jobs from BullMQ queue using exact match or delimited prefix (Finding 4)
+    try {
+      const queue = this.getQueue();
+      const existing = await this.prisma.outboxEvent.findUnique({
+        where: { id: outboxId },
+      });
+      if (existing) {
+        const baseKey = existing.idempotency_key || existing.id;
+        const jobs = await queue.getJobs(['failed', 'completed', 'waiting', 'active', 'delayed']);
+        for (const j of jobs) {
+          // Exact match or delimited prefix (e.g. order-1-del-... or order-1:...)
+          // NEVER match order-10 when baseKey is order-1
+          const isExactOrDelimited =
+            j.id === baseKey ||
+            j.id?.startsWith(`${baseKey}-del-`) ||
+            j.id?.startsWith(`${baseKey}:`);
+          if (
+            isExactOrDelimited ||
+            j.data?.outboxId === existing.id ||
+            (j.data?.idempotencyKey && j.data.idempotencyKey === baseKey)
+          ) {
+            await j.remove();
+          }
+        }
+      }
+    } catch {
+      // Best-effort cleanup
+    }
+
+    const record = await this.prisma.outboxEvent.findUnique({
+      where: { id: outboxId },
+    });
+    if (!record) {
+      throw new Error(`Outbox event ${outboxId} not found`);
+    }
+    return record;
   }
 
   async onModuleDestroy(): Promise<void> {

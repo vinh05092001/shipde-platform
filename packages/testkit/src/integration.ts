@@ -5,13 +5,17 @@
  * - Local Docker infrastructure connectivity (PostgreSQL, Redis, MinIO)
  * - API & Worker independent startup, liveness and readiness HTTP probes
  * - Correlation ID header propagation across services
+ * - Process-level dependency outage resilience
+ * - Live dependency restoration without process restart (AC-FOUND-03-06, Finding 11)
  * - Durable outbox insert within transaction -> BullMQ dispatch -> Smoke worker processing -> Published state
+ * - Strict structured JSON log schema parsing, correlation propagation, and zero connection-string leakage (Finding 12)
  * - Clean shutdown of background child processes
  */
 import { spawn, ChildProcess, execSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { PrismaClient } from '@prisma/client';
+import { S3Client, HeadBucketCommand, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { assertValidLivenessResponse, assertValidReadinessResponse } from './index';
 import { QUEUE_SMOKE_EVENT_TYPE } from '@shipde/contracts';
 
@@ -107,7 +111,6 @@ async function testDependencyOutage(
   });
 
   try {
-    // 1. Wait for process to be live (must return 200 OK despite dependency down!)
     await waitForHttpOk(`http://localhost:${testPort}/health/live`, 15000);
     const liveRes = await fetch(`http://localhost:${testPort}/health/live`);
     if (liveRes.status !== 200) {
@@ -116,7 +119,6 @@ async function testDependencyOutage(
       );
     }
 
-    // 2. Readiness MUST return 503 Service Unavailable with status: error and expected check 'down'
     const readyRes = await fetch(`http://localhost:${testPort}/health/ready`);
     if (readyRes.status !== 503) {
       throw new Error(
@@ -138,6 +140,66 @@ async function testDependencyOutage(
   }
 }
 
+/**
+ * Validates and parses every non-empty line of captured application logs (Finding 12).
+ * Strictly verifies schema, absence of database connection strings, and correlation.
+ */
+function validateAndParseStructuredLogs(
+  rawChunks: string[],
+  serviceName: 'api' | 'worker'
+): Array<Record<string, unknown>> {
+  const combined = rawChunks.join('');
+  const lines = combined
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const parsedRecords: Array<Record<string, unknown>> = [];
+
+  for (const line of lines) {
+    // Prohibition: Raw database connection string or unredacted passwords must NEVER appear in logs
+    if (line.includes('postgresql://') || line.includes('postgres://')) {
+      throw new Error(
+        `[SECURITY LEAK] Raw database connection string detected in ${serviceName} logs: ${line}`
+      );
+    }
+    if (line.includes('testPassword') || line.includes('supersecret')) {
+      throw new Error(`[SECURITY LEAK] Secret credential detected in ${serviceName} logs: ${line}`);
+    }
+
+    // Inspect JSON application log records
+    if (line.startsWith('{') && line.endsWith('}')) {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(line);
+      } catch (err: any) {
+        throw new Error(
+          `Malformed JSON in ${serviceName} structured log: ${line} (${err.message})`
+        );
+      }
+
+      if (!['debug', 'info', 'warn', 'error'].includes(parsed.level as string)) {
+        throw new Error(`Invalid log level '${parsed.level}' in ${serviceName} log: ${line}`);
+      }
+      if (parsed.service !== serviceName) {
+        throw new Error(
+          `Mismatched service '${parsed.service}' (expected '${serviceName}') in log: ${line}`
+        );
+      }
+      if (!parsed.message || typeof parsed.message !== 'string') {
+        throw new Error(`Missing or non-string message in ${serviceName} log: ${line}`);
+      }
+      if (!parsed.time || isNaN(Date.parse(parsed.time as string))) {
+        throw new Error(`Invalid or missing ISO timestamp in ${serviceName} log: ${line}`);
+      }
+
+      parsedRecords.push(parsed);
+    }
+  }
+
+  return parsedRecords;
+}
+
 async function main() {
   console.log('====================================================');
   console.log('Starting Ship Dễ Foundation Integration Tests (TASK-FOUND-03)');
@@ -151,16 +213,33 @@ async function main() {
   let workerProc: ChildProcess | null = null;
 
   try {
-    // 1. Verify Database Connectivity
+    // 1. Verify Database and S3 Bucket Readiness
     console.log('1. Verifying database connection on port 5433...');
     await prisma.$connect();
     await prisma.$queryRaw`SELECT 1 as result`;
     console.log('✅ PostgreSQL connection verified');
 
+    // Ensure configured test bucket exists in MinIO (Finding 9)
+    try {
+      const s3 = new S3Client({
+        endpoint: S3_ENDPOINT,
+        region: S3_REGION,
+        credentials: { accessKeyId: S3_ACCESS_KEY, secretAccessKey: S3_SECRET_KEY },
+        forcePathStyle: true,
+      });
+      try {
+        await s3.send(new HeadBucketCommand({ Bucket: S3_BUCKET }));
+      } catch {
+        await s3.send(new CreateBucketCommand({ Bucket: S3_BUCKET }));
+      }
+      s3.destroy();
+    } catch {
+      // Best effort bucket provisioning
+    }
+
     const apiEntry = path.join(ROOT_DIR, 'apps/api/dist/main.js');
     const workerEntry = path.join(ROOT_DIR, 'apps/worker/dist/main.js');
 
-    // Build prerequisites if missing (Finding 6)
     if (!fs.existsSync(apiEntry) || !fs.existsSync(workerEntry)) {
       console.log('Build artifacts missing. Compiling API and Worker services...');
       execSync('pnpm --filter @shipde/api --filter @shipde/worker build', {
@@ -169,17 +248,29 @@ async function main() {
       });
     }
 
-    // 2. Start API Service
+    // 2. Start API Service (capturing stdout/stderr for structured log verification - Finding 12)
     console.log(`2. Spawning API service on port ${API_PORT}...`);
+    const apiRawLogs: string[] = [];
     apiProc = spawn(process.execPath, [apiEntry], {
       cwd: path.join(ROOT_DIR, 'apps/api'),
       env: childEnv,
-      stdio: 'inherit',
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    // 3. Start Worker Service (capturing stdout/stderr for correlation log assertions - Finding 7)
+    apiProc.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      apiRawLogs.push(text);
+      process.stdout.write(text);
+    });
+    apiProc.stderr?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      apiRawLogs.push(text);
+      process.stderr.write(text);
+    });
+
+    // 3. Start Worker Service (capturing stdout/stderr for structured log verification - Finding 12)
     console.log(`3. Spawning Worker service on health port ${WORKER_PORT}...`);
-    const workerLogs: string[] = [];
+    const workerRawLogs: string[] = [];
     workerProc = spawn(process.execPath, [workerEntry], {
       cwd: path.join(ROOT_DIR, 'apps/worker'),
       env: childEnv,
@@ -188,13 +279,12 @@ async function main() {
 
     workerProc.stdout?.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
-      workerLogs.push(text);
+      workerRawLogs.push(text);
       process.stdout.write(text);
     });
-
     workerProc.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
-      workerLogs.push(text);
+      workerRawLogs.push(text);
       process.stderr.write(text);
     });
 
@@ -290,7 +380,7 @@ async function main() {
     }
     console.log('✅ Worker readiness probe returned 200 OK (all dependencies healthy)');
 
-    // 8.5 Test Process-Level Dependency Outage & Resilience (AC-FOUND-03-04, AC-FOUND-03-06, Finding 5)
+    // 8.5 Test Process-Level Dependency Outage & Resilience (AC-FOUND-03-04, AC-FOUND-03-06)
     console.log(
       '8.5 Testing process-level dependency outage scenarios (PostgreSQL, Redis, MinIO)...'
     );
@@ -324,10 +414,10 @@ async function main() {
     // 8.5.5 Worker with Redis Down
     await testDependencyOutage('worker', { REDIS_PORT: '63799' }, 'redis', 3015);
 
-    // 8.5.6 Worker with MinIO/Storage Down (port 9999 unused, Finding 3)
+    // 8.5.6 Worker with MinIO/Storage Down
     await testDependencyOutage('worker', { S3_ENDPOINT: 'http://127.0.0.1:9999' }, 'storage', 3016);
 
-    // 8.5.7 API with Slow/Blackholed PostgreSQL Connection (RFC 5737 TEST-NET-1, Finding 1)
+    // 8.5.7 API with Slow/Blackholed PostgreSQL Connection (RFC 5737 TEST-NET-1)
     await testDependencyOutage(
       'api',
       {
@@ -337,7 +427,7 @@ async function main() {
       3017
     );
 
-    // 8.5.8 Worker with Slow/Blackholed PostgreSQL Connection (RFC 5737 TEST-NET-1, Finding 2)
+    // 8.5.8 Worker with Slow/Blackholed PostgreSQL Connection (RFC 5737 TEST-NET-1)
     await testDependencyOutage(
       'worker',
       {
@@ -347,17 +437,143 @@ async function main() {
       3018
     );
 
-    // 8.5.9 Restoration Scenario: Verify primary API and Worker on ports 3001 & 3002 retain 200 OK all checks 'up'
-    const apiRestored: any = await (
-      await fetch(`http://localhost:${API_PORT}/health/ready`)
-    ).json();
-    assertValidReadinessResponse(apiRestored, 'ok');
-    const workerRestored: any = await (
-      await fetch(`http://localhost:${WORKER_PORT}/health/ready`)
-    ).json();
-    assertValidReadinessResponse(workerRestored, 'ok');
+    // 8.6 Live Dependency Restoration Without Process Restart (AC-FOUND-03-06, Finding 11)
     console.log(
-      '✅ Restoration verified: primary API and Worker services remain healthy with 200 OK'
+      '8.6 Testing live dependency restoration without process restart on primary services...'
+    );
+
+    // Test 8.6.1: Live Redis outage and recovery on the same running processes
+    try {
+      console.log('Pausing Redis container (shipde-redis)...');
+      execSync('docker pause shipde-redis', { stdio: 'ignore' });
+      const redisOutageStart = Date.now();
+      let apiRedisDown = false;
+      let workerRedisDown = false;
+      while (Date.now() - redisOutageStart < 12000) {
+        try {
+          const aRes = await fetch(`http://localhost:${API_PORT}/health/ready`);
+          const aJson: any = await aRes.json();
+          if (aRes.status === 503 && aJson.checks?.redis === 'down') apiRedisDown = true;
+
+          const wRes = await fetch(`http://localhost:${WORKER_PORT}/health/ready`);
+          const wJson: any = await wRes.json();
+          if (wRes.status === 503 && wJson.checks?.redis === 'down') workerRedisDown = true;
+
+          if (apiRedisDown && workerRedisDown) break;
+        } catch {
+          // retry
+        }
+        await sleep(300);
+      }
+      if (!apiRedisDown || !workerRedisDown) {
+        throw new Error(
+          `Live API/Worker failed to detect Redis outage: apiDown=${apiRedisDown}, workerDown=${workerRedisDown}`
+        );
+      }
+      console.log(
+        '✅ Live API and Worker reported 503 error with redis: down without process restart'
+      );
+    } finally {
+      execSync('docker unpause shipde-redis', { stdio: 'ignore' });
+    }
+
+    // Verify recovery without restarting API or Worker
+    const redisRecoverStart = Date.now();
+    let redisRecovered = false;
+    while (Date.now() - redisRecoverStart < 15000) {
+      try {
+        const aRes = await fetch(`http://localhost:${API_PORT}/health/ready`);
+        const wRes = await fetch(`http://localhost:${WORKER_PORT}/health/ready`);
+        const aJson: any = await aRes.json();
+        const wJson: any = await wRes.json();
+        if (
+          aRes.status === 200 &&
+          aJson.checks?.redis === 'up' &&
+          wRes.status === 200 &&
+          wJson.checks?.redis === 'up'
+        ) {
+          redisRecovered = true;
+          break;
+        }
+      } catch {
+        // retry
+      }
+      await sleep(500);
+    }
+    if (!redisRecovered) {
+      throw new Error(
+        'Live API and Worker failed to recover readiness after Redis restoration without restart'
+      );
+    }
+    console.log(
+      '✅ Redis restoration verified: same live API and Worker returned to 200 OK without restart'
+    );
+
+    // Test 8.6.2: Live MinIO outage and recovery on the same running processes
+    try {
+      console.log('Pausing MinIO container (shipde-minio)...');
+      execSync('docker pause shipde-minio', { stdio: 'ignore' });
+      const minioOutageStart = Date.now();
+      let apiMinioDown = false;
+      let workerMinioDown = false;
+      while (Date.now() - minioOutageStart < 12000) {
+        try {
+          const aRes = await fetch(`http://localhost:${API_PORT}/health/ready`);
+          const aJson: any = await aRes.json();
+          if (aRes.status === 503 && aJson.checks?.storage === 'down') apiMinioDown = true;
+
+          const wRes = await fetch(`http://localhost:${WORKER_PORT}/health/ready`);
+          const wJson: any = await wRes.json();
+          if (wRes.status === 503 && wJson.checks?.storage === 'down') workerMinioDown = true;
+
+          if (apiMinioDown && workerMinioDown) break;
+        } catch {
+          // retry
+        }
+        await sleep(300);
+      }
+      if (!apiMinioDown || !workerMinioDown) {
+        throw new Error(
+          `Live API/Worker failed to detect MinIO outage: apiDown=${apiMinioDown}, workerDown=${workerMinioDown}`
+        );
+      }
+      console.log(
+        '✅ Live API and Worker reported 503 error with storage: down without process restart'
+      );
+    } finally {
+      execSync('docker unpause shipde-minio', { stdio: 'ignore' });
+    }
+
+    // Verify MinIO recovery without restarting API or Worker
+    const minioRecoverStart = Date.now();
+    let minioRecovered = false;
+    while (Date.now() - minioRecoverStart < 15000) {
+      try {
+        const aRes = await fetch(`http://localhost:${API_PORT}/health/ready`);
+        const wRes = await fetch(`http://localhost:${WORKER_PORT}/health/ready`);
+        const aJson: any = await aRes.json();
+        const wJson: any = await wRes.json();
+        if (
+          aRes.status === 200 &&
+          aJson.checks?.storage === 'up' &&
+          wRes.status === 200 &&
+          wJson.checks?.storage === 'up'
+        ) {
+          minioRecovered = true;
+          break;
+        }
+      } catch {
+        // retry
+      }
+      await sleep(500);
+    }
+    if (!minioRecovered) {
+      throw new Error(
+        'Live API and Worker failed to recover readiness after MinIO restoration without restart'
+      );
+    }
+    console.log(
+      '✅ MinIO restoration verified: same live API and Worker returned to 200 OK without restart'
     );
 
     // 9. End-to-End Durable Outbox Dispatch to BullMQ and Worker Execution
@@ -410,19 +626,38 @@ async function main() {
       `✅ Outbox event ${outboxRecord.id} transitioned to PUBLISHED with published_at timestamp`
     );
 
-    // 10. Verify correlation ID propagation in Worker structured logs (AC-FOUND-03-09, AC-FOUND-03-11, Finding 7)
-    console.log('10. Verifying Worker structured logs for correlation ID propagation...');
-    const hasCorrelationLog = workerLogs.some(
-      (log) =>
-        log.includes(correlationId) &&
-        log.includes('Successfully executed deterministic smoke effect for job')
+    // 10. Verify Structured Log Parsing, Correlation, and Redaction (Finding 12)
+    console.log(
+      '10. Verifying structured JSON logs for API and Worker (schema, correlation, redaction)...'
     );
-    if (!hasCorrelationLog) {
+    const apiRecords = validateAndParseStructuredLogs(apiRawLogs, 'api');
+    const workerRecords = validateAndParseStructuredLogs(workerRawLogs, 'worker');
+
+    if (apiRecords.length === 0) {
+      throw new Error('No structured JSON logs captured for API service');
+    }
+    if (workerRecords.length === 0) {
+      throw new Error('No structured JSON logs captured for Worker service');
+    }
+
+    // Verify correlation ID propagation in Worker logs
+    const matchingWorkerRecord = workerRecords.find(
+      (r) =>
+        r.correlationId === correlationId &&
+        typeof r.message === 'string' &&
+        r.message.includes('Successfully executed deterministic smoke effect')
+    );
+    if (!matchingWorkerRecord) {
       throw new Error(
         `Worker structured logs did not capture correlation ID propagation: expected correlationId ${correlationId}`
       );
     }
-    console.log(`✅ Worker structured log confirmed correlation ID ${correlationId} propagation`);
+    console.log(
+      `✅ Worker structured log confirmed correlation ID ${correlationId} propagation: ${JSON.stringify(matchingWorkerRecord)}`
+    );
+    console.log(
+      `✅ Log inspection complete: verified ${apiRecords.length} API and ${workerRecords.length} Worker records without leaks or format errors`
+    );
 
     // Clean up test record
     await prisma.outboxEvent.delete({ where: { id: outboxRecord.id } });

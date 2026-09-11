@@ -1,9 +1,16 @@
 import * as path from 'path';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { validateConfig, formatStructuredLog, ConfigValidationError } from '@shipde/config';
+import {
+  validateConfig,
+  formatStructuredLog,
+  ConfigValidationError,
+  initTelemetry,
+} from '@shipde/config';
 
 export async function bootstrap(): Promise<void> {
+  initTelemetry('shipde-api');
+
   // Explicitly load .env file from root monorepo or local directory (Node 24 native, Finding 2)
   if (typeof (process as any).loadEnvFile === 'function') {
     const candidateEnvPaths = [
