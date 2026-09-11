@@ -131,14 +131,18 @@ model Merchant {
 model User {
   id                String            @id @default(uuid()) @db.Uuid
   merchant_id       String            @db.Uuid
-  email             String            @db.VarChar(255)
-  phone             String            @db.VarChar(32)
+  email             String?           @db.VarChar(255)
+  phone             String?           @db.VarChar(32)
   full_name         String            @db.VarChar(255)
   password_hash     String            @db.VarChar(255)
   role              RoleEnum
   store_scopes      String[]          @default([])
   warehouse_scopes  String[]          @default([])
-  status            String            @default("active") @db.VarChar(32)
+  status            String            @default("pending_verification") @db.VarChar(32)
+  email_verified_at DateTime?         @db.Timestamptz
+  phone_verified_at DateTime?         @db.Timestamptz
+  terms_accepted_at DateTime?         @db.Timestamptz
+  terms_version     String?           @db.VarChar(32)
   created_at        DateTime          @default(now()) @db.Timestamptz
   updated_at        DateTime          @updatedAt @db.Timestamptz
 
@@ -146,10 +150,31 @@ model User {
   assigned_cases    ExceptionCase[]   @relation("CaseAssignee")
   contact_logs      ExceptionContactLog[]
   device_sessions   DeviceSession[]
+  verification_tokens VerificationToken[]
 
   @@unique([merchant_id, email])
   @@index([merchant_id, role])
+  @@index([email])
+  @@index([phone])
   @@map("users")
+}
+
+model VerificationToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  user_id     String    @db.Uuid
+  token       String    @unique @db.VarChar(255)
+  channel     String    @db.VarChar(16)
+  identifier  String    @db.VarChar(255)
+  otp         String?   @db.VarChar(16)
+  expires_at  DateTime  @db.Timestamptz
+  consumed_at DateTime? @db.Timestamptz
+  created_at  DateTime  @default(now()) @db.Timestamptz
+
+  user        User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([identifier, channel])
+  @@map("verification_tokens")
 }
 
 model DeviceSession {

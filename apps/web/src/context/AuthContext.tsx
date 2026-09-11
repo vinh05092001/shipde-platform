@@ -3,6 +3,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, Merchant, Role } from '@/types/domain';
 
+export interface FieldError {
+  field: string;
+  code: string;
+  message: string;
+}
+
 interface AuthContextType {
   user: User | null;
   merchant: Merchant | null;
@@ -12,10 +18,46 @@ interface AuthContextType {
   register: (payload: {
     merchantName: string;
     fullName: string;
-    email: string;
-    phone: string;
+    email?: string;
+    phone?: string;
     password: string;
-  }) => Promise<{ success: boolean; error?: string }>;
+    termsAccepted: boolean;
+    termsVersion?: string;
+  }) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    fields?: FieldError[];
+    nextAction?: string;
+    data?: any;
+  }>;
+  verifyEmail: (token: string) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    data?: any;
+    nextAction?: string;
+  }>;
+  verifyPhone: (
+    phone: string,
+    otp: string
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    data?: any;
+    nextAction?: string;
+  }>;
+  resendVerification: (
+    identifier: string,
+    channel: 'email' | 'phone'
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    cooldownSeconds?: number;
+    nextAction?: string;
+  }>;
   logout: () => void;
   switchRole: (role: Role) => void;
 }
@@ -135,51 +177,133 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
   const register = async (payload: {
     merchantName: string;
     fullName: string;
-    email: string;
-    phone: string;
+    email?: string;
+    phone?: string;
     password: string;
+    termsAccepted: boolean;
+    termsVersion?: string;
   }) => {
-    if (!payload.merchantName || !payload.fullName || !payload.email || !payload.password) {
-      return { success: false, error: 'Vui lòng điền đầy đủ các trường thông tin bắt buộc' };
+    try {
+      const res = await fetch(`${API_BASE}/auth/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          merchant_name: payload.merchantName,
+          full_name: payload.fullName,
+          email: payload.email || undefined,
+          phone: payload.phone || undefined,
+          password: payload.password,
+          terms_accepted: payload.termsAccepted,
+          terms_version: payload.termsVersion || '2026.1',
+        }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body?.error?.message || 'Đăng ký không thành công. Vui lòng thử lại.',
+          code: body?.error?.code || 'VALIDATION_ERROR',
+          fields: body?.error?.fields || [],
+          nextAction: body?.error?.next_action,
+        };
+      }
+
+      return {
+        success: true,
+        data: body.data,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra đường truyền mạng.',
+        code: 'NETWORK_ERROR',
+      };
     }
+  };
 
-    const newMerchant: Merchant = {
-      id: `merc_${Date.now()}`,
-      name: payload.merchantName,
-      business_code: `03${Math.floor(Math.random() * 89999999) + 10000000}`,
-      phone: payload.phone,
-      email: payload.email,
-      address: 'TP. Hồ Chí Minh, Việt Nam',
-      subscription_plan: 'STARTER_TRIAL',
-      status: 'ACTIVE',
-      created_at: new Date(),
-    };
+  const verifyEmail = async (token: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/verify-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
 
-    const newUser: User = {
-      id: `usr_${Date.now()}`,
-      merchant_id: newMerchant.id,
-      full_name: payload.fullName,
-      email: payload.email,
-      phone: payload.phone,
-      role: Role.OWNER,
-      status: 'ACTIVE',
-      created_at: new Date(),
-    };
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body?.error?.message || 'Xác thực email thất bại',
+          code: body?.error?.code || 'VALIDATION_ERROR',
+          nextAction: body?.error?.next_action,
+        };
+      }
 
-    const authToken = `jwt_token_${Date.now()}`;
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối máy chủ', code: 'NETWORK_ERROR' };
+    }
+  };
 
-    setUser(newUser);
-    setMerchant(newMerchant);
-    setToken(authToken);
+  const verifyPhone = async (phone: string, otp: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/verify-phone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, otp }),
+      });
 
-    localStorage.setItem('shipde_user', JSON.stringify(newUser));
-    localStorage.setItem('shipde_merchant', JSON.stringify(newMerchant));
-    localStorage.setItem('shipde_token', authToken);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body?.error?.message || 'Xác thực số điện thoại thất bại',
+          code: body?.error?.code || 'VALIDATION_ERROR',
+          nextAction: body?.error?.next_action,
+        };
+      }
 
-    return { success: true };
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối máy chủ', code: 'NETWORK_ERROR' };
+    }
+  };
+
+  const resendVerification = async (identifier: string, channel: 'email' | 'phone') => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/verify/resend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, channel }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body?.error?.message || 'Gửi lại mã xác thực thất bại',
+          code: body?.error?.code || 'VALIDATION_ERROR',
+          nextAction: body?.error?.next_action,
+        };
+      }
+
+      return {
+        success: true,
+        data: body.data,
+        cooldownSeconds: body.data?.cooldown_seconds || 60,
+      };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối máy chủ', code: 'NETWORK_ERROR' };
+    }
   };
 
   const logout = () => {
@@ -213,6 +337,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         login,
         register,
+        verifyEmail,
+        verifyPhone,
+        resendVerification,
         logout,
         switchRole,
       }}

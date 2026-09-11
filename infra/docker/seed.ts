@@ -13,6 +13,10 @@ export const SEED_USERS = [
     password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
     role: RoleEnum.OWNER,
     status: 'active',
+    email_verified_at: new Date('2026-09-01T00:00:00Z'),
+    phone_verified_at: new Date('2026-09-01T00:00:00Z'),
+    terms_accepted_at: new Date('2026-09-01T00:00:00Z'),
+    terms_version: '2026.1',
   },
   {
     id: 'b0000000-0000-0000-0000-000000000002',
@@ -23,6 +27,9 @@ export const SEED_USERS = [
     password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
     role: RoleEnum.OPS_CSKH,
     status: 'active',
+    email_verified_at: new Date('2026-09-01T00:00:00Z'),
+    terms_accepted_at: new Date('2026-09-01T00:00:00Z'),
+    terms_version: '2026.1',
   },
   {
     id: 'b0000000-0000-0000-0000-000000000003',
@@ -33,6 +40,80 @@ export const SEED_USERS = [
     password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
     role: RoleEnum.ACCOUNTANT,
     status: 'active',
+    email_verified_at: new Date('2026-09-01T00:00:00Z'),
+    terms_accepted_at: new Date('2026-09-01T00:00:00Z'),
+    terms_version: '2026.1',
+  },
+  {
+    id: 'b0000000-0000-0000-0000-000000000010',
+    merchant_id: SEED_MERCHANT_ID,
+    email: 'pending@shipde.vn',
+    phone: '0909999001',
+    full_name: 'Pending Test User',
+    password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
+    role: RoleEnum.OWNER,
+    status: 'pending_verification',
+    email_verified_at: null,
+    phone_verified_at: null,
+    terms_accepted_at: new Date('2026-09-01T00:00:00Z'),
+    terms_version: '2026.1',
+  },
+  {
+    id: 'b0000000-0000-0000-0000-000000000011',
+    merchant_id: SEED_MERCHANT_ID,
+    email: 'expired@shipde.vn',
+    phone: '0909999002',
+    full_name: 'Expired Token Test User',
+    password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
+    role: RoleEnum.OWNER,
+    status: 'pending_verification',
+    email_verified_at: null,
+    phone_verified_at: null,
+    terms_accepted_at: new Date('2026-08-01T00:00:00Z'),
+    terms_version: '2026.1',
+  },
+];
+
+export const SEED_VERIFICATION_TOKENS = [
+  {
+    id: 'd0000000-0000-0000-0000-000000000001',
+    user_id: 'b0000000-0000-0000-0000-000000000010',
+    token: 'test-token-pending-valid',
+    channel: 'email',
+    identifier: 'pending@shipde.vn',
+    otp: null,
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    consumed_at: null,
+  },
+  {
+    id: 'd0000000-0000-0000-0000-000000000002',
+    user_id: 'b0000000-0000-0000-0000-000000000010',
+    token: 'test-token-phone-otp',
+    channel: 'phone',
+    identifier: '0909999001',
+    otp: '123456',
+    expires_at: new Date(Date.now() + 15 * 60 * 1000),
+    consumed_at: null,
+  },
+  {
+    id: 'd0000000-0000-0000-0000-000000000003',
+    user_id: 'b0000000-0000-0000-0000-000000000011',
+    token: 'test-token-expired',
+    channel: 'email',
+    identifier: 'expired@shipde.vn',
+    otp: null,
+    expires_at: new Date('2026-08-02T00:00:00Z'),
+    consumed_at: null,
+  },
+  {
+    id: 'd0000000-0000-0000-0000-000000000004',
+    user_id: 'b0000000-0000-0000-0000-000000000010',
+    token: 'test-token-consumed',
+    channel: 'email',
+    identifier: 'pending@shipde.vn',
+    otp: null,
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    consumed_at: new Date('2026-09-01T00:00:00Z'),
   },
 ];
 
@@ -103,6 +184,10 @@ export async function seedDatabase(client?: PrismaClient): Promise<{
           full_name: u.full_name,
           role: u.role,
           status: u.status,
+          email_verified_at: u.email_verified_at,
+          phone_verified_at: u.phone_verified_at,
+          terms_accepted_at: u.terms_accepted_at,
+          terms_version: u.terms_version,
         },
         create: u,
       });
@@ -127,6 +212,25 @@ export async function seedDatabase(client?: PrismaClient): Promise<{
       });
     }
 
+    // 4. Seed Verification Tokens
+    let tokensCount = 0;
+    if (prisma.verificationToken) {
+      for (const vt of SEED_VERIFICATION_TOKENS) {
+        await prisma.verificationToken.upsert({
+          where: { token: vt.token },
+          update: {
+            channel: vt.channel,
+            identifier: vt.identifier,
+            otp: vt.otp,
+            expires_at: vt.expires_at,
+            consumed_at: vt.consumed_at,
+          },
+          create: vt,
+        });
+      }
+      tokensCount = await prisma.verificationToken.count();
+    }
+
     const merchantsCount = await prisma.merchant.count();
     const usersCount = await prisma.user.count();
     const accountsCount = await prisma.carrierAccount.count();
@@ -137,7 +241,7 @@ export async function seedDatabase(client?: PrismaClient): Promise<{
       );
     }
 
-    return { merchantsCount, usersCount, accountsCount };
+    return { merchantsCount, usersCount, accountsCount, tokensCount };
   } finally {
     if (!client) {
       await prisma.$disconnect();
@@ -156,6 +260,7 @@ async function main() {
     console.log(` - Merchants: ${counts.merchantsCount}`);
     console.log(` - Users: ${counts.usersCount}`);
     console.log(` - Carrier Accounts: ${counts.accountsCount}`);
+    console.log(` - Verification Tokens: ${counts.tokensCount}`);
   } catch (error: any) {
     console.error('❌ Lỗi khởi tạo dữ liệu mẫu:', error.message);
     process.exit(1);
