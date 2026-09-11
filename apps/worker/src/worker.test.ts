@@ -759,6 +759,7 @@ async function runWorkerTests() {
       datasources: { db: { url: config.DATABASE_URL } },
     });
     await prismaService.onModuleInit();
+    const redisService = new RedisService(config);
 
     const dispatcher = new OutboxDispatcher(config, prismaService);
     await dispatcher.onModuleInit();
@@ -999,6 +1000,7 @@ async function runWorkerTests() {
       }
       await prismaService.outboxEvent.delete({ where: { id: raceEvent.id } });
     } finally {
+      await redisService.onModuleDestroy();
       await dispatcher.onModuleDestroy();
       await prismaService.onModuleDestroy();
     }
