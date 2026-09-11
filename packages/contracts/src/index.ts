@@ -185,4 +185,4 @@ export interface QueueSmokePayload {
 }
 
 // --- Generated OpenAPI Schema Types ---
-export * from './openapi';
+export type * from './openapi';
