@@ -2835,7 +2835,7 @@ function Get-ShipDeExactHeadCodexVerdict {
                 $targetSha = $targetMatch.Groups[1].Value
                 $match = ($targetSha -ieq $HeadSha) -or ($HeadSha.StartsWith($targetSha, [System.StringComparison]::OrdinalIgnoreCase)) -or ($targetSha.StartsWith($HeadSha, [System.StringComparison]::OrdinalIgnoreCase))
                 if ($match) {
-                    $verdictMatch = [regex]::Match($text, '(?im)^Verdict\s*:\s*(PASS|CHANGES_REQUIRED|BLOCKED)')
+                    $verdictMatch = [regex]::Match($text, '(?im)(?:^Verdict|"verdict")\s*:\s*"?\s*(PASS|CHANGES_REQUIRED|BLOCKED)\b')
                     if ($verdictMatch.Success) {
                         return $verdictMatch.Groups[1].Value.ToUpperInvariant()
                     }
@@ -5332,8 +5332,15 @@ mutation($input: MergePullRequestInput!) {
         }
     }
 
-    $jsonBody = $payload | ConvertTo-Json -Depth 5
-    $raw = @($jsonBody | gh api graphql --input - 2>$null)
+    $jsonBody = $payload | ConvertTo-Json -Depth 5 -Compress
+    $prevEncoding = $OutputEncoding
+    $raw = @()
+    try {
+        $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $raw = @($jsonBody | gh api graphql --input - 2>$null)
+    } finally {
+        $OutputEncoding = $prevEncoding
+    }
     if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) {
         $err = ($raw -join "`n")
         throw "Merge mutation failed via GraphQL API: $err"
@@ -6140,7 +6147,7 @@ function Test-ShipDeMergePreflight {
         }
 
         $needsGraphQLRollup = $false
-        if (-not $hasAppEvidence -and ($protection.Checks | Where-Object { $null -ne $_.app_id })) {
+        if (-not $hasAppEvidence -and ($protection.Checks | Where-Object { $null -ne (Get-ShipDeObjectProperty -Object $_ -Names @("AppId", "app_id", "appId")) })) {
             $needsGraphQLRollup = $true
         }
 
