@@ -8,6 +8,7 @@ import {
   ROOT_CONTEXT,
   Context,
 } from '@opentelemetry/api';
+import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import {
   BasicTracerProvider,
   SimpleSpanProcessor,
@@ -18,6 +19,10 @@ import { resourceFromAttributes } from '@opentelemetry/resources';
 
 let provider: BasicTracerProvider | null = null;
 let inMemoryExporter: InMemorySpanExporter | null = null;
+
+// Register W3C propagator at module load so extractTraceContext works
+// regardless of whether initTelemetry has been called yet.
+propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 
 class NoopSpanExporter implements SpanExporter {
   export(_spans: unknown[], resultCallback: (result: { code: number }) => void): void {
