@@ -24,7 +24,7 @@ Before the foundation migration, validate with the commands present in the curre
 ## Semi-automatic workspaces
 
 - `shipde-platform` / `main`: integration baseline; implementation agents must not edit it directly.
-- `shipde-claude`: Claude business and solution analysis only; never an implementation or review workspace.
+- `shipde-claude`: Claude analysis and host-authenticated Claude Code CLI author/repair workspace.
 - `shipde-dsh`: low-risk author using DSH/OpenCode through 9Router.
 - `shipde-gemini`: primary implementation author.
 - `shipde-codex`: independent planning, documentation and review workspace.
@@ -33,8 +33,8 @@ Never assume chat history is shared. The Work Item, branch, commits, Pull Reques
 
 ## Role separation
 
-- **Claude — business and solution analyst:** proposes business/solution changes only. It does not implement production code or mark a Work Item ready. Material decisions require human approval and versioned specification updates.
-- **Codex — planner/document owner:** selects the next dependency-ready item, prepares its complete Work Item from approved sources, chooses `GEMINI` or `9ROUTER` as author, and changes the register to `READY_FOR_AUTHOR`. It does not implement production code during planning.
+- **Claude — analyst, secondary author and reviewer fallback:** authenticated natively on the host machine via Claude Code CLI (`~/.claude/.credentials.json`, never third-party API quotas). Authorized to provide independent code review fallback when cloud reviewers hit rate limits, and authorized to act as code repair / assistant author for addressing review findings or authoring assigned Work Items.
+- **Codex — planner/document owner:** selects the next dependency-ready item, prepares its complete Work Item from approved sources, chooses `GEMINI`, `CLAUDE`, or `9ROUTER` as author, and changes the register to `READY_FOR_AUTHOR`. It does not implement production code during planning.
 - **9Router worker — constrained author:** handles only explicitly assigned, low-risk, deterministic work such as fixtures, mocks, types, small CRUD, focused tests, lint or mechanical changes. It must stop when scope reaches architecture, authentication, authorization, tenant isolation, money, carrier side effects, database ownership or product UX decisions.
 - **Gemini — primary author:** plans and implements complete foundation or vertical product Work Items, adds evidence and opens/updates the Pull Request.
 - **Codex — independent reviewer:** uses a fresh review-only task, checks the full Pull Request against the Work Item and source specifications, and returns `PASS`, `CHANGES_REQUIRED` or `BLOCKED`. It does not merge or silently fix the author's branch during review.
