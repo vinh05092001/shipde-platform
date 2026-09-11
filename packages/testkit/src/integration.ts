@@ -324,7 +324,10 @@ async function main() {
     // 8.5.5 Worker with Redis Down
     await testDependencyOutage('worker', { REDIS_PORT: '63799' }, 'redis', 3015);
 
-    // 8.5.6 Restoration Scenario: Verify primary API and Worker on ports 3001 & 3002 retain 200 OK all checks 'up'
+    // 8.5.6 Worker with MinIO/Storage Down (port 9999 unused, Finding 3)
+    await testDependencyOutage('worker', { S3_ENDPOINT: 'http://127.0.0.1:9999' }, 'storage', 3016);
+
+    // 8.5.7 Restoration Scenario: Verify primary API and Worker on ports 3001 & 3002 retain 200 OK all checks 'up'
     const apiRestored: any = await (
       await fetch(`http://localhost:${API_PORT}/health/ready`)
     ).json();

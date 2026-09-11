@@ -1,15 +1,24 @@
+import * as path from 'path';
 import { NestFactory } from '@nestjs/core';
 import { WorkerAppModule } from './app.module';
 import { validateConfig, formatStructuredLog, ConfigValidationError } from '@shipde/config';
 
 export async function bootstrap(): Promise<void> {
-  // Explicitly load .env file if present in working directory or parent (Node 24 native, Finding 1)
+  // Explicitly load .env file from root monorepo or local directory (Node 24 native, Finding 2)
   if (typeof (process as any).loadEnvFile === 'function') {
-    try {
-      (process as any).loadEnvFile();
-    } catch (err: any) {
-      if (err.code !== 'ENOENT') {
-        // ignore missing .env file, fallback to environment variables
+    const candidateEnvPaths = [
+      path.resolve(process.cwd(), '../../.env'),
+      path.resolve(__dirname, '../../.env'),
+      path.resolve(__dirname, '../../../.env'),
+      path.resolve(process.cwd(), '.env'),
+    ];
+    for (const envPath of candidateEnvPaths) {
+      try {
+        (process as any).loadEnvFile(envPath);
+      } catch (err: any) {
+        if (err.code !== 'ENOENT') {
+          // ignore missing .env file, fallback to environment variables
+        }
       }
     }
   }

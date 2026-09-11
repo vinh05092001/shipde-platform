@@ -521,9 +521,11 @@ async function runApiTests() {
         'PORT=3099\nDATABASE_URL=postgresql://postgres:test@localhost:5433/shipde_dev\nREDIS_HOST=localhost\nREDIS_PORT=6379\nS3_ACCESS_KEY=minioadmin\nS3_SECRET_KEY=minioadmin\n'
       );
       // Execute node to verify process.loadEnvFile loads the variables
+      const cleanEnv = { ...process.env };
+      delete cleanEnv.PORT;
       const out = execSync(
-        `node --env-file-if-exists=${tempEnv} -e "console.log(process.env.PORT)"`,
-        { cwd: tempDir, encoding: 'utf-8' }
+        `node --env-file-if-exists="${tempEnv}" -e "console.log(process.env.PORT)"`,
+        { cwd: tempDir, encoding: 'utf-8', env: cleanEnv }
       );
       if (out.trim() !== '3099') {
         throw new Error(`Expected PORT 3099 loaded from .env, got: ${out.trim()}`);

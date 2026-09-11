@@ -986,6 +986,17 @@ async function runWorkerTests() {
         throw new Error('Expected atomic claim to reject regressing PUBLISHED to PROCESSING');
       }
 
+      // Ensure dispatch error handler update cannot regress PUBLISHED back to PENDING/FAILED (Finding 1)
+      const dispatchCatchTest = await prismaService.outboxEvent.updateMany({
+        where: { id: concurrentEvent.id, status: OutboxStatusEnum.PROCESSING },
+        data: { status: OutboxStatusEnum.FAILED, attempts: 3, last_error: 'simulated late error' },
+      });
+      if (dispatchCatchTest.count !== 0) {
+        throw new Error(
+          'Expected dispatch error recovery to reject regressing PUBLISHED to FAILED'
+        );
+      }
+
       await prismaService.outboxEvent.delete({ where: { id: concurrentEvent.id } });
 
       // 6.4 Live retryFailed: purges BullMQ queue and enables clean re-dispatch (Finding 2)

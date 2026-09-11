@@ -445,8 +445,8 @@ components:
           writeOnly: true
     SourceOrderInput:
       type: object
-      required:
-        [source_order_code, warehouse_id, recipient, address, parcels, expected_cod_vnd, fee_payer]
+      # prettier-ignore
+      required: [source_order_code, warehouse_id, recipient, address, parcels, expected_cod_vnd, fee_payer]
       properties:
         source_order_code:
           type: string

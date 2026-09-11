@@ -150,11 +150,15 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
           })
         );
 
-        // Record error and schedule bounded retry with exponential backoff
+        // Record error and schedule bounded retry with exponential backoff.
+        // Use conditional update requiring PROCESSING status so we never regress a concurrently PUBLISHED record (Finding 1)
         const nextAttempts = event.attempts + 1;
         const isExhausted = nextAttempts >= 3;
-        await this.prisma.outboxEvent.update({
-          where: { id: event.id },
+        await this.prisma.outboxEvent.updateMany({
+          where: {
+            id: event.id,
+            status: OutboxStatusEnum.PROCESSING,
+          },
           data: {
             status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
             attempts: nextAttempts,
