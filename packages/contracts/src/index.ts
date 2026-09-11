@@ -125,3 +125,61 @@ export const MatchingStatus = {
 } as const;
 
 export type MatchingStatus = (typeof MatchingStatus)[keyof typeof MatchingStatus];
+
+// --- Operational Health Contracts (API-FOUND-HEALTH-LIVE, API-FOUND-HEALTH-READY) ---
+export interface LivenessResponse {
+  status: 'ok';
+  service: string;
+  timestamp: string;
+  correlationId: string;
+}
+
+export interface ReadinessDependencyChecks {
+  database: 'up' | 'down';
+  redis: 'up' | 'down';
+  storage: 'up' | 'down';
+  [key: string]: 'up' | 'down';
+}
+
+export interface ReadinessResponse {
+  status: 'ok' | 'error';
+  service: string;
+  timestamp: string;
+  correlationId: string;
+  checks: ReadinessDependencyChecks;
+}
+
+// --- Technical Outbox & Durable Dispatch (ENT-FOUND-OUTBOX) ---
+export const OutboxStatus = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  PUBLISHED: 'PUBLISHED',
+  FAILED: 'FAILED',
+} as const;
+
+export type OutboxStatus = (typeof OutboxStatus)[keyof typeof OutboxStatus];
+
+export interface OutboxMessagePayload {
+  id: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  correlationId: string;
+  status: OutboxStatus;
+  attempts: number;
+  lastError?: string | null;
+  idempotencyKey?: string | null;
+  createdAt: string;
+  scheduledAt: string;
+  publishedAt?: string | null;
+}
+
+// --- Synthetic Queue Smoke Event (EVT-FOUND-QUEUE-SMOKE) ---
+export const QUEUE_SMOKE_EVENT_TYPE = 'EVT-FOUND-QUEUE-SMOKE' as const;
+export const SMOKE_QUEUE_NAME = 'smoke-queue' as const;
+
+export interface QueueSmokePayload {
+  smokeId: string;
+  timestamp: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+}

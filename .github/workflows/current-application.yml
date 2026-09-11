@@ -71,6 +71,18 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Generate Prisma Client from canonical schema
         run: pnpm db:generate
+      - name: Configure Local Environment
+        run: cp .env.example .env
+      - name: Validate Docker Compose Configuration
+        run: docker compose -f infra/docker/compose.yml config --quiet
+      - name: Start Local Infrastructure
+        run: pnpm infra:up
+      - name: Wait for Infrastructure Health
+        run: pnpm infra:wait
+      - name: Deploy Database Migrations
+        run: pnpm db:migrate
+      - name: Verify Migration Status
+        run: pnpm db:migrate:status
       - run: pnpm lint
       - run: pnpm format:check
         env:
@@ -115,6 +127,8 @@ jobs:
           gitleaks version
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Run Foundation Integration Tests
+        run: pnpm test:integration
       - run: pnpm test:e2e
       - run: pnpm test:baseline
       - name: Verify Preservation Baseline Negative Proof
@@ -145,6 +159,9 @@ jobs:
             exit 1
           fi
           echo "Success: apps/web/.next build output remains intact and untouched after secret scan."
+      - name: Teardown Local Infrastructure
+        if: always()
+        run: pnpm infra:down
 
   application-gate:
     needs: [detect-application-scope, current-application]

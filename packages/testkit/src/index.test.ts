@@ -1,7 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertValidMonorepoPackage, createMockId, resolveMonorepoPackage } from './index';
+import {
+  assertValidMonorepoPackage,
+  createMockId,
+  resolveMonorepoPackage,
+  assertValidLivenessResponse,
+  assertValidReadinessResponse,
+  assertNoSensitiveData,
+  createValidTestConfig,
+} from './index';
 import {
   UserRole,
   PrototypePersona,
@@ -86,6 +94,77 @@ function testTestkit() {
         throw new Error(`Package @shipde/${pkg} package.json missing "type": "module" declaration`);
       }
     }
+  }
+
+  // Verify health assertion helpers
+  const validLiveResponse = {
+    status: 'ok',
+    service: 'api',
+    timestamp: new Date().toISOString(),
+    correlationId: 'corr-test-12345678',
+  };
+  assertValidLivenessResponse(validLiveResponse);
+
+  let caughtLiveness = false;
+  try {
+    assertValidLivenessResponse({ ...validLiveResponse, status: 'error' });
+  } catch {
+    caughtLiveness = true;
+  }
+  if (!caughtLiveness) {
+    throw new Error('assertValidLivenessResponse should have thrown for non-ok status');
+  }
+
+  const validReadyResponse = {
+    status: 'ok',
+    service: 'api',
+    timestamp: new Date().toISOString(),
+    correlationId: 'corr-test-12345678',
+    checks: {
+      database: 'up' as const,
+      redis: 'up' as const,
+      storage: 'up' as const,
+    },
+  };
+  assertValidReadinessResponse(validReadyResponse, 'ok');
+
+  let caughtReadiness = false;
+  try {
+    assertValidReadinessResponse(validReadyResponse, 'error');
+  } catch {
+    caughtReadiness = true;
+  }
+  if (!caughtReadiness) {
+    throw new Error('assertValidReadinessResponse should have thrown for status mismatch');
+  }
+
+  // Verify sensitive data detection
+  assertNoSensitiveData({ safeField: 'safeValue', count: 42 });
+
+  let caughtSensitive = false;
+  try {
+    assertNoSensitiveData({ userPassword: 'plainTextPassword123' });
+  } catch {
+    caughtSensitive = true;
+  }
+  if (!caughtSensitive) {
+    throw new Error('assertNoSensitiveData should have thrown for password key');
+  }
+
+  let caughtPostgresUrl = false;
+  try {
+    assertNoSensitiveData({ db: 'postgresql://postgres:secret@localhost:5433/db' });
+  } catch {
+    caughtPostgresUrl = true;
+  }
+  if (!caughtPostgresUrl) {
+    throw new Error('assertNoSensitiveData should have thrown for postgres url value');
+  }
+
+  // Verify test config generation
+  const config = createValidTestConfig({ PORT: 4000 });
+  if (config.PORT !== 4000 || config.NODE_ENV !== 'test') {
+    throw new Error('createValidTestConfig failed to apply overrides');
   }
 
   console.log('✅ @shipde/testkit package export resolution and contract self-tests passed');
