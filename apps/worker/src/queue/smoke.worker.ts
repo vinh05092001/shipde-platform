@@ -93,7 +93,7 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
           message: `SmokeWorker rejected job ${job.id}: missing required durable outboxId`,
           metadata: {
             jobId: job.id,
-            data,
+            outboxId: 'missing',
           },
         })
       );

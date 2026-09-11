@@ -417,6 +417,40 @@ async function runWorkerTests() {
       throw new Error(`Expected delivery generation jobId, got ${enqueuedJobOpts?.jobId}`);
     }
 
+    // C2. OutboxDispatcher dispatchPending safely reverts event to PENDING/FAILED when queue.add throws
+    let revertUpdateArgs: any = null;
+    mockQueue.add = async () => {
+      throw new Error('Redis connection failed during queue.add');
+    };
+    mockPrismaDispatcher.outboxEvent.updateMany = async (args: any) => {
+      revertUpdateArgs = args;
+      return { count: 1 };
+    };
+    const failResult = await dispatcherUnit.dispatchPending(10);
+    if (failResult.failed !== 1 || failResult.dispatched !== 0) {
+      throw new Error(`Expected failed=1, dispatched=0, got ${JSON.stringify(failResult)}`);
+    }
+    if (
+      revertUpdateArgs?.data?.status !== OutboxStatusEnum.PENDING ||
+      revertUpdateArgs?.data?.attempts !== 1 ||
+      !revertUpdateArgs?.data?.last_error?.includes('Redis connection failed')
+    ) {
+      throw new Error(
+        `Expected updateMany to revert to PENDING with attempts=1, got ${JSON.stringify(revertUpdateArgs)}`
+      );
+    }
+
+    // C3. OutboxDispatcher dispatchPending handles double fault (queue.add throws and updateMany throws) without crash
+    mockPrismaDispatcher.outboxEvent.updateMany = async () => {
+      throw new Error('Database connection lost during updateMany');
+    };
+    const doubleFaultResult = await dispatcherUnit.dispatchPending(10);
+    if (doubleFaultResult.failed !== 1 || doubleFaultResult.dispatched !== 0) {
+      throw new Error(
+        `Expected failed=1 on double fault, got ${JSON.stringify(doubleFaultResult)}`
+      );
+    }
+
     // D. OutboxDispatcher retryFailed purges retained queue jobs (Finding 2)
     const removedJobs: string[] = [];
     const mockRetainedJobs = [

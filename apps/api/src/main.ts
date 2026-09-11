@@ -24,7 +24,13 @@ export async function bootstrap(): Promise<void> {
         (process as any).loadEnvFile(envPath);
       } catch (err: any) {
         if (err.code !== 'ENOENT') {
-          // ignore missing .env file, fallback to environment variables
+          console.warn(
+            formatStructuredLog({
+              level: 'warn',
+              service: 'api',
+              message: `Failed to load .env from ${envPath}: ${err.message}`,
+            })
+          );
         }
       }
     }

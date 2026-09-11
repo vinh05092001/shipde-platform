@@ -165,22 +165,34 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
             })
           );
 
-          const nextAttempts = event.attempts + 1;
-          const isExhausted = nextAttempts >= 3;
-          await this.prisma.outboxEvent.updateMany({
-            where: {
-              id: event.id,
-              status: OutboxStatusEnum.PROCESSING,
-            },
-            data: {
-              status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
-              attempts: nextAttempts,
-              last_error: errorMessage,
-              scheduled_at: new Date(
-                Date.now() + Math.min(1000 * Math.pow(2, nextAttempts), 30000)
-              ),
-            },
-          });
+          try {
+            const nextAttempts = event.attempts + 1;
+            const isExhausted = nextAttempts >= 3;
+            await this.prisma.outboxEvent.updateMany({
+              where: {
+                id: event.id,
+                status: OutboxStatusEnum.PROCESSING,
+              },
+              data: {
+                status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
+                attempts: nextAttempts,
+                last_error: errorMessage,
+                scheduled_at: new Date(
+                  Date.now() + Math.min(1000 * Math.pow(2, nextAttempts), 30000)
+                ),
+              },
+            });
+          } catch (updateErr: unknown) {
+            console.error(
+              formatStructuredLog({
+                level: 'error',
+                service: 'worker',
+                correlationId,
+                message: `Failed to revert outbox event ${event.id} status after dispatch failure: ${sanitizeErrorMessage(updateErr)}`,
+                metadata: { outboxId: event.id, error: sanitizeErrorMessage(updateErr) },
+              })
+            );
+          }
         }
       }
 
@@ -304,6 +316,7 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
       // Best-effort cleanup
     }
 
+    // Note: The returned record is a best-effort snapshot; the event may be claimed concurrently by dispatchPending().
     const record = await this.prisma.outboxEvent.findUnique({
       where: { id: outboxId },
     });
