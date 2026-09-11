@@ -23,6 +23,7 @@
     "@shipde/config": "workspace:*",
     "@typescript-eslint/parser": "^8.68.0",
     "eslint": "^9.39.5",
+    "openapi-typescript": "^7.13.0",
     "typescript": "^5"
   }
 }

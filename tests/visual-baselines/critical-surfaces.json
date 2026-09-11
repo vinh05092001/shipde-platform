@@ -1,0 +1,131 @@
+{
+  "version": "1.0.0",
+  "generatedAt": "2026-09-11T13:30:00.000Z",
+  "surfaces": [
+    {
+      "id": "SMOKE-DASH-01",
+      "component": "ControlTowerTab",
+      "filePath": "apps/web/src/components/ControlTowerTab.tsx",
+      "viewport": { "width": 1280, "height": 800 },
+      "requiredVisualTokens": [
+        "Bàn Điều Khiển Vận Hành & Đối Soát Ba Sổ",
+        "modern-card",
+        "grid grid-cols-1",
+        "TrackingCode"
+      ],
+      "layoutType": "dashboard-grid"
+    },
+    {
+      "id": "SMOKE-SHP-01",
+      "component": "ShipmentListTab",
+      "filePath": "apps/web/src/components/ShipmentListTab.tsx",
+      "viewport": { "width": 1280, "height": 800 },
+      "requiredVisualTokens": [
+        "MASTER_SHIPMENTS",
+        "onOpenTrackingModal",
+        "unmaskedRows",
+        "TrackingCode"
+      ],
+      "layoutType": "data-table"
+    },
+    {
+      "id": "SMOKE-ORD-01",
+      "component": "CreateOrderModal",
+      "filePath": "apps/web/src/components/CreateOrderModal.tsx",
+      "viewport": { "width": 640, "height": 720 },
+      "requiredVisualTokens": [
+        "PackagePlus",
+        "volumetricWeightGram",
+        "recipientAddress",
+        "AutomationBadge"
+      ],
+      "layoutType": "modal-dialog"
+    },
+    {
+      "id": "SMOKE-EXC-01",
+      "component": "ExceptionWorkboxTab",
+      "filePath": "apps/web/src/components/ExceptionWorkboxTab.tsx",
+      "viewport": { "width": 1280, "height": 800 },
+      "requiredVisualTokens": [
+        "MASTER_EXCEPTIONS",
+        "UIExceptionItem",
+        "reattemptNote",
+        "TrackingCode"
+      ],
+      "layoutType": "workbox-stream"
+    },
+    {
+      "id": "SMOKE-REC-01",
+      "component": "ReconciliationTab",
+      "filePath": "apps/web/src/components/ReconciliationTab.tsx",
+      "viewport": { "width": 1280, "height": 800 },
+      "requiredVisualTokens": [
+        "MASTER_DISCREPANCIES",
+        "DiscrepancyResolution",
+        "statementSummary",
+        "TrackingCode"
+      ],
+      "layoutType": "financial-dashboard"
+    },
+    {
+      "id": "SMOKE-LED-01",
+      "component": "ThreeLedgersTab",
+      "filePath": "apps/web/src/components/ThreeLedgersTab.tsx",
+      "viewport": { "width": 1280, "height": 800 },
+      "requiredVisualTokens": [
+        "ThreeValueLedgersReport",
+        "activeDrilldown",
+        "fetchLedgers",
+        "handleExportCsv"
+      ],
+      "layoutType": "three-ledgers-comparison"
+    },
+    {
+      "id": "SMOKE-RET-01",
+      "component": "ReturnScanTab",
+      "filePath": "apps/web/src/components/ReturnScanTab.tsx",
+      "viewport": { "width": 1024, "height": 768 },
+      "requiredVisualTokens": ["isOfflineMode", "barcodeInput", "conditionInput", "offlineQueue"],
+      "layoutType": "barcode-scanner-station"
+    },
+    {
+      "id": "SMOKE-RBAC-01",
+      "component": "SettingsWorkspace",
+      "filePath": "apps/web/src/components/SettingsWorkspace.tsx",
+      "viewport": { "width": 1280, "height": 800 },
+      "requiredVisualTokens": [
+        "PublicTrackingTab",
+        "NotificationMatrixTab",
+        "UserManagementTab",
+        "carrierGhnTier"
+      ],
+      "layoutType": "settings-pane"
+    },
+    {
+      "id": "SMOKE-TRK-01",
+      "component": "UnifiedTrackingModal",
+      "filePath": "apps/web/src/components/UnifiedTrackingModal.tsx",
+      "viewport": { "width": 720, "height": 800 },
+      "requiredVisualTokens": [
+        "getMockUnifiedTimeline",
+        "activeSubTab",
+        "TrackingCode",
+        "onActionReattempt"
+      ],
+      "layoutType": "tracking-modal"
+    },
+    {
+      "id": "SMOKE-UPL-01",
+      "component": "UploadStatementModal",
+      "filePath": "apps/web/src/components/UploadStatementModal.tsx",
+      "viewport": { "width": 640, "height": 480 },
+      "requiredVisualTokens": [
+        "UploadStatementModal",
+        "UPLOAD_STATEMENT",
+        "carrierCode",
+        "checksum"
+      ],
+      "layoutType": "upload-dialog"
+    }
+  ]
+}

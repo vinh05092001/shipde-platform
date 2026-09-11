@@ -180,3 +180,13 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     ...overrides,
   };
 }
+
+// --- Carrier Mocks ---
+export * from './carriers/index.js';
+
+// --- MSW Canonical State Handlers ---
+export * from './msw/index.js';
+
+// --- HTTP Integration Test Harness (Supertest) ---
+import request from 'supertest';
+export { request };
