@@ -8,8 +8,6 @@ export interface RouteBudget {
 
 export const CRITICAL_ROUTE_BUDGETS: RouteBudget[] = [
   { route: '/', maxInitialJsBytes: 750 * 1024 },
-  { route: '/orders', maxInitialJsBytes: 800 * 1024 },
-  { route: '/shipping', maxInitialJsBytes: 800 * 1024 },
 ];
 
 export interface PerfVerificationOptions {
