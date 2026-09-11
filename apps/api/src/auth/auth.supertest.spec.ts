@@ -1,5 +1,7 @@
 import 'reflect-metadata';
 import * as assert from 'node:assert';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -7,6 +9,8 @@ import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { RateLimitService } from './rate-limit.service';
 import { VERIFICATION_ADAPTER } from './auth.tokens';
+import { APP_CONFIG } from '../config.token';
+import { AppConfig } from '@shipde/config';
 import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
 import { verifyPassword, hashPassword } from './password.util';
 
@@ -15,11 +19,56 @@ async function runAuthSupertestSuite() {
   console.log('SHIP DE - AUTH & REGISTRATION SUPERTEST SUITE (FEAT-AUTH-01)');
   console.log('================================================================');
 
+  const envPaths = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '../../.env'),
+    path.resolve(__dirname, '../../../../.env'),
+  ];
+  for (const envPath of envPaths) {
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+          const [key, ...rest] = trimmed.split('=');
+          const val = rest.join('=').trim();
+          if (!process.env[key.trim()]) {
+            process.env[key.trim()] = val;
+          }
+        }
+      }
+      break;
+    }
+  }
+
+  const databaseUrl =
+    process.env.DATABASE_URL || 'postgresql://shipde:shipde_password@localhost:5432/shipde_dev';
+  process.env.DATABASE_URL = databaseUrl;
+
+  const testConfig: AppConfig = {
+    NODE_ENV: 'test',
+    PORT: 3099,
+    WORKER_HEALTH_PORT: 3098,
+    DATABASE_URL: databaseUrl,
+    REDIS_HOST: process.env.REDIS_HOST || 'localhost',
+    REDIS_PORT: Number(process.env.REDIS_PORT || 6379),
+    S3_ENDPOINT: process.env.S3_ENDPOINT || 'http://localhost:9000',
+    S3_REGION: 'us-east-1',
+    S3_ACCESS_KEY: 'minioadmin',
+    S3_SECRET_KEY: 'minioadmin',
+    S3_BUCKET: 'test-bucket',
+    S3_FORCE_PATH_STYLE: true,
+    CARRIER_MODE: 'disabled',
+    LOG_LEVEL: 'info',
+  };
+
   const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
 
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
   })
+    .overrideProvider(APP_CONFIG)
+    .useValue(testConfig)
     .overrideProvider(VERIFICATION_ADAPTER)
     .useValue(mockDeliveryAdapter)
     .compile();
