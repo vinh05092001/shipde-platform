@@ -61,14 +61,15 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
     const data = job.data;
     const correlationId = normalizeCorrelationId(data.correlationId);
 
-    // Restrict foundation worker strictly to QUEUE_SMOKE_EVENT_TYPE (P2 Finding 5)
-    if (data.eventType && data.eventType !== QUEUE_SMOKE_EVENT_TYPE) {
+    // Restrict foundation worker strictly to QUEUE_SMOKE_EVENT_TYPE (Finding 4)
+    // Require data.eventType === QUEUE_SMOKE_EVENT_TYPE; jobs with omitted or non-smoke event type must be rejected.
+    if (data.eventType !== QUEUE_SMOKE_EVENT_TYPE) {
       console.warn(
         formatStructuredLog({
           level: 'warn',
           service: 'worker',
           correlationId,
-          message: `SmokeWorker ignoring unsupported event type '${data.eventType}' for job ${job.id}`,
+          message: `SmokeWorker ignoring unsupported or missing event type '${data.eventType}' for job ${job.id}`,
           metadata: {
             jobId: job.id,
             eventType: data.eventType,
@@ -163,10 +164,12 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
         }
 
         // Execute deterministic smoke side effect: transition outbox event to PUBLISHED atomically
-        // Requiring in-flight status (PROCESSING or PENDING) prevents read-check-write race between concurrent deliveries (P1 Finding 4)
+        // Requiring in-flight status (PROCESSING or PENDING) and event_type: QUEUE_SMOKE_EVENT_TYPE
+        // prevents read-check-write race and accidental publication of non-smoke events (Finding 4)
         const claimEffect = await this.prisma.outboxEvent.updateMany({
           where: {
             id: data.outboxId,
+            event_type: QUEUE_SMOKE_EVENT_TYPE,
             status: { in: [OutboxStatusEnum.PROCESSING, OutboxStatusEnum.PENDING] },
           },
           data: {
@@ -264,10 +267,11 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
 
     if (job.data?.outboxId) {
       try {
-        // Atomically transition failure state ONLY if still in in-flight status (never overwrite PUBLISHED!) (Finding 4)
+        // Atomically transition failure state ONLY if still in in-flight status and matches smoke event type (never overwrite PUBLISHED!) (Finding 4)
         const updateResult = await this.prisma.outboxEvent.updateMany({
           where: {
             id: job.data.outboxId,
+            event_type: QUEUE_SMOKE_EVENT_TYPE,
             status: OutboxStatusEnum.PROCESSING,
           },
           data: {

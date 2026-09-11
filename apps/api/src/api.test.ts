@@ -310,6 +310,21 @@ async function runApiTests() {
     }
     await downPrisma.onModuleDestroy();
 
+    // Process-level blackhole/slow-connect resilience (Finding 1)
+    console.log('Testing API PrismaService resilience with slow/blackholed database connection...');
+    const blackholePrisma = new PrismaService({
+      datasources: {
+        db: { url: 'postgresql://postgres:postgres@192.0.2.1:5433/shipde_dev?connect_timeout=1' },
+      },
+    });
+    // onModuleInit must return immediately without blocking
+    await blackholePrisma.onModuleInit();
+    const blackholeDbReadiness = await blackholePrisma.checkReadiness(500);
+    if (blackholeDbReadiness !== 'down') {
+      throw new Error(`Expected blackholeDbReadiness to be 'down', got ${blackholeDbReadiness}`);
+    }
+    await blackholePrisma.onModuleDestroy();
+
     // Test infra wait container health evaluation (AC-FOUND-03-02, Finding 8)
     console.log('Testing isServiceHealthy logic...');
     const { isServiceHealthy } = await import('../../../infra/docker/wait');

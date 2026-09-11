@@ -327,7 +327,27 @@ async function main() {
     // 8.5.6 Worker with MinIO/Storage Down (port 9999 unused, Finding 3)
     await testDependencyOutage('worker', { S3_ENDPOINT: 'http://127.0.0.1:9999' }, 'storage', 3016);
 
-    // 8.5.7 Restoration Scenario: Verify primary API and Worker on ports 3001 & 3002 retain 200 OK all checks 'up'
+    // 8.5.7 API with Slow/Blackholed PostgreSQL Connection (RFC 5737 TEST-NET-1, Finding 1)
+    await testDependencyOutage(
+      'api',
+      {
+        DATABASE_URL: 'postgresql://postgres:postgres@192.0.2.1:5433/shipde_dev?connect_timeout=2',
+      },
+      'database',
+      3017
+    );
+
+    // 8.5.8 Worker with Slow/Blackholed PostgreSQL Connection (RFC 5737 TEST-NET-1, Finding 2)
+    await testDependencyOutage(
+      'worker',
+      {
+        DATABASE_URL: 'postgresql://postgres:postgres@192.0.2.1:5433/shipde_dev?connect_timeout=2',
+      },
+      'database',
+      3018
+    );
+
+    // 8.5.9 Restoration Scenario: Verify primary API and Worker on ports 3001 & 3002 retain 200 OK all checks 'up'
     const apiRestored: any = await (
       await fetch(`http://localhost:${API_PORT}/health/ready`)
     ).json();

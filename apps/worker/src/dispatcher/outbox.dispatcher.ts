@@ -193,7 +193,8 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
     let failed = 0;
 
     for (const event of staleEvents) {
-      const isExhausted = event.attempts >= 3;
+      const nextAttempts = event.attempts + 1;
+      const isExhausted = nextAttempts >= 3;
       // Atomically transition ONLY if still in PROCESSING state (prevents regressing PUBLISHED events!)
       const updateResult = await this.prisma.outboxEvent.updateMany({
         where: {
@@ -202,10 +203,13 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
         },
         data: {
           status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
+          attempts: nextAttempts,
           last_error: isExhausted
             ? event.last_error || 'Exhausted processing attempts'
             : 'Recovered from stale processing state',
-          scheduled_at: new Date(),
+          scheduled_at: isExhausted
+            ? new Date()
+            : new Date(Date.now() + Math.min(1000 * Math.pow(2, nextAttempts), 30000)),
         },
       });
 

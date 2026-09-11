@@ -338,6 +338,7 @@ async function runWorkerTests() {
         outboxId: 'published-outbox-id',
         smokeId: 'smoke-late',
         correlationId: 'corr-late',
+        eventType: QUEUE_SMOKE_EVENT_TYPE,
       },
     } as any;
     await workerLateFailure.handleJobFailure(
@@ -687,6 +688,7 @@ async function runWorkerTests() {
           outboxId: outboxRecord.id,
           smokeId: testSmokeId,
           correlationId: testCorrelationId,
+          eventType: QUEUE_SMOKE_EVENT_TYPE,
         } as SmokeJobData,
       } as Job<SmokeJobData>;
 
@@ -720,6 +722,7 @@ async function runWorkerTests() {
           outboxId: outboxRecord.id,
           smokeId: testSmokeId,
           correlationId: testCorrelationId,
+          eventType: QUEUE_SMOKE_EVENT_TYPE,
         } as SmokeJobData,
       } as Job<SmokeJobData>;
 
@@ -786,6 +789,7 @@ async function runWorkerTests() {
           outboxId: outboxRecord.id,
           smokeId: testSmokeId,
           correlationId: testCorrelationId,
+          eventType: QUEUE_SMOKE_EVENT_TYPE,
         } as SmokeJobData,
       } as Job<SmokeJobData>;
 
@@ -1092,6 +1096,163 @@ async function runWorkerTests() {
         );
       }
       await prismaService.outboxEvent.delete({ where: { id: raceEvent.id } });
+
+      // 6.6 Repeated stale-processing recovery consumes retry budget and reaches FAILED (Finding 3)
+      console.log('Testing repeated stale-processing recovery retry budget exhaustion...');
+      const exhaustStaleEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: 'stale-exhaust-test' },
+          correlation_id: `corr-stale-${Date.now()}`,
+          status: OutboxStatusEnum.PROCESSING,
+          attempts: 0,
+          scheduled_at: new Date(Date.now() - 120000), // 2 minutes ago
+        },
+      });
+
+      // Recovery 1: attempts: 0 -> 1, status: PENDING
+      const rec1 = await dispatcher.recoverStaleProcessing(60000);
+      if (rec1.recovered < 1) {
+        throw new Error(`Expected at least 1 recovered event on round 1, got ${rec1.recovered}`);
+      }
+      const eventAfterRec1 = await prismaService.outboxEvent.findUnique({
+        where: { id: exhaustStaleEvent.id },
+      });
+      if (eventAfterRec1?.attempts !== 1 || eventAfterRec1?.status !== OutboxStatusEnum.PENDING) {
+        throw new Error(
+          `Expected attempts 1 and status PENDING on round 1, got: ${JSON.stringify(eventAfterRec1)}`
+        );
+      }
+
+      // Simulate redispatch moving to PROCESSING and becoming stale again
+      await prismaService.outboxEvent.update({
+        where: { id: exhaustStaleEvent.id },
+        data: { status: OutboxStatusEnum.PROCESSING, scheduled_at: new Date(Date.now() - 120000) },
+      });
+
+      // Recovery 2: attempts: 1 -> 2, status: PENDING
+      const rec2 = await dispatcher.recoverStaleProcessing(60000);
+      if (rec2.recovered < 1) {
+        throw new Error(`Expected at least 1 recovered event on round 2, got ${rec2.recovered}`);
+      }
+      const eventAfterRec2 = await prismaService.outboxEvent.findUnique({
+        where: { id: exhaustStaleEvent.id },
+      });
+      if (eventAfterRec2?.attempts !== 2 || eventAfterRec2?.status !== OutboxStatusEnum.PENDING) {
+        throw new Error(
+          `Expected attempts 2 and status PENDING on round 2, got: ${JSON.stringify(eventAfterRec2)}`
+        );
+      }
+
+      // Simulate redispatch moving to PROCESSING and becoming stale again
+      await prismaService.outboxEvent.update({
+        where: { id: exhaustStaleEvent.id },
+        data: { status: OutboxStatusEnum.PROCESSING, scheduled_at: new Date(Date.now() - 120000) },
+      });
+
+      // Recovery 3: attempts: 2 -> 3, reaches exhaustion threshold -> FAILED
+      const rec3 = await dispatcher.recoverStaleProcessing(60000);
+      if (rec3.failed < 1) {
+        throw new Error(
+          `Expected at least 1 failed event on round 3 exhaustion, got ${rec3.failed}`
+        );
+      }
+      const eventAfterRec3 = await prismaService.outboxEvent.findUnique({
+        where: { id: exhaustStaleEvent.id },
+      });
+      if (eventAfterRec3?.attempts !== 3 || eventAfterRec3?.status !== OutboxStatusEnum.FAILED) {
+        throw new Error(
+          `Expected attempts 3 and status FAILED on exhaustion, got: ${JSON.stringify(eventAfterRec3)}`
+        );
+      }
+
+      await prismaService.outboxEvent.delete({ where: { id: exhaustStaleEvent.id } });
+
+      // 6.7 Missing/invalid eventType rejection and atomic claim safety (Finding 4)
+      console.log('Testing omitted and invalid eventType rejection in SmokeWorker...');
+      const nonSmokeEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: 'ORDER_CREATED', // Non-smoke event type
+          payload: { orderId: 'ord-123' },
+          correlation_id: `corr-nonsmoke-${Date.now()}`,
+          status: OutboxStatusEnum.PROCESSING,
+          attempts: 0,
+        },
+      });
+
+      const smokeWorkerEventFilter = new SmokeWorker(config, prismaService, redisService);
+
+      // 6.7.1 Job with omitted eventType
+      const jobWithoutEventType = {
+        id: `no-event-type-${Date.now()}`,
+        data: {
+          outboxId: nonSmokeEvent.id,
+          smokeId: 'no-type-test',
+          correlationId: nonSmokeEvent.correlation_id,
+          // eventType intentionally omitted
+        },
+      } as any;
+      const resNoType = await smokeWorkerEventFilter.processJob(jobWithoutEventType);
+      if (resNoType.success !== false) {
+        throw new Error(
+          `Expected job with omitted eventType to be rejected, got: ${JSON.stringify(resNoType)}`
+        );
+      }
+
+      // Ensure outbox row was NOT published
+      const nonSmokeAfterNoType = await prismaService.outboxEvent.findUnique({
+        where: { id: nonSmokeEvent.id },
+      });
+      if (nonSmokeAfterNoType?.status !== OutboxStatusEnum.PROCESSING) {
+        throw new Error(
+          `Expected nonSmokeEvent to remain PROCESSING, got: ${nonSmokeAfterNoType?.status}`
+        );
+      }
+
+      // 6.7.2 Job with non-smoke eventType
+      const jobWithWrongType = {
+        id: `wrong-event-type-${Date.now()}`,
+        data: {
+          outboxId: nonSmokeEvent.id,
+          smokeId: 'wrong-type-test',
+          correlationId: nonSmokeEvent.correlation_id,
+          eventType: 'ORDER_CREATED',
+        },
+      } as any;
+      const resWrongType = await smokeWorkerEventFilter.processJob(jobWithWrongType);
+      if (resWrongType.success !== false) {
+        throw new Error(
+          `Expected job with non-smoke eventType to be rejected, got: ${JSON.stringify(resWrongType)}`
+        );
+      }
+
+      const nonSmokeAfterWrongType = await prismaService.outboxEvent.findUnique({
+        where: { id: nonSmokeEvent.id },
+      });
+      if (nonSmokeAfterWrongType?.status !== OutboxStatusEnum.PROCESSING) {
+        throw new Error(
+          `Expected nonSmokeEvent to remain PROCESSING, got: ${nonSmokeAfterWrongType?.status}`
+        );
+      }
+
+      await prismaService.outboxEvent.delete({ where: { id: nonSmokeEvent.id } });
+
+      // 6.8 Worker PrismaService resilience on slow/blackholed database (Finding 2)
+      console.log('Testing Worker PrismaService bootstrap resilience with blackholed database...');
+      const blackholeWorkerPrisma = new PrismaService({
+        datasources: {
+          db: { url: 'postgresql://postgres:postgres@192.0.2.1:5433/shipde_dev?connect_timeout=1' },
+        },
+      });
+      // onModuleInit must return immediately without blocking
+      await blackholeWorkerPrisma.onModuleInit();
+      const workerDbReadiness = await blackholeWorkerPrisma.checkReadiness(500);
+      if (workerDbReadiness !== 'down') {
+        throw new Error(
+          `Expected workerDbReadiness to be 'down' on blackhole, got ${workerDbReadiness}`
+        );
+      }
+      await blackholeWorkerPrisma.onModuleDestroy();
     } finally {
       await redisService.onModuleDestroy();
       await dispatcher.onModuleDestroy();

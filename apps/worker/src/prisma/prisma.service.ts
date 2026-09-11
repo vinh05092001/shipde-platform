@@ -4,12 +4,12 @@ import { PrismaClient } from '@prisma/client';
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
-    try {
-      await this.$connect();
-    } catch {
-      // Do not abort Worker bootstrap when database is unavailable.
-      // Liveness (/health/live) remains available, while readiness (/health/ready) reports 503.
-    }
+    // Non-blocking initial connection: do not await $connect() during worker bootstrap.
+    // A slow, unreachable, or blackholed database must never block Nest bootstrap
+    // or prevent the HTTP health server from immediately serving /health/live (Finding 2).
+    void this.$connect().catch(() => {
+      // Detached connect failure is handled gracefully; readiness probe will report down.
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
