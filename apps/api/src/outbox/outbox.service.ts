@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, OutboxEvent, OutboxStatusEnum } from '@prisma/client';
 import { QUEUE_SMOKE_EVENT_TYPE } from '@shipde/contracts';
+import { normalizeCorrelationId } from '@shipde/config';
 
 @Injectable()
 export class OutboxService {
@@ -11,6 +12,7 @@ export class OutboxService {
    * Persists an outbox event within an existing database transaction client.
    * Proves atomic commit / rollback with application entity mutations.
    * Strictly enforces event allowlist to prevent unprocessable events (Finding 6).
+   * Normalizes correlationId before persisting to maintain consistent correlation chain (Round 6 Finding 5).
    */
   async createWithinTransaction(
     tx: Prisma.TransactionClient,
@@ -27,11 +29,13 @@ export class OutboxService {
       );
     }
 
+    const correlationId = normalizeCorrelationId(data.correlationId);
+
     return tx.outboxEvent.create({
       data: {
         event_type: data.eventType,
         payload: data.payload,
-        correlation_id: data.correlationId,
+        correlation_id: correlationId,
         idempotency_key: data.idempotencyKey,
         status: OutboxStatusEnum.PENDING,
       },
@@ -41,6 +45,7 @@ export class OutboxService {
   /**
    * Directly creates an outbox event using default client transaction.
    * Strictly enforces event allowlist to prevent unprocessable events (Finding 6).
+   * Normalizes correlationId before persisting to maintain consistent correlation chain (Round 6 Finding 5).
    */
   async createOutboxEvent(data: {
     eventType: string;
@@ -54,11 +59,13 @@ export class OutboxService {
       );
     }
 
+    const correlationId = normalizeCorrelationId(data.correlationId);
+
     return this.prisma.outboxEvent.create({
       data: {
         event_type: data.eventType,
         payload: data.payload,
-        correlation_id: data.correlationId,
+        correlation_id: correlationId,
         idempotency_key: data.idempotencyKey,
         status: OutboxStatusEnum.PENDING,
       },

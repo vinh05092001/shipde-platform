@@ -27,7 +27,7 @@
     "db:generate": "prisma generate --schema=prisma/schema.prisma",
     "db:migrate": "prisma migrate deploy --schema=prisma/schema.prisma",
     "db:migrate:status": "prisma migrate status --schema=prisma/schema.prisma",
-    "db:reset": "prisma migrate reset --force --schema=prisma/schema.prisma",
+    "db:reset": "tsx infra/docker/reset-db.ts",
     "security:secrets": "tsx scripts/verify-secrets.ts",
     "verify:inventory": "tsx scripts/verify-inventory.ts",
     "concierge:audit": "tsx scripts/concierge-audit.ts"

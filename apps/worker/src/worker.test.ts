@@ -1412,6 +1412,176 @@ async function runWorkerTests() {
       }
       await storageService.onModuleDestroy();
       console.log('✅ StorageService bucket-scoped readiness check passed');
+
+      // 6.13 SmokeWorker structured logging PII omission (Round 6 Finding 2)
+      console.log('Testing SmokeWorker structured logging PII omission...');
+      const piiEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: {
+            smokeId: 'pii-test',
+            recipientName: 'Nguyen Van A',
+            phone: '0901234567',
+            email: 'sensitive@customer.vn',
+            address: '123 Nguyen Hue, Quan 1, TP HCM',
+          },
+          correlation_id: `corr-pii-${Date.now()}`,
+          status: OutboxStatusEnum.PROCESSING,
+          attempts: 0,
+        },
+      });
+
+      const originalConsoleLog = console.log;
+      const capturedWorkerLogs: string[] = [];
+      console.log = (...args: any[]) => {
+        capturedWorkerLogs.push(
+          args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')
+        );
+        originalConsoleLog(...args);
+      };
+
+      try {
+        const piiWorker = new SmokeWorker(config, prismaService, redisService);
+        const piiJob = {
+          id: `job-pii-${Date.now()}`,
+          data: {
+            outboxId: piiEvent.id,
+            smokeId: 'pii-test',
+            correlationId: piiEvent.correlation_id,
+            eventType: QUEUE_SMOKE_EVENT_TYPE,
+          },
+        } as any;
+        await piiWorker.processJob(piiJob);
+      } finally {
+        console.log = originalConsoleLog;
+        await prismaService.outboxEvent.delete({ where: { id: piiEvent.id } });
+      }
+
+      const allCaptured = capturedWorkerLogs.join('\n');
+      const sensitiveStrings = [
+        'Nguyen Van A',
+        '0901234567',
+        'sensitive@customer.vn',
+        '123 Nguyen Hue',
+      ];
+      for (const str of sensitiveStrings) {
+        if (allCaptured.includes(str)) {
+          throw new Error(`PII leak detected in worker structured logs: found '${str}'`);
+        }
+      }
+      console.log('✅ SmokeWorker structured logging PII omission verified');
+
+      // 6.14 SmokeWorker distributed trace context continuation (Round 6 Finding 6)
+      console.log('Testing SmokeWorker distributed trace context continuation...');
+      const { initTelemetry: initWorkerTelemetry } = await import('@shipde/config');
+      const testWorkerTelemetry = initWorkerTelemetry('test-worker-tracing', '0.1.0', {
+        inMemory: true,
+      });
+      const traceEvent = await prismaService.outboxEvent.create({
+        data: {
+          event_type: QUEUE_SMOKE_EVENT_TYPE,
+          payload: { smokeId: 'trace-test' },
+          correlation_id: `corr-trace-${Date.now()}`,
+          status: OutboxStatusEnum.PROCESSING,
+          attempts: 0,
+        },
+      });
+
+      const injectedTraceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+      try {
+        const tracingWorker = new SmokeWorker(config, prismaService, redisService);
+        const traceJob = {
+          id: `job-trace-${Date.now()}`,
+          data: {
+            outboxId: traceEvent.id,
+            smokeId: 'trace-test',
+            correlationId: traceEvent.correlation_id,
+            eventType: QUEUE_SMOKE_EVENT_TYPE,
+            traceContext: {
+              traceparent: injectedTraceparent,
+            },
+          },
+        } as any;
+        await tracingWorker.processJob(traceJob);
+
+        const recordedSpans = testWorkerTelemetry.getRecordedSpans() as any[];
+        const smokeSpan = recordedSpans.find((s) => s.name === 'smoke.process');
+        if (!smokeSpan) {
+          throw new Error('Expected smoke.process span to be recorded');
+        }
+        if (smokeSpan.spanContext().traceId !== '4bf92f3577b34da6a3ce929d0e0e4736') {
+          throw new Error(
+            `Expected traceId 4bf92f3577b34da6a3ce929d0e0e4736, got ${smokeSpan.spanContext().traceId}`
+          );
+        }
+        if (smokeSpan.parentSpanId !== '00f067aa0ba902b7') {
+          throw new Error(`Expected parentSpanId 00f067aa0ba902b7, got ${smokeSpan.parentSpanId}`);
+        }
+        console.log('✅ SmokeWorker distributed trace context continuation verified');
+      } finally {
+        await testWorkerTelemetry.shutdown();
+        await prismaService.outboxEvent.delete({ where: { id: traceEvent.id } });
+      }
+
+      // 6.15 Safe Database Reset Fail-Closed Guards (Round 6 Finding 1)
+      console.log('Testing assertSafeDatabaseReset fail-closed guards...');
+      const { assertSafeDatabaseReset } = await import('../../infra/docker/reset-db');
+
+      // Reject in production
+      let caughtProd = false;
+      try {
+        assertSafeDatabaseReset(
+          'postgresql://postgres:postgres@localhost:5433/shipde_dev',
+          'production'
+        );
+      } catch (err: any) {
+        if (err.message.includes('strictly prohibited when NODE_ENV is "production"')) {
+          caughtProd = true;
+        }
+      }
+      if (!caughtProd) {
+        throw new Error('Expected assertSafeDatabaseReset to reject when NODE_ENV is production');
+      }
+
+      // Reject non-local remote host
+      let caughtRemote = false;
+      try {
+        assertSafeDatabaseReset(
+          'postgresql://postgres:secret@db.prod.internal:5432/shipde_dev',
+          'development'
+        );
+      } catch (err: any) {
+        if (err.message.includes('not an authorized local or test host')) {
+          caughtRemote = true;
+        }
+      }
+      if (!caughtRemote) {
+        throw new Error('Expected assertSafeDatabaseReset to reject non-local database host');
+      }
+
+      // Reject production database name
+      let caughtProdDb = false;
+      try {
+        assertSafeDatabaseReset(
+          'postgresql://postgres:secret@localhost:5433/shipde_production',
+          'development'
+        );
+      } catch (err: any) {
+        if (err.message.includes('not an authorized local or test database name')) {
+          caughtProdDb = true;
+        }
+      }
+      if (!caughtProdDb) {
+        throw new Error('Expected assertSafeDatabaseReset to reject production database name');
+      }
+
+      // Allow valid local test database
+      assertSafeDatabaseReset(
+        'postgresql://postgres:postgres@localhost:5433/shipde_dev',
+        'development'
+      );
+      assertSafeDatabaseReset('postgresql://postgres:postgres@127.0.0.1:5433/shipde_test', 'test');
+      console.log('✅ assertSafeDatabaseReset fail-closed guards verified');
     } finally {
       await redisService.onModuleDestroy();
       await dispatcher.onModuleDestroy();

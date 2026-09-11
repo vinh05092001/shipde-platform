@@ -14,7 +14,7 @@ function getComposeStatuses(): ServiceStatus[] {
   try {
     const raw = execFileSync(
       'docker',
-      ['compose', '-f', 'infra/docker/compose.yml', 'ps', '--format', 'json'],
+      ['compose', '-f', 'infra/docker/compose.yml', 'ps', '-a', '--format', 'json'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
     );
 
@@ -83,16 +83,17 @@ export async function waitForInfrastructure(): Promise<void> {
 
         const allHealthy = statuses.every((st) => st.isHealthy);
         const minioInit = serviceMap.get('minio-init');
-        const minioInitStatus = (minioInit?.status || '').toLowerCase();
-        const minioInitDone = !minioInit || minioInitStatus.includes('exited (0)');
+        if (!minioInit) {
+          // minio-init container not created yet, keep polling
+          continue;
+        }
 
-        if (
-          minioInit &&
-          minioInitStatus.includes('exited (') &&
-          !minioInitStatus.includes('exited (0)')
-        ) {
+        const minioInitStatus = (minioInit.status || '').toLowerCase();
+        if (minioInitStatus.includes('exited (') && !minioInitStatus.includes('exited (0)')) {
           throw new Error(`minio-init container failed with status: ${minioInit.status}`);
         }
+
+        const minioInitDone = minioInitStatus.includes('exited (0)');
 
         if (allHealthy && minioInitDone) {
           console.log('✅ All infrastructure services are healthy:');

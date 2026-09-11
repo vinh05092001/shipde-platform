@@ -6,37 +6,66 @@ import {
   Tracer,
   SpanStatusCode,
   ROOT_CONTEXT,
+  Context,
 } from '@opentelemetry/api';
 import {
   BasicTracerProvider,
   SimpleSpanProcessor,
   InMemorySpanExporter,
+  SpanExporter,
 } from '@opentelemetry/sdk-trace-base';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 
 let provider: BasicTracerProvider | null = null;
 let inMemoryExporter: InMemorySpanExporter | null = null;
 
+class NoopSpanExporter implements SpanExporter {
+  export(_spans: unknown[], resultCallback: (result: { code: number }) => void): void {
+    resultCallback({ code: 0 });
+  }
+  async shutdown(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+export interface TelemetryOptions {
+  inMemory?: boolean;
+}
+
 /**
  * Initializes OpenTelemetry distributed tracing foundation with standard service resource.
+ * In production/default runtime, uses NoopSpanExporter so finished spans are not retained in memory.
+ * InMemorySpanExporter is strictly restricted to test harnesses.
  */
 export function initTelemetry(
   serviceName: string,
-  serviceVersion = '0.1.0'
+  serviceVersion = '0.1.0',
+  options: TelemetryOptions = {}
 ): {
   tracer: Tracer;
   shutdown: () => Promise<void>;
   getRecordedSpans: () => unknown[];
 } {
   if (!provider) {
-    inMemoryExporter = new InMemorySpanExporter();
-    provider = new BasicTracerProvider({
-      resource: resourceFromAttributes({
-        'service.name': serviceName,
-        'service.version': serviceVersion,
-      }),
-      spanProcessors: [new SimpleSpanProcessor(inMemoryExporter)],
-    });
+    if (options.inMemory) {
+      inMemoryExporter = new InMemorySpanExporter();
+      provider = new BasicTracerProvider({
+        resource: resourceFromAttributes({
+          'service.name': serviceName,
+          'service.version': serviceVersion,
+        }),
+        spanProcessors: [new SimpleSpanProcessor(inMemoryExporter)],
+      });
+    } else {
+      inMemoryExporter = null;
+      provider = new BasicTracerProvider({
+        resource: resourceFromAttributes({
+          'service.name': serviceName,
+          'service.version': serviceVersion,
+        }),
+        spanProcessors: [new SimpleSpanProcessor(new NoopSpanExporter())],
+      });
+    }
     trace.setGlobalTracerProvider(provider);
   }
 
@@ -70,26 +99,30 @@ export async function withSpan<T>(
   tracer: Tracer,
   name: string,
   fn: (span: Span) => Promise<T>,
-  attributes?: Record<string, string | number | boolean>
+  attributes?: Record<string, string | number | boolean>,
+  parentContext?: Context
 ): Promise<T> {
-  return tracer.startActiveSpan(name, async (span) => {
-    if (attributes) {
-      span.setAttributes(attributes);
-    }
-    try {
-      const result = await fn(span);
-      span.setStatus({ code: SpanStatusCode.OK });
-      return result;
-    } catch (err: unknown) {
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: err instanceof Error ? err.message : String(err),
-      });
-      span.recordException(err instanceof Error ? err : new Error(String(err)));
-      throw err;
-    } finally {
-      span.end();
-    }
+  const activeCtx = parentContext || context.active();
+  return context.with(activeCtx, () => {
+    return tracer.startActiveSpan(name, async (span) => {
+      if (attributes) {
+        span.setAttributes(attributes);
+      }
+      try {
+        const result = await fn(span);
+        span.setStatus({ code: SpanStatusCode.OK });
+        return result;
+      } catch (err: unknown) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        span.recordException(err instanceof Error ? err : new Error(String(err)));
+        throw err;
+      } finally {
+        span.end();
+      }
+    });
   });
 }
 

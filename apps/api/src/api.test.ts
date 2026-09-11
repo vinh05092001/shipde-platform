@@ -632,7 +632,21 @@ async function runApiTests() {
   {
     const { initTelemetry, withSpan, extractTraceContext, injectTraceContext } =
       await import('@shipde/config');
-    const { tracer, shutdown, getRecordedSpans } = initTelemetry('test-api');
+
+    // Test production telemetry does not retain spans indefinitely (Finding 4)
+    const prodTelemetry = initTelemetry('test-prod-api');
+    await withSpan(prodTelemetry.tracer, 'test.prod_span', async (span) => {
+      span.setAttribute('test.attribute', 'valid');
+    });
+    if (prodTelemetry.getRecordedSpans().length !== 0) {
+      throw new Error('Expected production telemetry to not retain spans in process memory');
+    }
+    await prodTelemetry.shutdown();
+
+    // Test in-memory telemetry for test verification
+    const { tracer, shutdown, getRecordedSpans } = initTelemetry('test-api', '0.1.0', {
+      inMemory: true,
+    });
     await withSpan(tracer, 'test.foundation_span', async (span) => {
       span.setAttribute('test.attribute', 'valid');
     });
@@ -679,6 +693,42 @@ async function runApiTests() {
     }
     if (!caughtUnsupported) {
       throw new Error('Expected OutboxService.createOutboxEvent to reject non-smoke event types');
+    }
+
+    // Test invalid correlationId is normalized before persistence (Round 6 Finding 5)
+    let createdArgs: any = null;
+    mockPrismaOutbox.outboxEvent.create = async (args: any) => {
+      createdArgs = args;
+      return { id: 'outbox-1', ...args.data };
+    };
+    await outboxSvc.createOutboxEvent({
+      eventType: QUEUE_SMOKE_EVENT_TYPE,
+      payload: { smokeId: 'smoke-norm-1' },
+      correlationId: '   ',
+    });
+    if (!createdArgs?.data?.correlation_id || createdArgs.data.correlation_id.trim().length === 0) {
+      throw new Error('Expected whitespace correlationId to be normalized to valid UUID');
+    }
+
+    // Test transaction creation normalizes correlationId as well
+    let txCreatedArgs: any = null;
+    const mockTx: any = {
+      outboxEvent: {
+        create: async (args: any) => {
+          txCreatedArgs = args;
+          return { id: 'outbox-tx-1', ...args.data };
+        },
+      },
+    };
+    await outboxSvc.createWithinTransaction(mockTx, {
+      eventType: QUEUE_SMOKE_EVENT_TYPE,
+      payload: { smokeId: 'smoke-norm-2' },
+      correlationId: 'invalid@@chars!!',
+    });
+    if (!txCreatedArgs?.data?.correlation_id || txCreatedArgs.data.correlation_id.includes('@@')) {
+      throw new Error(
+        'Expected invalid correlationId in transaction to be normalized to valid UUID'
+      );
     }
   }
   console.log('✅ OutboxService allowlist enforcement passed');

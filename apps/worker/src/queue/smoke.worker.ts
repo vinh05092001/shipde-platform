@@ -9,6 +9,7 @@ import {
   redactSensitiveData,
   getTracer,
   withSpan,
+  extractTraceContext,
 } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 import { SMOKE_QUEUE_NAME, QUEUE_SMOKE_EVENT_TYPE } from '@shipde/contracts';
@@ -148,6 +149,7 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
     const payload = (outboxRecord.payload as Record<string, unknown>) || data.payload;
 
     const tracer = getTracer('shipde-worker');
+    const parentContext = data.traceContext ? extractTraceContext(data.traceContext) : undefined;
     return withSpan(
       tracer,
       'smoke.process',
@@ -263,7 +265,6 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
                 jobId: job.id,
                 smokeId: data.smokeId,
                 outboxId: data.outboxId,
-                payload,
               },
             })
           );
@@ -285,7 +286,8 @@ export class SmokeWorker implements OnModuleInit, OnModuleDestroy {
         'job.id': job.id || '',
         'outbox.id': data.outboxId || '',
         correlation_id: correlationId,
-      }
+      },
+      parentContext
     );
   }
 
