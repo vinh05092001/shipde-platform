@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync", "Supervise", "Test")]
     [string]$Action = "Menu",
 
@@ -951,6 +951,43 @@ function Get-ShipDePromptForItem {
     return $prompt
 }
 
+function Start-ShipDeGeminiAuthor {
+    param(
+        [Parameter(Mandatory = $true)][string]$Workspace
+    )
+
+    $dockerWorkerCompose = Join-Path $PSScriptRoot "docker-worker\docker-compose.yml"
+    $dockerRunning = $false
+    if ((Test-Path $dockerWorkerCompose) -and (Get-Command docker -ErrorAction SilentlyContinue)) {
+        try {
+            $null = & docker info 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $dockerRunning = $true
+            }
+        } catch {
+            $dockerRunning = $false
+        }
+    }
+
+    if ($dockerRunning) {
+        Write-Host "Starting Gemini author in Docker container (isolated Antigravity worker)..."
+        $escapedWorkspace = $Workspace.Replace("'", "''")
+        $escapedCompose = $dockerWorkerCompose.Replace("'", "''")
+        $dockerCmd = "`$env:SHIPDE_WORKSPACE = '$escapedWorkspace'; docker compose -f '$escapedCompose' run --rm -it gemini-worker"
+        Start-ShipDeTerminal -Workspace $Workspace -Command $dockerCmd
+        return
+    }
+
+    Write-Warning "Docker Desktop is stopped or unreachable. Falling back to host native Antigravity CLI (agy)..."
+    if (Get-Command agy -ErrorAction SilentlyContinue) {
+        Start-ShipDeTerminal -Workspace $Workspace -Command "agy"
+    } elseif (Get-Command gemini -ErrorAction SilentlyContinue) {
+        Start-ShipDeTerminal -Workspace $Workspace -Command "gemini"
+    } else {
+        throw "Neither Docker worker nor native Antigravity/Gemini CLI is available."
+    }
+}
+
 function Start-ShipDeAssignedAuthor {
     param([Parameter(Mandatory = $true)][object]$Item)
 
@@ -968,13 +1005,7 @@ function Start-ShipDeAssignedAuthor {
     Set-ShipDeClipboard -Text $prompt
 
     if ($Item.Author -eq "GEMINI") {
-        if (Get-Command agy -ErrorAction SilentlyContinue) {
-            Start-ShipDeTerminal -Workspace $workspace -Command "agy"
-        } elseif (Get-Command gemini -ErrorAction SilentlyContinue) {
-            Start-ShipDeTerminal -Workspace $workspace -Command "gemini"
-        } else {
-            throw "Neither Antigravity CLI (agy) nor Gemini CLI is available."
-        }
+        Start-ShipDeGeminiAuthor -Workspace $workspace
     } elseif ($Item.Author -eq "CLAUDE") {
         Assert-ShipDeCommand claude
         Start-ShipDeTerminal -Workspace $workspace -Command "claude"
@@ -1430,8 +1461,7 @@ function Start-ShipDeFixRound {
     Set-ShipDeClipboard -Text $prompt
 
     if ($Item.Author -eq "GEMINI") {
-        $command = if (Get-Command agy -ErrorAction SilentlyContinue) { "agy" } else { "gemini" }
-        Start-ShipDeTerminal -Workspace $workspace -Command $command
+        Start-ShipDeGeminiAuthor -Workspace $workspace
     } else {
         Assert-ShipDeCommand 9router
         Assert-ShipDeCommand dsh
@@ -1765,6 +1795,96 @@ IMPORTANT: You MUST respond ONLY with valid, raw JSON satisfying the schema. Do 
         Remove-Item -LiteralPath $tempInNative -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $tempOutNative -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $tempDiagNative -Force -ErrorAction SilentlyContinue
+    }
+
+    # 2. Secondary fallback: Claude Code CLI via AgentRouter (AGENTROUTER_API_KEY)
+    $arKey = [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
+    if ([string]::IsNullOrWhiteSpace($arKey)) {
+        Write-Warning "[REVIEW-FALLBACK] AGENTROUTER_API_KEY not set in User environment. Skipping AgentRouter fallback."
+        return $false
+    }
+
+    Write-Host ("[REVIEW-FALLBACK] Attempting review via AgentRouter for PR #{0} (HEAD: {1})..." -f $PullRequestNumber, $ReviewHeadSha.Substring(0, [Math]::Min(8, $ReviewHeadSha.Length)))
+
+    $tempInAr = Join-Path (Get-ShipDeTempDir) "ar-in-$([Guid]::NewGuid().ToString('N')).txt"
+    $tempOutAr = Join-Path (Get-ShipDeTempDir) "ar-review-$([Guid]::NewGuid().ToString('N')).txt"
+    $tempDiagAr = Join-Path (Get-ShipDeTempDir) "ar-diag-$([Guid]::NewGuid().ToString('N')).txt"
+    [System.IO.File]::WriteAllText($tempInAr, $reviewInstruction, [System.Text.UTF8Encoding]::new($false))
+
+    $arOriginalEnv = @{
+        ANTHROPIC_AUTH_TOKEN = $env:ANTHROPIC_AUTH_TOKEN
+        ANTHROPIC_BASE_URL   = $env:ANTHROPIC_BASE_URL
+        CLAUDE_CONFIG_DIR    = $env:CLAUDE_CONFIG_DIR
+        ANTHROPIC_API_KEY    = $env:ANTHROPIC_API_KEY
+    }
+
+    try {
+        $env:ANTHROPIC_AUTH_TOKEN = $null
+        $env:ANTHROPIC_BASE_URL   = "https://agentrouter.org/"
+        $env:CLAUDE_CONFIG_DIR    = $null
+        $env:ANTHROPIC_API_KEY    = $arKey
+
+        $arProc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c claude -p --dangerously-skip-permissions --output-format text < `"$tempInAr`"" -WorkingDirectory $codexWorktree -RedirectStandardOutput $tempOutAr -RedirectStandardError $tempDiagAr -PassThru -NoNewWindow
+        $arHasExited = $false
+        if ($null -ne $arProc) {
+            $arHasExited = $arProc.WaitForExit(900000)
+        }
+        if (-not $arHasExited) {
+            Write-Warning "[REVIEW-FALLBACK] AgentRouter Claude Code timed out after 900s."
+            if ($null -ne $arProc) {
+                & taskkill.exe /F /T /PID $arProc.Id 2>&1 | Out-Null
+                Stop-Process -Id $arProc.Id -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            $arRaw = if (Test-Path -LiteralPath $tempOutAr) { [string](Get-Content -LiteralPath $tempOutAr -Raw) } else { "" }
+            $arDiag = if (Test-Path -LiteralPath $tempDiagAr) { [string](Get-Content -LiteralPath $tempDiagAr -Raw) } else { "" }
+
+            if (-not [string]::IsNullOrWhiteSpace($arRaw)) {
+                $arCleanJson = $arRaw.Trim()
+                if ($arCleanJson -match '(?s)^.*?```(?:json)?\s*(\{.*\})\s*```.*?$') {
+                    $arCleanJson = $matches[1].Trim()
+                }
+
+                try {
+                    $arParsed = ConvertFrom-ShipDeCodexReviewOutput -OutputText $arCleanJson
+                    if ($null -ne $arParsed -and $null -ne $arParsed.Verdict) {
+                        $arHeader = "Reviewed by Claude Code (AgentRouter)`nReviewed exact head: $ReviewHeadSha`nVerdict: $($arParsed.Verdict)`n`n"
+                        if ($arParsed.Report -notmatch [regex]::Escape("Reviewed exact head:")) {
+                            $arParsed.Report = $arHeader + $arParsed.Report
+                        }
+
+                        $arCleanPayload = [PSCustomObject]@{
+                            verdict  = $arParsed.Verdict
+                            summary  = $arParsed.Summary
+                            findings = @($arParsed.Findings)
+                            report   = $arParsed.Report
+                        } | ConvertTo-Json -Depth 10
+
+                        [System.IO.File]::WriteAllText($ReviewFile, $arCleanPayload, [System.Text.UTF8Encoding]::new($false))
+                        try {
+                            [System.IO.File]::WriteAllText($ExecutionFile, "[Claude Code AgentRouter]`n$arCleanPayload", [System.Text.UTF8Encoding]::new($false))
+                        } catch {
+                            Write-Warning ("[REVIEW-FALLBACK] Could not write AgentRouter execution log: {0}" -f $_.Exception.Message)
+                        }
+                        Write-Host ("[REVIEW-FALLBACK] Successfully completed review via AgentRouter! Verdict: {0}" -f $arParsed.Verdict)
+                        return $true
+                    }
+                } catch {
+                    Write-Warning ("[REVIEW-FALLBACK] AgentRouter output failed schema validation: {0}" -f $_.Exception.Message)
+                }
+            } else {
+                $arDiagTrimmed = if (-not [string]::IsNullOrWhiteSpace($arDiag)) { $arDiag.Trim() } else { "(no stderr output)" }
+                Write-Warning ("[REVIEW-FALLBACK] AgentRouter Claude Code returned no stdout. Stderr: {0}" -f $arDiagTrimmed)
+            }
+        }
+    } finally {
+        $env:ANTHROPIC_AUTH_TOKEN = $arOriginalEnv.ANTHROPIC_AUTH_TOKEN
+        $env:ANTHROPIC_BASE_URL   = $arOriginalEnv.ANTHROPIC_BASE_URL
+        $env:CLAUDE_CONFIG_DIR    = $arOriginalEnv.CLAUDE_CONFIG_DIR
+        $env:ANTHROPIC_API_KEY    = $arOriginalEnv.ANTHROPIC_API_KEY
+        Remove-Item -LiteralPath $tempInAr -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tempOutAr -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tempDiagAr -Force -ErrorAction SilentlyContinue
     }
     return $false
 }

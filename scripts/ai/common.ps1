@@ -1,6 +1,15 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# Force the console to UTF-8 so Vietnamese and other non-ASCII text renders
+# correctly on Windows PowerShell 5.1 (OEM code page 437 by default).
+# All three settings are required:
+#   chcp 65001        — tells the terminal font renderer to use UTF-8
+#   OutputEncoding    — encodes stdout bytes as UTF-8
+#   InputEncoding     — decodes stdin bytes as UTF-8
+$null = & chcp 65001 2>$null
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+[Console]::InputEncoding  = [System.Text.UTF8Encoding]::new()
 
 function Assert-ShipDeCommand {
     param([Parameter(Mandatory = $true)][string]$Name)

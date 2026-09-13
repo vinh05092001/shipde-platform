@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("Validate", "Status", "Activate", "Deactivate", "Test", "SyncRegister")]
     [string]$Action = "Status",
 
