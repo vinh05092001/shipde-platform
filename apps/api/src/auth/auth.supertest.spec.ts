@@ -31,9 +31,16 @@ async function runAuthSupertestSuite() {
         const trimmed = line.trim();
         if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
           const [key, ...rest] = trimmed.split('=');
-          const val = rest.join('=').trim();
-          if (!process.env[key.trim()]) {
-            process.env[key.trim()] = val;
+          const cleanKey = key.trim();
+          let val = rest.join('=').trim();
+          if (
+            (val.startsWith('"') && val.endsWith('"')) ||
+            (val.startsWith("'") && val.endsWith("'"))
+          ) {
+            val = val.slice(1, -1);
+          }
+          if (!process.env[cleanKey]) {
+            process.env[cleanKey] = val;
           }
         }
       }
@@ -41,8 +48,15 @@ async function runAuthSupertestSuite() {
     }
   }
 
-  const databaseUrl =
-    process.env.DATABASE_URL || 'postgresql://shipde:shipde_password@localhost:5432/shipde_dev';
+  let databaseUrl =
+    process.env.DATABASE_URL ||
+    'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
+  if (
+    (databaseUrl.startsWith('"') && databaseUrl.endsWith('"')) ||
+    (databaseUrl.startsWith("'") && databaseUrl.endsWith("'"))
+  ) {
+    databaseUrl = databaseUrl.slice(1, -1);
+  }
   process.env.DATABASE_URL = databaseUrl;
 
   const testConfig: AppConfig = {
@@ -78,6 +92,19 @@ async function runAuthSupertestSuite() {
 
   const prisma = app.get(PrismaService);
   const rateLimitService = app.get(RateLimitService);
+
+  const dbStatus = await prisma.checkReadiness();
+  if (dbStatus !== 'up') {
+    if (process.env.CI) {
+      throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
+    }
+    console.warn(
+      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Skipping live Auth Supertest tests (run 'pnpm infra:up' to enable).`
+    );
+    await app.close();
+    console.log('🎉 Auth Supertest suite skipped offline safely!');
+    return;
+  }
 
   const testSuffix = Date.now().toString().slice(-6);
 
