@@ -192,89 +192,75 @@ export class AuthService {
       },
     });
 
-    const activeConflict = existingUsers.find(
-      (u) => u.status === 'active' || u.email_verified_at !== null || u.phone_verified_at !== null
+    const conflictResponse = await this.resolveExistingAccountConflict(
+      existingUsers,
+      email,
+      clientIp,
+      correlationId
     );
-
-    if (activeConflict) {
-      const conflictField = email && activeConflict.email === email ? 'email' : 'phone';
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'VALIDATION_ERROR',
-        `${conflictField === 'email' ? 'Email' : 'Số điện thoại'} đã được đăng ký trên hệ thống`,
-        false,
-        'Vui lòng đăng nhập hoặc sử dụng thông tin liên lạc khác',
-        [
-          {
-            field: conflictField,
-            code: 'DUPLICATE',
-            message: `${conflictField === 'email' ? 'Email' : 'Số điện thoại'} đã được đăng ký`,
-          },
-        ]
-      );
-    }
-
-    // 4. Handle Pending Account Re-try (BR-AUTH-03, BR-AUTH-10)
-    const pendingAccount = existingUsers.find((u) => u.status === 'pending_verification');
-
-    if (pendingAccount) {
-      // Record rate limit attempt
-      await this.rateLimitService.recordRegistrationAttempt(clientIp, email, phone);
-
-      // Re-issue verification token/OTP for pending account
-      await this.issueAndSendVerification(pendingAccount, email, phone, correlationId);
-
-      this.logAudit({
-        actor: this.hashIp(clientIp),
-        action: 'AUTH_REGISTER_PENDING_RETRY',
-        resource: `user:${pendingAccount.id}`,
-        correlationId,
-      });
-
-      return {
-        data: {
-          user_id: pendingAccount.id,
-          merchant_id: pendingAccount.merchant_id,
-          status: 'PENDING_VERIFICATION' as const,
-          email: pendingAccount.email || undefined,
-          phone: pendingAccount.phone || undefined,
-          message: 'Tài khoản đang chờ xác thực. Mã xác thực mới đã được gửi.',
-        },
-        meta: {
-          correlation_id: correlationId,
-        },
-      };
+    if (conflictResponse) {
+      return conflictResponse;
     }
 
     // 5. Atomic Creation of Merchant and User (BR-AUTH-01, BR-AUTH-02)
     const passwordHash = await hashPassword(dto.password);
     const merchantCode = this.generateMerchantCode(dto.merchant_name);
 
-    const { merchant, user } = await this.prisma.$transaction(async (tx) => {
-      const newMerchant = await tx.merchant.create({
-        data: {
-          name: dto.merchant_name.trim(),
-          code: merchantCode,
-          status: 'active',
-        },
-      });
+    let merchant: { id: string };
+    let user: { id: string; email: string | null; phone: string | null };
+    try {
+      const created = await this.prisma.$transaction(async (tx) => {
+        const newMerchant = await tx.merchant.create({
+          data: {
+            name: dto.merchant_name.trim(),
+            code: merchantCode,
+            status: 'active',
+          },
+        });
 
-      const newUser = await tx.user.create({
-        data: {
-          merchant_id: newMerchant.id,
-          full_name: dto.full_name.trim(),
-          email: email || null,
-          phone: phone || null,
-          password_hash: passwordHash,
-          role: RoleEnum.OWNER,
-          status: 'pending_verification',
-          terms_accepted_at: new Date(),
-          terms_version: dto.terms_version,
-        },
-      });
+        const newUser = await tx.user.create({
+          data: {
+            merchant_id: newMerchant.id,
+            full_name: dto.full_name.trim(),
+            email: email || null,
+            phone: phone || null,
+            password_hash: passwordHash,
+            role: RoleEnum.OWNER,
+            status: 'pending_verification',
+            terms_accepted_at: new Date(),
+            terms_version: dto.terms_version,
+          },
+        });
 
-      return { merchant: newMerchant, user: newUser };
-    });
+        return { merchant: newMerchant, user: newUser };
+      });
+      merchant = created.merchant;
+      user = created.user;
+    } catch (err: unknown) {
+      // BR-AUTH-10: two concurrent submissions of the same not-yet-verified identifier
+      // must not create two Merchant/User pairs. The pre-check above cannot see an
+      // in-flight, uncommitted transaction from a sibling request, so the platform-wide
+      // unique constraint on email/phone is the final authority: a P2002 violation here
+      // means the sibling request won the race, and this request must fall back to the
+      // same "existing account" branch instead of surfacing a raw 500.
+      if (this.isUniqueConstraintViolation(err)) {
+        const raced = await this.prisma.user.findMany({
+          where: {
+            OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+          },
+        });
+        const racedResponse = await this.resolveExistingAccountConflict(
+          raced,
+          email,
+          clientIp,
+          correlationId
+        );
+        if (racedResponse) {
+          return racedResponse;
+        }
+      }
+      throw err;
+    }
 
     // Record rate limit attempt
     await this.rateLimitService.recordRegistrationAttempt(clientIp, email, phone);
@@ -308,7 +294,7 @@ export class AuthService {
   /**
    * Verify Email Link Token (BR-AUTH-02, BR-AUTH-06)
    */
-  async verifyEmail(dto: VerifyEmailDto, correlationId: string) {
+  async verifyEmail(dto: VerifyEmailDto, clientIp: string, correlationId: string) {
     if (!dto.token || dto.token.trim().length === 0) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
@@ -602,6 +588,97 @@ export class AuthService {
         correlation_id: correlationId,
       },
     };
+  }
+
+  /**
+   * BR-AUTH-03 / BR-AUTH-10: given the set of existing users matching the submitted
+   * email/phone, either reject as a duplicate (already-verified match), re-issue a
+   * verification to the still-pending match, or return null to signal "no conflict,
+   * proceed to create". Shared by the pre-check and the post-race-loss recovery path.
+   */
+  private async resolveExistingAccountConflict(
+    existingUsers: Array<{
+      id: string;
+      merchant_id: string;
+      email: string | null;
+      phone: string | null;
+      status: string;
+      email_verified_at: Date | null;
+      phone_verified_at: Date | null;
+    }>,
+    email: string | undefined,
+    clientIp: string,
+    correlationId: string
+  ): Promise<{ data: Record<string, unknown>; meta: Record<string, unknown> } | null> {
+    const activeConflict = existingUsers.find(
+      (u) => u.status === 'active' || u.email_verified_at !== null || u.phone_verified_at !== null
+    );
+
+    if (activeConflict) {
+      const conflictField = email && activeConflict.email === email ? 'email' : 'phone';
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `${conflictField === 'email' ? 'Email' : 'Số điện thoại'} đã được đăng ký trên hệ thống`,
+        false,
+        'Vui lòng đăng nhập hoặc sử dụng thông tin liên lạc khác',
+        [
+          {
+            field: conflictField,
+            code: 'DUPLICATE',
+            message: `${conflictField === 'email' ? 'Email' : 'Số điện thoại'} đã được đăng ký`,
+          },
+        ]
+      );
+    }
+
+    const pendingAccount = existingUsers.find((u) => u.status === 'pending_verification');
+
+    if (pendingAccount) {
+      await this.rateLimitService.recordRegistrationAttempt(
+        clientIp,
+        pendingAccount.email || undefined,
+        pendingAccount.phone || undefined
+      );
+
+      await this.issueAndSendVerification(
+        pendingAccount,
+        pendingAccount.email || undefined,
+        pendingAccount.phone || undefined,
+        correlationId
+      );
+
+      this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_REGISTER_PENDING_RETRY',
+        resource: `user:${pendingAccount.id}`,
+        correlationId,
+      });
+
+      return {
+        data: {
+          user_id: pendingAccount.id,
+          merchant_id: pendingAccount.merchant_id,
+          status: 'PENDING_VERIFICATION' as const,
+          email: pendingAccount.email || undefined,
+          phone: pendingAccount.phone || undefined,
+          message: 'Tài khoản đang chờ xác thực. Mã xác thực mới đã được gửi.',
+        },
+        meta: {
+          correlation_id: correlationId,
+        },
+      };
+    }
+
+    return null;
+  }
+
+  private isUniqueConstraintViolation(err: unknown): boolean {
+    return (
+      typeof err === 'object' &&
+      err !== null &&
+      (err as { code?: string }).code === 'P2002'
+    );
   }
 
   private async issueAndSendVerification(

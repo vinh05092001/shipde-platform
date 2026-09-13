@@ -173,12 +173,7 @@ export async function seedDatabase(client?: PrismaClient): Promise<{
     // 2. Seed Users
     for (const u of SEED_USERS) {
       await prisma.user.upsert({
-        where: {
-          merchant_id_email: {
-            merchant_id: u.merchant_id,
-            email: u.email,
-          },
-        },
+        where: { email: u.email },
         update: {
           phone: u.phone,
           full_name: u.full_name,

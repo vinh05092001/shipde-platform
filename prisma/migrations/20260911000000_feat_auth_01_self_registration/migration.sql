@@ -1,3 +1,8 @@
+-- DropIndex: replace tenant-scoped uniqueness with a platform-wide constraint (BR-AUTH-03:
+-- self-registration mints a brand-new tenant per account, so email/phone must be unique
+-- across the whole platform, not merely within one merchant).
+DROP INDEX "users_merchant_id_email_key";
+
 -- AlterTable
 ALTER TABLE "users" ALTER COLUMN "email" DROP NOT NULL;
 ALTER TABLE "users" ALTER COLUMN "phone" DROP NOT NULL;
@@ -31,11 +36,12 @@ CREATE INDEX "verification_tokens_user_id_idx" ON "verification_tokens"("user_id
 -- CreateIndex
 CREATE INDEX "verification_tokens_identifier_channel_idx" ON "verification_tokens"("identifier", "channel");
 
--- CreateIndex
-CREATE INDEX "users_email_idx" ON "users"("email");
+-- CreateIndex: platform-wide uniqueness on the login identifiers (Postgres treats each NULL
+-- as distinct, so phone-only or email-only accounts remain unaffected).
+CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 
 -- CreateIndex
-CREATE INDEX "users_phone_idx" ON "users"("phone");
+CREATE UNIQUE INDEX "users_phone_key" ON "users"("phone");
 
 -- AddForeignKey
 ALTER TABLE "verification_tokens" ADD CONSTRAINT "verification_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
