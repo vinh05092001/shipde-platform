@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3333;
 const ROOT_DIR = process.cwd();
@@ -237,6 +238,77 @@ setInterval(() => {
   });
 }, 5000);
 
+// ---------------------------------------------------------------------------
+// Server-Sent Events: push on change instead of polling on a timer.
+// ---------------------------------------------------------------------------
+const sseClients = new Set();
+let lastPayloadHash = '';
+
+function buildSnapshot() {
+  const tasks = getTasksData();
+  return {
+    tasks,
+    total: tasks.length,
+    routerUp: is9RouterUp,
+    openPrs: openPrs.length,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function hashPayload(obj) {
+  return crypto.createHash('sha1').update(JSON.stringify(obj)).digest('hex');
+}
+
+function broadcastSnapshot(force) {
+  if (sseClients.size === 0 && !force) return;
+  let snapshot;
+  try {
+    snapshot = buildSnapshot();
+  } catch (e) {
+    return;
+  }
+  // Ignore the timestamp when deciding whether anything actually changed.
+  const { generatedAt, ...material } = snapshot;
+  const hash = hashPayload(material);
+  if (hash === lastPayloadHash && !force) return;
+  lastPayloadHash = hash;
+
+  const frame = 'event: snapshot\ndata: ' + JSON.stringify(snapshot) + '\n\n';
+  for (const client of sseClients) {
+    try {
+      client.write(frame);
+    } catch (e) {
+      sseClients.delete(client);
+    }
+  }
+}
+
+// Watch the register so an edit reaches the browser immediately.
+let watchDebounce = null;
+try {
+  fs.watch(CSV_PATH, () => {
+    clearTimeout(watchDebounce);
+    watchDebounce = setTimeout(() => broadcastSnapshot(false), 150);
+  });
+} catch (e) {
+  // Watching is an optimisation; the change poll below still covers it.
+}
+
+// Catches changes fs.watch misses (network shares, editors that replace inodes)
+// and picks up router/PR state, which are refreshed on their own timers.
+setInterval(() => broadcastSnapshot(false), 3000);
+
+// Heartbeat keeps intermediaries from closing an idle stream.
+setInterval(() => {
+  for (const client of sseClients) {
+    try {
+      client.write(': keep-alive\n\n');
+    } catch (e) {
+      sseClients.delete(client);
+    }
+  }
+}, 20000);
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host}`);
   const pathname = url.pathname;
@@ -253,6 +325,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   // API Endpoints
+  if (pathname === '/api/stream') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('retry: 3000\n\n');
+    res.write('event: snapshot\ndata: ' + JSON.stringify(buildSnapshot()) + '\n\n');
+    sseClients.add(res);
+    req.on('close', () => sseClients.delete(res));
+    req.on('error', () => sseClients.delete(res));
+    return;
+  }
+
   if (pathname === '/api/tasks') {
     const tasks = getTasksData();
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -628,9 +715,34 @@ function renderDashboardHtml() {
         </div>
         <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden flex">
           <div class="bg-emerald-500 h-full transition-all duration-500 shadow-sm" id="progressBarMerged" style="width: 9.5%"></div>
-          <div class="bg-amber-500 h-full transition-all duration-500" style="width: 2%"></div>
+        </div>
+
+        <!-- Status distribution across every work item -->
+        <div class="mt-4">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Phân bố trạng thái</span>
+            <div class="flex items-center gap-2">
+              <span id="liveDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+              <span id="liveLabel" class="text-[11px] font-semibold text-slate-400">Đang kết nối</span>
+              <span class="text-slate-700">•</span>
+              <span class="text-[11px] text-slate-500 font-mono" id="liveTime">--:--:--</span>
+            </div>
+          </div>
+          <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden flex" id="statusDist"></div>
+          <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 text-[11px]" id="statusLegend"></div>
         </div>
       </div>
+    </div>
+
+    <!-- Per-slice delivery progress -->
+    <div class="bg-slate-900/40 rounded-2xl p-5 border border-slate-800">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <h2 class="text-sm font-black text-slate-200">Tiến độ theo Slice</h2>
+          <p class="text-[11px] text-slate-500 mt-0.5">Bấm một slice để lọc bảng công việc bên dưới</p>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5" id="sliceProgress"></div>
     </div>
 
     <!-- Navigation Tabs -->
@@ -978,6 +1090,89 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
       }, 3000);
     }
 
+    const STATUS_STYLE = {
+      MERGED:                { color: 'bg-emerald-500', text: 'text-emerald-300', label: 'Đã gộp' },
+      READY_FOR_CODEX:       { color: 'bg-sky-500',     text: 'text-sky-300',     label: 'Chờ review' },
+      IN_PROGRESS:           { color: 'bg-amber-500',   text: 'text-amber-300',   label: 'Đang làm' },
+      BLOCKED_DEPENDENCY:    { color: 'bg-orange-500',  text: 'text-orange-300',  label: 'Chờ phụ thuộc' },
+      BLOCKED_BY_FOUNDATION: { color: 'bg-slate-600',   text: 'text-slate-400',   label: 'Chờ nền tảng' }
+    };
+
+    function statusStyle(st) {
+      return STATUS_STYLE[st] || { color: 'bg-slate-600', text: 'text-slate-400', label: st || 'Không rõ' };
+    }
+
+    function updateStats() {
+      const total = allTasks.length || 1;
+      const merged = allTasks.filter(t => t.status === 'MERGED').length;
+      const pct = ((merged / total) * 100).toFixed(1);
+
+      const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
+      set('statTotal', allTasks.length + ' Tasks');
+      set('statMerged', merged + ' Merged (' + pct + '%)');
+      set('progressLabel', merged + ' / ' + allTasks.length + ' Tasks (' + pct + '%)');
+      const bar = document.getElementById('progressBarMerged');
+      if (bar) bar.style.width = pct + '%';
+
+      // Status distribution bar
+      const dist = document.getElementById('statusDist');
+      if (dist) {
+        const counts = {};
+        allTasks.forEach(t => { counts[t.status] = (counts[t.status] || 0) + 1; });
+        const order = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+        dist.innerHTML = order.map(st => {
+          const s = statusStyle(st);
+          const w = (counts[st] / total) * 100;
+          return '<div class="' + s.color + ' h-full" style="width:' + w.toFixed(2) + '%" title="' +
+                 s.label + ': ' + counts[st] + '"></div>';
+        }).join('');
+        const legend = document.getElementById('statusLegend');
+        if (legend) {
+          legend.innerHTML = order.map(st => {
+            const s = statusStyle(st);
+            return '<span class="inline-flex items-center gap-1.5 whitespace-nowrap">' +
+                   '<span class="w-2 h-2 rounded-sm ' + s.color + '"></span>' +
+                   '<span class="' + s.text + ' font-semibold">' + s.label + '</span>' +
+                   '<span class="text-slate-500">' + counts[st] + '</span></span>';
+          }).join('');
+        }
+      }
+    }
+
+    function renderSliceProgress() {
+      const host = document.getElementById('sliceProgress');
+      if (!host) return;
+      const bySlice = {};
+      allTasks.forEach(t => {
+        const k = t.slice || '—';
+        if (!bySlice[k]) bySlice[k] = { total: 0, merged: 0, group: t.group || '' };
+        bySlice[k].total++;
+        if (t.status === 'MERGED') bySlice[k].merged++;
+      });
+      host.innerHTML = Object.keys(bySlice).sort().map(k => {
+        const d = bySlice[k];
+        const pct = d.total ? (d.merged / d.total) * 100 : 0;
+        const done = pct === 100;
+        return '<button onclick="filterBySlice(\\'' + k + '\\')" class="text-left p-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-brand/60 hover:bg-slate-900 transition group">' +
+          '<div class="flex items-center justify-between mb-1.5">' +
+            '<span class="text-xs font-bold ' + (done ? 'text-emerald-300' : 'text-slate-200') + '">' + k + '</span>' +
+            '<span class="text-[10px] font-mono text-slate-500 group-hover:text-brand">' + d.merged + '/' + d.total + '</span>' +
+          '</div>' +
+          '<div class="h-1.5 rounded-full bg-slate-800 overflow-hidden">' +
+            '<div class="h-full rounded-full ' + (done ? 'bg-emerald-500' : 'bg-brand') + ' transition-all duration-500" style="width:' + pct.toFixed(1) + '%"></div>' +
+          '</div>' +
+          '<div class="mt-1.5 text-[10px] text-slate-500 truncate">' + d.group + '</div>' +
+        '</button>';
+      }).join('');
+    }
+
+    function filterBySlice(slice) {
+      const sel = document.getElementById('sliceFilter');
+      if (sel) { sel.value = slice; renderTasksTable(); }
+      const tbl = document.getElementById('tasksTbody');
+      if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
     async function fetchData() {
       try {
         const [tasksRes, statusRes, agentsRes, accountsRes] = await Promise.all([
@@ -991,14 +1186,8 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
         allAgents = agentsRes || [];
         allAccounts = accountsRes || [];
 
-        // Update stats
-        document.getElementById('statTotal').innerText = allTasks.length + ' Tasks';
-        const merged = allTasks.filter(t => t.status === 'MERGED').length;
-        const pct = ((merged / allTasks.length) * 100).toFixed(1);
-        document.getElementById('statMerged').innerText = merged + ' Merged (' + pct + '%)';
-        document.getElementById('progressLabel').innerText = merged + ' / ' + allTasks.length + ' Tasks (' + pct + '%)';
-        document.getElementById('progressBarMerged').style.width = pct + '%';
-
+        updateStats();
+        renderSliceProgress();
         renderTasksTable();
         renderAgents();
         renderUsage();
@@ -1296,9 +1485,83 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
       }
     }
 
+    // --- Live connection -----------------------------------------------
+    // SSE is the primary channel; polling is kept only as a fallback so the
+    // dashboard still updates if the stream cannot be established.
+    let pollTimer = null;
+    let liveState = 'connecting';
+
+    function setLive(state, stamp) {
+      liveState = state;
+      const dot = document.getElementById('liveDot');
+      const label = document.getElementById('liveLabel');
+      const time = document.getElementById('liveTime');
+      if (!dot || !label) return;
+      const styles = {
+        live:       ['bg-emerald-400', 'Trực tiếp', 'text-emerald-300'],
+        polling:    ['bg-amber-400', 'Dự phòng 5s', 'text-amber-300'],
+        connecting: ['bg-slate-500', 'Đang kết nối', 'text-slate-400'],
+        offline:    ['bg-rose-500', 'Mất kết nối', 'text-rose-300']
+      };
+      const [dotCls, text, textCls] = styles[state] || styles.offline;
+      dot.className = 'w-2 h-2 rounded-full ' + dotCls + (state === 'live' ? ' animate-pulse' : '');
+      label.className = 'text-[11px] font-semibold ' + textCls;
+      label.innerText = text;
+      if (time && stamp) {
+        time.innerText = new Date(stamp).toLocaleTimeString('vi-VN');
+      }
+    }
+
+    function startPolling() {
+      if (pollTimer) return;
+      setLive('polling');
+      pollTimer = setInterval(fetchData, 5000);
+    }
+
+    function stopPolling() {
+      if (!pollTimer) return;
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    function applySnapshot(snap) {
+      allTasks = snap.tasks || [];
+      updateStats();
+      renderTasksTable();
+      renderSliceProgress();
+      setLive('live', snap.generatedAt);
+    }
+
+    function connectStream() {
+      if (typeof EventSource === 'undefined') {
+        startPolling();
+        return;
+      }
+      let es;
+      try {
+        es = new EventSource('/api/stream');
+      } catch (e) {
+        startPolling();
+        return;
+      }
+      es.addEventListener('snapshot', function (ev) {
+        try {
+          stopPolling();
+          applySnapshot(JSON.parse(ev.data));
+        } catch (e) {
+          console.error('Bad snapshot frame:', e);
+        }
+      });
+      es.onerror = function () {
+        // EventSource retries on its own; poll meanwhile so data stays fresh.
+        setLive(es.readyState === 2 ? 'offline' : 'connecting');
+        startPolling();
+      };
+    }
+
     // Auto-fetch on load
     fetchData();
-    setInterval(fetchData, 5000);
+    connectStream();
   </script>
 </body>
 </html>`;
