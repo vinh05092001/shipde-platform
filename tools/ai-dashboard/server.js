@@ -229,7 +229,7 @@ function getGitBranch(wtPath) {
 
 let is9RouterUp = true;
 setInterval(() => {
-  const req = http.get('http://127.0.0.1:20128/health', { timeout: 1500 }, (res) => {
+  const req = http.get('http://127.0.0.1:20128/api/health', { timeout: 1500 }, (res) => {
     is9RouterUp = res.statusCode === 200;
   });
   req.on('error', () => {
