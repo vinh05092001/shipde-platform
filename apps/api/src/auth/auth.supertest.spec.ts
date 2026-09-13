@@ -494,7 +494,9 @@ async function runAuthSupertestSuite() {
     // -------------------------------------------------------------------------
     // [TEST 16] Duplicate Verified Phone Rejection (BR-AUTH-03)
     // -------------------------------------------------------------------------
-    console.log('[TEST 16 / BR-AUTH-03] Duplicate verified phone rejected with 409 CONFLICT');
+    console.log(
+      '[TEST 16 / BR-AUTH-03] Duplicate verified phone rejected with 400 VALIDATION_ERROR'
+    );
     const res16 = await request(app.getHttpServer())
       .post('/auth/register')
       .set('x-forwarded-for', '198.51.100.16')
@@ -506,12 +508,12 @@ async function runAuthSupertestSuite() {
         terms_accepted: true,
         terms_version: '2026.1',
       })
-      .expect(409);
+      .expect(400);
 
     assert.strictEqual(res16.body.error.code, 'VALIDATION_ERROR');
     assert.strictEqual(res16.body.error.fields[0].field, 'phone');
     assert.strictEqual(res16.body.error.fields[0].code, 'DUPLICATE');
-    console.log('  PASS: Duplicate verified phone rejected with 409 CONFLICT');
+    console.log('  PASS: Duplicate verified phone rejected with 400 VALIDATION_ERROR');
 
     // -------------------------------------------------------------------------
     // [TEST 17] Resend Anti-Enumeration & Channel Mismatch (BR-AUTH-08)

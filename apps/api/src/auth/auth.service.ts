@@ -733,7 +733,7 @@ export class AuthService {
     if (activeConflict) {
       const conflictField = email && activeConflict.email === email ? 'email' : 'phone';
       throw new CanonicalApiException(
-        HttpStatus.CONFLICT,
+        HttpStatus.BAD_REQUEST,
         'VALIDATION_ERROR',
         `${conflictField === 'email' ? 'Email' : 'Số điện thoại'} đã được đăng ký trên hệ thống`,
         false,
