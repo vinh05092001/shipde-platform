@@ -177,6 +177,87 @@ function refreshOpenPrs() {
 refreshOpenPrs();
 setInterval(refreshOpenPrs, 10000);
 
+// ---------------------------------------------------------------------------
+// Real usage/quota, read from the 9router SQLite store. No fabricated numbers:
+// anything we cannot measure is reported as null and rendered as "chưa rõ".
+// ---------------------------------------------------------------------------
+const ROUTER_DB = path.join(
+  process.env.APPDATA || path.join(require('os').homedir(), 'AppData', 'Roaming'),
+  '9router',
+  'db',
+  'data.sqlite'
+);
+
+let sqliteCtor = null;
+try {
+  sqliteCtor = require('node:sqlite').DatabaseSync;
+} catch (e) {
+  sqliteCtor = null; // Older Node: usage simply reports unavailable.
+}
+
+function readRouterUsage() {
+  if (!sqliteCtor || !fs.existsSync(ROUTER_DB)) {
+    return { available: false, reason: sqliteCtor ? 'Không tìm thấy CSDL 9router' : 'Node thiếu node:sqlite', providers: [], totals: null, connections: [] };
+  }
+  let db;
+  try {
+    db = new sqliteCtor(ROUTER_DB, { readOnly: true });
+    const providers = db
+      .prepare(
+        'SELECT provider, COUNT(*) AS requests, ' +
+          'SUM(COALESCE(promptTokens,0)) AS promptTokens, ' +
+          'SUM(COALESCE(completionTokens,0)) AS completionTokens, ' +
+          'SUM(COALESCE(cost,0)) AS cost, ' +
+          'MAX(timestamp) AS lastAt, ' +
+          "SUM(CASE WHEN status='ok' THEN 0 ELSE 1 END) AS failures " +
+          'FROM usageHistory GROUP BY provider ORDER BY (SUM(COALESCE(promptTokens,0))+SUM(COALESCE(completionTokens,0))) DESC'
+      )
+      .all();
+
+    const connections = db
+      .prepare('SELECT id, provider, name, email, isActive, priority FROM providerConnections ORDER BY provider')
+      .all();
+
+    const totals = providers.reduce(
+      (acc, p) => {
+        acc.requests += p.requests || 0;
+        acc.tokens += (p.promptTokens || 0) + (p.completionTokens || 0);
+        acc.cost += p.cost || 0;
+        acc.failures += p.failures || 0;
+        return acc;
+      },
+      { requests: 0, tokens: 0, cost: 0, failures: 0 }
+    );
+
+    return {
+      available: true,
+      providers: providers.map((p) => ({
+        provider: p.provider,
+        requests: p.requests || 0,
+        tokens: (p.promptTokens || 0) + (p.completionTokens || 0),
+        promptTokens: p.promptTokens || 0,
+        completionTokens: p.completionTokens || 0,
+        cost: p.cost || 0,
+        failures: p.failures || 0,
+        lastAt: p.lastAt || null,
+      })),
+      totals,
+      connections: connections.map((c) => ({
+        id: c.id,
+        provider: c.provider,
+        name: c.name,
+        email: c.email,
+        active: c.isActive === 1,
+        priority: c.priority,
+      })),
+    };
+  } catch (e) {
+    return { available: false, reason: String(e && e.message ? e.message : e), providers: [], totals: null, connections: [] };
+  } finally {
+    try { if (db) db.close(); } catch (e) {}
+  }
+}
+
 // Read realtime tasks
 function getTasksData() {
   try {
@@ -244,13 +325,21 @@ setInterval(() => {
 const sseClients = new Set();
 let lastPayloadHash = '';
 
+let usageCache = { value: null, at: 0 };
+
 function buildSnapshot() {
   const tasks = getTasksData();
+  // The usage store is on disk and changes slowly; re-read at most every 5s.
+  const now = Date.now();
+  if (!usageCache.value || now - usageCache.at > 5000) {
+    usageCache = { value: readRouterUsage(), at: now };
+  }
   return {
     tasks,
     total: tasks.length,
     routerUp: is9RouterUp,
     openPrs: openPrs.length,
+    usage: usageCache.value,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -325,6 +414,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   // API Endpoints
+  if (pathname === '/api/usage') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(readRouterUsage()));
+    return;
+  }
+
   if (pathname === '/api/stream') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -690,14 +785,14 @@ function renderDashboardHtml() {
             <div class="text-[10px] text-emerald-400 mt-0.5" id="statMerged">12 Merged (9.5%)</div>
           </div>
           <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 hover:border-slate-600 transition">
-            <div class="text-[11px] text-slate-400 font-semibold uppercase">AI Đang Chạy</div>
-            <div class="text-xl font-black text-emerald-400 mt-1">4 Models</div>
-            <div class="text-[10px] text-slate-300 mt-0.5">Gemini • Claude • Codex • 9R</div>
+            <div class="text-[11px] text-slate-400 font-semibold uppercase">Nguồn Đang Bật</div>
+            <div class="text-xl font-black text-emerald-400 mt-1" id="heroSources">--</div>
+            <div class="text-[10px] text-slate-300 mt-0.5 truncate" id="heroSourceList">đang đọc…</div>
           </div>
           <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 hover:border-slate-600 transition">
             <div class="text-[11px] text-slate-400 font-semibold uppercase">Tokens / Chi Phí</div>
-            <div class="text-xl font-black text-amber-400 mt-1">1.84M</div>
-            <div class="text-[10px] text-slate-300 mt-0.5">~$3.42 (72% Free Tier)</div>
+            <div class="text-xl font-black text-amber-400 mt-1" id="heroTokens">--</div>
+            <div class="text-[10px] text-slate-300 mt-0.5" id="heroCost">đang đọc từ 9router…</div>
           </div>
           <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 hover:border-slate-600 transition">
             <div class="text-[11px] text-slate-400 font-semibold uppercase">Task Đang Code</div>
@@ -881,11 +976,12 @@ function renderDashboardHtml() {
 
     <!-- SUB-TAB 4: USAGE & QUOTA -->
     <div id="tab-usage" class="hidden space-y-6">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Tổng Chi Phí Đã Dùng</span><div class="text-2xl font-black text-white mt-1">$3.42</div><span class="text-[10px] text-emerald-400 font-bold">72% Free tier/Local</span></div>
-        <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Tổng Tokens Tiêu Thụ</span><div class="text-2xl font-black text-white mt-1">1,840,700</div><span class="text-[10px] text-slate-400">1.2M in / 640K out</span></div>
-        <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Tốc Độ Gọi Trung Bình</span><div class="text-2xl font-black text-white mt-1">14.2 RPM</div><span class="text-[10px] text-slate-400">Ngưỡng an toàn &lt; 50 RPM</span></div>
-        <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Cảnh Báo Quota</span><div class="text-2xl font-black text-emerald-400 mt-1">AN TOÀN</div><span class="text-[10px] text-slate-400">0 cảnh báo rate limit</span></div>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4" id="usageTiles">
+        <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Tổng Chi Phí Đã Dùng</span><div class="text-2xl font-black text-white mt-1" id="uCost">--</div><span class="text-[10px] text-slate-400" id="uCostSub">đọc từ 9router</span></div>
+        <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Tổng Tokens Tiêu Thụ</span><div class="text-2xl font-black text-white mt-1" id="uTokens">--</div><span class="text-[10px] text-slate-400" id="uTokensSub">--</span></div>
+        <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Số Lượt Gọi</span><div class="text-2xl font-black text-white mt-1" id="uReq">--</div><span class="text-[10px] text-slate-400" id="uReqSub">--</span></div>
+        <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Lượt Lỗi</span><div class="text-2xl font-black mt-1" id="uFail">--</div><span class="text-[10px] text-slate-400" id="uFailSub">--</span></div>
+      </div>
       </div>
 
       <div class="bg-slate-900 rounded-xl border border-slate-800 p-5 space-y-4 shadow-xl">
@@ -1075,6 +1171,7 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
   <script>
     let allTasks = [];
     let allAgents = [];
+    let allUsage = null;
     let allAccounts = [];
 
     // Toast helper
@@ -1113,6 +1210,21 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
       set('progressLabel', merged + ' / ' + allTasks.length + ' Tasks (' + pct + '%)');
       const bar = document.getElementById('progressBarMerged');
       if (bar) bar.style.width = pct + '%';
+
+      // Hero tiles fed from measured router usage, never from constants.
+      if (allUsage && allUsage.available) {
+        const tt = allUsage.totals || { tokens: 0, cost: 0 };
+        set('heroTokens', fmtTokens(tt.tokens));
+        set('heroCost', fmtCost(tt.cost) + ' • ' + tt.requests + ' lượt gọi');
+        const on = (allUsage.connections || []).filter(c => c.active);
+        set('heroSources', on.length + ' / ' + (allUsage.connections || []).length);
+        set('heroSourceList', on.map(c => c.provider).join(' • ') || 'không có nguồn nào bật');
+      } else {
+        set('heroTokens', 'chưa rõ');
+        set('heroCost', allUsage && allUsage.reason ? allUsage.reason : 'không đọc được');
+        set('heroSources', 'chưa rõ');
+        set('heroSourceList', '—');
+      }
 
       // Status distribution bar
       const dist = document.getElementById('statusDist');
@@ -1299,20 +1411,120 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
       }).join('');
     }
 
+    function fmtTokens(n) {
+      if (n == null) return 'chưa rõ';
+      if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+      return String(n);
+    }
+
+    function fmtCost(c) {
+      return c == null ? 'chưa rõ' : '$' + Number(c).toFixed(4).replace(/0+$/, '').replace(/\\.$/, '');
+    }
+
+    function fmtAgo(ts) {
+      if (!ts) return 'chưa có lượt gọi';
+      const diff = Date.now() - Number(ts);
+      if (diff < 0) return 'vừa xong';
+      const m = Math.floor(diff / 60000);
+      if (m < 1) return 'vừa xong';
+      if (m < 60) return m + ' phút trước';
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + ' giờ trước';
+      return Math.floor(h / 24) + ' ngày trước';
+    }
+
     function renderUsage() {
       const container = document.getElementById('usageBars');
       if (!container) return;
-      container.innerHTML = allAgents.map(a => {
-        return '<div class="space-y-1">' +
-          '<div class="flex justify-between font-mono">' +
-            '<span class="text-white font-bold">' + a.name + ' (' + a.model + ')</span>' +
-            '<span class="text-slate-400">' + a.tokens + ' • ' + a.quota + '% quota • ' + a.cost + '</span>' +
+
+      if (!allUsage || !allUsage.available) {
+        const why = allUsage && allUsage.reason ? allUsage.reason : 'Chưa đọc được dữ liệu';
+        container.innerHTML =
+          '<div class="p-5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs">' +
+            '<div class="font-bold mb-1">Không có số liệu sử dụng thật</div>' +
+            '<div class="text-amber-300/80">' + why + '. Bảng này chỉ hiển thị số đo được, không hiển thị số ước lượng.</div>' +
+          '</div>';
+        return;
+      }
+
+      const t = allUsage.totals || { requests: 0, tokens: 0, cost: 0, failures: 0 };
+      const maxTok = Math.max.apply(null, allUsage.providers.map(p => p.tokens).concat([1]));
+      const connByProvider = {};
+      (allUsage.connections || []).forEach(c => { connByProvider[c.provider] = c; });
+
+      const head =
+        '<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">' +
+          tile('Tổng token', fmtTokens(t.tokens), 'text-brand') +
+          tile('Tổng chi phí', fmtCost(t.cost), 'text-amber-400') +
+          tile('Số lượt gọi', String(t.requests), 'text-sky-400') +
+          tile('Lượt lỗi', String(t.failures), t.failures > 0 ? 'text-rose-400' : 'text-emerald-400') +
+        '</div>';
+
+      const rows = allUsage.providers.map(p => {
+        const pct = (p.tokens / maxTok) * 100;
+        const conn = connByProvider[p.provider];
+        const state = conn
+          ? (conn.active
+              ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">đang bật</span>'
+              : '<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-400 border border-slate-600">đã tắt</span>')
+          : '<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 border border-slate-700">không khai báo</span>';
+        return '<div class="space-y-1.5">' +
+          '<div class="flex justify-between items-center gap-2 text-xs">' +
+            '<span class="flex items-center gap-2 min-w-0">' +
+              '<span class="text-white font-bold truncate">' + p.provider + '</span>' + state +
+            '</span>' +
+            '<span class="text-slate-400 font-mono text-[11px] whitespace-nowrap">' +
+              fmtTokens(p.tokens) + ' • ' + fmtCost(p.cost) + ' • ' + p.requests + ' req' +
+            '</span>' +
           '</div>' +
           '<div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden">' +
-            '<div class="h-full bg-emerald-500" style="width: ' + a.quota + '%"></div>' +
+            '<div class="h-full ' + (p.failures > 0 ? 'bg-amber-500' : 'bg-emerald-500') +
+            ' transition-all duration-500" style="width: ' + pct.toFixed(1) + '%"></div>' +
+          '</div>' +
+          '<div class="flex justify-between text-[10px] text-slate-500">' +
+            '<span>vào ' + fmtTokens(p.promptTokens) + ' / ra ' + fmtTokens(p.completionTokens) + '</span>' +
+            '<span>' + fmtAgo(p.lastAt) + (p.failures > 0 ? ' • ' + p.failures + ' lỗi' : '') + '</span>' +
           '</div>' +
         '</div>';
       }).join('');
+
+      const idle = (allUsage.connections || []).filter(c => !allUsage.providers.some(p => p.provider === c.provider));
+      const idleHtml = idle.length
+        ? '<div class="mt-5 pt-4 border-t border-slate-800">' +
+            '<div class="text-[11px] font-semibold text-slate-400 uppercase mb-2">Nguồn đã khai báo nhưng chưa từng gọi</div>' +
+            '<div class="flex flex-wrap gap-2">' +
+              idle.map(c =>
+                '<span class="text-[11px] px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 ' +
+                (c.active ? 'text-slate-300' : 'text-slate-500') + '">' + c.provider +
+                (c.active ? '' : ' (tắt)') + '</span>').join('') +
+            '</div></div>'
+        : '';
+
+      const setT = (id, v) => { const el = document.getElementById(id); if (el) el.innerText = v; };
+      setT('uCost', fmtCost(t.cost));
+      setT('uCostSub', allUsage.providers.length + ' nguồn đã ghi nhận');
+      setT('uTokens', Number(t.tokens).toLocaleString('vi-VN'));
+      const pin = allUsage.providers.reduce((a, p) => a + p.promptTokens, 0);
+      const pout = allUsage.providers.reduce((a, p) => a + p.completionTokens, 0);
+      setT('uTokensSub', fmtTokens(pin) + ' vào / ' + fmtTokens(pout) + ' ra');
+      setT('uReq', String(t.requests));
+      const latest = allUsage.providers.reduce((a, p) => (p.lastAt && p.lastAt > a ? p.lastAt : a), 0);
+      setT('uReqSub', 'gần nhất: ' + fmtAgo(latest));
+      const fEl = document.getElementById('uFail');
+      if (fEl) fEl.className = 'text-2xl font-black mt-1 ' + (t.failures > 0 ? 'text-rose-400' : 'text-emerald-400');
+      setT('uFail', String(t.failures));
+      setT('uFailSub', t.failures > 0 ? 'cần kiểm tra' : 'không có lượt hỏng');
+
+      container.innerHTML = head + '<div class="space-y-4">' + rows + '</div>' + idleHtml;
+
+      function tile(label, value, cls) {
+        return '<div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700">' +
+          '<div class="text-[11px] text-slate-400 font-semibold uppercase">' + label + '</div>' +
+          '<div class="text-xl font-black mt-1 ' + cls + '">' + value + '</div>' +
+        '</div>';
+      }
     }
 
     function renderAccounts() {
@@ -1526,11 +1738,20 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
 
     function applySnapshot(snap) {
       allTasks = snap.tasks || [];
+      if (snap.usage) { allUsage = snap.usage; renderUsage(); }
       updateStats();
       renderTasksTable();
       renderSliceProgress();
       setLive('live', snap.generatedAt);
     }
+
+    // Agent and account panels are not part of the snapshot: they depend on
+    // git worktrees and credential files rather than the register, so refresh
+    // them on their own slow timer instead of leaving them frozen at load.
+    setInterval(() => {
+      fetch('/api/agents').then(r => r.json()).then(d => { allAgents = d || []; renderAgents(); }).catch(() => {});
+      fetch('/api/accounts').then(r => r.json()).then(d => { allAccounts = d || []; renderAccounts(); }).catch(() => {});
+    }, 15000);
 
     function connectStream() {
       if (typeof EventSource === 'undefined') {
