@@ -72,6 +72,20 @@ export const SEED_USERS = [
     terms_accepted_at: new Date('2026-08-01T00:00:00Z'),
     terms_version: '2026.1',
   },
+  {
+    id: 'b0000000-0000-0000-0000-000000000012',
+    merchant_id: SEED_MERCHANT_ID,
+    email: 'consumed.phone@shipde.vn',
+    phone: '0909999003',
+    full_name: 'Consumed Phone Test User',
+    password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
+    role: RoleEnum.OWNER,
+    status: 'pending_verification',
+    email_verified_at: null,
+    phone_verified_at: null,
+    terms_accepted_at: new Date('2026-09-01T00:00:00Z'),
+    terms_version: '2026.1',
+  },
 ];
 
 export const SEED_VERIFICATION_TOKENS = [
@@ -113,6 +127,26 @@ export const SEED_VERIFICATION_TOKENS = [
     identifier: 'pending@shipde.vn',
     otp: null,
     expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    consumed_at: new Date('2026-09-01T00:00:00Z'),
+  },
+  {
+    id: 'd0000000-0000-0000-0000-000000000005',
+    user_id: 'b0000000-0000-0000-0000-000000000011',
+    token: 'test-token-phone-expired',
+    channel: 'phone',
+    identifier: '0909999002',
+    otp: '123456',
+    expires_at: new Date('2026-08-02T00:00:00Z'),
+    consumed_at: null,
+  },
+  {
+    id: 'd0000000-0000-0000-0000-000000000006',
+    user_id: 'b0000000-0000-0000-0000-000000000012',
+    token: 'test-token-phone-consumed',
+    channel: 'phone',
+    identifier: '0909999003',
+    otp: '123456',
+    expires_at: new Date(Date.now() + 15 * 60 * 1000),
     consumed_at: new Date('2026-09-01T00:00:00Z'),
   },
 ];

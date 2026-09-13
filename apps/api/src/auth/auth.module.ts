@@ -5,7 +5,7 @@ import { RateLimitService } from './rate-limit.service';
 import { VERIFICATION_ADAPTER } from './auth.tokens';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
-import { globalMockVerificationAdapter } from '@shipde/testkit';
+import { DefaultVerificationAdapter } from './default-verification-adapter';
 
 import { validateConfig, AppConfig } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
@@ -21,9 +21,10 @@ import { APP_CONFIG } from '../config.token';
     RedisService,
     RateLimitService,
     AuthService,
+    DefaultVerificationAdapter,
     {
       provide: VERIFICATION_ADAPTER,
-      useValue: globalMockVerificationAdapter,
+      useClass: DefaultVerificationAdapter,
     },
   ],
   exports: [AuthService, RateLimitService, VERIFICATION_ADAPTER],

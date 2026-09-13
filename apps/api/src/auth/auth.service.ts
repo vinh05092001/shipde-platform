@@ -11,7 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RateLimitService } from './rate-limit.service';
 import { hashPassword } from './password.util';
 import { VERIFICATION_ADAPTER } from './auth.tokens';
-import type { IVerificationDeliveryAdapter } from '@shipde/testkit';
+import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
 import { formatStructuredLog } from '@shipde/config';
 import { RoleEnum } from '@prisma/client';
 
@@ -166,11 +166,12 @@ export class AuthService {
     );
 
     if (!rateLimitCheck.allowed) {
-      this.logAudit({
+      await this.logAudit({
         actor: this.hashIp(clientIp),
         action: 'AUTH_REGISTER_RATE_LIMITED',
         resource: 'auth/register',
         correlationId,
+        ipAddress: this.hashIp(clientIp),
       });
 
       throw new CanonicalApiException(
@@ -181,6 +182,9 @@ export class AuthService {
         `Vui lòng chờ ${rateLimitCheck.retryAfterSeconds || 3600} giây trước khi thử lại`
       );
     }
+
+    // Record IP registration attempt upfront to bound enumeration probing (BR-AUTH-07)
+    await this.rateLimitService.recordRegistrationAttempt(clientIp, undefined, undefined);
 
     // 3. Global Uniqueness Check (BR-AUTH-03)
     const existingUsers = await this.prisma.user.findMany({
@@ -195,6 +199,7 @@ export class AuthService {
     const conflictResponse = await this.resolveExistingAccountConflict(
       existingUsers,
       email,
+      phone,
       clientIp,
       correlationId
     );
@@ -202,78 +207,106 @@ export class AuthService {
       return conflictResponse;
     }
 
-    // 5. Atomic Creation of Merchant and User (BR-AUTH-01, BR-AUTH-02)
+    // 5. Atomic Creation of Merchant and User with Merchant Code Collision Retry (BR-AUTH-01, BR-AUTH-02, BR-AUTH-10)
     const passwordHash = await hashPassword(dto.password);
-    const merchantCode = this.generateMerchantCode(dto.merchant_name);
+    let merchant: { id: string } | null = null;
+    let user: {
+      id: string;
+      merchant_id: string;
+      email: string | null;
+      phone: string | null;
+    } | null = null;
+    let lastError: unknown = null;
 
-    let merchant: { id: string };
-    let user: { id: string; email: string | null; phone: string | null };
-    try {
-      const created = await this.prisma.$transaction(async (tx) => {
-        const newMerchant = await tx.merchant.create({
-          data: {
-            name: dto.merchant_name.trim(),
-            code: merchantCode,
-            status: 'active',
-          },
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const merchantCode = this.generateMerchantCode(dto.merchant_name);
+        const created = await this.prisma.$transaction(async (tx) => {
+          const newMerchant = await tx.merchant.create({
+            data: {
+              name: dto.merchant_name.trim(),
+              code: merchantCode,
+              status: 'active',
+            },
+          });
+
+          const newUser = await tx.user.create({
+            data: {
+              merchant_id: newMerchant.id,
+              full_name: dto.full_name.trim(),
+              email: email || null,
+              phone: phone || null,
+              password_hash: passwordHash,
+              role: RoleEnum.OWNER,
+              status: 'pending_verification',
+              terms_accepted_at: new Date(),
+              terms_version: dto.terms_version,
+            },
+          });
+
+          return { merchant: newMerchant, user: newUser };
         });
 
-        const newUser = await tx.user.create({
-          data: {
-            merchant_id: newMerchant.id,
-            full_name: dto.full_name.trim(),
-            email: email || null,
-            phone: phone || null,
-            password_hash: passwordHash,
-            role: RoleEnum.OWNER,
-            status: 'pending_verification',
-            terms_accepted_at: new Date(),
-            terms_version: dto.terms_version,
-          },
-        });
+        merchant = created.merchant;
+        user = created.user;
+        break;
+      } catch (err: unknown) {
+        lastError = err;
+        if (this.isUniqueConstraintViolation(err)) {
+          const target = (err as { meta?: { target?: string[] | string } })?.meta?.target;
+          const isMerchantCodeCollision =
+            (Array.isArray(target) && target.includes('code')) ||
+            (typeof target === 'string' && target.includes('merchants_code_key'));
 
-        return { merchant: newMerchant, user: newUser };
-      });
-      merchant = created.merchant;
-      user = created.user;
-    } catch (err: unknown) {
-      // BR-AUTH-10: two concurrent submissions of the same not-yet-verified identifier
-      // must not create two Merchant/User pairs. The pre-check above cannot see an
-      // in-flight, uncommitted transaction from a sibling request, so the platform-wide
-      // unique constraint on email/phone is the final authority: a P2002 violation here
-      // means the sibling request won the race, and this request must fall back to the
-      // same "existing account" branch instead of surfacing a raw 500.
-      if (this.isUniqueConstraintViolation(err)) {
-        const raced = await this.prisma.user.findMany({
-          where: {
-            OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
-          },
-        });
-        const racedResponse = await this.resolveExistingAccountConflict(
-          raced,
-          email,
-          clientIp,
-          correlationId
-        );
-        if (racedResponse) {
-          return racedResponse;
+          if (isMerchantCodeCollision) {
+            // Slug + random code collided on merchant. Retry with fresh random code!
+            continue;
+          }
+
+          // User identifier concurrency race (BR-AUTH-10)
+          const raced = await this.prisma.user.findMany({
+            where: {
+              OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+            },
+          });
+          const racedResponse = await this.resolveExistingAccountConflict(
+            raced,
+            email,
+            phone,
+            clientIp,
+            correlationId
+          );
+          if (racedResponse) {
+            return racedResponse;
+          }
         }
+        throw err;
       }
-      throw err;
     }
 
-    // Record rate limit attempt
-    await this.rateLimitService.recordRegistrationAttempt(clientIp, email, phone);
+    if (!merchant || !user) {
+      throw (
+        lastError ||
+        new Error('Failed to create merchant and owner account due to unresolvable code collision.')
+      );
+    }
+
+    // Record rate limit attempt for identifiers on successful creation
+    await this.rateLimitService.recordRegistrationAttempt(undefined, email, phone);
 
     // Issue tokens and dispatch
     await this.issueAndSendVerification(user, email, phone, correlationId);
 
     // Audit log (BR-AUTH-09)
-    this.logAudit({
+    await this.logAudit({
+      merchantId: merchant.id,
+      userId: user.id,
       actor: this.hashIp(clientIp),
       action: 'AUTH_REGISTER_SUCCESS',
       resource: `user:${user.id}`,
+      details: { email: user.email, phone: user.phone },
       correlationId,
+      ipAddress: this.hashIp(clientIp),
     });
 
     return {
@@ -304,9 +337,13 @@ export class AuthService {
       );
     }
 
+    const rawToken = dto.token.trim();
+    const hashedToken = this.hashSecret(rawToken);
+
+    // Look up by raw token or hashed digest (backward compatible with seed fixtures)
     const tokenRecord = await this.prisma.verificationToken.findFirst({
       where: {
-        token: dto.token.trim(),
+        token: { in: [rawToken, hashedToken] },
         channel: 'email',
       },
       include: {
@@ -359,7 +396,9 @@ export class AuthService {
       });
     });
 
-    this.logAudit({
+    await this.logAudit({
+      merchantId: updatedUser.merchant_id,
+      userId: updatedUser.id,
       actor: `user:${updatedUser.id}`,
       action: 'AUTH_VERIFY_EMAIL_SUCCESS',
       resource: `user:${updatedUser.id}`,
@@ -382,7 +421,7 @@ export class AuthService {
   }
 
   /**
-   * Verify Phone OTP (BR-AUTH-02, BR-AUTH-06)
+   * Verify Phone OTP with Bounded Attempts (BR-AUTH-02, BR-AUTH-06)
    */
   async verifyPhone(dto: VerifyPhoneDto, correlationId: string) {
     if (!dto.phone || !dto.otp) {
@@ -395,13 +434,25 @@ export class AuthService {
     }
 
     const phone = dto.phone.trim();
-    const otp = dto.otp.trim();
+    const rawOtp = dto.otp.trim();
 
+    // Check brute-force attempt limits (max 5 failed attempts per window)
+    const otpLimit = await this.rateLimitService.checkOtpAttemptLimit(phone);
+    if (!otpLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        otpLimit.reason || 'Quá nhiều lần thử mã OTP không chính xác. Vui lòng yêu cầu mã mới.',
+        true,
+        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây`
+      );
+    }
+
+    // Look up latest verification token for this phone
     const tokenRecord = await this.prisma.verificationToken.findFirst({
       where: {
         identifier: phone,
         channel: 'phone',
-        otp,
       },
       orderBy: {
         created_at: 'desc',
@@ -412,6 +463,7 @@ export class AuthService {
     });
 
     if (!tokenRecord) {
+      await this.rateLimitService.recordOtpFailure(phone);
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'INVALID_OTP',
@@ -441,6 +493,38 @@ export class AuthService {
       );
     }
 
+    // Validate OTP match (supports both SHA-256 hashed and plaintext legacy seeds)
+    const hashedOtp = this.hashSecret(rawOtp);
+    const isMatch = tokenRecord.otp === rawOtp || tokenRecord.otp === hashedOtp;
+
+    if (!isMatch) {
+      const failCount = await this.rateLimitService.recordOtpFailure(phone);
+      if (failCount >= 5) {
+        // Invalidate token on 5th failed attempt to prevent further brute force
+        await this.prisma.verificationToken.update({
+          where: { id: tokenRecord.id },
+          data: { consumed_at: new Date() },
+        });
+        throw new CanonicalApiException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          'OTP_MAX_ATTEMPTS_EXCEEDED',
+          'Đã vượt quá 5 lần nhập sai mã OTP. Mã OTP đã bị hủy, vui lòng yêu cầu mã mới.',
+          false,
+          'Vui lòng yêu cầu gửi lại mã xác thực mới'
+        );
+      }
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_OTP',
+        `Mã OTP không chính xác (còn ${5 - failCount} lần thử)`,
+        false,
+        'Vui lòng kiểm tra lại mã OTP vừa nhận qua SMS'
+      );
+    }
+
+    // Success! Reset OTP attempt counters
+    await this.rateLimitService.resetOtpAttempts(phone);
+
     const updatedUser = await this.prisma.$transaction(async (tx) => {
       await tx.verificationToken.update({
         where: { id: tokenRecord.id },
@@ -456,7 +540,9 @@ export class AuthService {
       });
     });
 
-    this.logAudit({
+    await this.logAudit({
+      merchantId: updatedUser.merchant_id,
+      userId: updatedUser.id,
       actor: `user:${updatedUser.id}`,
       action: 'AUTH_VERIFY_PHONE_SUCCESS',
       resource: `user:${updatedUser.id}`,
@@ -479,7 +565,7 @@ export class AuthService {
   }
 
   /**
-   * Resend Verification Code (BR-AUTH-08)
+   * Resend Verification Code with Anti-Enumeration and Channel Validation (BR-AUTH-08)
    */
   async resendVerification(dto: ResendVerificationDto, clientIp: string, correlationId: string) {
     if (!dto.identifier || !dto.channel) {
@@ -494,7 +580,7 @@ export class AuthService {
     const identifier = dto.identifier.trim();
     const channel = dto.channel;
 
-    // Resend Rate Limiting (BR-AUTH-08)
+    // Resend Rate Limiting (BR-AUTH-08: 60s cooldown and 5/hour cap)
     const rateCheck = await this.rateLimitService.checkResendLimit(identifier, channel);
     if (!rateCheck.allowed) {
       throw new CanonicalApiException(
@@ -506,34 +592,60 @@ export class AuthService {
       );
     }
 
-    // Find pending user
+    // Find pending user matching identifier and requested channel
     const user = await this.prisma.user.findFirst({
       where: {
-        OR: [{ email: identifier.toLowerCase() }, { phone: identifier }],
+        OR: [
+          ...(channel === 'email' ? [{ email: identifier.toLowerCase() }] : []),
+          ...(channel === 'phone' ? [{ phone: identifier }] : []),
+        ],
         status: 'pending_verification',
       },
     });
 
     if (!user) {
-      // Return 400 with actionable error
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'USER_NOT_FOUND',
-        'Không tìm thấy tài khoản đang chờ xác thực với thông tin cung cấp',
-        false,
-        'Vui lòng kiểm tra lại email/số điện thoại hoặc đăng ký tài khoản mới'
-      );
+      // Check if user exists under the other channel (channel mismatch)
+      const userOtherChannel = await this.prisma.user.findFirst({
+        where: {
+          OR: [{ email: identifier.toLowerCase() }, { phone: identifier }],
+          status: 'pending_verification',
+        },
+      });
+
+      if (userOtherChannel) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'CHANNEL_MISMATCH',
+          `Kênh xác thực '${channel}' không khớp với phương thức đăng ký của tài khoản. Vui lòng chọn kênh phù hợp.`,
+          false
+        );
+      }
+
+      // If user does not exist at all: apply cooldown to prevent spam, and return generic 200 to prevent account enumeration
+      await this.rateLimitService.recordResendAttempt(identifier, channel, 60);
+      return {
+        data: {
+          status: 'SENT' as const,
+          channel,
+          cooldown_seconds: 60,
+        },
+        meta: {
+          correlation_id: correlationId,
+        },
+      };
     }
 
+    // Record resend attempt (cooldown + hourly counter)
     await this.rateLimitService.recordResendAttempt(identifier, channel, 60);
 
-    // Issue and dispatch new token
+    // Issue and dispatch new token (storing SHA-256 digest in DB)
     if (channel === 'email' && user.email) {
       const emailToken = randomBytes(32).toString('hex');
+      const hashedToken = this.hashSecret(emailToken);
       await this.prisma.verificationToken.create({
         data: {
           user_id: user.id,
-          token: emailToken,
+          token: hashedToken,
           channel: 'email',
           identifier: user.email,
           expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
@@ -549,14 +661,17 @@ export class AuthService {
       }
     } else if (channel === 'phone' && user.phone) {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedOtp = this.hashSecret(otp);
       const phoneToken = randomBytes(16).toString('hex');
+      const hashedToken = this.hashSecret(phoneToken);
+
       await this.prisma.verificationToken.create({
         data: {
           user_id: user.id,
-          token: phoneToken,
+          token: hashedToken,
           channel: 'phone',
           identifier: user.phone,
-          otp,
+          otp: hashedOtp,
           expires_at: new Date(Date.now() + 15 * 60 * 1000),
         },
       });
@@ -571,11 +686,14 @@ export class AuthService {
       }
     }
 
-    this.logAudit({
+    await this.logAudit({
+      merchantId: user.merchant_id,
+      userId: user.id,
       actor: this.hashIp(clientIp),
       action: 'AUTH_RESEND_VERIFICATION',
       resource: `user:${user.id}`,
       correlationId,
+      ipAddress: this.hashIp(clientIp),
     });
 
     return {
@@ -591,10 +709,7 @@ export class AuthService {
   }
 
   /**
-   * BR-AUTH-03 / BR-AUTH-10: given the set of existing users matching the submitted
-   * email/phone, either reject as a duplicate (already-verified match), re-issue a
-   * verification to the still-pending match, or return null to signal "no conflict,
-   * proceed to create". Shared by the pre-check and the post-race-loss recovery path.
+   * BR-AUTH-03 / BR-AUTH-10: resolve duplicate / pending account conflicts
    */
   private async resolveExistingAccountConflict(
     existingUsers: Array<{
@@ -607,6 +722,7 @@ export class AuthService {
       phone_verified_at: Date | null;
     }>,
     email: string | undefined,
+    phone: string | undefined,
     clientIp: string,
     correlationId: string
   ): Promise<{ data: Record<string, unknown>; meta: Record<string, unknown> } | null> {
@@ -617,7 +733,7 @@ export class AuthService {
     if (activeConflict) {
       const conflictField = email && activeConflict.email === email ? 'email' : 'phone';
       throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
+        HttpStatus.CONFLICT,
         'VALIDATION_ERROR',
         `${conflictField === 'email' ? 'Email' : 'Số điện thoại'} đã được đăng ký trên hệ thống`,
         false,
@@ -636,7 +752,7 @@ export class AuthService {
 
     if (pendingAccount) {
       await this.rateLimitService.recordRegistrationAttempt(
-        clientIp,
+        undefined,
         pendingAccount.email || undefined,
         pendingAccount.phone || undefined
       );
@@ -648,11 +764,14 @@ export class AuthService {
         correlationId
       );
 
-      this.logAudit({
+      await this.logAudit({
+        merchantId: pendingAccount.merchant_id,
+        userId: pendingAccount.id,
         actor: this.hashIp(clientIp),
         action: 'AUTH_REGISTER_PENDING_RETRY',
         resource: `user:${pendingAccount.id}`,
         correlationId,
+        ipAddress: this.hashIp(clientIp),
       });
 
       return {
@@ -684,11 +803,12 @@ export class AuthService {
     correlationId?: string
   ): Promise<void> {
     if (email) {
-      const emailToken = randomBytes(32).toString('hex');
+      const rawEmailToken = randomBytes(32).toString('hex');
+      const hashedToken = this.hashSecret(rawEmailToken);
       await this.prisma.verificationToken.create({
         data: {
           user_id: user.id,
-          token: emailToken,
+          token: hashedToken,
           channel: 'email',
           identifier: email,
           expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
@@ -699,21 +819,24 @@ export class AuthService {
         await this.deliveryAdapter.sendVerification({
           channel: 'email',
           recipient: email,
-          token: emailToken,
+          token: rawEmailToken,
         });
       }
     }
 
     if (phone) {
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const phoneToken = randomBytes(16).toString('hex');
+      const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedOtp = this.hashSecret(rawOtp);
+      const rawPhoneToken = randomBytes(16).toString('hex');
+      const hashedToken = this.hashSecret(rawPhoneToken);
+
       await this.prisma.verificationToken.create({
         data: {
           user_id: user.id,
-          token: phoneToken,
+          token: hashedToken,
           channel: 'phone',
           identifier: phone,
-          otp,
+          otp: hashedOtp,
           expires_at: new Date(Date.now() + 15 * 60 * 1000),
         },
       });
@@ -722,8 +845,8 @@ export class AuthService {
         await this.deliveryAdapter.sendVerification({
           channel: 'phone',
           recipient: phone,
-          otp,
-          token: phoneToken,
+          otp: rawOtp,
+          token: rawPhoneToken,
         });
       }
     }
@@ -742,16 +865,24 @@ export class AuthService {
     return `${slug || 'SHOP'}_${rand}`;
   }
 
+  private hashSecret(secret: string): string {
+    return createHash('sha256').update(secret).digest('hex');
+  }
+
   private hashIp(ip: string): string {
     return createHash('sha256').update(ip).digest('hex').substring(0, 16);
   }
 
-  private logAudit(meta: {
+  private async logAudit(meta: {
+    merchantId?: string;
+    userId?: string;
     actor: string;
     action: string;
     resource: string;
+    details?: Record<string, unknown>;
+    ipAddress?: string;
     correlationId?: string;
-  }): void {
+  }): Promise<void> {
     console.log(
       formatStructuredLog({
         level: 'info',
@@ -763,5 +894,23 @@ export class AuthService {
         },
       })
     );
+
+    if (meta.merchantId) {
+      try {
+        await this.prisma.auditLog.create({
+          data: {
+            merchant_id: meta.merchantId,
+            user_id: meta.userId || null,
+            action: meta.action,
+            entity_type: meta.resource.split(':')[0] || 'Auth',
+            entity_id: meta.resource.split(':')[1] || meta.userId || 'system',
+            new_value: meta.details ? JSON.parse(JSON.stringify(meta.details)) : null,
+            ip_address: meta.ipAddress || null,
+          },
+        });
+      } catch (err) {
+        console.error('Failed to persist audit log to database:', err);
+      }
+    }
   }
 }

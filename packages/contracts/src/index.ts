@@ -39,6 +39,21 @@ export const VerificationChannel = {
 
 export type VerificationChannel = (typeof VerificationChannel)[keyof typeof VerificationChannel];
 
+// --- Verification Delivery Contracts ---
+export interface VerificationMessage {
+  channel: 'email' | 'phone';
+  recipient: string;
+  token?: string;
+  otp?: string;
+  sentAt?: Date;
+}
+
+export interface IVerificationDeliveryAdapter {
+  sendVerification(
+    message: Omit<VerificationMessage, 'sentAt'>
+  ): Promise<{ success: boolean; messageId: string }>;
+}
+
 // --- Prototype Navigation Personas ---
 export const PrototypePersona = {
   ...UserRole,

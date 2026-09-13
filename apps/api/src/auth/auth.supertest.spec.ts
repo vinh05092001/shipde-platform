@@ -462,8 +462,100 @@ async function runAuthSupertestSuite() {
     assert.strictEqual(res14.body.data.verified, true);
     console.log('  PASS: Phone OTP verified user to ACTIVE');
 
+    // -------------------------------------------------------------------------
+    // [TEST 15] Phone OTP Negative Paths (BR-AUTH-06)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 15 / BR-AUTH-06] Phone OTP negative paths (wrong, expired, consumed)');
+
+    // 15a. Wrong OTP -> 400 INVALID_OTP
+    const res15a = await request(app.getHttpServer())
+      .post('/auth/verify-phone')
+      .send({ phone: '0909999001', otp: '000000' })
+      .expect(400);
+    assert.strictEqual(res15a.body.error.code, 'INVALID_OTP');
+    console.log('  PASS: Wrong OTP rejected with 400 INVALID_OTP');
+
+    // 15b. Expired OTP -> 410 OTP_EXPIRED
+    const res15b = await request(app.getHttpServer())
+      .post('/auth/verify-phone')
+      .send({ phone: '0909999002', otp: '123456' })
+      .expect(410);
+    assert.strictEqual(res15b.body.error.code, 'OTP_EXPIRED');
+    console.log('  PASS: Expired OTP rejected with 410 OTP_EXPIRED');
+
+    // 15c. Consumed OTP -> 410 OTP_ALREADY_CONSUMED
+    const res15c = await request(app.getHttpServer())
+      .post('/auth/verify-phone')
+      .send({ phone: '0909999003', otp: '123456' })
+      .expect(410);
+    assert.strictEqual(res15c.body.error.code, 'OTP_ALREADY_CONSUMED');
+    console.log('  PASS: Consumed OTP rejected with 410 OTP_ALREADY_CONSUMED');
+
+    // -------------------------------------------------------------------------
+    // [TEST 16] Duplicate Verified Phone Rejection (BR-AUTH-03)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 16 / BR-AUTH-03] Duplicate verified phone rejected with 409 CONFLICT');
+    const res16 = await request(app.getHttpServer())
+      .post('/auth/register')
+      .set('x-forwarded-for', '198.51.100.16')
+      .send({
+        merchant_name: `Duplicate Phone Shop ${testSuffix}`,
+        full_name: 'Trần Văn Duplicate Phone',
+        phone: phone2, // Already active from TEST 14
+        password: 'SecurePassword123!',
+        terms_accepted: true,
+        terms_version: '2026.1',
+      })
+      .expect(409);
+
+    assert.strictEqual(res16.body.error.code, 'VALIDATION_ERROR');
+    assert.strictEqual(res16.body.error.fields[0].field, 'phone');
+    assert.strictEqual(res16.body.error.fields[0].code, 'DUPLICATE');
+    console.log('  PASS: Duplicate verified phone rejected with 409 CONFLICT');
+
+    // -------------------------------------------------------------------------
+    // [TEST 17] Resend Anti-Enumeration & Channel Mismatch (BR-AUTH-08)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 17 / BR-AUTH-08] Resend anti-enumeration and channel mismatch');
+
+    // 17a. Non-existent identifier returns generic 200 SENT to prevent enumeration
+    const res17a = await request(app.getHttpServer())
+      .post('/auth/verify/resend')
+      .send({ identifier: `nonexistent.${testSuffix}@shipde.vn`, channel: 'email' })
+      .expect(200);
+    assert.strictEqual(res17a.body.data.status, 'SENT');
+    console.log('  PASS: Non-existent identifier returned generic SENT (anti-enumeration)');
+
+    // 17b. Channel mismatch returns 400 CHANNEL_MISMATCH
+    const res17b = await request(app.getHttpServer())
+      .post('/auth/verify/resend')
+      .send({ identifier: '0909999001', channel: 'email' })
+      .expect(400);
+    assert.strictEqual(res17b.body.error.code, 'CHANNEL_MISMATCH');
+    console.log('  PASS: Channel mismatch rejected with 400 CHANNEL_MISMATCH');
+
+    // -------------------------------------------------------------------------
+    // [TEST 18] OTP Brute-Force Lockout (BR-AUTH-06)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 18 / BR-AUTH-06] OTP brute-force lockout after 5 failed attempts');
+    rateLimitService.clear();
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      const res = await request(app.getHttpServer())
+        .post('/auth/verify-phone')
+        .send({ phone: '0909999001', otp: `99999${attempt}` })
+        .expect(400);
+      assert.strictEqual(res.body.error.code, 'INVALID_OTP');
+    }
+    // 5th wrong attempt triggers OTP_MAX_ATTEMPTS_EXCEEDED
+    const res18 = await request(app.getHttpServer())
+      .post('/auth/verify-phone')
+      .send({ phone: '0909999001', otp: '999995' })
+      .expect(429);
+    assert.strictEqual(res18.body.error.code, 'OTP_MAX_ATTEMPTS_EXCEEDED');
+    console.log('  PASS: OTP brute-force locked out with 429 OTP_MAX_ATTEMPTS_EXCEEDED');
+
     console.log('================================================================');
-    console.log('✅ ALL 14 SUPERTEST INTEGRATION TESTS PASSED (FEAT-AUTH-01)');
+    console.log('✅ ALL 18 SUPERTEST INTEGRATION TESTS PASSED (FEAT-AUTH-01)');
     console.log('================================================================');
   } finally {
     await app.close();

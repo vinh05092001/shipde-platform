@@ -1,16 +1,6 @@
-export interface VerificationMessage {
-  channel: 'email' | 'phone';
-  recipient: string;
-  token?: string;
-  otp?: string;
-  sentAt: Date;
-}
+import type { VerificationMessage, IVerificationDeliveryAdapter } from '@shipde/contracts';
 
-export interface IVerificationDeliveryAdapter {
-  sendVerification(
-    message: Omit<VerificationMessage, 'sentAt'>
-  ): Promise<{ success: boolean; messageId: string }>;
-}
+export type { VerificationMessage, IVerificationDeliveryAdapter };
 
 export class MockVerificationDeliveryAdapter implements IVerificationDeliveryAdapter {
   private sentMessages: VerificationMessage[] = [];

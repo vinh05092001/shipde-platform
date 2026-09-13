@@ -19,7 +19,7 @@ CREATE TABLE "verification_tokens" (
     "token" VARCHAR(255) NOT NULL,
     "channel" VARCHAR(16) NOT NULL,
     "identifier" VARCHAR(255) NOT NULL,
-    "otp" VARCHAR(16),
+    "otp" VARCHAR(64),
     "expires_at" TIMESTAMPTZ NOT NULL,
     "consumed_at" TIMESTAMPTZ,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
