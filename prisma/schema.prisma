@@ -124,6 +124,9 @@ model Merchant {
   discrepancies     Discrepancy[]
   claims            Claim[]
   audit_logs        AuditLog[]
+  invitations       Invitation[]
+  branches          Branch[]
+  warehouses        Warehouse[]
 
   @@map("merchants")
 }
@@ -146,6 +149,9 @@ model User {
   assigned_cases    ExceptionCase[]   @relation("CaseAssignee")
   contact_logs      ExceptionContactLog[]
   device_sessions   DeviceSession[]
+  verification_tokens VerificationToken[]
+  password_resets   PasswordResetToken[]
+  mfa_credential    MfaCredential?
 
   @@unique([merchant_id, email])
   @@index([merchant_id, role])
@@ -533,4 +539,157 @@ model OutboxEvent {
   @@index([status, scheduled_at])
   @@index([correlation_id])
   @@map("outbox_events")
+}
+
+// ----------------------------------------------------------------------------
+// 9. Identity lifecycle: verification, recovery, invitations and MFA (S01)
+// ----------------------------------------------------------------------------
+
+enum VerificationChannelEnum {
+  EMAIL
+  PHONE
+}
+
+enum InvitationStatusEnum {
+  PENDING
+  ACCEPTED
+  CANCELLED
+  EXPIRED
+}
+
+/// Single-use proof that a contact channel belongs to the registering user.
+/// Only the SHA-256 of the code is stored, never the code itself.
+model VerificationToken {
+  id                String                  @id @default(uuid()) @db.Uuid
+  user_id           String                  @db.Uuid
+  channel           VerificationChannelEnum
+  destination       String                  @db.VarChar(255)
+  token_hash        String                  @db.VarChar(64)
+  attempts          Int                     @default(0)
+  consumed_at       DateTime?               @db.Timestamptz
+  expires_at        DateTime                @db.Timestamptz
+  created_at        DateTime                @default(now()) @db.Timestamptz
+
+  user              User                    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, channel, consumed_at])
+  @@index([token_hash])
+  @@map("verification_tokens")
+}
+
+/// Expiring one-time password reset. Consuming one revokes every live session.
+model PasswordResetToken {
+  id                String    @id @default(uuid()) @db.Uuid
+  user_id           String    @db.Uuid
+  token_hash        String    @unique @db.VarChar(64)
+  requested_ip      String?   @db.VarChar(64)
+  consumed_at       DateTime? @db.Timestamptz
+  expires_at        DateTime  @db.Timestamptz
+  created_at        DateTime  @default(now()) @db.Timestamptz
+
+  user              User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, consumed_at])
+  @@map("password_reset_tokens")
+}
+
+/// Invitation to join a merchant with a pre-assigned role and scopes.
+model Invitation {
+  id                String               @id @default(uuid()) @db.Uuid
+  merchant_id       String               @db.Uuid
+  email             String               @db.VarChar(255)
+  role              RoleEnum
+  store_scopes      String[]             @default([])
+  warehouse_scopes  String[]             @default([])
+  token_hash        String               @unique @db.VarChar(64)
+  status            InvitationStatusEnum @default(PENDING)
+  invited_by        String               @db.Uuid
+  accepted_user_id  String?              @db.Uuid
+  resend_count      Int                  @default(0)
+  expires_at        DateTime             @db.Timestamptz
+  created_at        DateTime             @default(now()) @db.Timestamptz
+  updated_at        DateTime             @updatedAt @db.Timestamptz
+
+  merchant          Merchant             @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+
+  @@unique([merchant_id, email, status])
+  @@index([merchant_id, status])
+  @@map("invitations")
+}
+
+/// TOTP shared secret plus single-use recovery codes, both stored hashed.
+model MfaCredential {
+  id                String    @id @default(uuid()) @db.Uuid
+  user_id           String    @unique @db.Uuid
+  secret_encrypted  String    @db.Text
+  confirmed_at      DateTime? @db.Timestamptz
+  recovery_hashes   String[]  @default([])
+  last_used_at      DateTime? @db.Timestamptz
+  created_at        DateTime  @default(now()) @db.Timestamptz
+
+  user              User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("mfa_credentials")
+}
+
+/// Records every failed authentication attempt so lockout is enforceable.
+model LoginAttempt {
+  id                String   @id @default(uuid()) @db.Uuid
+  email             String   @db.VarChar(255)
+  merchant_id       String?  @db.Uuid
+  ip                String?  @db.VarChar(64)
+  succeeded         Boolean
+  reason            String?  @db.VarChar(64)
+  created_at        DateTime @default(now()) @db.Timestamptz
+
+  @@index([email, created_at])
+  @@map("login_attempts")
+}
+
+// ----------------------------------------------------------------------------
+// 10. Organisation structure: branches and warehouses (S01)
+// ----------------------------------------------------------------------------
+
+model Branch {
+  id                String    @id @default(uuid()) @db.Uuid
+  merchant_id       String    @db.Uuid
+  code              String    @db.VarChar(64)
+  name              String    @db.VarChar(255)
+  address           String?   @db.Text
+  phone             String?   @db.VarChar(32)
+  is_active         Boolean   @default(true)
+  created_at        DateTime  @default(now()) @db.Timestamptz
+  updated_at        DateTime  @updatedAt @db.Timestamptz
+
+  merchant          Merchant  @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  warehouses        Warehouse[]
+
+  @@unique([merchant_id, code])
+  @@index([merchant_id, is_active])
+  @@map("branches")
+}
+
+model Warehouse {
+  id                String    @id @default(uuid()) @db.Uuid
+  merchant_id       String    @db.Uuid
+  branch_id         String?   @db.Uuid
+  code              String    @db.VarChar(64)
+  name              String    @db.VarChar(255)
+  pickup_address    String    @db.Text
+  return_address    String?   @db.Text
+  contact_name      String?   @db.VarChar(255)
+  contact_phone     String?   @db.VarChar(32)
+  /// Weekday windows, e.g. [{"day":1,"from":"08:00","to":"17:00"}]
+  pickup_schedule   Json?
+  printer_defaults  Json?
+  is_active         Boolean   @default(true)
+  created_at        DateTime  @default(now()) @db.Timestamptz
+  updated_at        DateTime  @updatedAt @db.Timestamptz
+
+  merchant          Merchant  @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  branch            Branch?   @relation(fields: [branch_id], references: [id], onDelete: SetNull)
+
+  @@unique([merchant_id, code])
+  @@index([merchant_id, is_active])
+  @@map("warehouses")
 }
