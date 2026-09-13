@@ -1152,15 +1152,15 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
             '<div class="flex justify-between"><span class="text-slate-400">Heartbeat:</span><span class="' + (isAuthed ? 'text-emerald-300' : 'text-slate-500') + '">' + acc.lastHeartbeat + '</span></div>' +
           '</div>' +
           '<div class="flex justify-between items-center pt-2 border-t border-slate-800">' +
-            '<button onclick="navigator.clipboard.writeText(\'' + (acc.location.replace(/\\/g, '\\\\')) + '\'); showToast(\'Đã sao chép đường dẫn credentials!\')" class="text-xs text-slate-400 hover:text-white transition flex items-center gap-1 font-mono">' +
+            '<button onclick="navigator.clipboard.writeText(\\'' + (acc.location.replace(/\\\\/g, '\\\\\\\\')) + '\\'); showToast(\\'Đã sao chép đường dẫn credentials!\\')" class="text-xs text-slate-400 hover:text-white transition flex items-center gap-1 font-mono">' +
               '📋 Sao Chép Path' +
             '</button>' +
             '<div class="flex items-center gap-2">' +
               (isAuthed ?
-                '<button onclick="openLoginModal(\'' + acc.id + '\')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">Đổi Key / Info</button>' +
-                '<button onclick="logoutAccount(\'' + acc.id + '\')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition">Đăng Xuất</button>'
+                '<button onclick="openLoginModal(\\'' + acc.id + '\\')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">Đổi Key / Info</button>' +
+                '<button onclick="logoutAccount(\\'' + acc.id + '\\')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition">Đăng Xuất</button>'
                 :
-                '<button onclick="openLoginModal(\'' + acc.id + '\')" class="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md transition flex items-center gap-1.5">🔑 Đăng Nhập Ngay</button>'
+                '<button onclick="openLoginModal(\\'' + acc.id + '\\')" class="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md transition flex items-center gap-1.5">🔑 Đăng Nhập Ngay</button>'
               ) +
             '</div>' +
           '</div>' +
