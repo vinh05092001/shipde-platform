@@ -13,6 +13,7 @@ import { APP_CONFIG } from '../config.token';
 import { AppConfig } from '@shipde/config';
 import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
 import { verifyPassword, hashPassword } from './password.util';
+import { seedDatabase } from '../../../../infra/docker/seed';
 
 async function runAuthSupertestSuite() {
   console.log('================================================================');
@@ -105,6 +106,9 @@ async function runAuthSupertestSuite() {
     console.log('🎉 Auth Supertest suite skipped offline safely!');
     return;
   }
+
+  // Ensure deterministic test fixtures (owner@shipde.vn, pending@shipde.vn, expired/consumed tokens) are seeded
+  await seedDatabase(prisma);
 
   const testSuffix = Date.now().toString().slice(-6);
 
