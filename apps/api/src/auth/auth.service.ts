@@ -294,7 +294,7 @@ export class AuthService {
   /**
    * Verify Email Link Token (BR-AUTH-02, BR-AUTH-06)
    */
-  async verifyEmail(dto: VerifyEmailDto, clientIp: string, correlationId: string) {
+  async verifyEmail(dto: VerifyEmailDto, correlationId: string) {
     if (!dto.token || dto.token.trim().length === 0) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
