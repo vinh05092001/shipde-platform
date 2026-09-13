@@ -16,16 +16,7 @@ Write-Host "📍 Cổng lắng nghe: http://localhost:$Port" -ForegroundColor Ye
 Write-Host "📦 Giám sát 148 đầu mục công việc & 4 AI Models" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-# 1. Đưa shortcut ra Desktop
-$desktop = [Environment]::GetFolderPath("Desktop")
-if (-not $desktop) { $desktop = "$env:USERPROFILE\Desktop" }
-if (Test-Path $desktop) {
-    Copy-Item ".\DASHBOARD.html" "$desktop\Ship Dễ AI Dashboard.html" -Force -ErrorAction SilentlyContinue
-    Write-Host "[✓] Đã tạo icon 'Ship Dễ AI Dashboard.html' ra ngoài Desktop!" -ForegroundColor Green
-}
-
-
-# 2. Khởi chạy server Node.js nền, chờ cổng sẵn sàng rồi mới mở trình duyệt
+# 1. Khởi chạy server Node.js nền, chờ cổng sẵn sàng rồi mới mở trình duyệt
 $env:PORT = $Port
 $server = Start-Process -FilePath "node" -ArgumentList "tools/ai-dashboard/server.js" -WorkingDirectory $repoRoot -PassThru -NoNewWindow
 
@@ -41,7 +32,7 @@ foreach ($i in 1..40) {
     } catch { }
 }
 
-# 3. Mở trình duyệt
+# 2. Mở trình duyệt
 if ($ready) {
     Write-Host "[✓] Server đã sẵn sàng sau $([math]::Round($i * 0.25, 1))s" -ForegroundColor Green
     Start-Process "http://localhost:$Port"
@@ -50,7 +41,7 @@ if ($ready) {
     Start-Process ".\DASHBOARD.html"
 }
 
-# 4. Giữ cửa sổ — Ctrl+C để dừng server
+# 3. Giữ cửa sổ — Ctrl+C để dừng server
 Write-Host "Nhấn Ctrl+C để dừng server." -ForegroundColor DarkGray
 try {
     Wait-Process -Id $server.Id
