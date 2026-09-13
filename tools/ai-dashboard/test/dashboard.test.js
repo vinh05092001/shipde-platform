@@ -15,42 +15,30 @@ const {
   deriveGatePipeline,
   loadRegister,
   resolveAssignedAuthorFromWorkItem,
-  resetWorkItemAuthorCacheForTest
+  resetWorkItemAuthorCacheForTest,
 } = require('../register-adapter');
 
 const {
   classifySessionRole,
   computeFreshness,
   parseAoStatus,
-  parseAoSessions
+  parseAoSessions,
 } = require('../ao-adapter');
 
 const {
   parseChecks,
   parseReviews,
   TRUSTED_CODEX_LOGIN,
-  safeGitHubErrorReason
+  safeGitHubErrorReason,
 } = require('../github-adapter');
 
-const {
-  parseWorktreesPorcelain,
-  parseCommits
-} = require('../git-adapter');
+const { parseWorktreesPorcelain, parseCommits } = require('../git-adapter');
 
-const {
-  resolveAoExecutable,
-  resetAoExecutableCacheForTest
-} = require('../ao-adapter');
+const { resolveAoExecutable, resetAoExecutableCacheForTest } = require('../ao-adapter');
 
-const {
-  detectConflicts
-} = require('../conflict-detector');
+const { detectConflicts } = require('../conflict-detector');
 
-const {
-  redactSensitive,
-  redactPath,
-  redactObject
-} = require('../redaction');
+const { redactSensitive, redactPath, redactObject } = require('../redaction');
 
 const {
   aggregateCockpitState,
@@ -59,23 +47,21 @@ const {
   buildGitHubEvidence,
   computeSourceFreshness,
   DEFAULT_FRESHNESS_THRESHOLDS_MS,
-  resetRevisionForTest
+  resetRevisionForTest,
 } = require('../aggregator');
 
-const {
-  createDashboardServer,
-  isPathTraversal
-} = require('../server');
+const { createDashboardServer, isPathTraversal } = require('../server');
 
 const {
   deriveWriterState,
   GATE_STAGE_LABELS,
   formatSourceAge,
-  FRESHNESS_BADGE
+  FRESHNESS_BADGE,
 } = require('../client');
 
-describe('TASK-AI-15 Realtime AI Cockpit Suite', () => {
+const { renderStaticDashboard } = require('../render-static');
 
+describe('TASK-AI-15 Realtime AI Cockpit Suite', () => {
   describe('AI15-AC01: Register CSV Parsing & Derivations', () => {
     test('parses RFC 4180 CSV with quotes, embedded commas, escaped quotes, and newlines', () => {
       const csv = `"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
@@ -88,7 +74,10 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
       assert.strictEqual(items[0].work_item_id, 'TASK-FOUND-01');
       assert.strictEqual(items[0].feature_name, 'Freeze, classify');
-      assert.strictEqual(items[0].key_behavior, 'Inventory and "protect" behavior\nmultiline detail');
+      assert.strictEqual(
+        items[0].key_behavior,
+        'Inventory and "protect" behavior\nmultiline detail'
+      );
       assert.strictEqual(items[0].status, 'MERGED');
       // Register rows in this fixture carry no assigned_author column, so the
       // author is honestly UNKNOWN rather than guessed from the ID prefix.
@@ -100,9 +89,18 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     });
 
     test('derives author solely from an explicit assigned_author field, never from the work_item_id', () => {
-      assert.strictEqual(deriveAuthor({ work_item_id: 'TASK-AI-15', assigned_author: 'GEMINI' }), 'GEMINI');
-      assert.strictEqual(deriveAuthor({ work_item_id: 'CUSTOM', assigned_author: 'HUMAN' }), 'HUMAN');
-      assert.strictEqual(deriveAuthor({ work_item_id: 'CUSTOM', assigned_author: '  CLAUDE  ' }), 'CLAUDE');
+      assert.strictEqual(
+        deriveAuthor({ work_item_id: 'TASK-AI-15', assigned_author: 'GEMINI' }),
+        'GEMINI'
+      );
+      assert.strictEqual(
+        deriveAuthor({ work_item_id: 'CUSTOM', assigned_author: 'HUMAN' }),
+        'HUMAN'
+      );
+      assert.strictEqual(
+        deriveAuthor({ work_item_id: 'CUSTOM', assigned_author: '  CLAUDE  ' }),
+        'CLAUDE'
+      );
 
       // IDs that previously triggered inference must no longer influence the result.
       assert.strictEqual(deriveAuthor({ work_item_id: 'TASK-AI-15' }), 'UNKNOWN');
@@ -112,7 +110,10 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       assert.strictEqual(deriveAuthor({ work_item_id: 'FEAT-USR-01' }), 'UNKNOWN');
 
       // Blank/whitespace-only assigned_author is also UNKNOWN, not inferred.
-      assert.strictEqual(deriveAuthor({ work_item_id: 'TASK-AI-15', assigned_author: '   ' }), 'UNKNOWN');
+      assert.strictEqual(
+        deriveAuthor({ work_item_id: 'TASK-AI-15', assigned_author: '   ' }),
+        'UNKNOWN'
+      );
       assert.strictEqual(deriveAuthor({}), 'UNKNOWN');
     });
 
@@ -121,7 +122,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
         { work_item_id: 'T1', status: 'MERGED', slice: 'S00' },
         { work_item_id: 'T2', status: 'MERGED', slice: 'S00' },
         { work_item_id: 'T3', status: 'READY_FOR_CODEX', slice: 'S01', branch: 'feat/t3' },
-        { work_item_id: 'T4', status: 'READY_FOR_AUTHOR', slice: 'S01' }
+        { work_item_id: 'T4', status: 'READY_FOR_AUTHOR', slice: 'S01' },
       ];
 
       const derived = deriveRegisterState(items);
@@ -137,7 +138,10 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     });
 
     test('loads live canonical repository register file without error', () => {
-      const csvPath = path.resolve(__dirname, '../../../docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv');
+      const csvPath = path.resolve(
+        __dirname,
+        '../../../docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+      );
       const res = loadRegister(csvPath);
       assert.strictEqual(res.health.status, 'live');
       assert.ok(res.data.total >= 148, `Expected at least 148 items, got ${res.data.total}`);
@@ -148,12 +152,17 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
   describe('AI15-R03: Gate pipeline requires exact-HEAD GitHub evidence', () => {
     test('never infers CODEX_REVIEW/CI_GATES/HUMAN_MERGE as passed from register fields alone', () => {
-      const activeItem = { work_item_id: 'T9', status: 'READY_FOR_HUMAN_MERGE', codex_verdict: 'PASS', branch: 'feat/t9' };
+      const activeItem = {
+        work_item_id: 'T9',
+        status: 'READY_FOR_HUMAN_MERGE',
+        codex_verdict: 'PASS',
+        branch: 'feat/t9',
+      };
 
       const withoutEvidence = deriveGatePipeline(activeItem, null);
       assert.strictEqual(withoutEvidence.currentGate, 'EVIDENCE_UNAVAILABLE');
       for (const gateName of ['CODEX_REVIEW', 'CI_GATES', 'HUMAN_MERGE']) {
-        const gate = withoutEvidence.gates.find(g => g.name === gateName);
+        const gate = withoutEvidence.gates.find((g) => g.name === gateName);
         assert.strictEqual(gate.status, 'UNAVAILABLE');
       }
     });
@@ -164,8 +173,8 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
       const result = deriveGatePipeline(activeItem, evidence);
       assert.strictEqual(result.currentGate, 'EVIDENCE_UNAVAILABLE');
-      assert.strictEqual(result.gates.find(g => g.name === 'CI_GATES').status, 'UNAVAILABLE');
-      assert.strictEqual(result.gates.find(g => g.name === 'HUMAN_MERGE').status, 'UNAVAILABLE');
+      assert.strictEqual(result.gates.find((g) => g.name === 'CI_GATES').status, 'UNAVAILABLE');
+      assert.strictEqual(result.gates.find((g) => g.name === 'HUMAN_MERGE').status, 'UNAVAILABLE');
     });
 
     test('marks the merge gate READY only when exact-HEAD CI and Codex evidence both pass', () => {
@@ -174,9 +183,9 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
       const result = deriveGatePipeline(activeItem, evidence);
       assert.strictEqual(result.currentGate, 'HUMAN_MERGE');
-      assert.strictEqual(result.gates.find(g => g.name === 'CODEX_REVIEW').status, 'PASSED');
-      assert.strictEqual(result.gates.find(g => g.name === 'CI_GATES').status, 'PASSED');
-      assert.strictEqual(result.gates.find(g => g.name === 'HUMAN_MERGE').status, 'READY');
+      assert.strictEqual(result.gates.find((g) => g.name === 'CODEX_REVIEW').status, 'PASSED');
+      assert.strictEqual(result.gates.find((g) => g.name === 'CI_GATES').status, 'PASSED');
+      assert.strictEqual(result.gates.find((g) => g.name === 'HUMAN_MERGE').status, 'READY');
     });
 
     test('stays IN_PROGRESS on exact HEAD when CI or Codex evidence has not passed yet', () => {
@@ -185,13 +194,18 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
       const result = deriveGatePipeline(activeItem, evidence);
       assert.strictEqual(result.currentGate, 'CODEX_REVIEW');
-      assert.strictEqual(result.gates.find(g => g.name === 'CI_GATES').status, 'IN_PROGRESS');
-      assert.strictEqual(result.gates.find(g => g.name === 'HUMAN_MERGE').status, 'PENDING');
+      assert.strictEqual(result.gates.find((g) => g.name === 'CI_GATES').status, 'IN_PROGRESS');
+      assert.strictEqual(result.gates.find((g) => g.name === 'HUMAN_MERGE').status, 'PENDING');
     });
 
     test('buildGitHubEvidence reports unavailable when the GitHub source is not live/authenticated', () => {
       const activeItem = { work_item_id: 'T9', branch: 'feat/t9' };
-      const evidence = buildGitHubEvidence(activeItem, { headOid: 'abc' }, { authenticated: false, pullRequests: [] }, 'unavailable');
+      const evidence = buildGitHubEvidence(
+        activeItem,
+        { headOid: 'abc' },
+        { authenticated: false, pullRequests: [] },
+        'unavailable'
+      );
       assert.strictEqual(evidence.available, false);
       assert.strictEqual(evidence.headMatches, false);
     });
@@ -201,7 +215,14 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const gitData = { headOid: 'localsha123' };
       const githubData = {
         authenticated: true,
-        pullRequests: [{ headRefName: 'feat/t9', headRefOid: 'differentsha456', checks: { summary: 'PASSED', totalCount: 3 }, reviews: { trustedCodexVerdict: 'PASS' } }]
+        pullRequests: [
+          {
+            headRefName: 'feat/t9',
+            headRefOid: 'differentsha456',
+            checks: { summary: 'PASSED', totalCount: 3 },
+            reviews: { trustedCodexVerdict: 'PASS' },
+          },
+        ],
       };
       const evidence = buildGitHubEvidence(activeItem, gitData, githubData, 'live');
       assert.strictEqual(evidence.available, true);
@@ -215,7 +236,14 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const gitData = { headOid: 'samesha789' };
       const githubData = {
         authenticated: true,
-        pullRequests: [{ headRefName: 'feat/t9', headRefOid: 'samesha789', checks: { summary: 'PASSED', totalCount: 3 }, reviews: { trustedCodexVerdict: 'PASS' } }]
+        pullRequests: [
+          {
+            headRefName: 'feat/t9',
+            headRefOid: 'samesha789',
+            checks: { summary: 'PASSED', totalCount: 3 },
+            reviews: { trustedCodexVerdict: 'PASS' },
+          },
+        ],
       };
       const evidence = buildGitHubEvidence(activeItem, gitData, githubData, 'live');
       assert.strictEqual(evidence.headMatches, true);
@@ -229,48 +257,111 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
     test('reports live for a recent successful observation', () => {
       const observedAt = new Date(FIXED_NOW - 2000).toISOString(); // 2s ago
-      const result = computeSourceFreshness(observedAt, 'live', DEFAULT_FRESHNESS_THRESHOLDS_MS, FIXED_NOW);
+      const result = computeSourceFreshness(
+        observedAt,
+        'live',
+        DEFAULT_FRESHNESS_THRESHOLDS_MS,
+        FIXED_NOW
+      );
       assert.strictEqual(result.freshness, 'live');
       assert.strictEqual(result.ageMs, 2000);
     });
 
     test('reports stale once age exceeds the live threshold but is still within the stale threshold', () => {
       const observedAt = new Date(FIXED_NOW - 30 * 1000).toISOString(); // 30s ago
-      const result = computeSourceFreshness(observedAt, 'live', DEFAULT_FRESHNESS_THRESHOLDS_MS, FIXED_NOW);
+      const result = computeSourceFreshness(
+        observedAt,
+        'live',
+        DEFAULT_FRESHNESS_THRESHOLDS_MS,
+        FIXED_NOW
+      );
       assert.strictEqual(result.freshness, 'stale');
       assert.strictEqual(result.ageMs, 30000);
     });
 
     test('reports unavailable once age exceeds the stale threshold, even if collection itself succeeded', () => {
       const observedAt = new Date(FIXED_NOW - 10 * 60 * 1000).toISOString(); // 10 minutes ago
-      const result = computeSourceFreshness(observedAt, 'live', DEFAULT_FRESHNESS_THRESHOLDS_MS, FIXED_NOW);
+      const result = computeSourceFreshness(
+        observedAt,
+        'live',
+        DEFAULT_FRESHNESS_THRESHOLDS_MS,
+        FIXED_NOW
+      );
       assert.strictEqual(result.freshness, 'unavailable');
       assert.strictEqual(result.ageMs, 10 * 60 * 1000);
     });
 
     test('reports unavailable with a null ageMs when the source status itself is unavailable', () => {
       const observedAt = new Date(FIXED_NOW - 1000).toISOString();
-      const result = computeSourceFreshness(observedAt, 'unavailable', DEFAULT_FRESHNESS_THRESHOLDS_MS, FIXED_NOW);
+      const result = computeSourceFreshness(
+        observedAt,
+        'unavailable',
+        DEFAULT_FRESHNESS_THRESHOLDS_MS,
+        FIXED_NOW
+      );
       assert.strictEqual(result.freshness, 'unavailable');
       assert.strictEqual(result.ageMs, null);
     });
 
     test('reports unavailable when no observedAt or an unparseable timestamp is given (never fabricated live)', () => {
-      assert.strictEqual(computeSourceFreshness(null, 'live', DEFAULT_FRESHNESS_THRESHOLDS_MS, FIXED_NOW).freshness, 'unavailable');
-      assert.strictEqual(computeSourceFreshness('not-a-date', 'live', DEFAULT_FRESHNESS_THRESHOLDS_MS, FIXED_NOW).freshness, 'unavailable');
+      assert.strictEqual(
+        computeSourceFreshness(null, 'live', DEFAULT_FRESHNESS_THRESHOLDS_MS, FIXED_NOW).freshness,
+        'unavailable'
+      );
+      assert.strictEqual(
+        computeSourceFreshness('not-a-date', 'live', DEFAULT_FRESHNESS_THRESHOLDS_MS, FIXED_NOW)
+          .freshness,
+        'unavailable'
+      );
     });
 
     test('aggregateCockpitState attaches observedAt, ageMs and freshness to every source health record', async () => {
       resetRevisionForTest(1);
       const observedAt = new Date(FIXED_NOW - 1000).toISOString();
-      const mockHealth = (name, status) => ({ name, status, observedAt, latencyMs: 5, provenance: 'test', impact: 'None', error: null });
+      const mockHealth = (name, status) => ({
+        name,
+        status,
+        observedAt,
+        latencyMs: 5,
+        provenance: 'test',
+        impact: 'None',
+        error: null,
+      });
 
       const state = await aggregateCockpitState({
         now: FIXED_NOW,
-        mockGit: { health: mockHealth('git', 'live'), data: { currentBranch: 'main', headOid: '', headOidShort: '', dirtyCount: 0, worktrees: [], recentCommits: [] } },
-        mockAo: { health: mockHealth('ao', 'unavailable'), data: { daemon: { ready: false, state: 'stopped' }, sessions: [] } },
-        mockGitHub: { health: mockHealth('github', 'live'), data: { authenticated: true, repo: 'x/y', pullRequests: [] } },
-        mockRegister: { health: mockHealth('register', 'live'), data: { total: 0, mergedCount: 0, completionPercent: '0.0', byStatus: {}, bySlice: {}, activeItem: null, gatePipeline: { currentGate: 'IDLE', gates: [] }, items: [] } }
+        mockGit: {
+          health: mockHealth('git', 'live'),
+          data: {
+            currentBranch: 'main',
+            headOid: '',
+            headOidShort: '',
+            dirtyCount: 0,
+            worktrees: [],
+            recentCommits: [],
+          },
+        },
+        mockAo: {
+          health: mockHealth('ao', 'unavailable'),
+          data: { daemon: { ready: false, state: 'stopped' }, sessions: [] },
+        },
+        mockGitHub: {
+          health: mockHealth('github', 'live'),
+          data: { authenticated: true, repo: 'x/y', pullRequests: [] },
+        },
+        mockRegister: {
+          health: mockHealth('register', 'live'),
+          data: {
+            total: 0,
+            mergedCount: 0,
+            completionPercent: '0.0',
+            byStatus: {},
+            bySlice: {},
+            activeItem: null,
+            gatePipeline: { currentGate: 'IDLE', gates: [] },
+            items: [],
+          },
+        },
       });
 
       for (const key of ['register', 'git', 'ao', 'github']) {
@@ -312,7 +403,8 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     });
 
     test('parsed worktrees never expose an unredacted rawPath', () => {
-      const output = 'worktree C:\\Users\\gumac\\AI\\shipde-platform\nHEAD abc123\nbranch refs/heads/main\n';
+      const output =
+        'worktree C:\\Users\\gumac\\AI\\shipde-platform\nHEAD abc123\nbranch refs/heads/main\n';
       const worktrees = parseWorktreesPorcelain(output);
       assert.strictEqual(worktrees.length, 1);
       assert.strictEqual('rawPath' in worktrees[0], false);
@@ -331,19 +423,34 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
   describe('AI15-AC02: Agent Orchestrator State & Role Classification', () => {
     test('classifies AO roles correctly separating author, reviewer, analyst, supervisor', () => {
-      const sup = classifySessionRole({ role: 'orchestrator', branch: 'ao/shipde-platf-orchestrator' });
+      const sup = classifySessionRole({
+        role: 'orchestrator',
+        branch: 'ao/shipde-platf-orchestrator',
+      });
       assert.strictEqual(sup.category, 'SUPERVISOR');
       assert.strictEqual(sup.isWriter, false);
 
-      const rev = classifySessionRole({ role: 'worker', branch: 'agent/codex-review', harness: 'codex' });
+      const rev = classifySessionRole({
+        role: 'worker',
+        branch: 'agent/codex-review',
+        harness: 'codex',
+      });
       assert.strictEqual(rev.category, 'REVIEWER');
       assert.strictEqual(rev.isWriter, false);
 
-      const ana = classifySessionRole({ role: 'worker', harness: 'claude-code', branch: 'ao/shipde-platform-13/root' });
+      const ana = classifySessionRole({
+        role: 'worker',
+        harness: 'claude-code',
+        branch: 'ao/shipde-platform-13/root',
+      });
       assert.strictEqual(ana.category, 'ANALYST');
       assert.strictEqual(ana.isWriter, false);
 
-      const aut = classifySessionRole({ role: 'worker', harness: 'agy', branch: 'feat/task-ai-15-realtime-ai-cockpit' });
+      const aut = classifySessionRole({
+        role: 'worker',
+        harness: 'agy',
+        branch: 'feat/task-ai-15-realtime-ai-cockpit',
+      });
       assert.strictEqual(aut.category, 'AUTHOR');
       assert.strictEqual(aut.isWriter, true);
     });
@@ -374,7 +481,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const rollup = [
         { name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS' },
         { name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' },
-        { name: 'typecheck', status: 'COMPLETED', conclusion: 'SUCCESS' }
+        { name: 'typecheck', status: 'COMPLETED', conclusion: 'SUCCESS' },
       ];
       const parsed = parseChecks(rollup);
       assert.strictEqual(parsed.summary, 'PASSED');
@@ -385,7 +492,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     test('detects check failures accurately', () => {
       const rollup = [
         { name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS' },
-        { name: 'test', status: 'COMPLETED', conclusion: 'FAILURE' }
+        { name: 'test', status: 'COMPLETED', conclusion: 'FAILURE' },
       ];
       const parsed = parseChecks(rollup);
       assert.strictEqual(parsed.summary, 'FAILED');
@@ -394,7 +501,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
     test('extracts trusted Codex review verdicts', () => {
       const reviews = [
-        { author: { login: TRUSTED_CODEX_LOGIN }, state: 'APPROVED', body: 'VERDICT: PASS' }
+        { author: { login: TRUSTED_CODEX_LOGIN }, state: 'APPROVED', body: 'VERDICT: PASS' },
       ];
       const parsed = parseReviews(reviews, []);
       assert.strictEqual(parsed.trustedCodexVerdict, 'PASS');
@@ -404,7 +511,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const impostorReviews = [
         { author: { login: 'codex-impersonator-bot' }, state: 'APPROVED', body: 'VERDICT: PASS' },
         { author: { login: 'some-other-bot[bot]' }, state: 'APPROVED', body: '**PASS**' },
-        { author: { login: 'chatgpt-codex-connector' }, state: 'APPROVED', body: 'VERDICT: PASS' } // missing [bot] suffix
+        { author: { login: 'chatgpt-codex-connector' }, state: 'APPROVED', body: 'VERDICT: PASS' }, // missing [bot] suffix
       ];
       const parsed = parseReviews(impostorReviews, []);
       assert.strictEqual(parsed.trustedCodexVerdict, 'PENDING');
@@ -420,7 +527,9 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
   describe('AI15-AC05 & AI15-AC06: Multi-Source State Derivation & Conflict Detection', () => {
     test('detects branch mismatch conflict between Register and Git', () => {
-      const reg = { activeItem: { work_item_id: 'TASK-AI-15', branch: 'feat/task-ai-15-realtime-ai-cockpit' } };
+      const reg = {
+        activeItem: { work_item_id: 'TASK-AI-15', branch: 'feat/task-ai-15-realtime-ai-cockpit' },
+      };
       const git = { currentBranch: 'feat/different-branch' };
       const conflicts = detectConflicts(reg, git, { sessions: [] }, { pullRequests: [] });
 
@@ -430,11 +539,17 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     });
 
     test('detects uncommitted changes on branch during review state', () => {
-      const reg = { activeItem: { work_item_id: 'TASK-AI-15', status: 'READY_FOR_CODEX', branch: 'feat/task-ai-15' } };
+      const reg = {
+        activeItem: {
+          work_item_id: 'TASK-AI-15',
+          status: 'READY_FOR_CODEX',
+          branch: 'feat/task-ai-15',
+        },
+      };
       const git = { currentBranch: 'feat/task-ai-15', dirtyCount: 3 };
       const conflicts = detectConflicts(reg, git, { sessions: [] }, { pullRequests: [] });
 
-      const dirtyConflict = conflicts.find(c => c.id === 'CONFLICT_DIRTY_WORKTREE_IN_REVIEW');
+      const dirtyConflict = conflicts.find((c) => c.id === 'CONFLICT_DIRTY_WORKTREE_IN_REVIEW');
       assert.ok(dirtyConflict, 'Expected dirty worktree conflict');
       assert.strictEqual(dirtyConflict.severity, 'error');
     });
@@ -444,13 +559,18 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
         register: { status: 'live' },
         git: { status: 'live' },
         ao: { status: 'unavailable' },
-        github: { status: 'live' }
+        github: { status: 'live' },
       };
       assert.strictEqual(deriveOverallStatus(sources, []), 'partial');
     });
 
     test('derives overallStatus: conflict when error conflict exists', () => {
-      const sources = { register: { status: 'live' }, git: { status: 'live' }, ao: { status: 'live' }, github: { status: 'live' } };
+      const sources = {
+        register: { status: 'live' },
+        git: { status: 'live' },
+        ao: { status: 'live' },
+        github: { status: 'live' },
+      };
       const conflicts = [{ severity: 'error', title: 'Fatal mismatch' }];
       assert.strictEqual(deriveOverallStatus(sources, conflicts), 'conflict');
     });
@@ -458,16 +578,22 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     test('builds chronological activity stream from commits and AO events', () => {
       const commits = [
         { hashShort: 'c1', message: 'Commit 1', date: '2026-09-13T10:00:00Z', authorName: 'Dev' },
-        { hashShort: 'c2', message: 'Commit 2', date: '2026-09-13T12:00:00Z', authorName: 'Dev' }
+        { hashShort: 'c2', message: 'Commit 2', date: '2026-09-13T12:00:00Z', authorName: 'Dev' },
       ];
       const sessions = [
-        { id: 's1', displayRole: 'Author', status: 'WORKING', harness: 'agy', updatedAt: '2026-09-13T11:00:00Z' }
+        {
+          id: 's1',
+          displayRole: 'Author',
+          status: 'WORKING',
+          harness: 'agy',
+          updatedAt: '2026-09-13T11:00:00Z',
+        },
       ];
 
       const stream = buildActivityStream(commits, sessions);
       assert.strictEqual(stream.length, 3);
       assert.strictEqual(stream[0].id, 'commit-c2'); // 12:00
-      assert.strictEqual(stream[1].id, 'ao-s1');     // 11:00
+      assert.strictEqual(stream[1].id, 'ao-s1'); // 11:00
       assert.strictEqual(stream[2].id, 'commit-c1'); // 10:00
     });
   });
@@ -510,8 +636,8 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
         userPath: 'C:\\Users\\gumac\\secret',
         nested: {
           token: 'ghp_1234567890abcdefghij',
-          safe: 'hello'
-        }
+          safe: 'hello',
+        },
       };
       const redacted = redactObject(obj);
       assert.strictEqual(redacted.apiKey, '[REDACTED_CONFIDENTIAL]');
@@ -537,7 +663,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       resetRevisionForTest(1);
       server = createDashboardServer({
         rootDir: path.resolve(__dirname, '../../../'),
-        disablePolling: true // Disable background interval during tests
+        disablePolling: true, // Disable background interval during tests
       });
 
       await new Promise((resolve) => {
@@ -551,7 +677,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
     after(async () => {
       if (server) {
-        await new Promise(resolve => server.close(resolve));
+        await new Promise((resolve) => server.close(resolve));
       }
     });
 
@@ -635,26 +761,29 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
     test('serves Server-Sent Events stream at /api/events with revision ID (AI15-AC04, AC10)', async () => {
       const sseRes = await new Promise((resolve, reject) => {
-        const req = http.request({
-          host: testHost,
-          port: testPort,
-          path: '/api/events',
-          method: 'GET'
-        }, (res) => {
-          let chunks = '';
-          res.on('data', (chunk) => {
-            chunks += chunk.toString();
-            // Once initial event is received, close and resolve
-            if (chunks.includes('event: state')) {
-              req.destroy();
-              resolve({
-                statusCode: res.statusCode,
-                headers: res.headers,
-                data: chunks
-              });
-            }
-          });
-        });
+        const req = http.request(
+          {
+            host: testHost,
+            port: testPort,
+            path: '/api/events',
+            method: 'GET',
+          },
+          (res) => {
+            let chunks = '';
+            res.on('data', (chunk) => {
+              chunks += chunk.toString();
+              // Once initial event is received, close and resolve
+              if (chunks.includes('event: state')) {
+                req.destroy();
+                resolve({
+                  statusCode: res.statusCode,
+                  headers: res.headers,
+                  data: chunks,
+                });
+              }
+            });
+          }
+        );
         req.on('error', (err) => {
           // req.destroy() causes error on client side, ignore if resolved
           if (!err.message.includes('socket hang up')) reject(err);
@@ -748,20 +877,33 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
         // Page-level safety net: html/body must never grow a horizontal
         // scrollbar, regardless of any residual child sizing quirk.
-        assert.ok(/html\s*\{[^}]*overflow-x:\s*hidden/i.test(html), `${file}: <html> must set overflow-x: hidden`);
-        assert.ok(/body\s*\{[^}]*overflow-x:\s*hidden/i.test(html), `${file}: body CSS must set overflow-x: hidden`);
-        assert.ok(html.includes('overflow-x-hidden'), `${file}: <body> must carry the overflow-x-hidden utility class`);
+        assert.ok(
+          /html\s*\{[^}]*overflow-x:\s*hidden/i.test(html),
+          `${file}: <html> must set overflow-x: hidden`
+        );
+        assert.ok(
+          /body\s*\{[^}]*overflow-x:\s*hidden/i.test(html),
+          `${file}: body CSS must set overflow-x: hidden`
+        );
+        assert.ok(
+          html.includes('overflow-x-hidden'),
+          `${file}: <body> must carry the overflow-x-hidden utility class`
+        );
 
         // Root cause fix: the hero's flex row and its two children (heading
         // block + topStats grid) — plus header and main — must all be able
         // to shrink below their content's intrinsic width (min-width:auto
         // is the classic flexbox/grid overflow trap this bug hit).
         assert.ok(
-          /id="topStats"[^>]*class="[^"]*min-w-0/.test(html) || /class="[^"]*min-w-0[^"]*"[^>]*id="topStats"/.test(html),
+          /id="topStats"[^>]*class="[^"]*min-w-0/.test(html) ||
+            /class="[^"]*min-w-0[^"]*"[^>]*id="topStats"/.test(html),
           `${file}: #topStats must carry min-w-0`
         );
         const minW0Count = (html.match(/min-w-0/g) || []).length;
-        assert.ok(minW0Count >= 8, `${file}: expected header/main/hero/stat-card containers to carry min-w-0 (found ${minW0Count})`);
+        assert.ok(
+          minW0Count >= 8,
+          `${file}: expected header/main/hero/stat-card containers to carry min-w-0 (found ${minW0Count})`
+        );
 
         // Wrapping/breaking so long headings/labels reflow instead of
         // forcing width.
@@ -773,12 +915,21 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const html = fs.readFileSync(path.resolve(__dirname, '../index.html'), 'utf-8');
       const overflowXAutoCount = (html.match(/overflow-x-auto/g) || []).length;
       // Tab nav + 2 table wrappers (roster tab table, queue tab table).
-      assert.ok(overflowXAutoCount >= 3, `expected at least 3 intentional overflow-x-auto regions, found ${overflowXAutoCount}`);
-      assert.ok(/<nav[^>]*overflow-x-auto/.test(html), 'tab nav must keep its own horizontal scroll');
+      assert.ok(
+        overflowXAutoCount >= 3,
+        `expected at least 3 intentional overflow-x-auto regions, found ${overflowXAutoCount}`
+      );
+      assert.ok(
+        /<nav[^>]*overflow-x-auto/.test(html),
+        'tab nav must keep its own horizontal scroll'
+      );
     });
 
     test('deriveWriterState reports UNAVAILABLE honestly when AO is not live, never asserting an active writer', () => {
-      const result = deriveWriterState({ sources: { ao: { status: 'unavailable' } }, sessions: [{ isWriter: true, isTerminated: false }] });
+      const result = deriveWriterState({
+        sources: { ao: { status: 'unavailable' } },
+        sessions: [{ isWriter: true, isTerminated: false }],
+      });
       assert.strictEqual(result.level, 'unavailable');
       assert.strictEqual(result.countLabel, 'UNAVAILABLE');
     });
@@ -787,18 +938,30 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const live = { status: 'live' };
       assert.strictEqual(deriveWriterState({ sources: { ao: live }, sessions: [] }).level, 'idle');
       assert.strictEqual(
-        deriveWriterState({ sources: { ao: live }, sessions: [{ isWriter: false }, { isWriter: true, isTerminated: false }] }).level,
+        deriveWriterState({
+          sources: { ao: live },
+          sessions: [{ isWriter: false }, { isWriter: true, isTerminated: false }],
+        }).level,
         'single'
       );
       assert.strictEqual(
         deriveWriterState({
           sources: { ao: live },
-          sessions: [{ isWriter: true, isTerminated: false }, { isWriter: true, isTerminated: false }]
+          sessions: [
+            { isWriter: true, isTerminated: false },
+            { isWriter: true, isTerminated: false },
+          ],
         }).level,
         'conflict'
       );
       // Terminated writer sessions must not count as currently active.
-      assert.strictEqual(deriveWriterState({ sources: { ao: live }, sessions: [{ isWriter: true, isTerminated: true }] }).level, 'idle');
+      assert.strictEqual(
+        deriveWriterState({
+          sources: { ao: live },
+          sessions: [{ isWriter: true, isTerminated: true }],
+        }).level,
+        'idle'
+      );
     });
 
     test('gate pipeline renders EVIDENCE_UNAVAILABLE as a clear, non-PASS label', () => {
@@ -814,12 +977,18 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     const repoRoot = path.resolve(__dirname, '../../../');
 
     test('parses the explicit `| Assigned author | `GEMINI` |` row from TASK-AI-15.md', () => {
-      const author = resolveAssignedAuthorFromWorkItem('docs/product-spec/work-items/TASK-AI-15.md', repoRoot);
+      const author = resolveAssignedAuthorFromWorkItem(
+        'docs/product-spec/work-items/TASK-AI-15.md',
+        repoRoot
+      );
       assert.strictEqual(author, 'GEMINI');
     });
 
     test('returns null (never a guess) for a missing Work Item file', () => {
-      const author = resolveAssignedAuthorFromWorkItem('docs/product-spec/work-items/DOES-NOT-EXIST-999.md', repoRoot);
+      const author = resolveAssignedAuthorFromWorkItem(
+        'docs/product-spec/work-items/DOES-NOT-EXIST-999.md',
+        repoRoot
+      );
       assert.strictEqual(author, null);
     });
 
@@ -831,23 +1000,42 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     test('rejects a missing/empty/non-string work_item_path or rootDir without throwing', () => {
       assert.strictEqual(resolveAssignedAuthorFromWorkItem('', repoRoot), null);
       assert.strictEqual(resolveAssignedAuthorFromWorkItem(null, repoRoot), null);
-      assert.strictEqual(resolveAssignedAuthorFromWorkItem('docs/product-spec/work-items/TASK-AI-15.md', null), null);
+      assert.strictEqual(
+        resolveAssignedAuthorFromWorkItem('docs/product-spec/work-items/TASK-AI-15.md', null),
+        null
+      );
     });
 
     test('deriveAuthor uses the Work Item document only when no explicit CSV assigned_author is present, and never infers from the ID', () => {
-      const item = { work_item_id: 'TASK-AI-15', work_item_path: 'docs/product-spec/work-items/TASK-AI-15.md' };
+      const item = {
+        work_item_id: 'TASK-AI-15',
+        work_item_path: 'docs/product-spec/work-items/TASK-AI-15.md',
+      };
       assert.strictEqual(deriveAuthor(item, repoRoot), 'GEMINI');
 
       // Explicit CSV assigned_author still wins over the document.
-      const overridden = { work_item_id: 'TASK-AI-15', work_item_path: 'docs/product-spec/work-items/TASK-AI-15.md', assigned_author: 'HUMAN' };
+      const overridden = {
+        work_item_id: 'TASK-AI-15',
+        work_item_path: 'docs/product-spec/work-items/TASK-AI-15.md',
+        assigned_author: 'HUMAN',
+      };
       assert.strictEqual(deriveAuthor(overridden, repoRoot), 'HUMAN');
 
       // No rootDir and no CSV field: honestly UNKNOWN, never an ID guess.
-      assert.strictEqual(deriveAuthor({ work_item_id: 'TASK-AI-15', work_item_path: 'docs/product-spec/work-items/TASK-AI-15.md' }), 'UNKNOWN');
+      assert.strictEqual(
+        deriveAuthor({
+          work_item_id: 'TASK-AI-15',
+          work_item_path: 'docs/product-spec/work-items/TASK-AI-15.md',
+        }),
+        'UNKNOWN'
+      );
     });
 
     test('loadRegister resolves TASK-AI-15 to GEMINI from the live register + work item doc', () => {
-      const csvPath = path.join(repoRoot, 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv');
+      const csvPath = path.join(
+        repoRoot,
+        'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+      );
       const res = loadRegister(csvPath, null, repoRoot);
       const item = res.data.items.find((it) => it.work_item_id === 'TASK-AI-15');
       assert.ok(item, 'TASK-AI-15 must be present in the register');
@@ -862,7 +1050,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
         '  X Failed to log in to github.com account octocat-user (keyring)',
         '  - Active account: true',
         '  - Token: gho_1234567890abcdefghijklmno',
-        '  - Token scopes: \'gist\', \'read:org\', \'repo\''
+        "  - Token scopes: 'gist', 'read:org', 'repo'",
       ].join('\n');
 
       const reason = safeGitHubErrorReason(raw, 'gh auth status failed');
@@ -874,19 +1062,438 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
     test('maps common gh failure modes to fixed, stable reasons', () => {
       assert.strictEqual(
-        safeGitHubErrorReason('You are not logged into any GitHub hosts. Run gh auth login to authenticate.'),
+        safeGitHubErrorReason(
+          'You are not logged into any GitHub hosts. Run gh auth login to authenticate.'
+        ),
         'GitHub CLI unauthenticated (run gh auth login)'
       );
       assert.strictEqual(
         safeGitHubErrorReason("'gh' is not recognized as an internal or external command"),
         'GitHub CLI (gh) not found or not on PATH'
       );
-      assert.strictEqual(safeGitHubErrorReason('API rate limit exceeded for user'), 'GitHub API rate limit reached');
+      assert.strictEqual(
+        safeGitHubErrorReason('API rate limit exceeded for user'),
+        'GitHub API rate limit reached'
+      );
     });
 
     test('falls back to a fixed safe reason for unrecognized or missing raw text', () => {
-      assert.strictEqual(safeGitHubErrorReason(undefined, 'gh auth status failed'), 'gh auth status failed');
-      assert.strictEqual(safeGitHubErrorReason('some unexpected internal detail'), 'GitHub CLI command failed');
+      assert.strictEqual(
+        safeGitHubErrorReason(undefined, 'gh auth status failed'),
+        'gh auth status failed'
+      );
+      assert.strictEqual(
+        safeGitHubErrorReason('some unexpected internal detail'),
+        'GitHub CLI command failed'
+      );
+    });
+  });
+
+  describe('Codex Review Findings Regression Suite (TASK-AI-15 Repair)', () => {
+    test('Finding 1: parseChecks treats CANCELLED, STARTUP_FAILURE, ACTION_REQUIRED as failed', () => {
+      const cancelled = parseChecks([
+        { name: 'test', status: 'COMPLETED', conclusion: 'CANCELLED' },
+      ]);
+      assert.strictEqual(cancelled.summary, 'FAILED');
+      assert.strictEqual(cancelled.failCount, 1);
+
+      const startup = parseChecks([
+        { name: 'build', status: 'COMPLETED', conclusion: 'STARTUP_FAILURE' },
+      ]);
+      assert.strictEqual(startup.summary, 'FAILED');
+      assert.strictEqual(startup.failCount, 1);
+
+      const action = parseChecks([
+        { name: 'gate', status: 'COMPLETED', conclusion: 'ACTION_REQUIRED' },
+      ]);
+      assert.strictEqual(action.summary, 'FAILED');
+      assert.strictEqual(action.failCount, 1);
+    });
+
+    test('Finding 1: parseReviews ties Codex verdict to exact commit SHA and flags older review as STALE_REVIEW', () => {
+      const oldReviews = [
+        {
+          author: { login: TRUSTED_CODEX_LOGIN },
+          state: 'APPROVED',
+          commitId: 'oldsha1234567890123456789012345678901234',
+          body: 'VERDICT: PASS',
+        },
+      ];
+      const parsedOld = parseReviews(oldReviews, [], 'newshaabcdef123456789012345678901234567890');
+      assert.strictEqual(parsedOld.trustedCodexVerdict, 'STALE_REVIEW');
+      assert.strictEqual(parsedOld.headShaMatches, false);
+
+      const matchingReviews = [
+        {
+          author: { login: TRUSTED_CODEX_LOGIN },
+          state: 'APPROVED',
+          commitId: 'matchingsha123456789012345678901234567890',
+          body: 'VERDICT: PASS',
+        },
+      ];
+      const parsedMatch = parseReviews(
+        matchingReviews,
+        [],
+        'matchingsha123456789012345678901234567890'
+      );
+      assert.strictEqual(parsedMatch.trustedCodexVerdict, 'PASS');
+      assert.strictEqual(parsedMatch.headShaMatches, true);
+    });
+
+    test('Finding 1: parseReviews never defaults unresolvedThreadsCount to 0', () => {
+      const reviews = [
+        { author: { login: TRUSTED_CODEX_LOGIN }, state: 'APPROVED', body: 'VERDICT: PASS' },
+      ];
+      const parsed = parseReviews(reviews, []);
+      assert.strictEqual(parsed.unresolvedThreadsCount, null);
+      assert.strictEqual(parsed.unresolvedThreadsStatus, 'UNVERIFIED');
+    });
+
+    test('Finding 1: deriveGatePipeline blocks merge gate when mergeability or unresolved threads fail preflight', () => {
+      const activeItem = { work_item_id: 'T9', status: 'READY_FOR_CODEX', branch: 'feat/t9' };
+
+      // Case A: mergeable is false (e.g. CONFLICTING)
+      const conflictingEvidence = {
+        available: true,
+        headMatches: true,
+        ciPassed: true,
+        codexPass: true,
+        mergeable: false,
+      };
+      const resA = deriveGatePipeline(activeItem, conflictingEvidence);
+      assert.strictEqual(resA.currentGate, 'PREFLIGHT_PENDING');
+      assert.strictEqual(resA.gates.find((g) => g.name === 'HUMAN_MERGE').status, 'PENDING');
+
+      // Case B: unresolved threads not verified
+      const unverifiedThreads = {
+        available: true,
+        headMatches: true,
+        ciPassed: true,
+        codexPass: true,
+        unresolvedThreadsVerified: false,
+      };
+      const resB = deriveGatePipeline(activeItem, unverifiedThreads);
+      assert.strictEqual(resB.currentGate, 'PREFLIGHT_PENDING');
+      assert.strictEqual(resB.gates.find((g) => g.name === 'HUMAN_MERGE').status, 'PENDING');
+
+      // Case C: all preflight passes
+      const preflightPassed = {
+        available: true,
+        headMatches: true,
+        ciPassed: true,
+        codexPass: true,
+        mergeable: true,
+        unresolvedThreadsVerified: true,
+        readyForMerge: true,
+      };
+      const resC = deriveGatePipeline(activeItem, preflightPassed);
+      assert.strictEqual(resC.currentGate, 'HUMAN_MERGE');
+      assert.strictEqual(resC.gates.find((g) => g.name === 'HUMAN_MERGE').status, 'READY');
+    });
+
+    test('Finding 2: AO role classification authorizes Claude on repair and keeps unknown feat branches read-only', () => {
+      // Claude on fix branch is author/repair writer
+      const claudeFix = classifySessionRole({
+        harness: 'claude-code',
+        branch: 'fix/task-ai-15-repair',
+        role: 'worker',
+      });
+      assert.strictEqual(claudeFix.category, 'REPAIR_AUTHOR');
+      assert.strictEqual(claudeFix.isWriter, true);
+
+      // Claude on idle/analysis session is read-only
+      const claudeIdle = classifySessionRole({
+        harness: 'claude-code',
+        branch: 'analysis/s01',
+        role: 'analyst',
+      });
+      assert.strictEqual(claudeIdle.category, 'ANALYST');
+      assert.strictEqual(claudeIdle.isWriter, false);
+
+      // Unknown harness on feat/ branch is NOT a writer
+      const unknownFeat = classifySessionRole({
+        harness: 'custom-tool',
+        branch: 'feat/dangerous-feature',
+        role: 'worker',
+      });
+      assert.strictEqual(unknownFeat.category, 'WORKER');
+      assert.strictEqual(unknownFeat.isWriter, false);
+
+      // DSH is CONSTRAINED_AUTHOR, not primary author
+      const dshSession = classifySessionRole({
+        harness: 'dsh',
+        branch: 'feat/fixtures',
+        role: 'worker',
+      });
+      assert.strictEqual(dshSession.category, 'CONSTRAINED_AUTHOR');
+      assert.strictEqual(dshSession.isWriter, true);
+    });
+
+    test('Finding 3: start-ai-dashboard.ps1 resolves repo root by traversing two directory levels', () => {
+      const fs = require('fs');
+      const scriptContent = fs.readFileSync(
+        path.resolve(__dirname, '../../../scripts/ai/start-ai-dashboard.ps1'),
+        'utf-8'
+      );
+      assert.ok(
+        scriptContent.includes('$repoRoot = Split-Path -Parent (Split-Path -Parent $scriptDir)'),
+        'start-ai-dashboard.ps1 must compute repo root by traversing two parent levels'
+      );
+      assert.strictEqual(scriptContent.includes('150'), false, 'must not hardcode 150 task count');
+    });
+
+    test('Finding 4: deriveOverallStatus evaluates freshness rather than raw collection status', () => {
+      const sourcesStale = {
+        register: { status: 'live', freshness: 'live' },
+        git: { status: 'live', freshness: 'stale' }, // collection says live, but age makes freshness stale
+        ao: { status: 'live', freshness: 'live' },
+        github: { status: 'live', freshness: 'live' },
+      };
+      assert.strictEqual(deriveOverallStatus(sourcesStale, []), 'stale');
+
+      const sourcesUnavailable = {
+        register: { status: 'live', freshness: 'live' },
+        git: { status: 'live', freshness: 'unavailable' },
+        ao: { status: 'live', freshness: 'live' },
+        github: { status: 'live', freshness: 'live' },
+      };
+      assert.strictEqual(deriveOverallStatus(sourcesUnavailable, []), 'partial');
+    });
+
+    test('Finding 4: aggregateCockpitState caches last-known state as stale on adapter failure (AI15-R01)', async () => {
+      resetRevisionForTest(1);
+      const mockHealth = (name, status) => ({
+        name,
+        status,
+        observedAt: new Date().toISOString(),
+        latencyMs: 5,
+        provenance: 'test',
+        impact: 'None',
+        error: null,
+      });
+
+      // Pass 1: Successful git observation
+      const state1 = await aggregateCockpitState({
+        mockGit: {
+          health: mockHealth('git', 'live'),
+          data: { currentBranch: 'feat/test-branch', headOid: 'sha1', recentCommits: [] },
+        },
+        mockAo: {
+          health: mockHealth('ao', 'live'),
+          data: { daemon: { ready: true, state: 'ready' }, sessions: [] },
+        },
+        mockGitHub: {
+          health: mockHealth('github', 'live'),
+          data: { authenticated: true, pullRequests: [] },
+        },
+        mockRegister: {
+          health: mockHealth('register', 'live'),
+          data: {
+            total: 10,
+            mergedCount: 5,
+            completionPercent: '50.0',
+            byStatus: {},
+            bySlice: {},
+            activeItem: null,
+            gatePipeline: { currentGate: 'IDLE', gates: [] },
+            items: [],
+          },
+        },
+      });
+      assert.strictEqual(state1.git.currentBranch, 'feat/test-branch');
+
+      // Pass 2: Git adapter query temporarily fails / unavailable
+      const state2 = await aggregateCockpitState({
+        mockGit: {
+          health: mockHealth('git', 'unavailable'),
+          data: { currentBranch: null, headOid: '', recentCommits: [] },
+        },
+        mockAo: {
+          health: mockHealth('ao', 'live'),
+          data: { daemon: { ready: true, state: 'ready' }, sessions: [] },
+        },
+        mockGitHub: {
+          health: mockHealth('github', 'live'),
+          data: { authenticated: true, pullRequests: [] },
+        },
+        mockRegister: {
+          health: mockHealth('register', 'live'),
+          data: {
+            total: 10,
+            mergedCount: 5,
+            completionPercent: '50.0',
+            byStatus: {},
+            bySlice: {},
+            activeItem: null,
+            gatePipeline: { currentGate: 'IDLE', gates: [] },
+            items: [],
+          },
+        },
+      });
+
+      // Data must NOT be blanked out; must retain last-known data labeled stale
+      assert.strictEqual(state2.sources.git.status, 'stale');
+      assert.strictEqual(state2.git.currentBranch, 'feat/test-branch');
+    });
+
+    test('Finding 5: SSE revision deduping and recovery transition activity', async () => {
+      resetRevisionForTest(1);
+      const mockHealth = (name, status) => ({
+        name,
+        status,
+        observedAt: new Date().toISOString(),
+        latencyMs: 5,
+        provenance: 'test',
+        impact: 'None',
+        error: null,
+      });
+
+      // Pass 1: Initial state (ao unavailable)
+      const state1 = await aggregateCockpitState({
+        mockGit: {
+          health: mockHealth('git', 'live'),
+          data: { currentBranch: 'main', headOid: 'sha1', recentCommits: [] },
+        },
+        mockAo: {
+          health: mockHealth('ao', 'unavailable'),
+          data: { daemon: { ready: false }, sessions: [] },
+        },
+        mockGitHub: {
+          health: mockHealth('github', 'live'),
+          data: { authenticated: true, pullRequests: [] },
+        },
+        mockRegister: {
+          health: mockHealth('register', 'live'),
+          data: {
+            total: 1,
+            mergedCount: 0,
+            completionPercent: '0.0',
+            byStatus: {},
+            bySlice: {},
+            activeItem: null,
+            gatePipeline: { currentGate: 'IDLE', gates: [] },
+            items: [],
+          },
+        },
+      });
+      const rev1 = state1.revision;
+
+      // Pass 2: AO recovers to live -> should generate recovery activity item
+      const state2 = await aggregateCockpitState({
+        mockGit: {
+          health: mockHealth('git', 'live'),
+          data: { currentBranch: 'main', headOid: 'sha1', recentCommits: [] },
+        },
+        mockAo: {
+          health: mockHealth('ao', 'live'),
+          data: { daemon: { ready: true, state: 'ready' }, sessions: [] },
+        },
+        mockGitHub: {
+          health: mockHealth('github', 'live'),
+          data: { authenticated: true, pullRequests: [] },
+        },
+        mockRegister: {
+          health: mockHealth('register', 'live'),
+          data: {
+            total: 1,
+            mergedCount: 0,
+            completionPercent: '0.0',
+            byStatus: {},
+            bySlice: {},
+            activeItem: null,
+            gatePipeline: { currentGate: 'IDLE', gates: [] },
+            items: [],
+          },
+        },
+      });
+
+      const recoveryAct = state2.activity.find((a) => a.type === 'SOURCE_RECOVERY');
+      assert.ok(recoveryAct, 'Expected a SOURCE_RECOVERY activity record upon AO recovery');
+      assert.ok(recoveryAct.title.includes('AO'));
+      assert.strictEqual(state2.revision > rev1, true);
+
+      // Pass 3: Identical state again -> revision must NOT increment
+      const state3 = await aggregateCockpitState({
+        mockGit: {
+          health: mockHealth('git', 'live'),
+          data: { currentBranch: 'main', headOid: 'sha1', recentCommits: [] },
+        },
+        mockAo: {
+          health: mockHealth('ao', 'live'),
+          data: { daemon: { ready: true, state: 'ready' }, sessions: [] },
+        },
+        mockGitHub: {
+          health: mockHealth('github', 'live'),
+          data: { authenticated: true, pullRequests: [] },
+        },
+        mockRegister: {
+          health: mockHealth('register', 'live'),
+          data: {
+            total: 1,
+            mergedCount: 0,
+            completionPercent: '0.0',
+            byStatus: {},
+            bySlice: {},
+            activeItem: null,
+            gatePipeline: { currentGate: 'IDLE', gates: [] },
+            items: [],
+          },
+        },
+      });
+      assert.strictEqual(state3.revision, state2.revision);
+    });
+
+    test('Finding 6: static dashboard snapshot reports overallStatus: partial when offline', () => {
+      const fs = require('fs');
+      const repoRoot = path.resolve(__dirname, '../../../');
+      const testOut = path.join(__dirname, 'test-static-dashboard.html');
+      const outPath = renderStaticDashboard(repoRoot, { port: 4444, outputPath: testOut });
+      assert.ok(fs.existsSync(outPath));
+
+      const content = fs.readFileSync(outPath, 'utf-8');
+      assert.ok(
+        content.includes('"overallStatus":"partial"'),
+        'Static snapshot must report partial overallStatus'
+      );
+      assert.ok(
+        content.includes('http://127.0.0.1:4444'),
+        'Static renderer must respect configured port'
+      );
+      try {
+        fs.unlinkSync(testOut);
+      } catch {}
+    });
+
+    test('Finding 8: index.html defines responsive-table CSS rules and data-label attributes', () => {
+      const fs = require('fs');
+      const html = fs.readFileSync(path.resolve(__dirname, '../index.html'), 'utf-8');
+      assert.ok(
+        html.includes('.responsive-table'),
+        'index.html must include .responsive-table class'
+      );
+      assert.ok(
+        html.includes('@media (max-width: 640px)'),
+        'index.html must include 640px breakpoint rule'
+      );
+      assert.ok(
+        html.includes('attr(data-label)'),
+        'index.html must use attr(data-label) for labeled stacked rows'
+      );
+
+      const clientCode = fs.readFileSync(path.resolve(__dirname, '../client.js'), 'utf-8');
+      assert.ok(
+        clientCode.includes('data-label="Session ID"'),
+        'client.js renderSessions must set data-label'
+      );
+      assert.ok(
+        clientCode.includes('data-label="Mã Task"'),
+        'client.js renderQueueTable must set data-label'
+      );
+      assert.strictEqual(
+        clientCode.includes("active.assigned_author || 'GEMINI'"),
+        false,
+        'client.js must not default missing author to GEMINI'
+      );
     });
   });
 });
@@ -895,7 +1502,7 @@ function makeRequest(host, port, path, method) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host, port, path, method }, (res) => {
       let body = '';
-      res.on('data', chunk => body += chunk.toString());
+      res.on('data', (chunk) => (body += chunk.toString()));
       res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body }));
     });
     req.on('error', reject);

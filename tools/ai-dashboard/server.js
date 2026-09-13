@@ -20,7 +20,7 @@ const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
-  '.ico': 'image/x-icon'
+  '.ico': 'image/x-icon',
 };
 
 const CONTENT_SECURITY_POLICY = [
@@ -31,7 +31,7 @@ const CONTENT_SECURITY_POLICY = [
   "connect-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",
-  "object-src 'none'"
+  "object-src 'none'",
 ].join('; ');
 
 // Applied to every response before any route-specific headers (AI15-R05).
@@ -46,10 +46,16 @@ function setBaselineSecurityHeaders(res) {
 // requests (AI15-R05) while still reporting accurate Content-Length.
 function sendJson(req, res, statusCode, payload, extraHeaders) {
   const body = JSON.stringify(payload);
-  res.writeHead(statusCode, Object.assign({
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(body)
-  }, extraHeaders || {}));
+  res.writeHead(
+    statusCode,
+    Object.assign(
+      {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': Buffer.byteLength(body),
+      },
+      extraHeaders || {}
+    )
+  );
   if (req.method === 'HEAD') {
     res.end();
     return;
@@ -90,17 +96,27 @@ function createDashboardServer(options = {}) {
   let heartbeatTimer = null;
   let isPolling = false;
   let nextClientSeq = 1; // Deterministic, monotonic per-connection identifier (never Math.random()).
+  let lastBroadcastRevision = 0;
 
   async function pollAndBroadcast() {
     if (isPolling) return;
     isPolling = true;
     try {
       const state = await aggregateCockpitState({ rootDir });
+      if (state.revision === lastBroadcastRevision && sseClients.size > 0) {
+        const allClientsCurrent = Array.from(sseClients).every(
+          (c) => c.lastSentRevision === state.revision
+        );
+        if (allClientsCurrent) return;
+      }
+      lastBroadcastRevision = state.revision;
       const payload = `id: ${state.revision}\nevent: state\ndata: ${JSON.stringify(state)}\n\n`;
 
       for (const client of sseClients) {
+        if (client.lastSentRevision === state.revision) continue;
         try {
           client.res.write(payload);
+          client.lastSentRevision = state.revision;
         } catch {
           sseClients.delete(client);
         }
@@ -163,9 +179,16 @@ function createDashboardServer(options = {}) {
 
     // 2. Strict read-only enforcement (AI15-R05, AI15-R09)
     if (req.method !== 'GET' && req.method !== 'HEAD') {
-      sendJson(req, res, 405, {
-        error: 'Method Not Allowed: Ship Dễ AI Cockpit is an observational read-only service (AI15-R09)'
-      }, { Allow: 'GET, HEAD, OPTIONS' });
+      sendJson(
+        req,
+        res,
+        405,
+        {
+          error:
+            'Method Not Allowed: Ship Dễ AI Cockpit is an observational read-only service (AI15-R09)',
+        },
+        { Allow: 'GET, HEAD, OPTIONS' }
+      );
       return;
     }
 
@@ -188,19 +211,19 @@ function createDashboardServer(options = {}) {
 
     // 3. API Endpoints
     if (pathname === '/api/health') {
-      const state = getLastAggregatedState() || await aggregateCockpitState({ rootDir });
+      const state = getLastAggregatedState() || (await aggregateCockpitState({ rootDir }));
       sendJson(req, res, 200, {
         status: state.overallStatus,
         schemaVersion: state.schemaVersion,
         revision: state.revision,
         observedAt: state.observedAt,
-        sources: state.sources
+        sources: state.sources,
       });
       return;
     }
 
     if (pathname === '/api/state') {
-      const state = getLastAggregatedState() || await aggregateCockpitState({ rootDir });
+      const state = getLastAggregatedState() || (await aggregateCockpitState({ rootDir }));
       sendJson(req, res, 200, state);
       return;
     }
@@ -210,8 +233,8 @@ function createDashboardServer(options = {}) {
       const sseHeaders = {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no'
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
       };
 
       if (req.method === 'HEAD') {
@@ -222,13 +245,29 @@ function createDashboardServer(options = {}) {
 
       res.writeHead(200, sseHeaders);
 
+      // Support Last-Event-ID header and ?lastEventId query parameter
+      const lastEventIdHeader = req.headers['last-event-id'];
+      let parsedUrlObj = null;
+      try {
+        parsedUrlObj = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+      } catch {}
+      const lastEventIdQuery = parsedUrlObj ? parsedUrlObj.searchParams.get('lastEventId') : null;
+      const rawLastEventId = lastEventIdHeader || lastEventIdQuery;
+      const clientLastEventId = rawLastEventId ? parseInt(rawLastEventId, 10) : null;
+
       // Deterministic, monotonic per-connection id — never Math.random().
-      const client = { id: nextClientSeq++, res };
+      const client = { id: nextClientSeq++, res, lastSentRevision: 0 };
       sseClients.add(client);
 
-      // Send initial state on connection
-      const state = getLastAggregatedState() || await aggregateCockpitState({ rootDir });
-      res.write(`id: ${state.revision}\nevent: state\ndata: ${JSON.stringify(state)}\n\n`);
+      // Send initial state on connection if client does not already have this revision
+      const state = getLastAggregatedState() || (await aggregateCockpitState({ rootDir }));
+      if (!clientLastEventId || clientLastEventId < state.revision) {
+        res.write(`id: ${state.revision}\nevent: state\ndata: ${JSON.stringify(state)}\n\n`);
+        client.lastSentRevision = state.revision;
+      } else {
+        client.lastSentRevision = clientLastEventId;
+        res.write(`: synced r${clientLastEventId}\n\n`);
+      }
 
       req.on('close', () => {
         sseClients.delete(client);
@@ -238,18 +277,18 @@ function createDashboardServer(options = {}) {
 
     // Backward-compatible endpoints without fabricated operational values
     if (pathname === '/api/tasks') {
-      const state = getLastAggregatedState() || await aggregateCockpitState({ rootDir });
+      const state = getLastAggregatedState() || (await aggregateCockpitState({ rootDir }));
       sendJson(req, res, 200, {
         total: state.workItems.total,
         mergedCount: state.workItems.mergedCount,
         completionPercent: state.workItems.completionPercent,
-        tasks: state.workItems.items
+        tasks: state.workItems.items,
       });
       return;
     }
 
     if (pathname === '/api/status') {
-      const state = getLastAggregatedState() || await aggregateCockpitState({ rootDir });
+      const state = getLastAggregatedState() || (await aggregateCockpitState({ rootDir }));
       sendJson(req, res, 200, {
         project: 'Ship Dễ Platform',
         version: state.schemaVersion,
@@ -257,15 +296,17 @@ function createDashboardServer(options = {}) {
         totalTasks: state.workItems.total,
         mergedTasks: state.workItems.mergedCount,
         completionPercent: state.workItems.completionPercent,
-        currentActiveTask: state.workItems.activeItem ? state.workItems.activeItem.work_item_id : 'NONE',
+        currentActiveTask: state.workItems.activeItem
+          ? state.workItems.activeItem.work_item_id
+          : 'NONE',
         overallStatus: state.overallStatus,
-        activeSessions: state.sessions.length
+        activeSessions: state.sessions.length,
       });
       return;
     }
 
     if (pathname === '/api/agents') {
-      const state = getLastAggregatedState() || await aggregateCockpitState({ rootDir });
+      const state = getLastAggregatedState() || (await aggregateCockpitState({ rootDir }));
       sendJson(req, res, 200, state.sessions);
       return;
     }
@@ -308,7 +349,9 @@ function createDashboardServer(options = {}) {
     if (pollIntervalTimer) clearInterval(pollIntervalTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     for (const client of sseClients) {
-      try { client.res.end(); } catch {}
+      try {
+        client.res.end();
+      } catch {}
     }
     sseClients.clear();
     return originalClose(cb);
@@ -338,5 +381,5 @@ module.exports = {
   createDashboardServer,
   isPathTraversal,
   DEFAULT_PORT,
-  HOST
+  HOST,
 };

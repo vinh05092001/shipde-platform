@@ -14,13 +14,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Split-Path -Parent $scriptDir
+$repoRoot = Split-Path -Parent (Split-Path -Parent $scriptDir)
 Set-Location $repoRoot
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "🚀 Đang khởi động Ship Dễ AI Developer Cockpit..." -ForegroundColor Green
 Write-Host "📍 Cổng lắng nghe (Loopback): http://127.0.0.1:$Port" -ForegroundColor Yellow
-Write-Host "📦 Giám sát 150 đầu mục công việc & các mô hình AI" -ForegroundColor Cyan
+Write-Host "📦 Giám sát toàn bộ đầu mục công việc & các mô hình AI" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 1. Kiểm tra môi trường Node.js

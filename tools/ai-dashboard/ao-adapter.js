@@ -15,7 +15,8 @@ const MAX_BUFFER = 1024 * 1024;
 
 // Canonical Windows desktop install location (scripts/ai/common.ps1
 // Resolve-ShipDeAoExecutable uses the same path as its documented fallback).
-const CANONICAL_AO_EXECUTABLE_WINDOWS = 'C:\\Program Files\\agent-orchestrator\\resources\\daemon\\ao.exe';
+const CANONICAL_AO_EXECUTABLE_WINDOWS =
+  'C:\\Program Files\\agent-orchestrator\\resources\\daemon\\ao.exe';
 
 let cachedAoExecutable = null;
 
@@ -73,23 +74,28 @@ function resetAoExecutableCacheForTest() {
 
 function runAoCommand(args) {
   return new Promise((resolve) => {
-    execFile(resolveAoExecutable(), args, { timeout: CMD_TIMEOUT, maxBuffer: MAX_BUFFER, windowsHide: true }, (error, stdout, stderr) => {
-      if (error) {
-        resolve({
-          success: false,
-          exitCode: error.code || 1,
-          stdout: stdout ? stdout.trim() : '',
-          stderr: stderr ? stderr.trim() : error.message
-        });
-      } else {
-        resolve({
-          success: true,
-          exitCode: 0,
-          stdout: stdout ? stdout.trim() : '',
-          stderr: ''
-        });
+    execFile(
+      resolveAoExecutable(),
+      args,
+      { timeout: CMD_TIMEOUT, maxBuffer: MAX_BUFFER, windowsHide: true },
+      (error, stdout, stderr) => {
+        if (error) {
+          resolve({
+            success: false,
+            exitCode: error.code || 1,
+            stdout: stdout ? stdout.trim() : '',
+            stderr: stderr ? stderr.trim() : error.message,
+          });
+        } else {
+          resolve({
+            success: true,
+            exitCode: 0,
+            stdout: stdout ? stdout.trim() : '',
+            stderr: '',
+          });
+        }
       }
-    });
+    );
   });
 }
 
@@ -99,50 +105,76 @@ function classifySessionRole(session) {
   const id = (session.id || '').toLowerCase();
   const role = (session.role || '').toLowerCase();
 
+  // 1. Deterministic supervisor
   if (role === 'orchestrator' || id.includes('orchestrator') || branch.includes('orchestrator')) {
     return {
       category: 'SUPERVISOR',
       displayRole: 'Deterministic AO Supervisor',
-      isWriter: false
+      isWriter: false,
     };
   }
 
-  if (branch.includes('codex') || harness.includes('codex') || id.includes('codex')) {
+  // 2. Independent reviewer
+  if (
+    branch.includes('codex') ||
+    harness.includes('codex') ||
+    id.includes('codex') ||
+    role === 'reviewer'
+  ) {
     return {
       category: 'REVIEWER',
       displayRole: 'Independent Codex Reviewer',
-      isWriter: false
+      isWriter: false,
     };
   }
 
+  // 3. Claude Code: analyst & reviewer fallback; authorized secondary author / code repair when assigned
   if (harness.includes('claude') || branch.includes('claude') || id.includes('claude')) {
+    const isAssignedRepair =
+      role.includes('repair') ||
+      role.includes('author') ||
+      id.includes('repair') ||
+      id.includes('author') ||
+      branch.startsWith('fix/') ||
+      branch.startsWith('feat/');
+
+    if (isAssignedRepair) {
+      return {
+        category: 'REPAIR_AUTHOR',
+        displayRole: 'Claude Code Repair / Secondary Author',
+        isWriter: true,
+      };
+    }
     return {
       category: 'ANALYST',
-      displayRole: 'Claude Analyst & Repair Fallback',
-      isWriter: false // Secondary author / repair only when assigned
+      displayRole: 'Claude Analyst & Reviewer Fallback',
+      isWriter: false,
     };
   }
 
-  if (harness === 'agy' || harness === 'gemini' || branch.startsWith('feat/') || id.includes('gemini')) {
+  // 4. Gemini / AGY: Primary implementation author
+  if (harness === 'agy' || harness === 'gemini' || id.includes('gemini')) {
     return {
       category: 'AUTHOR',
       displayRole: 'Primary Implementation Author',
-      isWriter: true
+      isWriter: true,
     };
   }
 
-  if (harness === 'dsh' || branch.includes('dsh')) {
+  // 5. 9Router / DSH: Constrained author (deterministic, low-risk only per AGENTS.md)
+  if (harness === 'dsh' || branch.includes('dsh') || id.includes('dsh')) {
     return {
       category: 'CONSTRAINED_AUTHOR',
       displayRole: '9Router Constrained Author',
-      isWriter: true
+      isWriter: true,
     };
   }
 
+  // 6. Unknown / Unrecognized worker — read-only, even if branch starts with feat/
   return {
     category: 'WORKER',
-    displayRole: 'Autonomous Worker',
-    isWriter: false
+    displayRole: 'Autonomous Worker (Read-Only)',
+    isWriter: false,
   };
 }
 
@@ -176,13 +208,13 @@ function parseAoStatus(statusJson) {
       port: data.port || null,
       uptime: data.uptime || null,
       health: data.health || 'ok',
-      dataDir: data.dataDir ? redactPath(data.dataDir) : null
+      dataDir: data.dataDir ? redactPath(data.dataDir) : null,
     };
   } catch (err) {
     return {
       ready: false,
       state: 'malformed_json',
-      error: err.message
+      error: err.message,
     };
   }
 }
@@ -190,7 +222,11 @@ function parseAoStatus(statusJson) {
 function parseAoSessions(sessionsJson) {
   try {
     const parsed = JSON.parse(sessionsJson);
-    const rawSessions = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.data) ? parsed.data : []);
+    const rawSessions = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed.data)
+        ? parsed.data
+        : [];
 
     return rawSessions.map((s) => {
       const roleInfo = classifySessionRole(s);
@@ -212,7 +248,7 @@ function parseAoSessions(sessionsJson) {
         lastActivityAt: s.lastActivityAt || null,
         createdAt: s.createdAt || null,
         updatedAt: s.updatedAt || null,
-        freshness
+        freshness,
       };
     });
   } catch (err) {
@@ -226,7 +262,7 @@ async function collectAoState(projectName = 'shipde-platform') {
   try {
     const [statusRes, sessionsRes] = await Promise.all([
       runAoCommand(['status', '--json']),
-      runAoCommand(['session', 'ls', '--project', projectName, '--json'])
+      runAoCommand(['session', 'ls', '--project', projectName, '--json']),
     ]);
 
     if (!statusRes.success) {
@@ -238,12 +274,12 @@ async function collectAoState(projectName = 'shipde-platform') {
           latencyMs: Date.now() - startTime,
           provenance: 'ao status --json',
           impact: 'Agent Orchestrator daemon is not running or unreachable',
-          error: redactSensitive(statusRes.stderr || 'AO daemon not reachable')
+          error: redactSensitive(statusRes.stderr || 'AO daemon not reachable'),
         },
         data: {
           daemon: { ready: false, state: 'stopped' },
-          sessions: []
-        }
+          sessions: [],
+        },
       };
     }
 
@@ -257,24 +293,33 @@ async function collectAoState(projectName = 'shipde-platform') {
           latencyMs: Date.now() - startTime,
           provenance: 'ao status --json',
           impact: 'Agent Orchestrator reported unready state',
-          error: daemon.error || `Daemon state: ${daemon.state}`
+          error: daemon.error || `Daemon state: ${daemon.state}`,
         },
         data: {
           daemon,
-          sessions: []
-        }
+          sessions: [],
+        },
       };
     }
 
     let sessions = [];
     let sessionsHealthNote = 'None — AO daemon and sessions healthy';
     let sourceStatus = 'live';
+    let sessionError = null;
 
     if (sessionsRes.success) {
-      sessions = parseAoSessions(sessionsRes.stdout);
+      try {
+        JSON.parse(sessionsRes.stdout);
+        sessions = parseAoSessions(sessionsRes.stdout);
+      } catch (jsonErr) {
+        sourceStatus = 'partial';
+        sessionsHealthNote = `Daemon ready but session output returned malformed JSON: ${redactSensitive(jsonErr.message)}`;
+        sessionError = sessionsHealthNote;
+      }
     } else {
       sourceStatus = 'partial';
       sessionsHealthNote = `Daemon ready but session query returned error: ${redactSensitive(sessionsRes.stderr)}`;
+      sessionError = redactSensitive(sessionsRes.stderr);
     }
 
     return {
@@ -285,12 +330,12 @@ async function collectAoState(projectName = 'shipde-platform') {
         latencyMs: Date.now() - startTime,
         provenance: `ao status / session ls --project ${projectName}`,
         impact: sessionsHealthNote,
-        error: sessionsRes.success ? null : redactSensitive(sessionsRes.stderr)
+        error: sessionError,
       },
       data: {
         daemon,
-        sessions
-      }
+        sessions,
+      },
     };
   } catch (err) {
     return {
@@ -301,12 +346,12 @@ async function collectAoState(projectName = 'shipde-platform') {
         latencyMs: Date.now() - startTime,
         provenance: 'ao CLI',
         impact: 'Agent Orchestrator query failed with exception',
-        error: redactSensitive(err.message)
+        error: redactSensitive(err.message),
       },
       data: {
         daemon: { ready: false, state: 'error' },
-        sessions: []
-      }
+        sessions: [],
+      },
     };
   }
 }
@@ -319,5 +364,5 @@ module.exports = {
   parseAoSessions,
   collectAoState,
   resolveAoExecutable,
-  resetAoExecutableCacheForTest
+  resetAoExecutableCacheForTest,
 };

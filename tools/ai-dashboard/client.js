@@ -9,6 +9,7 @@ let state = null;
 let eventSource = null;
 let sseReconnectTimeout = null;
 let reconnectAttempts = 0;
+let lastReceivedRevision = 0;
 let activeTab = 'gates';
 let searchFilter = '';
 let sliceFilter = 'ALL';
@@ -77,7 +78,8 @@ function initRealtime() {
 
   updateConnectionBadge('reconnecting', 'Đang kết nối SSE...');
 
-  const sseUrl = '/api/events';
+  const sseUrl =
+    lastReceivedRevision > 0 ? `/api/events?lastEventId=${lastReceivedRevision}` : '/api/events';
   try {
     eventSource = new EventSource(sseUrl);
 
@@ -85,6 +87,10 @@ function initRealtime() {
       reconnectAttempts = 0;
       try {
         const newState = JSON.parse(event.data);
+        if (newState.revision && newState.revision <= lastReceivedRevision) {
+          return;
+        }
+        lastReceivedRevision = newState.revision || lastReceivedRevision + 1;
         applyState(newState);
         updateConnectionBadge('live', `● LIVE (SSE r${newState.revision || 1})`);
       } catch (err) {
@@ -104,7 +110,10 @@ function initRealtime() {
       }
       reconnectAttempts++;
       const backoffMs = Math.min(10000, 1000 * Math.pow(1.5, reconnectAttempts));
-      updateConnectionBadge('reconnecting', `⚠ Mất kết nối. Thử lại sau ${Math.round(backoffMs / 1000)}s...`);
+      updateConnectionBadge(
+        'reconnecting',
+        `⚠ Mất kết nối. Thử lại sau ${Math.round(backoffMs / 1000)}s...`
+      );
 
       if (sseReconnectTimeout) clearTimeout(sseReconnectTimeout);
       sseReconnectTimeout = setTimeout(() => {
@@ -134,12 +143,18 @@ function updateConnectionBadge(type, label) {
   const badge = document.getElementById('connectionBadge');
   if (!badge) return;
 
-  badge.className = 'text-[11px] font-mono px-2.5 py-1 rounded-lg border font-bold flex items-center gap-1.5 transition';
+  badge.className =
+    'text-[11px] font-mono px-2.5 py-1 rounded-lg border font-bold flex items-center gap-1.5 transition';
 
   if (type === 'live') {
     badge.classList.add('bg-emerald-500/20', 'text-emerald-400', 'border-emerald-500/40');
   } else if (type === 'reconnecting') {
-    badge.classList.add('bg-amber-500/20', 'text-amber-400', 'border-amber-500/40', 'animate-pulse');
+    badge.classList.add(
+      'bg-amber-500/20',
+      'text-amber-400',
+      'border-amber-500/40',
+      'animate-pulse'
+    );
   } else {
     badge.classList.add('bg-slate-800', 'text-slate-400', 'border-slate-700');
   }
@@ -154,7 +169,8 @@ function applyState(newState) {
   // Save current active element ID and cursor position to preserve focus
   const activeEl = document.activeElement;
   const activeId = activeEl ? activeEl.id : null;
-  const selStart = activeEl && activeEl.selectionStart !== undefined ? activeEl.selectionStart : null;
+  const selStart =
+    activeEl && activeEl.selectionStart !== undefined ? activeEl.selectionStart : null;
   const selEnd = activeEl && activeEl.selectionEnd !== undefined ? activeEl.selectionEnd : null;
 
   renderHUD();
@@ -203,7 +219,7 @@ function deriveWriterState(currentState) {
   return {
     level: 'conflict',
     label: `⚠ ${activeWriters.length} WRITER (VI PHẠM)`,
-    countLabel: `⚠ ${activeWriters.length} Writer`
+    countLabel: `⚠ ${activeWriters.length} Writer`,
   };
 }
 
@@ -211,14 +227,14 @@ const WRITER_STATE_DOT_CLASS = {
   unavailable: 'bg-slate-500',
   idle: 'bg-slate-500',
   single: 'bg-emerald-400',
-  conflict: 'bg-rose-500 animate-pulse'
+  conflict: 'bg-rose-500 animate-pulse',
 };
 
 const WRITER_STATE_TEXT_CLASS = {
   unavailable: 'text-slate-400',
   idle: 'text-slate-400',
   single: 'text-emerald-400',
-  conflict: 'text-rose-400'
+  conflict: 'text-rose-400',
 };
 
 function renderWriterState() {
@@ -300,7 +316,8 @@ function renderHUD() {
   const overallBanner = document.getElementById('overallStatusBanner');
   if (overallBanner) {
     if (state.overallStatus === 'partial') {
-      overallBanner.className = 'p-3 rounded-xl bg-amber-950/40 border border-amber-700/60 text-amber-200 text-xs flex items-center justify-between gap-3';
+      overallBanner.className =
+        'p-3 rounded-xl bg-amber-950/40 border border-amber-700/60 text-amber-200 text-xs flex items-center justify-between gap-3';
       overallBanner.innerHTML = `
         <div class="flex items-center gap-2">
           <span class="text-amber-400 font-bold">[⚠ HOẠT ĐỘNG MỘT PHẦN]</span>
@@ -310,7 +327,8 @@ function renderHUD() {
       `;
       overallBanner.classList.remove('hidden');
     } else if (state.overallStatus === 'conflict') {
-      overallBanner.className = 'p-3 rounded-xl bg-rose-950/40 border border-rose-700/60 text-rose-200 text-xs flex items-center justify-between gap-3';
+      overallBanner.className =
+        'p-3 rounded-xl bg-rose-950/40 border border-rose-700/60 text-rose-200 text-xs flex items-center justify-between gap-3';
       overallBanner.innerHTML = `
         <div class="flex items-center gap-2">
           <span class="text-rose-400 font-bold">[⚡ XUNG ĐỘT TRẠNG THÁI]</span>
@@ -320,7 +338,8 @@ function renderHUD() {
       `;
       overallBanner.classList.remove('hidden');
     } else if (state.overallStatus === 'stale') {
-      overallBanner.className = 'p-3 rounded-xl bg-yellow-950/40 border border-yellow-700/60 text-yellow-200 text-xs flex items-center gap-2';
+      overallBanner.className =
+        'p-3 rounded-xl bg-yellow-950/40 border border-yellow-700/60 text-yellow-200 text-xs flex items-center gap-2';
       overallBanner.innerHTML = `
         <span class="text-yellow-400 font-bold">[⌛ DỮ LIỆU CŨ]</span>
         <span>Dữ liệu quan sát vượt quá ngưỡng thời gian. Đang chờ cập nhật mới...</span>
@@ -347,7 +366,7 @@ function formatSourceAge(ageMs) {
 const FRESHNESS_BADGE = {
   live: { cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30', text: '● LIVE' },
   stale: { cls: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30', text: '◐ STALE' },
-  unavailable: { cls: 'bg-rose-500/10 text-rose-400 border-rose-500/30', text: '○ UNAVAILABLE' }
+  unavailable: { cls: 'bg-rose-500/10 text-rose-400 border-rose-500/30', text: '○ UNAVAILABLE' },
 };
 
 function renderSourceHealth() {
@@ -358,38 +377,39 @@ function renderSourceHealth() {
     { key: 'register', label: '1. Register CSV', icon: '📋' },
     { key: 'git', label: '2. Git & Worktrees', icon: '🌿' },
     { key: 'ao', label: '3. Agent Orchestrator', icon: '🤖' },
-    { key: 'github', label: '4. GitHub PR / CI', icon: '🐙' }
+    { key: 'github', label: '4. GitHub PR / CI', icon: '🐙' },
   ];
 
-  container.innerHTML = sources.map((s) => {
-    const src = state.sources[s.key] || { status: 'unavailable', impact: 'Chưa có dữ liệu' };
-    const status = src.status || 'unavailable';
+  container.innerHTML = sources
+    .map((s) => {
+      const src = state.sources[s.key] || { status: 'unavailable', impact: 'Chưa có dữ liệu' };
+      const status = src.status || 'unavailable';
 
-    let badgeClass = 'bg-slate-800 text-slate-400 border-slate-700';
-    let statusText = '[? UNKNOWN]';
+      let badgeClass = 'bg-slate-800 text-slate-400 border-slate-700';
+      let statusText = '[? UNKNOWN]';
 
-    if (status === 'live') {
-      badgeClass = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30';
-      statusText = '[✓ LIVE]';
-    } else if (status === 'stale') {
-      badgeClass = 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30';
-      statusText = '[⚠ STALE]';
-    } else if (status === 'partial') {
-      badgeClass = 'bg-amber-500/10 text-amber-400 border-amber-500/30';
-      statusText = '[! PARTIAL]';
-    } else if (status === 'unavailable') {
-      badgeClass = 'bg-rose-500/10 text-rose-400 border-rose-500/30';
-      statusText = '[✕ UNAVAILABLE]';
-    }
+      if (status === 'live') {
+        badgeClass = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30';
+        statusText = '[✓ LIVE]';
+      } else if (status === 'stale') {
+        badgeClass = 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30';
+        statusText = '[⚠ STALE]';
+      } else if (status === 'partial') {
+        badgeClass = 'bg-amber-500/10 text-amber-400 border-amber-500/30';
+        statusText = '[! PARTIAL]';
+      } else if (status === 'unavailable') {
+        badgeClass = 'bg-rose-500/10 text-rose-400 border-rose-500/30';
+        statusText = '[✕ UNAVAILABLE]';
+      }
 
-    // Per-source freshness — a real, derived age/state (AI15-R01), distinct
-    // from the collection status badge above: a source can report a live
-    // collection status yet be serving an older observation.
-    const freshness = src.freshness || 'unavailable';
-    const freshnessBadge = FRESHNESS_BADGE[freshness] || FRESHNESS_BADGE.unavailable;
-    const ageLabel = formatSourceAge(src.ageMs);
+      // Per-source freshness — a real, derived age/state (AI15-R01), distinct
+      // from the collection status badge above: a source can report a live
+      // collection status yet be serving an older observation.
+      const freshness = src.freshness || 'unavailable';
+      const freshnessBadge = FRESHNESS_BADGE[freshness] || FRESHNESS_BADGE.unavailable;
+      const ageLabel = formatSourceAge(src.ageMs);
 
-    return `
+      return `
       <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800 flex flex-col justify-between hover:border-slate-700 transition">
         <div class="flex items-center justify-between text-xs mb-1">
           <span class="font-bold text-slate-200 flex items-center gap-1.5">${s.icon} ${s.label}</span>
@@ -402,7 +422,8 @@ function renderSourceHealth() {
         </div>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
 function renderActiveWorkItem() {
@@ -421,16 +442,23 @@ function renderActiveWorkItem() {
     return;
   }
 
-  const assignedAuthor = active.assigned_author || 'GEMINI';
-  let authorColor = 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30';
-  if (assignedAuthor === 'CLAUDE') authorColor = 'bg-amber-500/20 text-amber-400 border-amber-500/30';
+  const assignedAuthor = active.assigned_author || 'UNASSIGNED';
+  let authorColor = 'bg-slate-800 text-slate-400 border-slate-700';
+  if (assignedAuthor === 'GEMINI')
+    authorColor = 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30';
+  if (assignedAuthor === 'CLAUDE')
+    authorColor = 'bg-amber-500/20 text-amber-400 border-amber-500/30';
   if (assignedAuthor === '9ROUTER') authorColor = 'bg-teal-500/20 text-teal-400 border-teal-500/30';
 
   let statusBadgeColor = 'bg-slate-800 text-slate-300 border-slate-700';
-  if (active.status === 'READY_FOR_AUTHOR') statusBadgeColor = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-  if (active.status === 'IN_PROGRESS') statusBadgeColor = 'bg-amber-500/20 text-amber-400 border-amber-500/30 animate-pulse';
-  if (active.status === 'READY_FOR_CODEX') statusBadgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
-  if (active.status === 'MERGED') statusBadgeColor = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+  if (active.status === 'READY_FOR_AUTHOR')
+    statusBadgeColor = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+  if (active.status === 'IN_PROGRESS')
+    statusBadgeColor = 'bg-amber-500/20 text-amber-400 border-amber-500/30 animate-pulse';
+  if (active.status === 'READY_FOR_CODEX')
+    statusBadgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+  if (active.status === 'MERGED')
+    statusBadgeColor = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
 
   container.innerHTML = `
     <div class="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 p-6 rounded-2xl border border-slate-800 shadow-xl space-y-4">
@@ -493,7 +521,7 @@ const GATE_STAGE_LABELS = {
   HUMAN_MERGE: 'HUMAN_MERGE',
   MERGED: 'MERGED',
   BLOCKED: 'BLOCKED',
-  EVIDENCE_UNAVAILABLE: 'CHỜ BẰNG CHỨNG GITHUB (UNAVAILABLE)'
+  EVIDENCE_UNAVAILABLE: 'CHỜ BẰNG CHỨNG GITHUB (UNAVAILABLE)',
 };
 
 function renderGatePipeline() {
@@ -505,7 +533,8 @@ function renderGatePipeline() {
 
   const currentGateKey = pipeline.currentGate || 'IDLE';
   const currentGateLabel = GATE_STAGE_LABELS[currentGateKey] || currentGateKey;
-  const currentGateColor = currentGateKey === 'EVIDENCE_UNAVAILABLE' ? 'text-amber-400' : 'text-brand';
+  const currentGateColor =
+    currentGateKey === 'EVIDENCE_UNAVAILABLE' ? 'text-amber-400' : 'text-brand';
 
   container.innerHTML = `
     <div class="bg-slate-900/90 p-6 rounded-2xl border border-slate-800 shadow-xl space-y-4">
@@ -519,38 +548,39 @@ function renderGatePipeline() {
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
-        ${pipeline.gates.map((g, idx) => {
-          let badge = 'bg-slate-800 text-slate-400 border-slate-700';
-          let icon = '○';
-          let statusText = 'PENDING';
+        ${pipeline.gates
+          .map((g, idx) => {
+            let badge = 'bg-slate-800 text-slate-400 border-slate-700';
+            let icon = '○';
+            let statusText = 'PENDING';
 
-          if (g.status === 'PASSED') {
-            badge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
-            icon = '✓';
-            statusText = 'PASSED';
-          } else if (g.status === 'IN_PROGRESS') {
-            badge = 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse';
-            icon = '⚡';
-            statusText = 'RUNNING';
-          } else if (g.status === 'READY') {
-            badge = 'bg-blue-500/20 text-blue-400 border-blue-500/40';
-            icon = '▶';
-            statusText = 'READY';
-          } else if (g.status === 'FAILED') {
-            badge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
-            icon = '✕';
-            statusText = 'FAILED';
-          } else if (g.status === 'BLOCKED') {
-            badge = 'bg-slate-800 text-rose-400 border-rose-900';
-            icon = '⛔';
-            statusText = 'BLOCKED';
-          } else if (g.status === 'UNAVAILABLE') {
-            badge = 'bg-slate-800 text-amber-400 border-amber-900/60';
-            icon = '⊘';
-            statusText = 'UNAVAILABLE';
-          }
+            if (g.status === 'PASSED') {
+              badge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
+              icon = '✓';
+              statusText = 'PASSED';
+            } else if (g.status === 'IN_PROGRESS') {
+              badge = 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse';
+              icon = '⚡';
+              statusText = 'RUNNING';
+            } else if (g.status === 'READY') {
+              badge = 'bg-blue-500/20 text-blue-400 border-blue-500/40';
+              icon = '▶';
+              statusText = 'READY';
+            } else if (g.status === 'FAILED') {
+              badge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
+              icon = '✕';
+              statusText = 'FAILED';
+            } else if (g.status === 'BLOCKED') {
+              badge = 'bg-slate-800 text-rose-400 border-rose-900';
+              icon = '⛔';
+              statusText = 'BLOCKED';
+            } else if (g.status === 'UNAVAILABLE') {
+              badge = 'bg-slate-800 text-amber-400 border-amber-900/60';
+              icon = '⊘';
+              statusText = 'UNAVAILABLE';
+            }
 
-          return `
+            return `
             <div class="bg-slate-800/50 p-3 rounded-xl border border-slate-700/60 flex flex-col justify-between space-y-2">
               <div class="text-[10px] text-slate-400 font-mono font-bold">${escapeHtml(g.label)}</div>
               <div class="flex items-center justify-between">
@@ -559,7 +589,8 @@ function renderGatePipeline() {
               </div>
             </div>
           `;
-        }).join('')}
+          })
+          .join('')}
       </div>
 
       ${renderPrEvidenceContent()}
@@ -593,13 +624,17 @@ function renderPrEvidenceContent() {
   const reviews = primaryPr.reviews || { reviewList: [] };
 
   let checksBadge = 'bg-slate-800 text-slate-300 border-slate-700';
-  if (checks.summary === 'PASSED') checksBadge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
+  if (checks.summary === 'PASSED')
+    checksBadge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
   if (checks.summary === 'FAILED') checksBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
-  if (checks.summary === 'PENDING') checksBadge = 'bg-amber-500/20 text-amber-400 border-amber-500/40';
+  if (checks.summary === 'PENDING')
+    checksBadge = 'bg-amber-500/20 text-amber-400 border-amber-500/40';
 
   let codexBadge = 'bg-slate-800 text-slate-300 border-slate-700';
-  if (reviews.trustedCodexVerdict === 'PASS') codexBadge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
-  if (reviews.trustedCodexVerdict === 'CHANGES_REQUIRED') codexBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
+  if (reviews.trustedCodexVerdict === 'PASS')
+    codexBadge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
+  if (reviews.trustedCodexVerdict === 'CHANGES_REQUIRED')
+    codexBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
 
   return `
     <div class="mt-4 pt-4 border-t border-slate-800 space-y-3">
@@ -622,24 +657,37 @@ function renderPrEvidenceContent() {
         </div>
       </div>
 
-      ${checks.list && checks.list.length > 0 ? `
+      ${
+        checks.list && checks.list.length > 0
+          ? `
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs font-mono">
-          ${checks.list.map(c => {
-            let icon = '○';
-            let color = 'text-slate-400';
-            if (c.conclusion === 'SUCCESS') { icon = '✓'; color = 'text-emerald-400'; }
-            else if (c.conclusion === 'FAILURE') { icon = '✕'; color = 'text-rose-400'; }
-            else if (c.status !== 'COMPLETED') { icon = '⚡'; color = 'text-amber-400'; }
+          ${checks.list
+            .map((c) => {
+              let icon = '○';
+              let color = 'text-slate-400';
+              if (c.conclusion === 'SUCCESS') {
+                icon = '✓';
+                color = 'text-emerald-400';
+              } else if (c.conclusion === 'FAILURE') {
+                icon = '✕';
+                color = 'text-rose-400';
+              } else if (c.status !== 'COMPLETED') {
+                icon = '⚡';
+                color = 'text-amber-400';
+              }
 
-            return `
+              return `
               <div class="bg-slate-800/40 px-3 py-2 rounded-lg border border-slate-700/40 flex items-center justify-between">
                 <span class="text-slate-200 truncate" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</span>
                 <span class="font-bold ${color} ml-2">${icon} ${escapeHtml(c.conclusion)}</span>
               </div>
             `;
-          }).join('')}
+            })
+            .join('')}
         </div>
-      ` : ''}
+      `
+          : ''
+      }
     </div>
   `;
 }
@@ -662,13 +710,17 @@ function renderConflicts() {
         <span>⚡ Phát hiện ${conflicts.length} xung đột trạng thái giữa các nguồn</span>
       </div>
       <div class="space-y-2">
-        ${conflicts.map(c => `
+        ${conflicts
+          .map(
+            (c) => `
           <div class="bg-slate-900/80 p-3 rounded-lg border border-rose-900/50 text-xs space-y-1">
             <div class="font-bold text-rose-300">${escapeHtml(c.title)}</div>
             <div class="text-slate-300">${escapeHtml(c.description)}</div>
             <div class="text-[11px] text-amber-300/80 font-mono">Tác động: ${escapeHtml(c.impact)}</div>
           </div>
-        `).join('')}
+        `
+          )
+          .join('')}
       </div>
     </div>
   `;
@@ -690,24 +742,26 @@ function renderSessions() {
     return;
   }
 
-  container.innerHTML = sessions.map(s => {
-    const isWriter = s.isWriter;
-    const writerBadge = isWriter
-      ? '<span class="px-2 py-0.5 rounded bg-brand/20 text-brand border border-brand/30 text-[10px] font-bold">1 WRITER ACTIVE</span>'
-      : '<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 text-[10px]">READ ONLY</span>';
+  container.innerHTML = sessions
+    .map((s) => {
+      const isWriter = s.isWriter;
+      const writerBadge = isWriter
+        ? '<span class="px-2 py-0.5 rounded bg-brand/20 text-brand border border-brand/30 text-[10px] font-bold">1 WRITER ACTIVE</span>'
+        : '<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 text-[10px]">READ ONLY</span>';
 
-    return `
+      return `
       <tr class="border-b border-slate-800/80 hover:bg-slate-850/50 transition">
-        <td class="p-3 font-mono text-white font-bold">${escapeHtml(s.id)}</td>
-        <td class="p-3 text-slate-300 font-semibold">${escapeHtml(s.displayRole)}</td>
-        <td class="p-3 font-mono text-slate-300">${escapeHtml(s.harness)}</td>
-        <td class="p-3 font-mono text-slate-300 truncate max-w-xs" title="${escapeHtml(s.branch)}">${escapeHtml(s.branch || '—')}</td>
-        <td class="p-3 font-mono">${escapeHtml(s.status)}</td>
-        <td class="p-3 text-xs">${writerBadge}</td>
-        <td class="p-3 font-mono text-xs text-slate-400">${escapeHtml(s.freshness?.label || '—')}</td>
+        <td data-label="Session ID" class="p-3 font-mono text-white font-bold">${escapeHtml(s.id)}</td>
+        <td data-label="Vai Trò" class="p-3 text-slate-300 font-semibold">${escapeHtml(s.displayRole)}</td>
+        <td data-label="Harness" class="p-3 font-mono text-slate-300">${escapeHtml(s.harness)}</td>
+        <td data-label="Nhánh / Worktree" class="p-3 font-mono text-slate-300 truncate max-w-xs" title="${escapeHtml(s.branch)}">${escapeHtml(s.branch || '—')}</td>
+        <td data-label="Trạng Thái" class="p-3 font-mono">${escapeHtml(s.status)}</td>
+        <td data-label="Quyền Ghi" class="p-3 text-xs">${writerBadge}</td>
+        <td data-label="Độ Tươi" class="p-3 font-mono text-xs text-slate-400">${escapeHtml(s.freshness?.label || '—')}</td>
       </tr>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
 function renderQueueTable() {
@@ -718,17 +772,18 @@ function renderQueueTable() {
 
   // Filter
   if (sliceFilter !== 'ALL') {
-    items = items.filter(it => it.slice === sliceFilter);
+    items = items.filter((it) => it.slice === sliceFilter);
   }
   if (statusFilter !== 'ALL') {
-    items = items.filter(it => it.status === statusFilter);
+    items = items.filter((it) => it.status === statusFilter);
   }
   if (searchFilter) {
-    items = items.filter(it =>
-      (it.work_item_id && it.work_item_id.toLowerCase().includes(searchFilter)) ||
-      (it.feature_name && it.feature_name.toLowerCase().includes(searchFilter)) ||
-      (it.key_behavior && it.key_behavior.toLowerCase().includes(searchFilter)) ||
-      (it.slice && it.slice.toLowerCase().includes(searchFilter))
+    items = items.filter(
+      (it) =>
+        (it.work_item_id && it.work_item_id.toLowerCase().includes(searchFilter)) ||
+        (it.feature_name && it.feature_name.toLowerCase().includes(searchFilter)) ||
+        (it.key_behavior && it.key_behavior.toLowerCase().includes(searchFilter)) ||
+        (it.slice && it.slice.toLowerCase().includes(searchFilter))
     );
   }
 
@@ -748,35 +803,42 @@ function renderQueueTable() {
     return;
   }
 
-  container.innerHTML = items.map(item => {
-    let statusClass = 'bg-slate-800 text-slate-300 border-slate-700';
-    if (item.status === 'MERGED') statusClass = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
-    else if (item.status === 'READY_FOR_CODEX') statusClass = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
-    else if (item.status === 'READY_FOR_AUTHOR') statusClass = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-    else if (item.status === 'IN_PROGRESS') statusClass = 'bg-amber-500/20 text-amber-400 border-amber-500/30 animate-pulse';
-    else if (item.status?.startsWith('BLOCKED')) statusClass = 'bg-rose-950/40 text-rose-400 border-rose-800';
+  container.innerHTML = items
+    .map((item) => {
+      let statusClass = 'bg-slate-800 text-slate-300 border-slate-700';
+      if (item.status === 'MERGED')
+        statusClass = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+      else if (item.status === 'READY_FOR_CODEX')
+        statusClass = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+      else if (item.status === 'READY_FOR_AUTHOR')
+        statusClass = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+      else if (item.status === 'IN_PROGRESS')
+        statusClass = 'bg-amber-500/20 text-amber-400 border-amber-500/30 animate-pulse';
+      else if (item.status?.startsWith('BLOCKED'))
+        statusClass = 'bg-rose-950/40 text-rose-400 border-rose-800';
 
-    return `
+      return `
       <tr class="border-b border-slate-800/80 hover:bg-slate-800/40 text-xs transition">
-        <td class="p-3 font-mono text-slate-400">#${escapeHtml(item.delivery_order || '')}</td>
-        <td class="p-3 font-mono font-bold text-slate-300">${escapeHtml(item.slice || '')}</td>
-        <td class="p-3 font-mono font-bold text-white">${escapeHtml(item.work_item_id || '')}</td>
-        <td class="p-3 text-slate-200 font-semibold max-w-sm">
+        <td data-label="#" class="p-3 font-mono text-slate-400">#${escapeHtml(item.delivery_order || '')}</td>
+        <td data-label="Slice" class="p-3 font-mono font-bold text-slate-300">${escapeHtml(item.slice || '')}</td>
+        <td data-label="Mã Task" class="p-3 font-mono font-bold text-white">${escapeHtml(item.work_item_id || '')}</td>
+        <td data-label="Tính Năng" class="p-3 text-slate-200 font-semibold max-w-sm">
           <div class="truncate" title="${escapeHtml(item.feature_name || item.key_behavior || '')}">
             ${escapeHtml(item.feature_name || item.key_behavior || '')}
           </div>
         </td>
-        <td class="p-3 font-mono">
+        <td data-label="Trạng Thái" class="p-3 font-mono">
           <span class="px-2 py-0.5 rounded border text-[10px] font-bold ${statusClass}">
             ${escapeHtml(item.status || '')}
           </span>
         </td>
-        <td class="p-3 font-mono text-slate-400">${escapeHtml(item.assigned_author || '')}</td>
-        <td class="p-3 font-mono text-slate-300">${escapeHtml(item.pr || '—')}</td>
-        <td class="p-3 font-mono text-slate-400">${escapeHtml(item.codex_verdict || '—')}</td>
+        <td data-label="Tác Giả" class="p-3 font-mono text-slate-400">${escapeHtml(item.assigned_author || '')}</td>
+        <td data-label="PR" class="p-3 font-mono text-slate-300">${escapeHtml(item.pr || '—')}</td>
+        <td data-label="Codex" class="p-3 font-mono text-slate-400">${escapeHtml(item.codex_verdict || '—')}</td>
       </tr>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
 function renderActivity() {
@@ -785,16 +847,18 @@ function renderActivity() {
 
   const activities = state.activity || [];
   if (activities.length === 0) {
-    container.innerHTML = '<div class="p-4 text-center text-slate-400 text-xs">Chưa có nhật ký hoạt động gần đây.</div>';
+    container.innerHTML =
+      '<div class="p-4 text-center text-slate-400 text-xs">Chưa có nhật ký hoạt động gần đây.</div>';
     return;
   }
 
-  container.innerHTML = activities.map(act => {
-    const timeStr = act.timestamp ? new Date(act.timestamp).toLocaleTimeString() : '';
-    let badgeColor = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-    if (act.badge === 'AO') badgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+  container.innerHTML = activities
+    .map((act) => {
+      const timeStr = act.timestamp ? new Date(act.timestamp).toLocaleTimeString() : '';
+      let badgeColor = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+      if (act.badge === 'AO') badgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
 
-    return `
+      return `
       <div class="flex items-start gap-3 p-3 rounded-xl bg-slate-850/60 border border-slate-800 text-xs">
         <span class="px-2 py-0.5 rounded border text-[10px] font-mono font-bold ${badgeColor}">${escapeHtml(act.badge || 'ACT')}</span>
         <div class="flex-1 min-w-0">
@@ -804,14 +868,17 @@ function renderActivity() {
         <div class="text-[10px] font-mono text-slate-400 whitespace-nowrap">${timeStr}</div>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
 function renderDiagnostics() {
   const container = document.getElementById('diagnosticsPanel');
   if (!container || !state || !state.sources) return;
 
-  container.innerHTML = Object.entries(state.sources).map(([key, src]) => `
+  container.innerHTML = Object.entries(state.sources)
+    .map(
+      ([key, src]) => `
     <div class="bg-slate-900/80 p-4 rounded-xl border border-slate-800 space-y-2 text-xs font-mono">
       <div class="flex items-center justify-between pb-2 border-b border-slate-800">
         <span class="font-bold text-white uppercase">${escapeHtml(key)}</span>
@@ -823,7 +890,9 @@ function renderDiagnostics() {
       <div><span class="text-slate-400">Impact:</span> ${escapeHtml(src.impact || '—')}</div>
       ${src.error ? `<div class="text-rose-400"><span class="text-slate-400">Error:</span> ${escapeHtml(src.error)}</div>` : ''}
     </div>
-  `).join('');
+  `
+    )
+    .join('');
 }
 
 function switchTab(tabId) {
@@ -831,14 +900,16 @@ function switchTab(tabId) {
 
   // Toggle active button styles
   const tabs = ['gates', 'roster', 'queue', 'activity', 'health'];
-  tabs.forEach(t => {
+  tabs.forEach((t) => {
     const btn = document.getElementById(`tabBtn-${t}`);
     const pane = document.getElementById(`tabPane-${t}`);
     if (btn) {
       if (t === tabId) {
-        btn.className = 'tab-btn px-4 py-2.5 rounded-xl font-bold text-xs bg-brand text-white shadow-sm flex items-center gap-2 glow-brand';
+        btn.className =
+          'tab-btn px-4 py-2.5 rounded-xl font-bold text-xs bg-brand text-white shadow-sm flex items-center gap-2 glow-brand';
       } else {
-        btn.className = 'tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2';
+        btn.className =
+          'tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2';
       }
     }
     if (pane) {
@@ -853,24 +924,35 @@ function renderMinimalStaticTasks(tasks) {
     schemaVersion: '3.3.0',
     revision: 1,
     observedAt: new Date().toISOString(),
-    overallStatus: 'live',
+    overallStatus: 'partial',
     sources: {
-      register: { status: 'live', provenance: 'Static Embedded Register', latencyMs: 0, impact: 'Offline Snapshot' },
+      register: {
+        status: 'live',
+        provenance: 'Static Embedded Register',
+        latencyMs: 0,
+        impact: 'Offline Snapshot',
+      },
       git: { status: 'unavailable', impact: 'Server offline' },
       ao: { status: 'unavailable', impact: 'Server offline' },
-      github: { status: 'unavailable', impact: 'Server offline' }
+      github: { status: 'unavailable', impact: 'Server offline' },
     },
     workItems: {
       total: tasks.length,
-      mergedCount: tasks.filter(t => t.status === 'MERGED').length,
-      completionPercent: ((tasks.filter(t => t.status === 'MERGED').length / tasks.length) * 100).toFixed(1),
+      mergedCount: tasks.filter((t) => t.status === 'MERGED').length,
+      completionPercent: (
+        (tasks.filter((t) => t.status === 'MERGED').length / tasks.length) *
+        100
+      ).toFixed(1),
       items: tasks,
-      activeItem: tasks.find(t => t.status === 'IN_PROGRESS') || tasks.find(t => t.status === 'READY_FOR_CODEX') || tasks[0]
+      activeItem:
+        tasks.find((t) => t.status === 'IN_PROGRESS') ||
+        tasks.find((t) => t.status === 'READY_FOR_CODEX') ||
+        tasks[0],
     },
     sessions: [],
     pullRequests: [],
     conflicts: [],
-    activity: []
+    activity: [],
   };
   applyState(state);
 }

@@ -2,19 +2,19 @@
 
 ## Control
 
-| Field | Value |
-|---|---|
-| Work Item ID | `TASK-AI-15` |
-| Feature ID | `N/A` |
-| Status | `READY_FOR_AUTHOR` |
-| Delivery order | `148` |
-| Dependencies | `TASK-AI-14`, `TASK-FOUND-04` |
-| Assigned author | `GEMINI` |
-| Risk | `MEDIUM` |
-| Allowed paths | `DASHBOARD.html`; `open-dashboard.bat`; `tools/ai-dashboard/**`; `scripts/ai/start-ai-dashboard.ps1`; `scripts/ai/create-docker-shortcut.ps1`; `docs/product-spec/work-items/TASK-AI-15.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; directly relevant dashboard operating documentation under `docs/product-spec/docs/10-ai-collaboration/**` |
-| Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/task-ai-15-realtime-ai-cockpit` |
-| Pull Request | `TBD` |
+| Field           | Value                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Work Item ID    | `TASK-AI-15`                                                                                                                                                                                                                                                                                                                                                                       |
+| Feature ID      | `N/A`                                                                                                                                                                                                                                                                                                                                                                              |
+| Status          | `READY_FOR_AUTHOR`                                                                                                                                                                                                                                                                                                                                                                 |
+| Delivery order  | `148`                                                                                                                                                                                                                                                                                                                                                                              |
+| Dependencies    | `TASK-AI-14`, `TASK-FOUND-04`                                                                                                                                                                                                                                                                                                                                                      |
+| Assigned author | `GEMINI`                                                                                                                                                                                                                                                                                                                                                                           |
+| Risk            | `MEDIUM`                                                                                                                                                                                                                                                                                                                                                                           |
+| Allowed paths   | `DASHBOARD.html`; `open-dashboard.bat`; `tools/ai-dashboard/**`; `scripts/ai/start-ai-dashboard.ps1`; `scripts/ai/create-docker-shortcut.ps1`; `docs/product-spec/work-items/TASK-AI-15.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; directly relevant dashboard operating documentation under `docs/product-spec/docs/10-ai-collaboration/**` |
+| Reviewer        | `Codex — fresh independent task`                                                                                                                                                                                                                                                                                                                                                   |
+| Branch          | `feat/task-ai-15-realtime-ai-cockpit`                                                                                                                                                                                                                                                                                                                                              |
+| Pull Request    | `TBD`                                                                                                                                                                                                                                                                                                                                                                              |
 
 ## Business outcome
 
@@ -103,20 +103,20 @@ Gemini is required because this is cross-layer UI composition with a local aggre
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
-|---|---|---|---|
-| `AI15-AC01` | Given the repository register, when the dashboard loads | Totals and current queue state exactly match parsed register rows; no server overlay invents a task or PR | parser/API tests plus screenshot with fixture and live register |
-| `AI15-AC02` | Given AO is reachable, stopped, or returns malformed output | Sessions appear with role/state/freshness when valid; otherwise only AO is marked unavailable and other panels remain live | adapter tests and screenshots of live/partial states |
-| `AI15-AC03` | Given GitHub CLI is authenticated or unauthenticated | Exact-HEAD PR/check/review data is displayed only when verified; unauthenticated state shows no default PR or green gate | adapter tests and screenshots of verified/unavailable states |
-| `AI15-AC04` | Given source data changes after initial load | The page updates within the documented refresh window, preserves focus/scroll, and shows the new observation time without full reload | realtime integration test and short captured evidence/log |
-| `AI15-AC05` | Given a source exceeds freshness or timeout thresholds | Last observation is labeled stale or unavailable with source, age, impact, and retry/recovery status | clock-controlled tests and stale/partial screenshot |
-| `AI15-AC06` | Given conflicting register/git/AO/GitHub states | The UI exposes the conflict and provenance without silently promoting a workflow state | state-derivation test and conflict screenshot |
-| `AI15-AC07` | Given requests from the local machine | Service binds to `127.0.0.1`; endpoints are read-only; traversal, unsafe methods, oversized output, and secret-shaped fields are rejected or redacted | security tests and bound-address evidence |
-| `AI15-AC08` | Given keyboard, narrow viewport, high zoom, or reduced motion | Primary status remains usable; focus is visible; controls are named/reachable; motion is reduced; status is not color-only | accessibility assertions and desktop/mobile screenshots |
-| `AI15-AC09` | Given no active task, no sessions, or no recent activity | Each panel shows a truthful empty state rather than sample records | component/integration tests and empty-state screenshot |
-| `AI15-AC10` | Given service or stream interruption then recovery | Client reconnects with bounded backoff, does not duplicate events/listeners, and announces restored freshness | deterministic reconnect test and runtime evidence |
-| `AI15-AC11` | Given repository checks run from a clean checkout | Dashboard tests and all affected root gates pass with no hidden TODO or generated artifact drift | exact command logs in Pull Request |
-| `AI15-AC12` | Given an independent fresh Codex review of the authored commit | Reviewer verifies the full Work Item, source truth, screenshots, and security/realtime evidence and returns a recorded verdict | exact commit SHA and Codex review comment |
+| AC/Test ID  | Scenario                                                       | Expected result                                                                                                                                       | Evidence required                                               |
+| ----------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `AI15-AC01` | Given the repository register, when the dashboard loads        | Totals and current queue state exactly match parsed register rows; no server overlay invents a task or PR                                             | parser/API tests plus screenshot with fixture and live register |
+| `AI15-AC02` | Given AO is reachable, stopped, or returns malformed output    | Sessions appear with role/state/freshness when valid; otherwise only AO is marked unavailable and other panels remain live                            | adapter tests and screenshots of live/partial states            |
+| `AI15-AC03` | Given GitHub CLI is authenticated or unauthenticated           | Exact-HEAD PR/check/review data is displayed only when verified; unauthenticated state shows no default PR or green gate                              | adapter tests and screenshots of verified/unavailable states    |
+| `AI15-AC04` | Given source data changes after initial load                   | The page updates within the documented refresh window, preserves focus/scroll, and shows the new observation time without full reload                 | realtime integration test and short captured evidence/log       |
+| `AI15-AC05` | Given a source exceeds freshness or timeout thresholds         | Last observation is labeled stale or unavailable with source, age, impact, and retry/recovery status                                                  | clock-controlled tests and stale/partial screenshot             |
+| `AI15-AC06` | Given conflicting register/git/AO/GitHub states                | The UI exposes the conflict and provenance without silently promoting a workflow state                                                                | state-derivation test and conflict screenshot                   |
+| `AI15-AC07` | Given requests from the local machine                          | Service binds to `127.0.0.1`; endpoints are read-only; traversal, unsafe methods, oversized output, and secret-shaped fields are rejected or redacted | security tests and bound-address evidence                       |
+| `AI15-AC08` | Given keyboard, narrow viewport, high zoom, or reduced motion  | Primary status remains usable; focus is visible; controls are named/reachable; motion is reduced; status is not color-only                            | accessibility assertions and desktop/mobile screenshots         |
+| `AI15-AC09` | Given no active task, no sessions, or no recent activity       | Each panel shows a truthful empty state rather than sample records                                                                                    | component/integration tests and empty-state screenshot          |
+| `AI15-AC10` | Given service or stream interruption then recovery             | Client reconnects with bounded backoff, does not duplicate events/listeners, and announces restored freshness                                         | deterministic reconnect test and runtime evidence               |
+| `AI15-AC11` | Given repository checks run from a clean checkout              | Dashboard tests and all affected root gates pass with no hidden TODO or generated artifact drift                                                      | exact command logs in Pull Request                              |
+| `AI15-AC12` | Given an independent fresh Codex review of the authored commit | Reviewer verifies the full Work Item, source truth, screenshots, and security/realtime evidence and returns a recorded verdict                        | exact commit SHA and Codex review comment                       |
 
 ## Verification commands
 
@@ -145,9 +145,9 @@ Also record:
 
 ## Codex review record
 
-| Review round | Commit | Verdict | Findings resolved |
-|---|---|---|---|
-| 1 | `TBD` | `TBD` | `TBD` |
+| Review round | Commit                                     | Verdict            | Findings resolved                                                                                                                                                                                                                                      |
+| ------------ | ------------------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1            | `d31a595bec13c40123f866c654b794a65ae25fa3` | `CHANGES_REQUIRED` | Resolved all 8 findings: exact-HEAD gate non-success checks, SHA review tie, unresolved threads, AO Claude repair writer, DSH constraints, PowerShell script root path, freshness-based overall status, stale caching, SSE deduping, responsive tables |
 
 ## Residual limitations
 

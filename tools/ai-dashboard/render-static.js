@@ -15,32 +15,67 @@ function withFreshness(health) {
   return Object.assign({}, health, { ageMs, freshness });
 }
 
-function renderStaticDashboard(rootDir) {
+function renderStaticDashboard(rootDir, options = {}) {
   const baseDir = rootDir || path.resolve(__dirname, '../..');
-  const csvPath = path.join(baseDir, 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv');
+  const port = options.port || (process.env.PORT ? parseInt(process.env.PORT, 10) : 3333);
+  const csvPath = path.join(
+    baseDir,
+    'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+  );
   const indexHtmlPath = path.join(__dirname, 'index.html');
   const clientJsPath = path.join(__dirname, 'client.js');
-  const outputHtmlPath = path.join(baseDir, 'DASHBOARD.html');
+  const outputHtmlPath = options.outputPath || path.join(baseDir, 'DASHBOARD.html');
 
   const regResult = loadRegister(csvPath, null, baseDir);
   const staticState = redactObject({
     schemaVersion: '3.3.0',
     revision: 1,
     observedAt: new Date().toISOString(),
-    overallStatus: 'live',
+    overallStatus: 'partial',
     sources: {
       register: withFreshness(regResult.health),
-      git: withFreshness({ name: 'git', status: 'unavailable', observedAt: new Date().toISOString(), latencyMs: 0, provenance: 'Offline file mode', impact: 'Khởi động server để quan sát git live', error: null }),
-      ao: withFreshness({ name: 'ao', status: 'unavailable', observedAt: new Date().toISOString(), latencyMs: 0, provenance: 'Offline file mode', impact: 'Khởi động server để quan sát AO live', error: null }),
-      github: withFreshness({ name: 'github', status: 'unavailable', observedAt: new Date().toISOString(), latencyMs: 0, provenance: 'Offline file mode', impact: 'Khởi động server để quan sát GitHub live', error: null })
+      git: withFreshness({
+        name: 'git',
+        status: 'unavailable',
+        observedAt: new Date().toISOString(),
+        latencyMs: 0,
+        provenance: 'Offline file mode',
+        impact: 'Khởi động server để quan sát git live',
+        error: null,
+      }),
+      ao: withFreshness({
+        name: 'ao',
+        status: 'unavailable',
+        observedAt: new Date().toISOString(),
+        latencyMs: 0,
+        provenance: 'Offline file mode',
+        impact: 'Khởi động server để quan sát AO live',
+        error: null,
+      }),
+      github: withFreshness({
+        name: 'github',
+        status: 'unavailable',
+        observedAt: new Date().toISOString(),
+        latencyMs: 0,
+        provenance: 'Offline file mode',
+        impact: 'Khởi động server để quan sát GitHub live',
+        error: null,
+      }),
     },
     conflicts: [],
     workItems: regResult.data,
     sessions: [],
     daemon: { ready: false, state: 'offline' },
-    git: { currentBranch: 'unknown', headOid: '', headOidShort: '', dirtyCount: 0, worktrees: [], recentCommits: [] },
+    git: {
+      currentBranch: 'unknown',
+      headOid: '',
+      headOidShort: '',
+      dirtyCount: 0,
+      worktrees: [],
+      recentCommits: [],
+    },
     github: { authenticated: false, repo: 'vinh05092001/shipde-platform', pullRequests: [] },
-    activity: []
+    activity: [],
   });
 
   let html = fs.readFileSync(indexHtmlPath, 'utf-8');
@@ -57,7 +92,7 @@ function renderStaticDashboard(rootDir) {
     const origFetch = window.fetch;
     window.fetch = function(input, init) {
       if (typeof input === 'string' && input.startsWith('/')) {
-        return origFetch('http://127.0.0.1:3333' + input, init);
+        return origFetch('http://127.0.0.1:${port}' + input, init);
       }
       return origFetch(input, init);
     };
@@ -65,7 +100,7 @@ function renderStaticDashboard(rootDir) {
     const OrigEventSource = window.EventSource;
     window.EventSource = function(url, opts) {
       if (typeof url === 'string' && url.startsWith('/')) {
-        return new OrigEventSource('http://127.0.0.1:3333' + url, opts);
+        return new OrigEventSource('http://127.0.0.1:${port}' + url, opts);
       }
       return new OrigEventSource(url, opts);
     };
@@ -86,5 +121,5 @@ if (require.main === module) {
 }
 
 module.exports = {
-  renderStaticDashboard
+  renderStaticDashboard,
 };

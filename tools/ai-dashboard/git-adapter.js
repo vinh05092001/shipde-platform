@@ -13,23 +13,28 @@ const MAX_BUFFER = 1024 * 1024; // 1 MB limit
 
 function runGitCommand(args, cwd) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd: cwd || process.cwd(), timeout: CMD_TIMEOUT, maxBuffer: MAX_BUFFER }, (error, stdout, stderr) => {
-      if (error) {
-        resolve({
-          success: false,
-          exitCode: error.code || 1,
-          stdout: stdout ? stdout.trim() : '',
-          stderr: stderr ? stderr.trim() : error.message
-        });
-      } else {
-        resolve({
-          success: true,
-          exitCode: 0,
-          stdout: stdout ? stdout.trim() : '',
-          stderr: ''
-        });
+    execFile(
+      'git',
+      args,
+      { cwd: cwd || process.cwd(), timeout: CMD_TIMEOUT, maxBuffer: MAX_BUFFER },
+      (error, stdout, stderr) => {
+        if (error) {
+          resolve({
+            success: false,
+            exitCode: error.code || 1,
+            stdout: stdout ? stdout.trim() : '',
+            stderr: stderr ? stderr.trim() : error.message,
+          });
+        } else {
+          resolve({
+            success: true,
+            exitCode: 0,
+            stdout: stdout ? stdout.trim() : '',
+            stderr: '',
+          });
+        }
       }
-    });
+    );
   });
 }
 
@@ -57,7 +62,7 @@ function parseWorktreesPorcelain(output) {
         path: redactPath(line.substring('worktree '.length).trim()),
         head: '',
         branch: '',
-        isDetached: false
+        isDetached: false,
       };
     } else if (current && line.startsWith('HEAD ')) {
       current.head = line.substring('HEAD '.length).trim();
@@ -91,7 +96,7 @@ function parseCommits(logOutput) {
         hashShort: parts[0].substring(0, 7),
         authorName: parts[1],
         date: parts[2],
-        message: parts.slice(3).join('|')
+        message: parts.slice(3).join('|'),
       });
     }
   }
@@ -109,7 +114,7 @@ async function collectGitState(cwd) {
       runGitCommand(['rev-parse', 'HEAD'], workDir),
       runGitCommand(['status', '--porcelain'], workDir),
       runGitCommand(['worktree', 'list', '--porcelain'], workDir),
-      runGitCommand(['log', '-n', '10', '--format=%H|%an|%aI|%s'], workDir)
+      runGitCommand(['log', '-n', '10', '--format=%H|%an|%aI|%s'], workDir),
     ]);
 
     if (!headRes.success && !branchRes.success) {
@@ -121,7 +126,7 @@ async function collectGitState(cwd) {
           latencyMs: Date.now() - startTime,
           provenance: 'git CLI',
           impact: 'Cannot determine git branch or worktree state',
-          error: headRes.stderr || 'Git repository unreachable'
+          error: headRes.stderr || 'Git repository unreachable',
         },
         data: {
           currentBranch: 'unknown',
@@ -129,8 +134,8 @@ async function collectGitState(cwd) {
           headOidShort: '',
           dirtyCount: 0,
           worktrees: [],
-          recentCommits: []
-        }
+          recentCommits: [],
+        },
       };
     }
 
@@ -139,7 +144,9 @@ async function collectGitState(cwd) {
     const headOidShort = headOid.substring(0, 7);
 
     // Count dirty files
-    const dirtyLines = statusRes.stdout ? statusRes.stdout.split('\n').filter(l => l.trim().length > 0) : [];
+    const dirtyLines = statusRes.stdout
+      ? statusRes.stdout.split('\n').filter((l) => l.trim().length > 0)
+      : [];
     const dirtyCount = dirtyLines.length;
 
     const worktrees = parseWorktreesPorcelain(worktreeRes.stdout);
@@ -153,17 +160,17 @@ async function collectGitState(cwd) {
         latencyMs: Date.now() - startTime,
         provenance: `git status/worktree at ${redactPath(workDir)}`,
         impact: 'None — git observations verified',
-        error: null
+        error: null,
       },
       data: {
         currentBranch,
         headOid,
         headOidShort,
         dirtyCount,
-        dirtyFiles: dirtyLines.slice(0, 10).map(l => redactPath(l)),
+        dirtyFiles: dirtyLines.slice(0, 10).map((l) => redactPath(l)),
         worktrees,
-        recentCommits
-      }
+        recentCommits,
+      },
     };
   } catch (err) {
     return {
@@ -174,7 +181,7 @@ async function collectGitState(cwd) {
         latencyMs: Date.now() - startTime,
         provenance: 'git CLI',
         impact: 'Git command invocation failed',
-        error: err.message
+        error: err.message,
       },
       data: {
         currentBranch: 'unknown',
@@ -182,8 +189,8 @@ async function collectGitState(cwd) {
         headOidShort: '',
         dirtyCount: 0,
         worktrees: [],
-        recentCommits: []
-      }
+        recentCommits: [],
+      },
     };
   }
 }
@@ -192,5 +199,5 @@ module.exports = {
   runGitCommand,
   parseWorktreesPorcelain,
   parseCommits,
-  collectGitState
+  collectGitState,
 };

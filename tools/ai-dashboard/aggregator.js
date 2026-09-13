@@ -16,21 +16,42 @@ const { redactObject } = require('./redaction');
 let currentRevision = 1;
 let lastAggregatedState = null;
 
+// AI15-R01: Caching last-known healthy state for sources when temporary
+// adapter failures or timeouts occur, honest aging rather than dropping data.
+const lastKnownSourceData = {
+  git: null,
+  ao: null,
+  github: null,
+  register: null,
+};
+
+let previousSourceStatuses = {
+  register: null,
+  git: null,
+  ao: null,
+  github: null,
+};
+
 // Per-source freshness thresholds (AI15-R01). A source counts as "live"
 // only while its most recent successful observation is recent; beyond that
 // it is "stale" (last known values, honestly aged), and beyond the outer
 // bound — or when collection itself failed / produced no parseable
 // timestamp — it is "unavailable". Nothing here is a fabricated success.
 const DEFAULT_FRESHNESS_THRESHOLDS_MS = {
-  liveMs: 10 * 1000,   // within ~2 poll cycles of the 5s default interval
-  staleMs: 60 * 1000   // within a minute still counts as usable last-known data
+  liveMs: 10 * 1000, // within ~2 poll cycles of the 5s default interval
+  staleMs: 60 * 1000, // within a minute still counts as usable last-known data
 };
 
 /**
  * Derives { ageMs, freshness } for one source health record from its real
  * observedAt timestamp — never assumed, never defaulted to "live".
  */
-function computeSourceFreshness(observedAt, sourceStatus, thresholds = DEFAULT_FRESHNESS_THRESHOLDS_MS, now = Date.now()) {
+function computeSourceFreshness(
+  observedAt,
+  sourceStatus,
+  thresholds = DEFAULT_FRESHNESS_THRESHOLDS_MS,
+  now = Date.now()
+) {
   if (sourceStatus === 'unavailable' || !observedAt) {
     return { ageMs: null, freshness: 'unavailable' };
   }
@@ -60,41 +81,90 @@ function computeSourceFreshness(observedAt, sourceStatus, thresholds = DEFAULT_F
  * head commit exactly matches the local git HEAD observed for the same
  * aggregation cycle.
  */
-function buildGitHubEvidence(activeItem, gitData, githubData, githubSourceStatus) {
+function buildGitHubEvidence(activeItem, gitData, githubData, githubSource) {
   if (!activeItem) return null;
 
-  const available = githubSourceStatus === 'live' && Boolean(githubData && githubData.authenticated);
-  if (!available) {
-    return { available: false, headMatches: false, ciPassed: false, codexPass: false };
+  const isHealthObj = typeof githubSource === 'object' && githubSource !== null;
+  const status = isHealthObj ? githubSource.status : githubSource;
+  const freshness = isHealthObj
+    ? githubSource.freshness || githubSource.status
+    : status === 'live'
+      ? 'live'
+      : 'unavailable';
+
+  const isLive = status === 'live' && freshness === 'live';
+  const authenticated = Boolean(githubData && githubData.authenticated);
+  if (!isLive || !authenticated) {
+    return {
+      available: false,
+      freshness,
+      headMatches: false,
+      ciPassed: false,
+      codexPass: false,
+      mergeable: false,
+      unresolvedThreadsVerified: false,
+      readyForMerge: false,
+    };
   }
 
   const activeBranch = activeItem.branch || '';
   const activeWorkItemId = activeItem.work_item_id || '';
   const pullRequests = (githubData && githubData.pullRequests) || [];
-  const matchingPr = pullRequests.find(pr =>
-    pr.headRefName === activeBranch || (pr.title && activeWorkItemId && pr.title.includes(activeWorkItemId))
+  const matchingPr = pullRequests.find(
+    (pr) =>
+      pr.headRefName === activeBranch ||
+      (pr.title && activeWorkItemId && pr.title.includes(activeWorkItemId))
   );
 
   if (!matchingPr) {
-    return { available: true, headMatches: false, ciPassed: false, codexPass: false };
+    return {
+      available: true,
+      freshness: 'live',
+      headMatches: false,
+      ciPassed: false,
+      codexPass: false,
+      mergeable: false,
+      unresolvedThreadsVerified: false,
+      readyForMerge: false,
+    };
   }
 
   const headMatches = Boolean(
     gitData && gitData.headOid && matchingPr.headRefOid && gitData.headOid === matchingPr.headRefOid
   );
   const ciPassed = Boolean(
-    headMatches && matchingPr.checks && matchingPr.checks.summary === 'PASSED' && matchingPr.checks.totalCount > 0
+    headMatches &&
+    matchingPr.checks &&
+    matchingPr.checks.summary === 'PASSED' &&
+    (matchingPr.checks.totalCount > 0 ||
+      (matchingPr.checks.passCount && matchingPr.checks.passCount > 0)) &&
+    (matchingPr.checks.failCount === undefined || matchingPr.checks.failCount === 0) &&
+    (matchingPr.checks.pendingCount === undefined || matchingPr.checks.pendingCount === 0)
   );
   const codexPass = Boolean(
-    headMatches && matchingPr.reviews && matchingPr.reviews.trustedCodexVerdict === 'PASS'
+    headMatches &&
+    matchingPr.reviews &&
+    matchingPr.reviews.trustedCodexVerdict === 'PASS' &&
+    matchingPr.reviews.headShaMatches !== false
+  );
+  const mergeable = Boolean(headMatches && matchingPr.mergeable === 'MERGEABLE');
+  const unresolvedThreadsVerified = Boolean(
+    matchingPr.reviews && matchingPr.reviews.unresolvedThreadsCount === 0
+  );
+  const readyForMerge = Boolean(
+    headMatches && ciPassed && codexPass && mergeable && unresolvedThreadsVerified && isLive
   );
 
   return {
     available: true,
+    freshness: 'live',
     headMatches,
     ciPassed,
     codexPass,
-    prNumber: matchingPr.number
+    mergeable,
+    unresolvedThreadsVerified,
+    readyForMerge,
+    prNumber: matchingPr.number,
   };
 }
 
@@ -111,7 +181,7 @@ function buildActivityStream(gitCommits, aoSessions) {
         title: commit.message,
         actor: commit.authorName,
         badge: 'GIT',
-        detail: `Commit ${commit.hashShort}`
+        detail: `Commit ${commit.hashShort}`,
       });
     }
   }
@@ -127,7 +197,7 @@ function buildActivityStream(gitCommits, aoSessions) {
           title: `Phiên làm việc [${session.id}] — ${session.displayRole} (${session.status})`,
           actor: session.harness,
           badge: 'AO',
-          detail: `Nhánh: ${session.branch || 'N/A'}`
+          detail: `Nhánh: ${session.branch || 'N/A'}`,
         });
       }
     }
@@ -144,54 +214,192 @@ function buildActivityStream(gitCommits, aoSessions) {
 }
 
 function deriveOverallStatus(sources, conflicts) {
-  const statuses = Object.values(sources).map(s => s.status);
-
-  if (conflicts && conflicts.some(c => c.severity === 'error')) {
+  if (conflicts && conflicts.some((c) => c.severity === 'error')) {
     return 'conflict';
   }
 
-  if (statuses.every(s => s === 'live')) {
+  const effectiveStatuses = Object.values(sources).map((s) => {
+    // If source collection failed or freshness is unavailable
+    if (s.status === 'unavailable' || s.freshness === 'unavailable') return 'unavailable';
+    // If partial
+    if (s.status === 'partial') return 'partial';
+    // If freshness or status is stale
+    if (s.freshness === 'stale' || s.status === 'stale') return 'stale';
+    return 'live';
+  });
+
+  if (effectiveStatuses.every((s) => s === 'live')) {
     return 'live';
   }
 
-  if (statuses.every(s => s === 'unavailable')) {
+  if (effectiveStatuses.every((s) => s === 'unavailable')) {
     return 'unavailable';
   }
 
-  if (statuses.some(s => s === 'unavailable' || s === 'partial')) {
+  if (effectiveStatuses.some((s) => s === 'unavailable' || s === 'partial')) {
     return 'partial';
   }
 
-  if (statuses.some(s => s === 'stale')) {
+  if (effectiveStatuses.some((s) => s === 'stale')) {
     return 'stale';
   }
 
   return 'live';
 }
 
+function detectRecoveryTransitions(sources, observationTime) {
+  const recoveries = [];
+  for (const [key, src] of Object.entries(sources)) {
+    const prev = previousSourceStatuses[key];
+    const currEffective =
+      src.status === 'live' && src.freshness === 'live' ? 'live' : src.status || 'unavailable';
+    if (prev && prev !== 'live' && currEffective === 'live') {
+      recoveries.push({
+        id: `recovery-${key}-${observationTime}`,
+        type: 'SOURCE_RECOVERY',
+        timestamp: new Date(observationTime).toISOString(),
+        title: `Nguồn dữ liệu [${key.toUpperCase()}] đã phục hồi trạng thái LIVE`,
+        actor: 'SYSTEM',
+        badge: 'RECOVERY',
+        detail: `Kết nối và dữ liệu từ ${src.provenance || key} đã bình thường trở lại`,
+      });
+    }
+    previousSourceStatuses[key] = currEffective;
+  }
+  return recoveries;
+}
+
+function hasStateChanged(prevState, candidate) {
+  if (!prevState) return true;
+
+  if (prevState.overallStatus !== candidate.overallStatus) return true;
+
+  for (const key of ['register', 'git', 'ao', 'github']) {
+    const p = prevState.sources[key];
+    const n = candidate.sources[key];
+    if (!p || !n) return true;
+    if (p.status !== n.status || p.freshness !== n.freshness) return true;
+  }
+
+  if (prevState.workItems?.mergedCount !== candidate.workItems?.mergedCount) return true;
+  if (prevState.workItems?.total !== candidate.workItems?.total) return true;
+  if (
+    prevState.workItems?.activeItem?.work_item_id !== candidate.workItems?.activeItem?.work_item_id
+  )
+    return true;
+  if (prevState.workItems?.activeItem?.status !== candidate.workItems?.activeItem?.status)
+    return true;
+  if (
+    prevState.workItems?.gatePipeline?.currentGate !==
+    candidate.workItems?.gatePipeline?.currentGate
+  )
+    return true;
+
+  if ((prevState.conflicts || []).length !== (candidate.conflicts || []).length) return true;
+  if ((prevState.sessions || []).length !== (candidate.sessions || []).length) return true;
+  if (prevState.git?.headOid !== candidate.git?.headOid) return true;
+  if (prevState.git?.dirtyCount !== candidate.git?.dirtyCount) return true;
+  if (prevState.github?.authenticated !== candidate.github?.authenticated) return true;
+
+  const prevPrs = prevState.github?.pullRequests || [];
+  const nextPrs = candidate.github?.pullRequests || [];
+  if (prevPrs.length !== nextPrs.length) return true;
+  if (prevPrs[0]?.checks?.summary !== nextPrs[0]?.checks?.summary) return true;
+  if (prevPrs[0]?.reviews?.trustedCodexVerdict !== nextPrs[0]?.reviews?.trustedCodexVerdict)
+    return true;
+
+  return false;
+}
+
 async function aggregateCockpitState(options = {}) {
   const rootDir = options.rootDir || process.cwd();
-  const csvPath = options.csvPath || path.join(rootDir, 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv');
+  const csvPath =
+    options.csvPath ||
+    path.join(rootDir, 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv');
   const repo = options.repo || 'vinh05092001/shipde-platform';
 
   const gitPromise = options.mockGit ? Promise.resolve(options.mockGit) : collectGitState(rootDir);
-  const aoPromise = options.mockAo ? Promise.resolve(options.mockAo) : collectAoState('shipde-platform');
-  const githubPromise = options.mockGitHub ? Promise.resolve(options.mockGitHub) : collectGitHubState(repo);
+  const aoPromise = options.mockAo
+    ? Promise.resolve(options.mockAo)
+    : collectAoState('shipde-platform');
+  const githubPromise = options.mockGitHub
+    ? Promise.resolve(options.mockGitHub)
+    : collectGitHubState(repo);
 
-  const [gitResult, aoResult, githubResult] = await Promise.all([
+  let [gitResult, aoResult, githubResult] = await Promise.all([
     gitPromise,
     aoPromise,
-    githubPromise
+    githubPromise,
   ]);
 
+  // Handle cached last-known state on failure (AI15-R01)
+  if (gitResult.health.status === 'unavailable' && lastKnownSourceData.git) {
+    gitResult = {
+      health: Object.assign({}, gitResult.health, {
+        status: 'stale',
+        impact: 'Git query unavailable; serving cached last-known state (AI15-R01)',
+        observedAt: lastKnownSourceData.git.health.observedAt,
+      }),
+      data: lastKnownSourceData.git.data,
+    };
+  } else if (gitResult.health.status === 'live') {
+    lastKnownSourceData.git = gitResult;
+  }
+
+  if (aoResult.health.status === 'unavailable' && lastKnownSourceData.ao) {
+    aoResult = {
+      health: Object.assign({}, aoResult.health, {
+        status: 'stale',
+        impact: 'Agent Orchestrator unavailable; serving cached last-known state (AI15-R01)',
+        observedAt: lastKnownSourceData.ao.health.observedAt,
+      }),
+      data: lastKnownSourceData.ao.data,
+    };
+  } else if (aoResult.health.status === 'live') {
+    lastKnownSourceData.ao = aoResult;
+  }
+
+  if (githubResult.health.status === 'unavailable' && lastKnownSourceData.github) {
+    githubResult = {
+      health: Object.assign({}, githubResult.health, {
+        status: 'stale',
+        impact: 'GitHub CLI unavailable; serving cached last-known state (AI15-R01)',
+        observedAt: lastKnownSourceData.github.health.observedAt,
+      }),
+      data: lastKnownSourceData.github.data,
+    };
+  } else if (githubResult.health.status === 'live') {
+    lastKnownSourceData.github = githubResult;
+  }
+
   const preferredBranch = gitResult?.data?.currentBranch || null;
-  const registerResult = options.mockRegister ? options.mockRegister : loadRegister(csvPath, preferredBranch, rootDir);
+  let registerResult = options.mockRegister
+    ? options.mockRegister
+    : loadRegister(csvPath, preferredBranch, rootDir);
+
+  if (registerResult.health.status === 'unavailable' && lastKnownSourceData.register) {
+    registerResult = {
+      health: Object.assign({}, registerResult.health, {
+        status: 'stale',
+        impact: 'Register CSV unreadable; serving cached last-known state (AI15-R01)',
+        observedAt: lastKnownSourceData.register.health.observedAt,
+      }),
+      data: lastKnownSourceData.register.data,
+    };
+  } else if (registerResult.health.status === 'live') {
+    lastKnownSourceData.register = registerResult;
+  }
 
   const observationTime = options.now || Date.now();
   const freshnessThresholds = options.freshnessThresholdsMs || DEFAULT_FRESHNESS_THRESHOLDS_MS;
 
   function withFreshness(health) {
-    const { ageMs, freshness } = computeSourceFreshness(health.observedAt, health.status, freshnessThresholds, observationTime);
+    const { ageMs, freshness } = computeSourceFreshness(
+      health.observedAt,
+      health.status,
+      freshnessThresholds,
+      observationTime
+    );
     return Object.assign({}, health, { ageMs, freshness });
   }
 
@@ -199,7 +407,7 @@ async function aggregateCockpitState(options = {}) {
     register: withFreshness(registerResult.health),
     git: withFreshness(gitResult.health),
     ao: withFreshness(aoResult.health),
-    github: withFreshness(githubResult.health)
+    github: withFreshness(githubResult.health),
   };
 
   const conflicts = detectConflicts(
@@ -210,26 +418,26 @@ async function aggregateCockpitState(options = {}) {
   );
 
   const overallStatus = deriveOverallStatus(sources, conflicts);
-  const activity = buildActivityStream(gitResult.data.recentCommits, aoResult.data.sessions);
+
+  const recoveryEvents = detectRecoveryTransitions(sources, observationTime);
+  let activity = buildActivityStream(gitResult.data.recentCommits, aoResult.data.sessions);
+  if (recoveryEvents.length > 0) {
+    activity = recoveryEvents.concat(activity).slice(0, 15);
+  }
 
   // AI15-R03: recompute the gate pipeline from live, exact-HEAD GitHub
   // evidence rather than trusting the register-only pipeline embedded in
-  // registerResult.data (which cannot see git/GitHub and reports downstream
-  // gates as unavailable on its own).
+  // registerResult.data.
   const githubEvidence = buildGitHubEvidence(
     registerResult.data.activeItem,
     gitResult.data,
     githubResult.data,
-    sources.github.status
+    sources.github
   );
   const gatePipeline = deriveGatePipeline(registerResult.data.activeItem, githubEvidence);
 
-  const revision = currentRevision++;
-
-  const rawState = {
+  const candidateState = {
     schemaVersion: '3.3.0',
-    revision,
-    observedAt: new Date().toISOString(),
     overallStatus,
     sources,
     conflicts,
@@ -241,14 +449,25 @@ async function aggregateCockpitState(options = {}) {
       bySlice: registerResult.data.bySlice,
       activeItem: registerResult.data.activeItem,
       gatePipeline,
-      items: registerResult.data.items
+      items: registerResult.data.items,
     },
     sessions: aoResult.data.sessions,
     daemon: aoResult.data.daemon,
     git: gitResult.data,
     github: githubResult.data,
-    activity
   };
+
+  const changed = hasStateChanged(lastAggregatedState, candidateState);
+  if (changed) {
+    currentRevision++;
+  }
+  const revision = currentRevision;
+
+  const rawState = Object.assign({}, candidateState, {
+    revision,
+    observedAt: new Date(observationTime).toISOString(),
+    activity,
+  });
 
   lastAggregatedState = redactObject(rawState);
   return lastAggregatedState;
@@ -261,6 +480,11 @@ function getLastAggregatedState() {
 function resetRevisionForTest(val = 1) {
   currentRevision = val;
   lastAggregatedState = null;
+  lastKnownSourceData.git = null;
+  lastKnownSourceData.ao = null;
+  lastKnownSourceData.github = null;
+  lastKnownSourceData.register = null;
+  previousSourceStatuses = { register: null, git: null, ao: null, github: null };
 }
 
 module.exports = {
@@ -271,5 +495,5 @@ module.exports = {
   buildActivityStream,
   deriveOverallStatus,
   computeSourceFreshness,
-  DEFAULT_FRESHNESS_THRESHOLDS_MS
+  DEFAULT_FRESHNESS_THRESHOLDS_MS,
 };

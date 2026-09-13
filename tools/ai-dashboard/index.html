@@ -1,310 +1,460 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi" class="dark">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ship Dễ — AI Developer Cockpit & Realtime Delivery Tracker</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            brand: '#EA4B12',
-            darkBg: '#080D1A',
-            darkCard: '#0F172A',
-          }
-        }
-      }
-    }
-  </script>
-  <style>
-    /* Mobile overflow guard (AI15 responsive rule): the page itself must
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ship Dễ — AI Developer Cockpit & Realtime Delivery Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              brand: '#EA4B12',
+              darkBg: '#080D1A',
+              darkCard: '#0F172A',
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      /* Mobile overflow guard (AI15 responsive rule): the page itself must
        never grow a horizontal scrollbar. Only the explicit overflow-x-auto
        regions below (tab nav, table wrappers) may scroll sideways. */
-    html {
-      width: 100%;
-      overflow-x: hidden;
-    }
-    body {
-      background-color: #080D1A;
-      color: #F1F5F9;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      max-width: 100vw;
-      overflow-x: hidden;
-    }
-    .custom-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
-    .custom-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
-    .glow-brand { box-shadow: 0 0 25px -5px rgba(234, 75, 18, 0.4); }
-    @media (prefers-reduced-motion: reduce) {
-      *, ::before, ::after {
-        animation-delay: -1ms !important;
-        animation-duration: 1ms !important;
-        animation-iteration-count: 1 !important;
-        background-attachment: initial !important;
-        scroll-behavior: auto !important;
-        transition-delay: 0s !important;
-        transition-duration: 0s !important;
+      html {
+        width: 100%;
+        overflow-x: hidden;
       }
-    }
-    button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible {
-      outline: 2px solid #EA4B12;
-      outline-offset: 2px;
-    }
-  </style>
-</head>
-<body class="min-h-screen w-full flex flex-col antialiased overflow-x-hidden">
-  <!-- Top Navigation Header -->
-  <header class="sticky top-0 z-40 bg-[#0B1120]/95 backdrop-blur-md border-b border-slate-800 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 w-full min-w-0">
-    <div class="flex items-center gap-3 min-w-0">
-      <div class="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-tr from-brand to-amber-500 text-white flex items-center justify-center font-black text-base shadow-lg shadow-brand/30 glow-brand">
-        ⚡
-      </div>
-      <div class="min-w-0">
-        <div class="flex items-center gap-2 flex-wrap min-w-0">
-          <span class="font-black text-white text-sm sm:text-base tracking-tight break-words">Ship Dễ AI Developer Cockpit</span>
-          <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold shrink-0">
-            MISSION CONTROL v3.3
-          </span>
+      body {
+        background-color: #080d1a;
+        color: #f1f5f9;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          Roboto,
+          'Helvetica Neue',
+          Arial,
+          sans-serif;
+        max-width: 100vw;
+        overflow-x: hidden;
+      }
+      .custom-scroll::-webkit-scrollbar {
+        height: 6px;
+        width: 6px;
+      }
+      .custom-scroll::-webkit-scrollbar-thumb {
+        background: #334155;
+        border-radius: 9999px;
+      }
+      .glow-brand {
+        box-shadow: 0 0 25px -5px rgba(234, 75, 18, 0.4);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        ::before,
+        ::after {
+          animation-delay: -1ms !important;
+          animation-duration: 1ms !important;
+          animation-iteration-count: 1 !important;
+          background-attachment: initial !important;
+          scroll-behavior: auto !important;
+          transition-delay: 0s !important;
+          transition-duration: 0s !important;
+        }
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      a:focus-visible {
+        outline: 2px solid #ea4b12;
+        outline-offset: 2px;
+      }
+      @media (max-width: 640px) {
+        .responsive-table thead {
+          display: none;
+        }
+        .responsive-table tr {
+          display: block;
+          margin-bottom: 0.75rem;
+          background: rgba(15, 23, 42, 0.75);
+          border: 1px solid rgba(51, 65, 85, 0.7);
+          border-radius: 0.75rem;
+          padding: 0.5rem;
+        }
+        .responsive-table td {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 0.375rem 0.5rem;
+          border-bottom: 1px solid rgba(51, 65, 85, 0.3);
+          text-align: right;
+          min-width: 0;
+        }
+        .responsive-table td:last-child {
+          border-bottom: none;
+        }
+        .responsive-table td::before {
+          content: attr(data-label);
+          font-weight: 700;
+          font-size: 0.7rem;
+          color: #94a3b8;
+          text-transform: uppercase;
+          margin-right: 0.5rem;
+          text-align: left;
+          flex-shrink: 0;
+        }
+      }
+    </style>
+  </head>
+  <body class="min-h-screen w-full flex flex-col antialiased overflow-x-hidden">
+    <!-- Top Navigation Header -->
+    <header
+      class="sticky top-0 z-40 bg-[#0B1120]/95 backdrop-blur-md border-b border-slate-800 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 w-full min-w-0"
+    >
+      <div class="flex items-center gap-3 min-w-0">
+        <div
+          class="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-tr from-brand to-amber-500 text-white flex items-center justify-center font-black text-base shadow-lg shadow-brand/30 glow-brand"
+        >
+          ⚡
         </div>
-        <div class="text-[11px] text-slate-400 font-mono hidden sm:block break-words">
-          Bảng Điều Phối & Bằng Chứng Giao Việc Độc Lập Theo AGENTS.md
-        </div>
-      </div>
-    </div>
-
-    <div class="flex items-center gap-2 sm:gap-3 flex-wrap min-w-0">
-      <!-- Realtime Connection Status Badge -->
-      <div id="connectionBadge" class="text-[11px] font-mono px-2.5 py-1 rounded-lg border font-bold flex items-center gap-1.5 bg-slate-800 text-slate-400 border-slate-700" role="status" aria-live="polite">
-        ○ Đang kết nối...
-      </div>
-
-      <div id="writerStateBadge" class="hidden md:flex items-center gap-2 bg-slate-800/80 px-3 py-1 rounded-lg border border-slate-700 text-xs font-mono" role="status" aria-live="polite">
-        <span id="writerStateDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
-        <span class="text-slate-300">Single Writer:</span>
-        <span id="writerStateLabel" class="text-slate-400 font-bold">Đang kiểm tra AO...</span>
-      </div>
-
-      <button onclick="fetchState()" class="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition" title="Làm mới quan sát">
-        <span>🔄 Làm Mới</span>
-      </button>
-    </div>
-  </header>
-
-  <!-- Main Content Layout -->
-  <main class="max-w-[1600px] w-full min-w-0 mx-auto p-4 sm:p-6 space-y-6 flex-1">
-    <!-- Overall Status Alert (Hidden by default, shown on partial/conflict/stale) -->
-    <div id="overallStatusBanner" class="hidden" role="alert"></div>
-
-    <!-- Top Hero HUD -->
-    <section aria-labelledby="hud-heading" class="bg-gradient-to-r from-slate-900 via-slate-900 to-slate-800 rounded-2xl p-5 sm:p-6 border border-slate-800 shadow-2xl relative overflow-hidden">
-      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 relative z-10 min-w-0">
-        <div class="space-y-2 min-w-0">
-          <div class="inline-flex items-center gap-2 px-3 py-0.5 rounded-full bg-brand/20 text-brand text-[11px] font-black uppercase tracking-wider border border-brand/30 max-w-full">
-            <span class="break-words">Autonomous AI Delivery Engine</span>
+        <div class="min-w-0">
+          <div class="flex items-center gap-2 flex-wrap min-w-0">
+            <span class="font-black text-white text-sm sm:text-base tracking-tight break-words"
+              >Ship Dễ AI Developer Cockpit</span
+            >
+            <span
+              class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold shrink-0"
+            >
+              MISSION CONTROL v3.3
+            </span>
           </div>
-          <h1 id="hud-heading" class="text-xl sm:text-2xl lg:text-3xl font-black text-white break-words">
-            Giám Sát <span id="heroTaskCount">—</span> Đầu Việc & Tiến Độ Các Mô Hình AI Ship Dễ
-          </h1>
-          <p class="text-xs sm:text-sm text-slate-300 max-w-3xl leading-relaxed break-words">
-            Quan sát trạng thái thực tế từ Register CSV, Git worktrees, Agent Orchestrator và GitHub Pull Request. Dữ liệu trung thực, phân định rõ ràng vai trò tác giả, rà soát và kiểm soát chất lượng.
-          </p>
-          <div id="observedAtLabel" class="text-[11px] font-mono text-slate-400 break-words">
-            Đang tải dữ liệu quan sát...
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 min-w-0 w-full lg:w-auto" id="topStats">
-          <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
-            <div class="text-[11px] text-slate-400 font-semibold uppercase">Đầu Việc Trong Hàng Đợi</div>
-            <div class="text-xl font-black text-white mt-1" id="statTotal">— Tasks</div>
-            <div class="text-[10px] text-emerald-400 mt-0.5" id="statMerged">— Merged</div>
-          </div>
-          <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
-            <div class="text-[11px] text-slate-400 font-semibold uppercase">Phiên AO Hoạt Động</div>
-            <div class="text-xl font-black text-emerald-400 mt-1" id="statSessions">— Phiên</div>
-            <div class="text-[10px] text-slate-300 mt-0.5 break-words" title="AGENTS.md: Gemini là tác giả chính; Claude là phân tích/tác giả phụ/sửa lỗi/rà soát dự phòng; 9Router chỉ dự phòng rủi ro thấp có giới hạn">Gemini (tác giả chính) • Claude (phân tích/dự phòng) • 9Router (dự phòng)</div>
-          </div>
-          <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
-            <div class="text-[11px] text-slate-400 font-semibold uppercase">Quy Tắc Tác Giả</div>
-            <div class="text-xl font-black text-cyan-400 mt-1" id="writerCountValue">—</div>
-            <div class="text-[10px] text-slate-300 mt-0.5">AGENTS.md Single Writer</div>
-          </div>
-          <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
-            <div class="text-[11px] text-slate-400 font-semibold uppercase">Task Đang Chạy</div>
-            <div class="text-base font-black text-brand mt-1 truncate" id="statActiveTask">—</div>
-            <div class="text-[10px] text-amber-400 mt-0.5">Delivery Pipeline</div>
+          <div class="text-[11px] text-slate-400 font-mono hidden sm:block break-words">
+            Bảng Điều Phối & Bằng Chứng Giao Việc Độc Lập Theo AGENTS.md
           </div>
         </div>
       </div>
 
-      <!-- Global Deterministic Progress Bar -->
-      <div class="mt-5 pt-4 border-t border-slate-800/80 relative z-10">
-        <div class="flex items-center justify-between text-xs mb-1.5 font-semibold">
-          <span class="text-slate-300">Tiến Độ Giao Việc Toàn Dự Án:</span>
-          <span class="font-mono text-emerald-400" id="progressLabel">—</span>
+      <div class="flex items-center gap-2 sm:gap-3 flex-wrap min-w-0">
+        <!-- Realtime Connection Status Badge -->
+        <div
+          id="connectionBadge"
+          class="text-[11px] font-mono px-2.5 py-1 rounded-lg border font-bold flex items-center gap-1.5 bg-slate-800 text-slate-400 border-slate-700"
+          role="status"
+          aria-live="polite"
+        >
+          ○ Đang kết nối...
         </div>
-        <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden flex">
-          <div class="bg-emerald-500 h-full transition-all duration-500 shadow-sm" id="progressBarMerged" style="width: 0%"></div>
+
+        <div
+          id="writerStateBadge"
+          class="hidden md:flex items-center gap-2 bg-slate-800/80 px-3 py-1 rounded-lg border border-slate-700 text-xs font-mono"
+          role="status"
+          aria-live="polite"
+        >
+          <span id="writerStateDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+          <span class="text-slate-300">Single Writer:</span>
+          <span id="writerStateLabel" class="text-slate-400 font-bold">Đang kiểm tra AO...</span>
+        </div>
+
+        <button
+          onclick="fetchState()"
+          class="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition"
+          title="Làm mới quan sát"
+        >
+          <span>🔄 Làm Mới</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Layout -->
+    <main class="max-w-[1600px] w-full min-w-0 mx-auto p-4 sm:p-6 space-y-6 flex-1">
+      <!-- Overall Status Alert (Hidden by default, shown on partial/conflict/stale) -->
+      <div id="overallStatusBanner" class="hidden" role="alert"></div>
+
+      <!-- Top Hero HUD -->
+      <section
+        aria-labelledby="hud-heading"
+        class="bg-gradient-to-r from-slate-900 via-slate-900 to-slate-800 rounded-2xl p-5 sm:p-6 border border-slate-800 shadow-2xl relative overflow-hidden"
+      >
+        <div
+          class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 relative z-10 min-w-0"
+        >
+          <div class="space-y-2 min-w-0">
+            <div
+              class="inline-flex items-center gap-2 px-3 py-0.5 rounded-full bg-brand/20 text-brand text-[11px] font-black uppercase tracking-wider border border-brand/30 max-w-full"
+            >
+              <span class="break-words">Autonomous AI Delivery Engine</span>
+            </div>
+            <h1
+              id="hud-heading"
+              class="text-xl sm:text-2xl lg:text-3xl font-black text-white break-words"
+            >
+              Giám Sát <span id="heroTaskCount">—</span> Đầu Việc & Tiến Độ Các Mô Hình AI Ship Dễ
+            </h1>
+            <p class="text-xs sm:text-sm text-slate-300 max-w-3xl leading-relaxed break-words">
+              Quan sát trạng thái thực tế từ Register CSV, Git worktrees, Agent Orchestrator và
+              GitHub Pull Request. Dữ liệu trung thực, phân định rõ ràng vai trò tác giả, rà soát và
+              kiểm soát chất lượng.
+            </p>
+            <div id="observedAtLabel" class="text-[11px] font-mono text-slate-400 break-words">
+              Đang tải dữ liệu quan sát...
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 min-w-0 w-full lg:w-auto" id="topStats">
+            <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
+              <div class="text-[11px] text-slate-400 font-semibold uppercase">
+                Đầu Việc Trong Hàng Đợi
+              </div>
+              <div class="text-xl font-black text-white mt-1" id="statTotal">— Tasks</div>
+              <div class="text-[10px] text-emerald-400 mt-0.5" id="statMerged">— Merged</div>
+            </div>
+            <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
+              <div class="text-[11px] text-slate-400 font-semibold uppercase">
+                Phiên AO Hoạt Động
+              </div>
+              <div class="text-xl font-black text-emerald-400 mt-1" id="statSessions">— Phiên</div>
+              <div
+                class="text-[10px] text-slate-300 mt-0.5 break-words"
+                title="AGENTS.md: Gemini là tác giả chính; Claude là phân tích/tác giả phụ/sửa lỗi/rà soát dự phòng; 9Router chỉ dự phòng rủi ro thấp có giới hạn"
+              >
+                Gemini (tác giả chính) • Claude (phân tích/dự phòng) • 9Router (dự phòng)
+              </div>
+            </div>
+            <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
+              <div class="text-[11px] text-slate-400 font-semibold uppercase">Quy Tắc Tác Giả</div>
+              <div class="text-xl font-black text-cyan-400 mt-1" id="writerCountValue">—</div>
+              <div class="text-[10px] text-slate-300 mt-0.5">AGENTS.md Single Writer</div>
+            </div>
+            <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
+              <div class="text-[11px] text-slate-400 font-semibold uppercase">Task Đang Chạy</div>
+              <div class="text-base font-black text-brand mt-1 truncate" id="statActiveTask">—</div>
+              <div class="text-[10px] text-amber-400 mt-0.5">Delivery Pipeline</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Global Deterministic Progress Bar -->
+        <div class="mt-5 pt-4 border-t border-slate-800/80 relative z-10">
+          <div class="flex items-center justify-between text-xs mb-1.5 font-semibold">
+            <span class="text-slate-300">Tiến Độ Giao Việc Toàn Dự Án:</span>
+            <span class="font-mono text-emerald-400" id="progressLabel">—</span>
+          </div>
+          <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden flex">
+            <div
+              class="bg-emerald-500 h-full transition-all duration-500 shadow-sm"
+              id="progressBarMerged"
+              style="width: 0%"
+            ></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Source Health Bar (4 Primary Sources) -->
+      <section aria-label="Tình trạng các nguồn dữ liệu">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3" id="sourceHealthBar">
+          <!-- Filled dynamically -->
+        </div>
+      </section>
+
+      <!-- Navigation Tabs -->
+      <nav
+        class="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto custom-scroll"
+        aria-label="Bảng điều khiển tabs"
+      >
+        <button
+          onclick="switchTab('gates')"
+          id="tabBtn-gates"
+          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs bg-brand text-white shadow-sm flex items-center gap-2 glow-brand"
+        >
+          <span>🛡️ 1. Cổng Giao Việc & Bằng Chứng PR</span>
+        </button>
+        <button
+          onclick="switchTab('roster')"
+          id="tabBtn-roster"
+          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+        >
+          <span>🤖 2. Phiên Làm Việc & Worktrees</span>
+        </button>
+        <button
+          onclick="switchTab('queue')"
+          id="tabBtn-queue"
+          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+        >
+          <span>🗺️ 3. Lộ Trình <span id="tabQueueCountLabel">—</span> Đầu Việc</span>
+        </button>
+        <button
+          onclick="switchTab('activity')"
+          id="tabBtn-activity"
+          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+        >
+          <span>📜 4. Nhật Ký Hoạt Động</span>
+        </button>
+        <button
+          onclick="switchTab('health')"
+          id="tabBtn-health"
+          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+        >
+          <span>🩺 5. Sức Khỏe Nguồn Dữ Liệu</span>
+        </button>
+      </nav>
+
+      <!-- TAB PANE 1: GATES & PR EVIDENCE -->
+      <div id="tabPane-gates" class="space-y-6">
+        <div id="conflictsContainer" class="hidden"></div>
+        <div id="activeWorkItemCard"></div>
+        <div id="gatePipelineCard"></div>
+      </div>
+
+      <!-- TAB PANE 2: SESSIONS & WORKTREES -->
+      <div id="tabPane-roster" class="space-y-6 hidden">
+        <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-bold text-white uppercase tracking-wider">
+              Danh Sách Phiên Làm Việc Agent Orchestrator & Worktrees
+            </h3>
+            <span class="text-xs font-mono text-slate-400"
+              >Phân định vai trò tác giả / thẩm định theo AGENTS.md</span
+            >
+          </div>
+          <div class="overflow-x-auto custom-scroll">
+            <table class="responsive-table w-full text-left text-xs border-collapse">
+              <thead>
+                <tr
+                  class="border-b border-slate-800 text-[11px] font-mono uppercase text-slate-400 bg-slate-800/40"
+                >
+                  <th class="p-3">Session ID</th>
+                  <th class="p-3">Vai Trò Được Phân Công</th>
+                  <th class="p-3">Harness</th>
+                  <th class="p-3">Nhánh / Worktree</th>
+                  <th class="p-3">Trạng Thái</th>
+                  <th class="p-3">Quyền Ghi Code</th>
+                  <th class="p-3">Độ Tươi Dữ Liệu</th>
+                </tr>
+              </thead>
+              <tbody id="sessionsTableBody">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
-    </section>
 
-    <!-- Source Health Bar (4 Primary Sources) -->
-    <section aria-label="Tình trạng các nguồn dữ liệu">
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3" id="sourceHealthBar">
-        <!-- Filled dynamically -->
-      </div>
-    </section>
-
-    <!-- Navigation Tabs -->
-    <nav class="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto custom-scroll" aria-label="Bảng điều khiển tabs">
-      <button onclick="switchTab('gates')" id="tabBtn-gates" class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs bg-brand text-white shadow-sm flex items-center gap-2 glow-brand">
-        <span>🛡️ 1. Cổng Giao Việc & Bằng Chứng PR</span>
-      </button>
-      <button onclick="switchTab('roster')" id="tabBtn-roster" class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2">
-        <span>🤖 2. Phiên Làm Việc & Worktrees</span>
-      </button>
-      <button onclick="switchTab('queue')" id="tabBtn-queue" class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2">
-        <span>🗺️ 3. Lộ Trình <span id="tabQueueCountLabel">—</span> Đầu Việc</span>
-      </button>
-      <button onclick="switchTab('activity')" id="tabBtn-activity" class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2">
-        <span>📜 4. Nhật Ký Hoạt Động</span>
-      </button>
-      <button onclick="switchTab('health')" id="tabBtn-health" class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2">
-        <span>🩺 5. Sức Khỏe Nguồn Dữ Liệu</span>
-      </button>
-    </nav>
-
-    <!-- TAB PANE 1: GATES & PR EVIDENCE -->
-    <div id="tabPane-gates" class="space-y-6">
-      <div id="conflictsContainer" class="hidden"></div>
-      <div id="activeWorkItemCard"></div>
-      <div id="gatePipelineCard"></div>
-    </div>
-
-    <!-- TAB PANE 2: SESSIONS & WORKTREES -->
-    <div id="tabPane-roster" class="space-y-6 hidden">
-      <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
-        <div class="flex items-center justify-between">
-          <h3 class="text-sm font-bold text-white uppercase tracking-wider">
-            Danh Sách Phiên Làm Việc Agent Orchestrator & Worktrees
-          </h3>
-          <span class="text-xs font-mono text-slate-400">Phân định vai trò tác giả / thẩm định theo AGENTS.md</span>
+      <!-- TAB PANE 3: QUEUE (dynamic total, never hardcoded) -->
+      <div id="tabPane-queue" class="space-y-6 hidden">
+        <div
+          class="flex flex-col md:flex-row gap-3 items-center justify-between bg-slate-900/60 p-4 rounded-xl border border-slate-800"
+        >
+          <input
+            type="text"
+            id="searchInput"
+            placeholder="🔍 Tìm mã task (FEAT-AUTH, TASK-AI), tên tính năng..."
+            class="w-full md:w-80 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
+          />
+          <div class="flex flex-wrap items-center gap-2">
+            <select
+              id="sliceFilter"
+              class="bg-slate-800 border border-slate-700 text-xs px-3 py-1.5 rounded-lg text-slate-200"
+            >
+              <option value="ALL">Tất Cả Slices (S00..S11)</option>
+              <option value="S00">S00: Foundation & AI Workflow</option>
+              <option value="S01">S01: Identity & Multi-tenant</option>
+              <option value="S02">S02: Carrier Credentials</option>
+              <option value="S03">S03: Orders Intake & Address</option>
+              <option value="S04">S04: Rate Comparison & Policy</option>
+              <option value="S05">S05: Fulfillment & Waybills</option>
+              <option value="S06">S06: Tracking & Normalisation</option>
+              <option value="S07">S07: Delivery Exceptions & CSKH</option>
+              <option value="S08">S08: Pricing & Contract Rates</option>
+              <option value="S09">S09: COD Settlement & 3-Ledgers</option>
+              <option value="S10">S10: Claims & Damages</option>
+              <option value="S11">S11: Reconciliation & Audit Matrix</option>
+            </select>
+            <select
+              id="statusFilter"
+              class="bg-slate-800 border border-slate-700 text-xs px-3 py-1.5 rounded-lg text-slate-200"
+            >
+              <option value="ALL">Tất Cả Trạng Thái</option>
+              <option value="MERGED">Đã Merge</option>
+              <option value="READY_FOR_CODEX">Chờ Codex Review</option>
+              <option value="READY_FOR_AUTHOR">Sẵn Sàng Làm</option>
+              <option value="IN_PROGRESS">Đang Thực Hiện</option>
+              <option value="BLOCKED_DEPENDENCY">Khóa Phụ Thuộc</option>
+              <option value="BLOCKED_BY_FOUNDATION">Chờ Nền Tảng S00</option>
+            </select>
+            <span class="text-xs text-slate-400 font-mono" id="taskCountLabel">Đang tải...</span>
+          </div>
         </div>
-        <div class="overflow-x-auto custom-scroll">
-          <table class="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr class="border-b border-slate-800 text-[11px] font-mono uppercase text-slate-400 bg-slate-800/40">
-                <th class="p-3">Session ID</th>
-                <th class="p-3">Vai Trò Được Phân Công</th>
-                <th class="p-3">Harness</th>
-                <th class="p-3">Nhánh / Worktree</th>
-                <th class="p-3">Trạng Thái</th>
-                <th class="p-3">Quyền Ghi Code</th>
-                <th class="p-3">Độ Tươi Dữ Liệu</th>
-              </tr>
-            </thead>
-            <tbody id="sessionsTableBody">
-              <!-- Dynamically populated -->
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
 
-    <!-- TAB PANE 3: QUEUE (dynamic total, never hardcoded) -->
-    <div id="tabPane-queue" class="space-y-6 hidden">
-      <div class="flex flex-col md:flex-row gap-3 items-center justify-between bg-slate-900/60 p-4 rounded-xl border border-slate-800">
-        <input type="text" id="searchInput" placeholder="🔍 Tìm mã task (FEAT-AUTH, TASK-AI), tên tính năng..." class="w-full md:w-80 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand">
-        <div class="flex flex-wrap items-center gap-2">
-          <select id="sliceFilter" class="bg-slate-800 border border-slate-700 text-xs px-3 py-1.5 rounded-lg text-slate-200">
-            <option value="ALL">Tất Cả Slices (S00..S11)</option>
-            <option value="S00">S00: Foundation & AI Workflow</option>
-            <option value="S01">S01: Identity & Multi-tenant</option>
-            <option value="S02">S02: Carrier Credentials</option>
-            <option value="S03">S03: Orders Intake & Address</option>
-            <option value="S04">S04: Rate Comparison & Policy</option>
-            <option value="S05">S05: Fulfillment & Waybills</option>
-            <option value="S06">S06: Tracking & Normalisation</option>
-            <option value="S07">S07: Delivery Exceptions & CSKH</option>
-            <option value="S08">S08: Pricing & Contract Rates</option>
-            <option value="S09">S09: COD Settlement & 3-Ledgers</option>
-            <option value="S10">S10: Claims & Damages</option>
-            <option value="S11">S11: Reconciliation & Audit Matrix</option>
-          </select>
-          <select id="statusFilter" class="bg-slate-800 border border-slate-700 text-xs px-3 py-1.5 rounded-lg text-slate-200">
-            <option value="ALL">Tất Cả Trạng Thái</option>
-            <option value="MERGED">Đã Merge</option>
-            <option value="READY_FOR_CODEX">Chờ Codex Review</option>
-            <option value="READY_FOR_AUTHOR">Sẵn Sàng Làm</option>
-            <option value="IN_PROGRESS">Đang Thực Hiện</option>
-            <option value="BLOCKED_DEPENDENCY">Khóa Phụ Thuộc</option>
-            <option value="BLOCKED_BY_FOUNDATION">Chờ Nền Tảng S00</option>
-          </select>
-          <span class="text-xs text-slate-400 font-mono" id="taskCountLabel">Đang tải...</span>
+        <div class="bg-slate-900/80 rounded-2xl border border-slate-800 overflow-hidden">
+          <div class="overflow-x-auto custom-scroll">
+            <table class="responsive-table w-full text-left text-xs border-collapse">
+              <thead>
+                <tr
+                  class="border-b border-slate-800 text-[11px] font-mono uppercase text-slate-400 bg-slate-800/40"
+                >
+                  <th class="p-3 w-12">#</th>
+                  <th class="p-3 w-16">Slice</th>
+                  <th class="p-3 w-32">Mã Task</th>
+                  <th class="p-3">Tên & Hành Vi Tính Năng</th>
+                  <th class="p-3 w-36">Trạng Thái</th>
+                  <th class="p-3 w-28">Tác Giả</th>
+                  <th class="p-3 w-24">PR</th>
+                  <th class="p-3 w-28">Codex</th>
+                </tr>
+              </thead>
+              <tbody id="tasksTableBody">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      <div class="bg-slate-900/80 rounded-2xl border border-slate-800 overflow-hidden">
-        <div class="overflow-x-auto custom-scroll">
-          <table class="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr class="border-b border-slate-800 text-[11px] font-mono uppercase text-slate-400 bg-slate-800/40">
-                <th class="p-3 w-12">#</th>
-                <th class="p-3 w-16">Slice</th>
-                <th class="p-3 w-32">Mã Task</th>
-                <th class="p-3">Tên & Hành Vi Tính Năng</th>
-                <th class="p-3 w-36">Trạng Thái</th>
-                <th class="p-3 w-28">Tác Giả</th>
-                <th class="p-3 w-24">PR</th>
-                <th class="p-3 w-28">Codex</th>
-              </tr>
-            </thead>
-            <tbody id="tasksTableBody">
-              <!-- Dynamically populated -->
-            </tbody>
-          </table>
+      <!-- TAB PANE 4: ACTIVITY -->
+      <div id="tabPane-activity" class="space-y-6 hidden">
+        <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
+          <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+            <h3 class="text-sm font-bold text-white uppercase tracking-wider">
+              Nhật Ký Hoạt Động Gần Đây (Git Commits & AO Events)
+            </h3>
+            <span class="text-xs font-mono text-slate-400">Thời gian thực</span>
+          </div>
+          <div class="space-y-2.5" id="activityStreamList">
+            <!-- Dynamically populated -->
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- TAB PANE 4: ACTIVITY -->
-    <div id="tabPane-activity" class="space-y-6 hidden">
-      <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
-        <div class="flex items-center justify-between pb-3 border-b border-slate-800">
-          <h3 class="text-sm font-bold text-white uppercase tracking-wider">
-            Nhật Ký Hoạt Động Gần Đây (Git Commits & AO Events)
-          </h3>
-          <span class="text-xs font-mono text-slate-400">Thời gian thực</span>
-        </div>
-        <div class="space-y-2.5" id="activityStreamList">
-          <!-- Dynamically populated -->
-        </div>
-      </div>
-    </div>
-
-    <!-- TAB PANE 5: HEALTH & DIAGNOSTICS -->
-    <div id="tabPane-health" class="space-y-6 hidden">
-      <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
-        <div class="flex items-center justify-between pb-3 border-b border-slate-800">
-          <h3 class="text-sm font-bold text-white uppercase tracking-wider">
-            Chi Tiết Sức Khỏe & Chẩn Đoán Từng Nguồn Dữ Liệu
-          </h3>
-          <span class="text-xs font-mono text-slate-400">Không dùng dữ liệu mô phỏng giả lập</span>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="diagnosticsPanel">
-          <!-- Dynamically populated -->
+      <!-- TAB PANE 5: HEALTH & DIAGNOSTICS -->
+      <div id="tabPane-health" class="space-y-6 hidden">
+        <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
+          <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+            <h3 class="text-sm font-bold text-white uppercase tracking-wider">
+              Chi Tiết Sức Khỏe & Chẩn Đoán Từng Nguồn Dữ Liệu
+            </h3>
+            <span class="text-xs font-mono text-slate-400"
+              >Không dùng dữ liệu mô phỏng giả lập</span
+            >
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="diagnosticsPanel">
+            <!-- Dynamically populated -->
+          </div>
         </div>
       </div>
-    </div>
-  </main>
+    </main>
 
-  <footer class="border-t border-slate-800/80 py-4 px-6 text-center text-xs text-slate-400 font-mono">
-    Ship Dễ Platform Cockpit • Giám sát độc lập theo hợp đồng giao việc AGENTS.md • TASK-AI-15
-  </footer>
+    <footer
+      class="border-t border-slate-800/80 py-4 px-6 text-center text-xs text-slate-400 font-mono"
+    >
+      Ship Dễ Platform Cockpit • Giám sát độc lập theo hợp đồng giao việc AGENTS.md • TASK-AI-15
+    </footer>
 
-  <script src="/client.js"></script>
-</body>
+    <script src="/client.js"></script>
+  </body>
 </html>

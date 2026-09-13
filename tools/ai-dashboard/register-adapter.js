@@ -138,7 +138,7 @@ function parseRegisterCsv(text, rootDir) {
         }
         currentRow.push(currentField.trim());
         currentField = '';
-        if (currentRow.length > 0 && currentRow.some(f => f.length > 0)) {
+        if (currentRow.length > 0 && currentRow.some((f) => f.length > 0)) {
           rows.push(currentRow);
         }
         currentRow = [];
@@ -147,7 +147,7 @@ function parseRegisterCsv(text, rootDir) {
       } else if (char === '\n') {
         currentRow.push(currentField.trim());
         currentField = '';
-        if (currentRow.length > 0 && currentRow.some(f => f.length > 0)) {
+        if (currentRow.length > 0 && currentRow.some((f) => f.length > 0)) {
           rows.push(currentRow);
         }
         currentRow = [];
@@ -164,14 +164,14 @@ function parseRegisterCsv(text, rootDir) {
   // Flush remaining field/row
   if (currentField.length > 0 || currentRow.length > 0) {
     currentRow.push(currentField.trim());
-    if (currentRow.length > 0 && currentRow.some(f => f.length > 0)) {
+    if (currentRow.length > 0 && currentRow.some((f) => f.length > 0)) {
       rows.push(currentRow);
     }
   }
 
   if (rows.length < 2) return [];
 
-  const headers = rows[0].map(h => h.toLowerCase().trim());
+  const headers = rows[0].map((h) => h.toLowerCase().trim());
   const items = [];
 
   for (let r = 1; r < rows.length; r++) {
@@ -221,19 +221,19 @@ function deriveRegisterState(items, preferredBranch = null) {
   // 5. First non-merged item
   let activeItem = null;
   if (preferredBranch) {
-    activeItem = items.find(it => it.branch === preferredBranch && it.status !== 'MERGED');
+    activeItem = items.find((it) => it.branch === preferredBranch && it.status !== 'MERGED');
   }
   if (!activeItem) {
-    activeItem = items.find(it => it.status === 'IN_PROGRESS');
+    activeItem = items.find((it) => it.status === 'IN_PROGRESS');
   }
   if (!activeItem) {
-    activeItem = items.find(it => it.status === 'READY_FOR_CODEX');
+    activeItem = items.find((it) => it.status === 'READY_FOR_CODEX');
   }
   if (!activeItem) {
-    activeItem = items.find(it => it.status === 'READY_FOR_AUTHOR');
+    activeItem = items.find((it) => it.status === 'READY_FOR_AUTHOR');
   }
   if (!activeItem) {
-    activeItem = items.find(it => it.status && it.status !== 'MERGED');
+    activeItem = items.find((it) => it.status && it.status !== 'MERGED');
   }
 
   // Derive delivery gate pipeline for the active item
@@ -247,7 +247,7 @@ function deriveRegisterState(items, preferredBranch = null) {
     bySlice,
     activeItem: activeItem || null,
     gatePipeline,
-    items
+    items,
   };
 }
 
@@ -276,8 +276,8 @@ function deriveGatePipeline(activeItem, githubEvidence = null) {
         { name: 'AUTHORING', label: '2. Implementation Author', status: 'IDLE' },
         { name: 'CODEX_REVIEW', label: '3. Independent Codex Review', status: 'IDLE' },
         { name: 'CI_GATES', label: '4. Exact-HEAD CI', status: 'IDLE' },
-        { name: 'HUMAN_MERGE', label: '5. Merge Owner Gate', status: 'IDLE' }
-      ]
+        { name: 'HUMAN_MERGE', label: '5. Merge Owner Gate', status: 'IDLE' },
+      ],
     };
   }
 
@@ -289,7 +289,7 @@ function deriveGatePipeline(activeItem, githubEvidence = null) {
     { name: 'AUTHORING', label: '2. Implementation Author', status: 'PENDING' },
     { name: 'CODEX_REVIEW', label: '3. Independent Codex Review', status: 'PENDING' },
     { name: 'CI_GATES', label: '4. Exact-HEAD CI', status: 'PENDING' },
-    { name: 'HUMAN_MERGE', label: '5. Merge Owner Gate', status: 'PENDING' }
+    { name: 'HUMAN_MERGE', label: '5. Merge Owner Gate', status: 'PENDING' },
   ];
 
   const evidenceAvailable = Boolean(githubEvidence && githubEvidence.available);
@@ -308,7 +308,7 @@ function deriveGatePipeline(activeItem, githubEvidence = null) {
     gates[2].status = 'FAILED';
     currentGate = 'AUTHORING';
   } else if (status === 'MERGED') {
-    gates.forEach(g => g.status = 'PASSED');
+    gates.forEach((g) => (g.status = 'PASSED'));
     currentGate = 'MERGED';
   } else if (status.startsWith('BLOCKED')) {
     gates[0].status = 'BLOCKED';
@@ -327,9 +327,21 @@ function deriveGatePipeline(activeItem, githubEvidence = null) {
     } else {
       gates[2].status = codexPass ? 'PASSED' : 'IN_PROGRESS';
       gates[3].status = ciPassed ? 'PASSED' : 'IN_PROGRESS';
-      if (codexPass && ciPassed) {
+
+      const isPreflightReady =
+        githubEvidence && typeof githubEvidence.readyForMerge === 'boolean'
+          ? githubEvidence.readyForMerge
+          : codexPass &&
+            ciPassed &&
+            githubEvidence.mergeable !== false &&
+            githubEvidence.unresolvedThreadsVerified !== false;
+
+      if (isPreflightReady) {
         gates[4].status = 'READY';
         currentGate = 'HUMAN_MERGE';
+      } else if (codexPass && ciPassed) {
+        gates[4].status = 'PENDING';
+        currentGate = 'PREFLIGHT_PENDING';
       } else {
         currentGate = 'CODEX_REVIEW';
       }
@@ -357,9 +369,9 @@ function loadRegister(filePath, preferredBranch = null, rootDir = null) {
           latencyMs: Date.now() - startTime,
           provenance: filePath,
           impact: 'Delivery register file does not exist on disk',
-          error: `File not found: ${filePath}`
+          error: `File not found: ${filePath}`,
         },
-        data: deriveRegisterState([])
+        data: deriveRegisterState([]),
       };
     }
 
@@ -375,9 +387,9 @@ function loadRegister(filePath, preferredBranch = null, rootDir = null) {
         latencyMs: Date.now() - startTime,
         provenance: filePath,
         impact: 'None — canonical delivery register healthy',
-        error: null
+        error: null,
       },
-      data: derived
+      data: derived,
     };
   } catch (err) {
     return {
@@ -388,9 +400,9 @@ function loadRegister(filePath, preferredBranch = null, rootDir = null) {
         latencyMs: Date.now() - startTime,
         provenance: filePath,
         impact: 'Cannot read delivery queue',
-        error: err.message
+        error: err.message,
       },
-      data: deriveRegisterState([])
+      data: deriveRegisterState([]),
     };
   }
 }
@@ -402,5 +414,5 @@ module.exports = {
   deriveGatePipeline,
   loadRegister,
   resolveAssignedAuthorFromWorkItem,
-  resetWorkItemAuthorCacheForTest
+  resetWorkItemAuthorCacheForTest,
 };

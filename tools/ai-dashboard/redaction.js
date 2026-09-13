@@ -19,7 +19,7 @@ const TOKEN_PATTERNS = [
   /AGENTROUTER_API_KEY=[^\s,;]+/gi,
   /OPENAI_API_KEY=[^\s,;]+/gi,
   /ANTHROPIC_API_KEY=[^\s,;]+/gi,
-  /GEMINI_API_KEY=[^\s,;]+/gi
+  /GEMINI_API_KEY=[^\s,;]+/gi,
 ];
 
 // Normalize and redact sensitive user home path segments
@@ -61,7 +61,7 @@ function redactObject(obj) {
   if (typeof obj === 'string') return redactSensitive(obj);
   if (typeof obj === 'number' || typeof obj === 'boolean') return obj;
   if (Array.isArray(obj)) {
-    return obj.map(item => redactObject(item));
+    return obj.map((item) => redactObject(item));
   }
   if (typeof obj === 'object') {
     const result = {};
@@ -81,5 +81,5 @@ function redactObject(obj) {
 module.exports = {
   redactSensitive,
   redactPath,
-  redactObject
+  redactObject,
 };
