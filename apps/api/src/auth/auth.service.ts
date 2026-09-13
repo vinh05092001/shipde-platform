@@ -674,11 +674,7 @@ export class AuthService {
   }
 
   private isUniqueConstraintViolation(err: unknown): boolean {
-    return (
-      typeof err === 'object' &&
-      err !== null &&
-      (err as { code?: string }).code === 'P2002'
-    );
+    return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002';
   }
 
   private async issueAndSendVerification(
