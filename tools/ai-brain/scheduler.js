@@ -44,6 +44,24 @@ const RESEARCH_ROLES = new Set(['analyst.default', 'planner.default']);
 // parallel with authoring by nature, and is the right home for spare capacity.
 const REVIEW_ROLES = new Set(['reviewer.primary', 'reviewer.fallback']);
 
+/**
+ * The provider-reported readings the cache still vouches for.
+ *
+ * Failing to read the cache yields no readings rather than an error. The
+ * scheduler planned dispatch before these figures existed and must still plan
+ * without them; what it must never do is treat their absence as evidence that
+ * every budget is full.
+ */
+function cachedReadings(ctx) {
+  try {
+    const { readIdentity } = require('./agy-identity');
+    const { usableReadings } = require('./quota-store');
+    return usableReadings(readIdentity({ home: ctx.home }), { home: ctx.home, now: ctx.now }).reported;
+  } catch (e) {
+    return {};
+  }
+}
+
 function waiting(item, reason, detail) {
   return {
     workItemId: item.workItemId,
@@ -66,7 +84,17 @@ function planDispatch(items, accounts, context) {
   // Dispatch is per model, not per account: one key exposes many models and
   // choosing "the account" says nothing about which will write the code.
   const offerings = expandOfferings(accounts);
-  const headrooms = headroomForAll(offerings, ctx.eventsByAccount || {}, ctx.eventsByOffering || {}, { now });
+
+  // What each provider says is left. Without this the ladder drops a tier only
+  // after a refusal has already been collected, which costs a dispatch, a wait
+  // and a retry to learn something the provider was willing to state up front.
+  // Read from the cache rather than by calling a CLI: planning must not block
+  // on a round trip per account.
+  const reported = ctx.reported !== undefined ? ctx.reported : cachedReadings(ctx);
+  const headrooms = headroomForAll(offerings, ctx.eventsByAccount || {}, ctx.eventsByOffering || {}, {
+    now,
+    reported,
+  });
 
   // What is already in flight, from the caller rather than inferred: the
   // scheduler must never assume a slot is free because it cannot see the work.
