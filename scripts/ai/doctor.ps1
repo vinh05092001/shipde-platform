@@ -694,7 +694,11 @@ $hooksConfigured = New-Object System.Collections.Generic.List[string]
 foreach ($entry in $paths.GetEnumerator()) {
     if (-not (Test-Path -LiteralPath (Join-Path $entry.Value ".git"))) { continue }
     $hooksHere = (@(& git -C $entry.Value config core.hooksPath 2>$null) -join "").Trim()
-    if ($hooksHere -and ($hooksHere -match $script:HooksPathPattern)) {
+    # A configured path is not an installed hook. Checking only the path would
+    # report CONFIGURED for precisely the case getHookStatus was written to
+    # catch: the directory set, no pre-commit in it, commits running free.
+    $hookFileHere = if ($hooksHere) { Join-Path $entry.Value (Join-Path $hooksHere "pre-commit") } else { $null }
+    if ($hooksHere -and ($hooksHere -match $script:HooksPathPattern) -and (Test-Path -LiteralPath $hookFileHere)) {
         $hooksConfigured.Add($entry.Key)
     } else {
         $hooksMissing.Add($entry.Key)

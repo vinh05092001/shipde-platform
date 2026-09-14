@@ -362,3 +362,65 @@ describe('A configured path is not an installed hook', () => {
     }
   });
 });
+
+describe('Where git looks for the hook is where we must look', () => {
+  // git resolves a relative core.hooksPath against the working-tree top level.
+  // Resolving it against the current directory reported NOT INSTALLED from any
+  // subdirectory of a correctly installed repository.
+  function repoWithHook() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sub-'));
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    fs.mkdirSync(path.join(dir, '.githooks'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.githooks', 'pre-commit'), '#!/bin/sh\nexit 0\n');
+    fs.mkdirSync(path.join(dir, 'tools', 'deep'), { recursive: true });
+    execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: dir });
+    return dir;
+  }
+
+  test('status from a subdirectory still reports installed', () => {
+    const dir = repoWithHook();
+    try {
+      const s = getHookStatus({ cwd: path.join(dir, 'tools', 'deep') });
+      assert.strictEqual(s.installed, true);
+      assert.strictEqual(s.configuredOnly, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('status from the top level agrees', () => {
+    const dir = repoWithHook();
+    try {
+      assert.strictEqual(getHookStatus({ cwd: dir }).installed, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('installHook says when it configured nothing useful', () => {
+  test('a repository without the hook file reports hookPresent false', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-nohook-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      const r = installHook({ cwd: dir });
+      assert.strictEqual(r.success, true);
+      assert.strictEqual(r.hookPresent, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a repository with the hook file reports hookPresent true', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-hook-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      fs.mkdirSync(path.join(dir, '.githooks'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.githooks', 'pre-commit'), '#!/bin/sh\nexit 0\n');
+      const r = installHook({ cwd: dir });
+      assert.strictEqual(r.hookPresent, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -279,9 +279,24 @@ function getHookStatus(options) {
     // A configured path is not an installed hook. Pointing core.hooksPath at
     // a directory with no pre-commit in it reported INSTALLED while commits
     // ran free, which is the one answer this function must never get wrong.
+    // git resolves a relative core.hooksPath against the working-tree top
+    // level, not the current directory. Resolving against cwd made `status`
+    // report NOT INSTALLED from any subdirectory of a correctly installed
+    // repository -- the same false-negative class the unscoped `git config`
+    // call produced in doctor.ps1.
+    let topLevel = opts.cwd || process.cwd();
+    try {
+      topLevel = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+        cwd: opts.cwd || process.cwd(),
+        encoding: 'utf8',
+        timeout: 5000,
+      }).trim();
+    } catch (e) {
+      /* not a repository, or git unavailable: fall back to the given cwd */
+    }
     const hookFile = path.isAbsolute(hooksPath)
       ? path.join(hooksPath, 'pre-commit')
-      : path.join(opts.cwd || process.cwd(), hooksPath, 'pre-commit');
+      : path.join(topLevel, hooksPath, 'pre-commit');
     const hookPresent = isGithooks && fs.existsSync(hookFile);
     return {
       installed: hookPresent,

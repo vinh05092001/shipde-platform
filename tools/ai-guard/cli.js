@@ -57,6 +57,20 @@ async function main() {
   if (command === 'install') {
     const result = installHook({ global: args.global });
     if (result.success) {
+      // installHook reports whether the hook file is actually there. Printing
+      // success regardless would announce a clean install on a checkout whose
+      // commits run unguarded, which is the one thing that function exists to
+      // distinguish.
+      if (!result.hookPresent) {
+        console.error(
+          'Cảnh báo: đã đặt core.hooksPath = .githooks nhưng không có .githooks/pre-commit; ' +
+            'hook chưa bảo vệ điều gì.'
+        );
+        if (args.strict) {
+          process.exit(1);
+        }
+        return;
+      }
       console.log('Đã cài đặt pre-commit hook (core.hooksPath = .githooks).');
       return;
     }
