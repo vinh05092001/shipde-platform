@@ -95,10 +95,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path ../shipde-brain",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["FOUNDATION", "RESEARCH_ONLY"]
     },
     {
       "id": "nine-router",
@@ -119,10 +116,7 @@
       "telemetry_network_behavior": "localhost-only-telemetry-off",
       "health_check": "Test-ShipDePort -HostName 127.0.0.1 -Port 20128",
       "rollback": "Stop-Process -Name 9router -Force",
-      "profiles": [
-        "FOUNDATION",
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["FOUNDATION", "RESEARCH_ONLY"]
     },
     {
       "id": "deepseek-harness",
@@ -143,10 +137,7 @@
       "telemetry_network_behavior": "localhost-only-telemetry-off",
       "health_check": "Test-ShipDePort -HostName 127.0.0.1 -Port 3080",
       "rollback": "Stop-Process -Name dsh -Force",
-      "profiles": [
-        "FOUNDATION",
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["FOUNDATION", "RESEARCH_ONLY"]
     },
     {
       "id": "gemini-cli",
@@ -221,10 +212,7 @@
       "telemetry_network_behavior": "openai-api-only",
       "health_check": "codex login status",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "PR_REVIEW"
-      ],
+      "profiles": ["FOUNDATION", "PR_REVIEW"],
       "observed_version_or_commit": "0.154.0",
       "version_drift_note": "Observed installed version is 0.154.0 (@openai/codex@0.154.0); manifest pin remains 0.151.0 pending human decision per AI-TOOLCHAIN-DECISIONS.md."
     },
@@ -247,9 +235,7 @@
       "telemetry_network_behavior": "agentrouter-or-anthropic",
       "health_check": "claude --version",
       "rollback": "N/A",
-      "profiles": [
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["RESEARCH_ONLY"]
     },
     {
       "id": "playwright-cli",
@@ -270,10 +256,7 @@
       "telemetry_network_behavior": "local-chromium-only",
       "health_check": "playwright-cli --version",
       "rollback": "N/A",
-      "profiles": [
-        "UI_FEATURE",
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["UI_FEATURE", "RESEARCH_ONLY"]
     },
     {
       "id": "gh",
@@ -325,11 +308,7 @@
       "telemetry_network_behavior": "localhost-containers-only",
       "health_check": "docker compose version",
       "rollback": "docker compose down",
-      "profiles": [
-        "BACKEND_FEATURE",
-        "CARRIER_INTEGRATION",
-        "COD_AND_SETTLEMENT"
-      ]
+      "profiles": ["BACKEND_FEATURE", "CARRIER_INTEGRATION", "COD_AND_SETTLEMENT"]
     },
     {
       "id": "chrome-devtools-mcp",
@@ -350,10 +329,7 @@
       "telemetry_network_behavior": "localhost-only",
       "health_check": "Get-Command npx",
       "rollback": "Stop-Process -Name chrome-devtools-mcp -Force",
-      "profiles": [
-        "UI_FEATURE",
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["UI_FEATURE", "RESEARCH_ONLY"]
     },
     {
       "id": "vercel-agent-skills",
@@ -374,10 +350,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path tools/snapshots/agent-skills",
       "rollback": "N/A",
-      "profiles": [
-        "UI_FEATURE",
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["UI_FEATURE", "RESEARCH_ONLY"]
     },
     {
       "id": "lighthouse-ci",
@@ -398,10 +371,7 @@
       "telemetry_network_behavior": "localhost-only",
       "health_check": "lhci --version",
       "rollback": "N/A",
-      "profiles": [
-        "UI_FEATURE",
-        "PR_REVIEW"
-      ]
+      "profiles": ["UI_FEATURE", "PR_REVIEW"]
     },
     {
       "id": "storybook",
@@ -422,9 +392,7 @@
       "telemetry_network_behavior": "localhost-only",
       "health_check": "storybook --version",
       "rollback": "N/A",
-      "profiles": [
-        "UI_FEATURE"
-      ]
+      "profiles": ["UI_FEATURE"]
     },
     {
       "id": "msw",
@@ -445,11 +413,7 @@
       "telemetry_network_behavior": "localhost-only",
       "health_check": "Test-Path node_modules/msw",
       "rollback": "N/A",
-      "profiles": [
-        "BACKEND_FEATURE",
-        "CARRIER_INTEGRATION",
-        "UI_FEATURE"
-      ]
+      "profiles": ["BACKEND_FEATURE", "CARRIER_INTEGRATION", "UI_FEATURE"]
     },
     {
       "id": "openapi-typescript",
@@ -470,12 +434,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "openapi-typescript --version",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "BACKEND_FEATURE",
-        "CARRIER_INTEGRATION",
-        "PR_REVIEW"
-      ]
+      "profiles": ["FOUNDATION", "BACKEND_FEATURE", "CARRIER_INTEGRATION", "PR_REVIEW"]
     },
     {
       "id": "open-spec",
@@ -496,11 +455,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path tools/snapshots/openspec",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "RESEARCH_ONLY",
-        "PR_REVIEW"
-      ]
+      "profiles": ["FOUNDATION", "RESEARCH_ONLY", "PR_REVIEW"]
     },
     {
       "id": "spec-kit",
@@ -521,10 +476,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path tools/snapshots/spec-kit",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["FOUNDATION", "RESEARCH_ONLY"]
     },
     {
       "id": "beads",
@@ -545,9 +497,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path tools/snapshots/beads",
       "rollback": "N/A",
-      "profiles": [
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["RESEARCH_ONLY"]
     },
     {
       "id": "sylph",
@@ -568,10 +518,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path tools/snapshots/sylph",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "SECURITY_REVIEW"
-      ]
+      "profiles": ["FOUNDATION", "SECURITY_REVIEW"]
     },
     {
       "id": "context7",
@@ -590,19 +537,14 @@
       "blocking_policy": "NON_BLOCKING",
       "permissions": "workspace-read-index",
       "telemetry_network_behavior": "context7-api-outbound-https",
-      "outbound_endpoints": [
-        "https://context7.com/api"
-      ],
+      "outbound_endpoints": ["https://context7.com/api"],
       "credential_requirement": "optional-api-key (CONTEXT7_API_KEY for elevated limits; unauthenticated public doc retrieval supported)",
       "data_sent": "Target library names and documentation query terms (no local repository source code sent)",
       "telemetry_defaults": "disabled",
       "local_mode": "read-only-cache",
       "health_check": "ctx7 --version",
       "rollback": "N/A",
-      "profiles": [
-        "RESEARCH_ONLY",
-        "PR_REVIEW"
-      ]
+      "profiles": ["RESEARCH_ONLY", "PR_REVIEW"]
     },
     {
       "id": "hermes-agent",
@@ -623,9 +565,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path tools/snapshots/hermes-agent",
       "rollback": "N/A",
-      "profiles": [
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["RESEARCH_ONLY"]
     },
     {
       "id": "agent-scan",
@@ -644,20 +584,14 @@
       "blocking_policy": "NON_BLOCKING",
       "permissions": "authenticated-security-scan",
       "telemetry_network_behavior": "snyk-api-outbound-https",
-      "outbound_endpoints": [
-        "https://api.snyk.io",
-        "https://app.snyk.io"
-      ],
+      "outbound_endpoints": ["https://api.snyk.io", "https://app.snyk.io"],
       "credential_requirement": "required-snyk-token (SNYK_TOKEN required for Snyk platform analysis and Evo reporting)",
       "data_sent": "Skill metadata, configuration schemas, and scanned prompt text sent to Snyk policy engine",
       "telemetry_defaults": "snyk-cli-telemetry-governed",
       "local_mode": "local-rule-evaluation (requires SNYK_TOKEN for rule catalog synchronization)",
       "health_check": "snyk-agent-scan --version",
       "rollback": "N/A",
-      "profiles": [
-        "SECURITY_REVIEW",
-        "PR_REVIEW"
-      ]
+      "profiles": ["SECURITY_REVIEW", "PR_REVIEW"]
     },
     {
       "id": "token-tracker",
@@ -678,10 +612,7 @@
       "telemetry_network_behavior": "local-metrics-only",
       "health_check": "token-tracker --version",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "NIGHTLY_MAINTENANCE"
-      ]
+      "profiles": ["FOUNDATION", "NIGHTLY_MAINTENANCE"]
     },
     {
       "id": "renovate",
@@ -702,9 +633,7 @@
       "telemetry_network_behavior": "api.github.com-only",
       "health_check": "renovate --version",
       "rollback": "N/A",
-      "profiles": [
-        "NIGHTLY_MAINTENANCE"
-      ]
+      "profiles": ["NIGHTLY_MAINTENANCE"]
     },
     {
       "id": "lefthook",
@@ -725,10 +654,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "lefthook version",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "SECURITY_REVIEW"
-      ]
+      "profiles": ["FOUNDATION", "SECURITY_REVIEW"]
     },
     {
       "id": "serena",
@@ -749,9 +675,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path tools/snapshots/serena",
       "rollback": "N/A",
-      "profiles": [
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["RESEARCH_ONLY"]
     },
     {
       "id": "repomix",
@@ -772,10 +696,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "repomix --version",
       "rollback": "N/A",
-      "profiles": [
-        "RESEARCH_ONLY",
-        "PR_REVIEW"
-      ]
+      "profiles": ["RESEARCH_ONLY", "PR_REVIEW"]
     },
     {
       "id": "prism",
@@ -796,10 +717,7 @@
       "telemetry_network_behavior": "localhost-only-telemetry-off",
       "health_check": "Test-ShipDePort -HostName 127.0.0.1 -Port 4010",
       "rollback": "Stop-Process -Name prism -Force",
-      "profiles": [
-        "BACKEND_FEATURE",
-        "CARRIER_INTEGRATION"
-      ]
+      "profiles": ["BACKEND_FEATURE", "CARRIER_INTEGRATION"]
     },
     {
       "id": "gitleaks",
@@ -820,12 +738,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "gitleaks version",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "SECURITY_REVIEW",
-        "PR_REVIEW",
-        "NIGHTLY_MAINTENANCE"
-      ]
+      "profiles": ["FOUNDATION", "SECURITY_REVIEW", "PR_REVIEW", "NIGHTLY_MAINTENANCE"]
     },
     {
       "id": "axe-core",
@@ -846,10 +759,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path node_modules/axe-core",
       "rollback": "N/A",
-      "profiles": [
-        "UI_FEATURE",
-        "PR_REVIEW"
-      ]
+      "profiles": ["UI_FEATURE", "PR_REVIEW"]
     },
     {
       "id": "playwright-mcp",
@@ -870,10 +780,7 @@
       "telemetry_network_behavior": "localhost-only",
       "health_check": "Get-Command npx",
       "rollback": "Stop-Process -Name playwright-mcp -Force",
-      "profiles": [
-        "UI_FEATURE",
-        "RESEARCH_ONLY"
-      ]
+      "profiles": ["UI_FEATURE", "RESEARCH_ONLY"]
     },
     {
       "id": "promptfoo",
@@ -894,10 +801,7 @@
       "telemetry_network_behavior": "local-assertions-only",
       "health_check": "promptfoo --version",
       "rollback": "N/A",
-      "profiles": [
-        "FOUNDATION",
-        "SECURITY_REVIEW"
-      ]
+      "profiles": ["FOUNDATION", "SECURITY_REVIEW"]
     },
     {
       "id": "trivy",
@@ -918,10 +822,7 @@
       "telemetry_network_behavior": "local-scan-only",
       "health_check": "trivy --version",
       "rollback": "N/A",
-      "profiles": [
-        "SECURITY_REVIEW",
-        "NIGHTLY_MAINTENANCE"
-      ]
+      "profiles": ["SECURITY_REVIEW", "NIGHTLY_MAINTENANCE"]
     },
     {
       "id": "opentelemetry-js",
@@ -942,10 +843,7 @@
       "telemetry_network_behavior": "localhost-collector-only",
       "health_check": "Test-Path node_modules/@opentelemetry/api",
       "rollback": "N/A",
-      "profiles": [
-        "BACKEND_FEATURE",
-        "CARRIER_INTEGRATION"
-      ]
+      "profiles": ["BACKEND_FEATURE", "CARRIER_INTEGRATION"]
     },
     {
       "id": "vietnamese-provinces-database",
@@ -966,10 +864,7 @@
       "telemetry_network_behavior": "none",
       "health_check": "Test-Path data/vietnamese-provinces",
       "rollback": "N/A",
-      "profiles": [
-        "CARRIER_INTEGRATION",
-        "COD_AND_SETTLEMENT"
-      ]
+      "profiles": ["CARRIER_INTEGRATION", "COD_AND_SETTLEMENT"]
     }
   ],
   "product_dependencies": [
