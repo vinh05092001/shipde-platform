@@ -109,6 +109,53 @@ because a flag that parses is not a hook that fired — a launch command exiting
 zero proves neither. An unreadable ledger reports "cannot verify" and never a
 pass.
 
+## Ecosystem manifest reconciliation against reality (TASK-AI-17)
+
+On 2026-09-14, the automated manifest audit (`node tools/ai-brain/cli.js manifest`)
+evaluated all 37 declared adopted repositories in `tools/ecosystem-manifest.json`
+against reality on the machine and in the monorepo workspace. The audit found:
+
+- 37 repositories declared, 27 checkable, 19 present, 8 missing.
+- 7 ERRORS `QUALITY_GATE_MISSING`: `lighthouse-ci`, `agent-scan`, `token-tracker`,
+  `lefthook`, `gitleaks`, `axe-core`, `trivy` — all declared `ADOPTED`, but none
+  present on the machine or declared in any workspace `package.json`.
+- 1 WARNING `DECLARED_ADOPTED_BUT_ABSENT`: `storybook` — declared `ADOPTED`,
+  but absent from workspace dependencies.
+- Pin drift: `codex-cli` pinned at `0.151.0` while `0.154.0` is installed.
+
+Verdict: the manifest overclaimed reality. A quality gate believed to be running
+when absent is worse than one openly missing, because the pipeline and operators
+assume automated enforcement is active.
+
+Under `AGENTS.md` and policy `AI-TOOL-10`, declared lifecycle states must match
+machine truth; an agent may never flip flags to make an audit pass. The 8 absent
+entries are therefore truthfully downgraded from `ADOPTED` to `PENDING` with
+`default_enabled: false` and `blocking_policy: "NON_BLOCKING"`, unblocking
+focused downstream Work Items:
+
+1. `gitleaks` (`PENDING`): absent from system PATH. Downstream Work Item
+   `TASK-AI-35` evaluates whether to install Gitleaks or adopt Betterleaks.
+2. `lefthook` (`PENDING`): absent from devDependencies. Downstream Work Item
+   `TASK-AI-36` installs and configures Lefthook for pre-commit / pre-push hooks.
+3. `trivy` (`PENDING`): absent from system PATH. Downstream Work Item
+   `TASK-AI-37` integrates Trivy container and dependency vulnerability scanning.
+4. `axe-core` (`PENDING`): absent from devDependencies. Downstream Work Item
+   `TASK-AI-38` integrates automated accessibility auditing via Playwright.
+5. `lighthouse-ci` (`PENDING`): absent from devDependencies. Downstream Work Item
+   `TASK-AI-38` configures performance budgets on critical routes.
+6. `agent-scan` (`PENDING`): absent from python/pip tools. Downstream Work Item
+   `TASK-AI-39` establishes security scanning for agent skills, prompts, and MCPs.
+7. `token-tracker` (`PENDING`): absent from devDependencies; superseded by the
+   internal token usage adapter in `tools/ai-brain` and `tools/ai-dashboard`
+   (TASK-AI-15). Scheduled for formal manifest retirement in `TASK-AI-40`.
+8. `storybook` (`PENDING`): absent from workspace. Maintained as `PENDING`
+   until dedicated component documentation adoption in UI work items.
+
+Codex CLI version drift:
+The manifest entry for `codex-cli` now records `observed_version_or_commit: "0.154.0"`
+and a descriptive version drift note. The manifest pin remains `0.151.0` pending a
+deliberate human upgrade decision per the toolchain policy above.
+
 ## UI quality stack
 
 `TASK-FOUND-04` must make these reviewable in one PR:
