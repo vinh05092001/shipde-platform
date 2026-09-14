@@ -26,6 +26,7 @@
 
 const { eligibleAccounts } = require('./capabilities');
 const { poolHeadroom, rankByHeadroom, isDispatchable } = require('./quota');
+const { tiersOf } = require('./accounts');
 
 const DEFAULTS = {
   maxImplementationAgents: 1,
@@ -139,10 +140,23 @@ function planDispatch(items, accounts, context) {
       continue;
     }
 
-    const withRoom = rankByHeadroom(
-      eligible.map((a) => a.id),
-      headrooms
-    ).filter((id) => (perAccountLoad[id] || 0) < limits.maxPerAccount);
+    // Escalation ladder: exhaust tier 0 before spending tier 1, and tier 1
+    // before tier 2. Without this the cheapest-first sort inside a tier would
+    // happily reach past free local capacity into a metered API key merely
+    // because that key reported more headroom.
+    let withRoom = [];
+    let chosenTier = null;
+    for (const { tier, accounts: inTier } of tiersOf(eligible)) {
+      const ranked = rankByHeadroom(
+        inTier.map((a) => a.id),
+        headrooms
+      ).filter((id) => (perAccountLoad[id] || 0) < limits.maxPerAccount);
+      if (ranked.length > 0) {
+        withRoom = ranked;
+        chosenTier = tier;
+        break;
+      }
+    }
 
     if (withRoom.length === 0) {
       const why = eligible
@@ -167,6 +181,7 @@ function planDispatch(items, accounts, context) {
       provider: chosen.provider,
       model: chosen.model,
       headroom: headrooms[chosen.id].status,
+      tier: chosenTier,
       // Recorded so a later review can see the account was not chosen at random.
       alternatives: withRoom.slice(1, 4),
     });
