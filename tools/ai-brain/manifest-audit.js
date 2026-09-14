@@ -101,8 +101,12 @@ function inCiWorkflows(name, rootDir) {
   } catch (e) {
     return null; // No workflows readable here; unverifiable, not absent.
   }
+  // The id is escaped before it reaches the RegExp. Only gitleaks uses this
+  // path today, but an id carrying a regex metacharacter would either misread
+  // or throw -- and an exception here takes the whole audit run down with it.
+  const safe = String(name).replace(/[-\/\^$*+?.()|[\]{}]/g, '\\$&');
   const pattern = new RegExp(
-    '(install|download|setup|curl|apt-get|brew)[^\n]*\\b' + name + '\\b',
+    '(install|download|setup|curl|apt-get|brew)[^\n]*\\b' + safe + '\\b',
     'i'
   );
   for (const f of files) {

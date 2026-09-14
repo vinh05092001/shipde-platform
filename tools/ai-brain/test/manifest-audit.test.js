@@ -163,3 +163,32 @@ describe('A version written down by hand is still checked', () => {
     assert.ok(!codes(r).includes('PINNED_VERSION_DRIFT'));
   });
 });
+
+describe('The CI probe fails safe, and survives an awkward id', () => {
+  test('an unreadable workflows directory is unverifiable, not absent', () => {
+    // null means "cannot tell". Returning false would let a missing blocking
+    // gate go quiet on any checkout without .github/workflows.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-nowf-'));
+    const r = audit([entry({ id: 'gitleaks', install_method: 'ci-provisioned' })], {
+      rootDir: root,
+    });
+    assert.strictEqual(r.rows[0].present, null);
+    assert.deepStrictEqual(codes(r), []);
+  });
+
+  test('an id containing regex metacharacters does not throw', () => {
+    // An exception here would take the whole audit run down.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-meta-'));
+    fs.mkdirSync(path.join(root, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '.github', 'workflows', 'w.yml'),
+      'steps:\n  - run: curl -sSL install gitleaks\n'
+    );
+    assert.doesNotThrow(() => {
+      const r = audit([entry({ id: 'a+b(c)', install_method: 'ci-provisioned' })], {
+        rootDir: root,
+      });
+      assert.strictEqual(r.rows[0].present, false);
+    });
+  });
+});

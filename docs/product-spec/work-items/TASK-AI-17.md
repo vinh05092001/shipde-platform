@@ -21,10 +21,17 @@
 The ecosystem manifest `tools/ecosystem-manifest.json` is the repository's
 machine-readable source of truth for tooling and quality gates. However, the
 automated manifest audit (`node tools/ai-brain/cli.js manifest`) revealed that
-the manifest overclaims reality: 7 quality gates (`lighthouse-ci`, `agent-scan`,
-`token-tracker`, `lefthook`, `gitleaks`, `axe-core`, `trivy`) and 1 UI tool
+the manifest overclaims reality: 6 quality gates (`lighthouse-ci`,
+`agent-scan`, `token-tracker`, `lefthook`, `axe-core`, `trivy`) and 1 UI tool
 (`storybook`) were declared `ADOPTED` despite being absent from the machine and
 monorepo workspace.
+
+A seventh, `gitleaks`, was reported missing by the same run and was not. It is
+installed by CI at the pinned version and enforced as a blocking gate on every
+Pull Request; the audit could not see it because it probed the local host. That
+one is resolved by correcting the check, never the record — downgrading a live
+blocking gate would be understatement of exactly the kind this Work Item
+exists to prevent.
 
 An absent tool declared as `ADOPTED` is dangerous because every code path,
 workflow, and operator assumes that the corresponding quality gate is actively
@@ -81,11 +88,14 @@ Prohibited in this Work Item:
 
 ## In scope
 
-- Audit each of the 8 absent tools in `tools/ecosystem-manifest.json`
-  (`lighthouse-ci`, `agent-scan`, `token-tracker`, `lefthook`, `gitleaks`,
-  `axe-core`, `trivy`, `storybook`): downgrade `lifecycle_state` from
-  `ADOPTED` to `PENDING`, set `default_enabled: false`, and set
+- Audit each tool the first run reported absent in `tools/ecosystem-manifest.json`.
+  For the 7 genuinely absent (`lighthouse-ci`, `agent-scan`, `token-tracker`,
+  `lefthook`, `axe-core`, `trivy`, `storybook`): downgrade `lifecycle_state`
+  from `ADOPTED` to `PENDING`, set `default_enabled: false`, and set
   `blocking_policy: "NON_BLOCKING"`.
+- For `gitleaks`, which is present via CI: keep `ADOPTED` / `BLOCKING_GATE` and
+  fix the audit instead, adding an `install_method: ci-provisioned` class that
+  is verified against the workflow installing it.
 - Document the downgrade rationale and downstream ownership for each tool in
   `tools/ecosystem-manifest.json` boundaries and `AI-TOOLCHAIN-DECISIONS.md`.
 - Record observed `codex-cli` version drift (`0.154.0` observed vs. `0.151.0`
@@ -135,7 +145,7 @@ register, and toolchain decision documentation.
 | `AC-AI-17-01` | Run manifest audit via `cli.js manifest` | Reports 0 errors and trustworthy = true. The only permitted warning is `PINNED_VERSION_DRIFT` for `codex-cli`, which is real and awaits a human decision under the upgrade rule; a run with zero warnings would mean the drift had been hidden rather than settled | CLI stdout |
 | `AC-AI-17-02` | Run register reconciliation via `cli.js reconcile` | Reports 0 errors | CLI stdout |
 | `AC-AI-17-03` | Run test suite for `ai-brain` and `ai-dashboard` | All 380 tests pass | Test runner stdout |
-| `AC-AI-17-04` | Inspect the 8 absent tools in manifest | All 8 have `lifecycle_state: "PENDING"`, `default_enabled: false`, `blocking_policy: "NON_BLOCKING"` | JSON inspect output |
+| `AC-AI-17-04` | Inspect the absent tools in manifest | The 7 genuinely absent entries have `lifecycle_state: "PENDING"`, `default_enabled: false`, `blocking_policy: "NON_BLOCKING"`. `gitleaks` is excluded and must remain `ADOPTED` / `BLOCKING_GATE` / `install_method: ci-provisioned`: it is installed by CI at the pinned version and was never absent | JSON inspect output |
 | `AC-AI-17-05` | Inspect `codex-cli` manifest entry | Pin remains `0.151.0`, observed drift to `0.154.0` documented | JSON inspect output |
 | `AC-AI-17-06` | Check delivery register status | `TASK-AI-17` recorded at `READY_FOR_CODEX` | CSV row inspection |
 
