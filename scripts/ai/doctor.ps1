@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
     [switch]$TestDocker,
     [switch]$TestModels
@@ -31,6 +31,12 @@ function Invoke-ShipDeBoundedProbe {
             $encodedCommand
         ) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden
 
+        # Touching Handle caches it on the object. Without this, Start-Process
+        # -PassThru hands back a process whose handle is released on exit, and
+        # ExitCode then reads as null rather than the real status — so every
+        # probe compared `-ne 0` and reported failure no matter what happened.
+        $null = $process.Handle
+
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             # Stop the wrapper and every CLI process it spawned. Killing only
             # powershell.exe can leave a detached agent process running.
@@ -61,6 +67,12 @@ function Invoke-ShipDeBoundedProbe {
         } else {
             ""
         }
+        # WaitForExit(milliseconds) returns once the process signals, but does
+        # not complete the async exit processing that populates ExitCode. Without
+        # the parameterless call, ExitCode reads as null, `-ne 0` is true, and
+        # every probe reports failure however well the command actually ran.
+        $process.WaitForExit()
+
         return [PSCustomObject]@{
             ExitCode = $process.ExitCode
             TimedOut = $false
@@ -137,6 +149,75 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
         Write-Host "Codex: AUTHENTICATED"
     }
 }
+
+
+Write-Host ""
+Write-Host "=== CODEX LAUNCH FLAG SURFACE (TASK-AI-16) ==="
+if (Get-Command codex -ErrorAction SilentlyContinue) {
+    # `ao doctor` reports the whole command line as one opaque failure and
+    # blames a CLI version change. Probing the overrides separately says which
+    # one is actually refused, which is the difference between a diagnosis and
+    # a guess.
+    #
+    # Only overrides whose value carries no embedded quotes are probed here.
+    # Windows PowerShell re-quotes an argument before handing it to a native
+    # process and a double quote does not survive that, so a hook override
+    # tested from this script would fail on the quoting rather than on the
+    # CLI — a false failure, which is worse than no check at all. The hook
+    # schema is verified separately; see TASK-AI-16-FINDINGS.md.
+    $simple = [ordered]@{
+        "check_for_update_on_startup" = "check_for_update_on_startup=false"
+        "notice.hide_rate_limit_model_nudge" = "notice.hide_rate_limit_model_nudge=true"
+    }
+
+    $refused = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $simple.Keys) {
+        $probe = Invoke-ShipDeBoundedProbe -CommandText ("& codex features list -c {0}" -f $simple[$name]) -TimeoutSeconds 30
+        if ($probe.TimedOut -or $probe.ExitCode -ne 0) { $refused.Add($name) }
+    }
+
+    if ($refused.Count -eq 0) {
+        Write-Host "Codex simple overrides: ACCEPTED"
+    } else {
+        Write-Host ("Codex simple overrides REFUSED: {0}" -f ($refused -join ", "))
+        $failures.Add("Codex refused basic config overrides: $($refused -join ', ')")
+    }
+
+    # The projects override is the one that actually fails, and its failure mode
+    # is specific: backslashes in a Windows path are consumed as escapes, so the
+    # value arrives as a string where a map was expected. A forward-slash path
+    # parses. Both forms are probed so the report distinguishes "this CLI
+    # changed" from "the path separator is wrong".
+    $tempPath = $env:TEMP
+    if (-not $tempPath) { $tempPath = [System.IO.Path]::GetTempPath().TrimEnd('\') }
+    $q = [char]92 + [char]34
+    $backForm = 'projects={' + $q + $tempPath + $q + '={trust_level=' + $q + 'trusted' + $q + '}}'
+    $fwdForm = 'projects={' + $q + ($tempPath -replace '\\', '/') + $q + '={trust_level=' + $q + 'trusted' + $q + '}}'
+
+    # Single quotes in the generated command keep the backslash-quote pairs
+    # literal all the way to the CLI. A double-quoted wrapper would end the
+    # string at the first inner quote and the value would arrive truncated.
+    $backProbe = Invoke-ShipDeBoundedProbe -CommandText ("& codex features list -c {0}{1}{0}" -f "'", $backForm) -TimeoutSeconds 30
+    $fwdProbe = Invoke-ShipDeBoundedProbe -CommandText ("& codex features list -c {0}{1}{0}" -f "'", $fwdForm) -TimeoutSeconds 30
+
+    $backOk = -not ($backProbe.TimedOut -or $backProbe.ExitCode -ne 0)
+    $fwdOk = -not ($fwdProbe.TimedOut -or $fwdProbe.ExitCode -ne 0)
+
+    if ($backOk) {
+        Write-Host "Codex projects override: ACCEPTED with a backslash path"
+    } elseif ($fwdOk) {
+        Write-Host "Codex projects override: REFUSED with backslashes, ACCEPTED with forward slashes"
+        Write-Host "  Root cause: Windows path separators break config parsing, not a CLI version change."
+        Write-Host "  See docs/product-spec/work-items/TASK-AI-16-FINDINGS.md"
+        $failures.Add("Codex refuses the projects override when the path contains backslashes; AO must emit a forward-slash path")
+    } else {
+        Write-Host "Codex projects override: REFUSED in both path forms"
+        $failures.Add("Codex refuses the projects override regardless of path separator; the config surface changed")
+    }
+} else {
+    Write-Host "Codex: NOT INSTALLED; launch flag surface not checked"
+}
+
 
 $googleCommand = $null
 $googleProbe = $null
