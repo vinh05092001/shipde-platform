@@ -132,10 +132,38 @@ Write-Host "`n=== OPTIONAL/ALTERNATE CLIENTS ==="
 $agyCommand = Get-Command agy -ErrorAction SilentlyContinue
 Write-Host ("Antigravity CLI: {0}" -f $(if ($agyCommand) { "OK  $($agyCommand.Source)" } else { "NOT INSTALLED; Gemini CLI fallback remains available" }))
 
-$agentRouterSaved = -not [string]::IsNullOrWhiteSpace(
-    [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
-)
-Write-Host ("AgentRouter user credential: {0}" -f $(if ($agentRouterSaved) { "CONFIGURED" } else { "NOT CONFIGURED; Claude account authentication will be checked" }))
+$agentRouterKey = [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
+$agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
+
+# Presence is not configuration. A key that is set but rejected reports as
+# CONFIGURED under a presence check, so the dashboard and this report both
+# advertise a fallback that cannot authenticate — and the operator finds out
+# only after the primary path has already failed. AI-44-R01.
+$agentRouterLive = $false
+$agentRouterDetail = "NOT CONFIGURED; Claude account authentication will be checked"
+if ($agentRouterSaved) {
+    try {
+        $probe = Invoke-WebRequest -Uri "https://agentrouter.org/v1/models" `
+            -Headers @{ Authorization = "Bearer $agentRouterKey" } `
+            -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+        $agentRouterLive = ($probe.StatusCode -eq 200)
+        $agentRouterDetail = "CONFIGURED and authenticated"
+    } catch {
+        $status = 0
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -eq 401 -or $status -eq 403) {
+            $agentRouterDetail = "KEY PRESENT BUT REJECTED (HTTP $status); the Claude and Codex fallback route is unavailable"
+            $failures.Add("AGENTROUTER_API_KEY is rejected by agentrouter.org (HTTP $status); renew or remove it — see TASK-AI-44")
+        } else {
+            # A network failure is not a dead key, and saying so would send the
+            # operator to rotate a credential that is fine.
+            $agentRouterDetail = "CONFIGURED but unverified (agentrouter.org unreachable)"
+        }
+    }
+}
+Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)
+Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.org)")
+Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) — a different gateway despite the naming in control.ps1")
 
 Write-Host ""
 Write-Host "=== AGENT AUTHENTICATION ==="
