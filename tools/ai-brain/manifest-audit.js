@@ -162,19 +162,27 @@ function auditManifest(manifest, deps) {
     // --- Overstatement: declared in use, absent in fact -------------------
     if ((state === 'INSTALLED' || state === 'INTEGRATED') && present === false) {
       findings.push(
-        finding('error', 'DECLARED_INSTALLED_BUT_ABSENT', entry,
-          'Khai là ' + state + ' nhưng không tìm thấy trên máy (' + how + ').')
+        finding(
+          'error',
+          'DECLARED_INSTALLED_BUT_ABSENT',
+          entry,
+          'Khai là ' + state + ' nhưng không tìm thấy trên máy (' + how + ').'
+        )
       );
     } else if (state === 'ADOPTED' && present === false) {
       // ADOPTED means accepted for use. A quality gate accepted but absent is
       // the dangerous case: the pipeline believes it is being checked.
       const isGate = /scan|leak|trivy|lefthook|axe|lint|audit/i.test(id + ' ' + (entry.role || ''));
       findings.push(
-        finding(isGate ? 'error' : 'warn',
+        finding(
+          isGate ? 'error' : 'warn',
           isGate ? 'QUALITY_GATE_MISSING' : 'DECLARED_ADOPTED_BUT_ABSENT',
           entry,
-          'Khai ADOPTED nhưng không có trên máy (' + how + ')' +
-            (isGate ? ' — đây là cổng chất lượng, nên đường dẫn tin là đang được kiểm.' : '.'))
+          'Khai ADOPTED nhưng không có trên máy (' +
+            how +
+            ')' +
+            (isGate ? ' — đây là cổng chất lượng, nên đường dẫn tin là đang được kiểm.' : '.')
+        )
       );
     }
 
@@ -184,14 +192,19 @@ function auditManifest(manifest, deps) {
       const exists = repoExists(entry.repository);
       if (exists === false) {
         findings.push(
-          finding('error', 'PINNED_COMMIT_FOR_MISSING_REPO', entry,
+          finding(
+            'error',
+            'PINNED_COMMIT_FOR_MISSING_REPO',
+            entry,
             'Pin ở commit ' + pin.slice(0, 12) + '… nhưng repository không tồn tại.',
-            { repository: entry.repository, pin })
+            { repository: entry.repository, pin }
+          )
         );
       } else if (exists === null) {
         findings.push(
-          finding('info', 'REPO_UNVERIFIED', entry,
-            'Chưa xác minh được repository (cần mạng).', { repository: entry.repository })
+          finding('info', 'REPO_UNVERIFIED', entry, 'Chưa xác minh được repository (cần mạng).', {
+            repository: entry.repository,
+          })
         );
       }
     }
@@ -202,8 +215,12 @@ function auditManifest(manifest, deps) {
     }
     if (!pin) {
       findings.push(
-        finding('warn', 'NOT_PINNED', entry,
-          'Không pin phiên bản hay commit; bản cài có thể trôi mà không ai biết.')
+        finding(
+          'warn',
+          'NOT_PINNED',
+          entry,
+          'Không pin phiên bản hay commit; bản cài có thể trôi mà không ai biết.'
+        )
       );
     }
     if (!entry.role) {
@@ -211,8 +228,12 @@ function auditManifest(manifest, deps) {
     }
     if (entry.blocking_policy === undefined) {
       findings.push(
-        finding('info', 'NO_BLOCKING_POLICY', entry,
-          'Không khai blocking_policy, nên không rõ vắng mặt có chặn dây chuyền hay không.')
+        finding(
+          'info',
+          'NO_BLOCKING_POLICY',
+          entry,
+          'Không khai blocking_policy, nên không rõ vắng mặt có chặn dây chuyền hay không.'
+        )
       );
     }
   }

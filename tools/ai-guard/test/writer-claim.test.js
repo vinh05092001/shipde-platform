@@ -8,13 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const {
-  readClaims,
-  writeClaim,
-  releaseClaim,
-  checkWrite,
-  claimPath,
-} = require('../writer-claim');
+const { readClaims, writeClaim, releaseClaim, checkWrite, claimPath } = require('../writer-claim');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-claim-'));
@@ -132,7 +126,9 @@ describe('Single-writer claim guard', () => {
         branch: 'feat/shared',
         owner: 'shipde-platform-14',
         aoHolders: [],
-        claims: [{ source: 'claim', branch: 'feat/shared', owner: 'direct-terminal', harness: 'direct' }],
+        claims: [
+          { source: 'claim', branch: 'feat/shared', owner: 'direct-terminal', harness: 'direct' },
+        ],
       });
       assert.equal(result.allowed, false, 'the guard is symmetric across both kinds of session');
       assert.match(result.reason, /direct-terminal/);
@@ -150,7 +146,10 @@ describe('Single-writer claim guard', () => {
       const result = await checkWrite({
         branch: 'feat/crowded',
         owner: 'me',
-        aoHolders: [aoSession('s1', 'feat/crowded'), aoSession('s2', 'feat/crowded', 'claude-code')],
+        aoHolders: [
+          aoSession('s1', 'feat/crowded'),
+          aoSession('s2', 'feat/crowded', 'claude-code'),
+        ],
         claims: [{ source: 'claim', branch: 'feat/crowded', owner: 'direct', harness: 'direct' }],
       });
       assert.equal(result.allowed, false);

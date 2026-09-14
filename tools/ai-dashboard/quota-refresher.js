@@ -78,7 +78,11 @@ function startQuotaRefresher(options) {
         output: String(out).trim().slice(-2000),
         error: error ? String(error.message || error) : null,
       };
-      log(lastResult.ok ? 'đã làm mới quota' : 'làm mới quota hỏng: ' + (lastResult.error || 'mã thoát ' + code));
+      log(
+        lastResult.ok
+          ? 'đã làm mới quota'
+          : 'làm mới quota hỏng: ' + (lastResult.error || 'mã thoát ' + code)
+      );
     };
 
     child.on('error', (e) => finish(null, e));

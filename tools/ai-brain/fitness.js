@@ -217,9 +217,7 @@ function scoreOffering(offering, difficulty, headroom, history, options) {
       blended * costWeight +
       Number(offering.preference || 0) * 100,
     reason:
-      runway === null
-        ? 'chưa khai hạn mức token'
-        : 'còn ~' + runway.toFixed(1) + ' lượt việc',
+      runway === null ? 'chưa khai hạn mức token' : 'còn ~' + runway.toFixed(1) + ' lượt việc',
   };
 }
 
@@ -281,7 +279,9 @@ function runwayReport(offerings, difficulty, headrooms, history, options) {
     };
   });
 
-  const sufficient = rows.filter((r) => r.sufficient && r.status !== 'exhausted' && r.status !== 'cooling');
+  const sufficient = rows.filter(
+    (r) => r.sufficient && r.status !== 'exhausted' && r.status !== 'cooling'
+  );
   const knownRunway = sufficient.filter((r) => r.runway !== null);
 
   return {

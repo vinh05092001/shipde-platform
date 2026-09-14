@@ -47,7 +47,11 @@ describe('Capability registry', () => {
   });
 
   test('a disabled account is never eligible', () => {
-    const { eligible } = eligibleAccounts('author.foundation', [account({ enabled: false })], item());
+    const { eligible } = eligibleAccounts(
+      'author.foundation',
+      [account({ enabled: false })],
+      item()
+    );
     assert.equal(eligible.length, 0);
   });
 
@@ -83,7 +87,11 @@ describe('Capability registry', () => {
     let ranked = eligibleAccounts('author.foundation', [dear, cheap], item()).eligible;
     assert.equal(ranked[0].id, 'free');
 
-    const pinned = account({ id: 'opus', cost: { inputPerMillion: 15, outputPerMillion: 75 }, preference: 10 });
+    const pinned = account({
+      id: 'opus',
+      cost: { inputPerMillion: 15, outputPerMillion: 75 },
+      preference: 10,
+    });
     ranked = eligibleAccounts('author.foundation', [pinned, cheap], item()).eligible;
     assert.equal(ranked[0].id, 'opus', 'an explicit preference wins over price');
   });
@@ -131,7 +139,11 @@ describe('Quota headroom', () => {
 
   test('passing the warn threshold reports tight but stays usable', () => {
     const a = account({ limits: { requestsPerDay: 10 } });
-    const events = Array.from({ length: 9 }, (_, i) => ({ at: hoursAgo(i + 1), tokens: 1, cost: 0 }));
+    const events = Array.from({ length: 9 }, (_, i) => ({
+      at: hoursAgo(i + 1),
+      tokens: 1,
+      cost: 0,
+    }));
     const h = accountHeadroom(a, events, { now: NOW });
     assert.equal(h.status, 'tight');
     assert.ok(isDispatchable(h));
@@ -156,16 +168,28 @@ describe('Quota headroom', () => {
     const heads = {
       open: accountHeadroom(open, [], { now: NOW }),
       unknown: accountHeadroom(unknown, [], { now: NOW }),
-      tight: accountHeadroom(tight, Array.from({ length: 9 }, () => ({ at: hoursAgo(1) })), { now: NOW }),
+      tight: accountHeadroom(
+        tight,
+        Array.from({ length: 9 }, () => ({ at: hoursAgo(1) })),
+        { now: NOW }
+      ),
     };
-    assert.deepEqual(rankByHeadroom(['tight', 'unknown', 'open'], heads), ['open', 'unknown', 'tight']);
+    assert.deepEqual(rankByHeadroom(['tight', 'unknown', 'open'], heads), [
+      'open',
+      'unknown',
+      'tight',
+    ]);
   });
 
   test('undeclared accounts spread by recent load instead of stacking', () => {
     const busy = account({ id: 'busy' });
     const idle = account({ id: 'idle' });
     const heads = {
-      busy: accountHeadroom(busy, Array.from({ length: 20 }, () => ({ at: hoursAgo(1) })), { now: NOW }),
+      busy: accountHeadroom(
+        busy,
+        Array.from({ length: 20 }, () => ({ at: hoursAgo(1) })),
+        { now: NOW }
+      ),
       idle: accountHeadroom(idle, [], { now: NOW }),
     };
     assert.deepEqual(rankByHeadroom(['busy', 'idle'], heads), ['idle', 'busy']);
@@ -181,7 +205,10 @@ describe('Dispatch planning', () => {
 
   test('one Work Item never gets two writers, whatever the limits allow', () => {
     const plan = planDispatch(
-      [item({ workItemId: 'X-1', branch: 'feat/x-1' }), item({ workItemId: 'X-1', branch: 'feat/x-1b' })],
+      [
+        item({ workItemId: 'X-1', branch: 'feat/x-1' }),
+        item({ workItemId: 'X-1', branch: 'feat/x-1b' }),
+      ],
       pool,
       { limits: { maxImplementationAgents: 10, maxTotal: 10 }, now: NOW }
     );
@@ -201,7 +228,10 @@ describe('Dispatch planning', () => {
 
   test('the default holds AI-TOOL-03: one implementation agent at a time', () => {
     const plan = planDispatch(
-      [item({ workItemId: 'A-1', branch: 'feat/a' }), item({ workItemId: 'B-1', branch: 'feat/b' })],
+      [
+        item({ workItemId: 'A-1', branch: 'feat/a' }),
+        item({ workItemId: 'B-1', branch: 'feat/b' }),
+      ],
       pool,
       { now: NOW }
     );
