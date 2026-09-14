@@ -22,6 +22,7 @@
  */
 
 const { accountHeadroom, isDispatchable } = require('./quota');
+const { effectiveLimits } = require('./ceiling');
 
 /** How an offering is chosen within a tier. */
 const Strategy = {
@@ -40,7 +41,7 @@ function offeringId(accountId, model) {
  * inherit the account's capabilities, cost, tier and limits unless they
  * override them, so the common case stays short.
  */
-function expandOfferings(accounts) {
+function expandOfferings(accounts, options) {
   const out = [];
   for (const account of accounts || []) {
     if (account.enabled === false) continue;
@@ -48,6 +49,8 @@ function expandOfferings(accounts) {
     const declared = Array.isArray(account.models) && account.models.length > 0
       ? account.models
       : [{ model: account.model, quality: account.quality, cost: account.cost, capabilities: account.capabilities, limits: account.limits }];
+
+    const effective = effectiveLimits(account, options);
 
     for (const entry of declared) {
       const model = typeof entry === 'string' ? entry : entry.model;
@@ -78,7 +81,11 @@ function expandOfferings(accounts) {
         enabled: e.enabled !== false,
         // Kept apart so the combined check below can see which is which.
         modelLimits: e.limits || {},
-        accountLimits: account.limits || {},
+        // A limit the operator never stated can still be known, if the
+        // provider has refused often enough to bound it. effectiveLimits
+        // prefers the declared number and fills gaps from observation.
+        accountLimits: effective.limits,
+        limitSources: effective.sources,
         cooldownUntil: e.cooldownUntil || account.cooldownUntil || null,
       });
     }
