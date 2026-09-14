@@ -61,9 +61,11 @@ human architectural decision.
 - `.github/workflows/current-application.yml` — Security baseline execution on
   workflow branches.
 - `scripts/verify-secrets.ts` — Fail-closed scanning harness supporting
-  `gitleaks git --log-opts` and `gitleaks dir`.
-- `.gitleaks.toml` — Custom rules (`shipde-carrier-live-token`, `generic-api-key`,
-  `private-key`, `aws-secret-key`) extending default rules.
+  `gitleaks git --log-opts` and `gitleaks dir`. Contains fallback pattern definitions
+  (`generic-api-key`, `private-key`, `aws-secret-key`) used during standalone verifier execution.
+- `.gitleaks.toml` — Custom rule configuration containing exactly one custom rule
+  (`shipde-carrier-live-token`) and extending Gitleaks' built-in default rules
+  via `[extend] useDefault = true`.
 - `docs/product-spec/work-items/TASK-FOUND-01.md` § `AC-FOUND-01-06` — Negative
   failure proof detecting secret leak fixtures with exact exit code 1 and
   guaranteed cleanup.
@@ -72,13 +74,18 @@ human architectural decision.
 
 - `TASK-AI-17` reconciled the ecosystem manifest against reality, establishing
   that `gitleaks` is `ADOPTED` / `ci-provisioned` while `lefthook` and `trivy`
-  are `PENDING`.
+  are `PENDING`. `TASK-AI-17` is merged into the base branch
+  (`fix/task-ai-16-codex-launch-flags` via PR #19 commit `1f587dd`), satisfying
+  the dependency requirement for `TASK-AI-35` (the delivery register
+  `FEATURE-DELIVERY-REGISTER.csv` retains `BLOCKED_DEPENDENCY` until `TASK-AI-19`
+  executes the deterministic reconciler write-back).
 - Pinned `gitleaks 8.24.0` is provisioned and running in CI
   (`.github/workflows/security-baseline.yml`).
 - `pnpm security:secrets` and `pnpm security:secrets -- --test-negative` execute
   and pass cleanly in the current baseline.
-- `node tools/ai-brain/cli.js manifest` reports 0 errors and confirms that
-  the manifest matches reality for all checkable tools.
+- `node tools/ai-brain/cli.js manifest` reports exactly 0 errors and exactly
+  the one named `codex-cli` version-drift warning (pinned `0.151.0` vs observed
+  `0.154.0`), with zero unexpected warnings or unrecorded drift.
 
 ## Author boundary
 
@@ -99,23 +106,46 @@ Prohibited in this Work Item:
 
 ## In scope
 
-- Define the technical comparison between Gitleaks (regex + Shannon entropy)
-  and Betterleaks (regex + Byte-Pair Encoding tokenization).
-- Define the strict parity and non-regression benchmarks required before any
-  replacement can be considered:
-  1. Full configuration compatibility: drop-in execution with `.gitleaks.toml`,
-     including `[extend] useDefault = true`, custom `[[rules]]`, and `[allowlist]`.
-  2. Negative failure proof parity: detection of synthetic carrier tokens
-     (`shipde-carrier-live-token`) with exact exit code 1 and guaranteed cleanup.
-  3. Git history range scanning parity: `--log-opts=<base>...HEAD` support for
-     PR validation.
-  4. Working tree scanning parity: directory traversal honoring `.gitignore` and
-     build output exclusions (`.next`, `.turbo`, `.pnpm-store`).
-  5. Fail-closed error handling: exit code 2 on operational faults (missing binary,
-     unparseable config, invalid arguments), never exiting zero on failure.
-  6. Multi-platform portability: native binary availability for Linux x64
-     (CI runner) and Windows x64 (local worktrees) with cryptographic checksums.
-  7. Zero network behavior: strictly offline execution with zero telemetry.
+- Define the architectural comparison between Gitleaks (regex pattern matching + Shannon entropy calculation)
+  and Betterleaks (regex pattern matching + Byte-Pair Encoding [BPE] tokenization).
+- Define the strict parity and non-regression benchmarks required before any replacement can be considered:
+  1. Full configuration compatibility: drop-in execution with `.gitleaks.toml`, specifically:
+     - `[extend] useDefault = true` (inheriting standard Gitleaks built-in default rules);
+     - Custom `[[rules]]` definitions, specifically the single custom rule `shipde-carrier-live-token` with keywords and regex matching;
+     - Global `[allowlist]` paths, stopwords, regexTarget, and regex patterns (including redaction test fixtures and delivery register column exemptions);
+     - Functional parity with standalone verifier fallback definitions in `scripts/verify-secrets.ts` (`generic-api-key`, `private-key`, `aws-secret-key`).
+  2. Parity benchmark datasets (labeled corpora):
+     - **Ship Dễ Carrier & Core Fixture Corpus**: 50 synthetic positive secret instances covering live and production carrier tokens (`ghn_live_*`, `ghtk_live_*`, `vtp_live_*`, `jtexpress_live_*`), AWS secret access keys (`[0-9a-zA-Z\/+=]{40}`), private key headers (`BEGIN RSA PRIVATE KEY`), and GitHub PATs (`ghp_*`), paired with the negative test fixture harness from `scripts/verify-secrets.ts` and `tools/ai-guard/test/fixtures/`.
+     - **Public Credential Benchmark Corpus**: Pinned reference dataset of >= 1,000 positive secret instances across >= 15 credential classes (API tokens, private keys, database connection strings, OAuth client secrets).
+     - **Benign Repository Negative Corpus**: The clean Ship Dễ codebase (500+ clean TypeScript, JSON, Markdown, YAML files) containing intentional benign patterns such as test redaction fixtures (`(sk-|ghp_|gho_|ghu_)1234567890`) and schema names (`key_behavior:`).
+  3. Measurable quantitative parity thresholds:
+     - **Minimum Recall**: Exactly 100.0% recall on the Ship Dễ Carrier & Core Fixture Corpus (zero missed carrier tokens or verifier fallback patterns); >= 99.0% recall across the Public Credential Benchmark Corpus (0% recall regression compared to Gitleaks 8.24.0 baseline).
+     - **Maximum False-Positive Rate**: <= 0.1% false-positive rate across the Benign Repository Negative Corpus, and exactly 0 false positives on the clean Ship Dễ repository tree with allowlists applied.
+     - **Execution Speed & Runtime Budget**:
+       * Full repository directory scan (`dir .`): <= 5.0 seconds on standard CI runner (Linux x64, 2 vCPU / 8 GB RAM); <= 8.0 seconds on Windows x64 workstation.
+       * PR commit range scan (`--log-opts=<base>...HEAD`): <= 1.5 seconds.
+       * Memory ceiling: Peak Resident Set Size (RSS) <= 250 MB during full repository traversal.
+  4. Target benchmark environments:
+     - CI Environment: Linux x64 runner (`ubuntu-22.04` LTS in GitHub Actions).
+     - Local Developer Environment: Windows 11 x64 (PowerShell 7+).
+  5. Reproducible benchmark procedure & artifacts:
+     - Benchmark execution harness executing identical passes of Gitleaks 8.24.0 and Betterleaks with cache dropped between runs.
+     - Generated machine-readable benchmark artifacts: `benchmark-gitleaks-results.json` and `benchmark-betterleaks-results.json` detailing true positives, false positives, wall-clock duration (p50, p95), peak memory RSS, and rule match distributions.
+  6. Negative failure proof parity:
+     - Exact exit code 1 when secret leak fixtures are present in git history or working tree.
+     - Deterministic cleanup in `finally` blocks, matching `AC-FOUND-01-06` and `scripts/verify-secrets.ts`.
+  7. Dual-mode scanning parity:
+     - Commit range scanning: PR diff validation via `--log-opts=<base>...HEAD`.
+     - Working tree directory scanning: Traversal honoring `.gitignore` and build exclusions (`.git`, `node_modules`, `.next`, `.turbo`, `.pnpm-store`).
+  8. Fail-closed error handling:
+     - Operational faults (missing binary, invalid CLI arguments, unparseable configuration file, unreadable target) must exit with code 2 and fail the pipeline, never silently exiting code 0.
+  9. Multi-platform portability:
+     - Verified pre-compiled native binaries for Linux x64 and Windows x64 distributed with published SHA-256 cryptographic checksums.
+  10. Zero-network behavior and runtime evidence:
+     - Strictly offline execution with zero network calls or telemetry.
+     - Verification command (Linux x64): `unshare -n betterleaks dir .` AND `strace -f -e trace=socket,connect -o /tmp/betterleaks-trace.log betterleaks dir .` (or container network isolation: `docker run --rm --network none -v ${PWD}:/repo betterleaks:local dir /repo`).
+     - Expected log: Normal scan completion report with exit code 0 or 1; exactly 0 outbound `connect()` system calls to remote IP addresses (AF_INET/AF_INET6) in `/tmp/betterleaks-trace.log`.
+     - Failure condition: Any attempt to open a socket to an external network host, any connection timeout, or any crash/warning/non-zero exit triggered by running without network access.
 - Define the formal human decision gate in `AI-TOOLCHAIN-DECISIONS.md` required
   to authorize any future migration.
 - Author complete Work Item specification `TASK-AI-35.md`.
@@ -135,10 +165,10 @@ Prohibited in this Work Item:
 | Rule | Behavior |
 |---|---|
 | `AI-35-R01` | Gitleaks baseline preservation: Gitleaks 8.24.0 remains the active, blocking, adopted CI secret scanning gate until all replacement criteria are proven and human decision is granted. Gitleaks is never treated as absent. |
-| `AI-35-R02` | Negative proof parity: Any proposed replacement scanner must detect all `.gitleaks.toml` custom rules (e.g., `shipde-carrier-live-token`) and built-in rules with exact exit code 1 in negative test fixtures, matching `AC-FOUND-01-06`. |
+| `AI-35-R02` | Parity benchmark thresholds & negative proof parity: Any proposed replacement scanner must achieve 100.0% recall on the `.gitleaks.toml` custom rule (`shipde-carrier-live-token`), Gitleaks defaults, and verifier fallback rules (`generic-api-key`, `private-key`, `aws-secret-key`), >= 99.0% recall on the public benchmark corpus, <= 0.1% false-positive rate, and adhere to the runtime budget (<= 5.0s CI / <= 8.0s Windows full scan, <= 1.5s PR range). It must exit with exact code 1 on negative leak fixtures with guaranteed cleanup, matching `AC-FOUND-01-06`. |
 | `AI-35-R03` | Git range and tree scanning parity: The scanner must scan both the PR commit range (`BASE_SHA...HEAD`) and uncommitted working directory targets without traversing ignored paths (`.git`, `node_modules`, `.next`, `.turbo`, `.pnpm-store`). |
 | `AI-35-R04` | Fail-closed behavior: Missing binary, invalid CLI flags, unparseable configuration, or empty report on exit code 1 must result in an operational failure (exit code 2) and block the CI pipeline, never silently exiting zero. |
-| `AI-35-R05` | Local and CI platform portability: The scanner must provide verified pre-compiled binaries or npm-managed native executables for both Linux x64 (GitHub Actions runner) and Windows x64 (local developer worktrees), with zero telemetry or network calls during scan. |
+| `AI-35-R05` | Local/CI platform portability & runtime zero-network verification: The scanner must provide verified pre-compiled native binaries for Linux x64 and Windows x64 with published SHA-256 checksums. Execution must be strictly offline with zero telemetry; verified at runtime via `unshare -n betterleaks dir .` (or Docker `--network none`) and `strace -f -e trace=socket,connect` logging zero remote socket connections. Any network connection attempt or failure under network isolation immediately disqualifies the scanner. |
 | `AI-35-R06` | Human authorization gate: Replacement of Gitleaks with Betterleaks requires explicit human approval in `AI-TOOLCHAIN-DECISIONS.md`. In the absence of an approved replacement decision or if Betterleaks fails any parity requirement, Gitleaks remains the sole authoritative blocking gate. |
 
 ## UI states
@@ -160,11 +190,11 @@ and verification scripts.
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| `AC-AI-35-01` | Truthfulness of baseline gate status | Gitleaks is accurately recorded as `ADOPTED`, `BLOCKING_GATE`, `ci-provisioned`, and active in `.github/workflows/security-baseline.yml`; `lefthook` and `trivy` are accurately documented as `PENDING` | `tools/ecosystem-manifest.json` and workflow review |
-| `AC-AI-35-02` | Replacement evaluation criteria specification | The Work Item specifies quantitative and qualitative parity criteria (recall, BPE vs Shannon entropy, false positive rate, execution speed) required before replacing Gitleaks | Specification text in `TASK-AI-35.md` |
-| `AC-AI-35-03` | Negative failure proof parity requirement | Specification mandates exact exit code 1 on synthetic leak fixtures (`ghn_live_...`) with guaranteed cleanup in `finally`, matching existing `scripts/verify-secrets.ts` | Specification text and rule `AI-35-R02` |
+| `AC-AI-35-01` | Truthfulness of baseline gate status | Gitleaks is accurately recorded as `ADOPTED`, `BLOCKING_GATE`, `ci-provisioned`, and active in `.github/workflows/security-baseline.yml`; `lefthook` and `trivy` are accurately documented as `PENDING`; manifest check outputs exactly 0 errors and exactly the one named `codex-cli` version-drift warning | `tools/ecosystem-manifest.json`, workflow review, and `node tools/ai-brain/cli.js manifest` output (0 errors, exactly 1 warning: `codex-cli` version drift) |
+| `AC-AI-35-02` | Measurable scanner-parity benchmarks and thresholds | The Work Item specifies quantitative and qualitative parity criteria: labeled datasets (Ship Dễ Carrier & Core Corpus + Public Credential Corpus + Benign Negative Corpus), quantitative thresholds (100.0% carrier recall, >= 99.0% overall recall, <= 0.1% FP rate, <= 5.0s CI / <= 8.0s Windows full scan runtime budget, <= 1.5s PR range budget, <= 250MB peak RSS), execution environments (Linux x64 CI and Windows x64 local), and reproducible benchmark artifacts (`benchmark-*-results.json`) | Specification text in `TASK-AI-35.md` § In scope and rule `AI-35-R02` |
+| `AC-AI-35-03` | Negative failure proof parity requirement | Specification mandates exact exit code 1 on synthetic leak fixtures (`shipde-carrier-live-token`, `ghn_live_...`) and verifier fallback patterns with guaranteed cleanup in `finally`, matching existing `scripts/verify-secrets.ts` and `AC-FOUND-01-06` | Specification text and rule `AI-35-R02` |
 | `AC-AI-35-04` | Dual-mode scanning parity requirement | Specification mandates full support for PR commit range (`BASE_SHA...HEAD`) and safe working tree directory scanning | Specification text and rule `AI-35-R03` |
-| `AC-AI-35-05` | Fail-closed and zero-telemetry requirement | Specification requires operational failure (code 2) on missing binary or invalid config, and verifies zero outbound network requests | Specification text and rules `AI-35-R04`, `AI-35-R05` |
+| `AC-AI-35-05` | Fail-closed and zero-telemetry runtime verification | Specification requires operational failure (code 2) on missing binary or invalid config, and mandates runtime verification of zero network activity under network isolation (`unshare -n` or Docker `--network none`) with `strace -f -e trace=socket,connect` confirming zero external socket calls | Specification text, rule `AI-35-R05`, and documented verification commands: `unshare -n betterleaks dir .` and `strace -f -e trace=socket,connect` (expected log: 0 external connect calls; failure condition: socket creation to external IP or crash under isolation) |
 | `AC-AI-35-06` | Human decision gate enforcement | Specification requires formal human approval in `AI-TOOLCHAIN-DECISIONS.md` before executing any replacement | Specification text and rule `AI-35-R06` |
 
 ## Verification commands
@@ -172,15 +202,23 @@ and verification scripts.
 ```
 node tools/ai-brain/cli.js manifest
 node tools/ai-brain/cli.js reconcile
-node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js"
+node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"
 python docs/product-spec/scripts/validate_docs.py
 ```
+
+| Command | Result | Evidence/notes |
+|---|---|---|
+| `node tools/ai-brain/cli.js manifest` | PASS | Exactly 0 errors, exactly 1 warning (`codex-cli` pinned 0.151.0 vs observed 0.154.0 drift) |
+| `node tools/ai-brain/cli.js reconcile` | PASS | 0 errors, 1 warning (`TASK-AI-07`), 161 notes; register matches repository reality |
+| `node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"` | PASS | 458 tests passing across ai-brain, ai-dashboard, and ai-guard |
+| `python docs/product-spec/scripts/validate_docs.py` | PASS | 82 markdown files, 130 feature IDs, 178 delivery rows, 520 unique identifiers |
 
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `<sha>` | `<PASS/CHANGES_REQUIRED/BLOCKED>` | `<links>` |
+| 1 | `5e0f278` / `cafdc1c` | `CHANGES_REQUIRED` | Resolved 5 findings: P1 dependency truth explained on PR (TASK-AI-17 merged into base); P2 manifest warning pinned to exactly 0 errors and 1 codex-cli drift warning; P2 measurable parity thresholds defined across corpora, metrics, environments, and JSON artifacts; P2 zero-network runtime verification command, expected log, and failure condition specified; P2 custom-rule inventory corrected to distinguish TOML rule (`shipde-carrier-live-token`), Gitleaks defaults, and verifier fallback rules. |
+| 2 | `HEAD` | `READY_FOR_CODEX` | Awaiting fresh independent Codex review. |
 
 ## Residual limitations
 
