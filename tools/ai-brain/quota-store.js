@@ -116,11 +116,35 @@ function freshness(reading, currentIdentity, options) {
  * somebody else, which is the whole point. Self-comparing it would make the
  * check pass forever.
  */
-function identityToCompare(reading, hostIdentity) {
+function identityToCompare(reading, hostIdentity, resolvers) {
   const source = reading && reading.account && reading.account.source;
   if (source === 'fingerprint') return reading.account;
+
+  // Each provider signs in separately, so "the current login" is a different
+  // question per provider. Comparing a Claude Code address against the
+  // Antigravity login is the same mistake as comparing it against a
+  // fingerprint: two real identities that can never be equal, so every reading
+  // is discarded and the panel goes blank for a reason that is not true.
+  const provider = reading && reading.provider;
+  const resolve = (resolvers || PROVIDER_IDENTITY)[provider];
+  if (resolve) return resolve();
+
   return hostIdentity;
 }
+
+/**
+ * How to ask each provider who it is currently signed in as.
+ *
+ * Cheap, file-based lookups only. This runs on the dashboard's read path, so
+ * anything that costs a CLI round trip belongs in the refresh instead.
+ */
+const PROVIDER_IDENTITY = {
+  // Antigravity is deliberately absent. Its readings identify themselves by the
+  // budget they describe, because no file on this machine tracks which account
+  // its CLI is signed in as — see budgetFingerprint. Listing it here with a
+  // file-based lookup would restore a check that cannot fail and cannot help.
+  'claude-code': () => require('./claude-usage').readAccount({}),
+};
 
 /**
  * The readings that may be used right now, keyed by account id, in the shape
@@ -137,7 +161,7 @@ function usableReadings(currentIdentity, options) {
   const problems = {};
 
   for (const [accountId, reading] of Object.entries(store.accounts || {})) {
-    const verdict = freshness(reading, identityToCompare(reading, currentIdentity), options);
+    const verdict = freshness(reading, identityToCompare(reading, currentIdentity, (options || {}).identityResolvers), options);
     if (verdict.usable) reported[accountId] = reading;
     else problems[accountId] = verdict;
   }
@@ -152,5 +176,6 @@ module.exports = {
   saveReading,
   freshness,
   identityToCompare,
+  PROVIDER_IDENTITY,
   usableReadings,
 };

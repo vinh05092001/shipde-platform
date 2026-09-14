@@ -151,6 +151,44 @@ function readQuota(options) {
 }
 
 /**
+ * A signature of the budget a reading describes.
+ *
+ * The obvious way to tie a reading to an account is an email address, and for
+ * this CLI that turned out to be unavailable. The files that look like they
+ * hold it — `google_accounts.json`, `oauth_creds.json` — belong to neighbouring
+ * Google tools; on the machine this was written for, one had not changed in two
+ * weeks and the other had been expired for eight days without being refreshed,
+ * while the reported quota changed underneath both. An identity check reading
+ * those answers confidently and is answering about something else.
+ *
+ * The reset instants are account-specific and arrive with the data for free. A
+ * weekly budget that resets at a different moment is a different budget, which
+ * is the only thing the cache actually needs to know. This is exactly what
+ * exposed the problem: the host's weekly reset moved from Sep 16 to Sep 17
+ * between two readings, while every file-based identity said nothing changed.
+ *
+ * One honest caveat: the instants also advance when a window genuinely rolls
+ * over. That makes a rollover look like a switch and forces a re-read, which
+ * costs one CLI call and cannot produce a wrong number — the direction to err
+ * in. Within the cache's thirty-minute life a rollover is nearly unreachable
+ * anyway.
+ */
+function budgetFingerprint(quota) {
+  if (!quota || !quota.available || !Array.isArray(quota.rows) || quota.rows.length === 0) {
+    return null;
+  }
+  const parts = quota.rows
+    .filter((r) => r.resetsAt)
+    .map((r) => r.family + '/' + r.window + '@' + r.resetsAt)
+    .sort();
+  // A reading whose rows carry no reset instant cannot be fingerprinted. That
+  // is reported as no fingerprint rather than as an empty one, which would
+  // match every other unfingerprintable reading.
+  if (parts.length === 0) return null;
+  return 'budget:' + parts.join('|');
+}
+
+/**
  * Headroom for one model on this account, as a fraction of its pool.
  *
  * The tightest window wins for the same reason it does everywhere else: a
@@ -197,4 +235,12 @@ function statusFrom(headroom, options) {
   return 'open';
 }
 
-module.exports = { Family, familyOf, parseQuota, readQuota, headroomFor, statusFrom };
+module.exports = {
+  Family,
+  familyOf,
+  parseQuota,
+  readQuota,
+  budgetFingerprint,
+  headroomFor,
+  statusFrom,
+};

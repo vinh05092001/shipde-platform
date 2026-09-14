@@ -15,12 +15,65 @@
 
 const { execFileSync } = require('child_process');
 
-const { readQuota } = require('./agy-quota');
+const { readQuota, budgetFingerprint } = require('./agy-quota');
+const claudeUsage = require('./claude-usage');
 const { readIdentity } = require('./agy-identity');
 const { saveReading } = require('./quota-store');
 
-/** Providers whose quota `agy --print "/quota"` can actually report. */
-const SUPPORTED_PROVIDERS = new Set(['antigravity']);
+/**
+ * How each provider reports what it has left, and how it names its account.
+ *
+ * Two providers, two vocabularies. Antigravity states what remains; Claude Code
+ * states what has been spent. Both are normalised to remaining before they
+ * reach this file, so nothing downstream has to remember which is which.
+ *
+ * A provider absent from this table is skipped with a reason. Probing it and
+ * recording the empty result would turn "we never asked" into "it reported
+ * nothing", which are not the same claim.
+ */
+const READERS = {
+  antigravity: {
+    read: (account, opts) => {
+      const quota = (opts.readQuota || readQuota)({
+        command: account.quotaCommand || opts.command,
+        args: account.quotaArgs || opts.args,
+        cwd: account.cwd || opts.cwd,
+        home: opts.home,
+        account: identityFor(account, opts),
+      });
+
+      // The reading identifies itself by the budget it describes. The declared
+      // address is kept as a label but is not the identity: on this CLI the
+      // files that carry an address do not track its login, so a check built on
+      // them answers confidently about the wrong thing. A reset instant that
+      // moved is proof a different budget answered; an address that did not
+      // move is proof of nothing.
+      const signature = budgetFingerprint(quota);
+      if (signature) {
+        return Object.assign({}, quota, {
+          account: { known: true, email: signature, source: 'fingerprint' },
+          label: account.email || (quota.account && quota.account.email) || null,
+        });
+      }
+      return quota;
+    },
+  },
+  'claude-code': {
+    read: (account, opts) => {
+      const identity = account.email
+        ? { known: true, email: account.email, source: 'declared' }
+        : claudeUsage.readAccount({ home: opts.home });
+      const usage = (opts.readUsage || claudeUsage.readUsage)({
+        command: account.quotaCommand || opts.claudeCommand,
+        args: account.quotaArgs,
+        cwd: account.cwd || opts.cwd,
+      });
+      return claudeUsage.asQuotaReading(usage, identity);
+    },
+  },
+};
+
+const SUPPORTED_PROVIDERS = new Set(Object.keys(READERS));
 
 /**
  * Whose account this reading will belong to.
@@ -69,17 +122,18 @@ function refreshAccount(account, options) {
   const opts = options || {};
 
   if (!SUPPORTED_PROVIDERS.has(account.provider)) {
-    return { accountId: account.id, skipped: true, reason: 'nhà cung cấp không báo quota qua agy' };
+    return {
+      accountId: account.id,
+      skipped: true,
+      reason: 'nhà cung cấp "' + account.provider + '" chưa có cách đọc hạn mức',
+    };
   }
 
-  const identity = identityFor(account, opts);
-  const quota = (opts.readQuota || readQuota)({
-    command: account.quotaCommand || opts.command,
-    args: account.quotaArgs || opts.args,
-    cwd: account.cwd || opts.cwd,
-    home: opts.home,
-    account: identity,
-  });
+  // The provider is stamped alongside the account, because "who is signed in
+  // now" is a different question for each one. Without it a Claude Code address
+  // gets compared against the Antigravity login and every reading is thrown
+  // away for a mismatch that was never meaningful.
+  const quota = Object.assign({ provider: account.provider }, READERS[account.provider].read(account, opts));
 
   // Failures are cached too. "The last attempt failed at 09:12 because the
   // eligibility check timed out" is a fact the dashboard should show; dropping

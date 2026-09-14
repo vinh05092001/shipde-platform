@@ -155,3 +155,44 @@ describe('Which identity a reading is compared against', () => {
     assert.match(problems.docker.reason, /quá hạn/);
   });
 });
+
+describe('Comparing across providers', () => {
+  const now = Date.parse('2026-09-14T12:00:00Z');
+  const AGY = { known: true, email: 'gmail-login@gmail.com' };
+
+  const claudeReading = (email) =>
+    reading({
+      provider: 'claude-code',
+      account: { known: true, email, source: 'declared' },
+    });
+
+  test("a provider's reading is compared against that provider's login", () => {
+    // Comparing a Claude Code address against the Antigravity login is the same
+    // mistake as comparing it against a fingerprint: two real identities that
+    // can never be equal, so every reading would be thrown away.
+    const resolvers = { 'claude-code': () => ({ known: true, email: 'me@anthropic-account.com' }) };
+    const p = tmpStore();
+    saveReading('claude', claudeReading('me@anthropic-account.com'), {
+      path: p,
+      now: Date.parse('2026-09-14T11:55:00Z'),
+    });
+    const { reported } = usableReadings(AGY, { path: p, now, identityResolvers: resolvers });
+    assert.deepEqual(Object.keys(reported), ['claude']);
+  });
+
+  test('a switch within that provider is still caught', () => {
+    const resolvers = { 'claude-code': () => ({ known: true, email: 'someone-new@example.com' }) };
+    const p = tmpStore();
+    saveReading('claude', claudeReading('me@anthropic-account.com'), {
+      path: p,
+      now: Date.parse('2026-09-14T11:55:00Z'),
+    });
+    const { problems } = usableReadings(AGY, { path: p, now, identityResolvers: resolvers });
+    assert.match(problems.claude.reason, /account đã đổi/);
+  });
+
+  test('a reading with no provider falls back to the host login', () => {
+    const r = reading();
+    assert.equal(identityToCompare(r, AGY, {}).email, 'gmail-login@gmail.com');
+  });
+});

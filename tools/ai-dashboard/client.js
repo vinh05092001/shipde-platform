@@ -873,8 +873,15 @@ function renderActivity() {
     .join('');
 }
 
-const FAMILY_LABEL = { gemini: 'Gemini', 'claude-gpt': 'Claude / GPT' };
-const WINDOW_LABEL = { weekly: 'tuần', fiveHour: '5 giờ' };
+const FAMILY_LABEL = {
+  gemini: 'Gemini',
+  'claude-gpt': 'Claude / GPT',
+  // Not a model family: every model on the plan draws from one session and one
+  // weekly budget, so naming it after a family would imply a split that is not
+  // there.
+  'claude-code': 'Claude Code',
+};
+const WINDOW_LABEL = { weekly: 'tuần', fiveHour: '5 giờ', session: 'phiên' };
 
 /**
  * What each provider says is left, shown beside our own accounting rather than
@@ -908,7 +915,15 @@ function renderVendorQuota(vendor) {
   };
 
   const rowHtml = (row) => {
+    // Shown as remaining everywhere, because that is what every reader ranks
+    // on. Where the provider stated spend instead, its own number is kept in
+    // the tooltip so a figure here can be checked against the CLI without
+    // anyone having to recall which direction the subtraction went.
     const value = row.disabled ? 'đã tắt' : row.remainingPercent + '%';
+    const title =
+      typeof row.usedPercent === 'number'
+        ? ' title="' + escapeHtml('nhà cung cấp báo: đã dùng ' + row.usedPercent + '%') + '"'
+        : '';
     const tone = row.disabled || row.remainingPercent <= 2
       ? 'text-rose-300'
       : row.remainingPercent < 20
@@ -919,23 +934,42 @@ function renderVendorQuota(vendor) {
       '<span class="text-slate-300">' + escapeHtml(FAMILY_LABEL[row.family] || row.family) + '</span>' +
       '<span class="text-slate-500">' + escapeHtml(WINDOW_LABEL[row.window] || row.window) + '</span>' +
       bar(row.remainingPercent, row.disabled) +
-      '<span class="font-mono font-bold ' + tone + ' tabular-nums">' + escapeHtml(value) + '</span>' +
+      '<span class="font-mono font-bold ' + tone + ' tabular-nums"' + title + '>' + escapeHtml(value) + '</span>' +
       '</div>'
     );
   };
 
   const accountHtml = (acc) => {
-    const who = acc.account
-      ? (String(acc.account).indexOf('fingerprint:') === 0
+    // What is shown is what is actually known. Two of these providers cannot
+    // name their account at all: the container reports a credential
+    // fingerprint, and the Antigravity CLI keeps no readable record of its
+    // login, so its readings are identified by the budget that answered.
+    // Printing an address in those cases would be inventing one.
+    const who = acc.label
+      ? acc.label + ' (nhãn khai tay)'
+      : acc.account
+        ? String(acc.account).indexOf('fingerprint:') === 0
           ? 'đăng nhập riêng trong container'
-          : acc.account)
-      : 'không rõ account';
+          : String(acc.account).indexOf('budget:') === 0
+            ? 'nhận diện theo mốc reset của hạn mức'
+            : acc.account
+        : 'không rõ account';
     return (
       '<div class="bg-slate-800/60 rounded-xl p-3 border border-slate-700 space-y-2">' +
       '<div class="flex items-baseline justify-between gap-2">' +
       '<span class="text-xs font-bold text-white">' + escapeHtml(acc.accountId) + '</span>' +
       '<span class="text-[10px] text-slate-500">' + escapeHtml(who) + '</span></div>' +
       (acc.rows || []).map(rowHtml).join('') +
+      ((acc.rows || []).some((r) => r.resetsAtText)
+        ? '<div class="text-[10px] text-slate-500">Reset: ' +
+          escapeHtml(
+            (acc.rows || [])
+              .filter((r) => r.resetsAtText)
+              .map((r) => (WINDOW_LABEL[r.window] || r.window) + ' — ' + r.resetsAtText)
+              .join(' · ')
+          ) +
+          '</div>'
+        : '') +
       '<div class="text-[10px] text-slate-500">Đọc lúc ' +
       escapeHtml(acc.observedAt ? new Date(acc.observedAt).toLocaleTimeString() : 'không rõ') +
       '</div>' +
@@ -961,7 +995,7 @@ function renderVendorQuota(vendor) {
       ? 'bg-slate-800 text-slate-300 border border-slate-700'
       : 'bg-amber-500/15 text-amber-300 border border-amber-500/30') +
     '">' +
-    escapeHtml(id.known ? 'host: ' + id.email : 'không rõ account host') +
+    escapeHtml(id.known ? 'đăng nhập Google (theo file cũ): ' + id.email : 'không rõ account host') +
     '</span></div>' +
     '<div class="grid sm:grid-cols-2 gap-2.5">' + (vendor.accounts || []).map(accountHtml).join('') + '</div>' +
     (vendor.problems || []).map(problemHtml).join('') +

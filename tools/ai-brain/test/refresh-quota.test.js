@@ -159,3 +159,43 @@ describe('An account that names its own login', () => {
     assert.equal(id.known, false);
   });
 });
+
+describe('Reading the Claude Code subscription limits', () => {
+  const USAGE = [
+    'Current session: 81% used · resets Sep 14, 4:20pm (Asia/Bangkok)',
+    'Current week (all models): 31% used · resets Sep 17, 4am (Asia/Bangkok)',
+  ].join('\n');
+
+  test('spent is stored as remaining', () => {
+    // The other provider reports what is left. Storing 81 here would put an
+    // almost-exhausted session on screen as an almost-full one.
+    const p = tmpStore();
+    refreshAccount(
+      { id: 'claude', provider: 'claude-code', email: 'me@example.com' },
+      { path: p, readUsage: () => require('../claude-usage').parseUsage(USAGE) }
+    );
+    const rows = loadStore({ path: p }).accounts.claude.rows;
+    const session = rows.find((r) => r.window === 'session');
+    assert.equal(session.remainingPercent, 19);
+    assert.equal(session.usedPercent, 81);
+  });
+
+  test('the reading carries the signed-in address', () => {
+    const p = tmpStore();
+    refreshAccount(
+      { id: 'claude', provider: 'claude-code', email: 'me@example.com' },
+      { path: p, readUsage: () => require('../claude-usage').parseUsage(USAGE) }
+    );
+    assert.equal(loadStore({ path: p }).accounts.claude.account.email, 'me@example.com');
+  });
+
+  test('a failed read is recorded with its reason', () => {
+    const p = tmpStore();
+    const r = refreshAccount(
+      { id: 'claude', provider: 'claude-code', email: 'me@example.com' },
+      { path: p, readUsage: () => ({ available: false, reason: 'claude.exe không chạy', rows: [] }) }
+    );
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /không chạy/);
+  });
+});

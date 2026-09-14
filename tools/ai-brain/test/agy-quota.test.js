@@ -5,7 +5,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 
-const { Family, familyOf, parseQuota, headroomFor, statusFrom } = require('../agy-quota');
+const { Family, familyOf, parseQuota, budgetFingerprint, headroomFor, statusFrom } = require('../agy-quota');
 
 /** Exactly what `agy --print "/quota"` printed on 2026-09-14. */
 const REAL_OUTPUT = [
@@ -163,5 +163,40 @@ describe('Mapping headroom onto the scheduler vocabulary', () => {
 
   test('thresholds are configurable', () => {
     assert.equal(statusFrom(at(25), { tightBelow: 50 }), 'tight');
+  });
+});
+
+describe('Identifying which budget answered', () => {
+  test('two readings of the same budget share a signature', () => {
+    const a = parseQuota(REAL_OUTPUT);
+    const b = parseQuota(REAL_OUTPUT.replace('40%', '38%'));
+    // The percentages drain; the budget is the same one.
+    assert.equal(budgetFingerprint(a), budgetFingerprint(b));
+  });
+
+  test('a different reset instant is a different budget', () => {
+    // This is the case that exposed the problem: one machine's weekly reset
+    // moved from Sep 16 to Sep 17 while every file-based identity said nothing
+    // had changed.
+    const a = parseQuota(REAL_OUTPUT);
+    const b = parseQuota(REAL_OUTPUT.replace('2026-09-16T06:47:24Z', '2026-09-17T23:27:08Z'));
+    assert.notEqual(budgetFingerprint(a), budgetFingerprint(b));
+  });
+
+  test('row order does not change the signature', () => {
+    const rows = REAL_OUTPUT.split('\n');
+    const shuffled = [rows[3], rows[0], rows[2], rows[1]].join('\n');
+    assert.equal(budgetFingerprint(parseQuota(REAL_OUTPUT)), budgetFingerprint(parseQuota(shuffled)));
+  });
+
+  test('a reading with no reset instants has no signature', () => {
+    // Returning an empty signature would make it match every other
+    // unfingerprintable reading.
+    assert.equal(budgetFingerprint(parseQuota('Gemini Models  Weekly Limit Remaining  40%')), null);
+  });
+
+  test('an unread quota has no signature', () => {
+    assert.equal(budgetFingerprint({ available: false, rows: [] }), null);
+    assert.equal(budgetFingerprint(null), null);
   });
 });

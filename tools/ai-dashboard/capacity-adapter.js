@@ -165,6 +165,10 @@ function collectCapacity(options) {
         accounts: Object.entries(reported).map(([accountId, q]) => ({
           accountId,
           account: q.account && q.account.known ? q.account.email : null,
+          // An operator-written name for the account. Kept separate from the
+          // identity because it is not evidence of anything: nothing verifies
+          // it, and it does not change when the account does.
+          label: q.label || null,
           observedAt: q.cachedAt || q.observedAt || null,
           rows: q.rows,
         })),
