@@ -196,3 +196,51 @@ describe('Comparing across providers', () => {
     assert.equal(identityToCompare(r, AGY, {}).email, 'gmail-login@gmail.com');
   });
 });
+
+
+describe('A failed reading is not cached like a measurement', () => {
+  // A success is cached because it is expensive and stays roughly true. A
+  // failure measured nothing, so the only thing it can buy is a cooldown.
+  const identity = { known: true, email: 'a@example.com', source: 'host' };
+  const failed = {
+    available: false,
+    reason: 'Eligibility check thất bại (mạng), chưa đọc được quota',
+    rows: [],
+    account: { known: true, email: 'a@example.com', source: 'host' },
+    cachedAt: '2026-09-14T09:00:00.000Z',
+  };
+  const ok = Object.assign({}, failed, { available: true, reason: undefined, rows: [{ family: 'gemini' }] });
+
+  test('a fresh failure is reused, so a broken probe is not hammered', () => {
+    const f = freshness(failed, identity, { now: Date.parse('2026-09-14T09:00:30.000Z') });
+    assert.strictEqual(f.usable, true);
+    assert.strictEqual(f.failed, true);
+  });
+
+  test('a failure expires in a minute, not in half an hour', () => {
+    const now = Date.parse('2026-09-14T09:02:00.000Z');
+    const f = freshness(failed, identity, { now });
+    assert.strictEqual(f.usable, false);
+    assert.strictEqual(f.action, 'reread');
+    assert.match(f.reason, /thất bại/);
+
+    // The same age leaves a successful reading perfectly usable, which is the
+    // asymmetry the whole change exists for.
+    assert.strictEqual(freshness(ok, identity, { now }).usable, true);
+  });
+
+  test('a caller asking for a longer window cannot extend a failure', () => {
+    const f = freshness(failed, identity, {
+      now: Date.parse('2026-09-14T09:20:00.000Z'),
+      maxAgeMs: 60 * 60 * 1000,
+    });
+    assert.strictEqual(f.usable, false);
+  });
+
+  test('a blip does not outlive the retry that would have fixed it', () => {
+    // 2026-09-14: two agy accounts cached a network failure one second before
+    // the claude-code account read cleanly, and the panels stayed blank.
+    const f = freshness(failed, identity, { now: Date.parse('2026-09-14T09:01:01.000Z') });
+    assert.strictEqual(f.usable, false);
+  });
+});
