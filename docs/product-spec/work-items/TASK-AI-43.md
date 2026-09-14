@@ -11,10 +11,10 @@
 | Dependencies | `TASK-AI-17` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `scripts/ai/doctor.ps1`, `scripts/ai/ecosystem.ps1`, `docs/product-spec/work-items/TASK-AI-43.md`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-43.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-43-audit-gate` |
-| Pull Request | `<URL>` |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/22 |
 
 ## Business outcome
 
@@ -74,13 +74,14 @@ manifest.
 
 ## Author boundary
 
-`GEMINI` is the assigned author for this Work Item. Scope is strictly bounded
-to the allowed paths:
+`GEMINI` is the assigned author for this Work Item. Scope for this specification Work Item is strictly bounded to the allowed path:
+- `docs/product-spec/work-items/TASK-AI-43.md`
+
+Allowed paths for subsequent implementation by GEMINI:
 - `scripts/ai/doctor.ps1`
 - `scripts/ai/ecosystem.ps1`
 - `docs/product-spec/work-items/TASK-AI-43.md`
 - `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`
-- `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`
 
 Prohibited in this Work Item:
 - Modifying anything under `.github/`, `scripts/verify-*`,
@@ -92,18 +93,14 @@ Prohibited in this Work Item:
 
 ## In scope
 
-- Execute `node tools/ai-brain/cli.js manifest` during ecosystem validation in
-  `scripts/ai/ecosystem.ps1 -Action Validate` and `scripts/ai/doctor.ps1`.
-- Enforce fail-closed blocking: if `summary.error > 0` (e.g. `QUALITY_GATE_MISSING`,
-  `DECLARED_ADOPTED_BUT_ABSENT`), output exact finding codes and missing tool
-  identifiers, append to `$failures`, and exit with code 1.
-- Preserve differentiation between blocking errors and non-fatal warnings:
-  documented warnings (`PINNED_VERSION_DRIFT` for `codex-cli`) are printed
-  visibly for operator awareness but do not cause failure in default mode.
-- Resolve the PowerShell strict-mode null collection evaluation bug in
-  `ecosystem.ps1` (`if ($errors.Count -gt 0)` when `$errors` is null).
-- Record the blocking manifest audit integration in `AI-TOOLCHAIN-DECISIONS.md`.
-- Author this Work Item specification `docs/product-spec/work-items/TASK-AI-43.md`.
+- Author this formal Work Item specification `docs/product-spec/work-items/TASK-AI-43.md`.
+- Specify execution of `node tools/ai-brain/cli.js manifest` during ecosystem validation in `scripts/ai/ecosystem.ps1 -Action Validate` and `scripts/ai/doctor.ps1`.
+- Specify fail-closed blocking: if `summary.error > 0` (e.g. `QUALITY_GATE_MISSING`, `DECLARED_ADOPTED_BUT_ABSENT`), output exact finding codes and missing tool identifiers, append to `$failures`, and exit with code 1.
+- Specify differentiation between blocking errors and non-fatal warnings: documented warnings (`PINNED_VERSION_DRIFT` for `codex-cli`) are printed visibly for operator awareness but do not cause failure in default mode.
+- Specify resolution of the PowerShell strict-mode null collection evaluation bug in `ecosystem.ps1` (`if ($errors.Count -gt 0)` when `$errors` is null).
+- Specify safe test injection path: both `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1` accept an optional `-ManifestPath` parameter (defaulting to the production `tools/ecosystem-manifest.json`), allowing deterministic testing against synthetic fixture manifests without mutating tracked repository manifests.
+- Specify an automated negative acceptance test in `ecosystem.ps1 -Action Test` (e.g. Test 27) that verifies fail-closed behavior when an adopted quality gate is missing.
+- Specify documentation of the blocking manifest audit integration in `AI-TOOLCHAIN-DECISIONS.md` during implementation.
 - Ensure all repository tests and reconciliation checks stay green.
 
 ## Out of scope
@@ -126,6 +123,7 @@ Prohibited in this Work Item:
 | `AI-43-R04` | Tools declared with `install_method: "ci-provisioned"` (such as `gitleaks` at pinned 8.24.0 in `.github/workflows/security-baseline.yml`) must be verified against workflow declarations rather than local host `PATH`, preventing false-positive failures on developer workstations. |
 | `AI-43-R05` | In PowerShell scripts under `Set-StrictMode -Version Latest`, checking error collections must safely guard against null objects before accessing `.Count`. |
 | `AI-43-R06` | All files under `scripts/ai/` must remain pure ASCII with no byte-order mark (BOM). |
+| `AI-43-R07` | Both `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1` must accept an optional `-ManifestPath` parameter for testing. When omitted, they default to the production manifest (`tools/ecosystem-manifest.json`). Supplying a custom `-ManifestPath` allows negative acceptance verification against temporary fixtures without mutating tracked repository manifests. |
 
 ## UI states
 
@@ -145,26 +143,91 @@ impact is bounded to PowerShell health check scripts and toolchain documentation
 |---|---|---|---|
 | `AC-AI-43-01` | Run `doctor.ps1` against reconciled manifest | Manifest audit passes, 0 errors, reports VALIDATED, exits cleanly on manifest gate | Console stdout |
 | `AC-AI-43-02` | Run `ecosystem.ps1 -Action Validate` | Schema and manifest truth audit both execute and pass with 0 errors | Console stdout |
-| `AC-AI-43-03` | Simulate missing adopted quality gate in manifest | Audit detects overstatement, `doctor.ps1` and `ecosystem.ps1` fail closed with exit code 1 and list tool ID | Console stderr/stdout |
+| `AC-AI-43-03` | Negative acceptance check harness: execute `ecosystem.ps1` and `doctor.ps1` with temporary manifest fixture where an adopted blocking quality gate is absent | Both `ecosystem.ps1 -Action Validate -ManifestPath <temp-manifest>` and `doctor.ps1 -ManifestPath <temp-manifest>` fail closed with exit code 1, output `QUALITY_GATE_MISSING` (or `DECLARED_ADOPTED_BUT_ABSENT`) naming the missing tool ID | Console stdout/stderr and exit code 1 |
 | `AC-AI-43-04` | Verify CI-provisioned gate handling | `gitleaks` is recognized as present via workflow evidence without requiring local binary | Manifest audit stdout |
 | `AC-AI-43-05` | Verify warning visibility | `codex-cli` version drift (`0.154.0` vs `0.151.0`) is displayed visibly as a warning without blocking | Console stdout |
 | `AC-AI-43-06` | Regression checks | `node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js"`, `node tools/ai-brain/cli.js reconcile`, `node tools/ai-brain/cli.js manifest` all pass | Test runner stdout |
 
 ## Verification commands
 
-```
+### 1. Standard repository verification suite
+
+```powershell
 powershell -NoProfile -File scripts/ai/ecosystem.ps1 -Action Validate
 powershell -NoProfile -File scripts/ai/doctor.ps1
 node tools/ai-brain/cli.js manifest
 node tools/ai-brain/cli.js reconcile
-node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js"
+node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"
+python docs/product-spec/scripts/validate_docs.py
+```
+
+### 2. Executable negative acceptance check harness (AC-AI-43-03)
+
+The following harness creates a temporary manifest fixture with an overstated quality gate (`synthetic-missing-gate` declared `ADOPTED` / `BLOCKING_GATE` but absent) in an isolated scratch directory, and verifies that both PowerShell entrypoints fail closed with exit code 1 and identify the missing gate, without modifying any repository-tracked files:
+
+```powershell
+$tempDir = Join-Path ([IO.Path]::GetTempPath()) ("shipde-neg-manifest-" + [Guid]::NewGuid())
+$null = New-Item -ItemType Directory -Path (Join-Path $tempDir "tools") -Force
+$fixtureManifest = Join-Path $tempDir "tools/ecosystem-manifest.json"
+
+try {
+    # Generate fixture with an absent adopted quality gate
+    $m = Get-Content "tools/ecosystem-manifest.json" -Raw | ConvertFrom-Json
+    $m.adopted += [PSCustomObject]@{
+        id = "synthetic-missing-gate"
+        role = "Negative test quality gate"
+        lifecycle_state = "ADOPTED"
+        quality_gate = $true
+        blocking = $true
+        install_method = "manual"
+        verify = "synthetic-missing-gate --version"
+    }
+    $m | ConvertTo-Json -Depth 10 | Set-Content -Path $fixtureManifest -Encoding ASCII
+
+    # 1. Negative check on ecosystem.ps1
+    $ecoOut = Join-Path $tempDir "eco.out"
+    $ecoErr = Join-Path $tempDir "eco.err"
+    $ecoProc = Start-Process -FilePath "powershell.exe" -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/ai/ecosystem.ps1",
+        "-Action", "Validate", "-ManifestPath", "`"$fixtureManifest`""
+    ) -PassThru -Wait -NoNewWindow -RedirectStandardOutput $ecoOut -RedirectStandardError $ecoErr
+
+    if ($ecoProc.ExitCode -ne 1) {
+        throw "ecosystem.ps1 failed negative check: expected exit code 1, got $($ecoProc.ExitCode)"
+    }
+    $ecoText = (Get-Content $ecoOut -Raw -ErrorAction SilentlyContinue) + (Get-Content $ecoErr -Raw -ErrorAction SilentlyContinue)
+    if ($ecoText -notmatch "synthetic-missing-gate") {
+        throw "ecosystem.ps1 output missing expected tool identifier 'synthetic-missing-gate'"
+    }
+
+    # 2. Negative check on doctor.ps1 via safe -ManifestPath injection path
+    $docOut = Join-Path $tempDir "doc.out"
+    $docErr = Join-Path $tempDir "doc.err"
+    $docProc = Start-Process -FilePath "powershell.exe" -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/ai/doctor.ps1",
+        "-ManifestPath", "`"$fixtureManifest`""
+    ) -PassThru -Wait -NoNewWindow -RedirectStandardOutput $docOut -RedirectStandardError $docErr
+
+    if ($docProc.ExitCode -ne 1) {
+        throw "doctor.ps1 failed negative check: expected exit code 1, got $($docProc.ExitCode)"
+    }
+    $docText = (Get-Content $docOut -Raw -ErrorAction SilentlyContinue) + (Get-Content $docErr -Raw -ErrorAction SilentlyContinue)
+    if ($docText -notmatch "synthetic-missing-gate") {
+        throw "doctor.ps1 output missing expected tool identifier 'synthetic-missing-gate'"
+    }
+
+    Write-Host "NEGATIVE ACCEPTANCE HARNESS PASSED: Both ecosystem.ps1 and doctor.ps1 failed closed with exit code 1 and reported the missing gate."
+} finally {
+    Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 ```
 
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `<sha>` | `<PASS/CHANGES_REQUIRED/BLOCKED>` | `<links>` |
+| 1 | `5b9b1ce` | `CHANGES_REQUIRED` | [Finding 1 (P1 doctor.ps1:658)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4006773151): Reverted implementation scripts (`doctor.ps1`, `ecosystem.ps1`, `AI-TOOLCHAIN-DECISIONS.md`) from planning commit; branch bounded strictly to Work Item specification. [Finding 2 (P1 TASK-AI-43.md:11)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4006773166): Retained `READY_FOR_CODEX` because dependency `TASK-AI-17` was merged into `fix/task-ai-16-codex-launch-flags` via PR #19 (`1f587dd`), while register row 176 status synchronization is reserved for `TASK-AI-19` reconciler write-back rather than manual edit. [Finding 3 (P2 TASK-AI-43.md:148)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4006773187): Defined safe `-ManifestPath` injection parameter in `doctor.ps1`, added `AI-43-R07`, updated `AC-AI-43-03`, and provided full executable negative acceptance fixture harness in Verification commands. |
+| 2 | `HEAD` | Pending | Re-submitted for independent Codex review via `@codex review`. |
 
 ## Residual limitations
 
