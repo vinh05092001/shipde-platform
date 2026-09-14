@@ -53,7 +53,16 @@ In an AO worker session, `AO_SESSION_ID` matches the worker's own holder row in 
 
 ### Automatic Installation
 
-The repository configures `core.hooksPath` via the `prepare` script in `package.json`. Running:
+The hook is installed explicitly, never by an install lifecycle script. The
+repository's regression audit forbids `preinstall`, `install`, `postinstall`
+and `prepare` in the root and web manifests, because an install hook runs
+whatever the dependency tree says it should — a supply-chain surface the
+project has deliberately closed.
+
+So `core.hooksPath` is set in three explicit places instead: by
+`scripts/ai/bootstrap-worktrees.ps1` when a worktree is created, by
+`pnpm guard:install` on demand, and it is verified by `scripts/ai/doctor.ps1`,
+which names the command to run when it is missing. Running:
 
 ```bash
 pnpm install
