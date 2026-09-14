@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-35.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-35-betterleaks` |
-| Pull Request | `<URL>` |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/21 |
 
 ## Business outcome
 
