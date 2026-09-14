@@ -39,14 +39,29 @@ describe('Telling a quota refusal from any other failure', () => {
   test('recognises the shapes providers actually use', () => {
     const quotaErrors = [
       'HTTP 429 Too Many Requests',
+      'HTTP 402 Payment Required',
       'rate limit exceeded',
       'You have exceeded your quota',
-      '当前分组 default 下对于模型 x 无可用渠道',
-      'no available channel for this model',
+      'Budget pool quota has been exhausted',
       'insufficient credit balance',
     ];
     for (const e of quotaErrors) {
       assert.equal(isQuotaRefusal(e), true, 'treats as quota: ' + e);
+    }
+  });
+
+  test('does not treat routing or channel availability errors as quota refusals', () => {
+    // Finding #4: a 503 or "no available channel" means post-auth routing/model
+    // naming state, not quota exhaustion. Learning a ceiling from it permanently
+    // pins the ceiling to the lowest refusal.
+    const routingErrors = [
+      '当前分组 default 下对于模型 x 无可用渠道',
+      'no available channel for this model',
+      'HTTP 503 Service Unavailable',
+      '503 no available channel',
+    ];
+    for (const e of routingErrors) {
+      assert.equal(isQuotaRefusal(e), false, 'routing error must not be quota signal: ' + e);
     }
   });
 
@@ -62,6 +77,21 @@ describe('Telling a quota refusal from any other failure', () => {
     const file = store();
     assert.equal(recordFailure('a', 'm', 'ECONNREFUSED', { tokensPerDay: 500 }, { file }), null);
     assert.equal(readLedger(file).length, 0, 'nothing is written');
+  });
+
+  test('recordFailure ignores routing errors like no available channel', () => {
+    const file = store();
+    assert.equal(
+      recordFailure(
+        'a',
+        'm',
+        'no available channel for this model',
+        { tokensPerDay: 100 },
+        { file }
+      ),
+      null
+    );
+    assert.equal(readLedger(file).length, 0, 'routing error must never record a refusal in ledger');
   });
 
   test('recordFailure stores a quota error with what had been consumed', () => {
@@ -246,4 +276,46 @@ describe('Ledger', () => {
       /accepted hoặc refused/
     );
   });
+});
+
+describe('A status code is only a status code in a status context', () => {
+  // A loose /402/ matched anything containing those digits. Because the
+  // learned ceiling only ratchets down, one false positive pinned an account
+  // permanently — the same failure this module removed for 503.
+  const refusals = [
+    'API Error: 402 Budget pool quota has been exhausted',
+    'HTTP 429 Too Many Requests',
+    'rate limit exceeded',
+    'insufficient credit on this account',
+  ];
+  const notRefusals = [
+    'request id: 20260914402883507jl4rmC8jYjxlK',
+    'completed in 402 ms',
+    '503 no available channel for this model',
+    'wrote 4029 tokens',
+  ];
+
+  for (const text of refusals) {
+    test(`counts as a quota refusal: ${text.slice(0, 44)}`, () => {
+      assert.strictEqual(isQuotaRefusal(text), true);
+    });
+  }
+  for (const text of notRefusals) {
+    test(`does not: ${text.slice(0, 44)}`, () => {
+      assert.strictEqual(isQuotaRefusal(text), false);
+    });
+  }
+});
+
+describe('A bare trailing status code needs a reason beside it', () => {
+  // Matching any line ending in 402 or 429 would have made "tokens: 429" a
+  // quota refusal, and the ceiling never recovers from a false positive.
+  const refusals = ['Request failed: 402', 'Request failed: 429', 'upstream rejected - 402'];
+  const notRefusals = ['tokens: 429', 'wrote 4029 tokens', 'latency 402'];
+  for (const t of refusals) {
+    test(`counts: ${t}`, () => assert.strictEqual(isQuotaRefusal(t), true));
+  }
+  for (const t of notRefusals) {
+    test(`does not: ${t}`, () => assert.strictEqual(isQuotaRefusal(t), false));
+  }
 });
