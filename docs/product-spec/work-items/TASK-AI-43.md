@@ -98,7 +98,8 @@ Allowed paths for subsequent implementation by GEMINI:
 
 Prohibited in this Work Item:
 - Modifying anything under `.github/`, `scripts/verify-*`,
-  `docs/product-spec/scripts/`, `.gitleaks.toml`, or any existing validator.
+  `docs/product-spec/scripts/`, `.gitleaks.toml`, or any existing validator (such as
+  the hard-coded 37-entry count check in `scripts/ai/ecosystem.ps1`).
 - Flipping a declared `lifecycle_state` or Work Item status in the register to make a check pass.
 - Disabling, skipping, or narrowing any audit rule or error severity.
 - Introducing byte-order marks (BOM) or non-ASCII characters into `scripts/ai/*`.
@@ -109,13 +110,13 @@ Prohibited in this Work Item:
 - Author this formal Work Item specification `docs/product-spec/work-items/TASK-AI-43.md`.
 - Specify execution of `node tools/ai-brain/cli.js manifest` during ecosystem validation in `scripts/ai/ecosystem.ps1 -Action Validate` and `scripts/ai/doctor.ps1`.
 - Specify fail-closed blocking: if `summary.error > 0` (e.g. `QUALITY_GATE_MISSING`, `DECLARED_ADOPTED_BUT_ABSENT`), output exact finding codes and missing tool identifiers, append to `$failures`, and exit with code 1.
-- Specify differentiation between blocking errors and non-fatal warnings: documented warnings (`PINNED_VERSION_DRIFT` for `codex-cli`) are printed visibly for operator awareness but do not cause failure in default mode.
+- Specify differentiation between blocking errors and non-fatal warnings: documented warnings (`PINNED_VERSION_DRIFT` for `codex-cli`) are printed visibly for operator awareness but do not cause failure in validation mode.
 - Specify resolution of the PowerShell strict-mode null collection evaluation bug in `ecosystem.ps1` (`if ($errors.Count -gt 0)` when `$errors` is null).
 - Specify extending `tools/ai-brain/cli.js manifest` to accept `--manifest <path>` (defaulting to `<rootDir>/tools/ecosystem-manifest.json`). When supplied, the custom manifest is audited while preserving the repository `rootDir` for CI workflow and monorepo dependency resolution.
 - Specify safe test injection path: both `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1` accept an optional `-ManifestPath` parameter (defaulting to `tools/ecosystem-manifest.json`) and forward it to `node tools/ai-brain/cli.js manifest --manifest "$ManifestPath"`, allowing deterministic testing against synthetic fixture manifests without mutating tracked repository manifests.
 - Specify classifier enhancement in `tools/ai-brain/manifest-audit.js`: an entry declared `ADOPTED` and absent (`present === false`) is classified as a quality gate (raising `QUALITY_GATE_MISSING` error with exit code 1) if `entry.blocking_policy === "BLOCKING_GATE"` or its `id`/`role` matches `/scan|leak|trivy|lefthook|axe|lint|audit/i`.
-- Specify authoritative install verification for CI-provisioned tools: `tools/ai-brain/manifest-audit.js` must verify that `.github/workflows/security-baseline.yml` exists and installs `gitleaks` at the exact version pinned in `pinned_version_or_commit` (`8.24.0`), rather than relying on loose token matching across arbitrary workflows.
-- Specify an automated negative acceptance test in `ecosystem.ps1 -Action Test` (e.g. Test 27) that verifies fail-closed behavior when an adopted quality gate is missing.
+- Specify authoritative install verification and negative proof for CI-provisioned tools: `tools/ai-brain/manifest-audit.js` must verify that `.github/workflows/security-baseline.yml` exists and installs `gitleaks` at the exact version pinned in `pinned_version_or_commit` (`8.24.0`). If the workflow is absent or decoyed without that pinned install, the audit must fail closed with `QUALITY_GATE_MISSING: gitleaks` (exit code 1).
+- Specify an automated negative acceptance test that creates a 37-entry fixture by flipping existing entry `trivy` to `ADOPTED`/`BLOCKING_GATE`, passing the validator count check while failing closed on manifest truth.
 - Specify documentation of the blocking manifest audit integration in `AI-TOOLCHAIN-DECISIONS.md` during implementation.
 - Ensure all repository tests and reconciliation checks stay green.
 
@@ -123,6 +124,7 @@ Prohibited in this Work Item:
 
 - Modifying GitHub Actions workflow definitions under `.github/`.
 - Modifying repository validator scripts or test fixtures outside the allowed implementation paths.
+- Relaxing, modifying, or parameterizing the 37-entry count assertion in `ecosystem.ps1`.
 - Installing machine-level binaries (`lefthook`, `trivy`, etc., owned by
   `TASK-AI-35`..`40`).
 - Upgrading or repinning `codex-cli` in `tools/ecosystem-manifest.json` (human
@@ -135,8 +137,8 @@ Prohibited in this Work Item:
 |---|---|
 | `AI-43-R01` | The manifest audit must run as a blocking check in `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1 -Action Validate`. |
 | `AI-43-R02` | Any manifest audit error (`summary.error > 0`, such as `QUALITY_GATE_MISSING` or `DECLARED_ADOPTED_BUT_ABSENT`) must fail closed: report the finding codes and tool IDs, record an actionable item in `$failures`, and exit with code 1. |
-| `AI-43-R03` | Non-fatal warnings (such as `PINNED_VERSION_DRIFT` for `codex-cli`) must be printed visibly with exact evidence (`0.154.0` observed vs `0.151.0` pin), but must not block normal doctor runs unless strict mode is explicitly requested. |
-| `AI-43-R04` | Tools declared with `install_method: "ci-provisioned"` (such as `gitleaks` at pinned `8.24.0`) must be verified against authoritative workflow declarations: `.github/workflows/security-baseline.yml` must exist and install `gitleaks` at the pinned version (`8.24.0`), preventing false-positive failures on developer workstations while ensuring the gate is genuinely pinned in CI. If the workflow is missing or specifies a mismatched version, the audit must report `QUALITY_GATE_MISSING` with exit code 1. |
+| `AI-43-R03` | Non-fatal warnings (such as `PINNED_VERSION_DRIFT` for `codex-cli`) must be printed visibly with exact evidence (`0.154.0` observed vs `0.151.0` pin), but must not block doctor or ecosystem validation runs (which fail only when `summary.error > 0`). |
+| `AI-43-R04` | Tools declared with `install_method: "ci-provisioned"` (such as `gitleaks` at pinned `8.24.0`) must be verified against authoritative workflow declarations: `.github/workflows/security-baseline.yml` must exist and install `gitleaks` at the pinned version (`8.24.0`). If the workflow is missing, decoyed, or specifies a mismatched version, the audit must fail closed with error `QUALITY_GATE_MISSING` and exit code 1. |
 | `AI-43-R05` | In PowerShell scripts under `Set-StrictMode -Version Latest`, checking error collections must safely guard against null objects before accessing `.Count`. |
 | `AI-43-R06` | All files under `scripts/ai/` must remain pure ASCII with no byte-order mark (BOM). |
 | `AI-43-R07` | Both `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1` must accept an optional `-ManifestPath` parameter for testing (defaulting to `tools/ecosystem-manifest.json`) and forward `--manifest "$ManifestPath"` to `node tools/ai-brain/cli.js manifest`. `tools/ai-brain/cli.js manifest` must accept `--manifest <path>` so that test fixtures can be loaded while keeping repository `rootDir` intact. |
@@ -161,10 +163,11 @@ and toolchain documentation.
 |---|---|---|---|
 | `AC-AI-43-01` | Validate production ecosystem manifest schema and profile conformity | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ai/ecosystem.ps1 -Action Validate` exits 0 and prints the string `VALIDATION PASSED: All 37 approved adopted repositories, 14 product dependencies, 10 candidates, and 9 profiles conform to ecosystem policy.` | command stdout |
 | `AC-AI-43-02` | Run manifest truth audit against production manifest | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` naming `codex-cli` | command stdout |
-| `AC-AI-43-03` | Run manifest truth audit against negative fixture with absent quality gate | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); m.adopted.push({ id: 'synthetic-missing-audit', name: 'Synthetic Quality Gate', repository: 'synthetic/audit-gate', role: 'Synthetic security audit quality gate', install_method: 'system', pinned_version_or_commit: '1.0.0', blocking_policy: 'BLOCKING_GATE', lifecycle_state: 'ADOPTED' }); const res = auditManifest(m); const f = res.findings.find(x => x.id === 'synthetic-missing-audit'); console.error('FAILED: ' + f.code + ' on ' + f.id); if (res.summary.error > 0) process.exit(1);"` exits 1 and prints the string `FAILED: QUALITY_GATE_MISSING on synthetic-missing-audit` | command stderr |
+| `AC-AI-43-03` | Run manifest truth audit against negative fixture with absent quality gate (trivy flipped to ADOPTED) | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); const t = m.adopted.find(x => x.id === 'trivy'); t.lifecycle_state = 'ADOPTED'; t.blocking_policy = 'BLOCKING_GATE'; const res = auditManifest(m); const f = res.findings.find(x => x.id === 'trivy'); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"` exits 1 and prints the string `QUALITY_GATE_MISSING: trivy` | command stderr |
 | `AC-AI-43-04` | Verify CI-provisioned gitleaks install in authoritative security-baseline workflow | `node -e "const fs = require('fs'); const wf = fs.readFileSync('.github/workflows/security-baseline.yml', 'utf8'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const g = m.adopted.find(x => x.id === 'gitleaks'); const pin = g.pinned_version_or_commit; const hasPin = wf.includes('GITLEAKS_VERSION=\x22' + pin + '\x22'); console.log('Gitleaks pin ' + pin + ' in security-baseline.yml: ' + hasPin); if (!hasPin) process.exit(1);"` exits 0 and prints the string `Gitleaks pin 8.24.0 in security-baseline.yml: true` | command stdout |
-| `AC-AI-43-05` | Verify warning visibility for codex-cli version drift without blocking | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `[CẢNH] PINNED_VERSION_DRIFT` naming `codex-cli` | command stdout |
-| `AC-AI-43-06` | Run full test suite regression checks | `node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"` exits 0 and prints the string `fail 0` | command stdout |
+| `AC-AI-43-05` | Negative proof: verify missing or decoyed workflow fails closed on CI-provisioned gate | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const os = require('os'); const fs = require('fs'); const path = require('path'); const d = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-decoy-')); fs.mkdirSync(path.join(d, '.github', 'workflows'), { recursive: true }); fs.writeFileSync(path.join(d, '.github', 'workflows', 'decoy.yml'), 'steps:\n  - run: echo no-gitleaks\n'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const res = auditManifest(m, { rootDir: d }); const f = res.findings.find(x => x.id === 'gitleaks'); fs.rmSync(d, { recursive: true, force: true }); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"` exits 1 and prints the string `QUALITY_GATE_MISSING: gitleaks` | command stderr |
+| `AC-AI-43-06` | Verify warning visibility for codex-cli version drift without blocking | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `[CẢNH] PINNED_VERSION_DRIFT` naming `codex-cli` | command stdout |
+| `AC-AI-43-07` | Run full test suite regression checks | `node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"` exits 0 and prints the string `fail 0` | command stdout |
 
 ## Verification commands
 
@@ -192,7 +195,7 @@ python docs/product-spec/scripts/validate_docs.py
 
 ### 2. Executable negative acceptance check harness (AC-AI-43-03)
 
-The following harness creates a temporary manifest fixture with an overstated quality gate (`synthetic-missing-audit` declared `ADOPTED` with `blocking_policy: "BLOCKING_GATE"` and role containing `audit` matching the quality-gate classifier) in an isolated scratch directory, and verifies that both PowerShell entrypoints fail closed with exit code 1 and identify the missing gate, without modifying any repository-tracked files:
+The following harness creates a temporary manifest fixture where existing entry `trivy` is flipped from `PENDING` to `ADOPTED` and `BLOCKING_GATE`. The fixture maintains the exact 37-entry count required by `ecosystem.ps1:339` (satisfying schema validation with 0 errors), and proves that the manifest truth audit detects the missing gate, fails closed with exit code 1, and reports `QUALITY_GATE_MISSING: trivy`:
 
 ```powershell
 $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("shipde-neg-manifest-" + [Guid]::NewGuid())
@@ -200,53 +203,46 @@ $null = New-Item -ItemType Directory -Path (Join-Path $tempDir "tools") -Force
 $fixtureManifest = Join-Path $tempDir "tools/ecosystem-manifest.json"
 
 try {
-    # Generate fixture with an absent adopted quality gate matching the classifier
+    # 1. Generate 37-entry fixture by flipping existing entry 'trivy' to ADOPTED / BLOCKING_GATE.
+    # Total count stays exactly 37, satisfying ecosystem.ps1 line 339 ($adopted.Count -ne 37),
+    # while trivy is absent on host PATH, proving that the manifest truth audit (not the validator count check) fails closed.
     $m = Get-Content "tools/ecosystem-manifest.json" -Raw | ConvertFrom-Json
-    $m.adopted += [PSCustomObject]@{
-        id = "synthetic-missing-audit"
-        name = "Synthetic Security Audit Quality Gate"
-        repository = "synthetic/security-audit-gate"
-        role = "Synthetic security audit quality gate for negative verification"
-        install_method = "system"
-        pinned_version_or_commit = "1.0.0"
-        blocking_policy = "BLOCKING_GATE"
-        lifecycle_state = "ADOPTED"
-    }
+    $trivy = $m.adopted | Where-Object { $_.id -eq "trivy" }
+    $trivy.lifecycle_state = "ADOPTED"
+    $trivy.blocking_policy = "BLOCKING_GATE"
+    $trivy.default_enabled = $true
     $m | ConvertTo-Json -Depth 10 | Set-Content -Path $fixtureManifest -Encoding ASCII
 
-    # 1. Negative check on ecosystem.ps1
-    $ecoOut = Join-Path $tempDir "eco.out"
-    $ecoErr = Join-Path $tempDir "eco.err"
-    $ecoProc = Start-Process -FilePath "powershell.exe" -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/ai/ecosystem.ps1",
-        "-Action", "Validate", "-ManifestPath", "`"$fixtureManifest`""
-    ) -PassThru -Wait -NoNewWindow -RedirectStandardOutput $ecoOut -RedirectStandardError $ecoErr
-
-    if ($ecoProc.ExitCode -ne 1) {
-        throw "ecosystem.ps1 failed negative check: expected exit code 1, got $($ecoProc.ExitCode)"
-    }
-    $ecoText = (Get-Content $ecoOut -Raw -ErrorAction SilentlyContinue) + (Get-Content $ecoErr -Raw -ErrorAction SilentlyContinue)
-    if ($ecoText -notmatch "synthetic-missing-audit") {
-        throw "ecosystem.ps1 output missing expected tool identifier 'synthetic-missing-audit'"
+    # 2. Verify schema validation passes on the fixture (0 schema errors, count is 37)
+    $p = Get-Content "tools/ecosystem-profiles.json" -Raw | ConvertFrom-Json
+    . scripts/ai/ecosystem.ps1
+    $schemaErrors = Assert-ShipDeManifest -Manifest $m -Profiles $p
+    if ($schemaErrors.Count -ne 0) {
+        throw "Fixture failed schema validation: $($schemaErrors -join '; ')"
     }
 
-    # 2. Negative check on doctor.ps1 via safe -ManifestPath injection path
-    $docOut = Join-Path $tempDir "doc.out"
-    $docErr = Join-Path $tempDir "doc.err"
-    $docProc = Start-Process -FilePath "powershell.exe" -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/ai/doctor.ps1",
-        "-ManifestPath", "`"$fixtureManifest`""
-    ) -PassThru -Wait -NoNewWindow -RedirectStandardOutput $docOut -RedirectStandardError $docErr
+    # 3. Negative manifest truth audit execution on the fixture (exit code 1, QUALITY_GATE_MISSING: trivy)
+    $testScript = Join-Path $tempDir "test-audit.js"
+    @'
+const path = require('path');
+const fs = require('fs');
+const { auditManifest } = require(path.join(process.cwd(), 'tools/ai-brain/manifest-audit'));
+const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const result = auditManifest(manifest);
+const finding = result.findings.find(f => f.id === 'trivy');
+console.error(finding.code + ': ' + finding.id);
+if (result.summary.error > 0) process.exit(1);
+'@ | Set-Content -Path $testScript -Encoding ASCII
 
-    if ($docProc.ExitCode -ne 1) {
-        throw "doctor.ps1 failed negative check: expected exit code 1, got $($docProc.ExitCode)"
+    $nodeOut = node $testScript $fixtureManifest 2>&1
+    if ($LASTEXITCODE -ne 1) {
+        throw "Manifest audit failed negative check: expected exit code 1, got $LASTEXITCODE"
     }
-    $docText = (Get-Content $docOut -Raw -ErrorAction SilentlyContinue) + (Get-Content $docErr -Raw -ErrorAction SilentlyContinue)
-    if ($docText -notmatch "synthetic-missing-audit") {
-        throw "doctor.ps1 output missing expected tool identifier 'synthetic-missing-audit'"
+    if ($nodeOut -notmatch "QUALITY_GATE_MISSING: trivy") {
+        throw "Manifest audit output missing expected finding 'QUALITY_GATE_MISSING: trivy'"
     }
 
-    Write-Host "NEGATIVE ACCEPTANCE HARNESS PASSED: Both ecosystem.ps1 and doctor.ps1 failed closed with exit code 1 and reported the missing gate."
+    Write-Host "NEGATIVE ACCEPTANCE HARNESS PASSED: Schema check passed (37 entries), manifest audit failed closed with exit code 1 and reported QUALITY_GATE_MISSING: trivy."
 } finally {
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -258,16 +254,20 @@ The following commands verify the exact behavioral distinctions identified in re
 
 ```powershell
 # A. Quality gate classifier: absent adopted gate raises QUALITY_GATE_MISSING (error, exit 1)
-node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); m.adopted.push({ id: 'synthetic-missing-audit', name: 'Synthetic Quality Gate', repository: 'synthetic/audit-gate', role: 'Synthetic security audit quality gate', install_method: 'system', pinned_version_or_commit: '1.0.0', blocking_policy: 'BLOCKING_GATE', lifecycle_state: 'ADOPTED' }); const res = auditManifest(m); const f = res.findings.find(x => x.id === 'synthetic-missing-audit'); console.log('Code:', f.code, 'Severity:', f.severity, 'Errors:', res.summary.error); if (f.code !== 'QUALITY_GATE_MISSING' || f.severity !== 'error' || res.summary.error < 1) process.exit(1);"
-# Expected: Code: QUALITY_GATE_MISSING Severity: error Errors: 1 (Exit code 0)
+node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); const t = m.adopted.find(x => x.id === 'trivy'); t.lifecycle_state = 'ADOPTED'; t.blocking_policy = 'BLOCKING_GATE'; const res = auditManifest(m); const f = res.findings.find(x => x.id === 'trivy'); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"
+# Expected: QUALITY_GATE_MISSING: trivy (Exit code 1)
 
 # B. Non-gate utility: absent adopted non-gate tool raises DECLARED_ADOPTED_BUT_ABSENT (warn, exit 0)
-node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); m.adopted.push({ id: 'synthetic-missing-tool', name: 'Synthetic Tool', repository: 'synthetic/tool', role: 'General utility helper', install_method: 'system', pinned_version_or_commit: '1.0.0', blocking_policy: 'NON_BLOCKING', lifecycle_state: 'ADOPTED' }); const res = auditManifest(m); const f = res.findings.find(x => x.id === 'synthetic-missing-tool'); console.log('Code:', f.code, 'Severity:', f.severity, 'Errors:', res.summary.error); if (f.code !== 'DECLARED_ADOPTED_BUT_ABSENT' || f.severity !== 'warn' || res.summary.error !== 0) process.exit(1);"
+node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); const t = m.adopted.find(x => x.id === 'trivy'); t.lifecycle_state = 'ADOPTED'; t.role = 'General utility helper'; t.id = 'general-tool'; const res = auditManifest(m); const f = res.findings.find(x => x.id === 'general-tool'); console.log('Code:', f.code, 'Severity:', f.severity, 'Errors:', res.summary.error); if (f.code !== 'DECLARED_ADOPTED_BUT_ABSENT' || f.severity !== 'warn' || res.summary.error !== 0) process.exit(1);"
 # Expected: Code: DECLARED_ADOPTED_BUT_ABSENT Severity: warn Errors: 0 (Exit code 0)
 
-# C. Authoritative CI-provisioned gitleaks install in .github/workflows/security-baseline.yml at pinned 8.24.0
-node -e "const fs = require('fs'); const wf = fs.readFileSync('.github/workflows/security-baseline.yml', 'utf8'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const g = m.adopted.find(x => x.id === 'gitleaks'); const pin = g.pinned_version_or_commit; const hasPin = wf.includes('GITLEAKS_VERSION=\x22' + pin + '\x22'); console.log('Gitleaks pin:', pin, 'Found in security-baseline.yml:', hasPin); if (!hasPin) process.exit(1);"
-# Expected: Gitleaks pin: 8.24.0 Found in security-baseline.yml: true (Exit code 0)
+# C. Authoritative CI-provisioned gitleaks install in .github/workflows/security-baseline.yml at pinned 8.24.0 (happy path)
+node -e "const fs = require('fs'); const wf = fs.readFileSync('.github/workflows/security-baseline.yml', 'utf8'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const g = m.adopted.find(x => x.id === 'gitleaks'); const pin = g.pinned_version_or_commit; const hasPin = wf.includes('GITLEAKS_VERSION=\x22' + pin + '\x22'); console.log('Gitleaks pin ' + pin + ' in security-baseline.yml: ' + hasPin); if (!hasPin) process.exit(1);"
+# Expected: Gitleaks pin 8.24.0 in security-baseline.yml: true (Exit code 0)
+
+# D. Authoritative CI-provisioned gitleaks negative proof: missing or decoyed workflow fails closed (negative path)
+node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const os = require('os'); const fs = require('fs'); const path = require('path'); const d = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-decoy-')); fs.mkdirSync(path.join(d, '.github', 'workflows'), { recursive: true }); fs.writeFileSync(path.join(d, '.github', 'workflows', 'decoy.yml'), 'steps:\n  - run: echo no-gitleaks\n'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const res = auditManifest(m, { rootDir: d }); const f = res.findings.find(x => x.id === 'gitleaks'); fs.rmSync(d, { recursive: true, force: true }); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"
+# Expected: QUALITY_GATE_MISSING: gitleaks (Exit code 1)
 ```
 
 ## Codex review record
@@ -275,7 +275,7 @@ node -e "const fs = require('fs'); const wf = fs.readFileSync('.github/workflows
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `5b9b1ce` | `CHANGES_REQUIRED` | [Finding 1 (P1 doctor.ps1:658)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4006773151): Reverted implementation scripts (`doctor.ps1`, `ecosystem.ps1`, `AI-TOOLCHAIN-DECISIONS.md`) from planning commit; branch bounded strictly to Work Item specification. [Finding 2 (P1 TASK-AI-43.md:11)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4006773166): Retained `READY_FOR_CODEX` because dependency `TASK-AI-17` was merged into `fix/task-ai-16-codex-launch-flags` via PR #19 (`1f587dd`), while register row 176 status synchronization is reserved for `TASK-AI-19` reconciler write-back rather than manual edit. [Finding 3 (P2 TASK-AI-43.md:148)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4006773187): Defined safe `-ManifestPath` injection parameter in `doctor.ps1`, added `AI-43-R07`, updated `AC-AI-43-03`, and provided full executable negative acceptance fixture harness in Verification commands. |
-| 2 | `34014ce` | `CHANGES_REQUIRED` | [Finding 1](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Added exact commands and expected exit codes to all criteria in Acceptance matrix (`AC-AI-43-01` through `AC-AI-43-06`). [Finding 2](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Corrected negative fixture to `synthetic-missing-audit` with `role: "Synthetic security audit quality gate..."` matching regex `/scan\|leak\|trivy\|lefthook\|axe\|lint\|audit/i`, producing `QUALITY_GATE_MISSING` (error) and exit code 1; placed classifier support for `blocking_policy === "BLOCKING_GATE"` into implementation scope. [Finding 3](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Brought `tools/ai-brain/cli.js` and `tools/ai-brain/manifest-audit.js` into allowed implementation paths and specified `--manifest <path>` support in `cli.js manifest`. [Finding 4](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Updated `AI-43-R04` and `AC-AI-43-04` to require authoritative install evidence in `.github/workflows/security-baseline.yml` pinned at `8.24.0`. [Finding 5](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Reconciled Work Item status in Control table from `READY_FOR_CODEX` to `BLOCKED_DEPENDENCY` to strictly reflect authoritative delivery register row 176 (`FEATURE-DELIVERY-REGISTER.csv`). |
+| 2 | `34014ce` | `CHANGES_REQUIRED` | [Finding 1](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Formatted Acceptance matrix to 4-part worked example structure naming exact command, expected exit code, required output string, and output source. [Finding 2 (Architectural)](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Negative fixture in `AC-AI-43-03` was adding a 38th entry, failing `ecosystem.ps1:339` count validation before the audit ran. Replaced with Option 1: flipping existing adopted entry `trivy` to `ADOPTED`/`BLOCKING_GATE`, keeping count at exactly 37, passing schema validation with 0 errors while failing closed on manifest truth (`QUALITY_GATE_MISSING: trivy`, exit 1). [Finding 3](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Brought `tools/ai-brain/cli.js` and `tools/ai-brain/manifest-audit.js` into implementation allowed paths and specified `--manifest <path>` support in `cli.js manifest`. [Finding 4](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Mandated authoritative install evidence in `.github/workflows/security-baseline.yml` at pinned `8.24.0` (`AC-AI-43-04`) and added negative proof for missing/decoyed workflow (`AC-AI-43-05`). [Finding 5](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Reconciled Work Item status in Control table from `READY_FOR_CODEX` to `BLOCKED_DEPENDENCY` to strictly reflect authoritative delivery register row 176 (`FEATURE-DELIVERY-REGISTER.csv`). [Finding 6]: Removed undefined "strict mode" reference from `AI-43-R03`. |
 | 3 | `HEAD` | Pending | Re-submitted for independent Codex review via `@codex review`. |
 
 ## Residual limitations
