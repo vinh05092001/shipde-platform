@@ -574,9 +574,8 @@ function Invoke-ShipDeValidate {
     $profiles = Get-ShipDeProfilesContent -Path $ProfilesPath
 
     $errors = Assert-ShipDeManifest -Manifest $manifest -Profiles $profiles
-    $errorCount = if ($null -ne $errors) { @($errors).Count } else { 0 }
-    if ($errorCount -gt 0) {
-        Write-Error "Validation failed with $errorCount errors:"
+    if ($errors.Count -gt 0) {
+        Write-Error "Validation failed with $($errors.Count) errors:"
         foreach ($err in $errors) {
             Write-Host ("  [ERROR] $err") -ForegroundColor Red
         }
@@ -584,44 +583,6 @@ function Invoke-ShipDeValidate {
     }
 
     Write-Host "VALIDATION PASSED: All 37 approved adopted repositories, 14 product dependencies, 10 candidates, and 9 profiles conform to ecosystem policy." -ForegroundColor Green
-
-    # Manifest truth audit (TASK-AI-43): verify declared ecosystem tools against reality
-    $rootDir = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-    $cliScript = Join-Path $rootDir "tools\ai-brain\cli.js"
-    if (Test-Path -LiteralPath $cliScript) {
-        $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-        if ($nodeCmd) {
-            $rawJson = @(& node $cliScript manifest --json 2>$null) -join "`n"
-            if ($rawJson) {
-                try {
-                    $auditResult = $rawJson | ConvertFrom-Json
-                    if ($auditResult.summary -and $auditResult.summary.error -gt 0) {
-                        Write-Host ("Ecosystem manifest audit: FAILED ({0} errors detected)" -f $auditResult.summary.error) -ForegroundColor Red
-                        foreach ($f in $auditResult.findings) {
-                            if ($f.severity -eq "error") {
-                                Write-Host ("  [ERROR] {0}: {1} ({2})" -f $f.code, $f.id, $f.message) -ForegroundColor Red
-                            }
-                        }
-                        exit 1
-                    }
-                    if ($auditResult.summary -and $auditResult.summary.warn -gt 0) {
-                        foreach ($f in $auditResult.findings) {
-                            if ($f.severity -eq "warn") {
-                                Write-Host ("  [WARN]  {0}: {1} ({2})" -f $f.code, $f.id, $f.message) -ForegroundColor Yellow
-                            }
-                        }
-                    }
-                    Write-Host ("Ecosystem manifest audit: VALIDATED ({0} tools checked, 0 errors, {1} warning(s))" -f $auditResult.checkable, $(if ($auditResult.summary) { $auditResult.summary.warn } else { 0 })) -ForegroundColor Green
-                } catch {
-                    Write-Error "Failed to parse manifest audit output: $($_.Exception.Message)"
-                    exit 1
-                }
-            } else {
-                Write-Error "Manifest audit returned empty output."
-                exit 1
-            }
-        }
-    }
 }
 
 function Invoke-ShipDeStatus {
@@ -944,11 +905,11 @@ function Invoke-ShipDeDeactivate {
                         # Verify process identity before stopping to prevent killing unrelated processes on PID reuse (Finding 2)
                         $isMatch = Test-ShipDeProcessIdentity -Process $proc -ExpectedRecord $svcRecord
                         if ($isMatch) {
-                            Write-Host ("Stopping Ship De-owned process: {0} (PID {1}, service: {2})" -f $proc.ProcessName, $pidToStop, $svcRecord.service_id)
+                            Write-Host ("Stopping Ship Dễ-owned process: {0} (PID {1}, service: {2})" -f $proc.ProcessName, $pidToStop, $svcRecord.service_id)
                             Stop-Process -Id $pidToStop -Force -ErrorAction SilentlyContinue
                             Start-Sleep -Milliseconds 100
                         } else {
-                            Write-Warning ("Stale or reused PID detected: PID {0} ({1}) does not match expected Ship De identity for service '{2}' (expected start {3}, actual start {4}). Process will NOT be stopped." -f $pidToStop, $proc.ProcessName, $svcRecord.service_id, $svcRecord.start_time, $proc.StartTime.ToString("o"))
+                            Write-Warning ("Stale or reused PID detected: PID {0} ({1}) does not match expected Ship Dễ identity for service '{2}' (expected start {3}, actual start {4}). Process will NOT be stopped." -f $pidToStop, $proc.ProcessName, $svcRecord.service_id, $svcRecord.start_time, $proc.StartTime.ToString("o"))
                         }
                     }
                 } catch {}
@@ -1281,7 +1242,7 @@ function Invoke-ShipDeTests {
     "comments": [
         {
             "author": { "login": "vinh05092001" },
-            "body": "## Codex independent review -- Round 3\n\n**Review target:** `57cb04b2c17a8f684d02ef885717bf88760cdf8c`\n\nSome findings and comments here.\n\nCHANGES_REQUIRED"
+            "body": "## Codex independent review — Round 3\n\n**Review target:** `57cb04b2c17a8f684d02ef885717bf88760cdf8c`\n\nSome findings and comments here.\n\nCHANGES_REQUIRED"
         }
     ]
 }

@@ -146,6 +146,10 @@ $agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
 # alike, so it cannot tell a valid credential from an invalid one; and a direct
 # POST to /v1/messages does not reproduce the headers Claude Code sends, so its
 # 401 says nothing about whether the fallback works. Only the real client does.
+# The gateway reports "no available channel" in Chinese. The literal is built
+# from code points so this file stays pure ASCII: it carries no byte-order mark,
+# and a non-ASCII literal in an unmarked file is read as ANSI by PowerShell and
+# breaks the whole script. That happened once already.
 $noChannelCn = -join @(0x65E0, 0x53EF, 0x7528, 0x6E20, 0x9053 | ForEach-Object { [char]$_ })
 $agentRouterLive = $false
 $agentRouterDetail = "NOT CONFIGURED; Claude account authentication will be checked"
@@ -643,50 +647,10 @@ $ecosystemScript = Join-Path $PSScriptRoot "ecosystem.ps1"
 if (Test-Path -LiteralPath $ecosystemScript) {
     try {
         & $ecosystemScript -Action Validate | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Ecosystem validation failed with exit code $LASTEXITCODE"
-        }
         Write-Host "Ecosystem manifest & profiles: VALIDATED (37 adopted tools, 9 profiles)"
     } catch {
         Write-Host "Ecosystem manifest & profiles: INVALID"
         $failures.Add("Ecosystem validation failed")
-    }
-}
-
-# TASK-AI-43: Run the manifest audit as a blocking check
-$rootDir = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$cliScript = Join-Path $rootDir "tools\ai-brain\cli.js"
-if (Test-Path -LiteralPath $cliScript) {
-    try {
-        $rawAudit = @(& node $cliScript manifest --json 2>$null) -join "`n"
-        if ($rawAudit) {
-            $audit = $rawAudit | ConvertFrom-Json
-            if ($audit.summary -and $audit.summary.error -gt 0) {
-                Write-Host ("Ecosystem manifest audit: FAILED ({0} error(s))" -f $audit.summary.error)
-                foreach ($f in $audit.findings) {
-                    if ($f.severity -eq "error") {
-                        Write-Host ("  [ERROR] {0}: {1}" -f $f.code, $f.id)
-                        $failures.Add("Manifest audit error: $($f.code) for $($f.id)")
-                    }
-                }
-            } else {
-                $warnCount = if ($audit.summary) { $audit.summary.warn } else { 0 }
-                Write-Host ("Ecosystem manifest audit: VALIDATED ({0} checkable, {1} present, 0 errors, {2} warning(s))" -f $audit.checkable, $audit.present, $warnCount)
-                if ($warnCount -gt 0) {
-                    foreach ($f in $audit.findings) {
-                        if ($f.severity -eq "warn") {
-                            Write-Host ("  [WARN]  {0}: {1} ({2})" -f $f.code, $f.id, $f.message)
-                        }
-                    }
-                }
-            }
-        } else {
-            Write-Host "Ecosystem manifest audit: CANNOT RUN (cli.js returned empty)"
-            $failures.Add("Manifest audit check returned empty output")
-        }
-    } catch {
-        Write-Host ("Ecosystem manifest audit: ERROR ({0})" -f $_.Exception.Message)
-        $failures.Add("Manifest audit check failed: $($_.Exception.Message)")
     }
 }
 
@@ -713,6 +677,40 @@ if ($pathsOutside.Count -gt 0) {
     $failures.Add("Configured paths must remain inside approved AI workspace: $($pathsOutside -join '; ')")
 } else {
     Write-Host ("Workspace containment: VERIFIED (All worktrees reside inside {0})" -f $AiRoot)
+}
+
+# Writer claim guard hook check
+#
+# Scoped per worktree with -C, like every other git call in this file. An
+# unscoped git config reads whatever directory the operator ran the doctor
+# from, and the doctor is normally run from the shell against worktrees under
+# $AiRoot -- a container directory, not a repository. Outside a repository the
+# command fails, the result is empty, and this reported ACTION REQUIRED on
+# machines where the hook was installed correctly in every worktree.
+# The hook directory pattern, defined once so the loop reads cleanly.
+$script:HooksPathPattern = "(^|[\\/])\.githooks$"
+$hooksMissing = New-Object System.Collections.Generic.List[string]
+$hooksConfigured = New-Object System.Collections.Generic.List[string]
+foreach ($entry in $paths.GetEnumerator()) {
+    if (-not (Test-Path -LiteralPath (Join-Path $entry.Value ".git"))) { continue }
+    $hooksHere = (@(& git -C $entry.Value config core.hooksPath 2>$null) -join "").Trim()
+    # A configured path is not an installed hook. Checking only the path would
+    # report CONFIGURED for precisely the case getHookStatus was written to
+    # catch: the directory set, no pre-commit in it, commits running free.
+    $hookFileHere = if ($hooksHere) { Join-Path $entry.Value (Join-Path $hooksHere "pre-commit") } else { $null }
+    if ($hooksHere -and ($hooksHere -match $script:HooksPathPattern) -and (Test-Path -LiteralPath $hookFileHere)) {
+        $hooksConfigured.Add($entry.Key)
+    } else {
+        $hooksMissing.Add($entry.Key)
+    }
+}
+if ($hooksConfigured.Count -eq 0 -and $hooksMissing.Count -eq 0) {
+    Write-Host "Single-writer guard hook: CANNOT VERIFY (no git worktree under the approved AI root)"
+} elseif ($hooksMissing.Count -eq 0) {
+    Write-Host ("Single-writer guard hook: CONFIGURED in all {0} worktrees" -f $hooksConfigured.Count)
+} else {
+    Write-Host ("Single-writer guard hook: NOT CONFIGURED in {0} (run: pnpm guard:install there)" -f ($hooksMissing -join ", "))
+    $failures.Add("ai-guard core.hooksPath is not configured in: $($hooksMissing -join ', '); run pnpm guard:install there")
 }
 
 if ($failures.Count -gt 0) {

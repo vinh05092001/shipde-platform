@@ -174,35 +174,6 @@ The manifest entry for `codex-cli` now records `observed_version_or_commit: "0.1
 and a descriptive version drift note. The manifest pin remains `0.151.0` pending a
 deliberate human upgrade decision per the toolchain policy above.
 
-## Manifest audit as a blocking check (TASK-AI-43)
-
-Following the truth reconciliation in `TASK-AI-17`, the manifest audit
-(`node tools/ai-brain/cli.js manifest`) was integrated as a mandatory blocking
-gate in `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1 -Action Validate`.
-
-Previously, ecosystem validation in `doctor.ps1` only evaluated structural JSON
-schema constraints (verifying that the adopted tools array contains exactly 37
-elements and that 9 profiles are declared), without checking whether declared
-tools actually exist on the host, in workspace dependencies, or in CI workflows.
-Under that setup, missing tools declared as `ADOPTED` would produce an advisory
-report in CLI invocations but would not fail health checks or operator gates.
-
-Under `TASK-AI-43`:
-1. `scripts/ai/ecosystem.ps1 -Action Validate` executes both structural schema
-   validation and `node tools/ai-brain/cli.js manifest --json`. Any manifest
-   audit errors (`summary.error > 0`, such as `QUALITY_GATE_MISSING` or
-   `DECLARED_ADOPTED_BUT_ABSENT`) cause validation to fail closed with exit code 1.
-2. `scripts/ai/doctor.ps1` executes the manifest audit under the Governed
-   Ecosystem & Health Checks section. Errors are reported with exact tool
-   identifiers and finding codes and appended to `$failures`, blocking the doctor
-   run with exit code 1.
-3. Permitted warnings (specifically `PINNED_VERSION_DRIFT` for `codex-cli`
-   `0.154.0` vs pin `0.151.0`) are displayed visibly to the operator for
-   awareness but do not block non-strict health checks.
-4. `ci-provisioned` tools (specifically `gitleaks` at pinned `8.24.0` in
-   `.github/workflows/security-baseline.yml`) are verified against workflow
-   definitions and correctly treated as present.
-
 ## UI quality stack
 
 `TASK-FOUND-04` must make these reviewable in one PR:

@@ -10,6 +10,7 @@ const path = require('path');
 
 const {
   Tier,
+  loadKey,
   addAccount,
   listAccounts,
   updateAccount,
@@ -166,6 +167,81 @@ describe('Secret handling', () => {
     assert.equal(getSecret('openrouter-free', s), 'sk-or-v1-abcdef');
     assert.equal(listAccounts(s)[0].limits.requestsPerDay, 50);
   });
+
+  test('a short SHIPDE_ACCOUNT_KEY throws naming the real problem and required length (Finding #5)', () => {
+    const origEnv = process.env.SHIPDE_ACCOUNT_KEY;
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = 'short-key-under-32';
+      assert.throws(
+        () => loadKey(),
+        (err) => {
+          assert.match(err.message, /SHIPDE_ACCOUNT_KEY/);
+          assert.match(err.message, /32/);
+          return true;
+        }
+      );
+
+      // Verify setSecret and getSecret also throw when no explicit key option is given
+      const s = store();
+      addAccount(def(), s);
+      assert.throws(
+        () =>
+          setSecret('openrouter-free', 'sk-secret-123', {
+            registryFile: s.registryFile,
+            secretsFile: s.secretsFile,
+          }),
+        /SHIPDE_ACCOUNT_KEY.*32/
+      );
+    } finally {
+      if (origEnv !== undefined) {
+        process.env.SHIPDE_ACCOUNT_KEY = origEnv;
+      } else {
+        delete process.env.SHIPDE_ACCOUNT_KEY;
+      }
+    }
+  });
+
+  test('a valid SHIPDE_ACCOUNT_KEY (>= 32 chars) is accepted and used', () => {
+    const origEnv = process.env.SHIPDE_ACCOUNT_KEY;
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = 'valid-env-account-key-test-fixture-32chars';
+      const key = loadKey();
+      assert.ok(Buffer.isBuffer(key));
+      assert.equal(key.length, 32);
+
+      const crypto = require('crypto');
+      const expected = crypto.createHash('sha256').update(process.env.SHIPDE_ACCOUNT_KEY).digest();
+      assert.deepEqual(key, expected);
+    } finally {
+      if (origEnv !== undefined) {
+        process.env.SHIPDE_ACCOUNT_KEY = origEnv;
+      } else {
+        delete process.env.SHIPDE_ACCOUNT_KEY;
+      }
+    }
+  });
+
+  test('an unset SHIPDE_ACCOUNT_KEY falls back to the file key', () => {
+    const origEnv = process.env.SHIPDE_ACCOUNT_KEY;
+    const s = store();
+    const keyFile = path.join(s.dir, 'custom.key');
+    try {
+      delete process.env.SHIPDE_ACCOUNT_KEY;
+      const key1 = loadKey({ keyFile });
+      assert.ok(Buffer.isBuffer(key1));
+      assert.equal(key1.length, 32);
+      assert.ok(fs.existsSync(keyFile), 'key file was created');
+
+      const key2 = loadKey({ keyFile });
+      assert.deepEqual(key1, key2, 'reads existing key file');
+    } finally {
+      if (origEnv !== undefined) {
+        process.env.SHIPDE_ACCOUNT_KEY = origEnv;
+      } else {
+        delete process.env.SHIPDE_ACCOUNT_KEY;
+      }
+    }
+  });
 });
 
 describe('Escalation ladder', () => {
@@ -297,5 +373,190 @@ describe('Validation helper', () => {
   test('reports every problem at once', () => {
     const errors = validateAccount({ id: 'BAD ID', capabilities: {} });
     assert.ok(errors.length >= 3, 'id, provider, model and context all reported');
+  });
+});
+
+describe('An exported-but-empty key means unset', () => {
+  // Shells, CI matrices and .env loaders all spell "unset" as an exported
+  // empty value. Throwing on it broke every secret read on a machine that
+  // merely exports the name.
+  const orig = process.env.SHIPDE_ACCOUNT_KEY;
+  function restore() {
+    if (orig === undefined) delete process.env.SHIPDE_ACCOUNT_KEY;
+    else process.env.SHIPDE_ACCOUNT_KEY = orig;
+  }
+
+  // Deliberately no `key` in the options: that forces loadKey to run, which is
+  // the code under test.
+  function keyedStore(keyFileRel) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-key-'));
+    return {
+      registryFile: path.join(dir, 'registry.json'),
+      secretsFile: path.join(dir, 'secrets.enc'),
+      keyFile: path.join(dir, ...keyFileRel),
+      dir,
+    };
+  }
+
+  test('an empty value falls back to the key file instead of throwing', () => {
+    const s = keyedStore(['nested', 'account.key']);
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = '';
+      addAccount(def(), s);
+      assert.doesNotThrow(() => setSecret('openrouter-free', 'sk-value', s));
+      assert.strictEqual(getSecret('openrouter-free', s), 'sk-value');
+      // The directory of the requested keyFile is created, not the home one.
+      assert.ok(fs.existsSync(s.keyFile));
+    } finally {
+      restore();
+      fs.rmSync(s.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a whitespace-only value is also unset', () => {
+    const s = keyedStore(['deep', 'nested', 'account.key']);
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = '   ';
+      addAccount(def(), s);
+      assert.doesNotThrow(() => setSecret('openrouter-free', 'sk-value', s));
+      assert.ok(fs.existsSync(s.keyFile));
+    } finally {
+      restore();
+      fs.rmSync(s.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a short but genuinely set value still throws', () => {
+    const s = keyedStore(['account.key']);
+    try {
+      addAccount(def(), s);
+      process.env.SHIPDE_ACCOUNT_KEY = 'too-short';
+      assert.throws(() => setSecret('openrouter-free', 'sk-value', s), /SHIPDE_ACCOUNT_KEY/);
+    } finally {
+      restore();
+      fs.rmSync(s.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('The same secret must always derive the same key', () => {
+  const orig = process.env.SHIPDE_ACCOUNT_KEY;
+  const restore = () => {
+    if (orig === undefined) delete process.env.SHIPDE_ACCOUNT_KEY;
+    else process.env.SHIPDE_ACCOUNT_KEY = orig;
+  };
+  const KEY = 'a-very-long-account-key-of-40-characters';
+
+  function freshStore() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-trim-'));
+    return {
+      dir,
+      registryFile: path.join(dir, 'r.json'),
+      secretsFile: path.join(dir, 's.enc'),
+      keyFile: path.join(dir, 'k'),
+    };
+  }
+
+  test('a trailing newline derives the same key, not a different one', () => {
+    // $(cat key) and Docker --env-file both append one. Deriving a different
+    // key from the same secret makes every stored credential undecryptable,
+    // with an error that blames corruption.
+    const a = freshStore();
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = KEY;
+      addAccount(def(), a);
+      setSecret('openrouter-free', 'sk-value', a);
+      process.env.SHIPDE_ACCOUNT_KEY = KEY + '\n';
+      assert.strictEqual(getSecret('openrouter-free', a), 'sk-value');
+    } finally {
+      restore();
+      fs.rmSync(a.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a short key padded with whitespace is still rejected', () => {
+    const a = freshStore();
+    try {
+      addAccount(def(), a);
+      process.env.SHIPDE_ACCOUNT_KEY = '   short-key   ';
+      assert.throws(() => setSecret('openrouter-free', 'v', a), /SHIPDE_ACCOUNT_KEY/);
+    } finally {
+      restore();
+      fs.rmSync(a.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a registry under a directory that does not exist is created, not ENOENT', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-deep-'));
+    const s2 = {
+      dir,
+      registryFile: path.join(dir, 'a', 'b', 'r.json'),
+      secretsFile: path.join(dir, 'a', 'b', 's.enc'),
+      keyFile: path.join(dir, 'a', 'b', 'k'),
+    };
+    try {
+      assert.doesNotThrow(() => addAccount(def(), s2));
+      assert.ok(fs.existsSync(s2.registryFile));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Trimming the key must not orphan installs that already work', () => {
+  // A value long enough raw and carrying padding had its secrets written under
+  // the untrimmed key. Hashing the trimmed value going forward is right, but
+  // without a fallback those installs decrypt to the corruption error - the
+  // failure this guard exists to prevent, aimed at people it currently works
+  // for.
+  const orig = process.env.SHIPDE_ACCOUNT_KEY;
+  const restore = () => {
+    if (orig === undefined) delete process.env.SHIPDE_ACCOUNT_KEY;
+    else process.env.SHIPDE_ACCOUNT_KEY = orig;
+  };
+  const RAW = '  a-very-long-account-key-of-40-characters  ';
+
+  test('a secret written under the untrimmed key still reads back', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-mig-'));
+    const store = {
+      registryFile: path.join(dir, 'r.json'),
+      secretsFile: path.join(dir, 's.enc'),
+      keyFile: path.join(dir, 'k'),
+    };
+    try {
+      // Write under the legacy derivation, exactly as an older install did.
+      const crypto = require('crypto');
+      const legacy = crypto.createHash('sha256').update(RAW).digest();
+      process.env.SHIPDE_ACCOUNT_KEY = RAW;
+      addAccount(def(), store);
+      setSecret('openrouter-free', 'sk-legacy', Object.assign({ key: legacy }, store));
+
+      // Read back through the normal path, which now derives from the trimmed
+      // value and must fall back.
+      assert.strictEqual(getSecret('openrouter-free', store), 'sk-legacy');
+    } finally {
+      restore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an explicitly supplied key is never second-guessed', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-mig-'));
+    const store = {
+      registryFile: path.join(dir, 'r.json'),
+      secretsFile: path.join(dir, 's.enc'),
+      keyFile: path.join(dir, 'k'),
+    };
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = RAW;
+      addAccount(def(), store);
+      setSecret('openrouter-free', 'sk-value', Object.assign({ key: Buffer.alloc(32, 3) }, store));
+      assert.throws(() =>
+        getSecret('openrouter-free', Object.assign({ key: Buffer.alloc(32, 4) }, store))
+      );
+    } finally {
+      restore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
