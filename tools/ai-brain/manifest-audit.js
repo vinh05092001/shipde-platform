@@ -56,6 +56,7 @@ const INSTALL_KINDS = {
   NPM_GLOBAL: 'npm-global',
   NPM_DEV: 'npm-dev',
   SYSTEM: 'system',
+  CI: 'ci-provisioned',
   PIP: 'pip',
   NPX: 'npx-on-demand',
   SNAPSHOT: 'pinned-snapshot',
@@ -71,6 +72,51 @@ function onPath(name) {
   } catch (e) {
     return false;
   }
+}
+
+/**
+ * Whether a CI workflow installs this tool.
+ *
+ * `where`/`which` asks one machine — this one — and a tool provisioned by the
+ * CI runner is invisible to it. That is not a hypothetical: gitleaks is
+ * installed at the pinned version by two workflows and enforced as a blocking
+ * gate on every Pull Request, while the local probe reported it missing. The
+ * audit then raised QUALITY_GATE_MISSING against a gate that was, at that
+ * moment, running.
+ *
+ * Worse than the false positive was where it pointed. A record that disagrees
+ * with a check is normally the record's fault, so the finding invited someone
+ * to downgrade a live blocking gate to PENDING — which is exactly what
+ * happened, and it made the manifest understate reality in the one direction
+ * this audit exists to prevent.
+ *
+ * So a CI-provisioned tool is verified where it actually lives: in the
+ * workflow that installs it.
+ */
+function inCiWorkflows(name, rootDir) {
+  const dir = path.join(rootDir, '.github', 'workflows');
+  let files;
+  try {
+    files = fs.readdirSync(dir).filter((f) => /\.ya?ml$/i.test(f));
+  } catch (e) {
+    return null; // No workflows readable here; unverifiable, not absent.
+  }
+  // The id is escaped before it reaches the RegExp. Only gitleaks uses this
+  // path today, but an id carrying a regex metacharacter would either misread
+  // or throw -- and an exception here takes the whole audit run down with it.
+  const safe = String(name).replace(/[-\/\^$*+?.()|[\]{}]/g, '\\$&');
+  const pattern = new RegExp(
+    '(install|download|setup|curl|apt-get|brew)[^\n]*\\b' + safe + '\\b',
+    'i'
+  );
+  for (const f of files) {
+    try {
+      if (pattern.test(fs.readFileSync(path.join(dir, f), 'utf8'))) return true;
+    } catch (e) {
+      /* an unreadable workflow is not evidence of absence */
+    }
+  }
+  return false;
 }
 
 /** Every dependency declared anywhere in the workspace. */
@@ -97,6 +143,10 @@ function workspaceDependencies(rootDir) {
     }
   }
   return deps;
+}
+
+function pinString(entry) {
+  return String((entry && entry.pinned_version_or_commit) || '').trim();
 }
 
 function finding(severity, code, entry, message, evidence) {
@@ -144,12 +194,34 @@ function auditManifest(manifest, deps) {
       const pkg = PACKAGE_ALIASES[id] || id;
       present = [...dependencies].some((d) => d === pkg || d.startsWith(pkg + '/'));
       how = 'dependency "' + pkg + '"';
+    } else if (install === INSTALL_KINDS.CI) {
+      const alias = BINARY_ALIASES[id] || id;
+      present = inCiWorkflows(alias, rootDir);
+      how = 'workflow CI cài "' + alias + '"';
     } else if (install === INSTALL_KINDS.PIP) {
       present = has(BINARY_ALIASES[id] || id);
       how = 'lệnh pip';
     } else if (install === INSTALL_KINDS.WORKSPACE) {
-      present = fs.existsSync(path.join(rootDir, 'package.json'));
-      how = 'workspace';
+      // This used to test for rootDir/package.json, which is true whenever the
+      // audit runs at all — so every workspace entry read as present, whether
+      // it existed or not. shipde-brain has never been created (TASK-AI-21
+      // creates it) and still reported present.
+      //
+      // A workspace entry names a checkout: this repository, or a sibling of
+      // it. Look for that, which is what the entries' own health_check strings
+      // already say ("Test-Path ../shipde-brain").
+      // Identify this checkout by its manifest name rather than its directory
+      // name: a git worktree lives under a generated path, so the directory
+      // name is not the repository's name.
+      let here = false;
+      try {
+        here = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')).name === id;
+      } catch (e) {
+        /* no readable manifest here; fall back to the sibling check */
+      }
+      const sibling = fs.existsSync(path.join(rootDir, '..', id));
+      present = here || sibling;
+      how = 'thư mục làm việc "' + id + '"';
     } else {
       // npx-on-demand and pinned-snapshot are fetched when used; absence is
       // the designed state, not a finding.
@@ -182,6 +254,55 @@ function auditManifest(manifest, deps) {
             how +
             ')' +
             (isGate ? ' — đây là cổng chất lượng, nên đường dẫn tin là đang được kiểm.' : '.')
+        )
+      );
+    }
+
+    // --- A pin that no longer matches what is installed --------------------
+    //
+    // `observed_version_or_commit` was free text: someone wrote down what they
+    // saw, and nothing ever compared it to the pin again. A hand-written note
+    // drifts silently, which is the exact failure class this audit exists to
+    // close — so the field is read rather than admired.
+    //
+    // It is a warning, not an error. Drift is a decision for the upgrade rule
+    // to settle, and the audit's job is to make sure nobody has to notice it
+    // by accident.
+    const observed = String(entry.observed_version_or_commit || '').trim();
+    if (observed && observed !== pinString(entry)) {
+      findings.push(
+        finding(
+          'warn',
+          'PINNED_VERSION_DRIFT',
+          entry,
+          'Pin là ' + pinString(entry) + ' nhưng bản quan sát được là ' + observed + '.',
+          { pinned: pinString(entry), observed }
+        )
+      );
+    }
+
+    // --- Understatement: declared not in use, present in fact -------------
+    //
+    // Every rule above catches the manifest claiming more than is true. This
+    // one catches the opposite, and it had no rule at all: PENDING produced no
+    // finding under any condition, so moving an entry to PENDING removed it
+    // from the audit's reach entirely. A run could therefore reach zero
+    // findings by demoting records rather than by matching them to reality,
+    // which is the failure this module exists to prevent, running backwards.
+    //
+    // It is a warning rather than an error because a tool present while
+    // declared PENDING is not dangerous the way a missing gate is — nothing
+    // trusts it yet. It is still wrong, and it hides a gate that is already
+    // enforcing.
+    if (state === 'PENDING' && present === true) {
+      findings.push(
+        finding(
+          'warn',
+          'DECLARED_PENDING_BUT_PRESENT',
+          entry,
+          'Khai PENDING nhưng thực tế đã có (' +
+            how +
+            ') — manifest đang khai thấp hơn thực tế; nâng lại trạng thái hoặc nói rõ vì sao chưa dùng.'
         )
       );
     }
