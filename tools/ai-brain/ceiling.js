@@ -68,6 +68,11 @@ const QUOTA_SIGNALS = [
   // surfacing err.statusText would have had a genuine spending refusal
   // silently dropped.
   /payment required/i,
+  // A bare trailing code ("Request failed: 402") has neither a keyword before
+  // it nor a separator after it. 429 is rescued by the too-many-requests
+  // pattern and the status-text form by payment-required; this shape had no
+  // backstop for either code.
+  /(?:fail|refus|error|reject|denied|exceed)[^0-9]{0,24}(?:402|429)\s*$/i,
   /rate.?limit/i,
   /quota/i,
   /too many requests/i,

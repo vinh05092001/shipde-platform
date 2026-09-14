@@ -259,11 +259,42 @@ function setSecret(id, value, options) {
  * Returns the decrypted credential. Deliberately the only way to obtain one,
  * so every call site is easy to find and review.
  */
+/**
+ * The key an existing install may already have encrypted under.
+ *
+ * Trimming SHIPDE_ACCOUNT_KEY before hashing is correct going forward, but it
+ * changes the derived key for anyone whose value is long enough raw and
+ * carries padding or a trailing newline. Their secrets were written under the
+ * untrimmed key and would fail to decrypt with the corruption message — the
+ * exact failure this whole guard exists to prevent, aimed at installs that
+ * work today.
+ *
+ * So a decrypt that fails under the current key is retried once under the old
+ * one. Returns null when there is nothing to retry with, which is the common
+ * case: no env key, or a value with no surrounding whitespace.
+ */
+function legacyEnvKey() {
+  const raw = process.env.SHIPDE_ACCOUNT_KEY;
+  if (typeof raw !== 'string') return null;
+  if (raw.trim() === '' || raw === raw.trim()) return null;
+  return crypto.createHash('sha256').update(raw).digest();
+}
+
 function getSecret(id, options) {
   const secrets = loadSecrets(options);
   if (!secrets[id]) return null;
   const key = (options && options.key) || loadKey(options);
-  return decrypt(secrets[id], key);
+  try {
+    return decrypt(secrets[id], key);
+  } catch (e) {
+    // See legacyEnvKey: an install encrypted under the untrimmed value must
+    // keep working. Only the env-key case can differ, so a supplied key is
+    // never second-guessed.
+    if (options && options.key) throw e;
+    const legacy = legacyEnvKey();
+    if (!legacy) throw e;
+    return decrypt(secrets[id], legacy);
+  }
 }
 
 function hasSecret(id, options) {

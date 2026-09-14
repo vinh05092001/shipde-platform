@@ -306,3 +306,16 @@ describe('A status code is only a status code in a status context', () => {
     });
   }
 });
+
+describe('A bare trailing status code needs a reason beside it', () => {
+  // Matching any line ending in 402 or 429 would have made "tokens: 429" a
+  // quota refusal, and the ceiling never recovers from a false positive.
+  const refusals = ['Request failed: 402', 'Request failed: 429', 'upstream rejected - 402'];
+  const notRefusals = ['tokens: 429', 'wrote 4029 tokens', 'latency 402'];
+  for (const t of refusals) {
+    test(`counts: ${t}`, () => assert.strictEqual(isQuotaRefusal(t), true));
+  }
+  for (const t of notRefusals) {
+    test(`does not: ${t}`, () => assert.strictEqual(isQuotaRefusal(t), false));
+  }
+});

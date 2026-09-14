@@ -502,3 +502,61 @@ describe('The same secret must always derive the same key', () => {
     }
   });
 });
+
+describe('Trimming the key must not orphan installs that already work', () => {
+  // A value long enough raw and carrying padding had its secrets written under
+  // the untrimmed key. Hashing the trimmed value going forward is right, but
+  // without a fallback those installs decrypt to the corruption error - the
+  // failure this guard exists to prevent, aimed at people it currently works
+  // for.
+  const orig = process.env.SHIPDE_ACCOUNT_KEY;
+  const restore = () => {
+    if (orig === undefined) delete process.env.SHIPDE_ACCOUNT_KEY;
+    else process.env.SHIPDE_ACCOUNT_KEY = orig;
+  };
+  const RAW = '  a-very-long-account-key-of-40-characters  ';
+
+  test('a secret written under the untrimmed key still reads back', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-mig-'));
+    const store = {
+      registryFile: path.join(dir, 'r.json'),
+      secretsFile: path.join(dir, 's.enc'),
+      keyFile: path.join(dir, 'k'),
+    };
+    try {
+      // Write under the legacy derivation, exactly as an older install did.
+      const crypto = require('crypto');
+      const legacy = crypto.createHash('sha256').update(RAW).digest();
+      process.env.SHIPDE_ACCOUNT_KEY = RAW;
+      addAccount(def(), store);
+      setSecret('openrouter-free', 'sk-legacy', Object.assign({ key: legacy }, store));
+
+      // Read back through the normal path, which now derives from the trimmed
+      // value and must fall back.
+      assert.strictEqual(getSecret('openrouter-free', store), 'sk-legacy');
+    } finally {
+      restore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an explicitly supplied key is never second-guessed', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-mig-'));
+    const store = {
+      registryFile: path.join(dir, 'r.json'),
+      secretsFile: path.join(dir, 's.enc'),
+      keyFile: path.join(dir, 'k'),
+    };
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = RAW;
+      addAccount(def(), store);
+      setSecret('openrouter-free', 'sk-value', Object.assign({ key: Buffer.alloc(32, 3) }, store));
+      assert.throws(() =>
+        getSecret('openrouter-free', Object.assign({ key: Buffer.alloc(32, 4) }, store))
+      );
+    } finally {
+      restore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
