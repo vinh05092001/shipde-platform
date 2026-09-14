@@ -1,0 +1,4 @@
+#!/bin/sh
+# Ship Dễ — refuse a commit when another live session holds this branch.
+# Bypass for a deliberate exception: git commit --no-verify
+node "$(git rev-parse --show-toplevel)/tools/ai-guard/cli.js" check || exit 1

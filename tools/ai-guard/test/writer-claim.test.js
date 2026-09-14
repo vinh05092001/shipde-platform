@@ -1,0 +1,172 @@
+/**
+ * Ship Dễ — Single-Writer Claim Guard Test Suite
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const {
+  readClaims,
+  writeClaim,
+  releaseClaim,
+  checkWrite,
+  claimPath,
+} = require('../writer-claim');
+
+function tempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-claim-'));
+}
+
+const aoSession = (id, branch, harness) => ({
+  source: 'ao',
+  id,
+  branch,
+  harness: harness || 'agy',
+  kind: 'worker',
+  state: 'idle',
+  lastActivityAt: '2026-09-13T14:37:31Z',
+});
+
+describe('Single-writer claim guard', () => {
+  describe('Claim lifecycle', () => {
+    test('a written claim is read back', () => {
+      const dir = tempDir();
+      writeClaim({ branch: 'feat/x', owner: 'alice', dir });
+      const claims = readClaims(dir);
+      assert.equal(claims.length, 1);
+      assert.equal(claims[0].branch, 'feat/x');
+      assert.equal(claims[0].owner, 'alice');
+    });
+
+    test('a branch name with slashes maps to one flat file', () => {
+      const dir = tempDir();
+      writeClaim({ branch: 'feat/deep/nested/name', owner: 'a', dir });
+      const file = claimPath('feat/deep/nested/name', dir);
+      assert.equal(path.dirname(file), dir, 'no nested directories created');
+      assert.ok(fs.existsSync(file));
+    });
+
+    test('an expired claim is dropped on read, so a crashed session frees its branch', () => {
+      const dir = tempDir();
+      writeClaim({ branch: 'feat/stale', owner: 'ghost', dir, ttlMinutes: 60 });
+      const file = claimPath('feat/stale', dir);
+      const claim = JSON.parse(fs.readFileSync(file, 'utf8'));
+      claim.expiresAt = new Date(Date.now() - 1000).toISOString();
+      fs.writeFileSync(file, JSON.stringify(claim), 'utf8');
+
+      assert.equal(readClaims(dir).length, 0, 'expired claim not reported');
+      assert.equal(fs.existsSync(file), false, 'and removed from disk');
+    });
+
+    test('a corrupt claim file is skipped rather than throwing', () => {
+      const dir = tempDir();
+      fs.writeFileSync(path.join(dir, 'garbage.json'), '{not json', 'utf8');
+      writeClaim({ branch: 'feat/ok', owner: 'a', dir });
+      assert.equal(readClaims(dir).length, 1);
+    });
+
+    test('releasing removes the claim and is safe to repeat', () => {
+      const dir = tempDir();
+      writeClaim({ branch: 'feat/y', owner: 'a', dir });
+      assert.equal(releaseClaim('feat/y', dir), true);
+      assert.equal(releaseClaim('feat/y', dir), false, 'second release is a no-op, not an error');
+      assert.equal(readClaims(dir).length, 0);
+    });
+
+    test('claiming requires a branch and an owner', () => {
+      const dir = tempDir();
+      assert.throws(() => writeClaim({ owner: 'a', dir }), /branch is required/);
+      assert.throws(() => writeClaim({ branch: 'b', dir }), /owner is required/);
+    });
+  });
+
+  describe('Write checks', () => {
+    test('allows a branch nobody holds', async () => {
+      const result = await checkWrite({
+        branch: 'feat/free',
+        owner: 'me',
+        aoHolders: [],
+        claims: [],
+      });
+      assert.equal(result.allowed, true);
+      assert.equal(result.holders.length, 0);
+    });
+
+    test('blocks the exact collision that happened on TASK-AI-15', async () => {
+      const result = await checkWrite({
+        branch: 'feat/task-ai-15-realtime-ai-cockpit',
+        owner: 'direct-terminal',
+        aoHolders: [aoSession('shipde-platform-14', 'feat/task-ai-15-realtime-ai-cockpit')],
+        claims: [],
+      });
+      assert.equal(result.allowed, false);
+      assert.match(result.reason, /shipde-platform-14/);
+      assert.equal(result.holders[0].harness, 'agy');
+    });
+
+    test('does not block the holder from its own branch', async () => {
+      const result = await checkWrite({
+        branch: 'feat/mine',
+        owner: 'shipde-platform-14',
+        aoHolders: [aoSession('shipde-platform-14', 'feat/mine')],
+        claims: [],
+      });
+      assert.equal(result.allowed, true, 'a session is never blocked by itself');
+    });
+
+    test('a holder on a different branch is irrelevant', async () => {
+      const result = await checkWrite({
+        branch: 'feat/a',
+        owner: 'me',
+        aoHolders: [aoSession('other', 'feat/b')],
+        claims: [],
+      });
+      assert.equal(result.allowed, true);
+    });
+
+    test('a direct claim blocks an AO session just as an AO session blocks a direct one', async () => {
+      const result = await checkWrite({
+        branch: 'feat/shared',
+        owner: 'shipde-platform-14',
+        aoHolders: [],
+        claims: [{ source: 'claim', branch: 'feat/shared', owner: 'direct-terminal', harness: 'direct' }],
+      });
+      assert.equal(result.allowed, false, 'the guard is symmetric across both kinds of session');
+      assert.match(result.reason, /direct-terminal/);
+    });
+
+    test('refuses main and master outright', async () => {
+      for (const branch of ['main', 'master']) {
+        const result = await checkWrite({ branch, owner: 'me', aoHolders: [], claims: [] });
+        assert.equal(result.allowed, false, branch + ' is refused');
+        assert.match(result.reason, /nhánh riêng/);
+      }
+    });
+
+    test('reports every holder when more than one exists', async () => {
+      const result = await checkWrite({
+        branch: 'feat/crowded',
+        owner: 'me',
+        aoHolders: [aoSession('s1', 'feat/crowded'), aoSession('s2', 'feat/crowded', 'claude-code')],
+        claims: [{ source: 'claim', branch: 'feat/crowded', owner: 'direct', harness: 'direct' }],
+      });
+      assert.equal(result.allowed, false);
+      assert.equal(result.holders.length, 3);
+    });
+
+    test('an unknown branch degrades rather than blocking', async () => {
+      const result = await checkWrite({
+        branch: null,
+        cwd: os.tmpdir(),
+        owner: 'me',
+        aoHolders: [],
+        claims: [],
+      });
+      assert.equal(result.allowed, true, 'a guard that cannot tell must not stop work');
+      assert.equal(result.degraded, true);
+    });
+  });
+});
