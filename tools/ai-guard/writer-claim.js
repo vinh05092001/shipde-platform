@@ -244,6 +244,125 @@ async function checkWrite(options) {
   };
 }
 
+function defaultOwner(env) {
+  const e = env || process.env;
+  if (e.SHIPDE_WRITER) return e.SHIPDE_WRITER;
+  if (e.AO_SESSION_ID) return e.AO_SESSION_ID;
+  if (e.AO_REVIEW_WORKER_SESSION_ID) return e.AO_REVIEW_WORKER_SESSION_ID;
+  if (e.AO_REVIEW_SESSION_ID) return e.AO_REVIEW_SESSION_ID;
+  if (e.CLAUDE_CODE_SESSION_ID) return e.CLAUDE_CODE_SESSION_ID;
+  if (e.CLAUDE_SESSION_ID) return e.CLAUDE_SESSION_ID;
+
+  try {
+    const user = os.userInfo();
+    if (user && user.username) {
+      return user.username + '@' + os.hostname();
+    }
+  } catch (err) {
+    /* ignore and fall through */
+  }
+  return ((e && (e.USER || e.USERNAME)) || 'unknown') + '@' + os.hostname();
+}
+
+function getHookStatus(options) {
+  const opts = options || {};
+  try {
+    const hooksPath = execFileSync('git', ['config', 'core.hooksPath'], {
+      cwd: opts.cwd || process.cwd(),
+      encoding: 'utf8',
+      timeout: 5000,
+    }).trim();
+    const isGithooks =
+      hooksPath === '.githooks' ||
+      hooksPath.endsWith('/.githooks') ||
+      hooksPath.endsWith('\\.githooks');
+    // A configured path is not an installed hook. Pointing core.hooksPath at
+    // a directory with no pre-commit in it reported INSTALLED while commits
+    // ran free, which is the one answer this function must never get wrong.
+    // git resolves a relative core.hooksPath against the working-tree top
+    // level, not the current directory. Resolving against cwd made `status`
+    // report NOT INSTALLED from any subdirectory of a correctly installed
+    // repository -- the same false-negative class the unscoped `git config`
+    // call produced in doctor.ps1.
+    let topLevel = opts.cwd || process.cwd();
+    try {
+      topLevel = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+        cwd: opts.cwd || process.cwd(),
+        encoding: 'utf8',
+        timeout: 5000,
+      }).trim();
+    } catch (e) {
+      /* not a repository, or git unavailable: fall back to the given cwd */
+    }
+    const hookFile = path.isAbsolute(hooksPath)
+      ? path.join(hooksPath, 'pre-commit')
+      : path.join(topLevel, hooksPath, 'pre-commit');
+    const hookPresent = isGithooks && fs.existsSync(hookFile);
+    return {
+      installed: hookPresent,
+      configuredOnly: isGithooks && !hookPresent,
+      hooksPath: hooksPath || null,
+    };
+  } catch (e) {
+    return { installed: false, hooksPath: null };
+  }
+}
+
+function installHook(options) {
+  const opts = options || {};
+  const args = ['config'];
+  if (opts.global) args.push('--global');
+  args.push('core.hooksPath', '.githooks');
+
+  try {
+    execFileSync('git', args, {
+      cwd: opts.cwd || process.cwd(),
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    // Setting the path is not the same as having the hook. A repository
+    // without .githooks/pre-commit is configured and unguarded, so say so
+    // rather than reporting a clean install.
+    const hookPresent = fs.existsSync(
+      path.join(opts.cwd || process.cwd(), '.githooks', 'pre-commit')
+    );
+    return { success: true, hooksPath: '.githooks', hookPresent };
+  } catch (e) {
+    return {
+      success: false,
+      hooksPath: null,
+      error: e && e.message ? e.message : String(e),
+    };
+  }
+}
+
+function uninstallHook(options) {
+  const opts = options || {};
+  const args = ['config'];
+  if (opts.global) args.push('--global');
+  args.push('--unset', 'core.hooksPath');
+
+  try {
+    execFileSync('git', args, {
+      cwd: opts.cwd || process.cwd(),
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    return { success: true };
+  } catch (e) {
+    // `git config --unset` exits 5 when the key is not set. The desired end
+    // state — no core.hooksPath — already holds, so reporting failure made
+    // `cli.js uninstall` warn and exit non-zero for doing nothing wrong.
+    if (e && e.status === 5) {
+      return { success: true, alreadyAbsent: true };
+    }
+    return {
+      success: false,
+      error: e && e.message ? e.message : String(e),
+    };
+  }
+}
+
 module.exports = {
   readAoHolders,
   readClaims,
@@ -251,6 +370,10 @@ module.exports = {
   releaseClaim,
   checkWrite,
   currentBranch,
+  defaultOwner,
+  getHookStatus,
+  installHook,
+  uninstallHook,
   claimPath,
   ensureClaimDir,
   CLAIM_DIR,

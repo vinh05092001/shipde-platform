@@ -47,14 +47,35 @@ const Outcome = {
  * Reasons that mean "out of quota" rather than "something else broke".
  * A 500 or a socket error says nothing about the ceiling, and treating it as a
  * refusal would teach the system a limit that does not exist.
+ *
+ * Routing states (such as 503 or "no available channel") indicate model naming
+ * or upstream supply issues, not quota exhaustion.
  */
 const QUOTA_SIGNALS = [
-  /\b429\b/,
+  // Status codes are matched in their status context, not as bare numbers.
+  // A loose /402/ also matches any message that happens to contain the digits
+  // — a request id, a duration, a token count — and one false positive pins
+  // the learned ceiling permanently, which is the exact failure this module
+  // just removed for 503. Verified: "completed in 402 ms" used to count as a
+  // quota refusal.
+  /(?:status|code|error|http)[^0-9]{0,12}429(?![0-9])/i,
+  /(?:status|code|error|http)[^0-9]{0,12}402(?![0-9])/i,
+  /(?:^|[\s])429(?=[\s]*[:-])/,
+  /(?:^|[\s])402(?=[\s]*[:-])/,
+  // The canonical raw status text matched none of the numeric patterns above,
+  // which all require a keyword or a trailing separator. 429 survived through
+  // the too-many-requests pattern; 402 had no such backstop, so a client
+  // surfacing err.statusText would have had a genuine spending refusal
+  // silently dropped.
+  /payment required/i,
+  // A bare trailing code ("Request failed: 402") has neither a keyword before
+  // it nor a separator after it. 429 is rescued by the too-many-requests
+  // pattern and the status-text form by payment-required; this shape had no
+  // backstop for either code.
+  /(?:fail|refus|error|reject|denied|exceed)[^0-9]{0,24}(?:402|429)\s*$/i,
   /rate.?limit/i,
   /quota/i,
   /too many requests/i,
-  /无可用渠道/,
-  /no available channel/i,
   /insufficient.*(credit|balance)/i,
 ];
 

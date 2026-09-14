@@ -42,8 +42,12 @@ const Tier = {
   EXTERNAL: 2, // API keys added later, billed per call
 };
 
-function ensureDir() {
-  fs.mkdirSync(HOME_DIR, { recursive: true });
+function ensureDir(target) {
+  // The directory that must exist is the one holding the file being written,
+  // not always the home directory: honouring options.keyFile while creating
+  // only HOME_DIR meant any keyFile outside it failed with ENOENT, and created
+  // ~/.shipde as a side effect on the way.
+  fs.mkdirSync(target ? path.dirname(target) : HOME_DIR, { recursive: true });
 }
 
 /**
@@ -51,18 +55,36 @@ function ensureDir() {
  * registry is inert. SHIPDE_ACCOUNT_KEY overrides it for setups that keep the
  * key outside the filesystem.
  */
-function loadKey() {
+function loadKey(options) {
   const fromEnv = process.env.SHIPDE_ACCOUNT_KEY;
-  if (fromEnv && fromEnv.length >= 32) {
-    return crypto.createHash('sha256').update(fromEnv).digest();
+  // An exported-but-empty variable means unset, not "set to nothing": that is
+  // how shells, CI matrices and .env loaders spell absence, and it carries
+  // none of the ambiguity a short key does. Throwing on it would break every
+  // secret read on machines that simply export the name.
+  //
+  // Presence, length and the hash input are all measured on the same trimmed
+  // value. Measuring presence on the trimmed one and length on the raw one let
+  // a 30-character key padded with spaces through, and — worse — let a
+  // trailing newline (ordinary with `$(cat key)` or a Docker --env-file)
+  // derive a different key from the same secret with no error at all. That is
+  // precisely the undecryptable-secrets failure this check exists to prevent.
+  const declaredKey = typeof fromEnv === 'string' ? fromEnv.trim() : '';
+  if (declaredKey !== '') {
+    if (declaredKey.length < 32) {
+      throw new Error(
+        `SHIPDE_ACCOUNT_KEY phải có độ dài ít nhất 32 ký tự (hiện có ${declaredKey.length})`
+      );
+    }
+    return crypto.createHash('sha256').update(declaredKey).digest();
   }
-  ensureDir();
-  if (!fs.existsSync(KEY_FILE)) {
+  const keyFile = (options && options.keyFile) || KEY_FILE;
+  ensureDir(keyFile);
+  if (!fs.existsSync(keyFile)) {
     const key = crypto.randomBytes(32);
-    fs.writeFileSync(KEY_FILE, key.toString('base64'), { mode: 0o600 });
+    fs.writeFileSync(keyFile, key.toString('base64'), { mode: 0o600 });
     return key;
   }
-  return Buffer.from(fs.readFileSync(KEY_FILE, 'utf8').trim(), 'base64');
+  return Buffer.from(fs.readFileSync(keyFile, 'utf8').trim(), 'base64');
 }
 
 function encrypt(plain, key) {
@@ -96,7 +118,12 @@ function readJson(file, fallback) {
 }
 
 function writeJson(file, value) {
-  ensureDir();
+  // The directory of the file being written, not the home directory. Passing
+  // nothing here was the other half of the same defect: a registryFile or
+  // secretsFile outside ~/.shipde still failed with ENOENT, and ~/.shipde was
+  // still created on the way past. The tests missed it by creating the
+  // directory first.
+  ensureDir(file);
   fs.writeFileSync(file, JSON.stringify(value, null, 2), { mode: 0o600 });
 }
 
@@ -221,7 +248,7 @@ function setSecret(id, value, options) {
   const accounts = loadRegistry(options);
   if (!accounts.some((a) => a.id === id)) throw new Error('Không có tài khoản "' + id + '"');
 
-  const key = (options && options.key) || loadKey();
+  const key = (options && options.key) || loadKey(options);
   const secrets = loadSecrets(options);
   secrets[id] = encrypt(value, key);
   saveSecrets(secrets, options);
@@ -232,11 +259,42 @@ function setSecret(id, value, options) {
  * Returns the decrypted credential. Deliberately the only way to obtain one,
  * so every call site is easy to find and review.
  */
+/**
+ * The key an existing install may already have encrypted under.
+ *
+ * Trimming SHIPDE_ACCOUNT_KEY before hashing is correct going forward, but it
+ * changes the derived key for anyone whose value is long enough raw and
+ * carries padding or a trailing newline. Their secrets were written under the
+ * untrimmed key and would fail to decrypt with the corruption message — the
+ * exact failure this whole guard exists to prevent, aimed at installs that
+ * work today.
+ *
+ * So a decrypt that fails under the current key is retried once under the old
+ * one. Returns null when there is nothing to retry with, which is the common
+ * case: no env key, or a value with no surrounding whitespace.
+ */
+function legacyEnvKey() {
+  const raw = process.env.SHIPDE_ACCOUNT_KEY;
+  if (typeof raw !== 'string') return null;
+  if (raw.trim() === '' || raw === raw.trim()) return null;
+  return crypto.createHash('sha256').update(raw).digest();
+}
+
 function getSecret(id, options) {
   const secrets = loadSecrets(options);
   if (!secrets[id]) return null;
-  const key = (options && options.key) || loadKey();
-  return decrypt(secrets[id], key);
+  const key = (options && options.key) || loadKey(options);
+  try {
+    return decrypt(secrets[id], key);
+  } catch (e) {
+    // See legacyEnvKey: an install encrypted under the untrimmed value must
+    // keep working. Only the env-key case can differ, so a supplied key is
+    // never second-guessed.
+    if (options && options.key) throw e;
+    const legacy = legacyEnvKey();
+    if (!legacy) throw e;
+    return decrypt(secrets[id], legacy);
+  }
 }
 
 function hasSecret(id, options) {
@@ -265,6 +323,8 @@ module.exports = {
   HOME_DIR,
   REGISTRY_FILE,
   SECRETS_FILE,
+  KEY_FILE,
+  loadKey,
   listAccounts,
   addAccount,
   updateAccount,

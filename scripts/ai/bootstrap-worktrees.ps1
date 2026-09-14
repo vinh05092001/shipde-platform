@@ -31,6 +31,8 @@ if ($mainBranch -ne "main") {
     throw "Integration workspace must remain on main: $($paths.Main)"
 }
 Invoke-ShipDeGit -Path $paths.Main -Arguments @("merge", "--ff-only", "origin/main") | Out-Null
+& git -C $paths.Main config core.hooksPath .githooks
+Write-Host "Configured core.hooksPath = .githooks for $($paths.Main)"
 
 $worktrees = @(
     @{ Path = $paths.Claude; Branch = "agent/claude" },
