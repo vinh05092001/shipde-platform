@@ -33,7 +33,7 @@ function Invoke-ShipDeBoundedProbe {
 
         # Touching Handle caches it on the object. Without this, Start-Process
         # -PassThru hands back a process whose handle is released on exit, and
-        # ExitCode then reads as null rather than the real status — so every
+        # ExitCode then reads as null rather than the real status -- so every
         # probe compared `-ne 0` and reported failure no matter what happened.
         $null = $process.Handle
 
@@ -137,7 +137,7 @@ $agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
 
 # Presence is not configuration. A key that is set but rejected reports as
 # CONFIGURED under a presence check, so the dashboard and this report both
-# advertise a fallback that cannot authenticate — and the operator finds out
+# advertise a fallback that cannot authenticate -- and the operator finds out
 # only after the primary path has already failed. AI-44-R01.
 #
 # The probe runs the client that will actually carry the fallback rather than
@@ -146,6 +146,11 @@ $agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
 # alike, so it cannot tell a valid credential from an invalid one; and a direct
 # POST to /v1/messages does not reproduce the headers Claude Code sends, so its
 # 401 says nothing about whether the fallback works. Only the real client does.
+# The gateway reports "no available channel" in Chinese. The literal is built
+# from code points so this file stays pure ASCII: it carries no byte-order mark,
+# and a non-ASCII literal in an unmarked file is read as ANSI by PowerShell and
+# breaks the whole script. That happened once already.
+$noChannelCn = -join @(0x65E0, 0x53EF, 0x7528, 0x6E20, 0x9053 | ForEach-Object { [char]$_ })
 $agentRouterLive = $false
 $agentRouterDetail = "NOT CONFIGURED; Claude account authentication will be checked"
 
@@ -195,7 +200,7 @@ if ($agentRouterSaved -and (Test-Path -LiteralPath $agentRouterCachePath -PathTy
 
 if ($agentRouterCached) {
     $agentRouterLive = [bool]$agentRouterCached.live
-    $agentRouterDetail = "{0} [cached {1:N0} phút trước]" -f `
+    $agentRouterDetail = "{0} [cached {1:N0} min ago]" -f `
         $agentRouterCached.detail,
         ([DateTime]::UtcNow - [DateTime]::Parse($agentRouterCached.observedAt).ToUniversalTime()).TotalMinutes
     if (-not $agentRouterLive -and $agentRouterCached.failure) {
@@ -259,14 +264,14 @@ if ($agentRouterCached) {
             $agentRouterDetail = ("AUTHENTICATED via {0}" -f $probeModel)
         } elseif ($text -match "401" -or $text -match "(?i)unauthor") {
             $agentRouterDetail = "KEY PRESENT BUT REJECTED; the Claude and Codex fallback route is unavailable"
-            $agentRouterFailure = "AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it — see TASK-AI-44"
+            $agentRouterFailure = "AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it -- see TASK-AI-44"
         } elseif ($text -match "402" -or $text -match "(?i)budget pool") {
             # 402 arrives after the key has authenticated, so it is a spending
             # state, not a credential fault. Rotating the key would not fix it
             # and would cost the operator a working credential.
             $agentRouterDetail = "AUTHENTICATED but the budget pool is exhausted (HTTP 402); top up or raise the pool limit on agentrouter.org"
             $agentRouterFailure = "AgentRouter authenticates but its budget pool is exhausted; the Claude and Codex fallback route cannot carry a review until it is topped up"
-        } elseif ($text -match "503" -or $text -match "无可用渠道") {
+        } elseif ($text -match "503" -or $text -match $noChannelCn) {
             # A 503 here means the key authenticated and the routing layer had
             # no channel for that model. That is a supply or naming state, not
             # a credential fault, and reporting it as one sends the operator to
@@ -290,7 +295,7 @@ if ($agentRouterCached) {
     if ($agentRouterFailure) { $failures.Add($agentRouterFailure) }
 
     # Record the verdict so the next run within the window spends nothing. Only
-    # the verdict is stored — never the key. It is bound to a hash of the key so
+    # the verdict is stored -- never the key. It is bound to a hash of the key so
     # a rotated credential is re-probed rather than answered from the old one.
     try {
         $keyHash = [BitConverter]::ToString(
@@ -311,7 +316,7 @@ if ($agentRouterCached) {
 }
 Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)
 Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.org, no /v1 in the base URL)")
-Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) — a different gateway despite the naming in control.ps1")
+Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) -- a different gateway despite the naming in control.ps1")
 
 Write-Host ""
 Write-Host "=== AGENT AUTHENTICATION ==="
@@ -339,7 +344,7 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
     # Windows PowerShell re-quotes an argument before handing it to a native
     # process and a double quote does not survive that, so a hook override
     # tested from this script would fail on the quoting rather than on the
-    # CLI — a false failure, which is worse than no check at all. The hook
+    # CLI -- a false failure, which is worse than no check at all. The hook
     # schema is verified separately; see TASK-AI-16-FINDINGS.md.
     $simple = [ordered]@{
         "check_for_update_on_startup" = "check_for_update_on_startup=false"
@@ -675,12 +680,33 @@ if ($pathsOutside.Count -gt 0) {
 }
 
 # Writer claim guard hook check
-$configuredHooks = (& git config core.hooksPath 2>$null)
-if ($configuredHooks -and ($configuredHooks.Trim() -match "(^|[\\/])\.githooks$")) {
-    Write-Host ("Single-writer guard hook: CONFIGURED ({0})" -f $configuredHooks.Trim())
+#
+# Scoped per worktree with -C, like every other git call in this file. An
+# unscoped git config reads whatever directory the operator ran the doctor
+# from, and the doctor is normally run from the shell against worktrees under
+# $AiRoot -- a container directory, not a repository. Outside a repository the
+# command fails, the result is empty, and this reported ACTION REQUIRED on
+# machines where the hook was installed correctly in every worktree.
+# The hook directory pattern, defined once so the loop reads cleanly.
+$script:HooksPathPattern = "(^|[\\/])\.githooks$"
+$hooksMissing = New-Object System.Collections.Generic.List[string]
+$hooksConfigured = New-Object System.Collections.Generic.List[string]
+foreach ($entry in $paths.GetEnumerator()) {
+    if (-not (Test-Path -LiteralPath (Join-Path $entry.Value ".git"))) { continue }
+    $hooksHere = (@(& git -C $entry.Value config core.hooksPath 2>$null) -join "").Trim()
+    if ($hooksHere -and ($hooksHere -match $script:HooksPathPattern)) {
+        $hooksConfigured.Add($entry.Key)
+    } else {
+        $hooksMissing.Add($entry.Key)
+    }
+}
+if ($hooksConfigured.Count -eq 0 -and $hooksMissing.Count -eq 0) {
+    Write-Host "Single-writer guard hook: CANNOT VERIFY (no git worktree under the approved AI root)"
+} elseif ($hooksMissing.Count -eq 0) {
+    Write-Host ("Single-writer guard hook: CONFIGURED in all {0} worktrees" -f $hooksConfigured.Count)
 } else {
-    Write-Host "Single-writer guard hook: NOT CONFIGURED (run: node tools/ai-guard/cli.js install)"
-    $failures.Add("Git pre-commit hook core.hooksPath is not configured for ai-guard; run node tools/ai-guard/cli.js install")
+    Write-Host ("Single-writer guard hook: NOT CONFIGURED in {0} (run: pnpm guard:install there)" -f ($hooksMissing -join ", "))
+    $failures.Add("ai-guard core.hooksPath is not configured in: $($hooksMissing -join ', '); run pnpm guard:install there")
 }
 
 if ($failures.Count -gt 0) {

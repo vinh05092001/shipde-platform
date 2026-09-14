@@ -51,7 +51,7 @@ In an AO worker session, `AO_SESSION_ID` matches the worker's own holder row in 
 
 ## Installation & Setup
 
-### Automatic Installation
+### How the hook gets installed
 
 The hook is installed explicitly, never by an install lifecycle script. The
 repository's regression audit forbids `preinstall`, `install`, `postinstall`
@@ -62,17 +62,14 @@ project has deliberately closed.
 So `core.hooksPath` is set in three explicit places instead: by
 `scripts/ai/bootstrap-worktrees.ps1` when a worktree is created, by
 `pnpm guard:install` on demand, and it is verified by `scripts/ai/doctor.ps1`,
-which names the command to run when it is missing. Running:
+which names the command to run when it is missing.
 
-```bash
-pnpm install
-```
+`pnpm install` does **not** install the hook. That is deliberate, and it is the
+whole point of the paragraph above.
 
-automatically installs the hook.
+### Installing it
 
-### Manual Installation
-
-To install or verify manually:
+To install or verify:
 
 ```bash
 node tools/ai-guard/cli.js install

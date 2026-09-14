@@ -269,7 +269,18 @@ describe('Single-writer claim guard', () => {
       const installRes = installHook({ cwd: repoDir });
       assert.equal(installRes.success, true);
       assert.equal(installRes.hooksPath, '.githooks');
+      // This repository has no .githooks/pre-commit, so the path is set and
+      // nothing guards anything. That is reported, not glossed over.
+      assert.equal(installRes.hookPresent, false);
 
+      const configured = getHookStatus({ cwd: repoDir });
+      assert.equal(configured.installed, false);
+      assert.equal(configured.configuredOnly, true);
+      assert.equal(configured.hooksPath, '.githooks');
+
+      // With the hook file in place the same configuration is a real install.
+      fs.mkdirSync(path.join(repoDir, '.githooks'), { recursive: true });
+      fs.writeFileSync(path.join(repoDir, '.githooks', 'pre-commit'), '#!/bin/sh\nexit 0\n');
       const status = getHookStatus({ cwd: repoDir });
       assert.equal(status.installed, true);
       assert.equal(status.hooksPath, '.githooks');
@@ -287,5 +298,67 @@ describe('Single-writer claim guard', () => {
       assert.equal(status.installed, false);
       assert.equal(status.hooksPath, null);
     });
+  });
+});
+
+describe('Uninstalling what is already gone is not a failure', () => {
+  // `git config --unset` exits 5 when the key is absent. Treating that as an
+  // error made `cli.js uninstall` warn and exit non-zero for reaching exactly
+  // the state it was asked to reach.
+  test('uninstall succeeds when core.hooksPath was never set', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-hook-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      const r = uninstallHook({ cwd: dir });
+      assert.strictEqual(r.success, true);
+      assert.strictEqual(r.alreadyAbsent, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('install then uninstall still reports success', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-hook-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      installHook({ cwd: dir });
+      const r = uninstallHook({ cwd: dir });
+      assert.strictEqual(r.success, true);
+      assert.ok(!r.alreadyAbsent);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('A configured path is not an installed hook', () => {
+  test('core.hooksPath pointing at a directory with no pre-commit is not installed', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-hook-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      fs.mkdirSync(path.join(dir, '.githooks'));
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: dir });
+      const s = getHookStatus({ cwd: dir });
+      assert.strictEqual(s.installed, false);
+      assert.strictEqual(s.configuredOnly, true);
+      assert.strictEqual(s.hooksPath, '.githooks');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a directory containing pre-commit is installed', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-hook-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      fs.mkdirSync(path.join(dir, '.githooks'));
+      fs.writeFileSync(path.join(dir, '.githooks', 'pre-commit'), '#!/bin/sh\nexit 0\n');
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: dir });
+      const s = getHookStatus({ cwd: dir });
+      assert.strictEqual(s.installed, true);
+      assert.strictEqual(s.configuredOnly, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

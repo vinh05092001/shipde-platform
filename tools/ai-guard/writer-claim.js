@@ -276,8 +276,16 @@ function getHookStatus(options) {
       hooksPath === '.githooks' ||
       hooksPath.endsWith('/.githooks') ||
       hooksPath.endsWith('\\.githooks');
+    // A configured path is not an installed hook. Pointing core.hooksPath at
+    // a directory with no pre-commit in it reported INSTALLED while commits
+    // ran free, which is the one answer this function must never get wrong.
+    const hookFile = path.isAbsolute(hooksPath)
+      ? path.join(hooksPath, 'pre-commit')
+      : path.join(opts.cwd || process.cwd(), hooksPath, 'pre-commit');
+    const hookPresent = isGithooks && fs.existsSync(hookFile);
     return {
-      installed: isGithooks,
+      installed: hookPresent,
+      configuredOnly: isGithooks && !hookPresent,
       hooksPath: hooksPath || null,
     };
   } catch (e) {
@@ -297,7 +305,13 @@ function installHook(options) {
       encoding: 'utf8',
       timeout: 5000,
     });
-    return { success: true, hooksPath: '.githooks' };
+    // Setting the path is not the same as having the hook. A repository
+    // without .githooks/pre-commit is configured and unguarded, so say so
+    // rather than reporting a clean install.
+    const hookPresent = fs.existsSync(
+      path.join(opts.cwd || process.cwd(), '.githooks', 'pre-commit')
+    );
+    return { success: true, hooksPath: '.githooks', hookPresent };
   } catch (e) {
     return {
       success: false,
@@ -321,6 +335,12 @@ function uninstallHook(options) {
     });
     return { success: true };
   } catch (e) {
+    // `git config --unset` exits 5 when the key is not set. The desired end
+    // state — no core.hooksPath — already holds, so reporting failure made
+    // `cli.js uninstall` warn and exit non-zero for doing nothing wrong.
+    if (e && e.status === 5) {
+      return { success: true, alreadyAbsent: true };
+    }
     return {
       success: false,
       error: e && e.message ? e.message : String(e),
