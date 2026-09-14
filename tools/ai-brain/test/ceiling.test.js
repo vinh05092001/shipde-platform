@@ -82,7 +82,13 @@ describe('Telling a quota refusal from any other failure', () => {
   test('recordFailure ignores routing errors like no available channel', () => {
     const file = store();
     assert.equal(
-      recordFailure('a', 'm', 'no available channel for this model', { tokensPerDay: 100 }, { file }),
+      recordFailure(
+        'a',
+        'm',
+        'no available channel for this model',
+        { tokensPerDay: 100 },
+        { file }
+      ),
       null
     );
     assert.equal(readLedger(file).length, 0, 'routing error must never record a refusal in ledger');

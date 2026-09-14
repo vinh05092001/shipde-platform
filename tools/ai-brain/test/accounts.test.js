@@ -185,7 +185,11 @@ describe('Secret handling', () => {
       const s = store();
       addAccount(def(), s);
       assert.throws(
-        () => setSecret('openrouter-free', 'sk-secret-123', { registryFile: s.registryFile, secretsFile: s.secretsFile }),
+        () =>
+          setSecret('openrouter-free', 'sk-secret-123', {
+            registryFile: s.registryFile,
+            secretsFile: s.secretsFile,
+          }),
         /SHIPDE_ACCOUNT_KEY.*32/
       );
     } finally {
@@ -200,7 +204,7 @@ describe('Secret handling', () => {
   test('a valid SHIPDE_ACCOUNT_KEY (>= 32 chars) is accepted and used', () => {
     const origEnv = process.env.SHIPDE_ACCOUNT_KEY;
     try {
-      process.env.SHIPDE_ACCOUNT_KEY = 'a-very-long-secret-key-that-exceeds-32-characters';
+      process.env.SHIPDE_ACCOUNT_KEY = 'valid-env-account-key-test-fixture-32chars';
       const key = loadKey();
       assert.ok(Buffer.isBuffer(key));
       assert.equal(key.length, 32);
