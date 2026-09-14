@@ -42,8 +42,12 @@ const Tier = {
   EXTERNAL: 2, // API keys added later, billed per call
 };
 
-function ensureDir() {
-  fs.mkdirSync(HOME_DIR, { recursive: true });
+function ensureDir(target) {
+  // The directory that must exist is the one holding the file being written,
+  // not always the home directory: honouring options.keyFile while creating
+  // only HOME_DIR meant any keyFile outside it failed with ENOENT, and created
+  // ~/.shipde as a side effect on the way.
+  fs.mkdirSync(target ? path.dirname(target) : HOME_DIR, { recursive: true });
 }
 
 /**
@@ -53,7 +57,12 @@ function ensureDir() {
  */
 function loadKey(options) {
   const fromEnv = process.env.SHIPDE_ACCOUNT_KEY;
-  if (fromEnv !== undefined) {
+  // An exported-but-empty variable means unset, not "set to nothing": that is
+  // how shells, CI matrices and .env loaders spell absence, and it carries
+  // none of the ambiguity a short key does. Throwing on it would break every
+  // secret read on machines that simply export the name.
+  const declared = typeof fromEnv === 'string' && fromEnv.trim() !== '';
+  if (declared) {
     if (fromEnv.length < 32) {
       throw new Error(
         `SHIPDE_ACCOUNT_KEY phải có độ dài ít nhất 32 ký tự (hiện có ${fromEnv.length})`
@@ -62,7 +71,7 @@ function loadKey(options) {
     return crypto.createHash('sha256').update(fromEnv).digest();
   }
   const keyFile = (options && options.keyFile) || KEY_FILE;
-  ensureDir();
+  ensureDir(keyFile);
   if (!fs.existsSync(keyFile)) {
     const key = crypto.randomBytes(32);
     fs.writeFileSync(keyFile, key.toString('base64'), { mode: 0o600 });

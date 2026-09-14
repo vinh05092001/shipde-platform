@@ -375,3 +375,66 @@ describe('Validation helper', () => {
     assert.ok(errors.length >= 3, 'id, provider, model and context all reported');
   });
 });
+
+describe('An exported-but-empty key means unset', () => {
+  // Shells, CI matrices and .env loaders all spell "unset" as an exported
+  // empty value. Throwing on it broke every secret read on a machine that
+  // merely exports the name.
+  const orig = process.env.SHIPDE_ACCOUNT_KEY;
+  function restore() {
+    if (orig === undefined) delete process.env.SHIPDE_ACCOUNT_KEY;
+    else process.env.SHIPDE_ACCOUNT_KEY = orig;
+  }
+
+  // Deliberately no `key` in the options: that forces loadKey to run, which is
+  // the code under test.
+  function keyedStore(keyFileRel) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-key-'));
+    return {
+      registryFile: path.join(dir, 'registry.json'),
+      secretsFile: path.join(dir, 'secrets.enc'),
+      keyFile: path.join(dir, ...keyFileRel),
+      dir,
+    };
+  }
+
+  test('an empty value falls back to the key file instead of throwing', () => {
+    const s = keyedStore(['nested', 'account.key']);
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = '';
+      addAccount(def(), s);
+      assert.doesNotThrow(() => setSecret('openrouter-free', 'sk-value', s));
+      assert.strictEqual(getSecret('openrouter-free', s), 'sk-value');
+      // The directory of the requested keyFile is created, not the home one.
+      assert.ok(fs.existsSync(s.keyFile));
+    } finally {
+      restore();
+      fs.rmSync(s.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a whitespace-only value is also unset', () => {
+    const s = keyedStore(['deep', 'nested', 'account.key']);
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = '   ';
+      addAccount(def(), s);
+      assert.doesNotThrow(() => setSecret('openrouter-free', 'sk-value', s));
+      assert.ok(fs.existsSync(s.keyFile));
+    } finally {
+      restore();
+      fs.rmSync(s.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a short but genuinely set value still throws', () => {
+    const s = keyedStore(['account.key']);
+    try {
+      addAccount(def(), s);
+      process.env.SHIPDE_ACCOUNT_KEY = 'too-short';
+      assert.throws(() => setSecret('openrouter-free', 'sk-value', s), /SHIPDE_ACCOUNT_KEY/);
+    } finally {
+      restore();
+      fs.rmSync(s.dir, { recursive: true, force: true });
+    }
+  });
+});

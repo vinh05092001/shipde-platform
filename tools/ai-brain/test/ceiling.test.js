@@ -277,3 +277,32 @@ describe('Ledger', () => {
     );
   });
 });
+
+describe('A status code is only a status code in a status context', () => {
+  // A loose /402/ matched anything containing those digits. Because the
+  // learned ceiling only ratchets down, one false positive pinned an account
+  // permanently — the same failure this module removed for 503.
+  const refusals = [
+    'API Error: 402 Budget pool quota has been exhausted',
+    'HTTP 429 Too Many Requests',
+    'rate limit exceeded',
+    'insufficient credit on this account',
+  ];
+  const notRefusals = [
+    'request id: 20260914402883507jl4rmC8jYjxlK',
+    'completed in 402 ms',
+    '503 no available channel for this model',
+    'wrote 4029 tokens',
+  ];
+
+  for (const text of refusals) {
+    test(`counts as a quota refusal: ${text.slice(0, 44)}`, () => {
+      assert.strictEqual(isQuotaRefusal(text), true);
+    });
+  }
+  for (const text of notRefusals) {
+    test(`does not: ${text.slice(0, 44)}`, () => {
+      assert.strictEqual(isQuotaRefusal(text), false);
+    });
+  }
+});

@@ -52,8 +52,16 @@ const Outcome = {
  * or upstream supply issues, not quota exhaustion.
  */
 const QUOTA_SIGNALS = [
-  /\b429\b/,
-  /\b402\b/,
+  // Status codes are matched in their status context, not as bare numbers.
+  // A loose /402/ also matches any message that happens to contain the digits
+  // — a request id, a duration, a token count — and one false positive pins
+  // the learned ceiling permanently, which is the exact failure this module
+  // just removed for 503. Verified: "completed in 402 ms" used to count as a
+  // quota refusal.
+  /(?:status|code|error|http)[^0-9]{0,12}429(?![0-9])/i,
+  /(?:status|code|error|http)[^0-9]{0,12}402(?![0-9])/i,
+  /(?:^|[\s])429(?=[\s]*[:-])/,
+  /(?:^|[\s])402(?=[\s]*[:-])/,
   /rate.?limit/i,
   /quota/i,
   /too many requests/i,
