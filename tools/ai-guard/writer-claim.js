@@ -244,6 +244,90 @@ async function checkWrite(options) {
   };
 }
 
+function defaultOwner(env) {
+  const e = env || process.env;
+  if (e.SHIPDE_WRITER) return e.SHIPDE_WRITER;
+  if (e.AO_SESSION_ID) return e.AO_SESSION_ID;
+  if (e.AO_REVIEW_WORKER_SESSION_ID) return e.AO_REVIEW_WORKER_SESSION_ID;
+  if (e.AO_REVIEW_SESSION_ID) return e.AO_REVIEW_SESSION_ID;
+  if (e.CLAUDE_CODE_SESSION_ID) return e.CLAUDE_CODE_SESSION_ID;
+  if (e.CLAUDE_SESSION_ID) return e.CLAUDE_SESSION_ID;
+
+  try {
+    const user = os.userInfo();
+    if (user && user.username) {
+      return user.username + '@' + os.hostname();
+    }
+  } catch (err) {
+    /* ignore and fall through */
+  }
+  return ((e && (e.USER || e.USERNAME)) || 'unknown') + '@' + os.hostname();
+}
+
+function getHookStatus(options) {
+  const opts = options || {};
+  try {
+    const hooksPath = execFileSync('git', ['config', 'core.hooksPath'], {
+      cwd: opts.cwd || process.cwd(),
+      encoding: 'utf8',
+      timeout: 5000,
+    }).trim();
+    const isGithooks =
+      hooksPath === '.githooks' ||
+      hooksPath.endsWith('/.githooks') ||
+      hooksPath.endsWith('\\.githooks');
+    return {
+      installed: isGithooks,
+      hooksPath: hooksPath || null,
+    };
+  } catch (e) {
+    return { installed: false, hooksPath: null };
+  }
+}
+
+function installHook(options) {
+  const opts = options || {};
+  const args = ['config'];
+  if (opts.global) args.push('--global');
+  args.push('core.hooksPath', '.githooks');
+
+  try {
+    execFileSync('git', args, {
+      cwd: opts.cwd || process.cwd(),
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    return { success: true, hooksPath: '.githooks' };
+  } catch (e) {
+    return {
+      success: false,
+      hooksPath: null,
+      error: e && e.message ? e.message : String(e),
+    };
+  }
+}
+
+function uninstallHook(options) {
+  const opts = options || {};
+  const args = ['config'];
+  if (opts.global) args.push('--global');
+  args.push('--unset', 'core.hooksPath');
+
+  try {
+    execFileSync('git', args, {
+      cwd: opts.cwd || process.cwd(),
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    return { success: true };
+  } catch (e) {
+    return {
+      success: false,
+      error: e && e.message ? e.message : String(e),
+    };
+  }
+}
+
 module.exports = {
   readAoHolders,
   readClaims,
@@ -251,6 +335,10 @@ module.exports = {
   releaseClaim,
   checkWrite,
   currentBranch,
+  defaultOwner,
+  getHookStatus,
+  installHook,
+  uninstallHook,
   claimPath,
   ensureClaimDir,
   CLAIM_DIR,

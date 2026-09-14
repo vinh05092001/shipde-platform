@@ -37,7 +37,10 @@
     "db:seed": "tsx infra/docker/seed.ts",
     "security:secrets": "tsx scripts/verify-secrets.ts",
     "verify:inventory": "tsx scripts/verify-inventory.ts",
-    "concierge:audit": "tsx scripts/concierge-audit.ts"
+    "concierge:audit": "tsx scripts/concierge-audit.ts",
+    "prepare": "node tools/ai-guard/cli.js install",
+    "guard:install": "node tools/ai-guard/cli.js install",
+    "guard:status": "node tools/ai-guard/cli.js status"
   },
   "devDependencies": {
     "@prisma/client": "^6.19.2",

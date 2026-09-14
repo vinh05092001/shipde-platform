@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
     [switch]$TestDocker,
     [switch]$TestModels
@@ -672,6 +672,15 @@ if ($pathsOutside.Count -gt 0) {
     $failures.Add("Configured paths must remain inside approved AI workspace: $($pathsOutside -join '; ')")
 } else {
     Write-Host ("Workspace containment: VERIFIED (All worktrees reside inside {0})" -f $AiRoot)
+}
+
+# Writer claim guard hook check
+$configuredHooks = (& git config core.hooksPath 2>$null)
+if ($configuredHooks -and ($configuredHooks.Trim() -match "(^|[\\/])\.githooks$")) {
+    Write-Host ("Single-writer guard hook: CONFIGURED ({0})" -f $configuredHooks.Trim())
+} else {
+    Write-Host "Single-writer guard hook: NOT CONFIGURED (run: node tools/ai-guard/cli.js install)"
+    $failures.Add("Git pre-commit hook core.hooksPath is not configured for ai-guard; run node tools/ai-guard/cli.js install")
 }
 
 if ($failures.Count -gt 0) {

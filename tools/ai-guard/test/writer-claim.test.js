@@ -8,7 +8,19 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { readClaims, writeClaim, releaseClaim, checkWrite, claimPath } = require('../writer-claim');
+const { execFileSync } = require('child_process');
+
+const {
+  readClaims,
+  writeClaim,
+  releaseClaim,
+  checkWrite,
+  claimPath,
+  defaultOwner,
+  getHookStatus,
+  installHook,
+  uninstallHook,
+} = require('../writer-claim');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-claim-'));
@@ -166,6 +178,114 @@ describe('Single-writer claim guard', () => {
       });
       assert.equal(result.allowed, true, 'a guard that cannot tell must not stop work');
       assert.equal(result.degraded, true);
+    });
+  });
+
+  describe('Owner identity resolution (defaultOwner)', () => {
+    test('resolves AO_SESSION_ID in an AO worker session', () => {
+      const owner = defaultOwner({ AO_SESSION_ID: 'shipde-platform-17' });
+      assert.equal(owner, 'shipde-platform-17');
+    });
+
+    test('resolves AO_REVIEW_WORKER_SESSION_ID in an AO review session to match the branch holder', () => {
+      const owner = defaultOwner({
+        AO_REVIEW_SESSION_ID: 'shipde-platform-review-99',
+        AO_REVIEW_WORKER_SESSION_ID: 'shipde-platform-16',
+      });
+      assert.equal(owner, 'shipde-platform-16');
+    });
+
+    test('resolves AO_REVIEW_SESSION_ID in an AO review session when worker ID is unset', () => {
+      const owner = defaultOwner({ AO_REVIEW_SESSION_ID: 'shipde-platform-review-99' });
+      assert.equal(owner, 'shipde-platform-review-99');
+    });
+
+    test('resolves CLAUDE_CODE_SESSION_ID in a direct Claude Code session', () => {
+      const owner = defaultOwner({
+        CLAUDE_CODE_SESSION_ID: '35ef22e6-5564-4b4c-8a01-e6f94103e817',
+      });
+      assert.equal(owner, '35ef22e6-5564-4b4c-8a01-e6f94103e817');
+    });
+
+    test('resolves legacy CLAUDE_SESSION_ID if present', () => {
+      const owner = defaultOwner({ CLAUDE_SESSION_ID: 'legacy-claude-session' });
+      assert.equal(owner, 'legacy-claude-session');
+    });
+
+    test('SHIPDE_WRITER override takes precedence over all other variables', () => {
+      const owner = defaultOwner({
+        SHIPDE_WRITER: 'manual-operator-override',
+        AO_SESSION_ID: 'shipde-platform-17',
+        AO_REVIEW_WORKER_SESSION_ID: 'shipde-platform-16',
+        AO_REVIEW_SESSION_ID: 'shipde-platform-review-99',
+        CLAUDE_CODE_SESSION_ID: '35ef22e6-5564-4b4c-8a01-e6f94103e817',
+      });
+      assert.equal(owner, 'manual-operator-override');
+    });
+
+    test('precedence hierarchy across session types is strictly maintained', () => {
+      // AO_SESSION_ID beats AO_REVIEW_WORKER_SESSION_ID
+      assert.equal(
+        defaultOwner({ AO_SESSION_ID: 'worker-1', AO_REVIEW_WORKER_SESSION_ID: 'worker-2' }),
+        'worker-1'
+      );
+      // AO_REVIEW_WORKER_SESSION_ID beats AO_REVIEW_SESSION_ID
+      assert.equal(
+        defaultOwner({ AO_REVIEW_WORKER_SESSION_ID: 'worker-2', AO_REVIEW_SESSION_ID: 'review-1' }),
+        'worker-2'
+      );
+      // AO_REVIEW_SESSION_ID beats CLAUDE_CODE_SESSION_ID
+      assert.equal(
+        defaultOwner({ AO_REVIEW_SESSION_ID: 'review-1', CLAUDE_CODE_SESSION_ID: 'cc-1' }),
+        'review-1'
+      );
+      // CLAUDE_CODE_SESSION_ID beats CLAUDE_SESSION_ID
+      assert.equal(
+        defaultOwner({ CLAUDE_CODE_SESSION_ID: 'cc-1', CLAUDE_SESSION_ID: 'legacy-1' }),
+        'cc-1'
+      );
+    });
+
+    test('falls back to host username@hostname when no variables are present', () => {
+      const owner = defaultOwner({});
+      assert.match(owner, /@.+/);
+      assert.ok(!owner.includes('undefined'));
+    });
+  });
+
+  describe('Git hook installation lifecycle', () => {
+    test('reports not installed when core.hooksPath is unset', () => {
+      const repoDir = tempDir();
+      execFileSync('git', ['init'], { cwd: repoDir, stdio: 'ignore' });
+      const status = getHookStatus({ cwd: repoDir });
+      assert.equal(status.installed, false);
+      assert.equal(status.hooksPath, null);
+    });
+
+    test('installHook configures core.hooksPath to .githooks and getHookStatus detects it', () => {
+      const repoDir = tempDir();
+      execFileSync('git', ['init'], { cwd: repoDir, stdio: 'ignore' });
+
+      const installRes = installHook({ cwd: repoDir });
+      assert.equal(installRes.success, true);
+      assert.equal(installRes.hooksPath, '.githooks');
+
+      const status = getHookStatus({ cwd: repoDir });
+      assert.equal(status.installed, true);
+      assert.equal(status.hooksPath, '.githooks');
+    });
+
+    test('uninstallHook unsets core.hooksPath', () => {
+      const repoDir = tempDir();
+      execFileSync('git', ['init'], { cwd: repoDir, stdio: 'ignore' });
+      installHook({ cwd: repoDir });
+
+      const uninstallRes = uninstallHook({ cwd: repoDir });
+      assert.equal(uninstallRes.success, true);
+
+      const status = getHookStatus({ cwd: repoDir });
+      assert.equal(status.installed, false);
+      assert.equal(status.hooksPath, null);
     });
   });
 });
