@@ -52,7 +52,10 @@ const READERS = {
       if (signature) {
         return Object.assign({}, quota, {
           account: { known: true, email: signature, source: 'fingerprint' },
-          label: account.email || (quota.account && quota.account.email) || null,
+          // Only an operator-written name. Falling back to whatever the
+          // previous identity held would print a credential fingerprint as if
+          // it were a name someone chose.
+          label: account.email || null,
         });
       }
       return quota;
