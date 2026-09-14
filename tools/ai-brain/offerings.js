@@ -93,9 +93,18 @@ function expandOfferings(accounts, options) {
   for (const account of accounts || []) {
     if (account.enabled === false) continue;
 
-    const declared = Array.isArray(account.models) && account.models.length > 0
-      ? account.models
-      : [{ model: account.model, quality: account.quality, cost: account.cost, capabilities: account.capabilities, limits: account.limits }];
+    const declared =
+      Array.isArray(account.models) && account.models.length > 0
+        ? account.models
+        : [
+            {
+              model: account.model,
+              quality: account.quality,
+              cost: account.cost,
+              capabilities: account.capabilities,
+              limits: account.limits,
+            },
+          ];
 
     const effective = effectiveLimits(account, options);
 
@@ -119,7 +128,9 @@ function expandOfferings(accounts, options) {
         tier: Number(e.tier !== undefined ? e.tier : account.tier || 0),
         // 0-100. Promptfoo results are meant to write this; absent, it is 50
         // so an unrated model sorts below anything measured and above nothing.
-        quality: Number(e.quality !== undefined ? e.quality : account.quality !== undefined ? account.quality : 50),
+        quality: Number(
+          e.quality !== undefined ? e.quality : account.quality !== undefined ? account.quality : 50
+        ),
         capabilities: Object.assign({}, account.capabilities, e.capabilities),
         cost: Object.assign({}, account.cost, e.cost),
         preference: Number(e.preference !== undefined ? e.preference : account.preference || 0),
@@ -127,7 +138,11 @@ function expandOfferings(accounts, options) {
         // from `quality`: quality ranks two models against each other, grade
         // says whether either may take the task at all.
         codingGrade:
-          e.codingGrade !== undefined ? Number(e.codingGrade) : account.codingGrade !== undefined ? Number(account.codingGrade) : undefined,
+          e.codingGrade !== undefined
+            ? Number(e.codingGrade)
+            : account.codingGrade !== undefined
+              ? Number(account.codingGrade)
+              : undefined,
         qualifiedRoles: e.qualifiedRoles || account.qualifiedRoles,
         enabled: e.enabled !== false,
         // Kept apart so the combined check below can see which is which.
@@ -156,7 +171,11 @@ function offeringHeadroom(offering, eventsByAccount, eventsByOffering, options) 
   const modelEvents = (eventsByOffering || {})[offering.id] || [];
 
   const accountView = accountHeadroom(
-    { id: offering.accountId, limits: offering.accountLimits, cooldownUntil: offering.cooldownUntil },
+    {
+      id: offering.accountId,
+      limits: offering.accountLimits,
+      cooldownUntil: offering.cooldownUntil,
+    },
     accountEvents,
     options
   );
@@ -181,7 +200,10 @@ function offeringHeadroom(offering, eventsByAccount, eventsByOffering, options) 
   // undisclosed ceiling and cannot be added to a token count without inventing
   // the ceiling.
   const reported = reportedView(offering, (options || {}).reported);
-  if (reported && (severity[reported.status] > severity[worse.status] || worse.status === 'unknown')) {
+  if (
+    reported &&
+    (severity[reported.status] > severity[worse.status] || worse.status === 'unknown')
+  ) {
     worse = Object.assign({}, worse, {
       status: reported.status,
       reason:
@@ -260,7 +282,9 @@ function laddered(offerings) {
     if (!byTier.has(o.tier)) byTier.set(o.tier, []);
     byTier.get(o.tier).push(o);
   }
-  return [...byTier.keys()].sort((a, b) => a - b).map((tier) => ({ tier, offerings: byTier.get(tier) }));
+  return [...byTier.keys()]
+    .sort((a, b) => a - b)
+    .map((tier) => ({ tier, offerings: byTier.get(tier) }));
 }
 
 module.exports = {

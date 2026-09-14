@@ -67,28 +67,46 @@ function reconcileRegister(items, deps) {
 
       if (!sha) {
         findings.push(
-          finding('error', 'MERGED_WITHOUT_COMMIT', item,
-            'Ghi là MERGED nhưng không có merge_commit để kiểm chứng.')
+          finding(
+            'error',
+            'MERGED_WITHOUT_COMMIT',
+            item,
+            'Ghi là MERGED nhưng không có merge_commit để kiểm chứng.'
+          )
         );
       } else if (!hasCommit(sha)) {
         findings.push(
-          finding('error', 'MERGE_COMMIT_MISSING', item,
-            'merge_commit không tồn tại trong repository.', { sha })
+          finding(
+            'error',
+            'MERGE_COMMIT_MISSING',
+            item,
+            'merge_commit không tồn tại trong repository.',
+            { sha }
+          )
         );
       } else if (!merged(sha)) {
         // The commit is real but unreachable from main: it was never merged,
         // or it was merged and later dropped.
         findings.push(
-          finding('error', 'MERGE_COMMIT_NOT_REACHABLE', item,
-            'merge_commit có thật nhưng không nằm trong lịch sử ' + mainRef + '.', { sha, mainRef })
+          finding(
+            'error',
+            'MERGE_COMMIT_NOT_REACHABLE',
+            item,
+            'merge_commit có thật nhưng không nằm trong lịch sử ' + mainRef + '.',
+            { sha, mainRef }
+          )
         );
       }
 
       const verdict = (item.codex_verdict || '').trim();
       if (verdict !== 'PASS') {
         findings.push(
-          finding('error', 'MERGED_WITHOUT_PASS', item,
-            'Ghi là MERGED nhưng codex_verdict là "' + (verdict || 'trống') + '", không phải PASS.')
+          finding(
+            'error',
+            'MERGED_WITHOUT_PASS',
+            item,
+            'Ghi là MERGED nhưng codex_verdict là "' + (verdict || 'trống') + '", không phải PASS.'
+          )
         );
       }
     }
@@ -103,17 +121,26 @@ function reconcileRegister(items, deps) {
         // Understating progress is how a backlog stays frozen after the thing
         // it was waiting for has landed.
         findings.push(
-          finding('warn', 'BLOCK_NO_LONGER_TRUE', item,
+          finding(
+            'warn',
+            'BLOCK_NO_LONGER_TRUE',
+            item,
             'Vẫn ghi là ' + status + ' nhưng mọi phụ thuộc đã MERGED.',
-            { dependencies: known })
+            { dependencies: known }
+          )
         );
       }
 
       const unknown = deps.filter((d) => !byId.has(d));
       if (unknown.length > 0) {
         findings.push(
-          finding('info', 'DEPENDENCY_UNKNOWN', item,
-            'Phụ thuộc không có trong register: ' + unknown.join(', '), { unknown })
+          finding(
+            'info',
+            'DEPENDENCY_UNKNOWN',
+            item,
+            'Phụ thuộc không có trong register: ' + unknown.join(', '),
+            { unknown }
+          )
         );
       }
     }
@@ -125,9 +152,13 @@ function reconcileRegister(items, deps) {
       const tip = tipOf(item.branch);
       if (tip && merged(tip)) {
         findings.push(
-          finding('warn', 'MERGE_NOT_RECORDED', item,
+          finding(
+            'warn',
+            'MERGE_NOT_RECORDED',
+            item,
             'Nhánh đã nằm trọn trong ' + mainRef + ' nhưng trạng thái vẫn là ' + status + '.',
-            { branch: item.branch, tip })
+            { branch: item.branch, tip }
+          )
         );
       }
     }
@@ -136,9 +167,13 @@ function reconcileRegister(items, deps) {
     if (item.work_item_path && !hasFile(item.work_item_path)) {
       const severity = status === TERMINAL_STATUS || status.startsWith('READY') ? 'error' : 'info';
       findings.push(
-        finding(severity, 'SPEC_MISSING', item,
+        finding(
+          severity,
+          'SPEC_MISSING',
+          item,
           'work_item_path được khai nhưng file không tồn tại.',
-          { path: item.work_item_path })
+          { path: item.work_item_path }
+        )
       );
     }
 
@@ -147,24 +182,31 @@ function reconcileRegister(items, deps) {
       // problem while the work is supposed to be live.
       if (status !== TERMINAL_STATUS) {
         findings.push(
-          finding('warn', 'BRANCH_MISSING', item,
+          finding(
+            'warn',
+            'BRANCH_MISSING',
+            item,
             'Nhánh được khai nhưng không tồn tại cục bộ lẫn trên origin.',
-            { branch: item.branch })
+            { branch: item.branch }
+          )
         );
       }
     }
 
     if (item.pr && !item.branch) {
       findings.push(
-        finding('info', 'PR_WITHOUT_BRANCH', item,
-          'Có số PR nhưng không ghi nhánh, nên không truy ngược được.', { pr: item.pr })
+        finding(
+          'info',
+          'PR_WITHOUT_BRANCH',
+          item,
+          'Có số PR nhưng không ghi nhánh, nên không truy ngược được.',
+          { pr: item.pr }
+        )
       );
     }
 
     if (!id) {
-      findings.push(
-        finding('error', 'ROW_WITHOUT_ID', item, 'Dòng không có work_item_id.')
-      );
+      findings.push(finding('error', 'ROW_WITHOUT_ID', item, 'Dòng không có work_item_id.'));
     }
   }
 
@@ -196,12 +238,14 @@ function reconcileRegister(items, deps) {
 
 function parseDependencies(raw) {
   if (!raw) return [];
-  return String(raw)
-    .split(/[;,]/)
-    .map((part) => part.trim())
-    // Rows carry prose alongside ids ("see BACKLOG-DEPENDENCIES.md"); only
-    // things shaped like a Work Item id are treated as dependencies.
-    .filter((part) => /^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+$/.test(part));
+  return (
+    String(raw)
+      .split(/[;,]/)
+      .map((part) => part.trim())
+      // Rows carry prose alongside ids ("see BACKLOG-DEPENDENCIES.md"); only
+      // things shaped like a Work Item id are treated as dependencies.
+      .filter((part) => /^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+$/.test(part))
+  );
 }
 
 function findDuplicateIds(items) {

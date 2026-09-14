@@ -56,7 +56,9 @@ function parseUsage(text) {
     if (!Number.isFinite(usedPercent)) continue;
 
     const resets = m[4].match(/resets?\s+(.+?)\s*$/i);
-    const scope = String(m[2] || '').replace(/[()]/g, '').trim();
+    const scope = String(m[2] || '')
+      .replace(/[()]/g, '')
+      .trim();
 
     rows.push({
       window: /week/i.test(m[1]) ? Window.WEEKLY : Window.SESSION,
@@ -207,7 +209,10 @@ function readAccount(options) {
   } catch (e) {
     return {
       known: false,
-      reason: e.code === 'ENOENT' ? 'không có ~/.claude.json' : 'không đọc được ~/.claude.json: ' + e.code,
+      reason:
+        e.code === 'ENOENT'
+          ? 'không có ~/.claude.json'
+          : 'không đọc được ~/.claude.json: ' + e.code,
     };
   }
 }
@@ -228,7 +233,12 @@ function readAccount(options) {
  */
 function asQuotaReading(usage, account) {
   if (!usage || !usage.available) {
-    return { available: false, reason: usage ? usage.reason : 'chưa đọc được hạn mức', rows: [], account };
+    return {
+      available: false,
+      reason: usage ? usage.reason : 'chưa đọc được hạn mức',
+      rows: [],
+      account,
+    };
   }
   return {
     available: true,

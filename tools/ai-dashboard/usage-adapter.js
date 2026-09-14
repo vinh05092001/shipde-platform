@@ -138,7 +138,10 @@ function collectRouterUsage(dbPath) {
       observedAt: new Date().toISOString(),
     };
   } catch (e) {
-    return { available: false, reason: 'Ledger unreadable: ' + String(e && e.message ? e.message : e) };
+    return {
+      available: false,
+      reason: 'Ledger unreadable: ' + String(e && e.message ? e.message : e),
+    };
   } finally {
     try {
       if (db) db.close();
@@ -315,7 +318,10 @@ async function collectUsageState(options) {
     routerTokens: router.available ? router.totals.tokens : null,
     routerCost: router.available ? router.totals.cost : null,
     claudeTokens: claude.available
-      ? claude.totals.input + claude.totals.output + claude.totals.cacheWrite + claude.totals.cacheRead
+      ? claude.totals.input +
+        claude.totals.output +
+        claude.totals.cacheWrite +
+        claude.totals.cacheRead
       : null,
     claudeCostEstimate: claude.available ? claude.totals.cost : null,
     activeSources: router.available

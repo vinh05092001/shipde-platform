@@ -79,7 +79,9 @@ describe('Showing why a figure is missing', () => {
     const html = render({
       identity: HOST,
       accounts: [],
-      problems: [{ accountId: 'agy-native-a', reason: 'account đã đổi: a@b.com → c@d.com', switched: true }],
+      problems: [
+        { accountId: 'agy-native-a', reason: 'account đã đổi: a@b.com → c@d.com', switched: true },
+      ],
     });
     assert.ok(html.includes('agy-native-a'));
     assert.ok(html.includes('account đã đổi'));

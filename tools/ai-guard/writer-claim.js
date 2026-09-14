@@ -86,7 +86,8 @@ async function readAoHolders() {
       kind: session.kind || 'unknown',
       branch,
       state: (session.activity && session.activity.state) || session.status || 'unknown',
-      lastActivityAt: (session.activity && session.activity.lastActivityAt) || session.updatedAt || null,
+      lastActivityAt:
+        (session.activity && session.activity.lastActivityAt) || session.updatedAt || null,
     });
   }
   return { reachable: true, holders };
@@ -193,7 +194,12 @@ async function checkWrite(options) {
   const owner = opts.owner;
 
   if (!branch) {
-    return { allowed: true, degraded: true, reason: 'Không xác định được nhánh hiện tại', holders: [] };
+    return {
+      allowed: true,
+      degraded: true,
+      reason: 'Không xác định được nhánh hiện tại',
+      holders: [],
+    };
   }
   if (branch === 'main' || branch === 'master') {
     return {

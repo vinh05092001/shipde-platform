@@ -33,7 +33,11 @@ const gemini = {
   capabilities: CAPS,
   limits: { requestsPerDay: 2 },
   models: [
-    { model: 'gemini-3.7-flash-high', quality: 82, cost: { inputPerMillion: 0, outputPerMillion: 0 } },
+    {
+      model: 'gemini-3.7-flash-high',
+      quality: 82,
+      cost: { inputPerMillion: 0, outputPerMillion: 0 },
+    },
     { model: 'gemini-3.1-pro-low', quality: 90, cost: { inputPerMillion: 0, outputPerMillion: 0 } },
   ],
 };
@@ -46,8 +50,16 @@ const nineRouter = {
   capabilities: CAPS,
   limits: { requestsPerDay: 2 },
   models: [
-    { model: 'cc/claude-sonnet-5', quality: 88, cost: { inputPerMillion: 3, outputPerMillion: 15 } },
-    { model: 'kimchi/glm-5.3-flash', quality: 60, cost: { inputPerMillion: 0, outputPerMillion: 0 } },
+    {
+      model: 'cc/claude-sonnet-5',
+      quality: 88,
+      cost: { inputPerMillion: 3, outputPerMillion: 15 },
+    },
+    {
+      model: 'kimchi/glm-5.3-flash',
+      quality: 60,
+      cost: { inputPerMillion: 0, outputPerMillion: 0 },
+    },
   ],
 };
 
@@ -58,7 +70,13 @@ const opencode = {
   enabled: true,
   capabilities: CAPS,
   limits: { requestsPerDay: 100 },
-  models: [{ model: 'oc/deepseek-v4-flash-free', quality: 70, cost: { inputPerMillion: 0, outputPerMillion: 0 } }],
+  models: [
+    {
+      model: 'oc/deepseek-v4-flash-free',
+      quality: 70,
+      cost: { inputPerMillion: 0, outputPerMillion: 0 },
+    },
+  ],
 };
 
 const LADDER = [opencode, nineRouter, gemini];
@@ -68,10 +86,10 @@ describe('Offering expansion', () => {
   test('one account with two models becomes two offerings', () => {
     const offerings = expandOfferings([gemini]);
     assert.equal(offerings.length, 2);
-    assert.deepEqual(
-      offerings.map((o) => o.model).sort(),
-      ['gemini-3.1-pro-low', 'gemini-3.7-flash-high']
-    );
+    assert.deepEqual(offerings.map((o) => o.model).sort(), [
+      'gemini-3.1-pro-low',
+      'gemini-3.7-flash-high',
+    ]);
   });
 
   test('a model inherits the account capabilities and tier unless it overrides', () => {
@@ -168,7 +186,10 @@ describe('Choosing a good model', () => {
 
   test('tiers are ordered as the operator declared them', () => {
     const tiers = laddered(expandOfferings(LADDER));
-    assert.deepEqual(tiers.map((t) => t.tier), [0, 1, 2]);
+    assert.deepEqual(
+      tiers.map((t) => t.tier),
+      [0, 1, 2]
+    );
     assert.equal(tiers[0].offerings[0].accountId, 'gemini');
   });
 });
@@ -177,7 +198,11 @@ describe('The operator ladder: Gemini, then 9Router, then another API', () => {
   test('Gemini writes code first, on its best model', () => {
     const plan = planDispatch([item], LADDER, { now: NOW });
     assert.equal(plan.assignments[0].accountId, 'gemini');
-    assert.equal(plan.assignments[0].model, 'gemini-3.1-pro-low', 'the stronger Gemini model, not the first listed');
+    assert.equal(
+      plan.assignments[0].model,
+      'gemini-3.1-pro-low',
+      'the stronger Gemini model, not the first listed'
+    );
     assert.equal(plan.assignments[0].tier, 0);
   });
 
