@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
     [switch]$TestDocker,
     [switch]$TestModels
@@ -33,7 +33,7 @@ function Invoke-ShipDeBoundedProbe {
 
         # Touching Handle caches it on the object. Without this, Start-Process
         # -PassThru hands back a process whose handle is released on exit, and
-        # ExitCode then reads as null rather than the real status — so every
+        # ExitCode then reads as null rather than the real status -- so every
         # probe compared `-ne 0` and reported failure no matter what happened.
         $null = $process.Handle
 
@@ -137,7 +137,7 @@ $agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
 
 # Presence is not configuration. A key that is set but rejected reports as
 # CONFIGURED under a presence check, so the dashboard and this report both
-# advertise a fallback that cannot authenticate — and the operator finds out
+# advertise a fallback that cannot authenticate -- and the operator finds out
 # only after the primary path has already failed. AI-44-R01.
 #
 # The probe runs the client that will actually carry the fallback rather than
@@ -146,6 +146,7 @@ $agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
 # alike, so it cannot tell a valid credential from an invalid one; and a direct
 # POST to /v1/messages does not reproduce the headers Claude Code sends, so its
 # 401 says nothing about whether the fallback works. Only the real client does.
+$noChannelCn = -join @(0x65E0, 0x53EF, 0x7528, 0x6E20, 0x9053 | ForEach-Object { [char]$_ })
 $agentRouterLive = $false
 $agentRouterDetail = "NOT CONFIGURED; Claude account authentication will be checked"
 
@@ -186,7 +187,7 @@ if ($agentRouterSaved -and (Test-Path -LiteralPath $agentRouterCachePath -PathTy
 
 if ($agentRouterCached) {
     $agentRouterLive = [bool]$agentRouterCached.live
-    $agentRouterDetail = "{0} [cached {1:N0} phút trước]" -f `
+    $agentRouterDetail = "{0} [cached {1:N0} min ago]" -f `
         $agentRouterCached.detail,
         ([DateTime]::UtcNow - [DateTime]::Parse($agentRouterCached.observedAt).ToUniversalTime()).TotalMinutes
     if (-not $agentRouterLive -and $agentRouterCached.failure) {
@@ -200,7 +201,7 @@ if ($agentRouterCached) {
 
     # The model name matters more than it looks. AgentRouter's own guide names
     # claude-opus-4-6 as the default, but that model is not in this account's
-    # group, and asking for it returns 503 "no available channel" — which reads
+    # group, and asking for it returns 503 "no available channel" -- which reads
     # like an outage and is really a wrong name. Probe a model the account
     # actually lists.
     # The key is handed over through the inherited environment, never through
@@ -237,14 +238,14 @@ if ($agentRouterCached) {
             $agentRouterDetail = "AUTHENTICATED via claude-opus-4-8"
         } elseif ($text -match "401" -or $text -match "(?i)unauthor") {
             $agentRouterDetail = "KEY PRESENT BUT REJECTED; the Claude and Codex fallback route is unavailable"
-            $agentRouterFailure = "AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it — see TASK-AI-44"
+            $agentRouterFailure = "AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it -- see TASK-AI-44"
         } elseif ($text -match "402" -or $text -match "(?i)budget pool") {
             # 402 arrives after the key has authenticated, so it is a spending
             # state, not a credential fault. Rotating the key would not fix it
             # and would cost the operator a working credential.
             $agentRouterDetail = "AUTHENTICATED but the budget pool is exhausted (HTTP 402); top up or raise the pool limit on agentrouter.org"
             $agentRouterFailure = "AgentRouter authenticates but its budget pool is exhausted; the Claude and Codex fallback route cannot carry a review until it is topped up"
-        } elseif ($text -match "503" -or $text -match "无可用渠道") {
+        } elseif ($text -match "503" -or $text -match $noChannelCn) {
             # A 503 here means the key authenticated and the routing layer had
             # no channel for that model. That is a supply or naming state, not
             # a credential fault, and reporting it as one sends the operator to
@@ -268,7 +269,7 @@ if ($agentRouterCached) {
     if ($agentRouterFailure) { $failures.Add($agentRouterFailure) }
 
     # Record the verdict so the next run within the window spends nothing. Only
-    # the verdict is stored — never the key. It is bound to a hash of the key so
+    # the verdict is stored -- never the key. It is bound to a hash of the key so
     # a rotated credential is re-probed rather than answered from the old one.
     try {
         $keyHash = [BitConverter]::ToString(
@@ -289,7 +290,7 @@ if ($agentRouterCached) {
 }
 Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)
 Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.org, no /v1 in the base URL)")
-Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) — a different gateway despite the naming in control.ps1")
+Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) -- a different gateway despite the naming in control.ps1")
 
 Write-Host ""
 Write-Host "=== AGENT AUTHENTICATION ==="
@@ -317,7 +318,7 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
     # Windows PowerShell re-quotes an argument before handing it to a native
     # process and a double quote does not survive that, so a hook override
     # tested from this script would fail on the quoting rather than on the
-    # CLI — a false failure, which is worse than no check at all. The hook
+    # CLI -- a false failure, which is worse than no check at all. The hook
     # schema is verified separately; see TASK-AI-16-FINDINGS.md.
     $simple = [ordered]@{
         "check_for_update_on_startup" = "check_for_update_on_startup=false"
@@ -620,10 +621,50 @@ $ecosystemScript = Join-Path $PSScriptRoot "ecosystem.ps1"
 if (Test-Path -LiteralPath $ecosystemScript) {
     try {
         & $ecosystemScript -Action Validate | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Ecosystem validation failed with exit code $LASTEXITCODE"
+        }
         Write-Host "Ecosystem manifest & profiles: VALIDATED (37 adopted tools, 9 profiles)"
     } catch {
         Write-Host "Ecosystem manifest & profiles: INVALID"
         $failures.Add("Ecosystem validation failed")
+    }
+}
+
+# TASK-AI-43: Run the manifest audit as a blocking check
+$rootDir = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$cliScript = Join-Path $rootDir "tools\ai-brain\cli.js"
+if (Test-Path -LiteralPath $cliScript) {
+    try {
+        $rawAudit = @(& node $cliScript manifest --json 2>$null) -join "`n"
+        if ($rawAudit) {
+            $audit = $rawAudit | ConvertFrom-Json
+            if ($audit.summary -and $audit.summary.error -gt 0) {
+                Write-Host ("Ecosystem manifest audit: FAILED ({0} error(s))" -f $audit.summary.error)
+                foreach ($f in $audit.findings) {
+                    if ($f.severity -eq "error") {
+                        Write-Host ("  [ERROR] {0}: {1}" -f $f.code, $f.id)
+                        $failures.Add("Manifest audit error: $($f.code) for $($f.id)")
+                    }
+                }
+            } else {
+                $warnCount = if ($audit.summary) { $audit.summary.warn } else { 0 }
+                Write-Host ("Ecosystem manifest audit: VALIDATED ({0} checkable, {1} present, 0 errors, {2} warning(s))" -f $audit.checkable, $audit.present, $warnCount)
+                if ($warnCount -gt 0) {
+                    foreach ($f in $audit.findings) {
+                        if ($f.severity -eq "warn") {
+                            Write-Host ("  [WARN]  {0}: {1} ({2})" -f $f.code, $f.id, $f.message)
+                        }
+                    }
+                }
+            }
+        } else {
+            Write-Host "Ecosystem manifest audit: CANNOT RUN (cli.js returned empty)"
+            $failures.Add("Manifest audit check returned empty output")
+        }
+    } catch {
+        Write-Host ("Ecosystem manifest audit: ERROR ({0})" -f $_.Exception.Message)
+        $failures.Add("Manifest audit check failed: $($_.Exception.Message)")
     }
 }
 
