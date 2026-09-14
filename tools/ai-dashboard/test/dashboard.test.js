@@ -732,6 +732,39 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       assert.notStrictEqual(res.headers['access-control-allow-origin'], '*');
     });
 
+    test('refuses the null origin, which any sandboxed iframe can send', async () => {
+      // "null" is not private to file:// pages. A sandboxed iframe on any site
+      // the operator visits sends it too, so allowing it would let that site
+      // read this service off loopback.
+      const res = await makeRequest(testHost, testPort, '/api/state', 'GET', {
+        Origin: 'null',
+      });
+      assert.strictEqual(res.headers['access-control-allow-origin'], undefined);
+    });
+
+    test('refuses an unrelated origin', async () => {
+      const res = await makeRequest(testHost, testPort, '/api/state', 'GET', {
+        Origin: 'https://evil.example',
+      });
+      assert.strictEqual(res.headers['access-control-allow-origin'], undefined);
+    });
+
+    test('allows the service its own origin, and varies on Origin either way', async () => {
+      const selfOrigin = `http://${testHost}:${testPort}`;
+      const allowed = await makeRequest(testHost, testPort, '/api/state', 'GET', {
+        Origin: selfOrigin,
+      });
+      assert.strictEqual(allowed.headers['access-control-allow-origin'], selfOrigin);
+      assert.strictEqual(allowed.headers['vary'], 'Origin');
+
+      // Vary must be present even when the header is withheld, or a cache
+      // could hand an allowed response to a disallowed origin.
+      const refused = await makeRequest(testHost, testPort, '/api/state', 'GET', {
+        Origin: 'null',
+      });
+      assert.strictEqual(refused.headers['vary'], 'Origin');
+    });
+
     test('sends CSP, nosniff, no-store and referrer-policy headers on every response', async () => {
       const res = await makeRequest(testHost, testPort, '/api/health', 'GET');
       assert.ok(res.headers['content-security-policy']);
@@ -1498,9 +1531,9 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
   });
 });
 
-function makeRequest(host, port, path, method) {
+function makeRequest(host, port, path, method, headers) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host, port, path, method }, (res) => {
+    const req = http.request({ host, port, path, method, headers }, (res) => {
       let body = '';
       res.on('data', (chunk) => (body += chunk.toString()));
       res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body }));

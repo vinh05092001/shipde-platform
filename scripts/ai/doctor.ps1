@@ -159,19 +159,29 @@ if ($agentRouterSaved) {
     # group, and asking for it returns 503 "no available channel" — which reads
     # like an outage and is really a wrong name. Probe a model the account
     # actually lists.
+    # The key is handed over through the inherited environment, never through
+    # the command line. An argument is visible in the process table to every
+    # process on the machine and is captured by Sysmon/EDR command-line logging
+    # and by PowerShell transcription. The same change removes a second fault:
+    # a key containing a single quote used to break the generated quoting and
+    # was then reported as KEY PRESENT BUT REJECTED.
     $probeBody = @(
-        '$env:ANTHROPIC_AUTH_TOKEN = $args[0]'
+        '$env:ANTHROPIC_AUTH_TOKEN = $env:SHIPDE_AR_PROBE_TOKEN'
+        '$env:SHIPDE_AR_PROBE_TOKEN = $null'
         '$env:ANTHROPIC_BASE_URL   = "https://agentrouter.org"'
         '$env:ANTHROPIC_API_KEY    = $null'
         '$env:ANTHROPIC_MODEL      = "claude-opus-4-8"'
-        '$env:CLAUDE_CONFIG_DIR    = $args[1]'
+        '$env:CLAUDE_CONFIG_DIR    = $args[0]'
         '& claude -p "Reply exactly: SHIPDE_AUTH_OK" --model claude-opus-4-8 --output-format text --max-turns 1 2>&1'
     ) -join [Environment]::NewLine
 
     try {
         Set-Content -Path $probeScript -Value $probeBody -Encoding UTF8
+        # Start-Process inherits this process's environment, so the child sees
+        # the token without it ever appearing in an argument list.
+        $env:SHIPDE_AR_PROBE_TOKEN = $agentRouterKey
         $probe = Invoke-ShipDeBoundedProbe `
-            -CommandText ("& powershell -NoProfile -ExecutionPolicy Bypass -File '{0}' '{1}' '{2}'" -f $probeScript, $agentRouterKey, $probeDir) `
+            -CommandText ("& powershell -NoProfile -ExecutionPolicy Bypass -File '{0}' '{1}'" -f $probeScript, $probeDir) `
             -TimeoutSeconds 90
 
         $text = [string]$probe.Output
@@ -183,6 +193,12 @@ if ($agentRouterSaved) {
         } elseif ($text -match "401" -or $text -match "(?i)unauthor") {
             $agentRouterDetail = "KEY PRESENT BUT REJECTED; the Claude and Codex fallback route is unavailable"
             $failures.Add("AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it — see TASK-AI-44")
+        } elseif ($text -match "402" -or $text -match "(?i)budget pool") {
+            # 402 arrives after the key has authenticated, so it is a spending
+            # state, not a credential fault. Rotating the key would not fix it
+            # and would cost the operator a working credential.
+            $agentRouterDetail = "AUTHENTICATED but the budget pool is exhausted (HTTP 402); top up or raise the pool limit on agentrouter.org"
+            $failures.Add("AgentRouter authenticates but its budget pool is exhausted; the Claude and Codex fallback route cannot carry a review until it is topped up")
         } elseif ($text -match "503" -or $text -match "无可用渠道") {
             # A 503 here means the key authenticated and the routing layer had
             # no channel for that model. That is a supply or naming state, not
@@ -197,6 +213,9 @@ if ($agentRouterSaved) {
     } catch {
         $agentRouterDetail = "CONFIGURED but unverified ($($_.Exception.Message))"
     } finally {
+        # The token lives in this process's environment only for the duration
+        # of the probe; anything spawned afterwards must not inherit it.
+        $env:SHIPDE_AR_PROBE_TOKEN = $null
         Remove-Item -LiteralPath $probeScript -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
     }

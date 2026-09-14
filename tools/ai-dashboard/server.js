@@ -159,15 +159,29 @@ function createDashboardServer(options = {}) {
   const server = http.createServer(async (req, res) => {
     setBaselineSecurityHeaders(res);
 
-    // 1. CORS: no wildcard. Only the service's own origin (self-referential
-    // fetch/EventSource from the served page) and the "null" origin used by
-    // the offline DASHBOARD.html opened via file:// are ever allowed.
+    // 1. CORS: no wildcard, and the service's own origin is the only one
+    // allowed. The "null" origin used to be allowed here so that the offline
+    // DASHBOARD.html, opened via file://, could stream live updates.
+    //
+    // That was a hole, not a feature. "null" is not a private value belonging
+    // to file:// pages: every sandboxed iframe sends it too, so any website
+    // the operator visited could read /api/state off 127.0.0.1 and take the
+    // session, branch and quota detail with it. Binding to loopback does not
+    // help, because the browser making the request is already inside the
+    // boundary.
+    //
+    // The offline file keeps working — it carries an embedded snapshot, which
+    // is its purpose. What it loses is live streaming, and live streaming is
+    // already served, safely, at http://127.0.0.1:<port>/.
     const requestOrigin = req.headers.origin;
     const selfOrigin = `http://${req.headers.host || '127.0.0.1'}`;
-    if (requestOrigin === 'null' || requestOrigin === selfOrigin) {
+    if (requestOrigin === selfOrigin) {
       res.setHeader('Access-Control-Allow-Origin', requestOrigin);
-      res.setHeader('Vary', 'Origin');
     }
+    // Vary is set unconditionally: the response depends on Origin even when
+    // the header is withheld, and a cache must not serve an allowed response
+    // to a disallowed origin.
+    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Last-Event-ID');
 
