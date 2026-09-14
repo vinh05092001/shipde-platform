@@ -10,6 +10,7 @@ const { loadRegister, deriveGatePipeline } = require('./register-adapter');
 const { collectGitState } = require('./git-adapter');
 const { collectAoState } = require('./ao-adapter');
 const { collectGitHubState } = require('./github-adapter');
+const { collectUsageState } = require('./usage-adapter');
 const { detectConflicts } = require('./conflict-detector');
 const { redactObject } = require('./redaction');
 
@@ -326,10 +327,15 @@ async function aggregateCockpitState(options = {}) {
     ? Promise.resolve(options.mockGitHub)
     : collectGitHubState(repo);
 
-  let [gitResult, aoResult, githubResult] = await Promise.all([
+  const usagePromise = options.mockUsage
+    ? Promise.resolve(options.mockUsage)
+    : collectUsageState(options.usageOptions);
+
+  let [gitResult, aoResult, githubResult, usageResult] = await Promise.all([
     gitPromise,
     aoPromise,
     githubPromise,
+    usagePromise,
   ]);
 
   // Handle cached last-known state on failure (AI15-R01)
@@ -372,6 +378,19 @@ async function aggregateCockpitState(options = {}) {
     lastKnownSourceData.github = githubResult;
   }
 
+  if (usageResult.health.status === 'unavailable' && lastKnownSourceData.usage) {
+    usageResult = {
+      health: Object.assign({}, usageResult.health, {
+        status: 'stale',
+        impact: 'Token ledgers unreadable; serving cached last-known usage (AI15-R01)',
+        observedAt: lastKnownSourceData.usage.health.observedAt,
+      }),
+      data: lastKnownSourceData.usage.data,
+    };
+  } else if (usageResult.health.status === 'live') {
+    lastKnownSourceData.usage = usageResult;
+  }
+
   const preferredBranch = gitResult?.data?.currentBranch || null;
   let registerResult = options.mockRegister
     ? options.mockRegister
@@ -408,6 +427,7 @@ async function aggregateCockpitState(options = {}) {
     git: withFreshness(gitResult.health),
     ao: withFreshness(aoResult.health),
     github: withFreshness(githubResult.health),
+    usage: withFreshness(usageResult.health),
   };
 
   const conflicts = detectConflicts(
@@ -453,6 +473,7 @@ async function aggregateCockpitState(options = {}) {
     },
     sessions: aoResult.data.sessions,
     daemon: aoResult.data.daemon,
+    usage: usageResult.data,
     git: gitResult.data,
     github: githubResult.data,
   };

@@ -66,8 +66,14 @@ function redactObject(obj) {
   if (typeof obj === 'object') {
     const result = {};
     for (const [key, value] of Object.entries(obj)) {
-      // If key looks like a secret or credential field, redact entirely
-      if (/token|secret|password|credential|apiKey|authHeader/i.test(key)) {
+      // If key looks like a secret or credential field, redact entirely.
+      // Numbers are exempt: a credential is never a number, while token
+      // COUNTS legitimately live under keys like tokens and promptTokens.
+      // Without this exemption the whole usage ledger reads as redacted.
+      if (
+        typeof value !== 'number' &&
+        /token|secret|password|credential|apiKey|authHeader/i.test(key)
+      ) {
         result[key] = '[REDACTED_CONFIDENTIAL]';
       } else {
         result[key] = redactObject(value);
