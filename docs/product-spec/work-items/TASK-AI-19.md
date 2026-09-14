@@ -14,7 +14,7 @@
 | Allowed paths | `tools/ai-brain/reconcile.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/test/reconcile.test.js`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/work-items/TASK-AI-19.md`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-19-reconciler` |
-| Pull Request | `Pending Pull Request` |
+| Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/23` |
 
 ## Business outcome
 
