@@ -62,6 +62,12 @@ const QUOTA_SIGNALS = [
   /(?:status|code|error|http)[^0-9]{0,12}402(?![0-9])/i,
   /(?:^|[\s])429(?=[\s]*[:-])/,
   /(?:^|[\s])402(?=[\s]*[:-])/,
+  // The canonical raw status text matched none of the numeric patterns above,
+  // which all require a keyword or a trailing separator. 429 survived through
+  // the too-many-requests pattern; 402 had no such backstop, so a client
+  // surfacing err.statusText would have had a genuine spending refusal
+  // silently dropped.
+  /payment required/i,
   /rate.?limit/i,
   /quota/i,
   /too many requests/i,

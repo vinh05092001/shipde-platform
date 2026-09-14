@@ -61,14 +61,21 @@ function loadKey(options) {
   // how shells, CI matrices and .env loaders spell absence, and it carries
   // none of the ambiguity a short key does. Throwing on it would break every
   // secret read on machines that simply export the name.
-  const declared = typeof fromEnv === 'string' && fromEnv.trim() !== '';
-  if (declared) {
-    if (fromEnv.length < 32) {
+  //
+  // Presence, length and the hash input are all measured on the same trimmed
+  // value. Measuring presence on the trimmed one and length on the raw one let
+  // a 30-character key padded with spaces through, and — worse — let a
+  // trailing newline (ordinary with `$(cat key)` or a Docker --env-file)
+  // derive a different key from the same secret with no error at all. That is
+  // precisely the undecryptable-secrets failure this check exists to prevent.
+  const declaredKey = typeof fromEnv === 'string' ? fromEnv.trim() : '';
+  if (declaredKey !== '') {
+    if (declaredKey.length < 32) {
       throw new Error(
-        `SHIPDE_ACCOUNT_KEY phải có độ dài ít nhất 32 ký tự (hiện có ${fromEnv.length})`
+        `SHIPDE_ACCOUNT_KEY phải có độ dài ít nhất 32 ký tự (hiện có ${declaredKey.length})`
       );
     }
-    return crypto.createHash('sha256').update(fromEnv).digest();
+    return crypto.createHash('sha256').update(declaredKey).digest();
   }
   const keyFile = (options && options.keyFile) || KEY_FILE;
   ensureDir(keyFile);
@@ -111,7 +118,12 @@ function readJson(file, fallback) {
 }
 
 function writeJson(file, value) {
-  ensureDir();
+  // The directory of the file being written, not the home directory. Passing
+  // nothing here was the other half of the same defect: a registryFile or
+  // secretsFile outside ~/.shipde still failed with ENOENT, and ~/.shipde was
+  // still created on the way past. The tests missed it by creating the
+  // directory first.
+  ensureDir(file);
   fs.writeFileSync(file, JSON.stringify(value, null, 2), { mode: 0o600 });
 }
 

@@ -438,3 +438,67 @@ describe('An exported-but-empty key means unset', () => {
     }
   });
 });
+
+describe('The same secret must always derive the same key', () => {
+  const orig = process.env.SHIPDE_ACCOUNT_KEY;
+  const restore = () => {
+    if (orig === undefined) delete process.env.SHIPDE_ACCOUNT_KEY;
+    else process.env.SHIPDE_ACCOUNT_KEY = orig;
+  };
+  const KEY = 'a-very-long-account-key-of-40-characters';
+
+  function freshStore() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-trim-'));
+    return {
+      dir,
+      registryFile: path.join(dir, 'r.json'),
+      secretsFile: path.join(dir, 's.enc'),
+      keyFile: path.join(dir, 'k'),
+    };
+  }
+
+  test('a trailing newline derives the same key, not a different one', () => {
+    // $(cat key) and Docker --env-file both append one. Deriving a different
+    // key from the same secret makes every stored credential undecryptable,
+    // with an error that blames corruption.
+    const a = freshStore();
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = KEY;
+      addAccount(def(), a);
+      setSecret('openrouter-free', 'sk-value', a);
+      process.env.SHIPDE_ACCOUNT_KEY = KEY + '\n';
+      assert.strictEqual(getSecret('openrouter-free', a), 'sk-value');
+    } finally {
+      restore();
+      fs.rmSync(a.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a short key padded with whitespace is still rejected', () => {
+    const a = freshStore();
+    try {
+      addAccount(def(), a);
+      process.env.SHIPDE_ACCOUNT_KEY = '   short-key   ';
+      assert.throws(() => setSecret('openrouter-free', 'v', a), /SHIPDE_ACCOUNT_KEY/);
+    } finally {
+      restore();
+      fs.rmSync(a.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a registry under a directory that does not exist is created, not ENOENT', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-deep-'));
+    const s2 = {
+      dir,
+      registryFile: path.join(dir, 'a', 'b', 'r.json'),
+      secretsFile: path.join(dir, 'a', 'b', 's.enc'),
+      keyFile: path.join(dir, 'a', 'b', 'k'),
+    };
+    try {
+      assert.doesNotThrow(() => addAccount(def(), s2));
+      assert.ok(fs.existsSync(s2.registryFile));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
