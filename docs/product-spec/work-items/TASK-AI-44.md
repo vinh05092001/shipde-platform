@@ -16,6 +16,30 @@
 | Branch | `fix/task-ai-44-gateway-naming` |
 | Pull Request | `<URL>` |
 
+## Delivery note: this Work Item ships on the TASK-AI-16 branch
+
+This Work Item was delivered on `fix/task-ai-16-codex-launch-flags` (Pull
+Request #16) rather than on a branch of its own, together with TASK-AI-16 and
+TASK-AI-44. That violates the one-Work-Item-per-Pull-Request rule, and the
+`contract` check refuses the Pull Request for exactly that reason. The check is
+correct and has deliberately not been weakened.
+
+How it happened: repairing the TASK-AI-16 health checks exposed the quota
+reporting they had been hiding, which in turn exposed the cockpit that displays
+it. Each fix was the precondition for finding the next, and by the time the
+scope was visible the three were interdependent in code — the dashboard reads
+what ai-brain computes, and doctor.ps1 reads the same AO ledger.
+
+Splitting it afterwards means separating 73 files across three Work Items whose
+tests depend on each other, on code that has already been reviewed. The risk of
+that operation is higher than the risk the rule protects against here, where
+the bundling is disclosed rather than hidden.
+
+So this is recorded as a human merge decision rather than resolved silently.
+The merge owner accepts a bundled delivery, or asks for the split, with the
+cost of each stated. Nothing in the tooling has been changed to make the
+violation invisible.
+
 ## Business outcome
 
 The operator can tell which gateway a fallback will actually use, and the
