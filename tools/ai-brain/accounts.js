@@ -121,7 +121,16 @@ function validateAccount(account) {
   if (!account || typeof account !== 'object') return ['Tài khoản không hợp lệ'];
   if (!ID_RE.test(String(account.id || ''))) errors.push('id phải là chữ thường, số, . _ - (2-64 ký tự)');
   if (!account.provider) errors.push('thiếu provider');
-  if (!account.model) errors.push('thiếu model');
+  // An account declares either one model or a models[] list. Requiring the
+  // singular field predates multi-model accounts and rejected every real one.
+  const hasModels = Array.isArray(account.models) && account.models.length > 0;
+  if (!account.model && !hasModels) errors.push('thiếu model hoặc models[]');
+  if (hasModels) {
+    account.models.forEach((m, i) => {
+      const name = typeof m === 'string' ? m : m && m.model;
+      if (!name) errors.push('models[' + i + '] thiếu tên model');
+    });
+  }
 
   const caps = account.capabilities || {};
   if (!Number.isFinite(Number(caps.contextWindow)) || Number(caps.contextWindow) <= 0) {
