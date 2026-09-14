@@ -25,8 +25,8 @@
  */
 
 const { eligibleAccounts } = require('./capabilities');
-const { poolHeadroom, rankByHeadroom, isDispatchable } = require('./quota');
-const { tiersOf } = require('./accounts');
+const { isDispatchable } = require('./quota');
+const { expandOfferings, headroomForAll, rankOfferings, laddered, Strategy } = require('./offerings');
 
 const DEFAULTS = {
   maxImplementationAgents: 1,
@@ -57,7 +57,10 @@ function planDispatch(items, accounts, context) {
   const limits = Object.assign({}, DEFAULTS, ctx.limits || {});
   const now = ctx.now || Date.now();
 
-  const headrooms = poolHeadroom(accounts, ctx.eventsByAccount || {}, { now });
+  // Dispatch is per model, not per account: one key exposes many models and
+  // choosing "the account" says nothing about which will write the code.
+  const offerings = expandOfferings(accounts);
+  const headrooms = headroomForAll(offerings, ctx.eventsByAccount || {}, ctx.eventsByOffering || {}, { now });
 
   // What is already in flight, from the caller rather than inferred: the
   // scheduler must never assume a slot is free because it cannot see the work.
@@ -130,7 +133,7 @@ function planDispatch(items, accounts, context) {
       }
     }
 
-    const { role, eligible, rejected } = eligibleAccounts(item.role, accounts, item);
+    const { role, eligible, rejected } = eligibleAccounts(item.role, offerings, item);
     if (!role) {
       deferred.push(waiting(item, 'UNKNOWN_ROLE', item.role));
       continue;
@@ -144,13 +147,16 @@ function planDispatch(items, accounts, context) {
     // before tier 2. Without this the cheapest-first sort inside a tier would
     // happily reach past free local capacity into a metered API key merely
     // because that key reported more headroom.
+    // The role decides how to choose inside a tier: authoring wants the best
+    // model that still has room, mechanical work wants the cheapest that works.
+    const strategy = item.strategy || role.strategy || Strategy.QUALITY_FIRST;
+
     let withRoom = [];
     let chosenTier = null;
-    for (const { tier, accounts: inTier } of tiersOf(eligible)) {
-      const ranked = rankByHeadroom(
-        inTier.map((a) => a.id),
-        headrooms
-      ).filter((id) => (perAccountLoad[id] || 0) < limits.maxPerAccount);
+    for (const { tier, offerings: inTier } of laddered(eligible)) {
+      const ranked = rankOfferings(inTier, headrooms, strategy).filter(
+        (o) => (perAccountLoad[o.accountId] || 0) < limits.maxPerAccount
+      );
       if (ranked.length > 0) {
         withRoom = ranked;
         chosenTier = tier;
@@ -160,35 +166,38 @@ function planDispatch(items, accounts, context) {
 
     if (withRoom.length === 0) {
       const why = eligible
-        .map((a) => {
-          const h = headrooms[a.id];
-          if (!isDispatchable(h)) return a.id + ': ' + (h ? h.reason : 'không rõ hạn mức');
-          return a.id + ': đang bận';
+        .map((o) => {
+          const h = headrooms[o.id];
+          if (!isDispatchable(h)) {
+            return o.id + ': ' + (h ? h.reason + ' (theo ' + h.boundBy + ')' : 'không rõ hạn mức');
+          }
+          return o.id + ': đang bận';
         })
         .join('; ');
       deferred.push(waiting(item, 'NO_QUOTA_OR_BUSY', why));
       continue;
     }
 
-    const chosenId = withRoom[0];
-    const chosen = eligible.find((a) => a.id === chosenId);
+    const chosen = withRoom[0];
 
     assignments.push({
       workItemId: item.workItemId,
       role: item.role,
       branch: item.branch || null,
-      accountId: chosen.id,
+      accountId: chosen.accountId,
       provider: chosen.provider,
       model: chosen.model,
+      quality: chosen.quality,
+      strategy,
       headroom: headrooms[chosen.id].status,
       tier: chosenTier,
-      // Recorded so a later review can see the account was not chosen at random.
-      alternatives: withRoom.slice(1, 4),
+      // Recorded so a later review can see the model was not chosen at random.
+      alternatives: withRoom.slice(1, 4).map((o) => o.id),
     });
 
     busyWorkItems.add(item.workItemId);
     if (item.branch) claimedBranches.set(item.branch, item.workItemId);
-    perAccountLoad[chosen.id] = (perAccountLoad[chosen.id] || 0) + 1;
+    perAccountLoad[chosen.accountId] = (perAccountLoad[chosen.accountId] || 0) + 1;
     totalLoad += 1;
     if (isImplementation) implementationLoad += 1;
     if (isResearch) researchLoad += 1;
