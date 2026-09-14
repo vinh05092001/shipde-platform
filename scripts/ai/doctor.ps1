@@ -139,30 +139,70 @@ $agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
 # CONFIGURED under a presence check, so the dashboard and this report both
 # advertise a fallback that cannot authenticate — and the operator finds out
 # only after the primary path has already failed. AI-44-R01.
+#
+# The probe runs the client that will actually carry the fallback rather than
+# a hand-built HTTP request. Two earlier attempts here were wrong in ways worth
+# recording: /v1/models answers 401 to a real key, a fabricated key and no key
+# alike, so it cannot tell a valid credential from an invalid one; and a direct
+# POST to /v1/messages does not reproduce the headers Claude Code sends, so its
+# 401 says nothing about whether the fallback works. Only the real client does.
 $agentRouterLive = $false
 $agentRouterDetail = "NOT CONFIGURED; Claude account authentication will be checked"
 if ($agentRouterSaved) {
+    # An isolated config directory keeps the probe from touching the operator's
+    # own Claude Code login.
+    $probeDir = Join-Path ([IO.Path]::GetTempPath()) ("shipde-ar-" + [Guid]::NewGuid().ToString("N"))
+    $probeScript = Join-Path ([IO.Path]::GetTempPath()) ("shipde-ar-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+
+    # The model name matters more than it looks. AgentRouter's own guide names
+    # claude-opus-4-6 as the default, but that model is not in this account's
+    # group, and asking for it returns 503 "no available channel" — which reads
+    # like an outage and is really a wrong name. Probe a model the account
+    # actually lists.
+    $probeBody = @(
+        '$env:ANTHROPIC_AUTH_TOKEN = $args[0]'
+        '$env:ANTHROPIC_BASE_URL   = "https://agentrouter.org"'
+        '$env:ANTHROPIC_API_KEY    = $null'
+        '$env:ANTHROPIC_MODEL      = "claude-opus-4-8"'
+        '$env:CLAUDE_CONFIG_DIR    = $args[1]'
+        '& claude -p "Reply exactly: SHIPDE_AUTH_OK" --model claude-opus-4-8 --output-format text --max-turns 1 2>&1'
+    ) -join [Environment]::NewLine
+
     try {
-        $probe = Invoke-WebRequest -Uri "https://agentrouter.org/v1/models" `
-            -Headers @{ Authorization = "Bearer $agentRouterKey" } `
-            -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
-        $agentRouterLive = ($probe.StatusCode -eq 200)
-        $agentRouterDetail = "CONFIGURED and authenticated"
-    } catch {
-        $status = 0
-        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-        if ($status -eq 401 -or $status -eq 403) {
-            $agentRouterDetail = "KEY PRESENT BUT REJECTED (HTTP $status); the Claude and Codex fallback route is unavailable"
-            $failures.Add("AGENTROUTER_API_KEY is rejected by agentrouter.org (HTTP $status); renew or remove it — see TASK-AI-44")
+        Set-Content -Path $probeScript -Value $probeBody -Encoding UTF8
+        $probe = Invoke-ShipDeBoundedProbe `
+            -CommandText ("& powershell -NoProfile -ExecutionPolicy Bypass -File '{0}' '{1}' '{2}'" -f $probeScript, $agentRouterKey, $probeDir) `
+            -TimeoutSeconds 90
+
+        $text = [string]$probe.Output
+        if ($probe.TimedOut) {
+            $agentRouterDetail = "CONFIGURED but unverified (probe timed out)"
+        } elseif ($text -match "SHIPDE_AUTH_OK") {
+            $agentRouterLive = $true
+            $agentRouterDetail = "AUTHENTICATED via claude-opus-4-8"
+        } elseif ($text -match "401" -or $text -match "(?i)unauthor") {
+            $agentRouterDetail = "KEY PRESENT BUT REJECTED; the Claude and Codex fallback route is unavailable"
+            $failures.Add("AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it — see TASK-AI-44")
+        } elseif ($text -match "503" -or $text -match "无可用渠道") {
+            # A 503 here means the key authenticated and the routing layer had
+            # no channel for that model. That is a supply or naming state, not
+            # a credential fault, and reporting it as one sends the operator to
+            # rotate a working key.
+            $agentRouterDetail = "AUTHENTICATED but no channel for claude-opus-4-8 right now (HTTP 503); check Model Status on agentrouter.org"
+        } elseif ($text -match "(?i)model catalog") {
+            $agentRouterDetail = "AUTHENTICATED but Claude Code does not recognise the probe model; map it with modelOverrides"
         } else {
-            # A network failure is not a dead key, and saying so would send the
-            # operator to rotate a credential that is fine.
-            $agentRouterDetail = "CONFIGURED but unverified (agentrouter.org unreachable)"
+            $agentRouterDetail = "CONFIGURED but unverified (unexpected probe output)"
         }
+    } catch {
+        $agentRouterDetail = "CONFIGURED but unverified ($($_.Exception.Message))"
+    } finally {
+        Remove-Item -LiteralPath $probeScript -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)
-Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.org)")
+Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.org, no /v1 in the base URL)")
 Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) — a different gateway despite the naming in control.ps1")
 
 Write-Host ""
@@ -299,7 +339,7 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
                 "AGENTROUTER_API_KEY",
                 "User"
             )
-            $env:ANTHROPIC_BASE_URL = "https://agentrouter.org/"
+            $env:ANTHROPIC_BASE_URL = "https://agentrouter.org"
             $env:ANTHROPIC_MODEL = "claude-opus-4-8"
             $env:CLAUDE_CONFIG_DIR = Join-Path $env:USERPROFILE ".claude-agentrouter-old"
             $claudeProbe = Invoke-ShipDeBoundedProbe -CommandText "& claude -p 'Reply exactly: SHIPDE_AUTH_OK' --model claude-opus-4-8 --output-format text --max-turns 1" -TimeoutSeconds 60
