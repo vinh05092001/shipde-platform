@@ -132,7 +132,7 @@ register, and toolchain decision documentation.
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| `AC-AI-17-01` | Run manifest audit via `cli.js manifest` | Reports 0 errors, 0 warnings, trustworthy = true | CLI stdout |
+| `AC-AI-17-01` | Run manifest audit via `cli.js manifest` | Reports 0 errors and trustworthy = true. The only permitted warning is `PINNED_VERSION_DRIFT` for `codex-cli`, which is real and awaits a human decision under the upgrade rule; a run with zero warnings would mean the drift had been hidden rather than settled | CLI stdout |
 | `AC-AI-17-02` | Run register reconciliation via `cli.js reconcile` | Reports 0 errors | CLI stdout |
 | `AC-AI-17-03` | Run test suite for `ai-brain` and `ai-dashboard` | All 380 tests pass | Test runner stdout |
 | `AC-AI-17-04` | Inspect the 8 absent tools in manifest | All 8 have `lifecycle_state: "PENDING"`, `default_enabled: false`, `blocking_policy: "NON_BLOCKING"` | JSON inspect output |
