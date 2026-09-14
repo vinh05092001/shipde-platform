@@ -873,6 +873,101 @@ function renderActivity() {
     .join('');
 }
 
+const FAMILY_LABEL = { gemini: 'Gemini', 'claude-gpt': 'Claude / GPT' };
+const WINDOW_LABEL = { weekly: 'tuần', fiveHour: '5 giờ' };
+
+/**
+ * What each provider says is left, shown beside our own accounting rather than
+ * folded into it.
+ *
+ * These are percentages of a ceiling the provider never discloses, so they
+ * cannot be added to a token count without inventing that ceiling. What they
+ * can do is account for spend this pipeline never saw — the operator working in
+ * the IDE on the same account, or a pool switched off outright — which is why a
+ * model can read "đã cạn" here while our own ledger for it is spotless.
+ *
+ * A figure the cache refused is shown as a refusal with its reason. Leaving it
+ * blank would read as zero, and "we do not know" and "there is none left" call
+ * for opposite responses.
+ */
+function renderVendorQuota(vendor) {
+  const el = document.getElementById('capacityVendor');
+  if (!el) return;
+  if (!vendor || ((vendor.accounts || []).length === 0 && (vendor.problems || []).length === 0)) {
+    el.innerHTML = '';
+    return;
+  }
+
+  const bar = (percent, disabled) => {
+    const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+    const colour = disabled || pct <= 2 ? 'bg-rose-500' : pct < 20 ? 'bg-amber-400' : 'bg-emerald-500';
+    return (
+      '<div class="h-1.5 rounded-full bg-slate-700 overflow-hidden w-full">' +
+      '<div class="h-full ' + colour + '" style="width:' + pct + '%"></div></div>'
+    );
+  };
+
+  const rowHtml = (row) => {
+    const value = row.disabled ? 'đã tắt' : row.remainingPercent + '%';
+    const tone = row.disabled || row.remainingPercent <= 2
+      ? 'text-rose-300'
+      : row.remainingPercent < 20
+        ? 'text-amber-300'
+        : 'text-emerald-300';
+    return (
+      '<div class="grid grid-cols-[7.5rem_3rem_1fr_auto] items-center gap-2 text-[11px]">' +
+      '<span class="text-slate-300">' + escapeHtml(FAMILY_LABEL[row.family] || row.family) + '</span>' +
+      '<span class="text-slate-500">' + escapeHtml(WINDOW_LABEL[row.window] || row.window) + '</span>' +
+      bar(row.remainingPercent, row.disabled) +
+      '<span class="font-mono font-bold ' + tone + ' tabular-nums">' + escapeHtml(value) + '</span>' +
+      '</div>'
+    );
+  };
+
+  const accountHtml = (acc) => {
+    const who = acc.account
+      ? (String(acc.account).indexOf('fingerprint:') === 0
+          ? 'đăng nhập riêng trong container'
+          : acc.account)
+      : 'không rõ account';
+    return (
+      '<div class="bg-slate-800/60 rounded-xl p-3 border border-slate-700 space-y-2">' +
+      '<div class="flex items-baseline justify-between gap-2">' +
+      '<span class="text-xs font-bold text-white">' + escapeHtml(acc.accountId) + '</span>' +
+      '<span class="text-[10px] text-slate-500">' + escapeHtml(who) + '</span></div>' +
+      (acc.rows || []).map(rowHtml).join('') +
+      '<div class="text-[10px] text-slate-500">Đọc lúc ' +
+      escapeHtml(acc.observedAt ? new Date(acc.observedAt).toLocaleTimeString() : 'không rõ') +
+      '</div>' +
+      '</div>'
+    );
+  };
+
+  const problemHtml = (p) =>
+    '<div class="text-[11px] px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-200">' +
+    '<span class="font-bold">' + escapeHtml(p.accountId) + '</span> — ' + escapeHtml(p.reason) +
+    (p.switched ? ' <span class="text-amber-300/70">(cần chạy lại lệnh quota)</span>' : '') +
+    '</div>';
+
+  const id = vendor.identity || {};
+  el.innerHTML =
+    '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800 space-y-3">' +
+    '<div class="flex items-start justify-between flex-wrap gap-2">' +
+    '<div><h3 class="text-sm font-black text-white">Hạn mức nhà cung cấp tự báo</h3>' +
+    '<p class="text-[11px] text-slate-500 mt-0.5">Phần trăm còn lại trên trần mà nhà cung cấp không công bố — ' +
+    'đọc riêng, không cộng vào số token bên dưới</p></div>' +
+    '<span class="text-[10px] px-2 py-1 rounded-lg ' +
+    (id.known
+      ? 'bg-slate-800 text-slate-300 border border-slate-700'
+      : 'bg-amber-500/15 text-amber-300 border border-amber-500/30') +
+    '">' +
+    escapeHtml(id.known ? 'host: ' + id.email : 'không rõ account host') +
+    '</span></div>' +
+    '<div class="grid sm:grid-cols-2 gap-2.5">' + (vendor.accounts || []).map(accountHtml).join('') + '</div>' +
+    (vendor.problems || []).map(problemHtml).join('') +
+    '</div>';
+}
+
 /**
  * Capacity panel: how much work the pool can still dispatch, and which model
  * runs out next. Reports "chưa rõ" wherever no limit was declared rather than
@@ -941,6 +1036,8 @@ function renderCapacity() {
           'cho từng tài khoản để bảng này có ý nghĩa.</div>'
         : '') +
     '</div>';
+
+  renderVendorQuota(cap.vendorQuota);
 
   const rows = cap.rows.slice().sort((a, b) => {
     if (a.tier !== b.tier) return a.tier - b.tier;
