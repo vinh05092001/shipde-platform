@@ -367,6 +367,14 @@ if (require.main === module) {
   const port = DEFAULT_PORT;
   const server = createDashboardServer();
 
+  // Keeps the vendor quota cache inside its own expiry window. Off by setting
+  // SHIPDE_QUOTA_REFRESH=0, for a machine where running the worker container on
+  // a timer is not wanted.
+  if (process.env.SHIPDE_QUOTA_REFRESH !== '0') {
+    const { startQuotaRefresher } = require('./quota-refresher');
+    startQuotaRefresher({ log: (m) => console.log('[quota] ' + m) });
+  }
+
   server.listen(port, HOST, () => {
     console.log(`\n======================================================`);
     console.log(`🚀 Ship Dễ AI Developer Cockpit is running!`);
