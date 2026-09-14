@@ -47,14 +47,16 @@ const Outcome = {
  * Reasons that mean "out of quota" rather than "something else broke".
  * A 500 or a socket error says nothing about the ceiling, and treating it as a
  * refusal would teach the system a limit that does not exist.
+ *
+ * Routing states (such as 503 or "no available channel") indicate model naming
+ * or upstream supply issues, not quota exhaustion.
  */
 const QUOTA_SIGNALS = [
   /\b429\b/,
+  /\b402\b/,
   /rate.?limit/i,
   /quota/i,
   /too many requests/i,
-  /无可用渠道/,
-  /no available channel/i,
   /insufficient.*(credit|balance)/i,
 ];
 

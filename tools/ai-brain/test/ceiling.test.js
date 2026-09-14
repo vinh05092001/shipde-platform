@@ -39,14 +39,29 @@ describe('Telling a quota refusal from any other failure', () => {
   test('recognises the shapes providers actually use', () => {
     const quotaErrors = [
       'HTTP 429 Too Many Requests',
+      'HTTP 402 Payment Required',
       'rate limit exceeded',
       'You have exceeded your quota',
-      '当前分组 default 下对于模型 x 无可用渠道',
-      'no available channel for this model',
+      'Budget pool quota has been exhausted',
       'insufficient credit balance',
     ];
     for (const e of quotaErrors) {
       assert.equal(isQuotaRefusal(e), true, 'treats as quota: ' + e);
+    }
+  });
+
+  test('does not treat routing or channel availability errors as quota refusals', () => {
+    // Finding #4: a 503 or "no available channel" means post-auth routing/model
+    // naming state, not quota exhaustion. Learning a ceiling from it permanently
+    // pins the ceiling to the lowest refusal.
+    const routingErrors = [
+      '当前分组 default 下对于模型 x 无可用渠道',
+      'no available channel for this model',
+      'HTTP 503 Service Unavailable',
+      '503 no available channel',
+    ];
+    for (const e of routingErrors) {
+      assert.equal(isQuotaRefusal(e), false, 'routing error must not be quota signal: ' + e);
     }
   });
 
@@ -62,6 +77,15 @@ describe('Telling a quota refusal from any other failure', () => {
     const file = store();
     assert.equal(recordFailure('a', 'm', 'ECONNREFUSED', { tokensPerDay: 500 }, { file }), null);
     assert.equal(readLedger(file).length, 0, 'nothing is written');
+  });
+
+  test('recordFailure ignores routing errors like no available channel', () => {
+    const file = store();
+    assert.equal(
+      recordFailure('a', 'm', 'no available channel for this model', { tokensPerDay: 100 }, { file }),
+      null
+    );
+    assert.equal(readLedger(file).length, 0, 'routing error must never record a refusal in ledger');
   });
 
   test('recordFailure stores a quota error with what had been consumed', () => {

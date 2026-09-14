@@ -51,18 +51,24 @@ function ensureDir() {
  * registry is inert. SHIPDE_ACCOUNT_KEY overrides it for setups that keep the
  * key outside the filesystem.
  */
-function loadKey() {
+function loadKey(options) {
   const fromEnv = process.env.SHIPDE_ACCOUNT_KEY;
-  if (fromEnv && fromEnv.length >= 32) {
+  if (fromEnv !== undefined) {
+    if (fromEnv.length < 32) {
+      throw new Error(
+        `SHIPDE_ACCOUNT_KEY phải có độ dài ít nhất 32 ký tự (hiện có ${fromEnv.length})`
+      );
+    }
     return crypto.createHash('sha256').update(fromEnv).digest();
   }
+  const keyFile = (options && options.keyFile) || KEY_FILE;
   ensureDir();
-  if (!fs.existsSync(KEY_FILE)) {
+  if (!fs.existsSync(keyFile)) {
     const key = crypto.randomBytes(32);
-    fs.writeFileSync(KEY_FILE, key.toString('base64'), { mode: 0o600 });
+    fs.writeFileSync(keyFile, key.toString('base64'), { mode: 0o600 });
     return key;
   }
-  return Buffer.from(fs.readFileSync(KEY_FILE, 'utf8').trim(), 'base64');
+  return Buffer.from(fs.readFileSync(keyFile, 'utf8').trim(), 'base64');
 }
 
 function encrypt(plain, key) {
@@ -212,7 +218,7 @@ function setSecret(id, value, options) {
   const accounts = loadRegistry(options);
   if (!accounts.some((a) => a.id === id)) throw new Error('Không có tài khoản "' + id + '"');
 
-  const key = (options && options.key) || loadKey();
+  const key = (options && options.key) || loadKey(options);
   const secrets = loadSecrets(options);
   secrets[id] = encrypt(value, key);
   saveSecrets(secrets, options);
@@ -226,7 +232,7 @@ function setSecret(id, value, options) {
 function getSecret(id, options) {
   const secrets = loadSecrets(options);
   if (!secrets[id]) return null;
-  const key = (options && options.key) || loadKey();
+  const key = (options && options.key) || loadKey(options);
   return decrypt(secrets[id], key);
 }
 
@@ -254,6 +260,8 @@ module.exports = {
   HOME_DIR,
   REGISTRY_FILE,
   SECRETS_FILE,
+  KEY_FILE,
+  loadKey,
   listAccounts,
   addAccount,
   updateAccount,

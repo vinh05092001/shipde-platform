@@ -10,6 +10,7 @@ const path = require('path');
 
 const {
   Tier,
+  loadKey,
   addAccount,
   listAccounts,
   updateAccount,
@@ -156,6 +157,77 @@ describe('Secret handling', () => {
     updateAccount('openrouter-free', { limits: { requestsPerDay: 50 } }, s);
     assert.equal(getSecret('openrouter-free', s), 'sk-or-v1-abcdef');
     assert.equal(listAccounts(s)[0].limits.requestsPerDay, 50);
+  });
+
+  test('a short SHIPDE_ACCOUNT_KEY throws naming the real problem and required length (Finding #5)', () => {
+    const origEnv = process.env.SHIPDE_ACCOUNT_KEY;
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = 'short-key-under-32';
+      assert.throws(
+        () => loadKey(),
+        (err) => {
+          assert.match(err.message, /SHIPDE_ACCOUNT_KEY/);
+          assert.match(err.message, /32/);
+          return true;
+        }
+      );
+
+      // Verify setSecret and getSecret also throw when no explicit key option is given
+      const s = store();
+      addAccount(def(), s);
+      assert.throws(
+        () => setSecret('openrouter-free', 'sk-secret-123', { registryFile: s.registryFile, secretsFile: s.secretsFile }),
+        /SHIPDE_ACCOUNT_KEY.*32/
+      );
+    } finally {
+      if (origEnv !== undefined) {
+        process.env.SHIPDE_ACCOUNT_KEY = origEnv;
+      } else {
+        delete process.env.SHIPDE_ACCOUNT_KEY;
+      }
+    }
+  });
+
+  test('a valid SHIPDE_ACCOUNT_KEY (>= 32 chars) is accepted and used', () => {
+    const origEnv = process.env.SHIPDE_ACCOUNT_KEY;
+    try {
+      process.env.SHIPDE_ACCOUNT_KEY = 'a-very-long-secret-key-that-exceeds-32-characters';
+      const key = loadKey();
+      assert.ok(Buffer.isBuffer(key));
+      assert.equal(key.length, 32);
+
+      const crypto = require('crypto');
+      const expected = crypto.createHash('sha256').update(process.env.SHIPDE_ACCOUNT_KEY).digest();
+      assert.deepEqual(key, expected);
+    } finally {
+      if (origEnv !== undefined) {
+        process.env.SHIPDE_ACCOUNT_KEY = origEnv;
+      } else {
+        delete process.env.SHIPDE_ACCOUNT_KEY;
+      }
+    }
+  });
+
+  test('an unset SHIPDE_ACCOUNT_KEY falls back to the file key', () => {
+    const origEnv = process.env.SHIPDE_ACCOUNT_KEY;
+    const s = store();
+    const keyFile = path.join(s.dir, 'custom.key');
+    try {
+      delete process.env.SHIPDE_ACCOUNT_KEY;
+      const key1 = loadKey({ keyFile });
+      assert.ok(Buffer.isBuffer(key1));
+      assert.equal(key1.length, 32);
+      assert.ok(fs.existsSync(keyFile), 'key file was created');
+
+      const key2 = loadKey({ keyFile });
+      assert.deepEqual(key1, key2, 'reads existing key file');
+    } finally {
+      if (origEnv !== undefined) {
+        process.env.SHIPDE_ACCOUNT_KEY = origEnv;
+      } else {
+        delete process.env.SHIPDE_ACCOUNT_KEY;
+      }
+    }
   });
 });
 
