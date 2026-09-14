@@ -19,6 +19,8 @@
 const { collectRouterUsage, collectClaudeUsage } = require('./usage-adapter');
 const { runwayReport, Difficulty } = require('../ai-brain/fitness');
 const { expandOfferings, headroomForAll } = require('../ai-brain/offerings');
+const { readIdentity } = require('../ai-brain/agy-identity');
+const { usableReadings } = require('../ai-brain/quota-store');
 
 let listAccounts = null;
 try {
@@ -110,8 +112,21 @@ function collectCapacity(options) {
     }
   }
 
+  // What the providers themselves last said was left. Read from the cache the
+  // `quota` command fills, never by calling a CLI here: that call takes tens of
+  // seconds and someone is waiting for this page. A reading the cache refuses
+  // is reported as a refusal rather than dropped, so the panel can say why a
+  // figure is missing instead of showing a gap that looks like zero.
+  const identity = opts.identity || readIdentity({ home: opts.home });
+  const { reported, problems } = opts.reported
+    ? { reported: opts.reported, problems: opts.reportedProblems || {} }
+    : usableReadings(identity, { home: opts.home, now });
+
   const offerings = expandOfferings(accounts);
-  const headrooms = headroomForAll(offerings, eventsByAccount, opts.eventsByOffering || {}, { now });
+  const headrooms = headroomForAll(offerings, eventsByAccount, opts.eventsByOffering || {}, {
+    now,
+    reported,
+  });
   const report = runwayReport(offerings, difficulty, headrooms, opts.history || {}, opts.fitness);
 
   // Claude Code work never passes through the router, so its spend is reported
@@ -139,6 +154,26 @@ function collectCapacity(options) {
     data: Object.assign({}, report, {
       derivedFromRouter: derived,
       claude: claudeSide,
+      // The vendor's own figures, and the reason each missing one is missing.
+      // Shown beside our accounting rather than merged into it: one is a
+      // percentage of an undisclosed ceiling, the other a token count, and
+      // presenting them as one number would invent a ceiling neither knows.
+      vendorQuota: {
+        identity: identity.known
+          ? { known: true, email: identity.email }
+          : { known: false, reason: identity.reason },
+        accounts: Object.entries(reported).map(([accountId, q]) => ({
+          accountId,
+          account: q.account && q.account.known ? q.account.email : null,
+          observedAt: q.cachedAt || q.observedAt || null,
+          rows: q.rows,
+        })),
+        problems: Object.entries(problems).map(([accountId, p]) => ({
+          accountId,
+          reason: p.reason,
+          switched: Boolean(p.switched),
+        })),
+      },
     }),
   };
 }

@@ -193,6 +193,61 @@ function proveCommand(args) {
   if (!allPassed) process.exit(1);
 }
 
+/**
+ * Reads each account's quota from the provider and caches it.
+ *
+ * Slow by nature — one CLI round trip per account — so it is a command the
+ * operator or a schedule runs, never something the dashboard does while
+ * someone waits for a page.
+ */
+function quotaCommand(args) {
+  const { refreshAll } = require('./refresh-quota');
+  const { readIdentity } = require('./agy-identity');
+  const { listAccounts } = require('./accounts');
+  const { usableReadings, storePath } = require('./quota-store');
+
+  const identity = readIdentity({});
+  const accounts = listAccounts() || [];
+
+  if (args.show) {
+    const { reported, problems } = usableReadings(identity, {});
+    if (args.json) return console.log(JSON.stringify({ identity, reported, problems }, null, 2));
+    console.log('');
+    console.log('  Số liệu quota đang dùng được — ' + storePath({}));
+    console.log('');
+    for (const [id, q] of Object.entries(reported)) {
+      for (const row of q.rows) {
+        console.log(
+          '  ' + id.padEnd(14) + row.family.padEnd(12) + row.window.padEnd(10) +
+            (row.disabled ? 'đã tắt' : row.remainingPercent + '%')
+        );
+      }
+    }
+    for (const [id, p] of Object.entries(problems)) {
+      console.log('  ' + id.padEnd(14) + 'KHÔNG DÙNG ĐƯỢC — ' + p.reason);
+    }
+    console.log('');
+    return;
+  }
+
+  const results = refreshAll(accounts, { identity });
+  if (args.json) return console.log(JSON.stringify({ identity, results }, null, 2));
+
+  console.log('');
+  console.log(
+    identity.known
+      ? '  Account đang đăng nhập: ' + identity.email
+      : '  Không xác định được account đang đăng nhập: ' + identity.reason
+  );
+  console.log('');
+  for (const r of results) {
+    if (r.skipped) console.log('  BỎ QUA  ' + r.accountId + ' — ' + r.reason);
+    else if (r.ok) console.log('  ĐỌC ĐƯỢC ' + r.accountId + ' — ' + r.rows + ' dòng');
+    else console.log('  HỎNG    ' + r.accountId + ' — ' + r.reason);
+  }
+  console.log('');
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -200,9 +255,10 @@ function main() {
   if (command === 'reconcile') return reconcileCommand(args);
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
+  if (command === 'quota') return quotaCommand(args);
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | manifest | prove');
+  console.error('Dùng: reconcile | manifest | prove | quota');
   process.exit(2);
 }
 
