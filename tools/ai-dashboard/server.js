@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { readClaudeUsage } = require('./claude-usage');
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3333;
 const ROOT_DIR = process.cwd();
@@ -326,6 +327,7 @@ const sseClients = new Set();
 let lastPayloadHash = '';
 
 let usageCache = { value: null, at: 0 };
+let claudeUsageCache = { value: null, at: 0 };
 
 function buildSnapshot() {
   const tasks = getTasksData();
@@ -334,12 +336,17 @@ function buildSnapshot() {
   if (!usageCache.value || now - usageCache.at > 5000) {
     usageCache = { value: readRouterUsage(), at: now };
   }
+  // Scanning 68 transcripts is heavier than a SQL aggregate, so cache longer.
+  if (!claudeUsageCache.value || now - claudeUsageCache.at > 30000) {
+    claudeUsageCache = { value: readClaudeUsage(), at: now };
+  }
   return {
     tasks,
     total: tasks.length,
     routerUp: is9RouterUp,
     openPrs: openPrs.length,
     usage: usageCache.value,
+    claudeUsage: claudeUsageCache.value,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -414,6 +421,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   // API Endpoints
+  if (pathname === '/api/claude-usage') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(readClaudeUsage()));
+    return;
+  }
+
   if (pathname === '/api/usage') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(readRouterUsage()));
@@ -976,6 +989,8 @@ function renderDashboardHtml() {
 
     <!-- SUB-TAB 4: USAGE & QUOTA -->
     <div id="tab-usage" class="hidden space-y-6">
+      <div id="claudeUsage" class="space-y-4"></div>
+
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4" id="usageTiles">
         <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Tổng Chi Phí Đã Dùng</span><div class="text-2xl font-black text-white mt-1" id="uCost">--</div><span class="text-[10px] text-slate-400" id="uCostSub">đọc từ 9router</span></div>
         <div class="bg-slate-900 p-4 rounded-xl border border-slate-800"><span class="text-slate-400 text-xs">Tổng Tokens Tiêu Thụ</span><div class="text-2xl font-black text-white mt-1" id="uTokens">--</div><span class="text-[10px] text-slate-400" id="uTokensSub">--</span></div>
@@ -1172,6 +1187,7 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
     let allTasks = [];
     let allAgents = [];
     let allUsage = null;
+    let claudeUsage = null;
     let allAccounts = [];
 
     // Toast helper
@@ -1287,22 +1303,25 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
 
     async function fetchData() {
       try {
-        const [tasksRes, statusRes, agentsRes, accountsRes] = await Promise.all([
+        const [tasksRes, statusRes, agentsRes, accountsRes, claudeRes] = await Promise.all([
           fetch('/api/tasks').then(r => r.json()),
           fetch('/api/status').then(r => r.json()),
           fetch('/api/agents').then(r => r.json()),
           fetch('/api/accounts').then(r => r.json()),
+          fetch('/api/claude-usage').then(r => r.json()).catch(() => null),
         ]);
 
         allTasks = tasksRes.tasks || [];
         allAgents = agentsRes || [];
         allAccounts = accountsRes || [];
+        if (claudeRes) claudeUsage = claudeRes;
 
         updateStats();
         renderSliceProgress();
         renderTasksTable();
         renderAgents();
         renderUsage();
+        renderClaudeUsage();
         renderAccounts();
       } catch (e) {
         console.error('Fetch error:', e);
@@ -1433,6 +1452,96 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
       const h = Math.floor(m / 60);
       if (h < 24) return h + ' giờ trước';
       return Math.floor(h / 24) + ' ngày trước';
+    }
+
+    function renderClaudeUsage() {
+      const host = document.getElementById('claudeUsage');
+      if (!host) return;
+
+      if (!claudeUsage || !claudeUsage.available) {
+        host.innerHTML =
+          '<div class="p-4 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-400">' +
+          'Chưa đọc được usage của Claude Code: ' +
+          ((claudeUsage && claudeUsage.reason) || 'không rõ') + '</div>';
+        return;
+      }
+
+      const t = claudeUsage.totals;
+      const hit = (claudeUsage.cacheHitRate * 100).toFixed(1);
+      const days = claudeUsage.days.slice(-14);
+      const maxDay = Math.max.apply(null, days.map(d => d.input + d.output + d.cacheWrite + d.cacheRead).concat([1]));
+
+      const bars = days.map(d => {
+        const tot = d.input + d.output + d.cacheWrite + d.cacheRead;
+        const h = Math.max(3, (tot / maxDay) * 100);
+        return '<div class="flex-1 flex flex-col justify-end items-center gap-1 group min-w-0" ' +
+          'title="' + d.day + ': ' + fmtTokens(tot) + ' • ' + fmtCost(d.cost) + '">' +
+          '<div class="w-full rounded-t bg-brand/70 group-hover:bg-brand transition-all" style="height:' + h + '%"></div>' +
+          '<span class="text-[9px] text-slate-500 truncate w-full text-center">' + d.day.slice(5) + '</span>' +
+          '</div>';
+      }).join('');
+
+      const models = claudeUsage.models.map(m => {
+        const tot = m.input + m.output + m.cacheWrite + m.cacheRead;
+        const pct = (tot / Math.max(1, t.input + t.output + t.cacheWrite + t.cacheRead)) * 100;
+        return '<div class="flex items-center gap-3 text-xs">' +
+          '<span class="w-52 shrink-0 truncate font-semibold text-slate-200">' + m.model + '</span>' +
+          '<div class="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">' +
+            '<div class="h-full bg-sky-500" style="width:' + pct.toFixed(1) + '%"></div>' +
+          '</div>' +
+          '<span class="w-40 text-right font-mono text-[11px] text-slate-400">' +
+            m.messages + ' msg • ' + (m.priced ? fmtCost(m.cost) : 'chưa có giá') +
+          '</span></div>';
+      }).join('');
+
+      host.innerHTML =
+        '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800 space-y-4">' +
+          '<div class="flex items-start justify-between flex-wrap gap-2">' +
+            '<div>' +
+              '<h3 class="text-sm font-black text-white">Claude Code (máy này)</h3>' +
+              '<p class="text-[11px] text-slate-500 mt-0.5">Đọc từ ' + claudeUsage.sessions +
+              ' transcript trong ~/.claude/projects • ' + t.messages + ' lượt trả lời</p>' +
+            '</div>' +
+            '<div class="text-right">' +
+              '<div class="text-xl font-black text-amber-400">' + fmtCost(t.cost) + '</div>' +
+              '<div class="text-[10px] text-slate-500">ước tính theo bảng giá công khai</div>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">' +
+            miniTile('Nhập mới', fmtTokens(t.input)) +
+            miniTile('Xuất ra', fmtTokens(t.output)) +
+            miniTile('Ghi cache', fmtTokens(t.cacheWrite)) +
+            miniTile('Đọc cache', fmtTokens(t.cacheRead)) +
+          '</div>' +
+
+          '<div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25">' +
+            '<div class="flex justify-between items-center text-xs mb-1.5">' +
+              '<span class="font-semibold text-emerald-300">Tỉ lệ dùng lại cache</span>' +
+              '<span class="font-mono font-bold text-emerald-300">' + hit + '%</span>' +
+            '</div>' +
+            '<div class="h-1.5 rounded-full bg-slate-800 overflow-hidden">' +
+              '<div class="h-full bg-emerald-500" style="width:' + hit + '%"></div>' +
+            '</div>' +
+            '<p class="text-[10px] text-emerald-300/70 mt-1.5">Token đọc từ cache rẻ hơn khoảng 10 lần so với nhập mới.</p>' +
+          '</div>' +
+
+          '<div>' +
+            '<div class="text-[11px] font-semibold text-slate-400 uppercase mb-2">14 ngày gần nhất</div>' +
+            '<div class="flex items-end gap-1 h-24">' + bars + '</div>' +
+          '</div>' +
+
+          '<div class="space-y-2 pt-2 border-t border-slate-800">' +
+            '<div class="text-[11px] font-semibold text-slate-400 uppercase">Theo model</div>' +
+            models +
+          '</div>' +
+        '</div>';
+
+      function miniTile(label, value) {
+        return '<div class="bg-slate-800/70 p-2.5 rounded-xl border border-slate-700">' +
+          '<div class="text-[10px] text-slate-400 font-semibold uppercase">' + label + '</div>' +
+          '<div class="text-base font-black text-white mt-0.5">' + value + '</div></div>';
+      }
     }
 
     function renderUsage() {
@@ -1739,6 +1848,7 @@ Nhấn nút "⚡ Gửi Probe" ở trên để gửi prompt thử nghiệm trực
     function applySnapshot(snap) {
       allTasks = snap.tasks || [];
       if (snap.usage) { allUsage = snap.usage; renderUsage(); }
+      if (snap.claudeUsage) { claudeUsage = snap.claudeUsage; renderClaudeUsage(); }
       updateStats();
       renderTasksTable();
       renderSliceProgress();
