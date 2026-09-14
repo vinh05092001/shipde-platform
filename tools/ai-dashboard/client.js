@@ -183,6 +183,7 @@ function applyState(newState) {
   renderQueueTable();
   renderActivity();
   renderDiagnostics();
+  renderCapacity();
 
   // Restore focus if element still exists
   if (activeId) {
@@ -872,6 +873,146 @@ function renderActivity() {
     .join('');
 }
 
+/**
+ * Capacity panel: how much work the pool can still dispatch, and which model
+ * runs out next. Reports "chưa rõ" wherever no limit was declared rather than
+ * implying capacity nobody measured.
+ */
+function renderCapacity() {
+  const summaryEl = document.getElementById('capacitySummary');
+  const tableEl = document.getElementById('capacityTable');
+  const claudeEl = document.getElementById('capacityClaude');
+  const tabLabel = document.getElementById('tabCapacityLabel');
+  if (!summaryEl || !tableEl) return;
+
+  const cap = state && state.capacity;
+  const health = state && state.sources && state.sources.capacity;
+
+  const tile = (label, value, cls, note) =>
+    '<div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700">' +
+    '<div class="text-[11px] text-slate-400 font-semibold uppercase">' + label + '</div>' +
+    '<div class="text-xl font-black mt-1 ' + cls + '">' + value + '</div>' +
+    '<div class="text-[10px] text-slate-400 mt-0.5">' + note + '</div></div>';
+
+  if (!cap) {
+    summaryEl.innerHTML =
+      '<div class="bg-slate-900 rounded-2xl p-5 border border-amber-500/30 text-amber-200 text-sm">' +
+      '<div class="font-bold mb-1">Chưa đo được sức chứa</div><div class="text-amber-300/80">' +
+      escapeHtml((health && health.impact) || 'Không có dữ liệu') +
+      '</div></div>';
+    tableEl.innerHTML = '';
+    if (claudeEl) claudeEl.innerHTML = '';
+    if (tabLabel) tabLabel.textContent = '—';
+    return;
+  }
+
+  const s = cap.summary;
+  const known = s.sufficient - s.unknownBudget;
+  if (tabLabel) {
+    tabLabel.textContent =
+      known > 0 ? Math.floor(s.tasksRemaining) + ' lượt' : 'chưa rõ';
+  }
+
+  summaryEl.innerHTML =
+    '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800 space-y-4">' +
+      '<div class="flex items-start justify-between flex-wrap gap-2">' +
+        '<div><h3 class="text-sm font-black text-white">Sức chứa còn lại của cả pool</h3>' +
+        '<p class="text-[11px] text-slate-500 mt-0.5">Tính theo việc cỡ ' +
+        escapeHtml(cap.difficultyName) + '</p></div>' +
+        (cap.derivedFromRouter
+          ? '<span class="text-[10px] px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30">suy ra từ 9router</span>'
+          : '') +
+      '</div>' +
+      '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">' +
+        tile('Lượt việc còn lại',
+             known > 0 ? Math.floor(s.tasksRemaining) : 'chưa rõ',
+             known > 0 ? 'text-brand' : 'text-slate-400',
+             known > 0 ? 'trên ' + known + ' model đã khai hạn mức' : 'chưa model nào khai hạn mức') +
+        tile('Model đủ năng lực', String(s.sufficient), 'text-emerald-400', 'trên tổng ' + s.total) +
+        tile('Sắp cạn', String(s.atRisk), s.atRisk > 0 ? 'text-rose-400' : 'text-emerald-400',
+             s.atRisk > 0 ? 'còn dưới 2 lượt việc' : 'không có model nào sắp cạn') +
+        tile('Bay mù', String(s.unknownBudget), s.unknownBudget > 0 ? 'text-amber-400' : 'text-emerald-400',
+             'chưa khai hạn mức token') +
+      '</div>' +
+      (s.unknownBudget > 0
+        ? '<div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200">' +
+          'Chưa khai hạn mức thì không tính được còn bao nhiêu lượt việc. Khai ' +
+          '<span class="font-mono">tokensPerDay</span> hoặc <span class="font-mono">tokensPerMonth</span> ' +
+          'cho từng tài khoản để bảng này có ý nghĩa.</div>'
+        : '') +
+    '</div>';
+
+  const rows = cap.rows.slice().sort((a, b) => {
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    if (a.runway === null) return 1;
+    if (b.runway === null) return -1;
+    return b.runway - a.runway;
+  });
+
+  const statusChip = (row) => {
+    const map = {
+      open: ['bg-emerald-500/20 text-emerald-300 border-emerald-500/30', 'còn dư'],
+      tight: ['bg-amber-500/20 text-amber-300 border-amber-500/30', 'sắp chạm'],
+      exhausted: ['bg-rose-500/20 text-rose-300 border-rose-500/30', 'đã cạn'],
+      cooling: ['bg-sky-500/20 text-sky-300 border-sky-500/30', 'đang nguội'],
+      unknown: ['bg-slate-700/60 text-slate-300 border-slate-600', 'chưa rõ'],
+    };
+    const entry = map[row.status] || map.unknown;
+    const extra = row.boundBy && row.status !== 'unknown' ? ' · ' + row.boundBy : '';
+    return '<span class="text-[10px] px-2 py-0.5 rounded border ' + entry[0] + '">' + entry[1] + extra + '</span>';
+  };
+
+  const bar = (row) => {
+    if (row.runway === null) return '<span class="text-[11px] text-slate-500">chưa rõ</span>';
+    const pct = Math.min(100, (row.runway / 10) * 100);
+    const colour = row.atRisk ? 'bg-rose-500' : row.runway < 5 ? 'bg-amber-500' : 'bg-emerald-500';
+    return '<div class="flex items-center gap-2">' +
+      '<div class="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden min-w-[60px]">' +
+      '<div class="h-full ' + colour + '" style="width:' + pct.toFixed(0) + '%"></div></div>' +
+      '<span class="text-[11px] font-mono ' + (row.atRisk ? 'text-rose-300' : 'text-slate-300') + '">' +
+      row.runway.toFixed(1) + '</span></div>';
+  };
+
+  tableEl.innerHTML =
+    '<div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">' +
+      '<div class="overflow-x-auto"><table class="w-full text-xs min-w-[640px]">' +
+      '<thead><tr class="bg-slate-800/60 text-slate-400 uppercase text-[10px]">' +
+        '<th class="text-left px-4 py-2.5 font-semibold">Model</th>' +
+        '<th class="text-left px-4 py-2.5 font-semibold">Bậc</th>' +
+        '<th class="text-left px-4 py-2.5 font-semibold">Cấp độ</th>' +
+        '<th class="text-left px-4 py-2.5 font-semibold">Trạng thái</th>' +
+        '<th class="text-left px-4 py-2.5 font-semibold">Cỡ việc</th>' +
+        '<th class="text-left px-4 py-2.5 font-semibold w-40">Còn mấy lượt</th>' +
+      '</tr></thead><tbody>' +
+      rows.map((row) =>
+        '<tr class="border-t border-slate-800' + (row.atRisk ? ' bg-rose-500/5' : '') + '">' +
+        '<td class="px-4 py-2.5"><div class="font-mono text-slate-200">' + escapeHtml(row.model) + '</div>' +
+          '<div class="text-[10px] text-slate-500 font-mono">' + escapeHtml(row.accountId) + '</div></td>' +
+        '<td class="px-4 py-2.5 font-mono text-slate-400">' + row.tier + '</td>' +
+        '<td class="px-4 py-2.5"><span class="' +
+          (row.sufficient ? 'text-slate-200' : 'text-slate-500 line-through') + '">' +
+          escapeHtml(row.gradeName) + '</span></td>' +
+        '<td class="px-4 py-2.5">' + statusChip(row) + '</td>' +
+        '<td class="px-4 py-2.5 font-mono text-slate-400">' + Math.round(row.tokensPerTask / 1000) + 'K</td>' +
+        '<td class="px-4 py-2.5">' + bar(row) + '</td>' +
+        '</tr>').join('') +
+      '</tbody></table></div></div>';
+
+  if (claudeEl) {
+    const c = cap.claude;
+    claudeEl.innerHTML = c && c.available
+      ? '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800">' +
+        '<h3 class="text-sm font-black text-white mb-1">Claude Code (ngoài pool)</h3>' +
+        '<p class="text-[11px] text-slate-500 mb-3">Việc Claude Code làm trực tiếp không đi qua 9router, nên báo riêng — cộng vào sẽ ngụ ý một ngân sách chung không tồn tại.</p>' +
+        '<div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">' +
+        tile('Lượt trả lời', String(c.messages), 'text-slate-200', 'đọc từ transcript') +
+        tile('Token', (c.tokens / 1e6).toFixed(1) + 'M', 'text-slate-200', 'gồm cả đọc cache') +
+        tile('Tỉ lệ cache', (c.cacheHitRate * 100).toFixed(1) + '%', 'text-emerald-400', 'rẻ hơn ~10 lần nhập mới') +
+        '</div></div>'
+      : '';
+  }
+}
+
 function renderDiagnostics() {
   const container = document.getElementById('diagnosticsPanel');
   if (!container || !state || !state.sources) return;
@@ -899,7 +1040,7 @@ function switchTab(tabId) {
   activeTab = tabId;
 
   // Toggle active button styles
-  const tabs = ['gates', 'roster', 'queue', 'activity', 'health'];
+  const tabs = ['gates', 'roster', 'queue', 'activity', 'capacity', 'health'];
   tabs.forEach((t) => {
     const btn = document.getElementById(`tabBtn-${t}`);
     const pane = document.getElementById(`tabPane-${t}`);

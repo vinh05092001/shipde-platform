@@ -11,6 +11,7 @@ const { collectGitState } = require('./git-adapter');
 const { collectAoState } = require('./ao-adapter');
 const { collectGitHubState } = require('./github-adapter');
 const { collectUsageState } = require('./usage-adapter');
+const { collectCapacity } = require('./capacity-adapter');
 const { detectConflicts } = require('./conflict-detector');
 const { redactObject } = require('./redaction');
 
@@ -331,11 +332,16 @@ async function aggregateCockpitState(options = {}) {
     ? Promise.resolve(options.mockUsage)
     : collectUsageState(options.usageOptions);
 
-  let [gitResult, aoResult, githubResult, usageResult] = await Promise.all([
+  const capacityPromise = options.mockCapacity
+    ? Promise.resolve(options.mockCapacity)
+    : Promise.resolve(collectCapacity(options.capacityOptions));
+
+  let [gitResult, aoResult, githubResult, usageResult, capacityResult] = await Promise.all([
     gitPromise,
     aoPromise,
     githubPromise,
     usagePromise,
+    capacityPromise,
   ]);
 
   // Handle cached last-known state on failure (AI15-R01)
@@ -428,6 +434,7 @@ async function aggregateCockpitState(options = {}) {
     ao: withFreshness(aoResult.health),
     github: withFreshness(githubResult.health),
     usage: withFreshness(usageResult.health),
+    capacity: withFreshness(capacityResult.health),
   };
 
   const conflicts = detectConflicts(
@@ -474,6 +481,7 @@ async function aggregateCockpitState(options = {}) {
     sessions: aoResult.data.sessions,
     daemon: aoResult.data.daemon,
     usage: usageResult.data,
+    capacity: capacityResult.data,
     git: gitResult.data,
     github: githubResult.data,
   };

@@ -296,13 +296,27 @@
           <span>📜 4. Nhật Ký Hoạt Động</span>
         </button>
         <button
+          onclick="switchTab('capacity')"
+          id="tabBtn-capacity"
+          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+        >
+          <span>&#9981; 5. S&#7913;c Ch&#7913;a &amp; Quota <span id="tabCapacityLabel">&#8212;</span></span>
+        </button>
+        <button
           onclick="switchTab('health')"
           id="tabBtn-health"
           class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
         >
-          <span>🩺 5. Sức Khỏe Nguồn Dữ Liệu</span>
+          <span>🩺 6. Sức Khỏe Nguồn Dữ Liệu</span>
         </button>
       </nav>
+
+      <!-- TAB PANE: CAPACITY & QUOTA -->
+      <div id="tabPane-capacity" class="hidden space-y-6">
+        <div id="capacitySummary"></div>
+        <div id="capacityTable"></div>
+        <div id="capacityClaude"></div>
+      </div>
 
       <!-- TAB PANE 1: GATES & PR EVIDENCE -->
       <div id="tabPane-gates" class="space-y-6">
