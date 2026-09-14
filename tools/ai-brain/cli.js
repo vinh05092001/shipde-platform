@@ -17,6 +17,7 @@
 const path = require('path');
 const { loadRegister } = require('../ai-dashboard/register-adapter');
 const { reconcileRegister } = require('./reconcile');
+const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
 
 const SEVERITY_LABEL = { error: 'LỖI ', warn: 'CẢNH', info: 'GHI ' };
@@ -116,6 +117,45 @@ function printReport(result, showInfo) {
   console.log('');
 }
 
+function manifestCommand(args) {
+  const rootDir = args.root || process.cwd();
+  const manifest = require(path.join(rootDir, 'tools/ecosystem-manifest.json'));
+  const result = auditManifest(manifest, { rootDir });
+
+  if (args.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log('');
+    console.log('  ' + result.total + ' repo khai trong manifest · kiểm được ' + result.checkable +
+      ' · có ' + result.present + ' · thiếu ' + result.absent + ' · nạp khi dùng ' + result.onDemand);
+    console.log('');
+    const order = { error: 0, warn: 1, info: 2 };
+    const groups = new Map();
+    for (const f of result.findings) {
+      if (!args.all && f.severity === 'info') continue;
+      if (!groups.has(f.code)) groups.set(f.code, []);
+      groups.get(f.code).push(f);
+    }
+    const sorted = [...groups.entries()].sort((a, b) => order[a[1][0].severity] - order[b[1][0].severity]);
+    for (const [code, list] of sorted) {
+      console.log('  [' + SEVERITY_LABEL[list[0].severity] + '] ' + code + '  (' + list.length + ')');
+      console.log('         ' + list[0].message);
+      for (const f of list.slice(0, 8)) console.log('           - ' + f.id);
+      if (list.length > 8) console.log('           … và ' + (list.length - 8) + ' mục nữa');
+      console.log('');
+    }
+    console.log('  Tổng: ' + result.summary.error + ' lỗi, ' + result.summary.warn +
+      ' cảnh báo, ' + result.summary.info + ' ghi chú');
+    console.log('  Manifest ' + (result.trustworthy
+      ? 'khớp thực tế ở những chỗ kiểm được.'
+      : 'KHAI QUÁ THỰC TẾ — có công cụ được tin là đang chạy nhưng không tồn tại.'));
+    console.log('');
+  }
+
+  const failed = args.strict ? result.summary.error + result.summary.warn : result.summary.error;
+  if (failed > 0) process.exit(1);
+}
+
 function proveCommand(args) {
   const commands = [];
   const raw = args.tests;
@@ -158,10 +198,11 @@ function main() {
   const command = args._[0] || 'reconcile';
 
   if (command === 'reconcile') return reconcileCommand(args);
+  if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | prove');
+  console.error('Dùng: reconcile | manifest | prove');
   process.exit(2);
 }
 

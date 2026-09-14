@@ -65,6 +65,22 @@ function gradeOf(offering) {
   return Number.isFinite(g) && g >= 1 && g <= 4 ? g : Difficulty.STANDARD;
 }
 
+/**
+ * The hardest class this model may REVIEW.
+ *
+ * Reviewing is not the easier half of writing. An author needs to produce one
+ * correct solution; a reviewer has to hold the specification, the diff and the
+ * space of things that could be wrong at once, and say so against an author
+ * that already believes it is done. So an unrated model reviews one class
+ * BELOW what it writes, and a model must be declared explicitly to review at
+ * the level it codes.
+ */
+function reviewGradeOf(offering) {
+  const explicit = Number(offering && offering.reviewGrade);
+  if (Number.isFinite(explicit) && explicit >= 1 && explicit <= 4) return explicit;
+  return Math.max(1, gradeOf(offering) - 1);
+}
+
 function isSufficient(offering, difficulty) {
   return gradeOf(offering) >= difficulty;
 }
@@ -142,12 +158,19 @@ function scoreOffering(offering, difficulty, headroom, history, options) {
     return { usable: false, reason: headroom ? headroom.reason : 'không rõ hạn mức' };
   }
 
-  const grade = gradeOf(offering);
+  // A reviewer is judged on its review grade, and the strongest one available
+  // is wanted rather than reserved: a review that misses a defect costs more
+  // than the model that would have caught it.
+  const reviewing = Boolean(opts.reviewing);
+  const grade = reviewing ? reviewGradeOf(offering) : gradeOf(offering);
   if (grade < difficulty) {
     return {
       usable: false,
       reason:
-        'chỉ đạt ' + DIFFICULTY_NAMES[grade] + ', việc này cần ' + DIFFICULTY_NAMES[difficulty],
+        (reviewing ? 'chỉ review được tới ' : 'chỉ đạt ') +
+        DIFFICULTY_NAMES[grade] +
+        ', việc này cần ' +
+        DIFFICULTY_NAMES[difficulty],
     };
   }
 
@@ -170,7 +193,13 @@ function scoreOffering(offering, difficulty, headroom, history, options) {
   // An unknown budget is usable but never preferred over a measured one: it
   // sits at the comfortable mark rather than at the top of the scale.
   const runwayScore = runway === null ? comfortable : Math.min(runway, comfortable * 2);
+  // Reserving strength makes sense for authoring, where a sufficient model
+  // finishes the job. It is wrong for review, so the penalty inverts into a
+  // bonus there.
   const overqualified = grade - difficulty;
+  const strengthTerm = reviewing
+    ? overqualified * overqualifiedPenalty
+    : -overqualified * overqualifiedPenalty;
   const c = offering.cost || {};
   const blended = Number(c.inputPerMillion || 0) * 0.8 + Number(c.outputPerMillion || 0) * 0.2;
 
@@ -180,10 +209,11 @@ function scoreOffering(offering, difficulty, headroom, history, options) {
     runway,
     tokensPerTask,
     overqualified,
+    reviewing,
     blendedCost: blended,
     score:
-      runwayScore * 10 -
-      overqualified * overqualifiedPenalty -
+      runwayScore * 10 +
+      strengthTerm -
       blended * costWeight +
       Number(offering.preference || 0) * 100,
     reason:
@@ -274,6 +304,7 @@ module.exports = {
   DIFFICULTY_NAMES,
   DEFAULT_TOKENS_PER_TASK,
   gradeOf,
+  reviewGradeOf,
   isSufficient,
   remainingTokens,
   runwayOf,

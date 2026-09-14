@@ -32,12 +32,17 @@ const { rankByFitness, Difficulty } = require('./fitness');
 const DEFAULTS = {
   maxImplementationAgents: 1,
   maxResearchAgents: 1,
+  maxReviewAgents: 2,
   maxPerAccount: 1,
   maxTotal: 6,
 };
 
 const IMPLEMENTATION_ROLES = new Set(['author.foundation', 'author.lowrisk']);
 const RESEARCH_ROLES = new Set(['analyst.default', 'planner.default']);
+// A reviewer reads a pull request; it never writes to the branch, so it holds
+// no writer claim and cannot collide with the author. Review therefore runs in
+// parallel with authoring by nature, and is the right home for spare capacity.
+const REVIEW_ROLES = new Set(['reviewer.primary', 'reviewer.fallback']);
 
 function waiting(item, reason, detail) {
   return {
@@ -82,6 +87,7 @@ function planDispatch(items, accounts, context) {
 
   let implementationLoad = running.filter((r) => IMPLEMENTATION_ROLES.has(r.role)).length;
   let researchLoad = running.filter((r) => RESEARCH_ROLES.has(r.role)).length;
+  let reviewLoad = running.filter((r) => REVIEW_ROLES.has(r.role)).length;
   let totalLoad = running.length;
 
   const assignments = [];
@@ -111,6 +117,7 @@ function planDispatch(items, accounts, context) {
 
     const isImplementation = IMPLEMENTATION_ROLES.has(item.role);
     const isResearch = RESEARCH_ROLES.has(item.role);
+    const isReview = REVIEW_ROLES.has(item.role);
 
     if (isImplementation && implementationLoad >= limits.maxImplementationAgents) {
       deferred.push(
@@ -122,11 +129,15 @@ function planDispatch(items, accounts, context) {
       deferred.push(waiting(item, 'RESEARCH_LIMIT', 'trần ' + limits.maxResearchAgents + ' agent nghiên cứu'));
       continue;
     }
+    if (isReview && reviewLoad >= limits.maxReviewAgents) {
+      deferred.push(waiting(item, 'REVIEW_LIMIT', 'trần ' + limits.maxReviewAgents + ' agent review'));
+      continue;
+    }
 
     // A branch held by someone else is the cross-session collision the writer
     // claim exists to catch. Catching it here avoids dispatching work that
     // would only be refused at commit time.
-    if (item.branch && claimedBranches.has(item.branch)) {
+    if (!isReview && item.branch && claimedBranches.has(item.branch)) {
       const owner = claimedBranches.get(item.branch);
       if (owner !== item.workItemId && owner !== item.owner) {
         deferred.push(waiting(item, 'BRANCH_CLAIMED', 'nhánh đang do ' + owner + ' giữ'));
@@ -158,7 +169,7 @@ function planDispatch(items, accounts, context) {
     // never let an insufficient or nearly-drained model through.
     const strategy = item.strategy || role.strategy || Strategy.QUALITY_FIRST;
     const fitnessOpts = Object.assign(
-      { costWeight: strategy === Strategy.COST_FIRST ? 200 : 1 },
+      { costWeight: strategy === Strategy.COST_FIRST ? 200 : 1, reviewing: isReview },
       ctx.fitness
     );
 
@@ -213,12 +224,17 @@ function planDispatch(items, accounts, context) {
       alternatives: withRoom.slice(1, 4).map((o) => o.id),
     });
 
-    busyWorkItems.add(item.workItemId);
-    if (item.branch) claimedBranches.set(item.branch, item.workItemId);
+    // A review does not occupy the Work Item as a writer, so authoring on it
+    // may continue and a second review of a different item stays possible.
+    if (!isReview) {
+      busyWorkItems.add(item.workItemId);
+      if (item.branch) claimedBranches.set(item.branch, item.workItemId);
+    }
     perAccountLoad[chosen.accountId] = (perAccountLoad[chosen.accountId] || 0) + 1;
     totalLoad += 1;
     if (isImplementation) implementationLoad += 1;
     if (isResearch) researchLoad += 1;
+    if (isReview) reviewLoad += 1;
   }
 
   return {
@@ -231,9 +247,15 @@ function planDispatch(items, accounts, context) {
       maxImplementation: limits.maxImplementationAgents,
       research: researchLoad,
       maxResearch: limits.maxResearchAgents,
+      review: reviewLoad,
+      maxReview: limits.maxReviewAgents,
+      // Slots the operator is paying for and not using. This is the number to
+      // watch: capacity idle while the queue is not empty is waste.
+      idleImplementation: Math.max(0, limits.maxImplementationAgents - implementationLoad),
+      idleReview: Math.max(0, limits.maxReviewAgents - reviewLoad),
     },
     headrooms,
   };
 }
 
-module.exports = { planDispatch, DEFAULTS, IMPLEMENTATION_ROLES, RESEARCH_ROLES };
+module.exports = { planDispatch, DEFAULTS, IMPLEMENTATION_ROLES, RESEARCH_ROLES, REVIEW_ROLES };
