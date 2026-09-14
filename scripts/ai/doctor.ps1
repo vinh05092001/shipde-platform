@@ -149,17 +149,26 @@ $agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
 $agentRouterLive = $false
 $agentRouterDetail = "NOT CONFIGURED; Claude account authentication will be checked"
 
-# The probe is not free. It spends one real claude-opus-4-8 request through the
-# gateway, and there is no cheaper route: Claude Code refuses the gateway's
-# cheap model ids (deepseek-v4-flash, glm-5.3) as absent from its own catalog,
-# claude-opus-4-6 is not in this account's group, and the OpenAI-compatible
-# surface at /v1 answers 401 to this key because it is a different surface with
-# its own credential.
+# The probe costs one real model request through the gateway, so it uses the
+# cheapest model the gateway offers rather than an Opus one. That is not a
+# micro-optimisation: a handful of doctor runs on 2026-09-14, while verifying an
+# unrelated fix, took the account's budget pool from working to HTTP 402.
+#
+# Claude Code refuses a model it does not know, and deepseek-v4-flash is a
+# gateway id rather than an Anthropic one. A modelPicker row with behavesAs
+# maps it onto a model this client does know, which is the supported route for
+# exactly this case. The isolated config directory carries that row, so nothing
+# about the operator's own setup changes.
+#
+# If the mapping is ever rejected, the probe says so through the existing
+# "model catalog" branch rather than silently reporting a credential fault.
 #
 # So running the doctor repeatedly drains the operator's budget pool. That is
 # not hypothetical: on 2026-09-14 a handful of doctor runs while verifying an
 # unrelated fix took the pool from working to HTTP 402. The verdict is cached
 # and reused, so the doctor stays free to run as often as anyone likes.
+$probeModel = "deepseek-v4-flash"
+$probeBehavesAs = "claude-haiku-4-5"
 $agentRouterCachePath = Join-Path (Get-ShipDeTempDir) "shipde-agentrouter-probe.json"
 $agentRouterCacheMaxAgeMinutes = 15
 $agentRouterCached = $null
@@ -198,11 +207,6 @@ if ($agentRouterCached) {
     $probeDir = Join-Path ([IO.Path]::GetTempPath()) ("shipde-ar-" + [Guid]::NewGuid().ToString("N"))
     $probeScript = Join-Path ([IO.Path]::GetTempPath()) ("shipde-ar-" + [Guid]::NewGuid().ToString("N") + ".ps1")
 
-    # The model name matters more than it looks. AgentRouter's own guide names
-    # claude-opus-4-6 as the default, but that model is not in this account's
-    # group, and asking for it returns 503 "no available channel" — which reads
-    # like an outage and is really a wrong name. Probe a model the account
-    # actually lists.
     # The key is handed over through the inherited environment, never through
     # the command line. An argument is visible in the process table to every
     # process on the machine and is captured by Sysmon/EDR command-line logging
@@ -214,13 +218,31 @@ if ($agentRouterCached) {
         '$env:SHIPDE_AR_PROBE_TOKEN = $null'
         '$env:ANTHROPIC_BASE_URL   = "https://agentrouter.org"'
         '$env:ANTHROPIC_API_KEY    = $null'
-        '$env:ANTHROPIC_MODEL      = "claude-opus-4-8"'
+        '$env:ANTHROPIC_MODEL      = "' + $probeModel + '"'
         '$env:CLAUDE_CONFIG_DIR    = $args[0]'
-        '& claude -p "Reply exactly: SHIPDE_AUTH_OK" --model claude-opus-4-8 --output-format text --max-turns 1 2>&1'
+        '& claude -p "Reply exactly: SHIPDE_AUTH_OK" --model ' + $probeModel + ' --output-format text --max-turns 1 2>&1'
     ) -join [Environment]::NewLine
 
     $agentRouterFailure = $null
     try {
+        # The isolated config declares the gateway model through a modelPicker
+        # row. Claude Code refuses an id absent from its own catalog; behavesAs
+        # names a model it does know whose client-side handling applies. Without
+        # this the probe fails on the catalog rather than on the credential.
+        New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+        $probeSettings = [ordered]@{
+            modelPicker = [ordered]@{
+                options = @(
+                    [ordered]@{
+                        model     = $probeModel
+                        label     = "Ship De health probe"
+                        behavesAs = $probeBehavesAs
+                    }
+                )
+            }
+        } | ConvertTo-Json -Depth 6
+        Set-Content -Path (Join-Path $probeDir "settings.json") -Value $probeSettings -Encoding UTF8
+
         Set-Content -Path $probeScript -Value $probeBody -Encoding UTF8
         # Start-Process inherits this process's environment, so the child sees
         # the token without it ever appearing in an argument list.
@@ -234,7 +256,7 @@ if ($agentRouterCached) {
             $agentRouterDetail = "CONFIGURED but unverified (probe timed out)"
         } elseif ($text -match "SHIPDE_AUTH_OK") {
             $agentRouterLive = $true
-            $agentRouterDetail = "AUTHENTICATED via claude-opus-4-8"
+            $agentRouterDetail = ("AUTHENTICATED via {0}" -f $probeModel)
         } elseif ($text -match "401" -or $text -match "(?i)unauthor") {
             $agentRouterDetail = "KEY PRESENT BUT REJECTED; the Claude and Codex fallback route is unavailable"
             $agentRouterFailure = "AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it — see TASK-AI-44"
@@ -249,7 +271,7 @@ if ($agentRouterCached) {
             # no channel for that model. That is a supply or naming state, not
             # a credential fault, and reporting it as one sends the operator to
             # rotate a working key.
-            $agentRouterDetail = "AUTHENTICATED but no channel for claude-opus-4-8 right now (HTTP 503); check Model Status on agentrouter.org"
+            $agentRouterDetail = ("AUTHENTICATED but no channel for {0} right now (HTTP 503); check Model Status on agentrouter.org" -f $probeModel)
         } elseif ($text -match "(?i)model catalog") {
             $agentRouterDetail = "AUTHENTICATED but Claude Code does not recognise the probe model; map it with modelOverrides"
         } else {
