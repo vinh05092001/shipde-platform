@@ -130,7 +130,8 @@ node tools/ai-brain/cli.js prove --tests "node tools/ai-brain/test/reconcile.tes
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `<sha>` | `<PASS/CHANGES_REQUIRED/BLOCKED>` | `<links>` |
+| 1 | `c61c6e8` | `CHANGES_REQUIRED` | 6 findings; #1 fixed in PR #17, #2 and #3 in PR #16, #4 and #5 in PR #18, #6 recorded as the bundle under Scope integrity |
+| 1b | PR #18 | author fix | Findings #4 and #5 — a routing error is no longer read as a quota refusal, so one mistyped model name can no longer pin an account's learned ceiling; a set-but-short `SHIPDE_ACCOUNT_KEY` now throws instead of silently falling back to the file key |
 
 ## Residual limitations
 
