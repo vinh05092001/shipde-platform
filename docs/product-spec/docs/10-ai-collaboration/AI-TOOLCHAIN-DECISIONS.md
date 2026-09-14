@@ -80,6 +80,35 @@ Free catalogs change. The health check reports missing candidates; never silentl
 
 Do not auto-upgrade 9Router, DSH, Codex CLI, Gemini/Antigravity CLI, Claude Code or an agent plugin during an active Work Item. `install-clis.ps1` installs only missing tools. Record current versions, upgrade in a dedicated low-risk task, run the doctor, execute a disposable test branch and verify prompt injection settings before promoting the version.
 
+## Codex CLI version dependency (TASK-AI-16)
+
+Observed on 2026-09-14: `codex-cli 0.154.0`, installed as `@openai/codex@0.154.0`.
+`tools/ecosystem-manifest.json` still pins `0.151.0`; reconciling that drift is a
+human decision under the upgrade rule above and is deliberately not made here.
+
+What this version accepts and refuses was established by probing each `-c`
+override separately (`docs/product-spec/work-items/TASK-AI-16-FINDINGS.md`):
+
+- All four hook overrides — `hooks.SessionStart`, `hooks.UserPromptSubmit`,
+  `hooks.PermissionRequest`, `hooks.Stop` — are accepted. No hook needs to be
+  dropped or reshaped.
+- The `projects` override is refused when the path contains Windows
+  backslashes: they are consumed as escape sequences, so the value reaches the
+  parser as a string where a map was expected. The identical override with
+  forward slashes is accepted. Doubling the backslashes does not help.
+
+The defect therefore sits in whatever builds Agent Orchestrator's command line,
+not in the hook configuration and not in a CLI flag-surface change. AO ships as
+a closed binary at `C:\Program Files\agent-orchestrator`, so the fix belongs
+upstream; what this repository owns is an accurate diagnosis.
+
+`doctor.ps1` carries two checks for this. The first probes the overrides
+individually and names the one refused. The second reads the AO ledger at
+`~/.ao/data/ao.db` and reports whether any Codex session has recorded activity,
+because a flag that parses is not a hook that fired — a launch command exiting
+zero proves neither. An unreadable ledger reports "cannot verify" and never a
+pass.
+
 ## UI quality stack
 
 `TASK-FOUND-04` must make these reviewable in one PR:

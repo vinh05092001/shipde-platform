@@ -477,3 +477,92 @@ function Get-ShipDeProcessIdentity {
         return $null
     }
 }
+
+function Get-ShipDeAoDatabasePath {
+    $userHome = Get-ShipDeUserHome
+    return (Join-Path (Join-Path (Join-Path $userHome ".ao") "data") "ao.db")
+}
+
+function Get-ShipDeAoHarnessActivity {
+    param(
+        [Parameter(Mandatory = $true)][string]$Harness,
+        [string]$DatabasePath = $null
+    )
+
+    # AI-16-R03: hook registration is only real once the daemon has written an
+    # activity row. A launch command that exits zero proves the flags parsed,
+    # not that the session was ever observed, so the evidence is read from
+    # ao.db rather than inferred from an exit code.
+    #
+    # AI-16-R04: every path that cannot read the ledger returns Verifiable
+    # $false with the reason. A missing database, a stopped daemon that never
+    # created one, or an absent Node runtime are all "cannot verify" — none of
+    # them may be reported as a pass.
+    if ([string]::IsNullOrWhiteSpace($DatabasePath)) {
+        $DatabasePath = Get-ShipDeAoDatabasePath
+    }
+
+    $unverifiable = {
+        param([string]$Reason)
+        [PSCustomObject]@{
+            Harness        = $Harness
+            Verifiable     = $false
+            Reason         = $Reason
+            Sessions       = 0
+            WithActivity   = 0
+            LastActivityAt = $null
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) {
+        return (& $unverifiable "AO ledger not found at $DatabasePath; the daemon has not run on this machine")
+    }
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        return (& $unverifiable "node is not on PATH, so the AO ledger cannot be read")
+    }
+
+    # node:sqlite opens the live database read-only; the daemon keeps it in WAL
+    # mode, so this neither blocks it nor writes to it.
+    $readerPath = Join-Path (Get-ShipDeTempDir) ("shipde-ao-activity-{0}.js" -f [Guid]::NewGuid())
+    $reader = @'
+const { DatabaseSync } = require('node:sqlite');
+const [dbPath, harness] = process.argv.slice(2);
+const db = new DatabaseSync(dbPath, { readOnly: true });
+const row = db
+  .prepare(
+    'SELECT COUNT(*) AS sessions, ' +
+      'SUM(CASE WHEN activity_last_at IS NOT NULL THEN 1 ELSE 0 END) AS withActivity, ' +
+      'MAX(activity_last_at) AS lastActivityAt ' +
+      'FROM sessions WHERE harness = ?'
+  )
+  .get(harness);
+process.stdout.write(
+  JSON.stringify({
+    sessions: row.sessions || 0,
+    withActivity: row.withActivity || 0,
+    lastActivityAt: row.lastActivityAt || null,
+  })
+);
+'@
+
+    try {
+        Set-Content -LiteralPath $readerPath -Value $reader -Encoding utf8
+        $raw = (@(& node $readerPath $DatabasePath $Harness 2>$null) -join "")
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) {
+            return (& $unverifiable "AO ledger at $DatabasePath could not be read")
+        }
+        $parsed = $raw | ConvertFrom-Json
+        return [PSCustomObject]@{
+            Harness        = $Harness
+            Verifiable     = $true
+            Reason         = $null
+            Sessions       = [int]$parsed.sessions
+            WithActivity   = [int]$parsed.withActivity
+            LastActivityAt = $parsed.lastActivityAt
+        }
+    } catch {
+        return (& $unverifiable "AO ledger at $DatabasePath could not be read: $($_.Exception.Message)")
+    } finally {
+        Remove-Item -LiteralPath $readerPath -Force -ErrorAction SilentlyContinue
+    }
+}

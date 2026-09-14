@@ -6,7 +6,7 @@
 |---|---|
 | Work Item ID | `TASK-AI-16` |
 | Feature ID | `N/A` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | `150` |
 | Dependencies | `TASK-AI-14` (merged, `f22c9b6`) |
 | Assigned author | `9ROUTER` |

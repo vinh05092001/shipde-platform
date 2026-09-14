@@ -286,6 +286,45 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
     Write-Host "Codex: NOT INSTALLED; launch flag surface not checked"
 }
 
+Write-Host ""
+Write-Host "=== CODEX HOOK REGISTRATION (TASK-AI-16) ==="
+# AI-16-R03: a flag that parses is not a hook that fired. The only evidence
+# that a Codex session was observed is a row the daemon wrote, so the ledger
+# is read directly and compared against the harnesses already known to work.
+$codexActivity = Get-ShipDeAoHarnessActivity -Harness "codex"
+if (-not $codexActivity.Verifiable) {
+    # AI-16-R04: unreadable is "cannot verify", never a pass.
+    Write-Host ("Codex hook registration: CANNOT VERIFY ({0})" -f $codexActivity.Reason)
+    $failures.Add("Codex hook registration could not be verified: $($codexActivity.Reason)")
+} elseif ($codexActivity.WithActivity -gt 0) {
+    Write-Host ("Codex hook registration: VERIFIED ({0} of {1} sessions recorded activity, last {2})" -f `
+        $codexActivity.WithActivity, $codexActivity.Sessions, $codexActivity.LastActivityAt)
+} else {
+    # Naming the harnesses that do record activity separates "AO never writes
+    # activity here" from "AO writes it for everyone except Codex", which are
+    # different faults with different owners.
+    $observed = New-Object System.Collections.Generic.List[string]
+    foreach ($peer in @("claude-code", "agy")) {
+        $peerActivity = Get-ShipDeAoHarnessActivity -Harness $peer
+        if ($peerActivity.Verifiable -and $peerActivity.WithActivity -gt 0) {
+            $observed.Add(("{0} ({1})" -f $peer, $peerActivity.WithActivity))
+        }
+    }
+
+    if ($codexActivity.Sessions -eq 0) {
+        Write-Host "Codex hook registration: NOT OBSERVED (no Codex session exists in the AO ledger)"
+    } else {
+        Write-Host ("Codex hook registration: NOT OBSERVED ({0} Codex sessions exist, none recorded activity)" -f `
+            $codexActivity.Sessions)
+    }
+    if ($observed.Count -gt 0) {
+        Write-Host ("  Harnesses that do record activity: {0}" -f ($observed -join ", "))
+        Write-Host "  The fault is specific to the Codex launch surface, not to hook delivery."
+    }
+    Write-Host "  See docs/product-spec/work-items/TASK-AI-16-FINDINGS.md"
+    $failures.Add("No Codex session has recorded activity in the AO ledger; Codex reviews are running unobserved")
+}
+
 
 $googleCommand = $null
 $googleProbe = $null
@@ -391,7 +430,10 @@ foreach ($entry in $paths.GetEnumerator()) {
         continue
     }
 
-    $branch = (& git -C $entry.Value branch --show-current).Trim()
+    # A detached HEAD yields no branch name at all, and calling .Trim() on that
+    # nothing aborts the doctor before it can print its summary.
+    $branch = (@(& git -C $entry.Value branch --show-current) -join "").Trim()
+    if ([string]::IsNullOrWhiteSpace($branch)) { $branch = "detached" }
     $status = @(& git -C $entry.Value status --porcelain)
     $state = if ($status.Count -eq 0) { "CLEAN" } else { "DIRTY" }
     Write-Host ("{0,-8} {1,-6} [{2}] {3}" -f $entry.Key, $state, $branch, $entry.Value)
