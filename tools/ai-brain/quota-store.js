@@ -33,6 +33,23 @@ const { checkFreshness } = require('./agy-identity');
 /** Readings older than this are refused. A quota percentage drains steadily. */
 const DEFAULT_MAX_AGE_MS = 30 * 60 * 1000;
 
+/**
+ * A reading that failed is kept for far less time, and for a different reason.
+ *
+ * A successful reading is cached because it is expensive to take and stays
+ * roughly true for a while. A failure is neither: it measured nothing, so it
+ * has no truth to go stale, and the only reason to remember it at all is to
+ * avoid hammering a probe that just refused.
+ *
+ * Holding one for the full window is actively harmful. A one-second network
+ * blip during the eligibility check blanked every Antigravity panel for half
+ * an hour while an immediate retry would have succeeded — observed on
+ * 2026-09-14, when two agy accounts cached "Eligibility check thất bại (mạng)"
+ * one second before the claude-code account read cleanly. A short cooldown
+ * stops the hammering without turning a blip into an outage.
+ */
+const DEFAULT_FAILURE_MAX_AGE_MS = 60 * 1000;
+
 function storePath(options) {
   const opts = options || {};
   return opts.path || path.join(opts.home || os.homedir(), '.shipde', 'agy-quota.json');
@@ -83,6 +100,31 @@ function freshness(reading, currentIdentity, options) {
     return { usable: false, action: 'reread', reason: 'bản ghi không có mốc thời gian' };
   }
   const ageMs = now - cachedAt;
+
+  // A failed reading is on a much shorter leash than a successful one; see
+  // DEFAULT_FAILURE_MAX_AGE_MS. Note this is decided by the reading itself,
+  // not by the caller's maxAgeMs, so no caller can accidentally extend a
+  // failure's life by asking for a longer window.
+  if (reading.available === false) {
+    const failureMaxAge =
+      Number(opts.failureMaxAgeMs) > 0 ? Number(opts.failureMaxAgeMs) : DEFAULT_FAILURE_MAX_AGE_MS;
+    if (ageMs > failureMaxAge) {
+      return {
+        usable: false,
+        action: 'reread',
+        reason: 'lần đọc trước thất bại, đã hết thời gian chờ (' + Math.round(ageMs / 1000) + ' giây)',
+        ageMs,
+      };
+    }
+    return {
+      usable: true,
+      action: 'use',
+      ageMs,
+      account: identity.account,
+      failed: true,
+    };
+  }
+
   if (ageMs > maxAge) {
     return {
       usable: false,
@@ -171,6 +213,7 @@ function usableReadings(currentIdentity, options) {
 
 module.exports = {
   DEFAULT_MAX_AGE_MS,
+  DEFAULT_FAILURE_MAX_AGE_MS,
   storePath,
   loadStore,
   saveReading,

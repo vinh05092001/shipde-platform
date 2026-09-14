@@ -148,7 +148,51 @@ $agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
 # 401 says nothing about whether the fallback works. Only the real client does.
 $agentRouterLive = $false
 $agentRouterDetail = "NOT CONFIGURED; Claude account authentication will be checked"
-if ($agentRouterSaved) {
+
+# The probe is not free. It spends one real claude-opus-4-8 request through the
+# gateway, and there is no cheaper route: Claude Code refuses the gateway's
+# cheap model ids (deepseek-v4-flash, glm-5.3) as absent from its own catalog,
+# claude-opus-4-6 is not in this account's group, and the OpenAI-compatible
+# surface at /v1 answers 401 to this key because it is a different surface with
+# its own credential.
+#
+# So running the doctor repeatedly drains the operator's budget pool. That is
+# not hypothetical: on 2026-09-14 a handful of doctor runs while verifying an
+# unrelated fix took the pool from working to HTTP 402. The verdict is cached
+# and reused, so the doctor stays free to run as often as anyone likes.
+$agentRouterCachePath = Join-Path (Get-ShipDeTempDir) "shipde-agentrouter-probe.json"
+$agentRouterCacheMaxAgeMinutes = 15
+$agentRouterCached = $null
+if ($agentRouterSaved -and (Test-Path -LiteralPath $agentRouterCachePath -PathType Leaf)) {
+    try {
+        $entry = Get-Content -LiteralPath $agentRouterCachePath -Raw | ConvertFrom-Json
+        $observedAt = [DateTime]::Parse($entry.observedAt).ToUniversalTime()
+        $ageMinutes = ([DateTime]::UtcNow - $observedAt).TotalMinutes
+        # Bound to this exact key. A rotated credential must be re-probed, not
+        # answered from the previous one's verdict.
+        $keyHash = [BitConverter]::ToString(
+            [Security.Cryptography.SHA256]::Create().ComputeHash(
+                [Text.Encoding]::UTF8.GetBytes($agentRouterKey)
+            )
+        ).Replace("-", "").Substring(0, 16)
+        if ($ageMinutes -le $agentRouterCacheMaxAgeMinutes -and $entry.keyHash -eq $keyHash) {
+            $agentRouterCached = $entry
+        }
+    } catch {
+        # An unreadable cache is no cache. Probe again.
+        $agentRouterCached = $null
+    }
+}
+
+if ($agentRouterCached) {
+    $agentRouterLive = [bool]$agentRouterCached.live
+    $agentRouterDetail = "{0} [cached {1:N0} phút trước]" -f `
+        $agentRouterCached.detail,
+        ([DateTime]::UtcNow - [DateTime]::Parse($agentRouterCached.observedAt).ToUniversalTime()).TotalMinutes
+    if (-not $agentRouterLive -and $agentRouterCached.failure) {
+        $failures.Add([string]$agentRouterCached.failure)
+    }
+} elseif ($agentRouterSaved) {
     # An isolated config directory keeps the probe from touching the operator's
     # own Claude Code login.
     $probeDir = Join-Path ([IO.Path]::GetTempPath()) ("shipde-ar-" + [Guid]::NewGuid().ToString("N"))
@@ -159,19 +203,30 @@ if ($agentRouterSaved) {
     # group, and asking for it returns 503 "no available channel" — which reads
     # like an outage and is really a wrong name. Probe a model the account
     # actually lists.
+    # The key is handed over through the inherited environment, never through
+    # the command line. An argument is visible in the process table to every
+    # process on the machine and is captured by Sysmon/EDR command-line logging
+    # and by PowerShell transcription. The same change removes a second fault:
+    # a key containing a single quote used to break the generated quoting and
+    # was then reported as KEY PRESENT BUT REJECTED.
     $probeBody = @(
-        '$env:ANTHROPIC_AUTH_TOKEN = $args[0]'
+        '$env:ANTHROPIC_AUTH_TOKEN = $env:SHIPDE_AR_PROBE_TOKEN'
+        '$env:SHIPDE_AR_PROBE_TOKEN = $null'
         '$env:ANTHROPIC_BASE_URL   = "https://agentrouter.org"'
         '$env:ANTHROPIC_API_KEY    = $null'
         '$env:ANTHROPIC_MODEL      = "claude-opus-4-8"'
-        '$env:CLAUDE_CONFIG_DIR    = $args[1]'
+        '$env:CLAUDE_CONFIG_DIR    = $args[0]'
         '& claude -p "Reply exactly: SHIPDE_AUTH_OK" --model claude-opus-4-8 --output-format text --max-turns 1 2>&1'
     ) -join [Environment]::NewLine
 
+    $agentRouterFailure = $null
     try {
         Set-Content -Path $probeScript -Value $probeBody -Encoding UTF8
+        # Start-Process inherits this process's environment, so the child sees
+        # the token without it ever appearing in an argument list.
+        $env:SHIPDE_AR_PROBE_TOKEN = $agentRouterKey
         $probe = Invoke-ShipDeBoundedProbe `
-            -CommandText ("& powershell -NoProfile -ExecutionPolicy Bypass -File '{0}' '{1}' '{2}'" -f $probeScript, $agentRouterKey, $probeDir) `
+            -CommandText ("& powershell -NoProfile -ExecutionPolicy Bypass -File '{0}' '{1}'" -f $probeScript, $probeDir) `
             -TimeoutSeconds 90
 
         $text = [string]$probe.Output
@@ -182,7 +237,13 @@ if ($agentRouterSaved) {
             $agentRouterDetail = "AUTHENTICATED via claude-opus-4-8"
         } elseif ($text -match "401" -or $text -match "(?i)unauthor") {
             $agentRouterDetail = "KEY PRESENT BUT REJECTED; the Claude and Codex fallback route is unavailable"
-            $failures.Add("AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it — see TASK-AI-44")
+            $agentRouterFailure = "AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it — see TASK-AI-44"
+        } elseif ($text -match "402" -or $text -match "(?i)budget pool") {
+            # 402 arrives after the key has authenticated, so it is a spending
+            # state, not a credential fault. Rotating the key would not fix it
+            # and would cost the operator a working credential.
+            $agentRouterDetail = "AUTHENTICATED but the budget pool is exhausted (HTTP 402); top up or raise the pool limit on agentrouter.org"
+            $agentRouterFailure = "AgentRouter authenticates but its budget pool is exhausted; the Claude and Codex fallback route cannot carry a review until it is topped up"
         } elseif ($text -match "503" -or $text -match "无可用渠道") {
             # A 503 here means the key authenticated and the routing layer had
             # no channel for that model. That is a supply or naming state, not
@@ -197,8 +258,33 @@ if ($agentRouterSaved) {
     } catch {
         $agentRouterDetail = "CONFIGURED but unverified ($($_.Exception.Message))"
     } finally {
+        # The token lives in this process's environment only for the duration
+        # of the probe; anything spawned afterwards must not inherit it.
+        $env:SHIPDE_AR_PROBE_TOKEN = $null
         Remove-Item -LiteralPath $probeScript -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($agentRouterFailure) { $failures.Add($agentRouterFailure) }
+
+    # Record the verdict so the next run within the window spends nothing. Only
+    # the verdict is stored — never the key. It is bound to a hash of the key so
+    # a rotated credential is re-probed rather than answered from the old one.
+    try {
+        $keyHash = [BitConverter]::ToString(
+            [Security.Cryptography.SHA256]::Create().ComputeHash(
+                [Text.Encoding]::UTF8.GetBytes($agentRouterKey)
+            )
+        ).Replace("-", "").Substring(0, 16)
+        [ordered]@{
+            observedAt = [DateTime]::UtcNow.ToString("o")
+            keyHash    = $keyHash
+            live       = $agentRouterLive
+            detail     = $agentRouterDetail
+            failure    = $agentRouterFailure
+        } | ConvertTo-Json | Set-Content -LiteralPath $agentRouterCachePath -Encoding UTF8
+    } catch {
+        # Failing to cache is not a health finding; the probe still ran.
     }
 }
 Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)

@@ -68,6 +68,8 @@ Required status flow:
 
 `BLOCKED` may be entered from any active state with a written reason and evidence.
 
+`SUPERSEDED` may be entered from any state when the Work Item is replaced by one or more successor Work Items; the successors must be named in the register row and in the Work Item file.
+
 ## Definition of a complete feature
 
 A feature is vertical, not UI-only. Where applicable it includes:

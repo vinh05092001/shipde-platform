@@ -165,6 +165,7 @@ def main() -> int:
         "CODEX_PASS",
         "MERGED",
         "BLOCKED",
+        "SUPERSEDED",
     }
     invalid_statuses = sorted(
         {
