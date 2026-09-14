@@ -111,9 +111,14 @@ describe('When the vendor says nothing', () => {
   test('an unread quota leaves the local verdict alone', () => {
     // Folding `unknown` in would drag every known-open offering down to
     // unknown, which is worse than not asking the vendor at all.
-    const h = offeringHeadroom(pick(offerings, 'gemini-3.8-flash-high'), {}, {}, {
-      reported: { 'acc-b': { available: false, reason: 'mạng lỗi' } },
-    });
+    const h = offeringHeadroom(
+      pick(offerings, 'gemini-3.8-flash-high'),
+      {},
+      {},
+      {
+        reported: { 'acc-b': { available: false, reason: 'mạng lỗi' } },
+      }
+    );
     assert.equal(h.reported, null);
     assert.equal(h.status, 'unknown');
     assert.match(h.reason, /Chưa khai hạn mức/);
@@ -121,7 +126,12 @@ describe('When the vendor says nothing', () => {
 
   test('a model outside both families is not assigned a pool', () => {
     const other = expandOfferings([
-      { id: 'acc-b', provider: 'antigravity', email: 'worker@gmail.com', models: [{ model: 'mystery-1' }] },
+      {
+        id: 'acc-b',
+        provider: 'antigravity',
+        email: 'worker@gmail.com',
+        models: [{ model: 'mystery-1' }],
+      },
     ]);
     const h = offeringHeadroom(other[0], {}, {}, { reported: { 'acc-b': ACCOUNT_B_QUOTA } });
     assert.equal(h.reported, null);

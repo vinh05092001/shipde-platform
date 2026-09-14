@@ -8,7 +8,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { loadStore, saveReading, freshness, identityToCompare, usableReadings } = require('../quota-store');
+const {
+  loadStore,
+  saveReading,
+  freshness,
+  identityToCompare,
+  usableReadings,
+} = require('../quota-store');
 
 const ME = { known: true, email: 'someone@gmail.com' };
 
@@ -78,7 +84,10 @@ describe('Deciding whether a cached reading still applies', () => {
   });
 
   test('a reading with no timestamp is refused', () => {
-    assert.equal(freshness(reading({ cachedAt: null, observedAt: null }), ME, { now }).usable, false);
+    assert.equal(
+      freshness(reading({ cachedAt: null, observedAt: null }), ME, { now }).usable,
+      false
+    );
   });
 
   test('no reading at all says so plainly', () => {
@@ -123,7 +132,9 @@ describe('Which identity a reading is compared against', () => {
   test('a declared address is still compared against the host login', () => {
     // Self-comparing it would make the check pass forever, and the switch it
     // exists to catch is exactly the operator signing in as somebody else.
-    const r = reading({ account: { known: true, email: 'declared@gmail.com', source: 'declared' } });
+    const r = reading({
+      account: { known: true, email: 'declared@gmail.com', source: 'declared' },
+    });
     assert.equal(identityToCompare(r, ME).email, 'someone@gmail.com');
   });
 
@@ -131,26 +142,39 @@ describe('Which identity a reading is compared against', () => {
     // The container reports a fingerprint of its own credential. Comparing it
     // to the host's email is not a strict check but a meaningless one: the two
     // can never be equal, so every such reading would be thrown away.
-    const r = reading({ account: { known: true, email: 'fingerprint:abc', source: 'fingerprint' } });
+    const r = reading({
+      account: { known: true, email: 'fingerprint:abc', source: 'fingerprint' },
+    });
     assert.equal(identityToCompare(r, ME).email, 'fingerprint:abc');
   });
 
   test('the container reading survives a host account switch', () => {
     const p = tmpStore();
-    saveReading('docker', reading({ account: { known: true, email: 'fingerprint:abc', source: 'fingerprint' } }), {
-      path: p,
-      now: Date.parse('2026-09-14T11:55:00Z'),
-    });
-    const { reported } = usableReadings({ known: true, email: 'a-different-host@gmail.com' }, { path: p, now });
+    saveReading(
+      'docker',
+      reading({ account: { known: true, email: 'fingerprint:abc', source: 'fingerprint' } }),
+      {
+        path: p,
+        now: Date.parse('2026-09-14T11:55:00Z'),
+      }
+    );
+    const { reported } = usableReadings(
+      { known: true, email: 'a-different-host@gmail.com' },
+      { path: p, now }
+    );
     assert.deepEqual(Object.keys(reported), ['docker']);
   });
 
   test('but it still expires with age', () => {
     const p = tmpStore();
-    saveReading('docker', reading({ account: { known: true, email: 'fingerprint:abc', source: 'fingerprint' } }), {
-      path: p,
-      now: Date.parse('2026-09-14T08:00:00Z'),
-    });
+    saveReading(
+      'docker',
+      reading({ account: { known: true, email: 'fingerprint:abc', source: 'fingerprint' } }),
+      {
+        path: p,
+        now: Date.parse('2026-09-14T08:00:00Z'),
+      }
+    );
     const { problems } = usableReadings(ME, { path: p, now });
     assert.match(problems.docker.reason, /quá hạn/);
   });
@@ -197,7 +221,6 @@ describe('Comparing across providers', () => {
   });
 });
 
-
 describe('A failed reading is not cached like a measurement', () => {
   // A success is cached because it is expensive and stays roughly true. A
   // failure measured nothing, so the only thing it can buy is a cooldown.
@@ -209,7 +232,11 @@ describe('A failed reading is not cached like a measurement', () => {
     account: { known: true, email: 'a@example.com', source: 'host' },
     cachedAt: '2026-09-14T09:00:00.000Z',
   };
-  const ok = Object.assign({}, failed, { available: true, reason: undefined, rows: [{ family: 'gemini' }] });
+  const ok = Object.assign({}, failed, {
+    available: true,
+    reason: undefined,
+    rows: [{ family: 'gemini' }],
+  });
 
   test('a fresh failure is reused, so a broken probe is not hammered', () => {
     const f = freshness(failed, identity, { now: Date.parse('2026-09-14T09:00:30.000Z') });

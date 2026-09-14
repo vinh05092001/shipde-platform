@@ -39,7 +39,13 @@ describe('Reviewing is harder than writing', () => {
   test('a model that may write COMPLEX may not review it unqualified', () => {
     const m = { id: 'm', codingGrade: Difficulty.COMPLEX };
     const asAuthor = scoreOffering(m, Difficulty.COMPLEX, headroom(1e9, 0), {});
-    const asReviewer = scoreOffering(m, Difficulty.COMPLEX, headroom(1e9, 0), {}, { reviewing: true });
+    const asReviewer = scoreOffering(
+      m,
+      Difficulty.COMPLEX,
+      headroom(1e9, 0),
+      {},
+      { reviewing: true }
+    );
     assert.equal(asAuthor.usable, true);
     assert.equal(asReviewer.usable, false);
     assert.match(asReviewer.reason, /chỉ review được tới/);
@@ -49,19 +55,39 @@ describe('Reviewing is harder than writing', () => {
     // Authoring reserves strength; review spends it, because a review that
     // misses a defect costs more than the model that would have caught it.
     const mid = { id: 'mid', codingGrade: Difficulty.COMPLEX, reviewGrade: Difficulty.STANDARD };
-    const strong = { id: 'strong', codingGrade: Difficulty.ARCHITECTURAL, reviewGrade: Difficulty.ARCHITECTURAL };
+    const strong = {
+      id: 'strong',
+      codingGrade: Difficulty.ARCHITECTURAL,
+      reviewGrade: Difficulty.ARCHITECTURAL,
+    };
     const heads = { mid: headroom(1e9, 0), strong: headroom(1e9, 0) };
 
     const authoring = rankByFitness([strong, mid], Difficulty.STANDARD, heads, {});
     assert.equal(authoring.ranked[0].offering.id, 'mid', 'authoring reserves the strong model');
 
-    const reviewing = rankByFitness([strong, mid], Difficulty.STANDARD, heads, {}, { reviewing: true });
+    const reviewing = rankByFitness(
+      [strong, mid],
+      Difficulty.STANDARD,
+      heads,
+      {},
+      { reviewing: true }
+    );
     assert.equal(reviewing.ranked[0].offering.id, 'strong', 'review takes the strongest available');
   });
 
   test('a reviewer still cannot run without quota to finish', () => {
-    const strong = { id: 'strong', codingGrade: Difficulty.ARCHITECTURAL, reviewGrade: Difficulty.ARCHITECTURAL };
-    const v = scoreOffering(strong, Difficulty.STANDARD, headroom(100000, 95000), {}, { reviewing: true });
+    const strong = {
+      id: 'strong',
+      codingGrade: Difficulty.ARCHITECTURAL,
+      reviewGrade: Difficulty.ARCHITECTURAL,
+    };
+    const v = scoreOffering(
+      strong,
+      Difficulty.STANDARD,
+      headroom(100000, 95000),
+      {},
+      { reviewing: true }
+    );
     assert.equal(v.usable, false, 'strength does not excuse an empty budget');
   });
 });
@@ -77,12 +103,22 @@ describe('Spare capacity goes to review', () => {
       limits: {},
       models: [
         { model: 'writer', codingGrade: Difficulty.COMPLEX, limits: { tokensPerDay: 9000000 } },
-        { model: 'judge', codingGrade: Difficulty.ARCHITECTURAL, reviewGrade: Difficulty.ARCHITECTURAL, limits: { tokensPerDay: 9000000 } },
+        {
+          model: 'judge',
+          codingGrade: Difficulty.ARCHITECTURAL,
+          reviewGrade: Difficulty.ARCHITECTURAL,
+          limits: { tokensPerDay: 9000000 },
+        },
       ],
     },
   ];
 
-  const authoring = { workItemId: 'A-1', role: 'author.foundation', branch: 'feat/a', riskDomains: [] };
+  const authoring = {
+    workItemId: 'A-1',
+    role: 'author.foundation',
+    branch: 'feat/a',
+    riskDomains: [],
+  };
   const review = { workItemId: 'B-1', role: 'reviewer.primary', branch: 'feat/b', riskDomains: [] };
 
   test('a review runs alongside authoring instead of queueing behind it', () => {
@@ -121,7 +157,11 @@ describe('Spare capacity goes to review', () => {
       limits: { maxImplementationAgents: 5, maxPerAccount: 5 },
       now: NOW,
     });
-    assert.equal(plan.assignments.length, 1, 'the safety invariant is untouched by the review lane');
+    assert.equal(
+      plan.assignments.length,
+      1,
+      'the safety invariant is untouched by the review lane'
+    );
   });
 
   test('the review lane has its own ceiling', () => {
@@ -157,7 +197,10 @@ describe('Manifest audit', () => {
     blocking_policy: 'NON_BLOCKING',
   };
   const audit = (entry, deps) =>
-    auditManifest({ adopted: [Object.assign({}, base, entry)] }, Object.assign({ onPath: () => true, dependencies: new Set(), repoExists: () => true }, deps));
+    auditManifest(
+      { adopted: [Object.assign({}, base, entry)] },
+      Object.assign({ onPath: () => true, dependencies: new Set(), repoExists: () => true }, deps)
+    );
 
   const codes = (r) => r.findings.map((f) => f.code);
 
@@ -170,7 +213,12 @@ describe('Manifest audit', () => {
   test('a missing quality gate is an error, not a warning', () => {
     // The pipeline believes it is being scanned; that belief is the damage.
     const r = audit(
-      { id: 'gitleaks', lifecycle_state: 'ADOPTED', install_method: 'system', role: 'Secret scanner.' },
+      {
+        id: 'gitleaks',
+        lifecycle_state: 'ADOPTED',
+        install_method: 'system',
+        role: 'Secret scanner.',
+      },
       { onPath: () => false }
     );
     const f = r.findings.find((x) => x.code === 'QUALITY_GATE_MISSING');
@@ -180,7 +228,12 @@ describe('Manifest audit', () => {
 
   test('an absent non-gate tool is only a warning', () => {
     const r = audit(
-      { id: 'storybook', lifecycle_state: 'ADOPTED', install_method: 'npm-dev', role: 'Component workshop.' },
+      {
+        id: 'storybook',
+        lifecycle_state: 'ADOPTED',
+        install_method: 'npm-dev',
+        role: 'Component workshop.',
+      },
       { dependencies: new Set() }
     );
     assert.equal(r.findings.find((x) => x.code === 'DECLARED_ADOPTED_BUT_ABSENT').severity, 'warn');
@@ -219,7 +272,15 @@ describe('Manifest audit', () => {
     // Reporting `claude-code` missing because no `claude-code` binary exists
     // would train the operator to ignore the audit.
     const seen = [];
-    audit({ id: 'claude-code' }, { onPath: (n) => { seen.push(n); return true; } });
+    audit(
+      { id: 'claude-code' },
+      {
+        onPath: (n) => {
+          seen.push(n);
+          return true;
+        },
+      }
+    );
     assert.ok(seen.includes('claude'));
   });
 });

@@ -9,11 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const {
-  collectUsageState,
-  collectRouterUsage,
-  collectClaudeUsage,
-} = require('../usage-adapter');
+const { collectUsageState, collectRouterUsage, collectClaudeUsage } = require('../usage-adapter');
 const { redactObject } = require('../redaction');
 
 /** Builds a throwaway ~/.claude/projects tree with hand-written transcripts. */
@@ -98,9 +94,7 @@ describe('Usage Adapter (TASK-AI-15 quota truthfulness)', () => {
     });
 
     test('an unpriced model is counted in tokens but excluded from cost', () => {
-      const dir = makeTranscriptDir([
-        turn('x', 'some-unknown-model', U(1000, 1000, 0, 0)),
-      ]);
+      const dir = makeTranscriptDir([turn('x', 'some-unknown-model', U(1000, 1000, 0, 0))]);
       const result = collectClaudeUsage(dir);
       assert.equal(result.totals.input, 1000, 'tokens still counted');
       assert.equal(result.totals.cost, 0, 'no invented price');
@@ -115,7 +109,9 @@ describe('Usage Adapter (TASK-AI-15 quota truthfulness)', () => {
     });
 
     test('cost is priced per model, not a flat rate', () => {
-      const opus = collectClaudeUsage(makeTranscriptDir([turn('o', 'claude-opus-5', U(1e6, 0, 0, 0))]));
+      const opus = collectClaudeUsage(
+        makeTranscriptDir([turn('o', 'claude-opus-5', U(1e6, 0, 0, 0))])
+      );
       const sonnet = collectClaudeUsage(
         makeTranscriptDir([turn('s', 'claude-sonnet-5', U(1e6, 0, 0, 0))])
       );
@@ -136,7 +132,9 @@ describe('Usage Adapter (TASK-AI-15 quota truthfulness)', () => {
     });
 
     test('reports unavailable with a reason when the directory is missing', () => {
-      const result = collectClaudeUsage(path.join(os.tmpdir(), 'shipde-does-not-exist-' + Date.now()));
+      const result = collectClaudeUsage(
+        path.join(os.tmpdir(), 'shipde-does-not-exist-' + Date.now())
+      );
       assert.equal(result.available, false);
       assert.ok(result.reason.length > 0, 'a reason is given rather than a zeroed total');
       assert.equal(result.totals, undefined, 'no fabricated zero totals');
@@ -152,7 +150,9 @@ describe('Usage Adapter (TASK-AI-15 quota truthfulness)', () => {
 
   describe('9router ledger', () => {
     test('reports unavailable with a reason when the database is absent', () => {
-      const result = collectRouterUsage(path.join(os.tmpdir(), 'no-such-' + Date.now() + '.sqlite'));
+      const result = collectRouterUsage(
+        path.join(os.tmpdir(), 'no-such-' + Date.now() + '.sqlite')
+      );
       assert.equal(result.available, false);
       assert.ok(result.reason.includes('not found'));
       assert.equal(result.totals, undefined, 'no fabricated totals');

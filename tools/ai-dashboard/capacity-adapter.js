@@ -132,16 +132,20 @@ function collectCapacity(options) {
   // Claude Code work never passes through the router, so its spend is reported
   // beside the pool rather than folded into it: adding the two would imply a
   // shared budget that does not exist.
-  const claudeSide = claude && claude.available
-    ? {
-        available: true,
-        messages: claude.totals.messages,
-        tokens:
-          claude.totals.input + claude.totals.output + claude.totals.cacheWrite + claude.totals.cacheRead,
-        costEstimate: claude.totals.cost,
-        cacheHitRate: claude.cacheHitRate,
-      }
-    : { available: false, reason: (claude && claude.reason) || 'không đọc được' };
+  const claudeSide =
+    claude && claude.available
+      ? {
+          available: true,
+          messages: claude.totals.messages,
+          tokens:
+            claude.totals.input +
+            claude.totals.output +
+            claude.totals.cacheWrite +
+            claude.totals.cacheRead,
+          costEstimate: claude.totals.cost,
+          cacheHitRate: claude.cacheHitRate,
+        }
+      : { available: false, reason: (claude && claude.reason) || 'không đọc được' };
 
   return {
     health: {

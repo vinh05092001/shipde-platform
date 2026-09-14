@@ -134,9 +134,21 @@ describe('Choosing the right-sized model', () => {
 
 describe('Runway monitoring', () => {
   const pool = [
-    { id: 'a::deepseek', accountId: 'a', model: 'deepseek', tier: 0, codingGrade: Difficulty.STANDARD },
+    {
+      id: 'a::deepseek',
+      accountId: 'a',
+      model: 'deepseek',
+      tier: 0,
+      codingGrade: Difficulty.STANDARD,
+    },
     { id: 'a::glm', accountId: 'a', model: 'glm-5.3', tier: 0, codingGrade: Difficulty.STANDARD },
-    { id: 'b::frontier', accountId: 'b', model: 'frontier', tier: 1, codingGrade: Difficulty.ARCHITECTURAL },
+    {
+      id: 'b::frontier',
+      accountId: 'b',
+      model: 'frontier',
+      tier: 1,
+      codingGrade: Difficulty.ARCHITECTURAL,
+    },
     { id: 'c::tiny', accountId: 'c', model: 'tiny', tier: 2, codingGrade: Difficulty.MECHANICAL },
   ];
   const heads = {
@@ -167,7 +179,13 @@ describe('Runway monitoring', () => {
 
   test('total remaining work counts only models with a known budget', () => {
     const withUnknown = pool.concat([
-      { id: 'd::mystery', accountId: 'd', model: 'mystery', tier: 3, codingGrade: Difficulty.STANDARD },
+      {
+        id: 'd::mystery',
+        accountId: 'd',
+        model: 'mystery',
+        tier: 3,
+        codingGrade: Difficulty.STANDARD,
+      },
     ]);
     const r = runwayReport(
       withUnknown,
@@ -176,7 +194,10 @@ describe('Runway monitoring', () => {
       {}
     );
     assert.equal(r.summary.unknownBudget, 1);
-    assert.ok(Number.isFinite(r.summary.tasksRemaining), 'an unknown budget never becomes infinity');
+    assert.ok(
+      Number.isFinite(r.summary.tasksRemaining),
+      'an unknown budget never becomes infinity'
+    );
   });
 });
 
@@ -190,17 +211,35 @@ describe('Dispatch uses fitness, not raw strength', () => {
     capabilities: CAPS,
     limits: {},
     models: [
-      { model: 'astra-6', codingGrade: Difficulty.ARCHITECTURAL, quality: 99, limits: { tokensPerDay: 5000000 } },
-      { model: 'glm-5.3', codingGrade: Difficulty.STANDARD, quality: 70, limits: { tokensPerDay: 5000000 } },
+      {
+        model: 'astra-6',
+        codingGrade: Difficulty.ARCHITECTURAL,
+        quality: 99,
+        limits: { tokensPerDay: 5000000 },
+      },
+      {
+        model: 'glm-5.3',
+        codingGrade: Difficulty.STANDARD,
+        quality: 70,
+        limits: { tokensPerDay: 5000000 },
+      },
     ],
   };
   const item = { workItemId: 'A-1', role: 'author.foundation', branch: 'feat/a', riskDomains: [] };
 
   test('ordinary work does not take the frontier model', () => {
-    const plan = planDispatch([Object.assign({}, item, { difficulty: Difficulty.STANDARD })], [account], {
-      now: NOW,
-    });
-    assert.equal(plan.assignments[0].model, 'glm-5.3', 'astra-6 is reserved, not spent on standard work');
+    const plan = planDispatch(
+      [Object.assign({}, item, { difficulty: Difficulty.STANDARD })],
+      [account],
+      {
+        now: NOW,
+      }
+    );
+    assert.equal(
+      plan.assignments[0].model,
+      'glm-5.3',
+      'astra-6 is reserved, not spent on standard work'
+    );
   });
 
   test('architectural work does take it', () => {
@@ -214,7 +253,13 @@ describe('Dispatch uses fitness, not raw strength', () => {
 
   test('a nearly drained model is skipped and the reason says so', () => {
     const drained = Object.assign({}, account, {
-      models: [{ model: 'astra-6', codingGrade: Difficulty.ARCHITECTURAL, limits: { tokensPerDay: 100000 } }],
+      models: [
+        {
+          model: 'astra-6',
+          codingGrade: Difficulty.ARCHITECTURAL,
+          limits: { tokensPerDay: 100000 },
+        },
+      ],
     });
     const plan = planDispatch(
       [Object.assign({}, item, { difficulty: Difficulty.ARCHITECTURAL })],
@@ -226,9 +271,13 @@ describe('Dispatch uses fitness, not raw strength', () => {
   });
 
   test('the assignment records the fit it was chosen on', () => {
-    const plan = planDispatch([Object.assign({}, item, { difficulty: Difficulty.STANDARD })], [account], {
-      now: NOW,
-    });
+    const plan = planDispatch(
+      [Object.assign({}, item, { difficulty: Difficulty.STANDARD })],
+      [account],
+      {
+        now: NOW,
+      }
+    );
     const a = plan.assignments[0];
     assert.equal(a.difficulty, Difficulty.STANDARD);
     assert.equal(a.grade, Difficulty.STANDARD);

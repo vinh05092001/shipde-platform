@@ -47,7 +47,10 @@ const codes = (result) => result.findings.map((f) => f.code);
 describe('Register reconciliation', () => {
   describe('Claims of completion', () => {
     test('MERGED without a merge commit is an error', () => {
-      const r = reconcileRegister([row({ status: 'MERGED', codex_verdict: 'PASS' })], EVERYTHING_EXISTS);
+      const r = reconcileRegister(
+        [row({ status: 'MERGED', codex_verdict: 'PASS' })],
+        EVERYTHING_EXISTS
+      );
       assert.ok(codes(r).includes('MERGED_WITHOUT_COMMIT'));
       assert.equal(r.trustworthy, false);
     });
@@ -77,7 +80,10 @@ describe('Register reconciliation', () => {
           [row({ status: 'MERGED', codex_verdict: verdict, merge_commit: 'abc1234' })],
           EVERYTHING_EXISTS
         );
-        assert.ok(codes(r).includes('MERGED_WITHOUT_PASS'), 'verdict rejected: ' + (verdict || 'empty'));
+        assert.ok(
+          codes(r).includes('MERGED_WITHOUT_PASS'),
+          'verdict rejected: ' + (verdict || 'empty')
+        );
       }
     });
 
@@ -95,8 +101,17 @@ describe('Register reconciliation', () => {
     test('flags a block whose dependency has merged', () => {
       const r = reconcileRegister(
         [
-          row({ work_item_id: 'TASK-FOUND-04', status: 'MERGED', codex_verdict: 'PASS', merge_commit: 'a1b2c3d' }),
-          row({ work_item_id: 'FEAT-AUTH-01', status: 'BLOCKED_BY_FOUNDATION', dependencies: 'TASK-FOUND-04' }),
+          row({
+            work_item_id: 'TASK-FOUND-04',
+            status: 'MERGED',
+            codex_verdict: 'PASS',
+            merge_commit: 'a1b2c3d',
+          }),
+          row({
+            work_item_id: 'FEAT-AUTH-01',
+            status: 'BLOCKED_BY_FOUNDATION',
+            dependencies: 'TASK-FOUND-04',
+          }),
         ],
         EVERYTHING_EXISTS
       );
@@ -110,7 +125,11 @@ describe('Register reconciliation', () => {
       const r = reconcileRegister(
         [
           row({ work_item_id: 'TASK-FOUND-04', status: 'READY_FOR_CODEX' }),
-          row({ work_item_id: 'FEAT-AUTH-01', status: 'BLOCKED_BY_FOUNDATION', dependencies: 'TASK-FOUND-04' }),
+          row({
+            work_item_id: 'FEAT-AUTH-01',
+            status: 'BLOCKED_BY_FOUNDATION',
+            dependencies: 'TASK-FOUND-04',
+          }),
         ],
         EVERYTHING_EXISTS
       );
@@ -120,7 +139,12 @@ describe('Register reconciliation', () => {
     test('requires every dependency to have merged, not just one', () => {
       const r = reconcileRegister(
         [
-          row({ work_item_id: 'A-1', status: 'MERGED', codex_verdict: 'PASS', merge_commit: 'aaa1111' }),
+          row({
+            work_item_id: 'A-1',
+            status: 'MERGED',
+            codex_verdict: 'PASS',
+            merge_commit: 'aaa1111',
+          }),
           row({ work_item_id: 'B-1', status: 'READY_FOR_AUTHOR' }),
           row({ work_item_id: 'C-1', status: 'BLOCKED_DEPENDENCY', dependencies: 'A-1; B-1' }),
         ],
@@ -164,7 +188,14 @@ describe('Register reconciliation', () => {
     test('a missing spec is an error once the row claims to be merged or ready', () => {
       for (const status of ['MERGED', 'READY_FOR_CODEX', 'READY_FOR_AUTHOR']) {
         const r = reconcileRegister(
-          [row({ status, codex_verdict: 'PASS', merge_commit: 'abc1234', work_item_path: 'docs/x.md' })],
+          [
+            row({
+              status,
+              codex_verdict: 'PASS',
+              merge_commit: 'abc1234',
+              work_item_path: 'docs/x.md',
+            }),
+          ],
           Object.assign({}, EVERYTHING_EXISTS, { fileExists: () => false })
         );
         const f = r.findings.find((x) => x.code === 'SPEC_MISSING');
@@ -183,14 +214,24 @@ describe('Register reconciliation', () => {
     });
 
     test('a declared branch that does not exist is reported while work is live', () => {
-      const r = reconcileRegister([row({ status: 'READY_FOR_CODEX', branch: 'feat/gone' })], NOTHING_EXISTS);
+      const r = reconcileRegister(
+        [row({ status: 'READY_FOR_CODEX', branch: 'feat/gone' })],
+        NOTHING_EXISTS
+      );
       assert.ok(codes(r).includes('BRANCH_MISSING'));
     });
 
     test('a deleted branch on a merged row is not reported', () => {
       // Deleting the branch after merge is normal housekeeping.
       const r = reconcileRegister(
-        [row({ status: 'MERGED', codex_verdict: 'PASS', merge_commit: 'abc1234', branch: 'feat/done' })],
+        [
+          row({
+            status: 'MERGED',
+            codex_verdict: 'PASS',
+            merge_commit: 'abc1234',
+            branch: 'feat/done',
+          }),
+        ],
         Object.assign({}, EVERYTHING_EXISTS, { branchExists: () => false })
       );
       assert.ok(!codes(r).includes('BRANCH_MISSING'));
@@ -223,7 +264,12 @@ describe('Register reconciliation', () => {
     test('trustworthy stays true when only warnings and info are present', () => {
       const r = reconcileRegister(
         [
-          row({ work_item_id: 'A-1', status: 'MERGED', codex_verdict: 'PASS', merge_commit: 'aaa1111' }),
+          row({
+            work_item_id: 'A-1',
+            status: 'MERGED',
+            codex_verdict: 'PASS',
+            merge_commit: 'aaa1111',
+          }),
           row({ work_item_id: 'B-1', status: 'BLOCKED_DEPENDENCY', dependencies: 'A-1' }),
         ],
         EVERYTHING_EXISTS
@@ -234,7 +280,10 @@ describe('Register reconciliation', () => {
     });
 
     test('counts every row it was given', () => {
-      const r = reconcileRegister([row({ work_item_id: 'A' }), row({ work_item_id: 'B' })], EVERYTHING_EXISTS);
+      const r = reconcileRegister(
+        [row({ work_item_id: 'A' }), row({ work_item_id: 'B' })],
+        EVERYTHING_EXISTS
+      );
       assert.equal(r.checked, 2);
     });
   });
@@ -257,7 +306,11 @@ describe('Register reconciliation', () => {
 
   describe('Duplicate detection', () => {
     test('reports the id and how many times it appeared', () => {
-      const dups = findDuplicateIds([{ work_item_id: 'X' }, { work_item_id: 'X' }, { work_item_id: 'Y' }]);
+      const dups = findDuplicateIds([
+        { work_item_id: 'X' },
+        { work_item_id: 'X' },
+        { work_item_id: 'Y' },
+      ]);
       assert.deepEqual(dups, [{ id: 'X', count: 2 }]);
     });
 

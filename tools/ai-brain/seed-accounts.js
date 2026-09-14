@@ -42,10 +42,20 @@ const ANTIGRAVITY_MODELS = [
   { model: 'gemini-3.6-flash-medium', codingGrade: D.STANDARD, quality: 68 },
   { model: 'gemini-3.6-flash-low', codingGrade: D.MECHANICAL, quality: 54 },
   // Pro carries the architectural work on this provider.
-  { model: 'gemini-3.1-pro-high', codingGrade: D.ARCHITECTURAL, reviewGrade: D.COMPLEX, quality: 90 },
+  {
+    model: 'gemini-3.1-pro-high',
+    codingGrade: D.ARCHITECTURAL,
+    reviewGrade: D.COMPLEX,
+    quality: 90,
+  },
   { model: 'gemini-3.1-pro-low', codingGrade: D.COMPLEX, reviewGrade: D.STANDARD, quality: 82 },
   // A thinking model is the one worth reserving for review.
-  { model: 'claude-opus-4-6-thinking', codingGrade: D.ARCHITECTURAL, reviewGrade: D.ARCHITECTURAL, quality: 94 },
+  {
+    model: 'claude-opus-4-6-thinking',
+    codingGrade: D.ARCHITECTURAL,
+    reviewGrade: D.ARCHITECTURAL,
+    quality: 94,
+  },
   { model: 'claude-sonnet-4-6', codingGrade: D.COMPLEX, reviewGrade: D.COMPLEX, quality: 86 },
   { model: 'gpt-oss-120b-medium', codingGrade: D.STANDARD, quality: 70 },
 ];
@@ -56,7 +66,12 @@ const ANTIGRAVITY_MODELS = [
  * about 104 models nobody has made.
  */
 const NINEROUTER_MODELS = [
-  { model: 'cc/claude-opus-5', codingGrade: D.ARCHITECTURAL, reviewGrade: D.ARCHITECTURAL, quality: 96 },
+  {
+    model: 'cc/claude-opus-5',
+    codingGrade: D.ARCHITECTURAL,
+    reviewGrade: D.ARCHITECTURAL,
+    quality: 96,
+  },
   { model: 'cc/claude-sonnet-5', codingGrade: D.COMPLEX, reviewGrade: D.COMPLEX, quality: 88 },
   { model: 'cc/claude-haiku-4-5-20251001', codingGrade: D.MECHANICAL, quality: 60 },
   { model: 'kimchi/glm-5.3', codingGrade: D.STANDARD, quality: 72 },
@@ -77,7 +92,8 @@ const ACCOUNTS = [
       kind: 'docker-compose',
       dir: 'scripts/ai/docker-worker',
       service: 'gemini-worker',
-      command: 'docker compose run --rm --no-TTY gemini-worker agy --print-timeout 120s --print <prompt> --output-format text --model <model>',
+      command:
+        'docker compose run --rm --no-TTY gemini-worker agy --print-timeout 120s --print <prompt> --output-format text --model <model>',
       note: 'OAuth account B, isolated in the gemini_worker_data volume',
     },
     capabilities: { jsonSchema: true, tools: true, contextWindow: 1000000 },
@@ -138,9 +154,13 @@ function main() {
   console.log('  Bậc thang dự phòng:');
   for (const a of all) {
     console.log(
-      '    tier ' + a.tier + '  ' + a.id.padEnd(14) +
-      String((a.models || []).length).padStart(3) + ' model  ' +
-      (a.limits && Object.keys(a.limits).length ? 'có hạn mức' : 'CHƯA khai hạn mức')
+      '    tier ' +
+        a.tier +
+        '  ' +
+        a.id.padEnd(14) +
+        String((a.models || []).length).padStart(3) +
+        ' model  ' +
+        (a.limits && Object.keys(a.limits).length ? 'có hạn mức' : 'CHƯA khai hạn mức')
     );
   }
   console.log('');

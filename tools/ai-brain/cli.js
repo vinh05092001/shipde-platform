@@ -68,7 +68,9 @@ function reconcileCommand(args) {
 
 function printReport(result, showInfo) {
   console.log('');
-  console.log('  Đã đối chiếu ' + result.checked + ' đầu mục với những gì repository chứng minh được.');
+  console.log(
+    '  Đã đối chiếu ' + result.checked + ' đầu mục với những gì repository chứng minh được.'
+  );
   console.log('');
 
   const shown = result.findings.filter((f) => showInfo || f.severity !== 'info');
@@ -126,8 +128,18 @@ function manifestCommand(args) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log('');
-    console.log('  ' + result.total + ' repo khai trong manifest · kiểm được ' + result.checkable +
-      ' · có ' + result.present + ' · thiếu ' + result.absent + ' · nạp khi dùng ' + result.onDemand);
+    console.log(
+      '  ' +
+        result.total +
+        ' repo khai trong manifest · kiểm được ' +
+        result.checkable +
+        ' · có ' +
+        result.present +
+        ' · thiếu ' +
+        result.absent +
+        ' · nạp khi dùng ' +
+        result.onDemand
+    );
     console.log('');
     const order = { error: 0, warn: 1, info: 2 };
     const groups = new Map();
@@ -136,19 +148,33 @@ function manifestCommand(args) {
       if (!groups.has(f.code)) groups.set(f.code, []);
       groups.get(f.code).push(f);
     }
-    const sorted = [...groups.entries()].sort((a, b) => order[a[1][0].severity] - order[b[1][0].severity]);
+    const sorted = [...groups.entries()].sort(
+      (a, b) => order[a[1][0].severity] - order[b[1][0].severity]
+    );
     for (const [code, list] of sorted) {
-      console.log('  [' + SEVERITY_LABEL[list[0].severity] + '] ' + code + '  (' + list.length + ')');
+      console.log(
+        '  [' + SEVERITY_LABEL[list[0].severity] + '] ' + code + '  (' + list.length + ')'
+      );
       console.log('         ' + list[0].message);
       for (const f of list.slice(0, 8)) console.log('           - ' + f.id);
       if (list.length > 8) console.log('           … và ' + (list.length - 8) + ' mục nữa');
       console.log('');
     }
-    console.log('  Tổng: ' + result.summary.error + ' lỗi, ' + result.summary.warn +
-      ' cảnh báo, ' + result.summary.info + ' ghi chú');
-    console.log('  Manifest ' + (result.trustworthy
-      ? 'khớp thực tế ở những chỗ kiểm được.'
-      : 'KHAI QUÁ THỰC TẾ — có công cụ được tin là đang chạy nhưng không tồn tại.'));
+    console.log(
+      '  Tổng: ' +
+        result.summary.error +
+        ' lỗi, ' +
+        result.summary.warn +
+        ' cảnh báo, ' +
+        result.summary.info +
+        ' ghi chú'
+    );
+    console.log(
+      '  Manifest ' +
+        (result.trustworthy
+          ? 'khớp thực tế ở những chỗ kiểm được.'
+          : 'KHAI QUÁ THỰC TẾ — có công cụ được tin là đang chạy nhưng không tồn tại.')
+    );
     console.log('');
   }
 
@@ -177,7 +203,17 @@ function proveCommand(args) {
     const parts = command.split(/\s+/).filter(Boolean);
     const result = runCheck(parts[0], parts.slice(1), { cwd: process.cwd() });
     allPassed = allPassed && result.passed;
-    console.log('  ' + (result.passed ? 'ĐẠT ' : 'HỎNG') + '  ' + command + '  (' + result.durationMs + 'ms, mã thoát ' + result.exitCode + ')');
+    console.log(
+      '  ' +
+        (result.passed ? 'ĐẠT ' : 'HỎNG') +
+        '  ' +
+        command +
+        '  (' +
+        result.durationMs +
+        'ms, mã thoát ' +
+        result.exitCode +
+        ')'
+    );
     if (!result.passed && result.tail) {
       for (const line of result.tail.split('\n')) console.log('          ' + line);
     }
@@ -218,7 +254,10 @@ function quotaCommand(args) {
     for (const [id, q] of Object.entries(reported)) {
       for (const row of q.rows) {
         console.log(
-          '  ' + id.padEnd(14) + row.family.padEnd(12) + row.window.padEnd(10) +
+          '  ' +
+            id.padEnd(14) +
+            row.family.padEnd(12) +
+            row.window.padEnd(10) +
             (row.disabled ? 'đã tắt' : row.remainingPercent + '%')
         );
       }

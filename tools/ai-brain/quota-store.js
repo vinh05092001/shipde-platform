@@ -112,7 +112,8 @@ function freshness(reading, currentIdentity, options) {
       return {
         usable: false,
         action: 'reread',
-        reason: 'lần đọc trước thất bại, đã hết thời gian chờ (' + Math.round(ageMs / 1000) + ' giây)',
+        reason:
+          'lần đọc trước thất bại, đã hết thời gian chờ (' + Math.round(ageMs / 1000) + ' giây)',
         ageMs,
       };
     }
@@ -203,7 +204,11 @@ function usableReadings(currentIdentity, options) {
   const problems = {};
 
   for (const [accountId, reading] of Object.entries(store.accounts || {})) {
-    const verdict = freshness(reading, identityToCompare(reading, currentIdentity, (options || {}).identityResolvers), options);
+    const verdict = freshness(
+      reading,
+      identityToCompare(reading, currentIdentity, (options || {}).identityResolvers),
+      options
+    );
     if (verdict.usable) reported[accountId] = reading;
     else problems[accountId] = verdict;
   }

@@ -907,10 +907,15 @@ function renderVendorQuota(vendor) {
 
   const bar = (percent, disabled) => {
     const pct = Math.max(0, Math.min(100, Number(percent) || 0));
-    const colour = disabled || pct <= 2 ? 'bg-rose-500' : pct < 20 ? 'bg-amber-400' : 'bg-emerald-500';
+    const colour =
+      disabled || pct <= 2 ? 'bg-rose-500' : pct < 20 ? 'bg-amber-400' : 'bg-emerald-500';
     return (
       '<div class="h-1.5 rounded-full bg-slate-700 overflow-hidden w-full">' +
-      '<div class="h-full ' + colour + '" style="width:' + pct + '%"></div></div>'
+      '<div class="h-full ' +
+      colour +
+      '" style="width:' +
+      pct +
+      '%"></div></div>'
     );
   };
 
@@ -924,17 +929,28 @@ function renderVendorQuota(vendor) {
       typeof row.usedPercent === 'number'
         ? ' title="' + escapeHtml('nhà cung cấp báo: đã dùng ' + row.usedPercent + '%') + '"'
         : '';
-    const tone = row.disabled || row.remainingPercent <= 2
-      ? 'text-rose-300'
-      : row.remainingPercent < 20
-        ? 'text-amber-300'
-        : 'text-emerald-300';
+    const tone =
+      row.disabled || row.remainingPercent <= 2
+        ? 'text-rose-300'
+        : row.remainingPercent < 20
+          ? 'text-amber-300'
+          : 'text-emerald-300';
     return (
       '<div class="grid grid-cols-[7.5rem_3rem_1fr_auto] items-center gap-2 text-[11px]">' +
-      '<span class="text-slate-300">' + escapeHtml(FAMILY_LABEL[row.family] || row.family) + '</span>' +
-      '<span class="text-slate-500">' + escapeHtml(WINDOW_LABEL[row.window] || row.window) + '</span>' +
+      '<span class="text-slate-300">' +
+      escapeHtml(FAMILY_LABEL[row.family] || row.family) +
+      '</span>' +
+      '<span class="text-slate-500">' +
+      escapeHtml(WINDOW_LABEL[row.window] || row.window) +
+      '</span>' +
       bar(row.remainingPercent, row.disabled) +
-      '<span class="font-mono font-bold ' + tone + ' tabular-nums"' + title + '>' + escapeHtml(value) + '</span>' +
+      '<span class="font-mono font-bold ' +
+      tone +
+      ' tabular-nums"' +
+      title +
+      '>' +
+      escapeHtml(value) +
+      '</span>' +
       '</div>'
     );
   };
@@ -957,8 +973,12 @@ function renderVendorQuota(vendor) {
     return (
       '<div class="bg-slate-800/60 rounded-xl p-3 border border-slate-700 space-y-2">' +
       '<div class="flex items-baseline justify-between gap-2">' +
-      '<span class="text-xs font-bold text-white">' + escapeHtml(acc.accountId) + '</span>' +
-      '<span class="text-[10px] text-slate-500">' + escapeHtml(who) + '</span></div>' +
+      '<span class="text-xs font-bold text-white">' +
+      escapeHtml(acc.accountId) +
+      '</span>' +
+      '<span class="text-[10px] text-slate-500">' +
+      escapeHtml(who) +
+      '</span></div>' +
       (acc.rows || []).map(rowHtml).join('') +
       ((acc.rows || []).some((r) => r.resetsAtText)
         ? '<div class="text-[10px] text-slate-500">Reset: ' +
@@ -979,7 +999,10 @@ function renderVendorQuota(vendor) {
 
   const problemHtml = (p) =>
     '<div class="text-[11px] px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-200">' +
-    '<span class="font-bold">' + escapeHtml(p.accountId) + '</span> — ' + escapeHtml(p.reason) +
+    '<span class="font-bold">' +
+    escapeHtml(p.accountId) +
+    '</span> — ' +
+    escapeHtml(p.reason) +
     (p.switched ? ' <span class="text-amber-300/70">(cần chạy lại lệnh quota)</span>' : '') +
     '</div>';
 
@@ -995,9 +1018,13 @@ function renderVendorQuota(vendor) {
       ? 'bg-slate-800 text-slate-300 border border-slate-700'
       : 'bg-amber-500/15 text-amber-300 border border-amber-500/30') +
     '">' +
-    escapeHtml(id.known ? 'đăng nhập Google (theo file cũ): ' + id.email : 'không rõ account host') +
+    escapeHtml(
+      id.known ? 'đăng nhập Google (theo file cũ): ' + id.email : 'không rõ account host'
+    ) +
     '</span></div>' +
-    '<div class="grid sm:grid-cols-2 gap-2.5">' + (vendor.accounts || []).map(accountHtml).join('') + '</div>' +
+    '<div class="grid sm:grid-cols-2 gap-2.5">' +
+    (vendor.accounts || []).map(accountHtml).join('') +
+    '</div>' +
     (vendor.problems || []).map(problemHtml).join('') +
     '</div>';
 }
@@ -1019,9 +1046,17 @@ function renderCapacity() {
 
   const tile = (label, value, cls, note) =>
     '<div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700">' +
-    '<div class="text-[11px] text-slate-400 font-semibold uppercase">' + label + '</div>' +
-    '<div class="text-xl font-black mt-1 ' + cls + '">' + value + '</div>' +
-    '<div class="text-[10px] text-slate-400 mt-0.5">' + note + '</div></div>';
+    '<div class="text-[11px] text-slate-400 font-semibold uppercase">' +
+    label +
+    '</div>' +
+    '<div class="text-xl font-black mt-1 ' +
+    cls +
+    '">' +
+    value +
+    '</div>' +
+    '<div class="text-[10px] text-slate-400 mt-0.5">' +
+    note +
+    '</div></div>';
 
   if (!cap) {
     summaryEl.innerHTML =
@@ -1038,37 +1073,47 @@ function renderCapacity() {
   const s = cap.summary;
   const known = s.sufficient - s.unknownBudget;
   if (tabLabel) {
-    tabLabel.textContent =
-      known > 0 ? Math.floor(s.tasksRemaining) + ' lượt' : 'chưa rõ';
+    tabLabel.textContent = known > 0 ? Math.floor(s.tasksRemaining) + ' lượt' : 'chưa rõ';
   }
 
   summaryEl.innerHTML =
     '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800 space-y-4">' +
-      '<div class="flex items-start justify-between flex-wrap gap-2">' +
-        '<div><h3 class="text-sm font-black text-white">Sức chứa còn lại của cả pool</h3>' +
-        '<p class="text-[11px] text-slate-500 mt-0.5">Tính theo việc cỡ ' +
-        escapeHtml(cap.difficultyName) + '</p></div>' +
-        (cap.derivedFromRouter
-          ? '<span class="text-[10px] px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30">suy ra từ 9router</span>'
-          : '') +
-      '</div>' +
-      '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">' +
-        tile('Lượt việc còn lại',
-             known > 0 ? Math.floor(s.tasksRemaining) : 'chưa rõ',
-             known > 0 ? 'text-brand' : 'text-slate-400',
-             known > 0 ? 'trên ' + known + ' model đã khai hạn mức' : 'chưa model nào khai hạn mức') +
-        tile('Model đủ năng lực', String(s.sufficient), 'text-emerald-400', 'trên tổng ' + s.total) +
-        tile('Sắp cạn', String(s.atRisk), s.atRisk > 0 ? 'text-rose-400' : 'text-emerald-400',
-             s.atRisk > 0 ? 'còn dưới 2 lượt việc' : 'không có model nào sắp cạn') +
-        tile('Bay mù', String(s.unknownBudget), s.unknownBudget > 0 ? 'text-amber-400' : 'text-emerald-400',
-             'chưa khai hạn mức token') +
-      '</div>' +
-      (s.unknownBudget > 0
-        ? '<div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200">' +
-          'Chưa khai hạn mức thì không tính được còn bao nhiêu lượt việc. Khai ' +
-          '<span class="font-mono">tokensPerDay</span> hoặc <span class="font-mono">tokensPerMonth</span> ' +
-          'cho từng tài khoản để bảng này có ý nghĩa.</div>'
-        : '') +
+    '<div class="flex items-start justify-between flex-wrap gap-2">' +
+    '<div><h3 class="text-sm font-black text-white">Sức chứa còn lại của cả pool</h3>' +
+    '<p class="text-[11px] text-slate-500 mt-0.5">Tính theo việc cỡ ' +
+    escapeHtml(cap.difficultyName) +
+    '</p></div>' +
+    (cap.derivedFromRouter
+      ? '<span class="text-[10px] px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30">suy ra từ 9router</span>'
+      : '') +
+    '</div>' +
+    '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">' +
+    tile(
+      'Lượt việc còn lại',
+      known > 0 ? Math.floor(s.tasksRemaining) : 'chưa rõ',
+      known > 0 ? 'text-brand' : 'text-slate-400',
+      known > 0 ? 'trên ' + known + ' model đã khai hạn mức' : 'chưa model nào khai hạn mức'
+    ) +
+    tile('Model đủ năng lực', String(s.sufficient), 'text-emerald-400', 'trên tổng ' + s.total) +
+    tile(
+      'Sắp cạn',
+      String(s.atRisk),
+      s.atRisk > 0 ? 'text-rose-400' : 'text-emerald-400',
+      s.atRisk > 0 ? 'còn dưới 2 lượt việc' : 'không có model nào sắp cạn'
+    ) +
+    tile(
+      'Bay mù',
+      String(s.unknownBudget),
+      s.unknownBudget > 0 ? 'text-amber-400' : 'text-emerald-400',
+      'chưa khai hạn mức token'
+    ) +
+    '</div>' +
+    (s.unknownBudget > 0
+      ? '<div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200">' +
+        'Chưa khai hạn mức thì không tính được còn bao nhiêu lượt việc. Khai ' +
+        '<span class="font-mono">tokensPerDay</span> hoặc <span class="font-mono">tokensPerMonth</span> ' +
+        'cho từng tài khoản để bảng này có ý nghĩa.</div>'
+      : '') +
     '</div>';
 
   renderVendorQuota(cap.vendorQuota);
@@ -1090,57 +1135,99 @@ function renderCapacity() {
     };
     const entry = map[row.status] || map.unknown;
     const extra = row.boundBy && row.status !== 'unknown' ? ' · ' + row.boundBy : '';
-    return '<span class="text-[10px] px-2 py-0.5 rounded border ' + entry[0] + '">' + entry[1] + extra + '</span>';
+    return (
+      '<span class="text-[10px] px-2 py-0.5 rounded border ' +
+      entry[0] +
+      '">' +
+      entry[1] +
+      extra +
+      '</span>'
+    );
   };
 
   const bar = (row) => {
     if (row.runway === null) return '<span class="text-[11px] text-slate-500">chưa rõ</span>';
     const pct = Math.min(100, (row.runway / 10) * 100);
     const colour = row.atRisk ? 'bg-rose-500' : row.runway < 5 ? 'bg-amber-500' : 'bg-emerald-500';
-    return '<div class="flex items-center gap-2">' +
+    return (
+      '<div class="flex items-center gap-2">' +
       '<div class="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden min-w-[60px]">' +
-      '<div class="h-full ' + colour + '" style="width:' + pct.toFixed(0) + '%"></div></div>' +
-      '<span class="text-[11px] font-mono ' + (row.atRisk ? 'text-rose-300' : 'text-slate-300') + '">' +
-      row.runway.toFixed(1) + '</span></div>';
+      '<div class="h-full ' +
+      colour +
+      '" style="width:' +
+      pct.toFixed(0) +
+      '%"></div></div>' +
+      '<span class="text-[11px] font-mono ' +
+      (row.atRisk ? 'text-rose-300' : 'text-slate-300') +
+      '">' +
+      row.runway.toFixed(1) +
+      '</span></div>'
+    );
   };
 
   tableEl.innerHTML =
     '<div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">' +
-      '<div class="overflow-x-auto"><table class="w-full text-xs min-w-[640px]">' +
-      '<thead><tr class="bg-slate-800/60 text-slate-400 uppercase text-[10px]">' +
-        '<th class="text-left px-4 py-2.5 font-semibold">Model</th>' +
-        '<th class="text-left px-4 py-2.5 font-semibold">Bậc</th>' +
-        '<th class="text-left px-4 py-2.5 font-semibold">Cấp độ</th>' +
-        '<th class="text-left px-4 py-2.5 font-semibold">Trạng thái</th>' +
-        '<th class="text-left px-4 py-2.5 font-semibold">Cỡ việc</th>' +
-        '<th class="text-left px-4 py-2.5 font-semibold w-40">Còn mấy lượt</th>' +
-      '</tr></thead><tbody>' +
-      rows.map((row) =>
-        '<tr class="border-t border-slate-800' + (row.atRisk ? ' bg-rose-500/5' : '') + '">' +
-        '<td class="px-4 py-2.5"><div class="font-mono text-slate-200">' + escapeHtml(row.model) + '</div>' +
-          '<div class="text-[10px] text-slate-500 font-mono">' + escapeHtml(row.accountId) + '</div></td>' +
-        '<td class="px-4 py-2.5 font-mono text-slate-400">' + row.tier + '</td>' +
-        '<td class="px-4 py-2.5"><span class="' +
-          (row.sufficient ? 'text-slate-200' : 'text-slate-500 line-through') + '">' +
-          escapeHtml(row.gradeName) + '</span></td>' +
-        '<td class="px-4 py-2.5">' + statusChip(row) + '</td>' +
-        '<td class="px-4 py-2.5 font-mono text-slate-400">' + Math.round(row.tokensPerTask / 1000) + 'K</td>' +
-        '<td class="px-4 py-2.5">' + bar(row) + '</td>' +
-        '</tr>').join('') +
-      '</tbody></table></div></div>';
+    '<div class="overflow-x-auto"><table class="w-full text-xs min-w-[640px]">' +
+    '<thead><tr class="bg-slate-800/60 text-slate-400 uppercase text-[10px]">' +
+    '<th class="text-left px-4 py-2.5 font-semibold">Model</th>' +
+    '<th class="text-left px-4 py-2.5 font-semibold">Bậc</th>' +
+    '<th class="text-left px-4 py-2.5 font-semibold">Cấp độ</th>' +
+    '<th class="text-left px-4 py-2.5 font-semibold">Trạng thái</th>' +
+    '<th class="text-left px-4 py-2.5 font-semibold">Cỡ việc</th>' +
+    '<th class="text-left px-4 py-2.5 font-semibold w-40">Còn mấy lượt</th>' +
+    '</tr></thead><tbody>' +
+    rows
+      .map(
+        (row) =>
+          '<tr class="border-t border-slate-800' +
+          (row.atRisk ? ' bg-rose-500/5' : '') +
+          '">' +
+          '<td class="px-4 py-2.5"><div class="font-mono text-slate-200">' +
+          escapeHtml(row.model) +
+          '</div>' +
+          '<div class="text-[10px] text-slate-500 font-mono">' +
+          escapeHtml(row.accountId) +
+          '</div></td>' +
+          '<td class="px-4 py-2.5 font-mono text-slate-400">' +
+          row.tier +
+          '</td>' +
+          '<td class="px-4 py-2.5"><span class="' +
+          (row.sufficient ? 'text-slate-200' : 'text-slate-500 line-through') +
+          '">' +
+          escapeHtml(row.gradeName) +
+          '</span></td>' +
+          '<td class="px-4 py-2.5">' +
+          statusChip(row) +
+          '</td>' +
+          '<td class="px-4 py-2.5 font-mono text-slate-400">' +
+          Math.round(row.tokensPerTask / 1000) +
+          'K</td>' +
+          '<td class="px-4 py-2.5">' +
+          bar(row) +
+          '</td>' +
+          '</tr>'
+      )
+      .join('') +
+    '</tbody></table></div></div>';
 
   if (claudeEl) {
     const c = cap.claude;
-    claudeEl.innerHTML = c && c.available
-      ? '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800">' +
-        '<h3 class="text-sm font-black text-white mb-1">Claude Code (ngoài pool)</h3>' +
-        '<p class="text-[11px] text-slate-500 mb-3">Việc Claude Code làm trực tiếp không đi qua 9router, nên báo riêng — cộng vào sẽ ngụ ý một ngân sách chung không tồn tại.</p>' +
-        '<div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">' +
-        tile('Lượt trả lời', String(c.messages), 'text-slate-200', 'đọc từ transcript') +
-        tile('Token', (c.tokens / 1e6).toFixed(1) + 'M', 'text-slate-200', 'gồm cả đọc cache') +
-        tile('Tỉ lệ cache', (c.cacheHitRate * 100).toFixed(1) + '%', 'text-emerald-400', 'rẻ hơn ~10 lần nhập mới') +
-        '</div></div>'
-      : '';
+    claudeEl.innerHTML =
+      c && c.available
+        ? '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800">' +
+          '<h3 class="text-sm font-black text-white mb-1">Claude Code (ngoài pool)</h3>' +
+          '<p class="text-[11px] text-slate-500 mb-3">Việc Claude Code làm trực tiếp không đi qua 9router, nên báo riêng — cộng vào sẽ ngụ ý một ngân sách chung không tồn tại.</p>' +
+          '<div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">' +
+          tile('Lượt trả lời', String(c.messages), 'text-slate-200', 'đọc từ transcript') +
+          tile('Token', (c.tokens / 1e6).toFixed(1) + 'M', 'text-slate-200', 'gồm cả đọc cache') +
+          tile(
+            'Tỉ lệ cache',
+            (c.cacheHitRate * 100).toFixed(1) + '%',
+            'text-emerald-400',
+            'rẻ hơn ~10 lần nhập mới'
+          ) +
+          '</div></div>'
+        : '';
   }
 }
 

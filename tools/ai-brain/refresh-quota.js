@@ -99,16 +99,28 @@ function identityFor(account, options) {
   // asks whether this is the same login as last time.
   if (account.identityCommand) {
     try {
-      const out = (opts.runIdentity || execFileSync)(account.identityCommand, account.identityArgs || [], {
-        encoding: 'utf8',
-        timeout: Number(account.identityTimeoutMs) > 0 ? Number(account.identityTimeoutMs) : 120000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      const value = String(out || '').trim().split('\n').pop().trim();
+      const out = (opts.runIdentity || execFileSync)(
+        account.identityCommand,
+        account.identityArgs || [],
+        {
+          encoding: 'utf8',
+          timeout:
+            Number(account.identityTimeoutMs) > 0 ? Number(account.identityTimeoutMs) : 120000,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      );
+      const value = String(out || '')
+        .trim()
+        .split('\n')
+        .pop()
+        .trim();
       if (value) return { known: true, email: value, source: 'fingerprint' };
       return { known: false, reason: 'lệnh nhận diện không in ra gì' };
     } catch (e) {
-      return { known: false, reason: 'lệnh nhận diện hỏng: ' + String(e.message || e.code).slice(0, 120) };
+      return {
+        known: false,
+        reason: 'lệnh nhận diện hỏng: ' + String(e.message || e.code).slice(0, 120),
+      };
     }
   }
 
@@ -136,7 +148,10 @@ function refreshAccount(account, options) {
   // now" is a different question for each one. Without it a Claude Code address
   // gets compared against the Antigravity login and every reading is thrown
   // away for a mismatch that was never meaningful.
-  const quota = Object.assign({ provider: account.provider }, READERS[account.provider].read(account, opts));
+  const quota = Object.assign(
+    { provider: account.provider },
+    READERS[account.provider].read(account, opts)
+  );
 
   // Failures are cached too. "The last attempt failed at 09:12 because the
   // eligibility check timed out" is a fact the dashboard should show; dropping

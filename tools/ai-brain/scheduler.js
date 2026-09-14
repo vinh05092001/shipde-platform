@@ -26,7 +26,13 @@
 
 const { eligibleAccounts } = require('./capabilities');
 const { isDispatchable } = require('./quota');
-const { expandOfferings, headroomForAll, rankOfferings, laddered, Strategy } = require('./offerings');
+const {
+  expandOfferings,
+  headroomForAll,
+  rankOfferings,
+  laddered,
+  Strategy,
+} = require('./offerings');
 const { rankByFitness, Difficulty } = require('./fitness');
 
 const DEFAULTS = {
@@ -56,7 +62,8 @@ function cachedReadings(ctx) {
   try {
     const { readIdentity } = require('./agy-identity');
     const { usableReadings } = require('./quota-store');
-    return usableReadings(readIdentity({ home: ctx.home }), { home: ctx.home, now: ctx.now }).reported;
+    return usableReadings(readIdentity({ home: ctx.home }), { home: ctx.home, now: ctx.now })
+      .reported;
   } catch (e) {
     return {};
   }
@@ -91,10 +98,15 @@ function planDispatch(items, accounts, context) {
   // Read from the cache rather than by calling a CLI: planning must not block
   // on a round trip per account.
   const reported = ctx.reported !== undefined ? ctx.reported : cachedReadings(ctx);
-  const headrooms = headroomForAll(offerings, ctx.eventsByAccount || {}, ctx.eventsByOffering || {}, {
-    now,
-    reported,
-  });
+  const headrooms = headroomForAll(
+    offerings,
+    ctx.eventsByAccount || {},
+    ctx.eventsByOffering || {},
+    {
+      now,
+      reported,
+    }
+  );
 
   // What is already in flight, from the caller rather than inferred: the
   // scheduler must never assume a slot is free because it cannot see the work.
@@ -149,16 +161,24 @@ function planDispatch(items, accounts, context) {
 
     if (isImplementation && implementationLoad >= limits.maxImplementationAgents) {
       deferred.push(
-        waiting(item, 'IMPLEMENTATION_LIMIT', 'trần ' + limits.maxImplementationAgents + ' agent hiện thực')
+        waiting(
+          item,
+          'IMPLEMENTATION_LIMIT',
+          'trần ' + limits.maxImplementationAgents + ' agent hiện thực'
+        )
       );
       continue;
     }
     if (isResearch && researchLoad >= limits.maxResearchAgents) {
-      deferred.push(waiting(item, 'RESEARCH_LIMIT', 'trần ' + limits.maxResearchAgents + ' agent nghiên cứu'));
+      deferred.push(
+        waiting(item, 'RESEARCH_LIMIT', 'trần ' + limits.maxResearchAgents + ' agent nghiên cứu')
+      );
       continue;
     }
     if (isReview && reviewLoad >= limits.maxReviewAgents) {
-      deferred.push(waiting(item, 'REVIEW_LIMIT', 'trần ' + limits.maxReviewAgents + ' agent review'));
+      deferred.push(
+        waiting(item, 'REVIEW_LIMIT', 'trần ' + limits.maxReviewAgents + ' agent review')
+      );
       continue;
     }
 
@@ -179,7 +199,13 @@ function planDispatch(items, accounts, context) {
       continue;
     }
     if (eligible.length === 0) {
-      deferred.push(waiting(item, 'NO_ELIGIBLE_ACCOUNT', rejected.map((r) => r.account + ': ' + r.reason).join('; ')));
+      deferred.push(
+        waiting(
+          item,
+          'NO_ELIGIBLE_ACCOUNT',
+          rejected.map((r) => r.account + ': ' + r.reason).join('; ')
+        )
+      );
       continue;
     }
 
@@ -207,7 +233,13 @@ function planDispatch(items, accounts, context) {
     let fitnessRejected = [];
     for (const { tier, offerings: inTier } of laddered(eligible)) {
       const free = inTier.filter((o) => (perAccountLoad[o.accountId] || 0) < limits.maxPerAccount);
-      const { ranked, rejected } = rankByFitness(free, difficulty, headrooms, ctx.history || {}, fitnessOpts);
+      const { ranked, rejected } = rankByFitness(
+        free,
+        difficulty,
+        headrooms,
+        ctx.history || {},
+        fitnessOpts
+      );
       fitnessRejected = fitnessRejected.concat(rejected);
       if (ranked.length > 0) {
         withRoom = ranked.map((r) => r.offering);
@@ -218,14 +250,20 @@ function planDispatch(items, accounts, context) {
     }
 
     if (withRoom.length === 0) {
-      const why = fitnessRejected.length > 0
-        ? fitnessRejected
-            .map((r) => {
-              const h = headrooms[r.offeringId];
-              return r.offeringId + ': ' + r.reason + (h && h.boundBy ? ' (theo ' + h.boundBy + ')' : '');
-            })
-            .join('; ')
-        : eligible.map((o) => o.id + ': đang bận').join('; ');
+      const why =
+        fitnessRejected.length > 0
+          ? fitnessRejected
+              .map((r) => {
+                const h = headrooms[r.offeringId];
+                return (
+                  r.offeringId +
+                  ': ' +
+                  r.reason +
+                  (h && h.boundBy ? ' (theo ' + h.boundBy + ')' : '')
+                );
+              })
+              .join('; ')
+          : eligible.map((o) => o.id + ': đang bận').join('; ');
       deferred.push(waiting(item, 'NO_QUOTA_OR_BUSY', why));
       continue;
     }

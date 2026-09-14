@@ -43,7 +43,11 @@ describe('Refreshing one account', () => {
     const p = tmpStore();
     const r = refreshAccount(
       { id: 'acc-a', provider: 'antigravity' },
-      { path: p, identity: ME, readQuota: () => ({ available: false, reason: 'mạng lỗi', account: ME }) }
+      {
+        path: p,
+        identity: ME,
+        readQuota: () => ({ available: false, reason: 'mạng lỗi', account: ME }),
+      }
     );
     assert.equal(r.ok, false);
     assert.match(r.reason, /mạng lỗi/);
@@ -86,7 +90,10 @@ describe('Skipping accounts that cannot answer', () => {
     // Recording "no data" for an account that was never asked would read as a
     // failed reading rather than an absent one.
     const p = tmpStore();
-    refreshAccount({ id: 'router', provider: '9router' }, { path: p, identity: ME, readQuota: () => OK });
+    refreshAccount(
+      { id: 'router', provider: '9router' },
+      { path: p, identity: ME, readQuota: () => OK }
+    );
     assert.deepEqual(loadStore({ path: p }).accounts, {});
   });
 });
@@ -140,15 +147,25 @@ describe('An account that names its own login', () => {
 
   test('two different logins do not match', () => {
     const { sameAccount } = require('../agy-identity');
-    const a = identityFor({ id: 'b', identityCommand: 'p' }, { runIdentity: () => 'fingerprint:aaa' });
-    const b = identityFor({ id: 'b', identityCommand: 'p' }, { runIdentity: () => 'fingerprint:bbb' });
+    const a = identityFor(
+      { id: 'b', identityCommand: 'p' },
+      { runIdentity: () => 'fingerprint:aaa' }
+    );
+    const b = identityFor(
+      { id: 'b', identityCommand: 'p' },
+      { runIdentity: () => 'fingerprint:bbb' }
+    );
     assert.equal(sameAccount(a, b), false);
   });
 
   test('a probe that fails leaves the identity unknown, not assumed', () => {
     const id = identityFor(
       { id: 'b', identityCommand: 'probe' },
-      { runIdentity: () => { throw Object.assign(new Error('container chưa chạy'), { code: 'ENOENT' }); } }
+      {
+        runIdentity: () => {
+          throw Object.assign(new Error('container chưa chạy'), { code: 'ENOENT' });
+        },
+      }
     );
     assert.equal(id.known, false);
     assert.match(id.reason, /lệnh nhận diện hỏng/);
@@ -193,7 +210,10 @@ describe('Reading the Claude Code subscription limits', () => {
     const p = tmpStore();
     const r = refreshAccount(
       { id: 'claude', provider: 'claude-code', email: 'me@example.com' },
-      { path: p, readUsage: () => ({ available: false, reason: 'claude.exe không chạy', rows: [] }) }
+      {
+        path: p,
+        readUsage: () => ({ available: false, reason: 'claude.exe không chạy', rows: [] }),
+      }
     );
     assert.equal(r.ok, false);
     assert.match(r.reason, /không chạy/);

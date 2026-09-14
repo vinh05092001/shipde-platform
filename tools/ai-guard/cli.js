@@ -85,7 +85,11 @@ async function main() {
       console.error('Không xác định được nhánh. Truyền --branch.');
       process.exit(2);
     }
-    console.log(releaseClaim(branch) ? 'Đã trả nhánh "' + branch + '"' : 'Không có claim nào cho "' + branch + '"');
+    console.log(
+      releaseClaim(branch)
+        ? 'Đã trả nhánh "' + branch + '"'
+        : 'Không có claim nào cho "' + branch + '"'
+    );
     return;
   }
 
@@ -95,14 +99,23 @@ async function main() {
     console.log('Nhánh hiện tại: ' + (branch || '(không rõ)'));
     console.log('Danh tính: ' + owner);
     console.log('');
-    console.log('Phiên AO đang sống (' + ao.holders.length + ')' + (ao.reachable ? '' : ' — daemon không phản hồi'));
+    console.log(
+      'Phiên AO đang sống (' +
+        ao.holders.length +
+        ')' +
+        (ao.reachable ? '' : ' — daemon không phản hồi')
+    );
     for (const h of ao.holders) {
-      console.log('  ' + h.id + ' [' + h.harness + '/' + h.kind + '] ' + h.state + ' -> ' + h.branch);
+      console.log(
+        '  ' + h.id + ' [' + h.harness + '/' + h.kind + '] ' + h.state + ' -> ' + h.branch
+      );
     }
     console.log('');
     console.log('Claim trực tiếp (' + claims.length + ')');
     for (const c of claims) {
-      console.log('  ' + c.owner + ' [' + c.harness + '] -> ' + c.branch + ' (đến ' + c.expiresAt + ')');
+      console.log(
+        '  ' + c.owner + ' [' + c.harness + '] -> ' + c.branch + ' (đến ' + c.expiresAt + ')'
+      );
     }
     return;
   }
@@ -118,8 +131,12 @@ async function main() {
     console.error('');
     for (const h of result.holders) {
       console.error(
-        '    ' + (h.owner || h.id) + ' [' + (h.harness || '?') + ']' +
-        (h.lastActivityAt ? ' hoạt động lúc ' + h.lastActivityAt : '')
+        '    ' +
+          (h.owner || h.id) +
+          ' [' +
+          (h.harness || '?') +
+          ']' +
+          (h.lastActivityAt ? ' hoạt động lúc ' + h.lastActivityAt : '')
       );
     }
     console.error('');

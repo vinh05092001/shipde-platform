@@ -142,7 +142,11 @@ function readQuota(options) {
     // An eligibility check reaches out to Google for a profile picture, and a
     // timeout there is a network problem rather than an exhausted account.
     if (/eligibility check failed/i.test(combined)) {
-      return stamp({ available: false, reason: 'Eligibility check thất bại (mạng), chưa đọc được quota', rows: [] });
+      return stamp({
+        available: false,
+        reason: 'Eligibility check thất bại (mạng), chưa đọc được quota',
+        rows: [],
+      });
     }
     const parsed = parseQuota(combined);
     if (parsed.available) return stamp(parsed);
