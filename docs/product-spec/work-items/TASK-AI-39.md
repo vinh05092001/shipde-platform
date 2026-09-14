@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-39.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-39-agent-scan` |
-| Pull Request | https://github.com/vinh05092001/shipde-platform/pulls |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/26 |
 
 ## Business outcome
 
