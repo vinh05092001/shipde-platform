@@ -156,19 +156,28 @@ Prohibited in this Work Item:
      token encountered by Agent-Scan in an agent artifact is reported as an informational
      secondary finding without displacing Gitleaks authority.
 - Define scanner execution modes and network governance reconciling manifest truth:
-  1. Manifest network alignment: In accordance with `tools/ecosystem-manifest.json`,
-     `telemetry_network_behavior: snyk-api-outbound-https` with outbound HTTPS endpoints
-     restricted strictly to `https://api.snyk.io` and `https://app.snyk.io`.
-  2. Local execution mode: Under `local_mode: local-rule-evaluation (requires SNYK_TOKEN for rule catalog synchronization)`,
-     local scans evaluate rules locally against agent artifacts, but catalog synchronization
-     requires `SNYK_TOKEN` over HTTPS. For developer worktrees without `SNYK_TOKEN`,
-     the scanner must operate in an offline cached mode (evaluating against local schemas
-     and cached heuristic rules without making outbound requests) or report a governed
-     missing-token diagnostic (`SNYK_TOKEN_ABSENT_OFFLINE_MODE`, exit code 0 for non-blocking local runs),
-     rather than hanging or leaking tokens.
-  3. Authenticated CI platform scan: governed execution using `SNYK_TOKEN` within
-     GitHub Actions under the `SECURITY_REVIEW` and `PR_REVIEW` profiles for full
-     platform analysis and Evo reporting.
+  1. Recorded source conflict (unresolved at source, not resolvable in this PR):
+     `tools/ecosystem-manifest.json` declares `telemetry_network_behavior: snyk-api-outbound-https`
+     with `outbound_endpoints` `https://api.snyk.io` and `https://app.snyk.io`, and
+     `credential_requirement: required-snyk-token`. But `agent-scan` is listed only in
+     profiles `SECURITY_REVIEW` (`network_policy: local-scan-only`) and `PR_REVIEW`
+     (`network_policy: github-api-and-localhost-only`). Neither profile permits egress to
+     `api.snyk.io` or `app.snyk.io`. Therefore the manifest's authenticated Snyk platform
+     mode is NOT exercisable under any profile `agent-scan` currently belongs to. This
+     contradiction is recorded, not papered over, and is proven by `AC-AI-39-15`.
+  2. Governed resolution for this specification: under the current profile set,
+     `agent-scan` is specified to run in tokenless offline local-rule-evaluation mode
+     only, evaluating bundled rule schemas and cached heuristics against agent artifacts
+     with exactly `0` outbound requests. Absent `SNYK_TOKEN` it emits the governed
+     diagnostic `SNYK_TOKEN_ABSENT_OFFLINE_MODE` and exits `0` (non-blocking), rather
+     than hanging, retrying, or leaking credentials.
+  3. Authenticated Snyk platform analysis and Evo reporting remain OUT of contract until
+     a governed amendment lands, because it cannot be implemented as specified today. It
+     requires EITHER an amendment to `tools/ecosystem-profiles.json` adding an explicit
+     egress allowlist for the two Snyk endpoints, OR an amendment to
+     `tools/ecosystem-manifest.json` narrowing `agent-scan` to a local-only tool. Both
+     files are outside this Work Item's allowed paths, so the choice is an owner decision
+     recorded in Residual limitations, and is a hard prerequisite of promotion criterion 7.
   4. Fail-closed operational semantics: clean scan exits `0`; detected security defect
      (prompt injection, malicious skill, MCP overprivilege) exits `1`; operational
      error (syntax error, unparseable YAML/JSON, invalid arguments) exits `2`.
@@ -203,13 +212,14 @@ Prohibited in this Work Item:
 
 | Rule | Behavior |
 |---|---|
-| `AI-39-R01` | Truthful lifecycle state: `agent-scan` remains `PENDING` with `blocking_policy: NON_BLOCKING` in `tools/ecosystem-manifest.json` until tooling installation and CI integration are fully implemented and verified. |
+| `AI-39-R01` | Truthful lifecycle state: `agent-scan` remains `PENDING` with `blocking_policy: NON_BLOCKING` in `tools/ecosystem-manifest.json` until every one of the 7 numbered Manifest promotion criteria has been satisfied with the named artifact evidence. "Verified" is defined exclusively by that list: an installed binary, a passing `--version`, or a single successful scan is explicitly NOT sufficient evidence for promotion. |
 | `AI-39-R02` | Admission scanning for agent artifacts: Under `AI-TOOL-05`, all agent skills, prompt templates, and MCP server configurations committed to the repository must undergo automated admission scanning before activation. |
 | `AI-39-R03` | Prompt injection and jailbreak prevention: Agent scan rules must inspect prompt definitions and skill instructions for prompt injection heuristics, jailbreak patterns, and unauthorized instruction overriding (exit code 1 on detection). |
 | `AI-39-R04` | Least-privilege MCP configuration: MCP server definitions must not permit unconstrained shell execution, expose wildcard network bindings (`0.0.0.0`, count must be 0), or inject unredacted environment secrets into tool contexts. Payload budget is 1048576 bytes. |
 | `AI-39-R05` | Authority separation across quality gates: Gitleaks 8.24.0 retains exclusive authority over git commit and code secret scanning. Agent-Scan does not duplicate Gitleaks; its secret inspection is strictly confined to agent prompt exfiltration instructions and MCP tool binding leaks. Any detected static plaintext token is treated as an informational secondary finding without displacing Gitleaks. |
 | `AI-39-R06` | Fail-closed operational policy and numeric thresholds: Clean scan exits 0. Security defect detected (severity >= 7.0) exits 1. Operational failure (syntax error, malformed frontmatter, invalid arguments) exits 2. Scan timeout is capped at 60000ms. Maximum skill file size budget is 512000 bytes. |
-| `AI-39-R07` | Network behavior and credential governance: Aligned to manifest declarations, network behavior is `snyk-api-outbound-https` connecting exclusively to `https://api.snyk.io` and `https://app.snyk.io`. Local execution uses `local_mode: local-rule-evaluation (requires SNYK_TOKEN for rule catalog synchronization)`. When `SNYK_TOKEN` is absent in local developer worktrees, scanner operates in cached local mode or reports an unblocking offline warning (`SNYK_TOKEN_ABSENT_OFFLINE_MODE`, exit code 0) rather than hanging or leaking credentials. |
+| `AI-39-R07` | Network behavior under governed profiles: `agent-scan` belongs only to `SECURITY_REVIEW` (`local-scan-only`) and `PR_REVIEW` (`github-api-and-localhost-only`). Neither permits egress to `https://api.snyk.io` or `https://app.snyk.io`, so the only contracted execution mode today is tokenless offline local-rule-evaluation with exactly 0 outbound requests. Absent `SNYK_TOKEN` the scanner emits `SNYK_TOKEN_ABSENT_OFFLINE_MODE` and exits 0 (non-blocking) rather than hanging, retrying or leaking credentials. Manifest `local_mode` still reads `local-rule-evaluation (requires SNYK_TOKEN for rule catalog synchronization)`; catalog synchronization is therefore unavailable under these profiles and rules ship bundled and pinned with `0.6.1`. |
+| `AI-39-R10` | Recorded profile/manifest egress conflict: the manifest declares `snyk-api-outbound-https` with `required-snyk-token`, which no profile containing `agent-scan` allows. Authenticated Snyk platform analysis and Evo reporting are therefore OUT of contract until an owner amends either `tools/ecosystem-profiles.json` (adding an explicit 2-endpoint egress allowlist) or `tools/ecosystem-manifest.json` (narrowing `agent-scan` to local-only). Both files are outside this Work Item's allowed paths. The conflict must be resolved at source before promotion, and must never be resolved by weakening a profile `network_policy` to silence it. `AC-AI-39-15` proves the conflict currently exists. |
 | `AI-39-R08` | Authoritative health check contract: In accordance with `tools/ecosystem-manifest.json`, the authoritative health check is `snyk-agent-scan --version` (exits 0 with `0.6.1`). `python -m pip show snyk-agent-scan` provides non-executing packaging inspection. In uninstalled state, doctor reports `PENDING` without false failure. |
 | `AI-39-R09` | Version pinning and provenance: Downstream installation must pin exact version `0.6.1` via pip, verifying package integrity and preventing unpinned drift across environments. |
 
@@ -248,14 +258,27 @@ Toolchain and quality gate impact:
 | `AC-AI-39-06` | Invariant check: zero forbidden install lifecycle scripts | `node -e "const r=require('./package.json'), w=require('./apps/web/package.json'); const forbidden=['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => (r.scripts && r.scripts[s]) \|\| (w.scripts && w.scripts[s])); if(found.length > 0) throw new Error('Forbidden lifecycle script detected: ' + found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json, apps/web/package.json` |
 | `AC-AI-39-07` | Negative proof: forbidden install lifecycle script triggers failure | `node -e "const synthetic = { scripts: { postinstall: 'pip install snyk-agent-scan' } }; const forbidden = ['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => synthetic.scripts[s]); if(found.length > 0) { console.error('FORBIDDEN_LIFECYCLE_SCRIPT: detected ' + found.join(', ')); process.exit(1); }"` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` | command stderr |
 | `AC-AI-39-08` | Specification structural integrity (all required sections) | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all required sections present');"` | `0` | `Specification structural integrity verified: all required sections present` | `docs/product-spec/work-items/TASK-AI-39.md` |
-| `AC-AI-39-09` | Specification contract, rules, and numeric thresholds completeness | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); tokens=['0.6.1','8.24.0','60000ms','512000','1048576','BLOCKED_DEPENDENCY','AI-39-R01','AI-39-R02','AI-39-R03','AI-39-R04','AI-39-R05','AI-39-R06','AI-39-R07','AI-39-R08','AI-39-R09','snyk-agent-scan --version','snyk-api-outbound-https','https://api.snyk.io','https://app.snyk.io']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-39-R01 through R09, network, and health check tokens verified');"` | `0` | `Specification numeric thresholds, rules AI-39-R01 through R09, network, and health check tokens verified` | `docs/product-spec/work-items/TASK-AI-39.md` |
-| `AC-AI-39-10` | Manifest audit green with 0 errors and exactly 1 drift warning | `node tools/ai-brain/cli.js manifest` | `0` | `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` | `tools/ai-brain/cli.js stdout` |
+| `AC-AI-39-09` | Specification contract, rules, and numeric thresholds completeness | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); tokens=['0.6.1','8.24.0','60000ms','512000','1048576','BLOCKED_DEPENDENCY','AI-39-R01','AI-39-R02','AI-39-R03','AI-39-R04','AI-39-R05','AI-39-R06','AI-39-R07','AI-39-R08','AI-39-R09','snyk-agent-scan --version','snyk-api-outbound-https','https://api.snyk.io','https://app.snyk.io','AI-39-R10','PROFILE_EGRESS_CONFLICT','local-scan-only','github-api-and-localhost-only','SNYK_TOKEN_ABSENT_OFFLINE_MODE']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, and health check tokens verified');"` | `0` | `Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, and health check tokens verified` | `docs/product-spec/work-items/TASK-AI-39.md` |
+| `AC-AI-39-10` | Manifest audit green with 0 errors and exactly 1 warning, that warning identified by code and tool | `node -e "const o=require('child_process').execSync('node tools/ai-brain/cli.js manifest',{encoding:'utf8'}); const need=['Tổng: 0 lỗi, 1 cảnh báo','PINNED_VERSION_DRIFT','codex-cli']; const miss=need.filter(t=>!o.includes(t)); if(miss.length\|\|(o.match(/\[CẢNH\]/g)\|\|[]).length!==1) throw new Error('manifest baseline mismatch: '+miss.join(',')); console.log('Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli');"` | `0` | `Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli` | `tools/ai-brain/cli.js stdout` |
 | `AC-AI-39-11` | Register reconciliation green with 0 errors | `node tools/ai-brain/cli.js reconcile` | `0` | `Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú` | `tools/ai-brain/cli.js stdout` |
 | `AC-AI-39-12` | Specification and documentation validation | `python docs/product-spec/scripts/validate_docs.py` | `0` | `Documentation validation passed` | `docs/product-spec/scripts/validate_docs.py stdout` |
 | `AC-AI-39-13` | Toolchain unit & integration test suites green | `node --test \"tools/ai-brain/test/*.test.js\" \"tools/ai-dashboard/test/*.test.js\" \"tools/ai-guard/test/*.test.js\"` | `0` | `fail 0` | `node --test stdout` |
 | `AC-AI-39-14` | Incremental code and document formatting check | `pnpm format:check` | `0` | `tuân thủ 100% chuẩn định dạng Prettier` | `scripts/verify-formatting.ts stdout` |
+| `AC-AI-39-15` | Negative proof: manifest egress declaration conflicts with every profile agent-scan belongs to | `node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id==='agent-scan'); const p=require('./tools/ecosystem-profiles.json').profiles; const open=['local-scan-only','github-api-and-localhost-only']; const pol=m.profiles.map(n=>p[n].network_policy); const egress=pol.filter(x=>!open.includes(x)); console.error('PROFILE_EGRESS_CONFLICT: agent-scan declares ' + m.outbound_endpoints.join(',') + ' but profiles ' + m.profiles.join(',') + ' allow only ' + pol.join(',')); if(egress.length===0) process.exit(1);"` | `1` | `PROFILE_EGRESS_CONFLICT: agent-scan declares https://api.snyk.io,https://app.snyk.io but profiles SECURITY_REVIEW,PR_REVIEW allow only local-scan-only,github-api-and-localhost-only` | command stderr |
 
 ## Downstream implementation acceptance contract
+
+**Implementation ownership.** `TASK-AI-39` itself retains ownership of installing
+`agent-scan` and wiring its CI gate. No successor Work Item exists in
+`docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, and this
+Work Item does not invent one, because the register is authoritative and creating rows
+is outside this item's allowed paths. Accordingly this PR delivers only the
+specification phase and does NOT advance `TASK-AI-39` to complete: register row 174
+stays `BLOCKED_DEPENDENCY` behind `TASK-AI-17` (`AC-AI-39-03`), and `agent-scan` stays
+`PENDING` / `NON_BLOCKING` (`AC-AI-39-01`). Merging this specification therefore claims
+no admission gate that does not exist. The implementation phase of this same Work Item
+must satisfy the contract below and all 7 promotion criteria before `agent-scan` may be
+declared a gate.
 
 When an author implements `TASK-AI-39`, the implementation must provide and satisfy
 the following deterministic verification contract:
@@ -300,13 +323,16 @@ the following deterministic verification contract:
 ## Manifest promotion criteria
 
 Promoting `agent-scan` from `PENDING` to `ADOPTED` and `BLOCKING_GATE` in `tools/ecosystem-manifest.json`
-strictly requires satisfying all 6 prerequisites with auditable workflow evidence:
+strictly requires satisfying all 7 prerequisites with auditable workflow evidence. Each
+prerequisite names the artifact that proves it; absence of the named artifact blocks
+promotion regardless of whether the binary installs or runs:
 1. **Exact-HEAD Execution**: CI check run `Agent Tooling Security Scan` passed at the exact 40-character commit SHA of PR HEAD.
 2. **Clean Fixture Proof**: `snyk-agent-scan scan` on clean skill fixture exits `0` with zero actionable findings.
 3. **Vulnerable Fixture Negative Proof**: `snyk-agent-scan scan` on prompt injection fixture exits `1` with detected injection pattern.
 4. **Operational Failure Fail-Closed Proof**: `snyk-agent-scan scan` on invalid arguments exits `2`.
 5. **Health Check Proof**: `snyk-agent-scan --version` exits `0` and outputs `0.6.1`.
-6. **Non-Duplication Preservation**: Gitleaks 8.24.0 remains `ADOPTED` / `BLOCKING_GATE` / `ci-provisioned`, and `node tools/ai-brain/cli.js manifest` reports 0 errors and exactly 1 warning (codex-cli drift).
+6. **Non-Duplication Preservation**: Gitleaks 8.24.0 remains `ADOPTED` / `BLOCKING_GATE` / `ci-provisioned`, and `node tools/ai-brain/cli.js manifest` reports 0 errors and exactly 1 warning, that warning being `PINNED_VERSION_DRIFT` for `codex-cli` (artifact: manifest audit stdout).
+7. **Egress Conflict Resolved At Source** (`AI-39-R10`): `AC-AI-39-15` must exit `0` rather than `1`, proving an owner has amended either `tools/ecosystem-profiles.json` or `tools/ecosystem-manifest.json` so the declared network behavior and the governing profile agree. Promotion is forbidden while `AC-AI-39-15` still exits `1`, and this criterion may never be satisfied by weakening a profile `network_policy` (artifact: `AC-AI-39-15` stderr and the amending commit).
 
 ## Verification commands
 
@@ -336,10 +362,10 @@ node -e "const synthetic = { scripts: { postinstall: 'pip install snyk-agent-sca
 python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all required sections present');"
 
 # AC-AI-39-09: Specification contract, rules, and numeric thresholds completeness
-python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); tokens=['0.6.1','8.24.0','60000ms','512000','1048576','BLOCKED_DEPENDENCY','AI-39-R01','AI-39-R02','AI-39-R03','AI-39-R04','AI-39-R05','AI-39-R06','AI-39-R07','AI-39-R08','AI-39-R09','snyk-agent-scan --version','snyk-api-outbound-https','https://api.snyk.io','https://app.snyk.io']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-39-R01 through R09, network, and health check tokens verified');"
+python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); tokens=['0.6.1','8.24.0','60000ms','512000','1048576','BLOCKED_DEPENDENCY','AI-39-R01','AI-39-R02','AI-39-R03','AI-39-R04','AI-39-R05','AI-39-R06','AI-39-R07','AI-39-R08','AI-39-R09','snyk-agent-scan --version','snyk-api-outbound-https','https://api.snyk.io','https://app.snyk.io','AI-39-R10','PROFILE_EGRESS_CONFLICT','local-scan-only','github-api-and-localhost-only','SNYK_TOKEN_ABSENT_OFFLINE_MODE']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, and health check tokens verified');"
 
-# AC-AI-39-10: Manifest audit green with 0 errors and exactly 1 drift warning
-node tools/ai-brain/cli.js manifest
+# AC-AI-39-10: Manifest audit green with 0 errors and exactly 1 warning, identified by code and tool
+node -e "const o=require('child_process').execSync('node tools/ai-brain/cli.js manifest',{encoding:'utf8'}); const need=['Tổng: 0 lỗi, 1 cảnh báo','PINNED_VERSION_DRIFT','codex-cli']; const miss=need.filter(t=>!o.includes(t)); if(miss.length||(o.match(/\[CẢNH\]/g)||[]).length!==1) throw new Error('manifest baseline mismatch: '+miss.join(',')); console.log('Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli');"
 
 # AC-AI-39-11: Register reconciliation green with 0 errors
 node tools/ai-brain/cli.js reconcile
@@ -352,6 +378,9 @@ node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" 
 
 # AC-AI-39-14: Incremental code and document formatting check
 pnpm format:check
+
+# AC-AI-39-15: Negative proof: manifest egress declaration conflicts with every profile agent-scan belongs to
+node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id==='agent-scan'); const p=require('./tools/ecosystem-profiles.json').profiles; const open=['local-scan-only','github-api-and-localhost-only']; const pol=m.profiles.map(n=>p[n].network_policy); const egress=pol.filter(x=>!open.includes(x)); console.error('PROFILE_EGRESS_CONFLICT: agent-scan declares ' + m.outbound_endpoints.join(',') + ' but profiles ' + m.profiles.join(',') + ' allow only ' + pol.join(',')); if(egress.length===0) process.exit(1);"
 ```
 
 ## Codex review record
@@ -359,7 +388,7 @@ pnpm format:check
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `fc6ff49` | `CHANGES_REQUIRED` | Resolved 4 review findings & 3 common specification patterns: (1) Pattern 1 / Finding 1: Acceptance criteria rewritten to replace vague intentions ("File inspection", "specification text") with exact executable commands, exit codes, required output strings, and output artifacts (`AC-AI-39-01` through `14`). (2) Finding 2: Reconciled network behavior and telemetry to align with `tools/ecosystem-manifest.json` (`telemetry_network_behavior: snyk-api-outbound-https`, endpoints `https://api.snyk.io`, `https://app.snyk.io`, and `local_mode: local-rule-evaluation (requires SNYK_TOKEN for rule catalog synchronization)`), specifying offline cached fallback / missing-token handling for local worktrees and authenticated execution in CI (`AI-39-R07`). (3) Finding 3: Reconciled health-check contract to designate `snyk-agent-scan --version` as the authoritative check (exits 0 with `0.6.1`), with `python -m pip show snyk-agent-scan` designated as secondary packaging inspection (`AI-39-R08`). (4) Finding 4 / PR inline comment (line 141): Resolved overlapping secret-scanner ownership by explicitly defining domain boundaries: Gitleaks 8.24.0 is the sole authoritative gate for git commit/plaintext secrets; Agent-Scan focuses strictly on prompt injection exfiltration instructions and MCP tool binding leaks, treating plaintext tokens as secondary findings without displacing Gitleaks (`AI-39-R05`). (5) Control table status aligned to authoritative delivery register row 174 (`BLOCKED_DEPENDENCY`). (6) Pattern 2: Explicit numeric thresholds specified (`0.6.1`, `8.24.0`, `60000ms`, `512000` bytes, `1048576` bytes, CVSS >= 7.0, exit codes 0, 1, 2). (7) Pattern 3: Negative fixtures specified and verified (unauthorized status advancement fails with exit 1, falsely declaring agent-scan ADOPTED triggers `QUALITY_GATE_MISSING: agent-scan` with exit 1, forbidden lifecycle script triggers exit 1). Downstream contract defines clean (0), vulnerable (1), and operational failure (2) fixtures. |
-| 2 | `HEAD` | `READY_FOR_CODEX` | Submitted for fresh independent Codex review via `@codex review`. |
+| 2 | `HEAD` | `CHANGES_REQUIRED` (round 2 fix pushed; no re-review verdict yet) | Verified round 1 against the posted findings and executed every acceptance command. (1) Confirmed genuinely closed: register-status alignment (`BLOCKED_DEPENDENCY`), health-check authority (`AI-39-R08`), secret-scanner ownership (`AI-39-R05`), and executable acceptance evidence. (2) NOT closed in round 1, now fixed: the execution-mode conflict. `agent-scan` sits only in `SECURITY_REVIEW` (`local-scan-only`) and `PR_REVIEW` (`github-api-and-localhost-only`), so the previously promised authenticated CI platform scan was impossible under either profile. The spec now records the conflict, contracts only tokenless offline local evaluation, moves authenticated Snyk analysis out of contract, and adds `AI-39-R10` plus `AC-AI-39-15` which proves the conflict by command (exit 1). (3) Manifest-warning criterion strengthened: `AC-AI-39-10` now requires exactly 1 warning AND names `PINNED_VERSION_DRIFT` / `codex-cli`, so quieting the pin no longer leaves it green. (4) Promotion evidence enumerated: `AI-39-R01` now defines "verified" solely as the 7 named promotion criteria, each naming its artifact. (5) Implementation ownership stated explicitly rather than deferred to an unnamed successor. Every one of the 15 acceptance commands was executed; real output is pasted in the Pull Request body. |
 
 ## Residual limitations
 
@@ -376,3 +405,23 @@ pnpm format:check
 - Specification authoring Work Item does not mutate `.github/` workflows or workspace
   dependencies directly; CI workflow integration and binary provisioning are strictly
   gated to subsequent implementation under repository change control rules.
+- **Open question for the owner (blocking promotion, `AI-39-R10`)**: the manifest
+  declares `agent-scan` egress to `https://api.snyk.io` and `https://app.snyk.io` with
+  `required-snyk-token`, but the only profiles containing `agent-scan` are
+  `SECURITY_REVIEW` (`local-scan-only`) and `PR_REVIEW` (`github-api-and-localhost-only`),
+  neither of which permits that egress. `AC-AI-39-15` reproduces the conflict and exits
+  `1` today. The owner must choose one of two amendments, both outside this Work Item's
+  allowed paths: amend `tools/ecosystem-profiles.json` to add an explicit 2-endpoint
+  egress allowlist, or amend `tools/ecosystem-manifest.json` to narrow `agent-scan` to a
+  local-only tool. Until that choice is made, authenticated Snyk platform analysis and
+  Evo reporting are out of contract and only tokenless offline local evaluation is
+  specified. This conflict must not be closed by weakening a profile `network_policy`.
+- **Open question for the owner (ownership)**: no successor Work Item owns `agent-scan`
+  installation and CI integration. This specification keeps that ownership with
+  `TASK-AI-39` and keeps the item `BLOCKED_DEPENDENCY` rather than inventing a register
+  row. If the owner prefers a dedicated implementation item, it must be added to the
+  delivery register by the governed process before `agent-scan` can be promoted.
+- Manifest `local_mode` states that local rule evaluation requires `SNYK_TOKEN` for rule
+  catalog synchronization. Under the tokenless offline mode contracted here, catalog
+  synchronization does not run, so detection rules are limited to those bundled with the
+  pinned `0.6.1` release and will age between version bumps.
