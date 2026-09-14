@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-38.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-38-a11y-perf` |
-| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/23 |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/25 |
 
 ## Business outcome
 
