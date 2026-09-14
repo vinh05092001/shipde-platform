@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-37.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-37-trivy` |
-| Pull Request | `<URL>` |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/24 |
 
 ## Business outcome
 
