@@ -23,6 +23,53 @@
 
 const { accountHeadroom, isDispatchable } = require('./quota');
 const { effectiveLimits } = require('./ceiling');
+const agyQuota = require('./agy-quota');
+const { sameAccount } = require('./agy-identity');
+
+/** Severity order shared by every headroom merge in this file. */
+const SEVERITY = { open: 0, unknown: 1, tight: 2, exhausted: 3, cooling: 4 };
+
+/**
+ * What the provider itself says is left, when it says anything.
+ *
+ * Local accounting measures what we spent; this measures what the vendor
+ * thinks is left, which is the only number that can account for spend from
+ * outside this pipeline — the operator using the same account in the IDE, or a
+ * pool being switched off outright. Where the two disagree the tighter one is
+ * taken, so a vendor reporting an empty pool stops dispatch even while our own
+ * ledger looks healthy.
+ *
+ * Returns null rather than `unknown` when there is nothing to say. Folding an
+ * unknown into the merge would drag a known-open offering down to unknown and
+ * make every offering look equally uncertain, which is the opposite of what
+ * reading the vendor's own number was for.
+ */
+function reportedView(offering, reportedByAccount) {
+  const quota = (reportedByAccount || {})[offering.accountId];
+  if (!quota || !quota.available) return null;
+
+  // A reading belongs to the account that produced it. If the offering names
+  // an expected address and the reading came from a different one, the
+  // operator switched accounts and this number describes someone else's budget.
+  if (offering.accountEmail && quota.account) {
+    if (!sameAccount({ known: true, email: offering.accountEmail }, quota.account)) return null;
+  }
+
+  const headroom = agyQuota.headroomFor(quota, offering.model);
+  if (!headroom.known) return null;
+
+  const status = agyQuota.statusFrom(headroom);
+  return {
+    status,
+    remainingPercent: headroom.remainingPercent,
+    window: headroom.window,
+    resetsAt: headroom.resetsAt,
+    family: headroom.family,
+    disabled: (headroom.windows || []).some((w) => w.disabled),
+    observedAt: quota.observedAt || null,
+    account: quota.account && quota.account.known ? quota.account.email : null,
+  };
+}
 
 /** How an offering is chosen within a tier. */
 const Strategy = {
@@ -61,6 +108,10 @@ function expandOfferings(accounts, options) {
         id: offeringId(account.id, model),
         accountId: account.id,
         provider: account.provider,
+        // The address the operator signed this account in as. Carried so a
+        // vendor-reported quota can be refused when it came from a different
+        // address, which happens whenever the operator switches accounts.
+        accountEmail: account.email || null,
         model,
         // Operator-declared order. Nothing here assumes local is cheaper or
         // that a subscription beats an API key; the ladder is whatever the
@@ -115,8 +166,31 @@ function offeringHeadroom(offering, eventsByAccount, eventsByOffering, options) 
     options
   );
 
-  const severity = { open: 0, unknown: 1, tight: 2, exhausted: 3, cooling: 4 };
-  const worse = severity[modelView.status] > severity[accountView.status] ? modelView : accountView;
+  const severity = SEVERITY;
+  let worse = severity[modelView.status] > severity[accountView.status] ? modelView : accountView;
+  let boundBy = worse === modelView ? 'model' : 'account';
+
+  // The vendor's own figure is merged on two grounds: it may tighten, and it
+  // may resolve an `unknown`. The second is not loosening — `unknown` means we
+  // have no information about this budget, and the vendor has just supplied
+  // some. What it may never do is overturn a local `exhausted`, because our
+  // ledger counts spend the vendor has not billed yet, nor a `cooling`, which
+  // records an actual refusal.
+  //
+  // It is kept out of the local windows because it is a percentage of an
+  // undisclosed ceiling and cannot be added to a token count without inventing
+  // the ceiling.
+  const reported = reportedView(offering, (options || {}).reported);
+  if (reported && (severity[reported.status] > severity[worse.status] || worse.status === 'unknown')) {
+    worse = Object.assign({}, worse, {
+      status: reported.status,
+      reason:
+        reported.disabled && reported.status === 'exhausted'
+          ? 'Nhà cung cấp đã tắt nhóm ' + reported.family + ' trên tài khoản này'
+          : 'Nhà cung cấp báo còn ' + reported.remainingPercent + '% (' + reported.window + ')',
+    });
+    boundBy = 'reported';
+  }
 
   // Status takes the worse of the two, but windows are merged. An account with
   // no declared limit reports `unknown` with no windows, and letting that
@@ -134,8 +208,11 @@ function offeringHeadroom(offering, eventsByAccount, eventsByOffering, options) 
     offeringId: offering.id,
     accountStatus: accountView.status,
     modelStatus: modelView.status,
+    // Carried whole so the dashboard can show the vendor's number next to our
+    // own rather than only the merged verdict.
+    reported: reported || null,
     // Named so a deferral message can say which budget actually ran out.
-    boundBy: worse === modelView ? 'model' : 'account',
+    boundBy,
   });
 }
 
