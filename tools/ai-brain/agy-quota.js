@@ -57,8 +57,12 @@ const WINDOW_NAMES = {
 function parseQuota(text) {
   const rows = [];
   for (const line of String(text || '').split('\n')) {
+    // A window can report `disabled` instead of a percentage: the pool is off
+    // for this account, not merely unreported. Skipping the row would let the
+    // other window speak for the whole family, so it is read as no headroom.
     const percent = line.match(/(\d+(?:\.\d+)?)\s*%/);
-    if (!percent) continue;
+    const disabled = !percent && /\bdisabled\b/i.test(line);
+    if (!percent && !disabled) continue;
 
     const reset = line.match(/\d{4}-\d{2}-\d{2}T[\d:]+(?:\.\d+)?Z/);
     const family = /gemini/i.test(line)
@@ -77,7 +81,8 @@ function parseQuota(text) {
     rows.push({
       family,
       window,
-      remainingPercent: Number(percent[1]),
+      remainingPercent: disabled ? 0 : Number(percent[1]),
+      disabled,
       resetsAt: reset ? reset[0] : null,
     });
   }
@@ -95,6 +100,13 @@ function parseQuota(text) {
  * conversation instead of expanding the slash command, and the reply then
  * reads as a plausible essay about the word "quota" rather than the table.
  * That failure is silent, so it is worth avoiding rather than detecting.
+ *
+ * The argument must also reach the CLI intact. Under MSYS2 (Git Bash, and any
+ * tool that shells through it) a lone `/quota` is rewritten to a Windows path
+ * before the process starts, so `agy` receives `C:/Program Files/Git/quota` and
+ * answers with an essay about a missing directory. It looks like a refusal or a
+ * permission problem and is neither. execFileSync passes argv directly and is
+ * therefore safe; a shell in between is not, and needs MSYS_NO_PATHCONV=1.
  */
 function readQuota(options) {
   const opts = options || {};

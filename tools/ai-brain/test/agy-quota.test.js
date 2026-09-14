@@ -46,6 +46,22 @@ describe('Reading the quota table', () => {
     assert.equal(row.remainingPercent, 7.5);
   });
 
+  test('a disabled window is no headroom, not a missing row', () => {
+    // Account B reports this for the Claude pool. Dropping the row would leave
+    // the weekly row speaking for the family on its own.
+    const q = parseQuota(
+      [
+        'Claude and GPT models\tWeekly Limit Remaining\t0%\t2026-09-16T04:12:24Z',
+        'Claude and GPT models\tFive Hour Limit Remaining\tdisabled',
+      ].join('\n')
+    );
+    assert.equal(q.rows.length, 2);
+    const off = q.rows.find((r) => r.window === 'fiveHour');
+    assert.equal(off.disabled, true);
+    assert.equal(off.remainingPercent, 0);
+    assert.equal(statusFrom(headroomFor(q, 'claude-opus-4-8')), 'exhausted');
+  });
+
   test('a row missing its reset time still parses', () => {
     const row = parseQuota('Gemini Models  Weekly Limit Remaining  40%').rows[0];
     assert.equal(row.remainingPercent, 40);
