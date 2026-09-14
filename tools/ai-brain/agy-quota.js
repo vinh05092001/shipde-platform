@@ -28,6 +28,7 @@
  */
 
 const { execFileSync } = require('child_process');
+const { readIdentity } = require('./agy-identity');
 
 /** Which pool a model name draws from. */
 const Family = {
@@ -110,6 +111,10 @@ function parseQuota(text) {
  */
 function readQuota(options) {
   const opts = options || {};
+  // Stamped on every outcome, including the failures: knowing which account
+  // failed to report is as useful as knowing which one reported 0%.
+  const account = opts.account || readIdentity({ home: opts.home });
+  const stamp = (result) => Object.assign({}, result, { account });
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 120000;
 
   const command = opts.command || 'agy';
@@ -131,17 +136,17 @@ function readQuota(options) {
       maxBuffer: 4 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return parseQuota(out);
+    return stamp(parseQuota(out));
   } catch (e) {
     const combined = String((e.stdout || '') + (e.stderr || '') || e.message || '');
     // An eligibility check reaches out to Google for a profile picture, and a
     // timeout there is a network problem rather than an exhausted account.
     if (/eligibility check failed/i.test(combined)) {
-      return { available: false, reason: 'Eligibility check thất bại (mạng), chưa đọc được quota', rows: [] };
+      return stamp({ available: false, reason: 'Eligibility check thất bại (mạng), chưa đọc được quota', rows: [] });
     }
     const parsed = parseQuota(combined);
-    if (parsed.available) return parsed;
-    return { available: false, reason: combined.slice(0, 200), rows: [] };
+    if (parsed.available) return stamp(parsed);
+    return stamp({ available: false, reason: combined.slice(0, 200), rows: [] });
   }
 }
 
