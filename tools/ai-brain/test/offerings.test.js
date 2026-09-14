@@ -187,7 +187,9 @@ describe('The operator ladder: Gemini, then 9Router, then another API', () => {
       now: NOW,
     });
     assert.equal(plan.assignments[0].accountId, '9router');
-    assert.equal(plan.assignments[0].model, 'cc/claude-sonnet-5');
+    // Standard work takes the free GLM, not the paid Sonnet: being stronger
+    // than the task requires is not a reason to spend on it.
+    assert.equal(plan.assignments[0].model, 'kimchi/glm-5.3-flash');
   });
 
   test('when 9Router also runs out, the next API picks it up', () => {
@@ -233,8 +235,8 @@ describe('The operator ladder: Gemini, then 9Router, then another API', () => {
 
   test('the plan records the model quality and the strategy used', () => {
     const plan = planDispatch([item], LADDER, { now: NOW });
-    assert.equal(plan.assignments[0].quality, 90);
     assert.equal(plan.assignments[0].strategy, Strategy.QUALITY_FIRST);
+    assert.ok(plan.assignments[0].grade >= 1, 'the grade it was judged sufficient at is recorded');
     assert.ok(plan.assignments[0].alternatives.length > 0);
   });
 });

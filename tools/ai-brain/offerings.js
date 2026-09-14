@@ -69,6 +69,11 @@ function expandOfferings(accounts) {
         capabilities: Object.assign({}, account.capabilities, e.capabilities),
         cost: Object.assign({}, account.cost, e.cost),
         preference: Number(e.preference !== undefined ? e.preference : account.preference || 0),
+        // The hardest class of work this model is trusted to finish. Distinct
+        // from `quality`: quality ranks two models against each other, grade
+        // says whether either may take the task at all.
+        codingGrade:
+          e.codingGrade !== undefined ? Number(e.codingGrade) : account.codingGrade !== undefined ? Number(account.codingGrade) : undefined,
         qualifiedRoles: e.qualifiedRoles || account.qualifiedRoles,
         enabled: e.enabled !== false,
         // Kept apart so the combined check below can see which is which.
@@ -106,7 +111,19 @@ function offeringHeadroom(offering, eventsByAccount, eventsByOffering, options) 
   const severity = { open: 0, unknown: 1, tight: 2, exhausted: 3, cooling: 4 };
   const worse = severity[modelView.status] > severity[accountView.status] ? modelView : accountView;
 
+  // Status takes the worse of the two, but windows are merged. An account with
+  // no declared limit reports `unknown` with no windows, and letting that
+  // replace the model's own declared budget would hide real information —
+  // runway would read as unknown for a model whose remaining tokens are known.
+  // Where both declare the same window, the one with less left wins.
+  const windows = Object.assign({}, accountView.windows);
+  for (const [key, w] of Object.entries(modelView.windows || {})) {
+    const existing = windows[key];
+    if (!existing || w.limit - w.used < existing.limit - existing.used) windows[key] = w;
+  }
+
   return Object.assign({}, worse, {
+    windows,
     offeringId: offering.id,
     accountStatus: accountView.status,
     modelStatus: modelView.status,

@@ -27,6 +27,7 @@
 const { eligibleAccounts } = require('./capabilities');
 const { isDispatchable } = require('./quota');
 const { expandOfferings, headroomForAll, rankOfferings, laddered, Strategy } = require('./offerings');
+const { rankByFitness, Difficulty } = require('./fitness');
 
 const DEFAULTS = {
   maxImplementationAgents: 1,
@@ -149,31 +150,43 @@ function planDispatch(items, accounts, context) {
     // because that key reported more headroom.
     // The role decides how to choose inside a tier: authoring wants the best
     // model that still has room, mechanical work wants the cheapest that works.
+    // Difficulty, not raw model strength, decides what is needed. Fitness then
+    // prefers the sufficient model with the most runway over the strongest one,
+    // and refuses any model that cannot finish a task of this size at all.
+    const difficulty = Number(item.difficulty) || role.difficulty || Difficulty.STANDARD;
+    // The strategy only sets how hard price presses on the choice; it can
+    // never let an insufficient or nearly-drained model through.
     const strategy = item.strategy || role.strategy || Strategy.QUALITY_FIRST;
+    const fitnessOpts = Object.assign(
+      { costWeight: strategy === Strategy.COST_FIRST ? 200 : 1 },
+      ctx.fitness
+    );
 
     let withRoom = [];
     let chosenTier = null;
+    let fitness = null;
+    let fitnessRejected = [];
     for (const { tier, offerings: inTier } of laddered(eligible)) {
-      const ranked = rankOfferings(inTier, headrooms, strategy).filter(
-        (o) => (perAccountLoad[o.accountId] || 0) < limits.maxPerAccount
-      );
+      const free = inTier.filter((o) => (perAccountLoad[o.accountId] || 0) < limits.maxPerAccount);
+      const { ranked, rejected } = rankByFitness(free, difficulty, headrooms, ctx.history || {}, fitnessOpts);
+      fitnessRejected = fitnessRejected.concat(rejected);
       if (ranked.length > 0) {
-        withRoom = ranked;
+        withRoom = ranked.map((r) => r.offering);
+        fitness = ranked[0].verdict;
         chosenTier = tier;
         break;
       }
     }
 
     if (withRoom.length === 0) {
-      const why = eligible
-        .map((o) => {
-          const h = headrooms[o.id];
-          if (!isDispatchable(h)) {
-            return o.id + ': ' + (h ? h.reason + ' (theo ' + h.boundBy + ')' : 'không rõ hạn mức');
-          }
-          return o.id + ': đang bận';
-        })
-        .join('; ');
+      const why = fitnessRejected.length > 0
+        ? fitnessRejected
+            .map((r) => {
+              const h = headrooms[r.offeringId];
+              return r.offeringId + ': ' + r.reason + (h && h.boundBy ? ' (theo ' + h.boundBy + ')' : '');
+            })
+            .join('; ')
+        : eligible.map((o) => o.id + ': đang bận').join('; ');
       deferred.push(waiting(item, 'NO_QUOTA_OR_BUSY', why));
       continue;
     }
@@ -188,7 +201,12 @@ function planDispatch(items, accounts, context) {
       provider: chosen.provider,
       model: chosen.model,
       quality: chosen.quality,
+      difficulty,
       strategy,
+      grade: fitness.grade,
+      runway: fitness.runway,
+      tokensPerTask: fitness.tokensPerTask,
+      fitReason: fitness.reason,
       headroom: headrooms[chosen.id].status,
       tier: chosenTier,
       // Recorded so a later review can see the model was not chosen at random.
