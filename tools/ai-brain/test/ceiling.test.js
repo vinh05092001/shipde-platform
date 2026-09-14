@@ -265,6 +265,9 @@ describe('Ledger', () => {
 
   test('an invalid outcome is refused', () => {
     const file = store();
-    assert.throws(() => record({ accountId: 'a', outcome: 'maybe' }, { file }), /accepted hoặc refused/);
+    assert.throws(
+      () => record({ accountId: 'a', outcome: 'maybe' }, { file }),
+      /accepted hoặc refused/
+    );
   });
 });

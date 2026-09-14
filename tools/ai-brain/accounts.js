@@ -75,7 +75,11 @@ function encrypt(plain, key) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const enc = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
-  return [iv.toString('base64'), cipher.getAuthTag().toString('base64'), enc.toString('base64')].join('.');
+  return [
+    iv.toString('base64'),
+    cipher.getAuthTag().toString('base64'),
+    enc.toString('base64'),
+  ].join('.');
 }
 
 function decrypt(stored, key) {
@@ -83,7 +87,10 @@ function decrypt(stored, key) {
   if (!ivB64 || !tagB64 || !dataB64) throw new Error('Bản mã hỏng hoặc sai định dạng');
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
   decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
-  return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]).toString('utf8');
+  return Buffer.concat([
+    decipher.update(Buffer.from(dataB64, 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
 }
 
 function readJson(file, fallback) {
@@ -125,7 +132,8 @@ const ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/;
 function validateAccount(account) {
   const errors = [];
   if (!account || typeof account !== 'object') return ['Tài khoản không hợp lệ'];
-  if (!ID_RE.test(String(account.id || ''))) errors.push('id phải là chữ thường, số, . _ - (2-64 ký tự)');
+  if (!ID_RE.test(String(account.id || '')))
+    errors.push('id phải là chữ thường, số, . _ - (2-64 ký tự)');
   if (!account.provider) errors.push('thiếu provider');
   // An account declares either one model or a models[] list. Requiring the
   // singular field predates multi-model accounts and rejected every real one.
@@ -214,7 +222,8 @@ function removeAccount(id, options) {
 }
 
 function setSecret(id, value, options) {
-  if (!value || typeof value !== 'string') throw new Error('Giá trị bí mật phải là chuỗi khác rỗng');
+  if (!value || typeof value !== 'string')
+    throw new Error('Giá trị bí mật phải là chuỗi khác rỗng');
   const accounts = loadRegistry(options);
   if (!accounts.some((a) => a.id === id)) throw new Error('Không có tài khoản "' + id + '"');
 
@@ -252,7 +261,9 @@ function tiersOf(accounts) {
     if (!byTier.has(t)) byTier.set(t, []);
     byTier.get(t).push(a);
   }
-  return [...byTier.keys()].sort((x, y) => x - y).map((t) => ({ tier: t, accounts: byTier.get(t) }));
+  return [...byTier.keys()]
+    .sort((x, y) => x - y)
+    .map((t) => ({ tier: t, accounts: byTier.get(t) }));
 }
 
 module.exports = {

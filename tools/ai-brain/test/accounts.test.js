@@ -76,7 +76,10 @@ describe('Account registry', () => {
 
   test('a missing context window is refused rather than defaulted', () => {
     const s = store();
-    assert.throws(() => addAccount(def({ capabilities: { jsonSchema: true, tools: true } }), s), /contextWindow/);
+    assert.throws(
+      () => addAccount(def({ capabilities: { jsonSchema: true, tools: true } }), s),
+      /contextWindow/
+    );
   });
 
   test('a credential passed inside the registry object is refused', () => {
@@ -116,7 +119,10 @@ describe('Secret handling', () => {
     addAccount(def(), s);
     setSecret('openrouter-free', 'sk-or-v1-SHOULD-NOT-LEAK', s);
     const encrypted = fs.readFileSync(s.secretsFile, 'utf8');
-    assert.ok(!encrypted.includes('SHOULD-NOT-LEAK'), 'the secrets file is ciphertext, not the key');
+    assert.ok(
+      !encrypted.includes('SHOULD-NOT-LEAK'),
+      'the secrets file is ciphertext, not the key'
+    );
   });
 
   test('listAccounts reports presence but never the value', () => {
@@ -125,7 +131,10 @@ describe('Secret handling', () => {
     setSecret('openrouter-free', 'sk-or-v1-SHOULD-NOT-LEAK', s);
     const listed = listAccounts(s);
     assert.equal(listed[0].hasSecret, true);
-    assert.ok(!JSON.stringify(listed).includes('SHOULD-NOT-LEAK'), 'a listing is safe to show on a dashboard');
+    assert.ok(
+      !JSON.stringify(listed).includes('SHOULD-NOT-LEAK'),
+      'a listing is safe to show on a dashboard'
+    );
   });
 
   test('a wrong key fails loudly instead of returning garbage', () => {
@@ -236,9 +245,39 @@ describe('Escalation ladder', () => {
     capabilities: { jsonSchema: true, tools: true, contextWindow: 200000 },
     enabled: true,
   };
-  const local = Object.assign({ id: '9router', provider: 'oc', model: 'free', tier: Tier.LOCAL, cost: { inputPerMillion: 0, outputPerMillion: 0 }, limits: { requestsPerDay: 2 } }, base);
-  const gemini = Object.assign({ id: 'gemini', provider: 'ag', model: 'gemini-3', tier: Tier.ACCOUNT, cost: { inputPerMillion: 0, outputPerMillion: 0 }, limits: { requestsPerDay: 2 } }, base);
-  const external = Object.assign({ id: 'openrouter', provider: 'or', model: 'paid', tier: Tier.EXTERNAL, cost: { inputPerMillion: 5, outputPerMillion: 15 }, limits: { requestsPerDay: 100 } }, base);
+  const local = Object.assign(
+    {
+      id: '9router',
+      provider: 'oc',
+      model: 'free',
+      tier: Tier.LOCAL,
+      cost: { inputPerMillion: 0, outputPerMillion: 0 },
+      limits: { requestsPerDay: 2 },
+    },
+    base
+  );
+  const gemini = Object.assign(
+    {
+      id: 'gemini',
+      provider: 'ag',
+      model: 'gemini-3',
+      tier: Tier.ACCOUNT,
+      cost: { inputPerMillion: 0, outputPerMillion: 0 },
+      limits: { requestsPerDay: 2 },
+    },
+    base
+  );
+  const external = Object.assign(
+    {
+      id: 'openrouter',
+      provider: 'or',
+      model: 'paid',
+      tier: Tier.EXTERNAL,
+      cost: { inputPerMillion: 5, outputPerMillion: 15 },
+      limits: { requestsPerDay: 100 },
+    },
+    base
+  );
   const pool = [external, gemini, local];
 
   const item = { workItemId: 'A-1', role: 'author.foundation', branch: 'feat/a', riskDomains: [] };
@@ -286,14 +325,19 @@ describe('Escalation ladder', () => {
   });
 
   test('a cooling account is skipped and the next tier serves', () => {
-    const cooling = Object.assign({}, local, { cooldownUntil: new Date(NOW + 300000).toISOString() });
+    const cooling = Object.assign({}, local, {
+      cooldownUntil: new Date(NOW + 300000).toISOString(),
+    });
     const plan = planDispatch([item], [external, gemini, cooling], { now: NOW });
     assert.equal(plan.assignments[0].accountId, 'gemini');
   });
 
   test('tiersOf groups and orders lowest first', () => {
     const tiers = tiersOf(pool);
-    assert.deepEqual(tiers.map((t) => t.tier), [Tier.LOCAL, Tier.ACCOUNT, Tier.EXTERNAL]);
+    assert.deepEqual(
+      tiers.map((t) => t.tier),
+      [Tier.LOCAL, Tier.ACCOUNT, Tier.EXTERNAL]
+    );
   });
 
   test('a newly added account joins the ladder without touching any workflow', () => {
@@ -301,7 +345,9 @@ describe('Escalation ladder', () => {
     addAccount(def({ id: 'new-free-api', tier: Tier.EXTERNAL }), s);
     const registered = listAccounts(s)[0];
     const withNew = pool.concat([
-      Object.assign({}, registered, { capabilities: { jsonSchema: true, tools: true, contextWindow: 200000 } }),
+      Object.assign({}, registered, {
+        capabilities: { jsonSchema: true, tools: true, contextWindow: 200000 },
+      }),
     ]);
     const plan = planDispatch([item], withNew, {
       eventsByAccount: {
@@ -311,7 +357,11 @@ describe('Escalation ladder', () => {
       },
       now: NOW,
     });
-    assert.equal(plan.assignments[0].accountId, 'new-free-api', 'config alone brings new capacity online');
+    assert.equal(
+      plan.assignments[0].accountId,
+      'new-free-api',
+      'config alone brings new capacity online'
+    );
   });
 });
 

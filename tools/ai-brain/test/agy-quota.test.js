@@ -5,7 +5,14 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 
-const { Family, familyOf, parseQuota, budgetFingerprint, headroomFor, statusFrom } = require('../agy-quota');
+const {
+  Family,
+  familyOf,
+  parseQuota,
+  budgetFingerprint,
+  headroomFor,
+  statusFrom,
+} = require('../agy-quota');
 
 /** Exactly what `agy --print "/quota"` printed on 2026-09-14. */
 const REAL_OUTPUT = [
@@ -130,7 +137,10 @@ describe('Headroom for a model', () => {
   });
 
   test('an unread quota carries its reason forward', () => {
-    const h = headroomFor({ available: false, reason: 'Eligibility check thất bại' }, 'gemini-3.8-flash-high');
+    const h = headroomFor(
+      { available: false, reason: 'Eligibility check thất bại' },
+      'gemini-3.8-flash-high'
+    );
     assert.equal(h.known, false);
     assert.match(h.reason, /Eligibility/);
   });
@@ -186,7 +196,10 @@ describe('Identifying which budget answered', () => {
   test('row order does not change the signature', () => {
     const rows = REAL_OUTPUT.split('\n');
     const shuffled = [rows[3], rows[0], rows[2], rows[1]].join('\n');
-    assert.equal(budgetFingerprint(parseQuota(REAL_OUTPUT)), budgetFingerprint(parseQuota(shuffled)));
+    assert.equal(
+      budgetFingerprint(parseQuota(REAL_OUTPUT)),
+      budgetFingerprint(parseQuota(shuffled))
+    );
   });
 
   test('a reading with no reset instants has no signature', () => {
