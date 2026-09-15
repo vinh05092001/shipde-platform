@@ -129,6 +129,16 @@ When Codex releases this specification and the dependency is cleared in the
 register, the register moves to `READY_FOR_AUTHOR` with `GEMINI` recorded as the
 implementation author; this specification PR never sets that state itself.
 
+Two distinct markers must not be conflated. The Pull Request body line
+`Review status: READY_FOR_CODEX` is the review-submission marker enforced by
+`docs/product-spec/scripts/validate_pr_contract.py`; it records only that the
+Pull Request is submitted for an independent Codex review-only task, and the
+`contract` CI job fails closed without it. The Work Item Control `Status` field
+and the durable register row 173 are the lifecycle state, and both remain
+`BLOCKED_DEPENDENCY`. Setting the Pull Request review-submission marker never
+advances the lifecycle state, and the lifecycle state is never edited to satisfy
+the Pull Request contract gate.
+
 Prohibited in this Work Item:
 - Modifying `.github/workflows/*`, `scripts/verify-*`, `.gitleaks.toml`, or
   `docs/product-spec/scripts/*`.
