@@ -311,8 +311,30 @@ node -e "const{spawnSync}=require('child_process');const p=process.argv[1];const
 | 1 | `b52ded6` | `CHANGES_REQUIRED` | 4 P1 findings resolved: (1) `id=4006827820`: Control table status aligned to `BLOCKED_DEPENDENCY` per delivery register authority and AGENTS.md lifecycle rules; (2) `id=4006827826`: Stale dependency unblocking transitions strictly to `BACKLOG` (never `READY_FOR_AUTHOR`), preserving Definition of Ready and Codex planning selection gate; (3) `id=4006827836`: Prohibited inferring `MERGED` from branch tip ancestry or commit text; reconciler requires durable external merge evidence (`--merge-evidence`) or strictly refuses to write `MERGED` per `AI-TOOL-12`; (4) `id=4006827845`: Protected main worktree write refusal enforced fail-closed (exit code 1) with exact stderr guard message, requiring feature worktree and auditable PR output. |
 | 2 | Pending review | `PENDING` | Fresh independent review task requested for updated specification. |
 | 3 | `fix/task-ai-19-reconciler` | `CHANGES_REQUIRED` | 1 blocking finding resolved: `AC-AI-19-03`, `-04`, `-05`, `-08` and `-10` asserted only the exit code of `node --test --test-name-pattern=<name>` against names that do not exist in `tools/ai-brain/test/reconcile.test.js`. Measured directly: a non-matching pattern reports `tests 1, pass 1, fail 0` and exits `0`, so all five rows passed while executing zero assertions. All five were replaced with CLI invocations against named fixtures that assert both the exit code and observable state (register SHA-256 reconciled against the audit artifact's pre/post hashes), matching the shape of `AC-AI-19-01`. New rule `AI-19-R10` and new acceptance row `AC-AI-19-11` make the defect class fail closed. No gate, status, or acceptance row was weakened; control status remains `BLOCKED_DEPENDENCY` per the delivery register. |
+| 4 | `feat/task-ai-19-reconciler-impl` | `IMPLEMENTED` | Specification implemented. Write-back added to `tools/ai-brain/reconcile.js` and `tools/ai-brain/cli.js` under the Allowed-Transition Table only: `BLOCKED_DEPENDENCY` / `BLOCKED_BY_FOUNDATION` clear strictly to `BACKLOG` when every declared dependency is `MERGED` with a 40-character merge commit present in the clone, reachable on `mainRef`, and carrying a `PASS` verdict; `READY_FOR_CODEX` / `CODEX_PASS` reach `MERGED` only against a durable evidence artifact that verifies PR identity, title, merge SHA reachability, exact-HEAD verdict, zero unresolved threads, CI status and on-disk spec path. Branch ancestry is never consulted (`AI-TOOL-12`). Atomic sibling-`.tmp` writes with per-record byte fidelity, durable audit artifact on every `--write`, and `--revert` that refuses if the register moved since the run it would undo. Protected-worktree guard strips a `refs/heads/` prefix before comparing, and `--allow-fixture-write` exempts only a register under the test tree so it cannot be used to reach the real one. Unknown options are rejected rather than ignored. 27 tests added (51 total); repository suite 11 of 11 tasks successful; all 11 acceptance rows executed with real output. First audited reconciliation cleared the stale `TASK-AI-07` block to `BACKLOG`, proved by dependency commit `fdf87594` with a `PASS` verdict; `TASK-AI-17` was refused in the same run for want of durable merge evidence, and that refusal is recorded in the artifact. |
 
 ## Residual limitations
+
+- **Allowed paths omit the fixture directory this document requires.** The Author boundary does not list
+  `tools/ai-brain/test/fixtures/`, yet the acceptance matrix names six fixture files under it
+  (`register-stale-dependency.csv`, `register-active-dependency.csv`, `register-unrecorded-merge.csv`,
+  `register-lifecycle-skip.csv`, `register-corrupt-overstatement.csv`, `merge-evidence-pr9.json`).
+  The fixtures were created because the matrix cannot be executed without them. The allowed-path list
+  should be reconciled with the matrix rather than the matrix quietly reduced.
+- **`AC-AI-19-01` consumes the fixture it reads.** It runs `--write` directly against
+  `register-stale-dependency.csv`, so the file is left at `BACKLOG` and any later row copying that fixture
+  starts from the mutated state. Observed in practice while executing the matrix. The row should copy into
+  `tools/ai-brain/test/tmp/` first, as `AC-AI-19-03`, `-05`, `-08` and `-10` already do.
+- **`AC-AI-19-07` states an expected string the reporter does not emit.** The row expects
+  `LỖI DUPLICATE_WORK_ITEM_ID`; the report prints `[LỖI ] DUPLICATE_WORK_ITEM_ID`. The format predates this
+  Work Item and was deliberately not changed to make a row pass; the expected string is what needs correcting.
+- **Ten rows stay blocked on `TASK-AI-17`.** It is merged in Git reality but carries no durable merge evidence
+  artifact, so the reconciler refuses to record it as `MERGED` and its dependents remain blocked. This is the
+  rule working rather than a gap in it: clearing them requires an evidence artifact carrying an exact-HEAD
+  Codex `PASS`, which does not exist for it today.
+- **Only the status cell is written.** The `pr`, `merge_commit` and `codex_verdict` columns are never
+  backfilled, so a row reconciled to `MERGED` still shows an empty `merge_commit` unless that column was
+  already populated.
 
 Write-back operates deterministically on local repository facts (Git commit
 history, branches, and on-disk files). It does not poll remote GitHub API
