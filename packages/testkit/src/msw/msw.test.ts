@@ -56,7 +56,73 @@ async function runMswTests() {
     const dataRecovered: any = await resAttempt2.json();
     assert.equal(dataRecovered.length, 2);
 
-    console.log('✅ All 7 MSW Canonical State Handler tests passed successfully.');
+    // 7. Test Auth Registration via MSW
+    resetMswScenario();
+    const regRes = await fetch(`${BASE_API_URL}/api/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        merchant_name: 'MSW Shop',
+        full_name: 'MSW User',
+        email: 'msw@shipde.vn',
+        password: 'Password123!',
+        terms_accepted: true,
+        terms_version: '2026.1',
+      }),
+    });
+    assert.equal(regRes.status, 200);
+    const regData: any = await regRes.json();
+    assert.equal(regData.data.status, 'PENDING_VERIFICATION');
+
+    // 8. Test Auth Registration Duplicate via MSW
+    const dupRes = await fetch(`${BASE_API_URL}/api/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'duplicate@shipde.vn' }),
+    });
+    assert.equal(dupRes.status, 400);
+    const dupData: any = await dupRes.json();
+    assert.equal(dupData.error.code, 'VALIDATION_ERROR');
+
+    // 9. Test Auth Registration Rate Limited via MSW
+    const limitRes = await fetch(`${BASE_API_URL}/api/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'ratelimit@shipde.vn' }),
+    });
+    assert.equal(limitRes.status, 429);
+    const limitData: any = await limitRes.json();
+    assert.equal(limitData.error.code, 'RATE_LIMITED');
+
+    // 10. Test Auth Verify Expired Token via MSW
+    const expRes = await fetch(`${BASE_API_URL}/api/v1/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: 'test-token-expired' }),
+    });
+    assert.equal(expRes.status, 410);
+    const expData: any = await expRes.json();
+    assert.equal(expData.error.code, 'TOKEN_EXPIRED');
+
+    // 11. Test Auth Verify Consumed Token via MSW
+    const conRes = await fetch(`${BASE_API_URL}/api/v1/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: 'test-token-consumed' }),
+    });
+    assert.equal(conRes.status, 410);
+    const conData: any = await conRes.json();
+    assert.equal(conData.error.code, 'TOKEN_ALREADY_CONSUMED');
+
+    // 12. Test Auth Resend Cooldown via MSW
+    const resendRes = await fetch(`${BASE_API_URL}/api/v1/auth/verify/resend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'ratelimit@shipde.vn', channel: 'email' }),
+    });
+    assert.equal(resendRes.status, 429);
+
+    console.log('✅ All MSW Canonical State Handler and Auth tests passed successfully.');
   } finally {
     server.close();
   }

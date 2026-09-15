@@ -184,6 +184,9 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
 // --- Carrier Mocks ---
 export * from './carriers/index.js';
 
+// --- Auth & Verification Mocks ---
+export * from './auth/index.js';
+
 // --- MSW Canonical State Handlers ---
 export * from './msw/index.js';
 

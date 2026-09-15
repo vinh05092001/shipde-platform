@@ -6,6 +6,10 @@
 
 Given an active verified user with valid credentials, when login and MFA succeed, then the user enters only authorized tenant/scope; failed attempts are rate-limited and audited.
 
+### AC-AUTH-02
+
+Given a prospective shop owner on SCR-AUTH-02 (/register), when submitting valid shop name, owner name, email or phone, password, and accepted terms, then exactly one Merchant and User(OWNER, PENDING_VERIFICATION) are created atomically and a single-use expiring verification token is issued; when verified with a valid token, the user transitions to ACTIVE and verified timestamp is recorded; invalid inputs, duplicate verified identifiers, unaccepted terms, expired/consumed tokens, and rate-limit violations fail closed with distinct actionable errors.
+
 ### AC-USR-01
 
 Given an owner, when inviting an operator with one warehouse/account scope, then the invite can be accepted and the operator cannot access another warehouse/account.
@@ -99,4 +103,3 @@ Two transactions fund one batch and one transaction funds another batch → allo
 ### E2E-10 Tenant attack
 
 User changes resource UUID to another tenant → backend returns not-found/forbidden without leaking metadata; event audited.
-

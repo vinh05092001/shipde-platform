@@ -21,9 +21,34 @@ Fields/actions:
 - Remember trusted device.
 - Login, OTP alternative if configured, forgot password.
 - MFA challenge and recovery code.
-- Clear states for unverified, suspended, locked, expired session.
+  Success routes to organization selection or role dashboard.
 
-Success routes to organization selection or role dashboard.
+## SCR-AUTH-02 Self-registration
+
+Route: `/register`
+
+Fields/actions:
+
+- Shop/merchant name (text, required).
+- Owner full name (text, required).
+- Owner email (email format, required if phone not provided).
+- Owner phone (Vietnamese phone regex `^(0|\+84)[3|5|7|8|9][0-9]{8}$`, required if email not provided).
+- Password (min 8 chars, with show/hide toggle).
+- Terms of service & Privacy policy acceptance (checkbox with link, mandatory).
+- "Đăng Ký Cửa Hàng" submit button.
+- Link to `/login` ("Đã có tài khoản? Đăng nhập").
+
+State coverage:
+
+- **Loading**: Submit button disabled with spinning indicator; fields set to read-only during in-flight network submission.
+- **Empty**: Initial clean form with helpful placeholders; zero production-like pre-filled sample text.
+- **Validation**: Per-field inline error messages sourced from `ErrorResponse.error.fields`; terms checkbox highlight if unchecked upon submit.
+- **Duplicate error**: Explicit notice ("Email hoặc Số điện thoại đã được sử dụng") with direct link to login (`/login`).
+- **Rate-limited error**: Actionable warning with cooldown countdown window hint (`BR-AUTH-07`).
+- **Pending verification**: Success transition displaying "Xác thực tài khoản" instructions with active verification channel details, OTP/link input, and "Gửi lại mã" (Resend) button with 60s cooldown.
+- **Verification error**: Distinct screens for expired token ("Mã xác thực đã hết hạn") and consumed token ("Mã xác thực đã được sử dụng") with single-click resend option.
+- **Verification success**: Confirmation screen celebrating account activation, leading into session start or login.
+- **Recovery**: Unsaved form warning on navigation; network interruptions preserve entered values.
 
 ## SCR-ONB-01 Onboarding
 
@@ -186,4 +211,3 @@ Sections:
 - Carry-forward periods.
 
 High-impact state transitions require reason/evidence and may require approval.
-

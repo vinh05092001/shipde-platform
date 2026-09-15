@@ -1,5 +1,29 @@
 # Business Rules and Decision Tables
 
+## Authentication and Self-registration
+
+- BR-AUTH-01: Registration requires merchant/shop name, owner full name, at least one valid identifier (email or phone), password satisfying policy BR-AUTH-05, and explicit terms acceptance (BR-AUTH-04). Missing required fields return VALIDATION_ERROR with field-level details.
+- BR-AUTH-02: New registrations start in PENDING_VERIFICATION state. An account cannot log in until at least one contact channel (email or phone) is verified. Verifying a second channel is optional but tracked.
+- BR-AUTH-03: Email and phone are globally unique across the platform. An already-verified identifier returns a field-level VALIDATION_ERROR. Submitting an identifier with an existing unverified account re-issues a new verification token rather than creating duplicate rows.
+- BR-AUTH-04: Terms of service and privacy policy acceptance is mandatory. Terms version and timestamp are permanently recorded with the user.
+- BR-AUTH-05: Passwords must be at least 8 characters and hashed with a memory-hard algorithm (scrypt/argon2). Plaintext passwords must never be logged or returned.
+- BR-AUTH-06: Verification tokens and OTPs are single-use with bounded expiration (15 minutes for OTP, 24 hours for email token). Consumed or expired tokens return an explicit error.
+- BR-AUTH-07: Registration attempts are rate-limited per IP (max 5/hour) and per identifier (max 3/hour). Exceeding the threshold returns RATE_LIMITED with retry-after hint.
+- BR-AUTH-08: Resend verification is bounded by a dedicated rate limit (1 request per 60 seconds cooldown, max 5/hour per identifier).
+- BR-AUTH-09: All registration, verification, and rate-limit events produce immutable audit records containing actor context and hashed IP without leaking passwords or verification tokens.
+- BR-AUTH-10: Concurrent submissions with the same unverified identifier must resolve idempotently; exactly one tenant/owner pair persists.
+
+### Self-registration decision
+
+| Identifier status | Terms accepted | Password valid | Rate limit  | Result                             | Next action                       |
+| ----------------- | -------------- | -------------- | ----------- | ---------------------------------- | --------------------------------- |
+| New / Available   | Yes            | Yes            | Under limit | 201 Created (PENDING_VERIFICATION) | Send verification token           |
+| Already verified  | Yes            | Yes            | Under limit | 400 VALIDATION_ERROR (Conflict)    | Show duplicate error + login link |
+| Exists unverified | Yes            | Yes            | Under limit | 200 Re-issued verification         | Resend verification token         |
+| Any               | No             | Any            | Any         | 400 VALIDATION_ERROR               | Prompt terms acceptance           |
+| Any               | Yes            | No (<8 chars)  | Any         | 400 VALIDATION_ERROR               | Prompt valid password             |
+| Any               | Any            | Any            | Exceeded    | 429 RATE_LIMITED                   | Display cooldown window           |
+
 ## Address and availability
 
 - BR-ADR-01: Canonical administrative address must be confirmed when normalization has multiple candidates.
@@ -9,13 +33,13 @@
 
 ### Serviceability decision
 
-| Carrier response | Input valid | Result | User action |
-|---|---:|---|---|
-| Supported services returned | Yes | AVAILABLE | Quote |
-| Explicit route/parcel rejection | Yes | UNSUPPORTED | Show reason/edit |
-| Timeout/5xx | Yes | UNKNOWN_ERROR | Retry/manual |
-| Authentication/permission error | Yes | ACCOUNT_ACTION_REQUIRED | Fix connection |
-| Input invalid | No | INPUT_REQUIRED | Correct fields |
+| Carrier response                | Input valid | Result                  | User action      |
+| ------------------------------- | ----------: | ----------------------- | ---------------- |
+| Supported services returned     |         Yes | AVAILABLE               | Quote            |
+| Explicit route/parcel rejection |         Yes | UNSUPPORTED             | Show reason/edit |
+| Timeout/5xx                     |         Yes | UNKNOWN_ERROR           | Retry/manual     |
+| Authentication/permission error |         Yes | ACCOUNT_ACTION_REQUIRED | Fix connection   |
+| Input invalid                   |          No | INPUT_REQUIRED          | Correct fields   |
 
 ## Quote and recommendation
 
@@ -36,14 +60,14 @@
 
 ### Create command decision
 
-| Local command | Carrier response | Remote lookup | Next action |
-|---|---|---|---|
-| New | Success with waybill | Not needed | Confirm created |
-| New | Explicit business error | Not needed | Fail with action |
-| New | Timeout/connection loss | Found by client reference | Confirm created |
-| New | Timeout/connection loss | Not found after bounded reconciliation window | Retry same idempotency lineage |
-| Existing completed | Any duplicate request | Existing waybill | Return existing result |
-| Unknown beyond policy | Unknown | Unknown | Manual reconciliation; no blind retry |
+| Local command         | Carrier response        | Remote lookup                                 | Next action                           |
+| --------------------- | ----------------------- | --------------------------------------------- | ------------------------------------- |
+| New                   | Success with waybill    | Not needed                                    | Confirm created                       |
+| New                   | Explicit business error | Not needed                                    | Fail with action                      |
+| New                   | Timeout/connection loss | Found by client reference                     | Confirm created                       |
+| New                   | Timeout/connection loss | Not found after bounded reconciliation window | Retry same idempotency lineage        |
+| Existing completed    | Any duplicate request   | Existing waybill                              | Return existing result                |
+| Unknown beyond policy | Unknown                 | Unknown                                       | Manual reconciliation; no blind retry |
 
 ## Tracking and exceptions
 
@@ -71,14 +95,14 @@ Milestones are predicted from Settlement Policy:
 - B: next expected batch close.
 - C: expected carrier transfer.
 
-| Condition | Classification |
-|---|---|
-| Before A | NOT_ELIGIBLE |
-| A ≤ now < B | ELIGIBLE_WAITING_BATCH |
-| B ≤ now < C | BATCH_CLOSED_WAITING_TRANSFER |
-| now ≥ C, no statement line, no valid exclusion | OVERDUE_MISSING_COD_SUSPECTED |
-| Account-level threshold/carry rule proves exclusion | VALID_EXCLUSION |
-| Any required milestone cannot be calculated | DATA_INCOMPLETE |
+| Condition                                           | Classification                |
+| --------------------------------------------------- | ----------------------------- |
+| Before A                                            | NOT_ELIGIBLE                  |
+| A ≤ now < B                                         | ELIGIBLE_WAITING_BATCH        |
+| B ≤ now < C                                         | BATCH_CLOSED_WAITING_TRANSFER |
+| now ≥ C, no statement line, no valid exclusion      | OVERDUE_MISSING_COD_SUSPECTED |
+| Account-level threshold/carry rule proves exclusion | VALID_EXCLUSION               |
+| Any required milestone cannot be calculated         | DATA_INCOMPLETE               |
 
 BR-MIS-01: Minimum remittance threshold is evaluated at account/batch aggregate plus opening carry-forward, never each waybill independently.
 
@@ -100,17 +124,16 @@ BR-MIS-01: Minimum remittance threshold is evaluated at account/batch aggregate 
 
 ### Claim submission decision
 
-| Complete evidence | Policy verified | Within deadline | Auto enabled/limit | Result |
-|---:|---:|---:|---:|---|
-| No | Any | Any | Any | NEEDS_EVIDENCE |
-| Yes | No | Any | Any | MANUAL_REVIEW |
-| Yes | Yes | No | Any | EXPIRED_DO_NOT_PROMISE_RECOVERY |
-| Yes | Yes | Yes | No | READY_FOR_CONFIRMATION |
-| Yes | Yes | Yes | Yes | AUTO_SUBMIT_ELIGIBLE |
+| Complete evidence | Policy verified | Within deadline | Auto enabled/limit | Result                          |
+| ----------------: | --------------: | --------------: | -----------------: | ------------------------------- |
+|                No |             Any |             Any |                Any | NEEDS_EVIDENCE                  |
+|               Yes |              No |             Any |                Any | MANUAL_REVIEW                   |
+|               Yes |             Yes |              No |                Any | EXPIRED_DO_NOT_PROMISE_RECOVERY |
+|               Yes |             Yes |             Yes |                 No | READY_FOR_CONFIRMATION          |
+|               Yes |             Yes |             Yes |                Yes | AUTO_SUBMIT_ELIGIBLE            |
 
 ## Billing
 
 - BR-BIL-01: Bill once at first conclusive audit using tenant + carrier account + waybill.
 - BR-BIL-02: No billing for not-eligible or data-incomplete.
 - BR-BIL-03: Rerun, revision, carry-forward and claim follow-up do not rebill.
-
