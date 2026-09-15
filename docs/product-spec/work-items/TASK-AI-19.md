@@ -6,7 +6,7 @@
 |---|---|
 | Work Item ID | `TASK-AI-19` |
 | Feature ID | `N/A` |
-| Status | `READY_FOR_CODEX` |
+| Status | `BLOCKED_DEPENDENCY` |
 | Delivery order | `152` |
 | Dependencies | `TASK-AI-17` (merged, `1f587dd`) |
 | Assigned author | `GEMINI` |
@@ -100,15 +100,20 @@ Prohibited in this Work Item:
 - Support `--write`, `--dry-run`, and `--revert <audit-file>` CLI options in
   `tools/ai-brain/cli.js reconcile`.
 - Enforce protected main worktree preflight: `--write` refuses to run (exit code 1)
-  if invoked on the `main` branch or within the protected `shipde-platform`
-  integration worktree, requiring execution in a dedicated feature worktree.
-- Clear stale `BLOCKED_DEPENDENCY` and `BLOCKED_BY_FOUNDATION` rows to `BACKLOG`
+  if invoked on the `main` or `master` branch or within the protected `shipde-platform`
+  integration worktree, emitting an explicit refusal message to stderr and requiring
+  execution in a dedicated feature worktree.
+- Clear stale `BLOCKED_DEPENDENCY` and `BLOCKED_BY_FOUNDATION` rows strictly to `BACKLOG`
   when all declared dependencies are verifiably `MERGED` (reachable on `mainRef`
-  with `codex_verdict: PASS`). Rows do not skip to `READY_FOR_AUTHOR`.
-- Record unrecorded merges (`MERGE_NOT_RECORDED`) to `MERGED` only for rows
-  already in active post-review lifecycle states (`READY_FOR_CODEX` or `CODEX_PASS`)
-  with verified PR identity, authoritative 40-character merge commit SHA,
-  trusted exact-HEAD Codex review `PASS`, and passing CI checks.
+  with `codex_verdict: PASS`). Rows must never skip or bulk-promote to `READY_FOR_AUTHOR`
+  upon dependency clearance, as mere existence of `work_item_path` does not satisfy the
+  Definition of Ready or bypass Codex's required per-item planning and selection gate.
+- Record unrecorded merges to `MERGED` only when provided with equivalent verified durable
+  merge evidence (`--merge-evidence <file>` from supervisor preflight or GitHub PR metadata)
+  for rows already in active post-review lifecycle states (`READY_FOR_CODEX` or `CODEX_PASS`).
+  In the absence of verified durable merge evidence, write-back strictly refuses to mutate
+  rows to `MERGED`; inferring merge status from Git branch tip ancestry or commit subject
+  matching is prohibited.
 - Produce a durable before/after audit artifact in
   `docs/product-spec/docs/10-ai-collaboration/audit/` recording run identity,
   operator, head commit, pre/post SHA-256 hashes, and per-row mutation details.
@@ -138,10 +143,10 @@ Prohibited in this Work Item:
 |---|---|
 | `AI-19-R01` | **Idempotency and determinism**: Running `cli.js reconcile --write` multiple times on an unchanged repository produces zero diff and identical file hashes after the first execution. |
 | `AI-19-R02` | **Allowed-transition enforcement**: Mutations are restricted to the transitions explicitly enumerated in the Allowed-Transition Table. Any row transition not permitted by the table is strictly prohibited and fails closed. |
-| `AI-19-R03` | **Stale dependency unblocking to BACKLOG**: When all declared dependencies for a `BLOCKED_DEPENDENCY` or `BLOCKED_BY_FOUNDATION` row are `MERGED` with valid reachable commits on `mainRef` and `codex_verdict: PASS`, write-back transitions the status to `BACKLOG`. Write-back must never advance unblocked rows to `READY_FOR_AUTHOR`, preserving the Codex planning gate. |
-| `AI-19-R04` | **Gated MERGED transition**: A row may transition from `READY_FOR_CODEX` or `CODEX_PASS` to `MERGED` only when all of the following are verifiably true: (1) verified PR reference in `pr` field; (2) exact 40-character merge commit SHA verified reachable on `mainRef`; (3) exact-HEAD Codex review verdict is `PASS` from a trusted reviewer login (`chatgpt-codex-connector[bot]` or authorized role) with 0 unresolved review threads; (4) required CI checks (`contract`, `application-gate`) report `SUCCESS` on exact HEAD; (5) `work_item_path` exists on disk. Rows in `BACKLOG`, `BLOCKED_*`, or `READY_FOR_AUTHOR` attempting `MERGED` transition are strictly refused. |
+| `AI-19-R03` | **Stale dependency unblocking strictly to BACKLOG**: When all declared dependencies for a `BLOCKED_DEPENDENCY` or `BLOCKED_BY_FOUNDATION` row are `MERGED` with valid reachable commits on `mainRef` and `codex_verdict: PASS`, write-back transitions the status strictly to `BACKLOG`. Mere existence of `work_item_path` does not prove readiness, provenance from approved sources, or queue eligibility. Promoting rows to `READY_FOR_AUTHOR` is reserved exclusively for the independent Codex planning and selection gate per AGENTS.md § Role separation; write-back must never bulk-promote unblocked rows to `READY_FOR_AUTHOR`. |
+| `AI-19-R04` | **Durable-evidence-bound MERGED transition**: A row may transition from `READY_FOR_CODEX` or `CODEX_PASS` to `MERGED` only when provided with equivalent durable merge evidence (`--merge-evidence <file>`) verifying: (1) PR identity matches row's `pr` and title `[<WORK_ITEM_ID>]`; (2) exact 40-character merge commit SHA verified reachable on `mainRef`; (3) exact-HEAD Codex review verdict is `PASS` from a trusted reviewer login (`chatgpt-codex-connector[bot]` or authorized role) on the exact reviewed `headRefOid` with 0 unresolved review threads; (4) required CI checks report `SUCCESS` on exact `headRefOid`; (5) `work_item_path` exists on disk. Because runtime GitHub queries are out of scope, the reconciler must consume equivalent durable evidence or refuse to write `MERGED`. Inferring merge from branch tip ancestry or commit subjects is prohibited (`AI-TOOL-12`). In the absence of durable evidence, write-back strictly refuses `MERGED` transition and retains existing status. |
 | `AI-19-R05` | **Fail-closed refusal on overstatements**: An overstatement is defined as any finding with `severity: 'error'` (`ROW_WITHOUT_ID`, `DUPLICATE_WORK_ITEM_ID`, `MERGED_WITHOUT_COMMIT`, `MERGE_COMMIT_MISSING`, `MERGE_COMMIT_NOT_REACHABLE`, `MERGED_WITHOUT_PASS`, `SPEC_MISSING` on terminal or ready rows). If any `error` exists, write-back refuses execution with exit code 1, leaving the CSV completely untouched (pre-hash == post-hash) and leaving no `.tmp` file. |
-| `AI-19-R06` | **Protected main worktree guard**: Write-back must refuse to run (exit code 1) when executed on the `main`/`master` branch or within the protected `shipde-platform` integration worktree. Mutations require a dedicated feature worktree and branch, ensuring clean integration baselines and auditable PR output. |
+| `AI-19-R06` | **Protected main worktree guard**: Write-back must refuse to run (exit code 1) when executed on the `main`/`master` branch or within the protected `shipde-platform` integration worktree, emitting `Write-back refused: running in protected main worktree/branch. Mutations require a dedicated feature worktree and branch.` to stderr. The register remains untouched (pre-hash == post-hash) with zero temporary files left. Mutations require a dedicated feature worktree and branch, ensuring clean integration baselines and auditable branch/PR handoff output per AGENTS.md § Semi-automatic workspaces. |
 | `AI-19-R07` | **Durable audit artifact and rollback**: Every `--write` execution writes a durable JSON audit artifact containing run ID, timestamp, operator session, git commit, pre/post SHA-256 hashes, and per-row mutation records with rule and evidence citations. A deterministic reversal procedure (`--revert <audit-file>`) restores the register to its exact pre-write state. |
 | `AI-19-R08` | **Atomic RFC 4180 serialization**: File writes must be atomic via temporary sibling files (`FEATURE-DELIVERY-REGISTER.csv.tmp`), preserving RFC 4180 quoting rules, existing line endings, and byte-for-byte integrity of unaffected rows. |
 | `AI-19-R09` | **Read-only default**: Invoking `cli.js reconcile` without `--write` is strictly read-only; mutations require explicit `--write`. `--dry-run` outputs the exact planned diff without touching disk. |
@@ -150,23 +155,33 @@ Prohibited in this Work Item:
 
 | Source Status | Destination Status | Preconditions and Required Evidence | Prohibited Shortcuts / Refusal Behavior |
 |---|---|---|---|
-| `BLOCKED_DEPENDENCY` | `BACKLOG` | 1. All declared dependencies in `dependencies` field exist in the register (`byId.has(dep)`).<br>2. Every declared dependency has `status == 'MERGED'`.<br>3. Every dependency has a 40-character `merge_commit` verified reachable on `mainRef` (`git merge-base --is-ancestor <sha> <mainRef>`).<br>4. Every dependency has `codex_verdict == 'PASS'`.<br>5. Target row has valid `work_item_id`. | Refuse transition to `READY_FOR_AUTHOR` (requires Codex planning gate) or `MERGED` (cannot skip author/PR/review/CI gates). |
+| `BLOCKED_DEPENDENCY` | `BACKLOG` | 1. All declared dependencies in `dependencies` field exist in the register (`byId.has(dep)`).<br>2. Every declared dependency has `status == 'MERGED'`.<br>3. Every dependency has a 40-character `merge_commit` verified reachable on `mainRef` (`git merge-base --is-ancestor <sha> <mainRef>`).<br>4. Every dependency has `codex_verdict == 'PASS'`.<br>5. Target row has valid `work_item_id`. | Refuse transition to `READY_FOR_AUTHOR` (mere existence of spec does not prove Definition of Ready or queue selection; requires independent Codex planning gate) or `MERGED` (cannot skip author/PR/review/CI gates). |
 | `BLOCKED_BY_FOUNDATION` | `BACKLOG` | 1. All foundation prerequisites (`TASK-FOUND-01` through `TASK-FOUND-04`) and declared dependencies are `MERGED` with reachable commits and `codex_verdict: PASS`.<br>2. Target row has valid `work_item_id`. | Refuse transition to `READY_FOR_AUTHOR` or `MERGED`. |
-| `READY_FOR_CODEX` or `CODEX_PASS` | `MERGED` | 1. Verified PR reference in `pr` field; PR title strictly matches `[<WORK_ITEM_ID>] <outcome>`.<br>2. Authoritative 40-character merge commit SHA verified reachable on `mainRef` (resolved from merge metadata, accounting for squash merges).<br>3. Exact-HEAD Codex review verdict is `PASS` from a trusted reviewer login (`chatgpt-codex-connector[bot]` or authorized role) with 0 unresolved review threads.<br>4. Required CI checks (`contract`, `application-gate`) report `SUCCESS` on exact HEAD.<br>5. `work_item_path` exists on disk. | Refuse if any evidence is missing or unverified.<br>Refuse if source status is `BACKLOG`, `BLOCKED_*`, or `READY_FOR_AUTHOR` (skipping lifecycle gates strictly prohibited). |
+| `READY_FOR_CODEX` or `CODEX_PASS` | `MERGED` | 1. Provided with verified durable merge evidence artifact (`--merge-evidence <file>`).<br>2. Verified PR reference in evidence matches `pr` field; PR title strictly matches `[<WORK_ITEM_ID>] <outcome>`.<br>3. Authoritative 40-character merge commit SHA verified reachable on `mainRef` (`git merge-base --is-ancestor <sha> origin/main`).<br>4. Exact-HEAD Codex review verdict is `PASS` from a trusted reviewer login (`chatgpt-codex-connector[bot]` or authorized role) on exact `headRefOid` with 0 unresolved review threads.<br>5. Required CI checks report `SUCCESS` on exact `headRefOid`.<br>6. `work_item_path` exists on disk. | Refuse if durable merge evidence is absent, unverified, or fails DAG reachability.<br>Refuse any branch tip ancestry inference or commit text heuristic (`AI-TOOL-12`).<br>Refuse if source status is `BACKLOG`, `BLOCKED_*`, or `READY_FOR_AUTHOR` (skipping lifecycle gates strictly prohibited). |
 | *Any other status* | *Any other status* | N/A | **STRICTLY PROHIBITED**. Reconciler refuses mutation and retains existing row status. |
 
-### Resolution of Exact Merge Commit SHA
+### Binding MERGED Writes to Exact Reviewed PR Head and Durable Evidence
 
 Squash merges (the repository standard under `TASK-AI-13`) squash feature branch commits
 into a single new commit on `main`. As a result, the branch tip commit is **not** an
 ancestor of `mainRef` (`git merge-base --is-ancestor <branchTip> origin/main` evaluates to false).
-To resolve the exact merge commit SHA authoritatively without false ancestry assumptions:
-1. **PR Merge Metadata**: Read the explicit `mergeCommit.oid` from GitHub PR metadata or
-   the deterministic supervisor preflight snapshot (`control.ps1`).
-2. **Local Commit Identification**: Search `mainRef` log for merge commits or squash commit
-   messages matching `Merge pull request #<NN>` or `[<WORK_ITEM_ID>]` in the commit subject.
-3. **DAG Verification**: Verify the resolved SHA exists in Git (`git cat-file -e <sha>`)
-   and is directly reachable on `mainRef` (`git merge-base --is-ancestor <sha> origin/main`).
+Furthermore, an unchanged branch tip already points into `main`, and an unbound `codex_verdict: PASS`
+in the CSV may refer to an older head rather than the merged commit.
+
+Under policy `AI-TOOL-12`, GitHub merged state is reconciled strictly by PR identity and merge SHA.
+Because runtime GitHub queries are declared out of scope for local offline reconciliation, the reconciler
+must consume equivalent durable evidence or refuse to write `MERGED`:
+1. **Durable Merge Evidence Input**: The reconciler accepts a durable merge evidence artifact
+   (`--merge-evidence <path-to-file>`) containing verified PR metadata (`number`, `title`, `headRefOid`,
+   `mergeCommit.oid`, `codexVerdict`, `unresolvedThreadsCount`, `ciChecksStatus`) exported from
+   supervisor preflight snapshots (`control.ps1` § `Sync-ShipDeRegister`) or GitHub CLI.
+2. **DAG Reachability Verification**: The reconciler verifies that `mergeCommit.oid` is a valid 40-character SHA
+   present in Git (`git cat-file -e <sha>`) and directly reachable on `mainRef` (`git merge-base --is-ancestor <sha> origin/main`).
+3. **Exact-HEAD Review Binding**: The reconciler asserts that `codexVerdict == 'PASS'` from a trusted
+   reviewer login with 0 unresolved review threads on the exact `headRefOid` that produced the merge.
+4. **Fail-Closed Refusal**: If no durable merge evidence artifact is provided, or if any verification step fails,
+   the reconciler strictly refuses to write `MERGED`, leaves the row status intact, and emits an informative
+   warning. Inferring merge status solely from Git branch ancestry or commit subject grep is prohibited.
 
 ## UI states
 
@@ -239,16 +254,16 @@ To rollback an applied write-back cleanly and deterministically:
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| `AC-AI-19-01` | Stale block unblocking to `BACKLOG` (`TASK-AI-07`) | Status transitions from `BLOCKED_DEPENDENCY` to `BACKLOG`; row is not advanced to `READY_FOR_AUTHOR`; audit artifact created | Command: `node tools/ai-brain/cli.js reconcile --register tools/ai-brain/test/fixtures/register-stale-dependency.csv --write --allow-fixture-write`<br>Exit code: `0`<br>Assertion: target row status is `BACKLOG`; audit JSON generated; pre/post hashes differ as expected; unchanged rows identical byte-for-byte |
-| `AC-AI-19-02` | Active/unresolved dependency retention | Row with unmerged dependency remains `BLOCKED_DEPENDENCY`; zero modifications to CSV | Command: `node tools/ai-brain/cli.js reconcile --register tools/ai-brain/test/fixtures/register-active-dependency.csv --write --allow-fixture-write`<br>Exit code: `0`<br>Assertion: pre-hash SHA-256 == post-hash SHA-256; zero mutations in audit log |
-| `AC-AI-19-03` | Verified unrecorded merge recording | Row in `READY_FOR_CODEX` with verified PR, 40-char merge commit reachable on `mainRef`, trusted exact-HEAD Codex `PASS`, and clean CI transitions to `MERGED` | Command: `node --test --test-name-pattern="records unrecorded merge with full verified evidence" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Assertion: status is `MERGED`; `merge_commit` populated; `codex_verdict` is `PASS`; audit entry recorded |
-| `AC-AI-19-04` | Refusal of unevidenced `MERGED` transition | Row lacking trusted exact-HEAD `PASS` review or lacking 40-char reachable merge commit is not modified to `MERGED`; warning emitted | Command: `node --test --test-name-pattern="refuses MERGED transition without full evidence" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Assertion: target row status remains unchanged; warning in findings; pre-hash == post-hash |
-| `AC-AI-19-05` | Refusal of lifecycle-skipping `MERGED` transition | Row in `BACKLOG` or `READY_FOR_AUTHOR` whose branch is merged refuses transition to `MERGED` to prevent skipping lifecycle gates | Command: `node --test --test-name-pattern="refuses lifecycle skipping to MERGED" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Assertion: target row status remains unchanged; warning emitted; pre-hash == post-hash |
-| `AC-AI-19-06` | Protected main worktree write refusal | `--write` invoked on `main` branch or in protected `shipde-platform` worktree refuses execution fail-closed with 0 file changes | Command: `node tools/ai-brain/cli.js reconcile --write`<br>Exit code: `1`<br>Assertion: stderr contains `Write-back refused: running in protected main worktree/branch`; pre-hash SHA-256 == post-hash SHA-256; absence of `.tmp` file |
-| `AC-AI-19-07` | Overstatement / Structural corruption fail-closed refusal | Register containing `severity: error` finding (`ROW_WITHOUT_ID`, `DUPLICATE_WORK_ITEM_ID`, `MERGED_WITHOUT_COMMIT`) refuses write-back | Command: `node tools/ai-brain/cli.js reconcile --register tools/ai-brain/test/fixtures/register-corrupt-overstatement.csv --write --allow-fixture-write`<br>Exit code: `1`<br>Assertion: stderr contains `LỖI DUPLICATE_WORK_ITEM_ID` and `LỖI MERGED_WITHOUT_COMMIT`; pre-hash SHA-256 == post-hash SHA-256; absence of `.tmp` file |
-| `AC-AI-19-08` | Write-back idempotency and zero-churn serialization | Consecutive write-back invocations produce zero file diff on second run; RFC 4180 quotes and line endings preserved byte-for-byte | Command: `node --test --test-name-pattern="reconcile write-back idempotency" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Assertion: post-hash-1 == post-hash-2; git diff is completely empty; unaffected rows untouched |
-| `AC-AI-19-09` | Read-only default execution | Invoking `reconcile` without `--write` reports findings without modifying disk | Command: `node tools/ai-brain/cli.js reconcile`<br>Exit code: `0`<br>Assertion: pre-hash SHA-256 == post-hash SHA-256; findings report printed to stdout; zero files touched |
-| `AC-AI-19-10` | Durable audit artifact creation and deterministic rollback | Write-back generates audit JSON, and `--revert` restores exact pre-mutation CSV state | Command: `node --test --test-name-pattern="audit artifact creation and deterministic rollback" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Assertion: audit JSON adheres to schema; post-revert SHA-256 matches pre-write SHA-256 byte-for-byte |
+| `AC-AI-19-01` | Stale block unblocking strictly to `BACKLOG` (`TASK-AI-07`) | Status transitions from `BLOCKED_DEPENDENCY` strictly to `BACKLOG`; row is not advanced to `READY_FOR_AUTHOR`; audit artifact created | Command: `node tools/ai-brain/cli.js reconcile --register tools/ai-brain/test/fixtures/register-stale-dependency.csv --write --allow-fixture-write`<br>Exit code: `0`<br>Expected output: `Reconciled TASK-AI-07: BLOCKED_DEPENDENCY -> BACKLOG`<br>Source file: `tools/ai-brain/test/fixtures/register-stale-dependency.csv` |
+| `AC-AI-19-02` | Active/unresolved dependency retention | Row with unmerged dependency remains `BLOCKED_DEPENDENCY`; 0 modifications to CSV | Command: `node tools/ai-brain/cli.js reconcile --register tools/ai-brain/test/fixtures/register-active-dependency.csv --write --allow-fixture-write`<br>Exit code: `0`<br>Expected output: `Register unchanged: 0 mutations applied`<br>Source file: `tools/ai-brain/test/fixtures/register-active-dependency.csv` |
+| `AC-AI-19-03` | Verified unrecorded merge recording with durable evidence | Row in `READY_FOR_CODEX` provided with verified durable merge evidence transitions to `MERGED` | Command: `node --test --test-name-pattern="records unrecorded merge with durable external evidence" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Expected output: `✔ records unrecorded merge with durable external evidence`<br>Source file: `tools/ai-brain/test/reconcile.test.js` |
+| `AC-AI-19-04` | Refusal of unevidenced `MERGED` transition | Row lacking durable exact-HEAD review and merge evidence refuses `MERGED` transition; status is retained without branch ancestry inference; warning emitted | Command: `node --test --test-name-pattern="refuses MERGED transition without durable external evidence" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Expected output: `✔ refuses MERGED transition without durable external evidence`<br>Source file: `tools/ai-brain/test/reconcile.test.js` |
+| `AC-AI-19-05` | Refusal of lifecycle-skipping `MERGED` transition | Row in `BACKLOG` or `READY_FOR_AUTHOR` whose branch is merged refuses transition to `MERGED` to prevent skipping lifecycle gates | Command: `node --test --test-name-pattern="refuses lifecycle skipping to MERGED" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Expected output: `✔ refuses lifecycle skipping to MERGED`<br>Source file: `tools/ai-brain/test/reconcile.test.js` |
+| `AC-AI-19-06` | Protected main worktree write refusal | `--write` invoked on `main` branch or in protected `shipde-platform` worktree refuses execution fail-closed with 0 file changes | Command: `node tools/ai-brain/cli.js reconcile --write`<br>Exit code: `1`<br>Expected output: `Write-back refused: running in protected main worktree/branch. Mutations require a dedicated feature worktree and branch.`<br>Source file: `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| `AC-AI-19-07` | Overstatement / Structural corruption fail-closed refusal | Register containing `severity: error` finding (`ROW_WITHOUT_ID`, `DUPLICATE_WORK_ITEM_ID`, `MERGED_WITHOUT_COMMIT`) refuses write-back with 0 file changes | Command: `node tools/ai-brain/cli.js reconcile --register tools/ai-brain/test/fixtures/register-corrupt-overstatement.csv --write --allow-fixture-write`<br>Exit code: `1`<br>Expected output: `LỖI DUPLICATE_WORK_ITEM_ID`<br>Source file: `tools/ai-brain/test/fixtures/register-corrupt-overstatement.csv` |
+| `AC-AI-19-08` | Write-back idempotency and zero-churn serialization | Consecutive write-back invocations produce zero file diff on second run; RFC 4180 quotes and line endings preserved byte-for-byte | Command: `node --test --test-name-pattern="reconcile write-back idempotency" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Expected output: `✔ reconcile write-back idempotency`<br>Source file: `tools/ai-brain/test/reconcile.test.js` |
+| `AC-AI-19-09` | Read-only default execution | Invoking `reconcile` without `--write` reports findings without modifying disk; 0 files modified | Command: `node tools/ai-brain/cli.js reconcile`<br>Exit code: `0`<br>Expected output: `Đã đối chiếu 178 đầu mục với những gì repository chứng minh được.`<br>Source file: `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| `AC-AI-19-10` | Durable audit artifact creation and deterministic rollback | Write-back generates audit JSON, and `--revert` restores exact pre-mutation CSV state byte-for-byte | Command: `node --test --test-name-pattern="audit artifact creation and deterministic rollback" tools/ai-brain/test/reconcile.test.js`<br>Exit code: `0`<br>Expected output: `✔ audit artifact creation and deterministic rollback`<br>Source file: `tools/ai-brain/test/reconcile.test.js` |
 
 ## Verification commands
 
@@ -267,7 +282,7 @@ node tools/ai-brain/cli.js manifest
 
 # 4. Product documentation and Work Item traceability validator
 python docs/product-spec/scripts/validate_docs.py
-# Expected exit code: 0 (82 markdown files, 130 feature IDs, 178 delivery rows, 522 unique identifiers verified)
+# Expected exit code: 0 (82 markdown files, 130 feature IDs, 178 delivery rows, 524 unique identifiers verified)
 
 # 5. Protected main worktree write refusal test
 node tools/ai-brain/cli.js reconcile --write
@@ -282,8 +297,8 @@ node --test "tools/ai-brain/test/reconcile.test.js"
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `b52ded6` | `CHANGES_REQUIRED` | 7 review findings resolved in Round 2: (1) All ACs replaced with falsifiable criteria naming fixtures, exact commands, exit codes, and assertions; (2) Durable JSON audit artifact and deterministic `--revert` procedure specified; (3) Unblocking transitions to `BACKLOG` (not `READY_FOR_AUTHOR`), preserving the Codex planning gate; (4) `MERGE_NOT_RECORDED -> MERGED` strictly gated with verified PR identity, 40-char merge SHA reachable on `mainRef` (accounting for squash merges), trusted exact-HEAD Codex review `PASS`, and clean CI; (5) Allowed-Transition Table explicitly enumerates permitted source/destination states and prohibits lifecycle shortcuts; (6) Overstatements defined as severity `error` findings; exact merge commit SHA resolution defined via authoritative sources rather than ancestor inference; (7) Protected main worktree write refusal enforced; pre/post hash equality and temporary file absence mandated. |
-| 2 | Pending review | `READY_FOR_CODEX` | Fresh independent review task requested for updated specification. |
+| 1 | `b52ded6` | `CHANGES_REQUIRED` | 4 P1 findings resolved: (1) `id=4006827820`: Control table status aligned to `BLOCKED_DEPENDENCY` per delivery register authority and AGENTS.md lifecycle rules; (2) `id=4006827826`: Stale dependency unblocking transitions strictly to `BACKLOG` (never `READY_FOR_AUTHOR`), preserving Definition of Ready and Codex planning selection gate; (3) `id=4006827836`: Prohibited inferring `MERGED` from branch tip ancestry or commit text; reconciler requires durable external merge evidence (`--merge-evidence`) or strictly refuses to write `MERGED` per `AI-TOOL-12`; (4) `id=4006827845`: Protected main worktree write refusal enforced fail-closed (exit code 1) with exact stderr guard message, requiring feature worktree and auditable PR output. |
+| 2 | Pending review | `PENDING` | Fresh independent review task requested for updated specification. |
 
 ## Residual limitations
 
