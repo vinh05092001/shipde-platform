@@ -160,6 +160,8 @@ node tools/ai-brain/cli.js prove --tests "node tools/ai-brain/test/review-lane.t
 
 ## Residual limitations
 
+- **The misleading names are still in the code.** A repository-wide search still finds `$script:AgentRouterProfile`, `$script:AgentRouterPort`, `Assert-ShipDeAgentRouterProfile` and `Invoke-ShipDeAgentRouterReviewFallback` in `scripts/ai/control.ps1`, and `$script:AgentRouterPort` in `scripts/ai/start-agent-orchestrator.ps1` — all of them naming AgentRouter while addressing 9Router's port. This Work Item separated the two in documentation and in the decision record; it did **not** rename the symbols. Anyone reading this document as "the confusion is resolved in code" is reading it wrongly, and the rename belongs to a follow-up that can change `control.ps1` safely.
+
 Renaming inside a 15,717-line script carries a real risk of missing an
 occurrence or catching one that belongs to the other gateway. `AC-AI-44-04`
 covers behaviour but not every path; a second reviewer pass over the diff is

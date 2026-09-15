@@ -33,9 +33,24 @@ const DEFAULT_CAPS = { jsonSchema: true, tools: true, contextWindow: 200000 };
 
 /**
  * Synthesises one usage event per recorded request so the quota windows have
- * something to count. Timestamps are spread across the day rather than stacked
- * on one instant, which keeps a per-minute limit from reading as exhausted
- * purely because history was replayed.
+ * something to count.
+ *
+ * The source is a daily aggregate: it records how many requests happened, never
+ * when. Any distribution this function picks is therefore invented, and each
+ * choice is wrong in its own direction — stacking every event on one instant
+ * reads as a per-minute limit exhausted by replayed history, while spreading
+ * them evenly (what this does) hides a recent burst below its limit and counts
+ * yesterday's requests as if they were minutes old.
+ *
+ * Spreading is kept because it is the less alarming of two guesses, but the
+ * guess is now labelled rather than presented as observation: every event
+ * carries `timingKnown: false`, and `syntheticTiming` is reported alongside the
+ * capacity rows so a consumer evaluating a window shorter than the aggregation
+ * period can refuse rather than compute a confident wrong answer.
+ *
+ * The real fix belongs upstream: the usage source has to carry timestamps.
+ * Until it does, no arrangement of these events can answer a per-minute
+ * question, and pretending otherwise is the failure this labelling prevents.
  */
 function eventsFromProvider(provider, now) {
   const count = Math.min(provider.requests || 0, 500);
@@ -47,6 +62,8 @@ function eventsFromProvider(provider, now) {
       at: now - Math.floor((span * (i + 1)) / (count + 1)),
       tokens: perEvent,
       cost: (provider.cost || 0) / Math.max(count, 1),
+      // The timestamp above is invented; see the note on this function.
+      timingKnown: false,
     });
   }
   return events;
@@ -157,6 +174,15 @@ function collectCapacity(options) {
     },
     data: Object.assign({}, report, {
       derivedFromRouter: derived,
+      // Router usage carries no timestamps, so every event feeding the windows
+      // below has an invented one. Declared here so a consumer can refuse to
+      // evaluate a window shorter than the daily aggregation rather than read a
+      // confident figure off a distribution nobody observed.
+      syntheticTiming: {
+        router: true,
+        aggregationWindowMs: 24 * 60 * 60 * 1000,
+        reason: 'Nguồn usage của router chỉ có tổng theo ngày, không có mốc thời gian từng request',
+      },
       claude: claudeSide,
       // The vendor's own figures, and the reason each missing one is missing.
       // Shown beside our accounting rather than merged into it: one is a

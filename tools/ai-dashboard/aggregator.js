@@ -271,6 +271,23 @@ function detectRecoveryTransitions(sources, observationTime) {
   return recoveries;
 }
 
+/**
+ * A stable fingerprint of the session fields the cockpit displays.
+ *
+ * Ordered by id rather than by arrival so a reordered list is not mistaken for
+ * a changed one, and joined with a separator that cannot occur in the values.
+ */
+function sessionSignature(sessions) {
+  return (sessions || [])
+    .map((s) =>
+      [s.id, s.status, s.activity, s.role, s.category, s.branch, s.terminated]
+        .map((v) => (v === undefined || v === null ? '' : String(v)))
+        .join('')
+    )
+    .sort()
+    .join('');
+}
+
 function hasStateChanged(prevState, candidate) {
   if (!prevState) return true;
 
@@ -298,7 +315,13 @@ function hasStateChanged(prevState, candidate) {
     return true;
 
   if ((prevState.conflicts || []).length !== (candidate.conflicts || []).length) return true;
-  if ((prevState.sessions || []).length !== (candidate.sessions || []).length) return true;
+  // Counting sessions answers "did one appear or disappear", which is not the
+  // question. A session that changes status, activity, role or branch without
+  // the count moving is the ordinary case — a worker going from active to
+  // exited — and comparing lengths reports no change, so the panel keeps
+  // showing the old state until something unrelated happens to move a
+  // different field. The signature covers what the panel actually renders.
+  if (sessionSignature(prevState.sessions) !== sessionSignature(candidate.sessions)) return true;
   if (prevState.git?.headOid !== candidate.git?.headOid) return true;
   if (prevState.git?.dirtyCount !== candidate.git?.dirtyCount) return true;
   if (prevState.github?.authenticated !== candidate.github?.authenticated) return true;

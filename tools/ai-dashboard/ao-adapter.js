@@ -106,7 +106,7 @@ function classifySessionRole(session) {
   const role = (session.role || '').toLowerCase();
 
   // 1. Deterministic supervisor
-  if (role === 'orchestrator' || id.includes('orchestrator') || branch.includes('orchestrator')) {
+  if (role === 'orchestrator' || id.includes('orchestrator')) {
     return {
       category: 'SUPERVISOR',
       displayRole: 'Deterministic AO Supervisor',
@@ -115,12 +115,14 @@ function classifySessionRole(session) {
   }
 
   // 2. Independent reviewer
-  if (
-    branch.includes('codex') ||
-    harness.includes('codex') ||
-    id.includes('codex') ||
-    role === 'reviewer'
-  ) {
+  //
+  // Decided by harness and role only. A branch name says what the work is
+  // about, never who is doing it: on `fix/task-ai-16-codex-launch-flags` every
+  // Gemini, AGY and Claude author session matched `branch.includes('codex')`
+  // and was displayed as an independent reviewer — which is the one confusion
+  // the writer/reviewer separation exists to prevent, shown on the panel that
+  // is supposed to enforce it.
+  if (harness.includes('codex') || id.includes('codex') || role === 'reviewer') {
     return {
       category: 'REVIEWER',
       displayRole: 'Independent Codex Reviewer',
@@ -129,7 +131,8 @@ function classifySessionRole(session) {
   }
 
   // 3. Claude Code: analyst & reviewer fallback; authorized secondary author / code repair when assigned
-  if (harness.includes('claude') || branch.includes('claude') || id.includes('claude')) {
+  // Same reasoning as above: harness and id identify the agent, the branch does not.
+  if (harness.includes('claude') || id.includes('claude')) {
     const isAssignedRepair =
       role.includes('repair') ||
       role.includes('author') ||
@@ -162,7 +165,7 @@ function classifySessionRole(session) {
   }
 
   // 5. 9Router / DSH: Constrained author (deterministic, low-risk only per AGENTS.md)
-  if (harness === 'dsh' || branch.includes('dsh') || id.includes('dsh')) {
+  if (harness === 'dsh' || id.includes('dsh')) {
     return {
       category: 'CONSTRAINED_AUTHOR',
       displayRole: '9Router Constrained Author',
