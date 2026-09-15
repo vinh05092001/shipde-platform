@@ -36,11 +36,34 @@ claimed as `ADOPTED` would still receive a passing "VALIDATED" status.
 
 Wiring the manifest truth audit into `doctor.ps1` and `ecosystem.ps1` ensures
 that any unverified overclaiming of reality (such as `QUALITY_GATE_MISSING` or
-`DECLARED_ADOPTED_BUT_ABSENT`) immediately fails closed with exit code 1,
-halting developer setup and preflight verification until tools are either
-honestly installed or reconciled in the manifest. Enforcing this blocking gate
-in automated CI workflow definitions or the orchestrator controller dispatch
-loop is reserved for subsequent integration work items.
+`DECLARED_ADOPTED_BUT_ABSENT`) fails closed with exit code 1 in those two
+scripts, so a developer or reviewer who runs the health check cannot be told
+`VALIDATED` while an adopted gate is absent.
+
+### Enforcement boundary claimed by this Work Item
+
+This Work Item deliberately does **not** claim that an absent adopted tool
+fails the CI pipeline or halts orchestrator delivery. That claim would be false
+at the current HEAD: no file under `.github/workflows/` and no line of
+`scripts/ai/control.ps1` invokes `scripts/ai/doctor.ps1` or
+`scripts/ai/ecosystem.ps1 -Action Validate`, so those two scripts are
+manually-executed verification surfaces, not enforced delivery gates. The
+measured caller count is `0`, asserted by `AC-AI-43-09`.
+
+The outcome claimed and accepted here is therefore exactly:
+
+- `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1 -Action Validate` exit
+  `1` — rather than reporting a passing status — when the manifest audit
+  reports `summary.error > 0` (`AC-AI-43-08`).
+- The audit logic itself (`tools/ai-brain/manifest-audit.js`) classifies an
+  absent adopted gate as a blocking error (`AC-AI-43-03`, `AC-AI-43-05`).
+
+Promoting these scripts into an enforced delivery path — a
+`.github/workflows/*` job or a `control.ps1` dispatch precondition — requires
+editing paths this Work Item prohibits (see **Out of scope**) and is reserved
+for a subsequent integration Work Item. Until that item lands, `AC-AI-43-09`
+holds the boundary honest by failing if any such caller is added without the
+business outcome above being updated to match.
 
 ## Source references
 
@@ -118,6 +141,7 @@ Prohibited in this Work Item:
 - Specify authoritative install verification and negative proof for CI-provisioned tools: `tools/ai-brain/manifest-audit.js` must verify that `.github/workflows/security-baseline.yml` exists and installs `gitleaks` at the exact version pinned in `pinned_version_or_commit` (`8.24.0`). If the workflow is absent or decoyed without that pinned install, the audit must fail closed with `QUALITY_GATE_MISSING: gitleaks` (exit code 1).
 - Specify an automated negative acceptance test that creates a 37-entry fixture by flipping existing entry `trivy` to `ADOPTED`/`BLOCKING_GATE`, passing the validator count check while failing closed on manifest truth.
 - Specify documentation of the blocking manifest audit integration in `AI-TOOLCHAIN-DECISIONS.md` during implementation.
+- Specify the enforcement-boundary assertion (`AI-43-R10`, `AC-AI-43-09`): the Work Item claims no CI or controller enforcement, and that claim is machine-checked at `0` callers rather than asserted in prose.
 - Ensure all repository tests and reconciliation checks stay green.
 
 ## Out of scope
@@ -143,6 +167,8 @@ Prohibited in this Work Item:
 | `AI-43-R06` | All files under `scripts/ai/` must remain pure ASCII with no byte-order mark (BOM). |
 | `AI-43-R07` | Both `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1` must accept an optional `-ManifestPath` parameter for testing (defaulting to `tools/ecosystem-manifest.json`) and forward `--manifest "$ManifestPath"` to `node tools/ai-brain/cli.js manifest`. `tools/ai-brain/cli.js manifest` must accept `--manifest <path>` so that test fixtures can be loaded while keeping repository `rootDir` intact. |
 | `AI-43-R08` | Quality gate classification for absent adopted tools: an entry with `lifecycle_state: "ADOPTED"` and `present === false` is classified as a quality gate (raising blocking error `QUALITY_GATE_MISSING`) if its `blocking_policy === "BLOCKING_GATE"` or its `id`/`role` matches `/scan|leak|trivy|lefthook|axe|lint|audit/i`. Absent tools without quality-gate classification emit non-fatal warning `DECLARED_ADOPTED_BUT_ABSENT`. |
+| `AI-43-R09` | The blocking surface delivered by this Work Item is exactly `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1 -Action Validate`. Both must exit `1` (not merely print a warning) when `summary.error > 0` for the manifest supplied via `-ManifestPath`. |
+| `AI-43-R10` | Enforcement boundary: at delivery, the number of files under `.github/workflows/` plus `scripts/ai/control.ps1` that invoke `doctor.ps1` or `ecosystem.ps1` must be exactly `0`. This Work Item therefore claims no CI or controller enforcement. If a future Work Item adds such a caller, `AC-AI-43-09` fails and the Business outcome section must be updated to match the new, wider claim before that caller is merged. |
 
 ## UI states
 
@@ -168,6 +194,8 @@ and toolchain documentation.
 | `AC-AI-43-05` | Negative proof: verify missing or decoyed workflow fails closed on CI-provisioned gate | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const os = require('os'); const fs = require('fs'); const path = require('path'); const d = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-decoy-')); fs.mkdirSync(path.join(d, '.github', 'workflows'), { recursive: true }); fs.writeFileSync(path.join(d, '.github', 'workflows', 'decoy.yml'), 'steps:\n  - run: echo no-gitleaks\n'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const res = auditManifest(m, { rootDir: d }); const f = res.findings.find(x => x.id === 'gitleaks'); fs.rmSync(d, { recursive: true, force: true }); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"` exits 1 and prints the string `QUALITY_GATE_MISSING: gitleaks` | command stderr |
 | `AC-AI-43-06` | Verify warning visibility for codex-cli version drift without blocking | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `[CẢNH] PINNED_VERSION_DRIFT` naming `codex-cli` | command stdout |
 | `AC-AI-43-07` | Run full test suite regression checks | `node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"` exits 0 and prints the string `fail 0` | command stdout |
+| `AC-AI-43-08` | Blocking surface: `doctor.ps1` exits 1 on a 37-entry fixture whose adopted gate `trivy` is absent | `powershell -NoProfile -ExecutionPolicy Bypass -Command "$f=Join-Path ([IO.Path]::GetTempPath()) 'ac0843.json'; $m=Get-Content tools/ecosystem-manifest.json -Raw | ConvertFrom-Json; $t=$m.adopted | Where-Object { $_.id -eq 'trivy' }; $t.lifecycle_state='ADOPTED'; $t.blocking_policy='BLOCKING_GATE'; $m | ConvertTo-Json -Depth 20 | Set-Content $f -Encoding ASCII; & scripts/ai/doctor.ps1 -ManifestPath $f; exit $LASTEXITCODE"` exits 1 and prints the string `QUALITY_GATE_MISSING: trivy` | stdout of `scripts/ai/doctor.ps1` (the delivered blocking surface) |
+| `AC-AI-43-09` | Enforcement boundary is exactly 0 CI/controller callers, so the Business outcome claims no pipeline enforcement | `node -e "const fs=require('fs'),path=require('path');const files=fs.readdirSync('.github/workflows').map(f=>path.join('.github/workflows',f)).concat(['scripts/ai/control.ps1']);const callers=files.filter(f=>/(doctor|ecosystem)\.ps1/.test(fs.readFileSync(f,'utf8')));console.log('Enforced-path callers of doctor.ps1/ecosystem.ps1 outside scripts/ai: '+callers.length+' '+JSON.stringify(callers));if(callers.length!==0)process.exit(1);"` exits 0 and prints the string `Enforced-path callers of doctor.ps1/ecosystem.ps1 outside scripts/ai: 0 []` | command stdout, reading `.github/workflows/*` and `scripts/ai/control.ps1` |
 
 ## Verification commands
 
@@ -276,7 +304,7 @@ node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); c
 |---|---|---|---|
 | 1 | `5b9b1ce` | `CHANGES_REQUIRED` | [Finding 1 (P1 doctor.ps1:658)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4006773151): Reverted implementation scripts (`doctor.ps1`, `ecosystem.ps1`, `AI-TOOLCHAIN-DECISIONS.md`) from planning commit; branch bounded strictly to Work Item specification. [Finding 2 (P1 TASK-AI-43.md:11)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4006773166): Retained `READY_FOR_CODEX` because dependency `TASK-AI-17` was merged into `fix/task-ai-16-codex-launch-flags` via PR #19 (`1f587dd`), while register row 176 status synchronization is reserved for `TASK-AI-19` reconciler write-back rather than manual edit. [Finding 3 (P2 TASK-AI-43.md:148)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4006773187): Defined safe `-ManifestPath` injection parameter in `doctor.ps1`, added `AI-43-R07`, updated `AC-AI-43-03`, and provided full executable negative acceptance fixture harness in Verification commands. |
 | 2 | `34014ce` | `CHANGES_REQUIRED` | [Finding 1](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Formatted Acceptance matrix to 4-part worked example structure naming exact command, expected exit code, required output string, and output source. [Finding 2 (Architectural)](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Negative fixture in `AC-AI-43-03` was adding a 38th entry, failing `ecosystem.ps1:339` count validation before the audit ran. Replaced with Option 1: flipping existing adopted entry `trivy` to `ADOPTED`/`BLOCKING_GATE`, keeping count at exactly 37, passing schema validation with 0 errors while failing closed on manifest truth (`QUALITY_GATE_MISSING: trivy`, exit 1). [Finding 3](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Brought `tools/ai-brain/cli.js` and `tools/ai-brain/manifest-audit.js` into implementation allowed paths and specified `--manifest <path>` support in `cli.js manifest`. [Finding 4](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Mandated authoritative install evidence in `.github/workflows/security-baseline.yml` at pinned `8.24.0` (`AC-AI-43-04`) and added negative proof for missing/decoyed workflow (`AC-AI-43-05`). [Finding 5](https://github.com/vinh05092001/shipde-platform/issues/22#issuecomment-5667336197): Reconciled Work Item status in Control table from `READY_FOR_CODEX` to `BLOCKED_DEPENDENCY` to strictly reflect authoritative delivery register row 176 (`FEATURE-DELIVERY-REGISTER.csv`). [Finding 6]: Removed undefined "strict mode" reference from `AI-43-R03`. |
-| 3 | `HEAD` | Pending | Re-submitted for independent Codex review via `@codex review`. |
+| 3 | `HEAD` | `CHANGES_REQUIRED` | [Finding 1 (P1 TASK-AI-43.md:9 — return to READY_FOR_AUTHOR)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4007073629): Already resolved at HEAD and no further change made. The finding was raised against `READY_FOR_CODEX`; the Control table reads `BLOCKED_DEPENDENCY`, matching authoritative register row 176. `BLOCKED_DEPENDENCY` is strictly more restrictive than `READY_FOR_AUTHOR` and does not present the item as review-ready, so no promotion or weakening was applied. [Finding 2 (P1 TASK-AI-43.md:182 — negative fixture must exercise a missing gate)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4007073640): Already resolved at HEAD and re-verified by execution. The fixture no longer uses `install_method: "manual"` or a 38th entry; it flips the existing entry `trivy` (`install_method: "system"`, a recognized checkable kind per `manifest-audit.js` `INSTALL_KINDS.SYSTEM`) to `ADOPTED`/`BLOCKING_GATE`, keeping exactly 37 schema-valid entries. `AC-AI-43-03` executes and asserts the exact code `QUALITY_GATE_MISSING: trivy` at exit 1. [Finding 3 (P1 TASK-AI-43.md:125 — wire the audit into an enforced delivery path)](https://github.com/vinh05092001/shipde-platform/pull/22#discussion_r4007073643): Confirmed and fixed by narrowing the claimed business outcome, the option Codex offered, because adding a CI or controller caller requires editing `.github/` and `scripts/ai/control.ps1`, both prohibited by this Work Item. Added the **Enforcement boundary** subsection, `AI-43-R09`/`AI-43-R10`, `AC-AI-43-08` (`doctor.ps1` itself exits 1 on the absent-gate fixture) and `AC-AI-43-09` (measured caller count is `0`, and fails if one is added without widening the claim). |
 
 ## Residual limitations
 
