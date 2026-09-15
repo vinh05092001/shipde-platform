@@ -16,11 +16,7 @@
 
 const path = require('path');
 const { loadRegister } = require('../ai-dashboard/register-adapter');
-const {
-  reconcileRegister,
-  planReconciliation,
-  applyStatusMutations,
-} = require('./reconcile');
+const { reconcileRegister, planReconciliation, applyStatusMutations } = require('./reconcile');
 const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
 
@@ -190,7 +186,10 @@ function reconcileCommand(args) {
   const registerArg = pick(args, 'register', 'register') || args.csv;
   const csvPath = registerArg
     ? path.resolve(rootDir, registerArg)
-    : path.join(rootDir, 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv');
+    : path.join(
+        rootDir,
+        'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+      );
 
   const write = args.write === true;
   const dryRun = pick(args, 'dry-run', 'dryRun') === true;
@@ -243,7 +242,11 @@ function reconcileCommand(args) {
       ? readJsonOrExit(path.resolve(rootDir, evidenceFile), 'merge evidence')
       : null;
 
-  const plan = planReconciliation(register.data.items, { cwd: rootDir, mainRef, mergeEvidence: evidence });
+  const plan = planReconciliation(register.data.items, {
+    cwd: rootDir,
+    mainRef,
+    mergeEvidence: evidence,
+  });
 
   for (const r of plan.refusals) {
     console.log('  Refused MERGED for ' + r.workItemId + ': ' + r.reason);

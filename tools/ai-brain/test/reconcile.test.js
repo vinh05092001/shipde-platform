@@ -440,7 +440,10 @@ describe('planReconciliation — clearing a stale block', () => {
   });
 
   test('a dependency with a short merge commit keeps the block', () => {
-    const plan = planReconciliation([mergedDep({ merge_commit: 'abc1234' }), blockedRow()], ALL_PROVEN);
+    const plan = planReconciliation(
+      [mergedDep({ merge_commit: 'abc1234' }), blockedRow()],
+      ALL_PROVEN
+    );
     assert.equal(plan.mutations.length, 0);
   });
 
@@ -466,7 +469,10 @@ describe('planReconciliation — clearing a stale block', () => {
 
 describe('planReconciliation — recording a merge', () => {
   test('durable evidence moves READY_FOR_CODEX to MERGED', () => {
-    const plan = planReconciliation([readyRow()], Object.assign({ mergeEvidence: evidenceFor() }, ALL_PROVEN));
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: evidenceFor() }, ALL_PROVEN)
+    );
     assert.equal(plan.mutations.length, 1);
     assert.equal(plan.mutations[0].to, 'MERGED');
     assert.equal(plan.mutations[0].evidence.mergeCommit, SHA_A);
@@ -531,7 +537,10 @@ describe('planReconciliation — recording a merge', () => {
   test('a non-PASS verdict is refused', () => {
     const plan = planReconciliation(
       [readyRow()],
-      Object.assign({ mergeEvidence: evidenceFor({ codexVerdict: 'CHANGES_REQUESTED' }) }, ALL_PROVEN)
+      Object.assign(
+        { mergeEvidence: evidenceFor({ codexVerdict: 'CHANGES_REQUESTED' }) },
+        ALL_PROVEN
+      )
     );
     assert.match(plan.refusals[0].reason, /Codex verdict is not PASS/);
   });
@@ -572,7 +581,8 @@ describe('CSV serialization', () => {
   });
 
   test('only the named row changes, and only in its status cell', () => {
-    const text = HEADER + '"1","x","TASK-AI-01","BLOCKED_DEPENDENCY"\n"2","y","TASK-AI-02","MERGED"\n';
+    const text =
+      HEADER + '"1","x","TASK-AI-01","BLOCKED_DEPENDENCY"\n"2","y","TASK-AI-02","MERGED"\n';
     const out = applyStatusMutations(text, [{ workItemId: 'TASK-AI-01', to: 'BACKLOG' }], {
       idColumn: 2,
       statusColumn: 3,
