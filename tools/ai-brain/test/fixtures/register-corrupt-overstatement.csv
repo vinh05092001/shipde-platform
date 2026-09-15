@@ -1,0 +1,3 @@
+"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
+"1","S1","AI","TASK-AI-05","","Merged prerequisite","Already landed","MERGED","","docs/product-spec/work-items/TASK-AI-06.md","feat/task-ai-05","5","PASS","9d101f4e5d9de9b880cc4311126ce8fe06de4206"
+"2","S1","AI","TASK-AI-05","","Merged prerequisite","Already landed","READY_FOR_CODEX","","docs/product-spec/work-items/TASK-AI-06.md","feat/task-ai-05","5","",""

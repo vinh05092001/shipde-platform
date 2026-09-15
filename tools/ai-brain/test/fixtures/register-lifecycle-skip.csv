@@ -1,0 +1,2 @@
+"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
+"1","S1","AI","TASK-AI-12","","Lifecycle skip attempt","Never went through author, review or CI","BACKLOG","","docs/product-spec/work-items/TASK-AI-06.md","feat/task-ai-12","9","",""
