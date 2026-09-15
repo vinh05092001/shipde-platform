@@ -148,8 +148,13 @@ Prohibited in this Work Item:
   this specification PR (retirement execution belongs to the subsequent
   implementation commit/phase).
 - Dropping, skipping, or weakening any verification gate.
-- Advancing the Control status ahead of the durable register, or declaring this
-  specification `READY_FOR_CODEX` / `READY_FOR_AUTHOR` inside this PR.
+- Advancing the Work Item lifecycle state inside this PR: editing the Control
+  `Status` field ahead of the durable register, or writing `READY_FOR_CODEX` /
+  `READY_FOR_AUTHOR` into the Control table or into register row 173. This
+  prohibition governs the lifecycle state only. It does not govern the Pull
+  Request body line `Review status: READY_FOR_CODEX`, which is the separate
+  review-submission marker required by the `contract` CI job and must be present
+  whenever this PR is open for Codex review.
 - Author never approves own work; the specification is released to an independent
   Codex review-only task, and the register transition to `READY_FOR_AUTHOR` is
   Codex's planning act, not this document's.
