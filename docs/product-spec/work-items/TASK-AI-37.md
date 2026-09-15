@@ -15,6 +15,36 @@
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-37-trivy` |
 | Pull Request | https://github.com/vinh05092001/shipde-platform/pull/24 |
+| Deliverable of this Work Item | Specification document only; no CI gate is delivered here |
+| Successor implementation Work Item | `TASK-AI-45` (not yet registered; see § Scope conflicts and successor authorization) |
+
+### Status transition ledger
+
+The durable delivery register (`FEATURE-DELIVERY-REGISTER.csv`, row 170) is the
+single authority for this Work Item's stage under `AGENTS.md` § Unit of delivery.
+The register records `BLOCKED_DEPENDENCY`, therefore the Control table above
+records `BLOCKED_DEPENDENCY` and no other value.
+
+| Gate in the required flow | Traversed? | Transition evidence |
+|---|---|---|
+| `BLOCKED_DEPENDENCY` | Yes — current stage | `FEATURE-DELIVERY-REGISTER.csv` row 170, column `status` = `BLOCKED_DEPENDENCY` |
+| `READY_FOR_AUTHOR` | No | None. No register write has occurred. |
+| `IN_PROGRESS` | No | None. No register write has occurred. |
+| `READY_FOR_CODEX` | No | None. No register write has occurred. |
+
+Consequences of this ledger, binding on any controller or reviewer:
+
+- This Work Item file must never declare `READY_FOR_CODEX` (or any later stage)
+  while the register records `BLOCKED_DEPENDENCY`; doing so would route the item
+  past gates for which no transition evidence exists.
+- The intervening `READY_FOR_AUTHOR` and `IN_PROGRESS` transitions must be written
+  to `FEATURE-DELIVERY-REGISTER.csv` by the governed register-write path
+  (`TASK-AI-19` reconciler) before this item is stage-eligible for review routing.
+  `TASK-AI-37` has no authority to write the register: the register file is not in
+  `Allowed paths`.
+- `AC-AI-37-15` mechanically compares the `Status` cell of the Control table above
+  against row 170 of the register and fails when they diverge, so the two sources
+  cannot silently disagree.
 
 ## Business outcome
 
@@ -180,6 +210,74 @@ Prohibited in this Work Item:
 - Web accessibility and Lighthouse performance scanning (`TASK-AI-38`).
 - Third-party SaaS security integrations; scans execute entirely local to the runner.
 
+## Scope conflicts and successor authorization
+
+This Work Item's `Allowed paths` authorize exactly one file,
+`docs/product-spec/work-items/TASK-AI-37.md`. That boundary is deliberate and is
+not widened here. The consequence is stated plainly rather than left implicit:
+**`TASK-AI-37` cannot deliver the Trivy CI gate.** It delivers the specification of
+that gate and nothing else. Three conflicts follow, each recorded with its resolution.
+
+### Conflict 1 — the authorized path cannot produce the gate
+
+The gate requires writes to `.github/workflows/*`, `scripts/verify-trivy.ts`,
+`scripts/ai/doctor.ps1`, `tools/ecosystem-manifest.json`, and
+`tests/fixtures/trivy/*`. Every one of those is prohibited under § Author boundary
+and absent from `Allowed paths`.
+
+Resolution: a separately identified implementation Work Item, `TASK-AI-45`
+("Implement the Trivy dependency, container and SBOM scanning gate in CI"), owns the
+implementation. It is **not yet registered**. Before any implementation begins,
+`TASK-AI-45` must be created through the governed register-write path with:
+
+- a row in `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`
+  whose `dependencies` column names `TASK-AI-37`;
+- `work_item_path` = `docs/product-spec/work-items/TASK-AI-45.md`;
+- `Allowed paths` covering exactly the five implementation paths listed in
+  § Author boundary;
+- the table in § Downstream implementation acceptance contract carried verbatim as
+  its own acceptance matrix, `AC-AI-45-01` through `AC-AI-45-12`.
+
+`TASK-AI-37` cannot create that row: the register is outside its `Allowed paths`.
+Until the row exists, no Trivy CI gate may be implemented under any Work Item ID,
+and `trivy` remains `PENDING` / `NON_BLOCKING` in `tools/ecosystem-manifest.json`.
+
+### Conflict 2 — no application container images exist to scan
+
+At this tree the only Dockerfile in the repository is
+`scripts/ai/docker-worker/Dockerfile`. `apps/api`, `apps/worker`, and `apps/web`
+contain no Dockerfile and no CI job builds an image for them, so the container
+*image* scanning described in § In scope item 1 is not implementable today. This is
+verified mechanically by `AC-AI-37-16`, which enumerates the repository's Dockerfiles
+from the filesystem rather than from this prose.
+
+Resolution, in two parts:
+
+1. `trivy config` misconfiguration scanning of `scripts/ai/docker-worker/Dockerfile`
+   is implementable now and is required of `TASK-AI-45` (`AC-AI-45-08a`).
+2. `trivy image` scanning of `apps/api`, `apps/worker`, `apps/web` is deferred behind
+   an explicit precondition: the first Work Item that adds `apps/<name>/Dockerfile`
+   and a CI image build. Until then the workflow step emits
+   `NO_CONTAINER_TARGET: No Dockerfile found in apps/*; container scan skipped` and
+   exits `0` (`AI-37-R07`). That fallback is a truthful statement that no target
+   exists, not a suppressed failure: as soon as an `apps/*/Dockerfile` appears, the
+   same step scans the built image and can fail the build (`AC-AI-45-08b`).
+
+### Conflict 3 — the register key behavior names secret scanning
+
+Delivery register row 170 describes the outcome as "Vulnerability, misconfiguration,
+secret and SBOM scanning on every pull request". This specification deliberately
+**excludes** secret scanning from Trivy (`AI-37-R02`, `--security-checks vuln,config`).
+
+Resolution: the secret-scanning portion of row 170's outcome is already delivered and
+blocking via Gitleaks `8.24.0` (`ADOPTED` / `BLOCKING_GATE` / `ci-provisioned`, owned
+by `TASK-AI-35`). Running Trivy's secret scanner alongside it would create two
+authorities for one finding class, which `AI-TOOL-01` forbids. The registered outcome
+is therefore satisfied in full across two tools, not narrowed. The remaining three
+portions — vulnerability, misconfiguration, and **SBOM** scanning — are all retained
+here: SBOM generation and attestation scanning are specified in § In scope item 2,
+ruled by `AI-37-R09`, and proven by `AC-AI-45-07a` / `AC-AI-45-07b`.
+
 ## Business rules and edge cases
 
 | Rule | Behavior |
@@ -222,73 +320,90 @@ contracts, supply-chain verification specifications, and SBOM artifact generatio
 | `AC-AI-37-05` | Negative proof: falsely declaring Trivy ADOPTED triggers QUALITY_GATE_MISSING | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const synthetic = { adopted: [{ id: 'trivy', role: 'Vulnerability scanner', install_method: 'system', pinned_version_or_commit: '0.60.0', lifecycle_state: 'ADOPTED', blocking_policy: 'BLOCKING_GATE' }] }; const res = auditManifest(synthetic, { onPath: () => false, rootDir: process.cwd() }); if(!res.findings.some(f => f.code === 'QUALITY_GATE_MISSING' && f.severity === 'error')) process.exit(0); console.error('NEGATIVE TEST PROOF: Falsely declaring trivy ADOPTED triggers QUALITY_GATE_MISSING error'); process.exit(1);"` | `1` | `NEGATIVE TEST PROOF: Falsely declaring trivy ADOPTED triggers QUALITY_GATE_MISSING error` | command stderr |
 | `AC-AI-37-06` | Invariant check: zero forbidden install lifecycle scripts | `node -e "const r=require('./package.json'), w=require('./apps/web/package.json'); const forbidden=['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => (r.scripts && r.scripts[s]) \|\| (w.scripts && w.scripts[s])); if(found.length > 0) throw new Error('Forbidden lifecycle script detected: ' + found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json`, `apps/web/package.json` |
 | `AC-AI-37-07` | Negative proof: forbidden install lifecycle script triggers failure | `node -e "const synthetic = { scripts: { postinstall: 'curl https://example.com/trivy \| sh' } }; const forbidden = ['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => synthetic.scripts[s]); if(found.length > 0) { console.error('FORBIDDEN_LIFECYCLE_SCRIPT: detected ' + found.join(', ')); process.exit(1); }"` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` | command stderr |
-| `AC-AI-37-08` | Specification structural integrity (all 15 required sections) | `python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Downstream implementation acceptance contract','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all 15 required sections present');"` | `0` | `Specification structural integrity verified: all 15 required sections present` | `docs/product-spec/work-items/TASK-AI-37.md` |
-| `AC-AI-37-09` | Specification contract & numeric thresholds completeness | `python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); tokens=['0.60.0','8.24.0','180000ms','500MB','BLOCKED_DEPENDENCY','AI-37-R01','AI-37-R02','AI-37-R03','AI-37-R04','AI-37-R05','AI-37-R06','AI-37-R07','AI-37-R08','AI-37-R09','AI-37-R10','sbom.cyclonedx.json','NO_CONTAINER_TARGET','aquasecurity/trivy-action']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, and fallback tokens verified');"` | `0` | `Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, and fallback tokens verified` | `docs/product-spec/work-items/TASK-AI-37.md` |
+| `AC-AI-37-08` | Specification structural integrity (all 15 required sections) | `python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Scope conflicts and successor authorization','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all 17 required sections present');"` | `0` | `Specification structural integrity verified: all 17 required sections present` | `docs/product-spec/work-items/TASK-AI-37.md` |
+| `AC-AI-37-09` | Specification contract & numeric thresholds completeness | `python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); tokens=['0.60.0','8.24.0','180000ms','500MB','BLOCKED_DEPENDENCY','AI-37-R01','AI-37-R02','AI-37-R03','AI-37-R04','AI-37-R05','AI-37-R06','AI-37-R07','AI-37-R08','AI-37-R09','AI-37-R10','sbom.cyclonedx.json','NO_CONTAINER_TARGET','aquasecurity/trivy-action','TASK-AI-45','DISTINCT_EXIT_CODES','trivy-fixture-evidence','shipde-sbom-cyclonedx','AC-AI-45-01','AC-AI-45-12']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, successor TASK-AI-45, and downstream evidence-artifact tokens verified');"` | `0` | `Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, successor TASK-AI-45, and downstream evidence-artifact tokens verified` | `docs/product-spec/work-items/TASK-AI-37.md` |
 | `AC-AI-37-10` | Manifest audit green with 0 errors and exactly 1 drift warning | `node tools/ai-brain/cli.js manifest` | `0` | `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` | `tools/ai-brain/cli.js` stdout |
 | `AC-AI-37-11` | Register reconciliation green with 0 errors | `node tools/ai-brain/cli.js reconcile` | `0` | `Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú` | `tools/ai-brain/cli.js` stdout |
-| `AC-AI-37-12` | Specification and documentation validation | `python docs/product-spec/scripts/validate_docs.py` | `0` | `Documentation validation passed: 82 markdown files, 130 feature IDs, 178 delivery rows, 528 unique identifiers.` | `docs/product-spec/scripts/validate_docs.py` stdout |
+| `AC-AI-37-12` | Specification and documentation validation | `python docs/product-spec/scripts/validate_docs.py` | `0` | `Documentation validation passed: 82 markdown files, 130 feature IDs, 178 delivery rows, 541 unique identifiers.` | `docs/product-spec/scripts/validate_docs.py` stdout |
 | `AC-AI-37-13` | Toolchain unit & integration test suites green | `node --test \"tools/ai-brain/test/*.test.js\" \"tools/ai-dashboard/test/*.test.js\" \"tools/ai-guard/test/*.test.js\"` | `0` | `ℹ pass 458` | Test runner stdout |
-| `AC-AI-37-14` | Incremental code and document formatting check | `pnpm format:check` | `0` | `Tất cả 61 tệp tin thay đổi tuân thủ 100% chuẩn định dạng Prettier` | `scripts/verify-formatting.ts` stdout |
+| `AC-AI-37-14` | Incremental code and document formatting check | `pnpm format:check` | `0` | `Tất cả 62 tệp tin thay đổi tuân thủ 100% chuẩn định dạng Prettier` | `scripts/verify-formatting.ts` stdout |
+| `AC-AI-37-15` | Control table status and delivery register row 170 cannot diverge | `python -c "import csv,re; md=open('docs/product-spec/work-items/TASK-AI-37.md',encoding='utf-8').read(); m=re.search(r'\n\| Status \| .([A-Z_]+). \|\n', md); reg=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',encoding='utf-8')) if r['work_item_id']=='TASK-AI-37'][0]['status']; assert m and m.group(1)==reg, 'STATUS_DIVERGENCE: ' + (m.group(1) if m else 'NONE') + ' vs ' + reg; print('Control status matches register row 170: ' + reg)"` | `0` | `Control status matches register row 170: BLOCKED_DEPENDENCY` | `docs/product-spec/work-items/TASK-AI-37.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| `AC-AI-37-16` | Filesystem proof that no application container target exists yet | `python -c "import os; hits=[os.path.join(r,f) for r,_,fs in os.walk('.') for f in fs if f=='Dockerfile' and 'node_modules' not in r and '.git' not in r]; apps=[p for p in hits if 'apps' in p.split(os.sep)]; assert not apps, 'UNEXPECTED_APP_DOCKERFILE: ' + str(apps); assert any('docker-worker' in p for p in hits), 'MISSING_KNOWN_DOCKERFILE'; print('Dockerfile inventory: ' + str(len(hits)) + ' total, 0 under apps/*, docker-worker present')"` | `0` | `Dockerfile inventory: 1 total, 0 under apps/*, docker-worker present` | repository filesystem, `scripts/ai/docker-worker/Dockerfile` |
+| `AC-AI-37-17` | Successor implementation Work Item is named here and not yet registered | `python -c "import csv; ids=[r['work_item_id'] for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',encoding='utf-8'))]; spec=open('docs/product-spec/work-items/TASK-AI-37.md',encoding='utf-8').read(); assert 'TASK-AI-45' in spec, 'SUCCESSOR_NOT_NAMED'; assert 'TASK-AI-45' not in ids, 'SUCCESSOR_ALREADY_REGISTERED'; print('Successor TASK-AI-45 named in specification and not yet registered')"` | `0` | `Successor TASK-AI-45 named in specification and not yet registered` | `docs/product-spec/work-items/TASK-AI-37.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 
 ## Downstream implementation acceptance contract
 
-When an author implements `TASK-AI-37`, the implementation must provide and satisfy the following deterministic verification contract:
+These rows are the acceptance matrix that `TASK-AI-45` must carry verbatim as
+`AC-AI-45-01` .. `AC-AI-45-12`. They are stated here, and not in the
+§ Acceptance matrix above, for one honest reason: **none of them can be executed at
+this tree.** `trivy` is absent from PATH, the fixtures do not exist, and no workflow
+invokes it. A row placed in § Acceptance matrix claiming to prove scanner behavior
+today would be proving prose in this file rather than scanner behavior, and is
+therefore excluded.
 
-1. **Exact-HEAD CI Execution Evidence**:
-   - The GitHub Actions workflow `security-baseline.yml` (or `trivy-scan.yml`) executes on the exact 40-character commit SHA of the PR HEAD.
-   - Job produces a green check run `Trivy Security Scan`.
-2. **Pinned Action and Provenance Verification**:
-   - Official action `aquasecurity/trivy-action` pinned by immutable 40-character commit SHA (e.g., `aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0` # v0.29.0).
-   - Mutable tags (`@v0.29.0`, `@latest`) are strictly forbidden.
-   - For CLI binary downloads: version `0.60.0` verified against official Aqua Security release SHA-256 checksums (`trivy_0.60.0_checksums.txt`).
-3. **Clean Dependency Scan Proof (Exit Code 0)**:
-   - Clean fixture: `tests/fixtures/trivy/clean-lockfile/pnpm-lock.yaml` (contains only updated, secure dependencies with 0 CVEs).
-   - Command: `trivy fs --security-checks vuln,config --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed tests/fixtures/trivy/clean-lockfile/`
-   - Expected exit code: `0`
-   - Expected output: `Total: 0 (HIGH: 0, CRITICAL: 0)`
-4. **Vulnerable Dependency Negative Proof (Exit Code 1)**:
-   - Vulnerable fixture: `tests/fixtures/trivy/vulnerable-lockfile/pnpm-lock.yaml` (contains synthetic resolution for `lodash@4.17.20` exhibiting `CVE-2021-23337` / Command Injection, fixable in `4.17.21`).
-   - Command: `trivy fs --security-checks vuln,config --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed tests/fixtures/trivy/vulnerable-lockfile/`
-   - Expected exit code: `1`
-   - Expected output string: `CVE-2021-23337` and `CRITICAL` or `HIGH`
-5. **Operational Failure Fail-Closed Proof (Exit Code 2)**:
-   - Command: `trivy fs --invalid-flag-syntax tests/fixtures/trivy/clean-lockfile/`
-   - Expected exit code: `2`
-   - Expected output string: `flag provided but not defined`
-6. **Non-Duplication of Secret Scanning**:
-   - Fixture: `tests/fixtures/trivy/synthetic-secret/token.txt` containing synthetic PAT `ghp_0123456789abcdefghijklmnopqrstuv`.
-   - Command: `trivy fs --security-checks vuln,config --exit-code 1 --severity HIGH,CRITICAL tests/fixtures/trivy/synthetic-secret/`
-   - Expected exit code: `0` (Trivy ignores secrets because `--security-checks` is restricted to `vuln,config`, keeping Gitleaks 8.24.0 as the single authority for secret scanning).
-7. **Software Bill of Materials (SBOM) Generation and Attestation**:
-   - Generation command: `trivy fs --format cyclonedx --output sbom.cyclonedx.json .`
-   - Expected exit code: `0`
-   - Generated artifact: `sbom.cyclonedx.json` contains `"bomFormat": "CycloneDX"` and `"specVersion": "1.5"`.
-   - CI step archives artifact as `shipde-sbom-cyclonedx`.
-   - Attestation scan command: `trivy sbom --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed sbom.cyclonedx.json` exits `0`.
-8. **Container Image and Misconfiguration Scanning**:
-   - Existing Dockerfile scan: `trivy config --exit-code 1 --severity HIGH,CRITICAL scripts/ai/docker-worker/Dockerfile` exits `0`.
-   - Application container scan fallback: when `apps/api`, `apps/worker`, and `apps/web` lack Dockerfiles, workflow step executes `Test-Path "apps/*/Dockerfile"` and logs `NO_CONTAINER_TARGET: No Dockerfile found in apps/*; container scan skipped` with exit code `0`.
-   - Built image scan (upon containerization): `trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed <tag>` exits `0` (or `1` on fixable HIGH/CRITICAL).
-9. **SARIF Generation and GitHub Code Scanning Integration**:
-   - Command: `trivy fs --security-checks vuln,config --format sarif --output trivy-results.sarif .`
-   - Expected exit code: `0`
-   - Upload action: `github/codeql-action/upload-sarif@df971e4284b25752ebc60000a68d0d4dfd4ee5b3` (# v3.28.11).
-10. **Vulnerability DB Caching and Budgets**:
-   - Cache key: `trivy-db-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}` targeting `~/.cache/trivy`.
-   - Maximum DB cache budget: `500MB`.
-   - Maximum scan execution timeout budget: `180000ms`.
-11. **Local Doctor Integration**:
-   - `pwsh -NoProfile -File scripts/ai/doctor.ps1` reports `PASS trivy` when installed locally at `0.60.0`, or `PENDING` when absent.
+Each row names the command, its exit code, an exact expected output string, and the
+**generated artifact** a future reviewer must be able to download in order to
+reproduce the claim. Evidence citing this document, or any other prose, instead of
+one of those artifacts does not satisfy the row.
+
+Binding on every row: the artifact must originate from a GitHub Actions run of
+workflow `trivy-scan.yml` triggered on the pull request, and that run's
+`github.event.pull_request.head.sha` must equal the 40-character PR HEAD SHA under
+review.
+
+| AC/Test ID | Scenario | Exact command to run | Exit code | Expected output string | Generated artifact the evidence must come from |
+|---|---|---|---|---|---|
+| `AC-AI-45-01` | Scanner ran at the exact PR HEAD | `gh api repos/vinh05092001/shipde-platform/commits/$(gh pr view --json headRefOid -q .headRefOid)/check-runs --jq '[.check_runs[] \| select(.name=="Trivy Security Scan" and .conclusion=="success")] \| length'` | `0` | `1` | GitHub check run `Trivy Security Scan` recorded against the PR HEAD SHA |
+| `AC-AI-45-02` | Action pinned by immutable 40-char SHA | `grep -cE 'aquasecurity/trivy-action@[0-9a-f]{40}' .github/workflows/trivy-scan.yml` | `0` | `1` | `.github/workflows/trivy-scan.yml` |
+| `AC-AI-45-02b` | Negative proof: no mutable action tag survives | `grep -nE 'aquasecurity/trivy-action@(v[0-9]\|latest)' .github/workflows/trivy-scan.yml` | `1` | (no output; `grep` finds no mutable tag) | `.github/workflows/trivy-scan.yml` |
+| `AC-AI-45-03` | Binary provenance verified against published checksums | `sha256sum -c --ignore-missing trivy_0.60.0_checksums.txt` | `0` | `trivy_0.60.0_Linux-64bit.tar.gz: OK` | Workflow artifact `trivy-provenance/trivy_0.60.0_checksums.txt` and the verifying step log |
+| `AC-AI-45-04` | Clean dependency fixture passes | `trivy fs --security-checks vuln,config --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed tests/fixtures/trivy/clean-lockfile/` | `0` | `Total: 0 (HIGH: 0, CRITICAL: 0)` | Workflow artifact `trivy-fixture-evidence/clean-lockfile.log`; fixture `tests/fixtures/trivy/clean-lockfile/pnpm-lock.yaml` |
+| `AC-AI-45-05` | Known-vulnerable fixture is detected and blocks | `trivy fs --security-checks vuln,config --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed tests/fixtures/trivy/vulnerable-lockfile/` | `1` | `CVE-2021-23337` | Workflow artifact `trivy-fixture-evidence/vulnerable-lockfile.log`; fixture `tests/fixtures/trivy/vulnerable-lockfile/pnpm-lock.yaml` pinning `lodash@4.17.20` (fixed in `4.17.21`) |
+| `AC-AI-45-06` | Induced operational fault fails closed on a distinct code | `trivy fs --invalid-flag-syntax tests/fixtures/trivy/clean-lockfile/` | `2` | `flag provided but not defined` | Workflow artifact `trivy-fixture-evidence/operational-fault.log` |
+| `AC-AI-45-06b` | The three outcomes are distinct, not collapsed | `bash tests/fixtures/trivy/assert-exit-codes.sh` | `0` | `DISTINCT_EXIT_CODES: clean=0 vulnerable=1 operational=2` | Workflow artifact `trivy-fixture-evidence/exit-code-matrix.json`, recording all three observed exit codes from the three runs above |
+| `AC-AI-45-07a` | SBOM generated in CycloneDX with real coverage | `trivy fs --format cyclonedx --output sbom.cyclonedx.json . && node -e "const b=require('./sbom.cyclonedx.json'); if(b.bomFormat!=='CycloneDX'\|\|b.specVersion!=='1.5') throw new Error('bad SBOM header'); if(b.components.length < 100) throw new Error('SBOM coverage too low: '+b.components.length); console.log('SBOM_OK: CycloneDX 1.5, components=' + b.components.length);"` | `0` | `SBOM_OK: CycloneDX 1.5, components=` | Workflow artifact `shipde-sbom-cyclonedx/sbom.cyclonedx.json` |
+| `AC-AI-45-07b` | The generated SBOM is itself scanned for CVEs | `trivy sbom --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed sbom.cyclonedx.json` | `0` | `Total: 0 (HIGH: 0, CRITICAL: 0)` | Workflow artifact `trivy-fixture-evidence/sbom-scan.log`, scanning the artifact produced by `AC-AI-45-07a` |
+| `AC-AI-45-08a` | Existing Dockerfile is misconfiguration-scanned | `trivy config --exit-code 1 --severity HIGH,CRITICAL scripts/ai/docker-worker/Dockerfile` | `0` | `Failures: 0 (HIGH: 0, CRITICAL: 0)` | Workflow artifact `trivy-fixture-evidence/dockerfile-config.log` |
+| `AC-AI-45-08b` | Container fallback is truthful, not a suppressed failure | `bash .github/scripts/trivy-container-target.sh` | `0` | `NO_CONTAINER_TARGET: No Dockerfile found in apps/*; container scan skipped` | Workflow job log for step `Scan application images`; the same script must exit `1` when an `apps/*/Dockerfile` exists and `trivy image` finds a fixable HIGH/CRITICAL, proven by artifact `trivy-fixture-evidence/container-fallback.json` recording both branches |
+| `AC-AI-45-09` | SARIF produced and accepted by Code Scanning | `trivy fs --security-checks vuln,config --format sarif --output trivy-results.sarif . && node -e "const r=require('./trivy-results.sarif'); if(r.version!=='2.1.0') throw new Error('bad SARIF version'); console.log('SARIF_OK: 2.1.0, runs=' + r.runs.length);"` | `0` | `SARIF_OK: 2.1.0, runs=1` | Workflow artifact `trivy-sarif/trivy-results.sarif` plus the successful `github/codeql-action/upload-sarif@df971e4284b25752ebc60000a68d0d4dfd4ee5b3` step log |
+| `AC-AI-45-10` | Secret scanning stays with Gitleaks alone | `trivy fs --security-checks vuln,config --exit-code 1 --severity HIGH,CRITICAL tests/fixtures/trivy/synthetic-secret/` | `0` | `Total: 0 (HIGH: 0, CRITICAL: 0)` | Workflow artifact `trivy-fixture-evidence/synthetic-secret.log`; fixture `tests/fixtures/trivy/synthetic-secret/token.txt` holding the synthetic PAT `ghp_0123456789abcdefghijklmnopqrstuv`, which the Gitleaks job must still flag in the same run |
+| `AC-AI-45-11a` | DB cache is restored and stays within budget | `du -sm ~/.cache/trivy \| awk '{ if ($1 > 500) { print "CACHE_BUDGET_EXCEEDED: " $1 "MB"; exit 1 } else print "CACHE_OK: " $1 "MB" }'` | `0` | `CACHE_OK: ` | Workflow job log for the `actions/cache` step keyed `trivy-db-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}`, showing `Cache restored from key: trivy-db-` |
+| `AC-AI-45-11b` | Scan completes within the runtime budget | `node .github/scripts/assert-scan-duration.js 180000` | `0` | `SCAN_DURATION_OK: budget 180000ms` | Workflow artifact `trivy-fixture-evidence/timing.json`, recording measured wall-clock duration in milliseconds |
+| `AC-AI-45-12` | Local doctor reports Trivy truthfully | `pwsh -NoProfile -File scripts/ai/doctor.ps1` | `0` | `PASS trivy 0.60.0` when the binary is on PATH; `PENDING trivy` when it is absent | `scripts/ai/doctor.ps1` stdout |
+
+Numeric values binding on the rows above: pinned Trivy version `0.60.0`; Gitleaks
+`8.24.0`; blocking severity floor CVSS `7.0` (`HIGH` `7.0`-`8.9`, `CRITICAL`
+`9.0`-`10.0`); advisory-only below CVSS `7.0`; DB cache ceiling `500MB`; scan
+wall-clock ceiling `180000ms`; minimum SBOM component count `100`; SARIF version
+`2.1.0`; CycloneDX spec version `1.5`; distinct exit codes `0` / `1` / `2`.
 
 ## Manifest promotion criteria
 
-Promoting `trivy` from `PENDING` to `ADOPTED` and `BLOCKING_GATE` in `tools/ecosystem-manifest.json` strictly requires satisfying all 6 prerequisites with auditable workflow evidence:
-1. **Exact-HEAD Execution**: CI check run `Trivy Security Scan` passed at the exact 40-character commit SHA of PR HEAD.
-2. **Clean Fixture Proof**: `trivy fs` on clean lockfile fixture exits `0` with zero actionable findings.
-3. **Vulnerable Fixture Negative Proof**: `trivy fs` on vulnerable lockfile fixture exits `1` with detected CVE.
-4. **Operational Failure Fail-Closed Proof**: `trivy fs` on invalid configuration exits `2`.
-5. **SARIF and SBOM Artifacts**: Valid `trivy-results.sarif` uploaded to GitHub Code Scanning and `sbom.cyclonedx.json` uploaded to workflow artifacts.
-6. **Non-Duplication Preservation**: Gitleaks 8.24.0 remains `ADOPTED` / `BLOCKING_GATE` / `ci-provisioned`, `--security-checks vuln,config` excludes secret scanning, and `node tools/ai-brain/cli.js manifest` reports 0 errors and exactly 1 warning (codex-cli drift).
+Promoting `trivy` from `PENDING` / `NON_BLOCKING` to `ADOPTED` / `BLOCKING_GATE` in
+`tools/ecosystem-manifest.json` is a lifecycle write. It is forbidden until all 6
+prerequisites below hold **simultaneously at one commit SHA**, each evidenced by a
+named, downloadable artifact rather than by any assertion in this or any other
+document. "Implemented and verified" is not an acceptable justification; only the
+artifact list is.
+
+Installing the binary, adding the workflow file, or a green run in which the scan
+step was skipped satisfies none of these.
+
+| # | Prerequisite | Satisfied by | Required auditable artifact |
+|---|---|---|---|
+| 1 | Pinned scanner ran at the exact head | `AC-AI-45-01`, `AC-AI-45-02`, `AC-AI-45-02b`, `AC-AI-45-03` | Check run `Trivy Security Scan` with `conclusion=success` on the 40-character PR HEAD SHA; workflow run URL recorded in the promoting PR body; artifact `trivy-provenance/trivy_0.60.0_checksums.txt` |
+| 2 | Clean fixture produced a true pass | `AC-AI-45-04` | Artifact `trivy-fixture-evidence/clean-lockfile.log` containing `Total: 0 (HIGH: 0, CRITICAL: 0)` at exit `0` |
+| 3 | Vulnerable fixture produced a true block | `AC-AI-45-05` | Artifact `trivy-fixture-evidence/vulnerable-lockfile.log` containing `CVE-2021-23337` at exit `1` |
+| 4 | Operational fault failed closed on a distinct code | `AC-AI-45-06`, `AC-AI-45-06b` | Artifact `trivy-fixture-evidence/exit-code-matrix.json` showing `clean=0 vulnerable=1 operational=2`; a run in which any two of the three collapse to the same code fails this prerequisite |
+| 5 | SARIF and SBOM were generated and uploaded | `AC-AI-45-07a`, `AC-AI-45-07b`, `AC-AI-45-09` | Artifact `trivy-sarif/trivy-results.sarif` (SARIF `2.1.0`) accepted by the `upload-sarif` step, and artifact `shipde-sbom-cyclonedx/sbom.cyclonedx.json` (CycloneDX `1.5`, at least `100` components) scanned clean |
+| 6 | Existing gates remained intact | `AC-AI-45-10`, plus `AC-AI-37-02` and `AC-AI-37-10` re-run at the promoting commit | Gitleaks job still green and still `ADOPTED` / `BLOCKING_GATE` / `ci-provisioned` at `8.24.0`; `node tools/ai-brain/cli.js manifest` output showing `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú`; artifact `trivy-fixture-evidence/synthetic-secret.log` proving Trivy did not also report the secret |
+
+Write ordering is fixed and non-negotiable: the artifacts for prerequisites 1-6 must
+exist **before** the `lifecycle_state` or `blocking_policy` field is edited, and the
+promoting PR body must link each artifact to its prerequisite number. A promotion PR
+that edits `tools/ecosystem-manifest.json` without those six links is rejected under
+`AI-TOOL-10` (declared lifecycle states must match machine truth) regardless of
+whether CI is green.
 
 ## Verification commands
 
@@ -298,8 +413,11 @@ node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id
 node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id==='gitleaks'); if(!m || m.lifecycle_state!=='ADOPTED' || m.blocking_policy!=='BLOCKING_GATE' || m.pinned_version_or_commit!=='8.24.0') throw new Error('gitleaks truth mismatch'); console.log('Gitleaks truthfully declared: ADOPTED, BLOCKING_GATE, pinned 8.24.0');"
 python -c "import csv; rows=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv', encoding='utf-8')) if r['work_item_id']=='TASK-AI-37']; actual=rows[0]['status']; assert actual=='BLOCKED_DEPENDENCY', f'mismatch: {actual}'; print('Register row 170 status: ' + actual)"
 node -e "const r=require('./package.json'), w=require('./apps/web/package.json'); const forbidden=['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => (r.scripts && r.scripts[s]) || (w.scripts && w.scripts[s])); if(found.length > 0) throw new Error('Forbidden lifecycle script detected: ' + found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"
-python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Downstream implementation acceptance contract','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all 15 required sections present');"
-python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); tokens=['0.60.0','8.24.0','180000ms','500MB','BLOCKED_DEPENDENCY','AI-37-R01','AI-37-R02','AI-37-R03','AI-37-R04','AI-37-R05','AI-37-R06','AI-37-R07','AI-37-R08','AI-37-R09','AI-37-R10','sbom.cyclonedx.json','NO_CONTAINER_TARGET','aquasecurity/trivy-action']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, and fallback tokens verified');"
+python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Scope conflicts and successor authorization','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all 17 required sections present');"
+python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); tokens=['0.60.0','8.24.0','180000ms','500MB','BLOCKED_DEPENDENCY','AI-37-R01','AI-37-R02','AI-37-R03','AI-37-R04','AI-37-R05','AI-37-R06','AI-37-R07','AI-37-R08','AI-37-R09','AI-37-R10','sbom.cyclonedx.json','NO_CONTAINER_TARGET','aquasecurity/trivy-action','TASK-AI-45','DISTINCT_EXIT_CODES','trivy-fixture-evidence','shipde-sbom-cyclonedx','AC-AI-45-01','AC-AI-45-12']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, successor TASK-AI-45, and downstream evidence-artifact tokens verified');"
+python -c "import csv,re; md=open('docs/product-spec/work-items/TASK-AI-37.md',encoding='utf-8').read(); m=re.search(r'\n\| Status \| .([A-Z_]+). \|\n', md); reg=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',encoding='utf-8')) if r['work_item_id']=='TASK-AI-37'][0]['status']; assert m and m.group(1)==reg, 'STATUS_DIVERGENCE: ' + (m.group(1) if m else 'NONE') + ' vs ' + reg; print('Control status matches register row 170: ' + reg)"
+python -c "import os; hits=[os.path.join(r,f) for r,_,fs in os.walk('.') for f in fs if f=='Dockerfile' and 'node_modules' not in r and '.git' not in r]; apps=[p for p in hits if 'apps' in p.split(os.sep)]; assert not apps, 'UNEXPECTED_APP_DOCKERFILE: ' + str(apps); assert any('docker-worker' in p for p in hits), 'MISSING_KNOWN_DOCKERFILE'; print('Dockerfile inventory: ' + str(len(hits)) + ' total, 0 under apps/*, docker-worker present')"
+python -c "import csv; ids=[r['work_item_id'] for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',encoding='utf-8'))]; spec=open('docs/product-spec/work-items/TASK-AI-37.md',encoding='utf-8').read(); assert 'TASK-AI-45' in spec, 'SUCCESSOR_NOT_NAMED'; assert 'TASK-AI-45' not in ids, 'SUCCESSOR_ALREADY_REGISTERED'; print('Successor TASK-AI-45 named in specification and not yet registered')"
 node tools/ai-brain/cli.js manifest
 node tools/ai-brain/cli.js reconcile
 python docs/product-spec/scripts/validate_docs.py
@@ -312,6 +430,7 @@ pnpm format:check
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `f6ad603` | `CHANGES_REQUIRED` | Resolved 7 review findings & 3 patterns: (1) Pattern 1 / Finding 2: Acceptance criteria rewritten to replace vague intentions ("File inspection", "specification text") with exact executable commands, exit codes, expected output strings, and artifacts. (2) Finding 1: Control table status aligned to authoritative delivery register row 170 (`BLOCKED_DEPENDENCY`). (3) Finding 3 / Pattern 3: Negative fixtures specified and verified (unauthorized status advancement fails with exit 1, premature ADOPTED declaration triggers `QUALITY_GATE_MISSING` with exit 1, forbidden lifecycle script triggers exit 1). Downstream contract defines clean (0), vulnerable (1), and operational fault (2) fixtures. (4) Finding 4: Tag mutability removed; required full 40-character immutable commit SHA for `aquasecurity/trivy-action` and SHA-256 checksum verification for binary downloads. (5) Finding 5: Addressed current absence of Dockerfiles in `apps/api`, `apps/worker`, `apps/web` by establishing deterministic `NO_CONTAINER_TARGET` fallback (exit 0) while retaining Dockerfile config scanning for `scripts/ai/docker-worker/Dockerfile`. (6) Finding 6 (Line 113): Restored CycloneDX SBOM generation and attestation scanning to scope and rules (`AI-37-R09`). (7) Finding 7 (Line 140): Defined exact 6 non-negotiable prerequisites required before promoting Trivy in `tools/ecosystem-manifest.json` (`AI-37-R10`). (8) Pattern 2: Explicit numeric thresholds specified (`0.60.0`, `8.24.0`, `180000ms`, `500MB`, CVSS >= 7.0, exit codes 0, 1, 2). |
+| 2 | `a83eb61` | `CHANGES_REQUIRED` | Resolved the 5 remaining findings. (1) Finding `4006830368` (Control vs register): Control status held at `BLOCKED_DEPENDENCY`; added § Control › Status transition ledger recording that `READY_FOR_AUTHOR`, `IN_PROGRESS` and `READY_FOR_CODEX` are untraversed with no transition evidence, that only the `TASK-AI-19` reconciler may write the register, and added `AC-AI-37-15`, which parses the Control `Status` cell and register row 170 and fails on divergence. (2) Finding `4006830377` (implementation paths): added § Scope conflicts and successor authorization stating that `TASK-AI-37` cannot deliver the gate, naming successor implementation Work Item `TASK-AI-45` with its required register row, allowed paths and acceptance matrix, and recording the absent `apps/*` Dockerfiles as a deferred precondition; proven by `AC-AI-37-16` (filesystem Dockerfile inventory) and `AC-AI-37-17` (successor named, not yet registered). (3) Finding `4006830387` (executable evidence): § Downstream implementation acceptance contract rewritten as a six-column table `AC-AI-45-01` .. `AC-AI-45-12`, each row naming command, exit code, exact output string and the downloadable workflow artifact the evidence must come from, with prose evidence explicitly rejected; `AC-AI-45-05` uses the `lodash@4.17.20` / `CVE-2021-23337` fixture, and `AC-AI-45-06` / `AC-AI-45-06b` require an induced fault plus an `exit-code-matrix.json` proving `clean=0 vulnerable=1 operational=2` are distinct. (4) Finding `4006830395` (SBOM): SBOM retained in scope and `AI-37-R09`, given falsifiable evidence in `AC-AI-45-07a` (CycloneDX `1.5`, at least `100` components) and `AC-AI-45-07b` (SBOM scanned clean), and the register's secret-scanning wording resolved as Conflict 3 rather than silently narrowed. (5) Finding `4006830401` (promotion evidence): § Manifest promotion criteria rewritten as a prerequisite-to-artifact table requiring all 6 to hold at one commit SHA with named artifacts, explicitly rejecting “implemented and verified”, binary installation alone, or a green run with a skipped scan step, and fixing write ordering so artifacts precede any `lifecycle_state` or `blocking_policy` edit. |
 
 ## Residual limitations
 
@@ -319,3 +438,12 @@ pnpm format:check
 - Zero-day vulnerabilities or disclosures without available upstream vendor patches are intentionally non-blocking under `--ignore-unfixed` (`AI-37-R04`) to prevent halting developer delivery on unfixable dependencies, remaining tracked as advisory findings.
 - Specification does not modify `.github/` workflows directly; actual workflow file creation and manifest promotion are strictly gated to the downstream implementation phase to honor repository change boundaries.
 - Container image scanning for application packages (`apps/api`, `apps/worker`, `apps/web`) depends on the introduction of application Dockerfiles in foundation tasks; until Dockerfiles are added, container scanning gracefully falls back to `NO_CONTAINER_TARGET` while configuration scanning actively inspects existing Dockerfiles (`scripts/ai/docker-worker/Dockerfile`).
+- Every scanner-behavior criterion (`AC-AI-45-01` .. `AC-AI-45-12`) is unverifiable
+  at this tree: `trivy` is absent from PATH, the fixtures under `tests/fixtures/trivy/`
+  do not exist, and no workflow invokes the scanner. Those criteria are therefore
+  stated as the acceptance contract binding on `TASK-AI-45` rather than claimed as
+  satisfied here; nothing in § Acceptance matrix asserts scanner behavior.
+- Successor Work Item `TASK-AI-45` is named but not registered. `TASK-AI-37` cannot
+  register it, because `FEATURE-DELIVERY-REGISTER.csv` is outside its `Allowed paths`.
+  Until that row exists through the governed register-write path, no Trivy CI gate may
+  be implemented under any Work Item ID (`AC-AI-37-17`).
