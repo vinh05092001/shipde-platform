@@ -631,3 +631,55 @@ describe('CSV serialization', () => {
     assert.equal(out.applied, 0);
   });
 });
+
+describe('AI-19-R03 — which review outcomes may clear a stale block', () => {
+  test('a Codex PASS clears the block', () => {
+    const plan = planReconciliation(
+      [mergedDep({ codex_verdict: 'PASS' }), blockedRow()],
+      ALL_PROVEN
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'BACKLOG');
+  });
+
+  test('a named fallback review also clears it, because BACKLOG grants nothing', () => {
+    const plan = planReconciliation(
+      [mergedDep({ codex_verdict: 'FALLBACK_PASS' }), blockedRow()],
+      ALL_PROVEN
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'BACKLOG');
+  });
+
+  test('no verdict at all does not clear it - absence of review is not weak evidence', () => {
+    const plan = planReconciliation([mergedDep({ codex_verdict: '' }), blockedRow()], ALL_PROVEN);
+    assert.equal(plan.mutations.length, 0);
+  });
+
+  test('a negative verdict does not clear it', () => {
+    const plan = planReconciliation(
+      [mergedDep({ codex_verdict: 'CHANGES_REQUIRED' }), blockedRow()],
+      ALL_PROVEN
+    );
+    assert.equal(plan.mutations.length, 0);
+  });
+
+  test('a fallback verdict is still refused for a MERGED transition', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: evidenceFor({ codexVerdict: 'FALLBACK_PASS' }) }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.match(plan.refusals[0].reason, /Codex verdict is not PASS/);
+  });
+
+  test('clearing a block never produces READY_FOR_AUTHOR, whatever the verdict', () => {
+    for (const v of ['PASS', 'FALLBACK_PASS']) {
+      const plan = planReconciliation([mergedDep({ codex_verdict: v }), blockedRow()], ALL_PROVEN);
+      assert.equal(
+        plan.mutations.some((m) => m.to === 'READY_FOR_AUTHOR'),
+        false
+      );
+    }
+  });
+});
