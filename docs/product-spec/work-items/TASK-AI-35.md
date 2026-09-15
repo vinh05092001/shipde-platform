@@ -18,8 +18,13 @@
 
 ## Business outcome
 
-The Ship Dễ delivery pipeline must prevent secret and credential leaks before
-code is committed or merged into `main`. The repository's existing secret
+The Ship Dễ delivery pipeline must prevent secret and credential leaks from
+being **merged into `main`**. The enforcement point owned by this Work Item is
+the CI gate, which runs on Pull Requests and on pushes to `main`; it therefore
+blocks merge, and it does **not** and cannot block a local `git commit`. No
+pre-commit hook exists in this repository today (`lefthook` is `PENDING`, owned
+by `TASK-AI-36`), so pre-commit enforcement is explicitly out of scope here and
+must not be claimed as an outcome of `TASK-AI-35`. The repository's existing secret
 scanning gate is `gitleaks`: it is NOT missing. Gitleaks is `ADOPTED`, a
 `BLOCKING_GATE`, `install_method: ci-provisioned`, installed at pinned version
 `8.24.0` in `.github/workflows/security-baseline.yml` and
@@ -128,17 +133,19 @@ Prohibited in this Work Item:
      - Functional parity with standalone verifier fallback definitions in `scripts/verify-secrets.ts` (`generic-api-key`, `private-key`, `aws-secret-key`).
   2. Grounded benchmark datasets (labeled corpora):
      - **Ship Dễ Carrier & Core Fixture Corpus**: The committed and generated fixtures from `scripts/verify-secrets.ts` (synthetic fixture `.temp-negative-fixture-*.js` created by `runNegativeCliTest` containing `ghn_live_*`) and test suites in `apps/web/src/tests/regression-audit.test.ts` (including shell metacharacter fixtures `.temp-gitleaks-test-$(echo_safe)-fixture.js`). Covers live carrier tokens (`ghn_live_*`, `ghtk_live_*`, `vtp_live_*`, `jtexpress_live_*`), AWS secret access keys (`[0-9a-zA-Z\/+=]{40}`), private key headers (`BEGIN RSA PRIVATE KEY`), and verifier fallback tokens.
-     - **Reference Public Credential Benchmark Corpus**: Pinned external reference dataset of >= 1,000 positive secret instances across >= 15 credential classes (API tokens, private keys, database connection strings, OAuth client secrets).
-     - **Benign Repository Negative Corpus**: The clean Ship Dễ codebase (64+ scan targets across all packages and tools) containing intentional benign patterns such as test redaction fixtures (`(sk-|ghp_|gho_|ghu_)1234567890`) and schema names (`key_behavior:`).
+     - **Reference Public Credential Benchmark Corpus**: There is currently **no pinned external dataset**, and no benchmark run may cite this corpus until one is pinned. Before the first benchmark run the evaluator MUST record, in `artifacts/benchmarks/corpus-manifest.json`, the dataset's source URL, immutable release tag or commit SHA, archive file name, and SHA-256 digest of the downloaded archive, and MUST verify that digest before scanning. The pinned dataset must contain >= 1,000 labeled positive secret instances across >= 15 credential classes (API tokens, private keys, database connection strings, OAuth client secrets). A benchmark result whose `corpus_sha256` does not match the pinned digest recorded in `corpus-manifest.json` is INVALID and fails `AI-35-R02`.
+     - **Benign Repository Negative Corpus**: The clean Ship Dễ working tree at a pinned commit SHA. Its contents are reproduced deterministically, never estimated: the corpus is the output of `git ls-files` at the pinned commit (**363 tracked files** at commit `da71354`) — reproducible today via `git ls-files | wc -l` — and scanned through the same exclusion set that `getGitleaksScanTargets(process.cwd())` in `scripts/verify-secrets.ts` applies (`.git`, `node_modules`, `.next`, `.turbo`, `.pnpm-store`, `dist`, `build`, `out`, `.gemini`). The **count** of scan targets that function returns is deliberately NOT pinned as a corpus size: it depends on locally materialised build and dependency directories (observed 62 on a fully installed worktree at commit `da71354`, and lower before `pnpm install` materialises those directories), so it MUST be measured and recorded per run in `corpus-manifest.json` rather than asserted as a constant. The pinned commit SHA and the `git ls-files` file count are the reproducible corpus identity, and both MUST be recorded for every benchmark run. It contains intentional benign patterns such as test redaction fixtures (`(sk-|ghp_|gho_|ghu_)1234567890`) and schema names (`key_behavior:`). No corpus path outside the pinned tracked-file set may be introduced; in particular, `tools/ai-guard/test/fixtures/` does not exist in this repository and must not be cited.
+     - **Corpus manifest (required artifact)**: `artifacts/benchmarks/corpus-manifest.json` MUST exist before any benchmark result is accepted and MUST record, for every corpus above: `corpus_name`, `generator` (the exact deterministic command or committed generator script that produces it), `pinned_commit_sha` (for repository-derived corpora), `source_url` and `release_tag` (for external corpora), `file_count`, `positive_instance_count`, and `corpus_sha256`. Corpora produced by an unversioned, ad-hoc, or unrecorded selection of inputs are not admissible evidence.
   3. Measurable quantitative parity thresholds (all concrete numbers):
      - **Minimum Recall**: Exactly 100.0% recall on the Ship Dễ Carrier & Core Fixture Corpus (zero missed carrier tokens or verifier fallback patterns); >= 99.0% recall across the Public Credential Benchmark Corpus (0% recall regression compared to Gitleaks 8.24.0 baseline).
      - **Maximum False-Positive Rate**: <= 0.1% false-positive rate across the Benign Repository Negative Corpus, and exactly 0 false positives on the clean Ship Dễ repository tree with allowlists applied.
      - **Execution Speed & Runtime Budget**:
-       * Full repository directory scan (`dir .`): <= 5.0 seconds on standard CI runner (Linux x64, 2 vCPU / 8 GB RAM); <= 8.0 seconds on Windows x64 workstation.
+       * Full repository directory scan (`dir .`): <= 5.0 seconds on the deployed CI runner label `ubuntu-latest` (GitHub-hosted Linux x64, 4 vCPU / 16 GB RAM at the time of measurement, with the resolved `runner_image` recorded); <= 8.0 seconds on Windows x64 workstation.
        * PR commit range scan (`--log-opts=<base>...HEAD`): <= 1.5 seconds.
        * Memory ceiling: Peak Resident Set Size (RSS) <= 250 MB during full repository traversal.
-  4. Target benchmark environments:
-     - CI Environment: Linux x64 runner (`ubuntu-22.04` LTS in GitHub Actions).
+  4. Target benchmark environments — the benchmark MUST run on the runner that actually hosts the gate:
+     - CI Environment: the GitHub-hosted runner label used by the `secret-scan` job in `.github/workflows/security-baseline.yml`, which is the floating label **`ubuntu-latest`** (not `ubuntu-22.04`); `.github/workflows/current-application.yml` uses the same label. Because the label floats, a timing result is admissible only if the run records the resolved image in the benchmark artifact: `runner_label` (`ubuntu-latest`), `runner_image` (captured with `echo "$ImageOS $ImageVersion"`), and `runner_cores` (captured with `nproc`). A result measured on any other label or image does not establish the <= 5.0 s CI budget for the deployed gate.
+     - If a future change pins `.github/workflows/security-baseline.yml` to a fixed image label, the benchmark environment must be re-aligned to that same label before its timings are reused as parity evidence.
      - Local Developer Environment: Windows 11 x64 (PowerShell 7.4+).
   5. Machine-readable benchmark artifacts & JSON Schema:
      - Output paths: `artifacts/benchmarks/benchmark-gitleaks-results.json` and `artifacts/benchmarks/benchmark-betterleaks-results.json`.
@@ -149,7 +156,9 @@ Prohibited in this Work Item:
          "title": "SecretScannerBenchmarkResult",
          "type": "object",
          "required": [
-           "scanner", "version", "platform", "timestamp", "corpus_name",
+           "scanner", "version", "candidate_source_repo", "candidate_commit_sha",
+           "binary_sha256", "platform", "runner_label", "runner_image",
+           "runner_cores", "timestamp", "corpus_name", "corpus_sha256",
            "total_files_scanned", "total_test_instances", "true_positives",
            "false_positives", "false_negatives", "recall_percentage",
            "duration_p50_ms", "duration_p95_ms", "peak_rss_mb", "exit_code"
@@ -157,9 +166,16 @@ Prohibited in this Work Item:
          "properties": {
            "scanner": { "type": "string", "enum": ["gitleaks", "betterleaks"] },
            "version": { "type": "string" },
+           "candidate_source_repo": { "type": "string", "format": "uri" },
+           "candidate_commit_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+           "binary_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
            "platform": { "type": "string", "enum": ["linux-x64", "windows-x64"] },
+           "runner_label": { "type": "string" },
+           "runner_image": { "type": "string" },
+           "runner_cores": { "type": "integer", "minimum": 1 },
            "timestamp": { "type": "string", "format": "date-time" },
            "corpus_name": { "type": "string" },
+           "corpus_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
            "total_files_scanned": { "type": "integer", "minimum": 0 },
            "total_test_instances": { "type": "integer", "minimum": 0 },
            "true_positives": { "type": "integer", "minimum": 0 },
@@ -235,6 +251,12 @@ Prohibited in this Work Item:
           | Windows Zero-Network Trace | 0 external TCP sockets | 0 sockets | [Observed sockets] | [PASS/FAIL] |
         - **Mandatory Decision Rule**: In the absence of an explicit `APPROVED` record signed by the human product and merge owner, Gitleaks 8.24.0 remains the sole blocking CI gate.
         ```
+  12. Pinning of the scanner candidate under test (both sides of the comparison):
+      - **No Betterleaks revision is pinned today.** A repository-wide search finds no Betterleaks source URL, release tag, commit SHA, or binary digest anywhere in this repository outside this Work Item. Consequently **no benchmark result may be produced or accepted until the candidate is pinned**, and any result lacking the fields below is INVALID and fails `AI-35-R02`.
+      - Before the first benchmark run the evaluator MUST record, in `artifacts/benchmarks/benchmark-betterleaks-results.json` and in the migration decision record: `candidate_source_repo` (upstream Git URL), `candidate_commit_sha` (full 40-hex source revision), the release tag when a published release is used, and `binary_sha256` (SHA-256 of the exact executable invoked, per platform).
+      - The digest MUST be computed from the executable actually run, immediately before the run — Linux `sha256sum ./betterleaks`, Windows `Get-FileHash -Algorithm SHA256 .\\betterleaks.exe` — and the printed digest MUST equal `binary_sha256` in the artifact.
+      - The Gitleaks baseline side is pinned identically: `version` `8.24.0` plus the `binary_sha256` of the CI-provisioned 8.24.0 executable, recorded in `artifacts/benchmarks/benchmark-gitleaks-results.json`.
+      - Two benchmark artifacts may be compared only when both carry these pinning fields; a rerun producing a different `binary_sha256` or `candidate_commit_sha` is a **new** comparison and inherits no prior verdict.
 - Author complete Work Item specification `TASK-AI-35.md`.
 
 ## Out of scope
@@ -252,8 +274,9 @@ Prohibited in this Work Item:
 
 | Rule | Behavior |
 |---|---|
+| `AI-35-R00` | Enforcement boundary: this Work Item's gate blocks **merge** (Pull Request and push to `main`), not local commits. No pre-commit hook exists (`lefthook` is `PENDING`, owned by `TASK-AI-36`), so no pre-commit protection may be claimed by `TASK-AI-35`. |
 | `AI-35-R01` | Gitleaks baseline preservation: Gitleaks 8.24.0 remains the active, blocking, adopted CI secret scanning gate until all replacement criteria are proven and human decision is granted. Gitleaks is never treated as absent. |
-| `AI-35-R02` | Parity benchmark thresholds & negative proof parity: Any proposed replacement scanner must achieve exactly 100.0% recall on the `.gitleaks.toml` custom rule (`shipde-carrier-live-token`), Gitleaks defaults, and verifier fallback rules (`generic-api-key`, `private-key`, `aws-secret-key`), >= 99.0% recall on the public benchmark corpus, <= 0.1% false-positive rate, and adhere to the runtime budget (<= 5.0s CI / <= 8.0s Windows full scan, <= 1.5s PR range). It must exit with exact code 1 on negative leak fixtures with guaranteed cleanup, matching `AC-FOUND-01-06`. |
+| `AI-35-R02` | Parity benchmark thresholds & negative proof parity: Any proposed replacement scanner must achieve exactly 100.0% recall on the `.gitleaks.toml` custom rule (`shipde-carrier-live-token`), Gitleaks defaults, and verifier fallback rules (`generic-api-key`, `private-key`, `aws-secret-key`), >= 99.0% recall on the public benchmark corpus, <= 0.1% false-positive rate, and adhere to the runtime budget (<= 5.0s on the deployed CI runner label `ubuntu-latest` / <= 8.0s Windows full scan, <= 1.5s PR range) measured with `runner_label`, `runner_image` and `runner_cores` recorded. Every benchmark artifact must pin the candidate (`candidate_source_repo`, `candidate_commit_sha`, `binary_sha256`) and the corpus (`corpus_sha256` matching `artifacts/benchmarks/corpus-manifest.json`); an unpinned run is INVALID. It must exit with exact code 1 on negative leak fixtures with guaranteed cleanup, matching `AC-FOUND-01-06`. |
 | `AI-35-R03` | Git range and tree scanning parity: The scanner must scan both the PR commit range (`BASE_SHA...HEAD`) and uncommitted working directory targets without traversing ignored paths (`.git`, `node_modules`, `.next`, `.turbo`, `.pnpm-store`). |
 | `AI-35-R04` | Fail-closed behavior: Missing binary, invalid CLI flags, unparseable configuration, or empty report on exit code 1 must result in an operational failure (exit code 2) and block the CI pipeline, never silently exiting zero. |
 | `AI-35-R05` | Local/CI platform portability & runtime zero-network verification: The scanner must provide verified pre-compiled native binaries for Linux x64 and Windows x64 with published SHA-256 checksums. Execution must be strictly offline with zero telemetry; verified at runtime on Linux via `unshare -n` and `strace -f -e trace=socket,connect` logging 0 external connect calls, and on Windows via `pktmon` / PowerShell socket capture logging 0 external network packets or TCP connections. Any network connection attempt or failure under network isolation immediately disqualifies the scanner. |
@@ -284,7 +307,7 @@ and verification scripts.
 | `AC-AI-35-04` | Dual-mode scanning and build/dependency directory exclusions | `npx tsx -e "const { isIgnoredScanName, getGitleaksScanTargets } = require('./scripts/verify-secrets.ts'); const ignored = ['.git', 'node_modules', '.next', '.turbo', '.pnpm-store', 'dist', 'build', 'out', '.gemini']; const allIgnored = ignored.every(d => isIgnoredScanName(d)); const targets = getGitleaksScanTargets(process.cwd()); const hasIgnored = targets.some(t => ignored.some(i => t.split(/[\\/]/).includes(i))); if (!allIgnored || hasIgnored) process.exit(1); console.log('DUAL_MODE_EXCLUSIONS_VERIFIED: ' + targets.length + ' scan targets, all build and dependency directories excluded');"` exits 0 and prints the string `DUAL_MODE_EXCLUSIONS_VERIFIED:` | command stdout |
 | `AC-AI-35-05` | Scanner operational fail-closed behavior on spawn and argument errors | `npx tsx -e "const { executeGitleaks } = require('./scripts/verify-secrets.ts'); const res = executeGitleaks('nonexistent-binary-xyz', ['dir', '.'], 'dummy-report.json'); if (res.success || (res.exitCode !== null && res.exitCode === 0)) process.exit(1); console.log('FAIL_CLOSED_VERIFIED: ' + res.operationalError);"` exits 0 and prints the string `FAIL_CLOSED_VERIFIED: Gitleaks process execution error:` | command stdout |
 | `AC-AI-35-06` | Scanner regression suite covering shell metacharacters, enumeration fail-closed, and cleanup override | `pnpm test:audit` exits 0 and prints the string `🎉 TẤT CẢ CÁC BÀI KIỂM TOÁN HỒI QUY ĐẠT 100%` running `apps/web/src/tests/regression-audit.test.ts` | command stdout |
-| `AC-AI-35-07` | Work item specification completeness, numeric thresholds, and future decision record schema | `node -e "const fs = require('fs'); const c = fs.readFileSync('docs/product-spec/work-items/TASK-AI-35.md', 'utf8'); const req = ['AI-35-R01', 'AI-35-R02', 'AI-35-R03', 'AI-35-R04', 'AI-35-R05', 'AI-35-R06', '100.0% recall', '<= 0.1% false-positive rate', '<= 5.0 seconds on standard CI runner', '<= 8.0 seconds on Windows x64', '<= 1.5 seconds', '<= 250 MB', '### Future Decision Record Template for AI-TOOLCHAIN-DECISIONS.md', 'Status: PENDING_EVALUATION', 'pktmon', 'unshare -n']; for (const r of req) { if (!c.includes(r)) { console.error('Missing: ' + r); process.exit(1); } } console.log('SPECIFICATION_INTEGRITY_VERIFIED: all numeric thresholds, rules, and decision templates present');"` exits 0 and prints the string `SPECIFICATION_INTEGRITY_VERIFIED: all numeric thresholds, rules, and decision templates present` | command stdout |
+| `AC-AI-35-07` | Work item specification completeness, numeric thresholds, and future decision record schema | `node -e "const fs = require('fs'); const c = fs.readFileSync('docs/product-spec/work-items/TASK-AI-35.md', 'utf8'); const req = ['AI-35-R01', 'AI-35-R02', 'AI-35-R03', 'AI-35-R04', 'AI-35-R05', 'AI-35-R06', '100.0% recall', '<= 0.1% false-positive rate', '<= 5.0 seconds on the deployed CI runner label', '<= 8.0 seconds on Windows x64', '<= 1.5 seconds', '<= 250 MB', '### Future Decision Record Template for AI-TOOLCHAIN-DECISIONS.md', 'Status: PENDING_EVALUATION', 'pktmon', 'unshare -n', 'AI-35-R00', 'candidate_commit_sha', 'binary_sha256', 'corpus_sha256', 'corpus-manifest.json', 'runner_label', '363 tracked files', 'corpus identity', 'No Betterleaks revision is pinned today']; for (const r of req) { if (!c.includes(r)) { console.error('Missing: ' + r); process.exit(1); } } console.log('SPECIFICATION_INTEGRITY_VERIFIED: all numeric thresholds, rules, and decision templates present');"` exits 0 and prints the string `SPECIFICATION_INTEGRITY_VERIFIED: all numeric thresholds, rules, and decision templates present` | command stdout |
 
 ## Verification commands
 
@@ -314,7 +337,8 @@ python docs/product-spec/scripts/validate_docs.py
 |---|---|---|---|
 | 1 | `5e0f278` / `cafdc1c` | `CHANGES_REQUIRED` | Resolved 5 findings: P1 dependency truth explained on PR (TASK-AI-17 merged into base); P2 manifest warning pinned to exactly 0 errors and 1 codex-cli drift warning; P2 measurable parity thresholds defined across corpora, metrics, environments, and JSON artifacts; P2 zero-network runtime verification command, expected log, and failure condition specified; P2 custom-rule inventory corrected to distinguish TOML rule (`shipde-carrier-live-token`), Gitleaks defaults, and verifier fallback rules. |
 | 2 | `3d0e259` | `CHANGES_REQUIRED` | Resolved 7 findings and 1 inline comment: (1) Control Status aligned to authoritative delivery register `BLOCKED_DEPENDENCY`; (2) All Acceptance Matrix rows replaced with independently executable commands naming exact command, expected exit code (0 or 1), exact string, and output source; (3) Proposed benchmark corpora grounded in committed `verify-secrets.ts` and `regression-audit.test.ts` harnesses, with exact JSON Schema, paths, and pass/fail exit codes defined; (4) Fixture path `.temp-negative-fixture-*.js` explicitly named from existing verifier harness and executed with exact exit code 1; (5) Dual-mode range and tree scanning verified alongside `getGitleaksScanTargets` build/dependency directory exclusions; (6) Disallowed ambiguous scan exit "0 or 1", fixed clean scan to exactly exit 0, negative test to exactly exit 1, operational error to exit 2, and specified Linux `strace` socket tracing against `/tmp/betterleaks-trace.log` with deterministic grep assertion; (7) Bounded Work Item to documentation-only and specified complete Future Decision Record Template for `AI-TOOLCHAIN-DECISIONS.md`; (8) Specified Windows 11 x64 zero-network procedure using `pktmon` / `Get-NetTCPConnection` to `$env:TEMP\betterleaks-win-traffic.log` with deterministic zero-connection assertion. |
-| 3 | `HEAD` | `READY_FOR_CODEX` | Awaiting fresh independent Codex review. |
+| 3 | `da71354` | `CHANGES_REQUIRED` | Resolved 5 findings: (1) business outcome no longer promises pre-commit protection — scope limited to blocking merge, with new rule `AI-35-R00` recording that no pre-commit hook exists (`lefthook` PENDING, owned by `TASK-AI-36`); (2) benchmark environment realigned from `ubuntu-22.04` to the floating `ubuntu-latest` label actually used by the `secret-scan` job, with `runner_label` / `runner_image` / `runner_cores` now required in every artifact; (3) Betterleaks candidate pinning made mandatory (`candidate_source_repo`, `candidate_commit_sha`, `binary_sha256`), with the explicit statement that no revision is pinned today and no benchmark result is valid until it is; (4) corpora pinned — the nonexistent `tools/ai-guard/test/fixtures/` path and the unverifiable file counts replaced with a reproducible corpus identity (`git ls-files` = 363 tracked files at commit `da71354`; the `getGitleaksScanTargets` count is explicitly not pinned because it varies with locally installed build directories — observed 62 on a fully installed worktree — and is recorded per run) plus a required `artifacts/benchmarks/corpus-manifest.json` carrying generator, pinned commit, source URL / release tag and `corpus_sha256`; (5) Windows 11 x64 zero-network procedure (`pktmon` plus outbound firewall block rule and deterministic assertion) confirmed present alongside the Linux `unshare -n` / `strace` procedure. |
+| 4 | `HEAD` | `READY_FOR_CODEX` | Awaiting fresh independent Codex review. |
 
 ## Residual limitations
 
