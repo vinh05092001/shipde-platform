@@ -282,6 +282,20 @@ const ALLOWED_SOURCES_FOR_BACKLOG = new Set(['BLOCKED_DEPENDENCY', 'BLOCKED_BY_F
 const ALLOWED_SOURCES_FOR_MERGED = new Set(['READY_FOR_CODEX', 'CODEX_PASS']);
 const SHA_40 = /^[0-9a-f]{40}$/;
 
+/**
+ * Review outcomes that may clear a stale dependency block.
+ *
+ * `PASS` is the independent Codex verdict. `FALLBACK_PASS` records a review
+ * that genuinely ran on another reviewer, named in the register rather than
+ * disguised as Codex - today that is a model reached through the local
+ * gateway, which has already found defects Codex never saw.
+ *
+ * Both are accepted here and only here. Neither is accepted for a MERGED
+ * transition (AI-19-R04), and neither promotes anything to READY_FOR_AUTHOR,
+ * which remains the independent planning gate's to open.
+ */
+const ACCEPTED_DEPENDENCY_VERDICTS = new Set(['PASS', 'FALLBACK_PASS']);
+
 function mutation(item, from, to, rule, evidence) {
   return { workItemId: item.work_item_id, from, to, rule, evidence };
 }
@@ -339,10 +353,26 @@ function dependencyProven(depId, byId, probes) {
         'dependency ' + depId + ' merge_commit ' + sha.slice(0, 8) + ' is not reachable on mainRef',
     };
   }
-  if (String(dep.codex_verdict || '').trim() !== 'PASS') {
-    return { ok: false, why: 'dependency ' + depId + ' has no PASS verdict' };
+  // Clearing a stale block moves a row to BACKLOG, and BACKLOG grants nothing:
+  // the item still needs the independent planning gate before anyone may pick
+  // it up (AI-19-R03). So the evidence bar here is deliberately lower than the
+  // one for MERGED. A review that actually happened is enough, whoever ran it,
+  // as long as the register says who.
+  //
+  // What is NOT accepted is an empty verdict. "Nobody looked" is not a weaker
+  // form of evidence, it is the absence of any, and a chain of unreviewed work
+  // must not clear itself one link at a time.
+  const verdict = String(dep.codex_verdict || '').trim();
+  if (!verdict) {
+    return { ok: false, why: 'dependency ' + depId + ' has no review verdict at all' };
   }
-  return { ok: true };
+  if (!ACCEPTED_DEPENDENCY_VERDICTS.has(verdict)) {
+    return {
+      ok: false,
+      why: 'dependency ' + depId + ' verdict "' + verdict + '" is not an accepted review outcome',
+    };
+  }
+  return { ok: true, verdict };
 }
 
 /**
@@ -631,6 +661,7 @@ module.exports = {
   parseCsvRecords,
   applyStatusMutations,
   serializeRecord,
+  ACCEPTED_DEPENDENCY_VERDICTS,
   ALLOWED_SOURCES_FOR_BACKLOG,
   ALLOWED_SOURCES_FOR_MERGED,
 };
