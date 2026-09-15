@@ -486,7 +486,12 @@ function Get-ShipDeAoDatabasePath {
 function Get-ShipDeAoHarnessActivity {
     param(
         [Parameter(Mandatory = $true)][string]$Harness,
-        [string]$DatabasePath = $null
+        [string]$DatabasePath = $null,
+        # An all-time aggregate answers "was this harness ever observed", which
+        # stays true forever once it has been true once. The question a health
+        # check is asking is whether it is observed now, so activity is counted
+        # inside a window and the all-time figure is kept only as context.
+        [int]$WindowHours = 24
     )
 
     # AI-16-R03: hook registration is only real once the daemon has written an
@@ -526,20 +531,24 @@ function Get-ShipDeAoHarnessActivity {
     $readerPath = Join-Path (Get-ShipDeTempDir) ("shipde-ao-activity-{0}.js" -f [Guid]::NewGuid())
     $reader = @'
 const { DatabaseSync } = require('node:sqlite');
-const [dbPath, harness] = process.argv.slice(2);
+const [dbPath, harness, windowHours] = process.argv.slice(2);
 const db = new DatabaseSync(dbPath, { readOnly: true });
 const row = db
   .prepare(
     'SELECT COUNT(*) AS sessions, ' +
       'SUM(CASE WHEN activity_last_at IS NOT NULL THEN 1 ELSE 0 END) AS withActivity, ' +
-      'MAX(activity_last_at) AS lastActivityAt ' +
+      'MAX(activity_last_at) AS lastActivityAt, ' +
+      'SUM(CASE WHEN activity_last_at IS NOT NULL ' +
+      "AND activity_last_at >= datetime('now', ?) THEN 1 ELSE 0 END) AS recentWithActivity " +
       'FROM sessions WHERE harness = ?'
   )
-  .get(harness);
+  .get('-' + windowHours + ' hours', harness);
 process.stdout.write(
   JSON.stringify({
     sessions: row.sessions || 0,
     withActivity: row.withActivity || 0,
+    recentWithActivity: row.recentWithActivity || 0,
+    windowHours: Number(windowHours),
     lastActivityAt: row.lastActivityAt || null,
   })
 );
@@ -547,7 +556,7 @@ process.stdout.write(
 
     try {
         Set-Content -LiteralPath $readerPath -Value $reader -Encoding utf8
-        $raw = (@(& node $readerPath $DatabasePath $Harness 2>$null) -join "")
+        $raw = (@(& node $readerPath $DatabasePath $Harness $WindowHours 2>$null) -join "")
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) {
             return (& $unverifiable "AO ledger at $DatabasePath could not be read")
         }
@@ -556,9 +565,11 @@ process.stdout.write(
             Harness        = $Harness
             Verifiable     = $true
             Reason         = $null
-            Sessions       = [int]$parsed.sessions
-            WithActivity   = [int]$parsed.withActivity
-            LastActivityAt = $parsed.lastActivityAt
+            Sessions           = [int]$parsed.sessions
+            WithActivity       = [int]$parsed.withActivity
+            RecentWithActivity = [int]$parsed.recentWithActivity
+            WindowHours        = [int]$parsed.windowHours
+            LastActivityAt     = $parsed.lastActivityAt
         }
     } catch {
         return (& $unverifiable "AO ledger at $DatabasePath could not be read: $($_.Exception.Message)")

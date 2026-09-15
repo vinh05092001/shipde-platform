@@ -301,6 +301,11 @@ async function collectGitHubState(repo = 'vinh05092001/shipde-platform') {
 
         if (viewRes.success) {
           try {
+            // The response has to be parsed before it can be read. Without this
+            // line every successful `gh pr view` threw a ReferenceError that the
+            // catch below swallowed into checks: ERROR, so an open PR with green
+            // checks and a Codex PASS was reported as having neither.
+            const detail = JSON.parse(viewRes.stdout);
             const headOid = detail.headRefOid || pr.headRefOid || '';
             const checks = parseChecks(detail.statusCheckRollup);
             const reviewInfo = parseReviews(detail.reviews, detail.comments, headOid);

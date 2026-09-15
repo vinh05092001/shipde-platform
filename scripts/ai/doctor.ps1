@@ -409,9 +409,16 @@ if (-not $codexActivity.Verifiable) {
     # AI-16-R04: unreadable is "cannot verify", never a pass.
     Write-Host ("Codex hook registration: CANNOT VERIFY ({0})" -f $codexActivity.Reason)
     $failures.Add("Codex hook registration could not be verified: $($codexActivity.Reason)")
+} elseif ($codexActivity.RecentWithActivity -gt 0) {
+    Write-Host ("Codex hook registration: VERIFIED ({0} of {1} sessions recorded activity in the last {2}h, last {3})" -f `
+        $codexActivity.RecentWithActivity, $codexActivity.Sessions, $codexActivity.WindowHours, $codexActivity.LastActivityAt)
 } elseif ($codexActivity.WithActivity -gt 0) {
-    Write-Host ("Codex hook registration: VERIFIED ({0} of {1} sessions recorded activity, last {2})" -f `
-        $codexActivity.WithActivity, $codexActivity.Sessions, $codexActivity.LastActivityAt)
+    # Observed once, but not inside the window. Reporting VERIFIED here is how a
+    # health check goes on passing after the thing it checks has stopped: the
+    # all-time aggregate can never fall back to zero once any row exists.
+    Write-Host ("Codex hook registration: STALE (last activity {0}, none in the last {1}h)" -f `
+        $codexActivity.LastActivityAt, $codexActivity.WindowHours)
+    $failures.Add("Codex hook registration is stale: last activity $($codexActivity.LastActivityAt), none in the last $($codexActivity.WindowHours)h")
 } else {
     # Naming the harnesses that do record activity separates "AO never writes
     # activity here" from "AO writes it for everyone except Codex", which are

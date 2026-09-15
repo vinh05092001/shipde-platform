@@ -173,9 +173,20 @@ function createDashboardServer(options = {}) {
     // The offline file keeps working — it carries an embedded snapshot, which
     // is its purpose. What it loses is live streaming, and live streaming is
     // already served, safely, at http://127.0.0.1:<port>/.
+    //
+    // The allowed origin is derived from what this process actually bound to,
+    // never from the Host header. Host is supplied by the caller: under DNS
+    // rebinding a hostile page's hostname resolves to 127.0.0.1, so the browser
+    // sends Origin and Host both naming that hostile host. Comparing the two
+    // against each other therefore always matches, and the check would approve
+    // exactly the attacker it exists to stop.
     const requestOrigin = req.headers.origin;
-    const selfOrigin = `http://${req.headers.host || '127.0.0.1'}`;
-    if (requestOrigin === selfOrigin) {
+    const boundPort = server.address() ? server.address().port : DEFAULT_PORT;
+    const allowedOrigins = new Set([
+      `http://${HOST}:${boundPort}`,
+      `http://localhost:${boundPort}`,
+    ]);
+    if (requestOrigin && allowedOrigins.has(requestOrigin)) {
       res.setHeader('Access-Control-Allow-Origin', requestOrigin);
     }
     // Vary is set unconditionally: the response depends on Origin even when
