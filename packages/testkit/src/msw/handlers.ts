@@ -181,4 +181,163 @@ export const handlers = [
 
     return handleStateResponse(successTracking, emptyTracking);
   }),
+
+  // --- Auth: Self-Registration (FEAT-AUTH-01) ---
+  http.post(`${BASE_API_URL}/api/v1/auth/register`, async ({ request }) => {
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
+    }
+
+    if (body.email === 'duplicate@shipde.vn') {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Email đã được đăng ký trên hệ thống',
+            retryable: false,
+            fields: [{ field: 'email', code: 'DUPLICATE', message: 'Email đã được đăng ký' }],
+          },
+          meta: { correlation_id: 'mock-corr-dup' },
+        },
+        { status: 400 }
+      );
+    }
+
+    if (body.email === 'ratelimit@shipde.vn') {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Quá nhiều yêu cầu đăng ký. Vui lòng thử lại sau.',
+            retryable: true,
+            next_action: 'Vui lòng chờ 3600 giây trước khi thử lại',
+          },
+          meta: { correlation_id: 'mock-corr-limit' },
+        },
+        { status: 429 }
+      );
+    }
+
+    const successReg = {
+      data: {
+        user_id: 'b0000000-0000-0000-0000-000000000099',
+        merchant_id: 'a0000000-0000-0000-0000-000000000099',
+        status: 'PENDING_VERIFICATION',
+        email: body.email || 'mock@shipde.vn',
+        phone: body.phone,
+        message: 'Đăng ký thành công. Vui lòng xác thực tài khoản qua email hoặc số điện thoại.',
+      },
+      meta: { correlation_id: 'mock-corr-reg' },
+    };
+
+    return handleStateResponse(successReg, successReg);
+  }),
+
+  // --- Auth: Verify Email ---
+  http.post(`${BASE_API_URL}/api/v1/auth/verify-email`, async ({ request }) => {
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
+    }
+
+    if (body.token === 'test-token-expired') {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TOKEN_EXPIRED',
+            message: 'Mã xác thực đã hết hạn',
+            retryable: false,
+            next_action: 'Vui lòng yêu cầu gửi lại mã xác thực mới',
+          },
+          meta: { correlation_id: 'mock-corr-expired' },
+        },
+        { status: 410 }
+      );
+    }
+
+    if (body.token === 'test-token-consumed') {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TOKEN_ALREADY_CONSUMED',
+            message: 'Mã xác thực này đã được sử dụng trước đó',
+            retryable: false,
+            next_action: 'Vui lòng đăng nhập hoặc yêu cầu mã xác thực mới nếu chưa kích hoạt',
+          },
+          meta: { correlation_id: 'mock-corr-consumed' },
+        },
+        { status: 410 }
+      );
+    }
+
+    const successVerify = {
+      data: {
+        user_id: 'b0000000-0000-0000-0000-000000000099',
+        merchant_id: 'a0000000-0000-0000-0000-000000000099',
+        status: 'ACTIVE',
+        channel: 'email',
+        verified: true,
+      },
+      meta: { correlation_id: 'mock-corr-verify' },
+    };
+
+    return handleStateResponse(successVerify, successVerify);
+  }),
+
+  // --- Auth: Verify Phone ---
+  http.post(`${BASE_API_URL}/api/v1/auth/verify-phone`, async () => {
+    const successVerify = {
+      data: {
+        user_id: 'b0000000-0000-0000-0000-000000000099',
+        merchant_id: 'a0000000-0000-0000-0000-000000000099',
+        status: 'ACTIVE',
+        channel: 'phone',
+        verified: true,
+      },
+      meta: { correlation_id: 'mock-corr-verify-phone' },
+    };
+
+    return handleStateResponse(successVerify, successVerify);
+  }),
+
+  // --- Auth: Resend Verification ---
+  http.post(`${BASE_API_URL}/api/v1/auth/verify/resend`, async ({ request }) => {
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
+    }
+
+    if (body.identifier === 'ratelimit@shipde.vn') {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Vui lòng chờ trước khi yêu cầu gửi lại mã',
+            retryable: true,
+            next_action: 'Vui lòng chờ 60 giây',
+          },
+          meta: { correlation_id: 'mock-corr-resend-limit' },
+        },
+        { status: 429 }
+      );
+    }
+
+    const successResend = {
+      data: {
+        status: 'SENT',
+        channel: body.channel || 'email',
+        cooldown_seconds: 60,
+      },
+      meta: { correlation_id: 'mock-corr-resend' },
+    };
+
+    return handleStateResponse(successResend, successResend);
+  }),
 ];

@@ -9,7 +9,10 @@ import { CorrelationMiddleware } from './correlation/correlation.middleware';
 import { validateConfig, AppConfig } from '@shipde/config';
 import { APP_CONFIG } from './config.token';
 
+import { AuthModule } from './auth/auth.module';
+
 @Module({
+  imports: [AuthModule],
   controllers: [HealthController],
   providers: [
     {

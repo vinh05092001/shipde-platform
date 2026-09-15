@@ -39,6 +39,86 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/auth/register': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Self-register new merchant and owner user (API-AUTH-REGISTER)
+     * @description Creates a new merchant tenant and its initial owner user in a single transaction in pending-verification status.
+     */
+    post: operations['register'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/verify-email': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Verify user email using verification token (API-AUTH-VERIFY-EMAIL)
+     * @description Verifies email address using single-use token and activates user if eligible.
+     */
+    post: operations['verifyEmail'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/verify-phone': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Verify user phone using OTP (API-AUTH-VERIFY-PHONE)
+     * @description Verifies phone number using OTP code and activates user if eligible.
+     */
+    post: operations['verifyPhone'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/verify/resend': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Resend verification token or OTP (API-AUTH-RESEND-VERIFICATION)
+     * @description Re-issues a verification token or phone OTP subject to independent rate limits.
+     */
+    post: operations['resendVerification'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/auth/login': {
     parameters: {
       query?: never;
@@ -331,6 +411,67 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    RegisterRequest: {
+      merchant_name: string;
+      full_name: string;
+      /** Format: email */
+      email?: string;
+      phone?: string;
+      /** Format: password */
+      password: string;
+      terms_accepted: boolean;
+      terms_version: string;
+    };
+    RegistrationResponse: {
+      data: {
+        /** Format: uuid */
+        user_id: string;
+        /** Format: uuid */
+        merchant_id: string;
+        /** @enum {string} */
+        status: 'PENDING_VERIFICATION' | 'ACTIVE';
+        email?: string;
+        phone?: string;
+        message?: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    VerifyEmailRequest: {
+      token: string;
+    };
+    VerifyPhoneRequest: {
+      phone: string;
+      otp: string;
+    };
+    VerifyResponse: {
+      data: {
+        /** Format: uuid */
+        user_id: string;
+        /** Format: uuid */
+        merchant_id: string;
+        /** @enum {string} */
+        status: 'PENDING_VERIFICATION' | 'ACTIVE';
+        /** @enum {string} */
+        channel: 'email' | 'phone';
+        verified: boolean;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    ResendVerificationRequest: {
+      identifier: string;
+      /** @enum {string} */
+      channel: 'email' | 'phone';
+    };
+    ResendVerificationResponse: {
+      data: {
+        /** @enum {string} */
+        status: 'SENT' | 'RATE_LIMITED';
+        /** @enum {string} */
+        channel: 'email' | 'phone';
+        cooldown_seconds?: number;
+      };
+      meta: components['schemas']['Meta'];
+    };
     LoginRequest: {
       identifier: string;
       /** Format: password */
@@ -479,6 +620,15 @@ export interface components {
         'application/json': components['schemas']['ErrorResponse'];
       };
     };
+    /** @description Rate limit exceeded (RATE_LIMITED) */
+    RateLimited: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
     /** @description Command accepted */
     CommandAccepted: {
       headers: {
@@ -548,6 +698,110 @@ export interface operations {
           'application/json': components['schemas']['ReadinessResponse'];
         };
       };
+    };
+  };
+  register: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RegisterRequest'];
+      };
+    };
+    responses: {
+      /** @description Registration initiated, pending verification */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RegistrationResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  verifyEmail: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['VerifyEmailRequest'];
+      };
+    };
+    responses: {
+      /** @description Email verified successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['VerifyResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      410: components['responses']['Error'];
+    };
+  };
+  verifyPhone: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['VerifyPhoneRequest'];
+      };
+    };
+    responses: {
+      /** @description Phone verified successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['VerifyResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      410: components['responses']['Error'];
+    };
+  };
+  resendVerification: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ResendVerificationRequest'];
+      };
+    };
+    responses: {
+      /** @description Verification token or OTP resent */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ResendVerificationResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      429: components['responses']['RateLimited'];
     };
   };
   login: {

@@ -15,6 +15,18 @@ Every implementation use case includes actor, preconditions, trigger, main flow,
 - Audit: success/failure metadata without password/OTP.
 - Acceptance: AC-AUTH-01.
 
+## UC-AUTH-02 Self-register
+
+- Actor: prospective shop owner (anonymous user).
+- Preconditions: none (public access).
+- Trigger: submit self-registration form (shop name, full name, email/phone, password, terms acceptance).
+- Main result: atomically create new Merchant (tenant) and User with role OWNER in PENDING_VERIFICATION state; issue single-use verification token/OTP via configured channels.
+- Alternatives: verification via email link; verification via phone OTP; resend verification token.
+- Postconditions: upon verifying at least one channel, user transitions to ACTIVE state with verified timestamp; tenant becomes usable for onboarding (FEAT-ONB-01).
+- Failures: missing required fields, weak password, unaccepted terms, duplicate verified identifier, rate limit exceeded, expired/consumed verification token.
+- Audit: registration event and verification events logged with hashed IP and actor context; never log plaintext passwords, OTPs, or verification tokens.
+- Acceptance: AC-AUTH-02.
+
 ## UC-USR-01 Invite and authorize a user
 
 - Actor: SHOP_OWNER or authorized administrator.
@@ -106,4 +118,3 @@ Every implementation use case includes actor, preconditions, trigger, main flow,
 - Main flow: classify → deadline → evidence → approval/policy → submit → monitor outcome.
 - Rules: deadline policy versioned; automatic submission must satisfy all guardrails.
 - Acceptance: AC-CLM-01.
-
