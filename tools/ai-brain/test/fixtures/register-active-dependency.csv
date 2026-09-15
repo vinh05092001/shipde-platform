@@ -1,0 +1,3 @@
+"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
+"1","S1","AI","TASK-AI-05","","Open prerequisite","Still in review","READY_FOR_CODEX","","docs/product-spec/work-items/TASK-AI-06.md","feat/task-ai-05","5","",""
+"2","S1","AI","TASK-AI-07","","Genuine block","Blocked on work that has not landed","BLOCKED_DEPENDENCY","TASK-AI-05","docs/product-spec/work-items/TASK-AI-06.md","","","",""

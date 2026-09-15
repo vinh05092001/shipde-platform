@@ -262,4 +262,367 @@ function findDuplicateIds(items) {
   return out;
 }
 
-module.exports = { reconcileRegister, parseDependencies, findDuplicateIds };
+/**
+ * Write-back — the part of this module that is allowed to change the register.
+ *
+ * Everything above only reports. What follows may mutate, and so it is written
+ * to be boring: it moves a row only along an edge the Allowed-Transition Table
+ * names, only when the repository itself proves the precondition, and it says
+ * out loud why it refused whenever it does not move one.
+ *
+ * Two refusals matter more than the successes. A row is never advanced to
+ * MERGED from branch ancestry, because a squash merge leaves the branch tip
+ * unreachable from main and an ancestry check would therefore answer a
+ * different question than the one asked (AI-TOOL-12). And a row is never
+ * advanced to READY_FOR_AUTHOR at all: clearing a dependency proves the block
+ * is stale, not that the item is ready, and readiness is Codex's gate to open.
+ */
+
+const ALLOWED_SOURCES_FOR_BACKLOG = new Set(['BLOCKED_DEPENDENCY', 'BLOCKED_BY_FOUNDATION']);
+const ALLOWED_SOURCES_FOR_MERGED = new Set(['READY_FOR_CODEX', 'CODEX_PASS']);
+const SHA_40 = /^[0-9a-f]{40}$/;
+
+function mutation(item, from, to, rule, evidence) {
+  return { workItemId: item.work_item_id, from, to, rule, evidence };
+}
+
+function refusal(workItemId, reason, rule) {
+  return { workItemId, reason, rule };
+}
+
+/** Whether this evidence artifact is about this row. */
+function evidenceTargets(evidence, item) {
+  const id = item.work_item_id;
+  const title = String(evidence.title || '');
+  if (title.startsWith('[' + id + ']')) return true;
+  const rowPr = String(item.pr || '')
+    .trim()
+    .replace(/^#/, '');
+  const evPr = String(evidence.number === undefined ? '' : evidence.number)
+    .trim()
+    .replace(/^#/, '');
+  return Boolean(rowPr) && rowPr === evPr;
+}
+
+/**
+ * Whether one dependency is proven merged.
+ *
+ * "Proven" is deliberately narrow: present in the register, MERGED, carrying a
+ * full 40-character merge commit that exists in this clone and is reachable on
+ * mainRef, and reviewed to PASS. A short SHA or an unreachable one counts as
+ * unproven rather than resolved, because the whole point of the check is that a
+ * row may claim a merge that never landed here.
+ */
+function dependencyProven(depId, byId, probes) {
+  const dep = byId.get(depId);
+  if (!dep) return { ok: false, why: 'dependency ' + depId + ' is not in the register' };
+  if (dep.status !== TERMINAL_STATUS) {
+    return {
+      ok: false,
+      why: 'dependency ' + depId + ' is ' + (dep.status || '(none)') + ', not MERGED',
+    };
+  }
+  const sha = String(dep.merge_commit || '').trim();
+  if (!SHA_40.test(sha)) {
+    return { ok: false, why: 'dependency ' + depId + ' has no 40-character merge_commit' };
+  }
+  if (!probes.hasCommit(sha)) {
+    return {
+      ok: false,
+      why: 'dependency ' + depId + ' merge_commit ' + sha.slice(0, 8) + ' is not in this clone',
+    };
+  }
+  if (!probes.merged(sha)) {
+    return {
+      ok: false,
+      why:
+        'dependency ' + depId + ' merge_commit ' + sha.slice(0, 8) + ' is not reachable on mainRef',
+    };
+  }
+  if (String(dep.codex_verdict || '').trim() !== 'PASS') {
+    return { ok: false, why: 'dependency ' + depId + ' has no PASS verdict' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Whether a durable merge evidence artifact proves this row merged.
+ *
+ * Every clause here replaces a GitHub query the reconciler is not allowed to
+ * make at runtime, so the artifact has to carry what that query would have
+ * returned — and each field is checked against the row or against Git rather
+ * than trusted for being present.
+ */
+function verifyMergeEvidence(evidence, item, probes) {
+  const id = item.work_item_id;
+  if (!evidence || typeof evidence !== 'object') {
+    return { ok: false, why: 'no durable merge evidence provided' };
+  }
+
+  const rowPr = String(item.pr || '')
+    .trim()
+    .replace(/^#/, '');
+  const evPr = String(evidence.number === undefined ? '' : evidence.number)
+    .trim()
+    .replace(/^#/, '');
+  if (!evPr) return { ok: false, why: 'merge evidence has no PR number' };
+  if (rowPr && rowPr !== evPr) {
+    return {
+      ok: false,
+      why: 'merge evidence PR ' + evPr + ' does not match register PR ' + rowPr,
+    };
+  }
+
+  const title = String(evidence.title || '');
+  if (!title.startsWith('[' + id + ']')) {
+    return { ok: false, why: 'merge evidence title does not start with [' + id + ']' };
+  }
+
+  const head = String(evidence.headRefOid || '').trim();
+  if (!SHA_40.test(head)) {
+    return { ok: false, why: 'merge evidence headRefOid is not a 40-character SHA' };
+  }
+
+  const mergeSha = String((evidence.mergeCommit && evidence.mergeCommit.oid) || '').trim();
+  if (!SHA_40.test(mergeSha)) {
+    return { ok: false, why: 'merge evidence mergeCommit.oid is not a 40-character SHA' };
+  }
+  if (!probes.hasCommit(mergeSha)) {
+    return { ok: false, why: 'merge commit ' + mergeSha.slice(0, 8) + ' is not in this clone' };
+  }
+  if (!probes.merged(mergeSha)) {
+    return {
+      ok: false,
+      why: 'merge commit ' + mergeSha.slice(0, 8) + ' is not reachable on mainRef',
+    };
+  }
+
+  if (String(evidence.codexVerdict || '').trim() !== 'PASS') {
+    return { ok: false, why: 'exact-HEAD Codex verdict is not PASS' };
+  }
+  if (Number(evidence.unresolvedThreadsCount) !== 0) {
+    return { ok: false, why: 'merge evidence reports unresolved review threads' };
+  }
+  if (String(evidence.ciChecksStatus || '').trim() !== 'SUCCESS') {
+    return { ok: false, why: 'required CI checks are not SUCCESS on the reviewed head' };
+  }
+
+  const specPath = String(item.work_item_path || '').trim();
+  if (!specPath || !probes.hasFile(specPath)) {
+    return { ok: false, why: 'work_item_path does not exist on disk' };
+  }
+
+  return { ok: true, mergeSha, head };
+}
+
+/**
+ * What write-back would do, without doing any of it.
+ *
+ * Returned separately from the act of writing so --dry-run and --write run the
+ * identical decision path; a preview that reasons differently from the write it
+ * previews is worth less than no preview at all.
+ */
+function planReconciliation(items, options) {
+  const opts = options || {};
+  const cwd = opts.cwd || process.cwd();
+  const mainRef = opts.mainRef || 'origin/main';
+  const evidence = opts.mergeEvidence || null;
+
+  const probes = {
+    hasCommit: opts.commitExists || ((sha) => commitExists(sha, cwd)),
+    merged: opts.isAncestorOf || ((sha) => isAncestorOf(sha, mainRef, cwd)),
+    hasFile: opts.fileExists || ((p) => fileExists(p, cwd)),
+  };
+
+  const byId = new Map();
+  for (const item of items) {
+    if (item.work_item_id) byId.set(item.work_item_id, item);
+  }
+
+  const mutations = [];
+  const refusals = [];
+
+  for (const item of items) {
+    const id = item.work_item_id;
+    if (!id) continue;
+    const status = String(item.status || '').trim();
+
+    if (ALLOWED_SOURCES_FOR_BACKLOG.has(status)) {
+      const deps = parseDependencies(item.dependencies);
+      if (deps.length === 0) continue;
+      let blocked = null;
+      for (const dep of deps) {
+        const verdict = dependencyProven(dep, byId, probes);
+        if (!verdict.ok) {
+          blocked = verdict.why;
+          break;
+        }
+      }
+      if (blocked) continue;
+      mutations.push(
+        mutation(item, status, 'BACKLOG', 'AI-19-R03', {
+          dependencies: deps,
+          note: 'every declared dependency is MERGED with a reachable commit and a PASS verdict',
+        })
+      );
+      continue;
+    }
+
+    if (ALLOWED_SOURCES_FOR_MERGED.has(status)) {
+      if (!evidence) {
+        refusals.push(refusal(id, 'no durable merge evidence provided', 'AI-19-R04'));
+        continue;
+      }
+      if (!evidenceTargets(evidence, item)) continue;
+      const verdict = verifyMergeEvidence(evidence, item, probes);
+      if (!verdict.ok) {
+        refusals.push(refusal(id, verdict.why, 'AI-19-R04'));
+        continue;
+      }
+      mutations.push(
+        mutation(item, status, TERMINAL_STATUS, 'AI-19-R04', {
+          pr: String(evidence.number),
+          mergeCommit: verdict.mergeSha,
+          headRefOid: verdict.head,
+        })
+      );
+      continue;
+    }
+
+    // A row outside both allowed source sets is never moved. It is only worth
+    // saying so when evidence was aimed at it, because that is the case an
+    // operator can mistake for a bug: the evidence is valid, the row is simply
+    // not at a point in its lifecycle where MERGED is reachable without
+    // skipping the author, review and CI gates in between.
+    if (evidence && evidenceTargets(evidence, item)) {
+      refusals.push(
+        refusal(id, 'source status ' + status + ' is not an allowed transition source', 'AI-19-R02')
+      );
+    }
+  }
+
+  return { mutations, refusals };
+}
+
+/**
+ * RFC 4180 records, each keeping the exact bytes it arrived as.
+ *
+ * Keeping the raw text per record is what makes byte-for-byte fidelity cheap:
+ * an untouched row is written back as the very string that was read, so no
+ * quoting or line-ending decision of ours can perturb a row we did not mean to
+ * change. Only a mutated row is re-serialized.
+ */
+function parseCsvRecords(text) {
+  const records = [];
+  let field = '';
+  let fields = [];
+  let raw = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    raw += ch;
+
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          raw += text[i + 1];
+          i += 1;
+        } else inQuotes = false;
+      } else field += ch;
+      continue;
+    }
+
+    if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      fields.push(field);
+      field = '';
+    } else if (ch === '\r' || ch === '\n') {
+      if (ch === '\r' && text[i + 1] === '\n') {
+        raw += text[i + 1];
+        i += 1;
+      }
+      fields.push(field);
+      records.push({ raw, fields, terminated: true });
+      field = '';
+      fields = [];
+      raw = '';
+    } else field += ch;
+  }
+
+  if (raw.length > 0 || field.length > 0 || fields.length > 0) {
+    fields.push(field);
+    records.push({ raw, fields, terminated: false });
+  }
+
+  return records;
+}
+
+function serializeField(value) {
+  const s = String(value === undefined || value === null ? '' : value);
+  // The register quotes every field; matching that is what keeps a rewritten
+  // row visually identical to its neighbours in a diff.
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
+function serializeRecord(fields, eol) {
+  return fields.map(serializeField).join(',') + (eol || '');
+}
+
+/** The line ending a record used, so a rewrite does not convert the file. */
+function eolOf(record) {
+  const m = /(\r\n|\n|\r)$/.exec(record.raw);
+  return m ? m[1] : '';
+}
+
+/**
+ * Rewrite only the status cell of the named rows.
+ *
+ * Returns the new text plus the count actually changed, which the caller
+ * compares against the plan: a mutation that was planned but matched no row is
+ * a bug worth failing on, not a no-op to shrug at.
+ */
+function applyStatusMutations(text, mutations, options) {
+  const opts = options || {};
+  const idColumn = opts.idColumn === undefined ? 3 : opts.idColumn;
+  const statusColumn = opts.statusColumn === undefined ? 7 : opts.statusColumn;
+
+  const wanted = new Map();
+  for (const m of mutations) wanted.set(m.workItemId, m.to);
+
+  const records = parseCsvRecords(text);
+  let applied = 0;
+
+  const out = records
+    .map((record, index) => {
+      if (index === 0) return record.raw;
+      const id = record.fields[idColumn];
+      if (!wanted.has(id)) return record.raw;
+      const next = wanted.get(id);
+      if (record.fields[statusColumn] === next) return record.raw;
+      const fields = record.fields.slice();
+      fields[statusColumn] = next;
+      applied += 1;
+      return serializeRecord(fields, eolOf(record));
+    })
+    .join('');
+
+  return { text: out, applied };
+}
+
+module.exports = {
+  reconcileRegister,
+  parseDependencies,
+  findDuplicateIds,
+  planReconciliation,
+  verifyMergeEvidence,
+  dependencyProven,
+  evidenceTargets,
+  parseCsvRecords,
+  applyStatusMutations,
+  serializeRecord,
+  ALLOWED_SOURCES_FOR_BACKLOG,
+  ALLOWED_SOURCES_FOR_MERGED,
+};
