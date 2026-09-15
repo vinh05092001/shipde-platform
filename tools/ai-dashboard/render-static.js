@@ -111,7 +111,14 @@ function renderStaticDashboard(rootDir, options = {}) {
 
   html = html.replace('<script src="/client.js"></script>', clientInline);
 
-  fs.writeFileSync(outputHtmlPath, html, 'utf-8');
+  // Trailing whitespace is stripped before writing. The template indents its
+  // blocks, so interpolating an empty value leaves a line of spaces behind -
+  // invisible in the browser and invisible in review, but `git diff --check`
+  // rejects it, which failed the whitespace gate on a file nobody hand-edited.
+  // Fixing it here means every regeneration is clean, rather than each one
+  // needing the same manual pass.
+  const clean = html.replace(/[ 	]+$/gm, '');
+  fs.writeFileSync(outputHtmlPath, clean, 'utf-8');
   console.log(`[OK] Generated self-contained DASHBOARD.html (${html.length} bytes)`);
   return outputHtmlPath;
 }
