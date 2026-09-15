@@ -175,4 +175,7 @@ Also record:
 
 ## Residual limitations
 
+- **The static dashboard is a snapshot with no trigger.** `DASHBOARD.html` is regenerated only when someone runs `render-static.js`, so it goes stale the moment the register changes and nothing notices. It showed `TASK-AI-07` as `BLOCKED_DEPENDENCY` for hours after the reconciler had written `BACKLOG` - the one screen meant to show progress failing to show it. The live server at `http://127.0.0.1:3333` does not have this problem: it reads every source live and pushes over SSE, so the static file is an offline convenience, not the cockpit. Wiring regeneration to register write-back would remove the whole class of staleness and is not done here.
+- **`DASHBOARD.html` is no longer format-checked.** It is a generated artifact and `render-static.js` rewrites it wholesale, so hand formatting is undone on the next run; the file would sit permanently unformatted-after-generation and fail the gate on every regeneration. Ignoring it is correct for a generated file, but a generator change emitting malformed output would no longer be caught by the format gate.
+
 None. Any source that cannot be made authoritative in this Work Item must be represented as unavailable, with the limitation and owner recorded in the Pull Request rather than hidden behind mock data.
