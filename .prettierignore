@@ -30,3 +30,7 @@ docs/
 .github/PULL_REQUEST_TEMPLATE.md
 .github/workflows/product-spec-validation.yml
 .github/workflows/feature-contract-gate.yml
+# Generated artifact. render-static.js rewrites it wholesale, so any hand
+# formatting is undone on the next run and the file would sit permanently
+# unformatted-after-generation. It is checked in to be read, not edited.
+DASHBOARD.html
