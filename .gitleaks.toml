@@ -17,6 +17,29 @@ stopwords = [
   "REQ_REATTEMPT_88291042",
   "ghn_live_a1b2c3d4e5f6g7h8i9j0k1l2",
 ]
+# Two families of false positive, both of which blocked every Pull Request on
+# this branch while no real secret existed anywhere in the diff.
+#
+# The first is the redaction test's own fixtures. tools/ai-dashboard/test
+# deliberately contains sk-/ghp_/gho_ strings so it can prove the redactor
+# removes them; the scanner flagged the very test that exists to keep secrets
+# out. Only the obviously-counted 1234567890 fixture shape is exempted, so a
+# real key pasted into a test is still caught.
+#
+# The second is a field name, not a value. The delivery register's key_behavior
+# column matched because the word "key" precedes a quoted string. Anchoring to
+# the start of the line keeps the exemption to that column.
+regexTarget = "line"
+regexes = [
+  '''(sk-|ghp_|gho_|ghu_|github_pat_)1234567890''',
+  '''^\s*key_behavior:\s*['"]''',
+  # A third fixture, and this one has to be allowlisted rather than renamed.
+  # The literal was committed earlier on this branch, so the history scan still
+  # finds it even though the working tree no longer contains it — renaming
+  # cannot reach a commit that already exists. The string states outright that
+  # it is a length fixture, so exempting this exact text costs nothing.
+  '''a-very-long-secret-key-that-exceeds-32-characters''',
+]
 
 [[rules]]
 id = "shipde-carrier-live-token"

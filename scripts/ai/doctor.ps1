@@ -31,6 +31,12 @@ function Invoke-ShipDeBoundedProbe {
             $encodedCommand
         ) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden
 
+        # Touching Handle caches it on the object. Without this, Start-Process
+        # -PassThru hands back a process whose handle is released on exit, and
+        # ExitCode then reads as null rather than the real status -- so every
+        # probe compared `-ne 0` and reported failure no matter what happened.
+        $null = $process.Handle
+
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             # Stop the wrapper and every CLI process it spawned. Killing only
             # powershell.exe can leave a detached agent process running.
@@ -61,6 +67,12 @@ function Invoke-ShipDeBoundedProbe {
         } else {
             ""
         }
+        # WaitForExit(milliseconds) returns once the process signals, but does
+        # not complete the async exit processing that populates ExitCode. Without
+        # the parameterless call, ExitCode reads as null, `-ne 0` is true, and
+        # every probe reports failure however well the command actually ran.
+        $process.WaitForExit()
+
         return [PSCustomObject]@{
             ExitCode = $process.ExitCode
             TimedOut = $false
@@ -120,10 +132,191 @@ Write-Host "`n=== OPTIONAL/ALTERNATE CLIENTS ==="
 $agyCommand = Get-Command agy -ErrorAction SilentlyContinue
 Write-Host ("Antigravity CLI: {0}" -f $(if ($agyCommand) { "OK  $($agyCommand.Source)" } else { "NOT INSTALLED; Gemini CLI fallback remains available" }))
 
-$agentRouterSaved = -not [string]::IsNullOrWhiteSpace(
-    [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
-)
-Write-Host ("AgentRouter user credential: {0}" -f $(if ($agentRouterSaved) { "CONFIGURED" } else { "NOT CONFIGURED; Claude account authentication will be checked" }))
+$agentRouterKey = [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
+$agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
+
+# Presence is not configuration. A key that is set but rejected reports as
+# CONFIGURED under a presence check, so the dashboard and this report both
+# advertise a fallback that cannot authenticate -- and the operator finds out
+# only after the primary path has already failed. AI-44-R01.
+#
+# The probe runs the client that will actually carry the fallback rather than
+# a hand-built HTTP request. Two earlier attempts here were wrong in ways worth
+# recording: /v1/models answers 401 to a real key, a fabricated key and no key
+# alike, so it cannot tell a valid credential from an invalid one; and a direct
+# POST to /v1/messages does not reproduce the headers Claude Code sends, so its
+# 401 says nothing about whether the fallback works. Only the real client does.
+# The gateway reports "no available channel" in Chinese. The literal is built
+# from code points so this file stays pure ASCII: it carries no byte-order mark,
+# and a non-ASCII literal in an unmarked file is read as ANSI by PowerShell and
+# breaks the whole script. That happened once already.
+$noChannelCn = -join @(0x65E0, 0x53EF, 0x7528, 0x6E20, 0x9053 | ForEach-Object { [char]$_ })
+$agentRouterLive = $false
+$agentRouterDetail = "NOT CONFIGURED; Claude account authentication will be checked"
+
+# The probe costs one real model request through the gateway, so it uses the
+# cheapest model the gateway offers rather than an Opus one. That is not a
+# micro-optimisation: a handful of doctor runs on 2026-09-14, while verifying an
+# unrelated fix, took the account's budget pool from working to HTTP 402.
+#
+# Claude Code refuses a model it does not know, and deepseek-v4-flash is a
+# gateway id rather than an Anthropic one. A modelPicker row with behavesAs
+# maps it onto a model this client does know, which is the supported route for
+# exactly this case. The isolated config directory carries that row, so nothing
+# about the operator's own setup changes.
+#
+# If the mapping is ever rejected, the probe says so through the existing
+# "model catalog" branch rather than silently reporting a credential fault.
+#
+# So running the doctor repeatedly drains the operator's budget pool. That is
+# not hypothetical: on 2026-09-14 a handful of doctor runs while verifying an
+# unrelated fix took the pool from working to HTTP 402. The verdict is cached
+# and reused, so the doctor stays free to run as often as anyone likes.
+$probeModel = "deepseek-v4-flash"
+$probeBehavesAs = "claude-haiku-4-5"
+$agentRouterCachePath = Join-Path (Get-ShipDeTempDir) "shipde-agentrouter-probe.json"
+$agentRouterCacheMaxAgeMinutes = 15
+$agentRouterCached = $null
+if ($agentRouterSaved -and (Test-Path -LiteralPath $agentRouterCachePath -PathType Leaf)) {
+    try {
+        $entry = Get-Content -LiteralPath $agentRouterCachePath -Raw | ConvertFrom-Json
+        $observedAt = [DateTime]::Parse($entry.observedAt).ToUniversalTime()
+        $ageMinutes = ([DateTime]::UtcNow - $observedAt).TotalMinutes
+        # Bound to this exact key. A rotated credential must be re-probed, not
+        # answered from the previous one's verdict.
+        $keyHash = [BitConverter]::ToString(
+            [Security.Cryptography.SHA256]::Create().ComputeHash(
+                [Text.Encoding]::UTF8.GetBytes($agentRouterKey)
+            )
+        ).Replace("-", "").Substring(0, 16)
+        if ($ageMinutes -le $agentRouterCacheMaxAgeMinutes -and $entry.keyHash -eq $keyHash) {
+            $agentRouterCached = $entry
+        }
+    } catch {
+        # An unreadable cache is no cache. Probe again.
+        $agentRouterCached = $null
+    }
+}
+
+if ($agentRouterCached) {
+    $agentRouterLive = [bool]$agentRouterCached.live
+    $agentRouterDetail = "{0} [cached {1:N0} min ago]" -f `
+        $agentRouterCached.detail,
+        ([DateTime]::UtcNow - [DateTime]::Parse($agentRouterCached.observedAt).ToUniversalTime()).TotalMinutes
+    if (-not $agentRouterLive -and $agentRouterCached.failure) {
+        $failures.Add([string]$agentRouterCached.failure)
+    }
+} elseif ($agentRouterSaved) {
+    # An isolated config directory keeps the probe from touching the operator's
+    # own Claude Code login.
+    $probeDir = Join-Path ([IO.Path]::GetTempPath()) ("shipde-ar-" + [Guid]::NewGuid().ToString("N"))
+    $probeScript = Join-Path ([IO.Path]::GetTempPath()) ("shipde-ar-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+
+    # The key is handed over through the inherited environment, never through
+    # the command line. An argument is visible in the process table to every
+    # process on the machine and is captured by Sysmon/EDR command-line logging
+    # and by PowerShell transcription. The same change removes a second fault:
+    # a key containing a single quote used to break the generated quoting and
+    # was then reported as KEY PRESENT BUT REJECTED.
+    $probeBody = @(
+        '$env:ANTHROPIC_AUTH_TOKEN = $env:SHIPDE_AR_PROBE_TOKEN'
+        '$env:SHIPDE_AR_PROBE_TOKEN = $null'
+        '$env:ANTHROPIC_BASE_URL   = "https://agentrouter.org"'
+        '$env:ANTHROPIC_API_KEY    = $null'
+        '$env:ANTHROPIC_MODEL      = "' + $probeModel + '"'
+        '$env:CLAUDE_CONFIG_DIR    = $args[0]'
+        '& claude -p "Reply exactly: SHIPDE_AUTH_OK" --model ' + $probeModel + ' --output-format text --max-turns 1 2>&1'
+    ) -join [Environment]::NewLine
+
+    $agentRouterFailure = $null
+    try {
+        # The isolated config declares the gateway model through a modelPicker
+        # row. Claude Code refuses an id absent from its own catalog; behavesAs
+        # names a model it does know whose client-side handling applies. Without
+        # this the probe fails on the catalog rather than on the credential.
+        New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+        $probeSettings = [ordered]@{
+            modelPicker = [ordered]@{
+                options = @(
+                    [ordered]@{
+                        model     = $probeModel
+                        label     = "Ship De health probe"
+                        behavesAs = $probeBehavesAs
+                    }
+                )
+            }
+        } | ConvertTo-Json -Depth 6
+        Set-Content -Path (Join-Path $probeDir "settings.json") -Value $probeSettings -Encoding UTF8
+
+        Set-Content -Path $probeScript -Value $probeBody -Encoding UTF8
+        # Start-Process inherits this process's environment, so the child sees
+        # the token without it ever appearing in an argument list.
+        $env:SHIPDE_AR_PROBE_TOKEN = $agentRouterKey
+        $probe = Invoke-ShipDeBoundedProbe `
+            -CommandText ("& powershell -NoProfile -ExecutionPolicy Bypass -File '{0}' '{1}'" -f $probeScript, $probeDir) `
+            -TimeoutSeconds 90
+
+        $text = [string]$probe.Output
+        if ($probe.TimedOut) {
+            $agentRouterDetail = "CONFIGURED but unverified (probe timed out)"
+        } elseif ($text -match "SHIPDE_AUTH_OK") {
+            $agentRouterLive = $true
+            $agentRouterDetail = ("AUTHENTICATED via {0}" -f $probeModel)
+        } elseif ($text -match "401" -or $text -match "(?i)unauthor") {
+            $agentRouterDetail = "KEY PRESENT BUT REJECTED; the Claude and Codex fallback route is unavailable"
+            $agentRouterFailure = "AGENTROUTER_API_KEY is rejected by agentrouter.org; renew or remove it -- see TASK-AI-44"
+        } elseif ($text -match "402" -or $text -match "(?i)budget pool") {
+            # 402 arrives after the key has authenticated, so it is a spending
+            # state, not a credential fault. Rotating the key would not fix it
+            # and would cost the operator a working credential.
+            $agentRouterDetail = "AUTHENTICATED but the budget pool is exhausted (HTTP 402); top up or raise the pool limit on agentrouter.org"
+            $agentRouterFailure = "AgentRouter authenticates but its budget pool is exhausted; the Claude and Codex fallback route cannot carry a review until it is topped up"
+        } elseif ($text -match "503" -or $text -match $noChannelCn) {
+            # A 503 here means the key authenticated and the routing layer had
+            # no channel for that model. That is a supply or naming state, not
+            # a credential fault, and reporting it as one sends the operator to
+            # rotate a working key.
+            $agentRouterDetail = ("AUTHENTICATED but no channel for {0} right now (HTTP 503); check Model Status on agentrouter.org" -f $probeModel)
+        } elseif ($text -match "(?i)model catalog") {
+            $agentRouterDetail = "AUTHENTICATED but Claude Code does not recognise the probe model; map it with modelOverrides"
+        } else {
+            $agentRouterDetail = "CONFIGURED but unverified (unexpected probe output)"
+        }
+    } catch {
+        $agentRouterDetail = "CONFIGURED but unverified ($($_.Exception.Message))"
+    } finally {
+        # The token lives in this process's environment only for the duration
+        # of the probe; anything spawned afterwards must not inherit it.
+        $env:SHIPDE_AR_PROBE_TOKEN = $null
+        Remove-Item -LiteralPath $probeScript -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($agentRouterFailure) { $failures.Add($agentRouterFailure) }
+
+    # Record the verdict so the next run within the window spends nothing. Only
+    # the verdict is stored -- never the key. It is bound to a hash of the key so
+    # a rotated credential is re-probed rather than answered from the old one.
+    try {
+        $keyHash = [BitConverter]::ToString(
+            [Security.Cryptography.SHA256]::Create().ComputeHash(
+                [Text.Encoding]::UTF8.GetBytes($agentRouterKey)
+            )
+        ).Replace("-", "").Substring(0, 16)
+        [ordered]@{
+            observedAt = [DateTime]::UtcNow.ToString("o")
+            keyHash    = $keyHash
+            live       = $agentRouterLive
+            detail     = $agentRouterDetail
+            failure    = $agentRouterFailure
+        } | ConvertTo-Json | Set-Content -LiteralPath $agentRouterCachePath -Encoding UTF8
+    } catch {
+        # Failing to cache is not a health finding; the probe still ran.
+    }
+}
+Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)
+Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.org, no /v1 in the base URL)")
+Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) -- a different gateway despite the naming in control.ps1")
 
 Write-Host ""
 Write-Host "=== AGENT AUTHENTICATION ==="
@@ -137,6 +330,121 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
         Write-Host "Codex: AUTHENTICATED"
     }
 }
+
+
+Write-Host ""
+Write-Host "=== CODEX LAUNCH FLAG SURFACE (TASK-AI-16) ==="
+if (Get-Command codex -ErrorAction SilentlyContinue) {
+    # `ao doctor` reports the whole command line as one opaque failure and
+    # blames a CLI version change. Probing the overrides separately says which
+    # one is actually refused, which is the difference between a diagnosis and
+    # a guess.
+    #
+    # Only overrides whose value carries no embedded quotes are probed here.
+    # Windows PowerShell re-quotes an argument before handing it to a native
+    # process and a double quote does not survive that, so a hook override
+    # tested from this script would fail on the quoting rather than on the
+    # CLI -- a false failure, which is worse than no check at all. The hook
+    # schema is verified separately; see TASK-AI-16-FINDINGS.md.
+    $simple = [ordered]@{
+        "check_for_update_on_startup" = "check_for_update_on_startup=false"
+        "notice.hide_rate_limit_model_nudge" = "notice.hide_rate_limit_model_nudge=true"
+    }
+
+    $refused = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $simple.Keys) {
+        $probe = Invoke-ShipDeBoundedProbe -CommandText ("& codex features list -c {0}" -f $simple[$name]) -TimeoutSeconds 30
+        if ($probe.TimedOut -or $probe.ExitCode -ne 0) { $refused.Add($name) }
+    }
+
+    if ($refused.Count -eq 0) {
+        Write-Host "Codex simple overrides: ACCEPTED"
+    } else {
+        Write-Host ("Codex simple overrides REFUSED: {0}" -f ($refused -join ", "))
+        $failures.Add("Codex refused basic config overrides: $($refused -join ', ')")
+    }
+
+    # The projects override is the one that actually fails, and its failure mode
+    # is specific: backslashes in a Windows path are consumed as escapes, so the
+    # value arrives as a string where a map was expected. A forward-slash path
+    # parses. Both forms are probed so the report distinguishes "this CLI
+    # changed" from "the path separator is wrong".
+    $tempPath = $env:TEMP
+    if (-not $tempPath) { $tempPath = [System.IO.Path]::GetTempPath().TrimEnd('\') }
+    $q = [char]92 + [char]34
+    $backForm = 'projects={' + $q + $tempPath + $q + '={trust_level=' + $q + 'trusted' + $q + '}}'
+    $fwdForm = 'projects={' + $q + ($tempPath -replace '\\', '/') + $q + '={trust_level=' + $q + 'trusted' + $q + '}}'
+
+    # Single quotes in the generated command keep the backslash-quote pairs
+    # literal all the way to the CLI. A double-quoted wrapper would end the
+    # string at the first inner quote and the value would arrive truncated.
+    $backProbe = Invoke-ShipDeBoundedProbe -CommandText ("& codex features list -c {0}{1}{0}" -f "'", $backForm) -TimeoutSeconds 30
+    $fwdProbe = Invoke-ShipDeBoundedProbe -CommandText ("& codex features list -c {0}{1}{0}" -f "'", $fwdForm) -TimeoutSeconds 30
+
+    $backOk = -not ($backProbe.TimedOut -or $backProbe.ExitCode -ne 0)
+    $fwdOk = -not ($fwdProbe.TimedOut -or $fwdProbe.ExitCode -ne 0)
+
+    if ($backOk) {
+        Write-Host "Codex projects override: ACCEPTED with a backslash path"
+    } elseif ($fwdOk) {
+        Write-Host "Codex projects override: REFUSED with backslashes, ACCEPTED with forward slashes"
+        Write-Host "  Root cause: Windows path separators break config parsing, not a CLI version change."
+        Write-Host "  See docs/product-spec/work-items/TASK-AI-16-FINDINGS.md"
+        $failures.Add("Codex refuses the projects override when the path contains backslashes; AO must emit a forward-slash path")
+    } else {
+        Write-Host "Codex projects override: REFUSED in both path forms"
+        $failures.Add("Codex refuses the projects override regardless of path separator; the config surface changed")
+    }
+} else {
+    Write-Host "Codex: NOT INSTALLED; launch flag surface not checked"
+}
+
+Write-Host ""
+Write-Host "=== CODEX HOOK REGISTRATION (TASK-AI-16) ==="
+# AI-16-R03: a flag that parses is not a hook that fired. The only evidence
+# that a Codex session was observed is a row the daemon wrote, so the ledger
+# is read directly and compared against the harnesses already known to work.
+$codexActivity = Get-ShipDeAoHarnessActivity -Harness "codex"
+if (-not $codexActivity.Verifiable) {
+    # AI-16-R04: unreadable is "cannot verify", never a pass.
+    Write-Host ("Codex hook registration: CANNOT VERIFY ({0})" -f $codexActivity.Reason)
+    $failures.Add("Codex hook registration could not be verified: $($codexActivity.Reason)")
+} elseif ($codexActivity.RecentWithActivity -gt 0) {
+    Write-Host ("Codex hook registration: VERIFIED ({0} of {1} sessions recorded activity in the last {2}h, last {3})" -f `
+        $codexActivity.RecentWithActivity, $codexActivity.Sessions, $codexActivity.WindowHours, $codexActivity.LastActivityAt)
+} elseif ($codexActivity.WithActivity -gt 0) {
+    # Observed once, but not inside the window. Reporting VERIFIED here is how a
+    # health check goes on passing after the thing it checks has stopped: the
+    # all-time aggregate can never fall back to zero once any row exists.
+    Write-Host ("Codex hook registration: STALE (last activity {0}, none in the last {1}h)" -f `
+        $codexActivity.LastActivityAt, $codexActivity.WindowHours)
+    $failures.Add("Codex hook registration is stale: last activity $($codexActivity.LastActivityAt), none in the last $($codexActivity.WindowHours)h")
+} else {
+    # Naming the harnesses that do record activity separates "AO never writes
+    # activity here" from "AO writes it for everyone except Codex", which are
+    # different faults with different owners.
+    $observed = New-Object System.Collections.Generic.List[string]
+    foreach ($peer in @("claude-code", "agy")) {
+        $peerActivity = Get-ShipDeAoHarnessActivity -Harness $peer
+        if ($peerActivity.Verifiable -and $peerActivity.WithActivity -gt 0) {
+            $observed.Add(("{0} ({1})" -f $peer, $peerActivity.WithActivity))
+        }
+    }
+
+    if ($codexActivity.Sessions -eq 0) {
+        Write-Host "Codex hook registration: NOT OBSERVED (no Codex session exists in the AO ledger)"
+    } else {
+        Write-Host ("Codex hook registration: NOT OBSERVED ({0} Codex sessions exist, none recorded activity)" -f `
+            $codexActivity.Sessions)
+    }
+    if ($observed.Count -gt 0) {
+        Write-Host ("  Harnesses that do record activity: {0}" -f ($observed -join ", "))
+        Write-Host "  The fault is specific to the Codex launch surface, not to hook delivery."
+    }
+    Write-Host "  See docs/product-spec/work-items/TASK-AI-16-FINDINGS.md"
+    $failures.Add("No Codex session has recorded activity in the AO ledger; Codex reviews are running unobserved")
+}
+
 
 $googleCommand = $null
 $googleProbe = $null
@@ -190,7 +498,7 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
                 "AGENTROUTER_API_KEY",
                 "User"
             )
-            $env:ANTHROPIC_BASE_URL = "https://agentrouter.org/"
+            $env:ANTHROPIC_BASE_URL = "https://agentrouter.org"
             $env:ANTHROPIC_MODEL = "claude-opus-4-8"
             $env:CLAUDE_CONFIG_DIR = Join-Path $env:USERPROFILE ".claude-agentrouter-old"
             $claudeProbe = Invoke-ShipDeBoundedProbe -CommandText "& claude -p 'Reply exactly: SHIPDE_AUTH_OK' --model claude-opus-4-8 --output-format text --max-turns 1" -TimeoutSeconds 60
@@ -242,7 +550,10 @@ foreach ($entry in $paths.GetEnumerator()) {
         continue
     }
 
-    $branch = (& git -C $entry.Value branch --show-current).Trim()
+    # A detached HEAD yields no branch name at all, and calling .Trim() on that
+    # nothing aborts the doctor before it can print its summary.
+    $branch = (@(& git -C $entry.Value branch --show-current) -join "").Trim()
+    if ([string]::IsNullOrWhiteSpace($branch)) { $branch = "detached" }
     $status = @(& git -C $entry.Value status --porcelain)
     $state = if ($status.Count -eq 0) { "CLEAN" } else { "DIRTY" }
     Write-Host ("{0,-8} {1,-6} [{2}] {3}" -f $entry.Key, $state, $branch, $entry.Value)
@@ -373,6 +684,40 @@ if ($pathsOutside.Count -gt 0) {
     $failures.Add("Configured paths must remain inside approved AI workspace: $($pathsOutside -join '; ')")
 } else {
     Write-Host ("Workspace containment: VERIFIED (All worktrees reside inside {0})" -f $AiRoot)
+}
+
+# Writer claim guard hook check
+#
+# Scoped per worktree with -C, like every other git call in this file. An
+# unscoped git config reads whatever directory the operator ran the doctor
+# from, and the doctor is normally run from the shell against worktrees under
+# $AiRoot -- a container directory, not a repository. Outside a repository the
+# command fails, the result is empty, and this reported ACTION REQUIRED on
+# machines where the hook was installed correctly in every worktree.
+# The hook directory pattern, defined once so the loop reads cleanly.
+$script:HooksPathPattern = "(^|[\\/])\.githooks$"
+$hooksMissing = New-Object System.Collections.Generic.List[string]
+$hooksConfigured = New-Object System.Collections.Generic.List[string]
+foreach ($entry in $paths.GetEnumerator()) {
+    if (-not (Test-Path -LiteralPath (Join-Path $entry.Value ".git"))) { continue }
+    $hooksHere = (@(& git -C $entry.Value config core.hooksPath 2>$null) -join "").Trim()
+    # A configured path is not an installed hook. Checking only the path would
+    # report CONFIGURED for precisely the case getHookStatus was written to
+    # catch: the directory set, no pre-commit in it, commits running free.
+    $hookFileHere = if ($hooksHere) { Join-Path $entry.Value (Join-Path $hooksHere "pre-commit") } else { $null }
+    if ($hooksHere -and ($hooksHere -match $script:HooksPathPattern) -and (Test-Path -LiteralPath $hookFileHere)) {
+        $hooksConfigured.Add($entry.Key)
+    } else {
+        $hooksMissing.Add($entry.Key)
+    }
+}
+if ($hooksConfigured.Count -eq 0 -and $hooksMissing.Count -eq 0) {
+    Write-Host "Single-writer guard hook: CANNOT VERIFY (no git worktree under the approved AI root)"
+} elseif ($hooksMissing.Count -eq 0) {
+    Write-Host ("Single-writer guard hook: CONFIGURED in all {0} worktrees" -f $hooksConfigured.Count)
+} else {
+    Write-Host ("Single-writer guard hook: NOT CONFIGURED in {0} (run: pnpm guard:install there)" -f ($hooksMissing -join ", "))
+    $failures.Add("ai-guard core.hooksPath is not configured in: $($hooksMissing -join ', '); run pnpm guard:install there")
 }
 
 if ($failures.Count -gt 0) {

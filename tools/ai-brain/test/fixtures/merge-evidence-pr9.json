@@ -1,0 +1,11 @@
+{
+  "number": 9,
+  "title": "[TASK-AI-06] Unrecorded merge recorded from durable evidence",
+  "headRefOid": "f22c9b627864eed88901fbc63f65288103c841f0",
+  "mergeCommit": {
+    "oid": "9d101f4e5d9de9b880cc4311126ce8fe06de4206"
+  },
+  "codexVerdict": "PASS",
+  "unresolvedThreadsCount": 0,
+  "ciChecksStatus": "SUCCESS"
+}

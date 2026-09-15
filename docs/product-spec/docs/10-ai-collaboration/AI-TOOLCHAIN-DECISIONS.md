@@ -80,6 +80,100 @@ Free catalogs change. The health check reports missing candidates; never silentl
 
 Do not auto-upgrade 9Router, DSH, Codex CLI, Gemini/Antigravity CLI, Claude Code or an agent plugin during an active Work Item. `install-clis.ps1` installs only missing tools. Record current versions, upgrade in a dedicated low-risk task, run the doctor, execute a disposable test branch and verify prompt injection settings before promoting the version.
 
+## Codex CLI version dependency (TASK-AI-16)
+
+Observed on 2026-09-14: `codex-cli 0.154.0`, installed as `@openai/codex@0.154.0`.
+`tools/ecosystem-manifest.json` still pins `0.151.0`; reconciling that drift is a
+human decision under the upgrade rule above and is deliberately not made here.
+
+What this version accepts and refuses was established by probing each `-c`
+override separately (`docs/product-spec/work-items/TASK-AI-16-FINDINGS.md`):
+
+- All four hook overrides — `hooks.SessionStart`, `hooks.UserPromptSubmit`,
+  `hooks.PermissionRequest`, `hooks.Stop` — are accepted. No hook needs to be
+  dropped or reshaped.
+- The `projects` override is refused when the path contains Windows
+  backslashes: they are consumed as escape sequences, so the value reaches the
+  parser as a string where a map was expected. The identical override with
+  forward slashes is accepted. Doubling the backslashes does not help.
+
+The defect therefore sits in whatever builds Agent Orchestrator's command line,
+not in the hook configuration and not in a CLI flag-surface change. AO ships as
+a closed binary at `C:\Program Files\agent-orchestrator`, so the fix belongs
+upstream; what this repository owns is an accurate diagnosis.
+
+`doctor.ps1` carries two checks for this. The first probes the overrides
+individually and names the one refused. The second reads the AO ledger at
+`~/.ao/data/ao.db` and reports whether any Codex session has recorded activity,
+because a flag that parses is not a hook that fired — a launch command exiting
+zero proves neither. An unreadable ledger reports "cannot verify" and never a
+pass.
+
+## Ecosystem manifest reconciliation against reality (TASK-AI-17)
+
+On 2026-09-14, the automated manifest audit (`node tools/ai-brain/cli.js manifest`)
+evaluated all 37 declared adopted repositories in `tools/ecosystem-manifest.json`
+against reality on the machine and in the monorepo workspace. The audit found:
+
+- 37 repositories declared, 27 checkable, 19 present, 8 missing.
+- 7 ERRORS `QUALITY_GATE_MISSING` as first reported: `lighthouse-ci`,
+  `agent-scan`, `token-tracker`, `lefthook`, `gitleaks`, `axe-core`, `trivy`.
+  Six of those were genuinely absent. The seventh, `gitleaks`, was a false
+  positive and is treated separately below.
+- 1 WARNING `DECLARED_ADOPTED_BUT_ABSENT`: `storybook` — declared `ADOPTED`,
+  but absent from workspace dependencies.
+- Pin drift: `codex-cli` pinned at `0.151.0` while `0.154.0` is installed.
+
+Verdict: the manifest overclaimed reality. A quality gate believed to be running
+when absent is worse than one openly missing, because the pipeline and operators
+assume automated enforcement is active.
+
+### `gitleaks` was never absent, and the check was wrong
+
+The audit probes a `system` tool with `where` / `which` on the local host, which
+cannot see a tool the CI runner provides. `gitleaks` is installed at the pinned
+`8.24.0` by `.github/workflows/security-baseline.yml` and again by
+`.github/workflows/current-application.yml`, and enforced as a blocking gate on
+every Pull Request and push to `main`. It was running at the moment the audit
+called it missing.
+
+Downgrading it to `PENDING` would have documented a live blocking gate as
+absent — understatement of exactly the kind this reconciliation exists to
+prevent, running backwards. So the check was fixed instead of the record:
+`gitleaks` stays `ADOPTED` / `BLOCKING_GATE` / `default_enabled: true` and moves
+from `install_method: system` to `ci-provisioned`, a class the audit verifies
+against the workflow that installs it. `TASK-AI-35` therefore evaluates
+replacing a working gate with Betterleaks; it does not install a missing one.
+
+### The seven that were genuinely absent
+
+Under `AGENTS.md` and policy `AI-TOOL-10`, declared lifecycle states must match
+machine truth; an agent may never flip flags to make an audit pass. The 7
+genuinely absent entries — six failed gates plus `storybook` — are truthfully
+downgraded from `ADOPTED` to `PENDING` with `default_enabled: false` and
+`blocking_policy: "NON_BLOCKING"`, unblocking focused downstream Work Items:
+
+1. `lefthook` (`PENDING`): absent from devDependencies. Downstream Work Item
+   `TASK-AI-36` installs and configures Lefthook for pre-commit / pre-push hooks.
+2. `trivy` (`PENDING`): absent from system PATH. Downstream Work Item
+   `TASK-AI-37` integrates Trivy container and dependency vulnerability scanning.
+3. `axe-core` (`PENDING`): absent from devDependencies. Downstream Work Item
+   `TASK-AI-38` integrates automated accessibility auditing via Playwright.
+4. `lighthouse-ci` (`PENDING`): absent from devDependencies. Downstream Work Item
+   `TASK-AI-38` configures performance budgets on critical routes.
+5. `agent-scan` (`PENDING`): absent from python/pip tools. Downstream Work Item
+   `TASK-AI-39` establishes security scanning for agent skills, prompts, and MCPs.
+6. `token-tracker` (`PENDING`): absent from devDependencies; superseded by the
+   internal token usage adapter in `tools/ai-brain` and `tools/ai-dashboard`
+   (TASK-AI-15). Scheduled for formal manifest retirement in `TASK-AI-40`.
+7. `storybook` (`PENDING`): absent from workspace. Maintained as `PENDING`
+   until dedicated component documentation adoption in UI work items.
+
+Codex CLI version drift:
+The manifest entry for `codex-cli` now records `observed_version_or_commit: "0.154.0"`
+and a descriptive version drift note. The manifest pin remains `0.151.0` pending a
+deliberate human upgrade decision per the toolchain policy above.
+
 ## UI quality stack
 
 `TASK-FOUND-04` must make these reviewable in one PR:

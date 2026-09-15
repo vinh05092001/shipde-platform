@@ -246,9 +246,31 @@ export async function verifyFormatting(
   unformattedFiles: FormatCheckResult[];
   checkedFiles: string[];
 }> {
-  const filesToCheck = (targetFiles || getChangedFiles(baseRef, rootDir)).filter(
+  const candidates = (targetFiles || getChangedFiles(baseRef, rootDir)).filter(
     (f) => isPrettierSupported(f) && fs.existsSync(path.isAbsolute(f) ? f : path.join(rootDir, f))
   );
+
+  // .prettierignore is honoured, and it has to be.
+  //
+  // It excludes docs/ and scripts/ai/ on the stated grounds that those are
+  // governed by the Python and JSON-schema validators instead. `prettier
+  // --write` obeys that exclusion and will not reformat them. A check that
+  // ignored the file would therefore demand a shape the project's own
+  // formatter refuses to produce — an unsatisfiable gate, which is what it had
+  // become: a Pull Request touching a Work Item document failed here with no
+  // command available to fix it.
+  const ignorePath = path.join(rootDir, '.prettierignore');
+  const filesToCheck: string[] = [];
+  for (const f of candidates) {
+    const fullPath = path.isAbsolute(f) ? f : path.join(rootDir, f);
+    try {
+      const info = await prettier.getFileInfo(fullPath, { ignorePath });
+      if (info.ignored) continue;
+    } catch {
+      // If the ignore file cannot be read, check the file rather than skip it.
+    }
+    filesToCheck.push(f);
+  }
 
   const unformattedFiles: FormatCheckResult[] = [];
 
@@ -368,7 +390,7 @@ if (require.main === module) {
       }
 
       console.log(
-        `✅ Hoàn tất: Tất cả ${totalFiles} tệp tin thay đổi tuân thủ 100% chuẩn định dạng Prettier (bỏ qua mọi quy tắc .prettierignore).\n`
+        `✅ Hoàn tất: Tất cả ${totalFiles} tệp tin thay đổi tuân thủ 100% chuẩn định dạng Prettier (tôn trọng .prettierignore).\n`
       );
       process.exit(0);
     } catch (err: any) {

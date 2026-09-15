@@ -1,0 +1,636 @@
+'use strict';
+
+/**
+ * Ship Dễ — Register Reconciliation
+ *
+ * The delivery register is what the project believes. This module compares
+ * each belief against what the repository can prove, and reports every place
+ * the two disagree.
+ *
+ * The rules below are not style preferences. Each one exists because a status
+ * can be written by an agent that was mistaken, interrupted, or simply never
+ * updated, and because a row that claims more than it can prove is how a
+ * project convinces itself it has shipped something it has not.
+ *
+ * Severity is about consequence, not confidence:
+ *   error  — the register overstates reality; work may be skipped as done.
+ *   warn   — the register understates reality; work may be blocked for nothing.
+ *   info   — a record is incomplete but nothing is being misrepresented.
+ */
+
+const { commitExists, isAncestorOf, branchExists, fileExists, headSha } = require('./facts');
+
+const TERMINAL_STATUS = 'MERGED';
+const BLOCKED_PREFIX = 'BLOCKED';
+
+function finding(severity, code, item, message, evidence) {
+  return {
+    severity,
+    code,
+    workItemId: item.work_item_id || '(unknown)',
+    status: item.status || '(none)',
+    message,
+    evidence: evidence || null,
+  };
+}
+
+/**
+ * @param items  register rows, as produced by register-adapter
+ * @param deps   { cwd, mainRef } — injectable so tests need no real repository
+ */
+function reconcileRegister(items, deps) {
+  const opts = deps || {};
+  const cwd = opts.cwd || process.cwd();
+  const mainRef = opts.mainRef || 'origin/main';
+
+  // Injection points keep the rules testable without a fixture repository.
+  const hasCommit = opts.commitExists || ((sha) => commitExists(sha, cwd));
+  const merged = opts.isAncestorOf || ((sha) => isAncestorOf(sha, mainRef, cwd));
+  const hasBranch = opts.branchExists || ((b) => branchExists(b, cwd));
+  const hasFile = opts.fileExists || ((p) => fileExists(p, cwd));
+  const tipOf = opts.headSha || ((ref) => headSha(ref, cwd));
+
+  const byId = new Map();
+  for (const item of items) {
+    if (item.work_item_id) byId.set(item.work_item_id, item);
+  }
+
+  const findings = [];
+
+  for (const item of items) {
+    const status = (item.status || '').trim();
+    const id = item.work_item_id || '';
+
+    // --- Claims of completion must be provable --------------------------
+    if (status === TERMINAL_STATUS) {
+      const sha = (item.merge_commit || '').trim();
+
+      if (!sha) {
+        findings.push(
+          finding(
+            'error',
+            'MERGED_WITHOUT_COMMIT',
+            item,
+            'Ghi là MERGED nhưng không có merge_commit để kiểm chứng.'
+          )
+        );
+      } else if (!hasCommit(sha)) {
+        findings.push(
+          finding(
+            'error',
+            'MERGE_COMMIT_MISSING',
+            item,
+            'merge_commit không tồn tại trong repository.',
+            { sha }
+          )
+        );
+      } else if (!merged(sha)) {
+        // The commit is real but unreachable from main: it was never merged,
+        // or it was merged and later dropped.
+        findings.push(
+          finding(
+            'error',
+            'MERGE_COMMIT_NOT_REACHABLE',
+            item,
+            'merge_commit có thật nhưng không nằm trong lịch sử ' + mainRef + '.',
+            { sha, mainRef }
+          )
+        );
+      }
+
+      const verdict = (item.codex_verdict || '').trim();
+      if (verdict !== 'PASS') {
+        findings.push(
+          finding(
+            'error',
+            'MERGED_WITHOUT_PASS',
+            item,
+            'Ghi là MERGED nhưng codex_verdict là "' + (verdict || 'trống') + '", không phải PASS.'
+          )
+        );
+      }
+    }
+
+    // --- Blocks must still be true --------------------------------------
+    if (status.startsWith(BLOCKED_PREFIX)) {
+      const deps = parseDependencies(item.dependencies);
+      const known = deps.filter((d) => byId.has(d));
+      const unresolved = known.filter((d) => (byId.get(d).status || '') !== TERMINAL_STATUS);
+
+      if (known.length > 0 && unresolved.length === 0) {
+        // Understating progress is how a backlog stays frozen after the thing
+        // it was waiting for has landed.
+        findings.push(
+          finding(
+            'warn',
+            'BLOCK_NO_LONGER_TRUE',
+            item,
+            'Vẫn ghi là ' + status + ' nhưng mọi phụ thuộc đã MERGED.',
+            { dependencies: known }
+          )
+        );
+      }
+
+      const unknown = deps.filter((d) => !byId.has(d));
+      if (unknown.length > 0) {
+        findings.push(
+          finding(
+            'info',
+            'DEPENDENCY_UNKNOWN',
+            item,
+            'Phụ thuộc không có trong register: ' + unknown.join(', '),
+            { unknown }
+          )
+        );
+      }
+    }
+
+    // --- Work that landed but was never recorded ------------------------
+    // The opposite direction from an overstated MERGED, and the one that keeps
+    // a backlog frozen: the branch is already in main and nobody wrote it down.
+    if (status !== TERMINAL_STATUS && item.branch && hasBranch(item.branch)) {
+      const tip = tipOf(item.branch);
+      if (tip && merged(tip)) {
+        findings.push(
+          finding(
+            'warn',
+            'MERGE_NOT_RECORDED',
+            item,
+            'Nhánh đã nằm trọn trong ' + mainRef + ' nhưng trạng thái vẫn là ' + status + '.',
+            { branch: item.branch, tip }
+          )
+        );
+      }
+    }
+
+    // --- Records that point at nothing ----------------------------------
+    if (item.work_item_path && !hasFile(item.work_item_path)) {
+      const severity = status === TERMINAL_STATUS || status.startsWith('READY') ? 'error' : 'info';
+      findings.push(
+        finding(
+          severity,
+          'SPEC_MISSING',
+          item,
+          'work_item_path được khai nhưng file không tồn tại.',
+          { path: item.work_item_path }
+        )
+      );
+    }
+
+    if (item.branch && !hasBranch(item.branch)) {
+      // A merged Work Item's branch is normally deleted, so this is only a
+      // problem while the work is supposed to be live.
+      if (status !== TERMINAL_STATUS) {
+        findings.push(
+          finding(
+            'warn',
+            'BRANCH_MISSING',
+            item,
+            'Nhánh được khai nhưng không tồn tại cục bộ lẫn trên origin.',
+            { branch: item.branch }
+          )
+        );
+      }
+    }
+
+    if (item.pr && !item.branch) {
+      findings.push(
+        finding(
+          'info',
+          'PR_WITHOUT_BRANCH',
+          item,
+          'Có số PR nhưng không ghi nhánh, nên không truy ngược được.',
+          { pr: item.pr }
+        )
+      );
+    }
+
+    if (!id) {
+      findings.push(finding('error', 'ROW_WITHOUT_ID', item, 'Dòng không có work_item_id.'));
+    }
+  }
+
+  const duplicates = findDuplicateIds(items);
+  for (const dup of duplicates) {
+    findings.push({
+      severity: 'error',
+      code: 'DUPLICATE_WORK_ITEM_ID',
+      workItemId: dup.id,
+      status: '(nhiều)',
+      message: 'work_item_id xuất hiện ' + dup.count + ' lần; trạng thái không xác định được.',
+      evidence: { count: dup.count },
+    });
+  }
+
+  return {
+    checked: items.length,
+    findings,
+    summary: {
+      error: findings.filter((f) => f.severity === 'error').length,
+      warn: findings.filter((f) => f.severity === 'warn').length,
+      info: findings.filter((f) => f.severity === 'info').length,
+    },
+    // An overstated register is the dangerous direction: it lets finished-looking
+    // work be skipped. Understatement only wastes time.
+    trustworthy: findings.every((f) => f.severity !== 'error'),
+  };
+}
+
+function parseDependencies(raw) {
+  if (!raw) return [];
+  return (
+    String(raw)
+      .split(/[;,]/)
+      .map((part) => part.trim())
+      // Rows carry prose alongside ids ("see BACKLOG-DEPENDENCIES.md"); only
+      // things shaped like a Work Item id are treated as dependencies.
+      .filter((part) => /^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+$/.test(part))
+  );
+}
+
+function findDuplicateIds(items) {
+  const counts = new Map();
+  for (const item of items) {
+    const id = item.work_item_id;
+    if (!id) continue;
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  const out = [];
+  for (const [id, count] of counts) {
+    if (count > 1) out.push({ id, count });
+  }
+  return out;
+}
+
+/**
+ * Write-back — the part of this module that is allowed to change the register.
+ *
+ * Everything above only reports. What follows may mutate, and so it is written
+ * to be boring: it moves a row only along an edge the Allowed-Transition Table
+ * names, only when the repository itself proves the precondition, and it says
+ * out loud why it refused whenever it does not move one.
+ *
+ * Two refusals matter more than the successes. A row is never advanced to
+ * MERGED from branch ancestry, because a squash merge leaves the branch tip
+ * unreachable from main and an ancestry check would therefore answer a
+ * different question than the one asked (AI-TOOL-12). And a row is never
+ * advanced to READY_FOR_AUTHOR at all: clearing a dependency proves the block
+ * is stale, not that the item is ready, and readiness is Codex's gate to open.
+ */
+
+const ALLOWED_SOURCES_FOR_BACKLOG = new Set(['BLOCKED_DEPENDENCY', 'BLOCKED_BY_FOUNDATION']);
+const ALLOWED_SOURCES_FOR_MERGED = new Set(['READY_FOR_CODEX', 'CODEX_PASS']);
+const SHA_40 = /^[0-9a-f]{40}$/;
+
+function mutation(item, from, to, rule, evidence) {
+  return { workItemId: item.work_item_id, from, to, rule, evidence };
+}
+
+function refusal(workItemId, reason, rule) {
+  return { workItemId, reason, rule };
+}
+
+/** Whether this evidence artifact is about this row. */
+function evidenceTargets(evidence, item) {
+  const id = item.work_item_id;
+  const title = String(evidence.title || '');
+  if (title.startsWith('[' + id + ']')) return true;
+  const rowPr = String(item.pr || '')
+    .trim()
+    .replace(/^#/, '');
+  const evPr = String(evidence.number === undefined ? '' : evidence.number)
+    .trim()
+    .replace(/^#/, '');
+  return Boolean(rowPr) && rowPr === evPr;
+}
+
+/**
+ * Whether one dependency is proven merged.
+ *
+ * "Proven" is deliberately narrow: present in the register, MERGED, carrying a
+ * full 40-character merge commit that exists in this clone and is reachable on
+ * mainRef, and reviewed to PASS. A short SHA or an unreachable one counts as
+ * unproven rather than resolved, because the whole point of the check is that a
+ * row may claim a merge that never landed here.
+ */
+function dependencyProven(depId, byId, probes) {
+  const dep = byId.get(depId);
+  if (!dep) return { ok: false, why: 'dependency ' + depId + ' is not in the register' };
+  if (dep.status !== TERMINAL_STATUS) {
+    return {
+      ok: false,
+      why: 'dependency ' + depId + ' is ' + (dep.status || '(none)') + ', not MERGED',
+    };
+  }
+  const sha = String(dep.merge_commit || '').trim();
+  if (!SHA_40.test(sha)) {
+    return { ok: false, why: 'dependency ' + depId + ' has no 40-character merge_commit' };
+  }
+  if (!probes.hasCommit(sha)) {
+    return {
+      ok: false,
+      why: 'dependency ' + depId + ' merge_commit ' + sha.slice(0, 8) + ' is not in this clone',
+    };
+  }
+  if (!probes.merged(sha)) {
+    return {
+      ok: false,
+      why:
+        'dependency ' + depId + ' merge_commit ' + sha.slice(0, 8) + ' is not reachable on mainRef',
+    };
+  }
+  if (String(dep.codex_verdict || '').trim() !== 'PASS') {
+    return { ok: false, why: 'dependency ' + depId + ' has no PASS verdict' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Whether a durable merge evidence artifact proves this row merged.
+ *
+ * Every clause here replaces a GitHub query the reconciler is not allowed to
+ * make at runtime, so the artifact has to carry what that query would have
+ * returned — and each field is checked against the row or against Git rather
+ * than trusted for being present.
+ */
+function verifyMergeEvidence(evidence, item, probes) {
+  const id = item.work_item_id;
+  if (!evidence || typeof evidence !== 'object') {
+    return { ok: false, why: 'no durable merge evidence provided' };
+  }
+
+  const rowPr = String(item.pr || '')
+    .trim()
+    .replace(/^#/, '');
+  const evPr = String(evidence.number === undefined ? '' : evidence.number)
+    .trim()
+    .replace(/^#/, '');
+  if (!evPr) return { ok: false, why: 'merge evidence has no PR number' };
+  if (rowPr && rowPr !== evPr) {
+    return {
+      ok: false,
+      why: 'merge evidence PR ' + evPr + ' does not match register PR ' + rowPr,
+    };
+  }
+
+  const title = String(evidence.title || '');
+  if (!title.startsWith('[' + id + ']')) {
+    return { ok: false, why: 'merge evidence title does not start with [' + id + ']' };
+  }
+
+  const head = String(evidence.headRefOid || '').trim();
+  if (!SHA_40.test(head)) {
+    return { ok: false, why: 'merge evidence headRefOid is not a 40-character SHA' };
+  }
+
+  const mergeSha = String((evidence.mergeCommit && evidence.mergeCommit.oid) || '').trim();
+  if (!SHA_40.test(mergeSha)) {
+    return { ok: false, why: 'merge evidence mergeCommit.oid is not a 40-character SHA' };
+  }
+  if (!probes.hasCommit(mergeSha)) {
+    return { ok: false, why: 'merge commit ' + mergeSha.slice(0, 8) + ' is not in this clone' };
+  }
+  if (!probes.merged(mergeSha)) {
+    return {
+      ok: false,
+      why: 'merge commit ' + mergeSha.slice(0, 8) + ' is not reachable on mainRef',
+    };
+  }
+
+  if (String(evidence.codexVerdict || '').trim() !== 'PASS') {
+    return { ok: false, why: 'exact-HEAD Codex verdict is not PASS' };
+  }
+  if (Number(evidence.unresolvedThreadsCount) !== 0) {
+    return { ok: false, why: 'merge evidence reports unresolved review threads' };
+  }
+  if (String(evidence.ciChecksStatus || '').trim() !== 'SUCCESS') {
+    return { ok: false, why: 'required CI checks are not SUCCESS on the reviewed head' };
+  }
+
+  const specPath = String(item.work_item_path || '').trim();
+  if (!specPath || !probes.hasFile(specPath)) {
+    return { ok: false, why: 'work_item_path does not exist on disk' };
+  }
+
+  return { ok: true, mergeSha, head };
+}
+
+/**
+ * What write-back would do, without doing any of it.
+ *
+ * Returned separately from the act of writing so --dry-run and --write run the
+ * identical decision path; a preview that reasons differently from the write it
+ * previews is worth less than no preview at all.
+ */
+function planReconciliation(items, options) {
+  const opts = options || {};
+  const cwd = opts.cwd || process.cwd();
+  const mainRef = opts.mainRef || 'origin/main';
+  const evidence = opts.mergeEvidence || null;
+
+  const probes = {
+    hasCommit: opts.commitExists || ((sha) => commitExists(sha, cwd)),
+    merged: opts.isAncestorOf || ((sha) => isAncestorOf(sha, mainRef, cwd)),
+    hasFile: opts.fileExists || ((p) => fileExists(p, cwd)),
+  };
+
+  const byId = new Map();
+  for (const item of items) {
+    if (item.work_item_id) byId.set(item.work_item_id, item);
+  }
+
+  const mutations = [];
+  const refusals = [];
+
+  for (const item of items) {
+    const id = item.work_item_id;
+    if (!id) continue;
+    const status = String(item.status || '').trim();
+
+    if (ALLOWED_SOURCES_FOR_BACKLOG.has(status)) {
+      const deps = parseDependencies(item.dependencies);
+      if (deps.length === 0) continue;
+      let blocked = null;
+      for (const dep of deps) {
+        const verdict = dependencyProven(dep, byId, probes);
+        if (!verdict.ok) {
+          blocked = verdict.why;
+          break;
+        }
+      }
+      if (blocked) continue;
+      // The audit names the commits and verdicts that proved this, so the
+      // record can be checked later without re-deriving it from a register
+      // that may have moved on.
+      mutations.push(
+        mutation(item, status, 'BACKLOG', 'AI-19-R03', {
+          dependencies: deps,
+          dependencyCommits: deps.map((d) => (byId.get(d) || {}).merge_commit || null),
+          dependencyVerdicts: deps.map((d) => (byId.get(d) || {}).codex_verdict || null),
+          note: 'every declared dependency is MERGED with a reachable commit and a PASS verdict',
+        })
+      );
+      continue;
+    }
+
+    if (ALLOWED_SOURCES_FOR_MERGED.has(status)) {
+      if (!evidence) {
+        refusals.push(refusal(id, 'no durable merge evidence provided', 'AI-19-R04'));
+        continue;
+      }
+      if (!evidenceTargets(evidence, item)) continue;
+      const verdict = verifyMergeEvidence(evidence, item, probes);
+      if (!verdict.ok) {
+        refusals.push(refusal(id, verdict.why, 'AI-19-R04'));
+        continue;
+      }
+      mutations.push(
+        mutation(item, status, TERMINAL_STATUS, 'AI-19-R04', {
+          pr: String(evidence.number),
+          mergeCommit: verdict.mergeSha,
+          headRefOid: verdict.head,
+          codexVerdict: evidence.codexVerdict,
+          unresolvedThreadsCount: evidence.unresolvedThreadsCount,
+          ciChecksStatus: evidence.ciChecksStatus,
+        })
+      );
+      continue;
+    }
+
+    // A row outside both allowed source sets is never moved. It is only worth
+    // saying so when evidence was aimed at it, because that is the case an
+    // operator can mistake for a bug: the evidence is valid, the row is simply
+    // not at a point in its lifecycle where MERGED is reachable without
+    // skipping the author, review and CI gates in between.
+    if (evidence && evidenceTargets(evidence, item)) {
+      refusals.push(
+        refusal(id, 'source status ' + status + ' is not an allowed transition source', 'AI-19-R02')
+      );
+    }
+  }
+
+  return { mutations, refusals };
+}
+
+/**
+ * RFC 4180 records, each keeping the exact bytes it arrived as.
+ *
+ * Keeping the raw text per record is what makes byte-for-byte fidelity cheap:
+ * an untouched row is written back as the very string that was read, so no
+ * quoting or line-ending decision of ours can perturb a row we did not mean to
+ * change. Only a mutated row is re-serialized.
+ */
+function parseCsvRecords(text) {
+  const records = [];
+  let field = '';
+  let fields = [];
+  let raw = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    raw += ch;
+
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          raw += text[i + 1];
+          i += 1;
+        } else inQuotes = false;
+      } else field += ch;
+      continue;
+    }
+
+    if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      fields.push(field);
+      field = '';
+    } else if (ch === '\r' || ch === '\n') {
+      if (ch === '\r' && text[i + 1] === '\n') {
+        raw += text[i + 1];
+        i += 1;
+      }
+      fields.push(field);
+      records.push({ raw, fields, terminated: true });
+      field = '';
+      fields = [];
+      raw = '';
+    } else field += ch;
+  }
+
+  if (raw.length > 0 || field.length > 0 || fields.length > 0) {
+    fields.push(field);
+    records.push({ raw, fields, terminated: false });
+  }
+
+  return records;
+}
+
+function serializeField(value) {
+  const s = String(value === undefined || value === null ? '' : value);
+  // The register quotes every field; matching that is what keeps a rewritten
+  // row visually identical to its neighbours in a diff.
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
+function serializeRecord(fields, eol) {
+  return fields.map(serializeField).join(',') + (eol || '');
+}
+
+/** The line ending a record used, so a rewrite does not convert the file. */
+function eolOf(record) {
+  const m = /(\r\n|\n|\r)$/.exec(record.raw);
+  return m ? m[1] : '';
+}
+
+/**
+ * Rewrite only the status cell of the named rows.
+ *
+ * Returns the new text plus the count actually changed, which the caller
+ * compares against the plan: a mutation that was planned but matched no row is
+ * a bug worth failing on, not a no-op to shrug at.
+ */
+function applyStatusMutations(text, mutations, options) {
+  const opts = options || {};
+  const idColumn = opts.idColumn === undefined ? 3 : opts.idColumn;
+  const statusColumn = opts.statusColumn === undefined ? 7 : opts.statusColumn;
+
+  const wanted = new Map();
+  for (const m of mutations) wanted.set(m.workItemId, m.to);
+
+  const records = parseCsvRecords(text);
+  let applied = 0;
+
+  const out = records
+    .map((record, index) => {
+      if (index === 0) return record.raw;
+      const id = record.fields[idColumn];
+      if (!wanted.has(id)) return record.raw;
+      const next = wanted.get(id);
+      if (record.fields[statusColumn] === next) return record.raw;
+      const fields = record.fields.slice();
+      fields[statusColumn] = next;
+      applied += 1;
+      return serializeRecord(fields, eolOf(record));
+    })
+    .join('');
+
+  return { text: out, applied };
+}
+
+module.exports = {
+  reconcileRegister,
+  parseDependencies,
+  findDuplicateIds,
+  planReconciliation,
+  verifyMergeEvidence,
+  dependencyProven,
+  evidenceTargets,
+  parseCsvRecords,
+  applyStatusMutations,
+  serializeRecord,
+  ALLOWED_SOURCES_FOR_BACKLOG,
+  ALLOWED_SOURCES_FOR_MERGED,
+};
