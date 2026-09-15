@@ -18,6 +18,42 @@ export const Role = UserRole;
 export const CanonicalRole = UserRole;
 export type CanonicalRole = UserRole;
 
+// --- Canonical User Status ---
+export const UserStatus = {
+  PENDING_VERIFICATION: 'pending_verification',
+  INVITED: 'invited',
+  ACTIVE: 'active',
+  SUSPENDED: 'suspended',
+  DISABLED: 'disabled',
+} as const;
+
+export type UserStatus = (typeof UserStatus)[keyof typeof UserStatus];
+export const CanonicalUserStatus = UserStatus;
+export type CanonicalUserStatus = UserStatus;
+
+// --- Verification Channels ---
+export const VerificationChannel = {
+  EMAIL: 'email',
+  PHONE: 'phone',
+} as const;
+
+export type VerificationChannel = (typeof VerificationChannel)[keyof typeof VerificationChannel];
+
+// --- Verification Delivery Contracts ---
+export interface VerificationMessage {
+  channel: 'email' | 'phone';
+  recipient: string;
+  token?: string;
+  otp?: string;
+  sentAt?: Date;
+}
+
+export interface IVerificationDeliveryAdapter {
+  sendVerification(
+    message: Omit<VerificationMessage, 'sentAt'>
+  ): Promise<{ success: boolean; messageId: string }>;
+}
+
 // --- Prototype Navigation Personas ---
 export const PrototypePersona = {
   ...UserRole,

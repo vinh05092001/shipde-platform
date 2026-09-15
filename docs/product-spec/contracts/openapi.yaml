@@ -56,6 +56,102 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessResponse'
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Self-register new merchant and owner user (API-AUTH-REGISTER)
+      description: Creates a new merchant tenant and its initial owner user in a single transaction in pending-verification status.
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Registration initiated, pending verification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/verify-email:
+    post:
+      tags: [Auth]
+      summary: Verify user email using verification token (API-AUTH-VERIFY-EMAIL)
+      description: Verifies email address using single-use token and activates user if eligible.
+      operationId: verifyEmail
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyEmailRequest'
+      responses:
+        '200':
+          description: Email verified successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '410':
+          $ref: '#/components/responses/Error'
+  /auth/verify-phone:
+    post:
+      tags: [Auth]
+      summary: Verify user phone using OTP (API-AUTH-VERIFY-PHONE)
+      description: Verifies phone number using OTP code and activates user if eligible.
+      operationId: verifyPhone
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyPhoneRequest'
+      responses:
+        '200':
+          description: Phone verified successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '410':
+          $ref: '#/components/responses/Error'
+  /auth/verify/resend:
+    post:
+      tags: [Auth]
+      summary: Resend verification token or OTP (API-AUTH-RESEND-VERIFICATION)
+      description: Re-issues a verification token or phone OTP subject to independent rate limits.
+      operationId: resendVerification
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResendVerificationRequest'
+      responses:
+        '200':
+          description: Verification token or OTP resent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResendVerificationResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /auth/login:
     post:
       tags: [Auth]
@@ -382,6 +478,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Rate limit exceeded (RATE_LIMITED)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     CommandAccepted:
       description: Command accepted
       content:
@@ -389,6 +491,121 @@ components:
           schema:
             $ref: '#/components/schemas/CommandResponse'
   schemas:
+    RegisterRequest:
+      type: object
+      required: [merchant_name, full_name, password, terms_accepted, terms_version]
+      properties:
+        merchant_name:
+          type: string
+          minLength: 2
+          maxLength: 100
+        full_name:
+          type: string
+          minLength: 2
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        password:
+          type: string
+          format: password
+          minLength: 8
+        terms_accepted:
+          type: boolean
+        terms_version:
+          type: string
+    RegistrationResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [user_id, merchant_id, status]
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            merchant_id:
+              type: string
+              format: uuid
+            status:
+              type: string
+              enum: [PENDING_VERIFICATION, ACTIVE]
+            email:
+              type: string
+            phone:
+              type: string
+            message:
+              type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    VerifyEmailRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+    VerifyPhoneRequest:
+      type: object
+      required: [phone, otp]
+      properties:
+        phone:
+          type: string
+        otp:
+          type: string
+    VerifyResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [user_id, merchant_id, status, channel, verified]
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            merchant_id:
+              type: string
+              format: uuid
+            status:
+              type: string
+              enum: [PENDING_VERIFICATION, ACTIVE]
+            channel:
+              type: string
+              enum: [email, phone]
+            verified:
+              type: boolean
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ResendVerificationRequest:
+      type: object
+      required: [identifier, channel]
+      properties:
+        identifier:
+          type: string
+        channel:
+          type: string
+          enum: [email, phone]
+    ResendVerificationResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [status, channel]
+          properties:
+            status:
+              type: string
+              enum: [SENT, RATE_LIMITED]
+            channel:
+              type: string
+              enum: [email, phone]
+            cooldown_seconds:
+              type: integer
+        meta:
+          $ref: '#/components/schemas/Meta'
     LoginRequest:
       type: object
       required: [identifier, password]
