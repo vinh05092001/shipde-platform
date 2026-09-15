@@ -265,6 +265,22 @@ function reconcileCommand(args) {
     process.exit(0);
   }
 
+  // The plan and the write must agree. If a row named in the plan no longer
+  // matches - the register moved between planning and applying, or an id stopped
+  // resolving - then part of the decision silently did not happen, and reporting
+  // the smaller number as success would record a reconciliation that was never
+  // performed. Refuse before writing anything.
+  if (applied.applied !== plan.mutations.length) {
+    console.error(
+      'Write-back refused: planned ' +
+        plan.mutations.length +
+        ' mutation(s) but ' +
+        applied.applied +
+        ' matched a row. The register changed between planning and applying.'
+    );
+    process.exit(1);
+  }
+
   if (applied.applied === 0) {
     console.log('  Register unchanged: 0 mutations applied');
     writeAudit(args, rootDir, csvPath, preHash, preHash, before, plan, mainRef);
