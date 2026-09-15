@@ -459,9 +459,14 @@ function planReconciliation(items, options) {
         }
       }
       if (blocked) continue;
+      // The audit names the commits and verdicts that proved this, so the
+      // record can be checked later without re-deriving it from a register
+      // that may have moved on.
       mutations.push(
         mutation(item, status, 'BACKLOG', 'AI-19-R03', {
           dependencies: deps,
+          dependencyCommits: deps.map((d) => (byId.get(d) || {}).merge_commit || null),
+          dependencyVerdicts: deps.map((d) => (byId.get(d) || {}).codex_verdict || null),
           note: 'every declared dependency is MERGED with a reachable commit and a PASS verdict',
         })
       );
@@ -484,6 +489,9 @@ function planReconciliation(items, options) {
           pr: String(evidence.number),
           mergeCommit: verdict.mergeSha,
           headRefOid: verdict.head,
+          codexVerdict: evidence.codexVerdict,
+          unresolvedThreadsCount: evidence.unresolvedThreadsCount,
+          ciChecksStatus: evidence.ciChecksStatus,
         })
       );
       continue;

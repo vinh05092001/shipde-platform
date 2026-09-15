@@ -93,7 +93,13 @@ function sha256(buffer) {
  * workspace, and the main branch is protected wherever it is checked out.
  */
 function isProtectedCheckout(rootDir, branch) {
-  if (PROTECTED_BRANCHES.has(String(branch || '').trim())) return true;
+  // currentBranch may answer with a fully qualified ref depending on how the
+  // checkout was made; comparing the raw string would let refs/heads/main slip
+  // past a guard that is looking for main.
+  const named = String(branch || '')
+    .trim()
+    .replace(/^refs\/heads\//, '');
+  if (PROTECTED_BRANCHES.has(named)) return true;
   const base = path.basename(path.resolve(rootDir));
   return base === PROTECTED_WORKTREE;
 }
@@ -122,6 +128,27 @@ function revertCommand(auditFile) {
   const target = audit.register_path;
   if (!target || !audit.pre_content_base64 || !audit.pre_hash_sha256) {
     console.error('Audit artifact thiếu register_path, pre_content_base64 hoặc pre_hash_sha256.');
+    process.exit(1);
+  }
+
+  if (!fs.existsSync(target)) {
+    console.error('Không tìm thấy register để rollback: ' + target);
+    process.exit(1);
+  }
+
+  // The register must still be where this audit left it. If something changed
+  // it since, restoring the pre-write bytes would throw that change away, and
+  // an operator asking to undo one run does not mean "discard everything after
+  // it" — so this refuses and lets them look rather than deciding for them.
+  const currentHash = sha256(fs.readFileSync(target));
+  if (audit.post_hash_sha256 && currentHash !== audit.post_hash_sha256) {
+    console.error(
+      'Rollback refused: register is at ' +
+        currentHash.slice(0, 12) +
+        ', not the ' +
+        String(audit.post_hash_sha256).slice(0, 12) +
+        ' this audit wrote. Something changed it since.'
+    );
     process.exit(1);
   }
 
