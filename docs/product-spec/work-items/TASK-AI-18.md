@@ -11,7 +11,7 @@
 | Dependencies | `none` |
 | Assigned author | `CLAUDE` |
 | Risk | `HIGH` |
-| Allowed paths | `tools/ai-brain/accounts.js`, `tools/ai-dashboard/usage-adapter.js`, `tools/ai-guard/cli.js`, `tools/ai-guard/secret-surface.js`, `tools/ai-guard/test/secret-surface.test.js`, `scripts/ai/doctor.ps1`, `docs/product-spec/work-items/TASK-AI-18.md`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
+| Allowed paths | `tools/ai-brain/accounts.js`, `tools/ai-dashboard/usage-adapter.js`, `tools/ai-guard/cli.js`, `tools/ai-guard/secret-surface.js`, `tools/ai-guard/test/secret-surface.test.js`, `tools/ai-guard/test/fixtures/`, `scripts/ai/doctor.ps1`, `docs/product-spec/work-items/TASK-AI-18.md`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-18-token-encryption` |
 | Pull Request | `pending` |
@@ -65,6 +65,28 @@ repository already has.
   `~/.shipde/accounts.secrets.enc`.
 - 9Router remains third-party. Nothing in scope modifies its schema, its files,
   or how it stores what it stores.
+- Measured on `2026-09-15`, because the acceptance matrix depends on each one:
+  - The shell is Windows PowerShell `5.1` (`powershell.exe`). `pwsh` is absent
+    (`ENOENT`), so no row may invoke it, and no row may use `&&`, which
+    PowerShell 5.1 does not support.
+  - One command in the review harness is bounded at `30` seconds. `pnpm
+    security:secrets` cannot be asserted here because `gitleaks` is
+    `ci-provisioned` in `tools/ecosystem-manifest.json` and absent from `PATH`.
+    `scripts/verify-secrets.ts` falls back to `%TEMP%\gitleaks\gitleaks.exe`,
+    so a local run scans when a scratch copy happens to be there and exits `2`
+    operationally when it is not — measured both ways on `2026-09-15`. A row
+    whose outcome turns on the contents of a temp directory measures the
+    workstation, not this Work Item. CI remains the owner of that gate.
+  - `node:sqlite` resolves (`Node v24.15.0`; root `package.json` requires
+    `>=24.0.0`), so a synthetic store fixture can be built in `os.tmpdir()`
+    without a new dependency.
+  - `.gitleaks.toml` hashes to `232e56d960dc7c86c417edba436cb2f89621c58d56dd7e91705edfcced3ef859`
+    (SHA-256). `AC-AI-18-15` pins that digest, so any widening of the secret
+    gate is a failing row rather than a silent edit.
+  - `scripts/verify-formatting.ts` runs Prettier over files changed against a
+    base ref and does not exclude `tools/`, so every `.ts` fixture added under
+    `tools/ai-guard/test/fixtures/` must itself be Prettier-clean or
+    `pnpm format:check` fails for a reason unrelated to this Work Item.
 
 ## Author boundary
 
@@ -89,6 +111,31 @@ database, and it may not alter the delivery register schema or any status.
   a store it does not own.
 - Author `tools/ai-guard/test/secret-surface.test.js` covering each rule with
   fixture source files, so the suite needs no real credential store.
+- Commit the source fixtures the guard is judged against under
+  `tools/ai-guard/test/fixtures/`, exactly `6` directories: `forbidden-api-keys-key`,
+  `forbidden-provider-connections-data`, `forbidden-wildcard-select`,
+  `safe-projections`, `unparsable-source`, `value-must-not-leak`. Each carries a
+  file named `reader.ts`, and each offending statement sits on line `3`, so a
+  violation's reported line number is deterministic rather than incidental.
+- Freeze this CLI surface in `tools/ai-guard/cli.js`, because every acceptance
+  row depends on it:
+  - `node tools/ai-guard/cli.js secret-surface [--root <dir>]` scans `<dir>`
+    (default: the repository root) and exits `0`, `1` or `2`.
+  - `node tools/ai-guard/cli.js check [--secret-surface-root <dir>]` is the
+    command the installed pre-commit hook already runs, so `check` also runs the
+    scan. `--secret-surface-root` exists so the integration can be proved against
+    a fixture without editing tracked source, in the same spirit as
+    `--allow-fixture-write` in `TASK-AI-19`.
+  - Exactly `3` output lines exist. Clean prints `SECRET_SURFACE_CLEAN`, then
+    `files scanned: <n>`, exit `0`. A violation prints nothing but one
+    `SECRET_SURFACE_VIOLATION: <file>:<line> <column>` line per violation, exit
+    `1`, where `<column>` is `apiKeys.key`, `providerConnections.data`, or
+    `SELECT * on apiKeys` / `SELECT * on providerConnections` for a wildcard. A
+    file the scanner cannot read prints `SECRET_SURFACE_UNREADABLE: <file>`, exit
+    `2`. No line in any state carries a value out of any row.
+- Exclude `tools/ai-guard/test/fixtures/` from the default repository scan, and
+  name that exclusion explicitly in the source. Without it the guard's own
+  negative fixtures are violations and `AC-AI-18-01` can never be green.
 
 ## Out of scope
 
@@ -116,16 +163,27 @@ database, and it may not alter the delivery register schema or any status.
 | `AI-18-R08` | **A test fixture is never a real credential.** Test files use synthetic values that cannot authenticate anywhere. The existing `.gitleaks.toml` fixture allowlists are the precedent, and the guard's own tests must not require widening them. |
 | `AI-18-R09` | **The guard runs where it can block.** `secret-surface` is invoked by `tools/ai-guard/cli.js` so the existing pre-commit hook can reach it. A check that only runs when someone remembers is not a control. |
 | `AI-18-R10` | **Operator scripts are in scope for the rule even when out of scope for the scan.** The rule binds any code that reads the store, including ad-hoc scripts outside the repository. The scan covers what it can see; the documentation states plainly that it cannot see everything, so the rule is not mistaken for full coverage. |
+| `AI-18-R11` | **The fixture directory is excluded by name, not by pattern.** The default scan skips exactly `tools/ai-guard/test/fixtures/`. A broad skip such as `**/test/**` would also blind the guard to a forbidden read written into `tools/ai-guard/test/secret-surface.test.js` itself, which is the more likely place for one to appear. |
+| `AI-18-R12` | **One violation is one line, and a clean scan is two.** Violations print one `SECRET_SURFACE_VIOLATION:` line each and nothing else; a clean scan prints `SECRET_SURFACE_CLEAN` and then a file count. Keeping the clean-line count off the first line is what lets a row assert an exact string instead of a string with a number in it. |
+| `AI-18-R13` | **The secret gate is pinned, not trusted.** `.gitleaks.toml` is not edited and its SHA-256 is asserted. Adding an allowlist entry so a new fixture passes the scanner is the specific weakening this rule forbids; a fixture that needs one is the wrong fixture. |
 
 ## UI states
 
-Not applicable as a screen. Operator-visible output is confined to two places:
+Not applicable as a screen. Operator-visible output is confined to three places:
 
-- **`ai-guard secret-surface`** — reports either `SECRET_SURFACE_CLEAN` with the
-  number of files scanned, or one line per violation naming file, line and
-  column, and exits non-zero.
+- **`ai-guard secret-surface`** — prints one of 3 frozen states. Clean:
+  `SECRET_SURFACE_CLEAN`, then `files scanned: <n>`, exit `0`. Violation: one
+  `SECRET_SURFACE_VIOLATION: <file>:<line> <column>` line and nothing else, exit
+  `1`. Unreadable file: `SECRET_SURFACE_UNREADABLE: <file>`, exit `2`. Every
+  state names a file, a line and a column; no state names a value.
 - **`doctor.ps1`** — a section stating the plaintext row counts in the
   third-party store and that Ship Dễ does not own it.
+- **`pre-commit`** — the hook already runs `node tools/ai-guard/cli.js check`.
+  With the scan wired into `check`, a commit whose staged source reads a
+  credential column is refused by the same command that refuses a concurrent
+  writer, and a clean commit passes with `SECRET_SURFACE_CLEAN` on stdout. The
+  writer-claim failure text is unchanged, so a blocked commit still says which
+  session holds the branch and how to release it.
 
 ## API, event and data impact
 
@@ -139,51 +197,108 @@ Not applicable as a screen. Operator-visible output is confined to two places:
 **Evidence boundary.** Every row runs the real guard against fixture source
 files. No row is satisfied by citing this document, and no row reimplements the
 scan inline — a row that rebuilt the column matching would pass with the guard
-absent. **No row reads the credential store or prints any value.**
+absent. Every row also names the guard's own command, its exit code, one exact
+line it must print, and the file that line comes from; a row that asserted a
+return code alone is not admissible either, because that is the same claim with
+the guard removed. **No row reads the credential store and no row prints any
+value.**
 
 | AC/Test ID | Scenario | Exact Command | Exit Code | Expected Output String | Output Source / Artifact |
 |---|---|---|---|---|---|
-| `AC-AI-18-01` | Current Ship Dễ source is clean, so the rule starts from a true baseline | `node tools/ai-guard/cli.js secret-surface` | `0` | `SECRET_SURFACE_CLEAN` | command stdout |
-| `AC-AI-18-02` | Negative proof: a direct read of `apiKeys.key` is caught | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: a select of apiKeys.key is reported with file and line` | TAP output |
-| `AC-AI-18-03` | Negative proof: a read of `providerConnections.data` is caught | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: a select of providerConnections.data is reported` | TAP output |
-| `AC-AI-18-04` | Negative proof: `SELECT *` on a credential table is caught even though no column is named | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: a wildcard select on a credential table is reported` | TAP output |
-| `AC-AI-18-05` | The existing usage adapter is not a false positive | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: selecting provider, name, isActive, priority is clean` | TAP output |
-| `AC-AI-18-06` | The guard never emits a credential value | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: a violation report contains no value from the row` | TAP output |
-| `AC-AI-18-07` | The guard fails closed on an unreadable file | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: an unreadable file reports failure, never clean` | TAP output |
-| `AC-AI-18-08` | The encrypted store keeps key and ciphertext at separate paths | `node -e "const a=require('./tools/ai-brain/accounts');if(a.KEY_FILE===a.SECRETS_FILE){console.error('KEY_BESIDE_CIPHERTEXT');process.exit(1)}console.log('KEY_AND_CIPHERTEXT_SEPARATE')"` | `0` | `KEY_AND_CIPHERTEXT_SEPARATE` | `tools/ai-brain/accounts.js` |
-| `AC-AI-18-09` | A round trip through the encrypted store returns the value and stores no plaintext | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: setSecret then getSecret round-trips without plaintext on disk` | TAP output |
-| `AC-AI-18-10` | Doctor counts the third-party exposure without quoting it | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: the report carries counts and no fragment of any value` | TAP output |
-| `AC-AI-18-11` | Negative proof that the TAP rows above are not vacuous | `node -e "const{spawnSync}=require('child_process');const p='THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ';const f='tools/ai-guard/test/secret-surface.test.js';const r=spawnSync(process.execPath,['--test','--test-reporter=tap','--test-name-pattern='+p,f],{encoding:'utf8'});const n=r.stdout.split('\n').filter(l=>l.trim()==='# Subtest: '+p).length;console.log(n>0?'MATCHED_TESTS='+n:'VACUOUS_PATTERN_REJECTED: 0 tests matched '+p);process.exit(n>0?0:1)"` | `1` | `VACUOUS_PATTERN_REJECTED: 0 tests matched THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ` | command stdout |
-| `AC-AI-18-12` | The guard is reachable from the CLI the hook already calls | `node tools/ai-guard/cli.js --help` | `0` | `secret-surface` | command stdout |
-| `AC-AI-18-13` | The new suite is green | `node --test tools/ai-guard/test/secret-surface.test.js` | `0` | `fail 0` | test runner stdout |
-| `AC-AI-18-14` | The repository secret scan is unbroken | `pnpm security:secrets` | `0` | `0 phát hiện` | command stdout |
+| `AC-AI-18-01` | The real Ship Dễ source tree is clean with the new fixtures present, so the rule starts from a true baseline | `node tools/ai-guard/cli.js secret-surface` | `0` | `SECRET_SURFACE_CLEAN` | `tools/ai-guard/secret-surface.js` scanning the repository root; command stdout |
+| `AC-AI-18-02` | **Negative proof, must fail:** a direct read of `apiKeys.key` is reported with file and line | `node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/forbidden-api-keys-key` | `1` | `SECRET_SURFACE_VIOLATION: reader.ts:3 apiKeys.key` | `tools/ai-guard/test/fixtures/forbidden-api-keys-key/reader.ts`; command stdout |
+| `AC-AI-18-03` | **Negative proof, must fail:** a direct read of `providerConnections.data` is reported with file and line | `node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/forbidden-provider-connections-data` | `1` | `SECRET_SURFACE_VIOLATION: reader.ts:3 providerConnections.data` | `tools/ai-guard/test/fixtures/forbidden-provider-connections-data/reader.ts`; command stdout |
+| `AC-AI-18-04` | **Negative proof, must fail:** `SELECT *` against a credential table is caught although no column is named | `node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/forbidden-wildcard-select` | `1` | `SECRET_SURFACE_VIOLATION: reader.ts:3 SELECT * on apiKeys` | `tools/ai-guard/test/fixtures/forbidden-wildcard-select/reader.ts`; command stdout |
+| `AC-AI-18-05` | The projection the existing usage adapter uses is not a false positive, so the guard does not block real work | `node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/safe-projections` | `0` | `SECRET_SURFACE_CLEAN` | `tools/ai-guard/test/fixtures/safe-projections/reader.ts`; command stdout |
+| `AC-AI-18-06` | **Negative proof, must fail closed:** a file the scanner cannot read is reported neither as clean nor as a violation | `node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/unparsable-source` | `2` | `SECRET_SURFACE_UNREADABLE: reader.ts` | `tools/ai-guard/test/fixtures/unparsable-source/reader.ts`; command stdout |
+| `AC-AI-18-07` | **Negative proof, must fail, and no value may leave:** the fixture reads `apiKeys.key` on line 3 and carries the synthetic gateway-key shape the existing `.gitleaks.toml` allowlist already exempts on line 4, so one exit-`1` run proves the shape is present in the file and absent from the report | `node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/value-must-not-leak` | `1` | `SECRET_SURFACE_VIOLATION: reader.ts:3 apiKeys.key` — the whole of stdout, which by construction cannot contain anything from line 4 | `tools/ai-guard/test/fixtures/value-must-not-leak/reader.ts`; command stdout |
+| `AC-AI-18-08` | The hook's own path is clean on this repository, so the scan does not block normal commits | `node tools/ai-guard/cli.js check` | `0` | `SECRET_SURFACE_CLEAN` | `tools/ai-guard/cli.js` `check` branch; command stdout |
+| `AC-AI-18-09` | **Negative proof, must fail:** the same command that refuses a concurrent writer also refuses a forbidden read | `node tools/ai-guard/cli.js check --secret-surface-root tools/ai-guard/test/fixtures/forbidden-api-keys-key` | `1` | `SECRET_SURFACE_VIOLATION: reader.ts:3 apiKeys.key` | `tools/ai-guard/cli.js`; command stdout |
+| `AC-AI-18-10` | The encrypted store keeps key and ciphertext at separate paths | `node -e "const a=require('./tools/ai-brain/accounts');if(a.KEY_FILE===a.SECRETS_FILE){console.error('KEY_BESIDE_CIPHERTEXT');process.exit(1)}console.log('KEY_AND_CIPHERTEXT_SEPARATE')"` | `0` | `KEY_AND_CIPHERTEXT_SEPARATE` | `tools/ai-brain/accounts.js` |
+| `AC-AI-18-11` | The new suite is green | `node --test tools/ai-guard/test/secret-surface.test.js` | `0` | `ℹ fail 0` | `tools/ai-guard/test/secret-surface.test.js`; test runner stdout |
+| `AC-AI-18-12` | A round trip through the encrypted store returns the value and leaves no plaintext on disk | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: setSecret then getSecret round-trips without plaintext on disk` | TAP output from `tools/ai-guard/test/secret-surface.test.js` |
+| `AC-AI-18-13` | Doctor counts the third-party exposure and quotes nothing from it | `node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js` | `0` | `# Subtest: the doctor report carries counts and no fragment of any value` | TAP output from `tools/ai-guard/test/secret-surface.test.js` |
+| `AC-AI-18-14` | **Negative proof that no row may rest on a pattern:** `node --test` exits `0` and prints `pass 1` when `--test-name-pattern` matches nothing, so a pattern is not a control | `node -e "const{spawnSync}=require('child_process');const p='THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ';const f='tools/ai-guard/test/secret-surface.test.js';const r=spawnSync(process.execPath,['--test','--test-reporter=tap','--test-name-pattern='+p,f],{encoding:'utf8'});const n=r.stdout.split('\n').filter(l=>l.trim()==='# Subtest: '+p).length;console.log(n>0?'MATCHED_TESTS='+n:'VACUOUS_PATTERN_REJECTED: 0 tests matched '+p);process.exit(n>0?0:1)"` | `1` | `VACUOUS_PATTERN_REJECTED: 0 tests matched THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ` | command stdout |
+| `AC-AI-18-15` | The repository secret gate is unchanged, so no allowlist entry was added to admit a new fixture | `node -e "const c=require('crypto'),f=require('fs');const h=c.createHash('sha256').update(f.readFileSync('.gitleaks.toml')).digest('hex');if(h!=='232e56d960dc7c86c417edba436cb2f89621c58d56dd7e91705edfcced3ef859'){console.error('GITLEAKS_CONFIG_CHANGED: '+h.slice(0,12));process.exit(1)}console.log('GITLEAKS_CONFIG_UNCHANGED')"` | `0` | `GITLEAKS_CONFIG_UNCHANGED` | `.gitleaks.toml`; command stdout |
 
-Rows `AC-AI-18-02` through `AC-AI-18-10` name the TAP subtest rather than
-asserting an exit code alone, because `node --test` exits `0` when
-`--test-name-pattern` matches nothing — measured, and the reason
-`AC-AI-18-11` exists.
+Rows `AC-AI-18-01` through `AC-AI-18-09` each name a different guard command
+against a different fixture, so no single run can satisfy more than one of them.
+`AC-AI-18-12` and `AC-AI-18-13` are the only two rows that share a command, and
+each asserts a differently named subtest that exists only inside the delivered
+suite. No row carries an assertion through `--test-name-pattern`, because a
+pattern that matches nothing still exits `0`; `AC-AI-18-14` measures that trap
+directly. Measured on `2026-09-15`:
+`node --test --test-name-pattern=ZZZ_MATCHES_NOTHING_AI18 tools/ai-brain/test/reconcile.test.js`
+printed `ℹ tests 1`, `ℹ pass 1` and exited `0`.
+
+`AC-AI-18-15` stands where `pnpm security:secrets` would have stood. The gate
+itself is `ci-provisioned` and cannot be executed here (see Preconditions), so
+what is asserted locally is the property this Work Item could actually violate:
+that the gate's configuration is byte-for-byte unchanged, and therefore that no
+fixture bought its passage with an allowlist entry.
 
 ## Verification commands
 
-```bash
-# 1. The guard on the real source tree
+```powershell
+# Acceptance rows, in the order of the matrix. One command, one expected exit code.
 node tools/ai-guard/cli.js secret-surface
+# Expected exit code: 0, stdout contains SECRET_SURFACE_CLEAN
 
-# 2. The guard's own suite, with named subtests visible
+node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/forbidden-api-keys-key
+# Expected exit code: 1, stdout is exactly SECRET_SURFACE_VIOLATION: reader.ts:3 apiKeys.key
+
+node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/forbidden-provider-connections-data
+# Expected exit code: 1, stdout is exactly SECRET_SURFACE_VIOLATION: reader.ts:3 providerConnections.data
+
+node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/forbidden-wildcard-select
+# Expected exit code: 1, stdout is exactly SECRET_SURFACE_VIOLATION: reader.ts:3 SELECT * on apiKeys
+
+node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/safe-projections
+# Expected exit code: 0, stdout contains SECRET_SURFACE_CLEAN
+
+node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/unparsable-source
+# Expected exit code: 2, stdout contains SECRET_SURFACE_UNREADABLE: reader.ts
+
+node tools/ai-guard/cli.js secret-surface --root tools/ai-guard/test/fixtures/value-must-not-leak
+# Expected exit code: 1, stdout is that one violation line and nothing from line 4 of the fixture
+
+node tools/ai-guard/cli.js check
+# Expected exit code: 0, stdout contains SECRET_SURFACE_CLEAN
+
+node tools/ai-guard/cli.js check --secret-surface-root tools/ai-guard/test/fixtures/forbidden-api-keys-key
+# Expected exit code: 1, stdout is exactly SECRET_SURFACE_VIOLATION: reader.ts:3 apiKeys.key
+
+node -e "const a=require('./tools/ai-brain/accounts');if(a.KEY_FILE===a.SECRETS_FILE){console.error('KEY_BESIDE_CIPHERTEXT');process.exit(1)}console.log('KEY_AND_CIPHERTEXT_SEPARATE')"
+# Expected exit code: 0, KEY_AND_CIPHERTEXT_SEPARATE
+
+node --test tools/ai-guard/test/secret-surface.test.js
+# Expected exit code: 0, the runner summary reports zero failures
+
 node --test --test-reporter=tap tools/ai-guard/test/secret-surface.test.js
+# Expected exit code: 0, and the two subtests named by AC-AI-18-12 and AC-AI-18-13 are present
 
-# 3. Negative proof that a non-matching pattern is rejected
-node -e "const{spawnSync}=require('child_process');const p='THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ';const r=spawnSync(process.execPath,['--test','--test-reporter=tap','--test-name-pattern='+p,'tools/ai-guard/test/secret-surface.test.js'],{encoding:'utf8'});const n=r.stdout.split('\n').filter(l=>l.trim()==='# Subtest: '+p).length;console.log(n>0?'MATCHED_TESTS='+n:'VACUOUS_PATTERN_REJECTED');process.exit(n>0?0:1)"
-# Expected exit code: 1
+node -e "const{spawnSync}=require('child_process');const p='THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ';const f='tools/ai-guard/test/secret-surface.test.js';const r=spawnSync(process.execPath,['--test','--test-reporter=tap','--test-name-pattern='+p,f],{encoding:'utf8'});const n=r.stdout.split('\n').filter(l=>l.trim()==='# Subtest: '+p).length;console.log(n>0?'MATCHED_TESTS='+n:'VACUOUS_PATTERN_REJECTED: 0 tests matched '+p);process.exit(n>0?0:1)"
+# Expected exit code: 1, VACUOUS_PATTERN_REJECTED: 0 tests matched THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ
 
-# 4. Key and ciphertext stay apart
-node -e "const a=require('./tools/ai-brain/accounts');console.log(a.KEY_FILE===a.SECRETS_FILE?'KEY_BESIDE_CIPHERTEXT':'KEY_AND_CIPHERTEXT_SEPARATE')"
+node -e "const c=require('crypto'),f=require('fs');const h=c.createHash('sha256').update(f.readFileSync('.gitleaks.toml')).digest('hex');if(h!=='232e56d960dc7c86c417edba436cb2f89621c58d56dd7e91705edfcced3ef859'){console.error('GITLEAKS_CONFIG_CHANGED: '+h.slice(0,12));process.exit(1)}console.log('GITLEAKS_CONFIG_UNCHANGED')"
+# Expected exit code: 0, GITLEAKS_CONFIG_UNCHANGED
 
-# 5. Repository secret scan
-pnpm security:secrets
-
-# 6. Whole repository suite
+# Repository gates that must stay green, per AGENTS.md
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm format:check
+pnpm typecheck
 pnpm test
+pnpm build
+node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"
+node tools/ai-brain/cli.js manifest
+python docs/product-spec/scripts/validate_docs.py
+
+# `pnpm security:secrets` is deliberately absent from this list. Gitleaks is
+# ci-provisioned and CI owns that gate; run locally on a machine without the
+# pinned binary it exits 2 operationally instead of scanning, so asserting it
+# here would assert the workstation rather than this Work Item. AC-AI-18-15
+# asserts what is locally checkable: that the gate was not widened.
 ```
 
 ## Codex review record
@@ -191,6 +306,35 @@ pnpm test
 | Round | Commit | Verdict | Notes |
 |---|---|---|---|
 | 1 | `pending` | `pending` | Awaiting independent review. |
+
+Before review round 1 the acceptance matrix was repaired on `2026-09-15` for
+four reasons that would each have been a review finding:
+
+1. Nine rows (`AC-AI-18-02` … `AC-AI-18-10`) shared one command — a single
+   `node --test` run of the new suite — so one run satisfied nine rows. Seven of
+   them now name a distinct guard command against a distinct fixture; the two
+   suite rows that remain assert differently named subtests that exist only
+   inside the delivered suite.
+2. Those rows were labelled "Negative proof" while asserting exit `0` from a
+   passing test. `AC-AI-18-02` through `-07` and `-09` now run the guard against
+   a committed fixture that must fail, each with its exact failure line.
+3. `AC-AI-18-14` asserted `pnpm security:secrets` locally, which cannot hold on
+   a machine where Gitleaks is `ci-provisioned` and absent from `PATH`. It is
+   replaced by `AC-AI-18-15`, which pins `.gitleaks.toml`'s SHA-256 and so
+   detects the weakening this Work Item could actually cause.
+4. `AC-AI-18-12` asserted that `secret-surface` appeared in `--help`, but
+   `tools/ai-guard/cli.js` implements no `--help` at all. Measured: `--help`
+   falls through to the default status command, printing the branch, identity
+   and live AO sessions and exiting `0`, so the row asserted exit `0` against
+   output that never contained the word; an unknown command exits `2`.
+   Reachability from the hook is now proved by running `check`, the command the
+   installed hook already invokes.
+
+`Allowed paths` gained `tools/ai-guard/test/fixtures/` in the same change,
+because the matrix names six fixture directories under it and a matrix whose
+fixtures are outside its own author boundary is not writable as specified.
+`TASK-AI-19` recorded the same omission as a residual limitation instead of
+fixing it; this document fixes it.
 
 ## Residual limitations
 
@@ -214,3 +358,29 @@ pnpm test
   detector found no plaintext token in them — not that they are proven
   encrypted. An OAuth record stored in a shape the detector does not recognise
   reads the same as a safe one.
+- **The fixture directory is excluded from the default scan by name.** A
+  forbidden read written *inside* `tools/ai-guard/test/fixtures/` is not reported
+  by `AC-AI-18-01`. The exclusion is what makes the negative fixtures possible at
+  all, and `AI-18-R11` keeps it narrow enough to leave
+  `tools/ai-guard/test/secret-surface.test.js` itself in scope, but the gap is
+  real and is not closed by anything this Work Item ships.
+- **The secret gate is pinned, not exercised.** `AC-AI-18-15` proves the Gitleaks
+  configuration was not widened. It cannot prove the scanner still detects what
+  it detected before, because the binary is `ci-provisioned` and absent here. A
+  pinned digest also fails on any legitimate future change to that file, which is
+  the intended direction for a gate change but does mean the row must be updated
+  deliberately rather than incidentally.
+- **`pnpm security:secrets` is not asserted locally at all.** CI owns that
+  gate. It can appear to pass locally when `%TEMP%\gitleaks\gitleaks.exe`
+  exists from unrelated work, which is a reason not to assert it rather than a
+  reason to.
+  If CI is ever skipped for a change to this Work Item's own files — the
+  fixtures, which are the only new files that could carry a literal — nothing
+  local would catch it. `AI-18-R08` and the `.gitleaks.toml` allowlist shape are
+  the only local defence.
+- **`scripts/ai/doctor.ps1` is not executed by any acceptance row.** It probes
+  `11` CLIs with a `60`-second bound each and exceeds the harness's `30`-second
+  command budget, so no row can run it. Its counting and its refusal to quote a
+  value are covered by `AC-AI-18-13`, which asserts the subtest that tests the
+  report rather than the PowerShell rendering of that report. A defect in the
+  rendering alone would not be caught by this matrix.
