@@ -314,6 +314,45 @@ node -e "const{spawnSync}=require('child_process');const p=process.argv[1];const
 | 4 | `feat/task-ai-19-reconciler-impl` | `IMPLEMENTED` | Specification implemented. Write-back added to `tools/ai-brain/reconcile.js` and `tools/ai-brain/cli.js` under the Allowed-Transition Table only: `BLOCKED_DEPENDENCY` / `BLOCKED_BY_FOUNDATION` clear strictly to `BACKLOG` when every declared dependency is `MERGED` with a 40-character merge commit present in the clone, reachable on `mainRef`, and carrying a `PASS` verdict; `READY_FOR_CODEX` / `CODEX_PASS` reach `MERGED` only against a durable evidence artifact that verifies PR identity, title, merge SHA reachability, exact-HEAD verdict, zero unresolved threads, CI status and on-disk spec path. Branch ancestry is never consulted (`AI-TOOL-12`). Atomic sibling-`.tmp` writes with per-record byte fidelity, durable audit artifact on every `--write`, and `--revert` that refuses if the register moved since the run it would undo. Protected-worktree guard strips a `refs/heads/` prefix before comparing, and `--allow-fixture-write` exempts only a register under the test tree so it cannot be used to reach the real one. Unknown options are rejected rather than ignored. 27 tests added (51 total); repository suite 11 of 11 tasks successful; all 11 acceptance rows executed with real output. First audited reconciliation cleared the stale `TASK-AI-07` block to `BACKLOG`, proved by dependency commit `fdf87594` with a `PASS` verdict; `TASK-AI-17` was refused in the same run for want of durable merge evidence, and that refusal is recorded in the artifact. |
 
 | 5 | `fix/task-ai-19-mutation-count` | `CHANGES_REQUIRED` | Independent review through the local 9Router gateway (`cbai/glm-5.2`), run because Codex is unavailable, found that `applyStatusMutations`'s own documentation promised a check the caller never performed: it said a mutation planned but matching no row is *a bug worth failing on*, while `cli.js` tested only whether the applied count was zero. Planning three mutations and matching two printed `2 mutation(s) applied`, exited 0, and wrote an audit artifact agreeing - recording as complete a reconciliation that had partly not happened. The caller now compares the applied count against `plan.mutations.length`, refuses before writing when they disagree, names both counts and exits 1. `AC-AI-19-02` is unaffected because a plan of zero and an applied count of zero agree. Five further reviewer points are recorded under Residual limitations rather than bundled into this fix. |
+## Executed runs
+
+The reconciler has been run once against the real delivery register. This record
+exists so the run is auditable from the specification rather than only from the
+Pull Request that carried it.
+
+| Field | Value |
+|---|---|
+| `run_id` | `293cecd2-cd83-4d0d-8778-aa66a8890c67` |
+| `generated_at` | `2026-09-15T14:09:32.149Z` |
+| `head_commit` | `f6d462e9ac6cf768ea1305fce77be755d2135c94` |
+| `main_ref` | `origin/main` |
+| Register SHA-256 before | `23b902154e15148853c7c4bae7771330be5c773e1c987719e67bdf3fd7683954` |
+| Register SHA-256 after | `f2561a8ca612d4aa4cef1cff2b833e0ce6ceaa8157826c80abbca57f24d335e7` |
+| Audit artifact | `docs/product-spec/docs/10-ai-collaboration/audit/reconcile-2026-09-15T14-09-32-148Z.json` |
+
+All `129` mutations were the same transition — `BLOCKED_BY_FOUNDATION` to
+`BACKLOG` under `AI-19-R03` — and every one of them was proven by the single
+dependency `TASK-FOUND-04`, merged at `9d101f4e5d9de9b880cc4311126ce8fe06de4206`
+with a `PASS` verdict. No row moved to `MERGED`, and no row moved to
+`READY_FOR_AUTHOR`; clearing a block returns an item to `BACKLOG` and nothing
+further, which is why `TASK-AI-20` still owns authoring the specifications for
+them.
+
+The run refused `2` rows, both under `AI-19-R04` and both for the same reason —
+`no durable merge evidence provided`:
+
+| Work Item | Rule | Reason |
+|---|---|---|
+| `FEAT-AUTH-01` | `AI-19-R04` | no durable merge evidence provided |
+| `TASK-AI-17` | `AI-19-R04` | no durable merge evidence provided |
+
+`TASK-AI-17` is merged in Git reality. The refusal is the rule working as
+specified: `AI-19-R04` requires an evidence artifact carrying an exact-HEAD
+Codex `PASS`, and none exists for it. The refusal is recorded here rather than
+worked around, because the alternative — recording `MERGED` from a branch name
+or a reachable commit alone — is the precise failure `AI-19-R04` was written to
+prevent.
+
 ## Residual limitations
 
 - **Reviewer points from round 5 not addressed here.** Reverting a penultimate audit is impossible by design, because `--revert` requires the register to still hash to that audit's `post_hash_sha256`; `operator_session` falls back to `USERNAME`, which is Windows-only, and does not consult `USER`; `require('crypto')` is called inline in two functions rather than hoisted; `pick(args, 'revert', 'revert')` passes the same key twice and is redundant; and an `AI-19-R02` refusal does not name the target row's status, so it reads similarly to an `AI-19-R04` refusal in an audit artifact. None of these changes whether the register is written correctly.
