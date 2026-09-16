@@ -173,6 +173,23 @@ Also record:
 | ------------ | ------------------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 1            | `d31a595bec13c40123f866c654b794a65ae25fa3` | `CHANGES_REQUIRED` | Resolved all 8 findings: exact-HEAD gate non-success checks, SHA review tie, unresolved threads, AO Claude repair writer, DSH constraints, PowerShell script root path, freshness-based overall status, stale caching, SSE deduping, responsive tables |
 
+## Post-merge correction
+
+A fallback review of this Work Item's merged pull request under `AI-19-R05`
+found that `tools/ai-dashboard/render-static.js` wrote `clean` but reported
+`html.length`. The figure was wrong twice: it counted the text before trailing
+whitespace was stripped, and `.length` counts UTF-16 code units rather than
+bytes, which on a page carrying Vietnamese is not the same number.
+
+Measured before the fix: the line reported `161714 bytes` while the file on disk
+was `163057` bytes. After the fix it reports `163077` and the file on disk is
+`163077`. The generator now reports `Buffer.byteLength(clean, 'utf-8')`, which
+is what was written.
+
+The defect was cosmetic — the artifact itself was always correct — but a
+generator that misreports its own output is the same class of untrue signal this
+delivery lane exists to remove.
+
 ## Residual limitations
 
 - **The static dashboard is a snapshot with no trigger.** `DASHBOARD.html` is regenerated only when someone runs `render-static.js`, so it goes stale the moment the register changes and nothing notices. It showed `TASK-AI-07` as `BLOCKED_DEPENDENCY` for hours after the reconciler had written `BACKLOG` - the one screen meant to show progress failing to show it. The live server at `http://127.0.0.1:3333` does not have this problem: it reads every source live and pushes over SSE, so the static file is an offline convenience, not the cockpit. Wiring regeneration to register write-back would remove the whole class of staleness and is not done here.
