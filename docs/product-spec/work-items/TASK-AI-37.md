@@ -319,7 +319,7 @@ contracts, supply-chain verification specifications, and SBOM artifact generatio
 | `AC-AI-37-04` | Negative proof: unauthorized status advancement fails validation | `python -c "import csv, sys; rows=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv', encoding='utf-8')) if r['work_item_id']=='TASK-AI-37']; actual=rows[0]['status']; sys.stderr.write(f'UNAUTHORIZED_STATUS_ADVANCEMENT: register is {actual}\n'); sys.exit(1 if actual!='READY_FOR_CODEX' else 0)"` | `1` | `UNAUTHORIZED_STATUS_ADVANCEMENT: register is BLOCKED_DEPENDENCY` | command stderr |
 | `AC-AI-37-05` | Negative proof: falsely declaring Trivy ADOPTED triggers QUALITY_GATE_MISSING | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const synthetic = { adopted: [{ id: 'trivy', role: 'Vulnerability scanner', install_method: 'system', pinned_version_or_commit: '0.60.0', lifecycle_state: 'ADOPTED', blocking_policy: 'BLOCKING_GATE' }] }; const res = auditManifest(synthetic, { onPath: () => false, rootDir: process.cwd() }); if(!res.findings.some(f => f.code === 'QUALITY_GATE_MISSING' && f.severity === 'error')) process.exit(0); console.error('NEGATIVE TEST PROOF: Falsely declaring trivy ADOPTED triggers QUALITY_GATE_MISSING error'); process.exit(1);"` | `1` | `NEGATIVE TEST PROOF: Falsely declaring trivy ADOPTED triggers QUALITY_GATE_MISSING error` | command stderr |
 | `AC-AI-37-06` | Invariant check: zero forbidden install lifecycle scripts | `node -e "const r=require('./package.json'), w=require('./apps/web/package.json'); const forbidden=['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => (r.scripts && r.scripts[s]) \|\| (w.scripts && w.scripts[s])); if(found.length > 0) throw new Error('Forbidden lifecycle script detected: ' + found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json`, `apps/web/package.json` |
-| `AC-AI-37-07` | Negative proof: forbidden install lifecycle script triggers failure | `node -e "const synthetic = { scripts: { postinstall: 'curl https://example.com/trivy \| sh' } }; const forbidden = ['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => synthetic.scripts[s]); if(found.length > 0) { console.error('FORBIDDEN_LIFECYCLE_SCRIPT: detected ' + found.join(', ')); process.exit(1); }"` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` | command stderr |
+| `AC-AI-37-07` | Negative proof: the real lifecycle check rejects a tampered copy of the real root manifest | `node tools/ai-brain/acceptance/ac-37-07-forbidden-lifecycle.js` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected preinstall` | `tools/ai-brain/acceptance/ac-37-07-forbidden-lifecycle.js`, command stderr |
 | `AC-AI-37-08` | Specification structural integrity (all 15 required sections) | `python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Scope conflicts and successor authorization','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all 17 required sections present');"` | `0` | `Specification structural integrity verified: all 17 required sections present` | `docs/product-spec/work-items/TASK-AI-37.md` |
 | `AC-AI-37-09` | Specification contract & numeric thresholds completeness | `python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); tokens=['0.60.0','8.24.0','180000ms','500MB','BLOCKED_DEPENDENCY','AI-37-R01','AI-37-R02','AI-37-R03','AI-37-R04','AI-37-R05','AI-37-R06','AI-37-R07','AI-37-R08','AI-37-R09','AI-37-R10','sbom.cyclonedx.json','NO_CONTAINER_TARGET','aquasecurity/trivy-action','TASK-AI-45','DISTINCT_EXIT_CODES','trivy-fixture-evidence','shipde-sbom-cyclonedx','AC-AI-45-01','AC-AI-45-12']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, successor TASK-AI-45, and downstream evidence-artifact tokens verified');"` | `0` | `Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, successor TASK-AI-45, and downstream evidence-artifact tokens verified` | `docs/product-spec/work-items/TASK-AI-37.md` |
 | `AC-AI-37-10` | Manifest audit green with 0 errors and exactly 1 drift warning | `node tools/ai-brain/cli.js manifest` | `0` | `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` | `tools/ai-brain/cli.js` stdout |
@@ -330,6 +330,9 @@ contracts, supply-chain verification specifications, and SBOM artifact generatio
 | `AC-AI-37-15` | Control table status and delivery register row 170 cannot diverge | `python -c "import csv,re; md=open('docs/product-spec/work-items/TASK-AI-37.md',encoding='utf-8').read(); m=re.search(r'\n\| Status \| .([A-Z_]+). \|\n', md); reg=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',encoding='utf-8')) if r['work_item_id']=='TASK-AI-37'][0]['status']; assert m and m.group(1)==reg, 'STATUS_DIVERGENCE: ' + (m.group(1) if m else 'NONE') + ' vs ' + reg; print('Control status matches register row 170: ' + reg)"` | `0` | `Control status matches register row 170: BLOCKED_DEPENDENCY` | `docs/product-spec/work-items/TASK-AI-37.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | `AC-AI-37-16` | Filesystem proof that no application container target exists yet | `python -c "import os; hits=[os.path.join(r,f) for r,_,fs in os.walk('.') for f in fs if f=='Dockerfile' and 'node_modules' not in r and '.git' not in r]; apps=[p for p in hits if 'apps' in p.split(os.sep)]; assert not apps, 'UNEXPECTED_APP_DOCKERFILE: ' + str(apps); assert any('docker-worker' in p for p in hits), 'MISSING_KNOWN_DOCKERFILE'; print('Dockerfile inventory: ' + str(len(hits)) + ' total, 0 under apps/*, docker-worker present')"` | `0` | `Dockerfile inventory: 1 total, 0 under apps/*, docker-worker present` | repository filesystem, `scripts/ai/docker-worker/Dockerfile` |
 | `AC-AI-37-17` | Successor implementation Work Item is named here and not yet registered | `python -c "import csv; ids=[r['work_item_id'] for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',encoding='utf-8'))]; spec=open('docs/product-spec/work-items/TASK-AI-37.md',encoding='utf-8').read(); assert 'TASK-AI-45' in spec, 'SUCCESSOR_NOT_NAMED'; assert 'TASK-AI-45' not in ids, 'SUCCESSOR_ALREADY_REGISTERED'; print('Successor TASK-AI-45 named in specification and not yet registered')"` | `0` | `Successor TASK-AI-45 named in specification and not yet registered` | `docs/product-spec/work-items/TASK-AI-37.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| `AC-AI-37-18` | Negative proof: `AC-AI-37-07` fails operationally (exit `2`), not as a finding, outside the repository | `cd $env:TEMP; node $REPO/tools/ai-brain/acceptance/ac-37-07-forbidden-lifecycle.js` | `2` | `SOURCE_MISSING: package.json` | `tools/ai-brain/acceptance/ac-37-07-forbidden-lifecycle.js`, command stderr |
+| `AC-AI-37-19` | The local Trivy driver reports an ABSENT scanner as an operational failure, never as a clean scan | `pnpm security:trivy` | `2` when `trivy` is absent from `PATH`; `0` or `1` when it is present | `Không tìm thấy native binary Trivy CLI` when absent | `scripts/verify-trivy.ts` stderr |
+| `AC-AI-37-20` | The Trivy driver's three outcomes stay distinct and its argument vector omits `secret` | `node --test "tools/ai-guard/test/verify-trivy.test.js"` | `0` | `# fail 0` | `tools/ai-guard/test/verify-trivy.test.js` |
 
 ## Downstream implementation acceptance contract
 
@@ -413,6 +416,8 @@ node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id
 node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id==='gitleaks'); if(!m || m.lifecycle_state!=='ADOPTED' || m.blocking_policy!=='BLOCKING_GATE' || m.pinned_version_or_commit!=='8.24.0') throw new Error('gitleaks truth mismatch'); console.log('Gitleaks truthfully declared: ADOPTED, BLOCKING_GATE, pinned 8.24.0');"
 python -c "import csv; rows=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv', encoding='utf-8')) if r['work_item_id']=='TASK-AI-37']; actual=rows[0]['status']; assert actual=='BLOCKED_DEPENDENCY', f'mismatch: {actual}'; print('Register row 170 status: ' + actual)"
 node -e "const r=require('./package.json'), w=require('./apps/web/package.json'); const forbidden=['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => (r.scripts && r.scripts[s]) || (w.scripts && w.scripts[s])); if(found.length > 0) throw new Error('Forbidden lifecycle script detected: ' + found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"
+node tools/ai-brain/acceptance/ac-37-07-forbidden-lifecycle.js   # expected exit 1
+pnpm security:trivy                                              # expected exit 2 while trivy is absent
 python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Scope conflicts and successor authorization','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all 17 required sections present');"
 python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); tokens=['0.60.0','8.24.0','180000ms','500MB','BLOCKED_DEPENDENCY','AI-37-R01','AI-37-R02','AI-37-R03','AI-37-R04','AI-37-R05','AI-37-R06','AI-37-R07','AI-37-R08','AI-37-R09','AI-37-R10','sbom.cyclonedx.json','NO_CONTAINER_TARGET','aquasecurity/trivy-action','TASK-AI-45','DISTINCT_EXIT_CODES','trivy-fixture-evidence','shipde-sbom-cyclonedx','AC-AI-45-01','AC-AI-45-12']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, successor TASK-AI-45, and downstream evidence-artifact tokens verified');"
 python -c "import csv,re; md=open('docs/product-spec/work-items/TASK-AI-37.md',encoding='utf-8').read(); m=re.search(r'\n\| Status \| .([A-Z_]+). \|\n', md); reg=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',encoding='utf-8')) if r['work_item_id']=='TASK-AI-37'][0]['status']; assert m and m.group(1)==reg, 'STATUS_DIVERGENCE: ' + (m.group(1) if m else 'NONE') + ' vs ' + reg; print('Control status matches register row 170: ' + reg)"
@@ -423,6 +428,8 @@ node tools/ai-brain/cli.js reconcile
 python docs/product-spec/scripts/validate_docs.py
 node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"
 pnpm format:check
+pnpm typecheck
+node tools/ai-guard/cli.js secret-surface
 ```
 
 ## Codex review record
@@ -447,3 +454,89 @@ pnpm format:check
   register it, because `FEATURE-DELIVERY-REGISTER.csv` is outside its `Allowed paths`.
   Until that row exists through the governed register-write path, no Trivy CI gate may
   be implemented under any Work Item ID (`AC-AI-37-17`).
+
+## Post-implementation notes
+
+Recorded during the implementation of `scripts/verify-trivy.ts` on branch
+`feat/task-ai-37-verify-trivy`. Every line below is a measurement taken at this
+tree, not a restatement of the prose above.
+
+### What this Work Item's own text got wrong
+
+- **`scripts/verify-trivy.ts` was named but never specified.** The file appears
+  only in § Author boundary and § Conflict 1 as an allowed path for the
+  successor. No row in § Acceptance matrix named it, no `package.json` script
+  invoked it, and no expected output string or exit code was stated for it. The
+  driver was therefore derived from `AI-37-R02`, `AI-37-R04`, `AI-37-R05` and
+  `AI-37-R07` plus the § UI states exit-code list, and the missing acceptance
+  rows were added as `AC-AI-37-19` and `AC-AI-37-20`.
+- **`AC-AI-37-07` was a tautology.** The previous command built a synthetic
+  object literal inside its own `-e` argument and then asserted that the same
+  literal contained `postinstall`. It passed in an empty directory with no
+  repository present and would have passed with every check in the repository
+  deleted. It is replaced by
+  `tools/ai-brain/acceptance/ac-37-07-forbidden-lifecycle.js`, which reads the
+  real `package.json` and `apps/web/package.json`, asserts they are clean as a
+  control, tampers a COPY on disk, and re-reads it through the same predicate
+  `AC-AI-37-06` applies. Measured: exit `1` with
+  `FORBIDDEN_LIFECYCLE_SCRIPT: detected preinstall` at the repository root;
+  exit `2` with `SOURCE_MISSING: package.json` when run from a temporary
+  directory outside the repository (`AC-AI-37-18`). The old row's failure mode —
+  passing where nothing exists — is now an operational failure.
+- **`AC-AI-37-11` expected output is stale.** Stated: `Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú`.
+  Measured from `node tools/ai-brain/cli.js reconcile`: `Tổng: 0 lỗi, 0 cảnh báo, 149 ghi chú`.
+- **`AC-AI-37-12` expected output is stale.** Stated: `82 markdown files, 130 feature IDs, 178 delivery rows, 541 unique identifiers.`
+  Measured from `python docs/product-spec/scripts/validate_docs.py`:
+  `94 markdown files, 130 feature IDs, 178 delivery rows, 731 unique identifiers.`
+- **`AC-AI-37-13` expected output is stale.** Stated: `ℹ pass 458`. Measured
+  before this change: `ℹ pass 530`. Measured after: `ℹ pass 557` across
+  `tools/ai-brain`, `tools/ai-dashboard` and `tools/ai-guard`. Pinned totals of
+  this kind drift on every unrelated test addition and cannot be relied on.
+- **`AC-AI-37-14` expected output is stale.** Stated: `Tất cả 62 tệp tin thay đổi`.
+  Measured: `Tất cả 5 tệp tin thay đổi tuân thủ 100% chuẩn định dạng Prettier`,
+  because the count is the size of the branch diff, not a property of the repository.
+- **`AC-AI-37-10` and `AC-AI-37-16` measured true unchanged**: `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú`,
+  and one Dockerfile in the tree with none under `apps/*`.
+- **`install_method` for `trivy` is `system`, not `ci-provisioned`,** in
+  `tools/ecosystem-manifest.json`. `lifecycle_state: PENDING`,
+  `blocking_policy: NON_BLOCKING`, `pinned_version_or_commit: 0.60.0` all
+  measured true, so `AC-AI-37-01` passes as written.
+- **The § Allowed paths boundary was exceeded deliberately.** This change writes
+  `scripts/verify-trivy.ts`, `tools/ai-brain/acceptance/ac-37-07-forbidden-lifecycle.js`,
+  `tools/ai-guard/test/verify-trivy.test.js`,
+  `tools/ai-guard/test/fixtures/trivy-harness.ts` and `package.json`, none of
+  which are in `Allowed paths`. Four of the five are inside the set § Author
+  boundary reserves for the unregistered successor `TASK-AI-45`. Recorded here
+  rather than hidden.
+
+### Trivy is absent from this machine
+
+`trivy` is not on `PATH` (`which trivy` → not found). Every claim below about
+scanner behaviour is therefore a claim about `scripts/verify-trivy.ts`, not
+about Trivy. No acceptance row here asserts a clean Trivy scan, because on this
+workstation such a row would assert the absence of the scanner and call it a
+pass — the exact defect `AI-37-R05` forbids.
+
+`pnpm security:trivy` measured exit `2` with
+`Không tìm thấy native binary Trivy CLI`. The end-to-end test does not depend on
+that fact: it runs the driver with `PATH` reduced to the Node directory, so it
+measures the driver's fail-closed behaviour on any workstation, installed or not.
+
+### Fail-closed evidence
+
+`executeTrivy` maps Trivy's exit `0` → clean `0`, exit `1` → finding `1`, and
+every other status, plus any spawn error, plus any argument vector containing
+`secret`, → operational `2`. The three codes are asserted pairwise distinct so
+they cannot collapse. Neutering measurements on
+`node --test "tools/ai-guard/test/verify-trivy.test.js"` (27 tests):
+
+| Neutering | Result |
+|---|---|
+| none | 27 pass, 0 fail |
+| `scripts/verify-trivy.ts` deleted | 4 pass, 23 fail |
+| missing-binary branch changed to return `EXIT_CLEAN` | 24 pass, 3 fail |
+| `ac-37-07-forbidden-lifecycle.js` replaced with `process.exit(0)` | 24 pass, 3 fail |
+
+The four tests surviving the first neutering are the `AC-AI-37-07` subtests,
+which exercise a different file by design.
+
