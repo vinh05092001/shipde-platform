@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/vinh05092001/shipde-brain/schema/lesson.schema.json",
+  "title": "Ship Dễ Agent Brain Lesson",
+  "description": "One reviewed lesson in the shipde-brain knowledge base. A lesson enters as proposed and only a human review may approve it (AI-TOOL-06); no agent approves its own lesson. An approved lesson carries the exact commit it was learned from, the scope it applies to, an expiry or an explicit null, and a supersession pointer or an explicit null. Expiry and supersession are required keys, never omitted: an unbounded lesson and a lesson that is not yet replaced are both deliberate states that must be written down, so neither can be inferred from a missing field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "status",
+    "scope",
+    "source_commit",
+    "expiry",
+    "superseded_by",
+    "evidence",
+    "created_at",
+    "proposed_by",
+    "approved_by"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^LESSON-[A-Z0-9-]{3,60}$",
+      "description": "Stable lesson identifier, unique within shipde-brain."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 8,
+      "description": "One-line statement of the lesson."
+    },
+    "status": {
+      "enum": ["proposed", "approved", "superseded", "rejected"],
+      "description": "Only a human review moves a lesson to approved (AI-TOOL-06)."
+    },
+    "scope": {
+      "enum": ["repo", "spec", "domain", "workflow", "tooling", "security"],
+      "description": "Where the lesson applies. A lesson with no scope is not admissible."
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "The exact 40-character commit the lesson was learned from."
+    },
+    "expiry": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Date after which the lesson must be re-reviewed, or null when it is not time-bounded."
+    },
+    "superseded_by": {
+      "type": ["string", "null"],
+      "pattern": "^LESSON-[A-Z0-9-]{3,60}$",
+      "description": "The lesson that replaced this one, or null when nothing has."
+    },
+    "evidence": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The observation the lesson was derived from, in the repository rather than in a chat."
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "description": "ISO-8601 UTC timestamp the lesson was recorded."
+    },
+    "proposed_by": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The agent or human that proposed the lesson."
+    },
+    "approved_by": {
+      "type": ["string", "null"],
+      "description": "The human who approved it, or null while it is proposed."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "approved" } }, "required": ["status"] },
+      "then": {
+        "required": ["source_commit", "scope", "expiry", "superseded_by", "approved_by"],
+        "properties": {
+          "approved_by": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "superseded" } }, "required": ["status"] },
+      "then": {
+        "required": ["superseded_by"],
+        "properties": {
+          "superseded_by": { "type": "string", "pattern": "^LESSON-[A-Z0-9-]{3,60}$" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "rejected" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "approved_by": { "type": "null" }
+        }
+      }
+    }
+  ]
+}

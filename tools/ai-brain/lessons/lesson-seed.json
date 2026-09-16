@@ -1,0 +1,83 @@
+{
+  "$comment": "Conformance seed for ./lesson-schema.json — the worked examples that prove the schema is satisfiable and effective. This is NOT the live brain store. The live store lives in the shipde-brain repository (AI-TOOL-06) and is written only by the promotion gate specified in TASK-AI-22. Every record here is approved by the human owner and cites a real commit from this repository; the acceptance rows AC-AI-21-01 and AC-AI-21-02 read this file, the schema, and a tampered copy of each.",
+  "lessons": [
+    {
+      "id": "LESSON-ACCEPTANCE-ROW-REAL-FILE",
+      "title": "An acceptance row must read a real file, tamper a copy, and assert the same check rejects it",
+      "status": "approved",
+      "scope": "workflow",
+      "source_commit": "e5e06918d0b6d62de988168d23bb1309fc7cf3ed",
+      "expiry": null,
+      "superseded_by": null,
+      "evidence": "AC-AI-07-04, AC-AI-07-06 and AC-AI-07-13 each compared two string literals written into their own command. Run from an empty directory with no repository present they still printed their exact expected string and exited 1, so they would have stayed green with the repository deleted.",
+      "created_at": "2026-09-16T00:00:00Z",
+      "proposed_by": "codex-review",
+      "approved_by": "vinh05092001"
+    },
+    {
+      "id": "LESSON-ONE-RULE-ONE-MODULE",
+      "title": "A positive row and its negative proof must require one committed rule module",
+      "status": "approved",
+      "scope": "spec",
+      "source_commit": "e5e06918d0b6d62de988168d23bb1309fc7cf3ed",
+      "expiry": null,
+      "superseded_by": null,
+      "evidence": "The forbidden install-lifecycle rule was restated inline by ac-37-07-forbidden-lifecycle.js, ac-38-08-forbidden-lifecycle.js and ac-39-07-forbidden-lifecycle.js, and by tools/ai-guard/test/verify-trivy.test.js, while the shared module tools/ai-brain/acceptance/lifecycle-scripts.js owned only its own pair. Changing the rule the invariant applied could not have changed what those scripts asserted.",
+      "created_at": "2026-09-16T00:00:00Z",
+      "proposed_by": "codex-review",
+      "approved_by": "vinh05092001"
+    },
+    {
+      "id": "LESSON-MANIFEST-TRUTH",
+      "title": "Installed does not imply integrated, enabled or blocking; an absent gate is PENDING, never ADOPTED",
+      "status": "approved",
+      "scope": "tooling",
+      "source_commit": "8925218d955188259ab09ef71469d6b098c190e8",
+      "expiry": null,
+      "superseded_by": null,
+      "evidence": "Six quality gates and one UI tool were declared ADOPTED while absent from the machine and the monorepo workspace, so every workflow and operator assumed a gate that was not running. A seventh, gitleaks, was reported missing only because the probe asked the local host while CI installs it at the pinned version.",
+      "created_at": "2026-09-16T00:00:00Z",
+      "proposed_by": "gemini",
+      "approved_by": "vinh05092001"
+    },
+    {
+      "id": "LESSON-BOUNDED-REPAIR-BUDGET",
+      "title": "A repair dispatch is bound to the exact 40-character HEAD and to the evidence that failed",
+      "status": "approved",
+      "scope": "workflow",
+      "source_commit": "8d039256adfa36172c09464123fcc9b488ab7f61",
+      "expiry": null,
+      "superseded_by": null,
+      "evidence": "The single-dispatch-per-HEAD guard refused before the Work Item repair counter was consulted, so a flaky check, a second failing check that surfaced after the first was fixed, or a repair that introduced a new failure all ended autonomous delivery on the first retry. The dispatch also named no failing check, so the worker re-derived evidence the supervisor could not audit.",
+      "created_at": "2026-09-16T00:00:00Z",
+      "proposed_by": "gemini",
+      "approved_by": "vinh05092001"
+    },
+    {
+      "id": "LESSON-SINGLE-REPAIR-PER-HEAD",
+      "title": "One repair dispatch is permitted per exact HEAD",
+      "status": "superseded",
+      "scope": "workflow",
+      "source_commit": "8925218d955188259ab09ef71469d6b098c190e8",
+      "expiry": "2026-12-31",
+      "superseded_by": "LESSON-BOUNDED-REPAIR-BUDGET",
+      "evidence": "TASK-AI-06 § In scope 7 sent each failed exact HEAD back to the same worker once, guarded by LastAcknowledgedCiRepairHead rather than by a counter, which made a second failure on the same HEAD unrecoverable.",
+      "created_at": "2026-09-16T00:00:00Z",
+      "proposed_by": "gemini",
+      "approved_by": "vinh05092001"
+    },
+    {
+      "id": "LESSON-BRAIN-UNTRUSTED-UNTIL-REVIEWED",
+      "title": "Agent memory and self-created skills stay untrusted until a human reviews them into the brain",
+      "status": "proposed",
+      "scope": "security",
+      "source_commit": "a2a3bc00a7d22e7bc25e0b2eb28c81c9b74ad774",
+      "expiry": null,
+      "superseded_by": null,
+      "evidence": "AI-TOOL-06 records that Hermes memory and self-created skills are untrusted until human-reviewed into shipde-brain, with no PII or credential persistence. No promotion gate exists yet, so a lesson has no approved_by until TASK-AI-22 adds one.",
+      "created_at": "2026-09-16T00:00:00Z",
+      "proposed_by": "gemini",
+      "approved_by": null
+    }
+  ]
+}
