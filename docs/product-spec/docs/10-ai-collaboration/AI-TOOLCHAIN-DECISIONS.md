@@ -78,6 +78,7 @@ Compatibility verified on this host before the pin moved:
 | `ao session ls --project --json` | accepted; response keeps the `{ data, meta }` shape with `id`, `status`, `activity`, `isTerminated`, `harness`, `branch`, `prs` |
 | `ao session get <id> --project --json` | accepted |
 | `ao session kill <id> --project` | accepted |
+| `ao review ls <session> --json` | accepted |
 | `ao status --json` | accepted; returns `state: ready` |
 
 Not verified: a live `ao spawn` end to end under 0.13.0. `ao version` on the daemon binary prints `dev`, so the desktop executable's ProductVersion remains the version source. Historical `0.12.12` references in TASK-AI-06/07 records and fixture comments describe what was observed then and are left unchanged.

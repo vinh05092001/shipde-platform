@@ -43,7 +43,7 @@ The operator launches AO through the existing localhost AgentRouter profile and 
 - `docs/product-spec/docs/10-ai-collaboration/GEMINI-START-PROMPT.md` — implementation author prompt template.
 - `docs/product-spec/docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md` — 9Router author prompt template.
 - `scripts/ai/control.ps1` — existing controller patterns to extend.
-- Agent Orchestrator canonical source: `https://github.com/Untrivial-ai/agent-orchestrator`; installed version `0.12.12`; health check requires `ao version` to match the pin and `ao status --json` to report `state=ready`.
+- Agent Orchestrator canonical source: `https://github.com/Untrivial-ai/agent-orchestrator`; installed version `0.12.12` at delivery, raised to `0.13.0` on 2026-09-16 by operator decision `AI-AO-PIN-2026-09-16` (AI-TOOLCHAIN-DECISIONS.md); health check requires `ao version` to match the pin and `ao status --json` to report `state=ready`.
 - AO CLI contract: `ao session ls --json`, `ao session get --json`, and `ao review ls <session> --json` from the pinned canonical source and installed skill documentation.
 
 ## Preconditions and dependencies
@@ -271,3 +271,7 @@ From a clean checkout:
 - The supervisor dispatches CI/review correction once per exact HEAD; richer diagnosis and retry budgeting remain TASK-AI-08.
 - Checkpoint restart is included; recovery from externally deleted AO sessions/worktrees remains TASK-AI-09.
 - Permission allowlist enforcement is deferred to TASK-AI-10.
+
+## Post-delivery change: AO pin 0.13.0 (2026-09-16)
+
+The installed desktop runtime moved to AO `0.13.0` and the supervisor failed closed on the pin, as `AI-SUP` intends. The operator approved raising the pin. Before the pin moved, every AO surface this Work Item depends on was checked against `0.13.0` on the host: `ao spawn` (`--project --kind --name --branch --harness --prompt --mode`), `ao session ls|get --project --json` (still `{ data, meta }`), `ao session kill --project`, `ao review ls <session> --json` and `ao status --json` (`state: ready`). All are accepted. A live spawn under `0.13.0` was not exercised. Changed: `tools/ecosystem-manifest.json` pin and health check, the canonical-pin self-test in `control.ps1`. Fixture comments naming `0.12.12` describe responses observed at that version and are unchanged.
