@@ -17,6 +17,7 @@ const {
   CREDENTIAL_COLUMNS,
   WILDCARD_TABLES,
   SQL_COLUMN_READS,
+  SKIPPED_DIRECTORIES,
 } = require('../secret-surface');
 
 /**
@@ -281,5 +282,38 @@ describe('secret-surface — raw SQL that names the column', () => {
 
   test('an unrelated table stays clean', () => {
     assert.equal(scanText('SELECT ' + 'k' + 'ey FROM sessions', 'q.ts').length, 0);
+  });
+});
+
+describe('secret-surface — directories that are not source', () => {
+  // Written this way because a literal backslash in a shell heredoc does not
+  // survive to the file, which is how this line was broken twice.
+  const BACKSLASH = String.fromCharCode(92);
+
+  test('a nested copy of the repository does not fail the scan', () => {
+    // Agent worktrees live under .claude/ and each is a full copy of this
+    // repository, unreadable fixture included. Measured on main: four such
+    // copies made a clean tree exit 2. A guard that fails on a clean repository
+    // is one people learn to ignore.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-skip-'));
+    const nested = path.join(dir, '.claude', 'worktrees', 'agent-x', 'tools');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'reader.ts'), Buffer.from([0x00]));
+    fs.writeFileSync(path.join(dir, 'ok.ts'), 'const a = 1;\n');
+
+    const r = scanDirectory(dir, {});
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.equal(r.status, 'clean');
+    assert.equal(r.scanned, 1);
+  });
+
+  test('every skipped directory is a name, never a path fragment', () => {
+    // A path fragment would skip more than it names. These are directory names
+    // matched exactly, wherever they appear in the tree.
+    for (const name of SKIPPED_DIRECTORIES) {
+      assert.equal(name.includes('/'), false, name + ' is a path, not a name');
+      assert.equal(name.includes(BACKSLASH), false, name + ' is a path, not a name');
+    }
   });
 });
