@@ -26,6 +26,7 @@ const {
   nextTierDown,
 } = require('../offerings');
 const { isDispatchable } = require('../quota');
+const { planDispatch } = require('../scheduler');
 
 /** A fresh ledger path per test, never the operator's home directory. */
 function store() {
@@ -384,5 +385,131 @@ describe('Evidence may be lost; protection may not', () => {
       { now: NOW, observations: [] }
     );
     assert.equal(view.status, 'cooling');
+  });
+});
+
+/**
+ * The wiring itself.
+ *
+ * Everything above proves the observer works. These prove something calls it:
+ * they drive `planDispatch`, the real dispatch path, and never touch
+ * `observeRefusal` directly. Remove the call site from `scheduler.js` and
+ * every test in this block fails.
+ */
+describe('The dispatch path observes refusals', () => {
+  const CAPS = { jsonSchema: true, tools: true, contextWindow: 200000 };
+
+  /** Two tiers, two accounts, so a cooled rung has somewhere to fall to. */
+  const FLEET = [
+    {
+      id: 'acct-a',
+      provider: 'antigravity',
+      tier: 0,
+      quality: 90,
+      codingGrade: 3,
+      capabilities: CAPS,
+      models: [{ model: 'big' }, { model: 'small', quality: 70 }],
+    },
+    {
+      id: 'acct-b',
+      provider: 'oc',
+      tier: 1,
+      quality: 60,
+      codingGrade: 3,
+      capabilities: CAPS,
+      models: [{ model: 'backup' }],
+    },
+  ];
+
+  const ITEM = {
+    workItemId: 'TASK-COOL-1',
+    role: 'author.foundation',
+    difficulty: 2,
+    priority: 1,
+  };
+
+  /** A reading as `readQuota` returns one when the CLI failed, verbatim. */
+  const failed = (reason) => ({ available: false, reason, rows: [] });
+
+  function plan(reported, over) {
+    return planDispatch(
+      [ITEM],
+      FLEET,
+      Object.assign({ reported, running: [], claims: [], now: NOW, ledgerFile: store() }, over)
+    );
+  }
+
+  test('a refusal reported to planDispatch cools the offerings it named', () => {
+    const out = plan({ 'acct-a': failed('HTTP 429: daily request quota exceeded') });
+
+    assert.ok(out.cooldowns.length > 0, 'the plan recorded at least one cooldown');
+    for (const c of out.cooldowns) {
+      assert.equal(c.until, cooldownFor(c.window, NOW));
+    }
+    // The reader that matters agrees: the refused account is out of service.
+    for (const [id, view] of Object.entries(out.headrooms)) {
+      if (!id.startsWith('acct-a::')) continue;
+      assert.equal(view.status, 'cooling', id + ' is cooling');
+      assert.equal(isDispatchable(view), false);
+    }
+  });
+
+  test('the refusal moves the dispatch off the tier that refused', () => {
+    const before = plan({});
+    assert.equal(before.assignments[0].accountId, 'acct-a');
+
+    const after = plan({ 'acct-a': failed('HTTP 429: daily request quota exceeded') });
+    assert.equal(after.assignments.length, 1);
+    assert.equal(after.assignments[0].accountId, 'acct-b');
+    assert.ok(after.assignments[0].tier > before.assignments[0].tier, 'one tier down');
+  });
+
+  test('a network failure reaching planDispatch cools nothing', () => {
+    const out = plan({ 'acct-a': failed('connect ECONNREFUSED 127.0.0.1:443') });
+    assert.deepEqual(out.cooldowns, []);
+    assert.equal(out.assignments[0].accountId, 'acct-a');
+  });
+
+  test('planDispatch writes the refusal to the injected ledger', () => {
+    const file = store();
+    const out = plan(
+      { 'acct-a': failed('HTTP 429: daily request quota exceeded') },
+      { ledgerFile: file }
+    );
+    assert.ok(out.cooldowns.length > 0);
+
+    const ledger = readLedger(file);
+    assert.ok(ledger.length > 0, 'the ledger gained entries');
+    for (const e of ledger) {
+      assert.equal(e.outcome, Outcome.REFUSED);
+      assert.equal(e.accountId, 'acct-a');
+    }
+  });
+
+  test('a refusal on one account leaves another account dispatchable', () => {
+    const out = plan({ 'acct-a': failed('HTTP 429: quota exceeded') });
+    assert.ok(out.cooldowns.length > 0, 'the refusal was observed at all');
+    assert.ok(
+      out.cooldowns.every((c) => c.offeringId.startsWith('acct-a::')),
+      'only the refusing account cooled'
+    );
+    assert.equal(isDispatchable(out.headrooms['acct-b::backup']), true);
+  });
+
+  test('the cooldown planDispatch wrote clears on time alone', () => {
+    const cooled = plan({ 'acct-a': failed('HTTP 429: daily request quota exceeded') });
+    const until = Date.parse(cooled.cooldowns[0].until);
+    assert.ok(WINDOWS.length > 0);
+
+    // The same fleet, planned after the instant has passed. Nothing succeeded
+    // in between; only the clock moved.
+    const later = planDispatch([ITEM], FLEET, {
+      reported: {},
+      running: [],
+      claims: [],
+      now: until + MINUTE,
+      ledgerFile: store(),
+    });
+    assert.equal(later.assignments[0].accountId, 'acct-a');
   });
 });
