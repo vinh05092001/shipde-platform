@@ -34,6 +34,7 @@ const {
   Strategy,
 } = require('./offerings');
 const { rankByFitness, Difficulty } = require('./fitness');
+const { observeRefusal } = require('./ceiling');
 
 const DEFAULTS = {
   maxImplementationAgents: 1,
@@ -69,6 +70,50 @@ function cachedReadings(ctx) {
   }
 }
 
+/**
+ * Cools every offering a provider has just refused.
+ *
+ * This is the one place in the planner where a provider speaks in its own
+ * words. A reading with `available: false` carries the text the CLI failed
+ * with — `readQuota` keeps it verbatim — and `quota-store` deliberately holds
+ * a failed reading for a short window precisely so the next planning pass can
+ * see it. Until now the merge in `offeringHeadroom` dropped it on the floor:
+ * an unavailable reading returns null there, so a genuine `429` taught the
+ * scheduler nothing and the next task was routed straight back into it.
+ *
+ * `observeRefusal` decides everything else — whether the text is about quota
+ * at all, how long the wait is for the window that was hit, and whether a
+ * cooldown already in force outlasts the new one. Nothing is restated here.
+ *
+ * The write lands on `offering.cooldownUntil`, which `offeringHeadroom` and
+ * `accountHeadroom` already consult, so no reader changes and a cooled
+ * offering is excluded from headroom rather than merely down-ranked.
+ */
+function coolRefusedOfferings(offerings, reported, ctx, now) {
+  const cooled = [];
+  for (const offering of offerings) {
+    const reading = (reported || {})[offering.accountId];
+    if (!reading || reading.available !== false) continue;
+
+    const observed = observeRefusal(
+      {
+        offeringId: offering.id,
+        accountId: offering.accountId,
+        model: offering.model,
+        window: reading.window || null,
+        cooldownUntil: offering.cooldownUntil,
+      },
+      reading.reason,
+      { now, file: ctx.ledgerFile }
+    );
+    if (!observed.cooled) continue;
+
+    offering.cooldownUntil = observed.cooldownUntil;
+    cooled.push(observed.cooldown);
+  }
+  return cooled;
+}
+
 function waiting(item, reason, detail) {
   return {
     workItemId: item.workItemId,
@@ -98,6 +143,12 @@ function planDispatch(items, accounts, context) {
   // Read from the cache rather than by calling a CLI: planning must not block
   // on a round trip per account.
   const reported = ctx.reported !== undefined ? ctx.reported : cachedReadings(ctx);
+
+  // Refusals are observed before headroom is computed, so the cooldown they
+  // write is visible to the very plan that observed them rather than to the
+  // one after it.
+  const cooldowns = coolRefusedOfferings(offerings, reported, ctx, now);
+
   const headrooms = headroomForAll(
     offerings,
     ctx.eventsByAccount || {},
@@ -321,6 +372,10 @@ function planDispatch(items, accounts, context) {
       idleReview: Math.max(0, limits.maxReviewAgents - reviewLoad),
     },
     headrooms,
+    // Every cooldown this pass wrote, with the offering, the instant, the
+    // window and the provider's own words. A cooldown whose cause cannot be
+    // read back is indistinguishable from a bug.
+    cooldowns,
   };
 }
 
