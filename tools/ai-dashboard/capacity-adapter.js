@@ -21,6 +21,7 @@ const { runwayReport, Difficulty } = require('../ai-brain/fitness');
 const { expandOfferings, headroomForAll } = require('../ai-brain/offerings');
 const { readIdentity } = require('../ai-brain/agy-identity');
 const { usableReadings } = require('../ai-brain/quota-store');
+const { resolveLimits } = require('../ai-brain/limits');
 
 let listAccounts = null;
 try {
@@ -145,6 +146,36 @@ function collectCapacity(options) {
     reported,
   });
   const report = runwayReport(offerings, difficulty, headrooms, opts.history || {}, opts.fitness);
+
+  // Which windows each row can speak to. A row with no ceiling shows an empty
+  // runway, and an empty runway reads as zero unless the row says which windows
+  // are unknown (AI-26 UI states). Resolved once per account, from the same
+  // declared limits and ledger the scheduler uses; nothing is defaulted here.
+  const windowsByAccount = {};
+  for (const account of accounts) {
+    const resolved = resolveLimits(account, {
+      now,
+      observations: opts.observations,
+      file: opts.ledgerFile,
+      skipLedger: opts.skipLedger,
+    });
+    const known = [];
+    const unknown = [];
+    for (const [window, w] of Object.entries(resolved.windows)) {
+      if (w.unknownBudget) unknown.push(window);
+      else known.push({ window, ceiling: w.ceiling, provenance: w.provenance, stale: w.stale });
+    }
+    windowsByAccount[account.id] = { knownWindows: known, unknownWindows: unknown };
+  }
+  if (Array.isArray(report.rows)) {
+    report.rows = report.rows.map((row) =>
+      Object.assign(
+        {},
+        row,
+        windowsByAccount[row.accountId] || { knownWindows: [], unknownWindows: [] }
+      )
+    );
+  }
 
   // Claude Code work never passes through the router, so its spend is reported
   // beside the pool rather than folded into it: adding the two would imply a

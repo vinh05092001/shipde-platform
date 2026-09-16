@@ -214,6 +214,42 @@ suite — removing `unknownBudget`, dropping the provenance check, breaking the
 runway arithmetic, ignoring the window match, counting a disabled account,
 removing the evidence floor, and forcing staleness to false.
 
+## Completion record (2026-09-16)
+
+PR #41 merged `limits.js` and its suite but left one in-scope item undone: the
+capacity adapter never reported which windows each row knows. Measured on
+`origin/main` `4b0fa4b`: `grep -rn "knownWindows\|unknownWindows" tools` returned
+nothing, so the panel still could not tell "plenty left" from "no idea".
+
+- `tools/ai-dashboard/capacity-adapter.js` now resolves each account once with
+  `resolveLimits` (the same declared limits and ledger the scheduler reads) and
+  adds `knownWindows` (`window`, `ceiling`, `provenance`, `stale`) and
+  `unknownWindows` to every row. Nothing is defaulted.
+- `tools/ai-brain/test/limits.test.js` gains two subtests driving the real
+  `collectCapacity` with injected accounts: `each capacity row names its known
+  and unknown windows` and `a row with no declared limits lists every window as
+  unknown`.
+
+**No ceiling was declared for any real account.** The registry lives outside
+the repository (`~/.shipde/accounts.registry.json`), no provider on this machine
+publishes an absolute figure, and the ledger holds no window with 20
+observations. Under `AI-26-R02` every window stays unknown; `AC-AI-26-01`
+still reads `35 of 35`, which is the honest state, not a defect. A ceiling is
+added when an operator asserts one with provenance, not by this Work Item.
+
+**Naming drift.** The rules say `source`; the merged code and suite use
+`provenance`. The code is left as merged and this record names the difference.
+
+| AC/Test ID | Result on this branch |
+|---|---|
+| `AC-AI-26-01` | exit 0, `BASELINE_CONFIRMED: 35 of 35 offerings have no ceiling` |
+| `AC-AI-26-02`..`11` | every named subtest present in TAP output, suite exit 0 |
+| `AC-AI-26-12` | `WINDOW_SET_EXACT` |
+| `AC-AI-26-13` | exit 1, `VACUOUS_PATTERN_REJECTED` |
+| `AC-AI-26-14` | `limits.test.js` 16 pass, 0 fail |
+| `AC-AI-26-15` | `ceiling.test.js` 41 pass, 0 fail |
+| all brain and dashboard suites | 516 pass, 0 fail |
+
 ## Residual limitations
 
 - **Most ceilings are not published.** Antigravity reports a percentage and
