@@ -265,8 +265,50 @@ Toolchain and quality gate impact:
 | `AC-AI-39-04` | Negative proof: unauthorized status advancement fails validation | `python -c "import csv, sys; rows=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv', encoding='utf-8')) if r['work_item_id']=='TASK-AI-39']; actual=rows[0]['status']; sys.stderr.write(f'UNAUTHORIZED_STATUS_ADVANCEMENT: register is {actual}\n'); sys.exit(1 if actual!='READY_FOR_CODEX' else 0)"` | `1` | `UNAUTHORIZED_STATUS_ADVANCEMENT: register is BLOCKED_DEPENDENCY` | command stderr |
 | `AC-AI-39-05` | Negative proof: falsely declaring agent-scan ADOPTED triggers QUALITY_GATE_MISSING | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); const a = m.adopted.find(x => x.id === 'agent-scan'); a.lifecycle_state = 'ADOPTED'; a.blocking_policy = 'BLOCKING_GATE'; const res = auditManifest(m); const f = res.findings.find(x => x.id === 'agent-scan'); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"` | `1` | `QUALITY_GATE_MISSING: agent-scan` | command stderr |
 | `AC-AI-39-06` | Invariant check: zero forbidden install lifecycle scripts | `node -e "const r=require('./package.json'), w=require('./apps/web/package.json'); const forbidden=['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => (r.scripts && r.scripts[s]) \|\| (w.scripts && w.scripts[s])); if(found.length > 0) throw new Error('Forbidden lifecycle script detected: ' + found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json, apps/web/package.json` |
-| `AC-AI-39-07` | Negative proof: forbidden install lifecycle script triggers failure | `node -e "const synthetic = { scripts: { postinstall: 'pip install snyk-agent-scan' } }; const forbidden = ['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => synthetic.scripts[s]); if(found.length > 0) { console.error('FORBIDDEN_LIFECYCLE_SCRIPT: detected ' + found.join(', ')); process.exit(1); }"` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` | command stderr |
-| `AC-AI-39-08` | Specification structural integrity (all required sections) | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria
+| `AC-AI-39-07` | **Negative proof, must fail:** a tampered copy of the REAL web manifest is rejected by the same forbidden-lifecycle check `AC-AI-39-06` runs. The script first proves both real manifests are clean (control, exit `2` otherwise), then tampers a copy in `os.tmpdir()`; no repository file is written | `node tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` | `package.json`, `apps/web/package.json`, `tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js`; command stderr |
+| `AC-AI-39-08` | Specification structural integrity (all required sections) | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Acceptance row defect record
+
+### `AC-AI-39-07` was a tautology (fixed)
+
+**Defect.** The previous `AC-AI-39-07` was a `node -e` one-liner that declared a synthetic object
+literal inside its own command text, filtered it, and printed the result. It compared two string
+literals written into the same command and read nothing from the repository. It would have stayed
+green with the whole project deleted, so it was not evidence that the forbidden-lifecycle invariant
+asserted by `AC-AI-39-06` fails closed.
+
+**Measurement that proved it.** The retired command was run from an empty temporary directory
+containing no files and no repository:
+
+```text
+$ node -e "const synthetic = { scripts: { postinstall: 'pip install snyk-agent-scan' } }; ..."
+FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall
+exit code: 1
+```
+
+That is exactly the expected exit code and expected output string the row demanded, produced with no
+repository present. The row could not fail.
+
+**What replaced it.** A committed script file, `tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js`,
+following the pattern established by `tools/ai-brain/acceptance/ac-07-13-forbidden-lifecycle.js`. It reads
+the real `package.json` and `apps/web/package.json`, exits `2` with `SOURCE_MISSING` when either is absent,
+exits `2` with `CONTROL_FAILED` when either real manifest already carries a forbidden script (refusing a
+tampered copy proves nothing if the untouched one would also be refused), then copies the web manifest,
+tampers the copy in `os.tmpdir()` with the `pip install snyk-agent-scan` hook this Work Item forbids, and
+runs the real check against that copy. No file inside the repository is written.
+
+The check lives in a committed file rather than a markdown table cell deliberately: a `node -e`
+one-liner in a table cell must survive markdown, then bash, then PowerShell in CI, and a mangled
+one-liner dies on `SyntaxError` with exit `1` - the very exit code the row expects, so a broken row
+would look like a passing one.
+
+**Measured behaviour of the replacement.**
+
+| Run location | Exit code | Output (stderr) |
+|---|---|---|
+| Inside the repository root | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` |
+| Empty temporary directory outside the repository | `2` | `SOURCE_MISSING: package.json` |
+
+## Downstream implementation acceptance contract','## Manifest promotion criteria
 
 Promoting `agent-scan` from `PENDING` to `ADOPTED` and `BLOCKING_GATE` in `tools/ecosystem-manifest.json`
 strictly requires satisfying all 10 prerequisites with auditable workflow evidence. Each
@@ -387,7 +429,7 @@ node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); c
 node -e "const r=require('./package.json'), w=require('./apps/web/package.json'); const forbidden=['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => (r.scripts && r.scripts[s]) || (w.scripts && w.scripts[s])); if(found.length > 0) throw new Error('Forbidden lifecycle script detected: ' + found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"
 
 # AC-AI-39-07: Negative proof: forbidden install lifecycle script triggers failure
-node -e "const synthetic = { scripts: { postinstall: 'pip install snyk-agent-scan' } }; const forbidden = ['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => synthetic.scripts[s]); if(found.length > 0) { console.error('FORBIDDEN_LIFECYCLE_SCRIPT: detected ' + found.join(', ')); process.exit(1); }"
+node tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js
 
 # AC-AI-39-08: Specification structural integrity (all required sections)
 python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all required sections present');"
