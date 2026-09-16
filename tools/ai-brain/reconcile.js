@@ -550,6 +550,37 @@ function planReconciliation(items, options) {
     if (!id) continue;
     const status = String(item.status || '').trim();
 
+    // Merge evidence is considered FIRST, before the stale-block branch.
+    //
+    // A BLOCKED_DEPENDENCY row matches the block-clearing branch, which clears
+    // the block to BACKLOG and continues - so it never reached the MERGED
+    // branch at all. Measured 2026-09-16: widening ALLOWED_SOURCES_FOR_MERGED
+    // to accept pre-review statuses had no effect on any blocked row, and the
+    // silent skip produced no refusal to explain why. A row carrying durable
+    // merge evidence is merged, whatever it was blocked on.
+    if (ALLOWED_SOURCES_FOR_MERGED.has(status) && evidence) {
+      if (!evidenceTargets(evidence, item)) {
+        // Not this row's evidence. Fall through rather than skip silently.
+      } else {
+        const verdict = verifyMergeEvidence(evidence, item, probes);
+        if (!verdict.ok) {
+          refusals.push(refusal(id, verdict.why, 'AI-19-R04'));
+          continue;
+        }
+        mutations.push(
+          mutation(item, status, TERMINAL_STATUS, 'AI-19-R04', {
+            pr: String(evidence.number),
+            mergeCommit: verdict.mergeSha,
+            headRefOid: verdict.head,
+            codexVerdict: evidence.codexVerdict,
+            unresolvedThreadsCount: evidence.unresolvedThreadsCount,
+            ciChecksStatus: evidence.ciChecksStatus,
+          })
+        );
+        continue;
+      }
+    }
+
     if (ALLOWED_SOURCES_FOR_BACKLOG.has(status)) {
       const deps = parseDependencies(item.dependencies);
       if (deps.length === 0) continue;

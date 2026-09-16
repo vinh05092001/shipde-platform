@@ -621,6 +621,61 @@ describe('planReconciliation — recording a merge', () => {
   });
 });
 
+describe('planReconciliation - a blocked row carrying merge evidence', () => {
+  test('the merge is recorded, not the block', () => {
+    // A BLOCKED_DEPENDENCY row matches the block-clearing branch, which clears
+    // the block to BACKLOG and continues - so it never reached the MERGED
+    // branch at all. Measured 2026-09-16: widening the allowed MERGED sources
+    // to include the pre-review statuses had no effect on any blocked row, and
+    // the skip produced no refusal to say why.
+    const plan = planReconciliation(
+      [
+        mergedDep({ work_item_id: 'TASK-AI-17', status: 'MERGED' }),
+        readyRow({
+          work_item_id: 'TASK-AI-06',
+          status: 'BLOCKED_DEPENDENCY',
+          dependencies: 'TASK-AI-17',
+        }),
+      ],
+      Object.assign({ mergeEvidence: evidenceFor() }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'MERGED');
+    assert.equal(plan.mutations[0].from, 'BLOCKED_DEPENDENCY');
+  });
+
+  test('a blocked row whose evidence is invalid is refused, not silently skipped', () => {
+    const plan = planReconciliation(
+      [
+        readyRow({
+          work_item_id: 'TASK-AI-06',
+          status: 'BLOCKED_DEPENDENCY',
+          dependencies: 'TASK-AI-17',
+        }),
+      ],
+      Object.assign({ mergeEvidence: evidenceFor({ ciChecksStatus: 'FAILURE' }) }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.equal(plan.refusals.length, 1);
+    assert.match(plan.refusals[0].reason, /CI checks are not SUCCESS/);
+  });
+
+  test('a blocked row with no evidence is left for the block-clearing branch', () => {
+    const plan = planReconciliation(
+      [
+        mergedDep({ work_item_id: 'TASK-AI-17', status: 'MERGED' }),
+        readyRow({
+          work_item_id: 'TASK-AI-06',
+          status: 'BLOCKED_DEPENDENCY',
+          dependencies: 'TASK-AI-17',
+        }),
+      ],
+      ALL_PROVEN
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'BACKLOG');
+  });
+});
 describe('applyStatusMutations - a MERGED transition writes its evidence', () => {
   // Built with String.fromCharCode rather than a backslash escape: this block
   // was written through a shell heredoc twice and the escape was eaten both
