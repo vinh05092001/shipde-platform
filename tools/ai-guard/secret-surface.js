@@ -90,6 +90,33 @@ const WILDCARD_TABLES = [
 /**
  * One source text's violations, in line order.
  */
+
+/**
+ * Raw SQL that names the credential column explicitly.
+ *
+ * Found by an independent review after the first version shipped: the guard
+ * caught `SELECT *` and JavaScript property access, so `SELECT key FROM apiKeys`
+ * — a direct read of the credential, written as plainly as it can be written —
+ * walked straight through. The wildcard rule existed because a wildcard reaches
+ * the column without naming it; naming it was never covered.
+ *
+ * The select list is bounded by the FROM so a query selecting other columns
+ * from the same table stays clean, and the column is matched on a word boundary
+ * so `keyName` and `keyId` are not credentials.
+ */
+const SQL_COLUMN_READS = [
+  {
+    column: 'apiKeys.key',
+    pattern:
+      /\bselect\b(?![\s\S]*?\bfrom\b[\s\S]*?\bfrom\b)[\s\S]{0,200}?\bkey\b[\s\S]{0,200}?\bfrom\s+["'`\[]?api_?keys\b/i,
+  },
+  {
+    column: 'providerConnections.data',
+    pattern:
+      /\bselect\b[\s\S]{0,200}?\bdata\b[\s\S]{0,200}?\bfrom\s+["'`\[]?provider_?connections\b/i,
+  },
+];
+
 /**
  * Line number of a character offset, 1-based.
  */
@@ -126,6 +153,7 @@ function scanText(text, displayPath) {
 
   for (const { column, pattern } of CREDENTIAL_COLUMNS) collect(pattern, column);
   for (const { table, pattern } of WILDCARD_TABLES) collect(pattern, 'SELECT * on ' + table);
+  for (const { column, pattern } of SQL_COLUMN_READS) collect(pattern, column);
 
   found.sort((x, y) => x.index - y.index);
   return found.map((f) => ({ file: f.file, line: f.line, column: f.column }));
@@ -247,6 +275,7 @@ module.exports = {
   SELF_EXCLUSION,
   CREDENTIAL_COLUMNS,
   WILDCARD_TABLES,
+  SQL_COLUMN_READS,
   scanText,
   scanDirectory,
   formatReport,

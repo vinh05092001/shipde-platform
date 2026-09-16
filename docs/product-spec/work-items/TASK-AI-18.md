@@ -367,6 +367,15 @@ not block the query the usage adapter runs. The pattern now matches only
 
 ## Residual limitations
 
+- **Raw SQL naming the column was missed entirely until an independent review
+  found it.** The first version caught `SELECT *`, because a wildcard reaches the
+  column without naming it, and caught JavaScript property access. It did not
+  catch `SELECT key FROM apiKeys` — the credential read written as plainly as it
+  can be written. Measured: three such spellings passed clean. `SQL_COLUMN_READS`
+  now covers them, bounded by the `FROM` so that selecting other columns from the
+  same table stays clean, and on a word boundary so `keyName` is not a credential.
+  The lesson is not that this one hole is closed; it is that a rule written from
+  the shapes its author happened to picture leaves the shapes they did not.
 - **The guard reads text, so an alias defeats it.** Measured during
   implementation: `const c = apiKeys; c.key` is not reported, because by the
   time the column is named the table is a local variable and no textual rule can

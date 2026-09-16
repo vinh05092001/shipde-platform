@@ -16,6 +16,7 @@ const {
   runSecretSurface,
   CREDENTIAL_COLUMNS,
   WILDCARD_TABLES,
+  SQL_COLUMN_READS,
 } = require('../secret-surface');
 
 /**
@@ -236,6 +237,15 @@ describe('secret-surface — reads that tried to hide', () => {
       const subject = column.split('.')[0] + '.' + column.split('.')[1];
       assert.equal(pattern.test(subject), true, 'pattern for ' + column + ' matches nothing');
     }
+    for (const { column, pattern } of SQL_COLUMN_READS) {
+      const table = column.split('.')[0];
+      const col = column.split('.')[1];
+      assert.equal(
+        pattern.test('SELECT ' + col + ' FROM ' + table),
+        true,
+        'sql pattern for ' + column + ' matches nothing'
+      );
+    }
     for (const { table, pattern } of WILDCARD_TABLES) {
       assert.equal(
         pattern.test('SELECT * FROM ' + table),
@@ -243,5 +253,33 @@ describe('secret-surface — reads that tried to hide', () => {
         'wildcard for ' + table + ' matches nothing'
       );
     }
+  });
+});
+
+describe('secret-surface — raw SQL that names the column', () => {
+  test('a raw query naming the key column is caught', () => {
+    const v = scanText('SELECT ' + 'k' + 'ey FROM ' + KEY_TABLE, 'q.ts');
+    assert.equal(v.length, 1);
+    assert.equal(v[0].column, KEY);
+  });
+
+  test('the snake_case table spelling is caught', () => {
+    assert.equal(scanText('select ' + 'k' + 'ey, name from api_keys', 'q.ts').length, 1);
+  });
+
+  test('a raw query naming the data column is caught', () => {
+    assert.equal(scanText('SELECT ' + 'da' + 'ta FROM ' + DATA_TABLE, 'q.ts').length, 1);
+  });
+
+  test('selecting other columns from the same table stays clean', () => {
+    assert.equal(scanText('SELECT name, provider FROM ' + KEY_TABLE, 'q.ts').length, 0);
+  });
+
+  test('a column that merely begins with the forbidden word stays clean', () => {
+    assert.equal(scanText('SELECT ' + 'k' + 'eyName FROM ' + KEY_TABLE, 'q.ts').length, 0);
+  });
+
+  test('an unrelated table stays clean', () => {
+    assert.equal(scanText('SELECT ' + 'k' + 'ey FROM sessions', 'q.ts').length, 0);
   });
 });
