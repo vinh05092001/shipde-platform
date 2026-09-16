@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-17` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-43.md` |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-43.md`, `tools/ai-brain/acceptance/ac-43-*.js` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-43-audit-gate` |
 | Pull Request | https://github.com/vinh05092001/shipde-platform/pull/22 |
@@ -52,9 +52,15 @@ measured caller count is `0`, asserted by `AC-AI-43-09`.
 
 The outcome claimed and accepted here is therefore exactly:
 
-- `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1 -Action Validate` exit
-  `1` — rather than reporting a passing status — when the manifest audit
-  reports `summary.error > 0` (`AC-AI-43-08`).
+- **Not delivered at HEAD (measured, see Defect D3).** This Work Item
+  specified that `scripts/ai/doctor.ps1` and
+  `scripts/ai/ecosystem.ps1 -Action Validate` exit `1` when the manifest audit
+  reports `summary.error > 0`. At HEAD no file under `scripts/` invokes
+  `tools/ai-brain/cli.js manifest`, requires `manifest-audit`, or contains the
+  string `QUALITY_GATE_MISSING`, and `doctor.ps1` declares no `-ManifestPath`
+  parameter. The manifest audit is a Brain CLI surface only. `AC-AI-43-08` now
+  measures that wiring rather than asserting it, and fails the moment the
+  wiring is added without this section being widened to match.
 - The audit logic itself (`tools/ai-brain/manifest-audit.js`) classifies an
   absent adopted gate as a blocking error (`AC-AI-43-03`, `AC-AI-43-05`).
 
@@ -159,15 +165,15 @@ Prohibited in this Work Item:
 
 | Rule | Behavior |
 |---|---|
-| `AI-43-R01` | The manifest audit must run as a blocking check in `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1 -Action Validate`. |
+| `AI-43-R01` | The manifest audit must run as a blocking check in `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1 -Action Validate`. **Measured status at HEAD: NOT IMPLEMENTED** — no file under `scripts/` invokes the manifest audit (`AC-AI-43-08`). Wiring it requires editing `scripts/ai/*`; see Defect D3. |
 | `AI-43-R02` | Any manifest audit error (`summary.error > 0`, such as `QUALITY_GATE_MISSING` or `DECLARED_ADOPTED_BUT_ABSENT`) must fail closed: report the finding codes and tool IDs, record an actionable item in `$failures`, and exit with code 1. |
 | `AI-43-R03` | Non-fatal warnings (such as `PINNED_VERSION_DRIFT` for `codex-cli`) must be printed visibly with exact evidence (`0.154.0` observed vs `0.151.0` pin), but must not block doctor or ecosystem validation runs (which fail only when `summary.error > 0`). |
 | `AI-43-R04` | Tools declared with `install_method: "ci-provisioned"` (such as `gitleaks` at pinned `8.24.0`) must be verified against authoritative workflow declarations: `.github/workflows/security-baseline.yml` must exist and install `gitleaks` at the pinned version (`8.24.0`). If the workflow is missing, decoyed, or specifies a mismatched version, the audit must fail closed with error `QUALITY_GATE_MISSING` and exit code 1. |
 | `AI-43-R05` | In PowerShell scripts under `Set-StrictMode -Version Latest`, checking error collections must safely guard against null objects before accessing `.Count`. |
 | `AI-43-R06` | All files under `scripts/ai/` must remain pure ASCII with no byte-order mark (BOM). |
-| `AI-43-R07` | Both `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1` must accept an optional `-ManifestPath` parameter for testing (defaulting to `tools/ecosystem-manifest.json`) and forward `--manifest "$ManifestPath"` to `node tools/ai-brain/cli.js manifest`. `tools/ai-brain/cli.js manifest` must accept `--manifest <path>` so that test fixtures can be loaded while keeping repository `rootDir` intact. |
+| `AI-43-R07` | Both `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1` must accept an optional `-ManifestPath` parameter for testing (defaulting to `tools/ecosystem-manifest.json`) and forward `--manifest "$ManifestPath"` to `node tools/ai-brain/cli.js manifest`. `tools/ai-brain/cli.js manifest` must accept `--manifest <path>` so that test fixtures can be loaded while keeping repository `rootDir` intact. **Measured status at HEAD: NOT IMPLEMENTED** — `scripts/ai/doctor.ps1` declares no `-ManifestPath` parameter and `tools/ai-brain/cli.js manifest` accepts `--root`, not `--manifest`. See Defect D3. |
 | `AI-43-R08` | Quality gate classification for absent adopted tools: an entry with `lifecycle_state: "ADOPTED"` and `present === false` is classified as a quality gate (raising blocking error `QUALITY_GATE_MISSING`) if its `blocking_policy === "BLOCKING_GATE"` or its `id`/`role` matches `/scan|leak|trivy|lefthook|axe|lint|audit/i`. Absent tools without quality-gate classification emit non-fatal warning `DECLARED_ADOPTED_BUT_ABSENT`. |
-| `AI-43-R09` | The blocking surface delivered by this Work Item is exactly `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1 -Action Validate`. Both must exit `1` (not merely print a warning) when `summary.error > 0` for the manifest supplied via `-ManifestPath`. |
+| `AI-43-R09` | The blocking surface delivered by this Work Item is exactly `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1 -Action Validate`. Both must exit `1` (not merely print a warning) when `summary.error > 0` for the manifest supplied via `-ManifestPath`. **Measured status at HEAD: NOT IMPLEMENTED** — neither script exits `1` on manifest audit errors, because neither runs the manifest audit. See Defect D3. |
 | `AI-43-R10` | Enforcement boundary: at delivery, the number of files under `.github/workflows/` plus `scripts/ai/control.ps1` that invoke `doctor.ps1` or `ecosystem.ps1` must be exactly `0`. This Work Item therefore claims no CI or controller enforcement. If a future Work Item adds such a caller, `AC-AI-43-09` fails and the Business outcome section must be updated to match the new, wider claim before that caller is merged. |
 
 ## UI states
@@ -188,14 +194,137 @@ and toolchain documentation.
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
 | `AC-AI-43-01` | Validate production ecosystem manifest schema and profile conformity | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ai/ecosystem.ps1 -Action Validate` exits 0 and prints the string `VALIDATION PASSED: All 37 approved adopted repositories, 14 product dependencies, 10 candidates, and 9 profiles conform to ecosystem policy.` | command stdout |
-| `AC-AI-43-02` | Run manifest truth audit against production manifest | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` naming `codex-cli` | command stdout |
+| `AC-AI-43-02` | Manifest truth audit reports zero blocking errors against the production manifest (the invariant, not a pinned tally) | `node tools/ai-brain/acceptance/ac-43-02-manifest-zero-errors.js` exits 0 and prints the string `MANIFEST_AUDIT_ERRORS: 0` | command stdout, including the `CONTROL:` line showing a tampered copy of the manifest being rejected |
 | `AC-AI-43-03` | Run manifest truth audit against negative fixture with absent quality gate (trivy flipped to ADOPTED) | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); const t = m.adopted.find(x => x.id === 'trivy'); t.lifecycle_state = 'ADOPTED'; t.blocking_policy = 'BLOCKING_GATE'; const res = auditManifest(m); const f = res.findings.find(x => x.id === 'trivy'); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"` exits 1 and prints the string `QUALITY_GATE_MISSING: trivy` | command stderr |
 | `AC-AI-43-04` | Verify CI-provisioned gitleaks install in authoritative security-baseline workflow | `node -e "const fs = require('fs'); const wf = fs.readFileSync('.github/workflows/security-baseline.yml', 'utf8'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const g = m.adopted.find(x => x.id === 'gitleaks'); const pin = g.pinned_version_or_commit; const hasPin = wf.includes('GITLEAKS_VERSION=\x22' + pin + '\x22'); console.log('Gitleaks pin ' + pin + ' in security-baseline.yml: ' + hasPin); if (!hasPin) process.exit(1);"` exits 0 and prints the string `Gitleaks pin 8.24.0 in security-baseline.yml: true` | command stdout |
 | `AC-AI-43-05` | Negative proof: verify missing or decoyed workflow fails closed on CI-provisioned gate | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const os = require('os'); const fs = require('fs'); const path = require('path'); const d = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-decoy-')); fs.mkdirSync(path.join(d, '.github', 'workflows'), { recursive: true }); fs.writeFileSync(path.join(d, '.github', 'workflows', 'decoy.yml'), 'steps:\n  - run: echo no-gitleaks\n'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const res = auditManifest(m, { rootDir: d }); const f = res.findings.find(x => x.id === 'gitleaks'); fs.rmSync(d, { recursive: true, force: true }); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"` exits 1 and prints the string `QUALITY_GATE_MISSING: gitleaks` | command stderr |
 | `AC-AI-43-06` | Verify warning visibility for codex-cli version drift without blocking | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `[CẢNH] PINNED_VERSION_DRIFT` naming `codex-cli` | command stdout |
-| `AC-AI-43-07` | Run full test suite regression checks | `node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"` exits 0 and prints the string `fail 0` | command stdout |
-| `AC-AI-43-08` | Blocking surface: `doctor.ps1` exits 1 on a 37-entry fixture whose adopted gate `trivy` is absent | `powershell -NoProfile -ExecutionPolicy Bypass -Command "$f=Join-Path ([IO.Path]::GetTempPath()) 'ac0843.json'; $m=Get-Content tools/ecosystem-manifest.json -Raw | ConvertFrom-Json; $t=$m.adopted | Where-Object { $_.id -eq 'trivy' }; $t.lifecycle_state='ADOPTED'; $t.blocking_policy='BLOCKING_GATE'; $m | ConvertTo-Json -Depth 20 | Set-Content $f -Encoding ASCII; & scripts/ai/doctor.ps1 -ManifestPath $f; exit $LASTEXITCODE"` exits 1 and prints the string `QUALITY_GATE_MISSING: trivy` | stdout of `scripts/ai/doctor.ps1` (the delivered blocking surface) |
-| `AC-AI-43-09` | Enforcement boundary is exactly 0 CI/controller callers, so the Business outcome claims no pipeline enforcement | `node -e "const fs=require('fs'),path=require('path');const files=fs.readdirSync('.github/workflows').map(f=>path.join('.github/workflows',f)).concat(['scripts/ai/control.ps1']);const callers=files.filter(f=>/(doctor|ecosystem)\.ps1/.test(fs.readFileSync(f,'utf8')));console.log('Enforced-path callers of doctor.ps1/ecosystem.ps1 outside scripts/ai: '+callers.length+' '+JSON.stringify(callers));if(callers.length!==0)process.exit(1);"` exits 0 and prints the string `Enforced-path callers of doctor.ps1/ecosystem.ps1 outside scripts/ai: 0 []` | command stdout, reading `.github/workflows/*` and `scripts/ai/control.ps1` |
+| `AC-AI-43-07` | Full test suite regression checks ran and were not vacuous | `node tools/ai-brain/acceptance/ac-43-07-suite-not-vacuous.js` exits 0 and prints the string `SUITE_NOT_VACUOUS:` | command stdout, including the `CONTROL:` line showing `node --test` exiting 0 on an empty directory, and the measured file/test/pass counts |
+| `AC-AI-43-08` | Blocking surface: measured wiring of the manifest audit into `scripts/ai/doctor.ps1` and `scripts/ai/ecosystem.ps1` (measured at zero; see Defect D3) | `node tools/ai-brain/acceptance/ac-43-08-audit-wiring.js` exits 0 and prints the string `MANIFEST_AUDIT_WIRED_SURFACES: 0 []` | command stdout, including the `CONTROL:` line showing wiring injected into a copy of `doctor.ps1` being detected |
+| `AC-AI-43-09` | Enforcement boundary is exactly 0 CI/controller callers, so the Business outcome claims no pipeline enforcement | `node tools/ai-brain/acceptance/ac-43-09-enforcement-boundary.js` exits 0 and prints the string `Enforced-path callers of doctor.ps1/ecosystem.ps1 outside scripts/ai: 0 []` | command stdout, reading `.github/workflows/*` and `scripts/ai/control.ps1`, including the `CONTROL:` line showing an injected caller in a copy being detected |
+
+## Acceptance matrix audit (defects found and repaired)
+
+Every row of the acceptance matrix above was extracted programmatically from the
+markdown table and executed as stored, on Windows PowerShell, from the
+repository root. Four rows did not hold. Each is recorded below with its
+measurement and its replacement. Rows `AC-AI-43-01`, `AC-AI-43-03`,
+`AC-AI-43-04`, `AC-AI-43-05` and `AC-AI-43-06` were re-measured and hold as
+written; they read real repository files and each fails when run from an empty
+directory with no repository present, so they are left unchanged.
+
+### Step 1 measurement (rows as originally stored)
+
+| Row | Expected exit | Actual exit | Expected string found | First 120 chars of actual output |
+|---|---|---|---|---|
+| `AC-AI-43-01` | 0 | 0 | yes | `=== VALIDATING ECOSYSTEM MANIFEST & PROFILES === Manifest : ...` |
+| `AC-AI-43-02` | 0 | 1 | no | `37 repo khai trong manifest - kiem duoc 27 - co 18 - thieu 9 ... [LOI] DECLARED_INSTALLED_BUT_ABSENT (1)` |
+| `AC-AI-43-03` | 1 | 1 | yes | `QUALITY_GATE_MISSING: trivy` |
+| `AC-AI-43-04` | 0 | 0 | yes | `Gitleaks pin 8.24.0 in security-baseline.yml: true` |
+| `AC-AI-43-05` | 1 | 1 | yes | `QUALITY_GATE_MISSING: gitleaks` |
+| `AC-AI-43-06` | 0 | 0 | yes | `37 repo khai trong manifest ... [CANH] PINNED_VERSION_DRIFT (1) Pin la 0...` |
+| `AC-AI-43-07` | 0 | 0 | yes | `tests 620, pass 620, fail 0` (but see D2: also 0 / `fail 0` outside the repository) |
+| `AC-AI-43-08` | 1 | not extractable | n/a | command cell truncated mid-command by an unescaped `\|` |
+| `AC-AI-43-09` | 0 | not extractable | n/a | command cell truncated mid-regex by an unescaped `\|` |
+
+### D1 — `AC-AI-43-02`: stale pin
+
+**Defect class:** stale pin. The row asserted the whole console tally
+`Tong: 0 loi, 1 canh bao, 2 ghi chu`. Two of those three numbers are
+host-dependent observations, not invariants: warning and note counts drift with
+whatever happens to be installed on the workstation.
+
+**Measurement:** the command exited `1` and printed
+`DECLARED_INSTALLED_BUT_ABSENT (1)` with `co 18 - thieu 9` instead of
+`co 19 - thieu 8`. Root cause: `onPath()` in `tools/ai-brain/manifest-audit.js`
+probes with `where` under a 5-second timeout, which a cold or loaded
+workstation can exceed; eleven subsequent runs, including six in parallel,
+reported `co 19 - thieu 8` and exit `0`. The probe itself lives outside this
+Work Item's allowed paths and is not changed here.
+
+**Replacement:** `tools/ai-brain/acceptance/ac-43-02-manifest-zero-errors.js`,
+which asserts only the invariant `summary.error === 0` against the real
+manifest and prints the warning and note counts as evidence without comparing
+them. No new number is pinned. A control step first tampers with an in-memory
+copy of the real manifest (flipping the existing `trivy` entry to
+`ADOPTED`/`BLOCKING_GATE`, keeping 37 entries) and requires the audit to reject
+it, so a clean verdict cannot come from a sleeping audit.
+
+### D2 — `AC-AI-43-07`: an assertion that proves nothing
+
+**Defect class:** vacuous assertion (tautology). The row asserted that
+`node --test "tools/ai-brain/test/*.test.js" ...` exits 0 and prints
+`fail 0`.
+
+**Measurement:** run from an empty temporary directory with no repository
+present, that exact command exits `0` and prints
+`tests 0 / pass 0 / fail 0`. `node --test` reports a clean run when its globs
+match nothing, so the row could not tell a green suite from no suite at all.
+
+**Replacement:** `tools/ai-brain/acceptance/ac-43-07-suite-not-vacuous.js`,
+which expands the globs against the real repository, requires them to resolve to
+files, runs the suite, and asserts `tests >= file count`, `pass > 0` and
+`fail === 0`. Its control step runs the identical command and the identical
+parser from an empty directory and requires that vacuous run to be refused.
+Measured at HEAD: 25 test files, 620 tests, 620 passed, fail 0.
+
+### D3 — `AC-AI-43-08`: unrunnable, and a false claim underneath it
+
+**Defect class:** unrunnable *and* false claim.
+
+**Measurement (unrunnable):** the stored PowerShell one-liner contains unescaped
+`|` characters (`Get-Content ... | ConvertFrom-Json`, `$m.adopted | Where-Object`).
+In a markdown table those split the cell, so the command extracted from the
+table ends at `$m=Get-Content tools/ecosystem-manifest.json -Raw`. Reassembled
+by hand from the raw source line and executed, it still fails to parse:
+`An empty pipe element is not allowed` at char 231, because the nested
+double-quoted `-Command` string does not survive a second shell layer.
+
+**Measurement (false claim):** the claim itself is untrue at HEAD.
+`grep -rn "QUALITY_GATE_MISSING" scripts/` and
+`grep -rn "cli.js manifest\|manifest-audit" scripts/` both return nothing, and
+`scripts/ai/doctor.ps1` declares only `-AiRoot`, `-TestDocker` and
+`-TestModels` — no `-ManifestPath`. `doctor.ps1` can never print
+`QUALITY_GATE_MISSING: trivy`; its exit `1` on this workstation comes from
+unrelated findings (Codex authentication, a dirty worktree). Wiring the audit
+requires editing `scripts/ai/*`, which the Author boundary of this Work Item
+prohibits, so the claim is corrected rather than satisfied: the Business outcome
+and `AI-43-R01`/`AI-43-R07`/`AI-43-R09` are now marked NOT IMPLEMENTED at HEAD.
+
+**Replacement:** `tools/ai-brain/acceptance/ac-43-08-audit-wiring.js`, which
+measures the wiring instead of asserting it. It reads the two real health-check
+scripts, reports the number of wired surfaces (`0` at HEAD), and exits `1` with
+`CLAIM_STALE` the moment wiring appears — forcing the prose above to be widened
+in the same change. Its control step injects the claimed wiring line into a copy
+of `doctor.ps1` and requires the detector to find it, so `0` cannot come from a
+dead pattern.
+
+### D4 — `AC-AI-43-09`: unrunnable
+
+**Defect class:** unrunnable. The command embeds the regular expression
+`/(doctor|ecosystem)\.ps1/`, whose `|` is unescaped inside a markdown table
+cell. Extracted from the table, the command ends at `...filter(f=>/(doctor`.
+Reassembled by hand from the raw source line, the logic itself is sound and
+exits `0`; the defect is storage, not logic.
+
+**Replacement:** `tools/ai-brain/acceptance/ac-43-09-enforcement-boundary.js`,
+carrying the identical logic in a committed file that no markdown escaping can
+corrupt, plus a control step that injects a `doctor.ps1` call into a copy of a
+real workflow file and requires it to be flagged.
+
+### Exit codes of the new acceptance scripts
+
+| Script | In repository | From an empty directory, no repository |
+|---|---|---|
+| `ac-43-02-manifest-zero-errors.js` | `0` | `2` (`SOURCE_MISSING`) |
+| `ac-43-07-suite-not-vacuous.js` | `0` | `2` (`SOURCE_MISSING`) |
+| `ac-43-08-audit-wiring.js` | `0` | `2` (`SOURCE_MISSING`) |
+| `ac-43-09-enforcement-boundary.js` | `0` | `2` (`SOURCE_MISSING`) |
+
+All four follow `tools/ai-brain/acceptance/ac-07-13-forbidden-lifecycle.js`:
+a control step that tampers with a copy and requires the real check to reject
+it, real repository files read from disk, no file on disk ever written, and
+exit `2` rather than a false pass when run outside the repository.
 
 ## Verification commands
 
