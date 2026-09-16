@@ -119,7 +119,12 @@ function renderStaticDashboard(rootDir, options = {}) {
   // needing the same manual pass.
   const clean = html.replace(/[ 	]+$/gm, '');
   fs.writeFileSync(outputHtmlPath, clean, 'utf-8');
-  console.log(`[OK] Generated self-contained DASHBOARD.html (${html.length} bytes)`);
+  // Report what was written, not what was built. `html` is the pre-strip text
+  // and its `.length` counts UTF-16 code units, so on a page carrying
+  // Vietnamese the number was wrong twice over: it ignored the stripped
+  // whitespace and it was not a byte count at all.
+  const bytesWritten = Buffer.byteLength(clean, 'utf-8');
+  console.log(`[OK] Generated self-contained DASHBOARD.html (${bytesWritten} bytes)`);
   return outputHtmlPath;
 }
 
