@@ -490,7 +490,40 @@ function verifyMergeEvidence(evidence, item, probes) {
     if (!SHA_40.test(reviewed)) {
       return { ok: false, why: 'FALLBACK_PASS reviewedCommit is not a 40-character SHA' };
     }
-    if (reviewed !== head) {
+    // Two shapes are accepted, and they answer the same question: was the code
+    // being recorded the code that was read?
+    //
+    //   - `reviewedCommit === headRefOid`: the review was of the pull request's
+    //     final head, before it merged.
+    //   - `reviewedAt: 'mainRef'`: the review was of the repository tip after
+    //     the merge. This is the shape a re-review takes - a first review found
+    //     defects, later pull requests fixed them, and the reviewer then read
+    //     the result rather than the history. The merge commit must be reachable
+    //     on mainRef and `reviewedCommit` must BE the mainRef tip, so the review
+    //     is of code that contains the merge and is current.
+    //
+    // Neither shape proves the reviewer read anything. Both make the claim
+    // falsifiable: the reviewed commit is named, and its content is fixed.
+    const reviewedAt = String(evidence.reviewedAt || '').trim();
+    if (reviewedAt) {
+      if (reviewedAt !== 'mainRef') {
+        return { ok: false, why: 'reviewedAt must be the literal mainRef' };
+      }
+      const tip = String(typeof probes.tip === 'function' ? probes.tip() || '' : '').trim();
+      if (!SHA_40.test(tip)) {
+        return { ok: false, why: 'the mainRef tip could not be read' };
+      }
+      if (reviewed !== tip) {
+        return {
+          ok: false,
+          why:
+            'reviewedAt names ' +
+            reviewed.slice(0, 8) +
+            ' but the mainRef tip is ' +
+            tip.slice(0, 8),
+        };
+      }
+    } else if (reviewed !== head) {
       return {
         ok: false,
         why:
@@ -535,6 +568,7 @@ function planReconciliation(items, options) {
     hasCommit: opts.commitExists || ((sha) => commitExists(sha, cwd)),
     merged: opts.isAncestorOf || ((sha) => isAncestorOf(sha, mainRef, cwd)),
     hasFile: opts.fileExists || ((p) => fileExists(p, cwd)),
+    tip: opts.mainTip || (() => headSha(mainRef, cwd)),
   };
 
   const byId = new Map();
@@ -549,6 +583,37 @@ function planReconciliation(items, options) {
     const id = item.work_item_id;
     if (!id) continue;
     const status = String(item.status || '').trim();
+
+    // Merge evidence is considered FIRST, before the stale-block branch.
+    //
+    // A BLOCKED_DEPENDENCY row matches the block-clearing branch, which clears
+    // the block to BACKLOG and continues - so it never reached the MERGED
+    // branch at all. Measured 2026-09-16: widening ALLOWED_SOURCES_FOR_MERGED
+    // to accept pre-review statuses had no effect on any blocked row, and the
+    // silent skip produced no refusal to explain why. A row carrying durable
+    // merge evidence is merged, whatever it was blocked on.
+    if (ALLOWED_SOURCES_FOR_MERGED.has(status) && evidence) {
+      if (!evidenceTargets(evidence, item)) {
+        // Not this row's evidence. Fall through rather than skip silently.
+      } else {
+        const verdict = verifyMergeEvidence(evidence, item, probes);
+        if (!verdict.ok) {
+          refusals.push(refusal(id, verdict.why, 'AI-19-R04'));
+          continue;
+        }
+        mutations.push(
+          mutation(item, status, TERMINAL_STATUS, 'AI-19-R04', {
+            pr: String(evidence.number),
+            mergeCommit: verdict.mergeSha,
+            headRefOid: verdict.head,
+            codexVerdict: evidence.codexVerdict,
+            unresolvedThreadsCount: evidence.unresolvedThreadsCount,
+            ciChecksStatus: evidence.ciChecksStatus,
+          })
+        );
+        continue;
+      }
+    }
 
     if (ALLOWED_SOURCES_FOR_BACKLOG.has(status)) {
       const deps = parseDependencies(item.dependencies);

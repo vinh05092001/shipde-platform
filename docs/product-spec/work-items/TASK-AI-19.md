@@ -387,6 +387,49 @@ This closes the residual limitation this document recorded below: "Only the
 status cell is written. The `pr`, `merge_commit` and `codex_verdict` columns are
 never backfilled."
 
+## Why a blocked row was not recorded
+
+`TASK-AI-38` carries a merged pull request, a fallback review on its exact head
+and CI success, yet the reconciler planned no mutation for it and printed no
+refusal.
+
+Cause, measured on `2026-09-16`: a `BLOCKED_DEPENDENCY` row matches the
+block-clearing branch, which clears the block to `BACKLOG` and continues. It
+therefore never reached the `MERGED` branch. Extending
+`ALLOWED_SOURCES_FOR_MERGED` to accept the pre-review statuses — done earlier in
+this same Work Item — had no effect on any blocked row, and the skip was silent,
+so nothing said why.
+
+The merge check now runs first. A row holding durable merge evidence is merged
+whatever it was blocked on; a row without evidence falls through to block
+clearing unchanged.
+
+The silent skip is the part worth keeping: a row that is neither moved nor
+refused is invisible in the output, and this defect survived a review round
+because of it.
+
+## Executed run: re-reviews of the repository tip
+
+Three more rows recorded on `2026-09-16`, each after a review of the repository
+tip rather than of the pull request's original head:
+
+| Row | PR | Merge commit |
+|---|---|---|
+| `TASK-AI-07` | `#53` | `a485ed88d62d` |
+| `TASK-AI-28` | `#49` | `1069fd27e8` |
+| `TASK-AI-40` | `#60` | `197e94c4f1` |
+
+The tip shape exists because a re-review is not a review of the original head. A
+first review found defects; later pull requests fixed them; the reviewer then
+read the result. `reviewedAt: 'mainRef'` accepts that on its own terms - the
+reviewed commit must be the `mainRef` tip, and the merge must already be proven
+reachable on `mainRef`, so the review is of code that contains the merge and is
+current. Without the field, the head-equality rule applies unchanged.
+
+Recording `TASK-AI-07` also cleared the block on `TASK-AI-08`, which moved from
+`BLOCKED_DEPENDENCY` to `BACKLOG` in the same run. That is the first link of the
+chain opening.
+
 ## Residual limitations
 
 - **Reviewer points from round 5 not addressed here.** Reverting a penultimate audit is impossible by design, because `--revert` requires the register to still hash to that audit's `post_hash_sha256`; `operator_session` falls back to `USERNAME`, which is Windows-only, and does not consult `USER`; `require('crypto')` is called inline in two functions rather than hoisted; `pick(args, 'revert', 'revert')` passes the same key twice and is redundant; and an `AI-19-R02` refusal does not name the target row's status, so it reads similarly to an `AI-19-R04` refusal in an audit artifact. None of these changes whether the register is written correctly.

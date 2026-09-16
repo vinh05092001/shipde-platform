@@ -621,6 +621,157 @@ describe('planReconciliation — recording a merge', () => {
   });
 });
 
+describe('planReconciliation - a review of the repository tip', () => {
+  const TIP = 'e'.repeat(40);
+
+  function tipProven(overrides) {
+    return Object.assign({}, ALL_PROVEN, { mainTip: () => TIP }, overrides || {});
+  }
+
+  function reviewedAtTip(overrides) {
+    return evidenceFor(
+      Object.assign(
+        {
+          codexVerdict: 'FALLBACK_PASS',
+          fallbackReviewer: 'a-model',
+          reviewedCommit: TIP,
+          reviewedAt: 'mainRef',
+        },
+        overrides || {}
+      )
+    );
+  }
+
+  test('a review of the tip records the merge', () => {
+    // The shape a RE-review takes: the first review found defects, later pull
+    // requests fixed them, and the reviewer then read the result rather than
+    // the history. Requiring reviewedCommit === headRefOid would refuse every
+    // such review and leave the row unrecordable.
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: reviewedAtTip() }, tipProven())
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'MERGED');
+  });
+
+  test('a reviewedCommit that is not the tip is refused', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign(
+        { mergeEvidence: reviewedAtTip({ reviewedCommit: 'f'.repeat(40) }) },
+        tipProven()
+      )
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.match(plan.refusals[0].reason, /but the mainRef tip is/);
+  });
+
+  test('an unreadable tip is refused rather than assumed', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: reviewedAtTip() }, tipProven({ mainTip: () => '' }))
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.match(plan.refusals[0].reason, /tip could not be read/);
+  });
+
+  test('an unrecognised reviewedAt value is refused', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: reviewedAtTip({ reviewedAt: 'whatever' }) }, tipProven())
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.match(plan.refusals[0].reason, /must be the literal mainRef/);
+  });
+
+  test('the tip shape does not excuse failing CI or unresolved threads', () => {
+    for (const [override, pattern] of [
+      [{ ciChecksStatus: 'FAILURE' }, /CI checks are not SUCCESS/],
+      [{ unresolvedThreadsCount: 1 }, /unresolved review threads/],
+    ]) {
+      const plan = planReconciliation(
+        [readyRow()],
+        Object.assign({ mergeEvidence: reviewedAtTip(override) }, tipProven())
+      );
+      assert.equal(plan.mutations.length, 0, JSON.stringify(override));
+      assert.match(plan.refusals[0].reason, pattern);
+    }
+  });
+
+  test('without reviewedAt the head equality rule still applies', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign(
+        {
+          mergeEvidence: evidenceFor({
+            codexVerdict: 'FALLBACK_PASS',
+            fallbackReviewer: 'a-model',
+            reviewedCommit: TIP,
+          }),
+        },
+        tipProven()
+      )
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.match(plan.refusals[0].reason, /but the evidence head is/);
+  });
+});
+describe('planReconciliation - a blocked row carrying merge evidence', () => {
+  test('the merge is recorded, not the block', () => {
+    // A BLOCKED_DEPENDENCY row matches the block-clearing branch, which clears
+    // the block to BACKLOG and continues - so it never reached the MERGED
+    // branch at all. Measured 2026-09-16: widening the allowed MERGED sources
+    // to include the pre-review statuses had no effect on any blocked row, and
+    // the skip produced no refusal to say why.
+    const plan = planReconciliation(
+      [
+        mergedDep({ work_item_id: 'TASK-AI-17', status: 'MERGED' }),
+        readyRow({
+          work_item_id: 'TASK-AI-06',
+          status: 'BLOCKED_DEPENDENCY',
+          dependencies: 'TASK-AI-17',
+        }),
+      ],
+      Object.assign({ mergeEvidence: evidenceFor() }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'MERGED');
+    assert.equal(plan.mutations[0].from, 'BLOCKED_DEPENDENCY');
+  });
+
+  test('a blocked row whose evidence is invalid is refused, not silently skipped', () => {
+    const plan = planReconciliation(
+      [
+        readyRow({
+          work_item_id: 'TASK-AI-06',
+          status: 'BLOCKED_DEPENDENCY',
+          dependencies: 'TASK-AI-17',
+        }),
+      ],
+      Object.assign({ mergeEvidence: evidenceFor({ ciChecksStatus: 'FAILURE' }) }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.equal(plan.refusals.length, 1);
+    assert.match(plan.refusals[0].reason, /CI checks are not SUCCESS/);
+  });
+
+  test('a blocked row with no evidence is left for the block-clearing branch', () => {
+    const plan = planReconciliation(
+      [
+        mergedDep({ work_item_id: 'TASK-AI-17', status: 'MERGED' }),
+        readyRow({
+          work_item_id: 'TASK-AI-06',
+          status: 'BLOCKED_DEPENDENCY',
+          dependencies: 'TASK-AI-17',
+        }),
+      ],
+      ALL_PROVEN
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'BACKLOG');
+  });
+});
 describe('applyStatusMutations - a MERGED transition writes its evidence', () => {
   // Built with String.fromCharCode rather than a backslash escape: this block
   // was written through a shell heredoc twice and the escape was eaten both
