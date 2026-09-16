@@ -445,6 +445,29 @@ model used earlier was exhausted for the day, and the replacement was calibrated
 against a diff whose defects were already known before it was trusted. It found
 all three.
 
+## Executed run: TASK-AI-35
+
+| Row | PR | Merge commit | Reviewer |
+|---|---|---|---|
+| `TASK-AI-35` | `#59` | `da9c4f8df1` | `cline-free/muse-spark-1.3-contributor` |
+
+## Why reviewedAt no longer requires the tip
+
+The first version of the tip-review rule required the reviewed commit to BE the
+mainRef tip. That was wrong, and it failed the first time it was used in anger:
+every unrelated merge moves the tip, so evidence gathered before any merge
+became unusable the moment that merge landed. Measured on `2026-09-16`: a row
+reviewed minutes earlier was refused because four unrelated specification pull
+requests had merged in between, while none of that Work Item own files had
+changed.
+
+The rule now requires the reviewed commit to be reachable on `mainRef` and to
+contain the merge commit. What it does NOT establish is that the reviewed commit
+is the latest one: a review of an earlier commit stands even if that Work Item
+files changed afterwards, so this evidence goes stale silently. The reviewer is
+named and the commit is fixed, which makes the claim checkable after the fact
+rather than impossible to make.
+
 ## Residual limitations
 
 - **Reviewer points from round 5 not addressed here.** Reverting a penultimate audit is impossible by design, because `--revert` requires the register to still hash to that audit's `post_hash_sha256`; `operator_session` falls back to `USERNAME`, which is Windows-only, and does not consult `USER`; `require('crypto')` is called inline in two functions rather than hoisted; `pick(args, 'revert', 'revert')` passes the same key twice and is redundant; and an `AI-19-R02` refusal does not name the target row's status, so it reads similarly to an `AI-19-R04` refusal in an audit artifact. None of these changes whether the register is written correctly.
