@@ -8,7 +8,9 @@ param(
         $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
         Join-Path $userHome ".claude"
     ),
-    [int]$NineRouterPort = 20128,
+    # The old name stays accepted so an operator launcher still passing it keeps
+    # working; the rename must change no behaviour (AI-44-R03).
+    [Alias('AgentRouterPort')][int]$NineRouterPort = 20128,
     [string]$ExpectedAoVersion = "",
     [int]$StartupTimeoutSeconds = 30,
     [switch]$Restart,
