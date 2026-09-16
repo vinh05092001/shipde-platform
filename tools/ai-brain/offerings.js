@@ -287,6 +287,22 @@ function laddered(offerings) {
     .map((tier) => ({ tier, offerings: byTier.get(tier) }));
 }
 
+/**
+ * The tier to fall to after an offering refused.
+ *
+ * One tier down, not one offering along. Offerings inside a tier normally
+ * share an account and therefore a budget, so moving sideways retries the same
+ * wall; the ladder exists precisely to name the next independent budget.
+ */
+function nextTierDown(ladder, fromTier, headrooms, strategy) {
+  for (const rung of ladder || []) {
+    if (!(rung.tier > fromTier)) continue;
+    const ranked = rankOfferings(rung.offerings, headrooms || {}, strategy);
+    if (ranked.length > 0) return { tier: rung.tier, offerings: ranked };
+  }
+  return null;
+}
+
 module.exports = {
   Strategy,
   offeringId,
@@ -295,5 +311,6 @@ module.exports = {
   headroomForAll,
   rankOfferings,
   laddered,
+  nextTierDown,
   blendedCost,
 };
