@@ -275,3 +275,11 @@ From a clean checkout:
 ## Post-delivery change: AO pin 0.13.0 (2026-09-16)
 
 The installed desktop runtime moved to AO `0.13.0` and the supervisor failed closed on the pin, as `AI-SUP` intends. The operator approved raising the pin. Before the pin moved, every AO surface this Work Item depends on was checked against `0.13.0` on the host: `ao spawn` (`--project --kind --name --branch --harness --prompt --mode`), `ao session ls|get --project --json` (still `{ data, meta }`), `ao session kill --project`, `ao review ls <session> --json` and `ao status --json` (`state: ready`). All are accepted. A live spawn under `0.13.0` was not exercised. Changed: `tools/ecosystem-manifest.json` pin and health check, the canonical-pin self-test in `control.ps1`. Fixture comments naming `0.12.12` describe responses observed at that version and are unchanged.
+
+### Review round 1 repairs (2026-09-16)
+
+- The `newerVersionRejected` self-test used the literal `ao version 0.12.99`. Once the pin moved to `0.13.0`, that version is older than the pin, so the test no longer proved its name. The fixture is now derived from the pin (`<major>.<minor+1>.0`), and a separate `olderVersionRejected` case (`<major>.<minor-1>.99`) covers the other direction. `control.ps1 -Action Test` exits 0 with `ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED`.
+- Live read-only evidence on the 0.13.0 host: `agent-orchestrator.exe` ProductVersion `0.13.0`; `ao session ls --json` exits 0 and returns the `data,meta` shape; `ao status --json` exits 0 with `state: ready`.
+- Kept deliberately: the canonical-pin self-test compares against a literal as well as `$script:ExpectedAoVersion`. The literal is the point of that test. A manifest edit alone must not silently move the pin the controller accepts, so a pin change has to touch both, as this one does.
+- Not changed in this Pull Request: `TASK-AI-07.md` line 69 still says `0.12.12`. It records the version at TASK-AI-07's delivery, and the `contract` check refuses a Pull Request that changes more than one Work Item file.
+- Still unverified: a live `ao spawn` of a real worker under 0.13.0. It starts a paid agent session, so it will be observed on the first supervised dispatch after merge. The supervisor fails closed if spawn output does not match the contract.
