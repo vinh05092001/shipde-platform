@@ -621,20 +621,20 @@ describe('planReconciliation — recording a merge', () => {
   });
 });
 
-describe('planReconciliation - a review of the repository tip', () => {
-  const TIP = 'e'.repeat(40);
+describe('planReconciliation - a review of a commit on main', () => {
+  const AT = 'e'.repeat(40);
 
-  function tipProven(overrides) {
-    return Object.assign({}, ALL_PROVEN, { mainTip: () => TIP }, overrides || {});
+  function onMain(overrides) {
+    return Object.assign({}, ALL_PROVEN, { containsCommit: () => true }, overrides || {});
   }
 
-  function reviewedAtTip(overrides) {
+  function reviewedSomewhere(overrides) {
     return evidenceFor(
       Object.assign(
         {
           codexVerdict: 'FALLBACK_PASS',
           fallbackReviewer: 'a-model',
-          reviewedCommit: TIP,
+          reviewedCommit: AT,
           reviewedAt: 'mainRef',
         },
         overrides || {}
@@ -642,44 +642,41 @@ describe('planReconciliation - a review of the repository tip', () => {
     );
   }
 
-  test('a review of the tip records the merge', () => {
+  test('a review of a commit on main records the merge', () => {
     // The shape a RE-review takes: the first review found defects, later pull
-    // requests fixed them, and the reviewer then read the result rather than
-    // the history. Requiring reviewedCommit === headRefOid would refuse every
-    // such review and leave the row unrecordable.
+    // requests fixed them, and the reviewer then read the result. Requiring the
+    // reviewed commit to equal the pull request's head refused every such
+    // review.
     const plan = planReconciliation(
       [readyRow()],
-      Object.assign({ mergeEvidence: reviewedAtTip() }, tipProven())
+      Object.assign({ mergeEvidence: reviewedSomewhere() }, onMain())
     );
     assert.equal(plan.mutations.length, 1);
     assert.equal(plan.mutations[0].to, 'MERGED');
   });
 
-  test('a reviewedCommit that is not the tip is refused', () => {
+  test('a reviewed commit that is not on main is refused', () => {
     const plan = planReconciliation(
       [readyRow()],
-      Object.assign(
-        { mergeEvidence: reviewedAtTip({ reviewedCommit: 'f'.repeat(40) }) },
-        tipProven()
-      )
+      Object.assign({ mergeEvidence: reviewedSomewhere() }, onMain({ isAncestorOf: () => false }))
     );
     assert.equal(plan.mutations.length, 0);
-    assert.match(plan.refusals[0].reason, /but the mainRef tip is/);
+    assert.match(plan.refusals[0].reason, /not reachable on mainRef/);
   });
 
-  test('an unreadable tip is refused rather than assumed', () => {
+  test('a reviewed commit that does not contain the merge is refused', () => {
     const plan = planReconciliation(
       [readyRow()],
-      Object.assign({ mergeEvidence: reviewedAtTip() }, tipProven({ mainTip: () => '' }))
+      Object.assign({ mergeEvidence: reviewedSomewhere() }, onMain({ containsCommit: () => false }))
     );
     assert.equal(plan.mutations.length, 0);
-    assert.match(plan.refusals[0].reason, /tip could not be read/);
+    assert.match(plan.refusals[0].reason, /does not contain the merge commit/);
   });
 
   test('an unrecognised reviewedAt value is refused', () => {
     const plan = planReconciliation(
       [readyRow()],
-      Object.assign({ mergeEvidence: reviewedAtTip({ reviewedAt: 'whatever' }) }, tipProven())
+      Object.assign({ mergeEvidence: reviewedSomewhere({ reviewedAt: 'whatever' }) }, onMain())
     );
     assert.equal(plan.mutations.length, 0);
     assert.match(plan.refusals[0].reason, /must be the literal mainRef/);
@@ -692,7 +689,7 @@ describe('planReconciliation - a review of the repository tip', () => {
     ]) {
       const plan = planReconciliation(
         [readyRow()],
-        Object.assign({ mergeEvidence: reviewedAtTip(override) }, tipProven())
+        Object.assign({ mergeEvidence: reviewedSomewhere(override) }, onMain())
       );
       assert.equal(plan.mutations.length, 0, JSON.stringify(override));
       assert.match(plan.refusals[0].reason, pattern);
@@ -707,10 +704,10 @@ describe('planReconciliation - a review of the repository tip', () => {
           mergeEvidence: evidenceFor({
             codexVerdict: 'FALLBACK_PASS',
             fallbackReviewer: 'a-model',
-            reviewedCommit: TIP,
+            reviewedCommit: AT,
           }),
         },
-        tipProven()
+        onMain()
       )
     );
     assert.equal(plan.mutations.length, 0);
