@@ -258,7 +258,12 @@ if ($agentRouterCached) {
 
         $text = [string]$probe.Output
         if ($probe.TimedOut) {
-            $agentRouterDetail = "CONFIGURED but unverified (probe timed out)"
+            # AI-44-R01: presence is not configuration. Measured 2026-09-16: a
+            # deliberately invalid key makes the probe time out rather than
+            # print a 401, so reporting a timeout as CONFIGURED passed a dead
+            # key off as a working fallback.
+            $agentRouterDetail = "UNAVAILABLE: key present but unverified (probe timed out); the Claude and Codex fallback route is not reported available"
+            $agentRouterFailure = "AGENTROUTER_API_KEY could not be verified (probe timed out); treat the AgentRouter fallback as unavailable -- see TASK-AI-44"
         } elseif ($text -match "SHIPDE_AUTH_OK") {
             $agentRouterLive = $true
             $agentRouterDetail = ("AUTHENTICATED via {0}" -f $probeModel)
@@ -280,10 +285,12 @@ if ($agentRouterCached) {
         } elseif ($text -match "(?i)model catalog") {
             $agentRouterDetail = "AUTHENTICATED but Claude Code does not recognise the probe model; map it with modelOverrides"
         } else {
-            $agentRouterDetail = "CONFIGURED but unverified (unexpected probe output)"
+            $agentRouterDetail = "UNAVAILABLE: key present but unverified (unexpected probe output)"
+            $agentRouterFailure = "AGENTROUTER_API_KEY could not be verified (unexpected probe output); treat the AgentRouter fallback as unavailable -- see TASK-AI-44"
         }
     } catch {
-        $agentRouterDetail = "CONFIGURED but unverified ($($_.Exception.Message))"
+        $agentRouterDetail = "UNAVAILABLE: key present but unverified ($($_.Exception.Message))"
+        $agentRouterFailure = "AGENTROUTER_API_KEY could not be verified (probe error); treat the AgentRouter fallback as unavailable -- see TASK-AI-44"
     } finally {
         # The token lives in this process's environment only for the duration
         # of the probe; anything spawned afterwards must not inherit it.
@@ -315,7 +322,7 @@ if ($agentRouterCached) {
     }
 }
 Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)
-Write-Host ("AgentRouter serves: manual Claude profile .claude-orchestrator (cloud, agentrouter.org, no /v1 in the base URL); review fallback uses the native Claude Code CLI, not this gateway")
+Write-Host ("AgentRouter serves: Claude and Codex through the manual .claude-orchestrator profile (cloud, agentrouter.org, no /v1 in the base URL); review fallback uses the native Claude Code CLI, not this gateway")
 Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) -- a different gateway (NineRouter* symbols in control.ps1)")
 
 Write-Host ""
