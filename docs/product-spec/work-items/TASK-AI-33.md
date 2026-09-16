@@ -286,8 +286,8 @@ Delivered on `feat/task-ai-33-beads-shadow`, based on `origin/main` at `4b0fa4b`
   value, and both-or-neither of `--project`/`--compare` are refused with exit 1.
   The default store is `.ai-local/shadow/dependency-graph.json`, which
   `.gitignore` already excludes, so a projection never dirties the tree.
-- `tools/ai-brain/test/shadow.test.js` — 17 tests against temp-directory
-  fixture registers; none reads or writes the real register.
+- `tools/ai-brain/test/shadow.test.js` — 22 tests against temp-directory
+  fixture registers; none writes the real register, and one row reads it read-only and asserts its bytes are unchanged.
 - `AI-TOOLCHAIN-DECISIONS.md` § Beads runs in shadow mode (TASK-AI-33).
 
 Measured on this branch (`178` nodes, `174` edges, printed and not pinned):
@@ -299,7 +299,7 @@ Measured on this branch (`178` nodes, `174` edges, printed and not pinned):
 | `AC-AI-33-03` | exit 0, `RULE_SINGLE_SOURCE: shadow edges parsed by tools/ai-brain/reconcile.js` |
 | `AC-AI-33-04` | exit 0, `OUTSIDE_REPOSITORY_PROBE: 3 subjects exited 2 with no register present` |
 | `AC-AI-33-05` | exit 0, `Tổng: 0 lỗi` |
-| `node --test tools/ai-brain/test/shadow.test.js` | 17 pass, 0 fail |
+| `node --test tools/ai-brain/test/shadow.test.js` | 22 pass, 0 fail |
 | `cli.js shadow --project` then `--compare` on the real register | exit 0, `Shadow agrees with the register: 178 nodes, 174 edges, 0 divergences` |
 
 ## Codex review record
