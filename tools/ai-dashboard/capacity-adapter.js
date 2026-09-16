@@ -21,7 +21,7 @@ const { runwayReport, Difficulty } = require('../ai-brain/fitness');
 const { expandOfferings, headroomForAll } = require('../ai-brain/offerings');
 const { readIdentity } = require('../ai-brain/agy-identity');
 const { usableReadings } = require('../ai-brain/quota-store');
-const { resolveLimits } = require('../ai-brain/limits');
+const { resolveLimits, WINDOWS } = require('../ai-brain/limits');
 
 let listAccounts = null;
 try {
@@ -150,8 +150,9 @@ function collectCapacity(options) {
   // Which windows each row can speak to. A row with no ceiling shows an empty
   // runway, and an empty runway reads as zero unless the row says which windows
   // are unknown (AI-26 UI states). Resolved once per account, from the same
-  // declared limits and ledger the scheduler uses; nothing is defaulted here.
-  const windowsByAccount = {};
+  // declared limits and ledger resolveLimits reads; nothing is defaulted here.
+  // A Map, because account ids are operator-supplied and `__proto__` is a key.
+  const windowsByAccount = new Map();
   for (const account of accounts) {
     const resolved = resolveLimits(account, {
       now,
@@ -165,14 +166,20 @@ function collectCapacity(options) {
       if (w.unknownBudget) unknown.push(window);
       else known.push({ window, ceiling: w.ceiling, provenance: w.provenance, stale: w.stale });
     }
-    windowsByAccount[account.id] = { knownWindows: known, unknownWindows: unknown };
+    windowsByAccount.set(account.id, { knownWindows: known, unknownWindows: unknown });
   }
   if (Array.isArray(report.rows)) {
     report.rows = report.rows.map((row) =>
       Object.assign(
         {},
         row,
-        windowsByAccount[row.accountId] || { knownWindows: [], unknownWindows: [] }
+        // A row whose account was not resolved has no known ceiling for any
+        // window; saying so is AI-26-R02. An empty list would read as "nothing
+        // missing".
+        windowsByAccount.get(row.accountId) || {
+          knownWindows: [],
+          unknownWindows: WINDOWS.slice(),
+        }
       )
     );
   }

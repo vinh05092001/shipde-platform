@@ -222,9 +222,9 @@ capacity adapter never reported which windows each row knows. Measured on
 nothing, so the panel still could not tell "plenty left" from "no idea".
 
 - `tools/ai-dashboard/capacity-adapter.js` now resolves each account once with
-  `resolveLimits` (the same declared limits and ledger the scheduler reads) and
-  adds `knownWindows` (`window`, `ceiling`, `provenance`, `stale`) and
-  `unknownWindows` to every row. Nothing is defaulted.
+  `resolveLimits` and adds `knownWindows` (`window`, `ceiling`, `provenance`,
+  `stale`) and `unknownWindows` to every row. A row whose account was not
+  resolved lists every window as unknown (`AI-26-R02`); no ceiling is defaulted.
 - `tools/ai-brain/test/limits.test.js` gains two subtests driving the real
   `collectCapacity` with injected accounts: `each capacity row names its known
   and unknown windows` and `a row with no declared limits lists every window as
@@ -275,3 +275,10 @@ added when an operator asserts one with provenance, not by this Work Item.
 - **Nothing here reconciles a ceiling against a bill.** A declared figure that
   is simply wrong will produce a confident runway that is wrong in the same
   direction for as long as it stands.
+
+### Review round 1 (cline-free/muse-spark-1.3-contributor, head `d4b11b8`)
+
+- **Orphan-row fallback** returned empty known and unknown lists, which reads as "nothing missing". Fixed: it now lists every window as unknown.
+- **Prototype-sensitive lookup** on operator-supplied account ids. Fixed: a `Map`.
+- **Wiring overstated.** The earlier record said the panel reads "the same ledger the scheduler reads". Not true today: scheduler headroom flows through `offerings.js` -> `effectiveLimits` + `quota.js` `accountHeadroom`, which does not read the `{ value, provenance, assertedAt }` shape `resolveLimits` reads, so the panel can show a window as known while dispatch still treats it as unknown. The claim is removed; rewiring dispatch is out of this Work Item's allowed paths and is a residual limitation.
+- `AC-AI-26-01` (35 of 35) and the 516-test aggregate remain author-run, not reviewer-run.
