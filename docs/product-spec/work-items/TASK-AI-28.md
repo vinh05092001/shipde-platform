@@ -219,12 +219,51 @@ Measured while implementing, on branch `feat/task-ai-28-cooldown-tests`:
 - **`AC-AI-28-05`'s durations hold exactly.** Measured
   `[2,60,60,240,5]` minutes for `requestsPerMinute`, `requestsPerDay`,
   `tokensPerDay`, `tokensPerMonth` and an unrecognised window. No drift.
-- **`AC-AI-28-01`'s baseline still holds after this change.** `git grep -nE
-  'cooldownFor|recordFailure' -- tools/ai-brain`, with `/test/` and
-  `ceiling.js` lines removed, returns no line. The wiring added here
-  (`observeRefusal`) lives inside `ceiling.js`, so no production *call site*
-  outside the module exists yet: `scheduler.js` still does not observe
-  refusals. The scheduler call site remains open work.
+- **`AC-AI-28-01`'s baseline no longer holds, and that is the point.** It was
+  written to confirm the gap, not to preserve it. `scheduler.js` now calls
+  `observeRefusal`, so a grep for the cooldown machinery outside `/test/` and
+  `ceiling.js` finds a production call site. The row is superseded by the
+  wiring evidence below; a future reader should read `AC-AI-28-01` as the
+  record of the state this Work Item closed.
+
+### The wiring (delivered on `feat/task-ai-28-wire-observer`)
+
+- **The call site.** `planDispatch` in `tools/ai-brain/scheduler.js` is the
+  only production point where a provider's own failure text meets a dispatch
+  decision. `ctx.reported` — from `quota-store.usableReadings`, which
+  deliberately keeps a failed reading usable for `DEFAULT_FAILURE_MAX_AGE_MS`
+  — carries readings shaped `{ available: false, reason }`, where `reason` is
+  the text `agy-quota.readQuota` captured verbatim from the refusing CLI.
+  Before this change `offerings.reportedView` discarded every unavailable
+  reading (`if (!quota || !quota.available) return null`), so a genuine `429`
+  was observed and thrown away.
+- **What was added.** `coolRefusedOfferings` in `scheduler.js`, called from
+  `planDispatch` immediately before `headroomForAll`. It hands each refused
+  reading to `observeRefusal` and writes the returned instant onto
+  `offering.cooldownUntil`, the field `offeringHeadroom` and
+  `accountHeadroom` already read. No reader changed. No duration, signal or
+  monotonicity rule is restated: `observeRefusal` decides all of it. The
+  cooldowns written by a pass are returned as `plan.cooldowns`, which
+  satisfies `AI-28-R10` without a second store.
+- **Tier step-down needs no extra code.** A cooled offering reports `cooling`,
+  `isDispatchable` excludes it, and the ladder loop already in `planDispatch`
+  falls to the next tier. `nextTierDown` remains the tested statement of
+  `AI-28-R05`.
+- **What proves it.** Six new subtests under `The dispatch path observes
+  refusals` in `tools/ai-brain/test/cooldown.test.js`. None calls
+  `observeRefusal`; all drive `planDispatch` with an injected clock and an
+  injected ledger path (`ctx.ledgerFile`). Measured: with the wiring in place,
+  **19 tests, 19 pass, 0 fail**; with only the `coolRefusedOfferings` call
+  replaced by an empty array and the observer left intact, **19 tests, 14
+  pass, 5 fail**. The whole brain/dashboard/guard suite is 626 pass, 0 fail.
+- **Deviation from `AI-28-R09`, stated rather than hidden.** The reported
+  reading is produced per *account*, so a refusal observed here names an
+  account, not one model on it. Every offering of that account is therefore
+  cooled — individually, on its own record; the account record, the tier and
+  every other account are untouched. `AI-28-R09`'s concern (not inflating a
+  model-scoped refusal into something wider) is respected in the only
+  direction the evidence allows: the refusal is not attributed to a narrower
+  scope than the one that produced it either.
 - **`AC-AI-28-13` is confirmed, and it is the reason no test here asserts via
   a name pattern.** Measured: `node --test --test-reporter=tap
   --test-name-pattern=THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ
