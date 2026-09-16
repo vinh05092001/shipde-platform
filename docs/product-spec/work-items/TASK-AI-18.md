@@ -367,6 +367,16 @@ not block the query the usage adapter runs. The pattern now matches only
 
 ## Residual limitations
 
+- **The guard failed on a clean repository the moment it shipped.** `.claude`
+  holds agent worktrees, each a full copy of this repository including the
+  deliberately unreadable fixture. Measured on `main` immediately after merge, on
+  a machine carrying four such worktrees: the default scan reported four
+  `SECRET_SURFACE_UNREADABLE` lines and exited `2` with nothing wrong. Adding
+  `.claude` to the skipped names fixes it, and a test now builds a nested copy
+  and asserts the scan stays clean. The lesson is that the guard was only ever
+  measured on a checkout that happened to have no nested copies — a clean result
+  on one machine is not a clean result.
+
 - **Raw SQL naming the column was missed entirely until an independent review
   found it.** The first version caught `SELECT *`, because a wildcard reaches the
   column without naming it, and caught JavaScript property access. It did not

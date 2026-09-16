@@ -43,9 +43,19 @@ const FIXTURE_EXCLUSION = path.join('tools', 'ai-guard', 'test', 'fixtures');
  */
 const SELF_EXCLUSION = path.join('tools', 'ai-guard', 'secret-surface.js');
 
+/**
+ * Directory names that are never Ship De source, skipped wherever they appear.
+ *
+ * '.claude' holds agent worktrees, each a full copy of this repository. Without
+ * it the guard scanned every copy, found the deliberately unreadable fixture in
+ * each, and exited 2 on a clean tree - measured on main right after the guard
+ * shipped, on a machine that happened to have four agent worktrees. A guard that
+ * fails on a clean repository is one people learn to ignore.
+ */
 const SKIPPED_DIRECTORIES = new Set([
   'node_modules',
   '.git',
+  '.claude',
   '.worktrees',
   'dist',
   'build',
@@ -272,6 +282,7 @@ function runSecretSurface(rootDir, options) {
 
 module.exports = {
   FIXTURE_EXCLUSION,
+  SKIPPED_DIRECTORIES,
   SELF_EXCLUSION,
   CREDENTIAL_COLUMNS,
   WILDCARD_TABLES,
