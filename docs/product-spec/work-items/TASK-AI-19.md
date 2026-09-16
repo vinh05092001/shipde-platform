@@ -430,6 +430,21 @@ Recording `TASK-AI-07` also cleared the block on `TASK-AI-08`, which moved from
 `BLOCKED_DEPENDENCY` to `BACKLOG` in the same run. That is the first link of the
 chain opening.
 
+## Executed run: 2026-09-16, third batch
+
+| Row | PR | Merge commit | Reviewer |
+|---|---|---|---|
+| `TASK-AI-19` | `#63` | `e5e06918d0` | `cline-free/muse-spark-1.3-contributor` |
+| `TASK-AI-16` | `#58` | `914ca697bf` | `cline-free/muse-spark-1.3-contributor` |
+
+Recording `TASK-AI-16` cleared the block on `TASK-AI-20` in the same run —
+`BLOCKED_DEPENDENCY` to `BACKLOG`.
+
+The reviewer is named per row because it changed mid-run: the free tier for the
+model used earlier was exhausted for the day, and the replacement was calibrated
+against a diff whose defects were already known before it was trusted. It found
+all three.
+
 ## Residual limitations
 
 - **Reviewer points from round 5 not addressed here.** Reverting a penultimate audit is impossible by design, because `--revert` requires the register to still hash to that audit's `post_hash_sha256`; `operator_session` falls back to `USERNAME`, which is Windows-only, and does not consult `USER`; `require('crypto')` is called inline in two functions rather than hoisted; `pick(args, 'revert', 'revert')` passes the same key twice and is redundant; and an `AI-19-R02` refusal does not name the target row's status, so it reads similarly to an `AI-19-R04` refusal in an audit artifact. None of these changes whether the register is written correctly.
