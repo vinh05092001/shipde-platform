@@ -188,7 +188,7 @@ Not applicable; this Work Item governs supervisor automation and terminal loggin
 
 | Row | Asserted invariant | Observed baseline (evidence only, not asserted) |
 |---|---|---|
-| `AC-AI-09-07` | `fail 0` in the test runner summary, with `tests > 0` and `suites > 0` | `632` tests across `138` suites at the pre-implementation baseline |
+| `AC-AI-09-07` | `fail 0` in the test runner summary, with `tests > 0` and `suites > 0` | `641` tests across `140` suites at the time of writing |
 | `AC-AI-09-08` | `Tổng: 0 lỗi` from `node tools/ai-brain/cli.js manifest` | Exactly one expected warning (`PINNED_VERSION_DRIFT` for `codex-cli`); warning and note totals are deliberately unpinned |
 | `AC-AI-09-09` | `Tổng: 0 lỗi` from `node tools/ai-brain/cli.js reconcile` | `178` delivery register rows reconciled at the time of writing |
 | `AC-AI-09-10` | `Documentation validation passed:` from `validate_docs.py` | `97` markdown files, `130` feature IDs, `178` delivery rows at the pre-implementation baseline |
