@@ -10,18 +10,28 @@
 //
 // Two premises are measured against artifacts outside this specification:
 //   (a) the pinned upstream tree `getnao/sylph` at the recorded commit ships no
-//       package.json and no runtime entrypoint, and the manifest pin `0.1.0`
-//       resolves to no tag at all;
+//       package.json and no runtime entrypoint, and the manifest pin resolves to
+//       no tag at all;
 //   (b) the real native deliverable `tools/ai-guard` still passes its own suite.
-// The native suite is asserted by the invariant "fail 0 with tests > 0" rather
-// than by a pinned pass count, which drifts.
+//
+// The pin and the remote are READ from `tools/ecosystem-manifest.json`, not
+// written into this file. An earlier revision carried the literal `0.1.0` and
+// the literal clone URL while reporting them as "the manifest pin", so the row
+// would have gone on saying `manifest pin 0.1.0` after the manifest changed.
+// The tag check is equally specific: the premise is that the pinned tag does not
+// resolve, and a test for "the upstream repository has at least one tag" is not
+// that premise.
+//
+// The native suite is asserted by the invariant "fail 0 over a non-empty run"
+// rather than by a pinned pass count, which drifts, and its count is therefore
+// not printed either - a row that quotes the count in its expected output is
+// pinning it just as firmly as one that asserts it.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 
 const SHA = 'd31a9c05f19de0f14e255d9301bbdb0f872354b3';
-const REMOTE = 'https://github.com/getnao/sylph';
 const GUARD_TEST = path.join('tools', 'ai-guard', 'test', 'writer-claim.test.js');
 const MANIFEST = path.join('tools', 'ecosystem-manifest.json');
 
@@ -29,6 +39,19 @@ if (!fs.existsSync(GUARD_TEST) || !fs.existsSync(MANIFEST)) {
   console.error('SOURCE_MISSING: ' + GUARD_TEST + ', ' + MANIFEST);
   process.exit(2);
 }
+
+const sylph = (JSON.parse(fs.readFileSync(MANIFEST, 'utf8')).adopted || []).find(
+  (x) => x.id === 'sylph'
+);
+
+// Control: the premise is about the manifest's own pin. Without an entry there
+// is no pin to test, and "the pin does not resolve" would be true of nothing.
+if (!sylph || !sylph.repository || !sylph.pinned_version_or_commit) {
+  console.error('CONTROL_FAILED: no sylph entry with a repository and a pin in ' + MANIFEST);
+  process.exit(2);
+}
+const PIN = sylph.pinned_version_or_commit;
+const REMOTE = 'https://github.com/' + sylph.repository;
 
 function git(args, opts) {
   const r = cp.spawnSync('git', args, Object.assign({ encoding: 'utf8' }, opts || {}));
@@ -39,8 +62,12 @@ function git(args, opts) {
   return (r.stdout || '').trim();
 }
 
+const tagRef = 'refs/tags/' + PIN;
 const tags = git(['ls-remote', '--tags', REMOTE]);
-const pinResolvable = tags.length > 0;
+const pinResolvable = tags
+  .split('\n')
+  .map((line) => (line.split('\t')[1] || '').trim())
+  .some((ref) => ref === tagRef || ref === tagRef + '^{}');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sylph-evidence-'));
 let files;
@@ -79,7 +106,9 @@ const guardGreen = guardTests > 0 && guardFail === 0;
 const ok = !pinResolvable && manifests === 0 && markdown > javascript && guardGreen;
 
 console.log(
-  'sylph retirement evidence: manifest pin 0.1.0 resolvable=' +
+  'sylph retirement evidence: manifest pin ' +
+    PIN +
+    ' resolvable=' +
     pinResolvable +
     '; upstream ' +
     SHA +
@@ -91,11 +120,7 @@ console.log(
     javascript +
     ' javascript, ' +
     manifests +
-    ' package.json; native tools/ai-guard writer-claim fail ' +
-    guardFail +
-    ' of ' +
-    guardTests +
-    ' tests -> ' +
+    ' package.json; native tools/ai-guard writer-claim fail 0 over a non-empty run -> ' +
     ok
 );
 process.exit(ok ? 0 : 1);
