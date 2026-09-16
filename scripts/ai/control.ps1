@@ -7258,8 +7258,8 @@ function Assert-ShipDeSupervisorCompatibility {
         }
 
         $canonicalPinned = Get-ShipDePinnedAoVersion
-        if ($canonicalPinned -ne "0.12.12" -or $canonicalPinned -ne $script:ExpectedAoVersion) {
-            throw "Canonical pinned AO version test failed: expected 0.12.12, got $canonicalPinned"
+        if ($canonicalPinned -ne "0.13.0" -or $canonicalPinned -ne $script:ExpectedAoVersion) {
+            throw "Canonical pinned AO version test failed: expected 0.13.0, got $canonicalPinned"
         }
     } finally {
         if (Test-Path -LiteralPath $aoFixtureRoot) {
