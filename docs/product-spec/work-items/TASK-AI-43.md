@@ -380,9 +380,8 @@ claim was tested by mutation. It does not hold.
 | append the claimed wiring line to `scripts/ai/doctor.ps1` | `ac-43-08` | `0` | `1` | `MANIFEST_AUDIT_WIRED_SURFACES: 1 ["scripts/ai/doctor.ps1 …"]` and `CLAIM_STALE` |
 | append `- run: pwsh scripts/ai/doctor.ps1` to `.github/workflows/security-baseline.yml` | `ac-43-09` | `0` | `1` | `Enforced-path callers …: 1 [".github\\workflows\\security-baseline.yml"]` and `ENFORCEMENT_BOUNDARY_WIDENED` |
 
-  Both mutations were reverted; the SHA-256 of each file is unchanged
-  (`doctor.ps1` `47d1f6b4…`, `security-baseline.yml` `87879d50…`) and the working
-  tree is clean.
+  Both mutations were reverted; the SHA-256 of each file was compared before
+  and after the measurement and is unchanged, and the working tree is clean.
 
 **Verdict.** The finding is wrong and no script was changed. The checks are
 textual because the claim they verify is textual: the Business outcome asserts
