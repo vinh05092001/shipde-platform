@@ -664,13 +664,17 @@ describe('AI-19-R03 — which review outcomes may clear a stale block', () => {
     assert.equal(plan.mutations.length, 0);
   });
 
-  test('a fallback verdict is still refused for a MERGED transition', () => {
+  test('a bare fallback verdict is still refused for a MERGED transition', () => {
+    // Until TASK-AI-14's reviewer was admitted, any FALLBACK_PASS was refused
+    // here. It is admitted now, but only carrying a named reviewer and the
+    // exact head it read, so the bare verdict this test passes is still not
+    // enough on its own.
     const plan = planReconciliation(
       [readyRow()],
       Object.assign({ mergeEvidence: evidenceFor({ codexVerdict: 'FALLBACK_PASS' }) }, ALL_PROVEN)
     );
     assert.equal(plan.mutations.length, 0);
-    assert.match(plan.refusals[0].reason, /Codex verdict is not PASS/);
+    assert.match(plan.refusals[0].reason, /names nobody/);
   });
 
   test('clearing a block never produces READY_FOR_AUTHOR, whatever the verdict', () => {
@@ -681,5 +685,87 @@ describe('AI-19-R03 — which review outcomes may clear a stale block', () => {
         false
       );
     }
+  });
+});
+
+describe('planReconciliation - a fallback review recording a merge', () => {
+  function fallback(overrides) {
+    return evidenceFor(
+      Object.assign(
+        {
+          codexVerdict: 'FALLBACK_PASS',
+          fallbackReviewer: 'z-ai/glm-5.3-flash',
+          reviewedCommit: SHA_B,
+        },
+        overrides || {}
+      )
+    );
+  }
+
+  test('a named review of the exact head records the merge', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: fallback() }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'MERGED');
+  });
+
+  test('a fallback review that names no reviewer is refused', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: fallback({ fallbackReviewer: '' }) }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.match(plan.refusals[0].reason, /names nobody/);
+  });
+
+  test('a fallback review of an earlier commit is refused', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: fallback({ reviewedCommit: 'c'.repeat(40) }) }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.match(plan.refusals[0].reason, /but the evidence head is/);
+  });
+
+  test('a fallback review with no reviewedCommit is refused', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: fallback({ reviewedCommit: '' }) }, ALL_PROVEN)
+    );
+    assert.match(plan.refusals[0].reason, /reviewedCommit is not a 40-character SHA/);
+  });
+
+  test('a fallback review does not excuse unresolved threads', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: fallback({ unresolvedThreadsCount: 1 }) }, ALL_PROVEN)
+    );
+    assert.match(plan.refusals[0].reason, /unresolved review threads/);
+  });
+
+  test('a fallback review does not excuse failing CI', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: fallback({ ciChecksStatus: 'FAILURE' }) }, ALL_PROVEN)
+    );
+    assert.match(plan.refusals[0].reason, /CI checks are not SUCCESS/);
+  });
+
+  test('a fallback review does not excuse an unreachable merge commit', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({}, ALL_PROVEN, { mergeEvidence: fallback(), isAncestorOf: () => false })
+    );
+    assert.match(plan.refusals[0].reason, /not reachable on mainRef/);
+  });
+
+  test('an unknown verdict is still refused', () => {
+    const plan = planReconciliation(
+      [readyRow()],
+      Object.assign({ mergeEvidence: fallback({ codexVerdict: 'LGTM' }) }, ALL_PROVEN)
+    );
+    assert.match(plan.refusals[0].reason, /Codex verdict is not PASS/);
   });
 });

@@ -427,7 +427,37 @@ function verifyMergeEvidence(evidence, item, probes) {
     };
   }
 
-  if (String(evidence.codexVerdict || '').trim() !== 'PASS') {
+  const verdict = String(evidence.codexVerdict || '').trim();
+  if (verdict === 'FALLBACK_PASS') {
+    // A fallback review is admitted here only because TASK-AI-14 established a
+    // machine-authenticated reviewer as an approved route, and only on terms
+    // Codex is held to. It carries two obligations Codex does not, because
+    // Codex's identity is verified by GitHub and a fallback reviewer's is not:
+    // the reviewer must be named, and the commit it read must be the exact head
+    // the evidence claims. A review of some earlier commit is a review of
+    // different code, and naming no reviewer makes the claim unfalsifiable.
+    const reviewer = String(evidence.fallbackReviewer || '').trim();
+    if (!reviewer) {
+      return {
+        ok: false,
+        why: 'FALLBACK_PASS carries no fallbackReviewer, so the claim names nobody',
+      };
+    }
+    const reviewed = String(evidence.reviewedCommit || '').trim();
+    if (!SHA_40.test(reviewed)) {
+      return { ok: false, why: 'FALLBACK_PASS reviewedCommit is not a 40-character SHA' };
+    }
+    if (reviewed !== head) {
+      return {
+        ok: false,
+        why:
+          'FALLBACK_PASS reviewed ' +
+          reviewed.slice(0, 8) +
+          ' but the evidence head is ' +
+          head.slice(0, 8),
+      };
+    }
+  } else if (verdict !== 'PASS') {
     return { ok: false, why: 'exact-HEAD Codex verdict is not PASS' };
   }
   if (Number(evidence.unresolvedThreadsCount) !== 0) {
