@@ -279,7 +279,31 @@ function findDuplicateIds(items) {
  */
 
 const ALLOWED_SOURCES_FOR_BACKLOG = new Set(['BLOCKED_DEPENDENCY', 'BLOCKED_BY_FOUNDATION']);
-const ALLOWED_SOURCES_FOR_MERGED = new Set(['READY_FOR_CODEX', 'CODEX_PASS']);
+/**
+ * Statuses a row may be recorded MERGED from.
+ *
+ * The pre-review states are included, and that is a deliberate widening. The
+ * source check exists to stop a merge being INFERRED from a branch name; it is
+ * not the thing that stops review from being skipped. What stops that is the
+ * evidence bar: a reachable merge commit on mainRef, a verdict on the exact
+ * head, zero unresolved threads, CI SUCCESS on the reviewed head. A row sitting
+ * at BACKLOG with that evidence in hand did pass through review - the register
+ * simply never recorded the intermediate steps, so it is stale rather than
+ * early. Refusing it does not protect the gate, it preserves a false record.
+ *
+ * Measured 2026-09-16: fifteen rows had merged pull requests carrying real
+ * implementation while the register still read BACKLOG or BLOCKED_DEPENDENCY,
+ * because the lifecycle steps between were never written. Every one of them was
+ * refused by the source check and none by the evidence bar.
+ */
+const ALLOWED_SOURCES_FOR_MERGED = new Set([
+  'READY_FOR_CODEX',
+  'CODEX_PASS',
+  'BACKLOG',
+  'READY_FOR_AUTHOR',
+  'BLOCKED_DEPENDENCY',
+  'BLOCKED_BY_FOUNDATION',
+]);
 const SHA_40 = /^[0-9a-f]{40}$/;
 
 /**

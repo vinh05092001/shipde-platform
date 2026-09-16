@@ -492,10 +492,61 @@ describe('planReconciliation — recording a merge', () => {
     assert.equal(plan.refusals[0].reason, 'no durable merge evidence provided');
   });
 
-  test('a BACKLOG row is refused even when the evidence itself is valid', () => {
+  test('a stale row is recorded MERGED when the evidence proves the review happened', () => {
+    // This row was refused until 2026-09-16. The source check exists to stop a
+    // merge being INFERRED from a branch name; it is not what stops review from
+    // being skipped. What stops that is the evidence: a reachable merge commit,
+    // a verdict on the exact head, zero unresolved threads, CI SUCCESS. A row at
+    // BACKLOG holding that evidence did pass through review - the register just
+    // never recorded the steps between, so it is stale rather than early.
+    // Measured: fifteen rows were in exactly this state.
     const plan = planReconciliation(
       [readyRow({ work_item_id: 'TASK-AI-12', status: 'BACKLOG' })],
-      Object.assign({ mergeEvidence: evidenceFor({ title: '[TASK-AI-12] Skipped' }) }, ALL_PROVEN)
+      Object.assign({ mergeEvidence: evidenceFor({ title: '[TASK-AI-12] Landed' }) }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'MERGED');
+    assert.equal(plan.mutations[0].from, 'BACKLOG');
+  });
+
+  test('a stale row with no evidence at all is still refused', () => {
+    const plan = planReconciliation(
+      [readyRow({ work_item_id: 'TASK-AI-12', status: 'BACKLOG' })],
+      ALL_PROVEN
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.match(plan.refusals[0].reason, /no durable merge evidence/);
+  });
+
+  test('a stale row whose evidence fails any condition is still refused', () => {
+    // The widening moves the whole weight onto the evidence bar, so each
+    // condition of it has to be shown to bite for a stale row and not only for
+    // a row already at READY_FOR_CODEX.
+    const stale = readyRow({ work_item_id: 'TASK-AI-12', status: 'BACKLOG' });
+    const title = { title: '[TASK-AI-12] Landed' };
+    const cases = [
+      [{ codexVerdict: 'CHANGES_REQUESTED' }, /Codex verdict is not PASS/],
+      [{ unresolvedThreadsCount: 3 }, /unresolved review threads/],
+      [{ ciChecksStatus: 'FAILURE' }, /CI checks are not SUCCESS/],
+      [{ mergeCommit: { oid: 'abc123' } }, /not a 40-character SHA/],
+    ];
+    for (const [override, pattern] of cases) {
+      const plan = planReconciliation(
+        [stale],
+        Object.assign(
+          { mergeEvidence: evidenceFor(Object.assign({}, title, override)) },
+          ALL_PROVEN
+        )
+      );
+      assert.equal(plan.mutations.length, 0, 'expected a refusal for ' + JSON.stringify(override));
+      assert.match(plan.refusals[0].reason, pattern);
+    }
+  });
+
+  test('an unknown status is never moved to MERGED however good the evidence', () => {
+    const plan = planReconciliation(
+      [readyRow({ work_item_id: 'TASK-AI-12', status: 'SOMETHING_ELSE' })],
+      Object.assign({ mergeEvidence: evidenceFor({ title: '[TASK-AI-12] Landed' }) }, ALL_PROVEN)
     );
     assert.equal(plan.mutations.length, 0);
     assert.match(plan.refusals[0].reason, /not an allowed transition source/);
