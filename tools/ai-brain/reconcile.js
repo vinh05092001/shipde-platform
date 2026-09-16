@@ -676,26 +676,62 @@ function eolOf(record) {
  * compares against the plan: a mutation that was planned but matched no row is
  * a bug worth failing on, not a no-op to shrug at.
  */
+/** Column positions, read from the header so a reordered register is not a silent corruption. */
+function columnIndexes(headerFields, opts) {
+  const find = (name, fallback) => {
+    const at = headerFields.indexOf(name);
+    return at === -1 ? fallback : at;
+  };
+  return {
+    id: opts.idColumn === undefined ? find('work_item_id', 3) : opts.idColumn,
+    status: opts.statusColumn === undefined ? find('status', 7) : opts.statusColumn,
+    pr: find('pr', 11),
+    verdict: find('codex_verdict', 12),
+    commit: find('merge_commit', 13),
+  };
+}
+
+/**
+ * Write the register.
+ *
+ * A MERGED transition writes four cells, not one. Writing only the status
+ * produces a row that claims to be merged and shows no pull request, no commit
+ * and no verdict - which the audit then reports as MERGED_WITHOUT_COMMIT and
+ * MERGED_WITHOUT_PASS. Measured on 2026-09-16: recording a single row that way
+ * made write-back refuse the NEXT write, because the register it was about to
+ * amend was already inconsistent.
+ *
+ * A mutation with no evidence (clearing a stale block) still writes only the
+ * status, because there is nothing else it could honestly record.
+ */
 function applyStatusMutations(text, mutations, options) {
   const opts = options || {};
-  const idColumn = opts.idColumn === undefined ? 3 : opts.idColumn;
-  const statusColumn = opts.statusColumn === undefined ? 7 : opts.statusColumn;
+  const records = parseCsvRecords(text);
+  const cols = columnIndexes(records.length ? records[0].fields : [], opts);
 
   const wanted = new Map();
-  for (const m of mutations) wanted.set(m.workItemId, m.to);
+  for (const m of mutations) wanted.set(m.workItemId, m);
 
-  const records = parseCsvRecords(text);
   let applied = 0;
 
   const out = records
     .map((record, index) => {
       if (index === 0) return record.raw;
-      const id = record.fields[idColumn];
+      const id = record.fields[cols.id];
       if (!wanted.has(id)) return record.raw;
-      const next = wanted.get(id);
-      if (record.fields[statusColumn] === next) return record.raw;
+      const m = wanted.get(id);
+      if (record.fields[cols.status] === m.to) return record.raw;
+
       const fields = record.fields.slice();
-      fields[statusColumn] = next;
+      fields[cols.status] = m.to;
+
+      const ev = m.evidence;
+      if (m.to === 'MERGED' && ev) {
+        if (ev.pr !== undefined) fields[cols.pr] = String(ev.pr);
+        if (ev.codexVerdict !== undefined) fields[cols.verdict] = String(ev.codexVerdict);
+        if (ev.mergeCommit !== undefined) fields[cols.commit] = String(ev.mergeCommit);
+      }
+
       applied += 1;
       return serializeRecord(fields, eolOf(record));
     })

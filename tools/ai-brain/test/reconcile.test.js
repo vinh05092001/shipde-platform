@@ -621,6 +621,88 @@ describe('planReconciliation — recording a merge', () => {
   });
 });
 
+describe('applyStatusMutations - a MERGED transition writes its evidence', () => {
+  // Built with String.fromCharCode rather than a backslash escape: this block
+  // was written through a shell heredoc twice and the escape was eaten both
+  // times, leaving a string literal broken across two lines.
+  const NL = String.fromCharCode(10);
+  const Q = String.fromCharCode(34);
+  const HEADER =
+    [
+      Q + 'work_item_id' + Q,
+      Q + 'status' + Q,
+      Q + 'branch' + Q,
+      Q + 'pr' + Q,
+      Q + 'codex_verdict' + Q,
+      Q + 'merge_commit' + Q,
+    ].join(',') + NL;
+
+  function row(cells) {
+    return cells.map((c) => Q + c + Q).join(',') + NL;
+  }
+
+  test('the status, pr, verdict and commit are all written', () => {
+    // Writing the status alone leaves a row claiming to be merged with no pull
+    // request, no commit and no verdict - which the audit reports as
+    // MERGED_WITHOUT_COMMIT and MERGED_WITHOUT_PASS. Measured 2026-09-16:
+    // recording one row that way made write-back refuse the NEXT write, because
+    // the register it was about to amend was already inconsistent.
+    const text = HEADER + row(['TASK-AI-18', 'BACKLOG', '', '', '', '']);
+    const out = applyStatusMutations(
+      text,
+      [
+        {
+          workItemId: 'TASK-AI-18',
+          to: 'MERGED',
+          evidence: { pr: '47', codexVerdict: 'FALLBACK_PASS', mergeCommit: 'a'.repeat(40) },
+        },
+      ],
+      {}
+    );
+    assert.equal(out.applied, 1);
+    assert.match(out.text, /"TASK-AI-18","MERGED"/);
+    assert.match(out.text, /"47","FALLBACK_PASS","a{40}"/);
+  });
+
+  test('a block cleared with no evidence writes only the status', () => {
+    // There is nothing else it could honestly record.
+    const text = HEADER + row(['FEAT-AUTH-02', 'BLOCKED_BY_FOUNDATION', '', '', '', '']);
+    const out = applyStatusMutations(text, [{ workItemId: 'FEAT-AUTH-02', to: 'BACKLOG' }], {});
+    assert.equal(out.applied, 1);
+    assert.match(out.text, /"FEAT-AUTH-02","BACKLOG","","","",""/);
+  });
+
+  test('columns are located from the header, not from fixed offsets', () => {
+    // A reordered register must not become a silent corruption.
+    const reordered =
+      [
+        Q + 'merge_commit' + Q,
+        Q + 'pr' + Q,
+        Q + 'codex_verdict' + Q,
+        Q + 'status' + Q,
+        Q + 'work_item_id' + Q,
+      ].join(',') +
+      NL +
+      row(['', '', '', 'BACKLOG', 'TASK-AI-18']);
+    const out = applyStatusMutations(
+      reordered,
+      [
+        {
+          workItemId: 'TASK-AI-18',
+          to: 'MERGED',
+          evidence: { pr: '47', codexVerdict: 'PASS', mergeCommit: 'b'.repeat(40) },
+        },
+      ],
+      {}
+    );
+    assert.equal(out.applied, 1);
+    assert.match(
+      out.text,
+      new RegExp('"' + 'b'.repeat(40) + '","47","PASS","MERGED","TASK-AI-18"')
+    );
+  });
+});
+
 describe('CSV serialization', () => {
   const HEADER = '"a","b","work_item_id","s"\n';
 
