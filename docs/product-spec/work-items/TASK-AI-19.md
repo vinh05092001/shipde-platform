@@ -362,7 +362,7 @@ merged head:
 | Row | PR | Reviewed commit | Merge commit | Verdict |
 |---|---|---|---|---|
 | `TASK-AI-18` | `#47` | `d9e4c65a582749c97e19f21c26dca45deaaf497d` | `a2a3bc00a7d22e7bc25e0b2eb28c81c9b74ad774` | `FALLBACK_PASS` |
-| `TASK-AI-15` | `#39` | `26f44e9d7df2db5b418969cbd22d23d4b03c9d8f` | `48314184e5fcfa98e7d2f4c4f0dcb0b0f5b3c2a1` | `FALLBACK_PASS` |
+| `TASK-AI-15` | `#39` | `26f44e9d7df2db5b418969cbd22d23d4b03c9d8f` | `48314184e5fcfa98a5a523dc2a31b14f4ef02de0` | `FALLBACK_PASS` |
 
 Three defects were found by attempting these writes, each recorded in the
 commit that closed it:
