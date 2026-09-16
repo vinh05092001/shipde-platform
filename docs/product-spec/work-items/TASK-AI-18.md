@@ -336,6 +336,35 @@ fixtures are outside its own author boundary is not writable as specified.
 `TASK-AI-19` recorded the same omission as a residual limitation instead of
 fixing it; this document fixes it.
 
+## What implementing this revealed
+
+Two things the specification asserted could not both hold, and were found by
+building it rather than by reading it.
+
+1. **The guard reports itself.** `tools/ai-guard/secret-surface.js` is the file
+   that defines the forbidden spellings, so it necessarily contains them, in its
+   patterns and in the comments explaining them. Measured: with only the fixture
+   exclusion in place the default scan returned four violations, all of them in
+   the guard, and `AC-AI-18-01` was unreachable. `SELF_EXCLUSION` now excludes
+   that one file by exact path, on the same terms as the fixture directory.
+
+2. **`AI-18-R11` and the test suite were in direct conflict.** The rule requires
+   `tools/ai-guard/test/secret-surface.test.js` to stay inside the default scan,
+   because a forbidden read written there is the likeliest place for one to
+   appear. But a suite that tests those spellings must contain them: measured,
+   it produced eleven violations of its own. Excluding it would have removed the
+   protection the rule exists for. The suite now assembles the forbidden
+   spellings from parts (`['api' + 'Keys', 'k' + 'ey'].join('.')`), so the file
+   stays in scope and stays clean, and a real forbidden read written there -
+   which is spelled literally, because that is what code performing the read
+   looks like - is still caught.
+
+A third measurement changed the guard itself. The first wildcard pattern matched
+a bare `.from(apiKeys)`, which is how every ordinary projection ends. It flagged
+`safe-projections`, the fixture whose entire purpose is to prove the guard does
+not block the query the usage adapter runs. The pattern now matches only
+`SELECT * FROM <table>` and a builder chain whose `select()` names nothing.
+
 ## Residual limitations
 
 - **The plaintext credentials remain plaintext.** This Work Item does not
