@@ -15,7 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { forbiddenScriptsInFile } = require('./lifecycle-scripts');
+const { forbiddenLifecycleScriptsInFile } = require('./lifecycle-scripts');
 
 const MANIFESTS = ['package.json', path.join('apps', 'web', 'package.json')];
 
@@ -31,7 +31,7 @@ for (const manifest of MANIFESTS) {
 for (const manifest of MANIFESTS) {
   let dirty;
   try {
-    dirty = forbiddenScriptsInFile(manifest);
+    dirty = forbiddenLifecycleScriptsInFile(manifest);
   } catch (err) {
     console.error('SOURCE_UNREADABLE: ' + manifest + ': ' + err.message);
     process.exit(2);
@@ -56,7 +56,7 @@ const tmp = path.join(os.tmpdir(), 'shipde-ac39-07-' + process.pid + '.json');
 let found;
 try {
   fs.writeFileSync(tmp, JSON.stringify(tampered, null, 2));
-  found = forbiddenScriptsInFile(tmp);
+  found = forbiddenLifecycleScriptsInFile(tmp);
 } catch (err) {
   console.error('TAMPER_COPY_FAILED: ' + err.message);
   process.exit(2);
