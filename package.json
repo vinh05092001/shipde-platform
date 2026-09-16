@@ -36,6 +36,7 @@
     "db:reset": "tsx infra/docker/reset-db.ts",
     "db:seed": "tsx infra/docker/seed.ts",
     "security:secrets": "tsx scripts/verify-secrets.ts",
+    "security:trivy": "tsx scripts/verify-trivy.ts",
     "verify:inventory": "tsx scripts/verify-inventory.ts",
     "concierge:audit": "tsx scripts/concierge-audit.ts",
     "guard:install": "node tools/ai-guard/cli.js install",
