@@ -172,7 +172,7 @@ rewritten to assert them.
 
 | Row | Asserted invariant | Observed baseline (evidence only, not asserted) |
 |---|---|---|
-| `AC-AI-27-10` | `Tổng: 0 lỗi` from `node tools/ai-brain/cli.js reconcile` | `178` delivery register rows reconciled, exactly one expected warning (`PINNED_VERSION_DRIFT` for `codex-cli`) |
+| `AC-AI-27-10` | `Tổng: 0 lỗi` from `node tools/ai-brain/cli.js reconcile` | `178` delivery register rows reconciled, `0` warnings and `150` notes measured at the time of writing; the reason and note totals are deliberately unpinned |
 | `AC-AI-27-11` | `Documentation validation passed:` from `validate_docs.py` | `94` markdown files, `130` feature IDs, `178` delivery rows at the time of writing |
 | `AC-AI-27-07` | Every declared grade is a ladder member | `22` declared models across the two seed lists, `22` graded, `0` ungraded at the time of writing; the count is printed as evidence and never asserted, because replacing a provisional grade with an ungraded record is the change this Work Item exists to allow |
 
