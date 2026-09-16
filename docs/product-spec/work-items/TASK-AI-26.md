@@ -192,6 +192,28 @@ pnpm test
 |---|---|---|---|
 | 1 | `pending` | `pending` | Awaiting independent review. |
 
+## Post-implementation notes
+
+Two things measured differently from what the specification assumed.
+
+1. **`inferWindow` reports a ceiling but not the evidence behind it.** The rule
+   "fewer than 20 observations yields no ceiling" needed a sample count that the
+   ceiling module does not return, so `limits.js` counts the ledger rows for that
+   account and window directly rather than trusting a field that does not exist.
+
+2. **The first version of the evidence-floor test proved nothing.** Mutation
+   testing caught it: removing the floor entirely failed no test. The fixture was
+   built from successful observations only, and `inferWindow` returns a null
+   ceiling for those regardless — successes establish a floor, never a ceiling —
+   so the floor was never reached. The fixture now carries refusals, and the test
+   asserts a control: the same ledger with enough observations does yield a
+   ceiling, so the refusal is attributable to the floor and to nothing else.
+
+Mutation results after the fix: all `7` of `7` mutations to `limits.js` fail the
+suite — removing `unknownBudget`, dropping the provenance check, breaking the
+runway arithmetic, ignoring the window match, counting a disabled account,
+removing the evidence floor, and forcing staleness to false.
+
 ## Residual limitations
 
 - **Most ceilings are not published.** Antigravity reports a percentage and
