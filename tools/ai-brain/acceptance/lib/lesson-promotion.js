@@ -64,7 +64,10 @@ function isAgentIdentity(identity) {
   return AGENT_IDENTITIES.some((agent) => value === agent || value.startsWith(agent + '/'));
 }
 
-/** Approval violations across a parsed seed; empty when no lesson is self-approved. */
+/**
+ * Approval violations across a parsed seed; empty when every promoted lesson
+ * names an approver who is neither its proposer nor an agent.
+ */
 function approvalViolations(seed) {
   const lessons = seed && Array.isArray(seed.lessons) ? seed.lessons : [];
   const violations = [];
@@ -76,7 +79,11 @@ function approvalViolations(seed) {
     const approver = String(lesson.approved_by || '')
       .trim()
       .toLowerCase();
-    if (approver && approver === proposer) {
+    if (!approver) {
+      violations.push(
+        'MISSING_APPROVER: ' + lesson.id + ' is ' + lesson.status + ' with no approver'
+      );
+    } else if (approver === proposer) {
       violations.push('SELF_APPROVAL: ' + lesson.id + ' approved by its proposer ' + approver);
     } else if (isAgentIdentity(approver)) {
       violations.push('AGENT_APPROVAL: ' + lesson.id + ' approved by agent ' + approver);

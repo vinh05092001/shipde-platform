@@ -9,7 +9,7 @@
 //
 // Run outside the repository it exits 2 (the real sources are missing), never 1,
 // so the negative proof cannot pass by accident where nothing exists. That
-// property is measured by `ac-22-09-outside-repository.js`.
+// property is measured by `ac-22-07-outside-repository.js`.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
