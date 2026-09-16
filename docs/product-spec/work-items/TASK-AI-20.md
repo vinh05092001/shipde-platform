@@ -87,6 +87,13 @@ whose Control table names a different row.
   `READY_FOR_AUTHOR` only through the reconciler's write-back path
   (`tools/ai-brain/reconcile.js`, `AI-19-R03`) once every declared dependency is
   `MERGED` and evidenced; it is never advanced by hand.
+- The register's own row for `TASK-AI-19` still reads `BLOCKED_DEPENDENCY`, a
+  state `TASK-AI-19` already documents as residual: its dependency `TASK-AI-17`
+  carries no durable merge-evidence artifact, so `AI-19-R04` refuses to record it
+  `MERGED` and the reconciler cannot yet clear the downstream blocks. The block
+  on row `153` is therefore stale rather than true — the dependency is merged in
+  Git — and clearing it remains the reconciler's write-back, not a hand edit of
+  the register.
 - `node tools/ai-brain/cli.js reconcile` reports `Tổng: 0 lỗi` against the real
   register, so no terminal or ready row currently claims a specification that
   does not exist.
