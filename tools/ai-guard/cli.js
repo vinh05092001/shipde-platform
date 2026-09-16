@@ -11,6 +11,7 @@
  *   node tools/ai-guard/cli.js status
  *   node tools/ai-guard/cli.js check     # exit 1 when blocked (git hook)
  *   node tools/ai-guard/cli.js secret-surface [--root <dir>]
+ *   node tools/ai-guard/cli.js staged-secrets [--root <dir>]
  *
  * `check` also runs the secret-surface scan, so the installed pre-commit hook
  * refuses a forbidden credential read with the same command that refuses a
@@ -33,6 +34,7 @@ const {
   uninstallHook,
 } = require('./writer-claim');
 const { runSecretSurface } = require('./secret-surface');
+const { runStagedSecrets } = require('./staged-secrets');
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -172,6 +174,16 @@ async function main() {
   if (command === 'secret-surface') {
     const root = typeof args.root === 'string' ? args.root : process.cwd();
     const report = runSecretSurface(root, { excludeFixtures: typeof args.root !== 'string' });
+    for (const line of report.lines) console.log(line);
+    process.exit(report.exitCode);
+  }
+
+  if (command === 'staged-secrets') {
+    // The scan runs in the repository being committed to, which is the current
+    // working directory and not this tool's own repository: a hook installed in
+    // one worktree must judge that worktree's index.
+    const root = typeof args.root === 'string' ? args.root : process.cwd();
+    const report = runStagedSecrets(root);
     for (const line of report.lines) console.log(line);
     process.exit(report.exitCode);
   }
