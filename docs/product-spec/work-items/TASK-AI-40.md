@@ -102,15 +102,21 @@ superseded and mis-described entries from the ecosystem catalog, defining:
 - `TASK-AI-17` merged (`1f587dd`), unblocking `TASK-AI-40` and establishing
   truthful `PENDING` states for absent tools while keeping `gitleaks` `ADOPTED`
   and `ci-provisioned`.
-- `tools/ai-brain/cli.js manifest` reports 0 errors, exactly 1 warning
-  (`PINNED_VERSION_DRIFT` for `codex-cli` observed `0.154.0` vs pinned `0.151.0`), and 2 notes.
+- `tools/ai-brain/cli.js manifest` reports 0 errors. The warning and note counts
+  are deliberately NOT pinned: the only warning observed is a `codex-cli` version
+  drift whose observed version changes whenever the upstream CLI is upgraded, and
+  the note count tracks the manifest entries, including the two this Work Item
+  retires, so pinning either would make this Work Item fail for a reason that has
+  nothing to do with manifest truthfulness. The invariant is `0 lỗi`.
 - `tools/ai-brain/cli.js reconcile` reports 0 errors and 0 warnings; the note count tracks the register and is not pinned here (defect `D-03`).
 - Combined test suite across `tools/ai-brain`, `tools/ai-dashboard`, and `tools/ai-guard`
   reports 0 failed; the pass and suite counts grow with the repository and are not pinned here (defect `D-01`).
 - Native usage adapter (`tools/ai-dashboard/usage-adapter.js`) and dashboard
-  (`tools/ai-dashboard`) are active, tested, and passing all unit tests (19 passed, 0 failed).
+  (`tools/ai-dashboard`) are active, tested, and pass their unit tests with
+  `fail 0` over a non-empty run (the pass count grows and is not pinned).
 - Native claim guard (`tools/ai-guard/cli.js`) is active, tested, and guarding
-  worktree sessions (33 passed, 0 failed).
+  worktree sessions with `fail 0` over a non-empty run (the pass count grows and
+  is not pinned).
 
 ## Author boundary
 
@@ -209,8 +215,8 @@ Prohibited in this Work Item:
 
 Not applicable; this Work Item has no user-facing screen. Developer- and
 operator-facing outputs are CLI logs from:
-- `node tools/ai-brain/cli.js manifest`: Must report 0 errors, exactly 1 warning (`codex-cli`
-  pinned version drift `0.151.0` vs `0.154.0`), and 2 notes.
+- `node tools/ai-brain/cli.js manifest`: Must report 0 errors. The warning and
+  note counts are not pinned (see Preconditions).
 - `node tools/ai-brain/cli.js reconcile`: Must report 0 errors and 0 warnings; the
   note count is not pinned (defect `D-03`).
 - `node tools/ai-brain/acceptance/ac-40-07-suite-invariant.js`:
@@ -229,10 +235,10 @@ ecosystem toolchain metadata files (`tools/ecosystem-manifest.json`,
 |---|---|---|---|
 | `AC-AI-40-01` | Verify truthfulness of baseline security gate status in manifest and CI workflow | `node -e "const fs = require('fs'); const wf = fs.readFileSync('.github/workflows/security-baseline.yml', 'utf8'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const g = m.adopted.find(x => x.id === 'gitleaks'); const pin = g.pinned_version_or_commit; const l = m.adopted.find(x => x.id === 'lefthook'); const t = m.adopted.find(x => x.id === 'trivy'); const valid = g.lifecycle_state === 'ADOPTED' && g.blocking_policy === 'BLOCKING_GATE' && wf.includes('GITLEAKS_VERSION=\x22' + pin + '\x22') && l.lifecycle_state === 'PENDING' && t.lifecycle_state === 'PENDING'; console.log('Baseline gates verified: gitleaks ' + pin + ' (ADOPTED/BLOCKING_GATE in CI), lefthook ' + l.lifecycle_state + ', trivy ' + t.lifecycle_state + ' -> ' + valid); if (!valid) process.exit(1);"` exits 0 and prints the string `Baseline gates verified: gitleaks 8.24.0 (ADOPTED/BLOCKING_GATE in CI), lefthook PENDING, trivy PENDING -> true` | command stdout |
 | `AC-AI-40-02` | Negative proof: verify missing or decoyed workflow fails closed on CI-provisioned gate | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const os = require('os'); const fs = require('fs'); const path = require('path'); const d = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-decoy-')); fs.mkdirSync(path.join(d, '.github', 'workflows'), { recursive: true }); fs.writeFileSync(path.join(d, '.github', 'workflows', 'decoy.yml'), 'steps:\n  - run: echo no-gitleaks\n'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const res = auditManifest(m, { rootDir: d }); const f = res.findings.find(x => x.id === 'gitleaks'); fs.rmSync(d, { recursive: true, force: true }); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"` exits 1 and prints the string `QUALITY_GATE_MISSING: gitleaks` | command stderr |
-| `AC-AI-40-03` | Independent evidence for the `token-tracker` retirement premise: inspect the pinned upstream npm artifact and prove the real native deliverable covers the declared capability | `node -e "const cp = require('child_process'); const meta = JSON.parse(cp.execSync('npm view token-tracker@1.0.1 --json', { encoding: 'utf8' })); const mismatch = !meta.repository.url.includes('xiufengsun/TokenTracker'); const blockchain = meta.description.indexOf('token balances over block') >= 0; const out = cp.execSync('node --test tools/ai-dashboard/test/usage-adapter.test.js', { encoding: 'utf8' }); const api = Object.keys(require('./tools/ai-dashboard/usage-adapter.js')); const covered = api.includes('collectUsageState') && api.includes('collectClaudeUsage') && api.includes('collectRouterUsage'); const ok = mismatch && blockchain && covered && out.indexOf('pass 19') >= 0 && out.indexOf('fail 0') >= 0; console.log('token-tracker retirement evidence: pinned npm artifact token-tracker@1.0.1 resolves to ' + meta.repository.url + ' (not xiufengsun/TokenTracker) described as ' + meta.description + ' blockchain-not-ai=' + blockchain + '; native tools/ai-dashboard/usage-adapter.js exports collectUsageState+collectClaudeUsage+collectRouterUsage=' + covered + ' with pass 19 fail 0 -> ' + ok); if (!ok) process.exit(1);"` exits 0 and prints the string `token-tracker retirement evidence: pinned npm artifact token-tracker@1.0.1 resolves to git+ssh://git@github.com/BunsDev/token-tracker.git (not xiufengsun/TokenTracker) described as A module for tracking token balances over block changes. blockchain-not-ai=true; native tools/ai-dashboard/usage-adapter.js exports collectUsageState+collectClaudeUsage+collectRouterUsage=true with pass 19 fail 0 -> true` - falsifiable in both directions: the premise fails if the pinned npm artifact does resolve to `xiufengsun/TokenTracker` or describes AI token usage, or if the real deliverable `tools/ai-dashboard/usage-adapter.js` stops exporting the three collectors or its own test file stops reporting `pass 19` / `fail 0` | command stdout; pinned npm registry metadata for `token-tracker@1.0.1`; module exports of `tools/ai-dashboard/usage-adapter.js`; run output of `tools/ai-dashboard/test/usage-adapter.test.js` |
-| `AC-AI-40-04` | Independent evidence for the `sylph` retirement premise: inspect the pinned upstream repository tree itself and prove the real native deliverable covers the declared capability | `node tools/ai-brain/acceptance/ac-40-04-sylph-evidence.js` exits 0 in the repository (and exits 2 with `SOURCE_MISSING` outside it) and prints the string `sylph retirement evidence: manifest pin 0.1.0 resolvable=false; upstream d31a9c05f19de0f14e255d9301bbdb0f872354b3 tracks 210 files = 112 markdown, 1 javascript, 0 package.json; native tools/ai-guard writer-claim fail 0 of 33 tests -> true` - the premise is falsified if upstream `getnao/sylph` at that commit ships a `package.json`, stops being markdown-dominated, or acquires a resolvable `0.1.0` tag matching the manifest pin, or if the real deliverable `tools/ai-guard` reports any failing test. The superseded one-line form is recorded as defect `D-02` below | command stdout; `tools/ai-brain/acceptance/ac-40-04-sylph-evidence.js`; `getnao/sylph` upstream tree at commit `d31a9c05f19de0f14e255d9301bbdb0f872354b3`; `git ls-remote --tags` output for manifest pin `0.1.0`; run output of `tools/ai-guard/test/writer-claim.test.js` |
+| `AC-AI-40-03` | Independent evidence for the `token-tracker` retirement premise: inspect the pinned upstream npm artifact and prove the real native deliverable covers the declared capability | `node -e "const cp = require('child_process'); const meta = JSON.parse(cp.execSync('npm view token-tracker@1.0.1 --json', { encoding: 'utf8' })); const mismatch = !meta.repository.url.includes('xiufengsun/TokenTracker'); const blockchain = meta.description.indexOf('token balances over block') >= 0; const out = cp.execSync('node --test tools/ai-dashboard/test/usage-adapter.test.js', { encoding: 'utf8' }); const api = Object.keys(require('./tools/ai-dashboard/usage-adapter.js')); const covered = api.includes('collectUsageState') && api.includes('collectClaudeUsage') && api.includes('collectRouterUsage'); const tests = out.match(/^\D*tests (\d+)$/m); const failed = out.match(/^\D*fail (\d+)$/m); const suiteGreen = tests !== null && Number(tests[1]) > 0 && failed !== null && Number(failed[1]) === 0; const ok = mismatch && blockchain && covered && suiteGreen; console.log('token-tracker retirement evidence: pinned npm artifact token-tracker@1.0.1 resolves to ' + meta.repository.url + ' (not xiufengsun/TokenTracker) described as ' + meta.description + ' blockchain-not-ai=' + blockchain + '; native tools/ai-dashboard/usage-adapter.js exports collectUsageState+collectClaudeUsage+collectRouterUsage=' + covered + ' with a non-empty run and fail 0 -> ' + ok); if (!ok) process.exit(1);"` exits 0 and prints the string `token-tracker retirement evidence: pinned npm artifact token-tracker@1.0.1 resolves to git+ssh://git@github.com/BunsDev/token-tracker.git (not xiufengsun/TokenTracker) described as A module for tracking token balances over block changes. blockchain-not-ai=true; native tools/ai-dashboard/usage-adapter.js exports collectUsageState+collectClaudeUsage+collectRouterUsage=true with a non-empty run and fail 0 -> true` - falsifiable in both directions: the premise fails if the pinned npm artifact does resolve to `xiufengsun/TokenTracker` or describes AI token usage, or if the real deliverable `tools/ai-dashboard/usage-adapter.js` stops exporting the three collectors or its own test file stops reporting `fail 0` over a non-empty run (the pass count is not pinned, nor is it printed: a row that quotes the count in its expected output pins it as firmly as one that asserts it) | command stdout; pinned npm registry metadata for `token-tracker@1.0.1`; module exports of `tools/ai-dashboard/usage-adapter.js`; run output of `tools/ai-dashboard/test/usage-adapter.test.js` |
+| `AC-AI-40-04` | Independent evidence for the `sylph` retirement premise: inspect the pinned upstream repository tree itself and prove the real native deliverable covers the declared capability | `node tools/ai-brain/acceptance/ac-40-04-sylph-evidence.js` exits 0 in the repository (and exits 2 with `SOURCE_MISSING` outside it) and prints the string `sylph retirement evidence: manifest pin 0.1.0 resolvable=false; upstream d31a9c05f19de0f14e255d9301bbdb0f872354b3 tracks 210 files = 112 markdown, 1 javascript, 0 package.json; native tools/ai-guard writer-claim fail 0 over a non-empty run -> true` - the premise is falsified if upstream `getnao/sylph` at that commit ships a `package.json`, stops being markdown-dominated, or acquires a tag named by the manifest pin, or if the real deliverable `tools/ai-guard` reports any failing test. The pin and the remote are read from `tools/ecosystem-manifest.json` rather than written into the script, and the native test count is neither asserted nor printed, so neither can drift (defects `D-02` and `D-04` below) | command stdout; `tools/ai-brain/acceptance/ac-40-04-sylph-evidence.js`; `getnao/sylph` upstream tree at commit `d31a9c05f19de0f14e255d9301bbdb0f872354b3`; `git ls-remote --tags` output for manifest pin `0.1.0`; run output of `tools/ai-guard/test/writer-claim.test.js` |
 | `AC-AI-40-05` | Verify the complete cleanup target inventory across all five unabbreviated repository files, including the governed catalog document and its adopted-repository count | `node -e "const fs = require('fs'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const p = JSON.parse(fs.readFileSync('tools/ecosystem-profiles.json', 'utf8')); const ma = fs.readFileSync('tools/ai-brain/manifest-audit.js', 'utf8'); const eco = fs.readFileSync('scripts/ai/ecosystem.ps1', 'utf8'); const dec = fs.readFileSync('docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md', 'utf8'); const hasM = m.adopted.some(x => x.id === 'token-tracker') && m.adopted.some(x => x.id === 'sylph'); const hasP = p.profiles.FOUNDATION.allowed_tools.includes('token-tracker') && p.profiles.NIGHTLY_MAINTENANCE.allowed_tools.includes('token-tracker') && p.profiles.SECURITY_REVIEW.allowed_tools.includes('sylph'); const hasMa = ma.includes('token-tracker'); const hasEco = eco.includes('getnao/sylph'); const hasDec = dec.includes('Governed Ecosystem Catalog (37 Adopted Repositories)') && dec.includes('**37 adopted repositories**') && dec.includes('getnao/sylph') && dec.includes('xiufengsun/TokenTracker'); const manifestCount = m.adopted.length; const ok = hasM && hasP && hasMa && hasEco && hasDec && manifestCount === 37; console.log('Retirement inventory verified in tools/ecosystem-manifest.json, tools/ecosystem-profiles.json, tools/ai-brain/manifest-audit.js, scripts/ai/ecosystem.ps1, docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md: manifest adopted=' + manifestCount + ', catalog declares 37 with both listings present -> ' + ok); if (!ok) process.exit(1);"` exits 0 and prints the string `Retirement inventory verified in tools/ecosystem-manifest.json, tools/ecosystem-profiles.json, tools/ai-brain/manifest-audit.js, scripts/ai/ecosystem.ps1, docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md: manifest adopted=37, catalog declares 37 with both listings present -> true`, pinning the pre-retirement state of all five files. The retirement implementation is complete only when this exact command exits 1 and, additionally, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` carries the heading `## Governed Ecosystem Catalog (35 Adopted Repositories)` and the phrase `**35 adopted repositories**`, lists neither `getnao/sylph` nor `xiufengsun/TokenTracker` in its catalog listings, and `tools/ecosystem-manifest.json` reports exactly 35 adopted entries | command stdout; `tools/ecosystem-manifest.json`; `tools/ecosystem-profiles.json`; `tools/ai-brain/manifest-audit.js`; `scripts/ai/ecosystem.ps1`; `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
-| `AC-AI-40-06` | Run manifest truth audit against production manifest reporting zero errors and one permitted warning | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` naming `codex-cli` | command stdout |
+| `AC-AI-40-06` | Run manifest truth audit against production manifest reporting zero errors | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `Tổng: 0 lỗi,` confirming 0 errors. The warning and note counts are deliberately NOT pinned (see Preconditions): the single warning is a `codex-cli` version drift whose observed version changes whenever the CLI is upgraded, and the note count tracks the manifest entries, including the two this Work Item retires. The invariant is `0 lỗi`. The superseded pinned form is recorded as defect `D-05` below | command stdout |
 | `AC-AI-40-07` | Run full test suite regression checks across ai-brain, ai-dashboard, and ai-guard | `node tools/ai-brain/acceptance/ac-40-07-suite-invariant.js` exits 0 in the repository (and exits 2 with `SOURCE_MISSING` outside it) and prints the string `AC-AI-40-07 suite invariant held: fail 0`. The asserted invariant is zero failures with a non-empty run, not a pinned pass count: the script refuses to report success unless the summary also reports `tests` and `suites` greater than zero. The superseded pinned form is recorded as defect `D-01` below | command stdout; `tools/ai-brain/acceptance/ac-40-07-suite-invariant.js` |
 | `AC-AI-40-08` | Verify zero angle-bracket placeholders anywhere in the specification, including every cell of the Codex review record, using a dedicated scanner rather than the documentation validator (which accepts template values) | `python -c "import re, pathlib, sys; text = pathlib.Path('docs/product-spec/work-items/TASK-AI-40.md').read_text(encoding='utf-8'); pat = chr(60) + '[^' + chr(62) + chr(10) + ']+' + chr(62); matches = re.findall(pat, text); print('Angle bracket placeholders found:', len(matches)); sys.exit(0 if len(matches) == 0 else 1)"` exits 0 and prints the string `Angle bracket placeholders found: 0` | command stdout |
 
@@ -241,9 +247,9 @@ ecosystem toolchain metadata files (`tools/ecosystem-manifest.json`,
 ### 1. Standard repository verification suite
 
 ```powershell
-# Manifest truth audit: 0 errors, 1 warning (codex-cli version drift 0.151.0 vs 0.154.0), 2 notes
+# Manifest truth audit: 0 errors (warning and note counts are not pinned)
 node tools/ai-brain/cli.js manifest
-# Expected: Exit code 0, "Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú", 1 warning (codex-cli)
+# Expected: Exit code 0, "Tổng: 0 lỗi," (0 errors)
 
 # Delivery register reconciliation: 0 errors, 0 warnings
 node tools/ai-brain/cli.js reconcile
@@ -274,12 +280,12 @@ node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); c
 # Expected: Exit code 1, "QUALITY_GATE_MISSING: gitleaks"
 
 # C. token-tracker retirement premise: pinned npm artifact inspection plus native adapter coverage (AI-40-R08)
-node -e "const cp = require('child_process'); const meta = JSON.parse(cp.execSync('npm view token-tracker@1.0.1 --json', { encoding: 'utf8' })); const mismatch = !meta.repository.url.includes('xiufengsun/TokenTracker'); const blockchain = meta.description.indexOf('token balances over block') >= 0; const out = cp.execSync('node --test tools/ai-dashboard/test/usage-adapter.test.js', { encoding: 'utf8' }); const api = Object.keys(require('./tools/ai-dashboard/usage-adapter.js')); const covered = api.includes('collectUsageState') && api.includes('collectClaudeUsage') && api.includes('collectRouterUsage'); const ok = mismatch && blockchain && covered && out.indexOf('pass 19') >= 0 && out.indexOf('fail 0') >= 0; console.log('token-tracker retirement evidence: pinned npm artifact token-tracker@1.0.1 resolves to ' + meta.repository.url + ' (not xiufengsun/TokenTracker) described as ' + meta.description + ' blockchain-not-ai=' + blockchain + '; native tools/ai-dashboard/usage-adapter.js exports collectUsageState+collectClaudeUsage+collectRouterUsage=' + covered + ' with pass 19 fail 0 -> ' + ok); if (!ok) process.exit(1);"
-# Expected: Exit code 0, "token-tracker retirement evidence: pinned npm artifact token-tracker@1.0.1 resolves to git+ssh://git@github.com/BunsDev/token-tracker.git (not xiufengsun/TokenTracker) described as A module for tracking token balances over block changes. blockchain-not-ai=true; native tools/ai-dashboard/usage-adapter.js exports collectUsageState+collectClaudeUsage+collectRouterUsage=true with pass 19 fail 0 -> true"
+node -e "const cp = require('child_process'); const meta = JSON.parse(cp.execSync('npm view token-tracker@1.0.1 --json', { encoding: 'utf8' })); const mismatch = !meta.repository.url.includes('xiufengsun/TokenTracker'); const blockchain = meta.description.indexOf('token balances over block') >= 0; const out = cp.execSync('node --test tools/ai-dashboard/test/usage-adapter.test.js', { encoding: 'utf8' }); const api = Object.keys(require('./tools/ai-dashboard/usage-adapter.js')); const covered = api.includes('collectUsageState') && api.includes('collectClaudeUsage') && api.includes('collectRouterUsage'); const tests = out.match(/^\D*tests (\d+)$/m); const failed = out.match(/^\D*fail (\d+)$/m); const suiteGreen = tests !== null && Number(tests[1]) > 0 && failed !== null && Number(failed[1]) === 0; const ok = mismatch && blockchain && covered && suiteGreen; console.log('token-tracker retirement evidence: pinned npm artifact token-tracker@1.0.1 resolves to ' + meta.repository.url + ' (not xiufengsun/TokenTracker) described as ' + meta.description + ' blockchain-not-ai=' + blockchain + '; native tools/ai-dashboard/usage-adapter.js exports collectUsageState+collectClaudeUsage+collectRouterUsage=' + covered + ' with a non-empty run and fail 0 -> ' + ok); if (!ok) process.exit(1);"
+# Expected: Exit code 0, "token-tracker retirement evidence: pinned npm artifact token-tracker@1.0.1 resolves to git+ssh://git@github.com/BunsDev/token-tracker.git (not xiufengsun/TokenTracker) described as A module for tracking token balances over block changes. blockchain-not-ai=true; native tools/ai-dashboard/usage-adapter.js exports collectUsageState+collectClaudeUsage+collectRouterUsage=true with a non-empty run and fail 0 -> true"
 
 # D. sylph retirement premise: pinned upstream tree inspection plus native writer-claim coverage (AI-40-R08)
 node tools/ai-brain/acceptance/ac-40-04-sylph-evidence.js
-# Expected: Exit code 0, "sylph retirement evidence: manifest pin 0.1.0 resolvable=false; upstream d31a9c05f19de0f14e255d9301bbdb0f872354b3 tracks 210 files = 112 markdown, 1 javascript, 0 package.json; native tools/ai-guard writer-claim fail 0 of 33 tests -> true"
+# Expected: Exit code 0, "sylph retirement evidence: manifest pin 0.1.0 resolvable=false; upstream d31a9c05f19de0f14e255d9301bbdb0f872354b3 tracks 210 files = 112 markdown, 1 javascript, 0 package.json; native tools/ai-guard writer-claim fail 0 over a non-empty run -> true"
 
 # E. Manifest cleanup target inventory across all five files, including the governed catalog document
 node -e "const fs = require('fs'); const m = JSON.parse(fs.readFileSync('tools/ecosystem-manifest.json', 'utf8')); const p = JSON.parse(fs.readFileSync('tools/ecosystem-profiles.json', 'utf8')); const ma = fs.readFileSync('tools/ai-brain/manifest-audit.js', 'utf8'); const eco = fs.readFileSync('scripts/ai/ecosystem.ps1', 'utf8'); const dec = fs.readFileSync('docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md', 'utf8'); const hasM = m.adopted.some(x => x.id === 'token-tracker') && m.adopted.some(x => x.id === 'sylph'); const hasP = p.profiles.FOUNDATION.allowed_tools.includes('token-tracker') && p.profiles.NIGHTLY_MAINTENANCE.allowed_tools.includes('token-tracker') && p.profiles.SECURITY_REVIEW.allowed_tools.includes('sylph'); const hasMa = ma.includes('token-tracker'); const hasEco = eco.includes('getnao/sylph'); const hasDec = dec.includes('Governed Ecosystem Catalog (37 Adopted Repositories)') && dec.includes('**37 adopted repositories**') && dec.includes('getnao/sylph') && dec.includes('xiufengsun/TokenTracker'); const manifestCount = m.adopted.length; const ok = hasM && hasP && hasMa && hasEco && hasDec && manifestCount === 37; console.log('Retirement inventory verified in tools/ecosystem-manifest.json, tools/ecosystem-profiles.json, tools/ai-brain/manifest-audit.js, scripts/ai/ecosystem.ps1, docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md: manifest adopted=' + manifestCount + ', catalog declares 37 with both listings present -> ' + ok); if (!ok) process.exit(1);"
@@ -369,6 +375,69 @@ and `AC-AI-40-08` were each re-run from an empty temporary directory with no
 repository present and each failed there with a non-zero exit, so none of them
 is a tautology and each is left unchanged.
 
+## Acceptance matrix audit — round 2 (rows that pin what drifts)
+
+The matrix was extracted again with a splitter that honours the escaped-pipe
+rule and every row was re-run as stored on this branch. All eight rows held.
+Three of them nevertheless pinned a value that is not invariant, which the
+round-1 record `D-03` claimed to have removed and had not.
+
+### `D-04` — `AC-AI-40-04`: the script carried a private copy of the manifest pin
+
+Measurement: `ac-40-04-sylph-evidence.js` printed `manifest pin 0.1.0` and
+`resolvable=false` while reading neither. The pin and the clone URL were literals
+written into the script, and `pinResolvable` came from `tags.length > 0` — "the
+upstream repository has at least one tag" — rather than from the pinned tag.
+Both halves were measured:
+
+| Input | Old rule | New rule |
+|---|---|---|
+| manifest copy whose sylph pin is `9.9.9` | printed `manifest pin 0.1.0` | printed `manifest pin 9.9.9` |
+| upstream carrying only `refs/tags/v2.0.0`, manifest pin `0.1.0` | `resolvable=true` | `resolvable=false` |
+
+The first line is a false statement about the file the row cites as its evidence.
+The second is a false premise: the row asserts that the *pinned tag* does not
+resolve, and the old rule would have failed it the day upstream published any
+unrelated tag.
+
+Replacement: the script reads `pinned_version_or_commit` and `repository` from
+`tools/ecosystem-manifest.json`, CONTROLs that the entry and its pin exist, and
+tests the exact tag ref named by that pin, including the peeled `^{}` form. The
+native `fail 0 of 33 tests` count is gone from the assertion and from the printed
+message alike: the assertion is `fail 0` over a non-empty run, and a message that
+prints the count is pinned just as firmly by the expected string that quotes it.
+
+### `D-05` — `AC-AI-40-03` and `AC-AI-40-06` pinned counts that drift
+
+Measurement: `AC-AI-40-03` required the substring `pass 19` from
+`tools/ai-dashboard/test/usage-adapter.test.js`, a suite that grows; it measures
+19 today, which is exactly why it will not tomorrow. `AC-AI-40-06` required
+`Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú`: the warning disappears the moment
+`codex-cli` is upgraded, and the note count tracks manifest entries — including
+the two entries this Work Item exists to retire. `D-03` claimed these counts were
+no longer pinned. They were, in the row, in "Preconditions and dependencies" and
+in "UI states".
+
+Replacement: `AC-AI-40-03` asserts `fail 0` over a run whose summary reports
+`tests > 0`, and prints no count. `AC-AI-40-06` asserts `Tổng: 0 lỗi,` — the same
+invariant `TASK-AI-35`'s `AC-AI-35-01` uses. The preconditions, the UI states and
+the verification command block now record that invariant and say plainly that the
+warning and note counts are not pinned.
+
+### The systematic defect is absent from this Work Item
+
+`AC-AI-40-02`, the only negative proof here, calls the real `auditManifest`
+exported by `tools/ai-brain/manifest-audit.js`; it does not define a private copy
+of the rule it tests. No pair of rows in this Work Item shares a rule through
+duplicate definitions, so there is no rule to extract into a single module — the
+coupling defect found in `TASK-AI-35` does not reproduce here. Its positive
+counterpart `AC-AI-40-06` runs the real CLI, which reaches the same
+`auditManifest`.
+
+Rows `AC-AI-40-01`, `AC-AI-40-02`, `AC-AI-40-05`, `AC-AI-40-07` and
+`AC-AI-40-08` were measured and held unchanged, and none of them compares two
+literals written into its own command.
+
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
@@ -389,9 +458,9 @@ row 150 remains `READY_FOR_CODEX` pending automated register write-back under
 Retiring `token-tracker` and `sylph` removes misleading or redundant entries from
 the catalog but does not alter developer workflow, since neither tool was ever
 installed on the host or integrated into CI. Local quota visibility continues to
-be provided by `tools/ai-dashboard` (verified by 19 unit tests in
-`tools/ai-dashboard/test/usage-adapter.test.js`), and workspace isolation continues to be
-enforced by `tools/ai-guard` (verified by 33 unit tests in
-`tools/ai-guard/test/writer-claim.test.js`). Pinned `codex-cli` version drift
+be provided by `tools/ai-dashboard` (verified by `tools/ai-dashboard/test/usage-adapter.test.js`),
+and workspace isolation continues to be enforced by `tools/ai-guard` (verified by
+`tools/ai-guard/test/writer-claim.test.js`). Their pass counts grow with the
+repository and are deliberately not pinned. Pinned `codex-cli` version drift
 (`0.154.0` observed vs pinned `0.151.0`) remains documented pending a formal
 human upgrade decision per `AI-TOOLCHAIN-DECISIONS.md`.

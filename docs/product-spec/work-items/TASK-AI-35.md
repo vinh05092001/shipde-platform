@@ -303,13 +303,13 @@ and verification scripts.
 
 | AC/Test ID | Scenario | Verification command & expected result | Output source |
 |---|---|---|---|
-| `AC-AI-35-01` | Baseline gate truth and ecosystem manifest audit | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `Tổng: 0 lỗi,` confirming 0 errors (warning and note counts are not pinned — see Preconditions); and `node -e "const m=JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json','utf8')); const g=m.adopted.find(x=>x.id==='gitleaks'); if(!g || g.lifecycle_state!=='ADOPTED' || g.blocking_policy!=='BLOCKING_GATE' || g.install_method!=='ci-provisioned' || g.pinned_version_or_commit!=='8.24.0') process.exit(1); console.log('GITLEAKS_BASELINE_VERIFIED:', g.id, g.lifecycle_state, g.blocking_policy, g.pinned_version_or_commit);"` exits 0 and prints the string `GITLEAKS_BASELINE_VERIFIED: gitleaks ADOPTED BLOCKING_GATE 8.24.0` | command stdout |
+| `AC-AI-35-01` | Baseline gate truth and ecosystem manifest audit | `node tools/ai-brain/cli.js manifest` exits 0 and prints the string `Tổng: 0 lỗi,` confirming 0 errors (warning and note counts are not pinned — see Preconditions); and `node tools/ai-brain/acceptance/ac-35-01-gitleaks-baseline.js` exits 0 and prints the string `GITLEAKS_BASELINE_VERIFIED: gitleaks ADOPTED BLOCKING_GATE 8.24.0`. The rule is not written into the row: the script requires `tools/ai-brain/acceptance/lib/gitleaks-baseline.js`, the same module `AC-AI-35-07` requires for its negative proof, so these two halves of the baseline rule cannot drift apart. It exits 2 outside the repository | command stdout |
 | `AC-AI-35-02` | Clean baseline secret scanning across commit history and working tree | `pnpm security:secrets` exits 0 and prints the string `✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.` | command stdout |
 | `AC-AI-35-03` | Demonstrated negative failure proof on synthetic carrier token fixture | `pnpm security:secrets -- --test-negative` exits 1 and prints the string `🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XÁC QUA RULE: [shipde-carrier-live-token]` against generated fixture `.temp-negative-fixture-*.js` with guaranteed cleanup in `finally` | command stderr |
-| `AC-AI-35-04` | Dual-mode scanning and build/dependency directory exclusions | `npx tsx -e "const { isIgnoredScanName, getGitleaksScanTargets } = require('./scripts/verify-secrets.ts'); const ignored = ['.git', 'node_modules', '.next', '.turbo', '.pnpm-store', 'dist', 'build', 'out', '.gemini']; const allIgnored = ignored.every(d => isIgnoredScanName(d)); const targets = getGitleaksScanTargets(process.cwd()); const hasIgnored = targets.some(t => ignored.some(i => t.split(/[\\/]/).includes(i))); if (!allIgnored || hasIgnored) process.exit(1); console.log('DUAL_MODE_EXCLUSIONS_VERIFIED: ' + targets.length + ' scan targets, all build and dependency directories excluded');"` exits 0 and prints the string `DUAL_MODE_EXCLUSIONS_VERIFIED:` | command stdout |
-| `AC-AI-35-05` | Scanner operational fail-closed behavior on spawn and argument errors | `npx tsx -e "const { executeGitleaks } = require('./scripts/verify-secrets.ts'); const res = executeGitleaks('nonexistent-binary-xyz', ['dir', '.'], 'dummy-report.json'); if (res.success || (res.exitCode !== null && res.exitCode === 0)) process.exit(1); console.log('FAIL_CLOSED_VERIFIED: ' + res.operationalError);"` exits 0 and prints the string `FAIL_CLOSED_VERIFIED: Gitleaks process execution error:` | command stdout |
+| `AC-AI-35-04` | Dual-mode scanning and build/dependency directory exclusions | `npx tsx tools/ai-brain/acceptance/ac-35-04-scan-exclusions.ts` exits 0 and prints the string `DUAL_MODE_EXCLUSIONS_VERIFIED:`. The ignored names are read from `IGNORED_SCAN_NAMES` and the traversal from `getGitleaksScanTargets`, both exported by the real `scripts/verify-secrets.ts`; the row restates neither. The script CONTROLs that the traversal reached the repository root and that the exclusion really removes the ignored directories from a fixture, and exits 2 outside the repository | command stdout |
+| `AC-AI-35-05` | Scanner operational fail-closed behavior on spawn and argument errors | `npx tsx tools/ai-brain/acceptance/ac-35-05-fail-closed.ts` exits 0 and prints the string `FAIL_CLOSED_VERIFIED: Gitleaks process execution error:`. It calls the real `executeGitleaks` exported by `scripts/verify-secrets.ts`, CONTROLs that the fault carries a non-empty `operationalError` so an empty message cannot carry the row, and exits 2 outside the repository | command stdout |
 | `AC-AI-35-06` | Negative proof: the real `shipde-carrier-live-token` rule read from `.gitleaks.toml` rejects a tampered copy of a real tracked file, after a CONTROL proving the untouched file is accepted | `node tools/ai-brain/acceptance/ac-35-06-carrier-rule-negative.js` exits 1 and prints the string `CARRIER_TOKEN_DETECTED_IN_TAMPERED_COPY:` | `tools/ai-brain/acceptance/ac-35-06-carrier-rule-negative.js`, command stderr |
-| `AC-AI-35-07` | Negative proof: the baseline check behind `AI-35-R01` rejects a tampered copy of the real ecosystem manifest, after a CONTROL proving the untouched manifest agrees with the Gitleaks version the CI workflow installs | `node tools/ai-brain/acceptance/ac-35-07-gitleaks-pin-consistency.js` exits 1 and prints the string `GITLEAKS_BASELINE_TAMPER_REJECTED:` | `tools/ai-brain/acceptance/ac-35-07-gitleaks-pin-consistency.js`, command stderr |
+| `AC-AI-35-07` | Negative proof: the baseline rule behind `AI-35-R01` rejects a tampered copy of the real ecosystem manifest, after a CONTROL proving the untouched manifest agrees with the Gitleaks version the CI workflow installs | `node tools/ai-brain/acceptance/ac-35-07-gitleaks-pin-consistency.js` exits 1 and prints the string `GITLEAKS_BASELINE_TAMPER_REJECTED:`. The rule is required from `tools/ai-brain/acceptance/lib/gitleaks-baseline.js` — the same module `AC-AI-35-01` requires — so this negative proof exercises the rule the positive row runs instead of a private copy of it. It exits 2 outside the repository | `tools/ai-brain/acceptance/ac-35-07-gitleaks-pin-consistency.js`, `tools/ai-brain/acceptance/lib/gitleaks-baseline.js`, command stderr |
 | `AC-AI-35-08` | Negative proof: `AC-AI-35-06` fails operationally (exit `2`), not as a clean result, when its real source file is absent | `cd $env:TEMP; node $REPO/tools/ai-brain/acceptance/ac-35-06-carrier-rule-negative.js` exits 2 and prints the string `SOURCE_MISSING: .gitleaks.toml` | `tools/ai-brain/acceptance/ac-35-06-carrier-rule-negative.js`, command stderr |
 | `AC-AI-35-09` | Negative proof: `AC-AI-35-07` fails operationally (exit `2`), not as a clean result, when its real source file is absent | `cd $env:TEMP; node $REPO/tools/ai-brain/acceptance/ac-35-07-gitleaks-pin-consistency.js` exits 2 and prints the string `SOURCE_MISSING: tools/ecosystem-manifest.json` | `tools/ai-brain/acceptance/ac-35-07-gitleaks-pin-consistency.js`, command stderr |
 
@@ -321,6 +321,9 @@ node tools/ai-brain/cli.js reconcile
 node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"
 pnpm security:secrets
 pnpm security:secrets -- --test-negative
+node tools/ai-brain/acceptance/ac-35-01-gitleaks-baseline.js   # expected exit 0
+npx tsx tools/ai-brain/acceptance/ac-35-04-scan-exclusions.ts   # expected exit 0
+npx tsx tools/ai-brain/acceptance/ac-35-05-fail-closed.ts   # expected exit 0
 node tools/ai-brain/acceptance/ac-35-06-carrier-rule-negative.js   # expected exit 1
 node tools/ai-brain/acceptance/ac-35-07-gitleaks-pin-consistency.js   # expected exit 1
 python docs/product-spec/scripts/validate_docs.py
@@ -337,8 +340,11 @@ number turns any unrelated merge into a failure of this Work Item.
 | `node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"` | PASS | Exit code 0; `fail 0` across ai-brain, ai-dashboard and ai-guard. The total is not pinned |
 | `pnpm security:secrets` | PASS | Exit code 0; 0 leaks across PR commit range and working tree |
 | `pnpm security:secrets -- --test-negative` | PASS (exit 1) | Exit code 1; detected `[shipde-carrier-live-token]` in `.temp-negative-fixture-*.js` with guaranteed cleanup |
-| `node tools/ai-brain/acceptance/ac-35-06-carrier-rule-negative.js` | PASS (exit 1) | Exit code 1; CONTROL accepted the untouched `package.json`, the real rule rejected the tampered copy. Exit 2 outside the repository |
-| `node tools/ai-brain/acceptance/ac-35-07-gitleaks-pin-consistency.js` | PASS (exit 1) | Exit code 1; CONTROL accepted the untouched manifest against the CI-installed Gitleaks version, the check rejected the downgraded copy. Exit 2 outside the repository |
+| `node tools/ai-brain/acceptance/ac-35-01-gitleaks-baseline.js` | PASS (exit 0) | Exit code 0; the real manifest satisfies the shared baseline rule. Exit 2 outside the repository |
+| `npx tsx tools/ai-brain/acceptance/ac-35-04-scan-exclusions.ts` | PASS (exit 0) | Exit code 0; the traversal reached the repository root and no target descends into an ignored directory. Exit 2 outside the repository |
+| `npx tsx tools/ai-brain/acceptance/ac-35-05-fail-closed.ts` | PASS (exit 0) | Exit code 0; the real `executeGitleaks` returns a non-empty `operationalError` and no success on a missing binary. Exit 2 outside the repository |
+| `node tools/ai-brain/acceptance/ac-35-06-carrier-rule-negative.js` | PASS (exit 1) | Exit code 1; CONTROL accepted the untouched `package.json`, the real rule read from `.gitleaks.toml` rejected the tampered copy. Exit 2 outside the repository |
+| `node tools/ai-brain/acceptance/ac-35-07-gitleaks-pin-consistency.js` | PASS (exit 1) | Exit code 1; CONTROL accepted the untouched manifest against the CI-installed Gitleaks version, the shared rule rejected the downgraded copy. Exit 2 outside the repository |
 | `python docs/product-spec/scripts/validate_docs.py` | PASS | Exit code 0; `Documentation validation passed`. File, feature and identifier counts are not pinned |
 
 ## Acceptance matrix audit
@@ -367,6 +373,82 @@ Assertions through `node --test --test-name-pattern` are prohibited in this Work
 Item: `node --test` exits 0 when the pattern matches nothing, so such a row
 cannot fail.
 
+## Acceptance matrix audit — round 2 (rule coupling)
+
+Every row of the acceptance matrix was extracted programmatically from the table
+honouring the escaped-pipe rule and executed exactly as stored against
+`origin/main`. Three defects remained after the first audit round, and all three
+were classified, measured and repaired below. The remaining rows were measured
+and held unchanged: `AC-AI-35-02` (exit 0), `AC-AI-35-03` (exit 1),
+`AC-AI-35-06` (exit 1; exit 2 from an empty directory), `AC-AI-35-08` and
+`AC-AI-35-09` (node exits 2 with `SOURCE_MISSING` from `$env:TEMP` under
+PowerShell).
+
+### `35-D1` — `AC-AI-35-01`, `AC-AI-35-04`, `AC-AI-35-05`: unrunnable as stored
+
+Classification: UNRUNNABLE (markdown escaping).
+
+Measurement: the markdown-aware splitter reads an unescaped `|` as a cell
+boundary. These three rows carried raw JavaScript `||` operators, so they split
+into 12, 6 and 6 cells instead of the table's 4 and no longer hold a command in
+one cell. Reconstructed and executed, the intended commands did pass — exit 0
+printing `GITLEAKS_BASELINE_VERIFIED: gitleaks ADOPTED BLOCKING_GATE 8.24.0`,
+`DUAL_MODE_EXCLUSIONS_VERIFIED: 70 scan targets, all build and dependency
+directories excluded` (the target count is measured, never pinned) and
+`FAIL_CLOSED_VERIFIED: Gitleaks process execution error: spawnSync
+nonexistent-binary-xyz ENOENT` — but a row that cannot be extracted as written
+is not a row.
+
+Replacement: each moved into a committed script —
+`ac-35-01-gitleaks-baseline.js`, `ac-35-04-scan-exclusions.ts` and
+`ac-35-05-fail-closed.ts`. Every one exits 2 from an empty directory with no
+repository present, so an absent repository can never read as a pass.
+
+### `35-D2` — the baseline rule was written twice, and the copies had drifted
+
+Classification: TAUTOLOGY-adjacent private copy of the rule under test — the
+systematic defect this audit was sent to find.
+
+Measurement: the rule "Gitleaks is `ADOPTED`, `BLOCKING_GATE`,
+`ci-provisioned`, pinned to the version CI installs" existed in two private
+copies inside this Work Item — inline in `AC-AI-35-01`, comparing against the
+literal `8.24.0`, and inside `reject()` in `ac-35-07-gitleaks-pin-consistency.js`,
+comparing against the `GITLEAKS_VERSION` the workflow actually installs. They had
+already diverged. Against a scratch copy of the real manifest and workflow whose
+CI pin was changed to `9.9.9` — CI installs 9.9.9, the manifest pins 8.24.0, a
+genuinely broken baseline:
+
+| Command | Exit | Output |
+|---|---|---|
+| old `AC-AI-35-01` inline command | 0 | `GITLEAKS_BASELINE_VERIFIED: gitleaks ADOPTED BLOCKING_GATE 8.24.0` |
+| new `ac-35-01-gitleaks-baseline.js` | 1 | `GITLEAKS_BASELINE_RULE_VIOLATED: pinned 8.24.0 but CI installs 9.9.9` |
+
+The positive row certified the gate while the gate was broken, because it carried
+its own copy of the rule.
+
+Replacement: `tools/ai-brain/acceptance/lib/gitleaks-baseline.js` is the single
+definition of the rule, required by both rows. `AC-AI-35-01` is the positive half
+and `AC-AI-35-07` the negative half, keeping its `CONTROL` step: the untouched
+manifest must be accepted before the tampered copy is rejected.
+
+Coupling mutation 1 — the module is edited so the rule never fires
+(`checkGitleaksBaseline` returns `null`): `ac-35-07` moves from exit 1 printing
+`GITLEAKS_BASELINE_TAMPER_REJECTED:` to exit 0 printing
+`GITLEAKS_BASELINE_TAMPER_ACCEPTED:`. The negative row fails.
+
+Coupling mutation 2 — the module is edited so the rule fires on the real manifest
+(`lifecycle_state !== 'INTEGRATED'`): `ac-35-01` exits 1 with
+`GITLEAKS_BASELINE_RULE_VIOLATED: lifecycle_state is ADOPTED`, and `ac-35-07`
+exits 2 with `CONTROL_FAILED: the untouched manifest is already rejected`. Both
+rows move together.
+
+The module was restored from a file backup, never by checking out the file:
+`sha256sum` of the restored module is
+`72f350c49dfbb2fa7b5c16633456e54352b892c66c6c7a07806bca155df75085`, equal to the
+pre-mutation hash, and the rows return to exit 0 and exit 1.
+
+No row compares two literals written into its own command, and no count that
+drifts with the repository is pinned.
 
 ## Codex review record
 
