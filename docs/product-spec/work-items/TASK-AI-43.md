@@ -245,10 +245,11 @@ Work Item's allowed paths and is not changed here.
 **Replacement:** `tools/ai-brain/acceptance/ac-43-02-manifest-zero-errors.js`,
 which asserts only the invariant `summary.error === 0` against the real
 manifest and prints the warning and note counts as evidence without comparing
-them. No new number is pinned. A control step first tampers with an in-memory
-copy of the real manifest (flipping the existing `trivy` entry to
-`ADOPTED`/`BLOCKING_GATE`, keeping 37 entries) and requires the audit to reject
-it, so a clean verdict cannot come from a sleeping audit.
+them. No new number is pinned. A control step first writes a tampered copy of
+the real manifest to the OS temp directory (flipping the existing `trivy` entry
+to `ADOPTED`/`BLOCKING_GATE`, keeping 37 entries), re-reads it from disk, removes
+it, and requires the audit to reject it, so a clean verdict cannot come from a
+sleeping audit.
 
 ### D2 — `AC-AI-43-07`: an assertion that proves nothing
 
@@ -323,8 +324,73 @@ real workflow file and requires it to be flagged.
 
 All four follow `tools/ai-brain/acceptance/ac-07-13-forbidden-lifecycle.js`:
 a control step that tampers with a copy and requires the real check to reject
-it, real repository files read from disk, no file on disk ever written, and
-exit `2` rather than a false pass when run outside the repository.
+it, real repository files read from disk, the tampered copy written in the OS
+temp directory and removed so that no repository file is written, and exit `2`
+rather than a false pass when run outside the repository.
+
+### D5 — a no-write claim the code does not keep
+
+**Defect class:** false claim in the specification.
+
+**Claim at HEAD.** The paragraph above asserted "no file on disk ever written",
+and D1 described its control as tampering "with an in-memory copy of the real
+manifest". Measured, both claims are false.
+
+**Measurement.** The accepted scripts write to disk:
+
+| Script | Write | Location | Removed |
+|---|---|---|---|
+| `ac-43-02-manifest-zero-errors.js` (lines 42, 44) | tampered manifest copy | `os.tmpdir()` | `fs.unlinkSync` |
+| `ac-43-08-audit-wiring.js` (lines 46, 48) | `doctor.ps1` copy with the wiring line | `os.tmpdir()` | `fs.unlinkSync` |
+| `ac-43-09-enforcement-boundary.js` (lines 43-50) | workflow copy with an injected caller | `fs.mkdtempSync(os.tmpdir(), …)` | `fs.rmSync` |
+
+Each writes a copy, reads it back, and removes it. None writes inside the
+repository, and that part of the claim is true; "no file on disk ever written"
+and "in-memory copy" are not.
+
+**Replacement.** The paragraph now states exactly what the code does: the
+tampered copy is written in the OS temp directory and removed, and no repository
+file is written. D1 now says the control writes a tampered copy to the OS temp
+directory and re-reads it. No script changed, because the code was already
+correct; only the description of it was wrong.
+
+### D6 — a review finding that did not hold: `AC-AI-43-08` / `AC-AI-43-09` are not regex-only
+
+**Finding reviewed.** `ac-43-08` "writes the manifest to a temp copy and
+re-reads it; `ac-43-09` injects a step into a copy and reads it back", and these
+"prove only regex syntax" rather than exercising the real check.
+
+**Verification from the code.** Both scripts were read and executed, and the
+claim was tested by mutation. It does not hold.
+
+- The control is a genuine disk round-trip, not a string comparison: each control
+  calls `fs.writeFileSync(tmp, …)` and then `wiring(fs.readFileSync(tmp, 'utf8'))`
+  (`ac-43-08`) or `CALLER.test(fs.readFileSync(tmp, 'utf8'))` (`ac-43-09`). The
+  bytes come back off disk.
+- The detector applied to the copy is the same function object applied to the
+  real files: `wiring()` reads `scripts/ai/doctor.ps1` and
+  `scripts/ai/ecosystem.ps1`; `CALLER` reads every `.github/workflows/*` file plus
+  `scripts/ai/control.ps1`. Control and measurement share one code path, so a
+  control hit and a measurement miss cannot come from different logic.
+- The measurement tracks real repository content, which is the decisive test of
+  "exercises the real check":
+
+| Mutation of a real repository file | Script | Exit before | Exit after | Output after |
+|---|---|---|---|---|
+| append the claimed wiring line to `scripts/ai/doctor.ps1` | `ac-43-08` | `0` | `1` | `MANIFEST_AUDIT_WIRED_SURFACES: 1 ["scripts/ai/doctor.ps1 …"]` and `CLAIM_STALE` |
+| append `- run: pwsh scripts/ai/doctor.ps1` to `.github/workflows/security-baseline.yml` | `ac-43-09` | `0` | `1` | `Enforced-path callers …: 1 [".github\\workflows\\security-baseline.yml"]` and `ENFORCEMENT_BOUNDARY_WIDENED` |
+
+  Both mutations were reverted; the SHA-256 of each file is unchanged
+  (`doctor.ps1` `47d1f6b4…`, `security-baseline.yml` `87879d50…`) and the working
+  tree is clean.
+
+**Verdict.** The finding is wrong and no script was changed. The checks are
+textual because the claim they verify is textual: the Business outcome asserts
+that no file under `scripts/` "invokes `tools/ai-brain/cli.js manifest`",
+"requires `manifest-audit`", or "contains the string `QUALITY_GATE_MISSING` at
+all", which is a statement about file contents. A textual check is the correct
+instrument for a textual claim, and the mutation above shows the instrument
+reacts to the real files rather than to its own injected literals.
 
 ## Verification commands
 
