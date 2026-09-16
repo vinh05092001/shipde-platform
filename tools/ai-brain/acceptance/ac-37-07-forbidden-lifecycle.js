@@ -9,17 +9,16 @@
 // never written. Run outside the repository the sources are missing, so the
 // script exits 2 (operational) rather than 1 (finding) — it cannot pass by
 // accident in an empty directory.
+//
+// The rule is NOT restated here. It is required from ./lib/lifecycle-forbidden.js,
+// the same module ac-37-06-lifecycle-clean.js requires: the negative proof now
+// exercises the positive row's check rather than a private copy of it.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { findForbiddenLifecycleScripts } = require('./lib/lifecycle-forbidden.js');
 
-const FORBIDDEN = ['preinstall', 'install', 'postinstall', 'prepare'];
 const SOURCES = ['package.json', path.join('apps', 'web', 'package.json')];
-
-// The predicate under test, identical to the one AC-AI-37-06 applies.
-function findForbidden(manifest) {
-  return FORBIDDEN.filter((s) => manifest.scripts && manifest.scripts[s]);
-}
 
 const loaded = [];
 for (const source of SOURCES) {
@@ -37,7 +36,7 @@ for (const source of SOURCES) {
 
 // Control: the real manifests must be clean, or the tampered copy proves nothing.
 for (const { source, manifest } of loaded) {
-  if (findForbidden(manifest).length > 0) {
+  if (findForbiddenLifecycleScripts(manifest).length > 0) {
     console.error('CONTROL_FAILED: ' + source + ' already carries a forbidden lifecycle script');
     process.exit(2);
   }
@@ -54,7 +53,7 @@ const tmp = path.join(os.tmpdir(), 'shipde-ac-37-07-' + process.pid + '-package.
 let found;
 try {
   fs.writeFileSync(tmp, JSON.stringify(tampered, null, 2));
-  found = findForbidden(JSON.parse(fs.readFileSync(tmp, 'utf8')));
+  found = findForbiddenLifecycleScripts(JSON.parse(fs.readFileSync(tmp, 'utf8')));
 } catch (err) {
   console.error('TAMPER_COPY_FAILED: ' + err.message);
   process.exit(2);
