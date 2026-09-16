@@ -77,8 +77,36 @@ function withRegisterUnchanged(registerPath, fn) {
   return { ...result, registerSha256: beforeHash };
 }
 
+/**
+ * Canonical identity of a path for the alias check. Symlinks and junctions are
+ * followed when the target exists; Windows and macOS compare case-insensitively.
+ */
+function canonical(filePath) {
+  let resolved = path.resolve(filePath);
+  try {
+    resolved = fs.realpathSync.native(resolved);
+  } catch {
+    // Not there yet: the resolved path is the best identity available.
+  }
+  return process.platform === 'linux' ? resolved : resolved.toLowerCase();
+}
+
+/**
+ * Refuses a shadow path that names the register. The after-hash in
+ * withRegisterUnchanged would only detect the overwrite after the register was
+ * already destroyed; this check runs before any write can happen.
+ */
+function refuseRegisterAlias(registerPath, shadowPath) {
+  if (canonical(registerPath) === canonical(shadowPath)) {
+    throw new ShadowError(
+      'shadow path is the register itself: ' + shadowPath + '; the shadow owns no state'
+    );
+  }
+}
+
 /** Writes the projection. With `dryRun` nothing is written, only reported. */
 function project({ registerPath, shadowPath, dryRun }) {
+  refuseRegisterAlias(registerPath, shadowPath);
   return withRegisterUnchanged(registerPath, (bytes) => {
     const g = registerGraph(bytes, registerPath);
     const text = graph.toShadowJson(g);
@@ -90,8 +118,14 @@ function project({ registerPath, shadowPath, dryRun }) {
     }
     const unchanged = existing === text;
     if (!dryRun && !unchanged) {
-      fs.mkdirSync(path.dirname(shadowPath), { recursive: true });
-      fs.writeFileSync(shadowPath, text);
+      try {
+        fs.mkdirSync(path.dirname(shadowPath), { recursive: true });
+        fs.writeFileSync(shadowPath, text);
+      } catch (err) {
+        throw new ShadowError(
+          'shadow store cannot be written: ' + shadowPath + ' (' + (err.code || err.message) + ')'
+        );
+      }
     }
     return {
       mode: 'project',
@@ -106,6 +140,7 @@ function project({ registerPath, shadowPath, dryRun }) {
 
 /** Compares the register's graph with a shadow store. */
 function compare({ registerPath, shadowPath }) {
+  refuseRegisterAlias(registerPath, shadowPath);
   return withRegisterUnchanged(registerPath, (bytes) => {
     const expected = registerGraph(bytes, registerPath);
     const actual = readShadow(shadowPath);

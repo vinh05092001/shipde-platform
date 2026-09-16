@@ -141,6 +141,26 @@ describe('Fail closed', () => {
     assert.throws(() => shadow.compare({ registerPath, shadowPath }), shadow.ShadowError);
   });
 
+  test('a shadow path that is the register is refused before any write', () => {
+    const before = fs.readFileSync(registerPath);
+    assert.throws(
+      () => shadow.project({ registerPath, shadowPath: registerPath }),
+      shadow.ShadowError
+    );
+    const aliased = path.join(dir, '.', 'shadow', '..', 'register.csv');
+    assert.throws(() => shadow.project({ registerPath, shadowPath: aliased }), shadow.ShadowError);
+    assert.throws(
+      () => shadow.compare({ registerPath, shadowPath: registerPath }),
+      shadow.ShadowError
+    );
+    assert.deepEqual(fs.readFileSync(registerPath), before);
+  });
+
+  test('an unwritable shadow path is a refusal, not a raw filesystem error', () => {
+    fs.mkdirSync(shadowPath, { recursive: true });
+    assert.throws(() => shadow.project({ registerPath, shadowPath }), shadow.ShadowError);
+  });
+
   test('a register with no rows is refused', () => {
     fs.writeFileSync(registerPath, HEADER + '\n');
     assert.throws(() => shadow.project({ registerPath, shadowPath }), shadow.ShadowError);
@@ -164,6 +184,48 @@ describe('CLI', () => {
     const r = runCli(['--compare', '--register', registerPath, '--shadow', shadowPath]);
     assert.equal(r.status, 1);
     assert.match(r.stdout, /MISSING_IN_SHADOW {2}TASK-AI-02 -> TASK-AI-01/);
+  });
+
+  test('--shadow naming the register exits 1 and leaves the register intact', () => {
+    const before = fs.readFileSync(registerPath);
+    const r = runCli(['--project', '--register', registerPath, '--shadow', registerPath]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /the shadow owns no state/);
+    assert.deepEqual(fs.readFileSync(registerPath), before);
+  });
+
+  test('--dry-run with --compare is refused', () => {
+    const r = runCli([
+      '--compare',
+      '--dry-run',
+      '--register',
+      registerPath,
+      '--shadow',
+      shadowPath,
+    ]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /--dry-run/);
+  });
+
+  test('the real register projects and compares with zero divergences', () => {
+    const real = path.join(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      'docs',
+      'product-spec',
+      'docs',
+      '10-ai-collaboration',
+      'FEATURE-DELIVERY-REGISTER.csv'
+    );
+    const out = path.join(dir, 'real', 'graph.json');
+    const before = fs.readFileSync(real);
+    assert.equal(runCli(['--project', '--register', real, '--shadow', out]).status, 0);
+    const r = runCli(['--compare', '--register', real, '--shadow', out]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /0 divergences/);
+    assert.deepEqual(fs.readFileSync(real), before);
   });
 
   test('a misspelled option is refused with exit 1', () => {

@@ -330,3 +330,16 @@ Measured on this branch (`178` nodes, `174` edges, printed and not pinned):
 - **The measured graph is recorded, not pinned.** `178` nodes and `174` edges
   were measured at `ab54b3f`; both grow with every merged Work Item, so the
   acceptance rows print them as evidence and assert neither.
+
+## Review round 1 — repairs
+
+Independent review by `cline-free/muse-spark-1.3-contributor` at `1122d031c0760d2125c3118652137430340d8729` returned `CHANGES_REQUIRED`. Each finding and its disposition:
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| `--shadow` equal to `--register` overwrote the register before the after-hash noticed | Fixed. `refuseRegisterAlias` compares canonical paths (resolved, symlinks followed, case-insensitive off Linux) and throws `ShadowError` before any read-then-write, in both `project` and `compare`. | `shadow.test.js`: "a shadow path that is the register is refused before any write" (direct and `shadow/../register.csv` alias) and the CLI row "--shadow naming the register exits 1 and leaves the register intact". Removing the guard makes both fail (measured: 20 pass, 2 fail). |
+| `--dry-run` silently ignored with `--compare` | Fixed. Refused with exit 1; `--compare` never writes. | CLI row "--dry-run with --compare is refused". |
+| Raw `EISDIR`/`EACCES` escaped as stack traces | Fixed. Write failures rethrow as `ShadowError`, so the CLI refuses with exit 1. | "an unwritable shadow path is a refusal, not a raw filesystem error". |
+| Real-register agreement was prose only | Fixed. A test runs `cli.js shadow --project` then `--compare` against the real register into a temp store, asserts `0 divergences` and byte-identical register. | "the real register projects and compares with zero divergences". |
+
+`node --test tools/ai-brain/test/shadow.test.js`: 22 pass, 0 fail.

@@ -611,6 +611,9 @@ function shadowCommand(args) {
   );
   const shadowPath = path.resolve(cwd, args.shadow || shadow.DEFAULT_SHADOW_PATH);
   const dryRun = Boolean(args['dry-run'] || args.dryRun);
+  if (dryRun && args.compare) {
+    refuse('--dry-run chỉ dùng với --project; --compare không bao giờ ghi gì');
+  }
 
   let result;
   try {
