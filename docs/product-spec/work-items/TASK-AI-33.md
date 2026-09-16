@@ -87,6 +87,13 @@ produces.
   `READY_FOR_AUTHOR` only through the reconciler's write-back path
   (`tools/ai-brain/reconcile.js`, `AI-19-R03`) once its dependency is `MERGED`
   and evidenced; it is never advanced by hand.
+- The register's own row for `TASK-AI-19` still reads `BLOCKED_DEPENDENCY`, a
+  state `TASK-AI-19` already documents as residual: its dependency `TASK-AI-17`
+  carries no durable merge-evidence artifact, so `AI-19-R04` refuses to record
+  it `MERGED` and the reconciler cannot yet clear the downstream blocks. The
+  block on row `166` is therefore stale rather than true — the dependency is
+  merged in Git — and clearing it remains the reconciler's write-back, not a
+  hand edit of the register.
 - `tools/ai-brain/reconcile.js` exports `parseDependencies`, so the shadow's edge
   rule can be the reconciler's rather than a copy of it.
 - `node tools/ai-brain/cli.js reconcile` reports `Tổng: 0 lỗi` against the real
