@@ -98,14 +98,23 @@ function reconcileRegister(items, deps) {
         );
       }
 
+      // The same verdicts the transition accepts, because an audit that
+      // disagreed with the rule it audits would report every row the rule
+      // legitimately wrote. Measured 2026-09-16: widening the transition for
+      // AI-19-R05 without widening this made the register un-writable - the
+      // first MERGED row written under the new rule was immediately an error.
       const verdict = (item.codex_verdict || '').trim();
-      if (verdict !== 'PASS') {
+      if (!ACCEPTED_MERGED_VERDICTS.has(verdict)) {
         findings.push(
           finding(
             'error',
             'MERGED_WITHOUT_PASS',
             item,
-            'Ghi là MERGED nhưng codex_verdict là "' + (verdict || 'trống') + '", không phải PASS.'
+            'Ghi là MERGED nhưng codex_verdict là "' +
+              (verdict || 'trống') +
+              '", không phải ' +
+              [...ACCEPTED_MERGED_VERDICTS].join(' hoặc ') +
+              '.'
           )
         );
       }
@@ -279,7 +288,41 @@ function findDuplicateIds(items) {
  */
 
 const ALLOWED_SOURCES_FOR_BACKLOG = new Set(['BLOCKED_DEPENDENCY', 'BLOCKED_BY_FOUNDATION']);
-const ALLOWED_SOURCES_FOR_MERGED = new Set(['READY_FOR_CODEX', 'CODEX_PASS']);
+/**
+ * Statuses a row may be recorded MERGED from.
+ *
+ * The pre-review states are included, and that is a deliberate widening. The
+ * source check exists to stop a merge being INFERRED from a branch name; it is
+ * not the thing that stops review from being skipped. What stops that is the
+ * evidence bar: a reachable merge commit on mainRef, a verdict on the exact
+ * head, zero unresolved threads, CI SUCCESS on the reviewed head. A row sitting
+ * at BACKLOG with that evidence in hand did pass through review - the register
+ * simply never recorded the intermediate steps, so it is stale rather than
+ * early. Refusing it does not protect the gate, it preserves a false record.
+ *
+ * Measured 2026-09-16: fifteen rows had merged pull requests carrying real
+ * implementation while the register still read BACKLOG or BLOCKED_DEPENDENCY,
+ * because the lifecycle steps between were never written. Every one of them was
+ * refused by the source check and none by the evidence bar.
+ */
+/**
+ * Verdicts that satisfy the MERGED transition's review condition.
+ *
+ * `PASS` is Codex. `FALLBACK_PASS` is the machine-authenticated reviewer
+ * TASK-AI-14 approved, admitted on the terms AI-19-R05 states: the reviewer is
+ * named and the commit it read equals the evidence head. Kept as one set so the
+ * transition and the audit cannot drift apart.
+ */
+const ACCEPTED_MERGED_VERDICTS = new Set(['PASS', 'FALLBACK_PASS']);
+
+const ALLOWED_SOURCES_FOR_MERGED = new Set([
+  'READY_FOR_CODEX',
+  'CODEX_PASS',
+  'BACKLOG',
+  'READY_FOR_AUTHOR',
+  'BLOCKED_DEPENDENCY',
+  'BLOCKED_BY_FOUNDATION',
+]);
 const SHA_40 = /^[0-9a-f]{40}$/;
 
 /**
@@ -652,26 +695,62 @@ function eolOf(record) {
  * compares against the plan: a mutation that was planned but matched no row is
  * a bug worth failing on, not a no-op to shrug at.
  */
+/** Column positions, read from the header so a reordered register is not a silent corruption. */
+function columnIndexes(headerFields, opts) {
+  const find = (name, fallback) => {
+    const at = headerFields.indexOf(name);
+    return at === -1 ? fallback : at;
+  };
+  return {
+    id: opts.idColumn === undefined ? find('work_item_id', 3) : opts.idColumn,
+    status: opts.statusColumn === undefined ? find('status', 7) : opts.statusColumn,
+    pr: find('pr', 11),
+    verdict: find('codex_verdict', 12),
+    commit: find('merge_commit', 13),
+  };
+}
+
+/**
+ * Write the register.
+ *
+ * A MERGED transition writes four cells, not one. Writing only the status
+ * produces a row that claims to be merged and shows no pull request, no commit
+ * and no verdict - which the audit then reports as MERGED_WITHOUT_COMMIT and
+ * MERGED_WITHOUT_PASS. Measured on 2026-09-16: recording a single row that way
+ * made write-back refuse the NEXT write, because the register it was about to
+ * amend was already inconsistent.
+ *
+ * A mutation with no evidence (clearing a stale block) still writes only the
+ * status, because there is nothing else it could honestly record.
+ */
 function applyStatusMutations(text, mutations, options) {
   const opts = options || {};
-  const idColumn = opts.idColumn === undefined ? 3 : opts.idColumn;
-  const statusColumn = opts.statusColumn === undefined ? 7 : opts.statusColumn;
+  const records = parseCsvRecords(text);
+  const cols = columnIndexes(records.length ? records[0].fields : [], opts);
 
   const wanted = new Map();
-  for (const m of mutations) wanted.set(m.workItemId, m.to);
+  for (const m of mutations) wanted.set(m.workItemId, m);
 
-  const records = parseCsvRecords(text);
   let applied = 0;
 
   const out = records
     .map((record, index) => {
       if (index === 0) return record.raw;
-      const id = record.fields[idColumn];
+      const id = record.fields[cols.id];
       if (!wanted.has(id)) return record.raw;
-      const next = wanted.get(id);
-      if (record.fields[statusColumn] === next) return record.raw;
+      const m = wanted.get(id);
+      if (record.fields[cols.status] === m.to) return record.raw;
+
       const fields = record.fields.slice();
-      fields[statusColumn] = next;
+      fields[cols.status] = m.to;
+
+      const ev = m.evidence;
+      if (m.to === 'MERGED' && ev) {
+        if (ev.pr !== undefined) fields[cols.pr] = String(ev.pr);
+        if (ev.codexVerdict !== undefined) fields[cols.verdict] = String(ev.codexVerdict);
+        if (ev.mergeCommit !== undefined) fields[cols.commit] = String(ev.mergeCommit);
+      }
+
       applied += 1;
       return serializeRecord(fields, eolOf(record));
     })
@@ -692,6 +771,7 @@ module.exports = {
   applyStatusMutations,
   serializeRecord,
   ACCEPTED_DEPENDENCY_VERDICTS,
+  ACCEPTED_MERGED_VERDICTS,
   ALLOWED_SOURCES_FOR_BACKLOG,
   ALLOWED_SOURCES_FOR_MERGED,
 };

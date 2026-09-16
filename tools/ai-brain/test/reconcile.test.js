@@ -492,10 +492,61 @@ describe('planReconciliation — recording a merge', () => {
     assert.equal(plan.refusals[0].reason, 'no durable merge evidence provided');
   });
 
-  test('a BACKLOG row is refused even when the evidence itself is valid', () => {
+  test('a stale row is recorded MERGED when the evidence proves the review happened', () => {
+    // This row was refused until 2026-09-16. The source check exists to stop a
+    // merge being INFERRED from a branch name; it is not what stops review from
+    // being skipped. What stops that is the evidence: a reachable merge commit,
+    // a verdict on the exact head, zero unresolved threads, CI SUCCESS. A row at
+    // BACKLOG holding that evidence did pass through review - the register just
+    // never recorded the steps between, so it is stale rather than early.
+    // Measured: fifteen rows were in exactly this state.
     const plan = planReconciliation(
       [readyRow({ work_item_id: 'TASK-AI-12', status: 'BACKLOG' })],
-      Object.assign({ mergeEvidence: evidenceFor({ title: '[TASK-AI-12] Skipped' }) }, ALL_PROVEN)
+      Object.assign({ mergeEvidence: evidenceFor({ title: '[TASK-AI-12] Landed' }) }, ALL_PROVEN)
+    );
+    assert.equal(plan.mutations.length, 1);
+    assert.equal(plan.mutations[0].to, 'MERGED');
+    assert.equal(plan.mutations[0].from, 'BACKLOG');
+  });
+
+  test('a stale row with no evidence at all is still refused', () => {
+    const plan = planReconciliation(
+      [readyRow({ work_item_id: 'TASK-AI-12', status: 'BACKLOG' })],
+      ALL_PROVEN
+    );
+    assert.equal(plan.mutations.length, 0);
+    assert.match(plan.refusals[0].reason, /no durable merge evidence/);
+  });
+
+  test('a stale row whose evidence fails any condition is still refused', () => {
+    // The widening moves the whole weight onto the evidence bar, so each
+    // condition of it has to be shown to bite for a stale row and not only for
+    // a row already at READY_FOR_CODEX.
+    const stale = readyRow({ work_item_id: 'TASK-AI-12', status: 'BACKLOG' });
+    const title = { title: '[TASK-AI-12] Landed' };
+    const cases = [
+      [{ codexVerdict: 'CHANGES_REQUESTED' }, /Codex verdict is not PASS/],
+      [{ unresolvedThreadsCount: 3 }, /unresolved review threads/],
+      [{ ciChecksStatus: 'FAILURE' }, /CI checks are not SUCCESS/],
+      [{ mergeCommit: { oid: 'abc123' } }, /not a 40-character SHA/],
+    ];
+    for (const [override, pattern] of cases) {
+      const plan = planReconciliation(
+        [stale],
+        Object.assign(
+          { mergeEvidence: evidenceFor(Object.assign({}, title, override)) },
+          ALL_PROVEN
+        )
+      );
+      assert.equal(plan.mutations.length, 0, 'expected a refusal for ' + JSON.stringify(override));
+      assert.match(plan.refusals[0].reason, pattern);
+    }
+  });
+
+  test('an unknown status is never moved to MERGED however good the evidence', () => {
+    const plan = planReconciliation(
+      [readyRow({ work_item_id: 'TASK-AI-12', status: 'SOMETHING_ELSE' })],
+      Object.assign({ mergeEvidence: evidenceFor({ title: '[TASK-AI-12] Landed' }) }, ALL_PROVEN)
     );
     assert.equal(plan.mutations.length, 0);
     assert.match(plan.refusals[0].reason, /not an allowed transition source/);
@@ -567,6 +618,88 @@ describe('planReconciliation — recording a merge', () => {
       Object.assign({}, ALL_PROVEN, { mergeEvidence: evidenceFor(), fileExists: () => false })
     );
     assert.match(plan.refusals[0].reason, /work_item_path does not exist/);
+  });
+});
+
+describe('applyStatusMutations - a MERGED transition writes its evidence', () => {
+  // Built with String.fromCharCode rather than a backslash escape: this block
+  // was written through a shell heredoc twice and the escape was eaten both
+  // times, leaving a string literal broken across two lines.
+  const NL = String.fromCharCode(10);
+  const Q = String.fromCharCode(34);
+  const HEADER =
+    [
+      Q + 'work_item_id' + Q,
+      Q + 'status' + Q,
+      Q + 'branch' + Q,
+      Q + 'pr' + Q,
+      Q + 'codex_verdict' + Q,
+      Q + 'merge_commit' + Q,
+    ].join(',') + NL;
+
+  function row(cells) {
+    return cells.map((c) => Q + c + Q).join(',') + NL;
+  }
+
+  test('the status, pr, verdict and commit are all written', () => {
+    // Writing the status alone leaves a row claiming to be merged with no pull
+    // request, no commit and no verdict - which the audit reports as
+    // MERGED_WITHOUT_COMMIT and MERGED_WITHOUT_PASS. Measured 2026-09-16:
+    // recording one row that way made write-back refuse the NEXT write, because
+    // the register it was about to amend was already inconsistent.
+    const text = HEADER + row(['TASK-AI-18', 'BACKLOG', '', '', '', '']);
+    const out = applyStatusMutations(
+      text,
+      [
+        {
+          workItemId: 'TASK-AI-18',
+          to: 'MERGED',
+          evidence: { pr: '47', codexVerdict: 'FALLBACK_PASS', mergeCommit: 'a'.repeat(40) },
+        },
+      ],
+      {}
+    );
+    assert.equal(out.applied, 1);
+    assert.match(out.text, /"TASK-AI-18","MERGED"/);
+    assert.match(out.text, /"47","FALLBACK_PASS","a{40}"/);
+  });
+
+  test('a block cleared with no evidence writes only the status', () => {
+    // There is nothing else it could honestly record.
+    const text = HEADER + row(['FEAT-AUTH-02', 'BLOCKED_BY_FOUNDATION', '', '', '', '']);
+    const out = applyStatusMutations(text, [{ workItemId: 'FEAT-AUTH-02', to: 'BACKLOG' }], {});
+    assert.equal(out.applied, 1);
+    assert.match(out.text, /"FEAT-AUTH-02","BACKLOG","","","",""/);
+  });
+
+  test('columns are located from the header, not from fixed offsets', () => {
+    // A reordered register must not become a silent corruption.
+    const reordered =
+      [
+        Q + 'merge_commit' + Q,
+        Q + 'pr' + Q,
+        Q + 'codex_verdict' + Q,
+        Q + 'status' + Q,
+        Q + 'work_item_id' + Q,
+      ].join(',') +
+      NL +
+      row(['', '', '', 'BACKLOG', 'TASK-AI-18']);
+    const out = applyStatusMutations(
+      reordered,
+      [
+        {
+          workItemId: 'TASK-AI-18',
+          to: 'MERGED',
+          evidence: { pr: '47', codexVerdict: 'PASS', mergeCommit: 'b'.repeat(40) },
+        },
+      ],
+      {}
+    );
+    assert.equal(out.applied, 1);
+    assert.match(
+      out.text,
+      new RegExp('"' + 'b'.repeat(40) + '","47","PASS","MERGED","TASK-AI-18"')
+    );
   });
 });
 

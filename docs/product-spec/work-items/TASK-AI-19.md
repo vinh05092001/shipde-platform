@@ -354,6 +354,39 @@ worked around, because the alternative — recording `MERGED` from a branch name
 or a reachable commit alone — is the precise failure `AI-19-R04` was written to
 prevent.
 
+## Executed run: 2026-09-16
+
+Two rows were recorded MERGED, both carrying a fallback review on the exact
+merged head:
+
+| Row | PR | Reviewed commit | Merge commit | Verdict |
+|---|---|---|---|---|
+| `TASK-AI-18` | `#47` | `d9e4c65a582749c97e19f21c26dca45deaaf497d` | `a2a3bc00a7d22e7bc25e0b2eb28c81c9b74ad774` | `FALLBACK_PASS` |
+| `TASK-AI-15` | `#39` | `26f44e9d7df2db5b418969cbd22d23d4b03c9d8f` | `48314184e5fcfa98a5a523dc2a31b14f4ef02de0` | `FALLBACK_PASS` |
+
+Three defects were found by attempting these writes, each recorded in the
+commit that closed it:
+
+1. **The source check was too strict.** `MERGED` was reachable only from
+   `READY_FOR_CODEX` or `CODEX_PASS`, so a row whose work had shipped while the
+   register stayed at `BACKLOG` could never be recorded. Measured: fifteen rows
+   were in that state and none was refused by the evidence bar. The pre-review
+   statuses are now accepted as sources, and the evidence bar is what remains.
+
+2. **A MERGED transition wrote only the status cell.** The row then claimed to
+   be merged showing no pull request, no commit and no verdict; the audit
+   reported `MERGED_WITHOUT_COMMIT` and write-back refused the next write. The
+   transition now writes all four cells, with column positions read from the
+   header rather than fixed offsets.
+
+3. **The audit disagreed with the transition it audits.** Widening the
+   transition for `AI-19-R05` without widening the audit made the first row
+   written under the new rule an error. Both now read one verdict set.
+
+This closes the residual limitation this document recorded below: "Only the
+status cell is written. The `pr`, `merge_commit` and `codex_verdict` columns are
+never backfilled."
+
 ## Residual limitations
 
 - **Reviewer points from round 5 not addressed here.** Reverting a penultimate audit is impossible by design, because `--revert` requires the register to still hash to that audit's `post_hash_sha256`; `operator_session` falls back to `USERNAME`, which is Windows-only, and does not consult `USER`; `require('crypto')` is called inline in two functions rather than hoisted; `pick(args, 'revert', 'revert')` passes the same key twice and is redundant; and an `AI-19-R02` refusal does not name the target row's status, so it reads similarly to an `AI-19-R04` refusal in an audit artifact. None of these changes whether the register is written correctly.
