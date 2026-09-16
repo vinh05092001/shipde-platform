@@ -509,18 +509,34 @@ function verifyMergeEvidence(evidence, item, probes) {
       if (reviewedAt !== 'mainRef') {
         return { ok: false, why: 'reviewedAt must be the literal mainRef' };
       }
-      const tip = String(typeof probes.tip === 'function' ? probes.tip() || '' : '').trim();
-      if (!SHA_40.test(tip)) {
-        return { ok: false, why: 'the mainRef tip could not be read' };
+      // The reviewed commit must be ON main, and must CONTAIN the merge.
+      //
+      // Requiring it to be the tip was the first attempt and it was wrong:
+      // every unrelated merge moves the tip, so evidence gathered before any
+      // merge became unusable the moment that merge landed. Measured
+      // 2026-09-16: a row reviewed minutes earlier was refused because four
+      // unrelated specification pull requests had merged in between, while
+      // none of that Work Item's own files had changed.
+      //
+      // What the two conditions do NOT establish is that the reviewed commit is
+      // the latest one. A review of an earlier commit stands even if that Work
+      // Item's files changed afterwards, so this evidence goes stale silently.
+      // The reviewer is named and the commit is fixed, which makes the claim
+      // checkable after the fact rather than impossible to make.
+      if (!probes.merged(reviewed)) {
+        return {
+          ok: false,
+          why: 'reviewedAt names ' + reviewed.slice(0, 8) + ', which is not reachable on mainRef',
+        };
       }
-      if (reviewed !== tip) {
+      if (probes.contains && reviewed !== mergeSha && !probes.contains(mergeSha, reviewed)) {
         return {
           ok: false,
           why:
             'reviewedAt names ' +
             reviewed.slice(0, 8) +
-            ' but the mainRef tip is ' +
-            tip.slice(0, 8),
+            ', which does not contain the merge commit ' +
+            mergeSha.slice(0, 8),
         };
       }
     } else if (reviewed !== head) {
@@ -568,7 +584,7 @@ function planReconciliation(items, options) {
     hasCommit: opts.commitExists || ((sha) => commitExists(sha, cwd)),
     merged: opts.isAncestorOf || ((sha) => isAncestorOf(sha, mainRef, cwd)),
     hasFile: opts.fileExists || ((p) => fileExists(p, cwd)),
-    tip: opts.mainTip || (() => headSha(mainRef, cwd)),
+    contains: opts.containsCommit || ((a, b) => isAncestorOf(a, b, cwd)),
   };
 
   const byId = new Map();
