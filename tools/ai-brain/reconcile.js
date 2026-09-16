@@ -490,7 +490,40 @@ function verifyMergeEvidence(evidence, item, probes) {
     if (!SHA_40.test(reviewed)) {
       return { ok: false, why: 'FALLBACK_PASS reviewedCommit is not a 40-character SHA' };
     }
-    if (reviewed !== head) {
+    // Two shapes are accepted, and they answer the same question: was the code
+    // being recorded the code that was read?
+    //
+    //   - `reviewedCommit === headRefOid`: the review was of the pull request's
+    //     final head, before it merged.
+    //   - `reviewedAt: 'mainRef'`: the review was of the repository tip after
+    //     the merge. This is the shape a re-review takes - a first review found
+    //     defects, later pull requests fixed them, and the reviewer then read
+    //     the result rather than the history. The merge commit must be reachable
+    //     on mainRef and `reviewedCommit` must BE the mainRef tip, so the review
+    //     is of code that contains the merge and is current.
+    //
+    // Neither shape proves the reviewer read anything. Both make the claim
+    // falsifiable: the reviewed commit is named, and its content is fixed.
+    const reviewedAt = String(evidence.reviewedAt || '').trim();
+    if (reviewedAt) {
+      if (reviewedAt !== 'mainRef') {
+        return { ok: false, why: 'reviewedAt must be the literal mainRef' };
+      }
+      const tip = String(typeof probes.tip === 'function' ? probes.tip() || '' : '').trim();
+      if (!SHA_40.test(tip)) {
+        return { ok: false, why: 'the mainRef tip could not be read' };
+      }
+      if (reviewed !== tip) {
+        return {
+          ok: false,
+          why:
+            'reviewedAt names ' +
+            reviewed.slice(0, 8) +
+            ' but the mainRef tip is ' +
+            tip.slice(0, 8),
+        };
+      }
+    } else if (reviewed !== head) {
       return {
         ok: false,
         why:
@@ -535,6 +568,7 @@ function planReconciliation(items, options) {
     hasCommit: opts.commitExists || ((sha) => commitExists(sha, cwd)),
     merged: opts.isAncestorOf || ((sha) => isAncestorOf(sha, mainRef, cwd)),
     hasFile: opts.fileExists || ((p) => fileExists(p, cwd)),
+    tip: opts.mainTip || (() => headSha(mainRef, cwd)),
   };
 
   const byId = new Map();
