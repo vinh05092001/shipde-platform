@@ -367,6 +367,26 @@ not block the query the usage adapter runs. The pattern now matches only
 
 ## Residual limitations
 
+- **The guard reads text, so an alias defeats it.** Measured during
+  implementation: `const c = apiKeys; c.key` is not reported, because by the
+  time the column is named the table is a local variable and no textual rule can
+  know what it holds. `const { key } = row` is likewise invisible, though the
+  fetch that produced `row` would be caught if it named the column. Closing
+  these needs a real parse and a binding analysis, which is a different Work
+  Item and a much larger one. Four evasions were attempted; two were closed
+  (bracket access and a read split across lines) and these two were not.
+- **A clean report can mean a broken guard.** Measured: a botched edit stripped
+  every backslash from the patterns, and the guard reported `SECRET_SURFACE_CLEAN`
+  for a fixture that reads the credential on line 3. The canary test now asserts
+  every configured pattern still matches its own subject, so an emptied pattern
+  fails the suite instead of passing the repository. The canary is not proof the
+  patterns are *correct*, only that they are not vacuous.
+- **`SELF_EXCLUSION` is a hole by construction.** A forbidden read written into
+  `tools/ai-guard/secret-surface.js` is not reported by the default scan. The
+  exclusion is what makes a clean repository reachable at all, and it is one
+  exact file rather than a pattern, but the gap is real and nothing here closes
+  it.
+
 - **The plaintext credentials remain plaintext.** This Work Item does not
   encrypt the 9Router store and cannot: the store belongs to a third-party
   application. Two gateway keys and one provider token stay readable by any

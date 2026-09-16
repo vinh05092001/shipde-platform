@@ -14,6 +14,8 @@ const {
   scanDirectory,
   formatReport,
   runSecretSurface,
+  CREDENTIAL_COLUMNS,
+  WILDCARD_TABLES,
 } = require('../secret-surface');
 
 /**
@@ -204,5 +206,42 @@ describe('secret-surface — the CLI surface', () => {
     ]);
     assert.equal(r.code, 1);
     assert.equal(r.out.includes('SECRET_SURFACE_VIOLATION: reader.ts:3 ' + KEY), true);
+  });
+});
+
+describe('secret-surface — reads that tried to hide', () => {
+  test('bracket access is caught', () => {
+    const v = scanText(KEY_TABLE + '["' + 'k' + 'ey"]', 'x.ts');
+    assert.equal(v.length, 1);
+    assert.equal(v[0].column, KEY);
+  });
+
+  test('a read split across two lines is caught, and reports the first line', () => {
+    const v = scanText('const x =\n  ' + KEY_TABLE + '\n  .' + 'k' + 'ey;', 'x.ts');
+    assert.equal(v.length, 1);
+    assert.equal(v[0].line, 2);
+  });
+
+  test('bracket access to the data column is caught', () => {
+    assert.equal(scanText(DATA_TABLE + "['" + 'da' + "ta']", 'x.ts').length, 1);
+  });
+
+  test('every pattern still matches something — the canary', () => {
+    // A regex edited into uselessness reports a clean repository, which is the
+    // most dangerous state this guard has: it looks like success. Measured
+    // during development — a botched edit stripped every backslash and the
+    // guard returned CLEAN for a fixture that reads the credential on line 3.
+    // This asserts each configured pattern still fires on its own subject.
+    for (const { column, pattern } of CREDENTIAL_COLUMNS) {
+      const subject = column.split('.')[0] + '.' + column.split('.')[1];
+      assert.equal(pattern.test(subject), true, 'pattern for ' + column + ' matches nothing');
+    }
+    for (const { table, pattern } of WILDCARD_TABLES) {
+      assert.equal(
+        pattern.test('SELECT * FROM ' + table),
+        true,
+        'wildcard for ' + table + ' matches nothing'
+      );
+    }
   });
 });

@@ -55,8 +55,18 @@ const SKIPPED_DIRECTORIES = new Set([
 const SCANNED_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx']);
 
 const CREDENTIAL_COLUMNS = [
-  { column: 'apiKeys.key', pattern: /\bapiKeys\s*\.\s*key\b/ },
-  { column: 'providerConnections.data', pattern: /\bproviderConnections\s*\.\s*data\b/ },
+  {
+    column: 'apiKeys.key',
+    // Dot access and bracket access, with any whitespace between the table and
+    // the column, a newline included. Measured: without the newline case a read
+    // split across two lines by a formatter was invisible, and without the
+    // bracket case the subscript spelling was invisible.
+    pattern: /\bapiKeys\s*(?:\.\s*key\b|\[\s*['"`]key['"`]\s*\])/,
+  },
+  {
+    column: 'providerConnections.data',
+    pattern: /\bproviderConnections\s*(?:\.\s*data\b|\[\s*['"`]data['"`]\s*\])/,
+  },
 ];
 
 const WILDCARD_TABLES = [
@@ -80,27 +90,45 @@ const WILDCARD_TABLES = [
 /**
  * One source text's violations, in line order.
  */
+/**
+ * Line number of a character offset, 1-based.
+ */
+function lineAt(text, index) {
+  let line = 1;
+  for (let i = 0; i < index; i += 1) {
+    if (text.charCodeAt(i) === 10) line += 1;
+  }
+  return line;
+}
+
+/**
+ * One source text's violations, in the order they appear.
+ *
+ * The scan runs over the whole text rather than line by line, because a read
+ * split across two lines by a formatter - `apiKeys` on one line and `.key` on
+ * the next - is the same read, and a line-by-line scan cannot see it. The line
+ * number reported is the line the match starts on.
+ */
 function scanText(text, displayPath) {
-  const violations = [];
-  const lines = text.split(/\r?\n/);
+  const found = [];
 
-  lines.forEach((line, index) => {
-    const lineNumber = index + 1;
-
-    for (const { column, pattern } of CREDENTIAL_COLUMNS) {
-      if (pattern.test(line)) {
-        violations.push({ file: displayPath, line: lineNumber, column });
-      }
+  function collect(pattern, column) {
+    const rx = new RegExp(
+      pattern.source,
+      pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g'
+    );
+    let m;
+    while ((m = rx.exec(text)) !== null) {
+      found.push({ index: m.index, file: displayPath, line: lineAt(text, m.index), column });
+      if (m.index === rx.lastIndex) rx.lastIndex += 1;
     }
+  }
 
-    for (const { table, pattern } of WILDCARD_TABLES) {
-      if (pattern.test(line)) {
-        violations.push({ file: displayPath, line: lineNumber, column: 'SELECT * on ' + table });
-      }
-    }
-  });
+  for (const { column, pattern } of CREDENTIAL_COLUMNS) collect(pattern, column);
+  for (const { table, pattern } of WILDCARD_TABLES) collect(pattern, 'SELECT * on ' + table);
 
-  return violations;
+  found.sort((x, y) => x.index - y.index);
+  return found.map((f) => ({ file: f.file, line: f.line, column: f.column }));
 }
 
 function collectFiles(rootDir, options) {
