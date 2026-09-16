@@ -98,14 +98,23 @@ function reconcileRegister(items, deps) {
         );
       }
 
+      // The same verdicts the transition accepts, because an audit that
+      // disagreed with the rule it audits would report every row the rule
+      // legitimately wrote. Measured 2026-09-16: widening the transition for
+      // AI-19-R05 without widening this made the register un-writable - the
+      // first MERGED row written under the new rule was immediately an error.
       const verdict = (item.codex_verdict || '').trim();
-      if (verdict !== 'PASS') {
+      if (!ACCEPTED_MERGED_VERDICTS.has(verdict)) {
         findings.push(
           finding(
             'error',
             'MERGED_WITHOUT_PASS',
             item,
-            'Ghi là MERGED nhưng codex_verdict là "' + (verdict || 'trống') + '", không phải PASS.'
+            'Ghi là MERGED nhưng codex_verdict là "' +
+              (verdict || 'trống') +
+              '", không phải ' +
+              [...ACCEPTED_MERGED_VERDICTS].join(' hoặc ') +
+              '.'
           )
         );
       }
@@ -296,6 +305,16 @@ const ALLOWED_SOURCES_FOR_BACKLOG = new Set(['BLOCKED_DEPENDENCY', 'BLOCKED_BY_F
  * because the lifecycle steps between were never written. Every one of them was
  * refused by the source check and none by the evidence bar.
  */
+/**
+ * Verdicts that satisfy the MERGED transition's review condition.
+ *
+ * `PASS` is Codex. `FALLBACK_PASS` is the machine-authenticated reviewer
+ * TASK-AI-14 approved, admitted on the terms AI-19-R05 states: the reviewer is
+ * named and the commit it read equals the evidence head. Kept as one set so the
+ * transition and the audit cannot drift apart.
+ */
+const ACCEPTED_MERGED_VERDICTS = new Set(['PASS', 'FALLBACK_PASS']);
+
 const ALLOWED_SOURCES_FOR_MERGED = new Set([
   'READY_FOR_CODEX',
   'CODEX_PASS',
@@ -752,6 +771,7 @@ module.exports = {
   applyStatusMutations,
   serializeRecord,
   ACCEPTED_DEPENDENCY_VERDICTS,
+  ACCEPTED_MERGED_VERDICTS,
   ALLOWED_SOURCES_FOR_BACKLOG,
   ALLOWED_SOURCES_FOR_MERGED,
 };
