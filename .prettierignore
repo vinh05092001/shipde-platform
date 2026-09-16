@@ -34,3 +34,8 @@ docs/
 # formatting is undone on the next run and the file would sit permanently
 # unformatted-after-generation. It is checked in to be read, not edited.
 DASHBOARD.html
+
+# The unparsable fixture carries a NUL byte on purpose: it is what proves the
+# secret-surface guard fails closed on a file it cannot read (AC-AI-18-06).
+# Prettier cannot parse it, and making it parsable would delete the fixture.
+tools/ai-guard/test/fixtures/unparsable-source/

@@ -336,7 +336,65 @@ fixtures are outside its own author boundary is not writable as specified.
 `TASK-AI-19` recorded the same omission as a residual limitation instead of
 fixing it; this document fixes it.
 
+## What implementing this revealed
+
+Two things the specification asserted could not both hold, and were found by
+building it rather than by reading it.
+
+1. **The guard reports itself.** `tools/ai-guard/secret-surface.js` is the file
+   that defines the forbidden spellings, so it necessarily contains them, in its
+   patterns and in the comments explaining them. Measured: with only the fixture
+   exclusion in place the default scan returned four violations, all of them in
+   the guard, and `AC-AI-18-01` was unreachable. `SELF_EXCLUSION` now excludes
+   that one file by exact path, on the same terms as the fixture directory.
+
+2. **`AI-18-R11` and the test suite were in direct conflict.** The rule requires
+   `tools/ai-guard/test/secret-surface.test.js` to stay inside the default scan,
+   because a forbidden read written there is the likeliest place for one to
+   appear. But a suite that tests those spellings must contain them: measured,
+   it produced eleven violations of its own. Excluding it would have removed the
+   protection the rule exists for. The suite now assembles the forbidden
+   spellings from parts (`['api' + 'Keys', 'k' + 'ey'].join('.')`), so the file
+   stays in scope and stays clean, and a real forbidden read written there -
+   which is spelled literally, because that is what code performing the read
+   looks like - is still caught.
+
+A third measurement changed the guard itself. The first wildcard pattern matched
+a bare `.from(apiKeys)`, which is how every ordinary projection ends. It flagged
+`safe-projections`, the fixture whose entire purpose is to prove the guard does
+not block the query the usage adapter runs. The pattern now matches only
+`SELECT * FROM <table>` and a builder chain whose `select()` names nothing.
+
 ## Residual limitations
+
+- **Raw SQL naming the column was missed entirely until an independent review
+  found it.** The first version caught `SELECT *`, because a wildcard reaches the
+  column without naming it, and caught JavaScript property access. It did not
+  catch `SELECT key FROM apiKeys` — the credential read written as plainly as it
+  can be written. Measured: three such spellings passed clean. `SQL_COLUMN_READS`
+  now covers them, bounded by the `FROM` so that selecting other columns from the
+  same table stays clean, and on a word boundary so `keyName` is not a credential.
+  The lesson is not that this one hole is closed; it is that a rule written from
+  the shapes its author happened to picture leaves the shapes they did not.
+- **The guard reads text, so an alias defeats it.** Measured during
+  implementation: `const c = apiKeys; c.key` is not reported, because by the
+  time the column is named the table is a local variable and no textual rule can
+  know what it holds. `const { key } = row` is likewise invisible, though the
+  fetch that produced `row` would be caught if it named the column. Closing
+  these needs a real parse and a binding analysis, which is a different Work
+  Item and a much larger one. Four evasions were attempted; two were closed
+  (bracket access and a read split across lines) and these two were not.
+- **A clean report can mean a broken guard.** Measured: a botched edit stripped
+  every backslash from the patterns, and the guard reported `SECRET_SURFACE_CLEAN`
+  for a fixture that reads the credential on line 3. The canary test now asserts
+  every configured pattern still matches its own subject, so an emptied pattern
+  fails the suite instead of passing the repository. The canary is not proof the
+  patterns are *correct*, only that they are not vacuous.
+- **`SELF_EXCLUSION` is a hole by construction.** A forbidden read written into
+  `tools/ai-guard/secret-surface.js` is not reported by the default scan. The
+  exclusion is what makes a clean repository reachable at all, and it is one
+  exact file rather than a pattern, but the gap is real and nothing here closes
+  it.
 
 - **The plaintext credentials remain plaintext.** This Work Item does not
   encrypt the 9Router store and cannot: the store belongs to a third-party

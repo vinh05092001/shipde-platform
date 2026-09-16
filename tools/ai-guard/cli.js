@@ -10,6 +10,11 @@
  *   node tools/ai-guard/cli.js release   [--branch X]
  *   node tools/ai-guard/cli.js status
  *   node tools/ai-guard/cli.js check     # exit 1 when blocked (git hook)
+ *   node tools/ai-guard/cli.js secret-surface [--root <dir>]
+ *
+ * `check` also runs the secret-surface scan, so the installed pre-commit hook
+ * refuses a forbidden credential read with the same command that refuses a
+ * concurrent writer (AI-18-R09).
  *
  * `check` is the only command with a meaningful exit code, so the pre-commit
  * hook stays a one-liner.
@@ -27,6 +32,7 @@ const {
   installHook,
   uninstallHook,
 } = require('./writer-claim');
+const { runSecretSurface } = require('./secret-surface');
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -163,7 +169,29 @@ async function main() {
     return;
   }
 
+  if (command === 'secret-surface') {
+    const root = typeof args.root === 'string' ? args.root : process.cwd();
+    const report = runSecretSurface(root, { excludeFixtures: typeof args.root !== 'string' });
+    for (const line of report.lines) console.log(line);
+    process.exit(report.exitCode);
+  }
+
   if (command === 'check') {
+    // The scan runs before the writer claim. A forbidden credential read is a
+    // property of the code being committed; a writer collision is a property of
+    // who is committing. Reporting the first one first keeps the more serious
+    // finding from being hidden behind a lock message.
+    const surfaceRoot =
+      typeof args['secret-surface-root'] === 'string' ? args['secret-surface-root'] : process.cwd();
+    const surface = runSecretSurface(surfaceRoot, {
+      excludeFixtures: typeof args['secret-surface-root'] !== 'string',
+    });
+    if (surface.exitCode !== 0) {
+      for (const line of surface.lines) console.log(line);
+      process.exit(surface.exitCode);
+    }
+    for (const line of surface.lines) console.log(line);
+
     const result = await checkWrite({ branch, owner });
     if (result.allowed) {
       if (result.degraded) console.error('Cảnh báo: ' + result.reason);
