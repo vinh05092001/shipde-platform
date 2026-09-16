@@ -261,6 +261,10 @@ source is missing; `AC-AI-21-17` measures that for all five at once.
 | `AC-AI-21-08` | brain repository contract `AC-AI-21-07` | the real manifest satisfies the contract | pin replaced by `latest`, and the repository repointed at `someone-else/notes`, in two manifest copies | `BRAIN_REPOSITORY_UNPINNED`, exit `1` |
 | `AC-AI-21-10` | dependency delivered `AC-AI-21-09` | the real register's dependency is delivered on `origin/main` | the row's `dependencies` cell repointed at `TASK-AI-99` in a register copy, and `trivy` flipped back to `ADOPTED` in a copy of the dependency's real artifact | `DEPENDENCY_UNPROVEN`, exit `1` |
 
+The matrix was then extracted from this table cell by cell and re-run as stored,
+to prove no row's command is mangled by the table: all `17` of the `17` rows
+passed with their stated exit code and expected string.
+
 Three defect classes were removed while validating the matrix, each of which this
 repository has already had to repair once:
 
