@@ -253,13 +253,17 @@ node tools/ai-brain/acceptance/ac-09-14-outside-repository.js
 ## Acceptance matrix validation
 
 Written `2026-09-16`. Every row was executed against this branch before the
-matrix was committed: the seven `node` rows produced their stated exit code and
-expected string, and the three negative proofs produced exit `1` with their
-stated string. Each negative proof reads a **real** repository file, proves the
-untouched source is accepted as a CONTROL, tampers a **copy** under
-`os.tmpdir()`, and asserts the same check rejects the copy. Each exits `2`, not
-`1`, when its real source is missing; `AC-AI-09-14` measures that for all three
-at once.
+matrix was committed: the eight `node` rows produced their stated exit code and
+expected string, the Python and formatting rows were run, and the three negative
+proofs produced exit `1` with their stated string. Each negative proof reads a
+**real** repository file, proves the untouched source is accepted as a CONTROL,
+tampers a **copy** under `os.tmpdir()`, and asserts the same check rejects the
+copy. Each exits `2`, not `1`, when its real source is missing; `AC-AI-09-14`
+measures that for all three at once.
+
+The matrix was then extracted from this table cell by cell and re-run as stored,
+to prove no row's command is mangled by the table: `13` of the `14` rows passed
+and the PowerShell row was not run in that sandbox.
 
 | Row | Negative proof of which rule | CONTROL (real input accepted) | Tamper (copy) | Rejection |
 |---|---|---|---|---|
