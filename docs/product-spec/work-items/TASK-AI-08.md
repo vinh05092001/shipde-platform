@@ -66,7 +66,7 @@ The deterministic supervisor established by `TASK-AI-06` and extended with cross
 ## Preconditions and dependencies
 
 - Prerequisite `TASK-AI-07` is merged into `origin/main` at `bdeb15b6f8bcb9c688caddfbd6a671384654179f` (PR #37), with a follow-up on the shared-check rule at `a485ed88d62df045109e7fbc2208892d3a884be6` (PR #53). Both commits are reachable on `origin/main`; `AC-AI-08-03` proves this from the repository rather than from the register.
-- Delivery register alignment: `FEATURE-DELIVERY-REGISTER.csv` row 141 records `status: "BLOCKED_DEPENDENCY"`. The Control table records `BLOCKED_DEPENDENCY` exactly.
+- Delivery register alignment: `FEATURE-DELIVERY-REGISTER.csv` row 141 records `status: "BACKLOG"`. The Control table records `BACKLOG` exactly, and `AC-AI-08-01` proves the two agree.
 - The deterministic supervisor exists in `scripts/ai/control.ps1` with `Supervise`, `Review`, `Resume`, `Status` and `Test` actions, and its behavioral suite runs under `powershell -NoProfile -File scripts/ai/control.ps1 -Action Test`.
 - GitHub check evidence is available through the paginated check rollup (`Get-ShipDeExactHeadCheckRollup`) grouped by name and provider identity (`AI-SUP-16`).
 - `supervisor-state.json` round-trips through `Normalize-ShipDeSupervisorState` with every property present, so a new evidence field can be added without breaking StrictMode.
@@ -138,8 +138,8 @@ Not applicable; this Work Item governs supervisor automation and terminal loggin
 - **Repair dispatched with evidence**: Emits `[SUPERVISOR] CI repair 1/2 dispatched for PR #{0} at exact HEAD {1}: failing checks {2}`.
 - **Review repair dispatched with evidence**: Emits `[SUPERVISOR] Review repair 1/2 dispatched for PR #{0} at exact HEAD {1} with {2} findings`.
 - **Evidence unavailable (fail-closed)**: Emits `[BLOCKED] Cannot bind repair evidence for PR #{0} at exact HEAD {1}; stopping fail-closed`.
-- **Per-HEAD budget exhausted (fail-closed)**: Emits `[BLOCKED] Repair budget for exact HEAD {0} exhausted after {1} attempts for Work Item {2}. Stopping fail-closed for human intervention`.
-- **Work-Item budget exhausted (fail-closed)**: Emits `[BLOCKED] Supervisor repair budget exhausted ({0} repairs dispatched exceeds max budget {1} for Work Item '{2}'). Stopping fail-closed for human intervention`.
+- **Per-HEAD budget exhausted (fail-closed)**: Emits `[BLOCKED] Repair budget for exact HEAD {0} exhausted after {1} attempts for Work Item {2}; bound reached: MaxRepairAttemptsPerHead={3}; last evidence: {4}. Stopping fail-closed for human intervention`.
+- **Work-Item budget exhausted (fail-closed)**: Emits `[BLOCKED] Supervisor repair budget exhausted ({0} repairs dispatched exceeds max budget {1} for Work Item '{2}') at exact HEAD {3}; bound reached: MaxRepairBudget={1}; last evidence: {4}. Stopping fail-closed for human intervention.` Neither bound mutates a counter when it refuses.
 - **Acknowledged repair recovered after restart**: Emits `[SUPERVISOR] Repair for exact HEAD {0} already acknowledged; awaiting author repair, not redispatching`.
 
 ## API, event and data impact
@@ -147,7 +147,8 @@ Not applicable; this Work Item governs supervisor automation and terminal loggin
 - Supervisor state schema in `$HandoffRoot/supervisor-state.json` extended with:
   - `RepairAttemptsByHead`: Object mapping a 40-character HEAD SHA to the number of repair dispatches against it.
   - `LastCiRepairEvidence`: Object or `null` — `Head`, `Checks` (name, provider, conclusion), `ObservedAt`.
-  - `LastReviewRepairEvidence`: Object or `null` — `Head`, `FindingsCount`, `ObservedAt`.
+  - `LastReviewRepairEvidence`: Object or `null` — `Head`, `FindingsCount`, `FindingsText`, `ObservedAt`.
+  - `RepairEvidenceHistory`: Array — each superseded evidence object with its `Kind` and `SupersededAt`.
   - `RepairAttemptsPerHead`: Integer, the resolved per-HEAD bound in use for the run.
 - New supervisor parameter: `MaxRepairAttemptsPerHead` (Integer, default 2), alongside the existing `MaxRepairBudget`.
 - No database migrations, runtime REST APIs, or carrier integration contract changes.
@@ -277,12 +278,12 @@ Delivered in `scripts/ai/control.ps1`:
 | `AI-08-R01` evidence before dispatch | `Get-ShipDeFailingCheckEvidence` names each failing check (name, provider, conclusion) with the same latest-attempt grouping as `Get-ShipDePrGate`, now shared through `Get-ShipDeLatestCheckAttempts`. `Register-ShipDeRepairAttempt` refuses a CI repair with no failing check, a review repair with empty findings, or a HEAD that is not 40 characters: `[BLOCKED] Cannot bind repair evidence ...`. The crash-recovery review path refuses empty findings too. |
 | `AI-08-R02` per-HEAD budget | `-MaxRepairAttemptsPerHead` (default `2`; script parameter `-SupervisorMaxRepairAttemptsPerHead`, range 1-100). An acknowledged HEAD is repaired again when its worker finished without moving the HEAD. CI and review are counted separately. |
 | `AI-08-R03` total bound kept | `RepairCount` / `$MaxRepairBudget` checked first, with the unchanged message. |
-| `AI-08-R04` fail-closed | `[BLOCKED] Repair budget for exact HEAD {0} exhausted after {1} attempts for Work Item {2}. ...` |
+| `AI-08-R04` fail-closed | Both exhaustion diagnostics name the Work Item, the exact HEAD, the bound reached (`MaxRepairAttemptsPerHead=` / `MaxRepairBudget=`) and the last evidence (`Format-ShipDeLastRepairEvidence`). A refusal writes no counter; the Work-Item total previously wrote `RepairCount` before throwing and no longer does. |
 | `AI-08-R05` no redispatch after acknowledgement | Pending-dispatch recovery logs `Repair for exact HEAD {0} already acknowledged; awaiting author repair, not redispatching`. |
 | `AI-08-R06` | Repairs never call failover; unchanged. |
 | `AI-08-R07` | Ambiguous attempts throw inside `Get-ShipDeLatestCheckAttempts`, before any evidence is named. |
-| `AI-08-R08` | `RepairAttemptsByHead`, `RepairAttemptsPerHead`, `LastCiRepairEvidence` and `LastReviewRepairEvidence` are normalized and checkpointed on dispatch; the CI `PendingDispatch` carries its evidence so a restart sends the identical message. |
-| `AI-08-R09` | `Reset-ShipDeSupervisorHeadState` leaves the per-HEAD map and the evidence alone; counts are keyed by HEAD, so a new HEAD starts at zero. |
+| `AI-08-R08` | `RepairAttemptsByHead`, `RepairAttemptsPerHead`, `LastCiRepairEvidence` and `LastReviewRepairEvidence` are normalized and checkpointed on dispatch; both the CI and the review `PendingDispatch` carry their evidence. Review evidence stores the findings text, and crash recovery re-sends it from the checkpoint, fetching findings only when the checkpoint has none (Regression Test `5C`). |
+| `AI-08-R09` | `Reset-ShipDeSupervisorHeadState` leaves the per-HEAD map and the evidence alone; counts are keyed by HEAD, so a new HEAD starts at zero. Evidence replaced by a newer dispatch of the same kind is appended to `RepairEvidenceHistory`, never dropped. |
 
 Self-tests added: section `5c` (evidence naming; first and second repair allowed; refusal at the bound; CI and review counted separately; refusal without evidence for both kinds; JSON checkpoint round-trip; head change; message names the check) and Regression Test `6D` (a parked worker with budget left is repaired again). Regression Test `6C` now asserts the per-HEAD exhaustion message, because under `AI-08-R02` a parked worker is stopped only once the budget is spent.
 
@@ -298,7 +299,16 @@ The contract behind `AC-AI-08-05`/`-06` gained three parts: the per-HEAD bound, 
 | `AC-AI-08-04` | `1` | `DEPENDENCY_UNPROVEN: TASK-AI-99 has no merge commit reachable on origin/main` |
 | `AC-AI-08-05` | `0` | `REPAIR_BUDGET_CONTRACT_HOLDS: bounded repair budget present in scripts/ai/control.ps1` |
 | `AC-AI-08-06` | `1` | `REPAIR_BUDGET_UNBOUNDED: a fail-closed stop when the repair counter exceeds the bound` |
+| `AC-AI-08-07` | `0` | `AC-AI-08-07 suite invariant held: fail 0 with 641 passing of 641 tests across 140 suites` |
+| `AC-AI-08-08` | `0` | `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` |
+| `AC-AI-08-09` | `0` | `Tổng: 0 lỗi, 0 cảnh báo, 150 ghi chú` |
+| `AC-AI-08-10` | `0` | `Documentation validation passed: 101 markdown files, 130 feature IDs, 178 delivery rows, 811 unique identifiers.` |
+| `AC-AI-08-11` | `0` | `✅ Hoàn tất: Tất cả 4 tệp tin thay đổi tuân thủ 100% chuẩn định dạng Prettier` |
+| `AC-AI-08-12` | `0` | `SECRET_SURFACE_CLEAN` |
 | `AC-AI-08-13` | `0` | `ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED` |
+| `AC-AI-08-14` | `0` | `OUTSIDE_REPOSITORY_PROBE: child exit 2 with SOURCE_MISSING: docs/product-spec/work-items/TASK-AI-08.md` |
+
+Every row, `01`–`14`, was re-run on the review-repair commit. Self-tests added in that commit: `5c` now asserts the checkpointed findings text, both exhaustion diagnostics (HEAD, bound, last evidence, unchanged `RepairCount`) and the evidence archive; Regression Test `5C` recovers a pending review repair from the checkpoint while the findings resolver returns nothing.
 
 ## Residual limitations
 

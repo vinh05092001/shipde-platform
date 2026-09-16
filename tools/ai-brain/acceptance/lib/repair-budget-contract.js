@@ -35,8 +35,9 @@ const REQUIRED_PARTS = [
   {
     id: 'BUDGET_EXHAUSTION_FAIL_CLOSED',
     label: 'a fail-closed stop when the repair counter exceeds the bound',
-    // The Work Item total is computed as the next count before it is written,
-    // so a refused repair never inflates the counter it was refused by.
+    // The Work Item total is computed as the next count and compared before
+    // anything is written; the refusal throws without assigning it, so a
+    // refused repair never inflates the counter it was refused by.
     pattern: /\$nextTotal\s+-gt\s+\$MaxRepairBudget/,
   },
   {
