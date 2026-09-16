@@ -207,3 +207,38 @@ pnpm test
   is only correct while offerings within a tier share an account. If a future
   registry places independent accounts in the same tier, stepping down a whole
   tier will skip capacity that was available.
+
+## Post-implementation notes
+
+Measured while implementing, on branch `feat/task-ai-28-cooldown-tests`:
+
+- **The `Branch` field in Control is wrong for this delivery.** It names
+  `feat/task-ai-28-auto-cooldown`; the work was delivered on
+  `feat/task-ai-28-cooldown-tests`. The field was not edited, because the
+  Author boundary forbids changing control state.
+- **`AC-AI-28-05`'s durations hold exactly.** Measured
+  `[2,60,60,240,5]` minutes for `requestsPerMinute`, `requestsPerDay`,
+  `tokensPerDay`, `tokensPerMonth` and an unrecognised window. No drift.
+- **`AC-AI-28-01`'s baseline still holds after this change.** `git grep -nE
+  'cooldownFor|recordFailure' -- tools/ai-brain`, with `/test/` and
+  `ceiling.js` lines removed, returns no line. The wiring added here
+  (`observeRefusal`) lives inside `ceiling.js`, so no production *call site*
+  outside the module exists yet: `scheduler.js` still does not observe
+  refusals. The scheduler call site remains open work.
+- **`AC-AI-28-13` is confirmed, and it is the reason no test here asserts via
+  a name pattern.** Measured: `node --test --test-reporter=tap
+  --test-name-pattern=THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ
+  tools/ai-brain/test/cooldown.test.js` exits `0` with zero subtests matched.
+  A row that checked only the exit code would pass against an empty file.
+- **The test file the spec promised did not exist.** `tools/ai-brain/test/cooldown.test.js`
+  is new here; before it, `cooldownFor`, `Outcome`, `WINDOWS` and `recordFailure`
+  were exercised only incidentally by `ceiling.test.js`.
+- **Mutation evidence (the tests are not vacuous).** With `cooldownFor`
+  neutered to return a fixed instant: 13 tests, 10 pass, 3 fail. With
+  `observeRefusal` neutered to return a constant object: 13 tests, 5 pass,
+  8 fail. Restored: 13 pass, 0 fail. The 5 that survive the second mutation
+  are the headroom and ladder rows, which exercise `offerings.js` and
+  `quota.js` rather than the observer.
+- **`AI-28-R05` needed a helper that did not exist.** `offerings.js` exported
+  `laddered` but nothing that chose the next rung, so "one tier down, not one
+  offering along" was unrepresentable. `nextTierDown` was added there.

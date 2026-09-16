@@ -283,6 +283,72 @@ function cooldownFor(window, now) {
   return new Date(base + wait * 60000).toISOString();
 }
 
+/**
+ * Observes one provider failure and decides whether the offering must cool.
+ *
+ * The order matters. The refusal is recorded to the ledger first, because the
+ * ledger is evidence; the cooldown is written whether or not that write
+ * succeeded, because the cooldown is protection and losing the evidence must
+ * not lose the protection.
+ *
+ * Only a quota refusal cools. A socket error, a timeout, a 500 or a routing
+ * state says nothing about a budget, and cooling on one converts a five-second
+ * outage into an hour-long blackout of capacity that was never exhausted.
+ *
+ * An offering already cooling is extended only when the newly computed instant
+ * is later than the one in force: a per-minute refusal arriving during a daily
+ * cooldown must not cut the daily wait down to two minutes.
+ */
+function observeRefusal(target, errorText, options) {
+  const opts = options || {};
+  const t = target || {};
+  const now = opts.now || Date.now();
+
+  if (!isQuotaRefusal(errorText)) {
+    return {
+      cooled: false,
+      cooldownUntil: t.cooldownUntil || null,
+      extended: false,
+      recorded: null,
+      ledgerError: null,
+      reason: 'không phải từ chối vì hạn mức',
+    };
+  }
+
+  // Evidence first, protection regardless.
+  let recorded = null;
+  let ledgerError = null;
+  try {
+    recorded = recordFailure(t.accountId, t.model, errorText, t.consumed || {}, {
+      file: opts.file,
+      maxEntries: opts.maxEntries,
+    });
+  } catch (e) {
+    ledgerError = e;
+  }
+
+  const candidate = cooldownFor(t.window, now);
+  const current = t.cooldownUntil ? Date.parse(t.cooldownUntil) : NaN;
+  const keepCurrent = Number.isFinite(current) && current >= Date.parse(candidate);
+  const cooldownUntil = keepCurrent ? t.cooldownUntil : candidate;
+
+  return {
+    cooled: true,
+    extended: !keepCurrent && Number.isFinite(current),
+    cooldownUntil,
+    recorded,
+    ledgerError,
+    // Attribution: a cooldown whose cause cannot be read back is
+    // indistinguishable from a bug.
+    cooldown: {
+      offeringId: t.offeringId || null,
+      until: cooldownUntil,
+      window: t.window || null,
+      reason: String(errorText || '').slice(0, 120),
+    },
+  };
+}
+
 module.exports = {
   Outcome,
   WINDOWS,
@@ -295,4 +361,5 @@ module.exports = {
   inferLimits,
   effectiveLimits,
   cooldownFor,
+  observeRefusal,
 };
