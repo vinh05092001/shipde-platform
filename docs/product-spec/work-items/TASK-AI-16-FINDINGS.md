@@ -50,10 +50,22 @@ Holding everything else constant and varying only the path separator:
 | `projects={"C:/Users/gumac/AppData/Local/Temp"={trust_level="trusted"}}` | **accepted** |
 | `projects."C:/Users/gumac/AppData/Local/Temp"={trust_level="trusted"}` | **accepted** |
 | `projects={"/tmp"={trust_level="trusted"}}` | accepted |
-| `projects={"C:\\Users\\gumac"={trust_level="trusted"}}` | rejected |
+| `projects={"C:\\Users\\gumac"={trust_level="trusted"}}` | accepted when the argument reaches the CLI intact; rejected through `cmd.exe` quoting — see the correction below |
 
-A path with no backslash always parses. Doubling the backslashes does not
-help, which rules out a simple escaping fix at the call site.
+A path with no backslash always parses.
+
+**Correction (measured 2026-09-16).** The row above originally read "rejected",
+and the conclusion drawn from it — "doubling the backslashes does not help,
+which rules out a simple escaping fix at the call site" — does not survive
+measurement. Handing the doubled form to `codex-cli 0.154.0` as a single argv
+element (`node @openai/codex/bin/codex.js features list -c 'projects={"C:\\Users\\…"=…}'`)
+exits `0`: after TOML unescaping the path is `C:\Users\…`, which parses. The
+same text routed through `cmd.exe` is rejected, because the shell consumes the
+doubling before Codex sees it. The original probe took the shell route, so its
+"rejected" reading was a property of the shell, not of the CLI. An escaping fix
+at the call site is therefore not ruled out by this evidence; the fix still
+belongs upstream because AO ships as a closed binary. The measurement is
+reproducible with `tools/ai-brain/acceptance/ac-16-03-codex-flag-refusal.js`.
 
 The complete flag set, with the single change of forward slashes in the
 project path, is accepted:

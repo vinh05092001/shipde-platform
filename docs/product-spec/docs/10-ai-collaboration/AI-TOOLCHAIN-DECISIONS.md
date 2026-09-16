@@ -95,7 +95,14 @@ override separately (`docs/product-spec/work-items/TASK-AI-16-FINDINGS.md`):
 - The `projects` override is refused when the path contains Windows
   backslashes: they are consumed as escape sequences, so the value reaches the
   parser as a string where a map was expected. The identical override with
-  forward slashes is accepted. Doubling the backslashes does not help.
+  forward slashes is accepted.
+- Doubling the backslashes is **accepted** when the argument reaches the CLI
+  intact, and rejected when the same text is routed through `cmd.exe` /
+  PowerShell quoting. The original probe took the second route, which is why it
+  read the doubling result backwards. An escaping fix at the call site is
+  therefore not ruled out by that evidence; the fix still belongs upstream
+  because AO ships as a closed binary. Measured by
+  `tools/ai-brain/acceptance/ac-16-03-codex-flag-refusal.js`.
 
 The defect therefore sits in whatever builds Agent Orchestrator's command line,
 not in the hook configuration and not in a CLI flag-surface change. AO ships as
