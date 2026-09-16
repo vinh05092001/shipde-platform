@@ -263,10 +263,21 @@ Toolchain and quality gate impact:
 | `AC-AI-39-02` | Verify Gitleaks baseline gate status in manifest | `node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id==='gitleaks'); if(!m \|\| m.lifecycle_state!=='ADOPTED' \|\| m.blocking_policy!=='BLOCKING_GATE' \|\| m.pinned_version_or_commit!=='8.24.0') throw new Error('gitleaks truth mismatch'); console.log('Gitleaks truthfully declared: ADOPTED, BLOCKING_GATE, pinned 8.24.0');"` | `0` | `Gitleaks truthfully declared: ADOPTED, BLOCKING_GATE, pinned 8.24.0` | `tools/ecosystem-manifest.json` |
 | `AC-AI-39-03` | Delivery register status truthfulness for TASK-AI-39 (row 174) | `python -c "import csv; rows=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv', encoding='utf-8')) if r['work_item_id']=='TASK-AI-39']; actual=rows[0]['status']; assert actual=='BLOCKED_DEPENDENCY', f'mismatch: {actual}'; print('Register row 174 status: ' + actual)"` | `0` | `Register row 174 status: BLOCKED_DEPENDENCY` | `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | `AC-AI-39-04` | Negative proof: unauthorized status advancement fails validation | `python -c "import csv, sys; rows=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv', encoding='utf-8')) if r['work_item_id']=='TASK-AI-39']; actual=rows[0]['status']; sys.stderr.write(f'UNAUTHORIZED_STATUS_ADVANCEMENT: register is {actual}\n'); sys.exit(1 if actual!='READY_FOR_CODEX' else 0)"` | `1` | `UNAUTHORIZED_STATUS_ADVANCEMENT: register is BLOCKED_DEPENDENCY` | command stderr |
-| `AC-AI-39-05` | Negative proof: falsely declaring agent-scan ADOPTED triggers QUALITY_GATE_MISSING | `node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); const a = m.adopted.find(x => x.id === 'agent-scan'); a.lifecycle_state = 'ADOPTED'; a.blocking_policy = 'BLOCKING_GATE'; const res = auditManifest(m); const f = res.findings.find(x => x.id === 'agent-scan'); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"` | `1` | `QUALITY_GATE_MISSING: agent-scan` | command stderr |
-| `AC-AI-39-06` | Invariant check: zero forbidden install lifecycle scripts | `node -e "const r=require('./package.json'), w=require('./apps/web/package.json'); const forbidden=['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => (r.scripts && r.scripts[s]) \|\| (w.scripts && w.scripts[s])); if(found.length > 0) throw new Error('Forbidden lifecycle script detected: ' + found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json, apps/web/package.json` |
-| `AC-AI-39-07` | **Negative proof, must fail:** a tampered copy of the REAL web manifest is rejected by the same forbidden-lifecycle check `AC-AI-39-06` runs. The script first proves both real manifests are clean (control, exit `2` otherwise), then tampers a copy in `os.tmpdir()`; no repository file is written | `node tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` | `package.json`, `apps/web/package.json`, `tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js`; command stderr |
-| `AC-AI-39-08` | Specification structural integrity (all required sections) | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Acceptance row defect record
+| `AC-AI-39-05` | **Negative proof, must fail:** a manifest whose `agent-scan` is falsely promoted to `ADOPTED` / `BLOCKING_GATE` raises `QUALITY_GATE_MISSING` from the same `auditManifest` that `node tools/ai-brain/cli.js manifest` runs. The tampered manifest is written to `os.tmpdir()` and re-read from disk before auditing, so the proof exercises a manifest that arrived through a file, not an object mutated in memory; no repository file is written | `node tools/ai-brain/acceptance/ac-39-05-manifest-promotion.js` | `1` | `QUALITY_GATE_MISSING: agent-scan` | `tools/ecosystem-manifest.json`, `tools/ai-brain/acceptance/ac-39-05-manifest-promotion.js`; command stderr |
+| `AC-AI-39-06` | Invariant check: zero forbidden install lifecycle scripts. Runs the rule `AC-AI-39-07` also runs — both rows `require` `tools/ai-brain/acceptance/lifecycle-scripts.js` — against the real manifests read from disk | `node -e "const {forbiddenScriptsInFile}=require('./tools/ai-brain/acceptance/lifecycle-scripts'); const found=['package.json','apps/web/package.json'].flatMap(p=>forbiddenScriptsInFile(p).map(s=>p+': '+s)); if(found.length>0) throw new Error('Forbidden lifecycle script detected: '+found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json, apps/web/package.json`, `tools/ai-brain/acceptance/lifecycle-scripts.js` |
+| `AC-AI-39-07` | **Negative proof, must fail:** a tampered copy of the REAL web manifest is rejected by the same shared rule `AC-AI-39-06` runs — both rows `require` `lifecycle-scripts.js` and this script carries no private copy of the rule. It first proves both real manifests are clean (control, exit `2` otherwise), then tampers a copy in `os.tmpdir()`, re-reads it from disk and runs the shared rule; no repository file is written | `node tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` | `package.json`, `apps/web/package.json`, `tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js`, `tools/ai-brain/acceptance/lifecycle-scripts.js`; command stderr |
+| `AC-AI-39-08` | STRUCTURAL GUARD, not evidence: confirms all 16 required sections exist in this document. It greps the document it lives in, so it is satisfied by writing the headings; it guards against accidental deletion in a later round and proves nothing about the gates | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all required sections present');"` | `0` | `Specification structural integrity verified: all required sections present` | `docs/product-spec/work-items/TASK-AI-39.md` |
+| `AC-AI-39-09` | Specification contract, rules, and numeric thresholds completeness | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); tokens=['0.6.1','8.24.0','60000ms','512000','1048576','BLOCKED_DEPENDENCY','AI-39-R01','AI-39-R02','AI-39-R03','AI-39-R04','AI-39-R05','AI-39-R06','AI-39-R07','AI-39-R08','AI-39-R09','snyk-agent-scan --version','snyk-api-outbound-https','https://api.snyk.io','https://app.snyk.io','AI-39-R10','PROFILE_EGRESS_CONFLICT','local-scan-only','github-api-and-localhost-only','SNYK_TOKEN_ABSENT_OFFLINE_MODE','Governed Input Coverage','Tokenless Credential And Network Behavior Proof','Required CI Check At Exact HEAD','WILDCARD_HOST_BINDING_FORBIDDEN','PROMPT_INJECTION_DETECTED']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, promotion evidence, and health check tokens verified');"` | `0` | `Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, promotion evidence, and health check tokens verified` | `docs/product-spec/work-items/TASK-AI-39.md` |
+| `AC-AI-39-10` | Manifest audit green with 0 errors and exactly 1 warning, that warning identified by code and tool | `node -e "const o=require('child_process').execSync('node tools/ai-brain/cli.js manifest',{encoding:'utf8'}); const need=['Tổng: 0 lỗi, 1 cảnh báo','PINNED_VERSION_DRIFT','codex-cli']; const miss=need.filter(t=>!o.includes(t)); if(miss.length\|\|(o.match(/\[CẢNH\]/g)\|\|[]).length!==1) throw new Error('manifest baseline mismatch: '+miss.join(',')); console.log('Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli');"` | `0` | `Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli` | `tools/ai-brain/cli.js stdout` |
+| `AC-AI-39-11` | Register reconciliation green with 0 errors | `node tools/ai-brain/cli.js reconcile` | `0` | `Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú` | `tools/ai-brain/cli.js stdout` |
+| `AC-AI-39-12` | Specification and documentation validation | `python docs/product-spec/scripts/validate_docs.py` | `0` | `Documentation validation passed` | `docs/product-spec/scripts/validate_docs.py stdout` |
+| `AC-AI-39-13` | Toolchain unit & integration test suites green | `node --test \"tools/ai-brain/test/*.test.js\" \"tools/ai-dashboard/test/*.test.js\" \"tools/ai-guard/test/*.test.js\"` | `0` | `fail 0` | `node --test stdout` |
+| `AC-AI-39-14` | Incremental code and document formatting check | `pnpm format:check` | `0` | `tuân thủ 100% chuẩn định dạng Prettier` | `scripts/verify-formatting.ts stdout` |
+| `AC-AI-39-15` | Negative proof: manifest egress declaration conflicts with every profile agent-scan belongs to | `node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id==='agent-scan'); const p=require('./tools/ecosystem-profiles.json').profiles; const open=['local-scan-only','github-api-and-localhost-only']; const pol=m.profiles.map(n=>p[n].network_policy); const egress=pol.filter(x=>!open.includes(x)); console.error('PROFILE_EGRESS_CONFLICT: agent-scan declares ' + m.outbound_endpoints.join(',') + ' but profiles ' + m.profiles.join(',') + ' allow only ' + pol.join(',')); if(egress.length===0) process.exit(1);"` | `1` | `PROFILE_EGRESS_CONFLICT: agent-scan declares https://api.snyk.io,https://app.snyk.io but profiles SECURITY_REVIEW,PR_REVIEW allow only local-scan-only,github-api-and-localhost-only` | command stderr |
+| `AC-AI-39-16` | Governed agent-artifact inventory that promotion criterion 2 must cover | `python -c "import subprocess; files=sorted(f for f in subprocess.run(['git','ls-files'],capture_output=True,text=True).stdout.split() if f=='AGENTS.md' or f.endswith('/AGENTS.md') or f.endswith('-PROMPT.md')); assert len(files)==7, files; print('Governed agent-artifact inventory: 7 files require agent-scan coverage')"` | `0` | `Governed agent-artifact inventory: 7 files require agent-scan coverage` | `git ls-files stdout` |
+| `AC-AI-39-17` | Promotion criteria enumerate 10 entries, each naming its evidence artifact. Anchored on the real `## Manifest promotion criteria` heading line, so the literal heading text inside the `AC-AI-39-08` row cannot be mistaken for the section | `python -c "import re; s=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); sec=s.split('\n## Manifest promotion criteria\n')[1].split('\n## Verification commands\n')[0]; items=[l for l in sec.splitlines() if re.match(r'^\d+\. ', l)]; assert len(items)==10, len(items); bad=[l.split(':')[0] for l in items if '(artifact: ' not in l]; assert not bad, bad; print('Promotion criteria: 10 enumerated, each naming its evidence artifact')"` | `0` | `Promotion criteria: 10 enumerated, each naming its evidence artifact` | `docs/product-spec/work-items/TASK-AI-39.md` |
+
+## Acceptance row defect record
 
 ### `AC-AI-39-07` was a tautology (fixed)
 
@@ -294,50 +305,90 @@ the real `package.json` and `apps/web/package.json`, exits `2` with `SOURCE_MISS
 exits `2` with `CONTROL_FAILED` when either real manifest already carries a forbidden script (refusing a
 tampered copy proves nothing if the untouched one would also be refused), then copies the web manifest,
 tampers the copy in `os.tmpdir()` with the `pip install snyk-agent-scan` hook this Work Item forbids, and
-runs the real check against that copy. No file inside the repository is written.
+runs the shared rule against that copy. No file inside the repository is written.
 
 The check lives in a committed file rather than a markdown table cell deliberately: a `node -e`
 one-liner in a table cell must survive markdown, then bash, then PowerShell in CI, and a mangled
 one-liner dies on `SyntaxError` with exit `1` - the very exit code the row expects, so a broken row
 would look like a passing one.
 
-**Measured behaviour of the replacement.**
+### Review round 4 — five findings repaired
+
+An independent review of the merged `AC-AI-39-07` work returned `CHANGES_REQUESTED` with five
+findings. Each is recorded here with the change made and the measurement that proves it.
+
+**Finding 1 — `AC-AI-39-05` mutated the parsed manifest in memory.** The negative proof called
+`auditManifest` on an object mutated after `JSON.parse`, so it never wrote or re-read a file, and its
+exit code was read off `summary.error` rather than off the classification the row names. Fixed by the
+committed script `tools/ai-brain/acceptance/ac-39-05-manifest-promotion.js`: it reads the real
+manifest, promotes `agent-scan` in the parsed object, **writes** the tampered manifest to `os.tmpdir()`,
+**re-reads it from disk**, and audits the re-read object. It exits `1` only when the specific
+`QUALITY_GATE_MISSING` **error** for `agent-scan` is present, so a classifier regression cannot print
+the expected string and pass. The machine-dependent presence probe is pinned to "absent" so the result
+does not turn on whether `snyk-agent-scan` happens to be installed.
+
+Measured:
+
+| Run | Exit code | Output (stderr) |
+|---|---|---|
+| In the repository root | `1` | `QUALITY_GATE_MISSING: agent-scan` |
+| In an empty directory outside the repository | `2` | `SOURCE_MISSING: tools\ecosystem-manifest.json` |
+
+**Finding 2 — the negative proof carried a private copy of the rule.**
+`tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js` declared its own
+`const FORBIDDEN = ['preinstall', 'install', 'postinstall', 'prepare'];` and filtered inline, so
+"rejected by the same forbidden-script rule" was false: the copy was rejected by a private copy that
+could drift from the rule `AC-AI-39-06` runs. Fixed by extracting the rule into one committed module,
+`tools/ai-brain/acceptance/lifecycle-scripts.js`, exporting `findForbiddenScripts(manifest)` and
+`forbiddenScriptsInFile(manifestPath)`. `AC-AI-39-06` and `AC-AI-39-07` now both `require` it, and
+neither carries a private list.
+
+**Finding 3 — `AC-AI-39-07`'s output was guaranteed by its own construction.** Because the script held
+a hardcoded `FORBIDDEN` list and tampered with a hardcoded `postinstall`, the expected stderr could not
+fail whatever the real check did. Sharing the module (Finding 2) is the fix: the proof's answer is now
+the rule's answer, and the mutation below shows the two move together.
+
+**Measurement proving Findings 2 and 3 (mutation test).** The shared module was edited in place, both
+rows were re-run, then the module was restored from a file backup.
+
+| Shared-rule edit | `AC-AI-39-06` (expects exit `0`) | `AC-AI-39-07` (expects exit `1`) |
+|---|---|---|
+| None (control) | exit `0`, `Zero forbidden lifecycle scripts present in root and web manifests` | exit `1`, `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` |
+| Remove `postinstall` from `FORBIDDEN` | exit `0` (real manifests are still clean) | exit `0`, `FORBIDDEN_SCRIPT_NOT_DETECTED: the shared rule did not reject the tampered copy` — **row fails** |
+| Add `test` to `FORBIDDEN` | exit `1`, `Forbidden lifecycle script detected: package.json: test, apps/web/package.json: test` — **row fails** | exit `2`, `CONTROL_FAILED: package.json already carries a forbidden script: test` — **row fails** |
+
+The first mutation is the one the review asked for: changing the rule in one place stops it reporting
+`postinstall`, and the negative row stops passing. The second shows the positive invariant reads the
+same rule. Restored, the module's SHA-1 is unchanged
+(`b5c9523f771afc1811b7fe542630629bfa1b9b60`) and the rows return to exit `1` / exit `0`.
+
+**Finding 4 — the defect-record measurement table was internally inconsistent and unsupported.** The
+old table claimed the replacement "runs the real check" while the script in fact ran a private copy,
+and it presented numbers with no stated command. The claim is now true (Findings 2 and 3) and the
+numbers are the commands' own output, reproducible from the repository root. Measured behaviour of
+`AC-AI-39-07` in both locations:
 
 | Run location | Exit code | Output (stderr) |
 |---|---|---|
 | Inside the repository root | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` |
 | Empty temporary directory outside the repository | `2` | `SOURCE_MISSING: package.json` |
 
-## Downstream implementation acceptance contract','## Manifest promotion criteria
+**Finding 5 — the `AC-AI-39-08` row was truncated and the required-sections list rebuilt.** The row's
+`python -c` command had a markdown defect record and the promotion-criteria text spliced into the
+middle of its `required=[...]` array, and it required the heading `## Acceptance row defect record`,
+which existed only as text inside the row itself. The list is restored to the 16 real sections, the
+spliced prose now lives in this section, and the promotion-criteria text was returned to the
+`## Manifest promotion criteria` section it belonged to (that section still held a stale 7-item list;
+`AC-AI-39-17` only passed because it matched the trapped copy). `AC-AI-39-17` now anchors on the real
+`## Manifest promotion criteria` heading line, so the literal heading inside the `AC-AI-39-08` row
+cannot be mistaken for the section.
 
-Promoting `agent-scan` from `PENDING` to `ADOPTED` and `BLOCKING_GATE` in `tools/ecosystem-manifest.json`
-strictly requires satisfying all 10 prerequisites with auditable workflow evidence. Each
-prerequisite names the artifact that proves it; absence of the named artifact blocks
-promotion regardless of whether the binary installs or runs. An installed binary, a
-passing `--version`, or one successful scan satisfies at most criteria 8 and 3 and is
-never sufficient on its own (`AI-39-R01`):
+Measured:
 
-1. **Required CI Check At Exact HEAD**: check run `Agent Tooling Security Scan` concluded `success` on the exact 40-character commit SHA of PR HEAD, and that check name is listed in the branch-protection required status checks for `main` (artifact: GitHub check-run JSON for the HEAD SHA plus `gh api repos/vinh05092001/shipde-platform/branches/main/protection/required_status_checks` output).
-2. **Governed Input Coverage**: a single scan invocation covers all `7` governed agent-artifact files enumerated by `AC-AI-39-16` (`AGENTS.md`, `docs/product-spec/AGENTS.md`, and the `5` `*-PROMPT.md` files under `docs/product-spec/docs/10-ai-collaboration/`), and the scan report lists `7` scanned paths with `0` skipped (artifact: `snyk-agent-scan scan --json` report `scanned_paths` array, and `AC-AI-39-16` stdout as the governed inventory it must match).
-3. **Clean Fixture Proof**: `snyk-agent-scan scan tests/fixtures/agent-scan/clean-skill/` exits `0` and prints `0 vulnerabilities found` (artifact: command stdout and the committed fixture `tests/fixtures/agent-scan/clean-skill/SKILL.md`).
-4. **Prompt Injection Negative Proof**: `snyk-agent-scan scan tests/fixtures/agent-scan/injection-prompt/` exits `1` and prints `PROMPT_INJECTION_DETECTED` at severity `>= 7.0` (artifact: command stdout and the committed fixture `tests/fixtures/agent-scan/injection-prompt/prompt.txt`).
-5. **MCP Least-Privilege Negative Proof**: `snyk-agent-scan scan tests/fixtures/agent-scan/mcp-wildcard/` exits `1` and prints `WILDCARD_HOST_BINDING_FORBIDDEN` naming `0.0.0.0` (artifact: command stdout and the committed fixture `tests/fixtures/agent-scan/mcp-wildcard/mcp-config.json`).
-6. **Operational Failure Fail-Closed Proof**: `snyk-agent-scan scan --invalid-flag-syntax tests/fixtures/agent-scan/clean-skill/` exits `2` and prints `error: unrecognized arguments` (artifact: command stderr).
-7. **Tokenless Credential And Network Behavior Proof**: with `SNYK_TOKEN` unset, a scan of the governed inputs exits `0`, prints the governed diagnostic `SNYK_TOKEN_ABSENT_OFFLINE_MODE`, and issues exactly `0` outbound requests, with `0` requests to `https://api.snyk.io` or `https://app.snyk.io` (artifact: CI step log with `SNYK_TOKEN` unset plus an egress capture showing `0` connections to the two Snyk endpoints).
-8. **Health Check Proof**: `snyk-agent-scan --version` exits `0` and outputs `0.6.1`, and `python -m pip show snyk-agent-scan` exits `0` and outputs `Version: 0.6.1` (artifact: both command stdouts and the pinned `snyk-agent-scan==0.6.1` install line).
-9. **Non-Duplication Preservation**: Gitleaks 8.24.0 remains `ADOPTED` / `BLOCKING_GATE` / `ci-provisioned`, `snyk-agent-scan scan tests/fixtures/agent-scan/plain-token/` reports the synthetic PAT only as an informational secondary finding and exits `0`, and `node tools/ai-brain/cli.js manifest` reports `0` errors and exactly `1` warning, that warning being `PINNED_VERSION_DRIFT` for `codex-cli` (artifact: `AC-AI-39-02` stdout, scan stdout for the `plain-token` fixture, and manifest audit stdout).
-10. **Egress Conflict Resolved At Source** (`AI-39-R10`): `AC-AI-39-15` exits `0` rather than `1`, proving an owner amended either `tools/ecosystem-profiles.json` or `tools/ecosystem-manifest.json` so the declared network behavior and the governing profile agree; promotion is forbidden while `AC-AI-39-15` exits `1`, and this criterion may never be satisfied by weakening a profile `network_policy` (artifact: `AC-AI-39-15` stderr and the amending commit SHA).
-
-## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all required sections present');"` | `0` | `Specification structural integrity verified: all required sections present` | `docs/product-spec/work-items/TASK-AI-39.md` |
-| `AC-AI-39-09` | Specification contract, rules, and numeric thresholds completeness | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); tokens=['0.6.1','8.24.0','60000ms','512000','1048576','BLOCKED_DEPENDENCY','AI-39-R01','AI-39-R02','AI-39-R03','AI-39-R04','AI-39-R05','AI-39-R06','AI-39-R07','AI-39-R08','AI-39-R09','snyk-agent-scan --version','snyk-api-outbound-https','https://api.snyk.io','https://app.snyk.io','AI-39-R10','PROFILE_EGRESS_CONFLICT','local-scan-only','github-api-and-localhost-only','SNYK_TOKEN_ABSENT_OFFLINE_MODE','Governed Input Coverage','Tokenless Credential And Network Behavior Proof','Required CI Check At Exact HEAD','WILDCARD_HOST_BINDING_FORBIDDEN','PROMPT_INJECTION_DETECTED']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, promotion evidence, and health check tokens verified');"` | `0` | `Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, promotion evidence, and health check tokens verified` | `docs/product-spec/work-items/TASK-AI-39.md` |
-| `AC-AI-39-10` | Manifest audit green with 0 errors and exactly 1 warning, that warning identified by code and tool | `node -e "const o=require('child_process').execSync('node tools/ai-brain/cli.js manifest',{encoding:'utf8'}); const need=['Tổng: 0 lỗi, 1 cảnh báo','PINNED_VERSION_DRIFT','codex-cli']; const miss=need.filter(t=>!o.includes(t)); if(miss.length\|\|(o.match(/\[CẢNH\]/g)\|\|[]).length!==1) throw new Error('manifest baseline mismatch: '+miss.join(',')); console.log('Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli');"` | `0` | `Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli` | `tools/ai-brain/cli.js stdout` |
-| `AC-AI-39-11` | Register reconciliation green with 0 errors | `node tools/ai-brain/cli.js reconcile` | `0` | `Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú` | `tools/ai-brain/cli.js stdout` |
-| `AC-AI-39-12` | Specification and documentation validation | `python docs/product-spec/scripts/validate_docs.py` | `0` | `Documentation validation passed` | `docs/product-spec/scripts/validate_docs.py stdout` |
-| `AC-AI-39-13` | Toolchain unit & integration test suites green | `node --test \"tools/ai-brain/test/*.test.js\" \"tools/ai-dashboard/test/*.test.js\" \"tools/ai-guard/test/*.test.js\"` | `0` | `fail 0` | `node --test stdout` |
-| `AC-AI-39-14` | Incremental code and document formatting check | `pnpm format:check` | `0` | `tuân thủ 100% chuẩn định dạng Prettier` | `scripts/verify-formatting.ts stdout` |
-| `AC-AI-39-15` | Negative proof: manifest egress declaration conflicts with every profile agent-scan belongs to | `node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id==='agent-scan'); const p=require('./tools/ecosystem-profiles.json').profiles; const open=['local-scan-only','github-api-and-localhost-only']; const pol=m.profiles.map(n=>p[n].network_policy); const egress=pol.filter(x=>!open.includes(x)); console.error('PROFILE_EGRESS_CONFLICT: agent-scan declares ' + m.outbound_endpoints.join(',') + ' but profiles ' + m.profiles.join(',') + ' allow only ' + pol.join(',')); if(egress.length===0) process.exit(1);"` | `1` | `PROFILE_EGRESS_CONFLICT: agent-scan declares https://api.snyk.io,https://app.snyk.io but profiles SECURITY_REVIEW,PR_REVIEW allow only local-scan-only,github-api-and-localhost-only` | command stderr |
-| `AC-AI-39-16` | Governed agent-artifact inventory that promotion criterion 2 must cover | `python -c "import subprocess; files=sorted(f for f in subprocess.run(['git','ls-files'],capture_output=True,text=True).stdout.split() if f=='AGENTS.md' or f.endswith('/AGENTS.md') or f.endswith('-PROMPT.md')); assert len(files)==7, files; print('Governed agent-artifact inventory: 7 files require agent-scan coverage')"` | `0` | `Governed agent-artifact inventory: 7 files require agent-scan coverage` | `git ls-files stdout` |
-| `AC-AI-39-17` | Promotion criteria enumerate 10 entries, each naming its evidence artifact | `python -c "import re; s=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); sec=s.split('## Manifest promotion criteria')[1].split('## Verification commands')[0]; items=[l for l in sec.splitlines() if re.match(r'^\d+\. ', l)]; assert len(items)==10, len(items); bad=[l.split(':')[0] for l in items if '(artifact: ' not in l]; assert not bad, bad; print('Promotion criteria: 10 enumerated, each naming its evidence artifact')"` | `0` | `Promotion criteria: 10 enumerated, each naming its evidence artifact` | `docs/product-spec/work-items/TASK-AI-39.md` |
+| Command | Before | After |
+|---|---|---|
+| `AC-AI-39-08` | could not fail: the spliced "required" strings it searched for were supplied by the row's own text | exit `0`, `Specification structural integrity verified: all required sections present`, against the 16 real headings |
+| `AC-AI-39-17` | parsed the promotion text trapped inside the row | exit `0`, `Promotion criteria: 10 enumerated, each naming its evidence artifact`, against the real section |
 
 ## Downstream implementation acceptance contract
 
@@ -396,16 +447,22 @@ the following deterministic verification contract:
 ## Manifest promotion criteria
 
 Promoting `agent-scan` from `PENDING` to `ADOPTED` and `BLOCKING_GATE` in `tools/ecosystem-manifest.json`
-strictly requires satisfying all 7 prerequisites with auditable workflow evidence. Each
+strictly requires satisfying all 10 prerequisites with auditable workflow evidence. Each
 prerequisite names the artifact that proves it; absence of the named artifact blocks
-promotion regardless of whether the binary installs or runs:
-1. **Exact-HEAD Execution**: CI check run `Agent Tooling Security Scan` passed at the exact 40-character commit SHA of PR HEAD.
-2. **Clean Fixture Proof**: `snyk-agent-scan scan` on clean skill fixture exits `0` with zero actionable findings.
-3. **Vulnerable Fixture Negative Proof**: `snyk-agent-scan scan` on prompt injection fixture exits `1` with detected injection pattern.
-4. **Operational Failure Fail-Closed Proof**: `snyk-agent-scan scan` on invalid arguments exits `2`.
-5. **Health Check Proof**: `snyk-agent-scan --version` exits `0` and outputs `0.6.1`.
-6. **Non-Duplication Preservation**: Gitleaks 8.24.0 remains `ADOPTED` / `BLOCKING_GATE` / `ci-provisioned`, and `node tools/ai-brain/cli.js manifest` reports 0 errors and exactly 1 warning, that warning being `PINNED_VERSION_DRIFT` for `codex-cli` (artifact: manifest audit stdout).
-7. **Egress Conflict Resolved At Source** (`AI-39-R10`): `AC-AI-39-15` must exit `0` rather than `1`, proving an owner has amended either `tools/ecosystem-profiles.json` or `tools/ecosystem-manifest.json` so the declared network behavior and the governing profile agree. Promotion is forbidden while `AC-AI-39-15` still exits `1`, and this criterion may never be satisfied by weakening a profile `network_policy` (artifact: `AC-AI-39-15` stderr and the amending commit).
+promotion regardless of whether the binary installs or runs. An installed binary, a
+passing `--version`, or one successful scan satisfies at most criteria 8 and 3 and is
+never sufficient on its own (`AI-39-R01`):
+
+1. **Required CI Check At Exact HEAD**: check run `Agent Tooling Security Scan` concluded `success` on the exact 40-character commit SHA of PR HEAD, and that check name is listed in the branch-protection required status checks for `main` (artifact: GitHub check-run JSON for the HEAD SHA plus `gh api repos/vinh05092001/shipde-platform/branches/main/protection/required_status_checks` output).
+2. **Governed Input Coverage**: a single scan invocation covers all `7` governed agent-artifact files enumerated by `AC-AI-39-16` (`AGENTS.md`, `docs/product-spec/AGENTS.md`, and the `5` `*-PROMPT.md` files under `docs/product-spec/docs/10-ai-collaboration/`), and the scan report lists `7` scanned paths with `0` skipped (artifact: `snyk-agent-scan scan --json` report `scanned_paths` array, and `AC-AI-39-16` stdout as the governed inventory it must match).
+3. **Clean Fixture Proof**: `snyk-agent-scan scan tests/fixtures/agent-scan/clean-skill/` exits `0` and prints `0 vulnerabilities found` (artifact: command stdout and the committed fixture `tests/fixtures/agent-scan/clean-skill/SKILL.md`).
+4. **Prompt Injection Negative Proof**: `snyk-agent-scan scan tests/fixtures/agent-scan/injection-prompt/` exits `1` and prints `PROMPT_INJECTION_DETECTED` at severity `>= 7.0` (artifact: command stdout and the committed fixture `tests/fixtures/agent-scan/injection-prompt/prompt.txt`).
+5. **MCP Least-Privilege Negative Proof**: `snyk-agent-scan scan tests/fixtures/agent-scan/mcp-wildcard/` exits `1` and prints `WILDCARD_HOST_BINDING_FORBIDDEN` naming `0.0.0.0` (artifact: command stdout and the committed fixture `tests/fixtures/agent-scan/mcp-wildcard/mcp-config.json`).
+6. **Operational Failure Fail-Closed Proof**: `snyk-agent-scan scan --invalid-flag-syntax tests/fixtures/agent-scan/clean-skill/` exits `2` and prints `error: unrecognized arguments` (artifact: command stderr).
+7. **Tokenless Credential And Network Behavior Proof**: with `SNYK_TOKEN` unset, a scan of the governed inputs exits `0`, prints the governed diagnostic `SNYK_TOKEN_ABSENT_OFFLINE_MODE`, and issues exactly `0` outbound requests, with `0` requests to `https://api.snyk.io` or `https://app.snyk.io` (artifact: CI step log with `SNYK_TOKEN` unset plus an egress capture showing `0` connections to the two Snyk endpoints).
+8. **Health Check Proof**: `snyk-agent-scan --version` exits `0` and outputs `0.6.1`, and `python -m pip show snyk-agent-scan` exits `0` and outputs `Version: 0.6.1` (artifact: both command stdouts and the pinned `snyk-agent-scan==0.6.1` install line).
+9. **Non-Duplication Preservation**: Gitleaks 8.24.0 remains `ADOPTED` / `BLOCKING_GATE` / `ci-provisioned`, `snyk-agent-scan scan tests/fixtures/agent-scan/plain-token/` reports the synthetic PAT only as an informational secondary finding and exits `0`, and `node tools/ai-brain/cli.js manifest` reports `0` errors and exactly `1` warning, that warning being `PINNED_VERSION_DRIFT` for `codex-cli` (artifact: `AC-AI-39-02` stdout, scan stdout for the `plain-token` fixture, and manifest audit stdout).
+10. **Egress Conflict Resolved At Source** (`AI-39-R10`): `AC-AI-39-15` exits `0` rather than `1`, proving an owner amended either `tools/ecosystem-profiles.json` or `tools/ecosystem-manifest.json` so the declared network behavior and the governing profile agree; promotion is forbidden while `AC-AI-39-15` exits `1`, and this criterion may never be satisfied by weakening a profile `network_policy` (artifact: `AC-AI-39-15` stderr and the amending commit SHA).
 
 ## Verification commands
 
@@ -423,10 +480,10 @@ python -c "import csv; rows=[r for r in csv.DictReader(open('docs/product-spec/d
 python -c "import csv, sys; rows=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv', encoding='utf-8')) if r['work_item_id']=='TASK-AI-39']; actual=rows[0]['status']; sys.stderr.write(f'UNAUTHORIZED_STATUS_ADVANCEMENT: register is {actual}\n'); sys.exit(1 if actual!='READY_FOR_CODEX' else 0)"
 
 # AC-AI-39-05: Negative proof: falsely declaring agent-scan ADOPTED triggers QUALITY_GATE_MISSING
-node -e "const { auditManifest } = require('./tools/ai-brain/manifest-audit'); const m = JSON.parse(require('fs').readFileSync('tools/ecosystem-manifest.json', 'utf8')); const a = m.adopted.find(x => x.id === 'agent-scan'); a.lifecycle_state = 'ADOPTED'; a.blocking_policy = 'BLOCKING_GATE'; const res = auditManifest(m); const f = res.findings.find(x => x.id === 'agent-scan'); console.error(f.code + ': ' + f.id); if (res.summary.error > 0) process.exit(1);"
+node tools/ai-brain/acceptance/ac-39-05-manifest-promotion.js
 
-# AC-AI-39-06: Invariant check: zero forbidden install lifecycle scripts
-node -e "const r=require('./package.json'), w=require('./apps/web/package.json'); const forbidden=['preinstall','install','postinstall','prepare']; const found = forbidden.filter(s => (r.scripts && r.scripts[s]) || (w.scripts && w.scripts[s])); if(found.length > 0) throw new Error('Forbidden lifecycle script detected: ' + found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"
+# AC-AI-39-06: Invariant check: zero forbidden install lifecycle scripts (shared rule in lifecycle-scripts.js)
+node -e "const {forbiddenScriptsInFile}=require('./tools/ai-brain/acceptance/lifecycle-scripts'); const found=['package.json','apps/web/package.json'].flatMap(p=>forbiddenScriptsInFile(p).map(s=>p+': '+s)); if(found.length>0) throw new Error('Forbidden lifecycle script detected: '+found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"
 
 # AC-AI-39-07: Negative proof: forbidden install lifecycle script triggers failure
 node tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js
@@ -457,8 +514,8 @@ node -e "const m=require('./tools/ecosystem-manifest.json').adopted.find(t=>t.id
 # AC-AI-39-16: Governed agent-artifact inventory that promotion criterion 2 must cover
 python -c "import subprocess; files=sorted(f for f in subprocess.run(['git','ls-files'],capture_output=True,text=True).stdout.split() if f=='AGENTS.md' or f.endswith('/AGENTS.md') or f.endswith('-PROMPT.md')); assert len(files)==7, files; print('Governed agent-artifact inventory: 7 files require agent-scan coverage')"
 
-# AC-AI-39-17: Promotion criteria enumerate 10 entries, each naming its evidence artifact
-python -c "import re; s=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); sec=s.split('## Manifest promotion criteria')[1].split('## Verification commands')[0]; items=[l for l in sec.splitlines() if re.match(r'^\d+\. ', l)]; assert len(items)==10, len(items); bad=[l.split(':')[0] for l in items if '(artifact: ' not in l]; assert not bad, bad; print('Promotion criteria: 10 enumerated, each naming its evidence artifact')"
+# AC-AI-39-17: Promotion criteria enumerate 10 entries, each naming its evidence artifact (anchored on the real heading line)
+python -c "import re; s=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); sec=s.split('\n## Manifest promotion criteria\n')[1].split('\n## Verification commands\n')[0]; items=[l for l in sec.splitlines() if re.match(r'^\d+\. ', l)]; assert len(items)==10, len(items); bad=[l.split(':')[0] for l in items if '(artifact: ' not in l]; assert not bad, bad; print('Promotion criteria: 10 enumerated, each naming its evidence artifact')"
 ```
 
 ## Codex review record
