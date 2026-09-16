@@ -35,7 +35,9 @@ const REQUIRED_PARTS = [
   {
     id: 'BUDGET_EXHAUSTION_FAIL_CLOSED',
     label: 'a fail-closed stop when the repair counter exceeds the bound',
-    pattern: /\$State\.RepairCount\s+-gt\s+\$MaxRepairBudget/,
+    // The Work Item total is computed as the next count before it is written,
+    // so a refused repair never inflates the counter it was refused by.
+    pattern: /\$nextTotal\s+-gt\s+\$MaxRepairBudget/,
   },
   {
     id: 'BUDGET_EXHAUSTION_DIAGNOSTIC',
@@ -51,6 +53,21 @@ const REQUIRED_PARTS = [
     id: 'EXACT_HEAD_REVIEW_BINDING',
     label: 'a repair dispatch bound to the exact review head SHA',
     pattern: /PendingDispatch\s*=\s*@\{\s*Type\s*=\s*"REVIEW_REPAIR"/,
+  },
+  {
+    id: 'PER_HEAD_BOUND',
+    label: 'a configurable per-HEAD repair bound (AI-08-R02)',
+    pattern: /\[int\]\$MaxRepairAttemptsPerHead\s*=\s*\d+/,
+  },
+  {
+    id: 'PER_HEAD_FAIL_CLOSED',
+    label: 'a fail-closed stop when one HEAD reaches its repair bound (AI-08-R04)',
+    pattern: /\$attempts\s+-ge\s+\$MaxRepairAttemptsPerHead/,
+  },
+  {
+    id: 'EVIDENCE_BEFORE_DISPATCH',
+    label: 'a refusal to dispatch a repair without evidence (AI-08-R01)',
+    pattern: /Cannot bind repair evidence/,
   },
 ];
 

@@ -70,8 +70,9 @@ fs.unlinkSync(tmp);
 
 const verdict = dependencyProven(rereadDependency || '');
 if (verdict.ok) {
+  // Exit 2, never 0: a proof that misses its tamper established nothing.
   console.error('DEPENDENCY_WRONGLY_PROVEN');
-  process.exit(0);
+  process.exit(2);
 }
 if (!verdict.measurable) {
   console.error('SOURCE_MISSING: ' + verdict.why);
