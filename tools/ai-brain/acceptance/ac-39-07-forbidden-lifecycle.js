@@ -11,6 +11,13 @@
 // The REAL root and web manifests are read from disk and proven clean as a
 // control, then a copy is tampered in os.tmpdir() and re-read from disk through
 // the same shared rule. No file inside the repository is written.
+//
+// Exit codes: 1 the tampered copy was rejected by the shared rule -- this row's
+// success, because a negative proof succeeds when the defect it stages is
+// caught. 2 the proof could not be established: SOURCE_MISSING,
+// SOURCE_UNREADABLE, CONTROL_FAILED, TAMPER_COPY_FAILED, or the detector
+// regression below. No path exits 0, so a regression can never be read as
+// success by a caller that only checks `$?`.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -70,7 +77,14 @@ try {
 
 if (found.length === 0) {
   console.error('FORBIDDEN_SCRIPT_NOT_DETECTED: the shared rule did not reject the tampered copy');
-  process.exit(0);
+  // Exit 2, deliberately -- not 0 and not 1. 0 is the shell's success code, so
+  // using it here would report success to any caller that checks `$?` at the
+  // exact moment the shared rule stopped rejecting the tampered copy. 1 is
+  // already this script's success code (the negative scenario was reproduced),
+  // so reusing it would make the regression indistinguishable from a pass. 2 is
+  // the code every other guard in this script already uses when the proof
+  // cannot be established (SOURCE_MISSING, CONTROL_FAILED, TAMPER_COPY_FAILED).
+  process.exit(2);
 }
 console.error('FORBIDDEN_LIFECYCLE_SCRIPT: detected ' + found.join(', '));
 process.exit(1);

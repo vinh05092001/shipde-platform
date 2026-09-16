@@ -12,6 +12,13 @@
 // depend on whether snyk-agent-scan happens to be installed on the machine
 // running the proof: ADOPTED-but-present is not a missing gate. The premise
 // this row proves is ADOPTED-while-absent, so absence is pinned, not guessed.
+//
+// Exit codes: 1 the tampered manifest was rejected with QUALITY_GATE_MISSING
+// for agent-scan -- this row's success, because a negative proof succeeds when
+// the defect it stages is caught. 2 the proof could not be established:
+// SOURCE_MISSING, ENTRY_MISSING, CONTROL_FAILED, TAMPER_COPY_FAILED, or the
+// classifier regression this row exists to catch. No path exits 0, so a
+// regression can never be read as success by a caller that only checks `$?`.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -78,7 +85,14 @@ if (!found) {
   console.error(
     'QUALITY_GATE_CLASSIFIER_REGRESSION: agent-scan declared ADOPTED did not raise QUALITY_GATE_MISSING'
   );
-  process.exit(0);
+  // Exit 2, deliberately -- not 0 and not 1. 0 is the shell's success code, so
+  // using it here would report success to any caller that checks `$?` at the
+  // exact moment the classifier regressed. 1 is already this script's success
+  // code (the negative scenario was reproduced), so reusing it would make a
+  // regression indistinguishable from a pass. 2 is the code every other guard
+  // in this script already uses when the proof cannot be established
+  // (SOURCE_MISSING, ENTRY_MISSING, CONTROL_FAILED, TAMPER_COPY_FAILED).
+  process.exit(2);
 }
 
 console.error('QUALITY_GATE_MISSING: ' + found.id);
