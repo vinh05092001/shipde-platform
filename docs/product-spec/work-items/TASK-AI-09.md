@@ -16,6 +16,8 @@
 | Branch | `spec/task-ai-09` |
 | Pull Request | `Pending` |
 
+**Row numbering.** "Row 142" is the register's own `delivery_order` column, the convention `TASK-AI-07` (row 140) and `TASK-AI-08` (row 141) already use. `TASK-AI-17` numbers by physical CSV line instead, where this record is line 10. The two conventions disagree, so every row number in this file also names the record's `work_item_id`.
+
 ### Status transition ledger
 
 The durable delivery register (`docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, row 142) is the authoritative source for this Work Item's lifecycle state under `AGENTS.md` § Unit of delivery. The register records `BLOCKED_DEPENDENCY`, therefore the Control table above records `BLOCKED_DEPENDENCY` and no other value.
@@ -347,6 +349,14 @@ red. That is the evidence the pairs are coupled to one rule.
   the naming commit is its own merge commit, so the row is sound here; the
   limitation is recorded so a later Work Item that depends on a frequently-named
   id does not inherit it silently.
+- **Two row-numbering conventions disagree in this directory.** `TASK-AI-07` and
+  `TASK-AI-08` call the register's `delivery_order` column the "row"; `TASK-AI-17`
+  numbers by physical CSV line. Measured: this Work Item is `delivery_order` 142
+  and physical line 10, `TASK-AI-17` is `delivery_order` 150 and physical line
+  152, and physical line 154 is `TASK-AI-19`, not `TASK-AI-21`. This file uses
+  `delivery_order` and names the `work_item_id` alongside every row number so the
+  two cannot be confused. The divergence is recorded rather than repaired, because
+  renumbering another Work Item's prose is not this one's scope.
 - Checkpoint replication across machines, and recovery of a handoff root that was
   never written, are out of scope; the checkpoint is local to this machine's
   handoff root.
