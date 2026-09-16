@@ -8,7 +8,7 @@ param(
         $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
         Join-Path $userHome ".claude"
     ),
-    [int]$AgentRouterPort = 20128,
+    [int]$NineRouterPort = 20128,
     [string]$ExpectedAoVersion = "",
     [int]$StartupTimeoutSeconds = 30,
     [switch]$Restart,
@@ -37,7 +37,7 @@ $handoffRoot = Join-Path $AiRoot "handoff"
 $runtimePath = Join-Path $handoffRoot "ao-router-runtime.json"
 
 if (-not (Test-Path $settingsPath)) {
-    throw "AgentRouter Claude profile is missing: $settingsPath"
+    throw "9Router Claude profile is missing: $settingsPath"
 }
 $aoExecutablePath = if ([string]::IsNullOrWhiteSpace($AoExecutable)) {
     Resolve-ShipDeAoExecutable
@@ -61,7 +61,7 @@ $aoVersionEvidence = Assert-ShipDeAoVersionEvidence `
 try {
     $config = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
 } catch {
-    throw "AgentRouter Claude profile contains invalid JSON: $settingsPath"
+    throw "9Router Claude profile contains invalid JSON: $settingsPath"
 }
 
 $baseUrl = [string]$config.env.ANTHROPIC_BASE_URL
@@ -71,25 +71,25 @@ if (
     -not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$uri) -or
     $uri.Scheme -ne "http" -or
     $uri.Host -notin @("localhost", "127.0.0.1") -or
-    $uri.Port -ne $AgentRouterPort -or
+    $uri.Port -ne $NineRouterPort -or
     $uri.AbsolutePath.TrimEnd('/') -ne "/v1" -or
     -not [string]::IsNullOrWhiteSpace($uri.Query) -or
     -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
     -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
 ) {
-    throw "The .claude profile must route to http://localhost:$AgentRouterPort/v1."
+    throw "The .claude profile must route to http://localhost:$NineRouterPort/v1."
 }
 
-function Test-AgentRouterEndpoint {
+function Test-NineRouterEndpoint {
     if ($null -ne $EndpointTester) {
         return (& $EndpointTester)
     }
-    if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $AgentRouterPort)) {
+    if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $NineRouterPort)) {
         return $false
     }
     try {
-        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$AgentRouterPort/api/health" -Method Get -TimeoutSec 5
-        $version = Invoke-RestMethod -Uri "http://127.0.0.1:$AgentRouterPort/api/version" -Method Get -TimeoutSec 6
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$NineRouterPort/api/health" -Method Get -TimeoutSec 5
+        $version = Invoke-RestMethod -Uri "http://127.0.0.1:$NineRouterPort/api/version" -Method Get -TimeoutSec 6
         return (
             $health.ok -eq $true -and
             [string]$version.currentVersion -eq "0.5.55"
@@ -137,7 +137,7 @@ function Stop-StartedRouterProcess {
 
     try {
         $cleanupDeadline = (Get-Date).AddSeconds(3)
-        while ((Get-Date) -lt $cleanupDeadline -and (Test-AgentRouterEndpoint)) {
+        while ((Get-Date) -lt $cleanupDeadline -and (Test-NineRouterEndpoint)) {
             Start-Sleep -Milliseconds 200
         }
     } catch {}
@@ -161,14 +161,14 @@ function Test-StartedRouterProcessExited {
     }
 }
 
-if (-not (Test-AgentRouterEndpoint)) {
+if (-not (Test-NineRouterEndpoint)) {
     $routerCommand = Get-Command "9router" -ErrorAction SilentlyContinue
     if (-not $routerCommand) {
         throw "The expected local 9Router endpoint is unavailable and the 9router command is missing."
     }
 
     $escapedRouterPath = $routerCommand.Source.Replace("'", "''")
-    $routerScript = "& '$escapedRouterPath' --host 127.0.0.1 --port $AgentRouterPort"
+    $routerScript = "& '$escapedRouterPath' --host 127.0.0.1 --port $NineRouterPort"
     $encodedRouterScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($routerScript))
     try {
         $routerProcess = Start-Process powershell.exe -WindowStyle Minimized -ArgumentList @(
@@ -180,15 +180,15 @@ if (-not (Test-AgentRouterEndpoint)) {
         $routerDeadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
         while (
             (Get-Date) -lt $routerDeadline -and
-            -not (Test-AgentRouterEndpoint)
+            -not (Test-NineRouterEndpoint)
         ) {
             Start-Sleep -Milliseconds 500
             if (Test-StartedRouterProcessExited -Process $routerProcess) {
                 throw "9Router process exited during startup with code $($routerProcess.ExitCode)."
             }
         }
-        if (-not (Test-AgentRouterEndpoint)) {
-            throw "Port $AgentRouterPort is not serving the expected local 9Router health and version contract."
+        if (-not (Test-NineRouterEndpoint)) {
+            throw "Port $NineRouterPort is not serving the expected local 9Router health and version contract."
         }
     } catch {
         Stop-StartedRouterProcess -Process $routerProcess
@@ -265,7 +265,7 @@ function Get-LiveAoProcess {
 $existing = @(Get-ExistingAoProcess -ExecutablePath $aoExecutablePath)
 if ($existing.Count -gt 0) {
     if (-not $Restart) {
-        throw "Agent Orchestrator is already running. Re-run with -Restart to replace it with the governed AgentRouter profile."
+        throw "Agent Orchestrator is already running. Re-run with -Restart to replace it with the governed 9Router profile."
     }
 
     & $aoExecutablePath stop --timeout 15s 2>$null | Out-Null
@@ -353,7 +353,7 @@ try {
         process_start_time = $aoIdentity.StartTimeUtc
         profile = $profilePath
         base_url = $baseUrl
-        router_port = $AgentRouterPort
+        router_port = $NineRouterPort
         ao_version = $aoVersionEvidence.EffectiveVersion
         ao_binary_version = $aoVersionEvidence.BinaryVersion
         ao_version_source = $aoVersionEvidence.Source
@@ -376,7 +376,7 @@ try {
     throw
 }
 
-Write-Host "Agent Orchestrator is ready through AgentRouter."
+Write-Host "Agent Orchestrator is ready through 9Router."
 Write-Host "Profile : $profilePath"
 Write-Host "Base URL: $baseUrl"
 Write-Host "AO PID  : $($aoProcess.Id)"

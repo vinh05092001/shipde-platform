@@ -1649,7 +1649,7 @@ function Get-ShipDeCodexReviewArgs {
     return @("exec", "--sandbox", "read-only", "--output-schema", $SchemaFile, "--output-last-message", $LastMessageFile, "-")
 }
 
-function Invoke-ShipDeAgentRouterReviewFallback {
+function Invoke-ShipDeClaudeReviewFallback {
     param(
         [Parameter(Mandatory = $true)][string]$ReviewPrompt,
         [Parameter(Mandatory = $true)][string]$ReviewHeadSha,
@@ -1922,11 +1922,11 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
             Pop-Location
         }
 
-        # Fallback to AgentRouter if Codex execution failed or produced invalid/empty review
+        # Fall back to the native Claude Code CLI if Codex execution failed or produced invalid/empty review
         $codexReviewValid = ($exitCode -eq 0) -and (Test-Path -LiteralPath $reviewFile) -and (-not [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $reviewFile -Raw -ErrorAction SilentlyContinue)))
         if (-not $codexReviewValid) {
-            Write-Warning "Codex review execution was not successful (Exit code: $exitCode). Initiating AgentRouter fallback chain..."
-            $fallbackSuccess = Invoke-ShipDeAgentRouterReviewFallback `
+            Write-Warning "Codex review execution was not successful (Exit code: $exitCode). Initiating native Claude Code CLI fallback..."
+            $fallbackSuccess = Invoke-ShipDeClaudeReviewFallback `
                 -ReviewPrompt $reviewPrompt `
                 -ReviewHeadSha $reviewHeadSha `
                 -PullRequestNumber $pr.number `
@@ -2987,15 +2987,15 @@ function Show-ShipDeStatus {
 
 # ============================================================================
 # SUPERVISOR FUNCTIONS (TASK-AI-06)
-# Deterministic AO control. AO is launched through the existing AgentRouter
+# Deterministic AO control. AO is launched through the local 9Router gateway (127.0.0.1:20128), not the cloud AgentRouter
 # Claude profile by start-agent-orchestrator.ps1.
 # ============================================================================
 
 $script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.json"
 $script:SupervisorLockFile = Join-Path $script:HandoffRoot "supervisor.lock"
 $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.json"
-$script:AgentRouterProfile = Join-Path (Get-ShipDeUserHome) ".claude"
-$script:AgentRouterPort = 20128
+$script:NineRouterProfile = Join-Path (Get-ShipDeUserHome) ".claude"
+$script:NineRouterPort = 20128
 $script:ExpectedAoVersion = Get-ShipDePinnedAoVersion
 $script:AoExecutablePath = $null
 
@@ -3135,7 +3135,7 @@ function Test-ShipDeAoReadiness {
     }
 }
 
-function Test-ShipDeAgentRouterEndpoint {
+function Test-ShipDeNineRouterEndpoint {
     param([Parameter(Mandatory = $true)][int]$Port)
 
     if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $Port)) {
@@ -3167,7 +3167,7 @@ function Assert-ShipDeAoRuntimeMarker {
         throw "AO router runtime marker is stale. Restart AO through the governed launcher."
     }
     if ([string]$Runtime.profile -ne $ExpectedProfile -or [string]$Runtime.base_url -ne $ExpectedBaseUrl) {
-        throw "AO was not launched with the current AgentRouter Claude profile."
+        throw "AO was not launched with the current 9Router Claude profile."
     }
     if ([string]$Runtime.ao_version -ne $ExpectedVersion) {
         throw "AO CLI runtime marker version does not match pinned version $ExpectedVersion."
@@ -3241,15 +3241,15 @@ function Assert-ShipDeAoRuntimeMarker {
     }
 }
 
-function Assert-ShipDeAgentRouterProfile {
-    $settingsPath = Join-Path $script:AgentRouterProfile "settings.json"
+function Assert-ShipDeNineRouterProfile {
+    $settingsPath = Join-Path $script:NineRouterProfile "settings.json"
     if (-not (Test-Path $settingsPath)) {
-        throw "AgentRouter Claude profile is missing: $settingsPath"
+        throw "9Router Claude profile is missing: $settingsPath"
     }
     try {
         $config = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
-        throw "AgentRouter Claude profile contains invalid JSON: $settingsPath"
+        throw "9Router Claude profile contains invalid JSON: $settingsPath"
     }
 
     $baseUrl = [string]$config.env.ANTHROPIC_BASE_URL
@@ -3259,16 +3259,16 @@ function Assert-ShipDeAgentRouterProfile {
         -not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$uri) -or
         $uri.Scheme -ne "http" -or
         $uri.Host -notin @("localhost", "127.0.0.1") -or
-        $uri.Port -ne $script:AgentRouterPort -or
+        $uri.Port -ne $script:NineRouterPort -or
         $uri.AbsolutePath.TrimEnd('/') -ne "/v1" -or
         -not [string]::IsNullOrWhiteSpace($uri.Query) -or
         -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
         -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
     ) {
-        throw "AgentRouter Claude profile must use http://localhost:$($script:AgentRouterPort)/v1."
+        throw "9Router Claude profile must use http://localhost:$($script:NineRouterPort)/v1."
     }
-    if (-not (Test-ShipDeAgentRouterEndpoint -Port $script:AgentRouterPort)) {
-        throw "Port $($script:AgentRouterPort) is not serving the expected local 9Router health and version contract."
+    if (-not (Test-ShipDeNineRouterEndpoint -Port $script:NineRouterPort)) {
+        throw "Port $($script:NineRouterPort) is not serving the expected local 9Router health and version contract."
     }
     if (-not (Test-Path $script:AoRouterRuntimeFile)) {
         throw "AO router runtime marker is missing. Start AO with scripts/ai/start-agent-orchestrator.ps1."
@@ -3280,19 +3280,19 @@ function Assert-ShipDeAgentRouterProfile {
     }
     Assert-ShipDeAoRuntimeMarker `
         -Runtime $runtime `
-        -ExpectedProfile $script:AgentRouterProfile `
+        -ExpectedProfile $script:NineRouterProfile `
         -ExpectedBaseUrl $baseUrl `
         -ExpectedVersion $script:ExpectedAoVersion `
         -ExpectedExecutable (Get-ShipDeAoInvocationPath)
 }
 
-function Ensure-ShipDeAgentRouterRuntime {
+function Ensure-ShipDeNineRouterRuntime {
     param(
-        [scriptblock]$ProfileValidator = { Assert-ShipDeAgentRouterProfile },
+        [scriptblock]$ProfileValidator = { Assert-ShipDeNineRouterProfile },
         [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
         [scriptblock]$Launcher = {
             param($Path, $Root, $Port, $Version)
-            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -Restart
+            & $Path -AiRoot $Root -NineRouterPort $Port -ExpectedAoVersion $Version -Restart
         }
     )
 
@@ -3304,7 +3304,7 @@ function Ensure-ShipDeAgentRouterRuntime {
         }
         throw $readiness.Reason
     } catch {
-        Write-Warning ("AO is not ready through AgentRouter: {0}" -f $_.Exception.Message)
+        Write-Warning ("AO is not ready through 9Router: {0}" -f $_.Exception.Message)
     }
 
     $launcherPath = Join-Path $PSScriptRoot "start-agent-orchestrator.ps1"
@@ -3312,9 +3312,9 @@ function Ensure-ShipDeAgentRouterRuntime {
         throw "Governed AO launcher is missing: $launcherPath"
     }
 
-    Write-Host "[SUPERVISOR] Starting AO through the AgentRouter Claude profile..."
+    Write-Host "[SUPERVISOR] Starting AO through the 9Router Claude profile..."
     try {
-        & $Launcher $launcherPath $AiRoot $script:AgentRouterPort $script:ExpectedAoVersion
+        & $Launcher $launcherPath $AiRoot $script:NineRouterPort $script:ExpectedAoVersion
     } catch {
         throw "The governed AO launcher failed: $($_.Exception.Message)"
     }
@@ -4543,7 +4543,7 @@ function Get-ShipDeSessionActivityState {
     }
 }
 
-function Get-ShipDeAgentRouterFailureSince {
+function Get-ShipDeNineRouterFailureSince {
     param([Parameter(Mandatory = $true)][string]$Since)
 
     $sinceDate = [DateTime]::MinValue
@@ -4551,7 +4551,7 @@ function Get-ShipDeAgentRouterFailureSince {
         throw "Supervisor start time is invalid; cannot bound 9Router diagnostics."
     }
     $encodedStart = [Uri]::EscapeDataString($sinceDate.ToUniversalTime().ToString("o"))
-    $uri = "http://127.0.0.1:$($script:AgentRouterPort)/api/usage/request-details?status=error&startDate=$encodedStart&page=1&pageSize=100"
+    $uri = "http://127.0.0.1:$($script:NineRouterPort)/api/usage/request-details?status=error&startDate=$encodedStart&page=1&pageSize=100"
     try {
         $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10
     } catch {
@@ -6502,7 +6502,7 @@ function Invoke-ShipDeSupervisorLoop {
 
         if ($activity -in @("FAILED", "STOPPED", "MISSING")) {
             if ($activity -in @("FAILED", "STOPPED")) {
-                $routerFailure = Get-ShipDeAgentRouterFailureSince -Since ([string]$State.StartTime)
+                $routerFailure = Get-ShipDeNineRouterFailureSince -Since ([string]$State.StartTime)
                 if ($routerFailure) {
                     $State.RouterFailure = $routerFailure
                     if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
@@ -6898,7 +6898,7 @@ function Assert-ShipDeSupervisorCompatibility {
     $origSupervisorStateFile = $script:SupervisorStateFile
     $origSupervisorLockFile = $script:SupervisorLockFile
     $origAoRouterRuntimeFile = $script:AoRouterRuntimeFile
-    $origAgentRouterProfile = $script:AgentRouterProfile
+    $origNineRouterProfile = $script:NineRouterProfile
     $origExpectedAoVersion = $script:ExpectedAoVersion
     $origAoExecutablePath = $script:AoExecutablePath
 
@@ -7162,7 +7162,7 @@ function Assert-ShipDeSupervisorCompatibility {
         }
 
         $duplicateLaunches = @{ Count = 0 }
-        Ensure-ShipDeAgentRouterRuntime `
+        Ensure-ShipDeNineRouterRuntime `
             -ProfileValidator { } `
             -ReadinessResolver { return @{ Ready = $true } } `
             -Launcher { $duplicateLaunches.Count++ }
@@ -10321,7 +10321,7 @@ Full review comments:
     $script:SupervisorStateFile = $origSupervisorStateFile
     $script:SupervisorLockFile = $origSupervisorLockFile
     $script:AoRouterRuntimeFile = $origAoRouterRuntimeFile
-    $script:AgentRouterProfile = $origAgentRouterProfile
+    $script:NineRouterProfile = $origNineRouterProfile
     $script:ExpectedAoVersion = $origExpectedAoVersion
     $script:AoExecutablePath = $origAoExecutablePath
 
@@ -15408,7 +15408,7 @@ function Invoke-ShipDeSupervise {
     try {
         Assert-ShipDeAoCommand
         Assert-ShipDeAoVersion
-        Ensure-ShipDeAgentRouterRuntime
+        Ensure-ShipDeNineRouterRuntime
 
         $syncScript = { param($s) Sync-ShipDeRegisterAfterAutoMerge -State $s -Repository $Repository }
 

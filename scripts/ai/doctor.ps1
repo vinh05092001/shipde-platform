@@ -315,8 +315,8 @@ if ($agentRouterCached) {
     }
 }
 Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)
-Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.org, no /v1 in the base URL)")
-Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) -- a different gateway despite the naming in control.ps1")
+Write-Host ("AgentRouter serves: manual Claude profile .claude-orchestrator (cloud, agentrouter.org, no /v1 in the base URL); review fallback uses the native Claude Code CLI, not this gateway")
+Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128) -- a different gateway (NineRouter* symbols in control.ps1)")
 
 Write-Host ""
 Write-Host "=== AGENT AUTHENTICATION ==="

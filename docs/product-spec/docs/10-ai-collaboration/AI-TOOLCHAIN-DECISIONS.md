@@ -66,6 +66,23 @@ AgentRouter provides Claude model access under two separate topologies:
 1. **Manual direct profile (`%USERPROFILE%\.claude-orchestrator`):** Used directly by Claude Code for manual business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. It connects directly to AgentRouter upstream without chaining through 9Router, and is not an implementation-author route. Its promotional balance is treated as temporary capacity rather than a permanent free entitlement. The repository stores no token, provider session or request log.
 2. **Unattended routed topology (`%USERPROFILE%\.claude`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
 
+### Gateway routing record (TASK-AI-44)
+
+Two gateways exist and they are not interchangeable. The names in code follow this table; `AgentRouter` names only the cloud endpoint.
+
+| Gateway | Endpoint | Credential | Code names | Serves |
+|---|---|---|---|---|
+| AgentRouter (cloud) | `https://agentrouter.org/` (no `/v1`) | `AGENTROUTER_API_KEY`, User environment | `doctor.ps1` AgentRouter probe | Claude and Codex, manual `.claude-orchestrator` profile |
+| 9Router (local) | `http://localhost:20128/v1` | local token | `$script:NineRouterProfile`, `$script:NineRouterPort`, `Assert-ShipDeNineRouterProfile`, `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeNineRouterFailureSince`, `start-agent-orchestrator.ps1 -NineRouterPort` | unattended AO sessions (`.claude` profile), Gemini, dsh |
+
+Fallback routing, as implemented:
+
+- **Codex review fails** -> `Invoke-ShipDeClaudeReviewFallback` runs the host-authenticated native Claude Code CLI with `ANTHROPIC_BASE_URL` and `CLAUDE_CONFIG_DIR` cleared. It uses neither gateway, and spends the Claude subscription quota. The function was previously named after AgentRouter, which it never called.
+- **An AO worker's provider fails** -> 9Router falls back across its configured upstreams; after every approved route is exhausted, TASK-AI-07 replaces the harness.
+- **AgentRouter credential** -> reported available only after a live probe authenticates (`AI-44-R01`); a rejected key is a `doctor.ps1` failure, never "configured" (`AI-44-R02`). The key is never logged; only a 16-character SHA-256 prefix is cached to bind the verdict to the key.
+
+Earlier decision rows (`AI-SUP-06`, `AI-SUP-07`, `AI-SUP-11`) say "AgentRouter" where the runtime they describe is the local 9Router route; read them through this table. The rename changed no routing (`AI-44-R03`).
+
 ## Low-cost model route
 
 Create a 9Router combo named `shipde-low-risk`. Select only model IDs currently returned by `GET /v1/models`, in this preference order when available:

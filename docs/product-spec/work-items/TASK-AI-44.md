@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-17` |
 | Assigned author | `GEMINI` |
 | Risk | `MEDIUM` |
-| Allowed paths | `scripts/ai/control.ps1`, `scripts/ai/doctor.ps1`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ecosystem-manifest.json` |
+| Allowed paths | `scripts/ai/control.ps1`, `scripts/ai/doctor.ps1`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ecosystem-manifest.json`, `scripts/ai/start-agent-orchestrator.ps1` (added: `control.ps1` passes the port to it by parameter name, so the rename cannot be made in `control.ps1` alone) |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-44-gateway-naming` |
 | Pull Request | `<URL>` |
@@ -158,11 +158,22 @@ node tools/ai-brain/cli.js prove --tests "node tools/ai-brain/test/review-lane.t
 |---|---|---|---|
 | 1 | `<sha>` | `<PASS/CHANGES_REQUIRED/BLOCKED>` | `<links>` |
 
+## Implementation record
+
+| AC/Test ID | Result | Evidence |
+|---|---|---|
+| `AC-AI-44-01` | PASS | `grep -nE '\$script:AgentRouter\|function [A-Za-z-]*AgentRouter\|-AgentRouterPort' scripts/ai/control.ps1 scripts/ai/start-agent-orchestrator.ps1` returns no line (exit 1). The seven remaining `AgentRouter` strings in `control.ps1` are the historical TASK-AI-06 Pull Request title inside test fixtures, not symbols. |
+| `AC-AI-44-02` | NOT RE-RUN LIVE | The key was renewed before this change, so a dead key could not be observed without destroying a working credential. The rejected-key branch in `doctor.ps1` (`KEY PRESENT BUT REJECTED`, added to `$failures`) is unchanged by this Work Item. |
+| `AC-AI-44-03` | PASS | `doctor.ps1` on 2026-09-16: `AgentRouter user credential: AUTHENTICATED via deepseek-v4-flash`. |
+| `AC-AI-44-04` | PASS | `control.ps1 -Action Test` exit 0, `ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED`; `review-lane.test.js` exit 0. |
+| `AC-AI-44-05` | PASS | `grep -rlF "$AGENTROUTER_API_KEY" scripts tools docs DASHBOARD.html` (key length 51) returns no file, exit 1. |
+
+Renames (`control.ps1`, `start-agent-orchestrator.ps1`): `$script:AgentRouterProfile` -> `$script:NineRouterProfile`, `$script:AgentRouterPort` -> `$script:NineRouterPort`, `Assert-ShipDeAgentRouterProfile` -> `Assert-ShipDeNineRouterProfile`, `Test-ShipDeAgentRouterEndpoint` -> `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeAgentRouterRuntime` -> `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeAgentRouterFailureSince` -> `Get-ShipDeNineRouterFailureSince`, `Test-AgentRouterEndpoint` -> `Test-NineRouterEndpoint`, parameter `-AgentRouterPort` -> `-NineRouterPort`.
+
+**Finding while renaming.** `Invoke-ShipDeAgentRouterReviewFallback` never calls AgentRouter: it clears `ANTHROPIC_BASE_URL` and `CLAUDE_CONFIG_DIR` and runs the native Claude Code CLI. It is renamed `Invoke-ShipDeClaudeReviewFallback`, and `doctor.ps1` no longer claims AgentRouter serves the review fallback. No routing changed (`AI-44-R03`); the routing is recorded in `AI-TOOLCHAIN-DECISIONS.md` § Gateway routing record.
+
 ## Residual limitations
 
-- **The misleading names are still in the code.** A repository-wide search still finds `$script:AgentRouterProfile`, `$script:AgentRouterPort`, `Assert-ShipDeAgentRouterProfile` and `Invoke-ShipDeAgentRouterReviewFallback` in `scripts/ai/control.ps1`, and `$script:AgentRouterPort` in `scripts/ai/start-agent-orchestrator.ps1` — all of them naming AgentRouter while addressing 9Router's port. This Work Item separated the two in documentation and in the decision record; it did **not** rename the symbols. Anyone reading this document as "the confusion is resolved in code" is reading it wrongly, and the rename belongs to a follow-up that can change `control.ps1` safely.
-
-Renaming inside a 15,717-line script carries a real risk of missing an
-occurrence or catching one that belongs to the other gateway. `AC-AI-44-04`
-covers behaviour but not every path; a second reviewer pass over the diff is
-worth more here than on a smaller change.
+- Historical decision rows `AI-SUP-06`, `AI-SUP-07` and `AI-SUP-11` still say "AgentRouter" for the local route. They are decision records and are not rewritten; the routing record tells the reader how to read them.
+- `AC-AI-44-02` was not observed live against a dead key (see above).
+- The one-Work-Item-per-PR note above describes the earlier bundled delivery on PR #16; this change ships on its own branch.
