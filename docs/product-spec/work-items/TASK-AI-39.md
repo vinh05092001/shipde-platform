@@ -264,7 +264,7 @@ Toolchain and quality gate impact:
 | `AC-AI-39-03` | Delivery register status truthfulness for TASK-AI-39 (row 174) | `python -c "import csv; rows=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv', encoding='utf-8')) if r['work_item_id']=='TASK-AI-39']; actual=rows[0]['status']; assert actual=='BLOCKED_DEPENDENCY', f'mismatch: {actual}'; print('Register row 174 status: ' + actual)"` | `0` | `Register row 174 status: BLOCKED_DEPENDENCY` | `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | `AC-AI-39-04` | Negative proof: unauthorized status advancement fails validation | `python -c "import csv, sys; rows=[r for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv', encoding='utf-8')) if r['work_item_id']=='TASK-AI-39']; actual=rows[0]['status']; sys.stderr.write(f'UNAUTHORIZED_STATUS_ADVANCEMENT: register is {actual}\n'); sys.exit(1 if actual!='READY_FOR_CODEX' else 0)"` | `1` | `UNAUTHORIZED_STATUS_ADVANCEMENT: register is BLOCKED_DEPENDENCY` | command stderr |
 | `AC-AI-39-05` | **Negative proof, must fail:** a manifest whose `agent-scan` is falsely promoted to `ADOPTED` / `BLOCKING_GATE` raises `QUALITY_GATE_MISSING` from the same `auditManifest` that `node tools/ai-brain/cli.js manifest` runs. The tampered manifest is written to `os.tmpdir()` and re-read from disk before auditing, so the proof exercises a manifest that arrived through a file, not an object mutated in memory; no repository file is written | `node tools/ai-brain/acceptance/ac-39-05-manifest-promotion.js` | `1` | `QUALITY_GATE_MISSING: agent-scan` | `tools/ecosystem-manifest.json`, `tools/ai-brain/acceptance/ac-39-05-manifest-promotion.js`; command stderr |
-| `AC-AI-39-06` | Invariant check: zero forbidden install lifecycle scripts. Runs the rule `AC-AI-39-07` also runs — both rows `require` `tools/ai-brain/acceptance/lifecycle-scripts.js` — against the real manifests read from disk | `node -e "const {forbiddenScriptsInFile}=require('./tools/ai-brain/acceptance/lifecycle-scripts'); const found=['package.json','apps/web/package.json'].flatMap(p=>forbiddenScriptsInFile(p).map(s=>p+': '+s)); if(found.length>0) throw new Error('Forbidden lifecycle script detected: '+found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json, apps/web/package.json`, `tools/ai-brain/acceptance/lifecycle-scripts.js` |
+| `AC-AI-39-06` | Invariant check: zero forbidden install lifecycle scripts. Runs the rule `AC-AI-39-07` also runs — both rows `require` `tools/ai-brain/acceptance/lifecycle-scripts.js` — against the real manifests read from disk | `node -e "const {forbiddenLifecycleScriptsInFile}=require('./tools/ai-brain/acceptance/lifecycle-scripts'); const found=['package.json','apps/web/package.json'].flatMap(p=>forbiddenLifecycleScriptsInFile(p).map(s=>p+': '+s)); if(found.length>0) throw new Error('Forbidden lifecycle script detected: '+found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json, apps/web/package.json`, `tools/ai-brain/acceptance/lifecycle-scripts.js` |
 | `AC-AI-39-07` | **Negative proof, must fail:** a tampered copy of the REAL web manifest is rejected by the same shared rule `AC-AI-39-06` runs — both rows `require` `lifecycle-scripts.js` and this script carries no private copy of the rule. It first proves both real manifests are clean (control, exit `2` otherwise), then tampers a copy in `os.tmpdir()`, re-reads it from disk and runs the shared rule; no repository file is written | `node tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` | `package.json`, `apps/web/package.json`, `tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js`, `tools/ai-brain/acceptance/lifecycle-scripts.js`; command stderr |
 | `AC-AI-39-08` | STRUCTURAL GUARD, not evidence: confirms all 16 required sections exist in this document. It greps the document it lives in, so it is satisfied by writing the headings; it guards against accidental deletion in a later round and proves nothing about the gates | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all required sections present');"` | `0` | `Specification structural integrity verified: all required sections present` | `docs/product-spec/work-items/TASK-AI-39.md` |
 | `AC-AI-39-09` | Specification contract, rules, and numeric thresholds completeness | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); tokens=['0.6.1','8.24.0','60000ms','512000','1048576','BLOCKED_DEPENDENCY','AI-39-R01','AI-39-R02','AI-39-R03','AI-39-R04','AI-39-R05','AI-39-R06','AI-39-R07','AI-39-R08','AI-39-R09','snyk-agent-scan --version','snyk-api-outbound-https','https://api.snyk.io','https://app.snyk.io','AI-39-R10','PROFILE_EGRESS_CONFLICT','local-scan-only','github-api-and-localhost-only','SNYK_TOKEN_ABSENT_OFFLINE_MODE','Governed Input Coverage','Tokenless Credential And Network Behavior Proof','Required CI Check At Exact HEAD','WILDCARD_HOST_BINDING_FORBIDDEN','PROMPT_INJECTION_DETECTED']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, promotion evidence, and health check tokens verified');"` | `0` | `Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, promotion evidence, and health check tokens verified` | `docs/product-spec/work-items/TASK-AI-39.md` |
@@ -339,8 +339,8 @@ Measured:
 `const FORBIDDEN = ['preinstall', 'install', 'postinstall', 'prepare'];` and filtered inline, so
 "rejected by the same forbidden-script rule" was false: the copy was rejected by a private copy that
 could drift from the rule `AC-AI-39-06` runs. Fixed by extracting the rule into one committed module,
-`tools/ai-brain/acceptance/lifecycle-scripts.js`, exporting `findForbiddenScripts(manifest)` and
-`forbiddenScriptsInFile(manifestPath)`. `AC-AI-39-06` and `AC-AI-39-07` now both `require` it, and
+`tools/ai-brain/acceptance/lifecycle-scripts.js`, exporting `forbiddenLifecycleScripts(manifest)` and
+`forbiddenLifecycleScriptsInFile(manifestPath)`. `AC-AI-39-06` and `AC-AI-39-07` now both `require` it, and
 neither carries a private list.
 
 **Finding 3 — `AC-AI-39-07`'s output was guaranteed by its own construction.** Because the script held
@@ -389,6 +389,77 @@ Measured:
 |---|---|---|
 | `AC-AI-39-08` | could not fail: the spliced "required" strings it searched for were supplied by the row's own text | exit `0`, `Specification structural integrity verified: all required sections present`, against the 16 real headings |
 | `AC-AI-39-17` | parsed the promotion text trapped inside the row | exit `0`, `Promotion criteria: 10 enumerated, each naming its evidence artifact`, against the real section |
+
+### Review round 5 — negative-proof failure paths exited 0
+
+Every acceptance row in the matrix was re-extracted programmatically from the
+table and executed from the repository root. Two defects were measured. Both
+were inside this Work Item's own files and are repaired here.
+
+**Defect D1 — a negative proof reported success on its own failure path.**
+`AC-AI-39-05` and `AC-AI-39-07` both ended their "the detector did not detect"
+branch with `process.exit(0)`. That is the shell's success code, so at the exact
+moment each proof caught a classifier regression it printed the regression
+diagnostic and told every caller that only inspects `$?` that all was well. The
+matrix row happens to expect exit `1`, so the mis-signal was masked there, but a
+standalone run was self-contradictory: it printed `…REGRESSION` / `…NOT_DETECTED`
+and succeeded.
+
+**Measurement (before the fix).** The regression each script exists to catch was
+simulated without editing any repository file, by preloading a `Module._load`
+hook that made the real check stop firing: for `AC-AI-39-05` the audit's
+`QUALITY_GATE_MISSING` finding for `agent-scan` was dropped; for `AC-AI-39-07`
+the shared rule returned `[]` for every manifest.
+
+| Script | Regression simulated | Exit before | Output before |
+|---|---|---|---|
+| `ac-39-05-manifest-promotion.js` | audit drops the `agent-scan` finding | `0` | `QUALITY_GATE_CLASSIFIER_REGRESSION: …` |
+| `ac-39-07-forbidden-lifecycle.js` | shared rule returns `[]` | `0` | `FORBIDDEN_SCRIPT_NOT_DETECTED: …` |
+
+**Replacement.** Both failure paths now exit `2`, with an inline comment
+recording why. `1` remains each script's success code (the staged defect was
+reproduced, which is what a negative proof is for) and `2` is the code every
+other guard in those scripts already uses when the proof cannot be established
+(`SOURCE_MISSING`, `CONTROL_FAILED`, `TAMPER_COPY_FAILED`). Neither script exits
+`0` on any path, so a regression can never be read as success. The success paths
+are unchanged.
+
+| Script | Run | Exit after | Output after |
+|---|---|---|---|
+| `ac-39-05-manifest-promotion.js` | normal | `1` | `QUALITY_GATE_MISSING: agent-scan` |
+| `ac-39-05-manifest-promotion.js` | regression simulated | `2` | `QUALITY_GATE_CLASSIFIER_REGRESSION: …` |
+| `ac-39-07-forbidden-lifecycle.js` | normal | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected postinstall` |
+| `ac-39-07-forbidden-lifecycle.js` | regression simulated | `2` | `FORBIDDEN_SCRIPT_NOT_DETECTED: …` |
+
+**Same shape outside this Work Item (separate dispatch, not fixed here).** The
+identical failure-path-exits-`0` shape is present in fourteen other acceptance
+scripts, all outside this Work Item's boundary: `ac-07-04-status-divergence.js`,
+`ac-07-06-dependency-unproven.js`, `ac-07-13-forbidden-lifecycle.js`,
+`ac-08-02-status-divergence.js`, `ac-08-04-dependency-unproven.js`,
+`ac-08-06-repair-budget-unbounded.js`, `ac-20-02-spec-identity.js`,
+`ac-20-03-spec-missing-severity.js`, `ac-33-02-shadow-divergence.js`,
+`ac-35-06-carrier-rule-negative.js`, `ac-35-07-gitleaks-pin-consistency.js`,
+`ac-37-07-forbidden-lifecycle.js`, `ac-38-08-forbidden-lifecycle.js`, and
+`ac-38-16-warning-creep.js`. They are listed, not repaired, so that each
+requires its own Work Item and review.
+
+**Defect D2 — `AC-AI-39-06` called an export that does not exist.**
+The row required `{forbiddenScriptsInFile}` from
+`tools/ai-brain/acceptance/lifecycle-scripts.js`, but that module exports
+`forbiddenLifecycleScripts` and `forbiddenLifecycleScriptsInFile` only.
+
+**Measurement.** The row command as stored exits `1` with
+`TypeError: forbiddenScriptsInFile is not a function` where the matrix requires
+exit `0`. It could never have passed; the Finding 2 prose above named the same
+non-existent export, so prose and row agreed with each other while both
+disagreed with the code.
+
+**Replacement.** The row command, its copy in `## Verification commands`, and
+the Finding 2 prose now name the real exports
+(`forbiddenLifecycleScriptsInFile`, `forbiddenLifecycleScripts`). Re-measured:
+exit `0`, `Zero forbidden lifecycle scripts present in root and web manifests`.
+The rule module itself is unchanged, so `AC-AI-39-07`'s use of the same module
+is untouched.
 
 ## Downstream implementation acceptance contract
 
@@ -483,7 +554,7 @@ python -c "import csv, sys; rows=[r for r in csv.DictReader(open('docs/product-s
 node tools/ai-brain/acceptance/ac-39-05-manifest-promotion.js
 
 # AC-AI-39-06: Invariant check: zero forbidden install lifecycle scripts (shared rule in lifecycle-scripts.js)
-node -e "const {forbiddenScriptsInFile}=require('./tools/ai-brain/acceptance/lifecycle-scripts'); const found=['package.json','apps/web/package.json'].flatMap(p=>forbiddenScriptsInFile(p).map(s=>p+': '+s)); if(found.length>0) throw new Error('Forbidden lifecycle script detected: '+found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"
+node -e "const {forbiddenLifecycleScriptsInFile}=require('./tools/ai-brain/acceptance/lifecycle-scripts'); const found=['package.json','apps/web/package.json'].flatMap(p=>forbiddenLifecycleScriptsInFile(p).map(s=>p+': '+s)); if(found.length>0) throw new Error('Forbidden lifecycle script detected: '+found.join(', ')); console.log('Zero forbidden lifecycle scripts present in root and web manifests');"
 
 # AC-AI-39-07: Negative proof: forbidden install lifecycle script triggers failure
 node tools/ai-brain/acceptance/ac-39-07-forbidden-lifecycle.js
