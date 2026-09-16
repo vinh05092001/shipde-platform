@@ -169,8 +169,8 @@ Not applicable; this Work Item governs supervisor automation and terminal loggin
 | `AC-AI-07-09` | Pre-failover branch protection: AI guard blocks concurrent writer collisions when a session holds the feature branch | `node -e "const fs = require('fs'); const path = require('path'); const os = require('os'); const cp = require('child_process'); const cli = path.join(process.cwd(), 'tools/ai-guard/cli.js'); const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-guard-test-')); const env = Object.assign({}, process.env, { HOME: homeDir, USERPROFILE: homeDir }); try { cp.execSync('node \x22' + cli + '\x22 claim --branch feat/task-ai-07-failover-test --owner prior-failed-worker', { env }); try { cp.execSync('node \x22' + cli + '\x22 check --branch feat/task-ai-07-failover-test --owner replacement-worker', { env }); process.exit(0); } catch (err) { const out = (err.stdout ? err.stdout.toString() : '') + (err.stderr ? err.stderr.toString() : ''); if (out.includes('CHẶN GHI') && out.includes('prior-failed-worker')) { console.error('WRITER_COLLISION_PREVENTED: prior-failed-worker holds branch'); process.exit(1); } process.exit(2); } } finally { fs.rmSync(homeDir, { recursive: true, force: true }); }"` | `1` | `WRITER_COLLISION_PREVENTED: prior-failed-worker holds branch` | `tools/ai-guard/cli.js`, `command stderr` |
 | `AC-AI-07-10` | Clean writer check on unclaimed branch passes with exit code 0 | `node -e "const fs = require('fs'); const path = require('path'); const os = require('os'); const cp = require('child_process'); const cli = path.join(process.cwd(), 'tools/ai-guard/cli.js'); const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-clean-claim-')); const env = Object.assign({}, process.env, { HOME: homeDir, USERPROFILE: homeDir }); try { cp.execSync('node \x22' + cli + '\x22 check --branch feat/task-ai-07-unclaimed-branch --owner replacement-worker', { env }); console.log('BRANCH_CLAIM_CLEAN_PASS: replacement-worker allowed on unclaimed branch'); process.exit(0); } finally { fs.rmSync(homeDir, { recursive: true, force: true }); }"` | `0` | `BRANCH_CLAIM_CLEAN_PASS: replacement-worker allowed on unclaimed branch` | `tools/ai-guard/cli.js`, `command stdout` |
 | `AC-AI-07-11` | Negative proof: Register reconciliation detects unevidenced MERGED row for TASK-AI-07 | `node -e "const { reconcileRegister } = require('./tools/ai-brain/reconcile'); const res = reconcileRegister([{ work_item_id: 'TASK-AI-07', status: 'MERGED', codex_verdict: 'PASS' }], { hasCommit: () => true, hasFile: () => true, merged: () => true }); const f = res.findings.find(x => x.code === 'MERGED_WITHOUT_COMMIT'); if (f) { console.error('NEGATIVE_PROOF_UNMERGED_COMMIT: ' + f.workItemId + ' reported MERGED_WITHOUT_COMMIT'); process.exit(1); }"` | `1` | `NEGATIVE_PROOF_UNMERGED_COMMIT: TASK-AI-07 reported MERGED_WITHOUT_COMMIT` | `tools/ai-brain/reconcile.js`, `command stderr` |
-| `AC-AI-07-12` | Invariant check: zero forbidden install lifecycle scripts across the root and web manifests | `node tools/ai-brain/acceptance/ac-07-12-lifecycle-clean.js` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json`, `apps/web/package.json`, `tools/ai-brain/acceptance/ac-07-12-lifecycle-clean.js`; command stdout |
-| `AC-AI-07-13` | **Negative proof, must fail:** a tampered copy of the real root manifest is rejected by the check `AC-AI-07-12` runs | `node tools/ai-brain/acceptance/ac-07-13-forbidden-lifecycle.js` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected preinstall` | `package.json`, `tools/ai-brain/acceptance/ac-07-13-forbidden-lifecycle.js`; command stderr |
+| `AC-AI-07-12` | Invariant check: zero forbidden install lifecycle scripts across the root and web manifests | `node tools/ai-brain/acceptance/ac-07-12-lifecycle-clean.js` | `0` | `Zero forbidden lifecycle scripts present in root and web manifests` | `package.json`, `apps/web/package.json`, `tools/ai-brain/acceptance/ac-07-12-lifecycle-clean.js`, `tools/ai-brain/acceptance/lifecycle-scripts.js`; command stdout |
+| `AC-AI-07-13` | **Negative proof, must fail:** a tampered copy of the real root manifest is rejected by the check `AC-AI-07-12` runs | `node tools/ai-brain/acceptance/ac-07-13-forbidden-lifecycle.js` | `1` | `FORBIDDEN_LIFECYCLE_SCRIPT: detected preinstall` | `package.json`, `tools/ai-brain/acceptance/ac-07-13-forbidden-lifecycle.js`, `tools/ai-brain/acceptance/lifecycle-scripts.js`; command stderr |
 | `AC-AI-07-14` | Specific unit test pattern matching: Node test runner executes matching test case | `node --test --test-name-pattern="MERGED without a merge commit is an error" tools/ai-brain/test/reconcile.test.js` | `0` | `✔ MERGED without a merge commit is an error` | `tools/ai-brain/test/reconcile.test.js` |
 | `AC-AI-07-15` | Negative proof: Non-matching node test runner pattern is rejected by assertion | `node -e "const cp = require('child_process'); const res = cp.spawnSync('node', ['--test', '--test-name-pattern=nonexistent_test_pattern_guaranteed_to_match_nothing', 'tools/ai-brain/test/reconcile.test.js'], { encoding: 'utf8' }); if (!res.stdout.includes('✔ MERGED without a merge commit is an error')) { console.error('NON_MATCHING_PATTERN_REJECTED: pattern matched 0 test cases'); process.exit(1); }"` | `1` | `NON_MATCHING_PATTERN_REJECTED: pattern matched 0 test cases` | `command stderr` |
 | `AC-AI-07-16` | Toolchain unit and integration test suites green with 0 failures | `node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"` | `0` | `ℹ fail 0` | `test runner stdout` |
@@ -307,6 +307,70 @@ have surfaced — three of them were rows that passed while proving nothing.
    with **no** probe object at all, because `MERGED_WITHOUT_COMMIT` is decided
    before any probe is consulted. The row was correct by accident while
    advertising an interface that would mislead anyone copying it.
+
+## Shared-rule extraction for `AC-AI-07-12` / `AC-AI-07-13`
+
+Repaired on `2026-09-16`. `AC-AI-07-12` is the invariant row (the real manifests
+carry no forbidden install lifecycle script) and `AC-AI-07-13` is the negative
+proof that the same rule rejects a tampered manifest.
+
+**The defect.** Each script carried its OWN copy of the rule it exercises:
+
+- `tools/ai-brain/acceptance/ac-07-12-lifecycle-clean.js` line 9:
+  `const FORBIDDEN = ['preinstall', 'install', 'postinstall', 'prepare'];`
+- `tools/ai-brain/acceptance/ac-07-13-forbidden-lifecycle.js` line 9: the same
+  literal, restated.
+
+Because the two copies were independent, `AC-AI-07-13` proved nothing about
+`AC-AI-07-12`: the rule could be changed in one file while the other still
+passed. The gate and the proof of the gate were separate copies of the same idea.
+
+**The fix.** The rule now lives in exactly one committed module,
+`tools/ai-brain/acceptance/lifecycle-scripts.js`, which exports
+`forbiddenLifecycleScripts(manifest)` (given a parsed manifest object, return the
+forbidden script names it declares) and `forbiddenLifecycleScriptsInFile(path)`.
+Both `AC-AI-07-12` and `AC-AI-07-13` require that module, so editing the rule
+there changes both behaviours.
+
+**Behaviour after the refactor.** Run at the repository root:
+`AC-AI-07-12` exits `0` (prints `Zero forbidden lifecycle scripts present in root
+and web manifests`); `AC-AI-07-13` exits `1` (prints `FORBIDDEN_LIFECYCLE_SCRIPT:
+detected preinstall`). Run `AC-AI-07-13` from an empty temporary directory with no
+repository present and it exits `2` (`SOURCE_MISSING: package.json`), never `1`,
+so the negative proof cannot pass by accident where the source does not exist.
+
+**Coupling proof (mutation test).** The shared module was edited, without
+touching either script, and both were re-run. The module was restored from a file
+backup afterwards (not from Git, so no uncommitted work was discarded).
+
+| Mutation to `lifecycle-scripts.js` | `AC-AI-07-12` exit | `AC-AI-07-13` exit | Reading |
+|---|---|---|---|
+| none (restored) | `0` | `1` | baseline |
+| `FORBIDDEN_LIFECYCLE_SCRIPTS = []` (empty the list) | `0` | `0` | `AC-AI-07-13` **fails**: with the rule reporting nothing it prints `FORBIDDEN_SCRIPT_NOT_DETECTED` and exits `0` instead of `1` |
+| drop only `postinstall` | `0` | `1` | no change: `AC-AI-07-13` tampers `preinstall`, so removing `postinstall` alone is invisible to it |
+| drop only `preinstall` | `0` | `0` | `AC-AI-07-13` **fails**: the key it tampers is the key that was dropped |
+
+Emptying the list leaves `AC-AI-07-12` at `0` (the real manifests are clean
+either way) while it breaks `AC-AI-07-13`, because the negative proof's detected
+key now depends on the invariant's rule. That is the evidence the two rows are
+coupled to one rule. The mutation is driven through the module alone, so a change
+to the rule can no longer keep the gate green while its proof stays green.
+
+**Note on the tampered key.** This brief described `AC-AI-07-13`'s tampered
+manifest as setting `postinstall`. It sets `preinstall`
+(`{ preinstall: 'powershell -File evil.ps1' }`), which is why dropping only
+`postinstall` from the list does not break it. Both keys live in the same shared
+list, so the coupling holds for either; the row's expected string is left as
+`FORBIDDEN_LIFECYCLE_SCRIPT: detected preinstall`.
+
+**Same defect elsewhere (not fixed here, one Work Item per Pull Request).** The
+same rule is restated inline by `ac-37-07-forbidden-lifecycle.js`,
+`ac-38-08-forbidden-lifecycle.js` and `ac-39-07-forbidden-lifecycle.js`, and by
+`tools/ai-guard/test/verify-trivy.test.js`. Each belongs to its own Work Item and
+must adopt `lifecycle-scripts.js` in its own change. The suite-invariant rule
+(the three test globs plus "fail 0") is restated by `ac-40-07-suite-invariant.js`
+and `ac-43-07-suite-not-vacuous.js`, and the manifest-audit "0 errors" rule by
+`ac-38-16-warning-creep.js` and `ac-43-02-manifest-zero-errors.js`.
 
 ## Residual limitations
 
