@@ -7,8 +7,8 @@
 // disk and Git supplies the merge evidence. Run outside the repository it exits
 // 2, so it cannot pass where nothing exists.
 //
-// This row exists because the register records TASK-AI-24 as
-// `BLOCKED_DEPENDENCY` while TASK-AI-16 is already merged in Git reality: the
+// This row exists because the register records TASK-AI-24 as `BACKLOG`
+// while TASK-AI-16 is already merged in Git reality: the
 // dependency is proven here from the repository, not from a register status the
 // reconciler has not yet rewritten.
 const fs = require('fs');

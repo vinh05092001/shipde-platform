@@ -45,7 +45,7 @@ if (plan.assignments.length !== 0 || plan.deferred.length !== 1) {
 }
 
 console.log(
-  'PLANNER_LAUNCHES_NOTHING: scheduler.js requires no launch capability and planDispatch returns a plan (deferred: ' +
+  'PLANNER_LAUNCHES_NOTHING: scheduler.js directly requires no launch capability and planDispatch returns a plan (deferred: ' +
     plan.deferred[0].reason +
     ')'
 );

@@ -29,7 +29,11 @@ const CONTROLLER_PATH = 'scripts/ai/control.ps1';
 // Modules whose presence would let the planner act rather than plan.
 const LAUNCH_CAPABILITIES = ['child_process', 'net', 'http', 'https', 'worker_threads', 'cluster'];
 
-/** Every launch-capable module the planner source requires, in source order. */
+/**
+ * Every launch-capable module the planner source DIRECTLY requires, in source
+ * order. Transitive requires (offerings.js -> agy-quota.js) are not followed;
+ * TASK-AI-24 discloses that as a residual limitation.
+ */
 function launchCapabilitiesRequired(source) {
   const found = [];
   const pattern = /require\(\s*['"](?:node:)?([a-z_]+)['"]\s*\)/g;
@@ -65,8 +69,11 @@ function spawnFunctionBody(controllerSource) {
 
 /** Violations of the executor half, or null when the launcher cannot be found. */
 function spawnViolations(controllerSource) {
-  const body = spawnFunctionBody(controllerSource);
-  if (body === null) return null;
+  const raw = spawnFunctionBody(controllerSource);
+  if (raw === null) return null;
+  // Comments are stripped first, so a flag that survives only inside a comment
+  // does not count as passed.
+  const body = raw.replace(/<#[\s\S]*?#>/g, '').replace(/(^|\s)#.*$/gm, '$1');
   const violations = [];
   if (!body.includes('"spawn"')) violations.push('SPAWN_VERB_MISSING');
   for (const flag of REQUIRED_SPAWN_FLAGS) {
