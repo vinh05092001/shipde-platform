@@ -179,3 +179,48 @@ describe('limits — the shape of the rules themselves', () => {
     assert.equal(EVIDENCE_FLOOR, 20);
   });
 });
+
+describe('limits — what the capacity panel shows', () => {
+  const { collectCapacity } = require('../../ai-dashboard/capacity-adapter');
+
+  function capacityFor(accounts) {
+    return collectCapacity({
+      now: NOW,
+      accounts,
+      skipLedger: true,
+      router: { available: false },
+      claude: { available: false, reason: 'test' },
+      identity: { known: false, reason: 'test' },
+      reported: {},
+    }).data.rows;
+  }
+
+  function offeringAccount(limits) {
+    return account({ provider: 'p', model: 'p/m', tier: 1, capabilities: {}, cost: {}, limits });
+  }
+
+  test('each capacity row names its known and unknown windows', () => {
+    const rows = capacityFor([
+      offeringAccount({ tokensPerDay: declared(1000, 'operator-declared') }),
+    ]);
+    assert.ok(rows.length > 0);
+    for (const row of rows) {
+      assert.deepEqual(row.knownWindows, [
+        { window: 'tokensPerDay', ceiling: 1000, provenance: 'operator-declared', stale: false },
+      ]);
+      assert.deepEqual(
+        row.unknownWindows,
+        WINDOWS.filter((w) => w !== 'tokensPerDay')
+      );
+    }
+  });
+
+  test('a row with no declared limits lists every window as unknown', () => {
+    const rows = capacityFor([offeringAccount({})]);
+    assert.ok(rows.length > 0);
+    for (const row of rows) {
+      assert.deepEqual(row.knownWindows, []);
+      assert.deepEqual(row.unknownWindows, WINDOWS);
+    }
+  });
+});
