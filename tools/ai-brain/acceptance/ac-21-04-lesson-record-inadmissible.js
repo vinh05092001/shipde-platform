@@ -72,7 +72,7 @@ const observed = seedLessons(onDisk).find((lesson) => lesson.id === SUBJECT);
 const violations = matchesViolations(schema, observed, '$.' + SUBJECT, []);
 if (violations.length === 0) {
   console.error('INADMISSIBLE_LESSON_NOT_DETECTED');
-  process.exit(0);
+  process.exit(2);
 }
 if (!violations.some((violation) => violation.indexOf("missing required 'source_commit'") > 0)) {
   console.error('CONTROL_FAILED: the tamper produced an unrelated violation: ' + violations[0]);
