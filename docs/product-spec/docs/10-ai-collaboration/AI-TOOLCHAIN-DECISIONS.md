@@ -337,7 +337,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### AgentRouter-backed orchestration and lifecycle
 
-6. **AI-SUP-06**: AO uses its own AgentRouter profile directory for unattended orchestration, `%USERPROFILE%\.claude-9router` by default (overridable with `-AgentRouterProfilePath` or `SHIPDE_AGENT_ROUTER_PROFILE`). It is never the operator's native `%USERPROFILE%\.claude` Claude Code profile, and the direct `.claude-orchestrator` profile is not used by unattended mode.
+6. **AI-SUP-06**: AO uses its own AgentRouter profile directory for unattended orchestration, `%USERPROFILE%\.claude-9router` by default (overridable with `-AgentRouterProfilePath` or `SHIPDE_AGENT_ROUTER_PROFILE`). The default is never the operator's native `%USERPROFILE%\.claude` Claude Code profile, which a self-test enforces; an explicit override remains an operator decision. The direct `.claude-orchestrator` profile is not used by unattended mode.
 7. **AI-SUP-07**: AgentRouter owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
 8. **AI-SUP-08**: Inactivity timeout is configurable (default 10 minutes).
 9. **AI-SUP-09**: Maximum 1 nudge attempt per inactivity window before reporting stalled.

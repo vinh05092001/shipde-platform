@@ -300,7 +300,10 @@ is left untouched so Claude Code keeps its own login.
 
 - `Get-ShipDeAgentRouterProfilePath` (`scripts/ai/common.ps1`) resolves the AO profile directory
   with the precedence explicit argument, then `SHIPDE_AGENT_ROUTER_PROFILE`, then the default
-  `%USERPROFILE%\.claude-9router`. The default is asserted never to be `%USERPROFILE%\.claude`.
+  `%USERPROFILE%\.claude-9router`. Self-test 0a fails if that default ever becomes
+  `%USERPROFILE%\.claude`. The default is what is guarded; an operator who deliberately points
+  `-AgentRouterProfilePath` or `SHIPDE_AGENT_ROUTER_PROFILE` at the native profile is not blocked,
+  because an explicit override is an operator decision.
 - `Assert-ShipDeAgentRouterProfileBaseUrl` (`scripts/ai/common.ps1`) is the single validator for the
   profile. A missing `settings.json`, invalid JSON, a missing `env` block, a missing
   `ANTHROPIC_BASE_URL`, or a base URL that is not `http://localhost:<port>/v1` each raise an

@@ -3274,8 +3274,8 @@ function Ensure-ShipDeAgentRouterRuntime {
         [scriptblock]$ProfileValidator = { Assert-ShipDeAgentRouterProfile },
         [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
         [scriptblock]$Launcher = {
-            param($Path, $Root, $Port, $Version, $Profile)
-            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -ProfilePath $Profile -Restart
+            param($Path, $Root, $Port, $Version, $ProfileDir)
+            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -ProfilePath $ProfileDir -Restart
         }
     )
 
