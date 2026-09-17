@@ -1,64 +1,60 @@
 'use strict';
-// AC-AI-20-04 — negative proof that the three checks fail operationally
-// (exit 2), not as findings (exit 0 or 1), when run outside the repository.
+// AC-AI-20-04: Negative proof — scripts fail operationally outside repository
 //
-// A negative acceptance script that reported success where its source does not
-// exist would be worse than no script. This one spawns each of the others with
-// its working directory in a fresh temporary folder holding no repository, and
-// requires every child to exit 2 with SOURCE_MISSING. Arguments are passed as an
-// argv array, so no shell re-quotes anything and the probe cannot die for a
-// reason unrelated to the scripts under test. It exits 2 itself when its own
-// subjects are missing, so it cannot pass where nothing exists.
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const cp = require('child_process');
+// Expected: exit 0, print "OUTSIDE_REPOSITORY_PROBE: 3 subjects exited 2 with
+// no register present".
+//
+// Spawns each subject with a fresh empty working directory and fails if any
+// subject exits without SOURCE_MISSING.
 
-const SUBJECTS = [
+const { spawnSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const subjects = [
   'ac-20-01-spec-coverage.js',
   'ac-20-02-spec-identity.js',
   'ac-20-03-spec-missing-severity.js',
-].map((name) => path.join(__dirname, name));
+];
 
-for (const subject of SUBJECTS) {
-  if (!fs.existsSync(subject)) {
-    console.error('SOURCE_MISSING: ' + subject.split(path.sep).join('/'));
-    process.exit(2);
+const acceptanceDir = __dirname;
+let failedCount = 0;
+
+for (const subject of subjects) {
+  const subjectPath = path.join(acceptanceDir, subject);
+
+  // Create a fresh empty directory for each subject.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `ac-20-04-${subject}-`));
+
+  const result = spawnSync('node', [subjectPath], {
+    cwd: tmpDir,
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+
+  const exitCode = result.status;
+  const stderr = result.stderr || '';
+
+  // Each subject must exit 2 with SOURCE_MISSING.
+  if (exitCode !== 2 || !stderr.includes('SOURCE_MISSING')) {
+    console.error(
+      `PROBE_FAILURE: ${subject} exited ${exitCode} from empty directory, expected exit 2 with SOURCE_MISSING`
+    );
+    console.error(`  stderr: ${stderr.substring(0, 200)}`);
+    failedCount++;
   }
+
+  // Clean up.
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 
-const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-ac-20-04-outside-'));
-let failures = 0;
-try {
-  for (const subject of SUBJECTS) {
-    const child = cp.spawnSync(process.execPath, [subject], {
-      cwd: outside,
-      encoding: 'utf8',
-      maxBuffer: 1024 * 1024 * 16,
-    });
-    const out = (child.stdout || '') + (child.stderr || '');
-    const name = path.basename(subject);
-    // CONTROL: a spawn failure would otherwise look like a refusal.
-    if (child.error) {
-      console.error('CONTROL_FAILED: could not spawn ' + name + ': ' + child.error.message);
-      failures += 1;
-    } else if (child.status !== 2 || !out.includes('SOURCE_MISSING:')) {
-      console.error(
-        'SUBJECT_EXIT_UNEXPECTED: ' +
-          name +
-          ' exited ' +
-          child.status +
-          ' outside the repository (expected 2 with SOURCE_MISSING)'
-      );
-      failures += 1;
-    }
-  }
-} finally {
-  fs.rmSync(outside, { recursive: true, force: true });
+if (failedCount > 0) {
+  console.error(`OUTSIDE_REPOSITORY_PROBE: ${failedCount} subjects did not exit 2`);
+  process.exit(1);
 }
 
-if (failures > 0) process.exit(1);
-console.log('CONTROL: every subject ran with no register on disk and refused operationally');
 console.log(
-  'OUTSIDE_REPOSITORY_PROBE: ' + SUBJECTS.length + ' subjects exited 2 with no register present'
+  `OUTSIDE_REPOSITORY_PROBE: ${subjects.length} subjects exited 2 with no register present`
 );
+process.exit(0);
