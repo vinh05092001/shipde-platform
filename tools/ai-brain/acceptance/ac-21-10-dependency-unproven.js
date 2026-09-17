@@ -78,7 +78,7 @@ if (declaredDependency(tamperedText, WORK_ITEM) !== UNPROVABLE) {
 const verdict = dependencyDelivered(tamperedText, WORK_ITEM);
 if (verdict.ok) {
   console.error('DEPENDENCY_WRONGLY_PROVEN');
-  process.exit(0);
+  process.exit(2);
 }
 if (!verdict.measurable) {
   console.error('SOURCE_MISSING: ' + verdict.why);
