@@ -27,7 +27,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 
 ## External orchestration layer
 
-[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is the control layer around the adopted ecosystem, not another adopted repository/provider. Ship Dễ pins the installed Windows runtime at `0.12.12`, checks it with `ao status --json`, and starts it only through `scripts/ai/start-agent-orchestrator.ps1`. Its provenance is recorded in the top-level `orchestrator_runtime` object of `tools/ecosystem-manifest.json`, outside `adopted`.
+[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is the control layer around the adopted ecosystem, not another adopted repository/provider. Ship Dễ pins the installed Windows runtime at `0.13.0` (raised from `0.12.12`, see AI-AO-PIN-2026-09-16), checks it with `ao status --json`, and starts it only through `scripts/ai/start-agent-orchestrator.ps1`. Its provenance is recorded in the top-level `orchestrator_runtime` object of `tools/ecosystem-manifest.json`, outside `adopted`.
 
 ## Explicitly not adopted
 
@@ -65,6 +65,23 @@ AgentRouter provides Claude model access under two separate topologies:
 
 1. **Manual direct profile (`%USERPROFILE%\.claude-orchestrator`):** Used directly by Claude Code for manual business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. It connects directly to AgentRouter upstream without chaining through 9Router, and is not an implementation-author route. Its promotional balance is treated as temporary capacity rather than a permanent free entitlement. The repository stores no token, provider session or request log.
 2. **Unattended routed topology (`%USERPROFILE%\.claude`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
+
+### AO version pin raised to 0.13.0 (AI-AO-PIN-2026-09-16)
+
+HUMAN-DECISION: operator approved AO 0.13.0 on 2026-09-16. The supervisor refused to start with `AO ProductVersion '0.13.0' does not match pinned version 0.12.12`; the operator chose raising the pin over reinstalling 0.12.12.
+
+Compatibility verified on this host before the pin moved:
+
+| Surface used by `control.ps1` | AO 0.13.0 result |
+|---|---|
+| `ao spawn --project --kind --name --branch --harness --prompt --mode` | every flag present in `ao spawn --help`; `agy`, `claude-code`, `codex`, `cline` remain valid harnesses |
+| `ao session ls --project --json` | accepted; response keeps the `{ data, meta }` shape with `id`, `status`, `activity`, `isTerminated`, `harness`, `branch`, `prs` |
+| `ao session get <id> --project --json` | accepted |
+| `ao session kill <id> --project` | accepted |
+| `ao review ls <session> --json` | accepted |
+| `ao status --json` | accepted; returns `state: ready` |
+
+Not verified: a live `ao spawn` end to end under 0.13.0. `ao version` on the daemon binary prints `dev`, so the desktop executable's ProductVersion remains the version source. Historical `0.12.12` references in TASK-AI-06/07 records and fixture comments describe what was observed then and are left unchanged.
 
 ## Low-cost model route
 
