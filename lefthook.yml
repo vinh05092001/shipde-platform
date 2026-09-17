@@ -1,0 +1,37 @@
+# Lefthook configuration (TASK-AI-36, AI-36-R01).
+#
+# Git hooks are the developer and agent front line for repository safety: they
+# refuse a commit when another live session already holds the branch (the
+# single-writer invariant, AI-TOOL-03) and when a secret has been staged into
+# the git index (AI-36-R05). Both checks are declared here, in version control,
+# so no developer-specific or untracked file can silently change what runs.
+#
+# Installation is explicit, never implicit. Repository supply-chain policy
+# forbids install lifecycle scripts (AI-36-R02), so neither `pnpm install` nor
+# the lefthook package's own postinstall registers hooks here (the postinstall
+# is denied in pnpm-workspace.yaml). Run `pnpm lefthook install` after a frozen
+# install; scripts/ai/doctor.ps1 verifies the result.
+#
+# A deliberate exception stays available and auditable: `git commit --no-verify`
+# or LEFTHOOK=0 (AI-36-R07). Lefthook does not tamper with Git's own flags.
+
+min_version: 1.11.3
+
+pre-commit:
+  # Sequential, not parallel: the writer-claim verdict is about who is
+  # committing and the secret verdict is about the content, but a runner that
+  # interleaves their output makes the failure harder to read than the small
+  # time saving is worth.
+  parallel: false
+  commands:
+    # Fail-closed single-writer guard (AI-36-R04). Runs the same command the
+    # bespoke `.githooks/pre-commit` ran, so behaviour is unchanged.
+    writer-claim:
+      run: node tools/ai-guard/cli.js check
+    # Local defense-in-depth staged secret scan (AI-36-R05). Reads the git
+    # index rather than the working tree, and evaluates `.gitleaks.toml` rules
+    # in Node, so a clean workstation without the Gitleaks binary still gets a
+    # real scan instead of `pnpm security:secrets`' operational exit code 2.
+    # The authoritative secret gate remains Gitleaks 8.24.0 in CI.
+    staged-secret-scan:
+      run: node tools/ai-guard/cli.js staged-secrets
