@@ -1,0 +1,175 @@
+# TASK-AI-25 — Feed measured outcomes back into qualifiedRoles
+
+## Control
+
+| Field | Value |
+|---|---|
+| Work Item ID | `TASK-AI-25` |
+| Feature ID | `N/A` |
+| Status | `BLOCKED_DEPENDENCY` |
+| Delivery order | `158` |
+| Dependencies | `TASK-AI-24` |
+| Assigned author | `CLAUDE` |
+| Risk | `MEDIUM` |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-25.md`, `tools/ai-brain/feedback.js`, `tools/ai-brain/test/feedback.test.js`, `tools/ai-brain/acceptance/ac-25-*.js`, `tools/ai-brain/acceptance/lib/role-feedback.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
+| Reviewer | `Codex — fresh independent task` |
+| Branch | `spec/task-ai-25` |
+| Pull Request | `Pending` |
+
+### Status transition ledger
+
+The durable delivery register (`docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `delivery_order` `158`, `work_item_id` `TASK-AI-25`) is the authoritative source for this Work Item's lifecycle state under `AGENTS.md` Unit of delivery. The register records `BLOCKED_DEPENDENCY`, therefore the Control table above records `BLOCKED_DEPENDENCY` and no other value.
+
+| Gate in the required flow | Traversed? | Transition evidence |
+|---|---|---|
+| `BACKLOG` | No | None. The register never moved this row out of the dependency block. |
+| `BLOCKED_DEPENDENCY` | Yes — current stage | `FEATURE-DELIVERY-REGISTER.csv` `delivery_order` `158`, column `status` = `BLOCKED_DEPENDENCY` |
+| `READY_FOR_AUTHOR` | No | None. No register write has occurred. |
+| `IN_PROGRESS` | No | None. No register write has occurred. |
+| `READY_FOR_CODEX` | No | None. No register write has occurred. |
+
+Consequences of this ledger, binding on any controller or reviewer:
+
+- This Work Item file must never declare `READY_FOR_CODEX` (or any later stage) while the register records `BLOCKED_DEPENDENCY`. The Codex review record below is therefore `PENDING`, not a review verdict.
+- The dependency `TASK-AI-24` (`Execute dispatch plans through AO session create`) has no specification document in this checkout (`docs/product-spec/work-items/TASK-AI-24.md` is absent). The block is true rather than stale: there is no executor whose outcomes this Work Item could feed back yet.
+- The intervening `READY_FOR_AUTHOR` and `IN_PROGRESS` transitions must be written to `FEATURE-DELIVERY-REGISTER.csv` by the governed register reconciler (`TASK-AI-19`) after `TASK-AI-24` is delivered, before this item is stage-eligible for review routing.
+- `AC-AI-25-01` mechanically compares the `Status` cell of the Control table above against `delivery_order` `158` of the register and fails if they diverge.
+
+## Business outcome
+
+`qualifiedRoles` decides whether an account may even be considered for a role, and nothing today writes it from evidence.
+
+`tools/ai-brain/capabilities.js:114` reads it in `disqualify`: when `account.qualifiedRoles` is an array that omits `role.id`, the account is refused with `chưa vượt bộ kiểm định cho vai trò này` before later checks matter. `tools/ai-brain/offerings.js:146` carries it onto every offering in `expandOfferings`, so the gate applies per model. `tools/ai-brain/test/scheduler.test.js:59` proves the refusal: `qualifiedRoles: ['analyst.default']` yields zero eligible accounts for `reviewer.primary`.
+
+Measured gaps, all from the source:
+
+1. No production path writes `qualifiedRoles`. Search finds it read in `capabilities.js`, inherited in `offerings.js`, set only in test fixtures. `seed-accounts.js` registers three accounts with no `qualifiedRoles`, so every account is tried for every capable role. Qualification is a comment (`capabilities.js:111-113`) rather than a flow.
+2. Dispatch inputs this item must record have readers but no writer. `fitness.js:125-133` `estimateTokens` prefers `history[id::difficulty].medianTokens`, then `history[id]`, then `DEFAULT_TOKENS_PER_TASK` (60000/180000/500000/900000). `scheduler.js:291` feeds `ctx.history || {}`; `capacity-adapter.js:147` feeds `opts.history || {}`. Nothing constructs such history from a real outcome at HEAD.
+Nothing constructs such history from a real outcome at HEAD.
+3. Grades and quality are placeholders. `seed-accounts.js:22-25` provisional header names `TASK-AI-27`/`TASK-AI-41` as replacers. `offerings.js:129-133` defaults unrated `quality` to `50`. A failing model keeps grade, quality, roles: no feedback narrows them.
+
+Register key_behavior: PASS rate, retries, tokens per merged item decide next dispatch. This item delivers a deterministic feedback module recording per-offering per-role outcomes and narrowing `qualifiedRoles` on evidence. No grants (`TASK-AI-30`/`TASK-AI-31`), no grade changes (`TASK-AI-27`/`TASK-AI-41`), no limits (`TASK-AI-26`), cooldown (`TASK-AI-28`), or dispatch (`TASK-AI-24`) changes.
+
+## Source references
+
+- `AGENTS.md` Unit of delivery; Source of truth; Role separation (`scripts/ai/control.ps1` routes, never invents meaning).
+- `WORK-ITEM-TEMPLATE.md` section list followed here.
+- `FEATURE-DELIVERY-REGISTER.csv` `delivery_order` `158`: `TASK-AI-25`, key_behavior, `BLOCKED_DEPENDENCY`, deps `TASK-AI-24`.
+- `AI-TOOLCHAIN-DECISIONS.md` Transient failure classification: quota/429 fail over, never return to author; lint/type/test failures return to author.
+- `capabilities.js`: `ROLES`, `disqualify`, `eligibleAccounts`; gate line 114; `forbiddenDomains`.
+- `offerings.js`: `expandOfferings` inheritance; `offeringHeadroom`, `rankOfferings`, `laddered`, `nextTierDown`.
+- `fitness.js`: `Difficulty`, `gradeOf`, `estimateTokens`, `runwayOf`, `scoreOffering`, `rankByFitness`; history key `id::difficulty` + `medianTokens`.
+- `scheduler.js`: `planDispatch` plans only; `coolRefusedOfferings` via `observeRefusal`; `ctx.history || {}` inlet.
+- `ceiling.js`: `Outcome`, `record`/`recordFailure`, `LEDGER_FILE`, `isQuotaRefusal`, `observeRefusal`, `cooldownFor`.
+- `quota.js`: statuses open/tight/exhausted/cooling/unknown; `isDispatchable`.
+- `limits.js`: `PROVENANCE`, `EVIDENCE_FLOOR=20`, `STALE_AFTER_MS=90d`.
+- `seed-accounts.js`: 3 accounts, no `qualifiedRoles`, provisional grades.
+- `TASK-AI-27.md` provenance discipline; `TASK-AI-28.md` refusal at dispatch point; `TASK-AI-31` (order 164) qual gate; `TASK-AI-32` (order 165) TokenPerMergedItem; `AI-TOOL-10` exact-state rule.
+## Preconditions and dependencies
+
+- `TASK-AI-24` not delivered: no `TASK-AI-24.md` in work-items/ here; register order 158 still deps `TASK-AI-24`, status `BLOCKED_DEPENDENCY`. No executor outcomes to feed back. Proved by `AC-AI-25-05`.
+- Register alignment: Control `BLOCKED_DEPENDENCY` equals register order 158. Only reconciler (`TASK-AI-19`) clears it.
+- Gates to preserve exist: `disqualify` refusal, `expandOfferings` inheritance, `scoreOffering` grade/runway refusal, `planDispatch` tier fitness ranking. `AC-AI-25-02` holds them.
+- History inlet empty by default (`ctx.history || {}`, `opts.history || {}`); absent history falls back to `DEFAULT_TOKENS_PER_TASK`. Writer is this item.
+- Quota ledger (`LEDGER_FILE`) is separate; task outcomes must not mix into it (`AI-25-R08`).
+
+## Author boundary
+
+`CLAUDE` fits: bounded deterministic test-provable work; no high-risk domain (arch/auth/tenancy/money/carrier/DB/UX).
+May change only Allowed paths. Must not edit `.github/`, `scripts/ai/`, workflows, register schema/status, other items, role requirements, dispatch arithmetic, ranking, dispatchability, cooldowns, ceilings, tiers, costs, grades, quality, credentials.
+Human confirms: floor/threshold numbers, removal durations/restoration with `TASK-AI-31`, outcome-ledger location if PII/secret-adjacent.
+## In scope
+
+- Record one outcome per author attempt reaching execution: offering `accountId::model` + role; `pass` bool; `retries`, `tokens` ints >= 0; `merged` bool; `at` instant; `source` measured/operator-declared.
+- Derive per-offering per-role aggregates over window: PASS rate, median retries, median tokens per merged item (median per `estimateTokens` precedent).
+- Narrow `qualifiedRoles` on evidence only: removal needs floor samples + breach of >=2 of 3 thresholds; record names aggregates, window, source.
+- Emit reader-ready history: `history[offeringId::difficulty]={medianTokens,samples,at}` + `history[offeringId]` fallback. Non-positive medianTokens ignored.
+- Enforcement stays in `disqualify`; single rule module `acceptance/lib/role-feedback.js` required by gate and proofs.
+- Deterministic unit tests + acceptance path incl. negative and outside-repo proofs.
+## Out of scope
+
+- Granting never-held roles. First qualification is `TASK-AI-30`/`TASK-AI-31`; restoration needs re-qualification, never silent re-add.
+- Grades/review/quality (`TASK-AI-27`, `TASK-AI-41`, `offerings.js` ranking).
+- Limits/ceilings/runway/cooldown/tiers (`TASK-AI-26`, `ceiling.js`, `TASK-AI-28`, operator ladder).
+- Launching sessions; executor is `TASK-AI-24`. No `control.ps1`/orchestrator changes.
+- Register/status/manifest/credentials/PII/UX/API/screens. One PR, one item.
+## Business rules and edge cases
+
+| Rule | Statement |
+|---|---|
+| `AI-25-R01` | Only PASS rate, retries, tokens per merged item decide removal. Cost, quota %, grade, quality, preference excluded. Removal must name all three aggregates. |
+| `AI-25-R02` | Feedback writes `qualifiedRoles` + history only. Must not write grade/reviewGrade/quality/preference/limits/tier/cost/capabilities/forbiddenDomains/credentials. |
+| `AI-25-R03` | Narrowing only; never grants. Removed role returns only via `TASK-AI-30`/`TASK-AI-31` probe with source measured. |
+| `AI-25-R04` | No removal below floor. Floor counted from outcome records for that offering+role. One failure never disqualifies (`AC-AI-25-06`). |
+| `AI-25-R05` | Non-delivery outcomes excluded: `isQuotaRefusal` refusals, socket/timeout/500/routing/auth/missing-model, or no attempt run. Quota path stays `observeRefusal` (`TASK-AI-28`). |
+| `AI-25-R06` | Two-of-three breach required in same window (PASS floor, retry ceiling, tokens/merged ceiling). One expensive-but-correct task cannot cost a role. |
+| `AI-25-R07` | Every write names source/instant/window/aggregates. Sourceless qual entry refused at load (`limits.js` precedent). Operator-declared removal expires after 90d (`STALE_AFTER_MS`) unless re-asserted. |
+| `AI-25-R08` | Task outcomes and quota observations never share a ledger. Missing/corrupt store is empty, never error (`quota-store.js` precedent). |
+| `AI-25-R09` | History shape fixed: `history[offeringId::difficulty]={medianTokens,samples,at}` + fallback; matches `estimateTokens` readers. |
+| `AI-25-R10` | Feedback never dispatches/cools/launches. Unreachable store fails closed, changes nothing, names reason (`AI-TOOL-10`). |
+
+Edge cases: disabled offering keeps records, excluded from aggregates until re-enabled; shared-budget siblings attribute per offering; in-flight attempt not revoked by mid-run removal; unknown offering/role recorded+reported, never dropped, never auto-qualifying.
+## UI states
+
+No screens. Store/log surfaces only: loading (absent store = empty; fallback to `DEFAULT_TOKENS_PER_TASK`); empty (below floor: no removal, sample count reported); validation (negative tokens/retries, unknown role, missing source refused naming field); error (unwritable store: fail closed, nothing changed); forbidden (no writer claim: refused; claims are `TASK-AI-24` executor's); partial (some offerings insufficient-evidence); success (removal with aggregates/window/source); recovery (re-qualify via `TASK-AI-30`/`TASK-AI-31`).
+
+## API, event and data impact
+
+No routes/events/jobs/migrations. Two local JSON stores via injected paths: task-outcome ledger (new) and `qualifiedRoles` projection. Idempotent: same attempt (offering+role+workitem+instant) recorded once; same window re-aggregated identically. Readers unchanged. Records carry offering/role/counts/tokens/instants only: no prompt/diff/credential/email/lesson content.
+## Acceptance matrix
+
+One rule, one module: `lib/role-feedback.js` defines removal; invariants and negative proofs require it. Each row is an exact command; pass only at stated exit + string.
+
+| AC/Test ID | Scenario | Expected result | Evidence required |
+|---|---|---|---|
+| `AC-AI-25-01` | `node tools/ai-brain/acceptance/ac-25-01-control-alignment.js`: Control vs register | Exit `0`, prints `CONTROL_ALIGNED: TASK-AI-25 BLOCKED_DEPENDENCY order 158`. Diverge exits `2` `CONTROL_DIVERGED`. | stdout + exit |
+| `AC-AI-25-02` | `node tools/ai-brain/acceptance/ac-25-02-existing-gates.js`: preserved contract | Exit `0` `GATES_HELD`: disqualify refusal, offering inheritance, estimateTokens history preference hold on committed code. | stdout + exit |
+| `AC-AI-25-03` | `node tools/ai-brain/acceptance/ac-25-03-narrow-on-evidence.js`: sustained breach narrows | Exit `0` `NARROWED_ON_EVIDENCE`: fixture at/above floor, 2-of-3 breach removes role naming aggregates+window+measured. | stdout + exit |
+| `AC-AI-25-04` | `node tools/ai-brain/acceptance/ac-25-04-rule-single-source.js`: single source | Exit `0` `SINGLE_SOURCE`: 02+03 require identical module path; no second rule copy. | stdout + exit |
+| `AC-AI-25-05` | `node tools/ai-brain/acceptance/ac-25-05-dependency-absent.js`: true block | Exit `0` `BLOCK_TRUE: TASK-AI-24 undelivered`: no TASK-AI-24.md, register order 158 still deps TASK-AI-24. | stdout + exit |
+| `AC-AI-25-06` | `node tools/ai-brain/acceptance/ac-25-06-single-failure-keeps-role.js`: floor negative proof | Exit `1` `KEPT_BELOW_FLOOR`: one failure keeps role. Exit 0 is the failure caught. | stdout + exit 1 |
+| `AC-AI-25-07` | `node tools/ai-brain/acceptance/ac-25-07-refusal-not-evidence.js`: scope negative proof | Exit `1` `REFUSAL_IGNORED`: quota/timeout/500-only feed writes no aggregate, keeps role. | stdout + exit 1 |
+| `AC-AI-25-08` | `node tools/ai-brain/acceptance/ac-25-08-grant-refused.js`: narrowing-only proof | Exit `2` refusal `SOURCE_MISSING: feedback never grants; re-qualify via TASK-AI-31`. Grant is failure. | output + exit 2 |
+| `AC-AI-25-09` | `node tools/ai-brain/acceptance/ac-25-09-outside-repository.js`: outside-repo proof | Exit `0` from empty temp dir: proofs refuse, print `OUTSIDE_REPOSITORY`, no gate strings. | stdout + exit |
+### Acceptance matrix validation
+
+| Mutation | Positive row | Negative row | Reading |
+|---|---|---|---|
+| floor check removed | 03 exit 0 | 06 exits 0 (removed on 1 sample) | proof fails: cannot show restraint |
+| R05 filter removed | 03 exit 0 | 07 exits 0 not 1 | proof fails: scope not enforced |
+| grant path added | 08 exits 0 with grant | — | proof fails: narrowing-only broken |
+
+No `node --test --test-name-pattern` rows: non-matching pattern exits 0 with zero subtests here, passing against empty file. No drifting counts pinned; totals printed as evidence only.
+
+## Verification commands
+
+```bash
+node tools/ai-brain/acceptance/ac-25-01-control-alignment.js
+node tools/ai-brain/acceptance/ac-25-02-existing-gates.js
+node tools/ai-brain/acceptance/ac-25-03-narrow-on-evidence.js
+node tools/ai-brain/acceptance/ac-25-04-rule-single-source.js
+node tools/ai-brain/acceptance/ac-25-05-dependency-absent.js
+node tools/ai-brain/acceptance/ac-25-06-single-failure-keeps-role.js
+node tools/ai-brain/acceptance/ac-25-07-refusal-not-evidence.js
+node tools/ai-brain/acceptance/ac-25-08-grant-refused.js
+node tools/ai-brain/acceptance/ac-25-09-outside-repository.js
+node tools/ai-brain/cli.js reconcile
+python docs/product-spec/scripts/validate_docs.py
+node tools/ai-guard/cli.js secret-surface
+pnpm format:check
+node --test tools/ai-brain/test/feedback.test.js
+```
+## Codex review record
+
+| Review round | Commit | Verdict | Findings resolved |
+|---|---|---|---|
+| 1 | `Pending` | `PENDING` | Initial specification authoring for TASK-AI-25. |
+
+## Residual limitations
+
+- No executor yet: `TASK-AI-24` undelivered, no spec here. Feedback store specified-but-unfilled; no role narrowed until it lands.
+- Floor/thresholds proposed, human confirms. Wrong numbers punish variance or never fire; rows prove restraint/scope, never correctness of numbers.
+- Narrowed stays narrowed until `TASK-AI-30`/`TASK-AI-31` re-qualify. Removal carries aggregates/window/source for restorer; nothing here restores.
+- Per-offering attribution only; shared-budget sibling drain still records against the failing offering (fingerprint caveat per `TASK-AI-26`).
+- Register order 158 stays `BLOCKED_DEPENDENCY`; only reconciler clears it after `TASK-AI-24`. `AC-AI-25-05` proves from repo+cell.
+- No JSON Schema validator installed (`TASK-AI-21` subset note). Adding one out of scope.
