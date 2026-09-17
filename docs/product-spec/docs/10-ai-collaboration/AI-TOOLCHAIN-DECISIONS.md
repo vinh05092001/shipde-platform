@@ -11,7 +11,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 | Tool or repository                                                                        | Decision                         | Purpose                                                                      | Boundary                                                                                                                                                                                                                                                      |
 | ----------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Git, GitHub and Git worktrees                                                             | USE NOW                          | Isolated workspaces, durable handoff, CI and review                          | `main` is never an implementation workspace                                                                                                                                                                                                                   |
-| Claude app and Claude Code                                                                | USE NOW                          | Business and solution analysis                                               | Interactive analysis stays in `shipde-claude`; unattended AO uses the governed AgentRouter launcher; no self-approval                                                                                                                                         |
+| Claude app and Claude Code                                                                | USE NOW                          | Business and solution analysis                                               | Interactive analysis stays in `shipde-claude`; unattended AO uses the governed 9Router launcher; no self-approval                                                                                                                                         |
 | AgentRouter                                                                               | USE NOW                          | Claude Code-compatible provider and routing runtime                          | Keep upstream credentials outside Git; unattended AO routes via the localhost 9Router endpoint (port 20128) using `%USERPROFILE%\.claude`, while direct AgentRouter access is reserved for the manual `%USERPROFILE%\.claude-orchestrator` diagnostic profile |
 | Codex app and Codex CLI                                                                   | USE NOW                          | Work Item planning, documentation and fresh independent review               | Planning and review are separate tasks; no author self-review                                                                                                                                                                                                 |
 | Gemini app, Antigravity CLI and [Gemini CLI](https://github.com/google-gemini/gemini-cli) | USE NOW                          | Primary implementation for complete vertical and high-risk work              | Prefer authenticated `agy`; `gemini` is the fallback; one prepared Work Item and branch at a time                                                                                                                                                             |
@@ -65,6 +65,23 @@ AgentRouter provides Claude model access under two separate topologies:
 
 1. **Manual direct profile (`%USERPROFILE%\.claude-orchestrator`):** Used directly by Claude Code for manual business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. It connects directly to AgentRouter upstream without chaining through 9Router, and is not an implementation-author route. Its promotional balance is treated as temporary capacity rather than a permanent free entitlement. The repository stores no token, provider session or request log.
 2. **Unattended routed topology (`%USERPROFILE%\.claude`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
+
+### Gateway routing record (TASK-AI-44)
+
+Two gateways exist and they are not interchangeable. The name `AgentRouter` is reserved for the cloud endpoint; the local endpoint is `9Router`. The names in code follow this table.
+
+| Gateway | Endpoint | Credential | Code names in this repository | Serves |
+|---|---|---|---|---|
+| AgentRouter (cloud) | `https://agentrouter.org/` (no `/v1`) | `AGENTROUTER_API_KEY`, User environment | `doctor.ps1` AgentRouter credential probe | Manual Claude Code business/solution analysis; the Claude and Codex fallback route |
+| 9Router (local) | `http://localhost:20128/v1` | local token | `$script:NineRouterProfile`, `$script:NineRouterPort`, `Assert-ShipDeNineRouterProfile`, `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeNineRouterFailureSince` | Unattended AO sessions (`.claude` profile), Gemini, dsh |
+
+Fallback routing, as implemented:
+
+- **Codex review fails** -> `Invoke-ShipDeClaudeReviewFallback` runs the host-authenticated native Claude Code CLI after clearing `ANTHROPIC_BASE_URL` and `CLAUDE_CONFIG_DIR`. It uses neither gateway; it spends the Claude subscription quota. The function was previously named after AgentRouter, which it never called.
+- **An AO worker's provider fails** -> the local 9Router falls back across its configured upstreams; after every approved route is exhausted, TASK-AI-07 replaces the harness.
+- **AgentRouter credential** -> reported available only after a live probe authenticates (`AI-44-R01`); a rejected key is a `doctor.ps1` failure, never "configured" (`AI-44-R02`). Only a 16-character SHA-256 prefix of the key is cached; the key itself is never written to a log, report or dashboard (`AI-44-R04`).
+
+`scripts/ai/start-agent-orchestrator.ps1` still names its port parameter `-AgentRouterPort` while it addresses 9Router's port 20128; renaming that file is outside this Work Item's allowed paths (see the Work Item's Residual limitations).
 
 ## Low-cost model route
 
@@ -318,10 +335,10 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 4. **AI-SUP-04**: Implementation/test failures are NOT provider failures; they return to the author.
 5. **AI-SUP-05**: Governed exact-HEAD auto-merge is authorized only through `TASK-AI-13` under `HUMAN-DECISION-ORCHESTRATOR-CORE-PRIORITY-2026-09-08` after `READY_FOR_HUMAN_MERGE` when strict single-snapshot preflight passes (exact 40-character commit OID, required GitHub Actions `SUCCESS` checks, trusted `chatgpt-codex-connector[bot]` `PASS` verdict, zero unresolved review threads, mergeable status, and `expectedHeadOid` squash mutation); human merge remains required for the bootstrap of TASK-AI-13 itself and whenever any preflight signal fails.
 
-### AgentRouter-backed orchestration and lifecycle
+### 9Router-backed orchestration and lifecycle
 
 6. **AI-SUP-06**: AO uses the existing `.claude` 9Router profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
-7. **AI-SUP-07**: AgentRouter owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
+7. **AI-SUP-07**: 9Router owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
 8. **AI-SUP-08**: Inactivity timeout is configurable (default 10 minutes).
 9. **AI-SUP-09**: Maximum 1 nudge attempt per inactivity window before reporting stalled.
 10. **AI-SUP-10**: The supervisor respects existing controller gates (CI must pass, Codex must approve).
@@ -339,11 +356,11 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### Provider and harness policy
 
-Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost 9Router endpoint (`http://localhost:20128/v1`). The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after AgentRouter exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
+Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost 9Router endpoint (`http://localhost:20128/v1`). The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after 9Router exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
 
 ### Transient failure classification
 
-AgentRouter handles transient provider failures internally. In accordance with AI-SUP-18, bounded 9Router error records are diagnostic metadata captured after a terminal AO state; one failed request never proves that every fallback route was exhausted. If a terminal provider failure or exhaustion reaches the supervisor, delivery stops fail-closed; implementation failures still return to the author:
+9Router handles transient provider failures internally. In accordance with AI-SUP-18, bounded 9Router error records are diagnostic metadata captured after a terminal AO state; one failed request never proves that every fallback route was exhausted. If a terminal provider failure or exhaustion reaches the supervisor, delivery stops fail-closed; implementation failures still return to the author:
 
 | Classification            | Trigger failover | Return to author |
 | ------------------------- | ---------------- | ---------------- |

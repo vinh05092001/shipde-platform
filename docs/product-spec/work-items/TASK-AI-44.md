@@ -11,12 +11,17 @@
 | Dependencies | `TASK-AI-17` |
 | Assigned author | `GEMINI` |
 | Risk | `MEDIUM` |
-| Allowed paths | `scripts/ai/control.ps1`, `scripts/ai/doctor.ps1`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ecosystem-manifest.json` |
+| Allowed paths | `scripts/ai/control.ps1`, `scripts/ai/doctor.ps1`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ecosystem-manifest.json`, `docs/product-spec/work-items/TASK-AI-44.md` (added by this Work Item: the Pull Request contract requires the registered Work Item file to be updated with the delivery, so the file is listed here and the addition is disclosed) |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-44-router-split` |
 | Pull Request | https://github.com/vinh05092001/shipde-platform/pull/92 |
 
-## Delivery note: this Work Item ships on the TASK-AI-16 branch
+## Delivery note (historical): the first delivery shipped on the TASK-AI-16 branch
+
+The delivery this section describes is historical. TASK-AI-44 is now delivered
+on its own branch `feat/task-ai-44-router-split` (Pull Request #92), as the
+one-Work-Item-per-Pull-Request rule requires; the Control table above names
+that branch and Pull Request.
 
 This Work Item was delivered on `fix/task-ai-16-codex-launch-flags` (Pull
 Request #16) rather than on a branch of its own, together with TASK-AI-16 and
@@ -110,13 +115,16 @@ cannot authenticate.
   and report a dead key as a failure.
 - Record in `AI-TOOLCHAIN-DECISIONS.md` which agent falls back to which
   gateway, so the routing is documented rather than inferred.
-- Renew or remove the credential. A fallback that cannot authenticate should
-  not be reported as available.
 
 ## Out of scope
 
 - Changing which gateway any agent uses. This Work Item makes the existing
   arrangement legible; it does not re-route anything.
+- Renewing or removing the cloud AgentRouter credential. `doctor.ps1` reports
+  a rejected key as a failure rather than as configured, which is the code
+  behaviour this Work Item owns; renewing or removing the key itself is an
+  operator action on the user environment, not a code change in this
+  repository.
 - The `Invoke-ShipDeAgentRouterReviewFallback` review logic itself beyond the
   rename.
 - Adding a new gateway.
@@ -161,4 +169,5 @@ node tools/ai-brain/cli.js prove --tests "node tools/ai-brain/test/review-lane.t
 ## Residual limitations
 
 - **`start-agent-orchestrator.ps1` still names the local gateway `AgentRouter`.** Its `-AgentRouterPort` parameter and `Test-AgentRouterEndpoint` helper address 9Router's local port 20128 but lie outside this Work Item's allowed paths. `control.ps1`'s governed launcher keeps the `-AgentRouterPort` argument verbatim so the cross-file call contract is unchanged; renaming it is a follow-up that may edit `start-agent-orchestrator.ps1`.
-- **The cloud AgentRouter credential is still dead.** `agentrouter.org` rejected the stored key (HTTP 401, verified 2026-09-14). `doctor.ps1` now reports it as unavailable rather than configured; renewal or removal is an operator action, not a code change.
+- **The cloud AgentRouter credential is observed live, not assumed.** `agentrouter.org` rejected the stored key on 2026-09-14 (HTTP 401). On 2026-09-17 the same stored key authenticates (`doctor.ps1`: `AgentRouter user credential: AUTHENTICATED via deepseek-v4-flash`), so the fallback is currently available. `doctor.ps1` decides this from a live probe rather than from presence, so the report follows the credential either way; renewing or removing the key remains an operator action, not a code change.
+- **`TASK-AI-07.md` still cites a renamed symbol.** `docs/product-spec/work-items/TASK-AI-07.md` still names `Get-ShipDeAgentRouterFailureSince` where this Work Item renamed it to `Get-ShipDeNineRouterFailureSince`. That file is outside this Work Item's allowed paths and is not edited here; correcting the citation belongs to a `TASK-AI-07` follow-up.
