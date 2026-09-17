@@ -7436,12 +7436,33 @@ function Assert-ShipDeSupervisorCompatibility {
             throw "AO version range fail-closed compatibility test failed."
         }
 
+        # Derived from the pin so the fixture stays newer than whatever is
+        # pinned. A literal went stale when the pin moved past it: 0.12.99 is
+        # older than 0.13.0, so the test stopped proving what its name says.
+        $pinParts = @($script:ExpectedAoVersion.Split('.') | ForEach-Object { [int]$_ })
+        $newerThanPin = "{0}.{1}.0" -f $pinParts[0], ($pinParts[1] + 1)
+        $olderThanPin = "{0}.{1}.99" -f $pinParts[0], ($pinParts[1] - 1)
+
+        $olderVersionRejected = $false
+        try {
+            Assert-ShipDeAoVersionEvidence `
+                -AoExecutable $resolvedCanonicalAo `
+                -ExpectedVersion $script:ExpectedAoVersion `
+                -VersionText "ao version $olderThanPin" `
+                -ProgramFilesRoot $aoFixtureRoot | Out-Null
+        } catch {
+            $olderVersionRejected = $true
+        }
+        if (-not $olderVersionRejected) {
+            throw "AO older version fail-closed compatibility test failed."
+        }
+
         $newerVersionRejected = $false
         try {
             Assert-ShipDeAoVersionEvidence `
                 -AoExecutable $resolvedCanonicalAo `
                 -ExpectedVersion $script:ExpectedAoVersion `
-                -VersionText "ao version 0.12.99" `
+                -VersionText "ao version $newerThanPin" `
                 -ProgramFilesRoot $aoFixtureRoot | Out-Null
         } catch {
             $newerVersionRejected = $true
@@ -7451,8 +7472,8 @@ function Assert-ShipDeSupervisorCompatibility {
         }
 
         $canonicalPinned = Get-ShipDePinnedAoVersion
-        if ($canonicalPinned -ne "0.12.12" -or $canonicalPinned -ne $script:ExpectedAoVersion) {
-            throw "Canonical pinned AO version test failed: expected 0.12.12, got $canonicalPinned"
+        if ($canonicalPinned -ne "0.13.0" -or $canonicalPinned -ne $script:ExpectedAoVersion) {
+            throw "Canonical pinned AO version test failed: expected 0.13.0, got $canonicalPinned"
         }
     } finally {
         if (Test-Path -LiteralPath $aoFixtureRoot) {
