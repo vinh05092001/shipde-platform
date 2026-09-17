@@ -27,7 +27,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 
 ## External orchestration layer
 
-[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is the control layer around the adopted ecosystem, not another adopted repository/provider. Ship Dễ pins the installed Windows runtime at `0.12.12`, checks it with `ao status --json`, and starts it only through `scripts/ai/start-agent-orchestrator.ps1`. Its provenance is recorded in the top-level `orchestrator_runtime` object of `tools/ecosystem-manifest.json`, outside `adopted`.
+[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is the control layer around the adopted ecosystem, not another adopted repository/provider. Ship Dễ pins the installed Windows runtime at `0.13.0` (raised from `0.12.12`, see AI-AO-PIN-2026-09-16), checks it with `ao status --json`, and starts it only through `scripts/ai/start-agent-orchestrator.ps1`. Its provenance is recorded in the top-level `orchestrator_runtime` object of `tools/ecosystem-manifest.json`, outside `adopted`.
 
 ## Explicitly not adopted
 
@@ -65,6 +65,23 @@ AgentRouter provides Claude model access under two separate topologies:
 
 1. **Manual direct profile (`%USERPROFILE%\.claude-orchestrator`):** Used directly by Claude Code for manual business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. It connects directly to AgentRouter upstream without chaining through 9Router, and is not an implementation-author route. Its promotional balance is treated as temporary capacity rather than a permanent free entitlement. The repository stores no token, provider session or request log.
 2. **Unattended routed topology (`%USERPROFILE%\.claude`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
+
+### AO version pin raised to 0.13.0 (AI-AO-PIN-2026-09-16)
+
+HUMAN-DECISION: operator approved AO 0.13.0 on 2026-09-16. The supervisor refused to start with `AO ProductVersion '0.13.0' does not match pinned version 0.12.12`; the operator chose raising the pin over reinstalling 0.12.12.
+
+Compatibility verified on this host before the pin moved:
+
+| Surface used by `control.ps1` | AO 0.13.0 result |
+|---|---|
+| `ao spawn --project --kind --name --branch --harness --prompt --mode` | every flag present in `ao spawn --help`; `agy`, `claude-code`, `codex`, `cline` remain valid harnesses |
+| `ao session ls --project --json` | accepted; response keeps the `{ data, meta }` shape with `id`, `status`, `activity`, `isTerminated`, `harness`, `branch`, `prs` |
+| `ao session get <id> --project --json` | accepted |
+| `ao session kill <id> --project` | accepted |
+| `ao review ls <session> --json` | accepted |
+| `ao status --json` | accepted; returns `state: ready` |
+
+Not verified: a live `ao spawn` end to end under 0.13.0. `ao version` on the daemon binary prints `dev`, so the desktop executable's ProductVersion remains the version source. Historical `0.12.12` references in TASK-AI-06/07 records and fixture comments describe what was observed then and are left unchanged.
 
 ## Low-cost model route
 
@@ -271,6 +288,15 @@ Candidate technologies are inventoried in `tools/ecosystem-manifest.json` under 
 | `ast-grep`   | ast-grep          | Structural code rewrite  | `WATCH`   | Structural refactoring across shared packages and Next.js applications          |
 | `llmlingua`  | LLMLingua         | Prompt compression       | `PILOT`   | Prompt compression for lengthy Work Item specifications and logs                |
 | `opa`        | Open Policy Agent | Policy engine            | `WATCH`   | Decoupled Rego policy enforcement for multi-tenant carrier access               |
+
+### Beads runs in shadow mode (TASK-AI-33)
+
+`gastownhall/beads` is adopted for multi-agent coordination, but it does not own the dependency graph. `FEATURE-DELIVERY-REGISTER.csv` is the only authority for which Work Item waits on which.
+
+- `node tools/ai-brain/cli.js shadow --project` writes a deterministic projection of the register's graph to a local store (default `.ai-local/shadow/dependency-graph.json`, untracked). `--compare` reports every `MISSING_IN_SHADOW` and `EXTRA_IN_SHADOW` edge by name and exits 1 on any divergence.
+- Edges are parsed by the reconciler's own `parseDependencies`; there is no second parser.
+- A shadow pass never writes the register. Each pass hashes the register's bytes before and after and fails if they differ. A divergence is fixed in the shadow or investigated in the register, never resolved by editing the register to match.
+- The pass is local and offline. The upstream Beads binary is not installed, not required, and not exercised; a green comparison means a projection of the register agrees with the register, not that Beads does.
 
 ## Activation Profiles
 

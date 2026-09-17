@@ -1,30 +1,26 @@
 'use strict';
-// AC-AI-21-02 — negative proof for the Control-table/register comparison.
+// AC-AI-10-02 - negative proof for the Control-table/register comparison.
 //
 // The check lives in `./lib/spec-status-alignment.js` and this script calls the
-// SAME aggregate function the invariant `ac-21-01-status-alignment.js` calls
-// (`statusAlignmentViolations`), so editing the rule changes both outcomes: a rule
-// that stops reporting divergence keeps the invariant green while this proof goes
-// red. This script reads the REAL specification and the REAL register, proves the
-// untouched pair agrees as a CONTROL, then tampers a COPY of the specification in
-// `os.tmpdir()` and requires the same comparison to reject it. Nothing on disk is
-// modified.
+// SAME aggregate function the invariant `ac-10-01-status-alignment.js` calls, so
+// editing the rule changes both outcomes. It reads the REAL specification and the
+// REAL register, proves the untouched pair agrees as a CONTROL, then tampers an
+// IN-MEMORY copy of the specification and requires the same comparison to reject
+// it. Nothing is written to disk.
 //
-// Run outside the repository it exits 2 (the real sources are missing), never 1,
-// so the negative proof cannot pass by accident where nothing exists. That
-// property is itself measured by `ac-21-17-outside-repository.js`.
+// A negative proof that stops detecting its tamper exits 2, never 0: a green 0
+// from a dead rule is indistinguishable from a pass. Run outside the repository
+// it also exits 2 (the real sources are missing), never 1.
 const fs = require('fs');
-const os = require('os');
-const path = require('path');
 const {
   controlStatus,
   registerStatus,
   statusAlignmentViolations,
 } = require('./lib/spec-status-alignment');
 
-const SPEC = 'docs/product-spec/work-items/TASK-AI-21.md';
+const SPEC = 'docs/product-spec/work-items/TASK-AI-10.md';
 const REG = 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv';
-const WORK_ITEM = 'TASK-AI-21';
+const WORK_ITEM = 'TASK-AI-10';
 
 for (const source of [SPEC, REG]) {
   if (!fs.existsSync(source)) {
@@ -41,8 +37,6 @@ if (!register) {
   process.exit(2);
 }
 
-// Control: the untampered pair must agree, otherwise the tampered case below
-// proves nothing about the comparison.
 if (statusAlignmentViolations(real, registerText, WORK_ITEM).length > 0) {
   console.error('CONTROL_FAILED: the real specification already diverges from the register');
   process.exit(2);
@@ -58,13 +52,7 @@ if (tampered === real) {
   process.exit(2);
 }
 
-const tmp = path.join(os.tmpdir(), 'shipde-ac21-02-' + process.pid + '.md');
-fs.writeFileSync(tmp, tampered);
-const tamperedText = fs.readFileSync(tmp, 'utf8');
-fs.unlinkSync(tmp);
-
-// The rejection must come from the comparison itself, not from a missing cell.
-const violations = statusAlignmentViolations(tamperedText, registerText, WORK_ITEM);
+const violations = statusAlignmentViolations(tampered, registerText, WORK_ITEM);
 if (violations.length === 0) {
   console.error('DIVERGENCE_NOT_DETECTED');
   process.exit(2);
@@ -75,7 +63,7 @@ if (!violations.some((violation) => violation.indexOf('STATUS_DIVERGENCE') === 0
 }
 console.error(
   'STATUS_DIVERGENCE_DETECTED: tampered copy ' +
-    controlStatus(tamperedText) +
+    controlStatus(tampered) +
     ' != register ' +
     register
 );
