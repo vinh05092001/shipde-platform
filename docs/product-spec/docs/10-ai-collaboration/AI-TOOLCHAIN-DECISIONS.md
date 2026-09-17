@@ -320,12 +320,12 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### AgentRouter-backed orchestration and lifecycle
 
-6. **AI-SUP-06**: AO uses the existing `.claude` AgentRouter profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
+6. **AI-SUP-06**: AO uses the existing `.claude` 9Router profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
 7. **AI-SUP-07**: AgentRouter owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
 8. **AI-SUP-08**: Inactivity timeout is configurable (default 10 minutes).
 9. **AI-SUP-09**: Maximum 1 nudge attempt per inactivity window before reporting stalled.
 10. **AI-SUP-10**: The supervisor respects existing controller gates (CI must pass, Codex must approve).
-11. **AI-SUP-11**: Starting `Supervise` repairs AO runtime drift by relaunching AO through AgentRouter before consuming a Work Item.
+11. **AI-SUP-11**: Starting `Supervise` repairs AO runtime drift by relaunching AO through 9Router before consuming a Work Item.
 12. **AI-SUP-12**: Manual bootstrap review requires an exact PR number when more than one implementation PR is open.
 13. **AI-SUP-13**: AO is an external control layer with pinned provenance and health check; it is never silently counted as an adopted repository/provider.
 14. **AI-SUP-14**: Manual bootstrap review uses Codex's non-interactive custom-review contract with machine-readable schema output and parses that contract; stale output is deleted, and the local file never authorizes the supervisor gate.

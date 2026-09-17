@@ -13,7 +13,7 @@
 | Risk | `MEDIUM` |
 | Allowed paths | `scripts/ai/control.ps1`, `scripts/ai/doctor.ps1`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ecosystem-manifest.json` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `fix/task-ai-44-gateway-naming` |
+| Branch | `feat/task-ai-44-router-split` |
 | Pull Request | `<URL>` |
 
 ## Delivery note: this Work Item ships on the TASK-AI-16 branch
@@ -160,9 +160,5 @@ node tools/ai-brain/cli.js prove --tests "node tools/ai-brain/test/review-lane.t
 
 ## Residual limitations
 
-- **The misleading names are still in the code.** A repository-wide search still finds `$script:AgentRouterProfile`, `$script:AgentRouterPort`, `Assert-ShipDeAgentRouterProfile` and `Invoke-ShipDeAgentRouterReviewFallback` in `scripts/ai/control.ps1`, and `$script:AgentRouterPort` in `scripts/ai/start-agent-orchestrator.ps1` — all of them naming AgentRouter while addressing 9Router's port. This Work Item separated the two in documentation and in the decision record; it did **not** rename the symbols. Anyone reading this document as "the confusion is resolved in code" is reading it wrongly, and the rename belongs to a follow-up that can change `control.ps1` safely.
-
-Renaming inside a 15,717-line script carries a real risk of missing an
-occurrence or catching one that belongs to the other gateway. `AC-AI-44-04`
-covers behaviour but not every path; a second reviewer pass over the diff is
-worth more here than on a smaller change.
+- **`start-agent-orchestrator.ps1` still names the local gateway `AgentRouter`.** Its `-AgentRouterPort` parameter and `Test-AgentRouterEndpoint` helper address 9Router's local port 20128 but lie outside this Work Item's allowed paths. `control.ps1`'s governed launcher keeps the `-AgentRouterPort` argument verbatim so the cross-file call contract is unchanged; renaming it is a follow-up that may edit `start-agent-orchestrator.ps1`.
+- **The cloud AgentRouter credential is still dead.** `agentrouter.org` rejected the stored key (HTTP 401, verified 2026-09-14). `doctor.ps1` now reports it as unavailable rather than configured; renewal or removal is an operator action, not a code change.
