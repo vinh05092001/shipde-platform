@@ -13,8 +13,8 @@
 | Risk | `HIGH` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-24.md`, `tools/ai-brain/executor.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/test/executor.test.js`, `tools/ai-brain/acceptance/ac-24-*.js`, `tools/ai-brain/acceptance/lib/dispatch-executor-contract.js`, `scripts/ai/control.ps1`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `spec/task-ai-24` |
-| Pull Request | `pending` |
+| Branch | `spec/task-ai-24` (specification, merged as PR #78); `feat/task-ai-24-dispatch-executor` (implementation) |
+| Pull Request | `#78` (specification); PR #90 (implementation) |
 
 ### Status transition ledger
 
@@ -88,9 +88,6 @@ Prohibited in this Work Item:
 - Review dispatch through the Codex connector, which stays in `control.ps1`.
 
 ## Business rules and edge cases
-
-| Rule | Behavior |
-|---|---|
 | `AI-24-R01` | **The planner never launches.** `scheduler.js` requires no process, network or thread capability; launching lives only in the executor. |
 | `AI-24-R02` | **The executor launches only what the plan assigned.** A deferred item is never launched, and no item absent from `assignments` is launched. |
 | `AI-24-R03` | **One writer per Work Item, checked at launch as well as at planning.** A plan can be stale by the time it runs; an assignment whose Work Item already has a running AO writer is skipped with reason `WORK_ITEM_ALREADY_WRITING`. |
@@ -165,6 +162,21 @@ python docs/product-spec/scripts/validate_docs.py
 node --test "tools/ai-brain/test/*.test.js"
 ```
 
+## Implementation record
+
+Delivered on `feat/task-ai-24-dispatch-executor`.
+
+- `tools/ai-brain/executor.js` — `executePlan(plan, options)` turns each assignment into an AO spawn call matching `New-ShipDeAoSpawnArguments` flag order, parses session ID matching `Get-ShipDeAoSessionPayload` shapes, fails closed on AO errors, enforces implementation ceiling and single writer per Work Item / branch, dry run by default.
+- `tools/ai-brain/cli.js` — `dispatch` command added with `--dry-run`, `--execute`, `--plan`, `--json`.
+- `tools/ai-brain/test/executor.test.js` — 17 unit tests covering dry run, execute, argument vector contract, deferred handling, duplicate writer refusal, ceiling enforcement, incomplete assignment refusal, AO fail closed, throwing runner, shell metacharacters safety, plan immutability, and session ID parsing.
+- `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` — recorded the planner / executor split.
+
+Measured verification results:
+- `AC-AI-24-01` to `AC-AI-24-09`: all acceptance scripts passed with expected exit codes (0 for positive, 1 for negative proofs).
+- `node --test tools/ai-brain/test/*.test.js`: 442 tests pass, 0 fail (17 in `executor.test.js`).
+- `node tools/ai-brain/cli.js reconcile`: 0 errors, register does not overstate.
+- `python docs/product-spec/scripts/validate_docs.py`: passed.
+
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
@@ -173,8 +185,10 @@ node --test "tools/ai-brain/test/*.test.js"
 
 ## Residual limitations
 
+- **The controller keeps its own launch path after this item.** Until an integration Work Item switches it to the executor, the plan and the live launch can still diverge; this item makes the plan executable, not mandatory.
 - **The planner rule covers `scheduler.js` itself, not everything it requires.** `offerings.js` requires `agy-quota.js`, which requires `child_process` for its quota reader. The planning path calls only the pure `headroomFor` and `statusFrom` from it, measured at HEAD, but a module-level rule cannot prove a function is never called. The executor must not rely on the planner having no transitive launch capability.
-- **The executor rows do not exist yet.** `executor.js` is not at HEAD, so `AI-24-R02` to `R09` have no positive acceptance row; they are delivered and tested during implementation. `AC-AI-24-05` to `-08` assert what the implementation must preserve.
+- **The AO CLI exposes session creation as `ao spawn`.** The register title's "session create" names the operation, not a literal subcommand.
+- **Outcome measurement for `qualifiedRoles` is deferred to `TASK-AI-25`.**
 - **`AC-AI-24-07` reads PowerShell source text.** It proves the launcher names every flag outside comments, not that AO accepts them; `control.ps1 -Action Test` covers the fixture spawn.
 
 ## Contradictions found in neighbouring specifications
