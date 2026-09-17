@@ -283,3 +283,65 @@ The installed desktop runtime moved to AO `0.13.0` and the supervisor failed clo
 - Kept deliberately: the canonical-pin self-test compares against a literal as well as `$script:ExpectedAoVersion`. The literal is the point of that test. A manifest edit alone must not silently move the pin the controller accepts, so a pin change has to touch both, as this one does.
 - Not changed in this Pull Request: `TASK-AI-07.md` line 69 still says `0.12.12`. It records the version at TASK-AI-07's delivery, and the `contract` check refuses a Pull Request that changes more than one Work Item file.
 - Still unverified: a live `ao spawn` of a real worker under 0.13.0. It starts a paid agent session, so it will be observed on the first supervised dispatch after merge. The supervisor fails closed if spawn output does not match the contract.
+
+## Post-delivery change: AO gets its own 9Router profile (2026-09-17)
+
+`-Action Supervise` died before it could start AO. `Assert-ShipDeAgentRouterProfile` read
+`$config.env.ANTHROPIC_BASE_URL` from `%USERPROFILE%\.claude\settings.json`, and that file has no
+`env` block, because the operator uses natively-authenticated Claude Code there. PowerShell raised
+the raw `The property 'env' cannot be found on this object` and the supervisor stopped with an error
+that named neither the profile nor the fix.
+
+The operator's decision is a profile split, not an edit to `~/.claude`: AO runs under its own Claude
+profile directory that is routed to the local AgentRouter (9Router) gateway, and the native profile
+is left untouched so Claude Code keeps its own login.
+
+### What changed
+
+- `Get-ShipDeAgentRouterProfilePath` (`scripts/ai/common.ps1`) resolves the AO profile directory
+  with the precedence explicit argument, then `SHIPDE_AGENT_ROUTER_PROFILE`, then the default
+  `%USERPROFILE%\.claude-9router`. The default is asserted never to be `%USERPROFILE%\.claude`.
+- `Assert-ShipDeAgentRouterProfileBaseUrl` (`scripts/ai/common.ps1`) is the single validator for the
+  profile. A missing `settings.json`, invalid JSON, a missing `env` block, a missing
+  `ANTHROPIC_BASE_URL`, or a base URL that is not `http://localhost:<port>/v1` each raise an
+  actionable error that names the profile file and states the required value. A raw
+  property-not-found error can no longer reach the operator.
+- `control.ps1` takes `-AgentRouterProfilePath`, `$script:AgentRouterProfile` is resolved through the
+  shared helper, `Assert-ShipDeAgentRouterProfile` delegates to the shared validator, and
+  `Ensure-ShipDeAgentRouterRuntime` passes the resolved profile to the launcher as `-ProfilePath`.
+- `start-agent-orchestrator.ps1` defaults `-ProfilePath` to empty and resolves it through the same
+  helper, so the launcher and the supervisor cannot disagree about which profile AO runs under. Its
+  duplicated inline base-URL validation is replaced by the shared validator.
+- `Invoke-ShipDeClaudeReviewFallback` is deliberately unchanged. The review fallback must keep using
+  the native Claude login with `ANTHROPIC_BASE_URL` cleared, so it does not read this profile.
+
+No gateway target changed. Everything that routed to `http://localhost:20128/v1` still does; only the
+directory holding that setting moved off the operator's native profile.
+
+### Acceptance evidence
+
+| Check | Evidence |
+| ----- | -------- |
+| Default profile is not the native profile | New self-test 0a in the AO bootstrap behavioral suite fails if `Get-ShipDeAgentRouterProfilePath` returns `%USERPROFILE%\.claude`, and asserts the environment override and the explicit-argument precedence. |
+| Missing `env` block is actionable, not a raw property error | New self-test 0b launches `start-agent-orchestrator.ps1` against a profile containing `{"model":"opus"}` and fails if the message matches `cannot be found on this object` or does not name the settings file, `env` and `ANTHROPIC_BASE_URL`. |
+| Existing bootstrap behavior preserved | Self-tests 1-4 (manifest pin bypass, pre-creation failure, early exit, live marker binding) still pass through the injected `-ProfilePath` seam. |
+| Suite result | `powershell -File scripts/ai/control.ps1 -Action Test` printed `ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED`. |
+| `-Action Status` | Ran clean: worktrees listed, `9Router : UP`, 13 open Pull Requests listed. |
+| `-Action Supervise` | No longer dies on the profile. It resolves the AO executable, reports `EffectiveVersion 0.13.0`, validates the new profile, and reaches `[SUPERVISOR] Starting AO through the AgentRouter Claude profile...`. It then stops on a separate pre-existing condition, below. |
+
+### Local machine state the operator owns
+
+`%USERPROFILE%\.claude-9router\settings.json` was created outside the repository with
+`{"env":{"ANTHROPIC_BASE_URL":"http://localhost:20128/v1"}}`. It is machine state, not repository
+state. No credential was copied from `%USERPROFILE%\.claude`. If AgentRouter later requires a token
+for this profile, the operator pastes it into that file as `env.ANTHROPIC_AUTH_TOKEN`; nothing in
+this repository reads or writes it.
+
+### Known limitations
+
+- `-Action Supervise` still stops after the profile gate with `Port 20128 is not serving the expected
+  local 9Router health and version contract`. The running gateway reports `currentVersion 0.5.75`
+  while `$script:NineRouterPinnedVersion` and the launcher's endpoint contract both require `0.5.55`.
+  That is a pre-existing 9Router version-pin mismatch, unrelated to the profile split, and moving a
+  gateway pin is an operator decision; it is not changed here.
+- A live AO session under the new profile is still unobserved for the same reason.

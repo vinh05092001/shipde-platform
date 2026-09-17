@@ -337,7 +337,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### AgentRouter-backed orchestration and lifecycle
 
-6. **AI-SUP-06**: AO uses the existing `.claude` AgentRouter profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
+6. **AI-SUP-06**: AO uses its own AgentRouter profile directory for unattended orchestration, `%USERPROFILE%\.claude-9router` by default (overridable with `-AgentRouterProfilePath` or `SHIPDE_AGENT_ROUTER_PROFILE`). It is never the operator's native `%USERPROFILE%\.claude` Claude Code profile, and the direct `.claude-orchestrator` profile is not used by unattended mode.
 7. **AI-SUP-07**: AgentRouter owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
 8. **AI-SUP-08**: Inactivity timeout is configurable (default 10 minutes).
 9. **AI-SUP-09**: Maximum 1 nudge attempt per inactivity window before reporting stalled.
@@ -356,7 +356,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### Provider and harness policy
 
-Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost 9Router endpoint (`http://localhost:20128/v1`). The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after AgentRouter exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
+Unattended AO sessions always use the dedicated AgentRouter profile directory (`%USERPROFILE%\.claude-9router` by default), whose `env.ANTHROPIC_BASE_URL` is the localhost 9Router endpoint (`http://localhost:20128/v1`). The operator's `%USERPROFILE%\.claude` profile stays natively authenticated Claude Code and must not carry that override, so the two profiles are split; the launcher and the supervisor both resolve the AO profile through `Get-ShipDeAgentRouterProfilePath` and validate it through `Assert-ShipDeAgentRouterProfileBaseUrl`, which fails closed with an actionable error naming the profile file when `settings.json`, its `env` block, or the base URL is missing or wrong. `Invoke-ShipDeClaudeReviewFallback` is deliberately outside this split: it keeps running under the native login with `ANTHROPIC_BASE_URL` cleared. The AO profile directory is local machine state created by the operator, never repository state, and no credential is copied into it from the native profile. The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after AgentRouter exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
 
 ### Transient failure classification
 

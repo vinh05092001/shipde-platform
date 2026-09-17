@@ -8,6 +8,11 @@ param(
         Join-Path $userHome "AI"
     ),
 
+    # Dedicated Claude profile directory that AO is launched under. It must route to
+    # the local AgentRouter (9Router) gateway. It is deliberately NOT ~/.claude, which
+    # belongs to the operator's natively-authenticated Claude Code CLI.
+    [string]$AgentRouterProfilePath = "",
+
     [ValidateRange(0, [int]::MaxValue)]
     [int]$PullRequestNumber = 0,
 
@@ -2994,7 +2999,7 @@ function Show-ShipDeStatus {
 $script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.json"
 $script:SupervisorLockFile = Join-Path $script:HandoffRoot "supervisor.lock"
 $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.json"
-$script:AgentRouterProfile = Join-Path (Get-ShipDeUserHome) ".claude"
+$script:AgentRouterProfile = Get-ShipDeAgentRouterProfilePath -ProfilePath $AgentRouterProfilePath
 $script:AgentRouterPort = 20128
 $script:ExpectedAoVersion = Get-ShipDePinnedAoVersion
 $script:AoExecutablePath = $null
@@ -3242,31 +3247,9 @@ function Assert-ShipDeAoRuntimeMarker {
 }
 
 function Assert-ShipDeAgentRouterProfile {
-    $settingsPath = Join-Path $script:AgentRouterProfile "settings.json"
-    if (-not (Test-Path $settingsPath)) {
-        throw "AgentRouter Claude profile is missing: $settingsPath"
-    }
-    try {
-        $config = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch {
-        throw "AgentRouter Claude profile contains invalid JSON: $settingsPath"
-    }
-
-    $baseUrl = [string]$config.env.ANTHROPIC_BASE_URL
-    $uri = $null
-    if (
-        [string]::IsNullOrWhiteSpace($baseUrl) -or
-        -not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$uri) -or
-        $uri.Scheme -ne "http" -or
-        $uri.Host -notin @("localhost", "127.0.0.1") -or
-        $uri.Port -ne $script:AgentRouterPort -or
-        $uri.AbsolutePath.TrimEnd('/') -ne "/v1" -or
-        -not [string]::IsNullOrWhiteSpace($uri.Query) -or
-        -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
-        -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
-    ) {
-        throw "AgentRouter Claude profile must use http://localhost:$($script:AgentRouterPort)/v1."
-    }
+    $baseUrl = Assert-ShipDeAgentRouterProfileBaseUrl `
+        -ProfilePath $script:AgentRouterProfile `
+        -Port $script:AgentRouterPort
     if (-not (Test-ShipDeAgentRouterEndpoint -Port $script:AgentRouterPort)) {
         throw "Port $($script:AgentRouterPort) is not serving the expected local 9Router health and version contract."
     }
@@ -3291,8 +3274,8 @@ function Ensure-ShipDeAgentRouterRuntime {
         [scriptblock]$ProfileValidator = { Assert-ShipDeAgentRouterProfile },
         [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
         [scriptblock]$Launcher = {
-            param($Path, $Root, $Port, $Version)
-            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -Restart
+            param($Path, $Root, $Port, $Version, $Profile)
+            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -ProfilePath $Profile -Restart
         }
     )
 
@@ -3314,7 +3297,7 @@ function Ensure-ShipDeAgentRouterRuntime {
 
     Write-Host "[SUPERVISOR] Starting AO through the AgentRouter Claude profile..."
     try {
-        & $Launcher $launcherPath $AiRoot $script:AgentRouterPort $script:ExpectedAoVersion
+        & $Launcher $launcherPath $AiRoot $script:AgentRouterPort $script:ExpectedAoVersion $script:AgentRouterProfile
     } catch {
         throw "The governed AO launcher failed: $($_.Exception.Message)"
     }
@@ -7001,6 +6984,55 @@ function Assert-ShipDeSupervisorCompatibility {
         try {
             New-Item -ItemType Directory -Path $behavioralProfile -Force | Out-Null
             Set-Content -Path $behavioralSettings -Value '{"env":{"ANTHROPIC_BASE_URL":"http://localhost:20128/v1"}}' -Encoding UTF8
+
+            # 0a. The AO profile default must never be the operator's native ~/.claude.
+            $savedProfileOverride = $env:SHIPDE_AGENT_ROUTER_PROFILE
+            try {
+                Remove-Item Env:SHIPDE_AGENT_ROUTER_PROFILE -ErrorAction SilentlyContinue
+                $defaultProfile = Get-ShipDeAgentRouterProfilePath
+                $nativeProfile = Join-Path (Get-ShipDeUserHome) ".claude"
+                if ([StringComparer]::OrdinalIgnoreCase.Equals([string]$defaultProfile, [string]$nativeProfile)) {
+                    throw "AO profile split regression: the default AgentRouter profile is the native Claude Code profile $nativeProfile."
+                }
+                if ([string]::IsNullOrWhiteSpace($defaultProfile)) {
+                    throw "AO profile split regression: the default AgentRouter profile path is empty."
+                }
+                $overrideProbe = Join-Path $behavioralTestRoot "override-profile"
+                $env:SHIPDE_AGENT_ROUTER_PROFILE = $overrideProbe
+                if ((Get-ShipDeAgentRouterProfilePath) -ne $overrideProbe) {
+                    throw "AO profile split regression: SHIPDE_AGENT_ROUTER_PROFILE did not override the default profile path."
+                }
+                if ((Get-ShipDeAgentRouterProfilePath -ProfilePath $behavioralProfile) -ne $behavioralProfile) {
+                    throw "AO profile split regression: an explicit profile path did not win over the environment override."
+                }
+            } finally {
+                if (-not [string]::IsNullOrWhiteSpace($savedProfileOverride)) {
+                    $env:SHIPDE_AGENT_ROUTER_PROFILE = $savedProfileOverride
+                } else {
+                    Remove-Item Env:SHIPDE_AGENT_ROUTER_PROFILE -ErrorAction SilentlyContinue
+                }
+            }
+
+            # 0b. A profile without an 'env' block must produce an actionable error that
+            # names the profile file, never a raw PowerShell property-not-found error.
+            $envlessProfile = Join-Path $behavioralTestRoot "envless-profile"
+            $envlessSettings = Join-Path $envlessProfile "settings.json"
+            New-Item -ItemType Directory -Path $envlessProfile -Force | Out-Null
+            Set-Content -Path $envlessSettings -Value '{"model":"opus"}' -Encoding UTF8
+            $envlessMessage = ""
+            try {
+                & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
+                    -ProfilePath $envlessProfile `
+                    -AiRoot $behavioralAiRoot
+            } catch {
+                $envlessMessage = [string]$_.Exception.Message
+            }
+            if ($envlessMessage -match "cannot be found on this object") {
+                throw "AO bootstrap behavioral regression: a profile without an 'env' block produced a raw property error: $envlessMessage"
+            }
+            if ($envlessMessage -notlike "*$envlessSettings*" -or $envlessMessage -notmatch "env" -or $envlessMessage -notmatch "ANTHROPIC_BASE_URL") {
+                throw "AO bootstrap behavioral regression: a profile without an 'env' block did not raise an actionable error naming the profile file. Got: $envlessMessage"
+            }
 
             # 1. Manifest bypass prevention
             $manifestBypassCaught = $false
