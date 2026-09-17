@@ -272,6 +272,15 @@ Candidate technologies are inventoried in `tools/ecosystem-manifest.json` under 
 | `llmlingua`  | LLMLingua         | Prompt compression       | `PILOT`   | Prompt compression for lengthy Work Item specifications and logs                |
 | `opa`        | Open Policy Agent | Policy engine            | `WATCH`   | Decoupled Rego policy enforcement for multi-tenant carrier access               |
 
+### Beads runs in shadow mode (TASK-AI-33)
+
+`gastownhall/beads` is adopted for multi-agent coordination, but it does not own the dependency graph. `FEATURE-DELIVERY-REGISTER.csv` is the only authority for which Work Item waits on which.
+
+- `node tools/ai-brain/cli.js shadow --project` writes a deterministic projection of the register's graph to a local store (default `.ai-local/shadow/dependency-graph.json`, untracked). `--compare` reports every `MISSING_IN_SHADOW` and `EXTRA_IN_SHADOW` edge by name and exits 1 on any divergence.
+- Edges are parsed by the reconciler's own `parseDependencies`; there is no second parser.
+- A shadow pass never writes the register. Each pass hashes the register's bytes before and after and fails if they differ. A divergence is fixed in the shadow or investigated in the register, never resolved by editing the register to match.
+- The pass is local and offline. The upstream Beads binary is not installed, not required, and not exercised; a green comparison means a projection of the register agrees with the register, not that Beads does.
+
 ## Activation Profiles
 
 Tool usage is governed by 9 task-based activation profiles defined in `tools/ecosystem-profiles.json`:
