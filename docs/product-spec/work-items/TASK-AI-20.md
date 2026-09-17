@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-20.md`, `tools/ai-brain/acceptance/ac-20-*.js`, `tools/ai-brain/acceptance/lib/spec-coverage.js` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-20-9r` |
-| Pull Request | `Pending` |
+| Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/98` |
 
 ## Business outcome
 
