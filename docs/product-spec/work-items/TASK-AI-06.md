@@ -283,6 +283,7 @@ The installed desktop runtime moved to AO `0.13.0` and the supervisor failed clo
 - Kept deliberately: the canonical-pin self-test compares against a literal as well as `$script:ExpectedAoVersion`. The literal is the point of that test. A manifest edit alone must not silently move the pin the controller accepts, so a pin change has to touch both, as this one does.
 - Not changed in this Pull Request: `TASK-AI-07.md` line 69 still says `0.12.12`. It records the version at TASK-AI-07's delivery, and the `contract` check refuses a Pull Request that changes more than one Work Item file.
 - Still unverified: a live `ao spawn` of a real worker under 0.13.0. It starts a paid agent session, so it will be observed on the first supervised dispatch after merge. The supervisor fails closed if spawn output does not match the contract.
+<<<<<<< HEAD
 
 ## Post-delivery change: AO gets its own 9Router profile (2026-09-17)
 
@@ -348,3 +349,5 @@ this repository reads or writes it.
   That is a pre-existing 9Router version-pin mismatch, unrelated to the profile split, and moving a
   gateway pin is an operator decision; it is not changed here.
 - A live AO session under the new profile is still unobserved for the same reason.
+=======
+>>>>>>> origin/main

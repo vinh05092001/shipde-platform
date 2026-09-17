@@ -13,7 +13,7 @@
 | Risk | `HIGH` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-21.md`, `tools/ai-brain/lessons/**`, `tools/ai-brain/acceptance/ac-21-*.js`, `tools/ai-brain/acceptance/lib/lesson-schema.js`, `tools/ai-brain/acceptance/lib/brain-repository-contract.js`, `tools/ai-brain/acceptance/lib/dependency-delivered.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `spec/task-ai-21` |
+| Branch | `feat/task-ai-21-lesson-schema` |
 | Pull Request | `Pending` |
 
 **Row numbering.** "Row 154" is the register's own `delivery_order` column, the convention `TASK-AI-07` (row 140) and `TASK-AI-08` (row 141) already use. `TASK-AI-17` numbers by physical CSV line instead, where the same record is line 152 and `TASK-AI-19` is line 154. The two conventions disagree, so every row number in this file also names the record's `work_item_id`.
@@ -326,14 +326,35 @@ catches the emptied rule, so both rows fail.
 
 | Mutation (shared module only) | Invariant row | Negative proof | Reading |
 |---|---|---|---|
-| `spec-status-alignment.js`: the divergence check is disabled | `AC-AI-21-01` exit `0` (unchanged) | `AC-AI-21-02` exit `0`, prints `DIVERGENCE_NOT_DETECTED` | The proof **fails**: the pair agrees while the rule is dead |
-| `lesson-schema.js`: `matchesViolations` reports no violation | `AC-AI-21-03` exit `0` (unchanged) | `AC-AI-21-04` exit `0`, prints `INADMISSIBLE_LESSON_NOT_DETECTED` | The proof **fails**: the schema admits anything while the admission row stays green |
-| `lesson-schema.js`: `approvedRequirementViolations` reports nothing | `AC-AI-21-05` exit `2` (`CONTROL_FAILED: the requirement detector cannot report missing requirements`) | `AC-AI-21-06` exit `0`, prints `LESSON_REQUIREMENT_MISSING_NOT_DETECTED` | Both **fail**: the detector's own control catches the empty rule and the proof can no longer reject |
+| `spec-status-alignment.js`: the divergence check is disabled | `AC-AI-21-01` exit `0` (unchanged) | `AC-AI-21-02` exit `2`, prints `DIVERGENCE_NOT_DETECTED` | The proof **fails**: the pair agrees while the rule is dead |
+| `lesson-schema.js`: `matchesViolations` reports no violation | `AC-AI-21-03` exit `0` (unchanged) | `AC-AI-21-04` exit `2`, prints `INADMISSIBLE_LESSON_NOT_DETECTED` | The proof **fails**: the schema admits anything while the admission row stays green |
+| `lesson-schema.js`: `approvedRequirementViolations` reports nothing | `AC-AI-21-05` exit `2` (`CONTROL_FAILED: the requirement detector cannot report missing requirements`) | `AC-AI-21-06` exit `2`, prints `LESSON_REQUIREMENT_MISSING_NOT_DETECTED` | Both **fail**: the detector's own control catches the empty rule and the proof can no longer reject |
 | `brain-repository-contract.js`: the unpinned check removed | `AC-AI-21-07` exit `0` (unchanged) | `AC-AI-21-08` exit `2`, prints `CONTROL_FAILED: the contract accepted a brain pinned to a movable ref` | The proof **fails**: with the rule dead it cannot demonstrate a refusal |
 | `dependency-merged.js`: `dependencyProven` proves every dependency | `AC-AI-21-09` exit `0` (unchanged) | `AC-AI-21-10` exit `2`, prints `SOURCE_MISSING: no declared deliverable rule for TASK-AI-99` | The proof **fails**, and the failure is the second half firing — evidence that `dependency-delivered.js` re-exports this module by reference |
 | `dependency-delivered.js`: `deliverableAtOriginMain` accepts every artifact | `AC-AI-21-09` exit `0` (unchanged) | `AC-AI-21-10` exit `2`, prints `CONTROL_FAILED: the deliverable rule accepted a copy that violates its own rule` | The proof **fails**: the deliverable half is falsifiable, not decorative |
 
+## Implementation record — a missed tamper exits 2
+
+The schema, seed, shared rule modules and all acceptance scripts arrived with the
+specification. Executing every row on the delivery branch found one defect class,
+the same one `TASK-AI-39` repaired in its own scripts (PR #72): four negative
+proofs (`AC-AI-21-02`, `-04`, `-06`, `-10`) printed their `*_NOT_DETECTED` /
+`DEPENDENCY_WRONGLY_PROVEN` diagnostic and then exited `0`, the shell's success
+code, at the exact moment the rule they guard had died. Each failure path now
+exits `2`, this Work Item's "the proof could not be established" code; no
+negative proof of this Work Item exits `0` on any path. `AC-AI-21-08` already
+exited `2` on every non-detection path.
+
+Measured after the change: with `statusAlignmentViolations`' divergence branch
+disabled in `spec-status-alignment.js` (restored from a backup afterwards),
+`AC-AI-21-02` prints `DIVERGENCE_NOT_DETECTED` and exits `2`. The mutation table
+above records the post-change exit codes.
+
 ## Residual limitations
+
+- **Owner action required: create `vinh05092001/shipde-brain`.** No agent created
+  the GitHub repository, its branch protection or its CI; the manifest pin and this
+  schema are the contract it must satisfy once the owner creates it.
 
 - **The repository itself is not created by this Work Item.** `shipde-brain` is a
   GitHub repository, and creating it, protecting it and giving it CI is a human
