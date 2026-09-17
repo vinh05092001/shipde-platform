@@ -214,6 +214,42 @@ suite — removing `unknownBudget`, dropping the provenance check, breaking the
 runway arithmetic, ignoring the window match, counting a disabled account,
 removing the evidence floor, and forcing staleness to false.
 
+## Completion record (2026-09-16)
+
+PR #41 merged `limits.js` and its suite but left one in-scope item undone: the
+capacity adapter never reported which windows each row knows. Measured on
+`origin/main` `4b0fa4b`: `grep -rn "knownWindows\|unknownWindows" tools` returned
+nothing, so the panel still could not tell "plenty left" from "no idea".
+
+- `tools/ai-dashboard/capacity-adapter.js` now resolves each account once with
+  `resolveLimits` and adds `knownWindows` (`window`, `ceiling`, `provenance`,
+  `stale`) and `unknownWindows` to every row. A row whose account was not
+  resolved lists every window as unknown (`AI-26-R02`); no ceiling is defaulted.
+- `tools/ai-brain/test/limits.test.js` gains two subtests driving the real
+  `collectCapacity` with injected accounts: `each capacity row names its known
+  and unknown windows` and `a row with no declared limits lists every window as
+  unknown`.
+
+**No ceiling was declared for any real account.** The registry lives outside
+the repository (`~/.shipde/accounts.registry.json`), no provider on this machine
+publishes an absolute figure, and the ledger holds no window with 20
+observations. Under `AI-26-R02` every window stays unknown; `AC-AI-26-01`
+still reads `35 of 35`, which is the honest state, not a defect. A ceiling is
+added when an operator asserts one with provenance, not by this Work Item.
+
+**Naming drift.** The rules say `source`; the merged code and suite use
+`provenance`. The code is left as merged and this record names the difference.
+
+| AC/Test ID | Result on this branch |
+|---|---|
+| `AC-AI-26-01` | exit 0, `BASELINE_CONFIRMED: 35 of 35 offerings have no ceiling` |
+| `AC-AI-26-02`..`11` | every named subtest present in TAP output, suite exit 0 |
+| `AC-AI-26-12` | `WINDOW_SET_EXACT` |
+| `AC-AI-26-13` | exit 1, `VACUOUS_PATTERN_REJECTED` |
+| `AC-AI-26-14` | `limits.test.js` 16 pass, 0 fail |
+| `AC-AI-26-15` | `ceiling.test.js` 41 pass, 0 fail |
+| all brain and dashboard suites | 516 pass, 0 fail |
+
 ## Residual limitations
 
 - **Most ceilings are not published.** Antigravity reports a percentage and
@@ -239,3 +275,10 @@ removing the evidence floor, and forcing staleness to false.
 - **Nothing here reconciles a ceiling against a bill.** A declared figure that
   is simply wrong will produce a confident runway that is wrong in the same
   direction for as long as it stands.
+
+### Review round 1 (cline-free/muse-spark-1.3-contributor, head `d4b11b8`)
+
+- **Orphan-row fallback** returned empty known and unknown lists, which reads as "nothing missing". Fixed: it now lists every window as unknown.
+- **Prototype-sensitive lookup** on operator-supplied account ids. Fixed: a `Map`.
+- **Wiring overstated.** The earlier record said the panel reads "the same ledger the scheduler reads". Not true today: scheduler headroom flows through `offerings.js` -> `effectiveLimits` + `quota.js` `accountHeadroom`, which does not read the `{ value, provenance, assertedAt }` shape `resolveLimits` reads, so the panel can show a window as known while dispatch still treats it as unknown. The claim is removed; rewiring dispatch is out of this Work Item's allowed paths and is a residual limitation.
+- `AC-AI-26-01` (35 of 35) and the 516-test aggregate remain author-run, not reviewer-run.
