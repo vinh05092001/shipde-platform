@@ -44,8 +44,7 @@ Consequences of this ledger, binding on any controller or reviewer:
 Measured gaps, all from the source:
 
 1. No production path writes `qualifiedRoles`. Search finds it read in `capabilities.js`, inherited in `offerings.js`, set only in test fixtures. `seed-accounts.js` registers three accounts with no `qualifiedRoles`, so every account is tried for every capable role. Qualification is a comment (`capabilities.js:111-113`) rather than a flow.
-2. Dispatch inputs this item must record have readers but no writer. `fitness.js:125-133` `estimateTokens` prefers `history[id::difficulty].medianTokens`, then `history[id]`, then `DEFAULT_TOKENS_PER_TASK` (60000/180000/500000/900000). `scheduler.js:291` feeds `ctx.history || {}`; `capacity-adapter.js:147` feeds `opts.history || {}`. Nothing constructs such history from a real outcome at HEAD.
-Nothing constructs such history from a real outcome at HEAD.
+2. Dispatch inputs this item must record have readers but no writer. `fitness.js:125-133` `estimateTokens` prefers `history[id::difficulty].medianTokens`, then `history[id]`, then `DEFAULT_TOKENS_PER_TASK` (60000/180000/500000/900000). `scheduler.js:291` feeds `ctx.history || {}`; `tools/ai-dashboard/capacity-adapter.js:147` feeds `opts.history || {}`. Nothing constructs such history from a real outcome at HEAD.
 3. Grades and quality are placeholders. `seed-accounts.js:22-25` provisional header names `TASK-AI-27`/`TASK-AI-41` as replacers. `offerings.js:129-133` defaults unrated `quality` to `50`. A failing model keeps grade, quality, roles: no feedback narrows them.
 
 Register key_behavior: PASS rate, retries, tokens per merged item decide next dispatch. This item delivers a deterministic feedback module recording per-offering per-role outcomes and narrowing `qualifiedRoles` on evidence. No grants (`TASK-AI-30`/`TASK-AI-31`), no grade changes (`TASK-AI-27`/`TASK-AI-41`), no limits (`TASK-AI-26`), cooldown (`TASK-AI-28`), or dispatch (`TASK-AI-24`) changes.
@@ -75,7 +74,7 @@ Register key_behavior: PASS rate, retries, tokens per merged item decide next di
 
 ## Author boundary
 
-`CLAUDE` fits: bounded deterministic test-provable work; no high-risk domain (arch/auth/tenancy/money/carrier/DB/UX).
+`CLAUDE` fits per `AGENTS.md` § Role separation ("Claude — analyst, secondary author and reviewer fallback ... authorized to act as code repair / assistant author for addressing review findings or authoring assigned Work Items"): bounded deterministic test-provable work; no high-risk domain (arch/auth/tenancy/money/carrier/DB/UX). The `AGENTS.md` § Author routing section states the `9ROUTER` and `GEMINI` conditions explicitly and does not name `CLAUDE`'s routing test; this item is assigned `CLAUDE` rather than `9ROUTER` because interpreting `qualifiedRoles` evidence and narrowing a role touches a scheduling/trust decision `9ROUTER`'s "stop when scope reaches architecture" condition would not safely escalate from, and `GEMINI` is reserved for foundation/product-feature work this item is not.
 May change only Allowed paths. Must not edit `.github/`, `scripts/ai/`, workflows, register schema/status, other items, role requirements, dispatch arithmetic, ranking, dispatchability, cooldowns, ceilings, tiers, costs, grades, quality, credentials.
 Human confirms: floor/threshold numbers, removal durations/restoration with `TASK-AI-31`, outcome-ledger location if PII/secret-adjacent.
 ## In scope
@@ -84,8 +83,9 @@ Human confirms: floor/threshold numbers, removal durations/restoration with `TAS
 - Derive per-offering per-role aggregates over window: PASS rate, median retries, median tokens per merged item (median per `estimateTokens` precedent).
 - Narrow `qualifiedRoles` on evidence only: removal needs floor samples + breach of >=2 of 3 thresholds; record names aggregates, window, source.
 - Emit reader-ready history: `history[offeringId::difficulty]={medianTokens,samples,at}` + `history[offeringId]` fallback. Non-positive medianTokens ignored.
-- Enforcement stays in `disqualify`; single rule module `acceptance/lib/role-feedback.js` required by gate and proofs.
+- Enforcement is proved against the real, unmodified `disqualify` imported by reference from `capabilities.js`; this item does not edit `capabilities.js`, `accounts.js` or `offerings.js` (none is in Allowed paths). `AC-AI-25-03` calls the actual `disqualify` with a fixture account object whose `qualifiedRoles` has been narrowed by this item's module, proving the real gate refuses on the merged result. Single rule module `acceptance/lib/role-feedback.js` required by gate and proofs.
 - Deterministic unit tests + acceptance path incl. negative and outside-repo proofs.
+- Record the feedback decision in `AI-TOOLCHAIN-DECISIONS.md`: a short dated entry naming the three aggregates this item may act on (PASS rate, retries, tokens per merged item) and the two-of-three-breach rule, so a later reader of that decisions log does not have to reconstruct the rule from `role-feedback.js`.
 ## Out of scope
 
 - Granting never-held roles. First qualification is `TASK-AI-30`/`TASK-AI-31`; restoration needs re-qualification, never silent re-add.
@@ -103,7 +103,7 @@ Human confirms: floor/threshold numbers, removal durations/restoration with `TAS
 | `AI-25-R04` | No removal below floor. Floor counted from outcome records for that offering+role. One failure never disqualifies (`AC-AI-25-06`). |
 | `AI-25-R05` | Non-delivery outcomes excluded: `isQuotaRefusal` refusals, socket/timeout/500/routing/auth/missing-model, or no attempt run. Quota path stays `observeRefusal` (`TASK-AI-28`). |
 | `AI-25-R06` | Two-of-three breach required in same window (PASS floor, retry ceiling, tokens/merged ceiling). One expensive-but-correct task cannot cost a role. |
-| `AI-25-R07` | Every write names source/instant/window/aggregates. Sourceless qual entry refused at load (`limits.js` precedent). Operator-declared removal expires after 90d (`STALE_AFTER_MS`) unless re-asserted. |
+| `AI-25-R07` | Every write names source/instant/window/aggregates. Sourceless qual entry refused at load (`limits.js` precedent). An operator-declared removal's justification goes stale after 90d (`STALE_AFTER_MS`) unless re-asserted with a fresh instant; staleness never restores the role (that would be a silent re-add, forbidden by `AI-25-R03`) — it only means the stale record can no longer be cited as current evidence for keeping the role narrowed, until re-asserted or replaced by a measured aggregate. |
 | `AI-25-R08` | Task outcomes and quota observations never share a ledger. Missing/corrupt store is empty, never error (`quota-store.js` precedent). |
 | `AI-25-R09` | History shape fixed: `history[offeringId::difficulty]={medianTokens,samples,at}` + fallback; matches `estimateTokens` readers. |
 | `AI-25-R10` | Feedback never dispatches/cools/launches. Unreachable store fails closed, changes nothing, names reason (`AI-TOOL-10`). |
@@ -129,8 +129,8 @@ One rule, one module: `lib/role-feedback.js` defines removal; invariants and neg
 | `AC-AI-25-05` | `node tools/ai-brain/acceptance/ac-25-05-dependency-absent.js`: true block | Exit `0` `BLOCK_TRUE: TASK-AI-24 undelivered`: no TASK-AI-24.md, register order 158 still deps TASK-AI-24. | stdout + exit |
 | `AC-AI-25-06` | `node tools/ai-brain/acceptance/ac-25-06-single-failure-keeps-role.js`: floor negative proof | Exit `1` `KEPT_BELOW_FLOOR`: one failure keeps role. Exit 0 is the failure caught. | stdout + exit 1 |
 | `AC-AI-25-07` | `node tools/ai-brain/acceptance/ac-25-07-refusal-not-evidence.js`: scope negative proof | Exit `1` `REFUSAL_IGNORED`: quota/timeout/500-only feed writes no aggregate, keeps role. | stdout + exit 1 |
-| `AC-AI-25-08` | `node tools/ai-brain/acceptance/ac-25-08-grant-refused.js`: narrowing-only proof | Exit `2` refusal `SOURCE_MISSING: feedback never grants; re-qualify via TASK-AI-31`. Grant is failure. | output + exit 2 |
-| `AC-AI-25-09` | `node tools/ai-brain/acceptance/ac-25-09-outside-repository.js`: outside-repo proof | Exit `0` from empty temp dir: proofs refuse, print `OUTSIDE_REPOSITORY`, no gate strings. | stdout + exit |
+| `AC-AI-25-08` | `node tools/ai-brain/acceptance/ac-25-08-grant-refused.js`: narrowing-only proof | Exit `1` `GRANT_REFUSED: feedback never grants; re-qualify via TASK-AI-31`, the caught violation. A mutant module that adds a grant path exits `0` and is the failing case this row exists to catch. Exit `2` `SOURCE_MISSING` is reserved for the setup failure of running outside the repository (see `AC-AI-25-09`), never for this row's own pass/fail. | stdout + exit 1 |
+| `AC-AI-25-09` | `node tools/ai-brain/acceptance/ac-25-09-outside-repository.js`: outside-repo proof | Exit `0` from an empty temp directory: the wrapper runs `AC-AI-25-01` through `AC-AI-25-08` and confirms each individually exits `2` with `SOURCE_MISSING`, then prints `OUTSIDE_REPOSITORY: 8 rows exited 2 with SOURCE_MISSING`. Any row that instead exits `0` or `1` outside the repository (a real gate string leaking without a repository to check) fails this wrapper. | stdout + exit |
 ### Acceptance matrix validation
 
 | Mutation | Positive row | Negative row | Reading |
@@ -140,6 +140,8 @@ One rule, one module: `lib/role-feedback.js` defines removal; invariants and neg
 | grant path added | 08 exits 0 with grant | — | proof fails: narrowing-only broken |
 
 No `node --test --test-name-pattern` rows: non-matching pattern exits 0 with zero subtests here, passing against empty file. No drifting counts pinned; totals printed as evidence only.
+
+**Rule-to-proof map.** `AI-25-R01`, `R03`, `R04`, `R06` are exercised by `AC-AI-25-03`/`06`; `R05` by `AC-AI-25-07`; `R07` by the `Instant`/`source` assertions inside `AC-AI-25-03`'s fixture. `AI-25-R02` (write surface), `R08` (separate ledgers, empty-not-error on a missing/corrupt store), `R09` (fixed history shape) and `R10` (fail-closed, no dispatch/cool/launch call) are shape and isolation invariants over the single module `role-feedback.js` rather than cross-file integration facts; they are proved by the deterministic unit tests in `node --test tools/ai-brain/test/feedback.test.js`, not by a standalone `ac-25-*.js` row, and that test file is listed in Verification commands for exactly this reason.
 
 ## Verification commands
 
@@ -173,3 +175,5 @@ node --test tools/ai-brain/test/feedback.test.js
 - Per-offering attribution only; shared-budget sibling drain still records against the failing offering (fingerprint caveat per `TASK-AI-26`).
 - Register order 158 stays `BLOCKED_DEPENDENCY`; only reconciler clears it after `TASK-AI-24`. `AC-AI-25-05` proves from repo+cell.
 - No JSON Schema validator installed (`TASK-AI-21` subset note). Adding one out of scope.
+- **The live account-loading path is not wired here.** `AC-AI-25-03` proves the real, unmodified `disqualify` refuses on a fixture account object once this item's module has narrowed its `qualifiedRoles`, but `accounts.js` and `offerings.js` — which build the `account` objects a live scheduler run actually passes to `disqualify` — are not in Allowed paths and are not touched. Until a follow-up item merges this module's `qualifiedRoles` projection into that live load path, a narrowing this module records has no effect on a real dispatch; the business outcome is proved at the unit boundary, not yet end-to-end.
+- **The branch name predates `AGENTS.md`'s `feat/`/`fix/` pattern for this Work Item.** `spec/task-ai-25` does not match the `feat/`- or `fix/`-prefixed work-item-id-and-slug rule in `AGENTS.md` § Unit of delivery. This follows the precedent already merged for spec-only authoring Work Items on this repository (for example `spec/task-ai-21`, PR #74), and the branch itself was created before this specification was authored. Renaming it is outside this Work Item's Allowed paths.
