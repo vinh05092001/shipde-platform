@@ -158,13 +158,16 @@ returned by `planDispatch` is consumed read-only; its shape is not changed.
 | `AC-AI-24-05` | AO failure is not reported as a launch | `node tools/ai-brain/acceptance/ac-24-05-ao-fail-closed.js` exits 0 and prints `AO_FAILURES_RECORDED_AS_LAUNCHED: 0` for non-zero exit, empty stdout, invalid JSON and missing id | stdout listing the four cases |
 | `AC-AI-24-06` | Planner remains side-effect free | `node tools/ai-brain/acceptance/ac-24-06-planner-pure.js` exits 0 and prints `SCHEDULER_LAUNCH_REFERENCES: 0` | stdout; a `CONTROL:` line shows a copy of `scheduler.js` with an injected `child_process` require being detected |
 | `AC-AI-24-07` | Suite is not vacuous | `node tools/ai-brain/acceptance/ac-24-07-suite-invariant.js` exits 0 and prints `SUITE_NOT_VACUOUS:` with `executor.test.js` among the resolved files | stdout |
-| `AC-AI-24-08` | Outside the repository | each `ac-24-*.js` run from an empty temp directory exits `2` with `SOURCE_MISSING` | stdout |
+| `AC-AI-24-08` | Outside the repository: every other `ac-24-*.js` refuses operationally | `node tools/ai-brain/acceptance/ac-24-08-outside-repository.js` exits 0 and prints `OUTSIDE_REPOSITORY_PROBE:`; exits 1 if any discovered subject does not exit `2` with `SOURCE_MISSING` or writes into the empty directory | stdout, one `SUBJECT:` line per discovered script |
+| `AC-AI-24-09` | Dependency proven from Git: register row 157 declares exactly `TASK-AI-16`, and `TASK-AI-16` is merged into `origin/main` | `node tools/ai-brain/acceptance/ac-24-09-dependency-merged.js` exits 0 and prints `TASK-AI-16 dependency verified: merged into origin/main for TASK-AI-24` | stdout; rule in `tools/ai-brain/acceptance/lib/dependency-merged.js` |
+| `AC-AI-24-10` | **Negative proof, must fail:** a copy of the real register naming a dependency with no merge commit is refused by the rule `AC-AI-24-09` runs, after the real row is control-proven | `node tools/ai-brain/acceptance/ac-24-10-dependency-unproven.js` exits 1 and prints `DEPENDENCY_UNPROVEN: TASK-AI-99 has no merge commit reachable on origin/main` | stderr; the register on disk is never written |
 
 ## Verification commands
 
 ```powershell
 node --test "tools/ai-brain/test/*.test.js"
-Get-ChildItem tools/ai-brain/acceptance/ac-24-*.js | ForEach-Object { node $_.FullName; if ($LASTEXITCODE -ne 0) { throw $_.Name } }
+Get-ChildItem tools/ai-brain/acceptance/ac-24-*.js | Where-Object Name -ne 'ac-24-10-dependency-unproven.js' | ForEach-Object { node $_.FullName; if ($LASTEXITCODE -ne 0) { throw $_.Name } }
+node tools/ai-brain/acceptance/ac-24-10-dependency-unproven.js; if ($LASTEXITCODE -ne 1) { throw 'ac-24-10 must exit 1' }
 node tools/ai-brain/cli.js dispatch --dry-run
 node tools/ai-brain/cli.js reconcile
 python docs/product-spec/scripts/validate_docs.py
