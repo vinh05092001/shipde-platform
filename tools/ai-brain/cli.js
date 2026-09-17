@@ -761,9 +761,16 @@ function main() {
   if (command === 'quota') return quotaCommand(args);
   if (command === 'dispatch') return dispatchCommand(args);
   if (command === 'shadow') return shadowCommand(args);
+  // account add | account limits | account secret (TASK-AI-29). The account
+  // surface parses its own argv strictly, so a mistyped flag is refused
+  // rather than dropped, and never routes through reconcile allowlists.
+  if (command === 'account') {
+    const { runAccountCli } = require('./account-entry');
+    process.exit(runAccountCli(process.argv.slice(3)));
+  }
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | manifest | prove | quota | dispatch | shadow');
+  console.error('Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account');
   process.exit(2);
 }
 
