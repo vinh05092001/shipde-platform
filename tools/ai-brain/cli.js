@@ -656,6 +656,126 @@ function shadowCommand(args) {
   if (result.mode === 'compare' && result.divergences.length > 0) process.exit(1);
 }
 
+/**
+ * TASK-AI-22 — promotion gate for proposed agent memory:
+ *   node tools/ai-brain/cli.js lesson propose [file] [--id <id>] [...]
+ *   node tools/ai-brain/cli.js lesson approve <id> [--approver <login>]
+ *   node tools/ai-brain/cli.js lesson reject <id>
+ *   node tools/ai-brain/cli.js lesson supersede <id> --by <replacing_id>
+ */
+function lessonCommand(args) {
+  const fs = require('fs');
+  const path = require('path');
+  const promote = require('./lessons/promote');
+
+  const action = args._[1];
+  const options = {
+    dir: args.dir || args['lessons-dir'] || args.lessonsDir,
+    file: args.file || args.input,
+    recordPath: args.record || args['record-path'] || args.recordPath,
+    approver: args.approver,
+    schemaPath: args.schema || args['schema-path'] || args.schemaPath,
+  };
+
+  try {
+    if (action === 'propose') {
+      let fileData = {};
+      const fileCandidate = args._[2] || options.file;
+      if (fileCandidate && fs.existsSync(fileCandidate)) {
+        try {
+          fileData = JSON.parse(fs.readFileSync(fileCandidate, 'utf8'));
+        } catch (e) {
+          console.error('refused: INVALID_INPUT: ' + e.message);
+          process.exit(1);
+        }
+      }
+      const data = {
+        id: args.id || fileData.id,
+        title: args.title || fileData.title,
+        scope: args.scope || fileData.scope,
+        evidence: args.evidence || fileData.evidence,
+        source_commit: args['source-commit'] || args.sourceCommit || fileData.source_commit,
+        expiry: args.expiry !== undefined ? args.expiry : fileData.expiry,
+        superseded_by:
+          args['superseded-by'] || args.supersededBy || args.by || fileData.superseded_by,
+        proposed_by:
+          args['proposed-by'] || args.proposedBy || args.proposer || fileData.proposed_by,
+        approved_by: args['approved-by'] !== undefined ? args['approved-by'] : fileData.approved_by,
+        created_at: args['created-at'] || args.createdAt || fileData.created_at,
+      };
+
+      const result = promote.proposeLesson(data, options);
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        for (const w of result.warnings) {
+          console.warn('warning: ' + w);
+        }
+        console.log('proposed: ' + result.lesson.id);
+      }
+      return;
+    }
+
+    if (action === 'approve') {
+      const id = args._[2] || args.id;
+      if (!id) {
+        console.error('refused: MISSING_LESSON_ID: node tools/ai-brain/cli.js lesson approve <id>');
+        process.exit(1);
+      }
+      const result = promote.approveLesson(id, options);
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log('approved: ' + result.lesson.id + ' by ' + result.lesson.approved_by);
+      }
+      return;
+    }
+
+    if (action === 'reject') {
+      const id = args._[2] || args.id;
+      if (!id) {
+        console.error('refused: MISSING_LESSON_ID: node tools/ai-brain/cli.js lesson reject <id>');
+        process.exit(1);
+      }
+      const result = promote.rejectLesson(id, options);
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log('rejected: ' + result.lesson.id);
+      }
+      return;
+    }
+
+    if (action === 'supersede') {
+      const id = args._[2] || args.id;
+      const replacingId = args.by || args['superseded-by'] || args.supersededBy || args._[3];
+      if (!id || !replacingId) {
+        console.error(
+          'refused: MISSING_SUPERSEDING_ID: node tools/ai-brain/cli.js lesson supersede <id> --by <replacing_id>'
+        );
+        process.exit(1);
+      }
+      const result = promote.supersedeLesson(id, replacingId, options);
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log('superseded: ' + result.lesson.id + ' by ' + result.lesson.superseded_by);
+      }
+      return;
+    }
+
+    console.error('Hành động không rõ: ' + (action || '(trống)'));
+    console.error('Dùng: lesson propose | approve | reject | supersede');
+    process.exit(2);
+  } catch (err) {
+    if (err instanceof promote.PromotionError) {
+      console.error('refused: ' + err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -665,9 +785,10 @@ function main() {
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
   if (command === 'shadow') return shadowCommand(args);
+  if (command === 'lesson') return lessonCommand(args);
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | manifest | prove | quota | shadow');
+  console.error('Dùng: reconcile | manifest | prove | quota | shadow | lesson');
   process.exit(2);
 }
 

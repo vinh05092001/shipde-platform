@@ -98,6 +98,14 @@
           "approved_by": { "type": "null" }
         }
       }
+    },
+    {
+      "if": { "properties": { "status": { "const": "proposed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "approved_by": { "type": "null" }
+        }
+      }
     }
   ]
 }
