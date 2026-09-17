@@ -14,7 +14,7 @@
 | Allowed paths | `scripts/ai/control.ps1`, `scripts/ai/doctor.ps1`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ecosystem-manifest.json` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-44-router-split` |
-| Pull Request | `<URL>` |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/92 |
 
 ## Delivery note: this Work Item ships on the TASK-AI-16 branch
 
