@@ -30,7 +30,7 @@ The durable delivery register (`docs/product-spec/docs/10-ai-collaboration/FEATU
 
 Consequences of this ledger, binding on any controller or reviewer:
 
-- This Work Item file must never declare `READY_FOR_CODEX` (or any later stage) while the register records `BLOCKED_DEPENDENCY`. The Codex review record below is therefore `PENDING`, not a review verdict.
+- This Work Item file must never declare `READY_FOR_CODEX` (or any later stage) while the register records `BLOCKED_DEPENDENCY`. The Codex review record below is therefore `NOT_REVIEWED`, not a review verdict.
 - The dependency `TASK-AI-24` (`Execute dispatch plans through AO session create`) has no specification document in this checkout (`docs/product-spec/work-items/TASK-AI-24.md` is absent). The block is true rather than stale: there is no executor whose outcomes this Work Item could feed back yet.
 - The intervening `READY_FOR_AUTHOR` and `IN_PROGRESS` transitions must be written to `FEATURE-DELIVERY-REGISTER.csv` by the governed register reconciler (`TASK-AI-19`) after `TASK-AI-24` is delivered, before this item is stage-eligible for review routing.
 - `AC-AI-25-01` mechanically compares the `Status` cell of the Control table above against `delivery_order` `158` of the register and fails if they diverge.
@@ -165,7 +165,7 @@ node --test tools/ai-brain/test/feedback.test.js
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `Pending` | `PENDING` | Initial specification authoring for TASK-AI-25. |
+| 1 | `Pending` | `NOT_REVIEWED` | Initial specification authoring for TASK-AI-25. |
 
 ## Residual limitations
 
