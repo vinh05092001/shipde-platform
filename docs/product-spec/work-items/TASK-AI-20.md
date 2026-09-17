@@ -6,15 +6,15 @@
 |---|---|
 | Work Item ID | `TASK-AI-20` |
 | Feature ID | `N/A` |
-| Status | `BLOCKED_DEPENDENCY` |
+| Status | `BACKLOG` |
 | Delivery order | `153` |
 | Dependencies | `TASK-AI-19` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-20.md`, `tools/ai-brain/acceptance/ac-20-*.js`, `tools/ai-brain/acceptance/lib/spec-coverage.js` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `spec/task-ai-20` |
-| Pull Request | `Pending` |
+| Branch | `feat/task-ai-20-9r` |
+| Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/98` |
 
 ## Business outcome
 
@@ -82,18 +82,17 @@ whose Control table names a different row.
   increments, the latest being `ab54b3f6b128517c537eaa0402dfb2de88bb353c`
   (Pull Request #61). Both commits are reachable from `origin/main`.
 - Authoritative delivery register status: row `153` records `TASK-AI-20` as
-  `BLOCKED_DEPENDENCY` on `TASK-AI-19`. The Control table above records
-  `BLOCKED_DEPENDENCY` and no other value. The row becomes eligible for
-  `READY_FOR_AUTHOR` only through the reconciler's write-back path
-  (`tools/ai-brain/reconcile.js`, `AI-19-R03`) once every declared dependency is
-  `MERGED` and evidenced; it is never advanced by hand.
-- The register's own row for `TASK-AI-19` still reads `BLOCKED_DEPENDENCY`, a
-  state `TASK-AI-19` already documents as residual: its dependency `TASK-AI-17`
-  carries no durable merge-evidence artifact, so `AI-19-R04` refuses to record it
-  `MERGED` and the reconciler cannot yet clear the downstream blocks. The block
-  on row `153` is therefore stale rather than true — the dependency is merged in
-  Git — and clearing it remains the reconciler's write-back, not a hand edit of
-  the register.
+  `BACKLOG` on `TASK-AI-19`. The Control table above records the register's own
+  value, `BACKLOG`, and no other. The row left its dependency block through the
+  reconciler's write-back path (`tools/ai-brain/reconcile.js`, `AI-19-R03`),
+  which clears a block to `BACKLOG` only once every declared dependency is
+  `MERGED`, reachable on `origin/main`, and carries an accepted verdict.
+- `BACKLOG` grants nothing: the row still needs the independent planning gate
+  before it can be picked up, and it is never advanced by hand. The dependency's
+  own row proves the clearing: row `152` records `TASK-AI-19` as `MERGED` on
+  Pull Request #63 with verdict `FALLBACK_PASS` and merge commit
+  `e5e06918d0b6d62de988168d23bb1309fc7cf3ed`, reachable from `origin/main`. The
+  stale-block note that previously stood here is superseded by that write-back.
 - `node tools/ai-brain/cli.js reconcile` reports `Tổng: 0 lỗi` against the real
   register, so no terminal or ready row currently claims a specification that
   does not exist.
@@ -246,6 +245,28 @@ instead of carrying a second CSV parser, and the severity ladder that
 `tools/ai-brain/reconcile.js`, which `AC-AI-20-05` runs through the CLI — not a
 private copy of it.
 
+### Executed acceptance evidence
+
+Measured on the branch head that delivers this document and the acceptance
+harness (Node.js workstation, `Asia/Bangkok`, 2026-09-17), against the real
+register. Every count below is a measurement, never a pinned assertion; the
+counts drift as rows are authored and are re-measured on every run.
+
+| Command | Exit | Observed evidence |
+|---|---|---|
+| `node tools/ai-brain/acceptance/ac-20-01-spec-coverage.js` | 0 | `SPEC_COVERAGE: specified=36, unspecified=142`; `CONTROL: the rule counted an absent path and cleared an existing one`; `SPEC_COVERAGE: 0 identity mismatches` |
+| `node tools/ai-brain/acceptance/ac-20-02-spec-identity.js` | 1 | `SPEC_IDENTITY_MISMATCH_DETECTED: tampered file declares "TASK-AI-02", row expects "TASK-AI-01"` |
+| `node tools/ai-brain/acceptance/ac-20-03-spec-missing-severity.js` | 1 | `SPEC_MISSING_ESCALATED: TASK-AI-10 status=READY_FOR_AUTHOR -> SPEC_MISSING severity=error` |
+| `node tools/ai-brain/acceptance/ac-20-04-outside-repository.js` | 0 | `OUTSIDE_REPOSITORY_PROBE: 3 subjects exited 2 with no register present` |
+| `node tools/ai-brain/cli.js reconcile` | 0 | register summary reports 0 errors and 0 warnings against the real register; no ready or terminal row names a specification that does not exist |
+| `node --test tools/ai-brain/test/*.test.js` | 0 | tests 391, pass 391, fail 0 |
+| `python docs/product-spec/scripts/validate_docs.py` | 0 | Documentation validation passed: 101 markdown files |
+| `node tools/ai-guard/cli.js secret-surface` | 0 | SECRET_SURFACE_CLEAN |
+
+The engine tests in `Verification commands` step 4 belong to the engine
+increment the `Author boundary` names as a subsequent task. They are not run by
+this bounded increment, which changes only the three allowed paths.
+
 ## Verification commands
 
 ```bash
@@ -273,6 +294,7 @@ node --test tools/ai-brain/test/spec-author.test.js
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `Pending` | `PENDING` | Initial specification authoring for TASK-AI-20. |
+| 2 | `Pending` | `PENDING` | Acceptance harness completed against the real register, with the Control probes each row's evidence depends on in place, and the Control table re-aligned to the register. Awaiting the independent Codex review. |
 
 ## Residual limitations
 
