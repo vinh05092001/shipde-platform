@@ -6,15 +6,15 @@
 |---|---|
 | Work Item ID | `TASK-AI-33` |
 | Feature ID | `N/A` |
-| Status | `BLOCKED_DEPENDENCY` |
+| Status | `BACKLOG` |
 | Delivery order | `166` |
 | Dependencies | `TASK-AI-19` |
-| Assigned author | `GEMINI` |
+| Assigned author | `GEMINI` (specification); `CLAUDE` (implementation, under the operator's instruction to finish the TASK-AI lane) |
 | Risk | `LOW` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-33.md`, `tools/ai-brain/acceptance/ac-33-*.js`, `tools/ai-brain/acceptance/lib/dependency-graph.js` |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-33.md`, `tools/ai-brain/acceptance/ac-33-*.js`, `tools/ai-brain/acceptance/lib/dependency-graph.js`; implementation: `tools/ai-brain/shadow.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/test/shadow.test.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `spec/task-ai-33` |
-| Pull Request | `Pending` |
+| Branch | `spec/task-ai-33` (specification, merged as PR #66); `feat/task-ai-33-beads-shadow` (implementation) |
+| Pull Request | `#66` (specification); implementation PR opened from `feat/task-ai-33-beads-shadow` |
 
 ## Business outcome
 
@@ -82,18 +82,10 @@ produces.
   `ab54b3f6b128517c537eaa0402dfb2de88bb353c` (Pull Request #61). Both commits are
   reachable from `origin/main`.
 - Authoritative delivery register status: row `166` records `TASK-AI-33` as
-  `BLOCKED_DEPENDENCY` on `TASK-AI-19`. The Control table above records
-  `BLOCKED_DEPENDENCY` and no other value. The row becomes eligible for
-  `READY_FOR_AUTHOR` only through the reconciler's write-back path
-  (`tools/ai-brain/reconcile.js`, `AI-19-R03`) once its dependency is `MERGED`
-  and evidenced; it is never advanced by hand.
-- The register's own row for `TASK-AI-19` still reads `BLOCKED_DEPENDENCY`, a
-  state `TASK-AI-19` already documents as residual: its dependency `TASK-AI-17`
-  carries no durable merge-evidence artifact, so `AI-19-R04` refuses to record
-  it `MERGED` and the reconciler cannot yet clear the downstream blocks. The
-  block on row `166` is therefore stale rather than true — the dependency is
-  merged in Git — and clearing it remains the reconciler's write-back, not a
-  hand edit of the register.
+  `BACKLOG`. The reconciler's write-back cleared the stale block when
+  `TASK-AI-19` was recorded `MERGED` (PR #69, `96940bf`), so the Control table
+  above records `BACKLOG`. This implementation does not advance the row; later
+  transitions remain the reconciler's and planning's.
 - `tools/ai-brain/reconcile.js` exports `parseDependencies`, so the shadow's edge
   rule can be the reconciler's rather than a copy of it.
 - `node tools/ai-brain/cli.js reconcile` reports `Tổng: 0 lỗi` against the real
@@ -278,6 +270,38 @@ pnpm format:check
 node --test tools/ai-brain/test/shadow.test.js
 ```
 
+## Implementation record
+
+Delivered on `feat/task-ai-33-beads-shadow`, based on `origin/main` at `4b0fa4b`.
+
+- `tools/ai-brain/shadow.js` — `project` and `compare`. It defines no graph rule
+  of its own: it requires `tools/ai-brain/acceptance/lib/dependency-graph.js`,
+  so the CLI, its tests and `AC-AI-33-01`..`03` run one module (`AI-33-R02`).
+  Every pass hashes the register before and after and throws if the bytes
+  changed (`AI-33-R01`). Missing or unparseable register or store, and a
+  register with no rows, throw `ShadowError` instead of yielding an empty graph
+  (`AI-33-R05`).
+- `node tools/ai-brain/cli.js shadow --project|--compare [--register <p>]
+  [--shadow <p>] [--json] [--dry-run]`. Unknown options, a value option with no
+  value, and both-or-neither of `--project`/`--compare` are refused with exit 1.
+  The default store is `.ai-local/shadow/dependency-graph.json`, which
+  `.gitignore` already excludes, so a projection never dirties the tree.
+- `tools/ai-brain/test/shadow.test.js` — 22 tests against temp-directory
+  fixture registers; none writes the real register, and one row reads it read-only and asserts its bytes are unchanged.
+- `AI-TOOLCHAIN-DECISIONS.md` § Beads runs in shadow mode (TASK-AI-33).
+
+Measured on this branch (`178` nodes, `174` edges, printed and not pinned):
+
+| Check | Result |
+|---|---|
+| `AC-AI-33-01` | exit 0, `SHADOW_PARITY: 0 divergences, register unchanged` |
+| `AC-AI-33-02` | exit 1, `SHADOW_DIVERGENCE_DETECTED: MISSING_IN_SHADOW TASK-AI-20 -> TASK-AI-19` |
+| `AC-AI-33-03` | exit 0, `RULE_SINGLE_SOURCE: shadow edges parsed by tools/ai-brain/reconcile.js` |
+| `AC-AI-33-04` | exit 0, `OUTSIDE_REPOSITORY_PROBE: 3 subjects exited 2 with no register present` |
+| `AC-AI-33-05` | exit 0, `Tổng: 0 lỗi` |
+| `node --test tools/ai-brain/test/shadow.test.js` | 22 pass, 0 fail |
+| `cli.js shadow --project` then `--compare` on the real register | exit 0, `Shadow agrees with the register: 178 nodes, 174 edges, 0 divergences` |
+
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
@@ -306,3 +330,16 @@ node --test tools/ai-brain/test/shadow.test.js
 - **The measured graph is recorded, not pinned.** `178` nodes and `174` edges
   were measured at `ab54b3f`; both grow with every merged Work Item, so the
   acceptance rows print them as evidence and assert neither.
+
+## Review round 1 — repairs
+
+Independent review by `cline-free/muse-spark-1.3-contributor` at `1122d031c0760d2125c3118652137430340d8729` returned `CHANGES_REQUIRED`. Each finding and its disposition:
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| `--shadow` equal to `--register` overwrote the register before the after-hash noticed | Fixed. `refuseRegisterAlias` compares canonical paths (resolved, symlinks followed, case-insensitive off Linux) and throws `ShadowError` before any read-then-write, in both `project` and `compare`. | `shadow.test.js`: "a shadow path that is the register is refused before any write" (direct and `shadow/../register.csv` alias) and the CLI row "--shadow naming the register exits 1 and leaves the register intact". Removing the guard makes both fail (measured: 20 pass, 2 fail). |
+| `--dry-run` silently ignored with `--compare` | Fixed. Refused with exit 1; `--compare` never writes. | CLI row "--dry-run with --compare is refused". |
+| Raw `EISDIR`/`EACCES` escaped as stack traces | Fixed. Write failures rethrow as `ShadowError`, so the CLI refuses with exit 1. | "an unwritable shadow path is a refusal, not a raw filesystem error". |
+| Real-register agreement was prose only | Fixed. A test runs `cli.js shadow --project` then `--compare` against the real register into a temp store, asserts `0 divergences` and byte-identical register. | "the real register projects and compares with zero divergences". |
+
+`node --test tools/ai-brain/test/shadow.test.js`: 22 pass, 0 fail.
