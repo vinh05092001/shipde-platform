@@ -25,6 +25,7 @@ const { accountHeadroom, isDispatchable } = require('./quota');
 const { effectiveLimits } = require('./ceiling');
 const agyQuota = require('./agy-quota');
 const { sameAccount } = require('./agy-identity');
+const { resolveGrade } = require('./fitness');
 
 /** Severity order shared by every headroom merge in this file. */
 const SEVERITY = { open: 0, unknown: 1, tight: 2, exhausted: 3, cooling: 4 };
@@ -113,8 +114,26 @@ function expandOfferings(accounts, options) {
       if (!model) continue;
       const e = typeof entry === 'string' ? {} : entry;
 
+      const offerId = offeringId(account.id, model);
+      const codingGrade =
+        e.codingGrade !== undefined
+          ? Number(e.codingGrade)
+          : account.codingGrade !== undefined
+            ? Number(account.codingGrade)
+            : undefined;
+
+      const gradeProvenance =
+        e.gradeProvenance !== undefined
+          ? e.gradeProvenance
+          : account.gradeProvenance !== undefined
+            ? account.gradeProvenance
+            : undefined;
+
+      const gradeRecord = resolveGrade({ id: offerId, codingGrade });
+      if (gradeProvenance !== undefined) gradeRecord.provenance = gradeProvenance;
+
       out.push({
-        id: offeringId(account.id, model),
+        id: offerId,
         accountId: account.id,
         provider: account.provider,
         // The address the operator signed this account in as. Carried so a
@@ -137,12 +156,10 @@ function expandOfferings(accounts, options) {
         // The hardest class of work this model is trusted to finish. Distinct
         // from `quality`: quality ranks two models against each other, grade
         // says whether either may take the task at all.
-        codingGrade:
-          e.codingGrade !== undefined
-            ? Number(e.codingGrade)
-            : account.codingGrade !== undefined
-              ? Number(account.codingGrade)
-              : undefined,
+        codingGrade,
+        // Full grade record with provenance: { class, graded, source, error? }
+        gradeRecord,
+        gradeProvenance,
         qualifiedRoles: e.qualifiedRoles || account.qualifiedRoles,
         enabled: e.enabled !== false,
         // Kept apart so the combined check below can see which is which.
