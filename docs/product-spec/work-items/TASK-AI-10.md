@@ -31,7 +31,7 @@ The durable delivery register (`docs/product-spec/docs/10-ai-collaboration/FEATU
 Consequences of this ledger, binding on any controller or reviewer:
 
 - This Work Item file must never declare `READY_FOR_CODEX` (or any later stage) while the register records `BLOCKED_DEPENDENCY`; doing so would route the item past gates for which no transition evidence exists. The Codex review record below is therefore `NOT_REVIEWED`, not a review verdict.
-- The dependency is satisfied in Git reality but not yet recorded: `TASK-AI-09`'s specification is merged into `origin/main` at `9132847a22ca71ad18c302b7d2487b7eb3a44ec4` (PR #70), while register row 142 still reads `BLOCKED_DEPENDENCY`. `AC-AI-10-03` proves this from the repository rather than from the register.
+- The dependency is satisfied in Git reality but not yet recorded: `TASK-AI-09`'s specification is merged into `origin/main` at `913284740f74e8e4ff096f2d4af4a321b01a11e3` (PR #70), while register row 142 still reads `BLOCKED_DEPENDENCY`. `AC-AI-10-03` proves this from the repository rather than from the register.
 - The intervening `READY_FOR_AUTHOR` and `IN_PROGRESS` transitions must be written to `FEATURE-DELIVERY-REGISTER.csv` by the governed register reconciler before this item is stage-eligible for review routing.
 - `AC-AI-10-01` mechanically compares the `Status` cell of the Control table above against row 143 of the register and fails if they diverge, guaranteeing the two sources cannot silently disagree.
 
@@ -65,22 +65,22 @@ The outcome is falsifiable from the repository alone: the boundary is declared i
 - `docs/product-spec/work-items/TASK-AI-07.md`, `TASK-AI-08.md`, `TASK-AI-09.md` - Out of scope entries that defer fine-grained permission allowlists to this Work Item.
 - `docs/product-spec/work-items/TASK-AI-13.md` - `AI-MERGE-04`: only `chatgpt-codex-connector[bot]` is a trusted reviewer; nothing extends the allowlist.
 - `scripts/ai/control.ps1` - `$script:TrustedCodexReviewerLogins`, `Assert-ShipDeReviewTarget`, `Assert-ShipDeSupervisorLock`, the force-push detection in the reconciliation transition, and `Invoke-ShipDeAutoMerge` (the governed, preflight-bound merge).
-- `tools/ecosystem-profiles.json` - the nine activation profiles carrying the minimum safe toolset (`allowed_tools`), a `localhost-only` network policy and concurrency limits.
+- `tools/ecosystem-profiles.json` - the nine activation profiles carrying the minimum safe toolset (`allowed_tools`), a per-profile least-privilege `network_policy` (`localhost-only`, `localhost-only-strict-carrier-mock`, `air-gapped-preferred-no-leakage`, `local-scan-only`, `read-only-localhost`, `github-api-and-localhost-only`, or `local-and-registry-only`, never unrestricted) and concurrency limits.
 - `tools/ai-guard/` - the writer-claim and secret-surface guards already enforcing part of the boundary.
 - `tools/ai-brain/acceptance/lib/permission-allowlist.js` - the single definition of the boundary this Work Item's rows exercise.
 
 ## Preconditions and dependencies
 
-- Prerequisite `TASK-AI-09` (Full checkpoint persistence and restart recovery) is declared on `origin/main` at `9132847a22ca71ad18c302b7d2487b7eb3a44ec4` (PR #70). `AC-AI-10-03` proves this from the repository rather than from the register.
+- Prerequisite `TASK-AI-09` (Full checkpoint persistence and restart recovery) is declared on `origin/main` at `913284740f74e8e4ff096f2d4af4a321b01a11e3` (PR #70). `AC-AI-10-03` proves this from the repository rather than from the register.
 - Delivery register alignment: `FEATURE-DELIVERY-REGISTER.csv` row 143 records `status: "BLOCKED_DEPENDENCY"`. The Control table records `BLOCKED_DEPENDENCY` exactly.
 - `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` carries the "Permission boundaries (TASK-AI-10+)" section with six allowed and six denied operations. `AC-AI-10-05` asserts this directly.
 - A local Node.js runtime for the acceptance scripts. No network access and no credential are required.
 
 ## Author boundary
 
-`GEMINI` is the assigned author for this Work Item. This Work Item authors the specification and the acceptance harness that prove it, bounded to the allowed paths above. It writes documents and scripts; it does not change application code.
+`GEMINI` is the assigned author for this Work Item. Although the Control table's Allowed paths already name `scripts/ai/control.ps1`, `tools/ecosystem-profiles.json` and `tools/ai-guard/**` — because those are the eventual enforcement points this Work Item's rule module must bind to — this particular pull request changes zero application code: it authors only the specification (`TASK-AI-10.md`) and the acceptance harness (`tools/ai-brain/acceptance/ac-10-*.js`, `tools/ai-brain/acceptance/lib/permission-allowlist.js`) that prove the boundary from the repository as it stands today. `git show --stat` on this PR's commit shows exactly one markdown file and the acceptance scripts; no diff touches `control.ps1`, `ecosystem-profiles.json` or `tools/ai-guard/`.
 
-Implementation of the enforced allowlist is a subsequent task by `GEMINI` within these additional paths:
+Implementation of the enforced allowlist — actually editing `control.ps1`, `ecosystem-profiles.json` and `tools/ai-guard/` to consult `lib/permission-allowlist.js` at runtime — is a subsequent task by `GEMINI`, using the same three paths already declared above:
 
 - `scripts/ai/control.ps1` (the enforcement point every routine operation passes through)
 - `tools/ecosystem-profiles.json` (the activation-time tool subsets)
@@ -100,7 +100,7 @@ Prohibited in this Work Item:
 1. **One enforced boundary, one authority.** The supervisor's routine operations are bounded by the declared allowlist in `AI-TOOLCHAIN-DECISIONS.md` "Permission boundaries (TASK-AI-10+)"; an operation outside the allowlist is denied by default, fail-closed, not warned and continued.
 2. **The six routine operations stay allowed**: read files and repository state; run lint, typecheck and test commands; create commits and push to feature branches; create and update Pull Requests; inspect CI status and review comments; send messages to AO sessions.
 3. **The six operations stay denied**: auto-merge any Pull Request; force-push or rewrite history; delete branches or worktrees destructively; bypass CI or review gates; broad unrestricted shell access; install, remove or upgrade machine tools.
-4. **Activation-time least privilege.** Each activation profile in `tools/ecosystem-profiles.json` carries only the tools its activity needs (`allowed_tools`), a `localhost-only` network policy, and the concurrency ceiling.
+4. **Activation-time least privilege.** Each activation profile in `tools/ecosystem-profiles.json` carries only the tools its activity needs (`allowed_tools`), a per-profile least-privilege `network_policy` (not always literally `localhost-only`; see the seven distinct values in `tools/ecosystem-profiles.json`), and the concurrency ceiling.
 5. **Reviewer-identity allowlist preserved.** Durable review evidence is admitted only from `chatgpt-codex-connector[bot]` (`AI-SUP-21`, `AI-MERGE-04`); no configuration, environment variable or actor extends that allowlist.
 6. **Deterministic self-tests** covering the boundary: every allowed operation passes, every denied operation is refused, and an operation the allowlist does not name is denied by default.
 7. **Acceptance rows** that assert the boundary is declared and complete, that a removed deny entry is reported, and that every negative proof fails closed (exit 2) when it cannot detect.
@@ -121,7 +121,7 @@ Prohibited in this Work Item:
 | `AI-10-R02` | **The deny list is load-bearing.** Each of the six denied operations is named, and removing one from the boundary is a violation reported by `AC-AI-10-06`, never a silent widening.                                                                                                                                               |
 | `AI-10-R03` | **Denial is enforcement, not advice.** A denied operation stops the run with a diagnostic naming the operation; it is never logged as a warning and continued.                                                                                                                                                                     |
 | `AI-10-R04` | **One authority.** The boundary is declared once in `AI-TOOLCHAIN-DECISIONS.md` and read by the enforcement point. A second, private copy of the allow/deny list is prohibited.                                                                                                                                                    |
-| `AI-10-R05` | **Least privilege at activation.** Each profile in `tools/ecosystem-profiles.json` carries only the tools its activity needs, a `localhost-only` network policy, and the concurrency ceiling.                                                                                                                                      |
+| `AI-10-R05` | **Least privilege at activation.** Each profile in `tools/ecosystem-profiles.json` carries only the tools its activity needs, a per-profile least-privilege `network_policy` (not always literally `localhost-only`; see the seven distinct values in `tools/ecosystem-profiles.json`), and the concurrency ceiling.                                                                                                                                      |
 | `AI-10-R06` | **Reviewer identity is part of the boundary.** Only `chatgpt-codex-connector[bot]` is trusted for durable review evidence; non-allowlisted review-shaped text is untrusted (`AI-SUP-21`).                                                                                                                                          |
 | `AI-10-R07` | **Fixed commands, bounded output.** Routine operations run through fixed executable/argument construction with explicit timeouts; client or model input is never interpolated into a shell command.                                                                                                                                |
 | `AI-10-R08` | **No vacuous verification.** Every acceptance row reads a real file or real repository state. No row compares two string literals written into its own command, no row asserts through `node --test --test-name-pattern` (which exits 0 when the pattern matches nothing), and no count that drifts with the repository is pinned. |
