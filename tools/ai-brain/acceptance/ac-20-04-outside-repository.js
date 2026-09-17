@@ -50,9 +50,7 @@ for (const subject of subjects) {
 }
 
 if (failedCount > 0) {
-  console.error(
-    `OUTSIDE_REPOSITORY_PROBE: ${failedCount} subjects did not exit 2`
-  );
+  console.error(`OUTSIDE_REPOSITORY_PROBE: ${failedCount} subjects did not exit 2`);
   process.exit(1);
 }
 
