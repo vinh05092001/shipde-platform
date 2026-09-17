@@ -261,10 +261,11 @@ than the real `PINNED_VERSION_DRIFT` for `codex-cli`", matching `AC-AI-17-01`.
 
 **Defect class:** false claim.
 
-**Measurement:** Preconditions opened with "`TASK-AI-16` complete". Register row
-151 records `TASK-AI-16` at `READY_FOR_AUTHOR`, `TASK-AI-16.md` records it at
-`READY_FOR_CODEX`, and the live `ao doctor` still reports
-`WARN codex-launch-flags`. No reading of the register supports "complete".
+**Measurement (at the PR #55 audit, 2026-09-14):** Preconditions opened with "`TASK-AI-16` complete". At that audit register row
+151 then recorded `TASK-AI-16` at `READY_FOR_AUTHOR`, `TASK-AI-16.md` then recorded it at
+`READY_FOR_CODEX`, and the live `ao doctor` then reported
+`WARN codex-launch-flags`. No reading of the register at that time supported "complete".
+Row 151 has since been recorded `MERGED` (PR #58); see the current-state note under Preconditions.
 
 **Replacement:** the precondition is annotated with the measured status and
 states that this Work Item's reconciliation does not depend on it.
@@ -316,6 +317,7 @@ python docs/product-spec/scripts/validate_docs.py
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `4b0fa4b` — the `origin/main` tip actually checked out and read by the reviewer; it contains the PR #55 merge `d45a5d1`, and TASK-AI-17's delivered files are unchanged between `d45a5d1` and `4b0fa4b` | `CHANGES_REQUIRED` (cline-free/muse-spark-1.3-contributor) | Findings 1-5 in the PR #55 review comment, resolved in branch `fix/task-ai-17-review-findings`: allowed-path lists aligned (1, 2); PR/branch/review placeholders filled (3); precondition and Step 1 snapshot marked current/historical (4, 5); re-run 2026-09-16: all six `ac-17-*` scripts exit 0, suite `514/514` across 116 suites, `manifest` 0 errors / 1 drift warning, `reconcile` 0 errors |
+| 3 | `a3412e9` (PR #82 head) | `CHANGES_REQUIRED` (cline-free/muse-spark-1.3-contributor) | round-2 findings 2-4 confirmed resolved and 5 confirmed disclosed; residual present-tense history in § D5 put in past tense |
 | 2 | `897d3cb` (PR #82 head) | `CHANGES_REQUIRED` (cline-free/muse-spark-1.3-contributor; verdict posted on PR #82) | (1) historical precondition sentence now in past tense; (2) Step 1 table no longer pins a count, and the re-run output is quoted below; (3) round 1 commit explained as the reviewed tip containing `d45a5d1`; (4) PR #82 added to the Pull Request field; (5) retroactive allowed-path expansion is left for the merge owner to confirm, as disclosed |
 
 Re-run at `897d3cb`, 2026-09-17, exact final lines:
