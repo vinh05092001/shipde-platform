@@ -83,7 +83,7 @@ if (matchesViolations(onDisk, withoutField, '$.' + SUBJECT, []).length > 0) {
 const violations = approvedRequirementViolations(onDisk);
 if (violations.length === 0) {
   console.error('LESSON_REQUIREMENT_MISSING_NOT_DETECTED');
-  process.exit(0);
+  process.exit(2);
 }
 if (violations.indexOf(FIELD + ' is not required for an approved lesson') < 0) {
   console.error('CONTROL_FAILED: the tamper produced an unrelated violation: ' + violations[0]);

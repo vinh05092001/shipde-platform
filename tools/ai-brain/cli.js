@@ -6,6 +6,8 @@
  *
  *   node tools/ai-brain/cli.js reconcile [--json] [--strict]
  *   node tools/ai-brain/cli.js prove --tests "<command>" [...]
+ *   node tools/ai-brain/cli.js dispatch [--dry-run | --execute] [--plan <file>]
+ *   node tools/ai-brain/cli.js shadow --project|--compare [--register <p>] [--shadow <p>] [--json] [--dry-run]
  *
  * `reconcile` asks whether the register can back up what it claims.
  * `prove` runs the checks an agent says it ran, and reports what happened.
@@ -565,6 +567,190 @@ function quotaCommand(args) {
   console.log('');
 }
 
+/**
+ * Plans with planDispatch and hands the plan to the executor (TASK-AI-24).
+ * Dry run unless --execute is given; the plan comes from --plan <file> or is
+ * built from READY_FOR_AUTHOR register rows and the account registry.
+ */
+function dispatchCommand(args) {
+  const fs = require('fs');
+  const { executePlan } = require('./executor');
+  const rootDir = args.root || process.cwd();
+  const execute = args.execute === true;
+  if (execute && (args['dry-run'] || args.dryRun)) {
+    console.error('Dispatch refused: --execute and --dry-run are exclusive.');
+    process.exit(2);
+  }
+
+  let plan;
+  if (typeof args.plan === 'string') {
+    plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+  } else {
+    const { planDispatch } = require('./scheduler');
+    const { listAccounts } = require('./accounts');
+    const csvPath =
+      args.csv ||
+      path.join(
+        rootDir,
+        'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+      );
+    if (!fs.existsSync(csvPath)) {
+      console.error('SOURCE_MISSING: ' + csvPath);
+      process.exit(2);
+    }
+    const register = loadRegister(csvPath, null, rootDir);
+    const items = ((register.data && register.data.items) || [])
+      .filter((row) => row.status === 'READY_FOR_AUTHOR')
+      .map((row) => ({
+        workItemId: row.work_item_id,
+        role: 'author.foundation',
+        branch: row.branch || null,
+        riskDomains: [],
+        priority: 0,
+      }));
+    plan = planDispatch(items, listAccounts() || [], {});
+  }
+
+  const result = executePlan(plan, {
+    dryRun: !execute,
+    project: args.project || 'shipde-platform',
+  });
+  const deferred = plan.deferred || [];
+  const planned = (plan.assignments || []).length;
+
+  if (args.json) {
+    console.log(JSON.stringify({ plan, result }, null, 2));
+    process.exit(result.summary.failed > 0 ? 1 : 0);
+  } else {
+    if (planned === 0) {
+      console.log('Dispatch: 0 assignments (' + deferred.length + ' deferred)');
+      for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
+      process.exit(0);
+    }
+    for (const r of result.records) {
+      console.log(
+        '  ' +
+          r.outcome +
+          '  ' +
+          r.workItemId +
+          '  ' +
+          r.role +
+          '  ' +
+          (r.offeringId || '-') +
+          (r.sessionId ? '  session ' + r.sessionId : '') +
+          (r.detail ? '  ' + r.detail : '')
+      );
+      if (r.args) console.log('    args ' + JSON.stringify(r.args));
+    }
+    for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
+  }
+  const s = result.summary;
+  if (result.dryRun) {
+    console.log('Dispatch dry run: ' + planned + ' planned, 0 launched');
+    process.exit(0);
+  }
+  console.log(
+    'Dispatch executed: ' +
+      s.launched +
+      ' launched, ' +
+      s.refused +
+      ' refused, ' +
+      s.failed +
+      ' failed'
+  );
+  process.exit(s.failed > 0 ? 1 : 0);
+}
+
+const SHADOW_FLAGS = new Set(['project', 'compare', 'json', 'dry-run', 'dryRun']);
+const SHADOW_VALUES = new Set(['register', 'shadow']);
+
+/**
+ * TASK-AI-33 — projects the register's dependency graph into a local shadow
+ * store, or compares a store against the register. The register is never
+ * written; every pass proves that by hash.
+ *
+ * Exit codes: 0 projected or in agreement, 1 divergent or refused.
+ */
+function shadowCommand(args) {
+  const shadow = require('./shadow');
+  const refuse = (why) => {
+    console.error(why);
+    process.exit(1);
+  };
+
+  for (const key of Object.keys(args)) {
+    if (key === '_') continue;
+    if (!SHADOW_FLAGS.has(key) && !SHADOW_VALUES.has(key)) {
+      refuse('Tuỳ chọn không nhận ra: --' + key);
+    }
+    if (SHADOW_VALUES.has(key) && typeof args[key] !== 'string') {
+      refuse('--' + key + ' cần một đường dẫn');
+    }
+  }
+  if (args._.length > 1) refuse('Đối số thừa: ' + args._.slice(1).join(' '));
+  if (Boolean(args.project) === Boolean(args.compare)) {
+    refuse('Chọn đúng một trong --project hoặc --compare');
+  }
+
+  const cwd = process.cwd();
+  const registerPath = path.resolve(
+    cwd,
+    args.register ||
+      path.join(
+        'docs',
+        'product-spec',
+        'docs',
+        '10-ai-collaboration',
+        'FEATURE-DELIVERY-REGISTER.csv'
+      )
+  );
+  const shadowPath = path.resolve(cwd, args.shadow || shadow.DEFAULT_SHADOW_PATH);
+  const dryRun = Boolean(args['dry-run'] || args.dryRun);
+  if (dryRun && args.compare) {
+    refuse('--dry-run chỉ dùng với --project; --compare không bao giờ ghi gì');
+  }
+
+  let result;
+  try {
+    result = args.project
+      ? shadow.project({ registerPath, shadowPath, dryRun })
+      : shadow.compare({ registerPath, shadowPath });
+  } catch (err) {
+    if (err instanceof shadow.ShadowError) refuse(err.message);
+    throw err;
+  }
+
+  if (args.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else if (result.mode === 'project') {
+    console.log(
+      (dryRun ? 'Would project ' : 'Projected ') +
+        result.nodes +
+        ' nodes, ' +
+        result.edges +
+        ' edges to ' +
+        result.shadowPath +
+        (result.unchanged ? ' (unchanged)' : '')
+    );
+  } else if (result.divergences.length === 0) {
+    console.log(
+      'Shadow agrees with the register: ' +
+        result.nodes +
+        ' nodes, ' +
+        result.edges +
+        ' edges, 0 divergences'
+    );
+  } else {
+    for (const d of result.divergences) console.log(d.type + '  ' + d.from + ' -> ' + d.to);
+    console.log(
+      result.divergences.length +
+        ' divergences; fix the shadow or investigate the register, never edit the register to match'
+    );
+  }
+
+  if (result.mode === 'compare' && result.divergences.length > 0) process.exit(1);
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -573,9 +759,11 @@ function main() {
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
+  if (command === 'dispatch') return dispatchCommand(args);
+  if (command === 'shadow') return shadowCommand(args);
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | manifest | prove | quota');
+  console.error('Dùng: reconcile | manifest | prove | quota | dispatch | shadow');
   process.exit(2);
 }
 
