@@ -14,7 +14,7 @@
 | Allowed paths | `tools/ecosystem-manifest.json`, `docs/product-spec/work-items/TASK-AI-17.md`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-brain/acceptance/ac-17-*.js`, `tools/ai-brain/acceptance/lib/reconcile-expectations.js`, `tools/ai-brain/manifest-audit.js`, `tools/ai-brain/test/manifest-audit.test.js` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-17-manifest-truth` (PR #19), `fix/task-ai-17-matrix-audit` (PR #55), `fix/task-ai-17-review-findings` (review repair) |
-| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/19 (merge `1f587dd`), https://github.com/vinh05092001/shipde-platform/pull/55 (merge `d45a5d1`) |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/19 (merge `1f587dd`), https://github.com/vinh05092001/shipde-platform/pull/55 (merge `d45a5d1`), https://github.com/vinh05092001/shipde-platform/pull/82 (review repair, this change) |
 
 ## Business outcome
 
@@ -63,9 +63,9 @@ for `codex-cli` (manifest pinned at `0.151.0` vs. host CLI installed at
 - `TASK-AI-16` recorded as complete; manifest audit CLI (`tools/ai-brain/cli.js
   manifest`) available. **Current state (2026-09-16): holds** — register row 151
   records `TASK-AI-16` as `MERGED` (PR #58). **Historical measurement at the
-  PR #55 audit, kept for traceability: the precondition did not hold then.** Register row 151 records `TASK-AI-16` at `READY_FOR_AUTHOR`, and
-  `TASK-AI-16.md` records it at `READY_FOR_CODEX`; neither is `MERGED`, and the
-  live `ao doctor` still reports `WARN codex-launch-flags` (see
+  PR #55 audit, kept for traceability: the precondition did not hold then.** At that audit, register row 151 then recorded `TASK-AI-16` at `READY_FOR_AUTHOR`, and
+  `TASK-AI-16.md` then recorded it at `READY_FOR_CODEX`; neither was `MERGED`, and the
+  live `ao doctor` then reported `WARN codex-launch-flags` (see
   `TASK-AI-16.md` § Acceptance matrix audit). The reconciliation in this Work
   Item does not depend on that health check, so it is measured and disclosed
   here rather than asserted.
@@ -190,13 +190,13 @@ that `AC-AI-17-01` and `AC-AI-17-04` both need is therefore committed once, to
 
 Historical snapshot taken at the PR #55 audit (2026-09-14); counts are not
 pinned. At the review-repair re-run (2026-09-16) `AC-AI-17-03` measured the
-larger live counts reported in `## Codex review record`, still `fail 0`.
+larger live counts reported in `## Codex review record`, still `fail 0`; that run's exact output is quoted in `## Codex review record`.
 
 | Row | Stored as a command? | Exit | Measured |
 |---|---|---|---|
 | `AC-AI-17-01` | no — prose only | 0 (`cli.js manifest`) | 37 declared, 27 checkable, 19 present, 8 missing; `0 lỗi, 1 cảnh báo, 2 ghi chú`; warning is `PINNED_VERSION_DRIFT` naming `codex-cli` (`0.151.0` pin vs `0.154.0` observed); `trustworthy` true |
 | `AC-AI-17-02` | no — prose only | 0 (`cli.js reconcile`) | 178 items checked; `0 lỗi, 0 cảnh báo, 149 ghi chú` |
-| `AC-AI-17-03` | yes | 0 | `tests 499 / pass 499 / fail 0` across 113 suites (ai-brain + ai-dashboard) |
+| `AC-AI-17-03` | yes | 0 | `fail 0` with `tests > 0` (the invariant `ac-17-03` asserts); the historical count at this snapshot is recorded in D2, not pinned here |
 | `AC-AI-17-04` | no — prose only | n/a | the 7 named entries are `PENDING` / `default_enabled: false` / `NON_BLOCKING`; `gitleaks` is `ADOPTED` / `BLOCKING_GATE` / `ci-provisioned` |
 | `AC-AI-17-05` | no — prose only | n/a | pin `0.151.0`; `observed_version_or_commit: "0.154.0"`; `version_drift_note` present |
 | `AC-AI-17-06` | no — prose only | n/a | register row 152, `status = READY_FOR_CODEX` |
@@ -315,7 +315,19 @@ python docs/product-spec/scripts/validate_docs.py
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `4b0fa4b` (origin/main after PR #55) | `CHANGES_REQUIRED` (cline-free/muse-spark-1.3-contributor) | Findings 1-5 in the PR #55 review comment, resolved in branch `fix/task-ai-17-review-findings`: allowed-path lists aligned (1, 2); PR/branch/review placeholders filled (3); precondition and Step 1 snapshot marked current/historical (4, 5); re-run 2026-09-16: all six `ac-17-*` scripts exit 0, suite `514/514` across 116 suites, `manifest` 0 errors / 1 drift warning, `reconcile` 0 errors |
+| 1 | `4b0fa4b` — the `origin/main` tip actually checked out and read by the reviewer; it contains the PR #55 merge `d45a5d1`, and TASK-AI-17's delivered files are unchanged between `d45a5d1` and `4b0fa4b` | `CHANGES_REQUIRED` (cline-free/muse-spark-1.3-contributor) | Findings 1-5 in the PR #55 review comment, resolved in branch `fix/task-ai-17-review-findings`: allowed-path lists aligned (1, 2); PR/branch/review placeholders filled (3); precondition and Step 1 snapshot marked current/historical (4, 5); re-run 2026-09-16: all six `ac-17-*` scripts exit 0, suite `514/514` across 116 suites, `manifest` 0 errors / 1 drift warning, `reconcile` 0 errors |
+| 2 | `897d3cb` (PR #82 head) | `CHANGES_REQUIRED` (cline-free/muse-spark-1.3-contributor; verdict posted on PR #82) | (1) historical precondition sentence now in past tense; (2) Step 1 table no longer pins a count, and the re-run output is quoted below; (3) round 1 commit explained as the reviewed tip containing `d45a5d1`; (4) PR #82 added to the Pull Request field; (5) retroactive allowed-path expansion is left for the merge owner to confirm, as disclosed |
+
+Re-run at `897d3cb`, 2026-09-17, exact final lines:
+
+```
+ac-17-01-manifest-audit-clean.js   exit 0  MANIFEST_AUDIT_ERRORS: 0
+ac-17-02-reconcile-clean.js        exit 0  RECONCILE_ERRORS: 0
+ac-17-03-suite-invariant.js        exit 0  AC-AI-17-03 suite invariant held: fail 0 with 514 passing of 514 tests across 116 suites (count not pinned)
+ac-17-04-manifest-reconciliation.js exit 0 AC-AI-17-04 reconciliation held: 0 violation(s)
+ac-17-05-codex-cli-drift.js        exit 0  AC-AI-17-05 drift recorded, pin intact
+ac-17-06-register-status.js        exit 0  AC-AI-17-06 register status held
+```
 
 ## Residual limitations
 
