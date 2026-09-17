@@ -14,7 +14,7 @@
 | Allowed paths | `package.json`, `pnpm-lock.yaml`, `lefthook.yml`, `tools/ecosystem-manifest.json`, `tools/ai-guard/**`, `tools/ai-brain/acceptance/ac-36-*.js`, `docs/product-spec/work-items/TASK-AI-36.md`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `scripts/ai/doctor.ps1`, `scripts/ai/bootstrap-worktrees.ps1` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-36-lefthook` |
-| Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/20` |
+| Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/96` |
 
 ## Business outcome
 
