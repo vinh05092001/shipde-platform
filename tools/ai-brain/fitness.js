@@ -216,6 +216,45 @@ function reviewGradeOf(offering) {
   return Math.max(1, gradeOf(offering) - 1);
 }
 
+/**
+ * A model's review class together with its provenance (AI-41-R01..R06).
+ *
+ *   { class, graded, source, declared?, error? }
+ *
+ *   - a declared ladder member  -> graded: true,  source: 'declared'
+ *   - an absent review grade    -> graded: false, source: 'assumed', class Math.max(1, gradeOf(offering) - 1)
+ *   - a value outside 1..4      -> graded: false, source: 'assumed', class Math.max(1, gradeOf(offering) - 1),
+ *     plus an `error` naming the model and the value. The class stays one-below
+ *     so the dispatch arithmetic is unchanged, but a typo is a finding rather
+ *     than a silent clamp.
+ *
+ * The class always agrees with reviewGradeOf().
+ */
+function resolveReviewGrade(offering) {
+  const declared = offering && offering.reviewGrade;
+  const fallback = Math.max(1, gradeOf(offering) - 1);
+  if (declared === undefined || declared === null) {
+    return { class: fallback, graded: false, source: GRADE_SOURCE.ASSUMED };
+  }
+
+  const g = Number(declared);
+  if (!Number.isFinite(g) || g < 1 || g > 4) {
+    return {
+      class: fallback,
+      graded: false,
+      source: GRADE_SOURCE.ASSUMED,
+      declared,
+      error:
+        'out-of-ladder review grade: ' +
+        ((offering && offering.id) || 'unknown') +
+        ' declares ' +
+        declared,
+    };
+  }
+
+  return { class: g, graded: true, source: GRADE_SOURCE.DECLARED };
+}
+
 function isSufficient(offering, difficulty) {
   return gradeOf(offering) >= difficulty;
 }
@@ -445,6 +484,7 @@ module.exports = {
   deriveGrade,
   gradeOf,
   reviewGradeOf,
+  resolveReviewGrade,
   isSufficient,
   remainingTokens,
   runwayOf,
