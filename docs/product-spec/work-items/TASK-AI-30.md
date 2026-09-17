@@ -10,8 +10,8 @@
 | Delivery order | `163` |
 | Dependencies | `TASK-AI-29` |
 | Assigned author | `CLAUDE` |
-| Risk | `MEDIUM` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-30.md`, `tools/ai-brain/qualification.js`, `tools/ai-brain/test/qualification.test.js`, `tools/ai-brain/acceptance/ac-30-*.js`, `tools/ai-brain/acceptance/lib/qualification.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
+| Risk | `HIGH` |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-30.md`, `tools/ai-brain/qualification.js`, `tools/ai-brain/test/qualification.test.js`, `tools/ai-brain/acceptance/ac-30-*.js`, `tools/ai-brain/acceptance/lib/qualification.js`, `tools/ai-brain/cli.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `spec/task-ai-30` |
 | Pull Request | `Pending` |
@@ -70,7 +70,7 @@ The register key behaviour — probe a newly added model and record what it is q
 
 ## Author boundary
 
-`CLAUDE` is the assigned author. Scope is strictly bounded: a bounded connection probe and a recorded qualification result inside `tools/ai-brain/` plus this specification. Consequential decisions (launching real model spend, touching encrypted credentials, recording qualification) require human approval per the ledger.
+`CLAUDE` is the assigned author, per `AGENTS.md` § Role separation ("Claude — analyst, secondary author and reviewer fallback ... authorized to act as ... assistant author for addressing review findings or authoring assigned Work Items"). Scope is strictly bounded: a bounded connection probe and a recorded qualification result inside `tools/ai-brain/` plus this specification. Risk is `HIGH`, not `MEDIUM`, because the probe decrypts a stored credential through `accounts.getSecret` and spends real, if bounded, model budget — both on `AGENTS.md`'s high-risk list. There is no separate approval ledger beyond the standard gate every Work Item already passes through: CI green, an independent Codex review verdict of `PASS`, and human merge (`AGENTS.md` § Role separation, § Unit of delivery); this item invents no additional approval mechanism, and implementation must not either.
 Prohibited in this Work Item:
 
 - Do NOT take a role, open `qualifiedRoles`, or grade any model. Gating is `TASK-AI-31`; grading is `TASK-AI-27`; review grading is `TASK-AI-41`.
@@ -85,7 +85,7 @@ Prohibited in this Work Item:
 
 1. Bounded connection probe: real request through the account's own launch path, with timeout, tree kill, cheapest model, cached verdict.
 2. Qualification result record: account id, model, instant, outcome (pass/fail/timeout/refused), latency, reason; readable; no credential or prompt text.
-3. Capability-gate wiring: result readable where `disqualify` reads `qualifiedRoles`; probe never writes `qualifiedRoles` itself.
+3. Result readability contract: the qualification result record lives at a stable, injectable path, keyed by account id and model, so a later item (`TASK-AI-31`) can read it without this item touching `capabilities.js`, `accounts.js`, `offerings.js` or `qualifiedRoles` — none of which is in Allowed paths. This item does not wire the result into `disqualify`; `disqualify`'s `qualifiedRoles` read is a separate, unrelated field this item never writes (`AI-30-R07`), and wiring a probe result into a granted role is `TASK-AI-31`'s job, not this one's.
 4. Entry-rule compliance: probed account passes the entry rule; registry stays credential-free.
 5. Deterministic unit tests in `tools/ai-brain/test/qualification.test.js` with injected functions; no network, no real registry.
 6. Acceptance scripts `ac-30-*.js` sharing one rule module `acceptance/lib/qualification.js`.
@@ -103,14 +103,14 @@ Prohibited in this Work Item:
 | `AI-30-R01` | **Probe the account's own launch path, never a hand-built request.** `seed-accounts.js` records per-account launch; `doctor.ps1` proves a hand-built request cannot tell a valid credential from an invalid one. Only the real client carries the probe. |
 | `AI-30-R02` | **Every probe is bounded.** Timeout, process-tree kill, cheapest model, cached verdict. Repeats within the cache window reuse the verdict instead of spending again (2026-09-14 pool drain). |
 | `AI-30-R03` | **Unsupported providers are skipped with a reason, never probed hopefully.** `refresh-quota.js READERS` covers antigravity and claude-code only; an empty result from an unanswerable question is not evidence. |
-| `AI-30-R04` | **A failure is recorded as a failure, never as healthy.** Per `AI-TOOL-10`: pass/fail/timeout/refused with latency and reason; a timeout reconciles before retry and never blind-retries. |
+| `AI-30-R04` | **A failure is recorded as a failure, never as healthy.** Per `AI-TOOL-10`: pass/fail/timeout/refused with latency and reason. A `timeout` outcome is cached like any other verdict (`AI-30-R02`): a repeat within the cache window reuses the cached `timeout` and does not re-spend; "reconciles before retry" means the *next* probe attempted after the cache window expires re-runs the real client rather than assuming the earlier timeout was transient, never a same-window blind retry. |
 | `AI-30-R05` | **The result carries no credential, PII, or prompt text.** Registry stays readable per `accounts.js`; credential travels only through `setSecret`/`getSecret`. |
 | `AI-30-R06` | **Only entry-admitted accounts are probed.** Account passes `validateAccount` plus `resolveLimits` via the shared entry module; a refused entry is never probed. |
 | `AI-30-R07` | **The probe never grants qualification.** It writes an outcome record; it never writes `qualifiedRoles`, grades, or quality. Promotion is `TASK-AI-31`. |
 
 ## UI states
 
-No screen changes. If the cockpit surfaces the result later, it follows the read-only rule (`AI15-R09`): loading, empty (never probed), error (probe failed with reason), success (outcome with instant and latency), and stale (past cache window) states; a failed probe is never shown as unqualified-route.
+N/A — this item makes no screen change; the cockpit is out of scope entirely (see Out of scope). A future item that surfaces this result on the cockpit must follow the read-only rule (`AI15-R09`) and specify its own states at that time; none is specified here to avoid describing a screen this item does not build.
 ## API, event and data impact
 
 Probe is a local operator command joining the `cli.js` surface (unknown options refused). No HTTP route, no migration, no registry schema change: the result is a separate readable record keyed by account id and model. `qualifiedRoles`, grades, quality untouched. Additive only: dispatch, quota, capability reads unchanged when no result exists.
@@ -121,7 +121,7 @@ Probe is a local operator command joining the `cli.js` surface (unknown options 
 | `AC-AI-30-01` | Control Status vs register row 163 | `node tools/ai-brain/acceptance/ac-30-01-status-alignment.js` exit 0 | stdout match message |
 | `AC-AI-30-02` | Negative: tampered spec copy diverges | `node tools/ai-brain/acceptance/ac-30-02-status-divergence.js` exit 1 | `STATUS_DIVERGENCE` stderr |
 | `AC-AI-30-03` | Declared dependency exactly TASK-AI-29 | `node tools/ai-brain/acceptance/ac-30-03-dependency-declared.js` exit 0 | stdout declaration message |
-| `AC-AI-30-04` | Negative: dependency repointed refused | `node tools/ai-brain/acceptance/ac-30-04-dependency-unproven.js` exit 1 | `DEPENDENCY_MISMATCH` stderr |
+| `AC-AI-30-04` | Negative: dependency repointed refused | `node tools/ai-brain/acceptance/ac-30-04-dependency-repointed.js` exit 1 | `DEPENDENCY_MISMATCH` stderr |
 | `AC-AI-30-05` | Probe rule over seeded accounts | `node tools/ai-brain/acceptance/ac-30-05-probe-rule.js` exit 0 | `PROBE_HOLDS` stdout |
 | `AC-AI-30-06` | Negative: unbounded and unsupported refused | `node tools/ai-brain/acceptance/ac-30-06-probe-rule-refused.js` exit 1 | `PROBE_VIOLATED` stderr |
 | `AC-AI-30-07` | Result carries outcome, no credential | `node tools/ai-brain/acceptance/ac-30-07-result-credential-free.js` exit 0 | `RESULT_CLEAN` stdout |
@@ -132,14 +132,14 @@ Probe is a local operator command joining the `cli.js` surface (unknown options 
 | `AC-AI-30-12` | New unit tests pass | `node --test tools/ai-brain/test/qualification.test.js` exit 0 | 0 fail stdout |
 | `AC-AI-30-13` | No secret surface | `node tools/ai-guard/cli.js secret-surface` exit 0 | `SECRET_SURFACE_CLEAN` stdout |
 
-Each row is a runnable command with a failing exit (`1` for violated, `2` for unmeasurable) when its rule breaks. Invariant rows assert markers, never pinned counts, since this item adds a spec file and nine scripts. Negative rows pair with one shared rule module (`acceptance/lib/qualification.js`) required by both sides; status and dependency pairs reuse `lib/spec-status-alignment.js` and `lib/dependency-merged.js`. Outside-repository behaviour is measured by `AC-AI-30-09`.
+Each row is a runnable command with a failing exit (`1` for violated, `2` for unmeasurable) when its rule breaks. Invariant rows assert markers, never pinned counts, since this item adds a spec file and nine scripts. Negative rows pair with one shared rule module (`acceptance/lib/qualification.js`) required by both sides; status and dependency pairs reuse `lib/spec-status-alignment.js` and `lib/dependency-declared.js`. Outside-repository behaviour is measured by `AC-AI-30-09`.
 ## Verification commands
 
 ```bash
 node tools/ai-brain/acceptance/ac-30-01-status-alignment.js
 node tools/ai-brain/acceptance/ac-30-02-status-divergence.js
 node tools/ai-brain/acceptance/ac-30-03-dependency-declared.js
-node tools/ai-brain/acceptance/ac-30-04-dependency-unproven.js
+node tools/ai-brain/acceptance/ac-30-04-dependency-repointed.js
 node tools/ai-brain/acceptance/ac-30-05-probe-rule.js
 node tools/ai-brain/acceptance/ac-30-06-probe-rule-refused.js
 node tools/ai-brain/acceptance/ac-30-07-result-credential-free.js
@@ -163,3 +163,5 @@ node tools/ai-guard/cli.js secret-surface
 - A passing probe is connectivity only. It says the model answered; it says nothing about quality, grade, or role fitness. Promotion stays with `TASK-AI-31`.
 - A result goes stale. Past the cache window it is history, not standing; dispatch must re-probe rather than trust it.
 - Spend is bounded, not zero. Cheapest model plus cache limits cost; each probe still spends budget.
+- **`TASK-AI-31` must still do the reading.** This item stores the qualification result at a stable, injectable path (declared in `qualification.js`, mirroring how `ceiling.js` declares `LEDGER_FILE`) and proves the record's shape, but it does not modify `capabilities.js`, `accounts.js` or `offerings.js` — none is in Allowed paths. `TASK-AI-31`, when it grants a role, is the item that reads this result and writes `qualifiedRoles`.
+- **The branch name predates `AGENTS.md`'s `feat/`/`fix/` pattern for this Work Item.** `spec/task-ai-30` does not match the `feat/`- or `fix/`-prefixed work-item-id-and-slug rule in `AGENTS.md` § Unit of delivery. This follows the precedent already merged for spec-only authoring Work Items on this repository (for example `spec/task-ai-21`, PR #74), and the branch itself was created before this specification was authored. Renaming it is outside this Work Item's Allowed paths.
