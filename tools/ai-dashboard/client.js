@@ -382,7 +382,7 @@ function renderSourceHealth() {
 
   const sources = [
     { key: 'register', label: '1. Register CSV', icon: '📋' },
-    { key: 'git', label: '2. Git & Worktrees', icon: '🌿' },
+    { key: 'git', label: '2. Git & Worktree', icon: '🌿' },
     { key: 'ao', label: '3. Agent Orchestrator', icon: '🤖' },
     { key: 'github', label: '4. GitHub PR / CI', icon: '🐙' },
   ];
@@ -425,7 +425,7 @@ function renderSourceHealth() {
         <div class="text-[11px] text-base-content/70 truncate mt-1" title="${escapeHtml(src.impact || '')}">${escapeHtml(src.impact || 'Hoạt động bình thường')}</div>
         <div class="flex items-center justify-between text-[10px] font-mono mt-1.5 pt-1.5 border-t border-base-300">
           <span class="px-1.5 py-0.5 rounded border font-bold ${freshnessBadge.cls}" title="Độ tươi dữ liệu nguồn (observedAt/ageMs thực)">${freshnessBadge.text}</span>
-          <span class="text-base-content/70">Tuổi: ${escapeHtml(ageLabel)}${src.latencyMs !== undefined ? ` • ${src.latencyMs}ms` : ''}</span>
+          <span class="text-base-content/70">Độ trễ: ${escapeHtml(ageLabel)}${src.latencyMs !== undefined ? ` • ${src.latencyMs}ms` : ''}</span>
         </div>
       </div>
     `;
@@ -442,13 +442,13 @@ function renderActiveWorkItem() {
     container.innerHTML = `
       <div class="p-6 text-center text-base-content/70 text-xs bg-base-200 rounded-xl border border-base-300">
         <span class="text-2xl mb-2 block">📭</span>
-        <div class="font-bold text-base-content mb-1">Không có Work Item chờ xử lý</div>
+        <div class="font-bold text-base-content mb-1">Không có việc đang xử lý</div>
       </div>
     `;
     return;
   }
 
-  const assignedAuthor = active.assigned_author || 'UNASSIGNED';
+  const assignedAuthor = active.assigned_author || 'CHƯA PHÂN CÔNG';
   let authorColor = 'bg-base-200 text-base-content/70 border-base-300';
   if (assignedAuthor === 'GEMINI')
     authorColor = 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30';
@@ -477,7 +477,7 @@ function renderActiveWorkItem() {
             ${escapeHtml(assignedAuthor)}
           </span>
           <span class="text-xs font-mono px-2 py-0.5 rounded border ${statusBadgeColor} font-bold">
-            [${escapeHtml(active.status)}]
+            [${escapeHtml(formatWorkItemStatus(active.status))}]
           </span>
         </div>
         <div class="text-xs text-base-content/70 font-mono">
@@ -489,26 +489,28 @@ function renderActiveWorkItem() {
         <h2 class="text-lg sm:text-xl font-black text-base-content leading-snug">
           ${escapeHtml(active.feature_name || active.key_behavior || 'Chi tiết công việc')}
         </h2>
-        <p class="text-xs sm:text-sm text-base-content/70 mt-2 leading-relaxed">
-          ${escapeHtml(active.key_behavior || '')}
-        </p>
+        ${
+          active.key_behavior && active.key_behavior !== active.feature_name
+            ? `<p class="text-xs sm:text-sm text-base-content/70 mt-2 leading-relaxed truncate">${escapeHtml(active.key_behavior)}</p>`
+            : ''
+        }
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs font-mono">
         <div class="bg-base-200 p-2.5 rounded-lg border border-base-300">
-          <div class="text-[10px] text-base-content/70 uppercase">Nhánh Thực Hiện</div>
-          <div class="text-base-content/70 truncate mt-0.5" title="${escapeHtml(active.branch || 'Chưa tạo nhánh')}">${escapeHtml(active.branch || '—')}</div>
+          <div class="text-[10px] text-base-content/70 uppercase">Nhánh</div>
+          <div class="text-base-content/70 truncate mt-0.5" title="${escapeHtml(active.branch || 'Chưa có nhánh')}">${escapeHtml(active.branch || '—')}</div>
         </div>
         <div class="bg-base-200 p-2.5 rounded-lg border border-base-300">
-          <div class="text-[10px] text-base-content/70 uppercase">Đặc Tả Nguồn</div>
+          <div class="text-[10px] text-base-content/70 uppercase">Đặc tả</div>
           <div class="text-base-content/70 truncate mt-0.5" title="${escapeHtml(active.work_item_path || '')}">
             ${escapeHtml(active.work_item_path ? active.work_item_path.split('/').pop() : '—')}
           </div>
         </div>
         <div class="bg-base-200 p-2.5 rounded-lg border border-base-300">
-          <div class="text-[10px] text-base-content/70 uppercase">Pull Request / Review</div>
+          <div class="text-[10px] text-base-content/70 uppercase">PR / Thẩm định</div>
           <div class="text-base-content/70 mt-0.5">
-            ${escapeHtml(active.pr || 'Chưa mở PR')} ${active.codex_verdict ? `(${escapeHtml(active.codex_verdict)})` : ''}
+            ${escapeHtml(active.pr || 'Chưa có PR')} ${active.codex_verdict ? `(${escapeHtml(active.codex_verdict)})` : ''}
           </div>
         </div>
       </div>
@@ -520,13 +522,13 @@ function renderActiveWorkItem() {
 // codes — most notably EVIDENCE_UNAVAILABLE, which must read clearly as
 // "cannot verify", not as a fabricated PASS state (AI15-R03).
 const GATE_STAGE_LABELS = {
-  IDLE: 'IDLE',
-  AUTHORING: 'AUTHORING',
-  CODEX_REVIEW: 'CODEX_REVIEW',
-  CI_GATES: 'CI_GATES',
-  HUMAN_MERGE: 'HUMAN_MERGE',
-  MERGED: 'MERGED',
-  BLOCKED: 'BLOCKED',
+  IDLE: 'NGHỈ',
+  AUTHORING: 'ĐANG SOẠN',
+  CODEX_REVIEW: 'CODEX THẨM ĐỊNH',
+  CI_GATES: 'CỔNG CI',
+  HUMAN_MERGE: 'CHỜ MERGE',
+  MERGED: 'ĐÃ MERGE',
+  BLOCKED: 'BỊ CHẶN',
   EVIDENCE_UNAVAILABLE: 'CHỜ BẰNG CHỨNG TỪ GITHUB',
 };
 
@@ -558,32 +560,32 @@ function renderGatePipeline() {
           .map((g, idx) => {
             let badge = 'bg-base-200 text-base-content/70 border-base-300';
             let icon = '○';
-            let statusText = 'PENDING';
+            let statusText = 'CHỜ';
 
             if (g.status === 'PASSED') {
               badge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
               icon = '✓';
-              statusText = 'PASSED';
+              statusText = 'ĐẠT';
             } else if (g.status === 'IN_PROGRESS') {
               badge = 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse';
               icon = '⚡';
-              statusText = 'RUNNING';
+              statusText = 'ĐANG CHẠY';
             } else if (g.status === 'READY') {
               badge = 'bg-blue-500/20 text-blue-400 border-blue-500/40';
               icon = '▶';
-              statusText = 'READY';
+              statusText = 'SẴN SÀNG';
             } else if (g.status === 'FAILED') {
               badge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
               icon = '✕';
-              statusText = 'FAILED';
+              statusText = 'KHÔNG ĐẠT';
             } else if (g.status === 'BLOCKED') {
               badge = 'bg-base-200 text-rose-400 border-rose-900';
               icon = '⛔';
-              statusText = 'BLOCKED';
+              statusText = 'BỊ CHẶN';
             } else if (g.status === 'UNAVAILABLE') {
               badge = 'bg-base-200 text-amber-400 border-amber-900/60';
               icon = '⊘';
-              statusText = 'UNAVAILABLE';
+              statusText = 'KHÔNG CÓ';
             }
 
             return `
@@ -613,14 +615,14 @@ function renderPrEvidenceContent() {
       return `
         <div class="mt-4 p-4 rounded-xl bg-base-200 border border-base-300 text-xs text-base-content/70 flex items-center gap-2">
           <span>🔒</span>
-          <span>GitHub CLI chưa xác thực. PR/CI: UNAVAILABLE.</span>
+          <span>GitHub CLI chưa xác thực. PR/CI: Không khả dụng.</span>
         </div>
       `;
     }
     return `
       <div class="mt-4 p-4 rounded-xl bg-base-200 border border-base-300 text-xs text-base-content/70 flex items-center gap-2">
         <span>ℹ️</span>
-        <span>Không có PR mở.</span>
+        <span>Không có PR đang mở.</span>
       </div>
     `;
   }
@@ -630,17 +632,31 @@ function renderPrEvidenceContent() {
   const reviews = primaryPr.reviews || { reviewList: [] };
 
   let checksBadge = 'bg-base-200 text-base-content/70 border-base-300';
-  if (checks.summary === 'PASSED')
+  let checksSummaryText = checks.summary;
+  if (checks.summary === 'PASSED') {
     checksBadge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
-  if (checks.summary === 'FAILED') checksBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
-  if (checks.summary === 'PENDING')
+    checksSummaryText = 'ĐẠT';
+  } else if (checks.summary === 'FAILED') {
+    checksBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
+    checksSummaryText = 'LỖI';
+  } else if (checks.summary === 'PENDING') {
     checksBadge = 'bg-amber-500/20 text-amber-400 border-amber-500/40';
+    checksSummaryText = 'ĐANG CHẠY';
+  } else if (checks.summary === 'NO_CHECKS') {
+    checksSummaryText = 'KHÔNG CÓ CI';
+  }
 
   let codexBadge = 'bg-base-200 text-base-content/70 border-base-300';
-  if (reviews.trustedCodexVerdict === 'PASS')
+  let codexVerdictText = reviews.trustedCodexVerdict;
+  if (reviews.trustedCodexVerdict === 'PASS') {
     codexBadge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
-  if (reviews.trustedCodexVerdict === 'CHANGES_REQUIRED')
+    codexVerdictText = 'ĐẠT';
+  } else if (reviews.trustedCodexVerdict === 'CHANGES_REQUIRED') {
     codexBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
+    codexVerdictText = 'CẦN SỬA';
+  } else if (!reviews.trustedCodexVerdict) {
+    codexVerdictText = 'CHỜ';
+  }
 
   return `
     <div class="mt-4 pt-4 border-t border-base-300 space-y-3">
@@ -652,10 +668,10 @@ function renderPrEvidenceContent() {
         </div>
         <div class="flex items-center gap-2 font-mono text-[11px]">
           <span class="px-2 py-0.5 rounded border ${checksBadge} font-bold">
-            CI: [${checks.summary} (${checks.passCount || 0}/${checks.totalCount || 0})]
+            CI: [${checksSummaryText} (${checks.passCount || 0}/${checks.totalCount || 0})]
           </span>
           <span class="px-2 py-0.5 rounded border ${codexBadge} font-bold">
-            Codex: [${escapeHtml(reviews.trustedCodexVerdict || 'CHỜ')}]
+            Codex: [${escapeHtml(codexVerdictText)}]
           </span>
           <span class="px-2 py-0.5 rounded border bg-base-200 text-base-content/70 border-base-300">
             HEAD: ${primaryPr.headRefOidShort || '—'}
@@ -671,21 +687,25 @@ function renderPrEvidenceContent() {
             .map((c) => {
               let icon = '○';
               let color = 'text-base-content/70';
+              let concText = c.conclusion || c.status;
               if (c.conclusion === 'SUCCESS') {
                 icon = '✓';
                 color = 'text-emerald-400';
+                concText = 'ĐẠT';
               } else if (c.conclusion === 'FAILURE') {
                 icon = '✕';
                 color = 'text-rose-400';
+                concText = 'LỖI';
               } else if (c.status !== 'COMPLETED') {
                 icon = '⚡';
                 color = 'text-amber-400';
+                concText = 'ĐANG CHẠY';
               }
 
               return `
               <div class="bg-base-200 px-3 py-2 rounded-lg border border-base-300 flex items-center justify-between">
                 <span class="text-base-content/70 truncate" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</span>
-                <span class="font-bold ${color} ml-2">${icon} ${escapeHtml(c.conclusion)}</span>
+                <span class="font-bold ${color} ml-2">${icon} ${escapeHtml(concText)}</span>
               </div>
             `;
             })
@@ -741,7 +761,7 @@ function renderSessions() {
     container.innerHTML = `
       <tr>
         <td colspan="7" class="p-6 text-center text-base-content/70 text-xs">
-          Không có phiên AO nào đang chạy. Trạng thái AO: ${escapeHtml(state.daemon?.state || 'stopped')}.
+          Không có phiên AO nào đang chạy. Trạng thái AO: ${escapeHtml(state.daemon?.state || 'đã dừng')}.
         </td>
       </tr>
     `;
@@ -752,8 +772,8 @@ function renderSessions() {
     .map((s) => {
       const isWriter = s.isWriter;
       const writerBadge = isWriter
-        ? '<span class="px-2 py-0.5 rounded bg-brand/20 text-brand border border-brand/30 text-[10px] font-bold">1 WRITER ACTIVE</span>'
-        : '<span class="px-2 py-0.5 rounded bg-base-200 text-base-content/70 border border-base-300 text-[10px]">READ ONLY</span>';
+        ? '<span class="px-2 py-0.5 rounded bg-brand/20 text-brand border border-brand/30 text-[10px] font-bold">1 TÁC GIẢ GHI</span>'
+        : '<span class="px-2 py-0.5 rounded bg-base-200 text-base-content/70 border border-base-300 text-[10px]">CHỈ ĐỌC</span>';
 
       return `
       <tr class="border-b border-base-300 hover:bg-base-200 transition">
@@ -761,7 +781,7 @@ function renderSessions() {
         <td data-label="Vai Trò" class="p-3 text-base-content/70 font-semibold">${escapeHtml(s.displayRole)}</td>
         <td data-label="Harness" class="p-3 font-mono text-base-content/70">${escapeHtml(s.harness)}</td>
         <td data-label="Nhánh / Worktree" class="p-3 font-mono text-base-content/70 truncate max-w-xs" title="${escapeHtml(s.branch)}">${escapeHtml(s.branch || '—')}</td>
-        <td data-label="Trạng Thái" class="p-3 font-mono">${escapeHtml(s.status)}</td>
+        <td data-label="Trạng Thái" class="p-3 font-mono">${escapeHtml(formatSessionStatus(s.status))}</td>
         <td data-label="Quyền Ghi" class="p-3 text-xs">${writerBadge}</td>
         <td data-label="Độ Tươi" class="p-3 font-mono text-xs text-base-content/70">${escapeHtml(s.freshness?.label || '—')}</td>
       </tr>
@@ -795,14 +815,14 @@ function renderQueueTable() {
 
   const countLabel = document.getElementById('taskCountLabel');
   if (countLabel) {
-    countLabel.innerText = `Hiển thị ${items.length} / ${state.workItems.total} đầu mục`;
+    countLabel.innerText = `Hiển thị ${items.length} / ${state.workItems.total} đầu việc`;
   }
 
   if (items.length === 0) {
     container.innerHTML = `
       <tr>
         <td colspan="8" class="p-8 text-center text-base-content/70 text-xs">
-          Không tìm thấy công việc nào khớp với bộ lọc hiện tại.
+          Không tìm thấy công việc phù hợp với bộ lọc.
         </td>
       </tr>
     `;
@@ -835,7 +855,7 @@ function renderQueueTable() {
         </td>
         <td data-label="Trạng Thái" class="p-3 font-mono">
           <span class="px-2 py-0.5 rounded border text-[10px] font-bold ${statusClass}">
-            ${escapeHtml(item.status || '')}
+            ${escapeHtml(formatWorkItemStatus(item.status))}
           </span>
         </td>
         <td data-label="Tác Giả" class="p-3 font-mono text-base-content/70">${escapeHtml(item.assigned_author || '')}</td>
@@ -854,7 +874,7 @@ function renderActivity() {
   const activities = state.activity || [];
   if (activities.length === 0) {
     container.innerHTML =
-      '<div class="p-4 text-center text-base-content/70 text-xs">Chưa có nhật ký hoạt động gần đây.</div>';
+      '<div class="p-4 text-center text-base-content/70 text-xs">Chưa có nhật ký hoạt động.</div>';
     return;
   }
 
