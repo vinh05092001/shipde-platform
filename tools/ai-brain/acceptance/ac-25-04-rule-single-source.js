@@ -64,6 +64,40 @@ for (const candidate of [path.join(root, 'feedback.js')]) {
   }
 }
 
+// Control: when feedback.js (production) exists, it must re-export the same
+// removal rule rather than carrying a private copy. feedback.js is allowed to
+// forward via require('./acceptance/lib/role-feedback.js') or any
+// re-export that resolves to the same absolute path. A private copy of the
+// rule inside feedback.js is the defect this row exists to catch.
+const feedbackPath = path.join(root, 'feedback.js');
+if (fs.existsSync(feedbackPath)) {
+  const feedbackSrc = fs.readFileSync(feedbackPath, 'utf8');
+  if (
+    /evaluateNarrowing\s*[:=]\s*function/.test(feedbackSrc) ||
+    /function\s+evaluateNarrowing\s*\(/.test(feedbackSrc)
+  ) {
+    console.error(
+      'SINGLE_SOURCE_FAILED: tools/ai-brain/feedback.js defines evaluateNarrowing locally; it must re-export acceptance/lib/role-feedback.js'
+    );
+    process.exit(1);
+  }
+  if (
+    /applyNarrowing\s*[:=]\s*function/.test(feedbackSrc) ||
+    /function\s+applyNarrowing\s*\(/.test(feedbackSrc)
+  ) {
+    console.error(
+      'SINGLE_SOURCE_FAILED: tools/ai-brain/feedback.js defines applyNarrowing locally; it must re-export acceptance/lib/role-feedback.js'
+    );
+    process.exit(1);
+  }
+  if (!feedbackSrc.includes('acceptance/lib/role-feedback')) {
+    console.error(
+      'SINGLE_SOURCE_FAILED: tools/ai-brain/feedback.js does not require acceptance/lib/role-feedback.js'
+    );
+    process.exit(1);
+  }
+}
+
 // Also check that lib/role-feedback.js is the unique source within acceptance/lib.
 const libDir = path.join(__dirname, 'lib');
 let libCount = 0;
