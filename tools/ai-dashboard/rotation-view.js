@@ -21,16 +21,30 @@
     return Number(v).toLocaleString('vi-VN');
   }
 
+  // One accent per source, the way 9Router gives every provider its own mark.
+  var ACCENT = {
+    '9router': '#8b5cf6',
+    xkiro: '#0ea5e9',
+    'agy-local': '#10b981',
+    'agy-docker': '#0d9488',
+    cline: '#f97316',
+    autoclaw: '#e11d48',
+    ao: '#6366f1',
+    codex: '#334155',
+  };
+
+  function accent(id) { return ACCENT[id] || '#64748b'; }
+
   function statusColor(status) {
     if (status === 'live') return '#16a34a';
     if (status === 'exhausted' || status === 'cooldown') return '#dc2626';
     return '#64748b';
   }
 
-  function kpi(label, value, tone) {
-    return '<div class="rounded-xl border p-3" style="border-color:var(--line)">' +
+  function kpi(label, value, color) {
+    return '<div class="rounded-xl border p-3" style="border-color:var(--line);background:var(--panel);border-top:3px solid ' + color + '">' +
       '<div class="text-[10px] uppercase tracking-wide opacity-60">' + label + '</div>' +
-      '<div class="text-xl font-bold' + (tone ? ' ' + tone : '') + '">' + value + '</div></div>';
+      '<div class="text-xl font-bold" style="color:' + color + '">' + value + '</div></div>';
   }
 
   function outcomeDot(outcome) {
@@ -42,10 +56,10 @@
     var box = document.getElementById('rotation-kpis');
     if (!box || !t) return;
     box.innerHTML =
-      kpi('Lượt chạy', t.attempts) +
-      kpi('Đang chạy', t.live, t.live > 0 ? 'text-emerald-600' : '') +
-      kpi('Bị từ chối quota', t.quotaRefused, t.quotaRefused > 0 ? 'text-rose-600' : '') +
-      kpi('Nguồn hết hạn mức', t.exhausted + '/' + t.sourcesConfigured, t.exhausted > 0 ? 'text-rose-600' : '');
+      kpi('Lượt chạy', t.attempts, '#3f3a33') +
+      kpi('Đang chạy', t.live, t.live > 0 ? '#16a34a' : '#857b6e') +
+      kpi('Bị từ chối quota', t.quotaRefused, t.quotaRefused > 0 ? '#b45309' : '#857b6e') +
+      kpi('Nguồn hết hạn mức', t.exhausted + '/' + t.sourcesConfigured, t.exhausted > 0 ? '#dc2626' : '#16a34a');
   }
 
   function renderRuns(runs) {
@@ -57,7 +71,8 @@
         outcomeDot(r.outcome) +
         '<span class="font-mono">' + (r.at || '--:--:--') + '</span>' +
         '<span class="font-bold">' + r.runId + '</span>' +
-        '<span class="opacity-70 truncate">' + r.sourceId + ' · ' + r.modelId + '</span>' +
+        '<span class="font-bold" style="color:' + accent(r.sourceId) + '">' + r.sourceId + '</span>' +
+        '<span class="opacity-70 truncate">' + r.modelId + '</span>' +
         '<span class="ml-auto opacity-60">' + (r.tokens === 'UNKNOWN' ? '' : num(r.tokens) + ' tk') + '</span>' +
         '</div>';
     }).join('');
@@ -93,7 +108,7 @@
         d: 'M' + (CX + 62 * Math.cos(a)) + ',' + (CY + 22 * Math.sin(a)) +
            ' Q' + (CX + nx) / 2 + ',' + (CY + ny) / 2 + ' ' + (nx - (W / 2) * Math.cos(a)) + ',' + (ny - (H / 2) * Math.sin(a)),
         fill: 'none',
-        stroke: live ? '#f59e0b' : '#d6cdbb',
+        stroke: live ? '#f59e0b' : accent(src.id),
         'stroke-width': live ? 2.5 : 1,
         opacity: live ? 0.9 : 0.35,
       });
@@ -112,9 +127,10 @@
       g.appendChild(el('rect', {
         x: nx - W / 2, y: ny - H / 2, width: W, height: H, rx: 10,
         fill: live ? '#fffbeb' : '#fffdf7',
-        stroke: statusColor(src.status), 'stroke-width': live ? 2 : 1.5,
+        stroke: live ? '#f59e0b' : accent(src.id), 'stroke-width': live ? 2.5 : 1.5,
       }));
       g.appendChild(el('circle', { cx: nx - W / 2 + 14, cy: ny, r: 4, fill: statusColor(src.status) }));
+      g.appendChild(el('rect', { x: nx - W / 2, y: ny - H / 2, width: 4, height: H, rx: 2, fill: accent(src.id) }));
       g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny - 1, fill: '#3f3a33', 'font-size': 12, 'font-weight': 'bold' }, src.label));
       g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny + 12, fill: '#857b6e', 'font-size': 10 },
         down ? (src.cooldown.reason || 'hết hạn mức').slice(0, 18) : src.status));
@@ -124,14 +140,37 @@
       var runs = src.recentRuns || [];
       var counts = { done: 0, failed: 0, 'quota-refused': 0 };
       runs.forEach(function (r) { if (counts[r.outcome] != null) counts[r.outcome]++; });
+      var pct = null;
+      if (lim.declaredLimit !== 'UNKNOWN' && lim.consumption !== 'UNKNOWN' && lim.declaredLimit > 0) {
+        pct = Math.min(100, Math.round((lim.consumption / lim.declaredLimit) * 100));
+      }
       var card = document.createElement('div');
-      card.className = 'rounded-xl border p-3 text-xs' + (down ? ' opacity-60' : '');
-      card.style.borderColor = statusColor(src.status);
+      card.className = 'rounded-xl border p-3 text-[11px] leading-5' + (down ? ' opacity-70' : '');
+      card.style.borderColor = 'var(--line)';
+      card.style.borderLeft = '4px solid ' + accent(src.id);
+      card.style.background = live ? '#fffbeb' : 'var(--panel)';
       card.innerHTML =
-        '<div class="font-bold text-sm mb-1">' + src.label + ' <span class="opacity-60 font-normal">' + src.status + '</span></div>' +
-        '<div class="font-mono">đã dùng ' + num(lim.consumption) + ' / ' + num(lim.declaredLimit) + '</div>' +
-        '<div class="font-mono">còn lại ' + num(lim.headroom) + '</div>' +
-        '<div class="mt-1 opacity-70">' + counts.done + ' xong · ' + counts.failed + ' hỏng · ' + counts['quota-refused'] + ' hết quota</div>';
+        '<div class="flex items-center gap-2 mb-1">' +
+          '<span style="width:7px;height:7px;border-radius:50%;display:inline-block;background:' + statusColor(src.status) + '"></span>' +
+          '<span class="font-bold text-[12px]">' + src.label + '</span>' +
+          '<span class="ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold" style="color:' + statusColor(src.status) + ';background:' + statusColor(src.status) + '1a">' + src.status + '</span>' +
+        '</div>' +
+        (live && src.activeRun.modelId
+          ? '<div class="truncate" style="color:#b45309">▶ ' + src.activeRun.modelId + '</div>'
+          : down && src.cooldown.reason
+            ? '<div class="truncate" style="color:#dc2626">' + src.cooldown.reason + '</div>'
+            : '') +
+        '<div class="opacity-80"><span class="opacity-60">đã dùng </span><span class="font-mono">' + num(lim.consumption) + ' / ' + num(lim.declaredLimit) + '</span></div>' +
+        (pct === null
+          ? '<div class="opacity-50">còn lại UNKNOWN (chưa khai hạn mức)</div>'
+          : '<div class="mt-1 h-1.5 rounded-full" style="background:#ece3d2">' +
+            '<div class="h-1.5 rounded-full" style="width:' + pct + '%;background:' + (pct >= 100 ? '#dc2626' : accent(src.id)) + '"></div></div>' +
+            '<div class="opacity-60 mt-0.5">còn lại ' + num(lim.headroom) + '</div>') +
+        '<div class="mt-1 flex gap-2 opacity-70">' +
+          '<span style="color:#0f766e">' + counts.done + ' xong</span>' +
+          '<span style="color:#b91c1c">' + counts.failed + ' hỏng</span>' +
+          '<span style="color:#b45309">' + counts['quota-refused'] + ' hết quota</span>' +
+        '</div>';
       cards.appendChild(card);
     });
   }
