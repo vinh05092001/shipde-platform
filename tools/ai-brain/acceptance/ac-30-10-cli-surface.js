@@ -8,6 +8,15 @@ const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 
+// Running outside the repository must be detected operationally (exit 2), not as
+// a finding (exit 1). Without this guard the child's own refusal would surface as
+// `RECONCILE_FAILED`, which is the code a real reconciliation failure uses.
+const REPO_MARKER = 'tools/ai-brain/qualification.js';
+if (!fs.existsSync(REPO_MARKER)) {
+  console.error('SOURCE_MISSING: ' + REPO_MARKER);
+  process.exit(2);
+}
+
 const CLI = path.join(__dirname, '..', 'cli.js');
 if (!fs.existsSync(CLI)) {
   console.error('SOURCE_MISSING: ' + CLI.split(path.sep).join('/'));

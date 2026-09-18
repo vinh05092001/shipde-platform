@@ -118,24 +118,25 @@ Probe is a local operator command joining the `cli.js` surface (unknown options 
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| `AC-AI-30-01` | Control Status vs register row 163 | `node tools/ai-brain/acceptance/ac-30-01-status-alignment.js` exit 0 | stdout match message |
+| `AC-AI-30-01` | Control Status vs register row 163 | `node tools/ai-brain/acceptance/ac-30-01-status-alignment.js` exit 0 | `Control status matches register row 163` stdout |
 | `AC-AI-30-02` | Negative: tampered spec copy diverges | `node tools/ai-brain/acceptance/ac-30-02-status-divergence.js` exit 1 | `STATUS_DIVERGENCE` stderr |
-| `AC-AI-30-03` | Declared dependency exactly TASK-AI-29 | `node tools/ai-brain/acceptance/ac-30-03-dependency-declared.js` exit 0 | stdout declaration message |
+| `AC-AI-30-03` | Declared dependency exactly TASK-AI-29 | `node tools/ai-brain/acceptance/ac-30-03-dependency-declared.js` exit 0 | `TASK-AI-29 dependency declared` stdout |
 | `AC-AI-30-04` | Negative: dependency repointed refused | `node tools/ai-brain/acceptance/ac-30-04-dependency-repointed.js` exit 1 | `DEPENDENCY_MISMATCH` stderr |
 | `AC-AI-30-05` | Probe rule over seeded accounts | `node tools/ai-brain/acceptance/ac-30-05-probe-rule.js` exit 0 | `PROBE_HOLDS` stdout |
 | `AC-AI-30-06` | Negative: unbounded and unsupported refused | `node tools/ai-brain/acceptance/ac-30-06-probe-rule-refused.js` exit 1 | `PROBE_VIOLATED` stderr |
 | `AC-AI-30-07` | Result carries outcome, no credential | `node tools/ai-brain/acceptance/ac-30-07-result-credential-free.js` exit 0 | `RESULT_CLEAN` stdout |
 | `AC-AI-30-08` | Negative: credential in result refused | `node tools/ai-brain/acceptance/ac-30-08-credential-in-result.js` exit 1 | `CREDENTIAL_IN_RESULT` stderr |
-| `AC-AI-30-09` | Negatives exit 2 outside repository | `node tools/ai-brain/acceptance/ac-30-09-outside-repository.js` exit 0 | outside probe stdout |
-| `AC-AI-30-10` | Register does not overstate | `node tools/ai-brain/cli.js reconcile` exit 0 | `Tổng: 0 lỗi` stdout |
-| `AC-AI-30-11` | Docs validate | `python docs/product-spec/scripts/validate_docs.py` exit 0 | `Documentation validation passed:` stdout |
-| `AC-AI-30-12` | New unit tests pass | `node --test tools/ai-brain/test/qualification.test.js` exit 0 | 0 fail stdout |
-| `AC-AI-30-13` | No secret surface | `node tools/ai-guard/cli.js secret-surface` exit 0 | `SECRET_SURFACE_CLEAN` stdout |
+| `AC-AI-30-09` | Negatives exit 2 outside repository | `node tools/ai-brain/acceptance/ac-30-09-outside-repository.js` exit 0 | `OUTSIDE_REPOSITORY_PROBE` stdout |
+| `AC-AI-30-10` | Register does not overstate (the row's script wraps `node tools/ai-brain/cli.js reconcile`) | `node tools/ai-brain/acceptance/ac-30-10-cli-surface.js` exit 0 | `Tổng: 0 lỗi` stdout |
+| `AC-AI-30-11` | Docs validate (the row's script wraps `python docs/product-spec/scripts/validate_docs.py`) | `node tools/ai-brain/acceptance/ac-30-11-docs-validate.js` exit 0 | `Documentation validation passed` stdout |
+| `AC-AI-30-12` | New unit tests pass (the row's script wraps `node --test tools/ai-brain/test/qualification.test.js`) | `node tools/ai-brain/acceptance/ac-30-12-unit-tests.js` exit 0 | `fail 0` stdout |
+| `AC-AI-30-13` | No secret surface (the row's script wraps `node tools/ai-guard/cli.js secret-surface`) | `node tools/ai-brain/acceptance/ac-30-13-secret-surface.js` exit 0 | `SECRET_SURFACE_CLEAN` stdout |
 
-Each row is a runnable command with a failing exit (`1` for violated, `2` for unmeasurable) when its rule breaks. Invariant rows assert markers, never pinned counts, since this item adds a spec file and nine scripts. Negative rows pair with one shared rule module (`acceptance/lib/qualification.js`) required by both sides; the status pair reuses the existing `lib/spec-status-alignment.js`. The dependency pair (`AC-AI-30-03`/`04`) introduces a new module, `acceptance/lib/dependency-declared.js` (in Allowed paths), rather than reusing `lib/dependency-merged.js` or `lib/dependency-delivered.js`: both of those existing modules assert merge evidence via Git, while this pair — per the Preconditions section above — asserts only that the register's declared dependency name is exactly `TASK-AI-29`, deliberately never a merge claim, since no merge evidence exists yet. Outside-repository behaviour is measured by `AC-AI-30-09`.
+Each row is a runnable command with a failing exit (`1` for violated, `2` for unmeasurable) when its rule breaks. Invariant rows assert markers, never pinned counts, since this item adds one spec file, thirteen acceptance scripts, two shared rule modules, the runtime qualification module and its test file — seventeen new files in total. Twelve of the thirteen rows also refuse operationally (`2`, with a `SOURCE_MISSING` line) when run with no repository on disk, so a row cannot report success where nothing exists; `AC-AI-30-09` is the deliberate exception, exiting `0` because its subject is the four negative proofs, which it runs itself with a fresh temporary working directory — a non-zero exit there would mean the measurement failed, not that the proofs held. Negative rows pair with one shared rule module (`acceptance/lib/qualification.js`) required by both sides; the status pair reuses the existing `lib/spec-status-alignment.js`. The dependency pair (`AC-AI-30-03`/`04`) introduces a new module, `acceptance/lib/dependency-declared.js` (in Allowed paths), rather than reusing `lib/dependency-merged.js` or `lib/dependency-delivered.js`: both of those existing modules assert merge evidence via Git, while this pair — per the Preconditions section above — asserts only that the register's declared dependency name is exactly `TASK-AI-29`, deliberately never a merge claim, since no merge evidence exists yet. Outside-repository behaviour is measured by `AC-AI-30-09`.
 ## Verification commands
 
 ```bash
+# The thirteen acceptance rows above, in order.
 node tools/ai-brain/acceptance/ac-30-01-status-alignment.js
 node tools/ai-brain/acceptance/ac-30-02-status-divergence.js
 node tools/ai-brain/acceptance/ac-30-03-dependency-declared.js
@@ -145,11 +146,72 @@ node tools/ai-brain/acceptance/ac-30-06-probe-rule-refused.js
 node tools/ai-brain/acceptance/ac-30-07-result-credential-free.js
 node tools/ai-brain/acceptance/ac-30-08-credential-in-result.js
 node tools/ai-brain/acceptance/ac-30-09-outside-repository.js
+node tools/ai-brain/acceptance/ac-30-10-cli-surface.js
+node tools/ai-brain/acceptance/ac-30-11-docs-validate.js
+node tools/ai-brain/acceptance/ac-30-12-unit-tests.js
+node tools/ai-brain/acceptance/ac-30-13-secret-surface.js
+
+# The repo-level audits rows 10-13 wrap, run directly and wider than the rows do.
 node tools/ai-brain/cli.js reconcile
 python docs/product-spec/scripts/validate_docs.py
-node --test tools/ai-brain/test/qualification.test.js
+node --test 'tools/ai-brain/test/*.test.js'
 node tools/ai-guard/cli.js secret-surface
 ```
+
+## Acceptance matrix validation
+
+Written 2026-09-18 on branch `spec/task-ai-30`, on top of the harness commit `88b7093`. Every row below was re-run **exactly as stored in the matrix above** — command text, exit code and evidence marker read from the table cells, not from a re-typed copy — and each was compared against what the row actually printed. No row asserts a pinned count, so the totals recorded here are evidence of one run, not a condition any row enforces.
+
+| Row | Stored command exit | Marker observed in `stdout`/`stderr` |
+|---|---|---|
+| `AC-AI-30-01` | 0 | `Control status matches register row 163: BLOCKED_DEPENDENCY (declared TASK-AI-30)` |
+| `AC-AI-30-02` | 1 | `STATUS_DIVERGENCE_DETECTED: tampered copy READY_FOR_AUTHOR != register BLOCKED_DEPENDENCY` (`stderr`) |
+| `AC-AI-30-03` | 0 | `TASK-AI-29 dependency declared for TASK-AI-30 (name only, no merge claim)` |
+| `AC-AI-30-04` | 1 | `DEPENDENCY_MISMATCH: repointed copy declares TASK-AI-99 != expected TASK-AI-29` (`stderr`) |
+| `AC-AI-30-05` | 0 | `PROBE_HOLDS: compliant injected probe configuration accepted` |
+| `AC-AI-30-06` | 1 | `PROBE_VIOLATED:` listing timeout, kill, model, cache, entry, provider and recording failures (`stderr`) |
+| `AC-AI-30-07` | 0 | `RESULT_CLEAN: well-formed result carries no credential` |
+| `AC-AI-30-08` | 1 | `CREDENTIAL_IN_RESULT: result carries the credential` (`stderr`) |
+| `AC-AI-30-09` | 0 | `OUTSIDE_REPOSITORY_PROBE: 4 negative proofs exited 2 with SOURCE_MISSING outside the repository` |
+| `AC-AI-30-10` | 0 | `Tổng: 0 lỗi — register does not overstate (reconciler ran green)` |
+| `AC-AI-30-11` | 0 | `Documentation validation passed (validate_docs.py ran green)` |
+| `AC-AI-30-12` | 0 | `AC-AI-30-12 unit tests passed: fail 0` with the observed passing total |
+| `AC-AI-30-13` | 0 | `SECRET_SURFACE_CLEAN — ai-guard secret-surface ran green` |
+
+### Negative proofs
+
+Each negative proof rejects a tampered copy of real input and is paired with the invariant row that accepts the real input, so a proof that rejects everything and a rule that rejects nothing are both caught. Each tampered copy is written under `os.tmpdir()` with a pid-scoped name and unlinked by the row as soon as the copy has been read, so no row writes a repository file or leaves one behind.
+
+| Negative proof | Rule it proves | CONTROL — real input accepted | Tamper applied to a copy | Rejection observed |
+|---|---|---|---|---|
+| `AC-AI-30-02` | status alignment (`AC-AI-30-01`) | real `TASK-AI-30.md` status cell agrees with real register row 163 | status cell flipped to `READY_FOR_AUTHOR` in a copy | `STATUS_DIVERGENCE_DETECTED`, exit 1 |
+| `AC-AI-30-04` | declared dependency (`AC-AI-30-03`) | the real register declares exactly `TASK-AI-29` | the row's dependencies cell repointed at `TASK-AI-99` in a register copy | `DEPENDENCY_MISMATCH`, exit 1 |
+| `AC-AI-30-06` | probe rule (`AC-AI-30-05`) | a compliant injected configuration is accepted | `timeoutMs` 0, `treeKill` off, `cheapestModel` off, `cacheWindowMs` negative, unsupported provider, refused entry, unrecorded outcome | `PROBE_VIOLATED`, exit 1 |
+| `AC-AI-30-08` | result credential rule (`AC-AI-30-07`) | a clean, well-formed result is accepted | the credential planted in the record's readable reason | `CREDENTIAL_IN_RESULT`, exit 1 |
+
+One shared module per pair, none restating its rule: `AC-AI-30-01`/`02` share `acceptance/lib/spec-status-alignment.js` (the module `TASK-AI-08`, `-09` and `-21` already share), `AC-AI-30-03`/`04` share the new `acceptance/lib/dependency-declared.js`, and `AC-AI-30-05` to `08` plus the unit tests share `acceptance/lib/qualification.js`. Both sides of a pair require the same module instance, so editing the rule moves both rows.
+
+### Falsifiability of the shared rules (mutations applied to a working copy, then reverted)
+
+| Mutation to the shared module | Invariant row | Negative proof | Reading |
+|---|---|---|---|
+| `qualification.js`: `probeRuleFindings` always returns no findings | `AC-AI-30-05` fails: `CONTROL_FAILED`, the rule cannot report a violation | `AC-AI-30-06` fails: `PROBE_VIOLATION_NOT_DETECTED` | A dead rule is caught from both sides |
+| `qualification.js`: `resultCredentialFindings` always returns no findings | `AC-AI-30-07` fails: `CONTROL_FAILED` | `AC-AI-30-08` fails: `CREDENTIAL_IN_RESULT_NOT_DETECTED` | Same reading for the credential rule |
+| `dependency-declared.js`: the declared dependency is always reported as declared | `AC-AI-30-03` unchanged, exit 0 | `AC-AI-30-04` fails: `DEPENDENCY_WRONG_DECLARED` | The proof alone would have missed it; the invariant row raises no false alarm because the real input is genuinely declared |
+| `spec-status-alignment.js`: the divergence comparison disabled | `AC-AI-30-01` unchanged, exit 0 | `AC-AI-30-02` fails: `DIVERGENCE_NOT_DETECTED` | The gate stays green only while the comparison works |
+
+### Fail-closed behaviour outside the repository
+
+Every row that asserts a property of this repository was run with a temporary working directory outside it. Twelve rows refused operationally with exit `2` and a `SOURCE_MISSING` line naming the cwd-relative path they need (`TASK-AI-30.md`, `FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-brain/qualification.js`, `docs/product-spec/scripts/validate_docs.py`, `tools/ai-brain/test`, `tools/ai-guard/cli.js`) rather than reporting success; none reported exit `0` where nothing exists. `AC-AI-30-09` exits `0` there by design: its subject is the four negative proofs, which it runs with a temporary working directory of its own, and it reports `OUTSIDE_REPOSITORY_PROBE` only when all four refused with exit `2`. `AC-AI-30-10` guards itself before spawning the reconciler, so a child's refusal cannot be re-reported as `RECONCILE_FAILED`, the code a real reconciliation failure uses.
+
+### Repo-level audits the rows wrap, run directly
+
+| Command | Observed at this head |
+|---|---|
+| `node tools/ai-brain/cli.js reconcile` | `Tổng: 0 lỗi` |
+| `python docs/product-spec/scripts/validate_docs.py` | `Documentation validation passed: 102 markdown files, 130 feature IDs, 178 delivery rows, 824 unique identifiers` |
+| `node --test 'tools/ai-brain/test/*.test.js'` | `406` tests in `93` suites, `406` pass, `0` fail (the new file contributes `13`) |
+| `node tools/ai-guard/cli.js secret-surface` | `SECRET_SURFACE_CLEAN` |
 
 ## Codex review record
 
@@ -159,7 +221,7 @@ node tools/ai-guard/cli.js secret-surface
 
 ## Residual limitations
 
-- Probe, rule module, result writer, and tests are specified here and delivered during implementation; rows `AC-AI-30-05` to `AC-AI-30-08` and `AC-AI-30-12` assert rules the shipped modules must satisfy, and fail until they exist.
+- **The bounded probe itself is not implemented by this specification change.** The rule module (`acceptance/lib/qualification.js`), the declared result path and record shape (`tools/ai-brain/qualification.js`) and the unit tests are delivered in this branch, and rows `AC-AI-30-05` to `AC-AI-30-08` and `AC-AI-30-12` run green against them — but every one of those rows exercises the rule with injected doubles, so no row reads a real credential, calls a real provider or writes a real result. The provider call, the timeout and tree-kill, the cache window and the recorded outcome are implementation work for this Work Item's `IN_PROGRESS` stage; the rows above are the conditions that implementation must keep true, and they fail the moment the delivered modules stop satisfying the rule.
 - A passing probe is connectivity only. It says the model answered; it says nothing about quality, grade, or role fitness. Promotion stays with `TASK-AI-31`.
 - A result goes stale. Past the cache window it is history, not standing; dispatch must re-probe rather than trust it.
 - Spend is bounded, not zero. Cheapest model plus cache limits cost; each probe still spends budget.

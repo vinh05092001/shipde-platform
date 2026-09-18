@@ -6,7 +6,17 @@
 // `ac-30-08-credential-in-result.js` requires, so the gate and the proof of the
 // gate cannot drift apart. The result is a plain object; no real registry, network
 // or credential store is touched. Run outside the repository it exits 2, not 0.
+const fs = require('fs');
 const { resultCredentialFindings } = require('./lib/qualification');
+
+// Running outside the repository must be detected operationally (exit 2), not as
+// a finding (exit 1). The check is relative to cwd so a spawned child with a
+// different cwd refuses instead of running against the real modules by accident.
+const REPO_MARKER = 'tools/ai-brain/qualification.js';
+if (!fs.existsSync(REPO_MARKER)) {
+  console.error('SOURCE_MISSING: ' + REPO_MARKER);
+  process.exit(2);
+}
 
 // Control: a result missing required fields must be flagged by the shape check,
 // otherwise "clean" proves nothing.
