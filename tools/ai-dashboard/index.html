@@ -27,6 +27,29 @@
         width: 100%;
         overflow-x: hidden;
       }
+      /* Cream theme (TASK-AI-47): one palette, applied over the existing markup. */
+      :root {
+        --cream: #faf6ec;
+        --panel: #fffdf7;
+        --line: #e6ddc9;
+        --ink: #3f3a33;
+        --muted: #7a7266;
+      }
+      body {
+        background-color: var(--cream) !important;
+        color: var(--ink) !important;
+      }
+      [class*='bg-slate-9'], [class*='bg-slate-8'], [class*='bg-[#0B1120]'],
+      [class*='bg-slate-95'], .bg-black\/40, [class*='bg-gray-9'] {
+        background-color: var(--panel) !important;
+      }
+      [class*='border-slate-'], [class*='border-gray-'] { border-color: var(--line) !important; }
+      [class*='text-slate-1'], [class*='text-slate-2'], [class*='text-white'] { color: var(--ink) !important; }
+      [class*='text-slate-4'], [class*='text-slate-5'], [class*='text-gray-4'] { color: var(--muted) !important; }
+      .tab-btn:hover { background-color: #f1e9d8 !important; color: var(--ink) !important; }
+      @keyframes rot-flow { to { stroke-dashoffset: -24; } }
+      .rot-flow { stroke-dasharray: 9 5; animation: rot-flow .7s linear infinite; }
+      .rot-dim { opacity: .45; }
       body {
         background-color: #080d1a;
         color: #f1f5f9;
@@ -316,6 +339,17 @@
 
       <!-- TAB PANE: CAPACITY & QUOTA -->
       <div id="tabPane-capacity" class="hidden space-y-6">
+        <!-- TASK-AI-47: live rotation topology, measured from dispatcher logs and provider usage. -->
+        <section class="rounded-2xl border border-[color:var(--line)] bg-[color:var(--panel)] p-4">
+          <div class="flex items-baseline justify-between mb-2">
+            <h3 class="font-bold text-sm">Xoay model theo nguồn</h3>
+            <span id="rotationObservedAt" class="text-[11px] opacity-60">—</span>
+          </div>
+          <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start">
+            <svg id="rotation-svg" viewBox="0 0 800 800" class="w-full max-w-xl mx-auto"></svg>
+            <div id="rotation-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+          </div>
+        </section>
         <div id="capacitySummary"></div>
         <div id="capacityVendor"></div>
         <div id="capacityTable"></div>
@@ -862,5 +896,6 @@
       })();
     </script>
     <script src="/client.js"></script>
+    <script src="/rotation-view.js"></script>
   </body>
 </html>

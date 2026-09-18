@@ -148,14 +148,18 @@ function createDashboardServer(options = {}) {
     if (pathname === '/' || pathname === '/index.html') {
       return path.join(dashboardDir, 'index.html');
     }
+    if (pathname === '/rotation-view.js') {
+      return path.join(dashboardDir, 'rotation-view.js');
+    }
     if (pathname === '/client.js') {
       return path.join(dashboardDir, 'client.js');
     }
     if (pathname === '/DASHBOARD.html') {
       return path.join(rootDir, 'DASHBOARD.html');
     }
+    // The rotation view lives inside the dashboard's Capacity & Quota tab.
     if (pathname === '/rotation' || pathname === '/rotation.html') {
-      return path.join(dashboardDir, 'rotation.html');
+      return path.join(dashboardDir, 'index.html');
     }
     return null;
   }
