@@ -1,6 +1,7 @@
 /**
  * Ship Dễ — Model Rotation Test Suite
- * TASK-AI-47: AC-AI-47-01 through AC-AI-47-04
+ * TASK-AI-47: AC-AI-47-01 through AC-AI-47-04, plus AC-AI-47-08
+ * (the dispatcher log is read where dispatch.sh actually writes it)
  */
 
 const { test, describe } = require('node:test');
@@ -10,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 
-const { buildRotationState, parseLogLines, readCooldowns, SOURCE_DEFS } = require('../rotation');
+const { buildRotationState, parseLogLines, readCooldowns, resolveLogDir, SOURCE_DEFS } = require('../rotation');
 const { createDashboardServer } = require('../server');
 
 function makeTmpDir() {
@@ -144,6 +145,96 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
         assert.ok(html.includes('<svg'));
         assert.ok(html.includes('rotation-svg'));
       } finally { server.close(); }
+    });
+  });
+
+  describe('AC-AI-47-08: the dispatcher log is read where dispatch.sh writes it', () => {
+    // dispatch.sh logs into the MAIN checkout's .worktrees/logs even when the
+    // Work Item it launches runs in a linked worktree below it. Joining this
+    // process's own rootDir with .worktrees/logs pointed at a folder that did
+    // not exist, and the panel reported zero dispatch attempts while the
+    // recorded dispatches sat one level up.
+    const stamp = (minutesAgo) => {
+      const d = new Date(Date.now() - minutesAgo * 60000);
+      return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+    };
+    const dispatchLog = () => [
+      `=== trying xkiro free/chatgpt-4.1-mini ${stamp(20)} ===`,
+      '--- xkiro free/chatgpt-4.1-mini exhausted ---',
+      `=== trying bai7 anthropic/claude-sonnet-4.5 ${stamp(15)} ===`,
+      '=== finished on bai7 anthropic/claude-sonnet-4.5 ===',
+      '--- skip xkiro minimax/minimax-m3: daily free quota remaining 0 ---',
+    ].join('\n');
+
+    function fixture() {
+      const tmp = makeTmpDir();
+      const main = path.join(tmp, 'shipde-platform');
+      const logs = path.join(main, '.worktrees', 'logs');
+      const worktree = path.join(main, '.worktrees', 'r9001');
+      fs.mkdirSync(logs, { recursive: true });
+      fs.mkdirSync(worktree, { recursive: true });
+      fs.writeFileSync(path.join(logs, 'r9001.log'), dispatchLog());
+      return { tmp, main, logs, worktree };
+    }
+
+    function stateFrom(options) {
+      const f = fixture();
+      const state = buildRotationState({
+        homeDir: f.tmp,
+        probe: false,
+        rootDir: f.worktree,
+        ledgerFile: path.join(f.tmp, 'no-ledger.json'),
+        quotaFile: path.join(f.tmp, 'no-quota.json'),
+        now: Date.now(),
+        ...options,
+      });
+      return { f, state };
+    }
+
+    test('resolveLogDir walks out of the worktree to the main checkout log folder', () => {
+      const f = fixture();
+      const resolved = resolveLogDir(f.worktree);
+      assert.strictEqual(resolved.dir, path.resolve(f.logs));
+      assert.ok(resolved.exists, 'the dispatcher folder must be found, not assumed missing');
+      fs.rmSync(f.tmp, { recursive: true, force: true });
+    });
+
+    test('attempts are counted from the real dispatcher lines, skips are not runs', () => {
+      const { f, state } = stateFrom({});
+      assert.strictEqual(state.log.exists, true, 'buildRotationState must read the resolved folder');
+      assert.strictEqual(state.totals.attempts, 2, 'the two lanes dispatch.sh actually launched');
+      assert.strictEqual(state.totals.skipped, 1, 'a pre-flight skip is a refusal, not a run');
+      assert.strictEqual(state.totals.quotaRefused, 2, 'one exhausted, one skipped');
+      assert.strictEqual(state.totals.live, 0, 'nothing is still open');
+      fs.rmSync(f.tmp, { recursive: true, force: true });
+    });
+
+    test('a lane the dashboard does not ship with still appears in the breakdown', () => {
+      const { f, state } = stateFrom({});
+      const bai = state.sources.find((s) => s.id === 'bai7');
+      assert.ok(bai, 'bai7 ran 1 logged attempt and must not be invisible');
+      const startedFor = (id) => parseLogLines(state.log.dir).filter((e) => e.sourceId === id && e.started).length;
+      let accounted = 0;
+      for (const src of state.sources) accounted += startedFor(src.id);
+      assert.strictEqual(accounted, state.totals.attempts, 'the per-source breakdown must add up to the headline');
+      fs.rmSync(f.tmp, { recursive: true, force: true });
+    });
+
+    test('an unreadable log folder yields UNKNOWN, never a clean zero', () => {
+      const tmp = makeTmpDir();
+      const state = buildRotationState({
+        homeDir: tmp,
+        probe: false,
+        rootDir: tmp,
+        logDir: path.join(tmp, 'definitely-not-logs'),
+        ledgerFile: path.join(tmp, 'no.json'),
+        quotaFile: path.join(tmp, 'no.json'),
+        now: Date.now(),
+      });
+      assert.strictEqual(state.log.exists, false);
+      assert.strictEqual(state.totals.attempts, 'UNKNOWN');
+      assert.ok(state.log.reason, 'the panel must be able to say why nothing is measured');
+      fs.rmSync(tmp, { recursive: true, force: true });
     });
   });
 

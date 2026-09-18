@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-26` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-47.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-dashboard/rotation.js`, `tools/ai-dashboard/rotation.html`, `tools/ai-dashboard/server.js`, `tools/ai-dashboard/test/rotation.test.js` |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-47.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-dashboard/rotation.js`, `tools/ai-dashboard/rotation.html`, `tools/ai-dashboard/server.js`, `tools/ai-dashboard/test/rotation.test.js`, `tools/ai-dashboard/rotation-view.js` (the panel added by the 2026-09-18 scope widening renders the rotation payload, so it carries the new state fields) |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-47-rotation-view` |
 | Pull Request | |
@@ -91,6 +91,8 @@ Tests under `tools/ai-dashboard/test/rotation.test.js` using `node:test` cover:
 - JSON shape validation (all required fields present, correct types or `UNKNOWN`).
 - UNKNOWN propagation: when no log or ledger data exists, limits and consumption read `UNKNOWN`, never `0`.
 - Cooldown state: when the ceiling ledger records a refusal, the source transitions to `cooldown` with the correct `until` timestamp.
+- Dispatcher log location: a process running in a linked worktree resolves the main checkout's `.worktrees/logs`, counts only launched runs as attempts, keeps pre-flight skips out of that number, and reports `UNKNOWN` when no folder can be read.
+- Breakdown integrity: every started run belongs to a source the panel shows, so the per-source cards add up to the headline total.
 
 ## Scope widened on 2026-09-18 (operator decision)
 
@@ -124,6 +126,33 @@ the acceptance tests.
 | AC-AI-47-05 | Active run detected in log | Arrow rendered with model label and token count, CSS animation class applied | Manual verification |
 | AC-AI-47-06 | `python docs/product-spec/scripts/validate_docs.py` | Exit 0 | CLI run |
 | AC-AI-47-07 | `node --test tools/ai-brain/test/*.test.js` | All pass | CLI run |
+| AC-AI-47-08 | Dashboard process runs in a linked worktree while `dispatch.sh` logs into the main checkout | `log.dir` is the main checkout `.worktrees/logs`, and `totals.attempts`/`totals.skipped`/`totals.quotaRefused` equal the dispatcher log's own line counts; a folder that cannot be read yields `UNKNOWN`, not `0` | `test/rotation.test.js` |
+
+## Data correction on 2026-09-18 (đối chiếu dashboard với nguồn thật)
+
+The rotation panel reported `0 lượt chạy` while the dispatcher had recorded 114 attempts. The cause was
+not the parser: `.worktrees/logs/dispatch.sh` writes with `L=$REPO/.worktrees/logs`, i.e. always the main
+checkout, whereas the panel joined its own `rootDir` with `.worktrees/logs`. Inside a linked worktree that
+folder does not exist, so `parseLogLines` honestly returned nothing and the empty result looked like a
+measurement of zero.
+
+Fixed by resolving the log location from git (`--git-common-dir`, with an ordered candidate list and a
+parent-directory walk as fallbacks), keeping `ROTATION_LOG_DIR`/`opts.logDir` as the explicit override, and
+publishing what was read as `log.dir`, `log.exists`, `log.candidates` and `log.reason` so the panel can name
+its source instead of implying an empty one.
+
+Two accounting errors surfaced by the same comparison and corrected here:
+
+- Pre-flight skips (`--- skip <lane> <model>: <reason> ---`, written before the CLI is launched) were counted
+  as runs. `entries[].started` now separates launched runs from skips, so attempts, skips and refusals do not
+  overlap.
+- Token totals matched any `inputTokens`/`outputTokens` text inside a run transcript, including source code
+  the agent was editing. Only a line that parses as JSON with a `usage` object, or the Codex CLI's final
+  `tokens used` block, is a measurement now.
+
+After the fix the panel matched every independently counted figure: 114 attempts, 21 skips, 44 quota refusals
+(23 exhausted + 21 skipped), 244,102 tokens and the per-lane breakdown, against the dispatcher logs, the run
+transcripts and xKiro's own `/v1/usage` response. See `.worktrees/logs/data-verify.md` for the full table.
 
 ## Verification commands
 

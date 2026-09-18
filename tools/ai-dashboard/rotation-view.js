@@ -60,14 +60,22 @@
     return '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + c + '"></span>';
   }
 
-  function renderKpis(t) {
+  function renderKpis(t, log) {
     var box = document.getElementById('rotation-kpis');
     if (!box || !t) return;
+    // A dispatcher log that cannot be read is reported as UNKNOWN, never as a
+    // comfortable zero.
+    var unreadable = log && log.exists === false;
     box.innerHTML =
-      kpi('Lượt chạy', t.attempts, '#3f3a33') +
-      kpi('Đang chạy', t.live, t.live > 0 ? '#16a34a' : '#5c5349') +
-      kpi('Bị từ chối hạn mức', t.quotaRefused, t.quotaRefused > 0 ? '#b45309' : '#5c5349') +
-      kpi('Nguồn hết hạn mức', t.exhausted + '/' + t.sourcesConfigured, t.exhausted > 0 ? '#dc2626' : '#16a34a');
+      kpi('Lượt chạy', num(t.attempts), '#3f3a33') +
+      kpi('Bị bỏ qua trước khi chạy', num(t.skipped), '#94a3b8') +
+      kpi('Đang chạy', num(t.live), t.live > 0 ? '#16a34a' : '#5c5349') +
+      kpi('Bị từ chối hạn mức', num(t.quotaRefused), t.quotaRefused > 0 ? '#b45309' : '#5c5349') +
+      kpi('Nguồn hết hạn mức', t.exhausted + '/' + t.sourcesConfigured, t.exhausted > 0 ? '#dc2626' : '#16a34a') +
+      (unreadable
+        ? '<div class="rounded-xl border p-3 text-xs" style="border-color:#dc2626;background:#fef2f2;color:#b91c1c">' +
+          'Không đọc được log dispatcher — số lượt chạy là UNKNOWN, không phải 0.</div>'
+        : '');
   }
 
   function renderRuns(runs) {
@@ -75,19 +83,20 @@
     if (!box) return;
     if (!runs || !runs.length) { box.innerHTML = '<div class="p-3 opacity-60">chưa có lượt chạy nào</div>'; return; }
     box.innerHTML = runs.slice(0, 12).map(function (r) {
+      var skipped = r.outcome === 'quota-refused' && r.reason;
       return '<div class="flex items-center gap-2 px-3 py-1.5 border-b" style="border-color:var(--line)">' +
         outcomeDot(r.outcome) +
         '<span class="font-mono">' + (r.at || '--:--:--') + '</span>' +
         '<span class="font-bold">' + r.runId + '</span>' +
         '<span class="font-bold" style="color:' + accent(r.sourceId) + '">' + r.sourceId + '</span>' +
         '<span class="opacity-70 truncate">' + r.modelId + '</span>' +
-        '<span class="ml-auto opacity-60">' + (r.tokens === 'UNKNOWN' ? '' : num(r.tokens) + ' tk') + '</span>' +
+        '<span class="ml-auto opacity-60">' + (skipped ? 'bỏ qua: ' + r.reason : r.tokens === 'UNKNOWN' ? '' : num(r.tokens) + ' tk') + '</span>' +
         '</div>';
     }).join('');
   }
 
   function render(data) {
-    renderKpis(data && data.totals);
+    renderKpis(data && data.totals, data && data.log);
     renderRuns(data && data.runs);
     var svg = document.getElementById('rotation-svg');
     var cards = document.getElementById('rotation-cards');

@@ -11,11 +11,114 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execFileSync } = require('child_process');
 
 const CODEX_TOKENS_RE = /tokens used\s*[\r\n]+([\d,]+)/g;
 const STALE_AFTER_MS = 5 * 60 * 1000;
 const SPLIT_RE = /\r?\n/;
 const HOME_DIR = path.join(os.homedir(), '.shipde');
+const GIT_TIMEOUT_MS = 4000;
+
+/**
+ * Where the dispatcher log actually lives.
+ *
+ * `.worktrees/logs/dispatch.sh` always writes into the main checkout
+ * (`L=$REPO/.worktrees/logs` there), and a Work Item run happens in a linked
+ * worktree below it. Joining this process's own rootDir with `.worktrees/logs`
+ * therefore points at a folder that does not exist, and `parseLogLines`
+ * honestly returns nothing — which the panel showed as "0 lượt chạy" while the
+ * dispatcher's own records sat one level up. The location is resolved from git
+ * instead of assumed, and a folder that cannot be read is reported as
+ * unreadable rather than as zero.
+ */
+const cachedMainRoots = new Map(); // resolved rootDir -> main checkout root, or null
+
+function commonDirToRoot(commonDir) {
+  if (!commonDir) return null;
+  const nested = path.sep + '.git' + path.sep + 'worktrees';
+  const at = commonDir.indexOf(nested);
+  if (at > 0) return commonDir.slice(0, at);
+  return path.dirname(commonDir);
+}
+
+function mainCheckoutRoot(rootDir) {
+  const key = path.resolve(rootDir);
+  if (cachedMainRoots.has(key)) return cachedMainRoots.get(key);
+  const forms = [
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    ['rev-parse', '--git-common-dir'],
+  ];
+  let resolved = null;
+  for (const args of forms) {
+    try {
+      const out = execFileSync('git', args, {
+        cwd: key,
+        timeout: GIT_TIMEOUT_MS,
+        encoding: 'utf8',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (out) {
+        resolved = commonDirToRoot(path.resolve(key, out));
+        break;
+      }
+    } catch {
+      // git missing or not a repository: fall through to the walk-up search
+    }
+  }
+  cachedMainRoots.set(key, resolved);
+  return resolved;
+}
+
+function isDirectory(dir) {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// Ordered, de-duplicated places the dispatcher log can legitimately be.
+function candidateLogDirs(rootDir) {
+  const dirs = [];
+  const seen = new Set();
+  const add = (dir) => {
+    if (!dir) return;
+    const resolved = path.resolve(dir);
+    if (seen.has(resolved)) return;
+    seen.add(resolved);
+    dirs.push(resolved);
+  };
+  add(path.join(rootDir, '.worktrees', 'logs'));
+  const main = mainCheckoutRoot(rootDir);
+  if (main) add(path.join(main, '.worktrees', 'logs'));
+  let current = path.resolve(rootDir);
+  for (let guard = 0; guard < 12; guard++) {
+    add(path.join(current, '.worktrees', 'logs'));
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return dirs;
+}
+
+function resolveLogDir(rootDir) {
+  const candidates = candidateLogDirs(rootDir);
+  for (const dir of candidates) {
+    if (isDirectory(dir)) return { dir, candidates, exists: true };
+  }
+  return { dir: candidates[0], candidates, exists: false };
+}
+
+function countDispatcherLogs(dir) {
+  if (!dir) return 0;
+  try {
+    return fs.readdirSync(dir).filter((f) => f.endsWith('.log') && !f.endsWith('-run.log')).length;
+  } catch {
+    return 0;
+  }
+}
+
 
 const SOURCE_DEFS = [
   { id: '9router', label: '9Router' },
@@ -27,6 +130,32 @@ const SOURCE_DEFS = [
   { id: 'ao', label: 'AO' },
   { id: 'codex', label: 'Codex' },
 ];
+
+// dispatch.sh names its author lanes after the key directory holding them
+// (bai1..bai7 are B.AI keys, each a separate Cline config), so a lane id read
+// from the log is a real source even when it is not one of the built-in defs.
+function labelForLaneId(id) {
+  const bai = /^bai(\d+)$/.exec(String(id));
+  if (bai) return 'B.AI ' + bai[1];
+  return String(id);
+}
+
+/**
+ * The built-in sources plus every lane the dispatcher log actually recorded.
+ * Without this, attempts on an unlisted lane stay in the totals while no card
+ * accounts for them, so the breakdown never adds up to the headline.
+ */
+function sourceDefinitions(configuredIds, observedLaneIds) {
+  const defs = SOURCE_DEFS.slice();
+  const known = new Set(SOURCE_DEFS.map((d) => d.id));
+  for (const id of observedLaneIds) {
+    if (!id || known.has(id) || !configuredIds.has(id)) continue;
+    known.add(id);
+    defs.push({ id, label: labelForLaneId(id) });
+  }
+  return defs;
+}
+
 
 function parseLogLines(logDir) {
   // Dispatcher lines written by .worktrees/logs/dispatch.sh:
@@ -83,16 +212,18 @@ function parseLogLines(logDir) {
       let m;
       if ((m = TRY.exec(line))) {
         if (open) open.outcome = 'failed';
-        open = { at: isoAt(m[3]), sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: stale ? 'ended' : 'live', tokens: 'UNKNOWN' };
+        open = { at: isoAt(m[3]), sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: stale ? 'ended' : 'live', tokens: 'UNKNOWN', started: true };
         entries.push(open);
       } else if ((m = EXHAUSTED.exec(line))) {
         if (open) { open.outcome = 'quota-refused'; open = null; }
-        else entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'quota-refused', tokens: 'UNKNOWN' });
+        else entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'quota-refused', tokens: 'UNKNOWN', started: true });
       } else if ((m = SKIP.exec(line))) {
-        entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'quota-refused', tokens: 'UNKNOWN', reason: m[3] });
+        // dispatch.sh checked the quota before launching and stayed away, so a
+        // skip is a refused lane, never a run that happened.
+        entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'quota-refused', tokens: 'UNKNOWN', started: false, reason: m[3] });
       } else if ((m = DONE.exec(line))) {
         if (open) { open.outcome = 'done'; open = null; }
-        else entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'done', tokens: 'UNKNOWN' });
+        else entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'done', tokens: 'UNKNOWN', started: true });
       }
     }
     // Tokens for the attempts this file produced, whether or not one is still open.
@@ -102,7 +233,33 @@ function parseLogLines(logDir) {
         const text = fs.readFileSync(runLog, 'utf8');
         let total = 0;
         let seen = false;
-        for (const mm of text.matchAll(/"(?:inputTokens|outputTokens)":(\d+)/g)) { total += Number(mm[1]); seen = true; }
+        // Only a machine-readable result line is a measurement. A run log also
+        // carries the agent's own transcript, and a snippet that merely
+        // mentions "inputTokens" (code the agent was editing, for example) is
+        // not this run's usage — counting it once inflated the token figure by
+        // 450 against the transcripts' own totals.
+        for (const raw of text.split(SPLIT_RE)) {
+          const line = raw.trim();
+          if (!line.startsWith('{')) continue;
+          let parsed;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          const usage = parsed && parsed.usage;
+          if (!usage) continue;
+          const counted =
+            typeof usage.totalTokens === 'number'
+              ? usage.totalTokens
+              : typeof usage.inputTokens === 'number' || typeof usage.outputTokens === 'number'
+                ? (usage.inputTokens || 0) + (usage.outputTokens || 0)
+                : null;
+          if (counted !== null) {
+            total += counted;
+            seen = true;
+          }
+        }
         const codex = [...text.matchAll(CODEX_TOKENS_RE)].pop();
         if (codex) { total += Number(codex[1].replace(/,/g, '')); seen = true; }
         if (seen) {
@@ -225,14 +382,20 @@ function readQuotaStore(storeFile) {
 function buildRotationState(options) {
   const opts = options || {};
   const rootDir = opts.rootDir || path.resolve(__dirname, '../..');
-  // In a git worktree the dispatcher still writes into the main checkout, so the
-  // location is overridable rather than assumed from this process's rootDir.
-  const logDir = opts.logDir || process.env.ROTATION_LOG_DIR || path.join(rootDir, '.worktrees', 'logs');
+  // The dispatcher log lives in the main checkout's .worktrees/logs even when
+  // this process runs from a linked worktree, so the location is resolved from
+  // git rather than assumed from rootDir. ROTATION_LOG_DIR still wins.
+  const explicitLogDir = opts.logDir || process.env.ROTATION_LOG_DIR || null;
+  const logSource = explicitLogDir
+    ? { dir: path.resolve(explicitLogDir), exists: isDirectory(explicitLogDir), candidates: null }
+    : resolveLogDir(rootDir);
+  const logDir = logSource.dir;
   const ledgerFile = opts.ledgerFile || path.join(HOME_DIR, 'quota.observations.json');
   const quotaFile = opts.quotaFile || path.join(HOME_DIR, 'agy-quota.json');
   const now = opts.now || Date.now();
 
   const logEntries = parseLogLines(logDir);
+  const logReadable = logSource.exists;
   const cooldowns = readCooldowns(ledgerFile);
   const quotaAccounts = readQuotaStore(quotaFile);
 
@@ -246,7 +409,7 @@ function buildRotationState(options) {
   const hasAnyData = configuredIds.size > 0;
   const sources = [];
 
-  for (const def of SOURCE_DEFS) {
+  for (const def of sourceDefinitions(configuredIds, logEntries.map((e) => e.sourceId))) {
     const isConfigured = hasAnyData ? configuredIds.has(def.id) : false;
     if (hasAnyData && !isConfigured) continue;
 
@@ -336,12 +499,16 @@ function buildRotationState(options) {
     }));
 
   const totals = {
-    attempts: logEntries.length,
-    live: logEntries.filter((e) => e.outcome === 'live').length,
-    quotaRefused: logEntries.filter((e) => e.outcome === 'quota-refused').length,
+    // A run only counts when dispatch.sh actually launched it. Pre-flight skips
+    // are refused lanes, not runs, so they stay out of this number.
+    attempts: logReadable ? logEntries.filter((e) => e.started).length : 'UNKNOWN',
+    skipped: logReadable ? logEntries.filter((e) => !e.started).length : 'UNKNOWN',
+    live: logReadable ? logEntries.filter((e) => e.outcome === 'live').length : 'UNKNOWN',
+    quotaRefused: logReadable ? logEntries.filter((e) => e.outcome === 'quota-refused').length : 'UNKNOWN',
     exhausted: sources.filter((x) => x.status === 'quota-exhausted' || x.status === 'cooldown').length,
     sourcesConfigured: sources.length,
     tokens: (function () {
+      if (!logReadable) return 'UNKNOWN';
       const known = logEntries.filter((e) => e.tokens !== 'UNKNOWN');
       return known.length ? known.reduce((a, e) => a + e.tokens, 0) : 'UNKNOWN';
     })(),
@@ -350,6 +517,18 @@ function buildRotationState(options) {
   return {
     observedAt: new Date(now).toISOString(),
     hub: { label: '9Router / dispatch lanes' },
+    // Where the dispatcher numbers came from, so a folder that could not be
+    // read is visible on the panel instead of hiding behind a zero.
+    log: {
+      dir: logDir,
+      exists: logReadable,
+      explicit: Boolean(explicitLogDir),
+      files: countDispatcherLogs(logDir),
+      candidates: logSource.candidates,
+      reason: logReadable
+        ? null
+        : 'Không đọc được log dispatcher: các chỉ số lượt chạy là UNKNOWN, không phải 0',
+    },
     sources,
     runs,
     totals,
@@ -364,4 +543,9 @@ module.exports = {
   readCooldowns,
   readQuotaStore,
   buildRotationState,
+  // Exported because "where the dispatcher log is" is the part that broke when
+  // the dashboard ran from a worktree, and it needs to stay provable.
+  resolveLogDir,
+  candidateLogDirs,
+  mainCheckoutRoot,
 };
