@@ -160,16 +160,16 @@
           : down && src.cooldown.reason
             ? '<div class="truncate" style="color:#dc2626">' + src.cooldown.reason + '</div>'
             : '') +
-        '<div class="opacity-80"><span class="opacity-60">đã dùng </span><span class="font-mono">' + num(lim.consumption) + ' / ' + num(lim.declaredLimit) + '</span></div>' +
+        '<div class="font-mono opacity-75">' + num(lim.consumption) + ' / ' + num(lim.declaredLimit) + '</div>' +
         (pct === null
-          ? '<div class="opacity-50">còn lại UNKNOWN (chưa khai hạn mức)</div>'
+          ? '<div class="opacity-45">chưa khai hạn mức</div>'
           : '<div class="mt-1 h-1.5 rounded-full" style="background:#ece3d2">' +
             '<div class="h-1.5 rounded-full" style="width:' + pct + '%;background:' + (pct >= 100 ? '#dc2626' : accent(src.id)) + '"></div></div>' +
-            '<div class="opacity-60 mt-0.5">còn lại ' + num(lim.headroom) + '</div>') +
+            '<div class="opacity-60 mt-0.5">còn ' + num(lim.headroom) + '</div>') +
         '<div class="mt-1 flex gap-2 opacity-70">' +
-          '<span style="color:#0f766e">' + counts.done + ' xong</span>' +
-          '<span style="color:#b91c1c">' + counts.failed + ' hỏng</span>' +
-          '<span style="color:#b45309">' + counts['quota-refused'] + ' hết quota</span>' +
+          '<span style="color:#0f766e">✓ ' + counts.done + '</span>' +
+          '<span style="color:#b91c1c">✕ ' + counts.failed + '</span>' +
+          '<span style="color:#b45309">⃠ ' + counts['quota-refused'] + '</span>' +
         '</div>';
       cards.appendChild(card);
     });

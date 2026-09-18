@@ -770,31 +770,20 @@
 
       <!-- TAB PANE 5: HEALTH & DIAGNOSTICS -->
       <!-- TAB PANE: SYSTEM ARCHITECTURE -->
-      <div id="tabPane-architecture" class="space-y-6 hidden">
+      <!-- TAB PANE: SYSTEM ARCHITECTURE -->
+      <div id="tabPane-architecture" class="space-y-4 hidden">
         <div class="card bg-base-100 border border-base-300">
-          <div class="card-body gap-4">
-            <div>
-              <h3 class="card-title text-base">Kiến trúc giao việc của Ship Dễ</h3>
-              <p class="text-xs opacity-70">
-                Đường đi thật của một Work Item: từ dòng trong register tới commit trên main.
-                Con số trên mỗi hộp là số đo lấy từ chính dashboard này; hộp nào chưa đo được thì không hiện số.
-              </p>
+          <div class="card-body gap-3 p-4">
+            <div class="flex items-baseline justify-between">
+              <h3 class="card-title text-sm">Kiến trúc hệ thống</h3>
+              <div class="flex gap-3 text-[10px]">
+                <span><span class="inline-block w-2 h-2 rounded-full align-middle" style="background:#8b5cf6"></span> sự thật</span>
+                <span><span class="inline-block w-2 h-2 rounded-full align-middle" style="background:#ea4b12"></span> điều phối</span>
+                <span><span class="inline-block w-2 h-2 rounded-full align-middle" style="background:#0ea5e9"></span> tác nhân</span>
+                <span><span class="inline-block w-2 h-2 rounded-full align-middle" style="background:#16a34a"></span> cổng chất lượng</span>
+              </div>
             </div>
             <div id="architecture-diagram"></div>
-            <div class="grid gap-3 sm:grid-cols-3 text-xs">
-              <div class="rounded-box border border-base-300 p-3">
-                <div class="font-bold mb-1">Quy tắc bất biến</div>
-                Một người ghi trên mỗi Work Item. Tác giả không tự review. Merge cần review PASS mới hơn commit cuối và CI xanh.
-              </div>
-              <div class="rounded-box border border-base-300 p-3">
-                <div class="font-bold mb-1">Khi hết quota</div>
-                dispatch.sh hỏi hạn mức trước khi giao, gặp lỗi quota thì đổi sang nhánh kế tiếp và ghi lại lý do.
-              </div>
-              <div class="rounded-box border border-base-300 p-3">
-                <div class="font-bold mb-1">Chưa tự động</div>
-                Chấm điểm model theo kết quả thật (TASK-AI-46) và cổng tự merge trong control.ps1 (TASK-AI-45) vẫn đang làm.
-              </div>
-            </div>
           </div>
         </div>
       </div>
