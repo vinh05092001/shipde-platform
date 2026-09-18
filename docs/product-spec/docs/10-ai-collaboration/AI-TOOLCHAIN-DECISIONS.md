@@ -194,8 +194,10 @@ genuinely absent entries — six failed gates plus `storybook` — are truthfull
 downgraded from `ADOPTED` to `PENDING` with `default_enabled: false` and
 `blocking_policy: "NON_BLOCKING"`, unblocking focused downstream Work Items:
 
-1. `lefthook` (`PENDING`): absent from devDependencies. Downstream Work Item
-   `TASK-AI-36` installs and configures Lefthook for pre-commit / pre-push hooks.
+1. `lefthook` (`PENDING` at this measurement; `ADOPTED` / `BLOCKING_GATE` since
+   `TASK-AI-36`): absent from devDependencies. Downstream Work Item `TASK-AI-36`
+   installs and configures Lefthook for pre-commit / pre-push hooks; see
+   "Git hook manager: Lefthook (TASK-AI-36)" below.
 2. `trivy` (`PENDING`): absent from system PATH. Downstream Work Item
    `TASK-AI-37` integrates Trivy container and dependency vulnerability scanning.
 3. `axe-core` (`PENDING`): absent from devDependencies. Downstream Work Item
@@ -430,6 +432,59 @@ The supervisor operates with least-privilege permissions:
 - Broad unrestricted shell access
 - Install, remove, or upgrade machine tools
 
+## Git hook manager: Lefthook (TASK-AI-36)
+
+Git hooks are the developer and agent front line for repository safety: they
+refuse a commit when another live session already holds the branch (the
+single-writer invariant, `AI-TOOL-03`) and when a credential has been staged
+into the git index (`AI-36-R05`). Until this Work Item those hooks depended on
+a hand-set `core.hooksPath = .githooks` override, which is a per-checkout
+manual step that fails silently when it is skipped: a checkout with the path
+set and no `pre-commit` in it commits unguarded, and a checkout with neither
+has no hook at all.
+
+The override is replaced with Lefthook (`evilmartians/lefthook`), pinned at
+exact version `1.11.3` as a root devDependency, and configured in
+version-controlled `lefthook.yml`:
+
+- The `pre-commit` stage declares two commands, run sequentially.
+  - `writer-claim` runs `node tools/ai-guard/cli.js check` — the same command
+    the bespoke hook ran, so the guard behaviour is unchanged.
+  - `staged-secret-scan` runs `node tools/ai-guard/cli.js staged-secrets`, which
+    reads the git index (not the working tree) and evaluates `.gitleaks.toml`
+    rules in Node.
+- The authoritative secret barrier is unchanged: Gitleaks `8.24.0` remains a
+  blocking CI gate provisioned by the GitHub Actions workflows. The staged
+  scanner is local defence in depth, and it exists because on a clean Windows
+  workstation `pnpm security:secrets` answers with operational exit code 2 when
+  the Gitleaks binary is not on PATH — an answer a pre-commit hook cannot act
+  on, since it distinguishes neither clean nor leaked.
+- Installation is explicit, never implicit. Repository supply-chain policy
+  forbids all four install lifecycle scripts (`preinstall`, `install`,
+  `postinstall`, `prepare`) in the root and workspace manifests, so `pnpm
+  install` never registers a hook. The `lefthook` npm package’s own
+  `postinstall` runs `lefthook install -f`, which is exactly that forbidden
+  behaviour, so its build script is denied in `pnpm-workspace.yaml`
+  (`lefthook: false`); the binary is still resolved from the pinned
+  `lefthook-windows-x64` optional dependency. Hook installation stays an
+  explicit `pnpm lefthook install`, wired into
+  `scripts/ai/bootstrap-worktrees.ps1`, with the pinned fallback
+  `npx lefthook@1.11.3 install`. A bare `npx lefthook install` is forbidden
+  under `AI-TOOL-11` because it would run whatever version the registry serves
+  today.
+- `scripts/ai/doctor.ps1` verifies that the binary resolves from the workspace
+  pin, that the staged scanner answers, that the Lefthook `pre-commit` hook is
+  installed in the repository’s git common dir, and that no `core.hooksPath`
+  override is left in place to shadow it.
+- A deliberate exception stays available and auditable: `git commit --no-verify`
+  or `LEFTHOOK=0`. Lefthook does not tamper with Git’s own bypass flags
+  (`AI-36-R07`).
+
+`lefthook` moves from `PENDING` to `ADOPTED` / `BLOCKING_GATE` /
+`default_enabled: true` in `tools/ecosystem-manifest.json` only because the
+gating artifact landed in the same change: the exact `"lefthook": "1.11.3"` root
+devDependency pin that the manifest audit probes as `dependency "lefthook"`
+(`AI-36-R08`).
 ## Planner / executor split (TASK-AI-24)
 
 - `tools/ai-brain/scheduler.js` (`planDispatch`) plans and never launches; it references no process-launching API (`AC-AI-24-06`).
