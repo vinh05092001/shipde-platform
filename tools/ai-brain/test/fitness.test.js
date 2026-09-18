@@ -397,3 +397,117 @@ describe('Deriving a grade from recorded outcomes (TASK-AI-27)', () => {
     assert.equal(r.floor, 1);
   });
 });
+
+describe('Review grade rules (TASK-AI-41)', () => {
+  const { reviewGradeOf, scoreOffering, rankByFitness } = require('../fitness');
+
+  test('reviewGrade is separate from codingGrade (AI-41-R01)', () => {
+    const o = { id: 'm', codingGrade: Difficulty.STANDARD, reviewGrade: Difficulty.ARCHITECTURAL };
+    assert.equal(gradeOf(o), Difficulty.STANDARD);
+    assert.equal(reviewGradeOf(o), Difficulty.ARCHITECTURAL);
+  });
+
+  test('an unrated model reviews one class below what it writes (AI-41-R02)', () => {
+    assert.equal(reviewGradeOf({ codingGrade: Difficulty.ARCHITECTURAL }), Difficulty.COMPLEX);
+    assert.equal(reviewGradeOf({ codingGrade: Difficulty.COMPLEX }), Difficulty.STANDARD);
+    assert.equal(reviewGradeOf({ codingGrade: Difficulty.STANDARD }), Difficulty.MECHANICAL);
+    assert.equal(reviewGradeOf({ codingGrade: Difficulty.MECHANICAL }), Difficulty.MECHANICAL);
+  });
+
+  test('an undeclared model defaults to MECHANICAL review (AI-41-R02)', () => {
+    assert.equal(reviewGradeOf({}), Difficulty.MECHANICAL);
+  });
+
+  test('explicit declaration is required to review at coding level (AI-41-R03)', () => {
+    const coder = { codingGrade: Difficulty.COMPLEX };
+    assert.equal(reviewGradeOf(coder), Difficulty.STANDARD);
+
+    const explicit = { codingGrade: Difficulty.COMPLEX, reviewGrade: Difficulty.COMPLEX };
+    assert.equal(reviewGradeOf(explicit), Difficulty.COMPLEX);
+  });
+
+  test('reviewers are selected on review grade, not coding grade (AI-41-R04)', () => {
+    const hd = {
+      status: 'open',
+      windows: { tokensPerDay: { limit: 1000000, used: 0, ratio: 0 } },
+    };
+    const unratedComplexCoder = {
+      id: 'coder',
+      codingGrade: Difficulty.COMPLEX,
+      cost: { inputPerMillion: 0 },
+    };
+    const v = scoreOffering(unratedComplexCoder, Difficulty.COMPLEX, hd, {}, { reviewing: true });
+    assert.equal(v.usable, false);
+    assert.match(v.reason, /chỉ review được tới STANDARD/);
+
+    const declaredComplexReviewer = {
+      id: 'reviewer',
+      codingGrade: Difficulty.STANDARD,
+      reviewGrade: Difficulty.COMPLEX,
+      cost: { inputPerMillion: 0 },
+    };
+    const v2 = scoreOffering(
+      declaredComplexReviewer,
+      Difficulty.COMPLEX,
+      hd,
+      {},
+      { reviewing: true }
+    );
+    assert.equal(v2.usable, true);
+    assert.equal(v2.grade, Difficulty.COMPLEX);
+  });
+
+  test('an out-of-ladder review grade falls back to one-below, not clamped (AI-41-R06)', () => {
+    const typo = { id: 'typo', codingGrade: Difficulty.STANDARD, reviewGrade: 5 };
+    assert.equal(reviewGradeOf(typo), Difficulty.MECHANICAL);
+
+    const negative = { id: 'neg', codingGrade: Difficulty.COMPLEX, reviewGrade: -1 };
+    assert.equal(reviewGradeOf(negative), Difficulty.STANDARD);
+  });
+});
+
+describe('Review grade provenance (TASK-AI-41)', () => {
+  const { resolveReviewGrade, reviewGradeOf } = require('../fitness');
+
+  test('a declared ladder review grade is reported as declared', () => {
+    const r = resolveReviewGrade({ id: 'm', reviewGrade: Difficulty.COMPLEX });
+    assert.deepEqual(r, {
+      class: Difficulty.COMPLEX,
+      graded: true,
+      source: 'declared',
+    });
+  });
+
+  test('an absent review grade is reported as assumed one-below', () => {
+    const r = resolveReviewGrade({ id: 'm', codingGrade: Difficulty.ARCHITECTURAL });
+    assert.equal(r.class, Difficulty.COMPLEX);
+    assert.equal(r.graded, false);
+    assert.equal(r.source, 'assumed');
+  });
+
+  test('an out-of-ladder review grade reports an error and falls back to one-below', () => {
+    const r = resolveReviewGrade({
+      id: 'bad-rev',
+      codingGrade: Difficulty.STANDARD,
+      reviewGrade: 99,
+    });
+    assert.equal(r.class, Difficulty.MECHANICAL);
+    assert.equal(r.graded, false);
+    assert.equal(r.source, 'assumed');
+    assert.match(r.error, /bad-rev/);
+    assert.match(r.error, /99/);
+  });
+
+  test('resolveReviewGrade agrees with reviewGradeOf on the class for every case', () => {
+    for (const c of [1, 2, 3, 4, 5, -1, 'nonsense', undefined, null]) {
+      for (const cg of [1, 2, 3, 4, undefined]) {
+        const offering = { codingGrade: cg, reviewGrade: c };
+        assert.equal(
+          resolveReviewGrade(offering).class,
+          reviewGradeOf(offering),
+          'disagreement for reviewGrade ' + c + ', codingGrade ' + cg
+        );
+      }
+    }
+  });
+});
