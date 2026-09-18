@@ -817,3 +817,15 @@ each one without leaving this Work Item's Allowed paths:
    exit `0` non-vacuous, `AC-AI-37-15` exit `0`
    (`Control status matches register row 170: BLOCKED_DEPENDENCY`),
    `AC-AI-37-18` exit `0`.
+
+### Verification commands record
+
+- `node tools/ai-brain/acceptance/ac-37-06-lifecycle-clean.js` (exit 0)
+- `node tools/ai-brain/acceptance/ac-37-07-forbidden-lifecycle.js` (exit 1 with `FORBIDDEN_LIFECYCLE_SCRIPT: detected preinstall`)
+- `node tools/ai-brain/acceptance/ac-37-13-suite-not-vacuous.js` (exit 0: pass 733 of 733 tests across 159 suites)
+- `node tools/ai-brain/acceptance/ac-37-15-status-alignment.js` (exit 0: Control status matches register row 170: `BLOCKED_DEPENDENCY`)
+- `node tools/ai-brain/acceptance/ac-37-18-outside-repository.js` (exit 0: child exit 2 with `SOURCE_MISSING: package.json`)
+- `node --test tools/ai-brain/test/*.test.js` (exit 0: 483 tests, 483 pass, 0 fail)
+- `python docs/product-spec/scripts/validate_docs.py` (exit 0: Passed: 105 markdown files, 130 feature IDs, 178 delivery rows, 853 unique identifiers)
+- `python docs/product-spec/scripts/validate_pr_contract.py` (exit 0: Pull Request contract passed for TASK-AI-37; 1 changed files inspected)
+
