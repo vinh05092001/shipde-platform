@@ -1,10 +1,95 @@
 <!doctype html>
-<html lang="vi" class="dark">
+<html lang="vi" data-theme="shipde">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Ship Dễ — AI Developer Cockpit & Realtime Delivery Tracker</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind 4 in the browser plus daisyUI 5 as its plugin: the combination daisyUI
+         documents for a build-free page. Tailwind 3's CDN could not be used because its
+         unlayered preflight overrode every daisyUI component. -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5/daisyui.css" />
+    <style type="text/tailwindcss">
+      @theme {
+        --color-brand: #ea4b12;
+      }
+      /* Ship Dễ cream theme. */
+      :root, [data-theme='shipde'] {
+        color-scheme: light;
+        --color-base-100: #fffdf7;
+        --color-base-200: #faf6ec;
+        --color-base-300: #e6ddc9;
+        --color-base-content: #3f3a33;
+        --color-primary: #ea4b12;
+        --color-primary-content: #fff7ed;
+        --color-secondary: #8b5cf6;
+        --color-secondary-content: #f5f3ff;
+        --color-accent: #0ea5e9;
+        --color-accent-content: #f0f9ff;
+        --color-neutral: #3f3a33;
+        --color-neutral-content: #faf6ec;
+        --color-info: #0284c7;
+        --color-info-content: #f0f9ff;
+        --color-success: #16a34a;
+        --color-success-content: #f0fdf4;
+        --color-warning: #b45309;
+        --color-warning-content: #fffbeb;
+        --color-error: #dc2626;
+        --color-error-content: #fef2f2;
+        --radius-selector: 0.5rem;
+        --radius-field: 0.6rem;
+        --radius-box: 0.9rem;
+        --size-selector: 0.25rem;
+        --size-field: 0.25rem;
+        --border: 1px;
+        --depth: 0;
+        --noise: 0;
+      }
+    </style>
+    <style>
+      /* daisyUI 5 is authored for Tailwind 4; this page runs the Tailwind 3 CDN,
+         so the v4 base variables it expects are declared here. */
+      :root {
+        --spacing: 0.25rem;
+        --radius-selector: 0.5rem;
+        --radius-field: 0.6rem;
+        --radius-box: 0.9rem;
+        --size-selector: 0.25rem;
+        --size-field: 0.25rem;
+        --border: 1px;
+        --depth: 1;
+        --noise: 0;
+        --color-black: #000;
+        --color-white: #fff;
+        --font-weight-medium: 500;
+        --font-weight-semibold: 600;
+        --text-xs: 0.75rem;
+        --text-sm: 0.875rem;
+        --text-base: 1rem;
+        --text-lg: 1.125rem;
+        --text-xs--line-height: 1rem;
+        --text-sm--line-height: 1.25rem;
+        --text-base--line-height: 1.5rem;
+        --default-transition-duration: 0.2s;
+      }
+      /* Ship Dễ cream theme mapped onto daisyUI's tokens. */
+      :root, [data-theme='shipde'] {
+        --color-base-100: #fffdf7;
+        --color-base-200: #faf6ec;
+        --color-base-300: #f1e9d8;
+        --color-base-content: #3f3a33;
+        --color-primary: #ea4b12;
+        --color-primary-content: #fff7ed;
+        --color-secondary: #8b5cf6;
+        --color-accent: #0ea5e9;
+        --color-neutral: #3f3a33;
+        --color-success: #16a34a;
+        --color-warning: #b45309;
+        --color-error: #dc2626;
+        --radius-box: 0.9rem;
+        --radius-field: 0.6rem;
+      }
+    </style>
     <script>
       tailwind.config = {
         darkMode: 'class',
@@ -289,51 +374,54 @@
 
       <!-- Navigation Tabs -->
       <nav
-        class="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto custom-scroll"
+        class="tabs tabs-lift overflow-x-auto custom-scroll"
         aria-label="Bảng điều khiển tabs"
       >
         <button
           onclick="switchTab('gates')"
           id="tabBtn-gates"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs bg-brand text-white shadow-sm flex items-center gap-2 glow-brand"
+          class="tab font-bold"
         >
           <span>🛡️ 1. Cổng Giao Việc & Bằng Chứng PR</span>
         </button>
         <button
           onclick="switchTab('roster')"
           id="tabBtn-roster"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+          class="tab font-bold"
         >
           <span>🤖 2. Phiên Làm Việc & Worktrees</span>
         </button>
         <button
           onclick="switchTab('queue')"
           id="tabBtn-queue"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+          class="tab font-bold"
         >
           <span>🗺️ 3. Lộ Trình <span id="tabQueueCountLabel">—</span> Đầu Việc</span>
         </button>
         <button
           onclick="switchTab('activity')"
           id="tabBtn-activity"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+          class="tab font-bold"
         >
           <span>📜 4. Nhật Ký Hoạt Động</span>
         </button>
         <button
           onclick="switchTab('capacity')"
           id="tabBtn-capacity"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+          class="tab font-bold"
         >
           <span
             >&#9981; 5. S&#7913;c Ch&#7913;a &amp; Quota
             <span id="tabCapacityLabel">&#8212;</span></span
           >
         </button>
+        <button onclick="switchTab('architecture')" id="tabBtn-architecture" class="tab font-bold">
+          <span>&#129518; 6. Ki&#7871;n Tr&#250;c H&#7879; Th&#7889;ng</span>
+        </button>
         <button
           onclick="switchTab('health')"
           id="tabBtn-health"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
+          class="tab font-bold"
         >
           <span>🩺 6. Sức Khỏe Nguồn Dữ Liệu</span>
         </button>
@@ -681,6 +769,36 @@
       </div>
 
       <!-- TAB PANE 5: HEALTH & DIAGNOSTICS -->
+      <!-- TAB PANE: SYSTEM ARCHITECTURE -->
+      <div id="tabPane-architecture" class="space-y-6 hidden">
+        <div class="card bg-base-100 border border-base-300">
+          <div class="card-body gap-4">
+            <div>
+              <h3 class="card-title text-base">Kiến trúc giao việc của Ship Dễ</h3>
+              <p class="text-xs opacity-70">
+                Đường đi thật của một Work Item: từ dòng trong register tới commit trên main.
+                Con số trên mỗi hộp là số đo lấy từ chính dashboard này; hộp nào chưa đo được thì không hiện số.
+              </p>
+            </div>
+            <div id="architecture-diagram"></div>
+            <div class="grid gap-3 sm:grid-cols-3 text-xs">
+              <div class="rounded-box border border-base-300 p-3">
+                <div class="font-bold mb-1">Quy tắc bất biến</div>
+                Một người ghi trên mỗi Work Item. Tác giả không tự review. Merge cần review PASS mới hơn commit cuối và CI xanh.
+              </div>
+              <div class="rounded-box border border-base-300 p-3">
+                <div class="font-bold mb-1">Khi hết quota</div>
+                dispatch.sh hỏi hạn mức trước khi giao, gặp lỗi quota thì đổi sang nhánh kế tiếp và ghi lại lý do.
+              </div>
+              <div class="rounded-box border border-base-300 p-3">
+                <div class="font-bold mb-1">Chưa tự động</div>
+                Chấm điểm model theo kết quả thật (TASK-AI-46) và cổng tự merge trong control.ps1 (TASK-AI-45) vẫn đang làm.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="tabPane-health" class="space-y-6 hidden">
         <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
           <div class="flex items-center justify-between pb-3 border-b border-slate-800">
@@ -914,5 +1032,6 @@
     </script>
     <script src="/client.js"></script>
     <script src="/rotation-view.js"></script>
+    <script src="/architecture.js"></script>
   </body>
 </html>

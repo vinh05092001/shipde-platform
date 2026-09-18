@@ -1258,17 +1258,15 @@ function switchTab(tabId) {
   activeTab = tabId;
 
   // Toggle active button styles
-  const tabs = ['gates', 'roster', 'queue', 'activity', 'capacity', 'health'];
+  const tabs = ['gates', 'roster', 'queue', 'activity', 'capacity', 'architecture', 'health'];
   tabs.forEach((t) => {
     const btn = document.getElementById(`tabBtn-${t}`);
     const pane = document.getElementById(`tabPane-${t}`);
     if (btn) {
       if (t === tabId) {
-        btn.className =
-          'tab-btn px-4 py-2.5 rounded-xl font-bold text-xs bg-brand text-white shadow-sm flex items-center gap-2 glow-brand';
+        btn.className = 'tab tab-active font-bold';
       } else {
-        btn.className =
-          'tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2';
+        btn.className = 'tab font-bold';
       }
     }
     if (pane) {
