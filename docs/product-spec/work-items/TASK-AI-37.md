@@ -13,9 +13,9 @@
 | Risk | `LOW` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-37.md`, `tools/ai-brain/acceptance/ac-37-*.js`, `tools/ai-brain/acceptance/lib/lifecycle-forbidden.js` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/task-ai-37-trivy-ci` (PR #103 repair branch `fix/pr103-143135` pushes here) |
+| Branch | `feat/task-ai-37-trivy-ci` (PR #103 repair rounds push here: rounds 1–2 from `fix/pr103-143135`, round 3 from `fix/pr103-211719`) |
 | Pull Request | https://github.com/vinh05092001/shipde-platform/pull/103 (prior spec PR https://github.com/vinh05092001/shipde-platform/pull/24; audit repair PR https://github.com/vinh05092001/shipde-platform/pull/56) |
-| Deliverable of this Work Item | Specification document only; no CI gate is delivered here |
+| Deliverable of this Work Item | Specification document and the acceptance probes that guard its own claims; no CI gate is delivered here |
 | Successor implementation Work Item | `TASK-AI-45` (not yet registered; see § Scope conflicts and successor authorization) |
 
 ### Status transition ledger
@@ -46,17 +46,57 @@ Consequences of this ledger, binding on any controller or reviewer:
   against row 170 of the register and fails when they diverge, so the two sources
   cannot silently disagree.
 
+### Review routing disposition
+
+**REVIEW HOLD.** Register row 170 of
+`docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` holds
+this Work Item at `BLOCKED_DEPENDENCY`, and the Control table above records the
+same value. Only the governed register-write path — the `TASK-AI-19` reconciler
+that owns that CSV — may advance the item through `READY_FOR_AUTHOR` and
+`IN_PROGRESS`. `Allowed paths` excludes the register file, so `TASK-AI-37` has
+no authority to write any of those transitions and claims none.
+`AC-AI-37-21` (`tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js`)
+refuses a blocked item that stops disclosing this hold, so the paragraph cannot
+be deleted in a later edit without a probe failing.
+
+Two, and only two, remedies are admissible, and both belong to the human merge
+owner rather than to the author:
+
+1. **ADVANCE** — the planner writes `READY_FOR_AUTHOR`, then `IN_PROGRESS`, then
+   `READY_FOR_CODEX` for row 170 through the `TASK-AI-19` register-write path;
+   the Control table follows the register, and review routing becomes valid as
+   `AGENTS.md` § Unit of delivery requires.
+2. **CLOSE** — close the open pull request and record on the register that the
+   deliverables already sit on `main`: the specification by PR #24, the five
+   acceptance probes by PR #46 (`e508bfc`) and their repair by PR #56
+   (`31e16b2`).
+
+The conflict this discloses is recorded, not silently resolved. The Pull Request
+contract gate (`.github/workflows/feature-contract-gate.yml`, which runs
+`python3 docs/product-spec/scripts/validate_pr_contract.py --event
+"$GITHUB_EVENT_PATH"`) requires every PR body to carry the line
+`Review status: READY_FOR_CODEX`. On a `BLOCKED_DEPENDENCY` item that line states
+only that the pull request is ready to be independently reviewed; it is not a
+stage transition for the Work Item, and the register plus the Control table above
+stay the single source of stage truth. An author cannot satisfy the CI contract
+and `AGENTS.md` § Unit of delivery any other way while the register is blocked,
+which is precisely why this hold is written here and probed by `AC-AI-37-21`.
+
 ## Business outcome
 
-> PR #103 repair note (2026-09-18): the `CHANGES_REQUIRED` review found this PR
-> head was an empty commit (`d50962f`, zero file changes) based on a stale base
-> (`cd3cfd8`) with no changes relative to `origin/main`, so the review could not
-> verify any deliverable. This repair merges current `origin/main` (`8cec992`)
-> into the repair branch and records, inside this Work Item's Allowed paths, that
-> the five acceptance scripts were delivered earlier by PR #46 (`e508bfc`) and
-> repaired by PR #56 (`31e16b2`); no script is re-delivered here. The Work Item
-> remains `BLOCKED_DEPENDENCY` in both the Control table and register row 170,
-> and no register, workflow, CI gate, or out-of-scope file is touched.
+> PR #103 repair note (2026-09-18): the `CHANGES_REQUIRED` review found the PR
+> head to be an empty commit (`d50962f`, zero file changes) on a stale base
+> (`cd3cfd8`), and found that the five acceptance scripts named in
+> `Allowed paths` had already been delivered on `main` by PR #46 (`e508bfc`) and
+> repaired by PR #56 (`31e16b2`). Repair rounds 1 and 2 merged current
+> `origin/main` (`8cec992`) into the branch and recorded the review outcome
+> inside this Work Item's Allowed paths. Round 3 adds the missing deliverable
+> instead of only prose: a new acceptance probe,
+> `tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js`, and the § Control ›
+> Review routing disposition that probe enforces. No previously delivered script
+> is re-delivered, the Work Item remains `BLOCKED_DEPENDENCY` in both the Control
+> table and register row 170, and no register, workflow, CI gate or out-of-scope
+> file is touched.
 
 The Ship Dễ continuous delivery pipeline requires automated supply-chain,
 dependency vulnerability, container security, and Software Bill of Materials (SBOM)
@@ -141,6 +181,14 @@ security gate specification across supply-chain dependencies, containers, and CI
 
 Bounded scope for this specification phase:
 Authoring the specification in `docs/product-spec/work-items/TASK-AI-37.md`.
+
+Bounded scope for the acceptance probes that guard this specification's own
+claims: `tools/ai-brain/acceptance/ac-37-*.js` and
+`tools/ai-brain/acceptance/lib/lifecycle-forbidden.js`. Five probes were
+delivered there by PR #46 (`e508bfc`) and repaired by PR #56 (`31e16b2`);
+`AC-AI-37-21` (`tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js`) was
+added by the third repair round of PR #103 to make the review-routing hold
+mechanical. No other path is authorized in either phase.
 
 Authorized paths for downstream implementation phase:
 When implementation is authorized, the downstream implementation phase executes
@@ -343,6 +391,7 @@ contracts, supply-chain verification specifications, and SBOM artifact generatio
 | `AC-AI-37-18` | Negative proof: `AC-AI-37-07` fails operationally (exit `2`), not as a finding (exit `1`), when run outside the repository. The row asserts the child's exit `2`; the harness itself exits `0` when the observation holds and `1` when it does not | `node tools/ai-brain/acceptance/ac-37-18-outside-repository.js` | `0` | `OUTSIDE_REPOSITORY_PROBE: child exit 2 with SOURCE_MISSING: package.json` | `tools/ai-brain/acceptance/ac-37-18-outside-repository.js` stdout |
 | `AC-AI-37-19` | The local Trivy driver reports an ABSENT scanner as an operational failure, never as a clean scan. On this workstation `trivy` is absent, so the applicable branch is exit `2` | `pnpm security:trivy` | `2` (on a workstation where `trivy` is absent from `PATH`; `0` or `1` when it is present) | `Không tìm thấy native binary Trivy CLI` | `scripts/verify-trivy.ts` stderr |
 | `AC-AI-37-20` | The Trivy driver's three outcomes stay distinct and its argument vector omits `secret` | `node --test "tools/ai-guard/test/verify-trivy.test.js"` | `0` | `ℹ fail 0` | `tools/ai-guard/test/verify-trivy.test.js` |
+| `AC-AI-37-21` | Review routing hold: a Work Item that the register still holds at a `BLOCKED` stage must disclose the hold on the page reviewers read, and must name the governed register-write path and the remedies it offers. The row does not re-implement the Control-versus-register comparison: it runs `AC-AI-37-15` as a child and mirrors its verdict, because duplicating a rule in the probe that claims to test it is defect `D-01` below | `node tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` | `0` | `REVIEW_ROUTING_HOLD: BLOCKED_DEPENDENCY disclosed with a governed transition path` | `tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js`, `docs/product-spec/work-items/TASK-AI-37.md` § Control › Review routing disposition |
 
 ## Acceptance matrix audit
 
@@ -360,6 +409,16 @@ empty temporary directory with no repository present; every other row failed
 there with a non-zero exit, so no other row is a tautology. `AC-AI-37-13` is
 repaired in `D-04`, and in the repaired matrix all twenty rows exit non-zero
 outside the repository.
+
+`AC-AI-37-21` was added afterwards, by the third repair round of PR #103, and is
+measured the same way: exit `0` at the repository root and exit `2` with
+`SOURCE_MISSING: docs/product-spec/work-items/TASK-AI-37.md` from an empty
+temporary directory outside the repository. Its mutants — disposition heading
+renamed, disposition section deleted, hold statement removed, remedies removed —
+each exit `1`, and the measurements are recorded in § PR #103 `CHANGES_REQUIRED`
+resolution record. It is not one of the twenty audited rows: it was written after
+that audit, by the round that answers the review, and it is measured by the same
+method rather than exempted from it.
 
 ### Step-2 measurement (rows as originally stored)
 
@@ -668,6 +727,7 @@ pnpm security:trivy                                              # expected exit
 python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Scope conflicts and successor authorization','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all 17 required sections present');"
 python -c "content=open('docs/product-spec/work-items/TASK-AI-37.md', encoding='utf-8').read(); tokens=['0.60.0','8.24.0','180000ms','500MB','BLOCKED_DEPENDENCY','AI-37-R01','AI-37-R02','AI-37-R03','AI-37-R04','AI-37-R05','AI-37-R06','AI-37-R07','AI-37-R08','AI-37-R09','AI-37-R10','sbom.cyclonedx.json','NO_CONTAINER_TARGET','aquasecurity/trivy-action','TASK-AI-45','DISTINCT_EXIT_CODES','trivy-fixture-evidence','shipde-sbom-cyclonedx','AC-AI-45-01','AC-AI-45-12']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-37-R01 through R10, SBOM, successor TASK-AI-45, and downstream evidence-artifact tokens verified');"
 node tools/ai-brain/acceptance/ac-37-15-status-alignment.js      # expected exit 0
+node tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js   # expected exit 0
 python -c "import os; hits=[os.path.join(r,f) for r,_,fs in os.walk('.') for f in fs if f=='Dockerfile' and 'node_modules' not in r and '.git' not in r]; apps=[p for p in hits if 'apps' in p.split(os.sep)]; assert not apps, 'UNEXPECTED_APP_DOCKERFILE: ' + str(apps); assert any('docker-worker' in p for p in hits), 'MISSING_KNOWN_DOCKERFILE'; print('Dockerfile inventory: ' + str(len(hits)) + ' total, 0 under apps/*, docker-worker present')"
 python -c "import csv; ids=[r['work_item_id'] for r in csv.DictReader(open('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',encoding='utf-8'))]; spec=open('docs/product-spec/work-items/TASK-AI-37.md',encoding='utf-8').read(); assert 'TASK-AI-45' in spec, 'SUCCESSOR_NOT_NAMED'; assert 'TASK-AI-45' not in ids, 'SUCCESSOR_ALREADY_REGISTERED'; print('Successor TASK-AI-45 named in specification and not yet registered')"
 node tools/ai-brain/cli.js manifest
@@ -818,6 +878,45 @@ each one without leaving this Work Item's Allowed paths:
    (`Control status matches register row 170: BLOCKED_DEPENDENCY`),
    `AC-AI-37-18` exit `0`.
 
+#### Round 3 — the missing in-scope deliverable (branch `fix/pr103-211719`)
+
+Rounds 1 and 2 answered findings 1, 2 and 4 by resynchronising the branch and
+recording the outcome here, but that record was prose: nothing in the repository
+failed if a later edit deleted it, and finding 3 stayed a disclosure rather than a
+checked claim. Round 3 delivers the one artifact this Work Item's `Allowed paths`
+can still produce and that the review found missing — an acceptance probe — and
+makes the disclosure of finding 3 mechanical.
+
+| Finding (comment `5724674195`) | Round-3 disposition | Evidence |
+|---|---|---|
+| 1. Empty PR (`d50962f`, zero file changes) | The PR now carries a real deliverable and not only a record: `tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` plus this Work Item. `git diff --name-only origin/main...HEAD` lists exactly those two files, both inside `Allowed paths`. | `git diff --name-only origin/main...HEAD`, `git diff --stat origin/main...HEAD` |
+| 2. Branch stale (`cd3cfd8`, behind `origin/main`) | Re-verified at this head after `git fetch origin --prune`: `origin/main` is an ancestor of `HEAD` and stands at `8cec992`. | `git merge-base --is-ancestor origin/main HEAD` exit `0`; `git log --oneline origin/main -1` |
+| 3. Specification conflict (`BLOCKED_DEPENDENCY` routed for review) | Not overridden, and no longer disclosure-only. § Control › Review routing disposition states the hold, names the `TASK-AI-19` register-write path that owns the transition, and names the two admissible remedies (`ADVANCE`, `CLOSE`). `AC-AI-37-21` exits `1` when any of those statements is removed, so the conflict cannot be silently dropped by a later edit. Register row 170 is untouched and still `BLOCKED_DEPENDENCY`, and `AC-AI-37-15` still proves the Control table agrees with it. | `node tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` exit `0`; mutants below each exit `1` |
+| 4. Acceptance scripts already on `main` (PR #46) | Not re-delivered. The new probe does not exist on `origin/main` (`git cat-file -e origin/main:tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` fails), and no file delivered by `e508bfc` (PR #46) or `31e16b2` (PR #56) is modified by this PR. | `git cat-file -e` non-zero; PR file list |
+
+Measured behaviour of the new probe at this head (repository root, Windows
+PowerShell, `node v24.15.0`):
+
+| Scenario | Exit | Output |
+|---|---|---|
+| `node tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` | `0` | `REVIEW_ROUTING_HOLD: BLOCKED_DEPENDENCY disclosed with a governed transition path` |
+| the same command from an empty temporary directory outside the repository | `2` | `SOURCE_MISSING: docs/product-spec/work-items/TASK-AI-37.md` |
+| mutant: disposition heading renamed | `1` | `DISPOSITION_SECTION_MISSING: ### Review routing disposition` |
+| mutant: disposition section deleted | `1` | `DISPOSITION_SECTION_MISSING: ### Review routing disposition` |
+| mutant: `REVIEW HOLD` statement removed | `1` | `DISCLOSURE_MISSING: REVIEW HOLD` |
+| mutant: remedies removed (`ADVANCE`, `CLOSE`) | `1` | `DISCLOSURE_MISSING: ADVANCE; DISCLOSURE_MISSING: CLOSE` |
+
+The mutants were applied to this document in place and it was restored
+byte-for-byte from a backup held outside the repository: the `sha256` digest was
+identical before and after (`27fab76599e9…`), and no `git checkout --` was used on
+uncommitted work. The probe's own controls additionally prove that it stays silent
+on a Control status that is not blocked and that its parser can tell two Control
+statuses apart.
+
+Round 3 touches nothing outside `Allowed paths`: `FEATURE-DELIVERY-REGISTER.csv`,
+`.github/**`, `tools/ecosystem-manifest.json` and every script delivered by PR #46
+and PR #56 are unchanged, and no CI gate is claimed.
+
 ### Verification commands record
 
 - `node tools/ai-brain/acceptance/ac-37-06-lifecycle-clean.js` (exit 0)
@@ -826,6 +925,15 @@ each one without leaving this Work Item's Allowed paths:
 - `node tools/ai-brain/acceptance/ac-37-15-status-alignment.js` (exit 0: Control status matches register row 170: `BLOCKED_DEPENDENCY`)
 - `node tools/ai-brain/acceptance/ac-37-18-outside-repository.js` (exit 0: child exit 2 with `SOURCE_MISSING: package.json`)
 - `node --test tools/ai-brain/test/*.test.js` (exit 0: 483 tests, 483 pass, 0 fail)
-- `python docs/product-spec/scripts/validate_docs.py` (exit 0: Passed: 105 markdown files, 130 feature IDs, 178 delivery rows, 853 unique identifiers)
-- `python docs/product-spec/scripts/validate_pr_contract.py` (exit 0: Pull Request contract passed for TASK-AI-37; 1 changed files inspected)
+- `python docs/product-spec/scripts/validate_docs.py` (exit 0: `Documentation validation passed:` — 105 markdown files, 130 feature IDs, 178 delivery rows, 853 unique identifiers at the round-2 head; the file, row and identifier totals grow with the repository, so only the `Documentation validation passed:` prefix is asserted)
+- `python docs/product-spec/scripts/validate_pr_contract.py` (exit 0: Pull Request contract passed for TASK-AI-37; 1 changed files inspected at the round-2 head)
+
+Round 3 (branch `fix/pr103-211719`) added these measurements, taken at this head:
+
+- `node tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` (exit 0: `REVIEW_ROUTING_HOLD: BLOCKED_DEPENDENCY disclosed with a governed transition path`; exit 2 with `SOURCE_MISSING: docs/product-spec/work-items/TASK-AI-37.md` from an empty directory outside the repository; four mutants each exit 1 — see the table in § PR #103 `CHANGES_REQUIRED` resolution record)
+- `node --test 'tools/ai-brain/test/*.test.js'` (exit 0: 483 tests, 109 suites, 483 pass, 0 fail)
+- `python docs/product-spec/scripts/validate_docs.py` (exit 0: `Documentation validation passed: 105 markdown files, 130 feature IDs, 178 delivery rows, 854 unique identifiers.`)
+- `python docs/product-spec/scripts/validate_pr_contract.py --event <pull_request payload>` (exit 0: Pull Request contract passed for TASK-AI-37; 2 changed files inspected)
+- `git merge-base --is-ancestor origin/main HEAD` (exit 0; `origin/main` at `8cec992`)
+
 
