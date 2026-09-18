@@ -3,14 +3,19 @@
 // one module (./lib/role-feedback.js), and both this script and feedback.js
 // (when it exists) resolve the same file path.
 //
-// The check: require.resolve('./lib/role-feedback.js') resolves to the same
-// absolute path regardless of which module asks. No second copy of the removal
-// rule exists anywhere in the tree outside the acceptance/ directory (which
-// holds test harnesses, not production code).
+// The check: two genuinely different requiring modules — this acceptance row,
+// whose base directory is acceptance/, and the production wrapper
+// tools/ai-brain/feedback.js, whose base directory is tools/ai-brain/ — must
+// resolve the removal rule to the identical absolute path. The two bases are
+// different modules, so the comparison can fail; if they ever resolve two
+// different files, production and proof no longer share one rule. No second
+// copy of the removal rule exists anywhere in the tree outside the acceptance/
+// directory (which holds test harnesses, not production code).
 //
 // Run outside the repository it exits 2, never 1.
 const fs = require('fs');
 const path = require('path');
+const { createRequire } = require('module');
 
 // SOURCE_MISSING check: verify the file exists relative to CWD.
 const cwd = process.cwd();
@@ -19,14 +24,34 @@ if (!fs.existsSync(path.join(cwd, 'tools/ai-brain/acceptance/lib/role-feedback.j
   process.exit(2);
 }
 
-const roleFeedbackRelative = './lib/role-feedback.js';
-const resolvedFromHere = require.resolve(roleFeedbackRelative);
+const root = path.join(__dirname, '..');
 
-// Both resolve the same file because require.cache is keyed by absolute path.
-const resolvedFromFeedback = require.resolve(roleFeedbackRelative);
+// Requiring module 1: this acceptance row. Base directory: acceptance/.
+const resolvedFromHere = require.resolve('./lib/role-feedback.js');
 
-if (resolvedFromHere !== resolvedFromFeedback) {
-  console.error('SINGLE_SOURCE_FAILED: two different resolutions');
+// Requiring module 2: the production wrapper feedback.js, whether or not it
+// exists yet. createRequire() only builds the resolution base that file would
+// use, so this is a real second requiring module, not the same literal resolved
+// twice from one base.
+const productionRequire = createRequire(path.join(root, 'feedback.js'));
+let resolvedFromProduction;
+try {
+  resolvedFromProduction = productionRequire.resolve('./acceptance/lib/role-feedback.js');
+} catch (err) {
+  console.error(
+    'SINGLE_SOURCE_FAILED: production base cannot resolve acceptance/lib/role-feedback.js: ' +
+      err.message
+  );
+  process.exit(1);
+}
+
+if (resolvedFromHere !== resolvedFromProduction) {
+  console.error(
+    'SINGLE_SOURCE_FAILED: production base resolves ' +
+      resolvedFromProduction +
+      ' but acceptance base resolves ' +
+      resolvedFromHere
+  );
   process.exit(1);
 }
 
@@ -45,7 +70,6 @@ if (typeof rf.applyNarrowing !== 'function') {
 // We check the production code tree (tools/ai-brain/*.js and tools/ai-brain/**/*.js
 // excluding acceptance/ and test/) for files that export both evaluateNarrowing
 // and applyNarrowing.
-const root = path.join(__dirname, '..');
 const duplicates = [];
 for (const candidate of [path.join(root, 'feedback.js')]) {
   if (fs.existsSync(candidate)) {
@@ -90,9 +114,35 @@ if (fs.existsSync(feedbackPath)) {
     );
     process.exit(1);
   }
-  if (!feedbackSrc.includes('acceptance/lib/role-feedback')) {
+  // The wrapper must resolve to the same file the acceptance tree resolves.
+  // Extract the specifier it actually requires and resolve it from the
+  // production base, so a lookalike path that merely contains the expected
+  // substring cannot pass.
+  const specifier = feedbackSrc.match(/require\(\s*['"]([^'"]*role-feedback[^'"]*)['"]\s*\)/);
+  if (!specifier) {
     console.error(
       'SINGLE_SOURCE_FAILED: tools/ai-brain/feedback.js does not require acceptance/lib/role-feedback.js'
+    );
+    process.exit(1);
+  }
+  let resolvedFromFeedback;
+  try {
+    resolvedFromFeedback = productionRequire.resolve(specifier[1]);
+  } catch (err) {
+    console.error(
+      'SINGLE_SOURCE_FAILED: tools/ai-brain/feedback.js requires ' +
+        specifier[1] +
+        ' which does not resolve: ' +
+        err.message
+    );
+    process.exit(1);
+  }
+  if (resolvedFromFeedback !== resolvedFromHere) {
+    console.error(
+      'SINGLE_SOURCE_FAILED: feedback.js resolves ' +
+        resolvedFromFeedback +
+        ' but the acceptance tree resolves ' +
+        resolvedFromHere
     );
     process.exit(1);
   }
@@ -132,7 +182,7 @@ if (duplicates.length > 0) {
 console.log(
   'SINGLE_SOURCE: ' +
     resolvedFromHere +
-    ' — feedback.js and AC-AI-25-03 ' +
-    'both resolve to the same file'
+    ' — production base (tools/ai-brain/feedback.js) and ' +
+    'acceptance base (acceptance/) resolve the same file'
 );
 process.exit(0);
