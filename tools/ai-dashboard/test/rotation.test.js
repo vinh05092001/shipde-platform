@@ -137,18 +137,5 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
     });
   });
 
-  describe('Log parsing', () => {
-    test('parseLogLines extracts entries correctly', () => {
-      const tmp = makeTmpDir();
-      fs.writeFileSync(path.join(tmp, 'test.log'),
-        '[2026-09-18T10:00:00Z] source=9router model=gpt-4o tokens=1500 status=done\n' +
-        '[2026-09-18T10:01:00Z] source=cline model=claude-sonnet tokens=UNKNOWN status=live\ngarbage\n');
-      const entries = parseLogLines(tmp);
-      assert.strictEqual(entries.length, 2);
-      assert.strictEqual(entries[0].sourceId, '9router');
-      assert.strictEqual(entries[0].tokens, 1500);
-      assert.strictEqual(entries[1].tokens, 'UNKNOWN');
-      fs.rmSync(tmp, { recursive: true, force: true });
-    });
-  });
+  // Dispatcher-format parsing is covered by rotation-parse.test.js.
 });
