@@ -30,3 +30,6 @@ test-results/
 __pycache__/
 *.pyc
 .gstack/
+
+# Open Code Review local scaffolding (reviewer tool, not project source)
+.ocr/
