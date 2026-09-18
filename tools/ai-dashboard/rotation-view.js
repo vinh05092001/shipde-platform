@@ -6,7 +6,7 @@
   'use strict';
 
   var SVG_NS = 'http://www.w3.org/2000/svg';
-  var CX = 400, CY = 400, R = 270;
+  var CX = 320, CY = 300, R = 210;
   var POLL_MS = 5000;
 
   function el(tag, attrs, text) {
@@ -38,7 +38,7 @@
     var sources = (data && data.sources ? data.sources : []).filter(function (s) { return s.configured; });
     if (!sources.length) return;
 
-    svg.appendChild(el('circle', { cx: CX, cy: CY, r: 58, fill: '#fff7ed', stroke: '#ea4b12', 'stroke-width': 3 }));
+    svg.appendChild(el('circle', { cx: CX, cy: CY, r: 50, fill: '#fff7ed', stroke: '#ea4b12', 'stroke-width': 3 }));
     svg.appendChild(el('text', { x: CX, y: CY + 5, 'text-anchor': 'middle', fill: '#7c2d12', 'font-size': 15, 'font-weight': 'bold' }, 'Dispatcher'));
 
     sources.forEach(function (src, i) {
@@ -49,8 +49,8 @@
       var g = el('g', down ? { class: 'rot-dim' } : null);
 
       var line = el('line', {
-        x1: CX + 58 * Math.cos(a), y1: CY + 58 * Math.sin(a),
-        x2: nx - 34 * Math.cos(a), y2: ny - 34 * Math.sin(a),
+        x1: CX + 50 * Math.cos(a), y1: CY + 50 * Math.sin(a),
+        x2: nx - 32 * Math.cos(a), y2: ny - 32 * Math.sin(a),
         stroke: live ? '#16a34a' : '#d6cdbb', 'stroke-width': live ? 3 : 2,
       });
       if (live) line.setAttribute('class', 'rot-flow');
@@ -65,10 +65,10 @@
         }, label));
       }
 
-      g.appendChild(el('circle', { cx: nx, cy: ny, r: 34, fill: '#fffdf7', stroke: statusColor(src.status), 'stroke-width': 3 }));
+      g.appendChild(el('circle', { cx: nx, cy: ny, r: 32, fill: '#fffdf7', stroke: statusColor(src.status), 'stroke-width': 3 }));
       g.appendChild(el('text', { x: nx, y: ny + 4, 'text-anchor': 'middle', fill: '#3f3a33', 'font-size': 12, 'font-weight': 'bold' }, src.id));
       if (down && src.cooldown && src.cooldown.reason) {
-        g.appendChild(el('text', { x: nx, y: ny + 52, 'text-anchor': 'middle', fill: '#dc2626', 'font-size': 11 }, src.cooldown.reason.slice(0, 34)));
+        g.appendChild(el('text', { x: nx, y: ny + 48, 'text-anchor': 'middle', fill: '#dc2626', 'font-size': 11 }, src.cooldown.reason.slice(0, 22)));
       }
       svg.appendChild(g);
 

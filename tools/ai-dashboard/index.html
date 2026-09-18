@@ -33,7 +33,7 @@
         --panel: #fffdf7;
         --line: #e6ddc9;
         --ink: #3f3a33;
-        --muted: #7a7266;
+        --muted: #6b6257;
       }
       body {
         background-color: var(--cream) !important;
@@ -45,7 +45,9 @@
       }
       [class*='border-slate-'], [class*='border-gray-'] { border-color: var(--line) !important; }
       [class*='text-slate-1'], [class*='text-slate-2'], [class*='text-white'] { color: var(--ink) !important; }
-      [class*='text-slate-4'], [class*='text-slate-5'], [class*='text-gray-4'] { color: var(--muted) !important; }
+      [class*='text-slate-3'], [class*='text-slate-4'], [class*='text-slate-5'],
+      [class*='text-gray-3'], [class*='text-gray-4'], [class*='text-gray-5'] { color: var(--muted) !important; }
+      [class*='text-slate-6'], [class*='text-slate-7'] { color: #857b6e !important; }
       .tab-btn:hover { background-color: #f1e9d8 !important; color: var(--ink) !important; }
       @keyframes rot-flow { to { stroke-dashoffset: -24; } }
       .rot-flow { stroke-dasharray: 9 5; animation: rot-flow .7s linear infinite; }
@@ -202,7 +204,7 @@
       <!-- Top Hero HUD -->
       <section
         aria-labelledby="hud-heading"
-        class="bg-gradient-to-r from-slate-900 via-slate-900 to-slate-800 rounded-2xl p-5 sm:p-6 border border-slate-800 shadow-2xl relative overflow-hidden"
+        class="rounded-2xl p-5 sm:p-6 border shadow-sm relative overflow-hidden" style="background:linear-gradient(90deg,#fffdf7,#f6efdf);border-color:var(--line)"
       >
         <div
           class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 relative z-10 min-w-0"
@@ -346,17 +348,24 @@
             <span id="rotationObservedAt" class="text-[11px] opacity-60">—</span>
           </div>
           <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start">
-            <svg id="rotation-svg" viewBox="0 0 800 800" class="w-full max-w-xl mx-auto"></svg>
+            <svg id="rotation-svg" viewBox="0 0 640 600" class="w-full max-w-lg mx-auto"></svg>
             <div id="rotation-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
           </div>
         </section>
         <div id="capacitySummary"></div>
-        <div id="capacityVendor"></div>
-        <div id="capacityTable"></div>
+        <details class="rounded-2xl border p-3" style="border-color:var(--line);background:var(--panel)">
+          <summary class="cursor-pointer text-sm font-bold">Hạn mức nhà cung cấp tự báo và bảng model</summary>
+          <div class="mt-3 space-y-4">
+            <div id="capacityVendor"></div>
+            <div id="capacityTable"></div>
+          </div>
+        </details>
         <div id="capacityClaude"></div>
         <!-- Account & quota entry form (TASK-AI-29). The cockpit renders the
              command an operator runs locally; AI15-R09 keeps this service
              observational, so this panel never submits anything. -->
+        <details class="rounded-2xl border p-3" style="border-color:var(--line);background:var(--panel)">
+          <summary class="cursor-pointer text-sm font-bold">Nhập tài khoản và hạn mức</summary>
         <section
           id="accountEntryPanel"
           aria-labelledby="accountEntryHeading"
@@ -534,6 +543,7 @@
             </div>
           </div>
         </section>
+        </details>
       </div>
 
       <!-- TAB PANE 1: GATES & PR EVIDENCE -->
