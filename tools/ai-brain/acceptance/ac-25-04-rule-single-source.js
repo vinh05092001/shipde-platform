@@ -8,9 +8,14 @@
 // tools/ai-brain/feedback.js, whose base directory is tools/ai-brain/ — must
 // resolve the removal rule to the identical absolute path. The two bases are
 // different modules, so the comparison can fail; if they ever resolve two
-// different files, production and proof no longer share one rule. No second
-// copy of the removal rule exists anywhere in the tree outside the acceptance/
-// directory (which holds test harnesses, not production code).
+// different files, production and proof no longer share one rule.
+//
+// A second control refuses a private copy of the rule: a module that exports
+// evaluateNarrowing/applyNarrowing as *different function objects* than this
+// module's is a re-implementation, wherever it lives. A sanctioned re-export
+// (`module.exports = require('./acceptance/lib/role-feedback')`) forwards the
+// identical references and is not a duplicate, which is what lets the
+// production wrapper be introduced without breaking this row.
 //
 // Run outside the repository it exits 2, never 1.
 const fs = require('fs');
@@ -66,20 +71,22 @@ if (typeof rf.applyNarrowing !== 'function') {
   process.exit(1);
 }
 
-// Control: no second copy of the removal rule exists outside acceptance/.
-// We check the production code tree (tools/ai-brain/*.js and tools/ai-brain/**/*.js
-// excluding acceptance/ and test/) for files that export both evaluateNarrowing
-// and applyNarrowing.
+// Control: no second copy of the removal rule exists in the production tree.
+// A module carries a private copy when it exports the same names but not the
+// same function objects as the rule module: a re-implementation always builds
+// new functions, while a sanctioned re-export forwards the identical
+// references. Identity, not the file's location, is what separates the two.
+const isPrivateCopy = (mod) =>
+  typeof mod.evaluateNarrowing === 'function' &&
+  typeof mod.applyNarrowing === 'function' &&
+  (mod.evaluateNarrowing !== rf.evaluateNarrowing || mod.applyNarrowing !== rf.applyNarrowing);
+
 const duplicates = [];
 for (const candidate of [path.join(root, 'feedback.js')]) {
   if (fs.existsSync(candidate)) {
     try {
       const mod = require(candidate);
-      if (
-        typeof mod.evaluateNarrowing === 'function' &&
-        typeof mod.applyNarrowing === 'function' &&
-        path.resolve(candidate) !== resolvedFromHere
-      ) {
+      if (isPrivateCopy(mod)) {
         duplicates.push(candidate);
       }
     } catch (e) {
@@ -148,7 +155,9 @@ if (fs.existsSync(feedbackPath)) {
   }
 }
 
-// Also check that lib/role-feedback.js is the unique source within acceptance/lib.
+// Also check that lib/role-feedback.js is the unique source within
+// acceptance/lib: a second module there that re-implements the rule is a
+// duplicate too, while a re-export of this module is not.
 const libDir = path.join(__dirname, 'lib');
 let libCount = 0;
 if (fs.existsSync(libDir)) {
@@ -159,7 +168,7 @@ if (fs.existsSync(libDir)) {
       const mod = require(absolute);
       if (typeof mod.evaluateNarrowing === 'function' && typeof mod.applyNarrowing === 'function') {
         libCount++;
-        if (path.resolve(absolute) !== resolvedFromHere) {
+        if (isPrivateCopy(mod)) {
           duplicates.push(absolute);
         }
       }
@@ -183,6 +192,6 @@ console.log(
   'SINGLE_SOURCE: ' +
     resolvedFromHere +
     ' — production base (tools/ai-brain/feedback.js) and ' +
-    'acceptance base (acceptance/) resolve the same file'
+    'acceptance base (acceptance/) resolve the same file; no private copy of the removal rule'
 );
 process.exit(0);
