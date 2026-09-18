@@ -9,6 +9,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { aggregateCockpitState, getLastAggregatedState } = require('./aggregator');
+const { buildRotationState } = require('./rotation');
 
 const DEFAULT_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3333;
 const HOST = '127.0.0.1'; // Strictly loopback only (AI15-R05)
@@ -152,6 +153,9 @@ function createDashboardServer(options = {}) {
     }
     if (pathname === '/DASHBOARD.html') {
       return path.join(rootDir, 'DASHBOARD.html');
+    }
+    if (pathname === '/rotation' || pathname === '/rotation.html') {
+      return path.join(dashboardDir, 'rotation.html');
     }
     return null;
   }
@@ -333,6 +337,13 @@ function createDashboardServer(options = {}) {
     if (pathname === '/api/agents') {
       const state = getLastAggregatedState() || (await aggregateCockpitState({ rootDir }));
       sendJson(req, res, 200, state.sessions);
+      return;
+    }
+
+    // TASK-AI-47: Model rotation JSON endpoint
+    if (pathname === '/api/rotation') {
+      const rotation = buildRotationState({ rootDir });
+      sendJson(req, res, 200, rotation);
       return;
     }
 
