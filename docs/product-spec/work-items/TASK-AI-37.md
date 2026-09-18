@@ -13,8 +13,8 @@
 | Risk | `LOW` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-37.md`, `tools/ai-brain/acceptance/ac-37-*.js`, `tools/ai-brain/acceptance/lib/lifecycle-forbidden.js` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `fix/task-ai-37-trivy` |
-| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/24 |
+| Branch | `feat/task-ai-37-trivy-ci` (PR #103 repair branch `fix/pr103-143135` pushes here) |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/103 (prior spec PR https://github.com/vinh05092001/shipde-platform/pull/24; audit repair PR https://github.com/vinh05092001/shipde-platform/pull/56) |
 | Deliverable of this Work Item | Specification document only; no CI gate is delivered here |
 | Successor implementation Work Item | `TASK-AI-45` (not yet registered; see § Scope conflicts and successor authorization) |
 
@@ -47,6 +47,16 @@ Consequences of this ledger, binding on any controller or reviewer:
   cannot silently disagree.
 
 ## Business outcome
+
+> PR #103 repair note (2026-09-18): the `CHANGES_REQUIRED` review found this PR
+> head was an empty commit (`d50962f`, zero file changes) based on a stale base
+> (`cd3cfd8`) with no changes relative to `origin/main`, so the review could not
+> verify any deliverable. This repair merges current `origin/main` (`8cec992`)
+> into the repair branch and records, inside this Work Item's Allowed paths, that
+> the five acceptance scripts were delivered earlier by PR #46 (`e508bfc`) and
+> repaired by PR #56 (`31e16b2`); no script is re-delivered here. The Work Item
+> remains `BLOCKED_DEPENDENCY` in both the Control table and register row 170,
+> and no register, workflow, CI gate, or out-of-scope file is touched.
 
 The Ship Dễ continuous delivery pipeline requires automated supply-chain,
 dependency vulnerability, container security, and Software Bill of Materials (SBOM)
@@ -776,3 +786,34 @@ they cannot collapse. Neutering measurements on
 
 The four tests surviving the first neutering are the `AC-AI-37-07` subtests,
 which exercise a different file by design.
+
+### PR #103 `CHANGES_REQUIRED` resolution record (2026-09-18)
+
+Blocking findings in review comment `5724674195` and how this repair resolves
+each one without leaving this Work Item's Allowed paths:
+
+1. **Empty PR (zero file changes, `d50962f`):** resolved by making a real,
+   in-scope change — this section plus the corrected `Branch`/`Pull Request`
+   Control rows and the repair note under § Business outcome — and by merging
+   current `origin/main` (`8cec992`) into the repair branch, so the PR diff is
+   non-empty and reviewable. No out-of-scope file is touched.
+2. **Stale branch (`cd3cfd8`, behind `origin/main`):** resolved by the merge
+   above; the resynced head contains `e66f766`, `4a1e97f`, `0496acf`,
+   `cd2a45d`, and `8cec992`. A fresh `git fetch origin` plus the five TASK-AI-37
+   acceptance probes were re-run after the merge (see evidence below).
+3. **Specification conflict (`BLOCKED_DEPENDENCY` PR opened for review):**
+   acknowledged as a constraint, not overridden. The Control table still
+   records `BLOCKED_DEPENDENCY`, the transition ledger is unchanged, register
+   row 170 still records `BLOCKED_DEPENDENCY`, and this file requests no
+   `READY_FOR_AUTHOR`/`IN_PROGRESS`/`READY_FOR_CODEX` transition; the register
+   is outside Allowed paths and untouched. The PR therefore remains a repair of
+   the review routing state, not a claim of stage advancement, and the human
+   merge owner decides whether a `BLOCKED_DEPENDENCY` item may hold an open PR.
+4. **Acceptance scripts already on `main` (PR #46):** confirmed and recorded
+   rather than re-delivered. `git log --all --oneline` shows `e508bfc` (PR #46)
+   delivered and `31e16b2` (PR #56) repaired the five scripts; no script content
+   is duplicated here. Re-run evidence after the merge: `AC-AI-37-06` exit `0`,
+   `AC-AI-37-07` exit `1` with `FORBIDDEN_LIFECYCLE_SCRIPT`, `AC-AI-37-13`
+   exit `0` non-vacuous, `AC-AI-37-15` exit `0`
+   (`Control status matches register row 170: BLOCKED_DEPENDENCY`),
+   `AC-AI-37-18` exit `0`.
