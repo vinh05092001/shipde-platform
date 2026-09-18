@@ -6,7 +6,7 @@
   'use strict';
 
   var SVG_NS = 'http://www.w3.org/2000/svg';
-  var CX = 320, CY = 300, R = 210;
+  var CX = 350, CY = 310, R = 225;
   var POLL_MS = 5000;
 
   function el(tag, attrs, text) {
@@ -76,8 +76,9 @@
     var sources = (data && data.sources ? data.sources : []).filter(function (s) { return s.configured; });
     if (!sources.length) return;
 
-    svg.appendChild(el('circle', { cx: CX, cy: CY, r: 50, fill: '#fff7ed', stroke: '#ea4b12', 'stroke-width': 3 }));
-    svg.appendChild(el('text', { x: CX, y: CY + 5, 'text-anchor': 'middle', fill: '#7c2d12', 'font-size': 15, 'font-weight': 'bold' }, 'Dispatcher'));
+    // Hub: a card, not a bubble, so it reads like the rest of the cockpit.
+    svg.appendChild(el('rect', { x: CX - 62, y: CY - 22, width: 124, height: 44, rx: 12, fill: '#fff7ed', stroke: '#ea4b12', 'stroke-width': 2 }));
+    svg.appendChild(el('text', { x: CX, y: CY + 5, 'text-anchor': 'middle', fill: '#9a3412', 'font-size': 13, 'font-weight': 'bold' }, 'Dispatcher'));
 
     sources.forEach(function (src, i) {
       var a = (2 * Math.PI * i) / sources.length - Math.PI / 2;
@@ -85,29 +86,38 @@
       var live = src.status === 'live';
       var down = src.status === 'exhausted' || src.status === 'cooldown';
       var g = el('g', down ? { class: 'rot-dim' } : null);
+      var W = 116, H = 40;
 
-      var line = el('line', {
-        x1: CX + 50 * Math.cos(a), y1: CY + 50 * Math.sin(a),
-        x2: nx - 32 * Math.cos(a), y2: ny - 32 * Math.sin(a),
-        stroke: live ? '#16a34a' : '#d6cdbb', 'stroke-width': live ? 3 : 2,
+      // Edge: idle links recede, the serving link is amber and flows.
+      var edge = el('path', {
+        d: 'M' + (CX + 62 * Math.cos(a)) + ',' + (CY + 22 * Math.sin(a)) +
+           ' Q' + (CX + nx) / 2 + ',' + (CY + ny) / 2 + ' ' + (nx - (W / 2) * Math.cos(a)) + ',' + (ny - (H / 2) * Math.sin(a)),
+        fill: 'none',
+        stroke: live ? '#f59e0b' : '#d6cdbb',
+        'stroke-width': live ? 2.5 : 1,
+        opacity: live ? 0.9 : 0.35,
       });
-      if (live) line.setAttribute('class', 'rot-flow');
-      g.appendChild(line);
+      if (live) edge.setAttribute('class', 'rot-flow');
+      g.appendChild(edge);
 
       if (live && src.activeRun && src.activeRun.modelId) {
         var label = src.activeRun.modelId.split('/').pop();
         if (src.activeRun.tokensSoFar !== 'UNKNOWN') label += ' · ' + num(src.activeRun.tokensSoFar) + ' tk';
         g.appendChild(el('text', {
           x: (CX + nx) / 2, y: (CY + ny) / 2 - 8, 'text-anchor': 'middle',
-          fill: '#3f3a33', 'font-size': 12,
+          fill: '#b45309', 'font-size': 11, 'font-weight': 'bold',
         }, label));
       }
 
-      g.appendChild(el('circle', { cx: nx, cy: ny, r: 32, fill: '#fffdf7', stroke: statusColor(src.status), 'stroke-width': 3 }));
-      g.appendChild(el('text', { x: nx, y: ny + 4, 'text-anchor': 'middle', fill: '#3f3a33', 'font-size': 12, 'font-weight': 'bold' }, src.id));
-      if (down && src.cooldown && src.cooldown.reason) {
-        g.appendChild(el('text', { x: nx, y: ny + 48, 'text-anchor': 'middle', fill: '#dc2626', 'font-size': 11 }, src.cooldown.reason.slice(0, 22)));
-      }
+      g.appendChild(el('rect', {
+        x: nx - W / 2, y: ny - H / 2, width: W, height: H, rx: 10,
+        fill: live ? '#fffbeb' : '#fffdf7',
+        stroke: statusColor(src.status), 'stroke-width': live ? 2 : 1.5,
+      }));
+      g.appendChild(el('circle', { cx: nx - W / 2 + 14, cy: ny, r: 4, fill: statusColor(src.status) }));
+      g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny - 1, fill: '#3f3a33', 'font-size': 12, 'font-weight': 'bold' }, src.label));
+      g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny + 12, fill: '#857b6e', 'font-size': 10 },
+        down ? (src.cooldown.reason || 'hết hạn mức').slice(0, 18) : src.status));
       svg.appendChild(g);
 
       var lim = src.limits || {};
