@@ -25,7 +25,20 @@ const { accountHeadroom, isDispatchable } = require('./quota');
 const { effectiveLimits } = require('./ceiling');
 const agyQuota = require('./agy-quota');
 const { sameAccount } = require('./agy-identity');
-const { resolveGrade } = require('./fitness');
+const { resolveGrade, resolveCapability, gradeOf } = require('./fitness');
+
+/** Access dimension independent of capability (TASK-AI-46). */
+const ACCESS_TYPE = {
+  FREE: 'free',
+  INCLUDED_IN_PAID_PLAN: 'included-in-paid-plan',
+  PAY_PER_CALL: 'pay-per-call',
+};
+
+const ACCESS_RANK = {
+  free: 0,
+  'included-in-paid-plan': 1,
+  'pay-per-call': 2,
+};
 
 /** Severity order shared by every headroom merge in this file. */
 const SEVERITY = { open: 0, unknown: 1, tight: 2, exhausted: 3, cooling: 4 };
@@ -132,6 +145,15 @@ function expandOfferings(accounts, options) {
       const gradeRecord = resolveGrade({ id: offerId, codingGrade });
       if (gradeProvenance !== undefined) gradeRecord.provenance = gradeProvenance;
 
+      const access =
+        e.access !== undefined
+          ? e.access
+          : account.access !== undefined
+            ? account.access
+            : ACCESS_TYPE.PAY_PER_CALL;
+
+      const modelVersion = e.modelVersion || account.modelVersion || null;
+
       out.push({
         id: offerId,
         accountId: account.id,
@@ -141,6 +163,9 @@ function expandOfferings(accounts, options) {
         // address, which happens whenever the operator switches accounts.
         accountEmail: account.email || null,
         model,
+        modelVersion,
+        // Access dimension independent of capability (free, included-in-paid-plan, pay-per-call)
+        access,
         // Operator-declared order. Nothing here assumes local is cheaper or
         // that a subscription beats an API key; the ladder is whatever the
         // operator configured.
@@ -157,9 +182,14 @@ function expandOfferings(accounts, options) {
         // from `quality`: quality ranks two models against each other, grade
         // says whether either may take the task at all.
         codingGrade,
+        reviewGrade: e.reviewGrade !== undefined ? Number(e.reviewGrade) : account.reviewGrade !== undefined ? Number(account.reviewGrade) : undefined,
         // Full grade record with provenance: { class, graded, source, error? }
         gradeRecord,
         gradeProvenance,
+        // Evidence layers (TASK-AI-46)
+        productionResults: e.productionResults || account.productionResults || null,
+        localEvaluation: e.localEvaluation || account.localEvaluation || null,
+        externalEvidence: e.externalEvidence || account.externalEvidence || null,
         qualifiedRoles: e.qualifiedRoles || account.qualifiedRoles,
         enabled: e.enabled !== false,
         // Kept apart so the combined check below can see which is which.
@@ -320,8 +350,94 @@ function nextTierDown(ladder, fromTier, headrooms, strategy) {
   return null;
 }
 
+/**
+ * Selects the best offering for a task with quota-aware rotation (TASK-AI-46).
+ *
+ * Selection order:
+ *   1. role and difficulty -> filter capable candidates
+ *   2. sources with headroom and no cooldown
+ *   3. cheapest access first (free < included-in-paid-plan < pay-per-call)
+ *   4. on quota refusal, re-select inside the capable set and skip every
+ *      source sharing the exhausted quota.
+ */
+function selectOffering(options) {
+  const opts = options || {};
+  const role = opts.role;
+  const difficulty = opts.difficulty;
+  const offerings = opts.offerings || [];
+  const headrooms = opts.headrooms || {};
+  const refusedOffering = opts.refusedOffering || null;
+  const exhaustedAccounts = new Set(opts.exhaustedAccounts || []);
+  const now = opts.now
+    ? typeof opts.now === 'number'
+      ? opts.now
+      : new Date(opts.now).getTime()
+    : Date.now();
+
+  if (refusedOffering) {
+    const accId =
+      typeof refusedOffering === 'string'
+        ? (offerings.find((o) => o.id === refusedOffering) || {}).accountId
+        : refusedOffering.accountId;
+    if (accId) exhaustedAccounts.add(accId);
+  }
+
+  // 1. Role and difficulty: filter capable candidates
+  const capable = offerings.filter((o) => {
+    if (role && Array.isArray(o.qualifiedRoles) && !o.qualifiedRoles.includes(role)) {
+      return false;
+    }
+    if (difficulty !== undefined && difficulty !== null) {
+      const cap = resolveCapability(o, opts);
+      const grade = cap.coding ? cap.coding.class : gradeOf(o);
+      if (grade === 'UNKNOWN' || typeof grade !== 'number' || grade < difficulty) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  // 2. Sources with headroom and no cooldown, skipping sources sharing exhausted quota
+  const dispatchable = capable.filter((o) => {
+    if (exhaustedAccounts.has(o.accountId)) {
+      return false;
+    }
+    if (o.cooldownUntil && new Date(o.cooldownUntil).getTime() > now) {
+      return false;
+    }
+    const hd = headrooms[o.id];
+    if (hd && !isDispatchable(hd)) {
+      return false;
+    }
+    return true;
+  });
+
+  // 3. Cheapest access first (free < included-in-paid-plan < pay-per-call)
+  dispatchable.sort((a, b) => {
+    const rankA = ACCESS_RANK[a.access] !== undefined ? ACCESS_RANK[a.access] : 99;
+    const rankB = ACCESS_RANK[b.access] !== undefined ? ACCESS_RANK[b.access] : 99;
+    if (rankA !== rankB) return rankA - rankB;
+
+    if (b.preference !== a.preference) return b.preference - a.preference;
+    const ca = blendedCost(a);
+    const cb = blendedCost(b);
+    if (ca !== cb) return ca - cb;
+    if (b.quality !== a.quality) return b.quality - a.quality;
+    return a.id.localeCompare(b.id);
+  });
+
+  return {
+    selected: dispatchable[0] || null,
+    candidates: dispatchable,
+    capableCount: capable.length,
+    skippedExhausted: capable.filter((o) => exhaustedAccounts.has(o.accountId)),
+  };
+}
+
 module.exports = {
   Strategy,
+  ACCESS_TYPE,
+  ACCESS_RANK,
   offeringId,
   expandOfferings,
   offeringHeadroom,
@@ -329,5 +445,6 @@ module.exports = {
   rankOfferings,
   laddered,
   nextTierDown,
+  selectOffering,
   blendedCost,
 };
