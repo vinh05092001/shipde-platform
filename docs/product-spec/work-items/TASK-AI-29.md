@@ -346,6 +346,64 @@ node --test "tools/ai-brain/test/*.test.js"
    from Git instead of asserting the register status, which would fail while the
    reconciler correctly refuses to write `MERGED`.
 
+## Completion record (2026-09-17)
+
+The specification above was delivered: the entry path is now code, the cockpit
+renders the command, and the delivery register is left exactly as it was — this
+record changes no lifecycle state (`AI-29-R11`).
+
+Measured on this branch, against the shipped modules in `tools/ai-brain/`:
+
+- `tools/ai-brain/account-entry.js` composes the entry through the shipped
+  modules only: `accounts.addAccount` / `updateAccount` / `setSecret` for every
+  write, `accounts.validateAccount` as the gate, and `limits.resolveLimits` for
+  the ceilings. No rule is restated (`AI-29-R02`, `AI-29-R03`, `AI-29-R04`,
+  `AI-29-R05`).
+- `tools/ai-brain/cli.js` gains the `account` group (`add`, `limits`, `secret`)
+  and joins it to the command surface. The group parses its own argv strictly, so
+  an unrecognised option is refused rather than silently ignored (`AI-29-R07`),
+  and the credential is read from a file descriptor or a file — never an
+  argument. `tools/ai-dashboard/server.js` is unchanged (`AI-29-R01`).
+- `tools/ai-brain/test/account-entry.test.js` adds the deterministic suite: 31
+  tests over injected paths under `os.tmpdir()`, with no real registry, no real
+  home directory and no credential. Each test names the rule it holds
+  (`AI-29-R03`, `AI-29-R04`, `AI-29-R06`, `AI-29-R08`, `AI-29-R09`, `AI-29-R10`).
+- `tools/ai-dashboard/index.html` renders the form for the entry path. It
+  composes the command an operator runs and previews which windows will be
+  written and which will stay unknown before the command runs; it never submits,
+  because `AI15-R09` keeps the cockpit observational.
+
+| Row | Result on this branch |
+|---|---|
+| `AC-AI-29-01` | exit 0, `Control status matches register row 162: BLOCKED_DEPENDENCY (declared TASK-AI-29)` |
+| `AC-AI-29-02` | exit 1, `STATUS_DIVERGENCE_DETECTED: tampered copy READY_FOR_AUTHOR != register BLOCKED_DEPENDENCY` |
+| `AC-AI-29-03` | exit 0, `TASK-AI-26 dependency verified: merged into origin/main for TASK-AI-29` |
+| `AC-AI-29-04` | exit 1, `DEPENDENCY_UNPROVEN: TASK-AI-99 has no merge commit reachable on origin/main` |
+| `AC-AI-29-05` | exit 0, `ENTRY_RULE_HOLDS: every account the registry declares passes the entry rule the form must apply` |
+| `AC-AI-29-06` | exit 1, `ENTRY_RULE_VIOLATED: REGISTRY_VALIDATOR,LIMIT_PROVENANCE (agy-docker-b tokensPerDay: provenance is missing or unrecognised)` |
+| `AC-AI-29-07` | exit 0, `REGISTRY_CREDENTIAL_FREE: the entry path wrote the credential through accounts.setSecret and the registry carries no readable copy of it` |
+| `AC-AI-29-08` | exit 1, `CREDENTIAL_IN_REGISTRY: accounts.registry.json` |
+| `AC-AI-29-09` | exit 0, `OUTSIDE_REPOSITORY_PROBE: 4 subjects exited 2 with no repository present` |
+| `AC-AI-29-10` | exit 0, `tools/ai-dashboard/test/dashboard.test.js` 87 pass / 0 fail, subtest `rejects unsafe mutation methods with 405 Method Not Allowed (AI15-R05, AI15-R09)` present |
+| `AC-AI-29-11` | exit 0, `Tổng: 0 lỗi, 0 cảnh báo, 150 ghi chú (dùng --all để xem ghi chú)` |
+| `AC-AI-29-12` | exit 0, `Documentation validation passed:` |
+
+Supporting suites on this branch: `node --test "tools/ai-brain/test/*.test.js"`
+424 pass / 0 fail, which includes the 31 new entry tests.
+
+**Residual limitations, updated.** The bullet "The entry path exists as a
+specification, not as code" was true when this document was authored and is
+superseded by this record: the command, the panel and `account-entry.test.js`
+now exist at HEAD. Every other bullet stands unchanged, including that the form
+is rendered rather than submitted and that a credential pasted onto a command
+line is still a credential in the shell history.
+
+**Register alignment unchanged.** `FEATURE-DELIVERY-REGISTER.csv` row 162 still
+reads `BLOCKED_DEPENDENCY`, and the Control table above still reads
+`BLOCKED_DEPENDENCY`; `AC-AI-29-01` proves the two agree. Clearing the row is the
+governed reconciler's write-back (`TASK-AI-19`), never a hand edit and never this
+Work Item.
+
 ## Residual limitations
 
 - **The form is rendered, not submitted.** `AI15-R09` forbids the cockpit from
