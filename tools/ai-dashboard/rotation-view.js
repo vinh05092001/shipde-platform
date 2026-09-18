@@ -6,7 +6,7 @@
   'use strict';
 
   var SVG_NS = 'http://www.w3.org/2000/svg';
-  var CX = 300, CY = 240, R = 175;
+  var CX = 220, CY = 195, R = 140;
   var POLL_MS = 5000;
 
   function el(tag, attrs, text) {
@@ -14,10 +14,6 @@
     if (attrs) Object.keys(attrs).forEach(function (k) { e.setAttribute(k, attrs[k]); });
     if (text != null) e.textContent = text;
     return e;
-  }
-
-  function esc(t) {
-    return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   function num(v) {
@@ -41,16 +37,16 @@
 
   function statusColor(status) {
     if (status === 'live') return '#16a34a';
-    if (status === 'quota-exhausted' || status === 'exhausted' || status === 'cooldown') return '#dc2626';
+    if (status === 'exhausted' || status === 'quota-exhausted' || status === 'cooldown') return '#dc2626';
     return '#64748b';
   }
 
-  function statusText(status) {
+  function statusLabelVi(status) {
     if (status === 'live') return 'đang chạy';
     if (status === 'idle') return 'rảnh';
-    if (status === 'quota-exhausted' || status === 'exhausted') return 'hết hạn mức';
+    if (status === 'exhausted' || status === 'quota-exhausted') return 'hết hạn mức';
     if (status === 'cooldown') return 'tạm nghỉ';
-    return status || 'rảnh';
+    return status || 'chưa rõ';
   }
 
   function kpi(label, value, color) {
@@ -70,7 +66,7 @@
     box.innerHTML =
       kpi('Lượt chạy', t.attempts, '#3f3a33') +
       kpi('Đang chạy', t.live, t.live > 0 ? '#16a34a' : '#5c5349') +
-      kpi('Bị từ chối quota', t.quotaRefused, t.quotaRefused > 0 ? '#b45309' : '#5c5349') +
+      kpi('Bị từ chối hạn mức', t.quotaRefused, t.quotaRefused > 0 ? '#b45309' : '#5c5349') +
       kpi('Nguồn hết hạn mức', t.exhausted + '/' + t.sourcesConfigured, t.exhausted > 0 ? '#dc2626' : '#16a34a');
   }
 
@@ -82,9 +78,9 @@
       return '<div class="flex items-center gap-2 px-3 py-1.5 border-b" style="border-color:var(--line)">' +
         outcomeDot(r.outcome) +
         '<span class="font-mono">' + (r.at || '--:--:--') + '</span>' +
-        '<span class="font-bold">' + esc(r.runId) + '</span>' +
-        '<span class="font-bold" style="color:' + accent(r.sourceId) + '">' + esc(r.sourceId) + '</span>' +
-        '<span class="opacity-70 truncate">' + esc(r.modelId) + '</span>' +
+        '<span class="font-bold">' + r.runId + '</span>' +
+        '<span class="font-bold" style="color:' + accent(r.sourceId) + '">' + r.sourceId + '</span>' +
+        '<span class="opacity-70 truncate">' + r.modelId + '</span>' +
         '<span class="ml-auto opacity-60">' + (r.tokens === 'UNKNOWN' ? '' : num(r.tokens) + ' tk') + '</span>' +
         '</div>';
     }).join('');
@@ -99,28 +95,26 @@
     if (!svg || !cards) return;
     svg.innerHTML = '';
     cards.innerHTML = '';
-    // Tight viewBox matching real drawing bounds
-    svg.setAttribute('viewBox', '55 35 490 410');
-
+    svg.setAttribute('viewBox', '10 20 420 350');
     if (stamp && data && data.observedAt) stamp.textContent = 'đo lúc ' + data.observedAt.slice(11, 19);
     var sources = (data && data.sources ? data.sources : []).filter(function (s) { return s.configured; });
     if (!sources.length) return;
 
     // Hub: a card, not a bubble, so it reads like the rest of the cockpit.
-    svg.appendChild(el('rect', { x: CX - 62, y: CY - 22, width: 124, height: 44, rx: 12, fill: '#fff7ed', stroke: '#ea4b12', 'stroke-width': 2 }));
+    svg.appendChild(el('rect', { x: CX - 60, y: CY - 22, width: 120, height: 44, rx: 12, fill: '#fff7ed', stroke: '#ea4b12', 'stroke-width': 2 }));
     svg.appendChild(el('text', { x: CX, y: CY + 5, 'text-anchor': 'middle', fill: '#9a3412', 'font-size': 13, 'font-weight': 'bold' }, 'Điều phối'));
 
     sources.forEach(function (src, i) {
       var a = (2 * Math.PI * i) / sources.length - Math.PI / 2;
       var nx = CX + R * Math.cos(a), ny = CY + R * Math.sin(a);
       var live = src.status === 'live';
-      var down = src.status === 'quota-exhausted' || src.status === 'exhausted' || src.status === 'cooldown';
+      var down = src.status === 'exhausted' || src.status === 'quota-exhausted' || src.status === 'cooldown';
       var g = el('g', down ? { class: 'rot-dim' } : null);
       var W = 116, H = 40;
 
       // Edge: idle links recede, the serving link is amber and flows.
       var edge = el('path', {
-        d: 'M' + (CX + 62 * Math.cos(a)) + ',' + (CY + 22 * Math.sin(a)) +
+        d: 'M' + (CX + 60 * Math.cos(a)) + ',' + (CY + 22 * Math.sin(a)) +
            ' Q' + (CX + nx) / 2 + ',' + (CY + ny) / 2 + ' ' + (nx - (W / 2) * Math.cos(a)) + ',' + (ny - (H / 2) * Math.sin(a)),
         fill: 'none',
         stroke: live ? '#f59e0b' : accent(src.id),
@@ -147,8 +141,7 @@
       g.appendChild(el('circle', { cx: nx - W / 2 + 14, cy: ny, r: 4, fill: statusColor(src.status) }));
       g.appendChild(el('rect', { x: nx - W / 2, y: ny - H / 2, width: 4, height: H, rx: 2, fill: accent(src.id) }));
       g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny - 1, fill: '#3f3a33', 'font-size': 12, 'font-weight': 'bold' }, src.label));
-      g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny + 12, fill: '#5c5349', 'font-size': 10 },
-        statusText(src.status)));
+      g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny + 12, fill: '#5c5349', 'font-size': 10 }, statusLabelVi(src.status)));
       svg.appendChild(g);
 
       var lim = src.limits || {};
@@ -167,13 +160,13 @@
       card.innerHTML =
         '<div class="flex items-center gap-2 mb-1">' +
           '<span style="width:7px;height:7px;border-radius:50%;display:inline-block;background:' + statusColor(src.status) + '"></span>' +
-          '<span class="font-bold text-[12px]">' + esc(src.label) + '</span>' +
-          '<span class="ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold" style="color:' + statusColor(src.status) + ';background:' + statusColor(src.status) + '1a">' + statusText(src.status) + '</span>' +
+          '<span class="font-bold text-[12px]">' + src.label + '</span>' +
+          '<span class="ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold" style="color:' + statusColor(src.status) + ';background:' + statusColor(src.status) + '1a">' + statusLabelVi(src.status) + '</span>' +
         '</div>' +
         (live && src.activeRun && src.activeRun.modelId
-          ? '<div class="truncate" style="color:#b45309">▶ ' + esc(src.activeRun.modelId) + '</div>'
+          ? '<div class="truncate" style="color:#b45309">▶ ' + src.activeRun.modelId + '</div>'
           : down && src.cooldown && src.cooldown.reason
-            ? '<div class="truncate" style="color:#dc2626">' + esc(src.cooldown.reason) + '</div>'
+            ? '<div class="truncate" style="color:#dc2626">' + src.cooldown.reason + '</div>'
             : '') +
         '<div class="font-mono opacity-75">' + num(lim.consumption) + ' / ' + num(lim.declaredLimit) + '</div>' +
         (pct === null
@@ -182,9 +175,9 @@
             '<div class="h-1.5 rounded-full" style="width:' + pct + '%;background:' + (pct >= 100 ? '#dc2626' : accent(src.id)) + '"></div></div>' +
             '<div class="opacity-60 mt-0.5">còn ' + num(lim.headroom) + '</div>') +
         '<div class="mt-1 flex gap-2 opacity-70">' +
-          '<span style="color:#0f766e" title="thành công">✓ ' + counts.done + '</span>' +
-          '<span style="color:#b91c1c" title="thất bại">✕ ' + counts.failed + '</span>' +
-          '<span style="color:#b45309" title="bị từ chối quota">⃠ ' + counts['quota-refused'] + '</span>' +
+          '<span style="color:#0f766e" title="Thành công">✓ ' + counts.done + '</span>' +
+          '<span style="color:#b91c1c" title="Thất bại">✕ ' + counts.failed + '</span>' +
+          '<span style="color:#b45309" title="Hết hạn mức">⃠ ' + counts['quota-refused'] + '</span>' +
         '</div>';
       cards.appendChild(card);
     });

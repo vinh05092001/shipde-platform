@@ -511,15 +511,17 @@
             <span id="rotationObservedAt" class="text-[11px] opacity-60">—</span>
           </div>
           <div id="rotation-kpis" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-center">
-            <div class="flex items-center justify-center">
-              <svg id="rotation-svg" viewBox="55 35 490 410" class="w-full max-w-md mx-auto"></svg>
+          <div class="grid gap-4 lg:grid-cols-[440px_1fr] items-start">
+            <div class="flex justify-center">
+              <svg id="rotation-svg" viewBox="10 20 420 350" class="w-full max-w-[440px]"></svg>
             </div>
-            <div id="rotation-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
-          </div>
-          <div>
-            <div class="text-[11px] font-bold uppercase tracking-wide opacity-60 mb-1">Lượt chạy gần đây</div>
-            <div id="rotation-runs" class="rounded-xl border overflow-hidden text-[11px]" style="border-color:var(--line)"></div>
+            <div class="space-y-3 min-w-0">
+              <div id="rotation-cards" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2"></div>
+              <div>
+                <div class="text-[11px] font-bold uppercase tracking-wide opacity-60 mb-1">Lượt chạy gần đây</div>
+                <div id="rotation-runs" class="rounded-xl border overflow-hidden text-[11px]" style="border-color:var(--line)"></div>
+              </div>
+            </div>
           </div>
         </section>
         <div id="capacitySummary"></div>
@@ -591,7 +593,7 @@
                   />
                 </label>
                 <label class="block">
-                  <span class="text-[11px] font-semibold uppercase text-base-content/70">Model</span>
+                  <span class="text-[11px] font-semibold uppercase text-base-content/70">Mô hình (model)</span>
                   <input
                     id="accModel"
                     type="text"
@@ -620,10 +622,10 @@
                     id="accTier"
                     class="mt-1 w-full bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content/70"
                   >
-                    <option value="">— mặc định (bên ngoài) —</option>
-                    <option value="0">0 · nội bộ (local)</option>
+                    <option value="">— mặc định (ngoại vi) —</option>
+                    <option value="0">0 · cục bộ (local)</option>
                     <option value="1">1 · tài khoản (account)</option>
-                    <option value="2">2 · bên ngoài (external)</option>
+                    <option value="2">2 · ngoại vi (external)</option>
                   </select>
                 </label>
                 <div class="block">
@@ -812,12 +814,12 @@
             select.className =
               'w-full bg-base-200 border border-base-300 px-2 py-1 rounded-lg text-xs text-base-content/70';
             [
-              { value: 'operator-declared', label: 'người vận hành khai (operator-declared)' },
-              { value: 'vendor-documented', label: 'tài liệu nhà cung cấp (vendor-documented)' },
-            ].forEach(function (p) {
+              { value: 'operator-declared', label: 'người vận hành khai' },
+              { value: 'vendor-documented', label: 'nhà cung cấp công bố' }
+            ].forEach(function (opt) {
               var option = document.createElement('option');
-              option.value = p.value;
-              option.textContent = p.label;
+              option.value = opt.value;
+              option.textContent = opt.label;
               select.appendChild(option);
             });
 
