@@ -205,7 +205,7 @@ function applyState(newState) {
 function deriveWriterState(currentState) {
   const aoStatus = currentState?.sources?.ao?.status;
   if (aoStatus !== 'live') {
-    return { level: 'unavailable', label: 'AO KHÔNG KHẢ DỤNG', countLabel: 'UNAVAILABLE' };
+    return { level: 'unavailable', label: 'AO KHÔNG KHẢ DỤNG', countLabel: 'Không có' };
   }
 
   const sessions = Array.isArray(currentState.sessions) ? currentState.sessions : [];
@@ -364,10 +364,16 @@ function formatSourceAge(ageMs) {
   return `${minutes}m ${seconds}s`;
 }
 
+function freshnessLabel(f) {
+  if (f === 'live') return 'Trực tiếp';
+  if (f === 'stale') return 'Dữ liệu cũ';
+  return 'Không có';
+}
+
 const FRESHNESS_BADGE = {
-  live: { cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30', text: '● LIVE' },
-  stale: { cls: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30', text: '◐ STALE' },
-  unavailable: { cls: 'bg-rose-500/10 text-rose-400 border-rose-500/30', text: '○ UNAVAILABLE' },
+  live: { cls: 'badge badge-success badge-sm', text: '● Trực tiếp' },
+  stale: { cls: 'badge badge-warning badge-sm', text: '◐ Cũ' },
+  unavailable: { cls: 'badge badge-error badge-sm', text: '○ Không có' },
 };
 
 function renderSourceHealth() {
@@ -386,21 +392,21 @@ function renderSourceHealth() {
       const src = state.sources[s.key] || { status: 'unavailable', impact: 'Chưa có dữ liệu' };
       const status = src.status || 'unavailable';
 
-      let badgeClass = 'bg-slate-800 text-slate-400 border-slate-700';
-      let statusText = '[? UNKNOWN]';
+      let badgeClass = 'badge badge-ghost badge-sm';
+      let statusText = 'Chưa rõ';
 
       if (status === 'live') {
-        badgeClass = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30';
-        statusText = '[✓ LIVE]';
+        badgeClass = 'badge badge-success badge-sm';
+        statusText = 'Trực tiếp';
       } else if (status === 'stale') {
-        badgeClass = 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30';
-        statusText = '[⚠ STALE]';
+        badgeClass = 'badge badge-warning badge-sm';
+        statusText = 'Dữ liệu cũ';
       } else if (status === 'partial') {
-        badgeClass = 'bg-amber-500/10 text-amber-400 border-amber-500/30';
-        statusText = '[! PARTIAL]';
+        badgeClass = 'badge badge-warning badge-sm';
+        statusText = 'Một phần';
       } else if (status === 'unavailable') {
-        badgeClass = 'bg-rose-500/10 text-rose-400 border-rose-500/30';
-        statusText = '[✕ UNAVAILABLE]';
+        badgeClass = 'badge badge-error badge-sm';
+        statusText = 'Không có';
       }
 
       // Per-source freshness — a real, derived age/state (AI15-R01), distinct
@@ -522,7 +528,7 @@ const GATE_STAGE_LABELS = {
   HUMAN_MERGE: 'HUMAN_MERGE',
   MERGED: 'MERGED',
   BLOCKED: 'BLOCKED',
-  EVIDENCE_UNAVAILABLE: 'CHỜ BẰNG CHỨNG GITHUB (UNAVAILABLE)',
+  EVIDENCE_UNAVAILABLE: 'CHỜ BẰNG CHỨNG TỪ GITHUB',
 };
 
 function renderGatePipeline() {
@@ -650,7 +656,7 @@ function renderPrEvidenceContent() {
             CI: [${checks.summary} (${checks.passCount || 0}/${checks.totalCount || 0})]
           </span>
           <span class="px-2 py-0.5 rounded border ${codexBadge} font-bold">
-            Codex Verdict: [${escapeHtml(reviews.trustedCodexVerdict || 'PENDING')}]
+            Kết luận Codex: [${escapeHtml(reviews.trustedCodexVerdict || 'CHỜ')}]
           </span>
           <span class="px-2 py-0.5 rounded border bg-slate-800 text-slate-300 border-slate-700">
             HEAD: ${primaryPr.headRefOidShort || '—'}
@@ -706,18 +712,18 @@ function renderConflicts() {
 
   container.classList.remove('hidden');
   container.innerHTML = `
-    <div class="bg-rose-950/30 border border-rose-700/60 p-4 rounded-xl space-y-3">
-      <div class="flex items-center gap-2 text-rose-400 font-bold text-xs uppercase tracking-wide">
+    <div class="card bg-base-100 border border-error/40 p-4 space-y-3">
+      <div class="flex items-center gap-2 text-error font-bold text-xs uppercase tracking-wide">
         <span>⚡ Phát hiện ${conflicts.length} xung đột trạng thái giữa các nguồn</span>
       </div>
       <div class="space-y-2">
         ${conflicts
           .map(
             (c) => `
-          <div class="bg-slate-900/80 p-3 rounded-lg border border-rose-900/50 text-xs space-y-1">
-            <div class="font-bold text-rose-300">${escapeHtml(c.title)}</div>
-            <div class="text-slate-300">${escapeHtml(c.description)}</div>
-            <div class="text-[11px] text-amber-300/80 font-mono">Tác động: ${escapeHtml(c.impact)}</div>
+          <div class="rounded-box border border-base-300 bg-base-200/60 p-3 text-xs space-y-1">
+            <div class="font-bold text-error">${escapeHtml(c.title)}</div>
+            <div class="text-base-content/80">${escapeHtml(c.description)}</div>
+            <div class="text-[11px] text-warning font-mono">Tác động: ${escapeHtml(c.impact)}</div>
           </div>
         `
           )
@@ -1238,16 +1244,16 @@ function renderDiagnostics() {
   container.innerHTML = Object.entries(state.sources)
     .map(
       ([key, src]) => `
-    <div class="bg-slate-900/80 p-4 rounded-xl border border-slate-800 space-y-2 text-xs font-mono">
-      <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-        <span class="font-bold text-white uppercase">${escapeHtml(key)}</span>
-        <span class="px-2 py-0.5 rounded font-bold ${src.status === 'live' ? 'text-emerald-400' : 'text-amber-400'}">[${escapeHtml(src.status)}]</span>
+    <div class="card bg-base-100 border border-base-300 p-4 space-y-2 text-xs font-mono">
+      <div class="flex items-center justify-between pb-2 border-b border-base-300">
+        <span class="font-bold uppercase">${escapeHtml(key)}</span>
+        <span class="${src.status === 'live' ? 'badge badge-success badge-sm' : 'badge badge-warning badge-sm'}">${escapeHtml(freshnessLabel(src.status))}</span>
       </div>
-      <div><span class="text-slate-400">Provenance:</span> ${escapeHtml(src.provenance || '—')}</div>
-      <div><span class="text-slate-400">Observed At:</span> ${escapeHtml(src.observedAt || '—')} (${src.latencyMs}ms)</div>
-      <div><span class="text-slate-400">Freshness:</span> ${escapeHtml((src.freshness || 'unavailable').toUpperCase())} (Tuổi: ${escapeHtml(formatSourceAge(src.ageMs))})</div>
-      <div><span class="text-slate-400">Impact:</span> ${escapeHtml(src.impact || '—')}</div>
-      ${src.error ? `<div class="text-rose-400"><span class="text-slate-400">Error:</span> ${escapeHtml(src.error)}</div>` : ''}
+      <div><span class="opacity-60">Nguồn:</span> ${escapeHtml(src.provenance || '—')}</div>
+      <div><span class="opacity-60">Đo lúc:</span> ${escapeHtml(src.observedAt || '—')} (${src.latencyMs}ms)</div>
+      <div><span class="opacity-60">Độ mới:</span> ${escapeHtml(freshnessLabel(src.freshness))} (Tuổi: ${escapeHtml(formatSourceAge(src.ageMs))})</div>
+      <div><span class="opacity-60">Ảnh hưởng:</span> ${escapeHtml(src.impact || '—')}</div>
+      ${src.error ? `<div class="text-error"><span class="opacity-60">Lỗi:</span> ${escapeHtml(src.error)}</div>` : ''}
     </div>
   `
     )
