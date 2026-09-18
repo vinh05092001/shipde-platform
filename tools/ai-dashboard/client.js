@@ -442,8 +442,7 @@ function renderActiveWorkItem() {
     container.innerHTML = `
       <div class="p-6 text-center text-base-content/70 text-xs bg-base-200 rounded-xl border border-base-300">
         <span class="text-2xl mb-2 block">📭</span>
-        <div class="font-bold text-base-content mb-1">Không có Work Item nào đang chờ xử lý</div>
-        <div>Toàn bộ đầu việc đã hoàn thành hoặc chưa có mục nào được mở.</div>
+        <div class="font-bold text-base-content mb-1">Không có Work Item chờ xử lý</div>
       </div>
     `;
     return;
@@ -475,14 +474,14 @@ function renderActiveWorkItem() {
             [${escapeHtml(active.work_item_id)}]
           </span>
           <span class="text-xs font-mono px-2 py-0.5 rounded border ${authorColor} font-bold">
-            Tác Giả: ${escapeHtml(assignedAuthor)}
+            ${escapeHtml(assignedAuthor)}
           </span>
           <span class="text-xs font-mono px-2 py-0.5 rounded border ${statusBadgeColor} font-bold">
             [${escapeHtml(active.status)}]
           </span>
         </div>
         <div class="text-xs text-base-content/70 font-mono">
-          Thứ tự giao việc: #${escapeHtml(active.delivery_order || '0')} • Slice: ${escapeHtml(active.slice || 'S00')}
+          #${escapeHtml(active.delivery_order || '0')} • Slice: ${escapeHtml(active.slice || 'S00')}
         </div>
       </div>
 
@@ -547,10 +546,10 @@ function renderGatePipeline() {
     <div class="bg-base-200 p-6 rounded-2xl border border-base-300 shadow-xl space-y-4">
       <div class="flex items-center justify-between pb-3 border-b border-base-300">
         <h3 class="text-sm font-bold text-base-content uppercase tracking-wider flex items-center gap-2">
-          <span>🛡️ Chuỗi Kiểm Soát Chất Lượng Giao Việc</span>
+          <span>🛡️ Cổng chất lượng</span>
         </h3>
         <span class="text-xs font-mono px-2 py-0.5 rounded bg-base-200 text-base-content/70 border border-base-300">
-          Cổng hiện tại: <span class="${currentGateColor} font-bold">${escapeHtml(currentGateLabel)}</span>
+          <span class="${currentGateColor} font-bold">${escapeHtml(currentGateLabel)}</span>
         </span>
       </div>
 
@@ -614,14 +613,14 @@ function renderPrEvidenceContent() {
       return `
         <div class="mt-4 p-4 rounded-xl bg-base-200 border border-base-300 text-xs text-base-content/70 flex items-center gap-2">
           <span>🔒</span>
-          <span>GitHub CLI chưa xác thực trên máy trạm. Bằng chứng PR và CI tạm thời ở trạng thái UNAVAILABLE.</span>
+          <span>GitHub CLI chưa xác thực. PR/CI: UNAVAILABLE.</span>
         </div>
       `;
     }
     return `
       <div class="mt-4 p-4 rounded-xl bg-base-200 border border-base-300 text-xs text-base-content/70 flex items-center gap-2">
         <span>ℹ️</span>
-        <span>Không có Pull Request nào đang mở trên kho mã nguồn.</span>
+        <span>Không có PR mở.</span>
       </div>
     `;
   }
@@ -649,14 +648,14 @@ function renderPrEvidenceContent() {
         <div class="flex items-center gap-2 font-mono">
           <span class="font-bold text-base-content">PR #${primaryPr.number}:</span>
           <span class="text-base-content/70">${escapeHtml(primaryPr.title)}</span>
-          <a href="${primaryPr.url}" target="_blank" class="text-brand hover:underline">Xem trên GitHub ↗</a>
+          <a href="${primaryPr.url}" target="_blank" class="text-brand hover:underline">GitHub ↗</a>
         </div>
         <div class="flex items-center gap-2 font-mono text-[11px]">
           <span class="px-2 py-0.5 rounded border ${checksBadge} font-bold">
             CI: [${checks.summary} (${checks.passCount || 0}/${checks.totalCount || 0})]
           </span>
           <span class="px-2 py-0.5 rounded border ${codexBadge} font-bold">
-            Kết luận Codex: [${escapeHtml(reviews.trustedCodexVerdict || 'CHỜ')}]
+            Codex: [${escapeHtml(reviews.trustedCodexVerdict || 'CHỜ')}]
           </span>
           <span class="px-2 py-0.5 rounded border bg-base-200 text-base-content/70 border-base-300">
             HEAD: ${primaryPr.headRefOidShort || '—'}

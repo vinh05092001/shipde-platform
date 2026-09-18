@@ -397,90 +397,97 @@
         <div id="progress-visual"></div>
         <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div class="space-y-4">
-        <div
-          class="flex flex-col md:flex-row gap-3 items-center justify-between bg-base-100 p-4 rounded-xl border border-base-300"
-        >
-          <input
-            type="text"
-            id="searchInput"
-            placeholder="🔍 Tìm mã task (FEAT-AUTH, TASK-AI), tên tính năng..."
-            class="w-full md:w-80 bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content focus:outline-none focus:border-brand"
-          />
-          <div class="flex flex-wrap items-center gap-2">
-            <select
-              id="sliceFilter"
-              class="bg-base-200 border border-base-300 text-xs px-3 py-1.5 rounded-lg text-base-content/70"
-            >
-              <option value="ALL">Tất Cả Slices (S00..S11)</option>
-              <option value="S00">S00: Foundation & AI Workflow</option>
-              <option value="S01">S01: Identity & Multi-tenant</option>
-              <option value="S02">S02: Carrier Credentials</option>
-              <option value="S03">S03: Orders Intake & Address</option>
-              <option value="S04">S04: Rate Comparison & Policy</option>
-              <option value="S05">S05: Fulfillment & Waybills</option>
-              <option value="S06">S06: Tracking & Normalisation</option>
-              <option value="S07">S07: Delivery Exceptions & CSKH</option>
-              <option value="S08">S08: Pricing & Contract Rates</option>
-              <option value="S09">S09: COD Settlement & 3-Ledgers</option>
-              <option value="S10">S10: Claims & Damages</option>
-              <option value="S11">S11: Reconciliation & Audit Matrix</option>
-            </select>
-            <select
-              id="statusFilter"
-              class="bg-base-200 border border-base-300 text-xs px-3 py-1.5 rounded-lg text-base-content/70"
-            >
-              <option value="ALL">Tất Cả Trạng Thái</option>
-              <option value="MERGED">Đã Merge</option>
-              <option value="READY_FOR_CODEX">Chờ Codex Review</option>
-              <option value="READY_FOR_AUTHOR">Sẵn Sàng Làm</option>
-              <option value="IN_PROGRESS">Đang Thực Hiện</option>
-              <option value="BLOCKED_DEPENDENCY">Khóa Phụ Thuộc</option>
-              <option value="BLOCKED_BY_FOUNDATION">Chờ Nền Tảng S00</option>
-            </select>
-            <span class="text-xs text-base-content/70 font-mono" id="taskCountLabel">Đang tải...</span>
-          </div>
-        </div>
-
-        <div class="bg-base-100 rounded-2xl border border-base-300 overflow-hidden">
-          <div class="overflow-x-auto custom-scroll">
-            <table class="responsive-table w-full text-left text-xs border-collapse">
-              <thead>
-                <tr
-                  class="border-b border-base-300 text-[11px] font-mono uppercase text-base-content/70 bg-base-200"
+            <details class="rounded-box border border-base-300 p-3">
+              <summary class="cursor-pointer text-sm font-bold">Bảng chi tiết 179 đầu việc</summary>
+              <div class="mt-3 space-y-4">
+                <div
+                  class="flex flex-col md:flex-row gap-3 items-center justify-between bg-base-100 p-4 rounded-xl border border-base-300"
                 >
-                  <th class="p-3 w-12">#</th>
-                  <th class="p-3 w-16">Slice</th>
-                  <th class="p-3 w-32">Mã Task</th>
-                  <th class="p-3">Tên & Hành Vi Tính Năng</th>
-                  <th class="p-3 w-36">Trạng Thái</th>
-                  <th class="p-3 w-28">Tác Giả</th>
-                  <th class="p-3 w-24">PR</th>
-                  <th class="p-3 w-28">Codex</th>
-                </tr>
-              </thead>
-              <tbody id="tasksTableBody">
-                <!-- Dynamically populated -->
-              </tbody>
-            </table>
+                  <input
+                    type="text"
+                    id="searchInput"
+                    placeholder="🔍 Tìm mã task (FEAT-AUTH, TASK-AI), tên tính năng..."
+                    class="w-full md:w-80 bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content focus:outline-none focus:border-brand"
+                  />
+                  <div class="flex flex-wrap items-center gap-2">
+                    <select
+                      id="sliceFilter"
+                      class="bg-base-200 border border-base-300 text-xs px-3 py-1.5 rounded-lg text-base-content/70"
+                    >
+                      <option value="ALL">Tất Cả Slices (S00..S11)</option>
+                      <option value="S00">S00: Foundation & AI Workflow</option>
+                      <option value="S01">S01: Identity & Multi-tenant</option>
+                      <option value="S02">S02: Carrier Credentials</option>
+                      <option value="S03">S03: Orders Intake & Address</option>
+                      <option value="S04">S04: Rate Comparison & Policy</option>
+                      <option value="S05">S05: Fulfillment & Waybills</option>
+                      <option value="S06">S06: Tracking & Normalisation</option>
+                      <option value="S07">S07: Delivery Exceptions & CSKH</option>
+                      <option value="S08">S08: Pricing & Contract Rates</option>
+                      <option value="S09">S09: COD Settlement & 3-Ledgers</option>
+                      <option value="S10">S10: Claims & Damages</option>
+                      <option value="S11">S11: Reconciliation & Audit Matrix</option>
+                    </select>
+                    <select
+                      id="statusFilter"
+                      class="bg-base-200 border border-base-300 text-xs px-3 py-1.5 rounded-lg text-base-content/70"
+                    >
+                      <option value="ALL">Tất Cả Trạng Thái</option>
+                      <option value="MERGED">Đã Merge</option>
+                      <option value="READY_FOR_CODEX">Chờ Codex Review</option>
+                      <option value="READY_FOR_AUTHOR">Sẵn Sàng Làm</option>
+                      <option value="IN_PROGRESS">Đang Thực Hiện</option>
+                      <option value="BLOCKED_DEPENDENCY">Khóa Phụ Thuộc</option>
+                      <option value="BLOCKED_BY_FOUNDATION">Chờ Nền Tảng S00</option>
+                    </select>
+                    <span class="text-xs text-base-content/70 font-mono" id="taskCountLabel">Đang tải...</span>
+                  </div>
+                </div>
+
+                <div class="bg-base-100 rounded-2xl border border-base-300 overflow-hidden">
+                  <div class="overflow-x-auto custom-scroll">
+                    <table class="responsive-table w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr
+                          class="border-b border-base-300 text-[11px] font-mono uppercase text-base-content/70 bg-base-200"
+                        >
+                          <th class="p-3 w-12">#</th>
+                          <th class="p-3 w-16">Slice</th>
+                          <th class="p-3 w-32">Mã Task</th>
+                          <th class="p-3">Tên & Hành Vi Tính Năng</th>
+                          <th class="p-3 w-36">Trạng Thái</th>
+                          <th class="p-3 w-28">Tác Giả</th>
+                          <th class="p-3 w-24">PR</th>
+                          <th class="p-3 w-28">Codex</th>
+                        </tr>
+                      </thead>
+                      <tbody id="tasksTableBody">
+                        <!-- Dynamically populated -->
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
-        </div>
-      </div>
           <div class="space-y-4">
             <div id="activeWorkItemCard"></div>
             <div id="gatePipelineCard"></div>
 
-        <div class="bg-base-100 rounded-2xl border border-base-300 p-5 space-y-4">
-          <div class="flex items-center justify-between pb-3 border-b border-base-300">
-            <h3 class="text-sm font-bold text-base-content uppercase tracking-wider">
-              Nhật Ký Hoạt Động Gần Đây (Git Commits & AO Events)
-            </h3>
-            <span class="text-xs font-mono text-base-content/70">Thời gian thực</span>
-          </div>
-          <div class="space-y-2.5" id="activityStreamList">
-            <!-- Dynamically populated -->
-          </div>
-        </div>
-      
+            <details class="rounded-box border border-base-300 p-3">
+              <summary class="cursor-pointer text-sm font-bold">Nhật ký chi tiết</summary>
+              <div class="mt-3 space-y-4">
+                <div class="flex items-center justify-between pb-3 border-b border-base-300">
+                  <h3 class="text-sm font-bold text-base-content uppercase tracking-wider">
+                    Nhật Ký Hoạt Động Gần Đây (Git Commits & AO Events)
+                  </h3>
+                  <span class="text-xs font-mono text-base-content/70">Thời gian thực</span>
+                </div>
+                <div class="space-y-2.5" id="activityStreamList">
+                  <!-- Dynamically populated -->
+                </div>
+              </div>
+            </details>
           </div>
         </div>
       </div>
