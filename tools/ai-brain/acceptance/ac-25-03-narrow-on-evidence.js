@@ -40,9 +40,9 @@ const workItemId = 'FEAT-TEST-01';
 const records = [];
 const items = 10;
 for (let i = 0; i < items; i++) {
-  records.push(outcomeRecord(
-    offeringId, roleId, workItemId + '-' + i, NOW - i * 1000, false, 4, 600000
-  ));
+  records.push(
+    outcomeRecord(offeringId, roleId, workItemId + '-' + i, NOW - i * 1000, false, 4, 600000)
+  );
 }
 
 // --- Evaluate -----------------------------------------------------------
@@ -79,21 +79,29 @@ if (narrowedRoles.includes(roleId)) {
 
 // Call the real disqualify with the narrowed qualifiedRoles.
 const role = getRole(roleId);
-const refusal = disqualify(role, Object.assign({}, account, {
-  qualifiedRoles: narrowedRoles,
-}), { workItemId, role: roleId });
+const refusal = disqualify(
+  role,
+  Object.assign({}, account, {
+    qualifiedRoles: narrowedRoles,
+  }),
+  { workItemId, role: roleId }
+);
 
 if (!refusal || !refusal.includes('chưa vượt')) {
   console.error(
-    'DISQUALIFY_FAILED: real disqualify did not refuse narrowed role: ' +
-    (refusal || '(no reason)')
+    'DISQUALIFY_FAILED: real disqualify did not refuse narrowed role: ' + (refusal || '(no reason)')
   );
   process.exit(1);
 }
 
 console.log(
-  'NARROWED_ON_EVIDENCE: ' + roleId + ' narrowed, ' +
-  'aggregates=' + JSON.stringify(result.aggregates) + ', ' +
-  'disqualify refuses: ' + refusal
+  'NARROWED_ON_EVIDENCE: ' +
+    roleId +
+    ' narrowed, ' +
+    'aggregates=' +
+    JSON.stringify(result.aggregates) +
+    ', ' +
+    'disqualify refuses: ' +
+    refusal
 );
 process.exit(0);

@@ -47,15 +47,15 @@ if (typeof rf.applyNarrowing !== 'function') {
 // and applyNarrowing.
 const root = path.join(__dirname, '..');
 const duplicates = [];
-for (const candidate of [
-  path.join(root, 'feedback.js'),
-]) {
+for (const candidate of [path.join(root, 'feedback.js')]) {
   if (fs.existsSync(candidate)) {
     try {
       const mod = require(candidate);
-      if (typeof mod.evaluateNarrowing === 'function' &&
-          typeof mod.applyNarrowing === 'function' &&
-          path.resolve(candidate) !== resolvedFromHere) {
+      if (
+        typeof mod.evaluateNarrowing === 'function' &&
+        typeof mod.applyNarrowing === 'function' &&
+        path.resolve(candidate) !== resolvedFromHere
+      ) {
         duplicates.push(candidate);
       }
     } catch (e) {
@@ -73,8 +73,7 @@ if (fs.existsSync(libDir)) {
     const absolute = path.join(libDir, entry);
     try {
       const mod = require(absolute);
-      if (typeof mod.evaluateNarrowing === 'function' &&
-          typeof mod.applyNarrowing === 'function') {
+      if (typeof mod.evaluateNarrowing === 'function' && typeof mod.applyNarrowing === 'function') {
         libCount++;
         if (path.resolve(absolute) !== resolvedFromHere) {
           duplicates.push(absolute);
@@ -92,14 +91,14 @@ if (libCount === 0) {
 }
 
 if (duplicates.length > 0) {
-  console.error(
-    'SINGLE_SOURCE_FAILED: removal rule found in ' + duplicates.join(', ')
-  );
+  console.error('SINGLE_SOURCE_FAILED: removal rule found in ' + duplicates.join(', '));
   process.exit(1);
 }
 
 console.log(
-  'SINGLE_SOURCE: ' + resolvedFromHere + ' — feedback.js and AC-AI-25-03 ' +
-  'both resolve to the same file'
+  'SINGLE_SOURCE: ' +
+    resolvedFromHere +
+    ' — feedback.js and AC-AI-25-03 ' +
+    'both resolve to the same file'
 );
 process.exit(0);

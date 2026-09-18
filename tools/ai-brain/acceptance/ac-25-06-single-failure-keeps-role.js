@@ -20,10 +20,7 @@ if (!fs.existsSync(path.join(cwd, 'tools/ai-brain/acceptance/lib/role-feedback.j
   process.exit(2);
 }
 
-const {
-  evaluateNarrowing,
-  outcomeRecord,
-} = require('./lib/role-feedback');
+const { evaluateNarrowing, outcomeRecord } = require('./lib/role-feedback');
 
 const NOW = Date.now();
 const roleId = 'reviewer.primary';
@@ -34,9 +31,7 @@ const workItemId = 'FEAT-TEST-01';
 
 // One merged item with passRate=0 (below floor), but retries=2 (below ceiling)
 // and tokens=100000 (below ceiling). Only 1 of 3 breaches → keep.
-const records = [
-  outcomeRecord(offeringId, roleId, workItemId, NOW, false, 2, 100000),
-];
+const records = [outcomeRecord(offeringId, roleId, workItemId, NOW, false, 2, 100000)];
 
 const result = evaluateNarrowing(roleId, offeringId, records, NOW);
 

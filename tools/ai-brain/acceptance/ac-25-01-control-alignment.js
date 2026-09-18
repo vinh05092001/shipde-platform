@@ -30,8 +30,5 @@ if (violations.length > 0) {
   process.exit(2);
 }
 
-console.log(
-  'CONTROL_ALIGNED: ' + WORK_ITEM + ' ' + controlStatus(specText) +
-  ' order 158'
-);
+console.log('CONTROL_ALIGNED: ' + WORK_ITEM + ' ' + controlStatus(specText) + ' order 158');
 process.exit(0);

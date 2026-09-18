@@ -20,11 +20,7 @@ if (!fs.existsSync(path.join(cwd, 'tools/ai-brain/acceptance/lib/role-feedback.j
   process.exit(2);
 }
 
-const {
-  applyNarrowing,
-  evaluateNarrowing,
-  outcomeRecord,
-} = require('./lib/role-feedback');
+const { applyNarrowing, evaluateNarrowing, outcomeRecord } = require('./lib/role-feedback');
 
 const NOW = Date.now();
 const roleId = 'reviewer.primary';
@@ -60,9 +56,9 @@ if (fromEmpty.includes(roleId)) {
 
 const records = [];
 for (let i = 0; i < 10; i++) {
-  records.push(outcomeRecord(
-    offeringId, roleId, workItemId + '-' + i, NOW - i * 1000, true, 0, 1000
-  ));
+  records.push(
+    outcomeRecord(offeringId, roleId, workItemId + '-' + i, NOW - i * 1000, true, 0, 1000)
+  );
 }
 
 const result = evaluateNarrowing(roleId, offeringId, records, NOW);

@@ -32,9 +32,20 @@ describe('TASK-AI-25 — role-feedback shape and isolation invariants', () => {
   // --- R08: Task outcomes and quota observations never share a ledger ------
 
   test('outcomeRecord does not carry quota observation fields', () => {
-    const record = rf.outcomeRecord('offering::model', 'role', 'workItem', Date.now(), true, 0, 1000);
+    const record = rf.outcomeRecord(
+      'offering::model',
+      'role',
+      'workItem',
+      Date.now(),
+      true,
+      0,
+      1000
+    );
     assert.ok('available' in record === false, 'outcomeRecord must not have quota available');
-    assert.ok('remainingPercent' in record === false, 'outcomeRecord must not have remainingPercent');
+    assert.ok(
+      'remainingPercent' in record === false,
+      'outcomeRecord must not have remainingPercent'
+    );
     assert.ok('status' in record === false, 'outcomeRecord must not have quota status');
   });
 
@@ -77,10 +88,15 @@ describe('TASK-AI-25 — role-feedback shape and isolation invariants', () => {
   test('evaluateNarrowing never returns dispatch/cool/launch side effects', () => {
     const records = [];
     for (let i = 0; i < 10; i++) {
-      records.push(rf.outcomeRecord('offering::model', 'role', 'workItem-' + i, Date.now(), true, 0, 100));
+      records.push(
+        rf.outcomeRecord('offering::model', 'role', 'workItem-' + i, Date.now(), true, 0, 100)
+      );
     }
     const result = rf.evaluateNarrowing('role', 'offering::model', records, Date.now());
-    assert.ok(result.decision === 'narrow' || result.decision === 'keep', 'decision must be narrow or keep');
+    assert.ok(
+      result.decision === 'narrow' || result.decision === 'keep',
+      'decision must be narrow or keep'
+    );
     assert.ok('dispatch' in result === false, 'result must not contain dispatch');
     assert.ok('cooldown' in result === false, 'result must not contain cooldown');
     assert.ok('launch' in result === false, 'result must not contain launch');
@@ -126,7 +142,10 @@ describe('TASK-AI-25 — role-feedback shape and isolation invariants', () => {
     const before = Date.now();
     const record = rf.outcomeRecord('offering::model', 'role', 'workItem', null, true, 0, 0);
     const after = Date.now();
-    assert.ok(record.instant >= before && record.instant <= after, 'instant must default to Date.now');
+    assert.ok(
+      record.instant >= before && record.instant <= after,
+      'instant must default to Date.now'
+    );
   });
 
   // --- Validation (R07) mock ---------------------------------------------
@@ -152,6 +171,24 @@ describe('TASK-AI-25 — role-feedback shape and isolation invariants', () => {
     };
     const result = rf.validateEntry(entry);
     assert.equal(result, null, 'valid entry must pass validation');
+  });
+
+  test('validateEntry returns EVIDENCE_STALE for stale operator-declared removal (R07)', () => {
+    // An operator-sourced removal older than STALE_AFTER_MS (90 days) must be
+    // refused as evidence for a new narrowing decision.
+    const staleRemovedAt = Date.now() - rf.STALE_AFTER_MS - 1;
+    const entry = {
+      roleId: 'role',
+      removedAt: staleRemovedAt,
+      source: 'operator',
+      aggregates: null,
+    };
+    const result = rf.validateEntry(entry);
+    assert.equal(
+      result,
+      'EVIDENCE_STALE',
+      'stale operator removal must be refused as EVIDENCE_STALE'
+    );
   });
 
   // --- Constants ---------------------------------------------------------

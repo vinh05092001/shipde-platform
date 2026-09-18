@@ -22,9 +22,9 @@ if (!fs.existsSync(path.join(cwd, REG))) {
 }
 
 const registerText = fs.readFileSync(REG, 'utf8');
-const registerLine = registerText.split(/\r?\n/).find(
-  (line) => line.includes('"' + WORK_ITEM + '"')
-);
+const registerLine = registerText
+  .split(/\r?\n/)
+  .find((line) => line.includes('"' + WORK_ITEM + '"'));
 
 if (!registerLine) {
   console.error('SOURCE_MISSING: no ' + WORK_ITEM + ' row in register');
@@ -66,9 +66,7 @@ const depIndex = header.indexOf('dependencies');
 const dep = fields[depIndex] || '';
 
 if (!dep.includes(DEPENDENCY)) {
-  console.error(
-    'BLOCK_FALSE: register order 158 does not depend on ' + DEPENDENCY
-  );
+  console.error('BLOCK_FALSE: register order 158 does not depend on ' + DEPENDENCY);
   process.exit(1);
 }
 
@@ -80,6 +78,12 @@ if (fs.existsSync(depSpec)) {
   process.exit(1);
 }
 
-console.log('BLOCK_TRUE: ' + DEPENDENCY + ' undelivered — no ' + DEPENDENCY +
-  '.md, register order 158 still deps ' + DEPENDENCY);
+console.log(
+  'BLOCK_TRUE: ' +
+    DEPENDENCY +
+    ' undelivered — no ' +
+    DEPENDENCY +
+    '.md, register order 158 still deps ' +
+    DEPENDENCY
+);
 process.exit(0);

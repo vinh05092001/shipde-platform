@@ -21,10 +21,7 @@ if (!fs.existsSync(path.join(cwd, 'tools/ai-brain/acceptance/lib/role-feedback.j
   process.exit(2);
 }
 
-const {
-  evaluateNarrowing,
-  outcomeRecord,
-} = require('./lib/role-feedback');
+const { evaluateNarrowing, outcomeRecord } = require('./lib/role-feedback');
 
 const NOW = Date.now();
 const roleId = 'reviewer.primary';

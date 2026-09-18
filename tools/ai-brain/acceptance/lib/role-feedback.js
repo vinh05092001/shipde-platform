@@ -25,9 +25,7 @@ const PASS_RATE_FLOOR = 0.5;
 const RETRY_CEILING = 3;
 const TOKENS_PER_MERGED_CEILING = 500000;
 
-const EXCLUDED_METRICS = new Set([
-  'cost', 'quotaPercent', 'grade', 'quality', 'preference',
-]);
+const EXCLUDED_METRICS = new Set(['cost', 'quotaPercent', 'grade', 'quality', 'preference']);
 
 const WRITTEN_FIELDS = new Set(['qualifiedRoles', 'history']);
 
@@ -58,9 +56,7 @@ function qualifiedRoleEntry(roleId, removedAt, reason, aggregates, source) {
 // --- Aggregate -----------------------------------------------------------
 
 function aggregateWindow(records, windowStart, windowEnd) {
-  const inWindow = records.filter(
-    (r) => r.instant >= windowStart && r.instant <= windowEnd
-  );
+  const inWindow = records.filter((r) => r.instant >= windowStart && r.instant <= windowEnd);
   if (inWindow.length === 0) return null;
 
   const merged = new Map();
@@ -73,7 +69,10 @@ function aggregateWindow(records, windowStart, windowEnd) {
     m.tokens += r.tokens;
   }
 
-  let totalPassed = 0, totalRetries = 0, totalTokens = 0, totalItems = 0;
+  let totalPassed = 0,
+    totalRetries = 0,
+    totalTokens = 0,
+    totalItems = 0;
   for (const m of merged.values()) {
     totalPassed += m.passed;
     totalRetries += m.retries;
@@ -105,9 +104,7 @@ function evaluateNarrowing(roleId, offeringId, records, now) {
   now = now == null ? Date.now() : now;
 
   // R05: non-delivery outcomes excluded.
-  const deliveryRecords = records.filter(
-    (r) => r.tokens > 0 || r.retries > 0 || r.passed
-  );
+  const deliveryRecords = records.filter((r) => r.tokens > 0 || r.retries > 0 || r.passed);
 
   if (deliveryRecords.length === 0) {
     return { decision: 'keep', reason: 'no delivery outcomes in window' };

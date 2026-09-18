@@ -89,7 +89,6 @@ if (typeof estimated !== 'number' || estimated <= 0) {
 }
 
 console.log(
-  'GATES_HELD: disqualify refusal, offering inheritance, estimateTokens ' +
-  'history preference'
+  'GATES_HELD: disqualify refusal, offering inheritance, estimateTokens ' + 'history preference'
 );
 process.exit(0);

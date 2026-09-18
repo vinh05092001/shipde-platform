@@ -74,21 +74,28 @@ try {
       process.exit(2);
     }
     if (child.error) {
-      console.error('CONTROL_FAILED: could not spawn ' + subject.script + ': ' + child.error.message);
+      console.error(
+        'CONTROL_FAILED: could not spawn ' + subject.script + ': ' + child.error.message
+      );
       process.exit(2);
     }
     if (child.status !== 2) {
       console.error(
-        'SUBJECT_EXIT_UNEXPECTED: ' + subject.script +
-        ' exited ' + child.status + ' outside the repository (expected 2)'
+        'SUBJECT_EXIT_UNEXPECTED: ' +
+          subject.script +
+          ' exited ' +
+          child.status +
+          ' outside the repository (expected 2)'
       );
       process.exit(1);
     }
     const out = (child.stdout || '') + (child.stderr || '');
     if (!out.includes('SOURCE_MISSING: ' + subject.missing)) {
       console.error(
-        'SUBJECT_OUTPUT_UNEXPECTED: ' + subject.script +
-        ' printed ' + (out.trim().split('\n')[0] || '(nothing)')
+        'SUBJECT_OUTPUT_UNEXPECTED: ' +
+          subject.script +
+          ' printed ' +
+          (out.trim().split('\n')[0] || '(nothing)')
       );
       process.exit(1);
     }
@@ -96,9 +103,12 @@ try {
   }
 } finally {
   // Best-effort cleanup: remove the temp directory if empty.
-  try { fs.rmdirSync(outside); } catch (e) { /* may not be empty */ }
+  try {
+    fs.rmdirSync(outside);
+  } catch (e) {
+    /* may not be empty */
+  }
 }
 
-console.log('OUTSIDE_REPOSITORY: ' + results.length +
-  ' rows exited 2 with SOURCE_MISSING');
+console.log('OUTSIDE_REPOSITORY: ' + results.length + ' rows exited 2 with SOURCE_MISSING');
 process.exit(0);
