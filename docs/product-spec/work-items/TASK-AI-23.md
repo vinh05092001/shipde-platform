@@ -76,7 +76,7 @@ The register's key behaviour for this Work Item is the retrieval answer: *only r
 
 ## Author boundary
 
-`GEMINI` is the assigned author. Scope is bounded to the retrieval gate, its shared rule module, its acceptance scripts, and this spec — the four paths named in Allowed paths above. `FEATURE-DELIVERY-REGISTER.csv` is not in Allowed paths and is not in this author's scope; only the governed register reconciler writes it (see "Do NOT advance the status ... manually" below). `GEMINI` is required (not `9ROUTER`) because the gate interprets a trust boundary (`AI-TOOL-06`); a mis-scoped filter silently promotes untrusted memory into prompts.
+`GEMINI` is the assigned author. Scope is bounded to the five paths named in Allowed paths above: this spec, `tools/ai-brain/retrieval/**` (reserved for the gate module, see Residual limitations), the acceptance rows `tools/ai-brain/acceptance/ac-23-*.js`, the shared retrieval rule module `tools/ai-brain/acceptance/lib/lesson-retrieval.js`, and the shared dependency rule module `tools/ai-brain/acceptance/lib/dependency-delivered.js`. The last is the module `TASK-AI-21` created and `TASK-AI-23` only `require`s for `AC-AI-23-09` and `AC-AI-23-10`: copying it would put the dependency-delivered rule in two places, so it is listed in Allowed paths instead, and the single branch of it this PR changes is bounded and substitution-evidenced under "Shared-module substitution evidence" below. `FEATURE-DELIVERY-REGISTER.csv` is not in Allowed paths and is not in this author's scope; only the governed register reconciler writes it (see "Do NOT advance the status ... manually" below). `GEMINI` is required (not `9ROUTER`) because the gate interprets a trust boundary (`AI-TOOL-06`); a mis-scoped filter silently promotes untrusted memory into prompts.
 Prohibited in this Work Item:
 
 - Do NOT create, push or configure the `shipde-brain` GitHub repository; that is a human action outside Git.
@@ -150,10 +150,10 @@ Not applicable; no user-facing screen. Operator output is the stdout of `tools/a
 | `AC-AI-23-14` | Docs validation passes with 0 errors | `python docs/product-spec/scripts/validate_docs.py` | `0` | `Documentation validation passed:` | `validate_docs.py stdout` |
 | `AC-AI-23-15` | Formatting check green | `pnpm format:check` | `0` | `100%` | `scripts/verify-formatting.ts stdout` |
 | `AC-AI-23-16` | Secret surface guard clean | `node tools/ai-guard/cli.js secret-surface` | `0` | `SECRET_SURFACE_CLEAN` | `tools/ai-guard/cli.js stdout` |
-| `AC-AI-23-17` | Each of the four negative proofs defined in this matrix (`AC-AI-23-02`, `AC-AI-23-04`, `AC-AI-23-06`, `AC-AI-23-10`) exits 2, not 1, when run outside the repository | `node tools/ai-brain/acceptance/ac-23-17-outside-repository.js` | `0` | `OUTSIDE_REPOSITORY_PROBE: ac-23-02, ac-23-04, ac-23-06, ac-23-10 each exited 2 with SOURCE_MISSING outside the repository` | `ac-23-17-outside-repository.js`; stdout |
+| `AC-AI-23-17` | Each of the four negative proofs defined in this matrix (`AC-AI-23-02`, `AC-AI-23-04`, `AC-AI-23-06`, `AC-AI-23-10`) exits 2, not 1, when run outside the repository | `node tools/ai-brain/acceptance/ac-23-17-outside-repository.js` | `0` | `OUTSIDE_REPOSITORY_PROBE: 4 negative proofs exited 2 with SOURCE_MISSING outside the repository` (the count form `TASK-AI-09` and `TASK-AI-21` use; the four subjects are named in the scenario cell and each is separately asserted there) | `ac-23-17-outside-repository.js`; stdout |
 ### Evidence notes
 
-Invariant rows assert invariants, never exact totals, because the seed grows and later items add scripts. Baselines below are evidence only: `AC-AI-23-03` admits 4 approved live and excludes 1 superseded plus 1 proposed; `AC-AI-23-11` reports 641 tests across 140 suites; `AC-AI-23-13` reconciles 178 rows; `AC-AI-23-14` covers 102 markdown files, 130 feature IDs, 178 rows. `AC-AI-23-11` reuses the suite gate owned by `TASK-AI-08`; this item adds none.
+Invariant rows assert invariants, never exact totals, because the seed grows and later items add scripts. Baselines below are evidence only, re-measured on this branch at `543736d` on `2026-09-19` (see Acceptance matrix validation for the verbatim output of each): `AC-AI-23-03` admits 4 approved live and excludes 1 superseded plus 1 proposed; `AC-AI-23-11` reports 643 tests across 141 suites; `AC-AI-23-13` reconciles 178 rows; `AC-AI-23-14` covers 102 markdown files, 130 feature IDs, 178 rows. `AC-AI-23-11` reuses the suite gate owned by `TASK-AI-08`; this item adds none.
 
 ## Verification commands
 
@@ -171,6 +171,7 @@ node tools/ai-brain/acceptance/ac-23-08-retrieval-nonconforming.js
 node tools/ai-brain/acceptance/ac-23-09-dependency-blocked.js
 node tools/ai-brain/acceptance/ac-23-10-dependency-unproven.js
 node tools/ai-brain/acceptance/ac-08-07-suite-invariant.js
+node --test tools/ai-brain/test/*.test.js
 node tools/ai-brain/cli.js manifest --json
 node tools/ai-brain/cli.js reconcile --json
 python docs/product-spec/scripts/validate_docs.py
@@ -181,13 +182,56 @@ node tools/ai-brain/acceptance/ac-23-17-outside-repository.js
 
 ## Codex review record
 
-| Review round | Commit | Verdict | Findings resolved |
+| Review round | Reviewed commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `Pending` | `NOT_REVIEWED` | Spec authored for TASK-AI-23. Register records `BLOCKED_DEPENDENCY`, so item is not stage-eligible and no verdict is claimed. |
+| 1 | `fcf0a5b` | `CHANGES_REQUIRED` | Six findings on the rule text, the `AC-AI-23-04` scenario and internal contradictions of the first draft; itemised in the review comment on this PR. Resolved in `4924861` |
+| 2 | `4924861` | `CHANGES_REQUIRED` | `AC-AI-23-04` still contradicted itself and one fix was only partly applied. Resolved in `ab8a761` |
+| 3 | `ab8a761` | `PASS` | None open; the reviewer noted the repository's Prettier configuration skips this file |
+| 4 | `ab8a761` | `PASS` | Independent re-review of the same commit against the register, seed and schema; nothing blocked the merge |
+| 5 | `ccda8d9` | `CHANGES_REQUIRED` | The whole acceptance matrix named scripts that did not exist in the branch. Harness delivered in `5be9558` |
+| 6 | `5be9558` | `CHANGES_REQUIRED` | (a) a blank line at EOF failed `git diff --check` in CI, (b) `Acceptance matrix validation` still claimed no acceptance script existed, (c) shared `lib/dependency-delivered.js` was not in Allowed paths, (d) the PR body verification table omitted `node --test` and `pnpm format:check`. Resolved in `543736d` and in this round |
+| 7 | `543736d` | `NOT_REVIEWED` | No verdict claimed. This round re-executed all seventeen rows on `2026-09-19`, pasted the observed exit code and output of each, added the shared-module substitution evidence and recorded the `origin/main` drift under Residual limitations |
+
+Register status governs stage eligibility: `delivery_order` 156 records `BLOCKED_DEPENDENCY`, so this item is not dispatch-eligible and no round above is claimed as an approval.
 
 ## Acceptance matrix validation
 
-Written `2026-09-17`. The acceptance harness is delivered in this PR: scripts `ac-23-01` through `ac-23-10`, `ac-23-17-outside-repository.js`, and shared modules `lib/lesson-retrieval.js` and `lib/dependency-delivered.js` are all present under `tools/ai-brain/acceptance/`. Every row in the matrix above was executed against this checkout and the exit codes match the expected outcomes documented there. Each negative proof follows the `TASK-AI-21` pattern: it reads a real file, proves the untouched source is accepted as CONTROL, tampers a copy under `os.tmpdir()`, and asserts the same check rejects the copy. Each exits `2`, not `1`, when its source is absent.
+Written `2026-09-17`; evidence recorded `2026-09-19` at commit `543736d` on `spec/task-ai-23`. The harness is delivered in this PR: scripts `ac-23-01` through `ac-23-10`, `ac-23-17-outside-repository.js`, and shared modules `lib/lesson-retrieval.js` and `lib/dependency-delivered.js`, all under `tools/ai-brain/acceptance/`. Each row of the matrix above was therefore executed against this checkout, and the observed exit code and observed output are pasted below verbatim rather than asserted. All seventeen rows reproduced their stated exit code.
+
+| Row | Exact command | Expected exit | Observed exit | Observed output (verbatim) |
+|---|---|---|---|---|
+| `AC-AI-23-01` | `node tools/ai-brain/acceptance/ac-23-01-status-alignment.js` | `0` | `0` | `Control status matches register row 156: BLOCKED_DEPENDENCY (declared TASK-AI-23)` |
+| `AC-AI-23-02` | `node tools/ai-brain/acceptance/ac-23-02-status-divergence.js` | `1` | `1` | stderr `STATUS_DIVERGENCE_DETECTED: tampered copy READY_FOR_AUTHOR != register BLOCKED_DEPENDENCY` |
+| `AC-AI-23-03` | `node tools/ai-brain/acceptance/ac-23-03-lesson-retrieval.js` | `0` | `0` | `LESSON_RETRIEVAL_HOLDS: only approved live lessons are retrievable`; admitted 4 approved live lessons, excluded `LESSON-SINGLE-REPAIR-PER-HEAD` (superseded) and `LESSON-BRAIN-UNTRUSTED-UNTIL-REVIEWED` (unapproved) |
+| `AC-AI-23-04` | `node tools/ai-brain/acceptance/ac-23-04-retrieval-leak.js` | `1` | `1` | stderr `RETRIEVAL_LEAK: LESSON-BRAIN-UNTRUSTED-UNTIL-REVIEWED stays excluded (nonconforming: approved_by required when status is approved)` |
+| `AC-AI-23-05` | `node tools/ai-brain/acceptance/ac-23-05-retrieval-staleness.js` | `0` | `0` | `RETRIEVAL_STALENESS_HOLDS: superseded and expired lessons stay out of retrieval`; synthetic `LESSON-SYNTHETIC-EXPIRY-ONLY-FIXTURE` excluded expired, `LESSON-SINGLE-REPAIR-PER-HEAD` excluded superseded with that reason winning over expiry per `AI-23-R05` |
+| `AC-AI-23-06` | `node tools/ai-brain/acceptance/ac-23-06-retrieval-requirement-missing.js` | `1` | `1` | stderr `RETRIEVAL_REQUIREMENT_MISSING: status is not required for retrieval` |
+| `AC-AI-23-07` | `node tools/ai-brain/acceptance/ac-23-07-retrieval-reasons.js` | `0` | `0` | `RETRIEVAL_REASONS_HOLDS: every excluded lesson carries its reason`; 4 admitted with no reason, 2 excluded each with its reason |
+| `AC-AI-23-08` | `node tools/ai-brain/acceptance/ac-23-08-retrieval-nonconforming.js` | `0` | `0` | `RETRIEVAL_CONFORMANCE_HOLDS: a nonconforming approved lesson stays out of retrieval` |
+| `AC-AI-23-09` | `node tools/ai-brain/acceptance/ac-23-09-dependency-blocked.js` | `0` | `0` | `TASK-AI-22 dependency blocked: no promotion gate delivered for TASK-AI-23`; reason `no declared deliverable rule for TASK-AI-22` |
+| `AC-AI-23-10` | `node tools/ai-brain/acceptance/ac-23-10-dependency-unproven.js` | `1` | `1` | stderr `DEPENDENCY_UNPROVEN: TASK-AI-99 has no merge commit reachable on origin/main` |
+| `AC-AI-23-11` | `node tools/ai-brain/acceptance/ac-08-07-suite-invariant.js` | `0` | `0` | `AC-AI-08-07 suite invariant held: fail 0 with 643 passing of 643 tests across 141 suites` |
+| `AC-AI-23-12` | `node tools/ai-brain/cli.js manifest --json` | `0` | `0` | `"error": 0` (37 checks, `"warn": 1`, `"info": 2`, `"trustworthy": true`) |
+| `AC-AI-23-13` | `node tools/ai-brain/cli.js reconcile --json` | `0` | `0` | `"error": 0`, `"trustworthy": true` |
+| `AC-AI-23-14` | `python docs/product-spec/scripts/validate_docs.py` | `0` | `0` | `Documentation validation passed: 102 markdown files, 130 feature IDs, 178 delivery rows, 828 unique identifiers.` |
+| `AC-AI-23-15` | `pnpm format:check` | `0` | `0` | exit `0`; the incremental checker reports all 13 changed files at 100% conformance |
+| `AC-AI-23-16` | `node tools/ai-guard/cli.js secret-surface` | `0` | `0` | `SECRET_SURFACE_CLEAN` and `files scanned: 323` |
+| `AC-AI-23-17` | `node tools/ai-brain/acceptance/ac-23-17-outside-repository.js` | `0` | `0` | `CONTROL: each child ran with no repository on disk and refused operationally` and `OUTSIDE_REPOSITORY_PROBE: 4 negative proofs exited 2 with SOURCE_MISSING outside the repository` |
+
+Each negative proof follows the `TASK-AI-21` pattern: it reads a real file, proves the untouched source is accepted as CONTROL, tampers a copy, and asserts the same check rejects the copy. The copy is written under `os.tmpdir()` by `AC-AI-23-02`, `-04`, `-05`, `-08` and `-10`; `AC-AI-23-06` tampers an in-memory copy of the admissibility predicate instead, because its subject is a function body and not a data file, which is what `AI-23-R07` requires of it. Each of the four subjects of `AC-AI-23-17` exits `2`, not `1`, when its source is absent.
+
+**Shared-module substitution evidence.** `lib/dependency-delivered.js` is shared with `TASK-AI-21`. The only behavioral change this PR makes to it is the branch where the dependency's merge commit exists but no deliverable rule is declared: `measurable: false` becomes `measurable: true, ok: false`, which is exactly the state `AC-AI-23-09` must be able to observe instead of dying as unmeasurable. To bound the blast radius, the four rows that load the module were run twice on this checkout - once with the module replaced by the untouched `origin/main` blob, once with this PR's copy restored:
+
+| Row | With the `origin/main` module | With this PR's module |
+|---|---|---|
+| `ac-21-09-dependency-delivered.js` | exit `1`, `DEPENDENCY_UNPROVEN: TASK-AI-17 is named on origin/main but its deliverable tools/ecosystem-manifest.json still violates its own rule: lefthook: lifecycle_state is ADOPTED, expected PENDING` | exit `1`, identical message |
+| `ac-21-10-dependency-unproven.js` | exit `2`, `CONTROL_FAILED: the real dependency TASK-AI-17 is not delivered, so the negative case is meaningless` | exit `2`, identical message |
+| `ac-23-09-dependency-blocked.js` | exit `2`, `SOURCE_MISSING: no declared deliverable rule for TASK-AI-22` | exit `0`, `TASK-AI-22 dependency blocked: no promotion gate delivered for TASK-AI-23` |
+| `ac-23-10-dependency-unproven.js` | exit `2`, `SOURCE_MISSING: no declared deliverable rule for TASK-AI-22` | exit `1`, `DEPENDENCY_UNPROVEN: TASK-AI-99 has no merge commit reachable on origin/main` |
+
+Neither `TASK-AI-21` result moves under this PR's edit: both keep the same exit code and the same message, so their red is `origin/main` data that moved after this branch last merged main, recorded under Residual limitations rather than repaired here. Both rows of this Work Item do depend on the edit, which is why the module is listed in Allowed paths instead of being copied.
+
+**Environment caveat.** This evidence was recorded on a Windows checkout with `core.autocrlf=true`. Two gates govern that checkout differently than a naive reading of them suggests: `.prettierignore` lists `docs/`, so `AC-AI-23-15` formats only the JavaScript, TypeScript and JSON files this PR changes (its run reports 13 such files at 100% conformance and never a markdown file), while this specification document itself is governed by `AC-AI-23-14`, the Python documentation validator; a bare `npx prettier --check` outside the repository gate compares markdown against `endOfLine: "lf"` and reports CRLF noise that neither gate sees.
 
 ## Residual limitations
 
@@ -198,3 +242,5 @@ Written `2026-09-17`. The acceptance harness is delivered in this PR: scripts `a
 - **No JSON Schema validator is installed**, so rows apply the named subset in `lib/lesson-schema.js` (`type`, `enum`, `const`, `pattern`, `minLength`, `required`, `properties`, `additionalProperties: false`, `items`, `allOf`, `if`/`then`/`else`). A keyword outside it would be ignored by `AC-AI-23-08`.
 - **Row 156 displays `BLOCKED_DEPENDENCY`** behind `TASK-AI-22`. The Control table stays aligned to the register; clearing the block is the governed reconciler's job. `AC-AI-23-09` proves the block; it does not assert delivery.
 - **Two row-numbering conventions disagree.** `TASK-AI-07`/`TASK-AI-08` call `delivery_order` the row; `TASK-AI-17` numbers by physical CSV line. Measured: `TASK-AI-23` is `delivery_order` 156, physical line 158. This file uses `delivery_order` plus `work_item_id`. Divergence is recorded, not repaired.
+- **The canonical gate artifact declared in In scope 1 is not a file in this PR.** In scope 1 and Acceptance criteria promise the rule "at `tools/ai-brain/retrieval/lesson-admission-gate.md`" and name it in the Business outcome, but the gate itself is delivered once, as the predicate `admissible` in `tools/ai-brain/acceptance/lib/lesson-retrieval.js` (`AI-23-R07`: one copy of the predicate), and no matrix row requires a file under `tools/ai-brain/retrieval/`. That directory stays reserved in Allowed paths for the gate module the later prompt-wiring item will import, so no placeholder document is created here to satisfy the path. This is a naming gap the reviewer flagged on 2026-09-17; it is recorded rather than closed by inventing a second copy of the rule.
+- **`origin/main` data drift makes two `TASK-AI-21` rows red, and this branch is 17 commits behind.** `ac-21-09-dependency-delivered.js` exits `1` and `ac-21-10-dependency-unproven.js` exits `2` because `lefthook` in `tools/ecosystem-manifest.json` became `lifecycle_state: "ADOPTED"` while the `TASK-AI-17` reconcile expectation for it still reads `PENDING`. The drift arrived in `8cec992` (`[TASK-AI-36]` Git hooks run from the version-controlled Lefthook config, PR #96, merged `2026-09-18`), after the review round of `2026-09-17` measured both rows green and after this branch last merged main at `ccda8d9`; the shared module is not involved, as the substitution test under "Shared-module substitution evidence" shows. Repairing it belongs to the `TASK-AI-17`/`TASK-AI-21` lane, outside this Work Item's Allowed paths, so it is recorded here and flagged in the PR comment rather than fixed. The integration merge decision, including whether to refresh this branch against `main`, is the human's.
