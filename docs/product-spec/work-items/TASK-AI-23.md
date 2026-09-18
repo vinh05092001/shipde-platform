@@ -90,7 +90,7 @@ Prohibited in this Work Item:
 
 ## In scope
 
-1. **Canonical retrieval gate** (single file under `tools/ai-brain/retrieval/`): given a lesson set shaped like `tools/ai-brain/lessons/lesson-seed.json`, returns exactly the lessons admissible to a prompt — `status: approved`, not expired, not superseded — with a machine-readable reason per excluded lesson.
+1. **Canonical retrieval gate** (single file under `tools/ai-brain/retrieval/`): given a lesson set shaped like `tools/ai-brain/lessons/lesson-seed.json`, returns exactly the lessons admissible to a prompt — `status: approved`, not expired, not superseded — with a machine-readable reason per excluded lesson. This round delivers that rule once, as the `admissible` predicate of `tools/ai-brain/acceptance/lib/lesson-retrieval.js` (`AI-23-R07`), and creates no file under `tools/ai-brain/retrieval/`; see Residual limitations for the boundary artifact a later item adds there.
 2. **Shared rule module** at `tools/ai-brain/acceptance/lib/lesson-retrieval.js`: the admissibility predicate in exactly one place, required by both each invariant row and its negative proof. It requires `lib/lesson-schema.js` by reference and states only the read-time conditions.
 3. **Acceptance rows** at `tools/ai-brain/acceptance/ac-23-*.js`: the alignment pair, the retrieval invariant and negative proofs, the dependency-block proof, and the suite/audit/validation rows in the Acceptance matrix.
 4. **Retrieval over the real seed**: admits the approved live records; excludes proposed `LESSON-BRAIN-UNTRUSTED-UNTIL-REVIEWED`, superseded `LESSON-SINGLE-REPAIR-PER-HEAD`, and any expired record, each with its reason.
@@ -190,7 +190,7 @@ node tools/ai-brain/acceptance/ac-23-17-outside-repository.js
 | 4 | `ab8a761` | `PASS` | Independent re-review of the same commit against the register, seed and schema; nothing blocked the merge |
 | 5 | `ccda8d9` | `CHANGES_REQUIRED` | The whole acceptance matrix named scripts that did not exist in the branch. Harness delivered in `5be9558` |
 | 6 | `5be9558` | `CHANGES_REQUIRED` | (a) a blank line at EOF failed `git diff --check` in CI, (b) `Acceptance matrix validation` still claimed no acceptance script existed, (c) shared `lib/dependency-delivered.js` was not in Allowed paths, (d) the PR body verification table omitted `node --test` and `pnpm format:check`. Resolved in `543736d` and in this round |
-| 7 | `127966c` | `NOT_REVIEWED` | No verdict claimed. Round 6's remediation landed in `543736d`; `127966c` re-executed all seventeen rows on `2026-09-19`, pasted each observed exit code and output, added the shared-module substitution evidence and recorded the `origin/main` drift under Residual limitations |
+| 7 | `127966c` and later doc-only commits on this branch | `NOT_REVIEWED` | No verdict claimed. Round 6's remediation landed in `543736d`; `127966c` re-executed all seventeen rows on `2026-09-19`, pasted each observed exit code and output, added the shared-module substitution evidence and recorded the `origin/main` drift under Residual limitations |
 
 Register status governs stage eligibility: `delivery_order` 156 records `BLOCKED_DEPENDENCY`, so this item is not dispatch-eligible and no round above is claimed as an approval.
 
