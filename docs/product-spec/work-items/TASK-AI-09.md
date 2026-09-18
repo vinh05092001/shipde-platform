@@ -13,7 +13,7 @@
 | Risk | `HIGH` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-09.md`, `scripts/ai/control.ps1`, `tools/ai-brain/**`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `docs/product-spec/docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `spec/task-ai-09` |
+| Branch | `feat/task-ai-09-checkpoint-recovery` |
 | Pull Request | `Pending` |
 
 **Row numbering.** "Row 142" is the register's own `delivery_order` column, the convention `TASK-AI-07` (row 140) and `TASK-AI-08` (row 141) already use. `TASK-AI-17` numbers by physical CSV line instead, where this record is line 10. The two conventions disagree, so every row number in this file also names the record's `work_item_id`.
@@ -328,11 +328,10 @@ red. That is the evidence the pairs are coupled to one rule.
 - Implementation of the recovery fields (`RecoveryCount`, `LastRecoveryAt`,
   `RecoveredFrom`, `RecoveryDiagnostic`), `MaxRecoveryAttempts`, the fail-closed
   recovery diagnostics for a removed worktree or deleted AO state, and the
-  behavioral self-tests is specified here and delivered during the
-  implementation phase of `TASK-AI-09`. `AC-AI-09-05` asserts the restart-recovery
-  contract the real supervisor already satisfies today, so that extending it
-  cannot silently remove it; it does not assert the extended behaviour, which
-  does not exist yet.
+  behavioral self-tests (5i–5o) have been implemented and verified in
+  `scripts/ai/control.ps1` under `Assert-ShipDeSupervisorCompatibility` and the
+  acceptance matrix. Cross-machine replication and out-of-scope items remain
+  residual limitations.
 - Delivery register row 142 displays `BLOCKED_DEPENDENCY` while `TASK-AI-08` is
   merged in Git reality. The Control table stays strictly aligned to the register
   under `AGENTS.md` § Unit of delivery; clearing the block is the governed

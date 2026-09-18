@@ -6,6 +6,7 @@
  *
  *   node tools/ai-brain/cli.js reconcile [--json] [--strict]
  *   node tools/ai-brain/cli.js prove --tests "<command>" [...]
+ *   node tools/ai-brain/cli.js dispatch [--dry-run | --execute] [--plan <file>]
  *   node tools/ai-brain/cli.js shadow --project|--compare [--register <p>] [--shadow <p>] [--json] [--dry-run]
  *
  * `reconcile` asks whether the register can back up what it claims.
@@ -566,6 +567,100 @@ function quotaCommand(args) {
   console.log('');
 }
 
+/**
+ * Plans with planDispatch and hands the plan to the executor (TASK-AI-24).
+ * Dry run unless --execute is given; the plan comes from --plan <file> or is
+ * built from READY_FOR_AUTHOR register rows and the account registry.
+ */
+function dispatchCommand(args) {
+  const fs = require('fs');
+  const { executePlan } = require('./executor');
+  const rootDir = args.root || process.cwd();
+  const execute = args.execute === true;
+  if (execute && (args['dry-run'] || args.dryRun)) {
+    console.error('Dispatch refused: --execute and --dry-run are exclusive.');
+    process.exit(2);
+  }
+
+  let plan;
+  if (typeof args.plan === 'string') {
+    plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+  } else {
+    const { planDispatch } = require('./scheduler');
+    const { listAccounts } = require('./accounts');
+    const csvPath =
+      args.csv ||
+      path.join(
+        rootDir,
+        'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+      );
+    if (!fs.existsSync(csvPath)) {
+      console.error('SOURCE_MISSING: ' + csvPath);
+      process.exit(2);
+    }
+    const register = loadRegister(csvPath, null, rootDir);
+    const items = ((register.data && register.data.items) || [])
+      .filter((row) => row.status === 'READY_FOR_AUTHOR')
+      .map((row) => ({
+        workItemId: row.work_item_id,
+        role: 'author.foundation',
+        branch: row.branch || null,
+        riskDomains: [],
+        priority: 0,
+      }));
+    plan = planDispatch(items, listAccounts() || [], {});
+  }
+
+  const result = executePlan(plan, {
+    dryRun: !execute,
+    project: args.project || 'shipde-platform',
+  });
+  const deferred = plan.deferred || [];
+  const planned = (plan.assignments || []).length;
+
+  if (args.json) {
+    console.log(JSON.stringify({ plan, result }, null, 2));
+    process.exit(result.summary.failed > 0 ? 1 : 0);
+  } else {
+    if (planned === 0) {
+      console.log('Dispatch: 0 assignments (' + deferred.length + ' deferred)');
+      for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
+      process.exit(0);
+    }
+    for (const r of result.records) {
+      console.log(
+        '  ' +
+          r.outcome +
+          '  ' +
+          r.workItemId +
+          '  ' +
+          r.role +
+          '  ' +
+          (r.offeringId || '-') +
+          (r.sessionId ? '  session ' + r.sessionId : '') +
+          (r.detail ? '  ' + r.detail : '')
+      );
+      if (r.args) console.log('    args ' + JSON.stringify(r.args));
+    }
+    for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
+  }
+  const s = result.summary;
+  if (result.dryRun) {
+    console.log('Dispatch dry run: ' + planned + ' planned, 0 launched');
+    process.exit(0);
+  }
+  console.log(
+    'Dispatch executed: ' +
+      s.launched +
+      ' launched, ' +
+      s.refused +
+      ' refused, ' +
+      s.failed +
+      ' failed'
+  );
+  process.exit(s.failed > 0 ? 1 : 0);
+}
+
 const SHADOW_FLAGS = new Set(['project', 'compare', 'json', 'dry-run', 'dryRun']);
 const SHADOW_VALUES = new Set(['register', 'shadow']);
 
@@ -664,6 +759,7 @@ function main() {
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
+  if (command === 'dispatch') return dispatchCommand(args);
   if (command === 'shadow') return shadowCommand(args);
   // account add | account limits | account secret (TASK-AI-29). The account
   // surface parses its own argv strictly, so a mistyped flag is refused
@@ -674,7 +770,7 @@ function main() {
   }
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | manifest | prove | quota | shadow | account');
+  console.error('Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account');
   process.exit(2);
 }
 

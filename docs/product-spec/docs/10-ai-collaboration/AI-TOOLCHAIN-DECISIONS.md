@@ -11,7 +11,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 | Tool or repository                                                                        | Decision                         | Purpose                                                                      | Boundary                                                                                                                                                                                                                                                      |
 | ----------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Git, GitHub and Git worktrees                                                             | USE NOW                          | Isolated workspaces, durable handoff, CI and review                          | `main` is never an implementation workspace                                                                                                                                                                                                                   |
-| Claude app and Claude Code                                                                | USE NOW                          | Business and solution analysis                                               | Interactive analysis stays in `shipde-claude`; unattended AO uses the governed AgentRouter launcher; no self-approval                                                                                                                                         |
+| Claude app and Claude Code                                                                | USE NOW                          | Business and solution analysis                                               | Interactive analysis stays in `shipde-claude`; unattended AO uses the governed 9Router launcher; no self-approval                                                                                                                                         |
 | AgentRouter                                                                               | USE NOW                          | Claude Code-compatible provider and routing runtime                          | Keep upstream credentials outside Git; unattended AO routes via the localhost 9Router endpoint (port 20128) using `%USERPROFILE%\.claude`, while direct AgentRouter access is reserved for the manual `%USERPROFILE%\.claude-orchestrator` diagnostic profile |
 | Codex app and Codex CLI                                                                   | USE NOW                          | Work Item planning, documentation and fresh independent review               | Planning and review are separate tasks; no author self-review                                                                                                                                                                                                 |
 | Gemini app, Antigravity CLI and [Gemini CLI](https://github.com/google-gemini/gemini-cli) | USE NOW                          | Primary implementation for complete vertical and high-risk work              | Prefer authenticated `agy`; `gemini` is the fallback; one prepared Work Item and branch at a time                                                                                                                                                             |
@@ -65,6 +65,23 @@ AgentRouter provides Claude model access under two separate topologies:
 
 1. **Manual direct profile (`%USERPROFILE%\.claude-orchestrator`):** Used directly by Claude Code for manual business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. It connects directly to AgentRouter upstream without chaining through 9Router, and is not an implementation-author route. Its promotional balance is treated as temporary capacity rather than a permanent free entitlement. The repository stores no token, provider session or request log.
 2. **Unattended routed topology (`%USERPROFILE%\.claude`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
+
+### Gateway routing record (TASK-AI-44)
+
+Two gateways exist and they are not interchangeable. The name `AgentRouter` is reserved for the cloud endpoint; the local endpoint is `9Router`. The names in code follow this table.
+
+| Gateway | Endpoint | Credential | Code names in this repository | Serves |
+|---|---|---|---|---|
+| AgentRouter (cloud) | `https://agentrouter.org/` (no `/v1`) | `AGENTROUTER_API_KEY`, User environment | `doctor.ps1` AgentRouter credential probe | Manual Claude Code business/solution analysis; the Claude and Codex fallback route |
+| 9Router (local) | `http://localhost:20128/v1` | local token | `$script:NineRouterProfile`, `$script:NineRouterPort`, `Assert-ShipDeNineRouterProfile`, `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeNineRouterFailureSince` | Unattended AO sessions (`.claude` profile), Gemini, dsh |
+
+Fallback routing, as implemented:
+
+- **Codex review fails** -> `Invoke-ShipDeClaudeReviewFallback` runs the host-authenticated native Claude Code CLI after clearing `ANTHROPIC_BASE_URL` and `CLAUDE_CONFIG_DIR`. It uses neither gateway; it spends the Claude subscription quota. The function was previously named after AgentRouter, which it never called.
+- **An AO worker's provider fails** -> the local 9Router falls back across its configured upstreams; after every approved route is exhausted, TASK-AI-07 replaces the harness.
+- **AgentRouter credential** -> reported available only after a live probe authenticates (`AI-44-R01`); a rejected key is a `doctor.ps1` failure, never "configured" (`AI-44-R02`). Only a 16-character SHA-256 prefix of the key is cached; the key itself is never written to a log, report or dashboard (`AI-44-R04`).
+
+`scripts/ai/start-agent-orchestrator.ps1` still names its port parameter `-AgentRouterPort` while it addresses 9Router's port 20128; renaming that file is outside this Work Item's allowed paths (see the Work Item's Residual limitations).
 
 ### AO version pin raised to 0.13.0 (AI-AO-PIN-2026-09-16)
 
@@ -177,8 +194,10 @@ genuinely absent entries — six failed gates plus `storybook` — are truthfull
 downgraded from `ADOPTED` to `PENDING` with `default_enabled: false` and
 `blocking_policy: "NON_BLOCKING"`, unblocking focused downstream Work Items:
 
-1. `lefthook` (`PENDING`): absent from devDependencies. Downstream Work Item
-   `TASK-AI-36` installs and configures Lefthook for pre-commit / pre-push hooks.
+1. `lefthook` (`PENDING` at this measurement; `ADOPTED` / `BLOCKING_GATE` since
+   `TASK-AI-36`): absent from devDependencies. Downstream Work Item `TASK-AI-36`
+   installs and configures Lefthook for pre-commit / pre-push hooks; see
+   "Git hook manager: Lefthook (TASK-AI-36)" below.
 2. `trivy` (`PENDING`): absent from system PATH. Downstream Work Item
    `TASK-AI-37` integrates Trivy container and dependency vulnerability scanning.
 3. `axe-core` (`PENDING`): absent from devDependencies. Downstream Work Item
@@ -344,14 +363,14 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 4. **AI-SUP-04**: Implementation/test failures are NOT provider failures; they return to the author.
 5. **AI-SUP-05**: Governed exact-HEAD auto-merge is authorized only through `TASK-AI-13` under `HUMAN-DECISION-ORCHESTRATOR-CORE-PRIORITY-2026-09-08` after `READY_FOR_HUMAN_MERGE` when strict single-snapshot preflight passes (exact 40-character commit OID, required GitHub Actions `SUCCESS` checks, trusted `chatgpt-codex-connector[bot]` `PASS` verdict, zero unresolved review threads, mergeable status, and `expectedHeadOid` squash mutation); human merge remains required for the bootstrap of TASK-AI-13 itself and whenever any preflight signal fails.
 
-### AgentRouter-backed orchestration and lifecycle
+### 9Router-backed orchestration and lifecycle
 
-6. **AI-SUP-06**: AO uses the existing `.claude` AgentRouter profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
-7. **AI-SUP-07**: AgentRouter owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
+6. **AI-SUP-06**: AO uses the existing `.claude` 9Router profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
+7. **AI-SUP-07**: 9Router owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
 8. **AI-SUP-08**: Inactivity timeout is configurable (default 10 minutes).
 9. **AI-SUP-09**: Maximum 1 nudge attempt per inactivity window before reporting stalled.
 10. **AI-SUP-10**: The supervisor respects existing controller gates (CI must pass, Codex must approve).
-11. **AI-SUP-11**: Starting `Supervise` repairs AO runtime drift by relaunching AO through AgentRouter before consuming a Work Item.
+11. **AI-SUP-11**: Starting `Supervise` repairs AO runtime drift by relaunching AO through 9Router before consuming a Work Item.
 12. **AI-SUP-12**: Manual bootstrap review requires an exact PR number when more than one implementation PR is open.
 13. **AI-SUP-13**: AO is an external control layer with pinned provenance and health check; it is never silently counted as an adopted repository/provider.
 14. **AI-SUP-14**: Manual bootstrap review uses Codex's non-interactive custom-review contract with machine-readable schema output and parses that contract; stale output is deleted, and the local file never authorizes the supervisor gate.
@@ -365,11 +384,11 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### Provider and harness policy
 
-Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost 9Router endpoint (`http://localhost:20128/v1`). The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after AgentRouter exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
+Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost 9Router endpoint (`http://localhost:20128/v1`). The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after 9Router exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
 
 ### Transient failure classification
 
-AgentRouter handles transient provider failures internally. In accordance with AI-SUP-18, bounded 9Router error records are diagnostic metadata captured after a terminal AO state; one failed request never proves that every fallback route was exhausted. If a terminal provider failure or exhaustion reaches the supervisor, delivery stops fail-closed; implementation failures still return to the author:
+9Router handles transient provider failures internally. In accordance with AI-SUP-18, bounded 9Router error records are diagnostic metadata captured after a terminal AO state; one failed request never proves that every fallback route was exhausted. If a terminal provider failure or exhaustion reaches the supervisor, delivery stops fail-closed; implementation failures still return to the author:
 
 | Classification            | Trigger failover | Return to author |
 | ------------------------- | ---------------- | ---------------- |
@@ -404,3 +423,64 @@ The supervisor operates with least-privilege permissions:
 - Bypass CI or review gates
 - Broad unrestricted shell access
 - Install, remove, or upgrade machine tools
+
+## Git hook manager: Lefthook (TASK-AI-36)
+
+Git hooks are the developer and agent front line for repository safety: they
+refuse a commit when another live session already holds the branch (the
+single-writer invariant, `AI-TOOL-03`) and when a credential has been staged
+into the git index (`AI-36-R05`). Until this Work Item those hooks depended on
+a hand-set `core.hooksPath = .githooks` override, which is a per-checkout
+manual step that fails silently when it is skipped: a checkout with the path
+set and no `pre-commit` in it commits unguarded, and a checkout with neither
+has no hook at all.
+
+The override is replaced with Lefthook (`evilmartians/lefthook`), pinned at
+exact version `1.11.3` as a root devDependency, and configured in
+version-controlled `lefthook.yml`:
+
+- The `pre-commit` stage declares two commands, run sequentially.
+  - `writer-claim` runs `node tools/ai-guard/cli.js check` — the same command
+    the bespoke hook ran, so the guard behaviour is unchanged.
+  - `staged-secret-scan` runs `node tools/ai-guard/cli.js staged-secrets`, which
+    reads the git index (not the working tree) and evaluates `.gitleaks.toml`
+    rules in Node.
+- The authoritative secret barrier is unchanged: Gitleaks `8.24.0` remains a
+  blocking CI gate provisioned by the GitHub Actions workflows. The staged
+  scanner is local defence in depth, and it exists because on a clean Windows
+  workstation `pnpm security:secrets` answers with operational exit code 2 when
+  the Gitleaks binary is not on PATH — an answer a pre-commit hook cannot act
+  on, since it distinguishes neither clean nor leaked.
+- Installation is explicit, never implicit. Repository supply-chain policy
+  forbids all four install lifecycle scripts (`preinstall`, `install`,
+  `postinstall`, `prepare`) in the root and workspace manifests, so `pnpm
+  install` never registers a hook. The `lefthook` npm package’s own
+  `postinstall` runs `lefthook install -f`, which is exactly that forbidden
+  behaviour, so its build script is denied in `pnpm-workspace.yaml`
+  (`lefthook: false`); the binary is still resolved from the pinned
+  `lefthook-windows-x64` optional dependency. Hook installation stays an
+  explicit `pnpm lefthook install`, wired into
+  `scripts/ai/bootstrap-worktrees.ps1`, with the pinned fallback
+  `npx lefthook@1.11.3 install`. A bare `npx lefthook install` is forbidden
+  under `AI-TOOL-11` because it would run whatever version the registry serves
+  today.
+- `scripts/ai/doctor.ps1` verifies that the binary resolves from the workspace
+  pin, that the staged scanner answers, that the Lefthook `pre-commit` hook is
+  installed in the repository’s git common dir, and that no `core.hooksPath`
+  override is left in place to shadow it.
+- A deliberate exception stays available and auditable: `git commit --no-verify`
+  or `LEFTHOOK=0`. Lefthook does not tamper with Git’s own bypass flags
+  (`AI-36-R07`).
+
+`lefthook` moves from `PENDING` to `ADOPTED` / `BLOCKING_GATE` /
+`default_enabled: true` in `tools/ecosystem-manifest.json` only because the
+gating artifact landed in the same change: the exact `"lefthook": "1.11.3"` root
+devDependency pin that the manifest audit probes as `dependency "lefthook"`
+(`AI-36-R08`).
+## Planner / executor split (TASK-AI-24)
+
+- `tools/ai-brain/scheduler.js` (`planDispatch`) plans and never launches; it references no process-launching API (`AC-AI-24-06`).
+- `tools/ai-brain/executor.js` (`executePlan`) is the only consumer of a plan and its only side effect is one `ao spawn` per `plan.assignments[]` entry, with the argument vector of `New-ShipDeAoSpawnArguments` in `scripts/ai/control.ps1` (`AC-AI-24-02`), passed as an array without a shell.
+- Dry run is the default (`node tools/ai-brain/cli.js dispatch`); launching requires `--execute`. Deferred entries and alternatives are never launched, a second writer or an implementation beyond `plan.utilisation.maxImplementation` is refused, and any AO failure is `FAILED`, never `LAUNCHED`, with no in-call retry.
+- A provider without a harness the controller already uses (`antigravity`/`gemini` → `agy`, `9router`/`anthropic`/`claude` → `claude-code`) is refused as `INCOMPLETE_ASSIGNMENT` rather than guessed.
+- The controller keeps its own launch path; switching it to the executor is a separate Work Item.
