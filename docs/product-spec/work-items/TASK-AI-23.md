@@ -190,7 +190,7 @@ node tools/ai-brain/acceptance/ac-23-17-outside-repository.js
 | 4 | `ab8a761` | `PASS` | Independent re-review of the same commit against the register, seed and schema; nothing blocked the merge |
 | 5 | `ccda8d9` | `CHANGES_REQUIRED` | The whole acceptance matrix named scripts that did not exist in the branch. Harness delivered in `5be9558` |
 | 6 | `5be9558` | `CHANGES_REQUIRED` | (a) a blank line at EOF failed `git diff --check` in CI, (b) `Acceptance matrix validation` still claimed no acceptance script existed, (c) shared `lib/dependency-delivered.js` was not in Allowed paths, (d) the PR body verification table omitted `node --test` and `pnpm format:check`. Resolved in `543736d` and in this round |
-| 7 | `543736d` | `NOT_REVIEWED` | No verdict claimed. This round re-executed all seventeen rows on `2026-09-19`, pasted the observed exit code and output of each, added the shared-module substitution evidence and recorded the `origin/main` drift under Residual limitations |
+| 7 | `127966c` | `NOT_REVIEWED` | No verdict claimed. Round 6's remediation landed in `543736d`; `127966c` re-executed all seventeen rows on `2026-09-19`, pasted each observed exit code and output, added the shared-module substitution evidence and recorded the `origin/main` drift under Residual limitations |
 
 Register status governs stage eligibility: `delivery_order` 156 records `BLOCKED_DEPENDENCY`, so this item is not dispatch-eligible and no round above is claimed as an approval.
 
