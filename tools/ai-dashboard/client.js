@@ -10,7 +10,7 @@ let eventSource = null;
 let sseReconnectTimeout = null;
 let reconnectAttempts = 0;
 let lastReceivedRevision = 0;
-let activeTab = 'gates';
+let activeTab = 'roster';
 let searchFilter = '';
 let sliceFilter = 'ALL';
 let statusFilter = 'ALL';
@@ -156,7 +156,7 @@ function updateConnectionBadge(type, label) {
       'animate-pulse'
     );
   } else {
-    badge.classList.add('bg-slate-800', 'text-slate-400', 'border-slate-700');
+    badge.classList.add('bg-base-200', 'text-base-content/70', 'border-base-300');
   }
 
   badge.innerText = label;
@@ -225,15 +225,15 @@ function deriveWriterState(currentState) {
 }
 
 const WRITER_STATE_DOT_CLASS = {
-  unavailable: 'bg-slate-500',
-  idle: 'bg-slate-500',
+  unavailable: 'bg-base-200',
+  idle: 'bg-base-200',
   single: 'bg-emerald-400',
   conflict: 'bg-rose-500 animate-pulse',
 };
 
 const WRITER_STATE_TEXT_CLASS = {
-  unavailable: 'text-slate-400',
-  idle: 'text-slate-400',
+  unavailable: 'text-base-content/70',
+  idle: 'text-base-content/70',
   single: 'text-emerald-400',
   conflict: 'text-rose-400',
 };
@@ -241,8 +241,8 @@ const WRITER_STATE_TEXT_CLASS = {
 function renderWriterState() {
   if (!state) return;
   const writer = deriveWriterState(state);
-  const dotColor = WRITER_STATE_DOT_CLASS[writer.level] || 'bg-slate-500';
-  const textColor = WRITER_STATE_TEXT_CLASS[writer.level] || 'text-slate-400';
+  const dotColor = WRITER_STATE_DOT_CLASS[writer.level] || 'bg-base-200';
+  const textColor = WRITER_STATE_TEXT_CLASS[writer.level] || 'text-base-content/70';
 
   const dot = document.getElementById('writerStateDot');
   if (dot) dot.className = `w-2 h-2 rounded-full ${dotColor}`;
@@ -324,7 +324,7 @@ function renderHUD() {
           <span class="text-amber-400 font-bold">[⚠ HOẠT ĐỘNG MỘT PHẦN]</span>
           <span>Một hoặc nhiều nguồn dữ liệu đang gián đoạn; các phần còn lại vẫn hoạt động bình thường.</span>
         </div>
-        <button onclick="switchTab('health')" class="px-2.5 py-1 bg-amber-800/60 hover:bg-amber-700 rounded text-[11px] font-bold">Xem Chi Tiết ↗</button>
+        <button onclick="switchTab('system')" class="px-2.5 py-1 bg-amber-800/60 hover:bg-amber-700 rounded text-[11px] font-bold">Xem Chi Tiết ↗</button>
       `;
       overallBanner.classList.remove('hidden');
     } else if (state.overallStatus === 'conflict') {
@@ -335,7 +335,7 @@ function renderHUD() {
           <span class="text-rose-400 font-bold">[⚡ XUNG ĐỘT TRẠNG THÁI]</span>
           <span>Phát hiện bất đồng giữa Register, Git hoặc GitHub PR. Xem xét giải quyết trước khi merge!</span>
         </div>
-        <button onclick="switchTab('gates')" class="px-2.5 py-1 bg-rose-800/60 hover:bg-rose-700 rounded text-[11px] font-bold">Xem Xung Đột ↗</button>
+        <button onclick="switchTab('progress')" class="px-2.5 py-1 bg-rose-800/60 hover:bg-rose-700 rounded text-[11px] font-bold">Xem Xung Đột ↗</button>
       `;
       overallBanner.classList.remove('hidden');
     } else if (state.overallStatus === 'stale') {
@@ -417,15 +417,15 @@ function renderSourceHealth() {
       const ageLabel = formatSourceAge(src.ageMs);
 
       return `
-      <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800 flex flex-col justify-between hover:border-slate-700 transition">
+      <div class="bg-base-200 p-3 rounded-xl border border-base-300 flex flex-col justify-between hover:border-base-300 transition">
         <div class="flex items-center justify-between text-xs mb-1">
-          <span class="font-bold text-slate-200 flex items-center gap-1.5">${s.icon} ${s.label}</span>
+          <span class="font-bold text-base-content/70 flex items-center gap-1.5">${s.icon} ${s.label}</span>
           <span class="text-[10px] font-mono px-2 py-0.5 rounded border font-bold ${badgeClass}">${statusText}</span>
         </div>
-        <div class="text-[11px] text-slate-400 truncate mt-1" title="${escapeHtml(src.impact || '')}">${escapeHtml(src.impact || 'Hoạt động bình thường')}</div>
-        <div class="flex items-center justify-between text-[10px] font-mono mt-1.5 pt-1.5 border-t border-slate-800/60">
+        <div class="text-[11px] text-base-content/70 truncate mt-1" title="${escapeHtml(src.impact || '')}">${escapeHtml(src.impact || 'Hoạt động bình thường')}</div>
+        <div class="flex items-center justify-between text-[10px] font-mono mt-1.5 pt-1.5 border-t border-base-300">
           <span class="px-1.5 py-0.5 rounded border font-bold ${freshnessBadge.cls}" title="Độ tươi dữ liệu nguồn (observedAt/ageMs thực)">${freshnessBadge.text}</span>
-          <span class="text-slate-400">Tuổi: ${escapeHtml(ageLabel)}${src.latencyMs !== undefined ? ` • ${src.latencyMs}ms` : ''}</span>
+          <span class="text-base-content/70">Tuổi: ${escapeHtml(ageLabel)}${src.latencyMs !== undefined ? ` • ${src.latencyMs}ms` : ''}</span>
         </div>
       </div>
     `;
@@ -440,9 +440,9 @@ function renderActiveWorkItem() {
   const active = state.workItems?.activeItem;
   if (!active) {
     container.innerHTML = `
-      <div class="p-6 text-center text-slate-400 text-xs bg-slate-900/60 rounded-xl border border-slate-800">
+      <div class="p-6 text-center text-base-content/70 text-xs bg-base-200 rounded-xl border border-base-300">
         <span class="text-2xl mb-2 block">📭</span>
-        <div class="font-bold text-white mb-1">Không có Work Item nào đang chờ xử lý</div>
+        <div class="font-bold text-base-content mb-1">Không có Work Item nào đang chờ xử lý</div>
         <div>Toàn bộ đầu việc đã hoàn thành hoặc chưa có mục nào được mở.</div>
       </div>
     `;
@@ -450,14 +450,14 @@ function renderActiveWorkItem() {
   }
 
   const assignedAuthor = active.assigned_author || 'UNASSIGNED';
-  let authorColor = 'bg-slate-800 text-slate-400 border-slate-700';
+  let authorColor = 'bg-base-200 text-base-content/70 border-base-300';
   if (assignedAuthor === 'GEMINI')
     authorColor = 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30';
   if (assignedAuthor === 'CLAUDE')
     authorColor = 'bg-amber-500/20 text-amber-400 border-amber-500/30';
   if (assignedAuthor === '9ROUTER') authorColor = 'bg-teal-500/20 text-teal-400 border-teal-500/30';
 
-  let statusBadgeColor = 'bg-slate-800 text-slate-300 border-slate-700';
+  let statusBadgeColor = 'bg-base-200 text-base-content/70 border-base-300';
   if (active.status === 'READY_FOR_AUTHOR')
     statusBadgeColor = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
   if (active.status === 'IN_PROGRESS')
@@ -468,8 +468,8 @@ function renderActiveWorkItem() {
     statusBadgeColor = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
 
   container.innerHTML = `
-    <div class="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 p-6 rounded-2xl border border-slate-800 shadow-xl space-y-4">
-      <div class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
+    <div class="card bg-base-100 border border-base-300 p-5 space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-base-300">
         <div class="flex items-center gap-2">
           <span class="text-xs font-mono font-bold px-2.5 py-1 rounded bg-brand/20 text-brand border border-brand/30">
             [${escapeHtml(active.work_item_id)}]
@@ -481,34 +481,34 @@ function renderActiveWorkItem() {
             [${escapeHtml(active.status)}]
           </span>
         </div>
-        <div class="text-xs text-slate-400 font-mono">
+        <div class="text-xs text-base-content/70 font-mono">
           Thứ tự giao việc: #${escapeHtml(active.delivery_order || '0')} • Slice: ${escapeHtml(active.slice || 'S00')}
         </div>
       </div>
 
       <div>
-        <h2 class="text-lg sm:text-xl font-black text-white leading-snug">
+        <h2 class="text-lg sm:text-xl font-black text-base-content leading-snug">
           ${escapeHtml(active.feature_name || active.key_behavior || 'Chi tiết công việc')}
         </h2>
-        <p class="text-xs sm:text-sm text-slate-300 mt-2 leading-relaxed">
+        <p class="text-xs sm:text-sm text-base-content/70 mt-2 leading-relaxed">
           ${escapeHtml(active.key_behavior || '')}
         </p>
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs font-mono">
-        <div class="bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/60">
-          <div class="text-[10px] text-slate-400 uppercase">Nhánh Thực Hiện</div>
-          <div class="text-slate-200 truncate mt-0.5" title="${escapeHtml(active.branch || 'Chưa tạo nhánh')}">${escapeHtml(active.branch || '—')}</div>
+        <div class="bg-base-200 p-2.5 rounded-lg border border-base-300">
+          <div class="text-[10px] text-base-content/70 uppercase">Nhánh Thực Hiện</div>
+          <div class="text-base-content/70 truncate mt-0.5" title="${escapeHtml(active.branch || 'Chưa tạo nhánh')}">${escapeHtml(active.branch || '—')}</div>
         </div>
-        <div class="bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/60">
-          <div class="text-[10px] text-slate-400 uppercase">Đặc Tả Nguồn</div>
-          <div class="text-slate-200 truncate mt-0.5" title="${escapeHtml(active.work_item_path || '')}">
+        <div class="bg-base-200 p-2.5 rounded-lg border border-base-300">
+          <div class="text-[10px] text-base-content/70 uppercase">Đặc Tả Nguồn</div>
+          <div class="text-base-content/70 truncate mt-0.5" title="${escapeHtml(active.work_item_path || '')}">
             ${escapeHtml(active.work_item_path ? active.work_item_path.split('/').pop() : '—')}
           </div>
         </div>
-        <div class="bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/60">
-          <div class="text-[10px] text-slate-400 uppercase">Pull Request / Review</div>
-          <div class="text-slate-200 mt-0.5">
+        <div class="bg-base-200 p-2.5 rounded-lg border border-base-300">
+          <div class="text-[10px] text-base-content/70 uppercase">Pull Request / Review</div>
+          <div class="text-base-content/70 mt-0.5">
             ${escapeHtml(active.pr || 'Chưa mở PR')} ${active.codex_verdict ? `(${escapeHtml(active.codex_verdict)})` : ''}
           </div>
         </div>
@@ -544,12 +544,12 @@ function renderGatePipeline() {
     currentGateKey === 'EVIDENCE_UNAVAILABLE' ? 'text-amber-400' : 'text-brand';
 
   container.innerHTML = `
-    <div class="bg-slate-900/90 p-6 rounded-2xl border border-slate-800 shadow-xl space-y-4">
-      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
-        <h3 class="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+    <div class="bg-base-200 p-6 rounded-2xl border border-base-300 shadow-xl space-y-4">
+      <div class="flex items-center justify-between pb-3 border-b border-base-300">
+        <h3 class="text-sm font-bold text-base-content uppercase tracking-wider flex items-center gap-2">
           <span>🛡️ Chuỗi Kiểm Soát Chất Lượng Giao Việc</span>
         </h3>
-        <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+        <span class="text-xs font-mono px-2 py-0.5 rounded bg-base-200 text-base-content/70 border border-base-300">
           Cổng hiện tại: <span class="${currentGateColor} font-bold">${escapeHtml(currentGateLabel)}</span>
         </span>
       </div>
@@ -557,7 +557,7 @@ function renderGatePipeline() {
       <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
         ${pipeline.gates
           .map((g, idx) => {
-            let badge = 'bg-slate-800 text-slate-400 border-slate-700';
+            let badge = 'bg-base-200 text-base-content/70 border-base-300';
             let icon = '○';
             let statusText = 'PENDING';
 
@@ -578,20 +578,20 @@ function renderGatePipeline() {
               icon = '✕';
               statusText = 'FAILED';
             } else if (g.status === 'BLOCKED') {
-              badge = 'bg-slate-800 text-rose-400 border-rose-900';
+              badge = 'bg-base-200 text-rose-400 border-rose-900';
               icon = '⛔';
               statusText = 'BLOCKED';
             } else if (g.status === 'UNAVAILABLE') {
-              badge = 'bg-slate-800 text-amber-400 border-amber-900/60';
+              badge = 'bg-base-200 text-amber-400 border-amber-900/60';
               icon = '⊘';
               statusText = 'UNAVAILABLE';
             }
 
             return `
-            <div class="bg-slate-800/50 p-3 rounded-xl border border-slate-700/60 flex flex-col justify-between space-y-2">
-              <div class="text-[10px] text-slate-400 font-mono font-bold">${escapeHtml(g.label)}</div>
+            <div class="bg-base-200 p-3 rounded-xl border border-base-300 flex flex-col justify-between space-y-2">
+              <div class="text-[10px] text-base-content/70 font-mono font-bold">${escapeHtml(g.label)}</div>
               <div class="flex items-center justify-between">
-                <span class="text-sm font-bold text-slate-200">${icon}</span>
+                <span class="text-sm font-bold text-base-content/70">${icon}</span>
                 <span class="text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${badge}">${statusText}</span>
               </div>
             </div>
@@ -612,14 +612,14 @@ function renderPrEvidenceContent() {
   if (prs.length === 0) {
     if (!state.github.authenticated) {
       return `
-        <div class="mt-4 p-4 rounded-xl bg-slate-800/40 border border-slate-700/60 text-xs text-slate-400 flex items-center gap-2">
+        <div class="mt-4 p-4 rounded-xl bg-base-200 border border-base-300 text-xs text-base-content/70 flex items-center gap-2">
           <span>🔒</span>
           <span>GitHub CLI chưa xác thực trên máy trạm. Bằng chứng PR và CI tạm thời ở trạng thái UNAVAILABLE.</span>
         </div>
       `;
     }
     return `
-      <div class="mt-4 p-4 rounded-xl bg-slate-800/40 border border-slate-700/60 text-xs text-slate-400 flex items-center gap-2">
+      <div class="mt-4 p-4 rounded-xl bg-base-200 border border-base-300 text-xs text-base-content/70 flex items-center gap-2">
         <span>ℹ️</span>
         <span>Không có Pull Request nào đang mở trên kho mã nguồn.</span>
       </div>
@@ -630,25 +630,25 @@ function renderPrEvidenceContent() {
   const checks = primaryPr.checks || { list: [], summary: 'NO_CHECKS' };
   const reviews = primaryPr.reviews || { reviewList: [] };
 
-  let checksBadge = 'bg-slate-800 text-slate-300 border-slate-700';
+  let checksBadge = 'bg-base-200 text-base-content/70 border-base-300';
   if (checks.summary === 'PASSED')
     checksBadge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
   if (checks.summary === 'FAILED') checksBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
   if (checks.summary === 'PENDING')
     checksBadge = 'bg-amber-500/20 text-amber-400 border-amber-500/40';
 
-  let codexBadge = 'bg-slate-800 text-slate-300 border-slate-700';
+  let codexBadge = 'bg-base-200 text-base-content/70 border-base-300';
   if (reviews.trustedCodexVerdict === 'PASS')
     codexBadge = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
   if (reviews.trustedCodexVerdict === 'CHANGES_REQUIRED')
     codexBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/40';
 
   return `
-    <div class="mt-4 pt-4 border-t border-slate-800 space-y-3">
+    <div class="mt-4 pt-4 border-t border-base-300 space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3 text-xs">
         <div class="flex items-center gap-2 font-mono">
-          <span class="font-bold text-white">PR #${primaryPr.number}:</span>
-          <span class="text-slate-300">${escapeHtml(primaryPr.title)}</span>
+          <span class="font-bold text-base-content">PR #${primaryPr.number}:</span>
+          <span class="text-base-content/70">${escapeHtml(primaryPr.title)}</span>
           <a href="${primaryPr.url}" target="_blank" class="text-brand hover:underline">Xem trên GitHub ↗</a>
         </div>
         <div class="flex items-center gap-2 font-mono text-[11px]">
@@ -658,7 +658,7 @@ function renderPrEvidenceContent() {
           <span class="px-2 py-0.5 rounded border ${codexBadge} font-bold">
             Kết luận Codex: [${escapeHtml(reviews.trustedCodexVerdict || 'CHỜ')}]
           </span>
-          <span class="px-2 py-0.5 rounded border bg-slate-800 text-slate-300 border-slate-700">
+          <span class="px-2 py-0.5 rounded border bg-base-200 text-base-content/70 border-base-300">
             HEAD: ${primaryPr.headRefOidShort || '—'}
           </span>
         </div>
@@ -671,7 +671,7 @@ function renderPrEvidenceContent() {
           ${checks.list
             .map((c) => {
               let icon = '○';
-              let color = 'text-slate-400';
+              let color = 'text-base-content/70';
               if (c.conclusion === 'SUCCESS') {
                 icon = '✓';
                 color = 'text-emerald-400';
@@ -684,8 +684,8 @@ function renderPrEvidenceContent() {
               }
 
               return `
-              <div class="bg-slate-800/40 px-3 py-2 rounded-lg border border-slate-700/40 flex items-center justify-between">
-                <span class="text-slate-200 truncate" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</span>
+              <div class="bg-base-200 px-3 py-2 rounded-lg border border-base-300 flex items-center justify-between">
+                <span class="text-base-content/70 truncate" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</span>
                 <span class="font-bold ${color} ml-2">${icon} ${escapeHtml(c.conclusion)}</span>
               </div>
             `;
@@ -741,7 +741,7 @@ function renderSessions() {
   if (sessions.length === 0) {
     container.innerHTML = `
       <tr>
-        <td colspan="7" class="p-6 text-center text-slate-400 text-xs">
+        <td colspan="7" class="p-6 text-center text-base-content/70 text-xs">
           Không có phiên AO nào đang chạy. Trạng thái AO: ${escapeHtml(state.daemon?.state || 'stopped')}.
         </td>
       </tr>
@@ -754,17 +754,17 @@ function renderSessions() {
       const isWriter = s.isWriter;
       const writerBadge = isWriter
         ? '<span class="px-2 py-0.5 rounded bg-brand/20 text-brand border border-brand/30 text-[10px] font-bold">1 WRITER ACTIVE</span>'
-        : '<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 text-[10px]">READ ONLY</span>';
+        : '<span class="px-2 py-0.5 rounded bg-base-200 text-base-content/70 border border-base-300 text-[10px]">READ ONLY</span>';
 
       return `
-      <tr class="border-b border-slate-800/80 hover:bg-slate-850/50 transition">
-        <td data-label="Session ID" class="p-3 font-mono text-white font-bold">${escapeHtml(s.id)}</td>
-        <td data-label="Vai Trò" class="p-3 text-slate-300 font-semibold">${escapeHtml(s.displayRole)}</td>
-        <td data-label="Harness" class="p-3 font-mono text-slate-300">${escapeHtml(s.harness)}</td>
-        <td data-label="Nhánh / Worktree" class="p-3 font-mono text-slate-300 truncate max-w-xs" title="${escapeHtml(s.branch)}">${escapeHtml(s.branch || '—')}</td>
+      <tr class="border-b border-base-300 hover:bg-base-200 transition">
+        <td data-label="Session ID" class="p-3 font-mono text-base-content font-bold">${escapeHtml(s.id)}</td>
+        <td data-label="Vai Trò" class="p-3 text-base-content/70 font-semibold">${escapeHtml(s.displayRole)}</td>
+        <td data-label="Harness" class="p-3 font-mono text-base-content/70">${escapeHtml(s.harness)}</td>
+        <td data-label="Nhánh / Worktree" class="p-3 font-mono text-base-content/70 truncate max-w-xs" title="${escapeHtml(s.branch)}">${escapeHtml(s.branch || '—')}</td>
         <td data-label="Trạng Thái" class="p-3 font-mono">${escapeHtml(s.status)}</td>
         <td data-label="Quyền Ghi" class="p-3 text-xs">${writerBadge}</td>
-        <td data-label="Độ Tươi" class="p-3 font-mono text-xs text-slate-400">${escapeHtml(s.freshness?.label || '—')}</td>
+        <td data-label="Độ Tươi" class="p-3 font-mono text-xs text-base-content/70">${escapeHtml(s.freshness?.label || '—')}</td>
       </tr>
     `;
     })
@@ -802,7 +802,7 @@ function renderQueueTable() {
   if (items.length === 0) {
     container.innerHTML = `
       <tr>
-        <td colspan="8" class="p-8 text-center text-slate-400 text-xs">
+        <td colspan="8" class="p-8 text-center text-base-content/70 text-xs">
           Không tìm thấy công việc nào khớp với bộ lọc hiện tại.
         </td>
       </tr>
@@ -812,7 +812,7 @@ function renderQueueTable() {
 
   container.innerHTML = items
     .map((item) => {
-      let statusClass = 'bg-slate-800 text-slate-300 border-slate-700';
+      let statusClass = 'bg-base-200 text-base-content/70 border-base-300';
       if (item.status === 'MERGED')
         statusClass = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
       else if (item.status === 'READY_FOR_CODEX')
@@ -825,11 +825,11 @@ function renderQueueTable() {
         statusClass = 'bg-rose-950/40 text-rose-400 border-rose-800';
 
       return `
-      <tr class="border-b border-slate-800/80 hover:bg-slate-800/40 text-xs transition">
-        <td data-label="#" class="p-3 font-mono text-slate-400">#${escapeHtml(item.delivery_order || '')}</td>
-        <td data-label="Slice" class="p-3 font-mono font-bold text-slate-300">${escapeHtml(item.slice || '')}</td>
-        <td data-label="Mã Task" class="p-3 font-mono font-bold text-white">${escapeHtml(item.work_item_id || '')}</td>
-        <td data-label="Tính Năng" class="p-3 text-slate-200 font-semibold max-w-sm">
+      <tr class="border-b border-base-300 hover:bg-base-200 text-xs transition">
+        <td data-label="#" class="p-3 font-mono text-base-content/70">#${escapeHtml(item.delivery_order || '')}</td>
+        <td data-label="Slice" class="p-3 font-mono font-bold text-base-content/70">${escapeHtml(item.slice || '')}</td>
+        <td data-label="Mã Task" class="p-3 font-mono font-bold text-base-content">${escapeHtml(item.work_item_id || '')}</td>
+        <td data-label="Tính Năng" class="p-3 text-base-content/70 font-semibold max-w-sm">
           <div class="truncate" title="${escapeHtml(item.feature_name || item.key_behavior || '')}">
             ${escapeHtml(item.feature_name || item.key_behavior || '')}
           </div>
@@ -839,9 +839,9 @@ function renderQueueTable() {
             ${escapeHtml(item.status || '')}
           </span>
         </td>
-        <td data-label="Tác Giả" class="p-3 font-mono text-slate-400">${escapeHtml(item.assigned_author || '')}</td>
-        <td data-label="PR" class="p-3 font-mono text-slate-300">${escapeHtml(item.pr || '—')}</td>
-        <td data-label="Codex" class="p-3 font-mono text-slate-400">${escapeHtml(item.codex_verdict || '—')}</td>
+        <td data-label="Tác Giả" class="p-3 font-mono text-base-content/70">${escapeHtml(item.assigned_author || '')}</td>
+        <td data-label="PR" class="p-3 font-mono text-base-content/70">${escapeHtml(item.pr || '—')}</td>
+        <td data-label="Codex" class="p-3 font-mono text-base-content/70">${escapeHtml(item.codex_verdict || '—')}</td>
       </tr>
     `;
     })
@@ -855,7 +855,7 @@ function renderActivity() {
   const activities = state.activity || [];
   if (activities.length === 0) {
     container.innerHTML =
-      '<div class="p-4 text-center text-slate-400 text-xs">Chưa có nhật ký hoạt động gần đây.</div>';
+      '<div class="p-4 text-center text-base-content/70 text-xs">Chưa có nhật ký hoạt động gần đây.</div>';
     return;
   }
 
@@ -866,13 +866,13 @@ function renderActivity() {
       if (act.badge === 'AO') badgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
 
       return `
-      <div class="flex items-start gap-3 p-3 rounded-xl bg-slate-850/60 border border-slate-800 text-xs">
+      <div class="flex items-start gap-3 p-3 rounded-xl bg-base-200 border border-base-300 text-xs">
         <span class="px-2 py-0.5 rounded border text-[10px] font-mono font-bold ${badgeColor}">${escapeHtml(act.badge || 'ACT')}</span>
         <div class="flex-1 min-w-0">
-          <div class="font-semibold text-slate-200 leading-snug">${escapeHtml(act.title)}</div>
-          <div class="text-[11px] text-slate-400 font-mono mt-0.5">${escapeHtml(act.actor || '')} • ${escapeHtml(act.detail || '')}</div>
+          <div class="font-semibold text-base-content/70 leading-snug">${escapeHtml(act.title)}</div>
+          <div class="text-[11px] text-base-content/70 font-mono mt-0.5">${escapeHtml(act.actor || '')} • ${escapeHtml(act.detail || '')}</div>
         </div>
-        <div class="text-[10px] font-mono text-slate-400 whitespace-nowrap">${timeStr}</div>
+        <div class="text-[10px] font-mono text-base-content/70 whitespace-nowrap">${timeStr}</div>
       </div>
     `;
     })
@@ -916,7 +916,7 @@ function renderVendorQuota(vendor) {
     const colour =
       disabled || pct <= 2 ? 'bg-rose-500' : pct < 20 ? 'bg-amber-400' : 'bg-emerald-500';
     return (
-      '<div class="h-1.5 rounded-full bg-slate-700 overflow-hidden w-full">' +
+      '<div class="h-1.5 rounded-full bg-base-200 overflow-hidden w-full">' +
       '<div class="h-full ' +
       colour +
       '" style="width:' +
@@ -943,10 +943,10 @@ function renderVendorQuota(vendor) {
           : 'text-emerald-300';
     return (
       '<div class="grid grid-cols-[7.5rem_3rem_1fr_auto] items-center gap-2 text-[11px]">' +
-      '<span class="text-slate-300">' +
+      '<span class="text-base-content/70">' +
       escapeHtml(FAMILY_LABEL[row.family] || row.family) +
       '</span>' +
-      '<span class="text-slate-500">' +
+      '<span class="text-base-content/70">' +
       escapeHtml(WINDOW_LABEL[row.window] || row.window) +
       '</span>' +
       bar(row.remainingPercent, row.disabled) +
@@ -977,17 +977,17 @@ function renderVendorQuota(vendor) {
             : acc.account
         : 'không rõ account';
     return (
-      '<div class="bg-slate-800/60 rounded-xl p-3 border border-slate-700 space-y-2">' +
+      '<div class="bg-base-200 rounded-xl p-3 border border-base-300 space-y-2">' +
       '<div class="flex items-baseline justify-between gap-2">' +
-      '<span class="text-xs font-bold text-white">' +
+      '<span class="text-xs font-bold text-base-content">' +
       escapeHtml(acc.accountId) +
       '</span>' +
-      '<span class="text-[10px] text-slate-500">' +
+      '<span class="text-[10px] text-base-content/70">' +
       escapeHtml(who) +
       '</span></div>' +
       (acc.rows || []).map(rowHtml).join('') +
       ((acc.rows || []).some((r) => r.resetsAtText)
-        ? '<div class="text-[10px] text-slate-500">Reset: ' +
+        ? '<div class="text-[10px] text-base-content/70">Reset: ' +
           escapeHtml(
             (acc.rows || [])
               .filter((r) => r.resetsAtText)
@@ -996,7 +996,7 @@ function renderVendorQuota(vendor) {
           ) +
           '</div>'
         : '') +
-      '<div class="text-[10px] text-slate-500">Đọc lúc ' +
+      '<div class="text-[10px] text-base-content/70">Đọc lúc ' +
       escapeHtml(acc.observedAt ? new Date(acc.observedAt).toLocaleTimeString() : 'không rõ') +
       '</div>' +
       '</div>'
@@ -1014,14 +1014,14 @@ function renderVendorQuota(vendor) {
 
   const id = vendor.identity || {};
   el.innerHTML =
-    '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800 space-y-3">' +
+    '<div class="bg-base-200 rounded-2xl p-5 border border-base-300 space-y-3">' +
     '<div class="flex items-start justify-between flex-wrap gap-2">' +
-    '<div><h3 class="text-sm font-black text-white">Hạn mức nhà cung cấp tự báo</h3>' +
-    '<p class="text-[11px] text-slate-500 mt-0.5">Phần trăm còn lại trên trần mà nhà cung cấp không công bố — ' +
+    '<div><h3 class="text-sm font-black text-base-content">Hạn mức nhà cung cấp tự báo</h3>' +
+    '<p class="text-[11px] text-base-content/70 mt-0.5">Phần trăm còn lại trên trần mà nhà cung cấp không công bố — ' +
     'đọc riêng, không cộng vào số token bên dưới</p></div>' +
     '<span class="text-[10px] px-2 py-1 rounded-lg ' +
     (id.known
-      ? 'bg-slate-800 text-slate-300 border border-slate-700'
+      ? 'bg-base-200 text-base-content/70 border border-base-300'
       : 'bg-amber-500/15 text-amber-300 border border-amber-500/30') +
     '">' +
     escapeHtml(
@@ -1051,8 +1051,8 @@ function renderCapacity() {
   const health = state && state.sources && state.sources.capacity;
 
   const tile = (label, value, cls, note) =>
-    '<div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700">' +
-    '<div class="text-[11px] text-slate-400 font-semibold uppercase">' +
+    '<div class="bg-base-200 p-3 rounded-xl border border-base-300">' +
+    '<div class="text-[11px] text-base-content/70 font-semibold uppercase">' +
     label +
     '</div>' +
     '<div class="text-xl font-black mt-1 ' +
@@ -1060,13 +1060,13 @@ function renderCapacity() {
     '">' +
     value +
     '</div>' +
-    '<div class="text-[10px] text-slate-400 mt-0.5">' +
+    '<div class="text-[10px] text-base-content/70 mt-0.5">' +
     note +
     '</div></div>';
 
   if (!cap) {
     summaryEl.innerHTML =
-      '<div class="bg-slate-900 rounded-2xl p-5 border border-amber-500/30 text-amber-200 text-sm">' +
+      '<div class="bg-base-200 rounded-2xl p-5 border border-amber-500/30 text-amber-200 text-sm">' +
       '<div class="font-bold mb-1">Chưa đo được sức chứa</div><div class="text-amber-300/80">' +
       escapeHtml((health && health.impact) || 'Không có dữ liệu') +
       '</div></div>';
@@ -1079,14 +1079,14 @@ function renderCapacity() {
   const s = cap.summary;
   const known = s.sufficient - s.unknownBudget;
   if (tabLabel) {
-    tabLabel.textContent = known > 0 ? Math.floor(s.tasksRemaining) + ' lượt' : 'chưa rõ';
+    tabLabel.textContent = known > 0 ? Math.floor(s.tasksRemaining) + ' lượt' : '?';
   }
 
   summaryEl.innerHTML =
-    '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800 space-y-4">' +
+    '<div class="bg-base-200 rounded-2xl p-5 border border-base-300 space-y-4">' +
     '<div class="flex items-start justify-between flex-wrap gap-2">' +
-    '<div><h3 class="text-sm font-black text-white">Sức chứa còn lại của cả pool</h3>' +
-    '<p class="text-[11px] text-slate-500 mt-0.5">Tính theo việc cỡ ' +
+    '<div><h3 class="text-sm font-black text-base-content">Sức chứa còn lại của cả pool</h3>' +
+    '<p class="text-[11px] text-base-content/70 mt-0.5">Tính theo việc cỡ ' +
     escapeHtml(cap.difficultyName) +
     '</p></div>' +
     (cap.derivedFromRouter
@@ -1097,7 +1097,7 @@ function renderCapacity() {
     tile(
       'Lượt việc còn lại',
       known > 0 ? Math.floor(s.tasksRemaining) : 'chưa rõ',
-      known > 0 ? 'text-brand' : 'text-slate-400',
+      known > 0 ? 'text-brand' : 'text-base-content/70',
       known > 0 ? 'trên ' + known + ' model đã khai hạn mức' : 'chưa model nào khai hạn mức'
     ) +
     tile('Model đủ năng lực', String(s.sufficient), 'text-emerald-400', 'trên tổng ' + s.total) +
@@ -1137,7 +1137,7 @@ function renderCapacity() {
       tight: ['bg-amber-500/20 text-amber-300 border-amber-500/30', 'sắp chạm'],
       exhausted: ['bg-rose-500/20 text-rose-300 border-rose-500/30', 'đã cạn'],
       cooling: ['bg-sky-500/20 text-sky-300 border-sky-500/30', 'đang nguội'],
-      unknown: ['bg-slate-700/60 text-slate-300 border-slate-600', 'chưa rõ'],
+      unknown: ['bg-base-200 text-base-content/70 border-base-300', 'chưa rõ'],
     };
     const entry = map[row.status] || map.unknown;
     const extra = row.boundBy && row.status !== 'unknown' ? ' · ' + row.boundBy : '';
@@ -1152,19 +1152,19 @@ function renderCapacity() {
   };
 
   const bar = (row) => {
-    if (row.runway === null) return '<span class="text-[11px] text-slate-500">chưa rõ</span>';
+    if (row.runway === null) return '<span class="text-[11px] text-base-content/70">chưa rõ</span>';
     const pct = Math.min(100, (row.runway / 10) * 100);
     const colour = row.atRisk ? 'bg-rose-500' : row.runway < 5 ? 'bg-amber-500' : 'bg-emerald-500';
     return (
       '<div class="flex items-center gap-2">' +
-      '<div class="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden min-w-[60px]">' +
+      '<div class="flex-1 h-1.5 rounded-full bg-base-200 overflow-hidden min-w-[60px]">' +
       '<div class="h-full ' +
       colour +
       '" style="width:' +
       pct.toFixed(0) +
       '%"></div></div>' +
       '<span class="text-[11px] font-mono ' +
-      (row.atRisk ? 'text-rose-300' : 'text-slate-300') +
+      (row.atRisk ? 'text-rose-300' : 'text-base-content/70') +
       '">' +
       row.runway.toFixed(1) +
       '</span></div>'
@@ -1172,9 +1172,9 @@ function renderCapacity() {
   };
 
   tableEl.innerHTML =
-    '<div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">' +
+    '<div class="bg-base-200 rounded-2xl border border-base-300 overflow-hidden">' +
     '<div class="overflow-x-auto"><table class="w-full text-xs min-w-[640px]">' +
-    '<thead><tr class="bg-slate-800/60 text-slate-400 uppercase text-[10px]">' +
+    '<thead><tr class="bg-base-200 text-base-content/70 uppercase text-[10px]">' +
     '<th class="text-left px-4 py-2.5 font-semibold">Model</th>' +
     '<th class="text-left px-4 py-2.5 font-semibold">Bậc</th>' +
     '<th class="text-left px-4 py-2.5 font-semibold">Cấp độ</th>' +
@@ -1185,27 +1185,27 @@ function renderCapacity() {
     rows
       .map(
         (row) =>
-          '<tr class="border-t border-slate-800' +
+          '<tr class="border-t border-base-300' +
           (row.atRisk ? ' bg-rose-500/5' : '') +
           '">' +
-          '<td class="px-4 py-2.5"><div class="font-mono text-slate-200">' +
+          '<td class="px-4 py-2.5"><div class="font-mono text-base-content/70">' +
           escapeHtml(row.model) +
           '</div>' +
-          '<div class="text-[10px] text-slate-500 font-mono">' +
+          '<div class="text-[10px] text-base-content/70 font-mono">' +
           escapeHtml(row.accountId) +
           '</div></td>' +
-          '<td class="px-4 py-2.5 font-mono text-slate-400">' +
+          '<td class="px-4 py-2.5 font-mono text-base-content/70">' +
           row.tier +
           '</td>' +
           '<td class="px-4 py-2.5"><span class="' +
-          (row.sufficient ? 'text-slate-200' : 'text-slate-500 line-through') +
+          (row.sufficient ? 'text-base-content/70' : 'text-base-content/70 line-through') +
           '">' +
           escapeHtml(row.gradeName) +
           '</span></td>' +
           '<td class="px-4 py-2.5">' +
           statusChip(row) +
           '</td>' +
-          '<td class="px-4 py-2.5 font-mono text-slate-400">' +
+          '<td class="px-4 py-2.5 font-mono text-base-content/70">' +
           Math.round(row.tokensPerTask / 1000) +
           'K</td>' +
           '<td class="px-4 py-2.5">' +
@@ -1220,12 +1220,12 @@ function renderCapacity() {
     const c = cap.claude;
     claudeEl.innerHTML =
       c && c.available
-        ? '<div class="bg-slate-900 rounded-2xl p-5 border border-slate-800">' +
-          '<h3 class="text-sm font-black text-white mb-1">Claude Code (ngoài pool)</h3>' +
-          '<p class="text-[11px] text-slate-500 mb-3">Việc Claude Code làm trực tiếp không đi qua 9router, nên báo riêng — cộng vào sẽ ngụ ý một ngân sách chung không tồn tại.</p>' +
+        ? '<div class="bg-base-200 rounded-2xl p-5 border border-base-300">' +
+          '<h3 class="text-sm font-black text-base-content mb-1">Claude Code (ngoài pool)</h3>' +
+          '<p class="text-[11px] text-base-content/70 mb-3">Việc Claude Code làm trực tiếp không đi qua 9router, nên báo riêng — cộng vào sẽ ngụ ý một ngân sách chung không tồn tại.</p>' +
           '<div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">' +
-          tile('Lượt trả lời', String(c.messages), 'text-slate-200', 'đọc từ transcript') +
-          tile('Token', (c.tokens / 1e6).toFixed(1) + 'M', 'text-slate-200', 'gồm cả đọc cache') +
+          tile('Lượt trả lời', String(c.messages), 'text-base-content/70', 'đọc từ transcript') +
+          tile('Token', (c.tokens / 1e6).toFixed(1) + 'M', 'text-base-content/70', 'gồm cả đọc cache') +
           tile(
             'Tỉ lệ cache',
             (c.cacheHitRate * 100).toFixed(1) + '%',
@@ -1264,7 +1264,7 @@ function switchTab(tabId) {
   activeTab = tabId;
 
   // Toggle active button styles
-  const tabs = ['gates', 'roster', 'queue', 'activity', 'capacity', 'architecture', 'health'];
+  const tabs = ['roster', 'progress', 'system'];
   tabs.forEach((t) => {
     const btn = document.getElementById(`tabBtn-${t}`);
     const pane = document.getElementById(`tabPane-${t}`);
