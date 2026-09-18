@@ -388,9 +388,13 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     });
 
     test('FRESHNESS_BADGE provides a distinct, non-color-only label for each freshness state', () => {
-      assert.strictEqual(FRESHNESS_BADGE.live.text.includes('LIVE'), true);
-      assert.strictEqual(FRESHNESS_BADGE.stale.text.includes('STALE'), true);
-      assert.strictEqual(FRESHNESS_BADGE.unavailable.text.includes('UNAVAILABLE'), true);
+      // The cockpit reads Vietnamese; what matters is that each state carries its own
+      // word, so colour is never the only signal.
+      assert.strictEqual(FRESHNESS_BADGE.live.text.includes('Trực tiếp'), true);
+      assert.strictEqual(FRESHNESS_BADGE.stale.text.includes('Cũ'), true);
+      assert.strictEqual(FRESHNESS_BADGE.unavailable.text.includes('Không có'), true);
+      const labels = [FRESHNESS_BADGE.live.text, FRESHNESS_BADGE.stale.text, FRESHNESS_BADGE.unavailable.text];
+      assert.strictEqual(new Set(labels).size, 3);
     });
   });
 
@@ -463,7 +467,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const pastTenMins = new Date(Date.now() - 600 * 1000).toISOString();
       const fStale = computeFreshness(pastTenMins);
       assert.strictEqual(fStale.status, 'stale');
-      assert.ok(fStale.label.includes('STALE'));
+      assert.ok(fStale.label.includes('STALE') || fStale.label.includes('cũ'));
     });
 
     test('handles malformed AO json without crashing', () => {
@@ -964,7 +968,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
         sessions: [{ isWriter: true, isTerminated: false }],
       });
       assert.strictEqual(result.level, 'unavailable');
-      assert.strictEqual(result.countLabel, 'UNAVAILABLE');
+      assert.strictEqual(result.countLabel, 'Không có');
     });
 
     test('deriveWriterState reflects zero, one, and multiple real writer sessions from AO data', () => {
@@ -998,7 +1002,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     });
 
     test('gate pipeline renders EVIDENCE_UNAVAILABLE as a clear, non-PASS label', () => {
-      assert.strictEqual(GATE_STAGE_LABELS.EVIDENCE_UNAVAILABLE.includes('UNAVAILABLE'), true);
+      assert.match(GATE_STAGE_LABELS.EVIDENCE_UNAVAILABLE, /CHỜ BẰNG CHỨNG/);
       assert.notStrictEqual(GATE_STAGE_LABELS.EVIDENCE_UNAVAILABLE, 'PASSED');
     });
   });
