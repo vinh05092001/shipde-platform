@@ -13,7 +13,7 @@
 | Risk | `LOW` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-37.md`, `tools/ai-brain/acceptance/ac-37-*.js`, `tools/ai-brain/acceptance/lib/lifecycle-forbidden.js` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/task-ai-37-trivy-ci` (PR #103 repair rounds push here: rounds 1–2 from `fix/pr103-143135`, round 3 from `fix/pr103-211719`) |
+| Branch | `feat/task-ai-37-trivy-ci` (PR #103 repair rounds push here: rounds 1–2 from `fix/pr103-143135`, rounds 3 and 4 from `fix/pr103-211719`; round 4 ran in worktree `.worktrees/f103-run`) |
 | Pull Request | https://github.com/vinh05092001/shipde-platform/pull/103 (prior spec PR https://github.com/vinh05092001/shipde-platform/pull/24; audit repair PR https://github.com/vinh05092001/shipde-platform/pull/56) |
 | Deliverable of this Work Item | Specification document and the acceptance probes that guard its own claims; no CI gate is delivered here |
 | Successor implementation Work Item | `TASK-AI-45` (not yet registered; see § Scope conflicts and successor authorization) |
@@ -96,7 +96,10 @@ which is precisely why this hold is written here and probed by `AC-AI-37-21`.
 > Review routing disposition that probe enforces. No previously delivered script
 > is re-delivered, the Work Item remains `BLOCKED_DEPENDENCY` in both the Control
 > table and register row 170, and no register, workflow, CI gate or out-of-scope
-> file is touched.
+> file is touched. Round 4 removes the two trailing blank lines that round 3's
+> own append left at the end of this document — the only reason the required
+> `Current application checks` job failed at head `096a4d3` — and changes no
+> content line.
 
 The Ship Dễ continuous delivery pipeline requires automated supply-chain,
 dependency vulnerability, container security, and Software Bill of Materials (SBOM)
@@ -934,6 +937,50 @@ Round 3 touches nothing outside `Allowed paths`: `FEATURE-DELIVERY-REGISTER.csv`
 `.github/**`, `tools/ecosystem-manifest.json` and every script delivered by PR #46
 and PR #56 are unchanged, and no CI gate is claimed.
 
+#### Round 4 — the required check round 3 turned red (worktree `.worktrees/f103-run`, local branch `fix/pr103-211719` → PR branch `feat/task-ai-37-trivy-ci`)
+
+Round 3 left the pull request red. At head `096a4d3` the required workflow run
+`Current application checks` (`35375299458`) failed in job `current-application`
+(`105698498908`), step `Verify Git Diff Whitespace & Conflict Markers`, which
+runs `git diff --check origin/main...HEAD`:
+
+```
+docs/product-spec/work-items/TASK-AI-37.md:956: new blank line at EOF.
+```
+
+Exit `2`. Job `application-gate` (`105698888404`) then reported
+`Required application checks did not pass: failure` and exited `1`, so the pull
+request was not mergeable even though every acceptance probe it carries passed.
+The offending lines were round 3's own append: it left two empty lines after the
+last content line of this document. Nothing else in the diff was flagged.
+
+That step aborts its job, so the same failure also masked every later step of it
+(Gitleaks install, `pnpm typecheck`, `pnpm test`, `pnpm test:integration`,
+`pnpm test:e2e`, `pnpm test:baseline`, the preservation negative proof,
+`pnpm build`, `pnpm security:secrets` and the build-output check). This round
+changes one markdown file under `docs/` and no code path those steps cover, so
+they are not re-run here and no claim is made about them.
+
+**Fix:** the two trailing empty lines were removed, so the document ends with
+exactly one newline after its last content line. No content line was edited.
+
+Re-verification of the four blocking findings of comment `5724674195` at this
+head:
+
+| Finding | Disposition | Evidence measured in round 4 |
+|---|---|---|
+| 1. Empty PR (`d50962f`, zero file changes) | Closed — the PR carries real edits and, since round 3, a new deliverable. | `git diff --name-only origin/main...HEAD` lists `docs/product-spec/work-items/TASK-AI-37.md` and `tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` — both inside `Allowed paths` — and nothing else. |
+| 2. Branch stale (`cd3cfd8`, behind `origin/main`) | Closed — `origin/main` is an ancestor of the head. | `git fetch origin`, then `git merge-base --is-ancestor origin/main HEAD` exit `0`; `git log --oneline origin/main -1` → `8cec992`. |
+| 3. Specification conflict (`BLOCKED_DEPENDENCY` routed for review) | Held, not overridden, and not disclosure-only: § Control › Review routing disposition states the hold, names the `TASK-AI-19` register-write path and names the `ADVANCE` / `CLOSE` remedies, and `AC-AI-37-21` fails if any of those statements is removed. The finding cannot be closed inside `Allowed paths`: `FEATURE-DELIVERY-REGISTER.csv` is not in `Allowed paths`, so no edit here can write `READY_FOR_AUTHOR` or `IN_PROGRESS`, and review action 3 belongs to the governed register-write path and the human merge owner. | `node tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` exit `0`; `node tools/ai-brain/acceptance/ac-37-15-status-alignment.js` exit `0` (`Control status matches register row 170: BLOCKED_DEPENDENCY`). |
+| 4. Acceptance scripts already on `main` (PR #46) | Confirmed — none re-delivered. The probe added by round 3 does not exist on `origin/main`, and no file delivered by `e508bfc` (PR #46) or `31e16b2` (PR #56) is modified. | `git cat-file -e origin/main:tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` non-zero; `git diff --name-only origin/main...HEAD`. |
+
+The required check this round repairs is re-measured with the command the
+workflow runs:
+
+| Command | Result |
+|---|---|
+| `git diff --check origin/main...HEAD` | exit `0`, no output — was exit `2` with `docs/product-spec/work-items/TASK-AI-37.md:956: new blank line at EOF.` at `096a4d3` |
+
 ### Verification commands record
 
 - `node tools/ai-brain/acceptance/ac-37-06-lifecycle-clean.js` (exit 0)
@@ -954,4 +1001,16 @@ Round 3 (repair worktree `fix/pr103-211719`, pushed to the PR branch
 - `python docs/product-spec/scripts/validate_pr_contract.py --event <pull_request payload>` (exit 0: Pull Request contract passed for TASK-AI-37; 2 changed files inspected)
 - `git merge-base --is-ancestor origin/main HEAD` (exit 0; `origin/main` at `8cec992`)
 
+Round 4 (repair worktree `.worktrees/f103-run`, local branch `fix/pr103-211719`,
+pushed to the PR branch `feat/task-ai-37-trivy-ci`) repaired the required check
+that failed at `096a4d3` and re-measured it with the command the workflow runs:
 
+- `git diff --check origin/main...HEAD` (exit 0, no output — was exit 2 with `docs/product-spec/work-items/TASK-AI-37.md:956: new blank line at EOF.`)
+- `node tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` (exit 0: `REVIEW_ROUTING_HOLD: BLOCKED_DEPENDENCY disclosed with a governed transition path`)
+- `node tools/ai-brain/acceptance/ac-37-15-status-alignment.js` (exit 0: `Control status matches register row 170: BLOCKED_DEPENDENCY`)
+- `node --test 'tools/ai-brain/test/*.test.js'` (exit 0: 483 tests, 109 suites, 483 pass, 0 fail)
+- `python docs/product-spec/scripts/validate_docs.py` (exit 0: `Documentation validation passed: 105 markdown files, 130 feature IDs, 178 delivery rows, 854 unique identifiers.`)
+- `git cat-file -e origin/main:tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` (non-zero: the probe is absent from `origin/main`, so nothing delivered by PR #46 or PR #56 is re-delivered)
+- `npx eslint tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` (exit 0, no output)
+- `pnpm format:check` with `BASE_SHA=8cec992` (exit 0: the single changed file Prettier supports is formatted; `.prettierignore` respected)
+- local pre-commit gates on the round-4 commit (`node tools/ai-guard/cli.js check`, `node tools/ai-guard/cli.js staged-secrets`, declared in the version-controlled `lefthook.yml`): exit 0, `SECRET_SURFACE_CLEAN` over 354 scanned files
