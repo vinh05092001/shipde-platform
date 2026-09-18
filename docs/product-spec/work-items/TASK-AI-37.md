@@ -910,10 +910,13 @@ The mutants were applied to this document in place and it was restored
 byte-for-byte from an in-memory copy held by the measuring harness: the harness
 printed `spec restored byte-for-byte: True`, `git status` reported the document
 clean afterwards, and no `git checkout --` was used on uncommitted work. The
-digest of this document as committed at `17e1af4` is `sha256 89bde9a59de3…`,
-reproducible with `git show 17e1af4:docs/product-spec/work-items/TASK-AI-37.md`
-piped to `sha256sum`; the digest is quoted for that commit rather than for the
-current head because this record's own follow-up edit changes it again.
+digest the harness compared was the working-tree file of this Windows checkout,
+which uses CRLF (`sha256 89bde9a59de3…`); the same content as committed at
+`17e1af4` is `sha256 0b0f217b3bde…` with LF, reproducible with
+`git show 17e1af4:docs/product-spec/work-items/TASK-AI-37.md` piped to
+`sha256sum`. Both digests belong to commit `17e1af4` rather than to the current
+head because this record's own follow-up edits change them again; the digest a
+reviewer can reproduce is the committed blob.
 
 Re-measuring the mutants after this section was written is what produced the
 hardening recorded next. The first measurement of the renamed-heading mutant
