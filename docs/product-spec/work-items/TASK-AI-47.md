@@ -154,15 +154,18 @@ After the fix the panel matched every independently counted figure: 114 attempts
 (23 exhausted + 21 skipped), 244,102 tokens and the per-lane breakdown, against the dispatcher logs, the run
 transcripts and xKiro's own `/v1/usage` response. See `.worktrees/logs/data-verify.md` for the full table.
 
-### Remaining gate and bookkeeping state
+### Formatting gate and bookkeeping state
 
-- CI step `current-application` still fails `pnpm format:check`, now on eight files this PR's earlier commits
-  left unformatted: `architecture.js`, `client.js`, `index.html`, `progress-view.js`, `roster-view.js`,
-  `summary-view.js`, `test/dashboard.test.js`, `test/rotation-parse.test.js`. Formatting them adds roughly
-  1.200 lines of mechanical churn to a review whose subject is data correctness, so the operator decides
-  whether that churn belongs in this Pull Request. The three files this correction edits are already
-  prettier-clean.
-- The register row and the Control block above still read `BACKLOG` with branch
+- The `current-application` job scans every file the Pull Request changes with `pnpm format:check`. Earlier
+  commits in this Pull Request left eight of them unformatted: `architecture.js`, `client.js`, `index.html`,
+  `progress-view.js`, `roster-view.js`, `summary-view.js`, `test/dashboard.test.js`,
+  `test/rotation-parse.test.js`. The operator accepted the format-only churn (1.223 added / 425 deleted
+  lines) so the gate can go green inside this Pull Request instead of a separate one; the commit carries no
+  behavior change and `node --test tools/ai-dashboard/test` stayed at 136 pass / 0 fail.
+- Those eight paths sit outside the Allowed paths list above, which the earlier UI commits of this Pull
+  Request had already widened beyond. The reviewer should either extend that list to the files this Pull
+  Request really touches or split the presentation work out.
+- The register row and the Control block still read `BACKLOG` with branch
   `feat/task-ai-47-rotation-view`, while the code lives on `feat/task-ai-47-rotation-view-094708` under
   Pull Request #105. Advancing that status is the controller/human step, so it is recorded here rather than
   changed by the author.

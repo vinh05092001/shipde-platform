@@ -1244,7 +1244,12 @@ function renderCapacity() {
           '<p class="text-[11px] text-base-content/70 mb-3">Việc Claude Code làm trực tiếp không đi qua 9router, nên báo riêng — cộng vào sẽ ngụ ý một ngân sách chung không tồn tại.</p>' +
           '<div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">' +
           tile('Lượt trả lời', String(c.messages), 'text-base-content/70', 'đọc từ transcript') +
-          tile('Token', (c.tokens / 1e6).toFixed(1) + 'M', 'text-base-content/70', 'gồm cả đọc cache') +
+          tile(
+            'Token',
+            (c.tokens / 1e6).toFixed(1) + 'M',
+            'text-base-content/70',
+            'gồm cả đọc cache'
+          ) +
           tile(
             'Tỉ lệ cache',
             (c.cacheHitRate * 100).toFixed(1) + '%',

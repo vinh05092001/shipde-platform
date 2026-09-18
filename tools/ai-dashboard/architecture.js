@@ -34,27 +34,89 @@
     var badgeW = badge ? Math.max(50, badge.length * 6.5 + 14) : 0;
     return (
       '<g>' +
-      '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="8" fill="' + C.panel + '" stroke="' + color + '" stroke-width="1.6"/>' +
-      '<rect x="' + x + '" y="' + y + '" width="4" height="' + h + '" rx="2" fill="' + color + '"/>' +
-      '<text x="' + (x + 12) + '" y="' + (y + (hasTech ? 20 : Math.round(h / 2) + 5)) + '" font-size="12.5" font-weight="bold" fill="' + C.ink + '">' + esc(label) + '</text>' +
-      (hasTech ? '<text x="' + (x + 12) + '" y="' + (y + 36) + '" font-size="10.5" fill="' + C.muted + '">[' + esc(tech) + ']</text>' : '') +
-      (badge ? (
-        '<rect x="' + (x + w - badgeW - 8) + '" y="' + (y + 6) + '" width="' + badgeW + '" height="18" rx="4" fill="' + color + '" fill-opacity="0.12"/>' +
-        '<text x="' + (x + w - 8 - badgeW / 2) + '" y="' + (y + 19) + '" font-size="10" font-weight="bold" text-anchor="middle" fill="' + color + '">' + esc(badge) + '</text>'
-      ) : '') +
+      '<rect x="' +
+      x +
+      '" y="' +
+      y +
+      '" width="' +
+      w +
+      '" height="' +
+      h +
+      '" rx="8" fill="' +
+      C.panel +
+      '" stroke="' +
+      color +
+      '" stroke-width="1.6"/>' +
+      '<rect x="' +
+      x +
+      '" y="' +
+      y +
+      '" width="4" height="' +
+      h +
+      '" rx="2" fill="' +
+      color +
+      '"/>' +
+      '<text x="' +
+      (x + 12) +
+      '" y="' +
+      (y + (hasTech ? 20 : Math.round(h / 2) + 5)) +
+      '" font-size="12.5" font-weight="bold" fill="' +
+      C.ink +
+      '">' +
+      esc(label) +
+      '</text>' +
+      (hasTech
+        ? '<text x="' +
+          (x + 12) +
+          '" y="' +
+          (y + 36) +
+          '" font-size="10.5" fill="' +
+          C.muted +
+          '">[' +
+          esc(tech) +
+          ']</text>'
+        : '') +
+      (badge
+        ? '<rect x="' +
+          (x + w - badgeW - 8) +
+          '" y="' +
+          (y + 6) +
+          '" width="' +
+          badgeW +
+          '" height="18" rx="4" fill="' +
+          color +
+          '" fill-opacity="0.12"/>' +
+          '<text x="' +
+          (x + w - 8 - badgeW / 2) +
+          '" y="' +
+          (y + 19) +
+          '" font-size="10" font-weight="bold" text-anchor="middle" fill="' +
+          color +
+          '">' +
+          esc(badge) +
+          '</text>'
+        : '') +
       '</g>'
     );
   }
 
   function arrow(x1, y1, x2, y2, label, color, dashed, pathD, labelX, labelY) {
-    var markerId = color === C.dispatch ? 'arch-arr-dispatch'
-      : color === C.machine ? 'arch-arr-machine'
-      : color === C.docker ? 'arch-arr-docker'
-      : color === C.cloud ? 'arch-arr-cloud'
-      : color === C.result ? 'arch-arr-result'
-      : color === C.operator ? 'arch-arr-operator'
-      : color === C.alert ? 'arch-arr-alert'
-      : 'arch-arr-default';
+    var markerId =
+      color === C.dispatch
+        ? 'arch-arr-dispatch'
+        : color === C.machine
+          ? 'arch-arr-machine'
+          : color === C.docker
+            ? 'arch-arr-docker'
+            : color === C.cloud
+              ? 'arch-arr-cloud'
+              : color === C.result
+                ? 'arch-arr-result'
+                : color === C.operator
+                  ? 'arch-arr-operator'
+                  : color === C.alert
+                    ? 'arch-arr-alert'
+                    : 'arch-arr-default';
 
     var d = pathD;
     if (!d) {
@@ -71,19 +133,40 @@
     var pill = '';
     if (label) {
       var tw = label.length * 6.2 + 14;
-      pill = (
+      pill =
         '<g>' +
-        '<rect x="' + (lx - tw / 2) + '" y="' + (ly - 9) + '" width="' + tw + '" height="18" rx="4" fill="#fffdfa" stroke="' + C.line + '" stroke-width="1"/>' +
-        '<text x="' + lx + '" y="' + (ly + 4) + '" font-size="9.5" font-weight="600" text-anchor="middle" fill="' + (color || C.ink) + '">' + esc(label) + '</text>' +
-        '</g>'
-      );
+        '<rect x="' +
+        (lx - tw / 2) +
+        '" y="' +
+        (ly - 9) +
+        '" width="' +
+        tw +
+        '" height="18" rx="4" fill="#fffdfa" stroke="' +
+        C.line +
+        '" stroke-width="1"/>' +
+        '<text x="' +
+        lx +
+        '" y="' +
+        (ly + 4) +
+        '" font-size="9.5" font-weight="600" text-anchor="middle" fill="' +
+        (color || C.ink) +
+        '">' +
+        esc(label) +
+        '</text>' +
+        '</g>';
     }
 
     return (
       '<g>' +
-      '<path d="' + d + '" fill="none" stroke="' + (color || C.line) + '" stroke-width="1.6" ' +
+      '<path d="' +
+      d +
+      '" fill="none" stroke="' +
+      (color || C.line) +
+      '" stroke-width="1.6" ' +
       (dashed ? 'stroke-dasharray="5 4" ' : '') +
-      'marker-end="url(#' + markerId + ')"/>' +
+      'marker-end="url(#' +
+      markerId +
+      ')"/>' +
       pill +
       '</g>'
     );
@@ -93,21 +176,37 @@
     return (
       '<defs>' +
       '<marker id="arch-arr-default" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">' +
-      '<path d="M0,1 L7,4 L0,7 z" fill="' + C.line + '"/></marker>' +
+      '<path d="M0,1 L7,4 L0,7 z" fill="' +
+      C.line +
+      '"/></marker>' +
       '<marker id="arch-arr-machine" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">' +
-      '<path d="M0,1 L7,4 L0,7 z" fill="' + C.machine + '"/></marker>' +
+      '<path d="M0,1 L7,4 L0,7 z" fill="' +
+      C.machine +
+      '"/></marker>' +
       '<marker id="arch-arr-docker" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">' +
-      '<path d="M0,1 L7,4 L0,7 z" fill="' + C.docker + '"/></marker>' +
+      '<path d="M0,1 L7,4 L0,7 z" fill="' +
+      C.docker +
+      '"/></marker>' +
       '<marker id="arch-arr-cloud" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">' +
-      '<path d="M0,1 L7,4 L0,7 z" fill="' + C.cloud + '"/></marker>' +
+      '<path d="M0,1 L7,4 L0,7 z" fill="' +
+      C.cloud +
+      '"/></marker>' +
       '<marker id="arch-arr-dispatch" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">' +
-      '<path d="M0,1 L7,4 L0,7 z" fill="' + C.dispatch + '"/></marker>' +
+      '<path d="M0,1 L7,4 L0,7 z" fill="' +
+      C.dispatch +
+      '"/></marker>' +
       '<marker id="arch-arr-result" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">' +
-      '<path d="M0,1 L7,4 L0,7 z" fill="' + C.result + '"/></marker>' +
+      '<path d="M0,1 L7,4 L0,7 z" fill="' +
+      C.result +
+      '"/></marker>' +
       '<marker id="arch-arr-operator" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">' +
-      '<path d="M0,1 L7,4 L0,7 z" fill="' + C.operator + '"/></marker>' +
+      '<path d="M0,1 L7,4 L0,7 z" fill="' +
+      C.operator +
+      '"/></marker>' +
       '<marker id="arch-arr-alert" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">' +
-      '<path d="M0,1 L7,4 L0,7 z" fill="' + C.alert + '"/></marker>' +
+      '<path d="M0,1 L7,4 L0,7 z" fill="' +
+      C.alert +
+      '"/></marker>' +
       '</defs>'
     );
   }
@@ -118,45 +217,70 @@
      3 Ranh giới: Máy của bạn, Docker, Dịch vụ ngoài
      ========================================================================= */
   function renderDiagram1(m) {
-    var W = 1240, H = 560;
-    var p = [
-      defs(),
-      '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="none"/>',
-    ];
+    var W = 1240,
+      H = 560;
+    var p = [defs(), '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="none"/>'];
 
     // --- Ranh giới 1: "Máy của bạn" (x: 16..735, y: 16..545) ---
     p.push(
-      '<rect x="16" y="16" width="720" height="528" rx="14" fill="#faf8f5" stroke="' + C.machine + '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
-      '<rect x="30" y="8" width="165" height="20" rx="4" fill="' + C.machine + '"/>' +
-      '<text x="112" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Máy của bạn</text>'
+      '<rect x="16" y="16" width="720" height="528" rx="14" fill="#faf8f5" stroke="' +
+        C.machine +
+        '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
+        '<rect x="30" y="8" width="165" height="20" rx="4" fill="' +
+        C.machine +
+        '"/>' +
+        '<text x="112" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Máy của bạn</text>'
     );
 
     // --- Ranh giới 2: "Docker" (x: 755..975, y: 16..245) ---
     p.push(
-      '<rect x="755" y="16" width="220" height="230" rx="14" fill="#f0f9ff" stroke="' + C.docker + '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
-      '<rect x="770" y="8" width="135" height="20" rx="4" fill="' + C.docker + '"/>' +
-      '<text x="837" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Docker</text>'
+      '<rect x="755" y="16" width="220" height="230" rx="14" fill="#f0f9ff" stroke="' +
+        C.docker +
+        '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
+        '<rect x="770" y="8" width="135" height="20" rx="4" fill="' +
+        C.docker +
+        '"/>' +
+        '<text x="837" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Docker</text>'
     );
 
     // --- Ranh giới 3: "Dịch vụ ngoài" (x: 995..1225, y: 16..545) ---
     p.push(
-      '<rect x="995" y="16" width="230" height="528" rx="14" fill="#faf5ff" stroke="' + C.cloud + '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
-      '<rect x="1010" y="8" width="160" height="20" rx="4" fill="' + C.cloud + '"/>' +
-      '<text x="1090" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Dịch vụ ngoài</text>'
+      '<rect x="995" y="16" width="230" height="528" rx="14" fill="#faf5ff" stroke="' +
+        C.cloud +
+        '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
+        '<rect x="1010" y="8" width="160" height="20" rx="4" fill="' +
+        C.cloud +
+        '"/>' +
+        '<text x="1090" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Dịch vụ ngoài</text>'
     );
 
     // Nodes trong Ranh giới "Máy của bạn"
     p.push(node(36, 44, 180, 50, 'Người vận hành', 'người', C.operator));
     p.push(node(270, 44, 190, 50, 'Claude Code', 'CLI điều phối', C.dispatch));
-    p.push(node(510, 44, 210, 50, 'dispatch.sh', 'bash, chọn thợ và đổi model', C.dispatch, m.dispatchBadge));
+    p.push(
+      node(
+        510,
+        44,
+        210,
+        50,
+        'dispatch.sh',
+        'bash, chọn thợ và đổi model',
+        C.dispatch,
+        m.dispatchBadge
+      )
+    );
     p.push(node(510, 140, 210, 50, 'ai-brain', 'Node, quota · fitness · cooldown', C.dispatch));
 
     p.push(node(36, 215, 180, 50, 'AO daemon', ':4317, tạo phiên', C.worker));
 
     // Khung nhóm CLI thợ
     p.push(
-      '<rect x="252" y="132" width="225" height="198" rx="10" fill="#f0f9ff" stroke="' + C.worker + '" stroke-width="1.2" stroke-dasharray="4 3"/>' +
-      '<text x="264" y="150" font-size="11" font-weight="bold" fill="' + C.worker + '">CLI thợ</text>'
+      '<rect x="252" y="132" width="225" height="198" rx="10" fill="#f0f9ff" stroke="' +
+        C.worker +
+        '" stroke-width="1.2" stroke-dasharray="4 3"/>' +
+        '<text x="264" y="150" font-size="11" font-weight="bold" fill="' +
+        C.worker +
+        '">CLI thợ</text>'
     );
     p.push(node(262, 160, 205, 46, 'xKiro', 'cline + endpoint xKiro', C.worker));
     p.push(node(262, 216, 205, 46, 'agy', 'CLI', C.worker));
@@ -166,7 +290,18 @@
 
     // Nhóm phía dưới: Dashboard, Sổ việc, runner.sh
     p.push(node(36, 452, 190, 52, 'Dashboard', 'Node HTTP :3333, chỉ đọc', C.docker));
-    p.push(node(270, 452, 190, 52, 'Sổ việc & log', 'REGISTER.csv, log cục bộ', C.operator, m.registerBadge));
+    p.push(
+      node(
+        270,
+        452,
+        190,
+        52,
+        'Sổ việc & log',
+        'REGISTER.csv, log cục bộ',
+        C.operator,
+        m.registerBadge
+      )
+    );
     p.push(node(510, 452, 210, 52, 'runner.sh', 'bash, luật merge', C.result));
 
     // Nodes trong Ranh giới "Docker"
@@ -174,8 +309,20 @@
     p.push(node(770, 138, 190, 52, 'Claude (tài khoản 2)', 'container dự phòng', C.docker));
 
     // Nodes trong Ranh giới "Dịch vụ ngoài"
-    p.push(node(1010, 50, 200, 68, 'GitHub', 'PR, CI, API REST', C.cloud, m.reviewBadge || m.mergedBadge));
-    p.push(node(1010, 240, 200, 80, 'Nhà cung cấp model', 'xKiro · Anthropic · Google · MiniMax', C.cloud));
+    p.push(
+      node(1010, 50, 200, 68, 'GitHub', 'PR, CI, API REST', C.cloud, m.reviewBadge || m.mergedBadge)
+    );
+    p.push(
+      node(
+        1010,
+        240,
+        200,
+        80,
+        'Nhà cung cấp model',
+        'xKiro · Anthropic · Google · MiniMax',
+        C.cloud
+      )
+    );
 
     // --- Mũi tên và hành động ---
     // 1. Người vận hành → Claude Code
@@ -188,7 +335,20 @@
     p.push(arrow(615, 94, 615, 140, 'hỏi hạn mức', C.dispatch, false, null, 615, 117));
 
     // 4. dispatch.sh → CLI thợ
-    p.push(arrow(510, 75, 467, 180, 'chạy lệnh', C.dispatch, false, 'M510,75 C480,75 480,180 467,180', 484, 118));
+    p.push(
+      arrow(
+        510,
+        75,
+        467,
+        180,
+        'chạy lệnh',
+        C.dispatch,
+        false,
+        'M510,75 C480,75 480,180 467,180',
+        484,
+        118
+      )
+    );
 
     // 5. dispatch.sh → agy (Docker)
     p.push(arrow(720, 69, 770, 69, 'chạy lệnh', C.docker));
@@ -203,20 +363,61 @@
     p.push(arrow(720, 265, 1010, 265, 'định tuyến', C.worker));
 
     // 9. CLI thợ → Nhà cung cấp model (gọi API)
-    p.push(arrow(467, 295, 1010, 305, 'gọi API', C.cloud, false, 'M467,295 C560,350 820,350 1010,305', 730, 348));
+    p.push(
+      arrow(
+        467,
+        295,
+        1010,
+        305,
+        'gọi API',
+        C.cloud,
+        false,
+        'M467,295 C560,350 820,350 1010,305',
+        730,
+        348
+      )
+    );
 
     // 10. CLI thợ → GitHub (commit, push, mở PR)
-    p.push(arrow(467, 165, 1010, 75, 'commit, push, mở PR (gh REST)', C.cloud, false, 'M467,165 C580,110 820,40 1010,75', 720, 62));
+    p.push(
+      arrow(
+        467,
+        165,
+        1010,
+        75,
+        'commit, push, mở PR (gh REST)',
+        C.cloud,
+        false,
+        'M467,165 C580,110 820,40 1010,75',
+        720,
+        62
+      )
+    );
 
     // 11. runner.sh → GitHub (quét PR, merge khi đủ điều kiện)
-    p.push(arrow(720, 478, 1010, 105, 'quét PR, merge khi đủ điều kiện', C.result, false, 'M720,478 C880,478 950,260 1010,105', 860, 395));
+    p.push(
+      arrow(
+        720,
+        478,
+        1010,
+        105,
+        'quét PR, merge khi đủ điều kiện',
+        C.result,
+        false,
+        'M720,478 C880,478 950,260 1010,105',
+        860,
+        395
+      )
+    );
 
     // 12. Dashboard → đọc register, log, quota (nét đứt mảnh)
     p.push(arrow(226, 478, 270, 478, 'đọc register, log, quota', C.muted, true));
     p.push(arrow(131, 452, 510, 85, '', C.muted, true, 'M131,452 C131,390 490,390 510,85'));
     p.push(arrow(131, 504, 1010, 115, '', C.muted, true, 'M131,504 C131,540 920,540 1010,115'));
 
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="w-full h-auto block">' + p.join('') + '</svg>';
+    return (
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" class="w-full h-auto block">' + p.join('') + '</svg>'
+    );
   }
 
   /* =========================================================================
@@ -225,15 +426,25 @@
      5 làn: Người vận hành · Điều phối · Thợ · Kiểm chứng · Kết quả
      ========================================================================= */
   function renderDiagram2(m) {
-    var W = 1240, H = 420;
-    var p = [
-      defs(),
-      '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="none"/>',
-    ];
+    var W = 1240,
+      H = 420;
+    var p = [defs(), '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="none"/>'];
 
     var lanes = [
-      { name: 'Người vận hành', sub: 'giao việc & nhận kết quả', color: C.operator, bg: '#faf8ff', y: 20 },
-      { name: 'Điều phối', sub: 'Claude Code & dispatch.sh', color: C.dispatch, bg: '#fffaf5', y: 92 },
+      {
+        name: 'Người vận hành',
+        sub: 'giao việc & nhận kết quả',
+        color: C.operator,
+        bg: '#faf8ff',
+        y: 20,
+      },
+      {
+        name: 'Điều phối',
+        sub: 'Claude Code & dispatch.sh',
+        color: C.dispatch,
+        bg: '#fffaf5',
+        y: 92,
+      },
       { name: 'Thợ', sub: 'xKiro · agy · Cline', color: C.worker, bg: '#f8fcff', y: 164 },
       { name: 'Kiểm chứng', sub: 'CI & review chéo', color: C.gate, bg: '#fffdf2', y: 236 },
       { name: 'Kết quả', sub: 'runner.sh merge & main', color: C.result, bg: '#f6fef9', y: 308 },
@@ -249,14 +460,62 @@
     lanes.forEach(function (l) {
       // Vùng nội dung làn
       p.push(
-        '<rect x="' + contentLeft + '" y="' + l.y + '" width="' + contentW + '" height="' + laneH + '" rx="8" fill="' + l.bg + '" stroke="' + C.line + '" stroke-width="1"/>'
+        '<rect x="' +
+          contentLeft +
+          '" y="' +
+          l.y +
+          '" width="' +
+          contentW +
+          '" height="' +
+          laneH +
+          '" rx="8" fill="' +
+          l.bg +
+          '" stroke="' +
+          C.line +
+          '" stroke-width="1"/>'
       );
       // Tiêu đề nhãn làn bên trái
       p.push(
-        '<rect x="' + laneLeft + '" y="' + l.y + '" width="' + leftW + '" height="' + laneH + '" rx="8" fill="' + C.panel + '" stroke="' + l.color + '" stroke-width="1.6"/>' +
-        '<rect x="' + laneLeft + '" y="' + l.y + '" width="4" height="' + laneH + '" rx="2" fill="' + l.color + '"/>' +
-        '<text x="' + (laneLeft + 14) + '" y="' + (l.y + 28) + '" font-size="13" font-weight="bold" fill="' + l.color + '">' + esc(l.name) + '</text>' +
-        '<text x="' + (laneLeft + 14) + '" y="' + (l.y + 48) + '" font-size="10" fill="' + C.muted + '">' + esc(l.sub) + '</text>'
+        '<rect x="' +
+          laneLeft +
+          '" y="' +
+          l.y +
+          '" width="' +
+          leftW +
+          '" height="' +
+          laneH +
+          '" rx="8" fill="' +
+          C.panel +
+          '" stroke="' +
+          l.color +
+          '" stroke-width="1.6"/>' +
+          '<rect x="' +
+          laneLeft +
+          '" y="' +
+          l.y +
+          '" width="4" height="' +
+          laneH +
+          '" rx="2" fill="' +
+          l.color +
+          '"/>' +
+          '<text x="' +
+          (laneLeft + 14) +
+          '" y="' +
+          (l.y + 28) +
+          '" font-size="13" font-weight="bold" fill="' +
+          l.color +
+          '">' +
+          esc(l.name) +
+          '</text>' +
+          '<text x="' +
+          (laneLeft + 14) +
+          '" y="' +
+          (l.y + 48) +
+          '" font-size="10" fill="' +
+          C.muted +
+          '">' +
+          esc(l.sub) +
+          '</text>'
       );
     });
 
@@ -282,25 +541,90 @@
 
     // --- Mũi tên nối các bước nối từ trái sang phải ---
     // 1. chọn việc → giao dispatch.sh
-    p.push(arrow(296, 54, 316, 126, 'giao việc', C.operator, false, 'M296,54 C308,54 304,126 316,126', 305, 90));
+    p.push(
+      arrow(
+        296,
+        54,
+        316,
+        126,
+        'giao việc',
+        C.operator,
+        false,
+        'M296,54 C308,54 304,126 316,126',
+        305,
+        90
+      )
+    );
 
     // 2. giao dispatch.sh → chạy trong worktree riêng
-    p.push(arrow(446, 126, 466, 198, 'tạo việc', C.dispatch, false, 'M446,126 C458,126 454,198 466,198', 455, 162));
+    p.push(
+      arrow(
+        446,
+        126,
+        466,
+        198,
+        'tạo việc',
+        C.dispatch,
+        false,
+        'M446,126 C458,126 454,198 466,198',
+        455,
+        162
+      )
+    );
 
     // 3. chạy trong worktree riêng → commit + mở PR
     p.push(arrow(620, 198, 640, 198, 'xong mã', C.worker));
 
     // 4. commit + mở PR → CI
-    p.push(arrow(760, 198, 780, 270, 'kích hoạt', C.worker, false, 'M760,198 C772,198 768,270 780,270', 769, 234));
+    p.push(
+      arrow(
+        760,
+        198,
+        780,
+        270,
+        'kích hoạt',
+        C.worker,
+        false,
+        'M760,198 C772,198 768,270 780,270',
+        769,
+        234
+      )
+    );
 
     // 5. CI → review chéo
     p.push(arrow(844, 270, 864, 270, 'đạt CI', C.gate));
 
     // 6. Quay lui nếu CHANGES_REQUIRED về làn Thợ (sửa theo review)
-    p.push(arrow(922, 248, 543, 220, 'nếu CHANGES_REQUIRED: sửa theo review', C.alert, false, 'M922,248 C922,230 543,230 543,220', 732, 228));
+    p.push(
+      arrow(
+        922,
+        248,
+        543,
+        220,
+        'nếu CHANGES_REQUIRED: sửa theo review',
+        C.alert,
+        false,
+        'M922,248 C922,230 543,230 543,220',
+        732,
+        228
+      )
+    );
 
     // 7. review chéo → runner.sh merge
-    p.push(arrow(980, 270, 1008, 320, 'duyệt', C.gate, false, 'M980,270 C995,270 1008,295 1008,320', 994, 295));
+    p.push(
+      arrow(
+        980,
+        270,
+        1008,
+        320,
+        'duyệt',
+        C.gate,
+        false,
+        'M980,270 C995,270 1008,295 1008,320',
+        994,
+        295
+      )
+    );
 
     // 8. runner.sh merge → main
     p.push(arrow(1070, 342, 1090, 342, 'gộp', C.result));
@@ -309,13 +633,24 @@
     p.push(arrow(1146, 342, 1164, 342, 'ghi nhận', C.result));
 
     // 10. cập nhật register → quay về làn Người vận hành (mũi tên đứt, mở khoá việc kế tiếp)
-    p.push(arrow(
-      1191, 364, 246, 76, 'mở khoá việc kế tiếp', C.operator, true,
-      'M1191,364 C1191,400 1150,400 1050,400 L 320,400 C 246,400 246,380 246,76',
-      680, 400
-    ));
+    p.push(
+      arrow(
+        1191,
+        364,
+        246,
+        76,
+        'mở khoá việc kế tiếp',
+        C.operator,
+        true,
+        'M1191,364 C1191,400 1150,400 1050,400 L 320,400 C 246,400 246,380 246,76',
+        680,
+        400
+      )
+    );
 
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="w-full h-auto block">' + p.join('') + '</svg>';
+    return (
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" class="w-full h-auto block">' + p.join('') + '</svg>'
+    );
   }
 
   function render(m) {
@@ -332,22 +667,41 @@
     var badgesHtml = '';
     var badgeItems = [];
     if (m.totalWorkItems != null) {
-      badgeItems.push('<span class="badge badge-sm badge-neutral">Tổng việc: <b>' + esc(m.totalWorkItems) + '</b></span>');
+      badgeItems.push(
+        '<span class="badge badge-sm badge-neutral">Tổng việc: <b>' +
+          esc(m.totalWorkItems) +
+          '</b></span>'
+      );
     }
     if (m.dispatchCount != null) {
-      badgeItems.push('<span class="badge badge-sm badge-neutral">Lượt dispatch: <b>' + esc(m.dispatchCount) + '</b></span>');
+      badgeItems.push(
+        '<span class="badge badge-sm badge-neutral">Lượt dispatch: <b>' +
+          esc(m.dispatchCount) +
+          '</b></span>'
+      );
     }
     if (m.reviewCount != null) {
-      badgeItems.push('<span class="badge badge-sm badge-warning">Chờ review: <b>' + esc(m.reviewCount) + '</b></span>');
+      badgeItems.push(
+        '<span class="badge badge-sm badge-warning">Chờ review: <b>' +
+          esc(m.reviewCount) +
+          '</b></span>'
+      );
     }
     if (m.mergedCount != null) {
-      badgeItems.push('<span class="badge badge-sm badge-success text-white">Đã gộp: <b>' + esc(m.mergedCount) + '</b></span>');
+      badgeItems.push(
+        '<span class="badge badge-sm badge-success text-white">Đã gộp: <b>' +
+          esc(m.mergedCount) +
+          '</b></span>'
+      );
     }
     if (badgeItems.length > 0) {
-      badgesHtml = '<div class="flex flex-wrap gap-2 pt-1 pb-2 border-b border-base-300">' + badgeItems.join('') + '</div>';
+      badgesHtml =
+        '<div class="flex flex-wrap gap-2 pt-1 pb-2 border-b border-base-300">' +
+        badgeItems.join('') +
+        '</div>';
     }
 
-    var html = (
+    var html =
       '<div class="space-y-6">' +
       badgesHtml +
       // Khối Sơ đồ 1
@@ -358,9 +712,15 @@
       '      <h4 class="font-bold text-sm text-base-content">Sơ đồ container (C4 mức 2)</h4>' +
       '    </div>' +
       '    <div class="flex flex-wrap gap-3 text-[11px] opacity-80">' +
-      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' + C.machine + '"></span> Máy của bạn</span>' +
-      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' + C.docker + '"></span> Docker</span>' +
-      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' + C.cloud + '"></span> Dịch vụ ngoài</span>' +
+      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
+      C.machine +
+      '"></span> Máy của bạn</span>' +
+      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
+      C.docker +
+      '"></span> Docker</span>' +
+      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
+      C.cloud +
+      '"></span> Dịch vụ ngoài</span>' +
       '    </div>' +
       '  </div>' +
       '  <div class="overflow-x-auto rounded-xl border border-base-300 bg-base-100 p-2">' +
@@ -375,29 +735,52 @@
       '      <h4 class="font-bold text-sm text-base-content">Sơ đồ làn — Vòng đời một Work Item</h4>' +
       '    </div>' +
       '    <div class="flex flex-wrap gap-3 text-[11px] opacity-80">' +
-      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' + C.operator + '"></span> Người vận hành</span>' +
-      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' + C.dispatch + '"></span> Điều phối</span>' +
-      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' + C.worker + '"></span> Thợ</span>' +
-      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' + C.gate + '"></span> Kiểm chứng</span>' +
-      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' + C.result + '"></span> Kết quả</span>' +
+      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
+      C.operator +
+      '"></span> Người vận hành</span>' +
+      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
+      C.dispatch +
+      '"></span> Điều phối</span>' +
+      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
+      C.worker +
+      '"></span> Thợ</span>' +
+      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
+      C.gate +
+      '"></span> Kiểm chứng</span>' +
+      '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
+      C.result +
+      '"></span> Kết quả</span>' +
       '    </div>' +
       '  </div>' +
       '  <div class="overflow-x-auto rounded-xl border border-base-300 bg-base-100 p-2">' +
       renderDiagram2(m) +
       '  </div>' +
       '</div>' +
-      '</div>'
-    );
+      '</div>';
 
     host.innerHTML = html;
   }
 
   function load() {
     Promise.all([
-      fetch('/api/state').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
-      fetch('/api/rotation').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+      fetch('/api/state')
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .catch(function () {
+          return null;
+        }),
+      fetch('/api/rotation')
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .catch(function () {
+          return null;
+        }),
     ]).then(function (res) {
-      var state = res[0], rot = res[1], m = {};
+      var state = res[0],
+        rot = res[1],
+        m = {};
       if (state && state.workItems) {
         if (typeof state.workItems.total === 'number') {
           m.totalWorkItems = state.workItems.total;

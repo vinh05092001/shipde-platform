@@ -50,7 +50,10 @@ test('tokens are summed from the run log and stay UNKNOWN without one', () => {
   assert.equal(measured.outcome, 'live');
   assert.equal(measured.tokens, 150);
 
-  fs.writeFileSync(path.join(dir, 'job3.log'), '=== trying agy gemini-3.8-flash-medium 10:05:00 ===');
+  fs.writeFileSync(
+    path.join(dir, 'job3.log'),
+    '=== trying agy gemini-3.8-flash-medium 10:05:00 ==='
+  );
   const unmeasured = parseLogLines(dir).find((e) => e.runId === 'job3');
   assert.equal(unmeasured.sourceId, 'agy-local');
   assert.equal(unmeasured.tokens, 'UNKNOWN');
@@ -61,7 +64,10 @@ test('tokens are summed from the run log and stay UNKNOWN without one', () => {
 test('a run log is not mistaken for a dispatcher log', () => {
   const dir = tmpDir();
   fs.writeFileSync(path.join(dir, 'alpha.log'), '=== trying cline z-ai/glm-5.3-flash 11:00:00 ===');
-  fs.writeFileSync(path.join(dir, 'alpha-run.log'), '=== trying cline z-ai/glm-5.3-flash 11:00:00 ===');
+  fs.writeFileSync(
+    path.join(dir, 'alpha-run.log'),
+    '=== trying cline z-ai/glm-5.3-flash 11:00:00 ==='
+  );
   const entries = parseLogLines(dir);
   assert.equal(entries.length, 1);
   fs.rmSync(dir, { recursive: true, force: true });

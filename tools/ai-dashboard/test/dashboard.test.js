@@ -393,7 +393,11 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       assert.strictEqual(FRESHNESS_BADGE.live.text.includes('Trực tiếp'), true);
       assert.strictEqual(FRESHNESS_BADGE.stale.text.includes('Cũ'), true);
       assert.strictEqual(FRESHNESS_BADGE.unavailable.text.includes('Không có'), true);
-      const labels = [FRESHNESS_BADGE.live.text, FRESHNESS_BADGE.stale.text, FRESHNESS_BADGE.unavailable.text];
+      const labels = [
+        FRESHNESS_BADGE.live.text,
+        FRESHNESS_BADGE.stale.text,
+        FRESHNESS_BADGE.unavailable.text,
+      ];
       assert.strictEqual(new Set(labels).size, 3);
     });
   });
