@@ -13,6 +13,7 @@ const path = require('path');
 const os = require('os');
 
 const CODEX_TOKENS_RE = new RegExp('tokens used\s*[\r\n]+([\d,]+)', 'g');
+const STALE_AFTER_MS = 5 * 60 * 1000;
 const SPLIT_RE = new RegExp('\r?\n');
 const HOME_DIR = path.join(os.homedir(), '.shipde');
 
@@ -54,12 +55,20 @@ function parseLogLines(logDir) {
       continue;
     }
     const runId = file.replace(/\.log$/, '');
+    // An attempt only counts as live while its log is still being written to.
+    let freshMs = Infinity;
+    try {
+      freshMs = Date.now() - fs.statSync(path.join(logDir, file)).mtimeMs;
+    } catch {
+      freshMs = Infinity;
+    }
+    const stale = freshMs > STALE_AFTER_MS;
     let open = null;
     for (const raw of content.split(SPLIT_RE)) {
       const line = raw.trim();
       let m;
       if ((m = TRY.exec(line))) {
-        open = { at: m[3], sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'live', tokens: 'UNKNOWN' };
+        open = { at: m[3], sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: stale ? 'ended' : 'live', tokens: 'UNKNOWN' };
         entries.push(open);
       } else if ((m = EXHAUSTED.exec(line))) {
         if (open) { open.outcome = 'quota-refused'; open = null; }
@@ -93,33 +102,45 @@ function parseLogLines(logDir) {
 const probeCache = new Map();
 
 function probeXkiro(now, ttlMs) {
-  // Measured remaining quota straight from the provider, cached so the page cannot hammer it.
-  const key = 'xkiro-usage';
-  const cached = probeCache.get(key);
-  if (cached && now - cached.at < (ttlMs || 60000)) return cached.value;
-  let value = { declaredLimit: 'UNKNOWN', consumption: 'UNKNOWN', headroom: 'UNKNOWN' };
-  const token = process.env.XKIRO_API_KEY;
-  if (token) {
-    try {
-      const out = require('child_process').execFileSync(
-        'curl',
-        ['-s', '-m', '8', '-H', 'Authorization: Bearer ' + token, 'https://api.xkiro.com/v1/usage'],
-        { encoding: 'utf8', timeout: 10000 }
-      );
-      const free = JSON.parse(out).free_tokens;
-      if (free && typeof free.used_today === 'number') {
-        value = {
-          declaredLimit: typeof free.limit_per_day === 'number' ? free.limit_per_day : 'UNKNOWN',
-          consumption: free.used_today,
-          headroom: typeof free.remaining === 'number' ? free.remaining : 'UNKNOWN',
-        };
-      }
-    } catch {
-      // provider unreachable; everything stays UNKNOWN
-    }
+  // Measured remaining quota from the provider. The probe runs in the background and
+  // the page reads the last measurement, so rendering never blocks on the network and
+  // the provider is queried at most once per TTL.
+  var key = 'xkiro-usage';
+  var cached = probeCache.get(key);
+  var ttl = ttlMs || 60000;
+  var stale = !cached || now - cached.at >= ttl;
+  var token = process.env.XKIRO_API_KEY;
+
+  if (stale && token && !probeCache.get(key + ':inflight')) {
+    probeCache.set(key + ':inflight', true);
+    const controller = new AbortController();
+    const timer = setTimeout(function () { controller.abort(); }, 8000);
+    fetch('https://api.xkiro.com/v1/usage', {
+      headers: { Authorization: 'Bearer ' + token },
+      signal: controller.signal,
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        const free = j && j.free_tokens;
+        if (free && typeof free.used_today === 'number') {
+          probeCache.set(key, {
+            at: Date.now(),
+            value: {
+              declaredLimit: typeof free.limit_per_day === 'number' ? free.limit_per_day : 'UNKNOWN',
+              consumption: free.used_today,
+              headroom: typeof free.remaining === 'number' ? free.remaining : 'UNKNOWN',
+            },
+          });
+        }
+      })
+      .catch(function () { /* provider unreachable; the last measurement stands */ })
+      .finally(function () {
+        clearTimeout(timer);
+        probeCache.delete(key + ':inflight');
+      });
   }
-  probeCache.set(key, { at: now, value });
-  return value;
+
+  return cached ? cached.value : { declaredLimit: 'UNKNOWN', consumption: 'UNKNOWN', headroom: 'UNKNOWN' };
 }
 
 function detectConfigured(homeDir) {
@@ -182,7 +203,9 @@ function readQuotaStore(storeFile) {
 function buildRotationState(options) {
   const opts = options || {};
   const rootDir = opts.rootDir || path.resolve(__dirname, '../..');
-  const logDir = opts.logDir || path.join(rootDir, '.worktrees', 'logs');
+  // In a git worktree the dispatcher still writes into the main checkout, so the
+  // location is overridable rather than assumed from this process's rootDir.
+  const logDir = opts.logDir || process.env.ROTATION_LOG_DIR || path.join(rootDir, '.worktrees', 'logs');
   const ledgerFile = opts.ledgerFile || path.join(HOME_DIR, 'quota.observations.json');
   const quotaFile = opts.quotaFile || path.join(HOME_DIR, 'agy-quota.json');
   const now = opts.now || Date.now();
@@ -273,10 +296,40 @@ function buildRotationState(options) {
     });
   }
 
+  // Flat, newest-first view of every attempt, so the page can list activity
+  // the way an operator reads it: which run, which model, how it ended.
+  const runs = logEntries
+    .slice()
+    .reverse()
+    .slice(0, 40)
+    .map((e) => ({
+      runId: e.runId,
+      sourceId: e.sourceId,
+      modelId: e.modelId,
+      outcome: e.outcome,
+      at: e.at || null,
+      tokens: e.tokens,
+      reason: e.reason || null,
+    }));
+
+  const totals = {
+    attempts: logEntries.length,
+    live: logEntries.filter((e) => e.outcome === 'live').length,
+    quotaRefused: logEntries.filter((e) => e.outcome === 'quota-refused').length,
+    exhausted: sources.filter((x) => x.status === 'exhausted' || x.status === 'cooldown').length,
+    sourcesConfigured: sources.length,
+    tokens: (function () {
+      const known = logEntries.filter((e) => e.tokens !== 'UNKNOWN');
+      return known.length ? known.reduce((a, e) => a + e.tokens, 0) : 'UNKNOWN';
+    })(),
+  };
+
   return {
     observedAt: new Date(now).toISOString(),
     hub: { label: '9Router / dispatch lanes' },
     sources,
+    runs,
+    totals,
   };
 }
 

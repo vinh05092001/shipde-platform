@@ -342,14 +342,21 @@
       <!-- TAB PANE: CAPACITY & QUOTA -->
       <div id="tabPane-capacity" class="hidden space-y-6">
         <!-- TASK-AI-47: live rotation topology, measured from dispatcher logs and provider usage. -->
-        <section class="rounded-2xl border border-[color:var(--line)] bg-[color:var(--panel)] p-4">
-          <div class="flex items-baseline justify-between mb-2">
+        <section class="rounded-2xl border p-4 space-y-4" style="border-color:var(--line);background:var(--panel)">
+          <div class="flex items-baseline justify-between">
             <h3 class="font-bold text-sm">Xoay model theo nguồn</h3>
             <span id="rotationObservedAt" class="text-[11px] opacity-60">—</span>
           </div>
-          <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start">
+          <div id="rotation-kpis" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+          <div class="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] items-start">
             <svg id="rotation-svg" viewBox="0 0 640 600" class="w-full max-w-lg mx-auto"></svg>
-            <div id="rotation-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+            <div class="space-y-3">
+              <div id="rotation-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+              <div>
+                <div class="text-[11px] font-bold uppercase tracking-wide opacity-60 mb-1">Lượt chạy gần đây</div>
+                <div id="rotation-runs" class="rounded-xl border overflow-hidden text-[11px]" style="border-color:var(--line)"></div>
+              </div>
+            </div>
           </div>
         </section>
         <div id="capacitySummary"></div>

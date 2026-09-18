@@ -27,7 +27,45 @@
     return '#64748b';
   }
 
+  function kpi(label, value, tone) {
+    return '<div class="rounded-xl border p-3" style="border-color:var(--line)">' +
+      '<div class="text-[10px] uppercase tracking-wide opacity-60">' + label + '</div>' +
+      '<div class="text-xl font-bold' + (tone ? ' ' + tone : '') + '">' + value + '</div></div>';
+  }
+
+  function outcomeDot(outcome) {
+    var c = outcome === 'live' ? '#16a34a' : outcome === 'quota-refused' ? '#dc2626' : outcome === 'done' ? '#0f766e' : '#94a3b8';
+    return '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + c + '"></span>';
+  }
+
+  function renderKpis(t) {
+    var box = document.getElementById('rotation-kpis');
+    if (!box || !t) return;
+    box.innerHTML =
+      kpi('Lượt chạy', t.attempts) +
+      kpi('Đang chạy', t.live, t.live > 0 ? 'text-emerald-600' : '') +
+      kpi('Bị từ chối quota', t.quotaRefused, t.quotaRefused > 0 ? 'text-rose-600' : '') +
+      kpi('Nguồn hết hạn mức', t.exhausted + '/' + t.sourcesConfigured, t.exhausted > 0 ? 'text-rose-600' : '');
+  }
+
+  function renderRuns(runs) {
+    var box = document.getElementById('rotation-runs');
+    if (!box) return;
+    if (!runs || !runs.length) { box.innerHTML = '<div class="p-3 opacity-60">chưa có lượt chạy nào</div>'; return; }
+    box.innerHTML = runs.slice(0, 12).map(function (r) {
+      return '<div class="flex items-center gap-2 px-3 py-1.5 border-b" style="border-color:var(--line)">' +
+        outcomeDot(r.outcome) +
+        '<span class="font-mono">' + (r.at || '--:--:--') + '</span>' +
+        '<span class="font-bold">' + r.runId + '</span>' +
+        '<span class="opacity-70 truncate">' + r.sourceId + ' · ' + r.modelId + '</span>' +
+        '<span class="ml-auto opacity-60">' + (r.tokens === 'UNKNOWN' ? '' : num(r.tokens) + ' tk') + '</span>' +
+        '</div>';
+    }).join('');
+  }
+
   function render(data) {
+    renderKpis(data && data.totals);
+    renderRuns(data && data.runs);
     var svg = document.getElementById('rotation-svg');
     var cards = document.getElementById('rotation-cards');
     var stamp = document.getElementById('rotationObservedAt');
