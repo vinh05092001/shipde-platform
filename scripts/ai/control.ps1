@@ -16,6 +16,7 @@ param(
     [ValidateRange(1, 1)]
     [int]$SupervisorMaxNudges = 1,
     [int]$SupervisorReviewTimeoutMinutes = 20,
+    [int]$MaxRecoveryAttempts = 1,
     [switch]$NonInteractive
 )
 
@@ -1655,7 +1656,7 @@ function Get-ShipDeCodexReviewArgs {
     return @("exec", "--sandbox", "read-only", "--output-schema", $SchemaFile, "--output-last-message", $LastMessageFile, "-")
 }
 
-function Invoke-ShipDeAgentRouterReviewFallback {
+function Invoke-ShipDeClaudeReviewFallback {
     param(
         [Parameter(Mandatory = $true)][string]$ReviewPrompt,
         [Parameter(Mandatory = $true)][string]$ReviewHeadSha,
@@ -1928,11 +1929,11 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
             Pop-Location
         }
 
-        # Fallback to AgentRouter if Codex execution failed or produced invalid/empty review
+        # Fallback to Claude Code if Codex execution failed or produced invalid/empty review
         $codexReviewValid = ($exitCode -eq 0) -and (Test-Path -LiteralPath $reviewFile) -and (-not [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $reviewFile -Raw -ErrorAction SilentlyContinue)))
         if (-not $codexReviewValid) {
-            Write-Warning "Codex review execution was not successful (Exit code: $exitCode). Initiating AgentRouter fallback chain..."
-            $fallbackSuccess = Invoke-ShipDeAgentRouterReviewFallback `
+            Write-Warning "Codex review execution was not successful (Exit code: $exitCode). Initiating Claude Code fallback chain..."
+            $fallbackSuccess = Invoke-ShipDeClaudeReviewFallback `
                 -ReviewPrompt $reviewPrompt `
                 -ReviewHeadSha $reviewHeadSha `
                 -PullRequestNumber $pr.number `
@@ -2993,15 +2994,15 @@ function Show-ShipDeStatus {
 
 # ============================================================================
 # SUPERVISOR FUNCTIONS (TASK-AI-06)
-# Deterministic AO control. AO is launched through the existing AgentRouter
+# Deterministic AO control. AO is launched through the existing 9Router
 # Claude profile by start-agent-orchestrator.ps1.
 # ============================================================================
 
 $script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.json"
 $script:SupervisorLockFile = Join-Path $script:HandoffRoot "supervisor.lock"
 $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.json"
-$script:AgentRouterProfile = Join-Path (Get-ShipDeUserHome) ".claude"
-$script:AgentRouterPort = 20128
+$script:NineRouterProfile = Join-Path (Get-ShipDeUserHome) ".claude"
+$script:NineRouterPort = 20128
 $script:ExpectedAoVersion = Get-ShipDePinnedAoVersion
 $script:AoExecutablePath = $null
 
@@ -3141,7 +3142,7 @@ function Test-ShipDeAoReadiness {
     }
 }
 
-function Test-ShipDeAgentRouterEndpoint {
+function Test-ShipDeNineRouterEndpoint {
     param([Parameter(Mandatory = $true)][int]$Port)
 
     if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $Port)) {
@@ -3173,7 +3174,7 @@ function Assert-ShipDeAoRuntimeMarker {
         throw "AO router runtime marker is stale. Restart AO through the governed launcher."
     }
     if ([string]$Runtime.profile -ne $ExpectedProfile -or [string]$Runtime.base_url -ne $ExpectedBaseUrl) {
-        throw "AO was not launched with the current AgentRouter Claude profile."
+        throw "AO was not launched with the current 9Router Claude profile."
     }
     if ([string]$Runtime.ao_version -ne $ExpectedVersion) {
         throw "AO CLI runtime marker version does not match pinned version $ExpectedVersion."
@@ -3247,15 +3248,15 @@ function Assert-ShipDeAoRuntimeMarker {
     }
 }
 
-function Assert-ShipDeAgentRouterProfile {
-    $settingsPath = Join-Path $script:AgentRouterProfile "settings.json"
+function Assert-ShipDeNineRouterProfile {
+    $settingsPath = Join-Path $script:NineRouterProfile "settings.json"
     if (-not (Test-Path $settingsPath)) {
-        throw "AgentRouter Claude profile is missing: $settingsPath"
+        throw "9Router Claude profile is missing: $settingsPath"
     }
     try {
         $config = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
-        throw "AgentRouter Claude profile contains invalid JSON: $settingsPath"
+        throw "9Router Claude profile contains invalid JSON: $settingsPath"
     }
 
     $baseUrl = [string]$config.env.ANTHROPIC_BASE_URL
@@ -3265,16 +3266,16 @@ function Assert-ShipDeAgentRouterProfile {
         -not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$uri) -or
         $uri.Scheme -ne "http" -or
         $uri.Host -notin @("localhost", "127.0.0.1") -or
-        $uri.Port -ne $script:AgentRouterPort -or
+        $uri.Port -ne $script:NineRouterPort -or
         $uri.AbsolutePath.TrimEnd('/') -ne "/v1" -or
         -not [string]::IsNullOrWhiteSpace($uri.Query) -or
         -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
         -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
     ) {
-        throw "AgentRouter Claude profile must use http://localhost:$($script:AgentRouterPort)/v1."
+        throw "9Router Claude profile must use http://localhost:$($script:NineRouterPort)/v1."
     }
-    if (-not (Test-ShipDeAgentRouterEndpoint -Port $script:AgentRouterPort)) {
-        throw "Port $($script:AgentRouterPort) is not serving the expected local 9Router health and version contract."
+    if (-not (Test-ShipDeNineRouterEndpoint -Port $script:NineRouterPort)) {
+        throw "Port $($script:NineRouterPort) is not serving the expected local 9Router health and version contract."
     }
     if (-not (Test-Path $script:AoRouterRuntimeFile)) {
         throw "AO router runtime marker is missing. Start AO with scripts/ai/start-agent-orchestrator.ps1."
@@ -3286,18 +3287,20 @@ function Assert-ShipDeAgentRouterProfile {
     }
     Assert-ShipDeAoRuntimeMarker `
         -Runtime $runtime `
-        -ExpectedProfile $script:AgentRouterProfile `
+        -ExpectedProfile $script:NineRouterProfile `
         -ExpectedBaseUrl $baseUrl `
         -ExpectedVersion $script:ExpectedAoVersion `
         -ExpectedExecutable (Get-ShipDeAoInvocationPath)
 }
 
-function Ensure-ShipDeAgentRouterRuntime {
+function Ensure-ShipDeNineRouterRuntime {
     param(
-        [scriptblock]$ProfileValidator = { Assert-ShipDeAgentRouterProfile },
+        [scriptblock]$ProfileValidator = { Assert-ShipDeNineRouterProfile },
         [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
         [scriptblock]$Launcher = {
             param($Path, $Root, $Port, $Version)
+            # `-AgentRouterPort` is start-agent-orchestrator.ps1's parameter name (out of
+            # scope here); on that script it still addresses 9Router's local port (20128).
             & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -Restart
         }
     )
@@ -3310,7 +3313,7 @@ function Ensure-ShipDeAgentRouterRuntime {
         }
         throw $readiness.Reason
     } catch {
-        Write-Warning ("AO is not ready through AgentRouter: {0}" -f $_.Exception.Message)
+        Write-Warning ("AO is not ready through 9Router: {0}" -f $_.Exception.Message)
     }
 
     $launcherPath = Join-Path $PSScriptRoot "start-agent-orchestrator.ps1"
@@ -3318,9 +3321,9 @@ function Ensure-ShipDeAgentRouterRuntime {
         throw "Governed AO launcher is missing: $launcherPath"
     }
 
-    Write-Host "[SUPERVISOR] Starting AO through the AgentRouter Claude profile..."
+    Write-Host "[SUPERVISOR] Starting AO through the 9Router Claude profile..."
     try {
-        & $Launcher $launcherPath $AiRoot $script:AgentRouterPort $script:ExpectedAoVersion
+        & $Launcher $launcherPath $AiRoot $script:NineRouterPort $script:ExpectedAoVersion
     } catch {
         throw "The governed AO launcher failed: $($_.Exception.Message)"
     }
@@ -3596,6 +3599,7 @@ function Assert-ShipDeReusedAoSession {
     }
 
     if ([string]::IsNullOrWhiteSpace($worktree)) {
+        Write-Host ("[BLOCKED] Recovery target is missing: worktree for AO session '{0}'. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item." -f $sessionId)
         throw "Reused AO session does not have an active worktree path. Failing closed."
     }
 
@@ -3828,6 +3832,11 @@ function Normalize-ShipDeSupervisorState {
         NudgeCount = 0
         UnknownPollCount = 0
         RepairCount = 0
+        FailoverCount = 0
+        RecoveryCount = 0
+        LastRecoveryAt = $null
+        RecoveredFrom = $null
+        RecoveryDiagnostic = $null
         ProviderFailure = $false
         CiGate = $null
         ExactHeadVerdict = $null
@@ -3866,14 +3875,31 @@ function Normalize-ShipDeSupervisorState {
     return $normalized
 }
 
+function Assert-ShipDeRecoveryTargetExists {
+    param(
+        [Parameter(Mandatory = $true)][string]$Target,
+        [Parameter(Mandatory = $true)][bool]$Exists
+    )
+    if (-not $Exists) {
+        Write-Host ("[BLOCKED] Recovery target is missing: {0}. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item." -f $Target)
+        throw "[BLOCKED] Recovery target is missing: $Target. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item."
+    }
+}
+
 function Write-ShipDeSupervisorCheckpoint {
-    param([Parameter(Mandatory = $true)][hashtable]$State)
+    param([Parameter(Mandatory = $true)][object]$State)
 
     $normalized = Normalize-ShipDeSupervisorState -State $State
     $normalized.CheckpointTime = (Get-Date).ToUniversalTime().ToString("o")
     $temporaryPath = "$script:SupervisorStateFile.tmp"
     $normalized | ConvertTo-Json -Depth 12 | Set-Content -Path $temporaryPath -Encoding UTF8
     Move-Item -LiteralPath $temporaryPath -Destination $script:SupervisorStateFile -Force
+    $wId = [string](Get-ShipDeObjectProperty -Object $normalized -Names @("WorkItemId", "workItemId"))
+    $hSha = [string](Get-ShipDeObjectProperty -Object $normalized -Names @("HeadSha", "headSha"))
+    if (-not [string]::IsNullOrWhiteSpace($wId)) {
+        $headDisplay = if (-not [string]::IsNullOrWhiteSpace($hSha)) { $hSha } else { "UNKNOWN" }
+        Write-Host ("[SUPERVISOR] Checkpoint persisted for Work Item {0} at exact HEAD {1}" -f $wId, $headDisplay)
+    }
 }
 
 function Read-ShipDeSupervisorCheckpoint {
@@ -3881,8 +3907,16 @@ function Read-ShipDeSupervisorCheckpoint {
         return $null
     }
     try {
-        $stateObject = Get-Content $script:SupervisorStateFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        $raw = Get-Content $script:SupervisorStateFile -Raw -Encoding UTF8
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            throw "Empty checkpoint"
+        }
+        $stateObject = $raw | ConvertFrom-Json
+        if ($null -eq $stateObject -or ($stateObject -isnot [PSCustomObject] -and $stateObject -isnot [System.Collections.IDictionary])) {
+            throw "Invalid checkpoint object"
+        }
     } catch {
+        Write-Host ("[BLOCKED] Supervisor checkpoint '{0}' is malformed. Preserved for diagnosis; stopping fail-closed." -f $script:SupervisorStateFile)
         throw "Supervisor checkpoint is malformed. Preserve it for diagnosis and stop fail-closed."
     }
     return (Normalize-ShipDeSupervisorState -State $stateObject)
@@ -4223,6 +4257,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
             Get-ShipDeAoSessionById -SessionId $ckptSessionId -Project "shipde-platform"
         }
         if ($null -eq $sessDetail) {
+            Write-Host ("[BLOCKED] Recovery target is missing: AO session '{0}'. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item." -f $ckptSessionId)
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber binds AO session '$ckptSessionId', which could not be found or verified. Rejecting before any checkpoint-driven effects."
         }
         $actualSessionId = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("id", "sessionId"))
@@ -4310,6 +4345,7 @@ function Assert-ShipDeSupervisorLock {
             if ($holderPid -gt 0 -and $holderPid -ne $CurrentPid) {
                 $proc = & $ProcessResolver $holderPid
                 if ($null -ne $proc -and -not [bool]$proc.HasExited) {
+                    Write-Host ("[BLOCKED] Another supervisor instance (PID {0}, Work Item '{1}') is actively supervising. Stopping fail-closed." -f $holderPid, $holderWorkItem)
                     throw "Another supervisor instance (PID $holderPid, Work Item '$holderWorkItem') is actively supervising. Rejecting concurrent supervisor lock."
                 }
                 $isStale = $true
@@ -4325,6 +4361,7 @@ function Assert-ShipDeSupervisorLock {
 
         if ($isStale) {
             Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
+            Write-Host ("[SUPERVISOR] Reclaimed stale supervisor lock held by PID {0} (Work Item '{1}'); no live holder remains." -f $holderPid, $holderWorkItem)
         }
     }
 
@@ -4346,6 +4383,7 @@ function Assert-ShipDeSupervisorLock {
                 if ($holderPid -gt 0 -and $holderPid -ne $CurrentPid) {
                     $proc = & $ProcessResolver $holderPid
                     if ($null -ne $proc -and -not [bool]$proc.HasExited) {
+                        Write-Host ("[BLOCKED] Another supervisor instance (PID {0}, Work Item '{1}') is actively supervising. Stopping fail-closed." -f $holderPid, $holderWorkItem)
                         throw "Another supervisor instance (PID $holderPid, Work Item '$holderWorkItem') is actively supervising. Rejecting concurrent supervisor lock."
                     }
                 }
@@ -4553,7 +4591,7 @@ function Get-ShipDeSessionActivityState {
     }
 }
 
-function Get-ShipDeAgentRouterFailureSince {
+function Get-ShipDeNineRouterFailureSince {
     param([Parameter(Mandatory = $true)][string]$Since)
 
     $sinceDate = [DateTime]::MinValue
@@ -4561,7 +4599,7 @@ function Get-ShipDeAgentRouterFailureSince {
         throw "Supervisor start time is invalid; cannot bound 9Router diagnostics."
     }
     $encodedStart = [Uri]::EscapeDataString($sinceDate.ToUniversalTime().ToString("o"))
-    $uri = "http://127.0.0.1:$($script:AgentRouterPort)/api/usage/request-details?status=error&startDate=$encodedStart&page=1&pageSize=100"
+    $uri = "http://127.0.0.1:$($script:NineRouterPort)/api/usage/request-details?status=error&startDate=$encodedStart&page=1&pageSize=100"
     try {
         $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10
     } catch {
@@ -6645,7 +6683,7 @@ function Invoke-ShipDeSupervisorLoop {
 
         if ($activity -in @("FAILED", "STOPPED", "MISSING")) {
             if ($activity -in @("FAILED", "STOPPED")) {
-                $routerFailure = Get-ShipDeAgentRouterFailureSince -Since ([string]$State.StartTime)
+                $routerFailure = Get-ShipDeNineRouterFailureSince -Since ([string]$State.StartTime)
                 if ($routerFailure) {
                     $State.RouterFailure = $routerFailure
                     if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
@@ -7091,7 +7129,7 @@ function Assert-ShipDeSupervisorCompatibility {
     $origSupervisorStateFile = $script:SupervisorStateFile
     $origSupervisorLockFile = $script:SupervisorLockFile
     $origAoRouterRuntimeFile = $script:AoRouterRuntimeFile
-    $origAgentRouterProfile = $script:AgentRouterProfile
+    $origNineRouterProfile = $script:NineRouterProfile
     $origExpectedAoVersion = $script:ExpectedAoVersion
     $origAoExecutablePath = $script:AoExecutablePath
 
@@ -7355,7 +7393,7 @@ function Assert-ShipDeSupervisorCompatibility {
         }
 
         $duplicateLaunches = @{ Count = 0 }
-        Ensure-ShipDeAgentRouterRuntime `
+        Ensure-ShipDeNineRouterRuntime `
             -ProfileValidator { } `
             -ReadinessResolver { return @{ Ready = $true } } `
             -Launcher { $duplicateLaunches.Count++ }
@@ -8094,7 +8132,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
     }
     $simulatedMatchingPr = [PSCustomObject]@{
         number = 9
-        title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+        title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
         headRefName = "feat/task-ai-06-orchestrator-supervisor"
         isCrossRepository = $false
         headRepository = "vinh05092001/shipde-platform"
@@ -8273,7 +8311,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
 
         $greenPr = [PSCustomObject]@{
             number = 9
-            title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+            title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
             headRefName = "feat/task-ai-06-orchestrator-supervisor"
             headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
             isDraft = $false
@@ -8369,7 +8407,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         }
         $greenPr = [PSCustomObject]@{
             number = 9
-            title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+            title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
             headRefName = "feat/task-ai-06-orchestrator-supervisor"
             headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
             isDraft = $false
@@ -8433,7 +8471,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
             $testHeadSha = "aabbccddeeff00112233445566778899aabbccdd"
             $reviewPr = [PSCustomObject]@{
                 number = $testPrNumber
-                title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+                title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
                 headRefName = "feat/task-ai-06-orchestrator-supervisor"
                 headRefOid = $testHeadSha
                 isDraft = $false
@@ -8553,7 +8591,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
             $samplePrNumber = 99998
             $samplePr = [PSCustomObject]@{
                 number = $samplePrNumber
-                title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+                title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
                 headRefName = "feat/task-ai-06-orchestrator-supervisor"
                 headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
                 isDraft = $false
@@ -9400,6 +9438,197 @@ Full review comments:
         throw "TASK-AI-08 reattempt eligibility test failed."
     }
 
+    # 5i. TASK-AI-09: checkpoint round-trip with all recovery fields preserved
+    $ai09TestHead = "9999999999999999999999999999999999999999"
+    $ai09State = @{
+        WorkItemId = "TASK-AI-09"
+        Branch = "feat/task-ai-09-checkpoint-recovery"
+        State = "STARTED"
+        PullRequestNumber = 99
+        HeadSha = $ai09TestHead
+        FailoverCount = 2
+        RecoveryCount = 1
+        LastRecoveryAt = (Get-Date).ToUniversalTime().ToString("o")
+        RecoveredFrom = "CHECKPOINT"
+        RecoveryDiagnostic = "test-diagnostic"
+        RepairAttemptsByHead = @{ $ai09TestHead = @{ ci = 1; review = 0 } }
+        PendingDispatch = @{ Type = "CI_REPAIR"; Head = $ai09TestHead; WorkItemId = "TASK-AI-09" }
+        LastAcknowledgedCiRepairHead = $ai09TestHead
+        LastAcknowledgedReviewRepairHead = $ai09TestHead
+        MergeIntent = "MERGE_INTENT_PERSISTED"
+        MergeCommitOid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+    Write-ShipDeSupervisorCheckpoint -State $ai09State
+    $ai09ReadBack = Read-ShipDeSupervisorCheckpoint
+    if ($null -eq $ai09ReadBack -or
+        $ai09ReadBack.WorkItemId -ne "TASK-AI-09" -or
+        $ai09ReadBack.RecoveryCount -ne 1 -or
+        $ai09ReadBack.RecoveredFrom -ne "CHECKPOINT" -or
+        $ai09ReadBack.FailoverCount -ne 2 -or
+        [string]::IsNullOrWhiteSpace($ai09ReadBack.LastRecoveryAt) -or
+        $ai09ReadBack.RecoveryDiagnostic -ne "test-diagnostic" -or
+        $ai09ReadBack.MergeIntent -ne "MERGE_INTENT_PERSISTED" -or
+        $ai09ReadBack.MergeCommitOid -ne "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+        throw "TASK-AI-09 checkpoint round-trip test failed: recovery fields were not preserved."
+    }
+    # Test backward compatibility: legacy state missing recovery fields gains defaults
+    $legacyState = @{ WorkItemId = "TASK-AI-09"; Branch = "feat/task-ai-09"; State = "STARTED" }
+    $normalizedLegacy = Normalize-ShipDeSupervisorState -State $legacyState
+    if ($normalizedLegacy.RecoveryCount -ne 0 -or
+        $normalizedLegacy.FailoverCount -ne 0 -or
+        $null -ne $normalizedLegacy.RecoveredFrom -or
+        $null -ne $normalizedLegacy.LastRecoveryAt -or
+        $null -ne $normalizedLegacy.RecoveryDiagnostic) {
+        throw "TASK-AI-09 legacy checkpoint normalization test failed: missing recovery fields must have defaults."
+    }
+
+    # 5j. TASK-AI-09: malformed checkpoint refused and preserved for diagnosis
+    $corruptedJson = '{"WorkItemId": "TASK-AI-09", corrupted_json: true'
+    Set-Content -LiteralPath $script:SupervisorStateFile -Value $corruptedJson -Encoding UTF8
+    $corruptedCaught = $false
+    try {
+        Read-ShipDeSupervisorCheckpoint | Out-Null
+    } catch {
+        $corruptedCaught = $_.Exception.Message -match "Supervisor checkpoint is malformed"
+    }
+    if (-not $corruptedCaught) {
+        throw "TASK-AI-09 malformed checkpoint test failed: corrupted checkpoint was not rejected fail-closed."
+    }
+    if (-not (Test-Path -LiteralPath $script:SupervisorStateFile)) {
+        throw "TASK-AI-09 malformed checkpoint test failed: corrupted checkpoint file was deleted instead of preserved."
+    }
+    $preservedContent = Get-Content -LiteralPath $script:SupervisorStateFile -Raw -Encoding UTF8
+    if ($preservedContent.Trim() -ne $corruptedJson.Trim()) {
+        throw "TASK-AI-09 malformed checkpoint test failed: corrupted checkpoint file was overwritten."
+    }
+    Clear-ShipDeSupervisorCheckpoint
+
+    # 5k. TASK-AI-09: stale supervisor lock reclaimed and live supervisor lock refused
+    $ai09LockFile = Join-Path $compatHandoffRoot "ai09-test.lock"
+    # Create stale lock (holder PID 999988 does not exist)
+    $staleLockPayload = @{ process_id = 999988; work_item_id = "TASK-AI-08"; acquired_at = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json
+    Set-Content -LiteralPath $ai09LockFile -Value $staleLockPayload -Encoding UTF8
+    Assert-ShipDeSupervisorLock -LockFile $ai09LockFile -WorkItemId "TASK-AI-09" -CurrentPid 12345 -ProcessResolver { param($id) return $null }
+    $reclaimedLock = Get-Content -LiteralPath $ai09LockFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($reclaimedLock.process_id -ne 12345 -or $reclaimedLock.work_item_id -ne "TASK-AI-09") {
+        throw "TASK-AI-09 stale lock reclamation test failed: stale lock was not reclaimed."
+    }
+    # Live holder lock refused
+    $liveProcMock = [PSCustomObject]@{ Id = 12345; HasExited = $false }
+    $liveLockCaught = $false
+    try {
+        Assert-ShipDeSupervisorLock -LockFile $ai09LockFile -WorkItemId "TASK-AI-09" -CurrentPid 67890 -ProcessResolver { param($id) return $liveProcMock }
+    } catch {
+        $liveLockCaught = $_.Exception.Message -match "Another supervisor instance"
+    }
+    if (-not $liveLockCaught) {
+        throw "TASK-AI-09 live lock refusal test failed: live supervisor lock was not refused."
+    }
+    # Release-ShipDeSupervisorLock only releases for current holder
+    Release-ShipDeSupervisorLock -LockFile $ai09LockFile -CurrentPid 99999
+    if (-not (Test-Path -LiteralPath $ai09LockFile)) {
+        throw "TASK-AI-09 lock release test failed: non-holder released the lock."
+    }
+    Release-ShipDeSupervisorLock -LockFile $ai09LockFile -CurrentPid 12345
+    if (Test-Path -LiteralPath $ai09LockFile) {
+        throw "TASK-AI-09 lock release test failed: holder failed to release the lock."
+    }
+
+    # 5l. TASK-AI-09: archived checkpoint restored by stable Work Item and PR identity
+    $ai09ArchiveState = @{
+        WorkItemId = "TASK-AI-09"
+        PullRequestNumber = 55
+        Branch = "feat/task-ai-09-checkpoint-recovery"
+        Author = "GEMINI"
+        HeadSha = "4444444444444444444444444444444444444444"
+        State = "STARTED"
+    }
+    Archive-ShipDeSupervisorCheckpoint -State $ai09ArchiveState -HandoffRoot $compatHandoffRoot
+    $retrievedCandidate = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-AI-09" -PullRequestNumber 55 -HandoffRoot $compatHandoffRoot
+    if ($null -eq $retrievedCandidate -or $retrievedCandidate.WorkItemId -ne "TASK-AI-09" -or $retrievedCandidate.PullRequestNumber -ne 55) {
+        throw "TASK-AI-09 archived checkpoint retrieval failed: could not retrieve by Work Item and PR number."
+    }
+    $nonMatchingRetrieval = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-AI-09" -PullRequestNumber 999 -HandoffRoot $compatHandoffRoot
+    if ($null -ne $nonMatchingRetrieval) {
+        throw "TASK-AI-09 archived checkpoint retrieval failed: returned candidate with non-matching PR number."
+    }
+    Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-AI-09" -PullRequestNumber 55 -HandoffRoot $compatHandoffRoot
+
+    # 5m. TASK-AI-09: restart consumes existing open Pull Request before starting a new item without duplicating worker
+    $spawnedCount = 0
+    $ai09MockPr = [PSCustomObject]@{
+        number = 55
+        title = "[TASK-AI-09] Full checkpoint persistence and restart recovery"
+        headRefName = "feat/task-ai-09-checkpoint-recovery"
+        headRefOid = "5555555555555555555555555555555555555555"
+        isDraft = $false
+        statusCheckRollup = @()
+    }
+    $ai09ResumedState = @{
+        WorkItemId = "TASK-AI-09"
+        Branch = "feat/task-ai-09-checkpoint-recovery"
+        Author = "GEMINI"
+        State = "STARTED"
+        PullRequestNumber = 55
+        HeadSha = "5555555555555555555555555555555555555555"
+    }
+    $ai09RestartInit = Initialize-ShipDeSupervisorState `
+        -State $ai09ResumedState `
+        -PullRequestNumber 0 `
+        -OpenPrResolver { return @($ai09MockPr) } `
+        -ActiveWorkersResolver { return @() } `
+        -WorkerStarter { param($item, $prompt) $spawnedCount++; return [PSCustomObject]@{ SessionId = "dup"; Harness = "agy" } } `
+        -NextItemResolver { return [PSCustomObject]@{ WorkItemId = "TASK-AI-10"; Branch = "feat/task-ai-10"; Author = "GEMINI" } } `
+        -PrWorkItemResolver { param($pr) return [PSCustomObject]@{ WorkItemId = "TASK-AI-09"; Branch = "feat/task-ai-09-checkpoint-recovery"; Author = "GEMINI" } } `
+        -CheckpointWriter { param($s) }
+    if ($spawnedCount -ne 0) {
+        throw "TASK-AI-09 restart test failed: restart spawned a duplicate worker instead of consuming existing PR."
+    }
+    if ($ai09RestartInit.WorkItemId -ne "TASK-AI-09" -or $ai09RestartInit.PullRequestNumber -ne 55) {
+        throw "TASK-AI-09 restart test failed: existing PR was not consumed."
+    }
+    if ($ai09RestartInit.RecoveredFrom -ne "CHECKPOINT" -or $ai09RestartInit.RecoveryCount -ne 1) {
+        throw "TASK-AI-09 restart test failed: RecoveredFrom or RecoveryCount was not set on restart."
+    }
+
+    # 5n. TASK-AI-09: recovery attempts bounded by MaxRecoveryAttempts
+    $ai09ExhaustedState = @{
+        WorkItemId = "TASK-AI-09"
+        Branch = "feat/task-ai-09-checkpoint-recovery"
+        Author = "GEMINI"
+        State = "STARTED"
+        PullRequestNumber = 55
+        HeadSha = "5555555555555555555555555555555555555555"
+        RecoveryCount = 1
+    }
+    $boundExceededCaught = $false
+    try {
+        Initialize-ShipDeSupervisorState `
+            -State $ai09ExhaustedState `
+            -PullRequestNumber 0 `
+            -MaxRecoveryAttempts 1 `
+            -OpenPrResolver { return @($ai09MockPr) } `
+            -ActiveWorkersResolver { return @() } `
+            -PrWorkItemResolver { param($pr) return [PSCustomObject]@{ WorkItemId = "TASK-AI-09"; Branch = "feat/task-ai-09-checkpoint-recovery"; Author = "GEMINI" } } `
+            -CheckpointWriter { param($s) }
+    } catch {
+        $boundExceededCaught = $_.Exception.Message -match "Recovery limit exceeded"
+    }
+    if (-not $boundExceededCaught) {
+        throw "TASK-AI-09 recovery limit test failed: exceeding MaxRecoveryAttempts did not stop fail-closed."
+    }
+
+    # 5o. TASK-AI-09: recovery target removed stops fail-closed without re-creating artifact
+    $missingTargetCaught = $false
+    try {
+        Assert-ShipDeRecoveryTargetExists -Target "worktree 'C:\nonexistent\worktree'" -Exists $false
+    } catch {
+        $missingTargetCaught = $_.Exception.Message -match "Recovery target is missing"
+    }
+    if (-not $missingTargetCaught) {
+        throw "TASK-AI-09 removed state test failed: missing recovery target did not stop fail-closed."
+    }
+
     # Real-response regression fixture: AO 0.12.12 session with status=pr_open, isTerminated=false, harness=claude-code, author=GEMINI
     $ao01212ObservedPrOpenJson = @'
 {
@@ -9455,7 +9684,7 @@ Full review comments:
     }
     $prRecoveryPr = [PSCustomObject]@{
         number = 9
-        title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+        title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
         headRefName = "feat/task-ai-06-orchestrator-supervisor"
         headRefOid = "f43becbba10ea06edc9961862deb412ffefe888e"
         isDraft = $false
@@ -10542,7 +10771,7 @@ Full review comments:
                 number = 9
                 headRefOid = "778899001122"
                 isDraft = $false
-                title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+                title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
                 headRefName = "feat/task-ai-06-orchestrator-supervisor"
                 headRepository = "vinh05092001/shipde-platform"
                 isCrossRepository = $false
@@ -10702,7 +10931,7 @@ Full review comments:
     $script:SupervisorStateFile = $origSupervisorStateFile
     $script:SupervisorLockFile = $origSupervisorLockFile
     $script:AoRouterRuntimeFile = $origAoRouterRuntimeFile
-    $script:AgentRouterProfile = $origAgentRouterProfile
+    $script:NineRouterProfile = $origNineRouterProfile
     $script:ExpectedAoVersion = $origExpectedAoVersion
     $script:AoExecutablePath = $origAoExecutablePath
 
@@ -15065,6 +15294,7 @@ function Initialize-ShipDeSupervisorState {
             })
         },
         [int]$PullRequestNumber = 0,
+        [int]$MaxRecoveryAttempts = 1,
         [string]$Repository = "vinh05092001/shipde-platform",
         [scriptblock]$PrWorkItemResolver = { param($pr) Get-ShipDePrWorkItem -PullRequest $pr -HandoffRoot $HandoffRoot -Repository $Repository },
         [scriptblock]$SessionDetailResolver = $null,
@@ -15258,6 +15488,16 @@ function Initialize-ShipDeSupervisorState {
                 -SessionDetailResolver $SessionDetailResolver
 
             if ($restoredFromArchive) {
+                $State["RecoveredFrom"] = "ARCHIVE"
+                $State["RecoveryCount"] = [int]$State["RecoveryCount"] + 1
+                $State["LastRecoveryAt"] = (Get-Date).ToUniversalTime().ToString("o")
+                if ($MaxRecoveryAttempts -gt 0 -and [int]$State["RecoveryCount"] -gt $MaxRecoveryAttempts) {
+                    $diag = "Recovery limit exceeded for Work Item '$targetWorkItemId': $($State['RecoveryCount']) attempts > limit $MaxRecoveryAttempts"
+                    $State["State"] = "BLOCKED"
+                    $State["RecoveryDiagnostic"] = $diag
+                    & $CheckpointWriter $State
+                    throw $diag
+                }
                 # Finding 1: Persist the active checkpoint before removing the archive
                 & $CheckpointWriter $State
                 Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId $targetWorkItemId -PullRequestNumber $PullRequestNumber -HandoffRoot $HandoffRoot
@@ -15332,6 +15572,17 @@ function Initialize-ShipDeSupervisorState {
 
             if ($isSessionActive) {
                 Write-Host "[SUPERVISOR] Resuming $workItemId in AO session $sessionId."
+                $State["RecoveredFrom"] = "CHECKPOINT"
+                $State["RecoveryCount"] = [int]$State["RecoveryCount"] + 1
+                $State["LastRecoveryAt"] = (Get-Date).ToUniversalTime().ToString("o")
+                if ($MaxRecoveryAttempts -gt 0 -and [int]$State["RecoveryCount"] -gt $MaxRecoveryAttempts) {
+                    $diag = "Recovery limit exceeded for Work Item '$workItemId': $($State['RecoveryCount']) attempts > limit $MaxRecoveryAttempts"
+                    $State["State"] = "BLOCKED"
+                    $State["RecoveryDiagnostic"] = $diag
+                    & $CheckpointWriter $State
+                    throw $diag
+                }
+                & $CheckpointWriter $State
                 return $State
             }
 
@@ -15380,11 +15631,23 @@ function Initialize-ShipDeSupervisorState {
                 $State["PullRequestNumber"] = [int]$matchedPr.number
                 $State["HeadSha"] = [string]$matchedPr.headRefOid
                 $State["State"] = "STARTED"
+                $State["RecoveredFrom"] = "CHECKPOINT"
+                $State["RecoveryCount"] = [int]$State["RecoveryCount"] + 1
+                $State["LastRecoveryAt"] = (Get-Date).ToUniversalTime().ToString("o")
+                if ($MaxRecoveryAttempts -gt 0 -and [int]$State["RecoveryCount"] -gt $MaxRecoveryAttempts) {
+                    $diag = "Recovery limit exceeded for Work Item '$workItemId': $($State['RecoveryCount']) attempts > limit $MaxRecoveryAttempts"
+                    $State["State"] = "BLOCKED"
+                    $State["RecoveryDiagnostic"] = $diag
+                    & $CheckpointWriter $State
+                    throw $diag
+                }
                 & $CheckpointWriter $State
                 return $State
             } else {
                 $State["State"] = "MISSING"
+                $State["RecoveryDiagnostic"] = "[BLOCKED] Recovery target is missing: AO session '$sessionId'"
                 & $CheckpointWriter $State
+                Write-Host ("[BLOCKED] Recovery target is missing: AO session '{0}'. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item." -f $sessionId)
                 throw "Checkpoint AO session '$sessionId' no longer exists and no open PR for $workItemId was found. Stopping fail-closed."
             }
         } elseif ([int]$State["PullRequestNumber"] -gt 0) {
@@ -15403,7 +15666,18 @@ function Initialize-ShipDeSupervisorState {
                 } elseif ([string]::IsNullOrWhiteSpace([string]$State["HeadSha"]) -and -not [string]::IsNullOrWhiteSpace($matchedHead)) {
                     $State["HeadSha"] = $matchedHead
                 }
-                Write-Host "[SUPERVISOR] Resuming PR-only supervisor state for PR #$($State['PullRequestNumber']) ($workItemId)."
+                Write-Host ("[SUPERVISOR] Resuming Work Item {0} from checkpoint; open Pull Request #{1} at exact HEAD {2} is consumed before any new Work Item" -f $workItemId, $State["PullRequestNumber"], $State["HeadSha"])
+                $State["RecoveredFrom"] = "CHECKPOINT"
+                $State["RecoveryCount"] = [int]$State["RecoveryCount"] + 1
+                $State["LastRecoveryAt"] = (Get-Date).ToUniversalTime().ToString("o")
+                if ($MaxRecoveryAttempts -gt 0 -and [int]$State["RecoveryCount"] -gt $MaxRecoveryAttempts) {
+                    $diag = "Recovery limit exceeded for Work Item '$workItemId': $($State['RecoveryCount']) attempts > limit $MaxRecoveryAttempts"
+                    $State["State"] = "BLOCKED"
+                    $State["RecoveryDiagnostic"] = $diag
+                    & $CheckpointWriter $State
+                    throw $diag
+                }
+                & $CheckpointWriter $State
                 return $State
             } else {
                 $reconciledState = Reconcile-ShipDeMergeIntent `
@@ -15778,7 +16052,8 @@ function Initialize-ShipDeSupervisorState {
 
 function Invoke-ShipDeSupervise {
     param(
-        [int]$PullRequestNumber = 0
+        [int]$PullRequestNumber = 0,
+        [int]$MaxRecoveryAttempts = 1
     )
 
     Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR"
@@ -15790,12 +16065,12 @@ function Invoke-ShipDeSupervise {
     try {
         Assert-ShipDeAoCommand
         Assert-ShipDeAoVersion
-        Ensure-ShipDeAgentRouterRuntime
+        Ensure-ShipDeNineRouterRuntime
 
         $syncScript = { param($s) Sync-ShipDeRegisterAfterAutoMerge -State $s -Repository $Repository }
 
         $state = Read-ShipDeSupervisorCheckpoint
-        $state = Initialize-ShipDeSupervisorState -State $state -PullRequestNumber $PullRequestNumber -Repository $Repository -RegisterSynchronizer $syncScript
+        $state = Initialize-ShipDeSupervisorState -State $state -PullRequestNumber $PullRequestNumber -Repository $Repository -RegisterSynchronizer $syncScript -MaxRecoveryAttempts $MaxRecoveryAttempts
         if ($null -eq $state) {
             return
         }
@@ -15947,7 +16222,7 @@ function Show-ShipDeMenu {
                 "4" { Invoke-ShipDeStart }
                 "5" { Invoke-ShipDeReview }
                 "6" { Invoke-ShipDeSync }
-                "7" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber }
+                "7" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts }
                 "0" { return }
                 default { Write-Warning "Invalid choice." }
             }
@@ -15973,7 +16248,7 @@ switch ($Action) {
     "Start" { Invoke-ShipDeStart }
     "Review" { Invoke-ShipDeReview -PullRequestNumber $PullRequestNumber -NonInteractive:$NonInteractive }
     "Sync" { Invoke-ShipDeSync }
-    "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber }
+    "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts }
     "Test" { Write-Host "ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED"; return }
     default { Show-ShipDeMenu }
 }

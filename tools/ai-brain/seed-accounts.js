@@ -180,7 +180,12 @@ if (require.main === module) main();
 // resolveGrade reports the class together with this provenance.
 const GRADE_PROVENANCE = 'provisional';
 for (const list of [ANTIGRAVITY_MODELS, NINEROUTER_MODELS]) {
-  for (const model of list) model.gradeProvenance = GRADE_PROVENANCE;
+  for (const model of list) {
+    model.gradeProvenance = GRADE_PROVENANCE;
+    if (model.reviewGrade !== undefined) {
+      model.reviewGradeProvenance = GRADE_PROVENANCE;
+    }
+  }
 }
 
 module.exports = { ACCOUNTS, ANTIGRAVITY_MODELS, NINEROUTER_MODELS, GRADE_PROVENANCE };
