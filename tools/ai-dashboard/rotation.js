@@ -119,7 +119,6 @@ function countDispatcherLogs(dir) {
   }
 }
 
-
 const SOURCE_DEFS = [
   { id: '9router', label: '9Router' },
   { id: 'xkiro', label: 'xKiro' },
@@ -155,7 +154,6 @@ function sourceDefinitions(configuredIds, observedLaneIds) {
   }
   return defs;
 }
-
 
 function parseLogLines(logDir) {
   // Dispatcher lines written by .worktrees/logs/dispatch.sh:
@@ -212,18 +210,57 @@ function parseLogLines(logDir) {
       let m;
       if ((m = TRY.exec(line))) {
         if (open) open.outcome = 'failed';
-        open = { at: isoAt(m[3]), sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: stale ? 'ended' : 'live', tokens: 'UNKNOWN', started: true };
+        open = {
+          at: isoAt(m[3]),
+          sourceId: laneToSource(m[1]),
+          modelId: m[2],
+          runId,
+          outcome: stale ? 'ended' : 'live',
+          tokens: 'UNKNOWN',
+          started: true,
+        };
         entries.push(open);
       } else if ((m = EXHAUSTED.exec(line))) {
-        if (open) { open.outcome = 'quota-refused'; open = null; }
-        else entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'quota-refused', tokens: 'UNKNOWN', started: true });
+        if (open) {
+          open.outcome = 'quota-refused';
+          open = null;
+        } else
+          entries.push({
+            at: null,
+            sourceId: laneToSource(m[1]),
+            modelId: m[2],
+            runId,
+            outcome: 'quota-refused',
+            tokens: 'UNKNOWN',
+            started: true,
+          });
       } else if ((m = SKIP.exec(line))) {
         // dispatch.sh checked the quota before launching and stayed away, so a
         // skip is a refused lane, never a run that happened.
-        entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'quota-refused', tokens: 'UNKNOWN', started: false, reason: m[3] });
+        entries.push({
+          at: null,
+          sourceId: laneToSource(m[1]),
+          modelId: m[2],
+          runId,
+          outcome: 'quota-refused',
+          tokens: 'UNKNOWN',
+          started: false,
+          reason: m[3],
+        });
       } else if ((m = DONE.exec(line))) {
-        if (open) { open.outcome = 'done'; open = null; }
-        else entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'done', tokens: 'UNKNOWN', started: true });
+        if (open) {
+          open.outcome = 'done';
+          open = null;
+        } else
+          entries.push({
+            at: null,
+            sourceId: laneToSource(m[1]),
+            modelId: m[2],
+            runId,
+            outcome: 'done',
+            tokens: 'UNKNOWN',
+            started: true,
+          });
       }
     }
     // Tokens for the attempts this file produced, whether or not one is still open.
@@ -261,7 +298,10 @@ function parseLogLines(logDir) {
           }
         }
         const codex = [...text.matchAll(CODEX_TOKENS_RE)].pop();
-        if (codex) { total += Number(codex[1].replace(/,/g, '')); seen = true; }
+        if (codex) {
+          total += Number(codex[1].replace(/,/g, ''));
+          seen = true;
+        }
         if (seen) {
           const mine = entries.filter((e) => e.runId === runId);
           const target = mine.filter((e) => e.outcome === 'live')[0] || mine[mine.length - 1];
@@ -290,33 +330,42 @@ function probeXkiro(now, ttlMs) {
   if (stale && token && !probeCache.get(key + ':inflight')) {
     probeCache.set(key + ':inflight', true);
     const controller = new AbortController();
-    const timer = setTimeout(function () { controller.abort(); }, 8000);
+    const timer = setTimeout(function () {
+      controller.abort();
+    }, 8000);
     fetch('https://api.xkiro.com/v1/usage', {
       headers: { Authorization: 'Bearer ' + token },
       signal: controller.signal,
     })
-      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (r) {
+        return r.ok ? r.json() : null;
+      })
       .then(function (j) {
         const free = j && j.free_tokens;
         if (free && typeof free.used_today === 'number') {
           probeCache.set(key, {
             at: Date.now(),
             value: {
-              declaredLimit: typeof free.limit_per_day === 'number' ? free.limit_per_day : 'UNKNOWN',
+              declaredLimit:
+                typeof free.limit_per_day === 'number' ? free.limit_per_day : 'UNKNOWN',
               consumption: free.used_today,
               headroom: typeof free.remaining === 'number' ? free.remaining : 'UNKNOWN',
             },
           });
         }
       })
-      .catch(function () { /* provider unreachable; the last measurement stands */ })
+      .catch(function () {
+        /* provider unreachable; the last measurement stands */
+      })
       .finally(function () {
         clearTimeout(timer);
         probeCache.delete(key + ':inflight');
       });
   }
 
-  return cached ? cached.value : { declaredLimit: 'UNKNOWN', consumption: 'UNKNOWN', headroom: 'UNKNOWN' };
+  return cached
+    ? cached.value
+    : { declaredLimit: 'UNKNOWN', consumption: 'UNKNOWN', headroom: 'UNKNOWN' };
 }
 
 function detectConfigured(homeDir, explicit) {
@@ -331,7 +380,10 @@ function detectConfigured(homeDir, explicit) {
   if (exists('.cline')) found.add('cline');
   if (exists('.agy') || exists('AppData', 'Local', 'agy')) found.add('agy-local');
   if (exists('.codex')) found.add('codex');
-  if (exists('.ao')) { found.add('ao'); found.add('agy-docker'); }
+  if (exists('.ao')) {
+    found.add('ao');
+    found.add('agy-docker');
+  }
   if (exists('.claude-9router')) found.add('9router');
   if (exists('.openclaw-autoclaw')) found.add('autoclaw');
   return found;
@@ -348,9 +400,7 @@ function readCooldowns(ledgerFile) {
     return cooldowns;
   }
   const now = Date.now();
-  const refusals = observations.filter(
-    (o) => o && o.outcome === 'refused' && o.accountId
-  );
+  const refusals = observations.filter((o) => o && o.outcome === 'refused' && o.accountId);
   for (const ref of refusals) {
     const id = String(ref.accountId).toLowerCase();
     const refTime = ref.at ? new Date(ref.at).getTime() : 0;
@@ -402,14 +452,18 @@ function buildRotationState(options) {
   const configuredIds = detectConfigured(opts.homeDir, Boolean(opts.homeDir));
   for (const e of logEntries) configuredIds.add(e.sourceId);
   const allowProbe = opts.probe !== false;
-  const xkiroUsage = allowProbe && configuredIds.has('xkiro') ? probeXkiro(now, opts.probeTtlMs) : null;
+  const xkiroUsage =
+    allowProbe && configuredIds.has('xkiro') ? probeXkiro(now, opts.probeTtlMs) : null;
   for (const id of Object.keys(cooldowns)) configuredIds.add(id);
   for (const id of Object.keys(quotaAccounts)) configuredIds.add(id.toLowerCase());
 
   const hasAnyData = configuredIds.size > 0;
   const sources = [];
 
-  for (const def of sourceDefinitions(configuredIds, logEntries.map((e) => e.sourceId))) {
+  for (const def of sourceDefinitions(
+    configuredIds,
+    logEntries.map((e) => e.sourceId)
+  )) {
     const isConfigured = hasAnyData ? configuredIds.has(def.id) : false;
     if (hasAnyData && !isConfigured) continue;
 
@@ -420,21 +474,20 @@ function buildRotationState(options) {
       .map((e) => ({ outcome: e.outcome, at: e.at }));
 
     const liveEntries = sourceLogs.filter((e) => e.outcome === 'live');
-    const activeRun = liveEntries.length > 0
-      ? {
-          modelId: liveEntries[liveEntries.length - 1].modelId,
-          tokensSoFar: liveEntries[liveEntries.length - 1].tokens,
-          startedAt: liveEntries[liveEntries.length - 1].at,
-        }
-      : { modelId: null, tokensSoFar: 'UNKNOWN', startedAt: null };
+    const activeRun =
+      liveEntries.length > 0
+        ? {
+            modelId: liveEntries[liveEntries.length - 1].modelId,
+            tokensSoFar: liveEntries[liveEntries.length - 1].tokens,
+            startedAt: liveEntries[liveEntries.length - 1].at,
+          }
+        : { modelId: null, tokensSoFar: 'UNKNOWN', startedAt: null };
 
     const cooldown = Object.assign({ reason: null, until: null }, cooldowns[def.id] || {});
     const isOnCooldown = cooldown.until && new Date(cooldown.until).getTime() > now;
 
     let consumption = 'UNKNOWN';
-    const knownTokens = sourceLogs
-      .filter((e) => e.tokens !== 'UNKNOWN')
-      .map((e) => e.tokens);
+    const knownTokens = sourceLogs.filter((e) => e.tokens !== 'UNKNOWN').map((e) => e.tokens);
     if (knownTokens.length > 0) {
       consumption = knownTokens.reduce((a, b) => a + b, 0);
     }
@@ -504,8 +557,11 @@ function buildRotationState(options) {
     attempts: logReadable ? logEntries.filter((e) => e.started).length : 'UNKNOWN',
     skipped: logReadable ? logEntries.filter((e) => !e.started).length : 'UNKNOWN',
     live: logReadable ? logEntries.filter((e) => e.outcome === 'live').length : 'UNKNOWN',
-    quotaRefused: logReadable ? logEntries.filter((e) => e.outcome === 'quota-refused').length : 'UNKNOWN',
-    exhausted: sources.filter((x) => x.status === 'quota-exhausted' || x.status === 'cooldown').length,
+    quotaRefused: logReadable
+      ? logEntries.filter((e) => e.outcome === 'quota-refused').length
+      : 'UNKNOWN',
+    exhausted: sources.filter((x) => x.status === 'quota-exhausted' || x.status === 'cooldown')
+      .length,
     sourcesConfigured: sources.length,
     tokens: (function () {
       if (!logReadable) return 'UNKNOWN';

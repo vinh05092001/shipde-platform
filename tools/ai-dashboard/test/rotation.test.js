@@ -11,7 +11,13 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 
-const { buildRotationState, parseLogLines, readCooldowns, resolveLogDir, SOURCE_DEFS } = require('../rotation');
+const {
+  buildRotationState,
+  parseLogLines,
+  readCooldowns,
+  resolveLogDir,
+  SOURCE_DEFS,
+} = require('../rotation');
 const { createDashboardServer } = require('../server');
 
 function makeTmpDir() {
@@ -38,7 +44,10 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
         assert.ok(src.id, 'source must have id');
         assert.ok(src.label, 'source must have label');
         assert.strictEqual(typeof src.configured, 'boolean');
-        assert.ok(['live','idle','cooldown','quota-exhausted'].includes(src.status), 'valid status');
+        assert.ok(
+          ['live', 'idle', 'cooldown', 'quota-exhausted'].includes(src.status),
+          'valid status'
+        );
         assert.ok(src.activeRun, 'activeRun must exist');
         assert.ok('modelId' in src.activeRun, 'activeRun.modelId');
         assert.ok('tokensSoFar' in src.activeRun, 'activeRun.tokensSoFar');
@@ -84,15 +93,33 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
       const now = Date.now();
       const ledgerFile = path.join(tmp, 'ledger.json');
       const refusedAt = new Date(now - 60000).toISOString();
-      fs.writeFileSync(ledgerFile, JSON.stringify({
-        version: 1, updatedAt: refusedAt,
-        observations: [{ accountId: '9router', model: 'gpt-4o', outcome: 'refused', consumed: {}, reason: 'rate limit exceeded', at: refusedAt }]
-      }));
+      fs.writeFileSync(
+        ledgerFile,
+        JSON.stringify({
+          version: 1,
+          updatedAt: refusedAt,
+          observations: [
+            {
+              accountId: '9router',
+              model: 'gpt-4o',
+              outcome: 'refused',
+              consumed: {},
+              reason: 'rate limit exceeded',
+              at: refusedAt,
+            },
+          ],
+        })
+      );
       const state = buildRotationState({
         homeDir: tmp,
         probe: false,
-        rootDir: tmp, logDir: path.join(tmp, 'no'), ledgerFile, quotaFile: path.join(tmp, 'nq'), now });
-      const router = state.sources.find(s => s.id === '9router');
+        rootDir: tmp,
+        logDir: path.join(tmp, 'no'),
+        ledgerFile,
+        quotaFile: path.join(tmp, 'nq'),
+        now,
+      });
+      const router = state.sources.find((s) => s.id === '9router');
       assert.ok(router, '9router source must exist');
       assert.strictEqual(router.status, 'cooldown');
       assert.ok(router.cooldown.until);
@@ -105,15 +132,26 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
       const now = Date.now();
       const ledgerFile = path.join(tmp, 'ledger.json');
       const refusedAt = new Date(now - 600000).toISOString();
-      fs.writeFileSync(ledgerFile, JSON.stringify({
-        version: 1, updatedAt: refusedAt,
-        observations: [{ accountId: 'cline', outcome: 'refused', reason: 'quota', at: refusedAt }]
-      }));
+      fs.writeFileSync(
+        ledgerFile,
+        JSON.stringify({
+          version: 1,
+          updatedAt: refusedAt,
+          observations: [
+            { accountId: 'cline', outcome: 'refused', reason: 'quota', at: refusedAt },
+          ],
+        })
+      );
       const state = buildRotationState({
         homeDir: tmp,
         probe: false,
-        rootDir: tmp, logDir: path.join(tmp, 'x'), ledgerFile, quotaFile: path.join(tmp, 'x.json'), now });
-      const cline = state.sources.find(s => s.id === 'cline');
+        rootDir: tmp,
+        logDir: path.join(tmp, 'x'),
+        ledgerFile,
+        quotaFile: path.join(tmp, 'x.json'),
+        now,
+      });
+      const cline = state.sources.find((s) => s.id === 'cline');
       if (cline) assert.notStrictEqual(cline.status, 'cooldown');
       fs.rmSync(tmp, { recursive: true, force: true });
     });
@@ -122,7 +160,7 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
   describe('AC-AI-47-04: Server routes', () => {
     test('/api/rotation returns 200 with valid JSON', async () => {
       const server = createDashboardServer({ disablePolling: true });
-      await new Promise(r => server.listen(0, '127.0.0.1', r));
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
       const port = server.address().port;
       try {
         const res = await fetch('http://127.0.0.1:' + port + '/api/rotation');
@@ -131,12 +169,14 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
         assert.ok(data.observedAt);
         assert.ok(data.hub);
         assert.ok(Array.isArray(data.sources));
-      } finally { server.close(); }
+      } finally {
+        server.close();
+      }
     });
 
     test('/rotation serves HTML with SVG container', async () => {
       const server = createDashboardServer({ disablePolling: true });
-      await new Promise(r => server.listen(0, '127.0.0.1', r));
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
       const port = server.address().port;
       try {
         const res = await fetch('http://127.0.0.1:' + port + '/rotation');
@@ -144,7 +184,9 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
         const html = await res.text();
         assert.ok(html.includes('<svg'));
         assert.ok(html.includes('rotation-svg'));
-      } finally { server.close(); }
+      } finally {
+        server.close();
+      }
     });
   });
 
@@ -156,15 +198,18 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
     // recorded dispatches sat one level up.
     const stamp = (minutesAgo) => {
       const d = new Date(Date.now() - minutesAgo * 60000);
-      return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+      return [d.getHours(), d.getMinutes(), d.getSeconds()]
+        .map((n) => String(n).padStart(2, '0'))
+        .join(':');
     };
-    const dispatchLog = () => [
-      `=== trying xkiro free/chatgpt-4.1-mini ${stamp(20)} ===`,
-      '--- xkiro free/chatgpt-4.1-mini exhausted ---',
-      `=== trying bai7 anthropic/claude-sonnet-4.5 ${stamp(15)} ===`,
-      '=== finished on bai7 anthropic/claude-sonnet-4.5 ===',
-      '--- skip xkiro minimax/minimax-m3: daily free quota remaining 0 ---',
-    ].join('\n');
+    const dispatchLog = () =>
+      [
+        `=== trying xkiro free/chatgpt-4.1-mini ${stamp(20)} ===`,
+        '--- xkiro free/chatgpt-4.1-mini exhausted ---',
+        `=== trying bai7 anthropic/claude-sonnet-4.5 ${stamp(15)} ===`,
+        '=== finished on bai7 anthropic/claude-sonnet-4.5 ===',
+        '--- skip xkiro minimax/minimax-m3: daily free quota remaining 0 ---',
+      ].join('\n');
 
     function fixture() {
       const tmp = makeTmpDir();
@@ -201,7 +246,11 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
 
     test('attempts are counted from the real dispatcher lines, skips are not runs', () => {
       const { f, state } = stateFrom({});
-      assert.strictEqual(state.log.exists, true, 'buildRotationState must read the resolved folder');
+      assert.strictEqual(
+        state.log.exists,
+        true,
+        'buildRotationState must read the resolved folder'
+      );
       assert.strictEqual(state.totals.attempts, 2, 'the two lanes dispatch.sh actually launched');
       assert.strictEqual(state.totals.skipped, 1, 'a pre-flight skip is a refusal, not a run');
       assert.strictEqual(state.totals.quotaRefused, 2, 'one exhausted, one skipped');
@@ -213,10 +262,15 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
       const { f, state } = stateFrom({});
       const bai = state.sources.find((s) => s.id === 'bai7');
       assert.ok(bai, 'bai7 ran 1 logged attempt and must not be invisible');
-      const startedFor = (id) => parseLogLines(state.log.dir).filter((e) => e.sourceId === id && e.started).length;
+      const startedFor = (id) =>
+        parseLogLines(state.log.dir).filter((e) => e.sourceId === id && e.started).length;
       let accounted = 0;
       for (const src of state.sources) accounted += startedFor(src.id);
-      assert.strictEqual(accounted, state.totals.attempts, 'the per-source breakdown must add up to the headline');
+      assert.strictEqual(
+        accounted,
+        state.totals.attempts,
+        'the per-source breakdown must add up to the headline'
+      );
       fs.rmSync(f.tmp, { recursive: true, force: true });
     });
 
