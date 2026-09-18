@@ -878,7 +878,7 @@ each one without leaving this Work Item's Allowed paths:
    (`Control status matches register row 170: BLOCKED_DEPENDENCY`),
    `AC-AI-37-18` exit `0`.
 
-#### Round 3 — the missing in-scope deliverable (branch `fix/pr103-211719`)
+#### Round 3 — the missing in-scope deliverable (worktree `fix/pr103-211719` → PR branch `feat/task-ai-37-trivy-ci`)
 
 Rounds 1 and 2 answered findings 1, 2 and 4 by resynchronising the branch and
 recording the outcome here, but that record was prose: nothing in the repository
@@ -907,11 +907,25 @@ PowerShell, `node v24.15.0`):
 | mutant: remedies removed (`ADVANCE`, `CLOSE`) | `1` | `DISCLOSURE_MISSING: ADVANCE; DISCLOSURE_MISSING: CLOSE` |
 
 The mutants were applied to this document in place and it was restored
-byte-for-byte from a backup held outside the repository: the `sha256` digest was
-identical before and after (`27fab76599e9…`), and no `git checkout --` was used on
-uncommitted work. The probe's own controls additionally prove that it stays silent
-on a Control status that is not blocked and that its parser can tell two Control
-statuses apart.
+byte-for-byte from an in-memory copy held by the measuring harness: the harness
+printed `spec restored byte-for-byte: True`, `git status` reported the document
+clean afterwards, and no `git checkout --` was used on uncommitted work. The
+digest of this document as committed at `17e1af4` is `sha256 89bde9a59de3…`,
+reproducible with `git show 17e1af4:docs/product-spec/work-items/TASK-AI-37.md`
+piped to `sha256sum`; the digest is quoted for that commit rather than for the
+current head because this record's own follow-up edit changes it again.
+
+Re-measuring the mutants after this section was written is what produced the
+hardening recorded next. The first measurement of the renamed-heading mutant
+reported `DISCLOSURE_MISSING: TASK-AI-19` rather than a missing section, because
+`AC-AI-37-21` located its subject with a plain substring search and this section's
+own prose names the heading it quotes, so the probe re-anchored onto that mention.
+The probe now matches the heading line itself
+(`/^### Review routing disposition[ \t]*$/m`), which is why a renamed or deleted
+heading is reported as `DISPOSITION_SECTION_MISSING` above and a prose mention can
+never stand in for the section. The probe's own controls additionally prove that
+it stays silent on a Control status that is not blocked and that its parser can
+tell two Control statuses apart.
 
 Round 3 touches nothing outside `Allowed paths`: `FEATURE-DELIVERY-REGISTER.csv`,
 `.github/**`, `tools/ecosystem-manifest.json` and every script delivered by PR #46
@@ -928,7 +942,8 @@ and PR #56 are unchanged, and no CI gate is claimed.
 - `python docs/product-spec/scripts/validate_docs.py` (exit 0: `Documentation validation passed:` — 105 markdown files, 130 feature IDs, 178 delivery rows, 853 unique identifiers at the round-2 head; the file, row and identifier totals grow with the repository, so only the `Documentation validation passed:` prefix is asserted)
 - `python docs/product-spec/scripts/validate_pr_contract.py` (exit 0: Pull Request contract passed for TASK-AI-37; 1 changed files inspected at the round-2 head)
 
-Round 3 (branch `fix/pr103-211719`) added these measurements, taken at this head:
+Round 3 (repair worktree `fix/pr103-211719`, pushed to the PR branch
+`feat/task-ai-37-trivy-ci`) added these measurements, taken at this head:
 
 - `node tools/ai-brain/acceptance/ac-37-21-review-routing-hold.js` (exit 0: `REVIEW_ROUTING_HOLD: BLOCKED_DEPENDENCY disclosed with a governed transition path`; exit 2 with `SOURCE_MISSING: docs/product-spec/work-items/TASK-AI-37.md` from an empty directory outside the repository; four mutants each exit 1 — see the table in § PR #103 `CHANGES_REQUIRED` resolution record)
 - `node --test 'tools/ai-brain/test/*.test.js'` (exit 0: 483 tests, 109 suites, 483 pass, 0 fail)

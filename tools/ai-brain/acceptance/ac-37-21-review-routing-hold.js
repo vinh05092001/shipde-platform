@@ -25,6 +25,14 @@ const SPEC = path.join('docs', 'product-spec', 'work-items', 'TASK-AI-37.md');
 const ALIGNMENT = path.join(__dirname, 'ac-37-15-status-alignment.js');
 
 const HEADING = '### Review routing disposition';
+// The section is located by its own heading line. A plain substring search is
+// not enough: this document also refers to the section by name in prose (for
+// example in § Post-implementation notes), and that reference must never be
+// mistaken for the section itself. When the heading is renamed or deleted, the
+// section is therefore reported missing instead of silently re-anchoring to a
+// later mention.
+const HEADING_PATTERN = /^### Review routing disposition[ \t]*$/m;
+
 const REQUIRED_DISCLOSURES = [
   'REVIEW HOLD',
   'FEATURE-DELIVERY-REGISTER.csv',
@@ -50,9 +58,9 @@ function controlStatus(markdown) {
 
 // The body of the disposition section, up to the next heading of any level.
 function dispositionBody(markdown) {
-  const start = markdown.indexOf(HEADING);
-  if (start < 0) return null;
-  const rest = markdown.slice(start + HEADING.length);
+  const heading = markdown.match(HEADING_PATTERN);
+  if (heading === null) return null;
+  const rest = markdown.slice(heading.index + heading[0].length);
   const end = rest.search(/^#{2,3} /m);
   return (end < 0 ? rest : rest.slice(0, end)).trim();
 }
@@ -93,7 +101,9 @@ const reported = violations(markdown, status);
 // SOURCE_MISSING guard above.
 if (BLOCKED_STAGE.test(status) && reported.length === 0) {
   const body = dispositionBody(markdown);
-  if (violations(markdown.replace(HEADING, '### Review routing note'), status).length === 0) {
+  if (
+    violations(markdown.replace(HEADING_PATTERN, '### Review routing note'), status).length === 0
+  ) {
     console.error('CONTROL_FAILED: deleting the disposition section is not detected');
     process.exit(2);
   }
