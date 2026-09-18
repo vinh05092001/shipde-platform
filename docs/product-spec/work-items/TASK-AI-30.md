@@ -13,8 +13,8 @@
 | Risk | `HIGH` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-30.md`, `tools/ai-brain/qualification.js`, `tools/ai-brain/test/qualification.test.js`, `tools/ai-brain/acceptance/ac-30-*.js`, `tools/ai-brain/acceptance/lib/qualification.js`, `tools/ai-brain/acceptance/lib/dependency-declared.js`, `tools/ai-brain/cli.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `spec/task-ai-30` |
-| Pull Request | `Pending` |
+| Branch | `feat/task-ai-30-connection-test` |
+| Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/104` |
 
 ### Status transition ledger
 
