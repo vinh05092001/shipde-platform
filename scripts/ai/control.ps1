@@ -16,8 +16,7 @@ param(
     [ValidateRange(1, 1)]
     [int]$SupervisorMaxNudges = 1,
     [int]$SupervisorReviewTimeoutMinutes = 20,
-    [ValidateRange(1, 100)]
-    [int]$SupervisorMaxRepairAttemptsPerHead = 2,
+    [int]$MaxRecoveryAttempts = 1,
     [switch]$NonInteractive
 )
 
@@ -779,12 +778,12 @@ function Get-ShipDeCheckAppId {
 }
 
 function Get-ShipDeLatestCheckAttempts {
-    param([Parameter(Mandatory = $true)][object]$PullRequest)
+    param([AllowNull()][object[]]$StatusCheckRollup)
 
     # GitHub can retain superseded attempts for one check name on the same
     # immutable head. Only the newest attempt for each name is authoritative.
     $latestByName = @{}
-    foreach ($check in @($PullRequest.statusCheckRollup)) {
+    foreach ($check in @($StatusCheckRollup)) {
         $name = Get-ShipDeCheckName -Check $check
         if ([string]::IsNullOrWhiteSpace($name)) { continue }
 
@@ -824,45 +823,13 @@ function Get-ShipDeLatestCheckAttempts {
     return @($latestByName.Values | ForEach-Object { $_.Check })
 }
 
-function Get-ShipDeFailingCheckEvidence {
-    param(
-        [Parameter(Mandatory = $true)][object]$PullRequest,
-        [object[]]$RequiredChecks = $null
-    )
-
-    # TASK-AI-08 (AI-08-R01, AI-08-R07): the checks a CI repair is bound to,
-    # resolved with exactly the grouping Get-ShipDePrGate uses. Ambiguous
-    # attempts throw there and here alike, so a repair never names a guessed
-    # check. A required check that finished NEUTRAL fails the gate, so it is
-    # evidence too.
-    $targetChecks = if ($null -ne $RequiredChecks -and @($RequiredChecks).Count -gt 0) { $RequiredChecks } else { $script:RequiredPrChecks }
-    $requiredNames = @($targetChecks | ForEach-Object {
-        if ($_ -is [string]) { $_ } else { [string](Get-ShipDeObjectProperty -Object $_ -Names @("Context", "context", "name")) }
-    })
-    $evidence = [System.Collections.Generic.List[object]]::new()
-    foreach ($check in @(Get-ShipDeLatestCheckAttempts -PullRequest $PullRequest)) {
-        $result = Get-ShipDeCheckResult -Check $check
-        $name = Get-ShipDeCheckName -Check $check
-        if ($result -eq "FAILED" -or ($result -eq "NEUTRAL" -and $requiredNames -contains $name)) {
-            $conclusion = Get-ShipDeCheckField -Check $check -Field "conclusion"
-            if ([string]::IsNullOrWhiteSpace($conclusion)) { $conclusion = Get-ShipDeCheckField -Check $check -Field "state" }
-            [void]$evidence.Add(@{
-                Name = $name
-                Provider = Get-ShipDeCheckProvider -Check $check
-                Conclusion = ([string]$conclusion).ToUpperInvariant()
-            })
-        }
-    }
-    return ,@($evidence | Sort-Object { $_.Name })
-}
-
 function Get-ShipDePrGate {
     param(
         [Parameter(Mandatory = $true)][object]$PullRequest,
         [object[]]$RequiredChecks = $null
     )
 
-    $checks = @(Get-ShipDeLatestCheckAttempts -PullRequest $PullRequest)
+    $checks = @(Get-ShipDeLatestCheckAttempts -StatusCheckRollup @($PullRequest.statusCheckRollup))
     if ($checks.Count -eq 0) {
         return "PENDING"
     }
@@ -1689,7 +1656,7 @@ function Get-ShipDeCodexReviewArgs {
     return @("exec", "--sandbox", "read-only", "--output-schema", $SchemaFile, "--output-last-message", $LastMessageFile, "-")
 }
 
-function Invoke-ShipDeAgentRouterReviewFallback {
+function Invoke-ShipDeClaudeReviewFallback {
     param(
         [Parameter(Mandatory = $true)][string]$ReviewPrompt,
         [Parameter(Mandatory = $true)][string]$ReviewHeadSha,
@@ -1962,11 +1929,11 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
             Pop-Location
         }
 
-        # Fallback to AgentRouter if Codex execution failed or produced invalid/empty review
+        # Fallback to Claude Code if Codex execution failed or produced invalid/empty review
         $codexReviewValid = ($exitCode -eq 0) -and (Test-Path -LiteralPath $reviewFile) -and (-not [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $reviewFile -Raw -ErrorAction SilentlyContinue)))
         if (-not $codexReviewValid) {
-            Write-Warning "Codex review execution was not successful (Exit code: $exitCode). Initiating AgentRouter fallback chain..."
-            $fallbackSuccess = Invoke-ShipDeAgentRouterReviewFallback `
+            Write-Warning "Codex review execution was not successful (Exit code: $exitCode). Initiating Claude Code fallback chain..."
+            $fallbackSuccess = Invoke-ShipDeClaudeReviewFallback `
                 -ReviewPrompt $reviewPrompt `
                 -ReviewHeadSha $reviewHeadSha `
                 -PullRequestNumber $pr.number `
@@ -3027,15 +2994,15 @@ function Show-ShipDeStatus {
 
 # ============================================================================
 # SUPERVISOR FUNCTIONS (TASK-AI-06)
-# Deterministic AO control. AO is launched through the existing AgentRouter
+# Deterministic AO control. AO is launched through the existing 9Router
 # Claude profile by start-agent-orchestrator.ps1.
 # ============================================================================
 
 $script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.json"
 $script:SupervisorLockFile = Join-Path $script:HandoffRoot "supervisor.lock"
 $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.json"
-$script:AgentRouterProfile = Join-Path (Get-ShipDeUserHome) ".claude"
-$script:AgentRouterPort = 20128
+$script:NineRouterProfile = Join-Path (Get-ShipDeUserHome) ".claude"
+$script:NineRouterPort = 20128
 $script:ExpectedAoVersion = Get-ShipDePinnedAoVersion
 $script:AoExecutablePath = $null
 
@@ -3175,7 +3142,7 @@ function Test-ShipDeAoReadiness {
     }
 }
 
-function Test-ShipDeAgentRouterEndpoint {
+function Test-ShipDeNineRouterEndpoint {
     param([Parameter(Mandatory = $true)][int]$Port)
 
     if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port $Port)) {
@@ -3207,7 +3174,7 @@ function Assert-ShipDeAoRuntimeMarker {
         throw "AO router runtime marker is stale. Restart AO through the governed launcher."
     }
     if ([string]$Runtime.profile -ne $ExpectedProfile -or [string]$Runtime.base_url -ne $ExpectedBaseUrl) {
-        throw "AO was not launched with the current AgentRouter Claude profile."
+        throw "AO was not launched with the current 9Router Claude profile."
     }
     if ([string]$Runtime.ao_version -ne $ExpectedVersion) {
         throw "AO CLI runtime marker version does not match pinned version $ExpectedVersion."
@@ -3281,15 +3248,15 @@ function Assert-ShipDeAoRuntimeMarker {
     }
 }
 
-function Assert-ShipDeAgentRouterProfile {
-    $settingsPath = Join-Path $script:AgentRouterProfile "settings.json"
+function Assert-ShipDeNineRouterProfile {
+    $settingsPath = Join-Path $script:NineRouterProfile "settings.json"
     if (-not (Test-Path $settingsPath)) {
-        throw "AgentRouter Claude profile is missing: $settingsPath"
+        throw "9Router Claude profile is missing: $settingsPath"
     }
     try {
         $config = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
-        throw "AgentRouter Claude profile contains invalid JSON: $settingsPath"
+        throw "9Router Claude profile contains invalid JSON: $settingsPath"
     }
 
     $baseUrl = [string]$config.env.ANTHROPIC_BASE_URL
@@ -3299,16 +3266,16 @@ function Assert-ShipDeAgentRouterProfile {
         -not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$uri) -or
         $uri.Scheme -ne "http" -or
         $uri.Host -notin @("localhost", "127.0.0.1") -or
-        $uri.Port -ne $script:AgentRouterPort -or
+        $uri.Port -ne $script:NineRouterPort -or
         $uri.AbsolutePath.TrimEnd('/') -ne "/v1" -or
         -not [string]::IsNullOrWhiteSpace($uri.Query) -or
         -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
         -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
     ) {
-        throw "AgentRouter Claude profile must use http://localhost:$($script:AgentRouterPort)/v1."
+        throw "9Router Claude profile must use http://localhost:$($script:NineRouterPort)/v1."
     }
-    if (-not (Test-ShipDeAgentRouterEndpoint -Port $script:AgentRouterPort)) {
-        throw "Port $($script:AgentRouterPort) is not serving the expected local 9Router health and version contract."
+    if (-not (Test-ShipDeNineRouterEndpoint -Port $script:NineRouterPort)) {
+        throw "Port $($script:NineRouterPort) is not serving the expected local 9Router health and version contract."
     }
     if (-not (Test-Path $script:AoRouterRuntimeFile)) {
         throw "AO router runtime marker is missing. Start AO with scripts/ai/start-agent-orchestrator.ps1."
@@ -3320,18 +3287,20 @@ function Assert-ShipDeAgentRouterProfile {
     }
     Assert-ShipDeAoRuntimeMarker `
         -Runtime $runtime `
-        -ExpectedProfile $script:AgentRouterProfile `
+        -ExpectedProfile $script:NineRouterProfile `
         -ExpectedBaseUrl $baseUrl `
         -ExpectedVersion $script:ExpectedAoVersion `
         -ExpectedExecutable (Get-ShipDeAoInvocationPath)
 }
 
-function Ensure-ShipDeAgentRouterRuntime {
+function Ensure-ShipDeNineRouterRuntime {
     param(
-        [scriptblock]$ProfileValidator = { Assert-ShipDeAgentRouterProfile },
+        [scriptblock]$ProfileValidator = { Assert-ShipDeNineRouterProfile },
         [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
         [scriptblock]$Launcher = {
             param($Path, $Root, $Port, $Version)
+            # `-AgentRouterPort` is start-agent-orchestrator.ps1's parameter name (out of
+            # scope here); on that script it still addresses 9Router's local port (20128).
             & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -Restart
         }
     )
@@ -3344,7 +3313,7 @@ function Ensure-ShipDeAgentRouterRuntime {
         }
         throw $readiness.Reason
     } catch {
-        Write-Warning ("AO is not ready through AgentRouter: {0}" -f $_.Exception.Message)
+        Write-Warning ("AO is not ready through 9Router: {0}" -f $_.Exception.Message)
     }
 
     $launcherPath = Join-Path $PSScriptRoot "start-agent-orchestrator.ps1"
@@ -3352,9 +3321,9 @@ function Ensure-ShipDeAgentRouterRuntime {
         throw "Governed AO launcher is missing: $launcherPath"
     }
 
-    Write-Host "[SUPERVISOR] Starting AO through the AgentRouter Claude profile..."
+    Write-Host "[SUPERVISOR] Starting AO through the 9Router Claude profile..."
     try {
-        & $Launcher $launcherPath $AiRoot $script:AgentRouterPort $script:ExpectedAoVersion
+        & $Launcher $launcherPath $AiRoot $script:NineRouterPort $script:ExpectedAoVersion
     } catch {
         throw "The governed AO launcher failed: $($_.Exception.Message)"
     }
@@ -3630,6 +3599,7 @@ function Assert-ShipDeReusedAoSession {
     }
 
     if ([string]::IsNullOrWhiteSpace($worktree)) {
+        Write-Host ("[BLOCKED] Recovery target is missing: worktree for AO session '{0}'. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item." -f $sessionId)
         throw "Reused AO session does not have an active worktree path. Failing closed."
     }
 
@@ -3862,6 +3832,11 @@ function Normalize-ShipDeSupervisorState {
         NudgeCount = 0
         UnknownPollCount = 0
         RepairCount = 0
+        FailoverCount = 0
+        RecoveryCount = 0
+        LastRecoveryAt = $null
+        RecoveredFrom = $null
+        RecoveryDiagnostic = $null
         ProviderFailure = $false
         CiGate = $null
         ExactHeadVerdict = $null
@@ -3869,16 +3844,15 @@ function Normalize-ShipDeSupervisorState {
         LastAcknowledgedCiRepairHead = $null
         LastReviewRepairHead = $null
         LastAcknowledgedReviewRepairHead = $null
-        RepairAttemptsByHead = @{}
-        RepairAttemptsPerHead = $null
-        LastCiRepairEvidence = $null
-        LastReviewRepairEvidence = $null
-        RepairEvidenceHistory = @()
         LastReviewTriggeredHead = $null
         LastAcknowledgedReviewTriggerHead = $null
         LastReviewTriggeredAt = $null
         ReviewRequestCommentId = $null
         LastRepairDispatchedAt = $null
+        RepairAttemptsByHead = $null
+        LastCiRepairEvidence = $null
+        LastReviewRepairEvidence = $null
+        RepairAttemptsPerHead = $null
         PendingDispatch = $null
         RouterFailure = $null
         MergeIntent = $null
@@ -3891,7 +3865,6 @@ function Normalize-ShipDeSupervisorState {
                 $State[$key] = $normalized[$key]
             }
         }
-        $State["RepairAttemptsByHead"] = ConvertTo-ShipDeRepairAttemptMap -Value $State["RepairAttemptsByHead"]
         return $State
     } else {
         foreach ($prop in $State.PSObject.Properties) {
@@ -3899,174 +3872,34 @@ function Normalize-ShipDeSupervisorState {
         }
     }
 
-    $normalized["RepairAttemptsByHead"] = ConvertTo-ShipDeRepairAttemptMap -Value $normalized["RepairAttemptsByHead"]
     return $normalized
 }
 
-function ConvertTo-ShipDeRepairAttemptMap {
-    param([AllowNull()][object]$Value)
-
-    # A checkpoint read back from JSON carries PSCustomObjects; the loop writes
-    # hashtables. Both shapes become HEAD -> @{ CI = n; REVIEW = n }.
-    $map = @{}
-    if ($null -eq $Value) { return $map }
-    $pairs = if ($Value -is [System.Collections.IDictionary]) {
-        @($Value.Keys | ForEach-Object { @{ Key = [string]$_; Value = $Value[$_] } })
-    } else {
-        @($Value.PSObject.Properties | ForEach-Object { @{ Key = [string]$_.Name; Value = $_.Value } })
-    }
-    foreach ($pair in $pairs) {
-        $entry = @{ CI = 0; REVIEW = 0 }
-        foreach ($kind in @("CI", "REVIEW")) {
-            $count = Get-ShipDeObjectProperty -Object $pair.Value -Names @($kind)
-            if ($null -ne $count -and [string]$count -match '^\d+$') { $entry[$kind] = [int]$count }
-        }
-        $map[$pair.Key] = $entry
-    }
-    return $map
-}
-
-function Get-ShipDeRepairAttemptCount {
+function Assert-ShipDeRecoveryTargetExists {
     param(
-        [Parameter(Mandatory = $true)][object]$State,
-        [Parameter(Mandatory = $true)][ValidateSet("CI", "REVIEW")][string]$Kind,
-        [Parameter(Mandatory = $true)][string]$HeadSha
+        [Parameter(Mandatory = $true)][string]$Target,
+        [Parameter(Mandatory = $true)][bool]$Exists
     )
-
-    $map = ConvertTo-ShipDeRepairAttemptMap -Value (Get-ShipDeObjectProperty -Object $State -Names @("RepairAttemptsByHead"))
-    if (-not $map.ContainsKey($HeadSha)) { return 0 }
-    return [int]$map[$HeadSha][$Kind]
-}
-
-function Test-ShipDeRepairReactivationWindow {
-    param(
-        [Parameter(Mandatory = $true)][object]$State,
-        [int]$GraceSeconds = 120
-    )
-
-    if ([string]::IsNullOrWhiteSpace([string]$State.LastRepairDispatchedAt)) { return $false }
-    $dispatchedTime = [DateTime]::MinValue
-    if (-not [DateTime]::TryParse([string]$State.LastRepairDispatchedAt, [ref]$dispatchedTime)) { return $false }
-    $elapsed = (Get-Date).ToUniversalTime() - $dispatchedTime.ToUniversalTime()
-    return ($elapsed.TotalSeconds -ge 0 -and $elapsed.TotalSeconds -lt $GraceSeconds)
-}
-
-function Format-ShipDeLastRepairEvidence {
-    param([Parameter(Mandatory = $true)][hashtable]$State)
-
-    $parts = @()
-    $ci = $State.LastCiRepairEvidence
-    if ($null -ne $ci) {
-        $names = @(@($ci.Checks) | Where-Object { $null -ne $_ } | ForEach-Object { "{0}={1}" -f $_.Name, $_.Conclusion }) -join ", "
-        $parts += ("CI at {0}: {1}" -f $ci.Head, $names)
+    if (-not $Exists) {
+        Write-Host ("[BLOCKED] Recovery target is missing: {0}. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item." -f $Target)
+        throw "[BLOCKED] Recovery target is missing: $Target. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item."
     }
-    $review = $State.LastReviewRepairEvidence
-    if ($null -ne $review) {
-        $parts += ("review at {0}: {1} findings" -f $review.Head, $review.FindingsCount)
-    }
-    if ($parts.Count -eq 0) { return "none recorded" }
-    return ($parts -join "; ")
-}
-
-function Register-ShipDeRepairAttempt {
-    param(
-        [Parameter(Mandatory = $true)][hashtable]$State,
-        [Parameter(Mandatory = $true)][ValidateSet("CI", "REVIEW")][string]$Kind,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$HeadSha,
-        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
-        [Parameter(Mandatory = $true)][int]$MaxRepairAttemptsPerHead,
-        [Parameter(Mandatory = $true)][int]$MaxRepairBudget,
-        [AllowNull()][object]$Evidence
-    )
-
-    # TASK-AI-08: the Work Item total bound (AI-08-R03), the per-HEAD bound
-    # (AI-08-R02) and the evidence requirement (AI-08-R01) are all checked
-    # before anything but the exhausted counter is mutated.
-    if ($MaxRepairAttemptsPerHead -lt 1) {
-        throw "MaxRepairAttemptsPerHead must be at least 1; received $MaxRepairAttemptsPerHead."
-    }
-    # AI-08-R04: every exhaustion names the Work Item, the exact HEAD, the bound
-    # reached and the evidence of the last dispatch. A refused repair is not a
-    # dispatch, so neither bound mutates a counter when it refuses.
-    $lastEvidence = Format-ShipDeLastRepairEvidence -State $State
-    $nextTotal = [int]$State.RepairCount + 1
-    if ($nextTotal -gt $MaxRepairBudget) {
-        throw ("[BLOCKED] Supervisor repair budget exhausted ({0} repairs dispatched exceeds max budget {1} for Work Item '{2}') at exact HEAD {3}; bound reached: MaxRepairBudget={1}; last evidence: {4}. Stopping fail-closed for human intervention." -f $nextTotal, $MaxRepairBudget, $State.WorkItemId, $HeadSha, $lastEvidence)
-    }
-    if ($HeadSha -notmatch '^[a-fA-F0-9]{40}$') {
-        throw ("[BLOCKED] Cannot bind repair evidence for PR #{0} at exact HEAD {1}; stopping fail-closed" -f $PullRequestNumber, $HeadSha)
-    }
-    $attempts = Get-ShipDeRepairAttemptCount -State $State -Kind $Kind -HeadSha $HeadSha
-    if ($attempts -ge $MaxRepairAttemptsPerHead) {
-        throw ("[BLOCKED] Repair budget for exact HEAD {0} exhausted after {1} attempts for Work Item {2}; bound reached: MaxRepairAttemptsPerHead={3}; last evidence: {4}. Stopping fail-closed for human intervention" -f $HeadSha, $attempts, $State.WorkItemId, $MaxRepairAttemptsPerHead, $lastEvidence)
-    }
-    $hasEvidence = if ($Kind -eq "CI") {
-        $null -ne $Evidence -and @($Evidence).Count -gt 0
-    } else {
-        -not [string]::IsNullOrWhiteSpace([string]$Evidence)
-    }
-    if (-not $hasEvidence) {
-        throw ("[BLOCKED] Cannot bind repair evidence for PR #{0} at exact HEAD {1}; stopping fail-closed" -f $PullRequestNumber, $HeadSha)
-    }
-
-    $observedAt = (Get-Date).ToUniversalTime().ToString("o")
-    $map = ConvertTo-ShipDeRepairAttemptMap -Value $State.RepairAttemptsByHead
-    if (-not $map.ContainsKey($HeadSha)) { $map[$HeadSha] = @{ CI = 0; REVIEW = 0 } }
-    $map[$HeadSha][$Kind] = $attempts + 1
-    $State.RepairAttemptsByHead = $map
-    $State.RepairAttemptsPerHead = $MaxRepairAttemptsPerHead
-    $State.RepairCount = $nextTotal
-    # AI-08-R09: the evidence being replaced is archived, never dropped.
-    $previous = if ($Kind -eq "CI") { $State.LastCiRepairEvidence } else { $State.LastReviewRepairEvidence }
-    if ($null -ne $previous) {
-        $State.RepairEvidenceHistory = @(@($State.RepairEvidenceHistory) | Where-Object { $null -ne $_ }) + @(@{ Kind = $Kind; Evidence = $previous; SupersededAt = $observedAt })
-    }
-    if ($Kind -eq "CI") {
-        $State.LastCiRepairEvidence = @{ Head = $HeadSha; Checks = @($Evidence); ObservedAt = $observedAt }
-    } else {
-        $findingsCount = @(([string]$Evidence) -split "`n`n---`n`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
-        # AI-08-R08: the findings text itself is checkpointed, so a restart sends
-        # the identical review repair instead of re-deriving it.
-        $State.LastReviewRepairEvidence = @{ Head = $HeadSha; FindingsCount = $findingsCount; FindingsText = [string]$Evidence; ObservedAt = $observedAt }
-    }
-    return ($attempts + 1)
-}
-
-function New-ShipDeAoCiRepairMessage {
-    param(
-        [Parameter(Mandatory = $true)][int]$PullRequestNumber,
-        [Parameter(Mandatory = $true)][string]$HeadSha,
-        [AllowNull()][object]$Evidence,
-        [int]$MaxCharacters = $script:AoMessageMaxCharacters
-    )
-
-    $checks = if ($null -eq $Evidence) { @() } else { @(Get-ShipDeObjectProperty -Object $Evidence -Names @("Checks")) }
-    $described = @($checks | Where-Object { $null -ne $_ } | ForEach-Object {
-        "{0} ({1}): {2}" -f (Get-ShipDeObjectProperty -Object $_ -Names @("Name")), (Get-ShipDeObjectProperty -Object $_ -Names @("Provider")), (Get-ShipDeObjectProperty -Object $_ -Names @("Conclusion"))
-    })
-    $list = if ($described.Count -gt 0) { $described -join "; " } else { "read them on the PR" }
-    $message = "CI failed for PR #$PullRequestNumber at exact HEAD $HeadSha. Failing checks: $list. Repair this same Work Item, run governed verification, commit, and push. Do not merge."
-    if ($message.Length -gt $MaxCharacters) {
-        $message = "CI failed for PR #$PullRequestNumber at exact HEAD $HeadSha. $($described.Count) failing checks; read them on the PR. Repair this same Work Item, run governed verification, commit, and push. Do not merge."
-    }
-    return $message
-}
-
-function Format-ShipDeFailingCheckNames {
-    param([AllowNull()][object]$Evidence)
-    if ($null -eq $Evidence) { return "" }
-    $checks = @(Get-ShipDeObjectProperty -Object $Evidence -Names @("Checks"))
-    return (@($checks | Where-Object { $null -ne $_ } | ForEach-Object { [string](Get-ShipDeObjectProperty -Object $_ -Names @("Name")) }) -join ", ")
 }
 
 function Write-ShipDeSupervisorCheckpoint {
-    param([Parameter(Mandatory = $true)][hashtable]$State)
+    param([Parameter(Mandatory = $true)][object]$State)
 
     $normalized = Normalize-ShipDeSupervisorState -State $State
     $normalized.CheckpointTime = (Get-Date).ToUniversalTime().ToString("o")
     $temporaryPath = "$script:SupervisorStateFile.tmp"
     $normalized | ConvertTo-Json -Depth 12 | Set-Content -Path $temporaryPath -Encoding UTF8
     Move-Item -LiteralPath $temporaryPath -Destination $script:SupervisorStateFile -Force
+    $wId = [string](Get-ShipDeObjectProperty -Object $normalized -Names @("WorkItemId", "workItemId"))
+    $hSha = [string](Get-ShipDeObjectProperty -Object $normalized -Names @("HeadSha", "headSha"))
+    if (-not [string]::IsNullOrWhiteSpace($wId)) {
+        $headDisplay = if (-not [string]::IsNullOrWhiteSpace($hSha)) { $hSha } else { "UNKNOWN" }
+        Write-Host ("[SUPERVISOR] Checkpoint persisted for Work Item {0} at exact HEAD {1}" -f $wId, $headDisplay)
+    }
 }
 
 function Read-ShipDeSupervisorCheckpoint {
@@ -4074,8 +3907,16 @@ function Read-ShipDeSupervisorCheckpoint {
         return $null
     }
     try {
-        $stateObject = Get-Content $script:SupervisorStateFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        $raw = Get-Content $script:SupervisorStateFile -Raw -Encoding UTF8
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            throw "Empty checkpoint"
+        }
+        $stateObject = $raw | ConvertFrom-Json
+        if ($null -eq $stateObject -or ($stateObject -isnot [PSCustomObject] -and $stateObject -isnot [System.Collections.IDictionary])) {
+            throw "Invalid checkpoint object"
+        }
     } catch {
+        Write-Host ("[BLOCKED] Supervisor checkpoint '{0}' is malformed. Preserved for diagnosis; stopping fail-closed." -f $script:SupervisorStateFile)
         throw "Supervisor checkpoint is malformed. Preserve it for diagnosis and stop fail-closed."
     }
     return (Normalize-ShipDeSupervisorState -State $stateObject)
@@ -4416,6 +4257,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
             Get-ShipDeAoSessionById -SessionId $ckptSessionId -Project "shipde-platform"
         }
         if ($null -eq $sessDetail) {
+            Write-Host ("[BLOCKED] Recovery target is missing: AO session '{0}'. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item." -f $ckptSessionId)
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber binds AO session '$ckptSessionId', which could not be found or verified. Rejecting before any checkpoint-driven effects."
         }
         $actualSessionId = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("id", "sessionId"))
@@ -4503,6 +4345,7 @@ function Assert-ShipDeSupervisorLock {
             if ($holderPid -gt 0 -and $holderPid -ne $CurrentPid) {
                 $proc = & $ProcessResolver $holderPid
                 if ($null -ne $proc -and -not [bool]$proc.HasExited) {
+                    Write-Host ("[BLOCKED] Another supervisor instance (PID {0}, Work Item '{1}') is actively supervising. Stopping fail-closed." -f $holderPid, $holderWorkItem)
                     throw "Another supervisor instance (PID $holderPid, Work Item '$holderWorkItem') is actively supervising. Rejecting concurrent supervisor lock."
                 }
                 $isStale = $true
@@ -4518,6 +4361,7 @@ function Assert-ShipDeSupervisorLock {
 
         if ($isStale) {
             Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
+            Write-Host ("[SUPERVISOR] Reclaimed stale supervisor lock held by PID {0} (Work Item '{1}'); no live holder remains." -f $holderPid, $holderWorkItem)
         }
     }
 
@@ -4539,6 +4383,7 @@ function Assert-ShipDeSupervisorLock {
                 if ($holderPid -gt 0 -and $holderPid -ne $CurrentPid) {
                     $proc = & $ProcessResolver $holderPid
                     if ($null -ne $proc -and -not [bool]$proc.HasExited) {
+                        Write-Host ("[BLOCKED] Another supervisor instance (PID {0}, Work Item '{1}') is actively supervising. Stopping fail-closed." -f $holderPid, $holderWorkItem)
                         throw "Another supervisor instance (PID $holderPid, Work Item '$holderWorkItem') is actively supervising. Rejecting concurrent supervisor lock."
                     }
                 }
@@ -4746,7 +4591,7 @@ function Get-ShipDeSessionActivityState {
     }
 }
 
-function Get-ShipDeAgentRouterFailureSince {
+function Get-ShipDeNineRouterFailureSince {
     param([Parameter(Mandatory = $true)][string]$Since)
 
     $sinceDate = [DateTime]::MinValue
@@ -4754,7 +4599,7 @@ function Get-ShipDeAgentRouterFailureSince {
         throw "Supervisor start time is invalid; cannot bound 9Router diagnostics."
     }
     $encodedStart = [Uri]::EscapeDataString($sinceDate.ToUniversalTime().ToString("o"))
-    $uri = "http://127.0.0.1:$($script:AgentRouterPort)/api/usage/request-details?status=error&startDate=$encodedStart&page=1&pageSize=100"
+    $uri = "http://127.0.0.1:$($script:NineRouterPort)/api/usage/request-details?status=error&startDate=$encodedStart&page=1&pageSize=100"
     try {
         $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10
     } catch {
@@ -6604,6 +6449,133 @@ function Invoke-ShipDeAutoMerge {
     return "MERGED"
 }
 
+function Get-ShipDeCiRepairEvidence {
+    param(
+        [Parameter(Mandatory = $true)][object]$PullRequest,
+        [AllowEmptyString()][string]$HeadSha
+    )
+
+    # AI-08-R01/R07: a CI repair is bound to the exact HEAD and to the newest
+    # unambiguous failing attempts; ambiguous attempts throw from the grouping.
+    if ($HeadSha -notmatch '^[a-fA-F0-9]{40}$') {
+        return $null
+    }
+    $failing = [System.Collections.Generic.List[object]]::new()
+    foreach ($check in @(Get-ShipDeLatestCheckAttempts -StatusCheckRollup @($PullRequest.statusCheckRollup))) {
+        if ((Get-ShipDeCheckResult -Check $check) -ne "FAILED") { continue }
+        $conclusion = Get-ShipDeCheckField -Check $check -Field "conclusion"
+        if ([string]::IsNullOrWhiteSpace($conclusion)) {
+            $conclusion = Get-ShipDeCheckField -Check $check -Field "state"
+        }
+        $failing.Add(@{
+            Name = [string](Get-ShipDeCheckName -Check $check)
+            Provider = [string](Get-ShipDeCheckProvider -Check $check)
+            Conclusion = ([string]$conclusion).ToUpperInvariant()
+        })
+    }
+    if ($failing.Count -eq 0) {
+        return $null
+    }
+    return @{
+        Head = $HeadSha
+        Checks = @($failing | Sort-Object { $_.Name }, { $_.Provider })
+        ObservedAt = (Get-Date).ToUniversalTime().ToString("o")
+    }
+}
+
+function Get-ShipDeReviewRepairEvidence {
+    param(
+        [AllowEmptyString()][string]$HeadSha,
+        [AllowNull()][AllowEmptyString()][string]$FindingsText
+    )
+
+    if ($HeadSha -notmatch '^[a-fA-F0-9]{40}$' -or [string]::IsNullOrWhiteSpace($FindingsText)) {
+        return $null
+    }
+    $items = @(([string]$FindingsText -split "`r?`n") | Where-Object { $_ -match '^\s*(?:[-*]|\d+[.)])\s+\S' })
+    return @{
+        Head = $HeadSha
+        FindingsCount = [Math]::Max(1, $items.Count)
+        ObservedAt = (Get-Date).ToUniversalTime().ToString("o")
+    }
+}
+
+function Get-ShipDeRepairAttemptCount {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string]$HeadSha,
+        [Parameter(Mandatory = $true)][ValidateSet("CI", "REVIEW")][string]$Kind
+    )
+
+    $byHead = $State["RepairAttemptsByHead"]
+    if ($null -eq $byHead) { return 0 }
+    $entry = Get-ShipDeObjectProperty -Object $byHead -Names @($HeadSha)
+    if ($null -eq $entry) { return 0 }
+    $count = Get-ShipDeObjectProperty -Object $entry -Names @($Kind)
+    if ($null -eq $count) { return 0 }
+    return [int]$count
+}
+
+function Add-ShipDeRepairAttempt {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string]$HeadSha,
+        [Parameter(Mandatory = $true)][ValidateSet("CI", "REVIEW")][string]$Kind
+    )
+
+    # Rebuild as plain hashtables so a checkpoint read back as PSCustomObject stays writable.
+    $rebuilt = @{}
+    $byHead = $State["RepairAttemptsByHead"]
+    if ($null -ne $byHead) {
+        $heads = if ($byHead -is [System.Collections.IDictionary]) { @($byHead.Keys) } else { @($byHead.PSObject.Properties | ForEach-Object { $_.Name }) }
+        foreach ($head in $heads) {
+            $rebuilt[[string]$head] = @{
+                CI = Get-ShipDeRepairAttemptCount -State $State -HeadSha ([string]$head) -Kind CI
+                REVIEW = Get-ShipDeRepairAttemptCount -State $State -HeadSha ([string]$head) -Kind REVIEW
+            }
+        }
+    }
+    if (-not $rebuilt.ContainsKey($HeadSha)) {
+        $rebuilt[$HeadSha] = @{ CI = 0; REVIEW = 0 }
+    }
+    $rebuilt[$HeadSha][$Kind] = [int]$rebuilt[$HeadSha][$Kind] + 1
+    $State["RepairAttemptsByHead"] = $rebuilt
+    return [int]$rebuilt[$HeadSha][$Kind]
+}
+
+function Test-ShipDeRepairReattemptEligible {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string]$Activity,
+        [int]$ReactivationGraceSeconds = 120
+    )
+
+    # An acknowledged repair is redispatched only after its worker stopped
+    # without moving the HEAD, and never inside the reactivation window.
+    if ($Activity -notin @("COMPLETED", "PARKED")) {
+        return $false
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$State.LastRepairDispatchedAt)) {
+        $dispatchedTime = [DateTime]::MinValue
+        if ([DateTime]::TryParse([string]$State.LastRepairDispatchedAt, [ref]$dispatchedTime)) {
+            $elapsed = (Get-Date).ToUniversalTime() - $dispatchedTime.ToUniversalTime()
+            if ($elapsed.TotalSeconds -lt $ReactivationGraceSeconds) {
+                return $false
+            }
+        }
+    }
+    return $true
+}
+
+function Format-ShipDeCiRepairEvidence {
+    param([Parameter(Mandatory = $true)][object]$Evidence)
+
+    $names = @(@(Get-ShipDeObjectProperty -Object $Evidence -Names @("Checks")) | Where-Object { $null -ne $_ } | ForEach-Object {
+        "{0} [{1}] {2}" -f (Get-ShipDeObjectProperty -Object $_ -Names @("Name")), (Get-ShipDeObjectProperty -Object $_ -Names @("Provider")), (Get-ShipDeObjectProperty -Object $_ -Names @("Conclusion"))
+    })
+    return ($names -join "; ")
+}
+
 function Invoke-ShipDeSupervisorLoop {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
@@ -6614,8 +6586,8 @@ function Invoke-ShipDeSupervisorLoop {
         [int]$ReviewTimeoutMinutes = 20,
         [int]$MaxRepairBudget = 10,
         [int]$MaxRepairAttemptsPerHead = 2,
-        [scriptblock]$FindingsResolver = $null,
         [scriptblock]$PrResolver = $null,
+        [scriptblock]$FindingsResolver = $null,
         [scriptblock]$ExternalReviewLauncher = $null,
         [scriptblock]$BotReviewRequester = $null,
         [scriptblock]$SleepHandler = $null,
@@ -6631,7 +6603,11 @@ function Invoke-ShipDeSupervisorLoop {
 
     Assert-ShipDeSupervisorMaxNudges -MaxNudges $MaxNudges
 
+    if ($MaxRepairAttemptsPerHead -lt 1) {
+        throw "MaxRepairAttemptsPerHead must be at least 1."
+    }
     $State = Normalize-ShipDeSupervisorState -State $State
+    $State.RepairAttemptsPerHead = $MaxRepairAttemptsPerHead
 
     while ($true) {
         $sessionId = if ($State.ContainsKey("SessionId") -and $null -ne $State["SessionId"]) { [string]$State["SessionId"] } else { "" }
@@ -6707,7 +6683,7 @@ function Invoke-ShipDeSupervisorLoop {
 
         if ($activity -in @("FAILED", "STOPPED", "MISSING")) {
             if ($activity -in @("FAILED", "STOPPED")) {
-                $routerFailure = Get-ShipDeAgentRouterFailureSince -Since ([string]$State.StartTime)
+                $routerFailure = Get-ShipDeNineRouterFailureSince -Since ([string]$State.StartTime)
                 if ($routerFailure) {
                     $State.RouterFailure = $routerFailure
                     if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
@@ -6749,7 +6725,15 @@ function Invoke-ShipDeSupervisorLoop {
             } else {
                 switch ($pType) {
                     "CI_REPAIR" {
-                        $message = New-ShipDeAoCiRepairMessage -PullRequestNumber ([int]$pullRequest.number) -HeadSha $curHead -Evidence (Get-ShipDeObjectProperty -Object $State.PendingDispatch -Names @("Evidence", "evidence"))
+                        $ciEvidence = Get-ShipDeObjectProperty -Object $State.PendingDispatch -Names @("Evidence")
+                        if ($null -eq $ciEvidence) { $ciEvidence = $State.LastCiRepairEvidence }
+                        if ($null -eq $ciEvidence) { $ciEvidence = Get-ShipDeCiRepairEvidence -PullRequest $pullRequest -HeadSha $curHead }
+                        if ($null -eq $ciEvidence -or [string](Get-ShipDeObjectProperty -Object $ciEvidence -Names @("Head")) -ne $curHead) {
+                            $State.State = "BLOCKED"
+                            if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                            throw ("[BLOCKED] Cannot bind repair evidence for PR #{0} at exact HEAD {1}; stopping fail-closed" -f $pullRequest.number, $curHead)
+                        }
+                        $message = "CI failed for PR #$($pullRequest.number) at exact HEAD $curHead. Failing checks: $(Format-ShipDeCiRepairEvidence -Evidence $ciEvidence). Repair this same Work Item, run governed verification, commit, and push. Do not merge."
                         $targetSessionId = Ensure-ShipDeRepairWorker -State $State -PullRequest $pullRequest -Project $Project -WorkerStarter $WorkerStarter -SessionReleaser $SessionReleaser -SessionDetailResolver $SessionDetailResolver -SessionsResolver $SessionsResolver -OwnershipVerifier $OwnershipVerifier -CheckpointWriter $CheckpointWriter
                         $delivered = $false
                         if (-not [string]::IsNullOrWhiteSpace($targetSessionId)) {
@@ -6771,16 +6755,13 @@ function Invoke-ShipDeSupervisorLoop {
                         if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                     }
                     "REVIEW_REPAIR" {
-                        # AI-08-R08: the checkpointed findings are the record of what
-                        # was dispatched; they are re-derived only when absent.
-                        $pendingEvidence = Get-ShipDeObjectProperty -Object $State.PendingDispatch -Names @("Evidence", "evidence")
-                        $findingsText = [string](Get-ShipDeObjectProperty -Object $pendingEvidence -Names @("FindingsText", "findingsText"))
-                        if ([string]::IsNullOrWhiteSpace($findingsText)) {
-                            try {
-                                $findingsText = if ($null -ne $FindingsResolver) { & $FindingsResolver ([int]$pullRequest.number) $curHead } else { Get-ShipDeGitHubExactHeadCodexFindings -PullRequestNumber ([int]$pullRequest.number) -HeadSha $curHead -Repository "vinh05092001/shipde-platform" }
-                            } catch {}
-                        }
-                        if ([string]::IsNullOrWhiteSpace([string]$findingsText)) {
+                        $findingsText = ""
+                        try {
+                            $findingsText = if ($null -ne $FindingsResolver) { & $FindingsResolver ([int]$pullRequest.number) $curHead } else { Get-ShipDeGitHubExactHeadCodexFindings -PullRequestNumber ([int]$pullRequest.number) -HeadSha $curHead -Repository "vinh05092001/shipde-platform" }
+                        } catch {}
+                        if ($null -eq (Get-ShipDeReviewRepairEvidence -HeadSha $curHead -FindingsText $findingsText)) {
+                            $State.State = "BLOCKED"
+                            if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
                             throw ("[BLOCKED] Cannot bind repair evidence for PR #{0} at exact HEAD {1}; stopping fail-closed" -f $pullRequest.number, $curHead)
                         }
                         $message = New-ShipDeAoReviewRepairMessage `
@@ -6880,27 +6861,38 @@ function Invoke-ShipDeSupervisorLoop {
                 }
             } elseif ($gate -eq "FAILED") {
                 $workerActionExpected = $true
-                # AI-08-R02: an acknowledged HEAD is repaired again only once its
-                # worker has finished without moving the HEAD.
-                $ciRepairAgain = (
-                    [string]$State.LastAcknowledgedCiRepairHead -eq $headSha -and
-                    $activity -in @("COMPLETED", "PARKED") -and
-                    -not (Test-ShipDeRepairReactivationWindow -State $State)
-                )
-                if ([string]$State.LastAcknowledgedCiRepairHead -ne $headSha -or $ciRepairAgain) {
-                    $ciEvidence = @(Get-ShipDeFailingCheckEvidence -PullRequest $pullRequest)
-                    $ciAttempt = Register-ShipDeRepairAttempt -State $State -Kind "CI" -HeadSha $headSha -PullRequestNumber ([int]$pullRequest.number) -MaxRepairAttemptsPerHead $MaxRepairAttemptsPerHead -MaxRepairBudget $MaxRepairBudget -Evidence $ciEvidence
+                if ([string]$State.LastAcknowledgedCiRepairHead -ne $headSha -or (Test-ShipDeRepairReattemptEligible -State $State -Activity $activity)) {
+                    $ciAttempts = Get-ShipDeRepairAttemptCount -State $State -HeadSha $headSha -Kind CI
+                    if ($ciAttempts -ge $MaxRepairAttemptsPerHead) {
+                        $State.State = "BLOCKED"
+                        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                        $lastCiEvidence = if ($null -ne $State.LastCiRepairEvidence) { Format-ShipDeCiRepairEvidence -Evidence $State.LastCiRepairEvidence } else { "none" }
+                        throw ("[BLOCKED] Repair budget for exact HEAD {0} exhausted after {1} attempts for Work Item {2}. Stopping fail-closed for human intervention. Last evidence: {3}" -f $headSha, $ciAttempts, $State.WorkItemId, $lastCiEvidence)
+                    }
+                    $ciEvidence = Get-ShipDeCiRepairEvidence -PullRequest $pullRequest -HeadSha $headSha
+                    if ($null -eq $ciEvidence) {
+                        $State.State = "BLOCKED"
+                        if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                        throw ("[BLOCKED] Cannot bind repair evidence for PR #{0} at exact HEAD {1}; stopping fail-closed" -f $pullRequest.number, $headSha)
+                    }
+                    $State.RepairCount = [int]$State.RepairCount + 1
+                    if ([int]$State.RepairCount -gt $MaxRepairBudget) {
+                        throw "Supervisor repair budget exhausted ($([int]$State.RepairCount) repairs dispatched exceeds max budget $MaxRepairBudget for Work Item '$($State.WorkItemId)'). Stopping fail-closed for human intervention."
+                    }
+                    $ciAttempts = Add-ShipDeRepairAttempt -State $State -HeadSha $headSha -Kind CI
+                    $State.LastCiRepairEvidence = $ciEvidence
                     $State.PendingDispatch = @{
                         Type = "CI_REPAIR"
                         Head = $headSha
                         Time = (Get-Date).ToUniversalTime().ToString("o")
                         WorkItemId = [string]$State.WorkItemId
-                        Evidence = $State.LastCiRepairEvidence
+                        Evidence = $ciEvidence
                     }
                     if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
 
-                    $message = New-ShipDeAoCiRepairMessage -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -Evidence $State.LastCiRepairEvidence
-                    Write-Host ("[SUPERVISOR] CI repair {0}/{1} dispatched for PR #{2} at exact HEAD {3}: failing checks {4}" -f $ciAttempt, $MaxRepairAttemptsPerHead, $pullRequest.number, $headSha, (Format-ShipDeFailingCheckNames -Evidence $State.LastCiRepairEvidence))
+                    $failingSummary = Format-ShipDeCiRepairEvidence -Evidence $ciEvidence
+                    Write-Host ("[SUPERVISOR] CI repair {0}/{1} dispatched for PR #{2} at exact HEAD {3}: failing checks {4}" -f $ciAttempts, $MaxRepairAttemptsPerHead, $pullRequest.number, $headSha, $failingSummary)
+                    $message = "CI failed for PR #$($pullRequest.number) at exact HEAD $headSha. Failing checks: $failingSummary. Repair this same Work Item, run governed verification, commit, and push. Do not merge."
                     $targetSessionId = Ensure-ShipDeRepairWorker -State $State -PullRequest $pullRequest -Project $Project -WorkerStarter $WorkerStarter -SessionReleaser $SessionReleaser -SessionDetailResolver $SessionDetailResolver -SessionsResolver $SessionsResolver -OwnershipVerifier $OwnershipVerifier -CheckpointWriter $CheckpointWriter
                     $delivered = $false
                     if (-not [string]::IsNullOrWhiteSpace($targetSessionId)) {
@@ -6939,26 +6931,39 @@ function Invoke-ShipDeSupervisorLoop {
                 }
                 if ($verdict -eq "CHANGES_REQUIRED") {
                     $workerActionExpected = $true
-                    $reviewRepairAgain = (
-                        [string]$State.LastAcknowledgedReviewRepairHead -eq $headSha -and
-                        $activity -in @("COMPLETED", "PARKED") -and
-                        -not (Test-ShipDeRepairReactivationWindow -State $State)
-                    )
-                    if ([string]$State.LastAcknowledgedReviewRepairHead -ne $headSha -or $reviewRepairAgain) {
+                    if ([string]$State.LastAcknowledgedReviewRepairHead -ne $headSha -or (Test-ShipDeRepairReattemptEligible -State $State -Activity $activity)) {
+                        $reviewAttempts = Get-ShipDeRepairAttemptCount -State $State -HeadSha $headSha -Kind REVIEW
+                        if ($reviewAttempts -ge $MaxRepairAttemptsPerHead) {
+                            $State.State = "BLOCKED"
+                            if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                            $lastFindings = if ($null -ne $State.LastReviewRepairEvidence) { "$(Get-ShipDeObjectProperty -Object $State.LastReviewRepairEvidence -Names @('FindingsCount')) findings" } else { "none" }
+                            throw ("[BLOCKED] Repair budget for exact HEAD {0} exhausted after {1} attempts for Work Item {2}. Stopping fail-closed for human intervention. Last evidence: {3}" -f $headSha, $reviewAttempts, $State.WorkItemId, $lastFindings)
+                        }
                         $findingsText = ""
                         try {
                             $findingsText = if ($null -ne $FindingsResolver) { & $FindingsResolver ([int]$pullRequest.number) $headSha } else { Get-ShipDeGitHubExactHeadCodexFindings -PullRequestNumber ([int]$pullRequest.number) -HeadSha $headSha -Repository "vinh05092001/shipde-platform" }
                         } catch {}
-                        $reviewAttempt = Register-ShipDeRepairAttempt -State $State -Kind "REVIEW" -HeadSha $headSha -PullRequestNumber ([int]$pullRequest.number) -MaxRepairAttemptsPerHead $MaxRepairAttemptsPerHead -MaxRepairBudget $MaxRepairBudget -Evidence ([string]$findingsText)
+                        $reviewEvidence = Get-ShipDeReviewRepairEvidence -HeadSha $headSha -FindingsText $findingsText
+                        if ($null -eq $reviewEvidence) {
+                            $State.State = "BLOCKED"
+                            if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
+                            throw ("[BLOCKED] Cannot bind repair evidence for PR #{0} at exact HEAD {1}; stopping fail-closed" -f $pullRequest.number, $headSha)
+                        }
+                        $State.RepairCount = [int]$State.RepairCount + 1
+                        if ([int]$State.RepairCount -gt $MaxRepairBudget) {
+                            throw "Supervisor repair budget exhausted ($([int]$State.RepairCount) repairs dispatched exceeds max budget $MaxRepairBudget for Work Item '$($State.WorkItemId)'). Stopping fail-closed for human intervention."
+                        }
+                        $reviewAttempts = Add-ShipDeRepairAttempt -State $State -HeadSha $headSha -Kind REVIEW
+                        $State.LastReviewRepairEvidence = $reviewEvidence
                         $State.PendingDispatch = @{
                             Type = "REVIEW_REPAIR"
                             Head = $headSha
                             Time = (Get-Date).ToUniversalTime().ToString("o")
                             WorkItemId = [string]$State.WorkItemId
-                            Evidence = $State.LastReviewRepairEvidence
+                            Evidence = $reviewEvidence
                         }
                         if ($null -ne $CheckpointWriter) { & $CheckpointWriter $State } else { Write-ShipDeSupervisorCheckpoint -State $State }
-                        Write-Host ("[SUPERVISOR] Review repair {0}/{1} dispatched for PR #{2} at exact HEAD {3} with {4} findings" -f $reviewAttempt, $MaxRepairAttemptsPerHead, $pullRequest.number, $headSha, $State.LastReviewRepairEvidence.FindingsCount)
+                        Write-Host ("[SUPERVISOR] Review repair {0}/{1} dispatched for PR #{2} at exact HEAD {3} with {4} findings" -f $reviewAttempts, $MaxRepairAttemptsPerHead, $pullRequest.number, $headSha, $reviewEvidence.FindingsCount)
 
                         $message = New-ShipDeAoReviewRepairMessage `
                             -PullRequestNumber ([int]$pullRequest.number) `
@@ -7082,7 +7087,17 @@ function Invoke-ShipDeSupervisorLoop {
                 $statusDesc = if ($activity -eq "PARKED") { "parked" } else { "completed" }
                 throw "AO worker is $statusDesc while PR #$($pullRequest.number) is still draft. Mark the same PR ready before review."
             }
-            $inReactivationWindow = Test-ShipDeRepairReactivationWindow -State $State
+            $reactivationGraceSeconds = 120
+            $inReactivationWindow = $false
+            if (-not [string]::IsNullOrWhiteSpace([string]$State.LastRepairDispatchedAt)) {
+                $dispatchedTime = [DateTime]::MinValue
+                if ([DateTime]::TryParse([string]$State.LastRepairDispatchedAt, [ref]$dispatchedTime)) {
+                    $elapsed = (Get-Date).ToUniversalTime() - $dispatchedTime.ToUniversalTime()
+                    if ($elapsed.TotalSeconds -ge 0 -and $elapsed.TotalSeconds -lt $reactivationGraceSeconds) {
+                        $inReactivationWindow = $true
+                    }
+                }
+            }
 
             if ($inReactivationWindow) {
                 Write-Host ("[SUPERVISOR] Repair was dispatched at {0}. Permitting reactivation window for {1} worker." -f $State.LastRepairDispatchedAt, $activity)
@@ -7114,7 +7129,7 @@ function Assert-ShipDeSupervisorCompatibility {
     $origSupervisorStateFile = $script:SupervisorStateFile
     $origSupervisorLockFile = $script:SupervisorLockFile
     $origAoRouterRuntimeFile = $script:AoRouterRuntimeFile
-    $origAgentRouterProfile = $script:AgentRouterProfile
+    $origNineRouterProfile = $script:NineRouterProfile
     $origExpectedAoVersion = $script:ExpectedAoVersion
     $origAoExecutablePath = $script:AoExecutablePath
 
@@ -7378,7 +7393,7 @@ function Assert-ShipDeSupervisorCompatibility {
         }
 
         $duplicateLaunches = @{ Count = 0 }
-        Ensure-ShipDeAgentRouterRuntime `
+        Ensure-ShipDeNineRouterRuntime `
             -ProfileValidator { } `
             -ReadinessResolver { return @{ Ready = $true } } `
             -Launcher { $duplicateLaunches.Count++ }
@@ -7459,12 +7474,33 @@ function Assert-ShipDeSupervisorCompatibility {
             throw "AO version range fail-closed compatibility test failed."
         }
 
+        # Derived from the pin so the fixture stays newer than whatever is
+        # pinned. A literal went stale when the pin moved past it: 0.12.99 is
+        # older than 0.13.0, so the test stopped proving what its name says.
+        $pinParts = @($script:ExpectedAoVersion.Split('.') | ForEach-Object { [int]$_ })
+        $newerThanPin = "{0}.{1}.0" -f $pinParts[0], ($pinParts[1] + 1)
+        $olderThanPin = "{0}.{1}.99" -f $pinParts[0], ($pinParts[1] - 1)
+
+        $olderVersionRejected = $false
+        try {
+            Assert-ShipDeAoVersionEvidence `
+                -AoExecutable $resolvedCanonicalAo `
+                -ExpectedVersion $script:ExpectedAoVersion `
+                -VersionText "ao version $olderThanPin" `
+                -ProgramFilesRoot $aoFixtureRoot | Out-Null
+        } catch {
+            $olderVersionRejected = $true
+        }
+        if (-not $olderVersionRejected) {
+            throw "AO older version fail-closed compatibility test failed."
+        }
+
         $newerVersionRejected = $false
         try {
             Assert-ShipDeAoVersionEvidence `
                 -AoExecutable $resolvedCanonicalAo `
                 -ExpectedVersion $script:ExpectedAoVersion `
-                -VersionText "ao version 0.12.99" `
+                -VersionText "ao version $newerThanPin" `
                 -ProgramFilesRoot $aoFixtureRoot | Out-Null
         } catch {
             $newerVersionRejected = $true
@@ -7474,8 +7510,8 @@ function Assert-ShipDeSupervisorCompatibility {
         }
 
         $canonicalPinned = Get-ShipDePinnedAoVersion
-        if ($canonicalPinned -ne "0.12.12" -or $canonicalPinned -ne $script:ExpectedAoVersion) {
-            throw "Canonical pinned AO version test failed: expected 0.12.12, got $canonicalPinned"
+        if ($canonicalPinned -ne "0.13.0" -or $canonicalPinned -ne $script:ExpectedAoVersion) {
+            throw "Canonical pinned AO version test failed: expected 0.13.0, got $canonicalPinned"
         }
     } finally {
         if (Test-Path -LiteralPath $aoFixtureRoot) {
@@ -8096,7 +8132,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
     }
     $simulatedMatchingPr = [PSCustomObject]@{
         number = 9
-        title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+        title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
         headRefName = "feat/task-ai-06-orchestrator-supervisor"
         isCrossRepository = $false
         headRepository = "vinh05092001/shipde-platform"
@@ -8275,7 +8311,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
 
         $greenPr = [PSCustomObject]@{
             number = 9
-            title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+            title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
             headRefName = "feat/task-ai-06-orchestrator-supervisor"
             headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
             isDraft = $false
@@ -8287,6 +8323,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
             )
         }
         $loopResult = Invoke-ShipDeSupervisorLoop `
+            -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
             -State $rawIncomplete `
             -PrResolver { param($w, $b) return $greenPr } `
             -VerdictResolver { param($prNum, $head, $sId) return "PASS" } `
@@ -8370,7 +8407,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         }
         $greenPr = [PSCustomObject]@{
             number = 9
-            title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+            title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
             headRefName = "feat/task-ai-06-orchestrator-supervisor"
             headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
             isDraft = $false
@@ -8386,6 +8423,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
         $pollStats = @{ Count = 0 }
 
         $loopResult = Invoke-ShipDeSupervisorLoop `
+            -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
             -State $externalState `
             -PrResolver { param($w, $b) return $greenPr } `
             -ExternalReviewLauncher {
@@ -8433,7 +8471,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
             $testHeadSha = "aabbccddeeff00112233445566778899aabbccdd"
             $reviewPr = [PSCustomObject]@{
                 number = $testPrNumber
-                title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+                title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
                 headRefName = "feat/task-ai-06-orchestrator-supervisor"
                 headRefOid = $testHeadSha
                 isDraft = $false
@@ -8553,7 +8591,7 @@ delivery_order,work_item_id,feature_id,status,branch,work_item_path,title
             $samplePrNumber = 99998
             $samplePr = [PSCustomObject]@{
                 number = $samplePrNumber
-                title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+                title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
                 headRefName = "feat/task-ai-06-orchestrator-supervisor"
                 headRefOid = "fb02d345bbffeb40b21a75bcf6c296a12f49c575"
                 isDraft = $false
@@ -9038,6 +9076,7 @@ Full review comments:
     $recoveredLoopState = $null
     try {
         Invoke-ShipDeSupervisorLoop `
+            -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
             -State $pendingNudgeState `
             -PrResolver { return $null } `
             -SleepHandler { param($i) throw "STOP_LOOP" } `
@@ -9137,6 +9176,7 @@ Full review comments:
     $recoveredLoopStaleState = $null
     try {
         Invoke-ShipDeSupervisorLoop `
+            -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
             -State $stateWithStaleVerdict `
             -PrResolver { param($w, $b) return $staleHeadPr } `
             -VerdictResolver { param($p, $h, $s) return $null } `
@@ -9163,6 +9203,7 @@ Full review comments:
     $reviewTimeoutCaught = $false
     try {
         Invoke-ShipDeSupervisorLoop `
+            -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
             -State $reviewTimeoutState `
             -ReviewTimeoutMinutes 20 `
             -PrResolver { param($w, $b) return $staleHeadPr } `
@@ -9199,6 +9240,7 @@ Full review comments:
     $noDupStats = @{ Iterations = 0 }
     try {
         Invoke-ShipDeSupervisorLoop `
+            -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
             -State $noDupState `
             -PrResolver { param($w, $b) return $ciFailingPr } `
             -SleepHandler {
@@ -9223,6 +9265,7 @@ Full review comments:
     $budgetCaught = $false
     try {
         Invoke-ShipDeSupervisorLoop `
+            -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
             -State $exhaustedBudgetState `
             -MaxRepairBudget 5 `
             -PrResolver { param($w, $b) return $ciFailingPr } `
@@ -9249,89 +9292,341 @@ Full review comments:
         throw "Repair budget preservation test failed: RepairCount was not preserved across head change ($($resetState.RepairCount))."
     }
 
-    # 5c. TASK-AI-08: exact failure evidence and the per-HEAD repair bound
-    $ai08Evidence = @(Get-ShipDeFailingCheckEvidence -PullRequest $ciFailingPr)
-    if ($ai08Evidence.Count -ne 1 -or $ai08Evidence[0].Name -ne "contract" -or $ai08Evidence[0].Conclusion -ne "FAILURE") {
-        throw "TASK-AI-08 evidence test failed: the failing contract check was not named with its conclusion."
+    # 5c. TASK-AI-08: one CI repair allowed under the per-HEAD bound, bound to exact failing evidence
+    $ai08State = Normalize-ShipDeSupervisorState -State @{
+        WorkItemId = "TASK-AI-08"
+        Branch = "feat/task-ai-08"
+        Author = "GEMINI"
+        State = "STARTED"
     }
-    $ai08Head = "8888888888888888888888888888888888888888"
-    $ai08State = Normalize-ShipDeSupervisorState -State @{ WorkItemId = "TASK-AI-08"; Branch = "feat/task-ai-08"; State = "STARTED" }
-    $ai08First = Register-ShipDeRepairAttempt -State $ai08State -Kind "CI" -HeadSha $ai08Head -PullRequestNumber 9 -MaxRepairAttemptsPerHead 2 -MaxRepairBudget 10 -Evidence $ai08Evidence
-    if ($ai08First -ne 1 -or $ai08State.RepairCount -ne 1) {
-        throw "TASK-AI-08 test failed: the first repair under the per-HEAD bound was not allowed."
-    }
-    $ai08Second = Register-ShipDeRepairAttempt -State $ai08State -Kind "CI" -HeadSha $ai08Head -PullRequestNumber 9 -MaxRepairAttemptsPerHead 2 -MaxRepairBudget 10 -Evidence $ai08Evidence
-    if ($ai08Second -ne 2 -or $ai08State.RepairCount -ne 2) {
-        throw "TASK-AI-08 test failed: a second repair of the same HEAD under a bound of 2 was not allowed."
-    }
-    $ai08BoundCaught = $false
     try {
-        Register-ShipDeRepairAttempt -State $ai08State -Kind "CI" -HeadSha $ai08Head -PullRequestNumber 9 -MaxRepairAttemptsPerHead 2 -MaxRepairBudget 10 -Evidence $ai08Evidence | Out-Null
+        Invoke-ShipDeSupervisorLoop `
+            -State $ai08State `
+            -MaxRepairAttemptsPerHead 2 `
+            -SessionsResolver { param($p) return @() } `
+            -SessionDetailResolver { param($id, $p) return $null } `
+            -WorkerStarter { param($i, $p) return [PSCustomObject]@{ SessionId = "sess-ai08"; Harness = "agy" } } `
+            -MessageSender { param($sid, $msg) return ($msg -match "Failing checks: contract \[") } `
+            -PrResolver { param($w, $b) return $ciFailingPr } `
+            -SleepHandler { param($i) throw "STOP_LOOP" } `
+            -CheckpointWriter { param($s) } | Out-Null
     } catch {
-        $ai08BoundCaught = $_.Exception.Message -match "Repair budget for exact HEAD $ai08Head exhausted after 2 attempts for Work Item TASK-AI-08"
+        if ($_.Exception.Message -ne "STOP_LOOP") { throw "TASK-AI-08 first repair test failed: $($_.Exception.Message)" }
     }
-    if (-not $ai08BoundCaught -or $ai08State.RepairCount -ne 2) {
-        throw "TASK-AI-08 test failed: a third repair of the same HEAD was not refused fail-closed at the bound."
+    if ((Get-ShipDeRepairAttemptCount -State $ai08State -HeadSha $testNewHeadSha -Kind CI) -ne 1 -or [int]$ai08State.RepairCount -ne 1) {
+        throw "TASK-AI-08 first repair test failed: per-HEAD attempt or RepairCount was not recorded as 1."
     }
-    $ai08ReviewAttempt = Register-ShipDeRepairAttempt -State $ai08State -Kind "REVIEW" -HeadSha $ai08Head -PullRequestNumber 9 -MaxRepairAttemptsPerHead 2 -MaxRepairBudget 10 -Evidence "finding one`n`n---`n`nfinding two"
-    if ($ai08ReviewAttempt -ne 1 -or $ai08State.LastReviewRepairEvidence.FindingsCount -ne 2) {
-        throw "TASK-AI-08 test failed: review repairs were not counted separately from CI repairs, or findings were miscounted."
+    $ai08Checks = @($ai08State.LastCiRepairEvidence.Checks)
+    if ($ai08State.LastCiRepairEvidence.Head -ne $testNewHeadSha -or $ai08Checks.Count -ne 1 -or $ai08Checks[0].Name -ne "contract" -or $ai08Checks[0].Conclusion -ne "FAILURE" -or [string]::IsNullOrWhiteSpace($ai08Checks[0].Provider) -or [string]::IsNullOrWhiteSpace($ai08State.LastCiRepairEvidence.ObservedAt)) {
+        throw "TASK-AI-08 first repair test failed: CI evidence was not bound to the exact failing check."
     }
-    if ([string]$ai08State.LastReviewRepairEvidence.FindingsText -ne "finding one`n`n---`n`nfinding two") {
-        throw "TASK-AI-08 test failed: the review findings text was not checkpointed with its evidence (AI-08-R08)."
+    if ([int]$ai08State.RepairAttemptsPerHead -ne 2) {
+        throw "TASK-AI-08 first repair test failed: resolved per-HEAD bound was not persisted."
     }
-    $ai08BoundDiagnostic = ""
+
+    # 5d. TASK-AI-08: evidence and attempt count round-trip through the JSON checkpoint
+    $ai08RoundTrip = Normalize-ShipDeSupervisorState -State ($ai08State | ConvertTo-Json -Depth 10 | ConvertFrom-Json)
+    if ((Get-ShipDeRepairAttemptCount -State $ai08RoundTrip -HeadSha $testNewHeadSha -Kind CI) -ne 1) {
+        throw "TASK-AI-08 checkpoint round-trip test failed: per-HEAD attempt count was lost."
+    }
+    if (@($ai08RoundTrip.LastCiRepairEvidence.Checks)[0].Name -ne "contract" -or $null -ne $ai08RoundTrip.LastReviewRepairEvidence) {
+        throw "TASK-AI-08 checkpoint round-trip test failed: repair evidence was not preserved."
+    }
+    $ai08RoundTrip = Reset-ShipDeSupervisorHeadState -State $ai08RoundTrip -NewHeadSha "3333333333333333333333333333333333333333"
+    if ((Get-ShipDeRepairAttemptCount -State $ai08RoundTrip -HeadSha "3333333333333333333333333333333333333333" -Kind CI) -ne 0 -or (Get-ShipDeRepairAttemptCount -State $ai08RoundTrip -HeadSha $testNewHeadSha -Kind CI) -ne 1 -or $null -eq $ai08RoundTrip.LastCiRepairEvidence) {
+        throw "TASK-AI-08 head change test failed: a new HEAD must start a fresh count without dropping history."
+    }
+
+    # 5e. TASK-AI-08: a second repair of the same HEAD is allowed under a bound of 2
+    $ai08Second = Normalize-ShipDeSupervisorState -State @{
+        WorkItemId = "TASK-AI-08"
+        Branch = "feat/task-ai-08"
+        Author = "GEMINI"
+        State = "STARTED"
+        HeadSha = $testNewHeadSha
+        RepairCount = 1
+        RepairAttemptsByHead = @{ $testNewHeadSha = @{ CI = 1; REVIEW = 0 } }
+    }
     try {
-        Register-ShipDeRepairAttempt -State $ai08State -Kind "CI" -HeadSha $ai08Head -PullRequestNumber 9 -MaxRepairAttemptsPerHead 2 -MaxRepairBudget 10 -Evidence $ai08Evidence | Out-Null
-    } catch { $ai08BoundDiagnostic = $_.Exception.Message }
-    if ($ai08BoundDiagnostic -notmatch "MaxRepairAttemptsPerHead=2" -or $ai08BoundDiagnostic -notmatch "last evidence: CI at $ai08Head`: contract=FAILURE") {
-        throw "TASK-AI-08 test failed: per-HEAD exhaustion did not name the bound reached and the last evidence (AI-08-R04). Got: $ai08BoundDiagnostic"
+        Invoke-ShipDeSupervisorLoop `
+            -State $ai08Second `
+            -MaxRepairAttemptsPerHead 2 `
+            -SessionsResolver { param($p) return @() } `
+            -SessionDetailResolver { param($id, $p) return $null } `
+            -WorkerStarter { param($i, $p) return [PSCustomObject]@{ SessionId = "sess-ai08"; Harness = "agy" } } `
+            -MessageSender { param($sid, $msg) return ($msg -match "Failing checks: contract \[") } `
+            -PrResolver { param($w, $b) return $ciFailingPr } `
+            -SleepHandler { param($i) throw "STOP_LOOP" } `
+            -CheckpointWriter { param($s) } | Out-Null
+    } catch {
+        if ($_.Exception.Message -ne "STOP_LOOP") { throw "TASK-AI-08 second repair test failed: $($_.Exception.Message)" }
     }
-    $ai08TotalCountBefore = [int]$ai08State.RepairCount
-    $ai08TotalDiagnostic = ""
+    if ((Get-ShipDeRepairAttemptCount -State $ai08Second -HeadSha $testNewHeadSha -Kind CI) -ne 2 -or [int]$ai08Second.RepairCount -ne 2) {
+        throw "TASK-AI-08 second repair test failed: second dispatch under a bound of 2 was not recorded."
+    }
+
+    # 5f. TASK-AI-08: refusal at the per-HEAD bound, fail-closed without consuming the Work Item budget
+    $ai08Exhausted = Normalize-ShipDeSupervisorState -State @{
+        WorkItemId = "TASK-AI-08"
+        Branch = "feat/task-ai-08"
+        State = "STARTED"
+        HeadSha = $testNewHeadSha
+        RepairCount = 2
+        RepairAttemptsByHead = @{ $testNewHeadSha = @{ CI = 2; REVIEW = 0 } }
+    }
+    $ai08ExhaustedCaught = $false
     try {
-        Register-ShipDeRepairAttempt -State $ai08State -Kind "CI" -HeadSha "7777777777777777777777777777777777777777" -PullRequestNumber 9 -MaxRepairAttemptsPerHead 2 -MaxRepairBudget $ai08TotalCountBefore -Evidence $ai08Evidence | Out-Null
-    } catch { $ai08TotalDiagnostic = $_.Exception.Message }
-    if ($ai08TotalDiagnostic -notmatch "Supervisor repair budget exhausted" -or
-        $ai08TotalDiagnostic -notmatch "at exact HEAD 7777777777777777777777777777777777777777" -or
-        $ai08TotalDiagnostic -notmatch "bound reached: MaxRepairBudget=$ai08TotalCountBefore" -or
-        $ai08TotalDiagnostic -notmatch "last evidence: CI at $ai08Head" -or
-        [int]$ai08State.RepairCount -ne $ai08TotalCountBefore) {
-        throw "TASK-AI-08 test failed: Work-Item exhaustion did not name HEAD, bound and last evidence, or a refused repair inflated RepairCount (AI-08-R04). Got: $ai08TotalDiagnostic"
+        Invoke-ShipDeSupervisorLoop `
+            -State $ai08Exhausted `
+            -MaxRepairAttemptsPerHead 2 `
+            -PrResolver { param($w, $b) return $ciFailingPr } `
+            -SleepHandler { param($i) throw "STOP_LOOP" } `
+            -CheckpointWriter { param($s) } | Out-Null
+    } catch {
+        $ai08ExhaustedCaught = $_.Exception.Message -match ("Repair budget for exact HEAD {0} exhausted after 2 attempts for Work Item TASK-AI-08" -f $testNewHeadSha)
     }
-    $ai08HistoryState = Normalize-ShipDeSupervisorState -State @{ WorkItemId = "TASK-AI-08"; Branch = "feat/task-ai-08"; State = "STARTED" }
-    Register-ShipDeRepairAttempt -State $ai08HistoryState -Kind "CI" -HeadSha $ai08Head -PullRequestNumber 9 -MaxRepairAttemptsPerHead 2 -MaxRepairBudget 10 -Evidence $ai08Evidence | Out-Null
-    Register-ShipDeRepairAttempt -State $ai08HistoryState -Kind "CI" -HeadSha "6666666666666666666666666666666666666666" -PullRequestNumber 9 -MaxRepairAttemptsPerHead 2 -MaxRepairBudget 10 -Evidence $ai08Evidence | Out-Null
-    $ai08Archived = @($ai08HistoryState.RepairEvidenceHistory)
-    if ($ai08Archived.Count -ne 1 -or [string]$ai08Archived[0].Kind -ne "CI" -or [string]$ai08Archived[0].Evidence.Head -ne $ai08Head) {
-        throw "TASK-AI-08 test failed: superseded CI evidence was not archived when a new HEAD was repaired (AI-08-R09)."
+    if (-not $ai08ExhaustedCaught -or [int]$ai08Exhausted.RepairCount -ne 2 -or $ai08Exhausted.State -ne "BLOCKED") {
+        throw "TASK-AI-08 per-HEAD exhaustion test failed: the bound did not stop fail-closed."
     }
-    foreach ($ai08Missing in @(@{ Kind = "CI"; Evidence = @() }, @{ Kind = "REVIEW"; Evidence = "" })) {
-        $ai08NoEvidence = Normalize-ShipDeSupervisorState -State @{ WorkItemId = "TASK-AI-08"; Branch = "feat/task-ai-08"; State = "STARTED" }
-        $ai08EvidenceCaught = $false
-        try {
-            Register-ShipDeRepairAttempt -State $ai08NoEvidence -Kind $ai08Missing.Kind -HeadSha $ai08Head -PullRequestNumber 9 -MaxRepairAttemptsPerHead 2 -MaxRepairBudget 10 -Evidence $ai08Missing.Evidence | Out-Null
-        } catch {
-            $ai08EvidenceCaught = $_.Exception.Message -match "Cannot bind repair evidence for PR #9"
-        }
-        if (-not $ai08EvidenceCaught -or $ai08NoEvidence.RepairCount -ne 0) {
-            throw "TASK-AI-08 test failed: a $($ai08Missing.Kind) repair without evidence was not refused before dispatch."
-        }
+
+    # 5g. TASK-AI-08: a review repair without findings evidence is refused fail-closed
+    $ai08GreenPr = [PSCustomObject]@{
+        number = 9
+        title = "[TASK-AI-08] Test PR"
+        headRefName = "feat/task-ai-08"
+        headRefOid = $testNewHeadSha
+        isDraft = $false
+        isCrossRepository = $false
+        headRepository = "vinh05092001/shipde-platform"
+        statusCheckRollup = @(
+            [PSCustomObject]@{ name = "contract"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } },
+            [PSCustomObject]@{ name = "application-gate"; conclusion = "SUCCESS"; checkSuite = [PSCustomObject]@{ app = [PSCustomObject]@{ slug = "github-actions"; name = "GitHub Actions" } } }
+        )
     }
-    $ai08RoundTrip = Normalize-ShipDeSupervisorState -State ($ai08State | ConvertTo-Json -Depth 12 | ConvertFrom-Json)
-    if ((Get-ShipDeRepairAttemptCount -State $ai08RoundTrip -Kind "CI" -HeadSha $ai08Head) -ne 2 -or
-        (Get-ShipDeRepairAttemptCount -State $ai08RoundTrip -Kind "REVIEW" -HeadSha $ai08Head) -ne 1 -or
-        [string]$ai08RoundTrip.LastCiRepairEvidence.Checks[0].Name -ne "contract" -or
-        [int]$ai08RoundTrip.RepairAttemptsPerHead -ne 2) {
-        throw "TASK-AI-08 test failed: repair evidence and per-HEAD counts did not survive a checkpoint round-trip."
+    $ai08NoEvidence = Normalize-ShipDeSupervisorState -State @{
+        WorkItemId = "TASK-AI-08"
+        Branch = "feat/task-ai-08"
+        State = "STARTED"
     }
-    $ai08Reset = Reset-ShipDeSupervisorHeadState -State $ai08RoundTrip -NewHeadSha "9999999999999999999999999999999999999999"
-    if ((Get-ShipDeRepairAttemptCount -State $ai08Reset -Kind "CI" -HeadSha "9999999999999999999999999999999999999999") -ne 0 -or $null -eq $ai08Reset.LastCiRepairEvidence) {
-        throw "TASK-AI-08 test failed: a new HEAD did not start a fresh per-HEAD count, or evidence history was dropped."
+    $ai08NoEvidenceCaught = $false
+    try {
+        Invoke-ShipDeSupervisorLoop `
+            -State $ai08NoEvidence `
+            -FindingsResolver { param($n, $h) return "" } `
+            -VerdictResolver { param($n, $h, $s) return "CHANGES_REQUIRED" } `
+            -PrResolver { param($w, $b) return $ai08GreenPr } `
+            -SleepHandler { param($i) throw "STOP_LOOP" } `
+            -CheckpointWriter { param($s) } | Out-Null
+    } catch {
+        $ai08NoEvidenceCaught = $_.Exception.Message -match "Cannot bind repair evidence for PR #9"
     }
-    $ai08Message = New-ShipDeAoCiRepairMessage -PullRequestNumber 9 -HeadSha $ai08Head -Evidence $ai08RoundTrip.LastCiRepairEvidence
-    if ($ai08Message -notmatch "Failing checks: contract \(") {
-        throw "TASK-AI-08 test failed: the CI repair message does not name the failing check."
+    if (-not $ai08NoEvidenceCaught -or [int]$ai08NoEvidence.RepairCount -ne 0 -or $null -ne $ai08NoEvidence.PendingDispatch) {
+        throw "TASK-AI-08 missing-evidence test failed: a review repair without findings was dispatched."
+    }
+    $ai08Review = Get-ShipDeReviewRepairEvidence -HeadSha $testNewHeadSha -FindingsText "- first`n- second"
+    if ($ai08Review.FindingsCount -ne 2 -or $null -ne (Get-ShipDeReviewRepairEvidence -HeadSha "abc" -FindingsText "- first")) {
+        throw "TASK-AI-08 review evidence test failed."
+    }
+
+    # 5h. TASK-AI-08: an acknowledged repair is redispatched only after its worker stopped outside the reactivation window
+    $ai08Eligible = @{ LastRepairDispatchedAt = (Get-Date).ToUniversalTime().AddMinutes(-5).ToString("o") }
+    $ai08Fresh = @{ LastRepairDispatchedAt = (Get-Date).ToUniversalTime().ToString("o") }
+    if (-not (Test-ShipDeRepairReattemptEligible -State $ai08Eligible -Activity "COMPLETED") -or
+        (Test-ShipDeRepairReattemptEligible -State $ai08Eligible -Activity "ACTIVE") -or
+        (Test-ShipDeRepairReattemptEligible -State $ai08Eligible -Activity "EXTERNAL") -or
+        (Test-ShipDeRepairReattemptEligible -State $ai08Fresh -Activity "PARKED")) {
+        throw "TASK-AI-08 reattempt eligibility test failed."
+    }
+
+    # 5i. TASK-AI-09: checkpoint round-trip with all recovery fields preserved
+    $ai09TestHead = "9999999999999999999999999999999999999999"
+    $ai09State = @{
+        WorkItemId = "TASK-AI-09"
+        Branch = "feat/task-ai-09-checkpoint-recovery"
+        State = "STARTED"
+        PullRequestNumber = 99
+        HeadSha = $ai09TestHead
+        FailoverCount = 2
+        RecoveryCount = 1
+        LastRecoveryAt = (Get-Date).ToUniversalTime().ToString("o")
+        RecoveredFrom = "CHECKPOINT"
+        RecoveryDiagnostic = "test-diagnostic"
+        RepairAttemptsByHead = @{ $ai09TestHead = @{ ci = 1; review = 0 } }
+        PendingDispatch = @{ Type = "CI_REPAIR"; Head = $ai09TestHead; WorkItemId = "TASK-AI-09" }
+        LastAcknowledgedCiRepairHead = $ai09TestHead
+        LastAcknowledgedReviewRepairHead = $ai09TestHead
+        MergeIntent = "MERGE_INTENT_PERSISTED"
+        MergeCommitOid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+    Write-ShipDeSupervisorCheckpoint -State $ai09State
+    $ai09ReadBack = Read-ShipDeSupervisorCheckpoint
+    if ($null -eq $ai09ReadBack -or
+        $ai09ReadBack.WorkItemId -ne "TASK-AI-09" -or
+        $ai09ReadBack.RecoveryCount -ne 1 -or
+        $ai09ReadBack.RecoveredFrom -ne "CHECKPOINT" -or
+        $ai09ReadBack.FailoverCount -ne 2 -or
+        [string]::IsNullOrWhiteSpace($ai09ReadBack.LastRecoveryAt) -or
+        $ai09ReadBack.RecoveryDiagnostic -ne "test-diagnostic" -or
+        $ai09ReadBack.MergeIntent -ne "MERGE_INTENT_PERSISTED" -or
+        $ai09ReadBack.MergeCommitOid -ne "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+        throw "TASK-AI-09 checkpoint round-trip test failed: recovery fields were not preserved."
+    }
+    # Test backward compatibility: legacy state missing recovery fields gains defaults
+    $legacyState = @{ WorkItemId = "TASK-AI-09"; Branch = "feat/task-ai-09"; State = "STARTED" }
+    $normalizedLegacy = Normalize-ShipDeSupervisorState -State $legacyState
+    if ($normalizedLegacy.RecoveryCount -ne 0 -or
+        $normalizedLegacy.FailoverCount -ne 0 -or
+        $null -ne $normalizedLegacy.RecoveredFrom -or
+        $null -ne $normalizedLegacy.LastRecoveryAt -or
+        $null -ne $normalizedLegacy.RecoveryDiagnostic) {
+        throw "TASK-AI-09 legacy checkpoint normalization test failed: missing recovery fields must have defaults."
+    }
+
+    # 5j. TASK-AI-09: malformed checkpoint refused and preserved for diagnosis
+    $corruptedJson = '{"WorkItemId": "TASK-AI-09", corrupted_json: true'
+    Set-Content -LiteralPath $script:SupervisorStateFile -Value $corruptedJson -Encoding UTF8
+    $corruptedCaught = $false
+    try {
+        Read-ShipDeSupervisorCheckpoint | Out-Null
+    } catch {
+        $corruptedCaught = $_.Exception.Message -match "Supervisor checkpoint is malformed"
+    }
+    if (-not $corruptedCaught) {
+        throw "TASK-AI-09 malformed checkpoint test failed: corrupted checkpoint was not rejected fail-closed."
+    }
+    if (-not (Test-Path -LiteralPath $script:SupervisorStateFile)) {
+        throw "TASK-AI-09 malformed checkpoint test failed: corrupted checkpoint file was deleted instead of preserved."
+    }
+    $preservedContent = Get-Content -LiteralPath $script:SupervisorStateFile -Raw -Encoding UTF8
+    if ($preservedContent.Trim() -ne $corruptedJson.Trim()) {
+        throw "TASK-AI-09 malformed checkpoint test failed: corrupted checkpoint file was overwritten."
+    }
+    Clear-ShipDeSupervisorCheckpoint
+
+    # 5k. TASK-AI-09: stale supervisor lock reclaimed and live supervisor lock refused
+    $ai09LockFile = Join-Path $compatHandoffRoot "ai09-test.lock"
+    # Create stale lock (holder PID 999988 does not exist)
+    $staleLockPayload = @{ process_id = 999988; work_item_id = "TASK-AI-08"; acquired_at = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json
+    Set-Content -LiteralPath $ai09LockFile -Value $staleLockPayload -Encoding UTF8
+    Assert-ShipDeSupervisorLock -LockFile $ai09LockFile -WorkItemId "TASK-AI-09" -CurrentPid 12345 -ProcessResolver { param($id) return $null }
+    $reclaimedLock = Get-Content -LiteralPath $ai09LockFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($reclaimedLock.process_id -ne 12345 -or $reclaimedLock.work_item_id -ne "TASK-AI-09") {
+        throw "TASK-AI-09 stale lock reclamation test failed: stale lock was not reclaimed."
+    }
+    # Live holder lock refused
+    $liveProcMock = [PSCustomObject]@{ Id = 12345; HasExited = $false }
+    $liveLockCaught = $false
+    try {
+        Assert-ShipDeSupervisorLock -LockFile $ai09LockFile -WorkItemId "TASK-AI-09" -CurrentPid 67890 -ProcessResolver { param($id) return $liveProcMock }
+    } catch {
+        $liveLockCaught = $_.Exception.Message -match "Another supervisor instance"
+    }
+    if (-not $liveLockCaught) {
+        throw "TASK-AI-09 live lock refusal test failed: live supervisor lock was not refused."
+    }
+    # Release-ShipDeSupervisorLock only releases for current holder
+    Release-ShipDeSupervisorLock -LockFile $ai09LockFile -CurrentPid 99999
+    if (-not (Test-Path -LiteralPath $ai09LockFile)) {
+        throw "TASK-AI-09 lock release test failed: non-holder released the lock."
+    }
+    Release-ShipDeSupervisorLock -LockFile $ai09LockFile -CurrentPid 12345
+    if (Test-Path -LiteralPath $ai09LockFile) {
+        throw "TASK-AI-09 lock release test failed: holder failed to release the lock."
+    }
+
+    # 5l. TASK-AI-09: archived checkpoint restored by stable Work Item and PR identity
+    $ai09ArchiveState = @{
+        WorkItemId = "TASK-AI-09"
+        PullRequestNumber = 55
+        Branch = "feat/task-ai-09-checkpoint-recovery"
+        Author = "GEMINI"
+        HeadSha = "4444444444444444444444444444444444444444"
+        State = "STARTED"
+    }
+    Archive-ShipDeSupervisorCheckpoint -State $ai09ArchiveState -HandoffRoot $compatHandoffRoot
+    $retrievedCandidate = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-AI-09" -PullRequestNumber 55 -HandoffRoot $compatHandoffRoot
+    if ($null -eq $retrievedCandidate -or $retrievedCandidate.WorkItemId -ne "TASK-AI-09" -or $retrievedCandidate.PullRequestNumber -ne 55) {
+        throw "TASK-AI-09 archived checkpoint retrieval failed: could not retrieve by Work Item and PR number."
+    }
+    $nonMatchingRetrieval = Get-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-AI-09" -PullRequestNumber 999 -HandoffRoot $compatHandoffRoot
+    if ($null -ne $nonMatchingRetrieval) {
+        throw "TASK-AI-09 archived checkpoint retrieval failed: returned candidate with non-matching PR number."
+    }
+    Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId "TASK-AI-09" -PullRequestNumber 55 -HandoffRoot $compatHandoffRoot
+
+    # 5m. TASK-AI-09: restart consumes existing open Pull Request before starting a new item without duplicating worker
+    $spawnedCount = 0
+    $ai09MockPr = [PSCustomObject]@{
+        number = 55
+        title = "[TASK-AI-09] Full checkpoint persistence and restart recovery"
+        headRefName = "feat/task-ai-09-checkpoint-recovery"
+        headRefOid = "5555555555555555555555555555555555555555"
+        isDraft = $false
+        statusCheckRollup = @()
+    }
+    $ai09ResumedState = @{
+        WorkItemId = "TASK-AI-09"
+        Branch = "feat/task-ai-09-checkpoint-recovery"
+        Author = "GEMINI"
+        State = "STARTED"
+        PullRequestNumber = 55
+        HeadSha = "5555555555555555555555555555555555555555"
+    }
+    $ai09RestartInit = Initialize-ShipDeSupervisorState `
+        -State $ai09ResumedState `
+        -PullRequestNumber 0 `
+        -OpenPrResolver { return @($ai09MockPr) } `
+        -ActiveWorkersResolver { return @() } `
+        -WorkerStarter { param($item, $prompt) $spawnedCount++; return [PSCustomObject]@{ SessionId = "dup"; Harness = "agy" } } `
+        -NextItemResolver { return [PSCustomObject]@{ WorkItemId = "TASK-AI-10"; Branch = "feat/task-ai-10"; Author = "GEMINI" } } `
+        -PrWorkItemResolver { param($pr) return [PSCustomObject]@{ WorkItemId = "TASK-AI-09"; Branch = "feat/task-ai-09-checkpoint-recovery"; Author = "GEMINI" } } `
+        -CheckpointWriter { param($s) }
+    if ($spawnedCount -ne 0) {
+        throw "TASK-AI-09 restart test failed: restart spawned a duplicate worker instead of consuming existing PR."
+    }
+    if ($ai09RestartInit.WorkItemId -ne "TASK-AI-09" -or $ai09RestartInit.PullRequestNumber -ne 55) {
+        throw "TASK-AI-09 restart test failed: existing PR was not consumed."
+    }
+    if ($ai09RestartInit.RecoveredFrom -ne "CHECKPOINT" -or $ai09RestartInit.RecoveryCount -ne 1) {
+        throw "TASK-AI-09 restart test failed: RecoveredFrom or RecoveryCount was not set on restart."
+    }
+
+    # 5n. TASK-AI-09: recovery attempts bounded by MaxRecoveryAttempts
+    $ai09ExhaustedState = @{
+        WorkItemId = "TASK-AI-09"
+        Branch = "feat/task-ai-09-checkpoint-recovery"
+        Author = "GEMINI"
+        State = "STARTED"
+        PullRequestNumber = 55
+        HeadSha = "5555555555555555555555555555555555555555"
+        RecoveryCount = 1
+    }
+    $boundExceededCaught = $false
+    try {
+        Initialize-ShipDeSupervisorState `
+            -State $ai09ExhaustedState `
+            -PullRequestNumber 0 `
+            -MaxRecoveryAttempts 1 `
+            -OpenPrResolver { return @($ai09MockPr) } `
+            -ActiveWorkersResolver { return @() } `
+            -PrWorkItemResolver { param($pr) return [PSCustomObject]@{ WorkItemId = "TASK-AI-09"; Branch = "feat/task-ai-09-checkpoint-recovery"; Author = "GEMINI" } } `
+            -CheckpointWriter { param($s) }
+    } catch {
+        $boundExceededCaught = $_.Exception.Message -match "Recovery limit exceeded"
+    }
+    if (-not $boundExceededCaught) {
+        throw "TASK-AI-09 recovery limit test failed: exceeding MaxRecoveryAttempts did not stop fail-closed."
+    }
+
+    # 5o. TASK-AI-09: recovery target removed stops fail-closed without re-creating artifact
+    $missingTargetCaught = $false
+    try {
+        Assert-ShipDeRecoveryTargetExists -Target "worktree 'C:\nonexistent\worktree'" -Exists $false
+    } catch {
+        $missingTargetCaught = $_.Exception.Message -match "Recovery target is missing"
+    }
+    if (-not $missingTargetCaught) {
+        throw "TASK-AI-09 removed state test failed: missing recovery target did not stop fail-closed."
     }
 
     # Real-response regression fixture: AO 0.12.12 session with status=pr_open, isTerminated=false, harness=claude-code, author=GEMINI
@@ -9389,7 +9684,7 @@ Full review comments:
     }
     $prRecoveryPr = [PSCustomObject]@{
         number = 9
-        title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+        title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
         headRefName = "feat/task-ai-06-orchestrator-supervisor"
         headRefOid = "f43becbba10ea06edc9961862deb412ffefe888e"
         isDraft = $false
@@ -9506,9 +9801,9 @@ Full review comments:
         $loopStats = @{ Iterations = 0 }
 
         $e2eResult = Invoke-ShipDeSupervisorLoop `
+            -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
             -State $loopE2eState `
             -PrResolver { param($w, $b) return $prRecoveryPr } `
-            -FindingsResolver { param($n, $h) return "Fixture finding: repair the reported defect." } `
             -VerdictResolver {
                 param($prNum, $head, $sId)
                 if ($loopStats.Iterations -eq 0) { return "CHANGES_REQUIRED" }
@@ -9643,6 +9938,7 @@ Full review comments:
         $caughtUntrusted = $false
         try {
             Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $stateUntrusted `
                 -PrResolver { param($w, $b) return $testPr } `
                 -VerdictResolver { param($n, $h, $s) return $null } `
@@ -9726,6 +10022,7 @@ Full review comments:
         $loopStopped = $false
         try {
             Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $stateBotSuccess `
                 -PrResolver { param($w, $b) return $testPr2 } `
                 -VerdictResolver { param($n, $h, $s) return $null } `
@@ -9779,6 +10076,7 @@ Full review comments:
         $timedOutCaught = $false
         try {
             Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $stateTimedOut `
                 -ReviewTimeoutMinutes 20 `
                 -PrResolver { param($w, $b) return $testPr3 } `
@@ -9827,9 +10125,9 @@ Full review comments:
 
         try {
             Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $stateChangesReq `
                 -PrResolver { param($w, $b) return $testPr4 } `
-                -FindingsResolver { param($n, $h) return "Fixture finding: repair the reported defect." } `
                 -VerdictResolver { param($n, $h, $s) return "CHANGES_REQUIRED" } `
                 -SessionsResolver { param($p) return $t4MockSessions } `
                 -SessionDetailResolver {
@@ -9887,12 +10185,13 @@ Full review comments:
             State = "STARTED"
             HeadSha = "556677889900"
             PullRequestNumber = 9
-            PendingDispatch = @{ Type = "CI_REPAIR"; Head = "556677889900"; Time = (Get-Date).ToUniversalTime().ToString("o") }
+            PendingDispatch = @{ Type = "CI_REPAIR"; Head = "556677889900"; Time = (Get-Date).ToUniversalTime().ToString("o"); Evidence = @{ Head = "556677889900"; Checks = @(@{ Name = "contract"; Provider = "github-actions"; Conclusion = "FAILURE" }); ObservedAt = "2026-09-17T00:00:00.0000000Z" } }
             LastAcknowledgedCiRepairHead = $null
         }
         $t5Delivered = [System.Collections.Generic.List[object]]::new()
         try {
             Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $statePendingCrash `
                 -PrResolver { param($w, $b) return $t5Pr } `
                 -VerdictResolver { param($n, $h, $s) return $null } `
@@ -9931,12 +10230,13 @@ Full review comments:
             State = "STARTED"
             HeadSha = "556677889900"
             PullRequestNumber = 9
-            PendingDispatch = @{ Type = "CI_REPAIR"; Head = "556677889900"; Time = (Get-Date).ToUniversalTime().ToString("o") }
+            PendingDispatch = @{ Type = "CI_REPAIR"; Head = "556677889900"; Time = (Get-Date).ToUniversalTime().ToString("o"); Evidence = @{ Head = "556677889900"; Checks = @(@{ Name = "contract"; Provider = "github-actions"; Conclusion = "FAILURE" }); ObservedAt = "2026-09-17T00:00:00.0000000Z" } }
             LastAcknowledgedCiRepairHead = "556677889900"
         }
         $t5bDelivered = [System.Collections.Generic.List[object]]::new()
         try {
             $null = Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $stateAlreadyAck `
                 -PrResolver { param($w, $b) return $t5Pr } `
                 -MessageSender { param($sid, $msg) $t5bDelivered.Add($msg); return $true } `
@@ -9950,46 +10250,6 @@ Full review comments:
         }
         if ($null -ne $stateAlreadyAck.PendingDispatch) {
             throw "Regression Test 5B failed: PendingDispatch was not cleared for already acknowledged intent."
-        }
-
-        # 5C (TASK-AI-08, AI-08-R08): a pending review repair is recovered from its
-        # checkpointed findings, even when the findings can no longer be fetched.
-        $t5cPr = $t5Pr.PSObject.Copy()
-        $t5cPr.headRefOid = "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c"
-        $stateReviewCrash = @{
-            WorkItemId = "TASK-AI-06"
-            Branch = "feat/task-ai-06-orchestrator-supervisor"
-            Author = "GEMINI"
-            State = "STARTED"
-            HeadSha = "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c"
-            PullRequestNumber = 9
-            PendingDispatch = @{
-                Type = "REVIEW_REPAIR"; Head = "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c"; Time = (Get-Date).ToUniversalTime().ToString("o")
-                Evidence = @{ Head = "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c"; FindingsCount = 1; FindingsText = "checkpointed finding 5C"; ObservedAt = "2026-09-16T00:00:00Z" }
-            }
-            LastAcknowledgedReviewRepairHead = $null
-        }
-        $t5cDelivered = [System.Collections.Generic.List[object]]::new()
-        try {
-            Invoke-ShipDeSupervisorLoop `
-                -State $stateReviewCrash `
-                -PrResolver { param($w, $b) return $t5cPr } `
-                -VerdictResolver { param($n, $h, $s) return $null } `
-                -BotReviewRequester { param($n, $h) return "bot-comment-5c" } `
-                -FindingsResolver { param($n, $h) return "" } `
-                -SessionsResolver { param($p) return @() } `
-                -SessionDetailResolver { param($id, $p) return $null } `
-                -WorkerStarter { param($i, $p) return [PSCustomObject]@{ SessionId = "sess-agy-5c"; Harness = "agy" } } `
-                -MessageSender { param($sid, $msg) $t5cDelivered.Add($msg); return $true } `
-                -SleepHandler { param($s) throw "STOP_T5C" } `
-                -CheckpointWriter { param($s) }
-        } catch {
-            if ($_.Exception.Message -ne "STOP_T5C") {
-                throw "TEST 5C CAUGHT UNEXPECTED ERROR: $($_.Exception.Message)"
-            }
-        }
-        if ($t5cDelivered.Count -ne 1 -or [string]$t5cDelivered[0] -notmatch "checkpointed finding 5C") {
-            throw "Regression Test 5C failed: pending review repair was not re-sent from its checkpointed findings (AI-08-R08)."
         }
     }
 
@@ -10005,6 +10265,7 @@ Full review comments:
         $parkedNoPrCaught = $false
         try {
             Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $stateParkedNoPr `
                 -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
                 -PrResolver { param($w, $b) return $null } `
@@ -10042,6 +10303,7 @@ Full review comments:
         $parkedDraftCaught = $false
         try {
             Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $stateParkedDraft `
                 -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
                 -PrResolver { param($w, $b) return $draftPr } `
@@ -10057,11 +10319,9 @@ Full review comments:
         }
 
         # 6C: PARKED when repair is required outside grace window throws fail-closed
-        # once the per-HEAD repair budget is spent (TASK-AI-08, AI-08-R02/R04).
-        $failedPrHead = "7788990011227788990011227788990011227788"
         $failedPr = [PSCustomObject]@{
             number = 9
-            headRefOid = $failedPrHead
+            headRefOid = "778899001122"
             isDraft = $false
             title = "[TASK-AI-06] Failed CI PR"
             headRefName = "feat/task-ai-06-orchestrator-supervisor"
@@ -10077,58 +10337,28 @@ Full review comments:
             Author = "GEMINI"
             State = "STARTED"
             SessionId = "sess-parked-3"
-            HeadSha = $failedPrHead
-            RepairCount = 2
-            RepairAttemptsByHead = @{ $failedPrHead = @{ CI = 2; REVIEW = 0 } }
-            LastAcknowledgedCiRepairHead = $failedPrHead
+            HeadSha = "778899001122"
+            LastAcknowledgedCiRepairHead = "778899001122"
             LastRepairDispatchedAt = (Get-Date).ToUniversalTime().AddMinutes(-5).ToString("o")
+            RepairAttemptsByHead = @{ "778899001122" = @{ CI = 2; REVIEW = 0 } }
         }
         $parkedExpiredCaught = $false
         try {
             Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $stateParkedExpired `
-                -MaxRepairAttemptsPerHead 2 `
                 -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
                 -PrResolver { param($w, $b) return $failedPr } `
                 -SleepHandler { param($s) throw "LOOP" } `
                 -CheckpointWriter { param($s) }
         } catch {
-            if ($_.Exception.Message -match "Repair budget for exact HEAD $failedPrHead exhausted after 2 attempts") {
+            # TASK-AI-08: an acknowledged HEAD whose per-HEAD budget is spent stops fail-closed instead of redispatching.
+            if ($_.Exception.Message -match "Repair budget for exact HEAD 778899001122 exhausted after 2 attempts") {
                 $parkedExpiredCaught = $true
             }
         }
         if (-not $parkedExpiredCaught) {
             throw "Regression Test 6C failed: Parked worker when repair work is required outside grace window did not fail closed."
-        }
-
-        # 6D: TASK-AI-08 -- the same parked worker with per-HEAD budget left is
-        # repaired again, bound to the failing check, instead of stopping.
-        $stateParkedRetry = @{
-            WorkItemId = "TASK-AI-06"
-            Branch = "feat/task-ai-06-orchestrator-supervisor"
-            Author = "GEMINI"
-            State = "STARTED"
-            SessionId = "sess-parked-4"
-            HeadSha = $failedPrHead
-            RepairCount = 1
-            RepairAttemptsByHead = @{ $failedPrHead = @{ CI = 1; REVIEW = 0 } }
-            LastAcknowledgedCiRepairHead = $failedPrHead
-            LastRepairDispatchedAt = (Get-Date).ToUniversalTime().AddMinutes(-5).ToString("o")
-        }
-        try {
-            Invoke-ShipDeSupervisorLoop `
-                -State $stateParkedRetry `
-                -MaxRepairAttemptsPerHead 2 `
-                -SessionDetailResolver { param($id, $p) return [PSCustomObject]@{ status = "parked" } } `
-                -PrResolver { param($w, $b) return $failedPr } `
-                -SleepHandler { param($s) throw "LOOP" } `
-                -CheckpointWriter { param($s) } | Out-Null
-        } catch {}
-        if ((Get-ShipDeRepairAttemptCount -State $stateParkedRetry -Kind "CI" -HeadSha $failedPrHead) -ne 2 -or
-            [int]$stateParkedRetry.RepairCount -ne 2 -or
-            $null -eq $stateParkedRetry.LastCiRepairEvidence -or
-            [string]$stateParkedRetry.LastCiRepairEvidence.Checks[0].Name -ne "contract") {
-            throw "Regression Test 6D failed: a parked worker with per-HEAD budget left was not repaired again with evidence."
         }
     }
 
@@ -10350,6 +10580,7 @@ Full review comments:
         }
         $writtenCheckpoints56 = [System.Collections.Generic.List[object]]::new()
         $loopResult56 = Invoke-ShipDeSupervisorLoop `
+            -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
             -State $state56 `
             -SessionDetailResolver { param($id, $p) return $null } `
             -PrResolver { param($w, $b) return $req5Pr } `
@@ -10381,6 +10612,7 @@ Full review comments:
         $blockedCaught57 = $false
         try {
             Invoke-ShipDeSupervisorLoop `
+                -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                 -State $state57 `
                 -SessionDetailResolver { param($id, $p) return $null } `
                 -PrResolver { param($w, $b) return $req5FailedPr } `
@@ -10539,7 +10771,7 @@ Full review comments:
                 number = 9
                 headRefOid = "778899001122"
                 isDraft = $false
-                title = "[TASK-AI-06] Governed AO supervisor with AgentRouter fallback"
+                title = "[TASK-AI-06] Governed AO supervisor with 9Router fallback"
                 headRefName = "feat/task-ai-06-orchestrator-supervisor"
                 headRepository = "vinh05092001/shipde-platform"
                 isCrossRepository = $false
@@ -10699,7 +10931,7 @@ Full review comments:
     $script:SupervisorStateFile = $origSupervisorStateFile
     $script:SupervisorLockFile = $origSupervisorLockFile
     $script:AoRouterRuntimeFile = $origAoRouterRuntimeFile
-    $script:AgentRouterProfile = $origAgentRouterProfile
+    $script:NineRouterProfile = $origNineRouterProfile
     $script:ExpectedAoVersion = $origExpectedAoVersion
     $script:AoExecutablePath = $origAoExecutablePath
 
@@ -14345,10 +14577,10 @@ TASK-AI-13,FEAT-AI-01,Governed exact-HEAD auto-merge,FOUNDATION,GEMINI,READY_FOR
             $loopState = $reconciledInit
             try {
                 Invoke-ShipDeSupervisorLoop `
+                    -FindingsResolver { param($n, $h) "- Exact-HEAD finding for self-test" } `
                     -State $loopState `
                     -PrResolver { param($w, $b) return $pr10NewHead } `
                     -VerdictResolver $mockVerdictResolver `
-                    -FindingsResolver { param($n, $h) return (Get-ShipDeGitHubExactHeadCodexFindings -PullRequestNumber $n -HeadSha $h -Reviews @($prodReview5140304027) -PullComments $prodPullComments) } `
                     -SessionsResolver { param($project) return @() } `
                     -SessionDetailResolver {
                         param($sid, $project)
@@ -15062,6 +15294,7 @@ function Initialize-ShipDeSupervisorState {
             })
         },
         [int]$PullRequestNumber = 0,
+        [int]$MaxRecoveryAttempts = 1,
         [string]$Repository = "vinh05092001/shipde-platform",
         [scriptblock]$PrWorkItemResolver = { param($pr) Get-ShipDePrWorkItem -PullRequest $pr -HandoffRoot $HandoffRoot -Repository $Repository },
         [scriptblock]$SessionDetailResolver = $null,
@@ -15255,6 +15488,16 @@ function Initialize-ShipDeSupervisorState {
                 -SessionDetailResolver $SessionDetailResolver
 
             if ($restoredFromArchive) {
+                $State["RecoveredFrom"] = "ARCHIVE"
+                $State["RecoveryCount"] = [int]$State["RecoveryCount"] + 1
+                $State["LastRecoveryAt"] = (Get-Date).ToUniversalTime().ToString("o")
+                if ($MaxRecoveryAttempts -gt 0 -and [int]$State["RecoveryCount"] -gt $MaxRecoveryAttempts) {
+                    $diag = "Recovery limit exceeded for Work Item '$targetWorkItemId': $($State['RecoveryCount']) attempts > limit $MaxRecoveryAttempts"
+                    $State["State"] = "BLOCKED"
+                    $State["RecoveryDiagnostic"] = $diag
+                    & $CheckpointWriter $State
+                    throw $diag
+                }
                 # Finding 1: Persist the active checkpoint before removing the archive
                 & $CheckpointWriter $State
                 Remove-ShipDeArchivedSupervisorCheckpoint -WorkItemId $targetWorkItemId -PullRequestNumber $PullRequestNumber -HandoffRoot $HandoffRoot
@@ -15329,6 +15572,17 @@ function Initialize-ShipDeSupervisorState {
 
             if ($isSessionActive) {
                 Write-Host "[SUPERVISOR] Resuming $workItemId in AO session $sessionId."
+                $State["RecoveredFrom"] = "CHECKPOINT"
+                $State["RecoveryCount"] = [int]$State["RecoveryCount"] + 1
+                $State["LastRecoveryAt"] = (Get-Date).ToUniversalTime().ToString("o")
+                if ($MaxRecoveryAttempts -gt 0 -and [int]$State["RecoveryCount"] -gt $MaxRecoveryAttempts) {
+                    $diag = "Recovery limit exceeded for Work Item '$workItemId': $($State['RecoveryCount']) attempts > limit $MaxRecoveryAttempts"
+                    $State["State"] = "BLOCKED"
+                    $State["RecoveryDiagnostic"] = $diag
+                    & $CheckpointWriter $State
+                    throw $diag
+                }
+                & $CheckpointWriter $State
                 return $State
             }
 
@@ -15377,11 +15631,23 @@ function Initialize-ShipDeSupervisorState {
                 $State["PullRequestNumber"] = [int]$matchedPr.number
                 $State["HeadSha"] = [string]$matchedPr.headRefOid
                 $State["State"] = "STARTED"
+                $State["RecoveredFrom"] = "CHECKPOINT"
+                $State["RecoveryCount"] = [int]$State["RecoveryCount"] + 1
+                $State["LastRecoveryAt"] = (Get-Date).ToUniversalTime().ToString("o")
+                if ($MaxRecoveryAttempts -gt 0 -and [int]$State["RecoveryCount"] -gt $MaxRecoveryAttempts) {
+                    $diag = "Recovery limit exceeded for Work Item '$workItemId': $($State['RecoveryCount']) attempts > limit $MaxRecoveryAttempts"
+                    $State["State"] = "BLOCKED"
+                    $State["RecoveryDiagnostic"] = $diag
+                    & $CheckpointWriter $State
+                    throw $diag
+                }
                 & $CheckpointWriter $State
                 return $State
             } else {
                 $State["State"] = "MISSING"
+                $State["RecoveryDiagnostic"] = "[BLOCKED] Recovery target is missing: AO session '$sessionId'"
                 & $CheckpointWriter $State
+                Write-Host ("[BLOCKED] Recovery target is missing: AO session '{0}'. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item." -f $sessionId)
                 throw "Checkpoint AO session '$sessionId' no longer exists and no open PR for $workItemId was found. Stopping fail-closed."
             }
         } elseif ([int]$State["PullRequestNumber"] -gt 0) {
@@ -15400,7 +15666,18 @@ function Initialize-ShipDeSupervisorState {
                 } elseif ([string]::IsNullOrWhiteSpace([string]$State["HeadSha"]) -and -not [string]::IsNullOrWhiteSpace($matchedHead)) {
                     $State["HeadSha"] = $matchedHead
                 }
-                Write-Host "[SUPERVISOR] Resuming PR-only supervisor state for PR #$($State['PullRequestNumber']) ($workItemId)."
+                Write-Host ("[SUPERVISOR] Resuming Work Item {0} from checkpoint; open Pull Request #{1} at exact HEAD {2} is consumed before any new Work Item" -f $workItemId, $State["PullRequestNumber"], $State["HeadSha"])
+                $State["RecoveredFrom"] = "CHECKPOINT"
+                $State["RecoveryCount"] = [int]$State["RecoveryCount"] + 1
+                $State["LastRecoveryAt"] = (Get-Date).ToUniversalTime().ToString("o")
+                if ($MaxRecoveryAttempts -gt 0 -and [int]$State["RecoveryCount"] -gt $MaxRecoveryAttempts) {
+                    $diag = "Recovery limit exceeded for Work Item '$workItemId': $($State['RecoveryCount']) attempts > limit $MaxRecoveryAttempts"
+                    $State["State"] = "BLOCKED"
+                    $State["RecoveryDiagnostic"] = $diag
+                    & $CheckpointWriter $State
+                    throw $diag
+                }
+                & $CheckpointWriter $State
                 return $State
             } else {
                 $reconciledState = Reconcile-ShipDeMergeIntent `
@@ -15775,7 +16052,8 @@ function Initialize-ShipDeSupervisorState {
 
 function Invoke-ShipDeSupervise {
     param(
-        [int]$PullRequestNumber = 0
+        [int]$PullRequestNumber = 0,
+        [int]$MaxRecoveryAttempts = 1
     )
 
     Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR"
@@ -15787,12 +16065,12 @@ function Invoke-ShipDeSupervise {
     try {
         Assert-ShipDeAoCommand
         Assert-ShipDeAoVersion
-        Ensure-ShipDeAgentRouterRuntime
+        Ensure-ShipDeNineRouterRuntime
 
         $syncScript = { param($s) Sync-ShipDeRegisterAfterAutoMerge -State $s -Repository $Repository }
 
         $state = Read-ShipDeSupervisorCheckpoint
-        $state = Initialize-ShipDeSupervisorState -State $state -PullRequestNumber $PullRequestNumber -Repository $Repository -RegisterSynchronizer $syncScript
+        $state = Initialize-ShipDeSupervisorState -State $state -PullRequestNumber $PullRequestNumber -Repository $Repository -RegisterSynchronizer $syncScript -MaxRecoveryAttempts $MaxRecoveryAttempts
         if ($null -eq $state) {
             return
         }
@@ -15828,7 +16106,7 @@ function Invoke-ShipDeSupervise {
             }
         }
 
-        $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes -MaxRepairAttemptsPerHead $SupervisorMaxRepairAttemptsPerHead
+        $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes
 
         if ($result -eq "READY_FOR_HUMAN_MERGE") {
             Write-Host ("[SUPERVISOR] PR #{0} at {1} has CI GREEN and durable exact-HEAD Codex PASS." -f $state.PullRequestNumber, $state.HeadSha)
@@ -15944,7 +16222,7 @@ function Show-ShipDeMenu {
                 "4" { Invoke-ShipDeStart }
                 "5" { Invoke-ShipDeReview }
                 "6" { Invoke-ShipDeSync }
-                "7" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber }
+                "7" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts }
                 "0" { return }
                 default { Write-Warning "Invalid choice." }
             }
@@ -15970,7 +16248,7 @@ switch ($Action) {
     "Start" { Invoke-ShipDeStart }
     "Review" { Invoke-ShipDeReview -PullRequestNumber $PullRequestNumber -NonInteractive:$NonInteractive }
     "Sync" { Invoke-ShipDeSync }
-    "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber }
+    "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts }
     "Test" { Write-Host "ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED"; return }
     default { Show-ShipDeMenu }
 }

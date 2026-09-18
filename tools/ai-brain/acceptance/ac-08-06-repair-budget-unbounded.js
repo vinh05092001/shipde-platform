@@ -16,8 +16,8 @@ const os = require('os');
 const path = require('path');
 const { SOURCE, missingRepairBudgetParts } = require('./lib/repair-budget-contract');
 
-const FAIL_CLOSED = /\$nextTotal\s+-gt\s+\$MaxRepairBudget/g;
-const UNBOUNDED = '$nextTotal -gt ([int]::MaxValue)';
+const FAIL_CLOSED = /\$State\.RepairCount\s+-gt\s+\$MaxRepairBudget/g;
+const UNBOUNDED = 'RepairCount -gt ([int]::MaxValue)';
 
 if (!fs.existsSync(SOURCE)) {
   console.error('SOURCE_MISSING: ' + SOURCE);

@@ -67,7 +67,7 @@ fs.unlinkSync(tmp);
 const violations = statusAlignmentViolations(tamperedText, registerText, WORK_ITEM);
 if (violations.length === 0) {
   console.error('DIVERGENCE_NOT_DETECTED');
-  process.exit(0);
+  process.exit(2);
 }
 if (!violations.some((violation) => violation.indexOf('STATUS_DIVERGENCE') === 0)) {
   console.error('CONTROL_FAILED: the tamper produced an unrelated violation: ' + violations[0]);
