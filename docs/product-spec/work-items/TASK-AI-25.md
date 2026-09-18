@@ -190,6 +190,8 @@ node --test tools/ai-brain/test/feedback.test.js
 |---|---|---|---|
 | 1 | `Pending` | `NOT_REVIEWED` | Initial specification authoring for TASK-AI-25. |
 
+`Review status: READY_FOR_CODEX` in the Pull Request body is the author's handoff marker, required verbatim by `docs/product-spec/scripts/validate_pr_contract.py`; it states that the author is finished and requests review. It is not a verdict and it does not fill this table. This table records Codex rounds and stays `Pending`/`NOT_REVIEWED` until Codex posts a verdict against the reviewed commit, so it deliberately does not mirror the Pull Request marker. The register row stays `BLOCKED_DEPENDENCY` for the same reason it is true: `TASK-AI-24` is undelivered, and `AC-AI-25-01`/`AC-AI-25-05` fail if either the row or the Control table is edited to claim otherwise.
+
 ## Residual limitations
 
 - No executor yet: `TASK-AI-24` undelivered, no spec here. Feedback store specified-but-unfilled; no role narrowed until it lands.
