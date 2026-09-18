@@ -4,9 +4,9 @@ param(
         Join-Path $userHome "AI"
     ),
     [string]$AoExecutable = "",
-    # AO-only Claude profile directory routed to the local AgentRouter (9Router)
-    # gateway. Never the operator's native ~/.claude profile. Resolved against
-    # SHIPDE_AGENT_ROUTER_PROFILE and the shared default when left empty.
+    # AO-only Claude profile directory routed to the local 9Router gateway. Never
+    # the operator's native ~/.claude profile. Resolved against
+    # SHIPDE_NINEROUTER_PROFILE and the shared default when left empty.
     [string]$ProfilePath = "",
     [int]$AgentRouterPort = 20128,
     [string]$ExpectedAoVersion = "",
@@ -31,15 +31,15 @@ if (-not [string]::IsNullOrWhiteSpace($ExpectedAoVersion) -and $ExpectedAoVersio
 }
 $ExpectedAoVersion = $canonicalAoVersion
 
-$profilePath = Get-ShipDeAgentRouterProfilePath -ProfilePath $ProfilePath
+$profilePath = Get-ShipDeNineRouterProfilePath -ProfilePath $ProfilePath
 $settingsPath = Join-Path $profilePath "settings.json"
 $handoffRoot = Join-Path $AiRoot "handoff"
 $runtimePath = Join-Path $handoffRoot "ao-router-runtime.json"
 
 # Validates the profile fail-closed: missing file, invalid JSON, missing 'env' block or
-# a base URL that is not the local AgentRouter all raise an actionable error naming
+# a base URL that is not the local 9Router all raise an actionable error naming
 # $settingsPath, never a raw "property 'env' cannot be found" failure.
-$baseUrl = Assert-ShipDeAgentRouterProfileBaseUrl -ProfilePath $profilePath -Port $AgentRouterPort
+$baseUrl = Assert-ShipDeNineRouterProfileBaseUrl -ProfilePath $profilePath -Port $AgentRouterPort
 $aoExecutablePath = if ([string]::IsNullOrWhiteSpace($AoExecutable)) {
     Resolve-ShipDeAoExecutable
 } else {

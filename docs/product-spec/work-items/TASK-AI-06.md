@@ -162,8 +162,8 @@ The implementation must:
 - `AI-SUP-03`: The supervisor uses only supported public AO CLI commands; it does not modify AO internals.
 - `AI-SUP-04`: Implementation/test failures are NOT provider failures; they return to the author.
 - `AI-SUP-05`: The supervisor never auto-merges; human merge is always required.
-- `AI-SUP-06`: AO uses the existing `.claude` AgentRouter profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
-- `AI-SUP-07`: AgentRouter owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
+- `AI-SUP-06`: AO uses its own 9Router profile directory for unattended orchestration, `%USERPROFILE%\.claude-9router` by default (overridable with `-NineRouterProfilePath` or `SHIPDE_NINEROUTER_PROFILE`); the direct `.claude-orchestrator` profile is not used by unattended mode. Amended on 2026-09-17 by the post-delivery change below; `AI-TOOLCHAIN-DECISIONS.md` carries the canonical wording.
+- `AI-SUP-07`: 9Router owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
 - `AI-SUP-08`: Inactivity timeout is configurable (default 10 minutes).
 - `AI-SUP-09`: Maximum 1 nudge attempt per inactivity window before reporting stalled.
 - `AI-SUP-10`: The supervisor respects existing controller gates (CI must pass, Codex must approve).
@@ -283,36 +283,41 @@ The installed desktop runtime moved to AO `0.13.0` and the supervisor failed clo
 - Kept deliberately: the canonical-pin self-test compares against a literal as well as `$script:ExpectedAoVersion`. The literal is the point of that test. A manifest edit alone must not silently move the pin the controller accepts, so a pin change has to touch both, as this one does.
 - Not changed in this Pull Request: `TASK-AI-07.md` line 69 still says `0.12.12`. It records the version at TASK-AI-07's delivery, and the `contract` check refuses a Pull Request that changes more than one Work Item file.
 - Still unverified: a live `ao spawn` of a real worker under 0.13.0. It starts a paid agent session, so it will be observed on the first supervised dispatch after merge. The supervisor fails closed if spawn output does not match the contract.
-<<<<<<< HEAD
 
 ## Post-delivery change: AO gets its own 9Router profile (2026-09-17)
 
-`-Action Supervise` died before it could start AO. `Assert-ShipDeAgentRouterProfile` read
+`-Action Supervise` died before it could start AO. The profile gate (then named
+`Assert-ShipDeAgentRouterProfile`, now `Assert-ShipDeNineRouterProfile`) read
 `$config.env.ANTHROPIC_BASE_URL` from `%USERPROFILE%\.claude\settings.json`, and that file has no
 `env` block, because the operator uses natively-authenticated Claude Code there. PowerShell raised
 the raw `The property 'env' cannot be found on this object` and the supervisor stopped with an error
 that named neither the profile nor the fix.
 
 The operator's decision is a profile split, not an edit to `~/.claude`: AO runs under its own Claude
-profile directory that is routed to the local AgentRouter (9Router) gateway, and the native profile
+profile directory that is routed to the local 9Router gateway, and the native profile
 is left untouched so Claude Code keeps its own login.
+
+This section supersedes the `.claude` statements in the baseline part of this Work Item: the
+`CLAUDE_CONFIG_DIR=%USERPROFILE%\.claude` bullet in section 1 and `AI-SUP-06`. The baseline text stays
+as the record of what was approved at delivery; the shipped behavior is the split described here, and
+`AI-TOOLCHAIN-DECISIONS.md` carries the canonical wording.
 
 ### What changed
 
-- `Get-ShipDeAgentRouterProfilePath` (`scripts/ai/common.ps1`) resolves the AO profile directory
-  with the precedence explicit argument, then `SHIPDE_AGENT_ROUTER_PROFILE`, then the default
+- `Get-ShipDeNineRouterProfilePath` (`scripts/ai/common.ps1`) resolves the AO profile directory
+  with the precedence explicit argument, then `SHIPDE_NINEROUTER_PROFILE`, then the default
   `%USERPROFILE%\.claude-9router`. Self-test 0a fails if that default ever becomes
   `%USERPROFILE%\.claude`. The default is what is guarded; an operator who deliberately points
-  `-AgentRouterProfilePath` or `SHIPDE_AGENT_ROUTER_PROFILE` at the native profile is not blocked,
+  `-NineRouterProfilePath` or `SHIPDE_NINEROUTER_PROFILE` at the native profile is not blocked,
   because an explicit override is an operator decision.
-- `Assert-ShipDeAgentRouterProfileBaseUrl` (`scripts/ai/common.ps1`) is the single validator for the
+- `Assert-ShipDeNineRouterProfileBaseUrl` (`scripts/ai/common.ps1`) is the single validator for the
   profile. A missing `settings.json`, invalid JSON, a missing `env` block, a missing
   `ANTHROPIC_BASE_URL`, or a base URL that is not `http://localhost:<port>/v1` each raise an
   actionable error that names the profile file and states the required value. A raw
   property-not-found error can no longer reach the operator.
-- `control.ps1` takes `-AgentRouterProfilePath`, `$script:AgentRouterProfile` is resolved through the
-  shared helper, `Assert-ShipDeAgentRouterProfile` delegates to the shared validator, and
-  `Ensure-ShipDeAgentRouterRuntime` passes the resolved profile to the launcher as `-ProfilePath`.
+- `control.ps1` takes `-NineRouterProfilePath`, `$script:NineRouterProfile` is resolved through the
+  shared helper, `Assert-ShipDeNineRouterProfile` delegates to the shared validator, and
+  `Ensure-ShipDeNineRouterRuntime` passes the resolved profile to the launcher as `-ProfilePath`.
 - `start-agent-orchestrator.ps1` defaults `-ProfilePath` to empty and resolves it through the same
   helper, so the launcher and the supervisor cannot disagree about which profile AO runs under. Its
   duplicated inline base-URL validation is replaced by the shared validator.
@@ -326,12 +331,12 @@ directory holding that setting moved off the operator's native profile.
 
 | Check | Evidence |
 | ----- | -------- |
-| Default profile is not the native profile | New self-test 0a in the AO bootstrap behavioral suite fails if `Get-ShipDeAgentRouterProfilePath` returns `%USERPROFILE%\.claude`, and asserts the environment override and the explicit-argument precedence. |
+| Default profile is not the native profile | New self-test 0a in the AO bootstrap behavioral suite fails if `Get-ShipDeNineRouterProfilePath` returns `%USERPROFILE%\.claude`, and asserts the environment override and the explicit-argument precedence. |
 | Missing `env` block is actionable, not a raw property error | New self-test 0b launches `start-agent-orchestrator.ps1` against a profile containing `{"model":"opus"}` and fails if the message matches `cannot be found on this object` or does not name the settings file, `env` and `ANTHROPIC_BASE_URL`. |
 | Existing bootstrap behavior preserved | Self-tests 1-4 (manifest pin bypass, pre-creation failure, early exit, live marker binding) still pass through the injected `-ProfilePath` seam. |
 | Suite result | `powershell -File scripts/ai/control.ps1 -Action Test` printed `ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED`. |
 | `-Action Status` | Ran clean: worktrees listed, `9Router : UP`, 13 open Pull Requests listed. |
-| `-Action Supervise` | No longer dies on the profile. It resolves the AO executable, reports `EffectiveVersion 0.13.0`, validates the new profile, and reaches `[SUPERVISOR] Starting AO through the AgentRouter Claude profile...`. It then stops on a separate pre-existing condition, below. |
+| `-Action Supervise` | No longer dies on the profile. It resolves the AO executable, reports `EffectiveVersion 0.13.0`, validates the new profile, and reaches `[SUPERVISOR] Starting AO through the 9Router Claude profile...`. It then stops on a separate pre-existing condition, below. |
 
 ### Local machine state the operator owns
 
@@ -349,5 +354,29 @@ this repository reads or writes it.
   That is a pre-existing 9Router version-pin mismatch, unrelated to the profile split, and moving a
   gateway pin is an operator decision; it is not changed here.
 - A live AO session under the new profile is still unobserved for the same reason.
-=======
->>>>>>> origin/main
+
+### Merge resolution with TASK-AI-44 (2026-09-19)
+
+This branch was reconciled with `origin/main` after TASK-AI-44 (`4a1e97f`) renamed the local-gateway
+code names from `AgentRouter*` to `NineRouter*` in the same regions this Work Item edits. The conflict
+was rename-versus-change, not a disagreement about behavior, and `AI-TOOLCHAIN-DECISIONS.md` already
+reserved `AgentRouter` for the cloud endpoint, so both sides are satisfied together.
+
+- Behavior: this Work Item's profile split is kept, including the `-ProfilePath` seam between
+  `control.ps1` and `start-agent-orchestrator.ps1` that makes the two files share one resolver.
+- Naming: the new profile surface adopts TASK-AI-44's names — `Get-ShipDeNineRouterProfilePath`,
+  `Assert-ShipDeNineRouterProfileBaseUrl`, `-NineRouterProfilePath`, `$script:NineRouterProfile`,
+  `SHIPDE_NINEROUTER_PROFILE`. The env var was renamed before it shipped, so no operator or script
+  depends on the old spelling.
+- Documentation: `AI-TOOLCHAIN-DECISIONS.md` now says the unattended AO profile is
+  `%USERPROFILE%\.claude-9router` in the tool table, the topology list and the 9Router row, and its
+  `AI-SUP-06`/`AI-SUP-07` wording matches the split above. TASK-AI-44's own text described the
+  pre-split `.claude` topology; leaving it is the same one-Work-Item-per-Pull-Request rule that keeps
+  `TASK-AI-07.md`'s version pin untouched.
+- Kept as TASK-AI-44 left them: `-AgentRouterPort` and `Test-AgentRouterEndpoint` in
+  `start-agent-orchestrator.ps1`. Renaming that file's gateway surface is TASK-AI-44's declared
+  residual, documented at `AI-TOOLCHAIN-DECISIONS.md:84` and in its own Residual limitations, not this
+  Work Item's scope.
+- Removed: conflict markers that an earlier resolution attempt had committed into this file.
+- Re-verified after the merge: `powershell -File scripts/ai/control.ps1 -Action Test` printed
+  `ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED`.

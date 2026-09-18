@@ -40,6 +40,14 @@ allowBuilds:
   # 3. Native binary installer required by tsx for script execution and Turborepo builds
   esbuild: true
   fsevents: false
+  # 7. Lefthook's npm postinstall runs `lefthook install -f`, i.e. it would
+  #    register git hooks implicitly on every `pnpm install`. Repository
+  #    supply-chain policy (AI-36-R02/R03) forbids install-time hook
+  #    registration, so the build script is denied and hook installation stays
+  #    explicit (`pnpm lefthook install`). The binary still resolves from the
+  #    pinned `lefthook-windows-x64` optional dependency, so denying the
+  #    postinstall costs no functionality.
+  lefthook: false
   msgpackr-extract: false
   msw: false
   # 4. Prisma CLI setup for database schema generation and validation

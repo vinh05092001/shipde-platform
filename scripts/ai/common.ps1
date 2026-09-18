@@ -324,15 +324,15 @@ function Get-ShipDeUserHome {
     return [System.IO.Path]::GetTempPath()
 }
 
-function Get-ShipDeAgentRouterProfilePath {
+function Get-ShipDeNineRouterProfilePath {
     <#
         Resolves the Claude profile directory that Agent Orchestrator runs under.
 
-        AO must talk to the local AgentRouter (9Router) gateway, which requires an
+        AO must talk to the local 9Router gateway, which requires an
         `env.ANTHROPIC_BASE_URL` override in settings.json. The operator's own
         `~/.claude` profile is natively authenticated Claude Code and must stay free of
         that override, so AO gets its own profile directory instead. Precedence:
-        explicit argument, then SHIPDE_AGENT_ROUTER_PROFILE, then the default.
+        explicit argument, then SHIPDE_NINEROUTER_PROFILE, then the default.
     #>
     param(
         [string]$ProfilePath = ""
@@ -341,15 +341,15 @@ function Get-ShipDeAgentRouterProfilePath {
     if (-not [string]::IsNullOrWhiteSpace($ProfilePath)) {
         return $ProfilePath
     }
-    if (-not [string]::IsNullOrWhiteSpace($env:SHIPDE_AGENT_ROUTER_PROFILE)) {
-        return $env:SHIPDE_AGENT_ROUTER_PROFILE
+    if (-not [string]::IsNullOrWhiteSpace($env:SHIPDE_NINEROUTER_PROFILE)) {
+        return $env:SHIPDE_NINEROUTER_PROFILE
     }
     return (Join-Path (Get-ShipDeUserHome) ".claude-9router")
 }
 
-function Assert-ShipDeAgentRouterProfileBaseUrl {
+function Assert-ShipDeNineRouterProfileBaseUrl {
     <#
-        Reads settings.json from an AgentRouter profile directory and returns the
+        Reads settings.json from a 9Router profile directory and returns the
         validated ANTHROPIC_BASE_URL. Every failure mode (missing file, invalid JSON,
         missing env block, missing or wrong base URL) becomes an actionable error that
         names the profile path instead of a raw PowerShell property error.
@@ -361,17 +361,17 @@ function Assert-ShipDeAgentRouterProfileBaseUrl {
 
     $settingsPath = Join-Path $ProfilePath "settings.json"
     if (-not (Test-Path -LiteralPath $settingsPath)) {
-        throw "AgentRouter Claude profile is missing: $settingsPath. Create it with {""env"":{""ANTHROPIC_BASE_URL"":""http://localhost:$Port/v1""}}. Do not point this at your native ~/.claude profile."
+        throw "9Router Claude profile is missing: $settingsPath. Create it with {""env"":{""ANTHROPIC_BASE_URL"":""http://localhost:$Port/v1""}}. Do not point this at your native ~/.claude profile."
     }
     try {
         $config = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
-        throw "AgentRouter Claude profile contains invalid JSON: $settingsPath"
+        throw "9Router Claude profile contains invalid JSON: $settingsPath"
     }
 
     $envBlock = if ($null -eq $config) { $null } else { $config.PSObject.Properties['env'] }
     if ($null -eq $envBlock -or $null -eq $envBlock.Value) {
-        throw "AgentRouter Claude profile $settingsPath has no 'env' block, so AO cannot be routed to http://localhost:$Port/v1. Add {""env"":{""ANTHROPIC_BASE_URL"":""http://localhost:$Port/v1""}} to that file. This profile is AO-only; leave your native ~/.claude profile unchanged."
+        throw "9Router Claude profile $settingsPath has no 'env' block, so AO cannot be routed to http://localhost:$Port/v1. Add {""env"":{""ANTHROPIC_BASE_URL"":""http://localhost:$Port/v1""}} to that file. This profile is AO-only; leave your native ~/.claude profile unchanged."
     }
     $baseUrlProperty = $envBlock.Value.PSObject.Properties['ANTHROPIC_BASE_URL']
     $baseUrl = if ($null -eq $baseUrlProperty) { "" } else { [string]$baseUrlProperty.Value }
@@ -388,7 +388,7 @@ function Assert-ShipDeAgentRouterProfileBaseUrl {
         -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
         -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
     ) {
-        throw "AgentRouter Claude profile $settingsPath must set env.ANTHROPIC_BASE_URL to http://localhost:$Port/v1."
+        throw "9Router Claude profile $settingsPath must set env.ANTHROPIC_BASE_URL to http://localhost:$Port/v1."
     }
 
     return $baseUrl
