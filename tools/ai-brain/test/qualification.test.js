@@ -137,9 +137,7 @@ describe('Result credential rule', () => {
   });
 
   test('refuses a non-object result', () => {
-    assert.ok(
-      resultCredentialFindings(null, '').some((f) => f.startsWith('RESULT_SHAPE'))
-    );
+    assert.ok(resultCredentialFindings(null, '').some((f) => f.startsWith('RESULT_SHAPE')));
     assert.ok(
       resultCredentialFindings('not an object', '').some((f) => f.startsWith('RESULT_SHAPE'))
     );
@@ -192,14 +190,16 @@ describe('Qualification record store', () => {
   test('validateResultShape flags missing fields, unknown outcomes, non-objects', () => {
     assert.ok(q.validateResultShape({ accountId: 'x' }).length >= 5);
     assert.ok(
-      q.validateResultShape({
-        accountId: 'x',
-        model: 'm',
-        instant: 'z',
-        outcome: 'exploded',
-        latencyMs: 0,
-        reason: '',
-      }).some((f) => f.includes('unknown outcome'))
+      q
+        .validateResultShape({
+          accountId: 'x',
+          model: 'm',
+          instant: 'z',
+          outcome: 'exploded',
+          latencyMs: 0,
+          reason: '',
+        })
+        .some((f) => f.includes('unknown outcome'))
     );
     assert.ok(q.validateResultShape(null).some((f) => f.includes('not a plain object')));
     assert.ok(q.validateResultShape([1]).some((f) => f.includes('not a plain object')));
@@ -342,7 +342,11 @@ describe('Cache verdict and cheapest model', () => {
 describe('Probe command construction', () => {
   test('fills the declared cli command', () => {
     assert.strictEqual(
-      q.probeCommand({ launch: { kind: 'cli', command: 'agent --model <model> --prompt <prompt>' } }, 'm1', 'hi'),
+      q.probeCommand(
+        { launch: { kind: 'cli', command: 'agent --model <model> --prompt <prompt>' } },
+        'm1',
+        'hi'
+      ),
       'agent --model m1 --prompt hi'
     );
   });
@@ -360,7 +364,10 @@ describe('Probe command construction', () => {
       'm1',
       'hi'
     );
-    assert.strictEqual(cmd, 'docker compose -f "C:/agent/docker-compose.yml" run --rm app agent m1 hi');
+    assert.strictEqual(
+      cmd,
+      'docker compose -f "C:/agent/docker-compose.yml" run --rm app agent m1 hi'
+    );
   });
 
   test('builds the openai-compatible curl with max_tokens 1 and no credential', () => {

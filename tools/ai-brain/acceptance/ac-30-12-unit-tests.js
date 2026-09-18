@@ -57,10 +57,6 @@ if (fail !== 0) {
   process.exit(1);
 }
 console.log(
-  'AC-AI-30-12 unit tests passed: fail 0 with ' +
-    pass +
-    ' passing of ' +
-    tests +
-    ' tests'
+  'AC-AI-30-12 unit tests passed: fail 0 with ' + pass + ' passing of ' + tests + ' tests'
 );
 process.exit(0);

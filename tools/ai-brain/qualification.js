@@ -15,21 +15,13 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const RESULT_DIR =
-  process.env.QUALIFICATION_RESULT_DIR ||
-  path.join(__dirname, 'qualification-results');
+  process.env.QUALIFICATION_RESULT_DIR || path.join(__dirname, 'qualification-results');
 const RESULT_PATH = path.join(RESULT_DIR, 'results.json');
 
 const OUTCOMES = new Set(['pass', 'fail', 'timeout', 'refused']);
 
 /** Required fields for a qualification result record. */
-const REQUIRED_FIELDS = [
-  'accountId',
-  'model',
-  'instant',
-  'outcome',
-  'latencyMs',
-  'reason',
-];
+const REQUIRED_FIELDS = ['accountId', 'model', 'instant', 'outcome', 'latencyMs', 'reason'];
 
 /** The bounded-probe defaults (`AI-30-R02`). */
 const DEFAULT_PROBE_TIMEOUT_MS = 60 * 1000;
@@ -89,9 +81,7 @@ function loadResults(file, io) {
   }
   try {
     const parsed = JSON.parse(text);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed
-      : {};
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch (e) {
     throw Object.assign(new Error('RESULT_CORRUPT: ' + e.message), {
       code: 'RESULT_CORRUPT',
@@ -138,8 +128,7 @@ function cachedVerdict(store, accountId, model, options) {
   const opts = options || {};
   const entry = (store || {})[recordKey(accountId, model)];
   if (!entry) return { action: 'probe' };
-  const windowMs =
-    opts.cacheWindowMs === undefined ? DEFAULT_CACHE_WINDOW_MS : opts.cacheWindowMs;
+  const windowMs = opts.cacheWindowMs === undefined ? DEFAULT_CACHE_WINDOW_MS : opts.cacheWindowMs;
   const now = opts.now || Date.now();
   const taken = Date.parse(entry.instant);
   if (!Number.isFinite(taken) || now - taken >= windowMs) {
@@ -161,8 +150,7 @@ function cachedVerdict(store, accountId, model, options) {
 function cheapestModel(account) {
   const models = (account && account.models) || [];
   if (models.length === 0) return null;
-  const cost = (m) =>
-    Number((m.cost && (m.cost.inputPerMillion + m.cost.outputPerMillion)) || 0);
+  const cost = (m) => Number((m.cost && m.cost.inputPerMillion + m.cost.outputPerMillion) || 0);
   let best = models[0];
   for (const m of models.slice(1)) {
     const a = cost(best);
@@ -195,14 +183,10 @@ function probeCommand(account, model, probeText) {
     });
   }
   if (launch.kind === 'cli') {
-    return String(launch.command)
-      .replace('<prompt>', probeText)
-      .replace('<model>', model);
+    return String(launch.command).replace('<prompt>', probeText).replace('<model>', model);
   }
   if (launch.kind === 'docker-compose') {
-    const inner = String(launch.command)
-      .replace('<prompt>', probeText)
-      .replace('<model>', model);
+    const inner = String(launch.command).replace('<prompt>', probeText).replace('<model>', model);
     const composeFile = launch.dir
       ? launch.dir.replace(/[\\/]+$/, '') + '/docker-compose.yml'
       : 'docker-compose.yml';
@@ -352,10 +336,10 @@ function buildRecord(accountId, model, outcome, latencyMs, reason, now) {
   };
   const shape = validateResultShape(record);
   if (shape.length > 0) {
-    throw Object.assign(
-      new Error('RESULT_SHAPE: internal record refused: ' + shape.join('; ')),
-      { code: 'RESULT_SHAPE', findings: shape }
-    );
+    throw Object.assign(new Error('RESULT_SHAPE: internal record refused: ' + shape.join('; ')), {
+      code: 'RESULT_SHAPE',
+      findings: shape,
+    });
   }
   return record;
 }
@@ -479,7 +463,14 @@ async function probeAccount(input) {
   const latencyMs = Date.now() - started;
 
   return saveResult(
-    buildRecord(account.id, model, ran.outcome, latencyMs, String(ran.reason || '').slice(0, 160), now),
+    buildRecord(
+      account.id,
+      model,
+      ran.outcome,
+      latencyMs,
+      String(ran.reason || '').slice(0, 160),
+      now
+    ),
     file,
     io
   );

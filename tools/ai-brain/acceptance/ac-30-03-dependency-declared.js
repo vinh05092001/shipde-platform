@@ -35,7 +35,5 @@ if (!declared.ok) {
   process.exit(1);
 }
 
-console.log(
-  'TASK-AI-29 dependency declared for ' + WORK_ITEM + ' (name only, no merge claim)'
-);
+console.log('TASK-AI-29 dependency declared for ' + WORK_ITEM + ' (name only, no merge claim)');
 process.exit(0);

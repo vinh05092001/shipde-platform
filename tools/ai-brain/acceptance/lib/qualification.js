@@ -17,12 +17,7 @@
 //   0 the rule holds   1 it is violated   2 it cannot be measured
 const { validateResultShape } = require('../../qualification');
 
-const PROBE_REQUIRED_CONFIG = [
-  'timeoutMs',
-  'treeKill',
-  'cheapestModel',
-  'cacheWindowMs',
-];
+const PROBE_REQUIRED_CONFIG = ['timeoutMs', 'treeKill', 'cheapestModel', 'cacheWindowMs'];
 
 /**
  * Every way a probe configuration breaks the bounded, entry-gated, outcome-recording
