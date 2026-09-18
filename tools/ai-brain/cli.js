@@ -565,6 +565,212 @@ function quotaCommand(args) {
   console.log('');
 }
 
+/**
+ * Account entry commands.
+ *
+ * `account add` creates a registry entry through accounts.addAccount.
+ * `account limits` sets ceilings on an existing entry through updateAccount.
+ * `account secret` stores a credential through setSecret, reading from stdin
+ * so it never lands in shell history.
+ *
+ * Unrecognised options are refused rather than ignored, following reconcile.
+ */
+const ACCOUNT_FLAGS = new Set(['provider', 'model', 'tier', 'models', 'json']);
+const ACCOUNT_VALUES = new Set([
+  'id',
+  'provider',
+  'model',
+  'tier',
+  'context-window',
+  'contextWindow',
+  'tokens-per-minute',
+  'tokensPerMinute',
+  'tokens-per-day',
+  'tokensPerDay',
+  'requests-per-minute',
+  'requestsPerMinute',
+  'requests-per-day',
+  'requestsPerDay',
+  'provenance',
+]);
+
+// AI-29-R05: an entry typed by hand is either a vendor's own published figure
+// or the operator's own assertion. `observed` is derived from the ledger by
+// resolveLimits itself, and this path never measured anything, so it is not
+// an option here even though limits.PROVENANCE allows it structurally.
+const ACCOUNT_ENTRY_PROVENANCE = ['vendor-documented', 'operator-declared'];
+
+function accountCommand(args) {
+  const { addAccount, updateAccount, setSecret, listAccounts } = require('./accounts');
+  const { entryFindings } = require('./account-entry');
+
+  for (const key of Object.keys(args)) {
+    if (key === '_') continue;
+    if (!ACCOUNT_FLAGS.has(key) && !ACCOUNT_VALUES.has(key)) {
+      console.error('Tuỳ chọn không nhận ra: --' + key);
+      process.exit(1);
+    }
+  }
+
+  const subcommand = args._[1];
+
+  if (subcommand === 'add') {
+    const id = args.id;
+    const provider = args.provider;
+    const model = args.model;
+    const contextWindow = Number(pick(args, 'context-window', 'contextWindow')) || 200000;
+    const tier = args.tier !== undefined ? Number(args.tier) : 2;
+
+    if (!id || !provider || !model) {
+      console.error('account add yêu cầu --id, --provider và --model');
+      process.exit(1);
+    }
+
+    const account = {
+      id,
+      provider,
+      model,
+      tier,
+      capabilities: { contextWindow, jsonSchema: true, tools: true },
+      cost: { inputPerMillion: 0, outputPerMillion: 0 },
+      limits: {},
+    };
+
+    const findings = entryFindings(account);
+    if (findings.length > 0) {
+      console.error('Entry validation failed:');
+      for (const f of findings) {
+        console.error('  [' + f.code + '] ' + f.message);
+      }
+      process.exit(1);
+    }
+
+    try {
+      const entry = addAccount(account);
+      console.log('');
+      console.log('  Account added: ' + entry.id);
+      console.log('  Provider: ' + entry.provider);
+      console.log('  Model: ' + entry.model);
+      console.log('  Tier: ' + entry.tier);
+      console.log('  Known windows: (none yet — use account limits)');
+      console.log('  Unknown windows: all');
+      console.log('  Has secret: false');
+      console.log('');
+      console.log('  Next: node tools/ai-brain/cli.js account limits --id ' + entry.id + ' --tokens-per-day <value> --provenance operator-declared');
+      console.log('        node tools/ai-brain/cli.js account secret --id ' + entry.id);
+      console.log('');
+    } catch (e) {
+      console.error('Failed to add account: ' + e.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === 'limits') {
+    const id = args.id;
+    if (!id) {
+      console.error('account limits yêu cầu --id');
+      process.exit(1);
+    }
+
+    const provenance = args.provenance;
+    if (!provenance || ACCOUNT_ENTRY_PROVENANCE.indexOf(provenance) === -1) {
+      console.error('account limits yêu cầu --provenance (vendor-documented hoặc operator-declared)');
+      process.exit(1);
+    }
+
+    const tokensPerMinute = pick(args, 'tokens-per-minute', 'tokensPerMinute');
+    const tokensPerDay = pick(args, 'tokens-per-day', 'tokensPerDay');
+    const requestsPerMinute = pick(args, 'requests-per-minute', 'requestsPerMinute');
+    const requestsPerDay = pick(args, 'requests-per-day', 'requestsPerDay');
+
+    const limits = {};
+    const assertedAt = Date.now();
+
+    if (tokensPerMinute) {
+      limits.tokensPerMinute = { value: Number(tokensPerMinute), provenance, assertedAt };
+    }
+    if (tokensPerDay) {
+      limits.tokensPerDay = { value: Number(tokensPerDay), provenance, assertedAt };
+    }
+    if (requestsPerMinute) {
+      limits.requestsPerMinute = { value: Number(requestsPerMinute), provenance, assertedAt };
+    }
+    if (requestsPerDay) {
+      limits.requestsPerDay = { value: Number(requestsPerDay), provenance, assertedAt };
+    }
+
+    if (Object.keys(limits).length === 0) {
+      console.error('account limits yêu cầu ít nhất một window (--tokens-per-minute, --tokens-per-day, --requests-per-minute, --requests-per-day)');
+      process.exit(1);
+    }
+
+    try {
+      const updated = updateAccount(id, { limits });
+      const { resolveLimits } = require('./limits');
+      const resolved = resolveLimits(updated);
+
+      const known = Object.keys(resolved.windows).filter((w) => !resolved.windows[w].unknownBudget);
+      const unknown = Object.keys(resolved.windows).filter((w) => resolved.windows[w].unknownBudget);
+
+      console.log('');
+      console.log('  Limits updated: ' + updated.id);
+      console.log('  Known windows: ' + (known.length > 0 ? known.join(', ') : '(none)'));
+      console.log('  Unknown windows: ' + (unknown.length > 0 ? unknown.join(', ') : '(none)'));
+      for (const w of known) {
+        const entry = resolved.windows[w];
+        console.log('    ' + w + ': ' + entry.ceiling + ' (' + entry.provenance + ')');
+      }
+      console.log('');
+    } catch (e) {
+      console.error('Failed to update limits: ' + e.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === 'secret') {
+    const id = args.id;
+    if (!id) {
+      console.error('account secret yêu cầu --id');
+      process.exit(1);
+    }
+
+    const readline = require('readline');
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    rl.question('Enter secret for ' + id + ': ', (secret) => {
+      rl.close();
+      if (!secret || secret.trim() === '') {
+        console.error('Secret cannot be empty');
+        process.exit(1);
+      }
+
+      try {
+        setSecret(id, secret.trim());
+        const accounts = listAccounts();
+        const account = accounts.find((a) => a.id === id);
+        console.log('');
+        console.log('  Secret stored: ' + id);
+        console.log('  Has secret: true');
+        console.log('  Account can now authenticate.');
+        console.log('');
+      } catch (e) {
+        console.error('Failed to store secret: ' + e.message);
+        process.exit(1);
+      }
+    });
+    return;
+  }
+
+  console.error('Lệnh account không rõ: ' + subcommand);
+  console.error('Dùng: account add | account limits | account secret');
+  process.exit(2);
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -573,9 +779,10 @@ function main() {
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
+  if (command === 'account') return accountCommand(args);
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | manifest | prove | quota');
+  console.error('Dùng: reconcile | manifest | prove | quota | account');
   process.exit(2);
 }
 
