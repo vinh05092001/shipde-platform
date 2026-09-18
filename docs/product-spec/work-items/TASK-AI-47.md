@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-47.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-dashboard/rotation.js`, `tools/ai-dashboard/rotation.html`, `tools/ai-dashboard/server.js`, `tools/ai-dashboard/test/rotation.test.js`, `tools/ai-dashboard/rotation-view.js` (the panel added by the 2026-09-18 scope widening renders the rotation payload, so it carries the new state fields) |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-47-rotation-view` |
-| Pull Request | |
+| Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/105` |
 
 ## Business outcome
 
@@ -161,7 +161,8 @@ transcripts and xKiro's own `/v1/usage` response. See `.worktrees/logs/data-veri
   `progress-view.js`, `roster-view.js`, `summary-view.js`, `test/dashboard.test.js`,
   `test/rotation-parse.test.js`. The operator accepted the format-only churn (1.223 added / 425 deleted
   lines) so the gate can go green inside this Pull Request instead of a separate one; the commit carries no
-  behavior change and `node --test tools/ai-dashboard/test` stayed at 136 pass / 0 fail.
+  behavior change and `node --test tools/ai-dashboard/test` stayed at 136 pass / 0 fail. CI run `35369676861`
+  on `5c424d7` then reported all four workflows green, `format:check` included.
 - Those eight paths sit outside the Allowed paths list above, which the earlier UI commits of this Pull
   Request had already widened beyond. The reviewer should either extend that list to the files this Pull
   Request really touches or split the presentation work out.
