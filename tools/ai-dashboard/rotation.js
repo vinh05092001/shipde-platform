@@ -12,9 +12,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const CODEX_TOKENS_RE = new RegExp('tokens used\s*[\r\n]+([\d,]+)', 'g');
+const CODEX_TOKENS_RE = /tokens used\s*[\r\n]+([\d,]+)/g;
 const STALE_AFTER_MS = 5 * 60 * 1000;
-const SPLIT_RE = new RegExp('\r?\n');
+const SPLIT_RE = /\r?\n/;
 const HOME_DIR = path.join(os.homedir(), '.shipde');
 
 const SOURCE_DEFS = [
@@ -63,12 +63,27 @@ function parseLogLines(logDir) {
       freshMs = Infinity;
     }
     const stale = freshMs > STALE_AFTER_MS;
+    const fileDay = (function () {
+      try {
+        return new Date(fs.statSync(path.join(logDir, file)).mtimeMs);
+      } catch {
+        return null;
+      }
+    })();
+    const isoAt = function (hhmmss) {
+      if (!hhmmss || !fileDay) return null;
+      const parts = hhmmss.split(':').map(Number);
+      const d = new Date(fileDay);
+      d.setHours(parts[0], parts[1], parts[2], 0);
+      return d.toISOString();
+    };
     let open = null;
     for (const raw of content.split(SPLIT_RE)) {
       const line = raw.trim();
       let m;
       if ((m = TRY.exec(line))) {
-        open = { at: m[3], sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: stale ? 'ended' : 'live', tokens: 'UNKNOWN' };
+        if (open) open.outcome = 'failed';
+        open = { at: isoAt(m[3]), sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: stale ? 'ended' : 'live', tokens: 'UNKNOWN' };
         entries.push(open);
       } else if ((m = EXHAUSTED.exec(line))) {
         if (open) { open.outcome = 'quota-refused'; open = null; }
@@ -80,8 +95,8 @@ function parseLogLines(logDir) {
         else entries.push({ at: null, sourceId: laneToSource(m[1]), modelId: m[2], runId, outcome: 'done', tokens: 'UNKNOWN' });
       }
     }
-    // tokens for the still-open attempt, when the harness reported any
-    if (open) {
+    // Tokens for the attempts this file produced, whether or not one is still open.
+    {
       const runLog = path.join(logDir, runId + '-run.log');
       try {
         const text = fs.readFileSync(runLog, 'utf8');
@@ -90,7 +105,11 @@ function parseLogLines(logDir) {
         for (const mm of text.matchAll(/"(?:inputTokens|outputTokens)":(\d+)/g)) { total += Number(mm[1]); seen = true; }
         const codex = [...text.matchAll(CODEX_TOKENS_RE)].pop();
         if (codex) { total += Number(codex[1].replace(/,/g, '')); seen = true; }
-        if (seen) open.tokens = total;
+        if (seen) {
+          const mine = entries.filter((e) => e.runId === runId);
+          const target = mine.filter((e) => e.outcome === 'live')[0] || mine[mine.length - 1];
+          if (target) target.tokens = total;
+        }
       } catch {
         // no run log yet; tokens stay UNKNOWN
       }
@@ -143,12 +162,15 @@ function probeXkiro(now, ttlMs) {
   return cached ? cached.value : { declaredLimit: 'UNKNOWN', consumption: 'UNKNOWN', headroom: 'UNKNOWN' };
 }
 
-function detectConfigured(homeDir) {
+function detectConfigured(homeDir, explicit) {
   // A source is listed only when this machine actually carries its configuration.
   const home = homeDir || os.homedir();
+  // With an explicit home (tests), that directory alone decides: no environment fallback,
+  // so a developer's own key cannot make a test see a source that is not in the fixture.
+  const useEnv = !explicit;
   const exists = (...p) => fs.existsSync(path.join(home, ...p));
   const found = new Set();
-  if (process.env.XKIRO_API_KEY || exists('.cline-xkiro')) found.add('xkiro');
+  if ((useEnv && process.env.XKIRO_API_KEY) || exists('.cline-xkiro')) found.add('xkiro');
   if (exists('.cline')) found.add('cline');
   if (exists('.agy') || exists('AppData', 'Local', 'agy')) found.add('agy-local');
   if (exists('.codex')) found.add('codex');
@@ -214,9 +236,10 @@ function buildRotationState(options) {
   const cooldowns = readCooldowns(ledgerFile);
   const quotaAccounts = readQuotaStore(quotaFile);
 
-  const configuredIds = detectConfigured(opts.homeDir);
+  const configuredIds = detectConfigured(opts.homeDir, Boolean(opts.homeDir));
   for (const e of logEntries) configuredIds.add(e.sourceId);
-  const xkiroUsage = configuredIds.has('xkiro') ? probeXkiro(now, opts.probeTtlMs) : null;
+  const allowProbe = opts.probe !== false;
+  const xkiroUsage = allowProbe && configuredIds.has('xkiro') ? probeXkiro(now, opts.probeTtlMs) : null;
   for (const id of Object.keys(cooldowns)) configuredIds.add(id);
   for (const id of Object.keys(quotaAccounts)) configuredIds.add(id.toLowerCase());
 
@@ -280,7 +303,7 @@ function buildRotationState(options) {
     if (isOnCooldown) status = 'cooldown';
     // A source whose measured headroom is zero is exhausted, regardless of the ledger.
     if (headroom === 0) {
-      status = 'exhausted';
+      status = 'quota-exhausted';
       cooldown.reason = cooldown.reason || 'daily free quota exhausted (measured)';
     }
 
@@ -316,7 +339,7 @@ function buildRotationState(options) {
     attempts: logEntries.length,
     live: logEntries.filter((e) => e.outcome === 'live').length,
     quotaRefused: logEntries.filter((e) => e.outcome === 'quota-refused').length,
-    exhausted: sources.filter((x) => x.status === 'exhausted' || x.status === 'cooldown').length,
+    exhausted: sources.filter((x) => x.status === 'quota-exhausted' || x.status === 'cooldown').length,
     sourcesConfigured: sources.length,
     tokens: (function () {
       const known = logEntries.filter((e) => e.tokens !== 'UNKNOWN');

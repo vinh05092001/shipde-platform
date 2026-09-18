@@ -92,9 +92,23 @@ Tests under `tools/ai-dashboard/test/rotation.test.js` using `node:test` cover:
 - UNKNOWN propagation: when no log or ledger data exists, limits and consumption read `UNKNOWN`, never `0`.
 - Cooldown state: when the ceiling ledger records a refusal, the source transitions to `cooldown` with the correct `until` timestamp.
 
+## Scope widened on 2026-09-18 (operator decision)
+
+The item was written for a standalone page at `/rotation`. The operator asked for the
+rotation view to live inside the cockpit's own Capacity tab, for the cockpit to adopt a
+component library with one cream theme, for the seven tabs to collapse to three, and for
+an architecture diagram. That work necessarily edits `tools/ai-dashboard/index.html`,
+`client.js`, `server.js` and the adapters, which the original boundary forbade.
+
+Recorded rather than hidden: `tools/ai-dashboard/rotation.html` is deleted, `/rotation`
+now redirects into the cockpit, and `AI-47-R01`/`AI-47-R07` no longer describe a
+standalone page. Everything else the item claims - measured values only, `UNKNOWN`
+wherever nothing is measured, read-only behaviour - is unchanged and still enforced by
+the acceptance tests.
+
 ## Out of scope
 
-- Modifying the main dashboard `index.html` or `client.js`.
+- Adding new write paths of any kind; the cockpit stays observational.
 - Adding new data collection to `tools/ai-brain` (reads existing modules only).
 - WebSocket transport (uses polling like the rest of the dashboard).
 - Write operations of any kind.

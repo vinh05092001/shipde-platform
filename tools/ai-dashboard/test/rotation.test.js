@@ -22,6 +22,8 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
     test('buildRotationState returns correct top-level shape', () => {
       const tmp = makeTmpDir();
       const state = buildRotationState({
+        homeDir: tmp,
+        probe: false,
         rootDir: tmp,
         logDir: path.join(tmp, 'no-logs'),
         ledgerFile: path.join(tmp, 'no-ledger.json'),
@@ -54,6 +56,8 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
     test('all limits and consumption are UNKNOWN with empty dirs', () => {
       const tmp = makeTmpDir();
       const state = buildRotationState({
+        homeDir: tmp,
+        probe: false,
         rootDir: tmp,
         logDir: path.join(tmp, 'empty-logs'),
         ledgerFile: path.join(tmp, 'no.json'),
@@ -83,7 +87,10 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
         version: 1, updatedAt: refusedAt,
         observations: [{ accountId: '9router', model: 'gpt-4o', outcome: 'refused', consumed: {}, reason: 'rate limit exceeded', at: refusedAt }]
       }));
-      const state = buildRotationState({ rootDir: tmp, logDir: path.join(tmp, 'no'), ledgerFile, quotaFile: path.join(tmp, 'nq'), now });
+      const state = buildRotationState({
+        homeDir: tmp,
+        probe: false,
+        rootDir: tmp, logDir: path.join(tmp, 'no'), ledgerFile, quotaFile: path.join(tmp, 'nq'), now });
       const router = state.sources.find(s => s.id === '9router');
       assert.ok(router, '9router source must exist');
       assert.strictEqual(router.status, 'cooldown');
@@ -101,7 +108,10 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
         version: 1, updatedAt: refusedAt,
         observations: [{ accountId: 'cline', outcome: 'refused', reason: 'quota', at: refusedAt }]
       }));
-      const state = buildRotationState({ rootDir: tmp, logDir: path.join(tmp, 'x'), ledgerFile, quotaFile: path.join(tmp, 'x.json'), now });
+      const state = buildRotationState({
+        homeDir: tmp,
+        probe: false,
+        rootDir: tmp, logDir: path.join(tmp, 'x'), ledgerFile, quotaFile: path.join(tmp, 'x.json'), now });
       const cline = state.sources.find(s => s.id === 'cline');
       if (cline) assert.notStrictEqual(cline.status, 'cooldown');
       fs.rmSync(tmp, { recursive: true, force: true });
