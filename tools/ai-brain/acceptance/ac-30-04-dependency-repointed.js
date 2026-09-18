@@ -47,16 +47,12 @@ const lines = real.split(/\r?\n/);
 const header = lines[0].split(',').map((c) => c.replace(/^"/, '').replace(/"$/, ''));
 const idIndex = header.indexOf('work_item_id');
 const depIndex = header.indexOf('dependencies');
-const rowIndex = lines.findIndex(
-  (line, i) => i > 0 && line.includes('"' + WORK_ITEM + '"')
-);
+const rowIndex = lines.findIndex((line, i) => i > 0 && line.includes('"' + WORK_ITEM + '"'));
 if (idIndex < 0 || depIndex < 0 || rowIndex < 0) {
   console.error('SOURCE_MISSING: no ' + WORK_ITEM + ' row in the register');
   process.exit(2);
 }
-const cells = lines[rowIndex]
-  .split(',')
-  .map((c) => c.replace(/^"/, '').replace(/"$/, ''));
+const cells = lines[rowIndex].split(',').map((c) => c.replace(/^"/, '').replace(/"$/, ''));
 cells[depIndex] = REPPOINTED;
 const tamperedCells = cells.map((cell) => '"' + String(cell).replace(/"/g, '""') + '"');
 const tamperedLines = lines.slice();
@@ -76,8 +72,6 @@ if (!reread.measurable) {
   process.exit(2);
 }
 console.error(
-  'DEPENDENCY_MISMATCH: repointed copy declares ' +
-    reread.declared +
-    ' != expected TASK-AI-29'
+  'DEPENDENCY_MISMATCH: repointed copy declares ' + reread.declared + ' != expected TASK-AI-29'
 );
 process.exit(1);

@@ -53,9 +53,7 @@ try {
         maxBuffer: 1024 * 1024 * 16,
       });
     } catch (err) {
-      console.error(
-        'CONTROL_FAILED: could not spawn ' + subject.script + ': ' + err.message
-      );
+      console.error('CONTROL_FAILED: could not spawn ' + subject.script + ': ' + err.message);
       process.exit(2);
     }
     if (spawned.error) {

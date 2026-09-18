@@ -7,21 +7,13 @@
 const path = require('path');
 
 const RESULT_DIR =
-  process.env.QUALIFICATION_RESULT_DIR ||
-  path.join(__dirname, 'qualification-results');
+  process.env.QUALIFICATION_RESULT_DIR || path.join(__dirname, 'qualification-results');
 const RESULT_PATH = path.join(RESULT_DIR, 'results.json');
 
 const OUTCOMES = new Set(['pass', 'fail', 'timeout', 'refused']);
 
 /** Required fields for a qualification result record. */
-const REQUIRED_FIELDS = [
-  'accountId',
-  'model',
-  'instant',
-  'outcome',
-  'latencyMs',
-  'reason',
-];
+const REQUIRED_FIELDS = ['accountId', 'model', 'instant', 'outcome', 'latencyMs', 'reason'];
 
 /**
  * Every way `result` fails the qualification-record shape contract.

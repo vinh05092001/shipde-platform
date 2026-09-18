@@ -137,9 +137,7 @@ describe('Result credential rule', () => {
   });
 
   test('refuses a non-object result', () => {
-    assert.ok(
-      resultCredentialFindings(null, '').some((f) => f.startsWith('RESULT_SHAPE'))
-    );
+    assert.ok(resultCredentialFindings(null, '').some((f) => f.startsWith('RESULT_SHAPE')));
     assert.ok(
       resultCredentialFindings('not an object', '').some((f) => f.startsWith('RESULT_SHAPE'))
     );
