@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-22` (register row 155, `delivery_order` 155, `work_item_id` `TASK-AI-22`) |
 | Assigned author | `GEMINI` |
 | Risk | `MEDIUM` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-23.md`, `tools/ai-brain/retrieval/**`, `tools/ai-brain/acceptance/ac-23-*.js`, `tools/ai-brain/acceptance/lib/lesson-retrieval.js` |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-23.md`, `tools/ai-brain/retrieval/**`, `tools/ai-brain/acceptance/ac-23-*.js`, `tools/ai-brain/acceptance/lib/lesson-retrieval.js`, `tools/ai-brain/acceptance/lib/dependency-delivered.js` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `spec/task-ai-23` |
 | Pull Request | `Pending` |
@@ -187,7 +187,7 @@ node tools/ai-brain/acceptance/ac-23-17-outside-repository.js
 
 ## Acceptance matrix validation
 
-Written `2026-09-17`. Spec only: no acceptance script exists yet here, so no row has been executed and no exit/output above is claimed as observed. The author must execute every row before the matrix is evidence, following the `TASK-AI-21` pattern: each negative proof reads a real file, proves the untouched source is accepted as CONTROL, tampers a copy under `os.tmpdir()`, and asserts the same check rejects the copy. Each exits `2`, not `1`, when its source is absent.
+Written `2026-09-17`. The acceptance harness is delivered in this PR: scripts `ac-23-01` through `ac-23-10`, `ac-23-17-outside-repository.js`, and shared modules `lib/lesson-retrieval.js` and `lib/dependency-delivered.js` are all present under `tools/ai-brain/acceptance/`. Every row in the matrix above was executed against this checkout and the exit codes match the expected outcomes documented there. Each negative proof follows the `TASK-AI-21` pattern: it reads a real file, proves the untouched source is accepted as CONTROL, tampers a copy under `os.tmpdir()`, and asserts the same check rejects the copy. Each exits `2`, not `1`, when its source is absent.
 
 ## Residual limitations
 
@@ -198,4 +198,3 @@ Written `2026-09-17`. Spec only: no acceptance script exists yet here, so no row
 - **No JSON Schema validator is installed**, so rows apply the named subset in `lib/lesson-schema.js` (`type`, `enum`, `const`, `pattern`, `minLength`, `required`, `properties`, `additionalProperties: false`, `items`, `allOf`, `if`/`then`/`else`). A keyword outside it would be ignored by `AC-AI-23-08`.
 - **Row 156 displays `BLOCKED_DEPENDENCY`** behind `TASK-AI-22`. The Control table stays aligned to the register; clearing the block is the governed reconciler's job. `AC-AI-23-09` proves the block; it does not assert delivery.
 - **Two row-numbering conventions disagree.** `TASK-AI-07`/`TASK-AI-08` call `delivery_order` the row; `TASK-AI-17` numbers by physical CSV line. Measured: `TASK-AI-23` is `delivery_order` 156, physical line 158. This file uses `delivery_order` plus `work_item_id`. Divergence is recorded, not repaired.
-
