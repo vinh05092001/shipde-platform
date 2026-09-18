@@ -6,7 +6,7 @@
   'use strict';
 
   var SVG_NS = 'http://www.w3.org/2000/svg';
-  var CX = 350, CY = 310, R = 225;
+  var CX = 300, CY = 240, R = 175;
   var POLL_MS = 5000;
 
   function el(tag, attrs, text) {
@@ -57,8 +57,8 @@
     if (!box || !t) return;
     box.innerHTML =
       kpi('Lượt chạy', t.attempts, '#3f3a33') +
-      kpi('Đang chạy', t.live, t.live > 0 ? '#16a34a' : '#857b6e') +
-      kpi('Bị từ chối quota', t.quotaRefused, t.quotaRefused > 0 ? '#b45309' : '#857b6e') +
+      kpi('Đang chạy', t.live, t.live > 0 ? '#16a34a' : '#5c5349') +
+      kpi('Bị từ chối quota', t.quotaRefused, t.quotaRefused > 0 ? '#b45309' : '#5c5349') +
       kpi('Nguồn hết hạn mức', t.exhausted + '/' + t.sourcesConfigured, t.exhausted > 0 ? '#dc2626' : '#16a34a');
   }
 
@@ -132,7 +132,7 @@
       g.appendChild(el('circle', { cx: nx - W / 2 + 14, cy: ny, r: 4, fill: statusColor(src.status) }));
       g.appendChild(el('rect', { x: nx - W / 2, y: ny - H / 2, width: 4, height: H, rx: 2, fill: accent(src.id) }));
       g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny - 1, fill: '#3f3a33', 'font-size': 12, 'font-weight': 'bold' }, src.label));
-      g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny + 12, fill: '#857b6e', 'font-size': 10 },
+      g.appendChild(el('text', { x: nx - W / 2 + 26, y: ny + 12, fill: '#5c5349', 'font-size': 10 },
         down ? (src.cooldown.reason || 'hết hạn mức').slice(0, 18) : src.status));
       svg.appendChild(g);
 

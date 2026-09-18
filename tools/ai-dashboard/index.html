@@ -118,7 +118,7 @@
         --panel: #fffdf7;
         --line: #e6ddc9;
         --ink: #3f3a33;
-        --muted: #6b6257;
+        --muted: #5c5349;
       }
       body {
         background-color: var(--cream) !important;
@@ -132,7 +132,7 @@
       [class*='text-slate-1'], [class*='text-slate-2'], [class*='text-base-content'] { color: var(--ink) !important; }
       [class*='text-slate-3'], [class*='text-slate-4'], [class*='text-slate-5'],
       [class*='text-gray-3'], [class*='text-gray-4'], [class*='text-gray-5'] { color: var(--muted) !important; }
-      [class*='text-slate-6'], [class*='text-slate-7'] { color: #857b6e !important; }
+      [class*='text-slate-6'], [class*='text-slate-7'] { color: #6b6257 !important; }
       .tab-btn:hover { background-color: #f1e9d8 !important; color: var(--ink) !important; }
       @keyframes rot-flow { to { stroke-dashoffset: -24; } }
       .rot-flow { stroke-dasharray: 9 5; animation: rot-flow .7s linear infinite; }
@@ -306,10 +306,8 @@
             >
               Giám Sát <span id="heroTaskCount">—</span> Đầu Việc & Tiến Độ Các Mô Hình AI Ship Dễ
             </h1>
-            <p class="text-xs sm:text-sm text-base-content/70 max-w-3xl leading-relaxed break-words">
-              Quan sát trạng thái thực tế từ Register CSV, Git worktrees, Agent Orchestrator và
-              GitHub Pull Request. Dữ liệu trung thực, phân định rõ ràng vai trò tác giả, rà soát và
-              kiểm soát chất lượng.
+            <p class="text-xs text-base-content/70 break-words">
+              Register · Git · Agent Orchestrator · GitHub — số đo thật, không suy đoán.
             </p>
             <div id="observedAtLabel" class="text-[11px] font-mono text-base-content/70 break-words">
               Đang tải dữ liệu quan sát...
@@ -367,6 +365,7 @@
 
       <!-- Source Health Bar (4 Primary Sources) -->
       <section aria-label="Tình trạng các nguồn dữ liệu">
+        <div id="exec-summary" class="mb-4"></div>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3" id="sourceHealthBar">
           <!-- Filled dynamically -->
         </div>
@@ -513,7 +512,7 @@
           </div>
           <div id="rotation-kpis" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
           <div class="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] items-start">
-            <svg id="rotation-svg" viewBox="0 0 700 620" class="w-full max-w-xl mx-auto"></svg>
+            <svg id="rotation-svg" viewBox="0 0 600 490" class="w-full max-w-md mx-auto"></svg>
             <div class="space-y-3">
               <div id="rotation-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
               <div>
@@ -734,6 +733,7 @@
       </div>
 
       <div id="tabPane-roster" class="space-y-6 hidden">
+        <div id="roster-visual"></div>
         <div class="bg-base-100 rounded-2xl border border-base-300 p-5 space-y-4">
           <div class="flex items-center justify-between">
             <h3 class="text-sm font-bold text-base-content uppercase tracking-wider">
@@ -998,5 +998,7 @@
     <script src="/rotation-view.js"></script>
     <script src="/architecture.js"></script>
     <script src="/progress-view.js"></script>
+    <script src="/roster-view.js"></script>
+    <script src="/summary-view.js"></script>
   </body>
 </html>

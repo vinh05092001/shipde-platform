@@ -149,6 +149,12 @@ function createDashboardServer(options = {}) {
     if (pathname === '/' || pathname === '/index.html') {
       return path.join(dashboardDir, 'index.html');
     }
+    if (pathname === '/summary-view.js') {
+      return path.join(dashboardDir, 'summary-view.js');
+    }
+    if (pathname === '/roster-view.js') {
+      return path.join(dashboardDir, 'roster-view.js');
+    }
     if (pathname === '/progress-view.js') {
       return path.join(dashboardDir, 'progress-view.js');
     }

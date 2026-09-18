@@ -64,6 +64,35 @@
     }).join('');
   }
 
+  function timeline(activity) {
+    // Activity as a strip of hours instead of a wall of lines: each bar is one hour,
+    // height is the number of events, colour tells git commits from AO events apart.
+    var items = Array.isArray(activity) ? activity : Object.keys(activity || {}).map(function (k) { return activity[k]; });
+    if (!items.length) return '';
+    var buckets = {};
+    items.forEach(function (it) {
+      var t = new Date(it.timestamp || it.at || 0);
+      if (isNaN(t)) return;
+      var key = t.toISOString().slice(0, 13);
+      var b = (buckets[key] = buckets[key] || { git: 0, ao: 0 });
+      if (String(it.type || '').indexOf('GIT') === 0) b.git++; else b.ao++;
+    });
+    var keys = Object.keys(buckets).sort().slice(-24);
+    if (!keys.length) return '';
+    var max = keys.reduce(function (m, k) { return Math.max(m, buckets[k].git + buckets[k].ao); }, 1);
+    var bars = keys.map(function (k) {
+      var b = buckets[k];
+      var hg = Math.round((b.git / max) * 46), ha = Math.round((b.ao / max) * 46);
+      return '<div class="flex flex-col justify-end items-center gap-0.5" style="width:14px" title="' + k.replace('T', ' ') + 'h · git ' + b.git + ' · AO ' + b.ao + '">' +
+        (ha ? '<div style="height:' + ha + 'px;width:10px;background:#8b5cf6;border-radius:2px"></div>' : '') +
+        (hg ? '<div style="height:' + hg + 'px;width:10px;background:#16a34a;border-radius:2px"></div>' : '') +
+        '<span class="text-[9px] opacity-60">' + k.slice(11) + '</span></div>';
+    }).join('');
+    return '<div><div class="text-[11px] font-bold uppercase tracking-wide opacity-70 mb-1">Hoạt động theo giờ ' +
+      '<span class="font-normal normal-case"><span style="color:#16a34a">▮</span> commit · <span style="color:#8b5cf6">▮</span> AO</span></div>' +
+      '<div class="flex items-end gap-1 h-16">' + bars + '</div></div>';
+  }
+
   function render(state) {
     var host = document.getElementById('progress-visual');
     if (!host || !state || !state.workItems) return;
@@ -82,6 +111,9 @@
 
     body.appendChild(el('div', '', '<div class="text-[11px] font-bold uppercase tracking-wide opacity-60 mb-2">Theo slice</div>' +
       '<div class="grid gap-1.5 sm:grid-cols-2">' + sliceBars(bySlice, mergedPerSlice(w.items)) + '</div>'));
+
+    var tl = timeline(state.activity);
+    if (tl) body.appendChild(el('div', '', tl));
 
     card.appendChild(body);
     host.appendChild(card);

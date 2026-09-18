@@ -11,7 +11,7 @@
     lane: '#0ea5e9',
     gate: '#16a34a',
     ink: '#3f3a33',
-    muted: '#857b6e',
+    muted: '#5c5349',
     line: '#ded3bd',
     panel: '#fffdf7',
     wash: '#faf6ec',
