@@ -13,7 +13,7 @@
 | Risk | `HIGH` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-22.md`, `tools/ai-brain/lessons/promote.js`, `tools/ai-brain/lessons/lesson-schema.json`, `tools/ai-brain/cli.js`, `tools/ai-brain/test/promote.test.js`, `tools/ai-brain/acceptance/ac-22-*.js`, `tools/ai-brain/acceptance/lib/lesson-promotion.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `spec/task-ai-22` |
+| Branch | `feat/task-ai-22-promotion-gate` |
 | Pull Request | `pending` |
 
 ### Status transition ledger
@@ -173,7 +173,7 @@ python docs/product-spec/scripts/validate_docs.py
 
 - **No dependency-merged row.** The neighbouring specifications prove a stale block from Git. This block is true, so a row asserting `TASK-AI-21` merged would be false, and a row matching `TASK-AI-21` by commit message would pass on the specification commit alone and overstate delivery.
 - **The agent identity list is a list.** A new harness or reviewer name that is not added to `AGENT_IDENTITIES` would be treated as human by `AI-22-R03`. `AI-22-R04` (the approver comes from an authenticated GitHub login) is what closes this in the gate; the acceptance rows cannot.
-- **The gate itself has no positive row.** `promote.js` does not exist at HEAD. `AC-AI-22-03` to `-06` assert what the gate must preserve and what it must refuse.
+- **Positive verification covered in unit tests.** `promote.js` and `cli.js lesson` positive and negative behaviors are verified via `tools/ai-brain/test/promote.test.js` (18 unit tests, no network), while `AC-AI-22-03` to `-06` assert schema and seed invariants.
 - **The seed's approvals are not re-verified.** The rows prove no seed lesson names its proposer or an agent as approver; they cannot prove the named human actually reviewed it.
 
 ## Contradictions found in neighbouring specifications
