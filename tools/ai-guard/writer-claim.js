@@ -23,7 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const http = require('http');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 const DAEMON_HOST = '127.0.0.1';
 const DAEMON_RUN_FILE = path.join(os.homedir(), '.ao', 'running.json');
@@ -264,103 +264,337 @@ function defaultOwner(env) {
   return ((e && (e.USER || e.USERNAME)) || 'unknown') + '@' + os.hostname();
 }
 
-function getHookStatus(options) {
-  const opts = options || {};
+// TASK-AI-36 moved hook definition and installation to Lefthook: the pre-commit
+// guard is declared in lefthook.yml and `pnpm lefthook install` writes a hook
+// that delegates to the pinned binary into the repository's common hooks
+// directory. The bespoke `core.hooksPath = .githooks` wiring is retired — while
+// that override is set, the hook Git executes is the one behind it, so the
+// declared configuration stops running even though a pre-commit file exists.
+//
+// "Is the guard installed?" therefore cannot be answered from one config key.
+// It has to be answered from the hook Git will actually run, and from whether
+// the configuration behind that hook still declares the guard command.
+const LEFTHOOK_CONFIG_FILE = 'lefthook.yml';
+const LEFTHOOK_DELEGATION_MARKER = 'call_lefthook';
+const GUARD_COMMAND_MARKER = 'ai-guard/cli.js check';
+
+function gitLine(args, cwd) {
   try {
-    const hooksPath = execFileSync('git', ['config', 'core.hooksPath'], {
-      cwd: opts.cwd || process.cwd(),
+    return execFileSync('git', args, {
+      cwd,
       encoding: 'utf8',
       timeout: 5000,
     }).trim();
-    const isGithooks =
-      hooksPath === '.githooks' ||
-      hooksPath.endsWith('/.githooks') ||
-      hooksPath.endsWith('\\.githooks');
-    // A configured path is not an installed hook. Pointing core.hooksPath at
-    // a directory with no pre-commit in it reported INSTALLED while commits
-    // ran free, which is the one answer this function must never get wrong.
-    // git resolves a relative core.hooksPath against the working-tree top
-    // level, not the current directory. Resolving against cwd made `status`
-    // report NOT INSTALLED from any subdirectory of a correctly installed
-    // repository -- the same false-negative class the unscoped `git config`
-    // call produced in doctor.ps1.
-    let topLevel = opts.cwd || process.cwd();
-    try {
-      topLevel = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-        cwd: opts.cwd || process.cwd(),
-        encoding: 'utf8',
-        timeout: 5000,
-      }).trim();
-    } catch (e) {
-      /* not a repository, or git unavailable: fall back to the given cwd */
-    }
-    const hookFile = path.isAbsolute(hooksPath)
-      ? path.join(hooksPath, 'pre-commit')
-      : path.join(topLevel, hooksPath, 'pre-commit');
-    const hookPresent = isGithooks && fs.existsSync(hookFile);
-    return {
-      installed: hookPresent,
-      configuredOnly: isGithooks && !hookPresent,
-      hooksPath: hooksPath || null,
-    };
   } catch (e) {
-    return { installed: false, hooksPath: null };
+    return null;
   }
+}
+
+/** Where Git will actually look for a hook, and what is behind it. */
+function hookFacts(cwd) {
+  const topLevel = gitLine(['rev-parse', '--show-toplevel'], cwd) || cwd;
+  let commonDir = gitLine(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);
+  if (!commonDir) {
+    // Git before 2.31 prints the common directory relative to the working tree.
+    const relative = gitLine(['rev-parse', '--git-common-dir'], cwd);
+    commonDir = relative ? path.resolve(topLevel, relative) : null;
+  }
+  // A relative core.hooksPath resolves against the working-tree top level, not
+  // the current directory; with no override Git uses the common hooks
+  // directory, which every linked worktree of the repository shares. Resolving
+  // against cwd made `status` report NOT INSTALLED from any subdirectory of a
+  // correctly installed repository — the same false-negative class the unscoped
+  // `git config` call produced in scripts/ai/doctor.ps1.
+  const configured = gitLine(['config', 'core.hooksPath'], cwd) || null;
+  const hooksDir = configured
+    ? path.isAbsolute(configured)
+      ? configured
+      : path.resolve(topLevel, configured)
+    : commonDir
+      ? path.join(commonDir, 'hooks')
+      : null;
+  const hookFile = hooksDir ? path.join(hooksDir, 'pre-commit') : null;
+  const hookPresent = !!hookFile && fs.existsSync(hookFile);
+  let hookContent = '';
+  if (hookPresent) {
+    try {
+      hookContent = fs.readFileSync(hookFile, 'utf8');
+    } catch (e) {
+      hookContent = '';
+    }
+  }
+  // A hook that delegates to Lefthook guards nothing unless lefthook.yml still
+  // declares the command, so the declaration is part of the measured state and
+  // not an assumption: installed must never be claimed without both halves.
+  let guardDeclared = false;
+  try {
+    guardDeclared = fs
+      .readFileSync(path.join(topLevel, LEFTHOOK_CONFIG_FILE), 'utf8')
+      .includes(GUARD_COMMAND_MARKER);
+  } catch (e) {
+    guardDeclared = false;
+  }
+  return {
+    topLevel,
+    commonDir,
+    configured,
+    hooksDir,
+    hookFile,
+    hookPresent,
+    hookContent,
+    guardDeclared,
+  };
+}
+
+function hookRemediation(status) {
+  if (status.installed) return [];
+  if (status.hookManager === 'lefthook') {
+    return ['Restore `node tools/ai-guard/cli.js check` in lefthook.yml'];
+  }
+  const commands = [];
+  if (status.hooksPath) {
+    // Any override — the retired bespoke one included — keeps Git from reading
+    // the common hooks directory where Lefthook installs, so it must go first.
+    commands.push('git config --unset core.hooksPath');
+  }
+  commands.push('pnpm lefthook install');
+  return commands;
+}
+
+/**
+ * Retire the bespoke core.hooksPath override at the scope Git resolves it from.
+ * The override is what hides the Lefthook hook, so it has to go wherever it
+ * lives — unsetting the local file does not remove a value inherited from the
+ * global one.
+ */
+function retireHooksPathOverride(cwd) {
+  const scoped = gitLine(['config', '--show-scope', '--get', 'core.hooksPath'], cwd);
+  if (!scoped) return { retired: null };
+  const parts = scoped.split('\t');
+  const scope = parts.length > 1 ? parts[0] : 'local';
+  const value = parts.length > 1 ? parts[1] : scoped;
+  const args = ['config'];
+  if (scope === 'global' || scope === 'system') {
+    args.push('--' + scope);
+  }
+  args.push('--unset', 'core.hooksPath');
+  try {
+    execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    return { retired: value, scope };
+  } catch (e) {
+    // Exit 5 means the key vanished between the read and the unset.
+    if (e && e.status === 5) return { retired: null };
+    return { retired: null, error: e && e.message ? e.message : String(e) };
+  }
+}
+
+/**
+ * The runners `install` may use, best evidence first: the repository's own
+ * pinned Lefthook, then the pinned copy this tool ships beside (both execute
+ * the JS shim that resolves the platform binary from the lockfile — never a
+ * bare `npx lefthook`, which could fetch an unpinned version under AI-TOOL-11),
+ * then the package-manager paths, with `npx` pinned to the same 1.11.3 the
+ * workspace declares.
+ */
+function lefthookRunners(topLevel) {
+  const runners = [];
+  const shimFor = (base) => path.join(base, 'node_modules', 'lefthook', 'bin', 'index.js');
+  const toolCopy = path.resolve(__dirname, '..', '..');
+  for (const shim of [shimFor(topLevel), shimFor(toolCopy)]) {
+    if (fs.existsSync(shim)) {
+      runners.push({
+        label: 'node ' + shim + ' install',
+        run: () =>
+          spawnSync(process.execPath, [shim, 'install'], {
+            cwd: topLevel,
+            encoding: 'utf8',
+            timeout: 60000,
+          }),
+      });
+    }
+  }
+  for (const command of ['pnpm exec lefthook install', 'npx --yes lefthook@1.11.3 install']) {
+    runners.push({
+      label: command,
+      run: () =>
+        spawnSync(command, {
+          cwd: topLevel,
+          encoding: 'utf8',
+          shell: true,
+          timeout: 120000,
+        }),
+    });
+  }
+  return runners;
+}
+
+// The retired wiring resolved its hooks directory with either separator; the
+// backslash is built here so the matching below never hides in a regex.
+const REVERSE_SLASH = String.fromCharCode(92);
+
+function isGithooksOverride(value) {
+  return (
+    value === '.githooks' ||
+    value.endsWith('/.githooks') ||
+    value.endsWith(REVERSE_SLASH + '.githooks')
+  );
+}
+
+function getHookStatus(options) {
+  const opts = options || {};
+  const facts = hookFacts(opts.cwd || process.cwd());
+  const status = {
+    installed: false,
+    configuredOnly: false,
+    guardDeclared: facts.guardDeclared,
+    hooksPath: facts.configured,
+    hooksDir: facts.hooksDir,
+    hookManager: null,
+    legacyOverride: !!facts.configured && isGithooksOverride(facts.configured),
+  };
+  if (facts.configured) {
+    // An explicit override decides where Git looks. Only the repository's own
+    // retired `.githooks` wiring is a state this tool vouches for; crediting
+    // an arbitrary third-party hooks directory as "installed" would answer a
+    // different question than the one being asked.
+    if (status.legacyOverride) {
+      status.hookManager = 'legacy-githooks';
+      // A configured path is still not an installed hook: pointing
+      // core.hooksPath at a directory with no pre-commit in it must report
+      // configuredOnly, never installed, while commits run free.
+      status.installed = facts.hookPresent;
+      status.configuredOnly = !facts.hookPresent;
+    } else {
+      status.hookManager = 'custom';
+    }
+  } else if (facts.hookPresent) {
+    if (facts.hookContent.includes(LEFTHOOK_DELEGATION_MARKER)) {
+      // The hook Git runs delegates to Lefthook, which executes what
+      // lefthook.yml declares today — so the guard is installed only when
+      // the versioned config still carries the command. A delegation whose
+      // config lost the declaration guards nothing and must not be reported
+      // as installed.
+      status.hookManager = 'lefthook';
+      status.installed = facts.guardDeclared;
+      status.configuredOnly = !facts.guardDeclared;
+    } else {
+      status.hookManager = 'other';
+    }
+  }
+  status.remediation = hookRemediation(status);
+  return status;
 }
 
 function installHook(options) {
   const opts = options || {};
-  const args = ['config'];
-  if (opts.global) args.push('--global');
-  args.push('core.hooksPath', '.githooks');
+  const cwd = opts.cwd || process.cwd();
+  const facts = hookFacts(cwd);
+  const topLevel = facts.topLevel;
 
-  try {
-    execFileSync('git', args, {
-      cwd: opts.cwd || process.cwd(),
-      encoding: 'utf8',
-      timeout: 5000,
-    });
-    // Setting the path is not the same as having the hook. A repository
-    // without .githooks/pre-commit is configured and unguarded, so say so
-    // rather than reporting a clean install.
-    const hookPresent = fs.existsSync(
-      path.join(opts.cwd || process.cwd(), '.githooks', 'pre-commit')
-    );
-    return { success: true, hooksPath: '.githooks', hookPresent };
-  } catch (e) {
+  // Retire the bespoke override first. While it is set, the hook Git executes
+  // is the one behind it, so installing into the common directory would write
+  // a file no commit ever runs.
+  const retirement = retireHooksPathOverride(cwd);
+  if (retirement.error) {
     return {
       success: false,
-      hooksPath: null,
-      error: e && e.message ? e.message : String(e),
+      installed: false,
+      retired: null,
+      error: 'không gỡ được core.hooksPath: ' + retirement.error,
     };
   }
+
+  // Lefthook invents an empty configuration and installs no hook when it
+  // finds none. Refuse before that side effect: the guard definition lives in
+  // the versioned lefthook.yml, and installing nothing must never be reported
+  // as success (AI-TOOL-10).
+  const configPath = path.join(topLevel, LEFTHOOK_CONFIG_FILE);
+  if (!fs.existsSync(configPath)) {
+    return {
+      success: false,
+      installed: false,
+      retired: retirement.retired,
+      error:
+        'không có ' +
+        LEFTHOOK_CONFIG_FILE +
+        ' tại ' +
+        topLevel +
+        ' — định nghĩa hook phải nằm trong tệp được version control',
+    };
+  }
+
+  let runner = null;
+  let lastError = null;
+  for (const candidate of lefthookRunners(topLevel)) {
+    let result;
+    try {
+      result = candidate.run();
+    } catch (e) {
+      lastError = e && e.message ? e.message : String(e);
+      continue;
+    }
+    if (result.error) {
+      lastError = result.error.message;
+      continue;
+    }
+    if (result.status === 0) {
+      runner = candidate.label;
+      break;
+    }
+    const output = ((result.stderr || '') + String.fromCharCode(10) + (result.stdout || '')).trim();
+    lastError = output.split(/\r?\n/).filter(Boolean).pop() || 'exit ' + result.status;
+  }
+  if (!runner) {
+    return {
+      success: false,
+      installed: false,
+      retired: retirement.retired,
+      error: 'lefthook install thất bại: ' + lastError,
+    };
+  }
+
+  // Setting the path is not the same as having the hook: verify from what
+  // Git will actually execute before claiming anything was installed.
+  const status = getHookStatus({ cwd: topLevel });
+  return {
+    success: status.installed,
+    installed: status.installed,
+    hookManager: status.hookManager,
+    hooksDir: status.hooksDir,
+    runner,
+    retired: retirement.retired,
+    scope: retirement.scope || null,
+    error: status.installed
+      ? null
+      : 'hook đã ghi nhưng không được xác minh: ' +
+        LEFTHOOK_CONFIG_FILE +
+        ' không còn khai báo lệnh guard',
+  };
 }
 
 function uninstallHook(options) {
   const opts = options || {};
-  const args = ['config'];
-  if (opts.global) args.push('--global');
-  args.push('--unset', 'core.hooksPath');
-
-  try {
-    execFileSync('git', args, {
-      cwd: opts.cwd || process.cwd(),
-      encoding: 'utf8',
-      timeout: 5000,
-    });
-    return { success: true };
-  } catch (e) {
-    // `git config --unset` exits 5 when the key is not set. The desired end
-    // state — no core.hooksPath — already holds, so reporting failure made
-    // `cli.js uninstall` warn and exit non-zero for doing nothing wrong.
-    if (e && e.status === 5) {
-      return { success: true, alreadyAbsent: true };
-    }
-    return {
-      success: false,
-      error: e && e.message ? e.message : String(e),
-    };
+  // Under Lefthook there are two separate facts: the bespoke override (this
+  // command's job — retire it wherever Git resolves it from) and the hook in
+  // the common directory (owned by `lefthook uninstall`, left untouched, so
+  // the guard survives a `guard:install` round-trip of the override).
+  // Reaching a repository with no override is the requested end state, not a
+  // failure: `git config --unset` exits 5 when the key is absent, and the old
+  // code turned arriving there already into a warning with a non-zero exit.
+  const retirement = retireHooksPathOverride(opts.cwd || process.cwd());
+  if (retirement.error) {
+    return { success: false, error: retirement.error };
   }
+  return {
+    success: true,
+    retired: retirement.retired,
+    scope: retirement.scope || null,
+    alreadyAbsent: !retirement.retired,
+  };
 }
 
 module.exports = {
@@ -374,6 +608,8 @@ module.exports = {
   getHookStatus,
   installHook,
   uninstallHook,
+  hookFacts,
+  retireHooksPathOverride,
   claimPath,
   ensureClaimDir,
   CLAIM_DIR,

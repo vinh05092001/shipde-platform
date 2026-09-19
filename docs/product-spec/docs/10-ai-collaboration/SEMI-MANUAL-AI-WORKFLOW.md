@@ -117,7 +117,7 @@ Normal daily operation uses only `control.ps1 -Action Resume` (or **Continue pip
 
 ## Unattended supervisor mode (TASK-AI-06+)
 
-Run `control.ps1 -Action Supervise`. It validates AO and, when AO is stopped, stale, or running with the wrong profile, invokes `scripts/ai/start-agent-orchestrator.ps1 -Restart` automatically. The launcher forces AO to use the existing `.claude` profile routed to localhost AgentRouter; AgentRouter handles Claude/provider quota fallback without replacing the AO session. The deterministic supervisor automates the per-Work-Item procedure:
+Run `control.ps1 -Action Supervise`. It validates AO and, when AO is stopped, stale, or running with the wrong profile, invokes `scripts/ai/start-agent-orchestrator.ps1 -Restart` automatically. The launcher forces AO to use its own Claude profile directory (default `%USERPROFILE%\.claude-9router`, overridable with `SHIPDE_NINEROUTER_PROFILE`), routed to the local 9Router gateway, and leaves the native `.claude` login untouched; AgentRouter handles Claude/provider quota fallback without replacing the AO session. The deterministic supervisor automates the per-Work-Item procedure:
 
 AO is an external orchestration layer, not one of the adopted repositories/providers. Its canonical source, installed version and `ao status --json` health check are recorded separately in `tools/ecosystem-manifest.json`.
 

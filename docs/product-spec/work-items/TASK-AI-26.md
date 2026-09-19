@@ -6,15 +6,15 @@
 |---|---|
 | Work Item ID | `TASK-AI-26` |
 | Feature ID | `N/A` |
-| Status | `BACKLOG` |
+| Status | `MERGED` |
 | Delivery order | `159` |
 | Dependencies | `none` |
 | Assigned author | `CLAUDE` |
 | Risk | `MEDIUM` |
 | Allowed paths | `tools/ai-brain/accounts.js`, `tools/ai-brain/ceiling.js`, `tools/ai-brain/offerings.js`, `tools/ai-brain/seed-accounts.js`, `tools/ai-brain/test/ceiling.test.js`, `tools/ai-brain/test/limits.test.js`, `tools/ai-dashboard/capacity-adapter.js`, `docs/product-spec/work-items/TASK-AI-26.md`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/task-ai-26-quota-ceilings` |
-| Pull Request | `pending` |
+| Branch | `feat/task-ai-26-declared-limits` (PR #41); `feat/task-ai-26-quota-ao` (PR #93); `feat/task-ai-26-capacity-windows` (PR #76) |
+| Pull Request | PR #41 (`limits.js` and suite); PR #93 (capacity adapter windows, merge `a3f3e69`) |
 
 ## Business outcome
 
@@ -31,8 +31,10 @@ percentage cannot be converted into "how many more tasks fit" without a
 ceiling, so `offeringHeadroom` marks every offering `unknownBudget` and returns
 no runway.
 
-Measured at HEAD: **35 of 35 offerings report `unknownBudget: true` and
-`runway: null`**, and all four registered accounts carry `limits: {}`.
+Measured at authoring time on the operator host: **every offering reports
+`unknownBudget: true` and `runway: null`** (35 of 35 on that host; the count is
+host-local and is not the assertion), and all four registered accounts carry
+`limits: {}`.
 
 The consequence is not cosmetic. Without runway the scheduler cannot answer the
 only question that matters before dispatching work — will this offering finish
@@ -142,7 +144,7 @@ Item exists to prevent.
 
 | AC/Test ID | Scenario | Exact Command | Exit Code | Expected Output String | Output Source / Artifact |
 |---|---|---|---|---|---|
-| `AC-AI-26-01` | The problem is real at HEAD: every offering reports an unknown budget | `node -e "const{collectCapacity}=require('./tools/ai-dashboard/capacity-adapter');const rows=collectCapacity({}).data.rows\|\|[];const unk=rows.filter(r=>r.unknownBudget).length;if(unk!==rows.length){console.error('BASELINE_STALE: '+unk+' of '+rows.length+' unknown');process.exit(1)}console.log('BASELINE_CONFIRMED: '+unk+' of '+rows.length+' offerings have no ceiling')"` | `0` | `BASELINE_CONFIRMED: 35 of 35 offerings have no ceiling` | `tools/ai-dashboard/capacity-adapter.js` |
+| `AC-AI-26-01` | The problem is real at HEAD: every offering reports an unknown budget | `node -e "const{collectCapacity}=require('./tools/ai-dashboard/capacity-adapter');const d=collectCapacity({}).data;if(!d){console.error('BASELINE_UNAVAILABLE: no registered accounts on this host');process.exit(1)}const rows=d.rows\|\|[];const unk=rows.filter(r=>r.unknownBudget).length;if(rows.length===0\|\|unk!==rows.length){console.error('BASELINE_STALE: '+unk+' of '+rows.length+' unknown');process.exit(1)}console.log('BASELINE_CONFIRMED: every offering has no ceiling ('+rows.length+')')"` | `0` | `BASELINE_CONFIRMED: every offering has no ceiling` | `tools/ai-dashboard/capacity-adapter.js`; the count in parentheses comes from the host-local `~/.shipde/accounts.registry.json` and is not part of the expected string |
 | `AC-AI-26-02` | A declared ceiling makes runway computable | `node --test --test-reporter=tap tools/ai-brain/test/limits.test.js` | `0` | `# Subtest: a declared ceiling turns a percentage into a runway` | TAP output |
 | `AC-AI-26-03` | Negative proof: no ceiling leaves the window unknown, with no default | `node --test --test-reporter=tap tools/ai-brain/test/limits.test.js` | `0` | `# Subtest: an undeclared window stays unknown and gets no default` | TAP output |
 | `AC-AI-26-04` | A limit without provenance is rejected, naming account and window | `node --test --test-reporter=tap tools/ai-brain/test/limits.test.js` | `0` | `# Subtest: a limit with no source is rejected by account id and window` | TAP output |
@@ -190,7 +192,9 @@ pnpm test
 
 | Round | Commit | Verdict | Notes |
 |---|---|---|---|
-| 1 | `pending` | `pending` | Awaiting independent review. |
+| 1 | `d4b11b8` | `CHANGES_REQUIRED` | PR #76, `cline-free/muse-spark-1.3-contributor`: orphan-row fallback, prototype-sensitive lookup, overstated wiring. |
+| 2 | `d433dbb` | `PASS` (fallback reviewer) | PR #76, `cline-free/muse-spark-1.3-contributor`. The same content merged via PR #93: `git diff d433dbb 9313658 -- tools/ docs/product-spec/work-items/TASK-AI-26.md` is empty. |
+| 3 | `f957c60` | `CHANGES_REQUIRED` | PR #76, Cline. Lifecycle only: PR #76 is empty against `main` after PR #93, this record was not closed out, and `AC-AI-26-01` hard-coded a host-local count. No code defect found. |
 
 ## Post-implementation notes
 
@@ -233,22 +237,23 @@ nothing, so the panel still could not tell "plenty left" from "no idea".
 **No ceiling was declared for any real account.** The registry lives outside
 the repository (`~/.shipde/accounts.registry.json`), no provider on this machine
 publishes an absolute figure, and the ledger holds no window with 20
-observations. Under `AI-26-R02` every window stays unknown; `AC-AI-26-01`
-still reads `35 of 35`, which is the honest state, not a defect. A ceiling is
-added when an operator asserts one with provenance, not by this Work Item.
+observations. Under `AI-26-R02` every window stays unknown, which is the honest
+state, not a defect. A ceiling is added when an operator asserts one with
+provenance, not by this Work Item. `AC-AI-26-01` asserts that *every* offering
+is unknown rather than a host-local count (round 3; see the closeout below).
 
 **Naming drift.** The rules say `source`; the merged code and suite use
 `provenance`. The code is left as merged and this record names the difference.
 
 | AC/Test ID | Result on this branch |
 |---|---|
-| `AC-AI-26-01` | exit 0, `BASELINE_CONFIRMED: 35 of 35 offerings have no ceiling` |
+| `AC-AI-26-01` | exit 0, `BASELINE_CONFIRMED: every offering has no ceiling (36)` — the parenthesised count is host-local and is not part of the expected string |
 | `AC-AI-26-02`..`11` | every named subtest present in TAP output, suite exit 0 |
 | `AC-AI-26-12` | `WINDOW_SET_EXACT` |
 | `AC-AI-26-13` | exit 1, `VACUOUS_PATTERN_REJECTED` |
 | `AC-AI-26-14` | `limits.test.js` 16 pass, 0 fail |
 | `AC-AI-26-15` | `ceiling.test.js` 41 pass, 0 fail |
-| all brain and dashboard suites | 516 pass, 0 fail |
+| all brain and dashboard suites | 644 pass, 0 fail, exit 0 (re-measured 2026-09-19 at `cc09eaa`; the earlier `516` was author-attested and had drifted) |
 
 ## Residual limitations
 
@@ -281,4 +286,68 @@ added when an operator asserts one with provenance, not by this Work Item.
 - **Orphan-row fallback** returned empty known and unknown lists, which reads as "nothing missing". Fixed: it now lists every window as unknown.
 - **Prototype-sensitive lookup** on operator-supplied account ids. Fixed: a `Map`.
 - **Wiring overstated.** The earlier record said the panel reads "the same ledger the scheduler reads". Not true today: scheduler headroom flows through `offerings.js` -> `effectiveLimits` + `quota.js` `accountHeadroom`, which does not read the `{ value, provenance, assertedAt }` shape `resolveLimits` reads, so the panel can show a window as known while dispatch still treats it as unknown. The claim is removed; rewiring dispatch is out of this Work Item's allowed paths and is a residual limitation.
-- `AC-AI-26-01` (35 of 35) and the 516-test aggregate remain author-run, not reviewer-run.
+- `AC-AI-26-01` and the aggregate suite count were author-run, not reviewer-run. Round 3 replaced the hard-coded host-local count with a portable assertion, and the aggregate is re-measured in the closeout below.
+
+## Record closeout (2026-09-19)
+
+PR #93 merged the reviewed content on 2026-09-17 (`a3f3e69`), but this record
+still read `pending` and register row 159 still read `BACKLOG`, which kept
+`TASK-AI-27` and `TASK-AI-29` in `BLOCKED_DEPENDENCY` behind an item already on
+`main`. Round 3 of the review on PR #76 named both.
+
+- Register row 159 records `MERGED`, PR `93`, `FALLBACK_PASS` and merge commit
+  `a3f3e69bbad89d422233d33009f939a776930a4b`. The verdict is the round 2 `PASS`
+  from a fallback reviewer on `d433dbb`; PR #93 carried no review of its own,
+  and its head `9313658` has the same content as `d433dbb`.
+- `TASK-AI-27` and `TASK-AI-29` depend only on this item, so both move from
+  `BLOCKED_DEPENDENCY` to `BACKLOG`.
+- `AC-AI-26-01` no longer expects `35 of 35`. That count came from the
+  host-local `~/.shipde/accounts.registry.json` (a reviewer measured `36 of 36`
+  on another host), so no second host could reproduce it. The row now asserts
+  that every offering is unknown, fails on an empty row set so it cannot pass
+  vacuously, and fails with `BASELINE_UNAVAILABLE` where no registry exists.
+- PR #76 was empty against `main`, so only the merge owner could decide it. It
+  was closed, not merged, on 2026-09-19 as superseded by PR #93, and the author
+  later reopened it, still unmerged, to carry the round 3 response below.
+
+Re-measured at `origin/main` `8cec992` in a container with no account
+registry:
+
+| AC/Test ID | Result |
+|---|---|
+| `AC-AI-26-01` | exit 1, `BASELINE_UNAVAILABLE: no registered accounts on this host`. This is the expected result with no registry; it needs a host that has one |
+| `AC-AI-26-02`..`11` | all 10 named subtests present in TAP output |
+| `AC-AI-26-12` | `["requestsPerMinute","requestsPerDay","tokensPerDay","tokensPerMonth"]` |
+| `AC-AI-26-13` | exit 1, `VACUOUS_PATTERN_REJECTED: 0 tests matched THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ` |
+| `AC-AI-26-14` | `limits.test.js` tests 16, pass 16, fail 0 |
+| `AC-AI-26-15` | `ceiling.test.js` tests 41, pass 41, fail 0 |
+
+### Round 3 findings — disposition (2026-09-19, branch `feat/task-ai-26-capacity-windows`)
+
+Round 3 returned `CHANGES_REQUIRED` on PR #76 at `f957c60` and named five
+items. It found no code defect: the round 1 defects were fixed on the branch and
+that content is merged. This section records where each finding is answered. It
+is an author response, not a review, an approval or a merge.
+
+| Finding | Priority | Disposition |
+|---|---|---|
+| 1. PR #76 carried no change at all: its net diff against `main` was empty after PR #93 merged the same content, so the required `contract` check could never pass | P0 | The empty diff is gone: this record now changes against `main`. PR #76 was closed as superseded on 2026-09-19 and the author reopened it, still unmerged and unreviewed, only so this response can sit on the Pull Request the verdict was written against. This branch is not a second delivery of the merged feature. |
+| 2. This record was stale: `Status`, `Pull Request`, the review table and the `Branch` field still described an undelivered item | P0 | `Status`, `Pull Request` and the review table were corrected by PR #109 (merged). The `Branch` field still named `feat/task-ai-26-quota-ceilings`, a branch no Pull Request ever used; corrected in this branch to the three branches that carried the item. |
+| 3. `AC-AI-26-01` hard-coded a host-local count, so no second host could reproduce it | P1 | The acceptance row was made portable by PR #109: it asserts that every offering is unknown, fails on an empty row set and fails with `BASELINE_UNAVAILABLE` where no registry exists. This branch removes the last stale copies of that count from the record itself, which still contradicted its own corrected row. |
+| 4. The Pull Request body dropped the template checkboxes, left `Reviewed commit` unfilled and kept a stale aggregate count | P1 | The PR #76 body is rewritten from `.github/PULL_REQUEST_TEMPLATE.md`, binds the head commit under review, and re-states the aggregate measured at that commit. |
+| 5. Register row 159 still read `BACKLOG` while its dependents waited on it | P2 | Planner follow-up and already done: row 159 reads `MERGED`, PR `93`, `FALLBACK_PASS`, merge commit `a3f3e69bbad89d422233d33009f939a776930a4b`. The author boundary forbids register writes, so this branch does not touch the register. |
+
+Re-measured on 2026-09-19 at `cc09eaa` on the operator host, which has a
+registry, so `AC-AI-26-01` takes its registry branch rather than the
+`BASELINE_UNAVAILABLE` branch:
+
+| AC/Test ID | Result at `cc09eaa` |
+|---|---|
+| `AC-AI-26-01` | exit 0, `BASELINE_CONFIRMED: every offering has no ceiling (36)` |
+| `AC-AI-26-02`..`11` | all 10 named subtests present in `limits.test.js` TAP output, suite exit 0 |
+| `AC-AI-26-12` | exit 0, `WINDOW_SET_EXACT: ["requestsPerMinute","requestsPerDay","tokensPerDay","tokensPerMonth"]` |
+| `AC-AI-26-13` | exit 1, `VACUOUS_PATTERN_REJECTED: 0 tests matched THIS_TEST_DOES_NOT_EXIST_AT_ALL_XYZ` |
+| `AC-AI-26-14` | `node --test tools/ai-brain/test/limits.test.js` exit 0, tests 16, pass 16, fail 0 |
+| `AC-AI-26-15` | `node --test tools/ai-brain/test/ceiling.test.js` exit 0, tests 41, pass 41, fail 0 |
+| aggregate | `node --test tools/ai-brain/test/*.test.js tools/ai-dashboard/test/*.test.js` exit 0, tests 644, suites 138, pass 644, fail 0 |
+
