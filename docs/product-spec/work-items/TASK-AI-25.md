@@ -192,11 +192,15 @@ node --test tools/ai-brain/test/feedback.test.js
 ```
 ## Codex review record
 
-| Review round | Commit | Verdict | Findings resolved |
+| Review round | Reviewed commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `Pending` | `NOT_REVIEWED` | Initial specification authoring for TASK-AI-25. |
+| 2 | `d00bb68` | `CHANGES_REQUIRED` (issue comment 5712790930) | Acceptance scripts and test harness named by the matrix and by this Work Item did not exist; the review record used the non-lifecycle value `Blocked (dependency)`. Resolved in `ee49821`. |
+| 3 | `ee49821` | `CHANGES_REQUIRED` (issue comment 5717598080) | Red `pnpm format:check` on the 11 changed files; `EVIDENCE_STALE` unit test named by the rule-to-proof map was missing; the Pull Request description still claimed a specification-only diff; `AC-AI-25-04` used a weak string comparison (minor, non-blocking). Resolved across `90f9bb0`, `fa888f3`, `befa3e7`, `751da5d` and `132f076`. |
+| 4 | `132f076` (current HEAD) | `NOT_REVIEWED` | No Codex verdict has been posted against the current HEAD; a fresh review-only run is required before the human merge decision. The block on `TASK-AI-24` and the `BLOCKED_DEPENDENCY` register row are unchanged. |
 
-`Review status: READY_FOR_CODEX` in the Pull Request body is the author's handoff marker, required verbatim by `docs/product-spec/scripts/validate_pr_contract.py`; it states that the author is finished and requests review. It is not a verdict and it does not fill this table. This table records Codex rounds and stays `Pending`/`NOT_REVIEWED` until Codex posts a verdict against the reviewed commit, so it deliberately does not mirror the Pull Request marker. The register row stays `BLOCKED_DEPENDENCY` for the same reason it is true: `TASK-AI-24` is undelivered, and `AC-AI-25-01`/`AC-AI-25-05` fail if either the row or the Control table is edited to claim otherwise.
+`Review status: READY_FOR_CODEX` in the Pull Request body is the author's handoff marker, required verbatim by `docs/product-spec/scripts/validate_pr_contract.py`; it states that the author is finished and requests review. It is not a verdict and it does not fill this table. A round is recorded here only when Codex posts a verdict against the reviewed commit, so the current-HEAD row stays `NOT_REVIEWED` even though earlier rounds against superseded commits recorded `CHANGES_REQUIRED`. The register row stays `BLOCKED_DEPENDENCY` for the same reason it is true: `TASK-AI-24` is undelivered, and `AC-AI-25-01`/`AC-AI-25-05` fail if either the row or the Control table is edited to claim otherwise.
+
 
 ## Residual limitations
 
