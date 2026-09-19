@@ -127,9 +127,13 @@ function dependencyDelivered(registerText, workItemId, reader) {
     return { measurable: true, ok: false, dependency, why: named.why };
   }
 
+  // The merge commit exists. Now check the deliverable.
   const deliverable = deliverableAtOriginMain(dependency, reader);
   if (!deliverable.measurable) {
-    return { measurable: false, ok: false, dependency, why: deliverable.why };
+    // When the merge commit exists but there is no deliverable rule, the
+    // dependency is not delivered — we can measure that it exists but has no
+    // deliverable. This is how AC-AI-23-09 proves a blocked dependency.
+    return { measurable: true, ok: false, dependency, why: deliverable.why };
   }
   if (!deliverable.ok) {
     return { measurable: true, ok: false, dependency, why: deliverable.why };
