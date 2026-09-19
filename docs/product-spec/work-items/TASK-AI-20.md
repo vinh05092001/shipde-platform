@@ -274,6 +274,8 @@ not execute is visible in the evidence itself.
 | `node tools/ai-brain/acceptance/ac-20-04-outside-repository.js` | 0 | `OUTSIDE_REPOSITORY_PROBE: 3 subjects exited 2 with no register present` |
 | `node tools/ai-brain/cli.js reconcile` | 0 | register summary reports 0 errors and 0 warnings against the real register; no ready or terminal row names a specification that does not exist |
 | `node --test tools/ai-brain/test/*.test.js` | 0 | tests 483, pass 483, fail 0 |
+| `node --test tools/ai-dashboard/test/*.test.js` | 0 | tests 123, pass 123, fail 0 — `spec-coverage.js` re-exports the register adapter this package owns, so its parser is covered here too |
+| `pnpm format:check` | 0 | every changed file that Prettier covers is 100% compliant, respecting `.prettierignore` |
 | `python docs/product-spec/scripts/validate_docs.py` | 0 | Documentation validation passed: 105 markdown files, 130 feature IDs, 178 delivery rows, 853 unique identifiers |
 | `node tools/ai-guard/cli.js secret-surface` | 0 | SECRET_SURFACE_CLEAN |
 
