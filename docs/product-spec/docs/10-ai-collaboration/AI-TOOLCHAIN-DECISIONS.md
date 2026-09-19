@@ -494,3 +494,12 @@ devDependency pin that the manifest audit probes as `dependency "lefthook"`
 - Dry run is the default (`node tools/ai-brain/cli.js dispatch`); launching requires `--execute`. Deferred entries and alternatives are never launched, a second writer or an implementation beyond `plan.utilisation.maxImplementation` is refused, and any AO failure is `FAILED`, never `LAUNCHED`, with no in-call retry.
 - A provider without a harness the controller already uses (`antigravity`/`gemini` → `agy`, `9router`/`anthropic`/`claude` → `claude-code`) is refused as `INCOMPLETE_ASSIGNMENT` rather than guessed.
 - The controller keeps its own launch path; switching it to the executor is a separate Work Item.
+
+## Concurrent implementation ceiling decision (TASK-AI-42)
+
+- Under `AI-TOOL-03` and `AGENTS.md` ("Keep one active implementation Work Item until the workflow is proven stable"), the concurrent implementation ceiling is fixed at one (`1`) as a stability measure (`DEC-017`).
+- Raising the implementation ceiling is a **governed decision, not an unvetted runtime setting**. An operator, caller, or runtime context cannot raise `maxImplementationAgents` via an arbitrary configuration knob.
+- In `tools/ai-brain/scheduler.js` (`planDispatch`), `maxImplementationAgents` defaults to 1. Any attempt to request `maxImplementationAgents > 1` without an approved governed decision identifier (`DEC-*` or `HUMAN-DECISION-*`) is rejected and clamped to 1, preserving the `AI-TOOL-03` stability measure.
+- The single-writer invariant (exactly one writer per Work Item / branch) remains absolute and non-configurable, holding permanently even when a governed decision raises concurrency across different Work Items.
+- In `tools/ai-brain/executor.js` (`executePlan`), `maxImplementation` is read from `plan.utilisation.maxImplementation` (defaulting to 1) and enforces `IMPLEMENTATION_CEILING` on any attempt to exceed it.
+
