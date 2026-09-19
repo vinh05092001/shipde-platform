@@ -4,10 +4,10 @@ param(
         Join-Path $userHome "AI"
     ),
     [string]$AoExecutable = "",
-    [string]$ProfilePath = $(
-        $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
-        Join-Path $userHome ".claude"
-    ),
+    # AO-only Claude profile directory routed to the local 9Router gateway. Never
+    # the operator's native ~/.claude profile. Resolved against
+    # SHIPDE_NINEROUTER_PROFILE and the shared default when left empty.
+    [string]$ProfilePath = "",
     [int]$AgentRouterPort = 20128,
     [string]$ExpectedAoVersion = "",
     [int]$StartupTimeoutSeconds = 30,
@@ -31,14 +31,15 @@ if (-not [string]::IsNullOrWhiteSpace($ExpectedAoVersion) -and $ExpectedAoVersio
 }
 $ExpectedAoVersion = $canonicalAoVersion
 
-$profilePath = $ProfilePath
+$profilePath = Get-ShipDeNineRouterProfilePath -ProfilePath $ProfilePath
 $settingsPath = Join-Path $profilePath "settings.json"
 $handoffRoot = Join-Path $AiRoot "handoff"
 $runtimePath = Join-Path $handoffRoot "ao-router-runtime.json"
 
-if (-not (Test-Path $settingsPath)) {
-    throw "AgentRouter Claude profile is missing: $settingsPath"
-}
+# Validates the profile fail-closed: missing file, invalid JSON, missing 'env' block or
+# a base URL that is not the local 9Router all raise an actionable error naming
+# $settingsPath, never a raw "property 'env' cannot be found" failure.
+$baseUrl = Assert-ShipDeNineRouterProfileBaseUrl -ProfilePath $profilePath -Port $AgentRouterPort
 $aoExecutablePath = if ([string]::IsNullOrWhiteSpace($AoExecutable)) {
     Resolve-ShipDeAoExecutable
 } else {
@@ -57,28 +58,6 @@ $aoVersionEvidence = Assert-ShipDeAoVersionEvidence `
     -ExpectedVersion $ExpectedAoVersion `
     -VersionText $aoVersionProbe.Text `
     -VersionExitCode $aoVersionProbe.ExitCode
-
-try {
-    $config = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-} catch {
-    throw "AgentRouter Claude profile contains invalid JSON: $settingsPath"
-}
-
-$baseUrl = [string]$config.env.ANTHROPIC_BASE_URL
-$uri = $null
-if (
-    [string]::IsNullOrWhiteSpace($baseUrl) -or
-    -not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$uri) -or
-    $uri.Scheme -ne "http" -or
-    $uri.Host -notin @("localhost", "127.0.0.1") -or
-    $uri.Port -ne $AgentRouterPort -or
-    $uri.AbsolutePath.TrimEnd('/') -ne "/v1" -or
-    -not [string]::IsNullOrWhiteSpace($uri.Query) -or
-    -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
-    -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
-) {
-    throw "The .claude profile must route to http://localhost:$AgentRouterPort/v1."
-}
 
 function Test-AgentRouterEndpoint {
     if ($null -ne $EndpointTester) {

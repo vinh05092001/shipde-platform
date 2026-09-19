@@ -46,8 +46,10 @@ const missing = missingRepairBudgetParts(fs.readFileSync(tmp, 'utf8'));
 fs.unlinkSync(tmp);
 
 if (missing.length === 0) {
+  // Exit 2, never 0: a proof that cannot detect the tamper has not established
+  // anything, and 0 is the code a caller reads as success.
   console.error('REPAIR_BUDGET_UNBOUNDED_NOT_DETECTED');
-  process.exit(0);
+  process.exit(2);
 }
 console.error('REPAIR_BUDGET_UNBOUNDED: ' + missing[0].label);
 process.exit(1);
