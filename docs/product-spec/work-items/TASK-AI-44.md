@@ -166,6 +166,18 @@ node tools/ai-brain/cli.js prove --tests "node tools/ai-brain/test/review-lane.t
 |---|---|---|---|
 | 1 | `<sha>` | `<PASS/CHANGES_REQUIRED/BLOCKED>` | `<links>` |
 
+## Follow-up delivery: an unverified key is not a configured key
+
+After #92 merged, `doctor.ps1` still reported three probe outcomes as
+`CONFIGURED but unverified` with no failure recorded: a probe timeout, an
+unrecognised probe output, and a probe exception. Measured 2026-09-16, a
+deliberately invalid key makes the probe time out rather than print a 401, so
+a dead key read as a configured fallback, contrary to `AI-44-R01` and
+`AI-44-R02`. Each of those outcomes now reports `UNAVAILABLE: key present but
+unverified` and adds a failure, and the cached verdict carries the failure
+forward. The fix was first written on the superseded branch
+`fix/task-ai-44-gateway-naming` (Pull Request #75) and is carried here alone.
+
 ## Residual limitations
 
 - **`start-agent-orchestrator.ps1` still names the local gateway `AgentRouter`.** Its `-AgentRouterPort` parameter and `Test-AgentRouterEndpoint` helper address 9Router's local port 20128 but lie outside this Work Item's allowed paths. `control.ps1`'s governed launcher keeps the `-AgentRouterPort` argument verbatim so the cross-file call contract is unchanged; renaming it is a follow-up that may edit `start-agent-orchestrator.ps1`.
