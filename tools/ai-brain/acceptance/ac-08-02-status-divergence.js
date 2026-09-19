@@ -56,8 +56,9 @@ const observed = controlStatus(fs.readFileSync(tmp, 'utf8'));
 fs.unlinkSync(tmp);
 
 if (observed === register) {
+  // Exit 2, never 0: a proof that misses its tamper established nothing.
   console.error('DIVERGENCE_NOT_DETECTED');
-  process.exit(0);
+  process.exit(2);
 }
 console.error('STATUS_DIVERGENCE_DETECTED: tampered copy ' + observed + ' != register ' + register);
 process.exit(1);
