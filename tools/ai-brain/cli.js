@@ -10,6 +10,8 @@
  *   node tools/ai-brain/cli.js shadow --project|--compare [--register <p>] [--shadow <p>] [--json] [--dry-run]
  *   node tools/ai-brain/cli.js probe --account <id> [--model <m>] [--json]
  *                                   [--file <p>] [--timeout <ms>] [--cache-window <ms>]
+ *   node tools/ai-brain/cli.js qualify --account <id> --model <m> [--role <roleId>]
+ *                                      [--json] [--file <p>]
  *
  * `reconcile` asks whether the register can back up what it claims.
  * `prove` runs the checks an agent says it ran, and reports what happened.
@@ -18,6 +20,8 @@
  * launch path, whose outcome — pass, fail, timeout or refused — is recorded
  * in tools/ai-brain/qualification-results/results.json and reused inside the
  * cache window. It never grants qualification; that is TASK-AI-31.
+ * `qualify` (TASK-AI-31) reads the probe result and grants qualifiedRoles
+ * only when the outcome was 'pass' and the result is within the cache window.
  *
  * Exit codes: 0 when nothing is overstated, 1 when it is. --strict also fails
  * on warnings, for use in CI where an unrecorded merge should block.
@@ -792,9 +796,26 @@ function main() {
       });
     return;
   }
+  // qualify (TASK-AI-31): reads the probe result written by TASK-AI-30 and
+  // grants qualifiedRoles only when the probe outcome was 'pass' and the
+  // result is within the cache window. Exit 0 for any recorded outcome
+  // (QUALIFIED, ALREADY_QUALIFIED, NOT_QUALIFIED, RESULT_STALE,
+  // RESULT_MISSING); exit 2 for bad argv.
+  if (command === 'qualify') {
+    const { runQualifyCli } = require('./qualification-gate');
+    runQualifyCli(process.argv.slice(3))
+      .then((code) => {
+        process.exitCode = code;
+      })
+      .catch((e) => {
+        console.error('Qualify lỗi: ' + (e && e.message ? e.message : e));
+        process.exitCode = 1;
+      });
+    return;
+  }
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe');
+  console.error('Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify');
   process.exit(2);
 }
 
