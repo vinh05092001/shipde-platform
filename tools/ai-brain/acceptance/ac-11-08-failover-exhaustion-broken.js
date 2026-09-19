@@ -13,10 +13,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const {
-  SOURCE,
-  missingFailoverExhaustionParts,
-} = require('./lib/failover-exhaustion-contract');
+const { SOURCE, missingFailoverExhaustionParts } = require('./lib/failover-exhaustion-contract');
 
 // The MaxFailovers pattern to tamper with — this is the anchor of the bounded
 // failover budget; removing it must violate the contract.

@@ -24,8 +24,7 @@ const violations = [];
 
 // 1. Exhaustion guard must produce an explicit stop or error (not just a
 //    silent return or continue).
-const EXHAUSTION_STOP =
-  /exhausted.*?(?:throw|Write-Error|exit|\[FAIL-CLOSED\])/is;
+const EXHAUSTION_STOP = /exhausted.*?(?:throw|Write-Error|exit|\[FAIL-CLOSED\])/is;
 if (!EXHAUSTION_STOP.test(source)) {
   violations.push(
     'MISSING EXHAUSTION_STOP: exhausted guard does not produce an explicit stop/throw/exit'
@@ -35,25 +34,19 @@ if (!EXHAUSTION_STOP.test(source)) {
 // 2. Preview guard must be a conditional (if) that wraps mutating operations.
 const PREVIEW_IF = /if\s*\(\s*\$Preview\s*\)/i;
 if (!PREVIEW_IF.test(source)) {
-  violations.push(
-    'MISSING PREVIEW_IF: $Preview is not used in an if-guard conditional'
-  );
+  violations.push('MISSING PREVIEW_IF: $Preview is not used in an if-guard conditional');
 }
 
 // 3. DryRun guard must be a conditional (if) that wraps mutating operations.
 const DRYRUN_IF = /if\s*\(\s*\$DryRun\s*\)/i;
 if (!DRYRUN_IF.test(source)) {
-  violations.push(
-    'MISSING DRYRUN_IF: $DryRun is not used in an if-guard conditional'
-  );
+  violations.push('MISSING DRYRUN_IF: $DryRun is not used in an if-guard conditional');
 }
 
 // 4. The supervisor must have a [FAIL-CLOSED] tag on the exhaustion path.
 const FAIL_CLOSED_TAG = /\[FAIL-CLOSED\]/;
 if (!FAIL_CLOSED_TAG.test(source)) {
-  violations.push(
-    'MISSING FAIL_CLOSED_TAG: no [FAIL-CLOSED] tag on the exhaustion guard path'
-  );
+  violations.push('MISSING FAIL_CLOSED_TAG: no [FAIL-CLOSED] tag on the exhaustion guard path');
 }
 
 if (violations.length > 0) {
@@ -61,5 +54,7 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log('FAIL_CLOSED_GUARDS_HOLD: exhaustion stop, Preview if-guard, DryRun if-guard, and [FAIL-CLOSED] tag present');
+console.log(
+  'FAIL_CLOSED_GUARDS_HOLD: exhaustion stop, Preview if-guard, DryRun if-guard, and [FAIL-CLOSED] tag present'
+);
 process.exit(0);

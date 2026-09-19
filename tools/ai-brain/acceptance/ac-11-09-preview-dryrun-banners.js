@@ -20,8 +20,16 @@ const source = fs.readFileSync(SOURCE, 'utf8');
 
 // Required patterns: the supervisor must contain both observable banners.
 const REQUIRED = [
-  { id: 'PREVIEW_BANNER', pattern: /\[PREVIEW\]/, label: 'a [PREVIEW] banner in the supervisor output' },
-  { id: 'DRYRUN_BANNER', pattern: /\[SUPERVISOR\]\[DRY-RUN\]/, label: 'a [SUPERVISOR][DRY-RUN] banner in the supervisor output' },
+  {
+    id: 'PREVIEW_BANNER',
+    pattern: /\[PREVIEW\]/,
+    label: 'a [PREVIEW] banner in the supervisor output',
+  },
+  {
+    id: 'DRYRUN_BANNER',
+    pattern: /\[SUPERVISOR\]\[DRY-RUN\]/,
+    label: 'a [SUPERVISOR][DRY-RUN] banner in the supervisor output',
+  },
 ];
 
 const missing = REQUIRED.filter((r) => !r.pattern.test(source));
@@ -30,5 +38,7 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-console.log('PREVIEW_DRYRUN_BANNERS_PRESENT: [PREVIEW] and [SUPERVISOR][DRY-RUN] banners found in ' + SOURCE);
+console.log(
+  'PREVIEW_DRYRUN_BANNERS_PRESENT: [PREVIEW] and [SUPERVISOR][DRY-RUN] banners found in ' + SOURCE
+);
 process.exit(0);
