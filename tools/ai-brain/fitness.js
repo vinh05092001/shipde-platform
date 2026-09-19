@@ -161,12 +161,11 @@ function resolveGrade(offering, options) {
   // 3. externalEvidence (benchmarks.json)
   let ext = o.externalEvidence || opts.externalEvidence;
   if (!ext && (o.model || o.id)) {
-    try {
-      const { findBenchmarkEvidence, loadBenchmarks } = require('./benchmarks');
-      const bmarks = opts.benchmarks || loadBenchmarks();
-      const match = findBenchmarkEvidence(bmarks, o.model || o.id, o.modelVersion);
-      if (match) ext = match;
-    } catch (e) {}
+    // No catch: damaged evidence must fail closed, not read as "no evidence".
+    const { findBenchmarkEvidence, loadBenchmarks } = require('./benchmarks');
+    const bmarks = opts.benchmarks || loadBenchmarks();
+    const match = findBenchmarkEvidence(bmarks, o.model || o.id, o.modelVersion);
+    if (match) ext = match;
   }
   const extGrade = extractGradeFromEvidence(ext);
   if (extGrade !== null) {

@@ -26,6 +26,7 @@ const { effectiveLimits } = require('./ceiling');
 const agyQuota = require('./agy-quota');
 const { sameAccount } = require('./agy-identity');
 const { resolveGrade, resolveCapability, gradeOf } = require('./fitness');
+const { loadBenchmarks } = require('./benchmarks');
 
 /** Access dimension independent of capability (TASK-AI-46). */
 const ACCESS_TYPE = {
@@ -104,6 +105,8 @@ function offeringId(accountId, model) {
  */
 function expandOfferings(accounts, options) {
   const out = [];
+  // Read the evidence table once per expansion; a damaged table throws here.
+  const benchmarks = (options && options.benchmarks) || loadBenchmarks();
   for (const account of accounts || []) {
     if (account.enabled === false) continue;
 
@@ -142,7 +145,13 @@ function expandOfferings(accounts, options) {
             ? account.gradeProvenance
             : undefined;
 
-      const gradeRecord = resolveGrade({ id: offerId, codingGrade });
+      const modelVersion = e.modelVersion || account.modelVersion || null;
+
+      // Benchmark evidence is keyed by model, not by offering id.
+      const gradeRecord = resolveGrade(
+        { id: offerId, model, modelVersion, codingGrade },
+        { benchmarks },
+      );
       if (gradeProvenance !== undefined) gradeRecord.provenance = gradeProvenance;
 
       const access =
@@ -151,8 +160,6 @@ function expandOfferings(accounts, options) {
           : account.access !== undefined
             ? account.access
             : ACCESS_TYPE.PAY_PER_CALL;
-
-      const modelVersion = e.modelVersion || account.modelVersion || null;
 
       out.push({
         id: offerId,

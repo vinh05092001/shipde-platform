@@ -414,3 +414,72 @@ describe('Benchmark staleness and completeness audit (TASK-AI-46)', () => {
     assert.equal(res.summary.error, 0, 'must have zero errors');
   });
 });
+
+describe('Evidence reaches real offerings and fails closed (#106 review 05:09Z)', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { ACCOUNTS } = require('../seed-accounts');
+  const { formatAuditResult } = require('../benchmarks');
+
+  const verifiedFlash = {
+    model_id: 'gemini-3.8-flash-high',
+    benchmark: 'SWE-bench Verified',
+    benchmark_version: '1.0',
+    score: 50,
+    source_url: 'https://example.com/flash',
+    checked_on: '2026-09-01',
+  };
+
+  test('a seed offering resolves through externalEvidence by its model, not its offering id', () => {
+    const offerings = expandOfferings(ACCOUNTS, { benchmarks: [verifiedFlash] });
+    const flash = offerings.filter((o) => o.model === 'gemini-3.8-flash-high');
+    assert.ok(flash.length > 0, 'seed accounts carry gemini-3.8-flash-high');
+    for (const o of flash) {
+      assert.notStrictEqual(o.id, o.model, 'offering id differs from model');
+      assert.equal(o.gradeRecord.source, GRADE_SOURCE.EXTERNAL);
+      assert.equal(o.gradeRecord.class, Difficulty.STANDARD);
+    }
+  });
+
+  test('loadBenchmarks throws on a corrupt, non-array or missing table', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-'));
+    const corrupt = path.join(dir, 'corrupt.json');
+    const object = path.join(dir, 'object.json');
+    fs.writeFileSync(corrupt, '{');
+    fs.writeFileSync(object, '{}');
+    for (const p of [corrupt, object, path.join(dir, 'missing.json')]) {
+      assert.throws(() => loadBenchmarks(p), { code: 'BENCHMARKS_UNREADABLE' });
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('resolveGrade does not read damaged evidence as no evidence', () => {
+    const bad = [];
+    bad.filter = () => {
+      throw new Error('damaged');
+    };
+    assert.throws(
+      () => resolveGrade({ id: 'x', model: 'm', codingGrade: 3 }, { benchmarks: bad }),
+      /damaged/,
+    );
+  });
+
+  test('summary.pass counts records with no findings', () => {
+    const res = auditBenchmarks([{ model_id: 'm' }, verifiedFlash], [], { now: NOW });
+    assert.deepStrictEqual(res.summary, { total: 2, pass: 1, warn: 0, error: 2 });
+  });
+
+  test('the audit prints the operator-console state lines', () => {
+    const ok = auditBenchmarks([verifiedFlash], [], { now: NOW });
+    assert.equal(
+      formatAuditResult(ok),
+      'Benchmark audit: VALIDATED (1 records, 0 errors, 0 warnings)',
+    );
+    const bad = auditBenchmarks([{ model_id: 'm', checked_on: '2026-09-01' }], [], { now: NOW });
+    assert.equal(
+      formatAuditResult(bad),
+      'Benchmark audit: FAILED (1 errors: BENCHMARK_MISSING_SOURCE_URL: m)',
+    );
+  });
+});

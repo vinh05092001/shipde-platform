@@ -28,17 +28,26 @@ const STALENESS_THRESHOLD_DAYS = 90;
 
 /**
  * Loads benchmark records from disk.
+ *
+ * Fails closed: a missing, unreadable, unparsable or non-array table throws
+ * BENCHMARKS_UNREADABLE, so damaged evidence is never mistaken for "no evidence".
  */
 function loadBenchmarks(filePath) {
   const p = filePath || DEFAULT_BENCHMARKS_PATH;
-  if (!fs.existsSync(p)) return [];
+  let parsed;
   try {
-    const raw = fs.readFileSync(p, 'utf8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch (e) {
-    return [];
+    const err = new Error(`BENCHMARKS_UNREADABLE: ${p}: ${e.message}`);
+    err.code = 'BENCHMARKS_UNREADABLE';
+    throw err;
   }
+  if (!Array.isArray(parsed)) {
+    const err = new Error(`BENCHMARKS_UNREADABLE: ${p}: top level is not an array`);
+    err.code = 'BENCHMARKS_UNREADABLE';
+    throw err;
+  }
+  return parsed;
 }
 
 /**
@@ -255,16 +264,58 @@ function auditBenchmarks(benchmarks, offerings, options) {
 
   const errorCount = findings.filter((f) => f.severity === 'error').length;
   const warnCount = findings.filter((f) => f.severity === 'warn').length;
+  const flagged = new Set(findings.map((f) => f.recordIndex)).size;
 
   return {
     findings,
     summary: {
       total: list.length,
-      pass: list.length - errorCount - warnCount,
+      pass: list.length - flagged,
       warn: warnCount,
       error: errorCount,
     },
   };
+}
+
+/**
+ * The operator-console line for an audit result (TASK-AI-46 UI states).
+ */
+function formatAuditResult(result) {
+  const { summary, findings } = result;
+  if (summary.error === 0) {
+    return `Benchmark audit: VALIDATED (${summary.total} records, 0 errors, ${summary.warn} warnings)`;
+  }
+  const errors = findings
+    .filter((f) => f.severity === 'error')
+    .map((f) => `${f.code}: ${f.id}`)
+    .join(', ');
+  return `Benchmark audit: FAILED (${summary.error} errors: ${errors})`;
+}
+
+/**
+ * `node tools/ai-brain/benchmarks.js audit [file]` — exit 0 when valid, 1 on
+ * any error finding or an unreadable table. Checks versions against the seed offerings.
+ */
+function main(argv) {
+  const [cmd, file] = argv;
+  if (cmd !== 'audit') {
+    console.error('usage: node tools/ai-brain/benchmarks.js audit [benchmarks.json]');
+    return 2;
+  }
+  let records;
+  try {
+    records = loadBenchmarks(file);
+  } catch (e) {
+    console.log(`Benchmark audit: FAILED (1 errors: ${e.message})`);
+    return 1;
+  }
+  const { ACCOUNTS } = require('./seed-accounts');
+  const { expandOfferings } = require('./offerings');
+  const offerings = expandOfferings(ACCOUNTS, { benchmarks: records });
+  const result = auditBenchmarks(records, offerings);
+  console.log(formatAuditResult(result));
+  for (const f of result.findings) console.log(`  ${f.severity} ${f.code} ${f.message}`);
+  return result.summary.error === 0 ? 0 : 1;
 }
 
 module.exports = {
@@ -274,4 +325,8 @@ module.exports = {
   gradeFromBenchmark,
   findBenchmarkEvidence,
   auditBenchmarks,
+  formatAuditResult,
 };
+
+// After the exports: offerings -> fitness require this module back.
+if (require.main === module) process.exitCode = main(process.argv.slice(2));
