@@ -9,6 +9,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { aggregateCockpitState, getLastAggregatedState } = require('./aggregator');
+const { buildRotationState } = require('./rotation');
 
 const DEFAULT_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3333;
 const HOST = '127.0.0.1'; // Strictly loopback only (AI15-R05)
@@ -25,10 +26,11 @@ const MIME_TYPES = {
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' https://cdn.tailwindcss.com 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
+  // jsDelivr serves Tailwind 4 and the daisyUI plugin the cockpit is built on.
+  "script-src 'self' https://cdn.tailwindcss.com https://cdn.jsdelivr.net 'unsafe-inline'",
+  "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'",
   "img-src 'self' data:",
-  "connect-src 'self'",
+  "connect-src 'self' https://cdn.jsdelivr.net",
   "frame-ancestors 'none'",
   "base-uri 'none'",
   "object-src 'none'",
@@ -147,11 +149,30 @@ function createDashboardServer(options = {}) {
     if (pathname === '/' || pathname === '/index.html') {
       return path.join(dashboardDir, 'index.html');
     }
+    if (pathname === '/summary-view.js') {
+      return path.join(dashboardDir, 'summary-view.js');
+    }
+    if (pathname === '/roster-view.js') {
+      return path.join(dashboardDir, 'roster-view.js');
+    }
+    if (pathname === '/progress-view.js') {
+      return path.join(dashboardDir, 'progress-view.js');
+    }
+    if (pathname === '/architecture.js') {
+      return path.join(dashboardDir, 'architecture.js');
+    }
+    if (pathname === '/rotation-view.js') {
+      return path.join(dashboardDir, 'rotation-view.js');
+    }
     if (pathname === '/client.js') {
       return path.join(dashboardDir, 'client.js');
     }
     if (pathname === '/DASHBOARD.html') {
       return path.join(rootDir, 'DASHBOARD.html');
+    }
+    // The rotation view lives inside the dashboard's Capacity & Quota tab.
+    if (pathname === '/rotation' || pathname === '/rotation.html') {
+      return path.join(dashboardDir, 'index.html');
     }
     return null;
   }
@@ -333,6 +354,13 @@ function createDashboardServer(options = {}) {
     if (pathname === '/api/agents') {
       const state = getLastAggregatedState() || (await aggregateCockpitState({ rootDir }));
       sendJson(req, res, 200, state.sessions);
+      return;
+    }
+
+    // TASK-AI-47: Model rotation JSON endpoint
+    if (pathname === '/api/rotation') {
+      const rotation = buildRotationState({ rootDir });
+      sendJson(req, res, 200, rotation);
       return;
     }
 
