@@ -1,0 +1,93 @@
+[
+  {
+    "model_id": "claude-opus-4-6-thinking",
+    "model_version": "20260201",
+    "benchmark": "SWE-bench Verified",
+    "benchmark_version": "v1.0",
+    "score": 72.5,
+    "score_scale": "percent",
+    "harness": "SWE-agent",
+    "reasoning_setting": "high",
+    "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/claude-opus-4-6-thinking",
+    "checked_on": "2026-08-15",
+    "verified": false
+  },
+  {
+    "model_id": "claude-sonnet-4-6",
+    "model_version": "20260201",
+    "benchmark": "SWE-bench Verified",
+    "benchmark_version": "v1.0",
+    "score": 65.0,
+    "score_scale": "percent",
+    "harness": "SWE-agent",
+    "reasoning_setting": "medium",
+    "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/claude-sonnet-4-6",
+    "checked_on": "2026-08-15",
+    "verified": false
+  },
+  {
+    "model_id": "gemini-3.1-pro-high",
+    "model_version": "20260115",
+    "benchmark": "SWE-bench Verified",
+    "benchmark_version": "v1.0",
+    "score": 68.0,
+    "score_scale": "percent",
+    "harness": "SWE-agent",
+    "reasoning_setting": "high",
+    "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/gemini-3.1-pro",
+    "checked_on": "2026-08-15",
+    "verified": false
+  },
+  {
+    "model_id": "gemini-3.8-flash-high",
+    "model_version": "20260201",
+    "benchmark": "SWE-bench Verified",
+    "benchmark_version": "v1.0",
+    "score": 55.0,
+    "score_scale": "percent",
+    "harness": "SWE-agent",
+    "reasoning_setting": "high",
+    "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/gemini-3.8-flash",
+    "checked_on": "2026-08-15",
+    "verified": false
+  },
+  {
+    "model_id": "gpt-oss-120b-medium",
+    "model_version": "20260101",
+    "benchmark": "SWE-bench Verified",
+    "benchmark_version": "v1.0",
+    "score": 48.0,
+    "score_scale": "percent",
+    "harness": "SWE-agent",
+    "reasoning_setting": "medium",
+    "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/gpt-oss-120b",
+    "checked_on": "2026-08-15",
+    "verified": false
+  },
+  {
+    "model_id": "cc/claude-opus-5",
+    "model_version": "20260301",
+    "benchmark": "SWE-bench Verified",
+    "benchmark_version": "v1.0",
+    "score": 78.0,
+    "score_scale": "percent",
+    "harness": "SWE-agent",
+    "reasoning_setting": "high",
+    "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/claude-opus-5",
+    "checked_on": "2026-08-15",
+    "verified": false
+  },
+  {
+    "model_id": "cc/claude-sonnet-5",
+    "model_version": "20260301",
+    "benchmark": "SWE-bench Verified",
+    "benchmark_version": "v1.0",
+    "score": 67.0,
+    "score_scale": "percent",
+    "harness": "SWE-agent",
+    "reasoning_setting": "medium",
+    "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/claude-sonnet-5",
+    "checked_on": "2026-08-15",
+    "verified": false
+  }
+]

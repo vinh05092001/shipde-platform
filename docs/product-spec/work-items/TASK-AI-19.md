@@ -498,3 +498,14 @@ history, branches, and on-disk files). It does not poll remote GitHub API
 endpoints directly; remote branches and PR merge commits must be fetched into
 `origin/main` before reconciliation can verify them. Authoring specifications
 for items moved to `BACKLOG` remains bounded by `TASK-AI-20`.
+
+## Executed run: 2026-09-17, fourth batch
+
+| Row | PR | Merge commit | Reviewer |
+|---|---|---|---|
+| `TASK-AI-17` | `#82` | `d1e96a5b6f` | `cline-free/muse-spark-1.3-contributor` |
+
+Recording `TASK-AI-17` cleared the stale blocks on `TASK-AI-21`, `TASK-AI-36`,
+`TASK-AI-37`, `TASK-AI-39` and `TASK-AI-43` in the follow-up run —
+`BLOCKED_DEPENDENCY` to `BACKLOG`. PR #82's reviewed head `6c7dd96` equals its
+merge head; the review is posted on the PR.
