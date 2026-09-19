@@ -156,6 +156,7 @@ node tools/ai-guard/cli.js secret-surface
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `Pending` | `NOT_REVIEWED` | Spec authored for TASK-AI-30. Register records `BLOCKED_DEPENDENCY`; not stage-eligible for review routing. |
+| 2 (repair) | `43b0342` | `NOT_REVIEWED` | Author-side repair of the #104 review at `c770258`: F1 fixed (`probeAccount` defaults the entry gate to `account-entry.entryFindings`, so the shipped CLI path refuses an entry-refused account before any spawn; proven by two tests that inject no gate). N1 fixed (default record moves to `~/.shipde/qualification-results`). F2, F3, F4, N2, N3 remain open. |
 
 ## Residual limitations
 
