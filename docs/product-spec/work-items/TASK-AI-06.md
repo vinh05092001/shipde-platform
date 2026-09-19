@@ -341,16 +341,21 @@ directory holding that setting moved off the operator's native profile.
 | `-Action Status` | Ran clean: worktrees listed, `9Router : UP`, 13 open Pull Requests listed. |
 | `-Action Supervise` | Recorded 2026-09-17 against the profile file described below: no longer dies on the profile, resolves the AO executable, reports `EffectiveVersion 0.13.0`, validates the new profile, and reaches `[SUPERVISOR] Starting AO through the 9Router Claude profile...`, then stops on a separate pre-existing condition, below. Not reproducible against the operator machine state observed at review on 2026-09-19; see the re-record below. |
 | `-Action Supervise`, re-recorded 2026-09-19 | The independent review of `f9cad78` ran the same validator the gate invokes (`Assert-ShipDeNineRouterProfileBaseUrl`, `common.ps1:350-391`, via `control.ps1:3259`) on the host and it failed closed before `Starting AO` with `9Router Claude profile C:\Users\gumac\.claude-9router\settings.json must set env.ANTHROPIC_BASE_URL to http://localhost:20128/v1.` That is the intended actionable failure, not a regression: the validator's URL contract is unchanged from before this Work Item. This re-record was written from the review's observation; the author did not re-run on that host. |
+| `-Action Supervise` gate, re-run first-hand 2026-09-19 | This repair ran the same validator the gate invokes against the resolved default profile and reproduced the fail-closed result, then isolated the cause: `Assert-ShipDeNineRouterProfileBaseUrl -ProfilePath C:\Users\gumac\.claude-9router -Port 20128` printed `LIVE_OPERATOR_PROFILE REJECTED ... must set env.ANTHROPIC_BASE_URL to http://localhost:20128/v1.`, while the same call against a synthetic profile differing only in the `/v1` path printed `SYNTHETIC_127.0.0.1_WITH_V1 ACCEPTED http://127.0.0.1:20128/v1`. The host form is therefore accepted and the missing `/v1` is the only cause. |
 
 ### Local machine state the operator owns
 
 `%USERPROFILE%\.claude-9router\settings.json` was created outside the repository with
 `{"env":{"ANTHROPIC_BASE_URL":"http://localhost:20128/v1"}}`. It is machine state, not repository
-state, and it has since changed. At review on 2026-09-19 (file last modified 2026-09-17 14:43 local)
-it set `env.ANTHROPIC_BASE_URL` to `http://127.0.0.1:20128`, without the `/v1` path, and carried
-extra keys (`ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
-`CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT`) and a top-level `apiKeyHelper`. With that
-file the supervisor gate fails closed with the actionable error above. The failure is caused solely
+state, and it has since changed twice. At review on 2026-09-19 it set `env.ANTHROPIC_BASE_URL` to
+`http://127.0.0.1:20128`, without the `/v1` path, and carried extra keys (`ANTHROPIC_MODEL`,
+`ANTHROPIC_SMALL_FAST_MODEL`, `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT`) and a
+top-level `apiKeyHelper`. Re-read first-hand on 2026-09-19 16:53 local (file last modified
+2026-09-19 16:53 local) it still sets `env.ANTHROPIC_BASE_URL` to `http://127.0.0.1:20128`, and its
+top-level keys are now `apiKeyHelper`, `env` and `theme`, with the same three extra `env` keys. The
+operator owns this file, so the observation is dated rather than presented as a permanent property:
+the gate is what decides, and with a value that lacks `/v1` it fails closed with the actionable
+error above. The failure is caused solely
 by the missing `/v1` path segment: `Assert-ShipDeNineRouterProfileBaseUrl` (`scripts/ai/common.ps1:384`)
 already accepts both `localhost` and `127.0.0.1` as valid hosts (`$uri.Host -notin @("localhost", "127.0.0.1")`),
 so using `127.0.0.1` does not change the validated gateway contract. To pass the gate, the operator sets
@@ -406,3 +411,36 @@ Documentation-only; no script changed.
 - Deliberately left: `docs/product-spec/work-items/TASK-AI-07.md:56` still describes unattended AO on
   `~/.claude`. It belongs to TASK-AI-07, and one Pull Request changes one Work Item file; TASK-AI-07
   should adopt this wording when it is next edited.
+
+### Review repair closed on `main` (2026-09-19, review of `f9cad78`)
+
+The newest review verdict on the original Pull Request (#89) is `CHANGES_REQUIRED` at
+`f9cad78c8b4d2f76751a13a469ab4bbfdcc007ae` (comment 5738065068); the two later comments on that Pull
+Request are a watchdog note and the operator's closure note, not verdicts. All four findings are
+closed, and three of them closed on `main`, not only on that Pull Request:
+
+| Finding | Resolution |
+| ------- | ---------- |
+| 1. The `-Action Supervise` acceptance row and the machine-state record contradicted the only host they were recorded on. | Both re-recorded: the row now states the fail-closed outcome and marks the 2026-09-17 record as not reproducible, and the machine-state paragraph states a dated observation plus the single cause (the missing `/v1`). Re-recorded once more in this repair, because the operator file changed again after the review. |
+| 2. The Pull Request body named pre-rename identifiers and a stale verdict. | Pull Request body updated to `Get-ShipDeNineRouterProfilePath`, `Assert-ShipDeNineRouterProfileBaseUrl`, `-NineRouterProfilePath`, `$script:NineRouterProfile` and `SHIPDE_NINEROUTER_PROFILE`, with the review of record set to `CHANGES_REQUIRED` at `f9cad78`. |
+| 3. The supersession note named neither `AC-AI-53` nor `AC-AI-57`. | Both acceptance-matrix rows are now named with their quoted fragments in the note above. |
+| 4. `SEMI-MANUAL-AI-WORKFLOW.md:120` still described `.claude`, and `TASK-AI-07.md:56` was left. | Line 120 now names the dedicated 9Router profile; leaving `TASK-AI-07.md` is recorded as the deliberate one-Work-Item-per-Pull-Request choice. |
+
+Findings 1, 3 and 4 were repaired on the stacked branch of Pull Request #110, which an independent
+review passed at exact HEAD `5eb43300998fae26efb82ec59f0e8c0b5af14d71` (comment 5740689873) and
+which then merged into `main` as `29a48da490cb908a6d0bb598b7a218b633835912`. Finding 2 is repaired in
+the Pull Request body, which is not repository content. This branch is now merged up to that record,
+and the merge adopted `origin/main`'s file verbatim: `git diff --cached --quiet origin/main` exited 0
+before the merge was committed, so the merge reverts nothing that `main` already carries.
+
+This repair adds no behavior and changes no script. It re-records the machine state, which drifted
+again after the review: the operator file was last modified 2026-09-19 16:53 local and now also
+carries a top-level `theme` key, so the dated observation and the acceptance row were refreshed from
+a first-hand read of that file and a first-hand run of the gate's own validator, both quoted in the
+acceptance-evidence table above. The fresh command output for this repair (documentation validation,
+the ai-brain, ai-guard and ai-dashboard suites, the supervisor behavioral tests, the Pull Request
+contract validator and the profile probe) is recorded in Pull Request #89's body.
+
+Residual: Pull Request #89 is closed, and its workflows run only on `pull_request` and on pushes to
+`main`, so no check runs at this head. Reopening it, or routing the same commit through the
+controller, is what makes this record reviewable again; triggering that gate belongs to the operator.
