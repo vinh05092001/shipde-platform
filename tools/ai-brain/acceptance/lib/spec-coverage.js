@@ -122,6 +122,105 @@ function identityMismatches(rows, root) {
     .filter((entry) => !entry.identity.matches);
 }
 
+/** One register line, read back as a single row by the canonical parser. */
+function parseOneRow(headerLine, line) {
+  if (!line) return null;
+  try {
+    const parsed = parseRegisterCsv(headerLine + '\n' + line, null);
+    return Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+/** An RFC 4180 quoted cell. */
+function csvCell(value) {
+  return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"';
+}
+
+/**
+ * The register's own column names, in order, read with the canonical parser.
+ *
+ * `parseRegisterCsv` appends a *derived* `assigned_author` key that is not a CSV
+ * column (tools/ai-dashboard/register-adapter.js:186), so the keys of a parsed row
+ * cannot be used to write a row back — that would add a phantom cell and shift
+ * nothing while lying about what the register holds. Feeding the header line to
+ * the parser as if it were a data row makes each column answer with its own name,
+ * so a column is anything that round-trips its own label and every derived key is
+ * left out. If a real column is ever named `assigned_author` it still round-trips
+ * and is still written, which is the correct answer.
+ */
+function registerColumns(headerLine) {
+  const probe = parseOneRow(headerLine, headerLine);
+  if (!probe) return null;
+  const columns = Object.keys(probe).filter((name) => probe[name] === name);
+  return columns.length > 0 ? columns : null;
+}
+
+/**
+ * The single register line that declares `row`, located by the pair
+ * (`delivery_order`, `work_item_id`) rather than by a substring match on the id.
+ *
+ * A Work Item id appears in the `dependencies` cell of every row that waits for
+ * it, so a substring match can land on a different row's line and tamper with
+ * that one instead. `delivery_order` is unique per register (the documentation
+ * validator enforces it), and pairing it with the id means an ambiguous or
+ * missing line is reported rather than guessed at.
+ *
+ * Returns `{ index, line, row }`, or null when the line is not uniquely found.
+ */
+function registerLineFor(text, row) {
+  const lines = String(text).split(/\r?\n/);
+  const header = lines[0];
+  const found = [];
+  lines.forEach((line, index) => {
+    if (index === 0) return;
+    const parsed = parseOneRow(header, line);
+    if (
+      parsed &&
+      parsed.delivery_order === row.delivery_order &&
+      parsed.work_item_id === row.work_item_id
+    ) {
+      found.push({ index, line, row: parsed });
+    }
+  });
+  return found.length === 1 ? found[0] : null;
+}
+
+/**
+ * A copy of register `text` in which `row`'s named columns carry new values.
+ *
+ * Every other cell of every other row is rewritten from what the canonical parser
+ * read back, so `changes` is the only difference between the copy and the
+ * original — which is what lets a caller assert that a negative proof changed
+ * exactly one thing. Returns `{ text, line, columns }`, or null when the row's
+ * line cannot be found uniquely, the copy does not re-read as the same row, or
+ * `changes` names a column the register does not carry. It never writes a file;
+ * the caller places the returned text under os.tmpdir().
+ *
+ * Passing no changes returns the row's own line rewritten from the parsed cells,
+ * which is the round-trip control the acceptance rows run first: a copy that does
+ * not re-read identically cannot support a claim about the one thing changed in it.
+ */
+function tamperRegisterRow(text, row, changes) {
+  const lines = String(text).split(/\r?\n/);
+  const columns = registerColumns(lines[0]);
+  if (!columns || !row) return null;
+  const wanted = changes || {};
+  const unknown = Object.keys(wanted).filter((column) => !columns.includes(column));
+  if (unknown.length > 0) return null;
+  const located = registerLineFor(text, row);
+  if (!located) return null;
+  const next = lines.slice();
+  next[located.index] = columns
+    .map((column) => csvCell(column in wanted ? wanted[column] : located.row[column]))
+    .join(',');
+  const reread = parseOneRow(lines[0], next[located.index]);
+  if (!reread || reread.delivery_order !== row.delivery_order) return null;
+  if (reread.work_item_id !== row.work_item_id) return null;
+  return { text: next.join('\r\n'), line: next[located.index], columns };
+}
+
 module.exports = {
   REGISTER_PATH,
   WORK_ITEM_ID_CELL,
@@ -133,4 +232,6 @@ module.exports = {
   specifiedRows,
   unspecifiedRows,
   identityMismatches,
+  registerLineFor,
+  tamperRegisterRow,
 };

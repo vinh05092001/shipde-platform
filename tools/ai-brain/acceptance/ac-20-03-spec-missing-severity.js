@@ -12,6 +12,12 @@
 //
 // Uses the real reconciler's SPEC_MISSING rule, not a private copy of it, and reads
 // the register through the same canonical reader the coverage rule uses.
+//
+// The register line carrying each rung's status is located by the (delivery_order,
+// work_item_id) pair, and a tampered copy is accepted only if exactly that line
+// changed. A Work Item ID also sits in the `dependencies` cell of every row waiting
+// for it, so locating the line by substring can tamper with another row's status and
+// still read back a plausible answer.
 
 const fs = require('fs');
 const path = require('path');
@@ -19,7 +25,13 @@ const os = require('os');
 // The register path and its reader come from the module that already owns the
 // coverage rule: a second REGISTER_PATH or a direct call to the CSV parser here
 // would be a second answer to what the register says.
-const { REGISTER_PATH, registerRows, specExists } = require('./lib/spec-coverage');
+const {
+  REGISTER_PATH,
+  registerLineFor,
+  registerRows,
+  specExists,
+  tamperRegisterRow,
+} = require('./lib/spec-coverage');
 const { reconcileRegister } = require('../reconcile');
 
 const root = process.cwd();
@@ -69,6 +81,78 @@ const STATUS_LADDER = [
   { status: 'MERGED', severity: 'error' },
 ];
 
+/** A register cell as text, so a value that is absent and one that is empty compare equal. */
+function cellText(value) {
+  return String(value == null ? '' : value);
+}
+
+/** The line positions where two texts differ, or null if they differ in size. */
+function changedLines(before, after) {
+  const left = String(before).split(/\r?\n/);
+  const right = String(after).split(/\r?\n/);
+  if (left.length !== right.length) return null;
+  const diff = [];
+  left.forEach((line, index) => {
+    if (line !== right[index]) diff.push(index);
+  });
+  return diff;
+}
+
+/**
+ * A copy of the whole register in which the probe row's own line carries `changes`.
+ *
+ * The line is located by the (delivery_order, work_item_id) pair rather than by a
+ * substring match on the id: that id also sits in the `dependencies` cell of every
+ * row waiting for it, and the `status` cell being replaced is not unique to one row
+ * either, so a substring match can find one row and tamper with another. The copy is
+ * then rejected unless it altered exactly that line and nothing else - a writer that
+ * quietly reflowed the register would otherwise let a rung's severity be attributed
+ * to the status cell when it was the writer that moved something else.
+ */
+function registerCopy(changes, label) {
+  const located = registerLineFor(registerText, blockedRow);
+  if (!located) {
+    throw new Error(
+      `CONTROL_FAILURE: the register line for ${blockedRow.work_item_id} is not uniquely found`
+    );
+  }
+  const copy = tamperRegisterRow(registerText, blockedRow, changes);
+  if (!copy) {
+    throw new Error(
+      `CONTROL_FAILURE: the ${label} copy of ${blockedRow.work_item_id} cannot be built`
+    );
+  }
+  // A change that asks for the value the line already carries rewrites nothing -
+  // the ladder below starts at the probe row's own status. Anything else has to
+  // alter exactly the located line and no other.
+  const expected = copy.line === located.line ? [] : [located.index];
+  const diff = changedLines(registerText, copy.text);
+  if (!diff || JSON.stringify(diff) !== JSON.stringify(expected)) {
+    throw new Error(
+      `CONTROL_FAILURE: the ${label} copy altered lines ${JSON.stringify(diff)} ` +
+        `where ${JSON.stringify(expected)} was the whole of the tampering`
+    );
+  }
+  const changedRow = registerRows(copy.text).find(
+    (candidate) => candidate.work_item_id === blockedRow.work_item_id
+  );
+  if (!changedRow) {
+    throw new Error(
+      `CONTROL_FAILURE: the ${label} copy does not re-read ${blockedRow.work_item_id} at all`
+    );
+  }
+  const unapplied = Object.entries(changes).filter(
+    ([column, value]) => String(changedRow[column]) !== String(value)
+  );
+  if (unapplied.length > 0) {
+    throw new Error(
+      `CONTROL_FAILURE: the ${label} copy re-reads ${unapplied.map(([c]) => c).join(', ')} ` +
+        'as something other than the value asked for'
+    );
+  }
+  return copy;
+}
+
 /**
  * The severity the reconciler reports for SPEC_MISSING when the register records the
  * probe row at `status`.
@@ -82,23 +166,11 @@ const STATUS_LADDER = [
  * before the caller reports it.
  */
 function severityAt(status) {
-  const line = registerText
-    .split(/\r?\n/)
-    .find((candidate) => candidate.includes('"' + blockedRow.work_item_id + '"'));
-  if (!line || !line.includes('"' + blockedRow.status + '"')) {
-    throw new Error(
-      `CONTROL_FAILURE: the register line for ${blockedRow.work_item_id} was not found`
-    );
-  }
-  const tamperedLine = line.replace('"' + blockedRow.status + '"', '"' + status + '"');
+  const copy = registerCopy({ status }, `status=${status}`);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-ac-20-03-'));
   try {
     const tmpRegister = path.join(tmpDir, 'register.csv');
-    fs.writeFileSync(
-      tmpRegister,
-      registerText.replace(line, () => tamperedLine),
-      'utf8'
-    );
+    fs.writeFileSync(tmpRegister, copy.text, 'utf8');
     const tamperedRow = registerRows(fs.readFileSync(tmpRegister, 'utf8')).find(
       (row) => row.work_item_id === blockedRow.work_item_id
     );
@@ -145,6 +217,35 @@ if (realFindings[0].severity !== 'info') {
 
 console.log(
   `CONTROL: ${blockedRow.work_item_id} status=${blockedRow.status} -> SPEC_MISSING severity=info OK`
+);
+
+// CONTROL: the copy mechanism is inert before it is interesting. Rewriting the probe
+// row's line with nothing changed has to produce a register that re-reads that row
+// exactly as it stands, or a rung below could move because the writer disturbed
+// something other than the status cell it names.
+try {
+  const roundTrip = registerCopy({}, 'round-trip');
+  const reread = registerRows(roundTrip.text);
+  const sameRow = reread.find((row) => row.work_item_id === blockedRow.work_item_id);
+  if (reread.length !== rows.length) {
+    throw new Error(
+      `CONTROL_FAILURE: the round-trip copy holds ${reread.length} rows ` +
+        `where the register holds ${rows.length}`
+    );
+  }
+  if (JSON.stringify(sameRow) !== JSON.stringify(blockedRow)) {
+    throw new Error(
+      `CONTROL_FAILURE: the round-trip copy does not re-read ${blockedRow.work_item_id} unchanged`
+    );
+  }
+} catch (err) {
+  console.error(err.message);
+  process.exit(2);
+}
+
+console.log(
+  `AC-AI-20-03 CONTROL: the copy mechanism round-trips ${blockedRow.work_item_id}'s register line ` +
+    `and re-reads all ${rows.length} rows unchanged, so a rung's severity belongs to its status cell`
 );
 
 // Walk every rung of the ladder over the one real row. Each rung is a COPY of the
