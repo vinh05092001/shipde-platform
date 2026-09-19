@@ -22,12 +22,7 @@ const {
   reviewGradeOf,
   isCapable,
 } = require('../fitness');
-const {
-  ACCESS_TYPE,
-  ACCESS_RANK,
-  expandOfferings,
-  selectOffering,
-} = require('../offerings');
+const { ACCESS_TYPE, ACCESS_RANK, expandOfferings, selectOffering } = require('../offerings');
 
 const NOW = new Date('2026-09-18T12:00:00Z');
 
@@ -76,14 +71,26 @@ describe('Benchmark external evidence (TASK-AI-46)', () => {
   });
 
   test('a model with no record is UNKNOWN, never weak', () => {
-    const records = [{ model_id: 'known-model', benchmark: 'SWE-bench', score: 50, source_url: 'https://example.com', checked_on: '2026-08-01' }];
+    const records = [
+      {
+        model_id: 'known-model',
+        benchmark: 'SWE-bench',
+        score: 50,
+        source_url: 'https://example.com',
+        checked_on: '2026-08-01',
+      },
+    ];
     const match = findBenchmarkEvidence(records, 'completely-unknown-model');
     assert.equal(match, null);
 
     const cap = resolveCapability({ id: 'completely-unknown-model' }, { benchmarks: records });
     assert.equal(cap.grade, 'UNKNOWN');
     assert.notEqual(cap.grade, Difficulty.MECHANICAL, 'must never default unrecorded to weak');
-    assert.notEqual(cap.grade, Difficulty.STANDARD, 'must never default unrecorded to standard in capability resolution');
+    assert.notEqual(
+      cap.grade,
+      Difficulty.STANDARD,
+      'must never default unrecorded to standard in capability resolution'
+    );
   });
 });
 
@@ -162,7 +169,13 @@ describe('Separate capability from access (TASK-AI-46)', () => {
         provider: 'cloud-provider',
         tier: 1,
         access: ACCESS_TYPE.PAY_PER_CALL,
-        models: [{ model: 'weak-paid-model', codingGrade: Difficulty.MECHANICAL, cost: { inputPerMillion: 10 } }],
+        models: [
+          {
+            model: 'weak-paid-model',
+            codingGrade: Difficulty.MECHANICAL,
+            cost: { inputPerMillion: 10 },
+          },
+        ],
       },
     ];
 
@@ -327,9 +340,7 @@ describe('Benchmark staleness and completeness audit (TASK-AI-46)', () => {
       checked_on: '2026-08-15',
     };
 
-    const offerings = [
-      { model: 'gemini-3.8-flash-high', modelVersion: '20260201' },
-    ];
+    const offerings = [{ model: 'gemini-3.8-flash-high', modelVersion: '20260201' }];
 
     const res = auditBenchmarks([record], offerings, { now: NOW });
     assert.equal(res.summary.warn, 1);

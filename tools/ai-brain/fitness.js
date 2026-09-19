@@ -137,7 +137,11 @@ function resolveGrade(offering, options) {
   const prodGrade = extractGradeFromEvidence(prod);
   if (prodGrade !== null) {
     const r = { class: prodGrade, graded: true, source: GRADE_SOURCE.PRODUCTION };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.PRODUCTION, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.PRODUCTION,
+      enumerable: false,
+      writable: true,
+    });
     return r;
   }
 
@@ -146,7 +150,11 @@ function resolveGrade(offering, options) {
   const localGrade = extractGradeFromEvidence(local);
   if (localGrade !== null) {
     const r = { class: localGrade, graded: true, source: GRADE_SOURCE.LOCAL };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.LOCAL, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.LOCAL,
+      enumerable: false,
+      writable: true,
+    });
     return r;
   }
 
@@ -163,7 +171,11 @@ function resolveGrade(offering, options) {
   const extGrade = extractGradeFromEvidence(ext);
   if (extGrade !== null) {
     const r = { class: extGrade, graded: true, source: GRADE_SOURCE.EXTERNAL };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.EXTERNAL, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.EXTERNAL,
+      enumerable: false,
+      writable: true,
+    });
     return r;
   }
 
@@ -177,11 +189,7 @@ function resolveGrade(offering, options) {
         graded: false,
         source: GRADE_SOURCE.ASSUMED,
         declared,
-        error:
-          'out-of-ladder grade: ' +
-          (o.id || 'unknown') +
-          ' declares ' +
-          declared,
+        error: 'out-of-ladder grade: ' + (o.id || 'unknown') + ' declares ' + declared,
       };
       Object.defineProperty(r, 'layer', { value: null, enumerable: false, writable: true });
       return r;
@@ -360,7 +368,11 @@ function resolveReviewGrade(offering, options) {
   const prod = extractReviewGradeFromEvidence(o.productionResults || opts.productionResults);
   if (prod !== null) {
     const r = { class: prod, graded: true, source: GRADE_SOURCE.PRODUCTION };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.PRODUCTION, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.PRODUCTION,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
     return r;
   }
@@ -369,7 +381,11 @@ function resolveReviewGrade(offering, options) {
   const local = extractReviewGradeFromEvidence(o.localEvaluation || opts.localEvaluation);
   if (local !== null) {
     const r = { class: local, graded: true, source: GRADE_SOURCE.LOCAL };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.LOCAL, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.LOCAL,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
     return r;
   }
@@ -378,7 +394,11 @@ function resolveReviewGrade(offering, options) {
   const ext = extractReviewGradeFromEvidence(o.externalEvidence || opts.externalEvidence);
   if (ext !== null) {
     const r = { class: ext, graded: true, source: GRADE_SOURCE.EXTERNAL };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.EXTERNAL, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.EXTERNAL,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
     return r;
   }
@@ -390,7 +410,11 @@ function resolveReviewGrade(offering, options) {
 
   if (declared === undefined || declared === null) {
     const r = { class: fallback, graded: false, source: GRADE_SOURCE.ASSUMED };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.INFERRED, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.INFERRED,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: true, enumerable: false, writable: true });
     return r;
   }
@@ -402,13 +426,13 @@ function resolveReviewGrade(offering, options) {
       graded: false,
       source: GRADE_SOURCE.ASSUMED,
       declared,
-      error:
-        'out-of-ladder review grade: ' +
-        (o.id || 'unknown') +
-        ' declares ' +
-        declared,
+      error: 'out-of-ladder review grade: ' + (o.id || 'unknown') + ' declares ' + declared,
     };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.INFERRED, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.INFERRED,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: true, enumerable: false, writable: true });
     return r;
   }

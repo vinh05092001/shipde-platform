@@ -93,9 +93,7 @@ function findBenchmarkEvidence(benchmarks, modelId, modelVersion) {
 
   for (const record of matches) {
     const grade =
-      record.grade ||
-      record.codingGrade ||
-      gradeFromBenchmark(record.benchmark, record.score);
+      record.grade || record.codingGrade || gradeFromBenchmark(record.benchmark, record.score);
     if (grade && (bestGrade === null || grade > bestGrade)) {
       bestGrade = grade;
       bestRecord = record;

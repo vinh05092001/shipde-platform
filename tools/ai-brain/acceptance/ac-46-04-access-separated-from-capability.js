@@ -42,7 +42,11 @@ if (degradedGrade === Difficulty.ARCHITECTURAL) {
   console.error('CONTROL_FAILED: conflated grader did not degrade free offering');
   process.exit(2);
 }
-console.log('CONTROL: detected conflation of access and capability (free strong model degraded to ' + degradedGrade + ')');
+console.log(
+  'CONTROL: detected conflation of access and capability (free strong model degraded to ' +
+    degradedGrade +
+    ')'
+);
 
 // MEASUREMENT: Real offerings and selection
 const accounts = [
@@ -65,7 +69,14 @@ const accounts = [
     provider: 'api',
     tier: 2,
     access: ACCESS_TYPE.PAY_PER_CALL,
-    models: [{ model: 'gemini-pro', codingGrade: Difficulty.ARCHITECTURAL, quality: 90, cost: { inputPerMillion: 10 } }],
+    models: [
+      {
+        model: 'gemini-pro',
+        codingGrade: Difficulty.ARCHITECTURAL,
+        quality: 90,
+        cost: { inputPerMillion: 10 },
+      },
+    ],
   },
 ];
 
@@ -80,7 +91,9 @@ if (!freeOff || freeOff.access !== ACCESS_TYPE.FREE) {
   process.exit(1);
 }
 if (!planOff || planOff.access !== ACCESS_TYPE.INCLUDED_IN_PAID_PLAN) {
-  console.error('ACCESS_SEPARATION_VIOLATION: plan offering missing ACCESS_TYPE.INCLUDED_IN_PAID_PLAN');
+  console.error(
+    'ACCESS_SEPARATION_VIOLATION: plan offering missing ACCESS_TYPE.INCLUDED_IN_PAID_PLAN'
+  );
   process.exit(1);
 }
 if (!paidOff || paidOff.access !== ACCESS_TYPE.PAY_PER_CALL) {
@@ -90,7 +103,10 @@ if (!paidOff || paidOff.access !== ACCESS_TYPE.PAY_PER_CALL) {
 
 // 2. Verify strong model reached through free source retains ARCHITECTURAL capability
 if (freeOff.codingGrade !== Difficulty.ARCHITECTURAL) {
-  console.error('ACCESS_SEPARATION_VIOLATION: strong free offering was not graded ARCHITECTURAL: ' + freeOff.codingGrade);
+  console.error(
+    'ACCESS_SEPARATION_VIOLATION: strong free offering was not graded ARCHITECTURAL: ' +
+      freeOff.codingGrade
+  );
   process.exit(1);
 }
 
@@ -108,7 +124,10 @@ const sel1 = selectOffering({
 });
 
 if (!sel1.selected || sel1.selected.id !== freeOff.id) {
-  console.error('ACCESS_SEPARATION_VIOLATION: free offering was not chosen first: ' + (sel1.selected && sel1.selected.id));
+  console.error(
+    'ACCESS_SEPARATION_VIOLATION: free offering was not chosen first: ' +
+      (sel1.selected && sel1.selected.id)
+  );
   process.exit(1);
 }
 
@@ -120,9 +139,14 @@ const sel2 = selectOffering({
 });
 
 if (!sel2.selected || sel2.selected.id !== planOff.id) {
-  console.error('ACCESS_SEPARATION_VIOLATION: included-in-paid-plan was not chosen before pay-per-call: ' + (sel2.selected && sel2.selected.id));
+  console.error(
+    'ACCESS_SEPARATION_VIOLATION: included-in-paid-plan was not chosen before pay-per-call: ' +
+      (sel2.selected && sel2.selected.id)
+  );
   process.exit(1);
 }
 
-console.log('ACCESS_SEPARATED_FROM_CAPABILITY_VERIFIED: access dimension independent of capability, cheapest access selected first');
+console.log(
+  'ACCESS_SEPARATED_FROM_CAPABILITY_VERIFIED: access dimension independent of capability, cheapest access selected first'
+);
 process.exit(0);

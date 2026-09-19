@@ -182,6 +182,9 @@ node --test tools/ai-brain/test/*.test.js
 
 python docs/product-spec/scripts/validate_docs.py
 # Expected: Exit code 0, documentation validation passes
+
+npx prettier --check tools/ai-brain docs/product-spec/work-items/TASK-AI-46.md
+# Expected: Exit code 0, all matched files use Prettier code style (CI runs pnpm format:check)
 ```
 
 ## Codex review record
@@ -189,3 +192,4 @@ python docs/product-spec/scripts/validate_docs.py
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `HEAD` | `READY_FOR_CODEX` | Initial implementation of TASK-AI-46: external benchmark evidence, 3-layer precedence, UNKNOWN propagation, inferred review override, access dimension separation, and quota-aware rotation. |
+| 2 | `c5ad4a5` | `CHANGES_REQUIRED` | B1: the 11 `tools/ai-brain` files failing `pnpm format:check` were reformatted with Prettier 3.9.6 (whitespace and line wrapping only, no behavior change). B2: PR evidence now lists only the commands actually run, with their exact results. |

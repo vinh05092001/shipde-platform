@@ -182,7 +182,12 @@ function expandOfferings(accounts, options) {
         // from `quality`: quality ranks two models against each other, grade
         // says whether either may take the task at all.
         codingGrade,
-        reviewGrade: e.reviewGrade !== undefined ? Number(e.reviewGrade) : account.reviewGrade !== undefined ? Number(account.reviewGrade) : undefined,
+        reviewGrade:
+          e.reviewGrade !== undefined
+            ? Number(e.reviewGrade)
+            : account.reviewGrade !== undefined
+              ? Number(account.reviewGrade)
+              : undefined,
         // Full grade record with provenance: { class, graded, source, error? }
         gradeRecord,
         gradeProvenance,

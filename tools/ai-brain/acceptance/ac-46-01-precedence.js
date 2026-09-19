@@ -47,7 +47,11 @@ if (invertedResult.layer === EVIDENCE_LAYER.PRODUCTION) {
   console.error('CONTROL_FAILED: inverted resolver unexpectedly chose productionResults');
   process.exit(2);
 }
-console.log('CONTROL: inverted precedence rejected (incorrectly chose ' + invertedResult.layer + ' instead of productionResults)');
+console.log(
+  'CONTROL: inverted precedence rejected (incorrectly chose ' +
+    invertedResult.layer +
+    ' instead of productionResults)'
+);
 
 // MEASUREMENT: Real fitness module precedence evaluation
 const candidate = {
@@ -60,7 +64,13 @@ const candidate = {
 // 1. All three present: productionResults MUST win
 const r1 = resolveCapability(candidate);
 if (r1.grade !== Difficulty.ARCHITECTURAL || r1.layer !== EVIDENCE_LAYER.PRODUCTION) {
-  console.error('PRECEDENCE_VIOLATION: productionResults did not win when all three present: got ' + r1.layer + ' (' + r1.grade + ')');
+  console.error(
+    'PRECEDENCE_VIOLATION: productionResults did not win when all three present: got ' +
+      r1.layer +
+      ' (' +
+      r1.grade +
+      ')'
+  );
   process.exit(1);
 }
 
@@ -68,7 +78,13 @@ if (r1.grade !== Difficulty.ARCHITECTURAL || r1.layer !== EVIDENCE_LAYER.PRODUCT
 delete candidate.productionResults;
 const r2 = resolveCapability(candidate);
 if (r2.grade !== Difficulty.COMPLEX || r2.layer !== EVIDENCE_LAYER.LOCAL) {
-  console.error('PRECEDENCE_VIOLATION: localEvaluation did not win over externalEvidence: got ' + r2.layer + ' (' + r2.grade + ')');
+  console.error(
+    'PRECEDENCE_VIOLATION: localEvaluation did not win over externalEvidence: got ' +
+      r2.layer +
+      ' (' +
+      r2.grade +
+      ')'
+  );
   process.exit(1);
 }
 
@@ -76,7 +92,13 @@ if (r2.grade !== Difficulty.COMPLEX || r2.layer !== EVIDENCE_LAYER.LOCAL) {
 delete candidate.localEvaluation;
 const r3 = resolveCapability(candidate);
 if (r3.grade !== Difficulty.STANDARD || r3.layer !== EVIDENCE_LAYER.EXTERNAL) {
-  console.error('PRECEDENCE_VIOLATION: externalEvidence did not resolve: got ' + r3.layer + ' (' + r3.grade + ')');
+  console.error(
+    'PRECEDENCE_VIOLATION: externalEvidence did not resolve: got ' +
+      r3.layer +
+      ' (' +
+      r3.grade +
+      ')'
+  );
   process.exit(1);
 }
 

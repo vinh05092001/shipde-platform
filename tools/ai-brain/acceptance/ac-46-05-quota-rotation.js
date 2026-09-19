@@ -27,9 +27,24 @@ function buggySharedQuotaRotator(offerings, refusedOffering) {
 }
 
 const pool = [
-  { id: 'acc-alpha::model-1', accountId: 'acc-alpha', model: 'model-1', codingGrade: Difficulty.COMPLEX },
-  { id: 'acc-alpha::model-2', accountId: 'acc-alpha', model: 'model-2', codingGrade: Difficulty.COMPLEX },
-  { id: 'acc-beta::model-3', accountId: 'acc-beta', model: 'model-3', codingGrade: Difficulty.COMPLEX },
+  {
+    id: 'acc-alpha::model-1',
+    accountId: 'acc-alpha',
+    model: 'model-1',
+    codingGrade: Difficulty.COMPLEX,
+  },
+  {
+    id: 'acc-alpha::model-2',
+    accountId: 'acc-alpha',
+    model: 'model-2',
+    codingGrade: Difficulty.COMPLEX,
+  },
+  {
+    id: 'acc-beta::model-3',
+    accountId: 'acc-beta',
+    model: 'model-3',
+    codingGrade: Difficulty.COMPLEX,
+  },
 ];
 
 const refused = pool[0];
@@ -38,7 +53,13 @@ if (buggySelected.accountId !== refused.accountId) {
   console.error('CONTROL_FAILED: buggy rotator did not select sibling on shared account');
   process.exit(2);
 }
-console.log('CONTROL: detected failure to skip shared quota (buggy rotator picked sibling ' + buggySelected.id + ' sharing ' + refused.accountId + ')');
+console.log(
+  'CONTROL: detected failure to skip shared quota (buggy rotator picked sibling ' +
+    buggySelected.id +
+    ' sharing ' +
+    refused.accountId +
+    ')'
+);
 
 // MEASUREMENT: Real quota-aware rotation in selectOffering
 const headrooms = {
@@ -55,7 +76,9 @@ const initial = selectOffering({
 });
 
 if (!initial.selected || initial.selected.id !== 'acc-alpha::model-1') {
-  console.error('ROTATION_VIOLATION: initial selection failed: ' + (initial.selected && initial.selected.id));
+  console.error(
+    'ROTATION_VIOLATION: initial selection failed: ' + (initial.selected && initial.selected.id)
+  );
   process.exit(1);
 }
 
@@ -75,7 +98,11 @@ if (!rotated.selected) {
 }
 
 if (rotated.selected.accountId === 'acc-alpha') {
-  console.error('ROTATION_VIOLATION: rotation selected ' + rotated.selected.id + ' which shares exhausted quota with acc-alpha');
+  console.error(
+    'ROTATION_VIOLATION: rotation selected ' +
+      rotated.selected.id +
+      ' which shares exhausted quota with acc-alpha'
+  );
   process.exit(1);
 }
 
@@ -87,9 +114,14 @@ if (rotated.selected.id !== 'acc-beta::model-3') {
 // Verify skippedExhausted records both offerings from acc-alpha
 const skipped = rotated.skippedExhausted.map((o) => o.id);
 if (!skipped.includes('acc-alpha::model-1') || !skipped.includes('acc-alpha::model-2')) {
-  console.error('ROTATION_VIOLATION: skippedExhausted did not contain both shared-quota models: ' + JSON.stringify(skipped));
+  console.error(
+    'ROTATION_VIOLATION: skippedExhausted did not contain both shared-quota models: ' +
+      JSON.stringify(skipped)
+  );
   process.exit(1);
 }
 
-console.log('QUOTA_ROTATION_VERIFIED: on quota refusal, rotation re-selects inside capable set and skips all sources sharing exhausted quota');
+console.log(
+  'QUOTA_ROTATION_VERIFIED: on quota refusal, rotation re-selects inside capable set and skips all sources sharing exhausted quota'
+);
 process.exit(0);

@@ -46,7 +46,10 @@ const realRecords = loadBenchmarks(BENCHMARKS_JSON);
 const realAudit = auditBenchmarks(realRecords);
 
 if (realAudit.summary.error > 0) {
-  console.error('AUDIT_VIOLATION: production benchmarks.json contains errors: ' + JSON.stringify(realAudit.findings));
+  console.error(
+    'AUDIT_VIOLATION: production benchmarks.json contains errors: ' +
+      JSON.stringify(realAudit.findings)
+  );
   process.exit(1);
 }
 
@@ -86,5 +89,7 @@ if (!mismatchWarn) {
   process.exit(1);
 }
 
-console.log('STALENESS_AUDIT_VERIFIED: benchmark staleness and model version mismatch are warnings; missing source URL or checked_on are errors');
+console.log(
+  'STALENESS_AUDIT_VERIFIED: benchmark staleness and model version mismatch are warnings; missing source URL or checked_on are errors'
+);
 process.exit(0);
