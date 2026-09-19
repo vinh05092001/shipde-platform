@@ -11,7 +11,7 @@
 | Dependencies    | `TASK-AI-10` (not yet merged into `origin/main`)                                                                                                                              |
 | Assigned author | `GEMINI`                                                                                                                                                                      |
 | Review status   | `NOT_REVIEWED`                                                                                                                                                                |
-| Merge PR        | `#pending`                                                                                                                                                                    |
+| Merge PR        | `#120`                                                                                                                                                                        |
 
 ## Problem
 
