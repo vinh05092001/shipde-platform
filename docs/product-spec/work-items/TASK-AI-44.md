@@ -6,15 +6,15 @@
 |---|---|
 | Work Item ID | `TASK-AI-44` |
 | Feature ID | `N/A` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | `178` |
 | Dependencies | `TASK-AI-17` |
-| Assigned author | `GEMINI` |
+| Assigned author | `GEMINI (repaired from CLAUDE watchdog fallback in PR #108)` |
 | Risk | `MEDIUM` |
-| Allowed paths | `scripts/ai/control.ps1`, `scripts/ai/doctor.ps1`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ecosystem-manifest.json`, `docs/product-spec/work-items/TASK-AI-44.md` (added by this Work Item: the Pull Request contract requires the registered Work Item file to be updated with the delivery, so the file is listed here and the addition is disclosed) |
+| Allowed paths | `scripts/ai/control.ps1`, `scripts/ai/doctor.ps1`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ecosystem-manifest.json`, `docs/product-spec/work-items/TASK-AI-44.md`, `tools/ai-brain/acceptance/ac-44-01-doctor-unverified-arms.js` (added to satisfy Codex review round 1 Gap 1: deterministic durable test coverage of the repaired doctor.ps1 probe arms; addition disclosed in Work Item and PR body) |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/task-ai-44-router-split` |
-| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/92 |
+| Branch | `fix/task-ai-44-unverified-key` |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/108 |
 
 ## Delivery note (historical): the first delivery shipped on the TASK-AI-16 branch
 
@@ -147,15 +147,16 @@ None. No schema, migration or endpoint changes.
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
 | `AC-AI-44-01` | Read `control.ps1` for the local gateway | No symbol names it AgentRouter | grep output |
-| `AC-AI-44-02` | Run `doctor.ps1` with the current dead key | AgentRouter reported unavailable, marked as a failure | doctor output |
-| `AC-AI-44-03` | Run `doctor.ps1` with a working key | AgentRouter reported available | doctor output |
+| `AC-AI-44-02` | Run `doctor.ps1` with unverified key probe outcomes | AgentRouter reported unavailable, marked as a failure | doctor output / `node tools/ai-brain/acceptance/ac-44-01-doctor-unverified-arms.js` (durable gate covering timeout, unexpected output, and probe exception arms) |
+| `AC-AI-44-03` | Run `doctor.ps1` with a working key | AgentRouter reported available (`AUTHENTICATED via deepseek-v4-flash`), cached replay confirmed | doctor output |
 | `AC-AI-44-04` | Run the controller's existing self-tests | No behavioural change | test output |
-| `AC-AI-44-05` | Search every output path | The key appears nowhere | grep output |
+| `AC-AI-44-05` | Search every output path and test cache/failure payloads | The key appears nowhere, zero secret leaks | grep output / `node tools/ai-brain/acceptance/ac-44-01-doctor-unverified-arms.js` |
 
 ## Verification commands
 
 ```
-pwsh -NoProfile -File scripts/ai/doctor.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ai/doctor.ps1
+node tools/ai-brain/acceptance/ac-44-01-doctor-unverified-arms.js
 node tools/ai-brain/cli.js manifest
 node tools/ai-brain/cli.js prove --tests "node tools/ai-brain/test/review-lane.test.js"
 ```
@@ -164,7 +165,7 @@ node tools/ai-brain/cli.js prove --tests "node tools/ai-brain/test/review-lane.t
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `<sha>` | `<PASS/CHANGES_REQUIRED/BLOCKED>` | `<links>` |
+| 1 | `7c5485eb174b6234df2998d4eaa2383a41870aa1` | `CHANGES_REQUIRED` | [Comment 5740392204](https://github.com/vinh05092001/shipde-platform/pull/108#issuecomment-5740392204): Gaps 1-4 resolved: (1) added deterministic durable gate `tools/ai-brain/acceptance/ac-44-01-doctor-unverified-arms.js` testing all probe arms, cached replay, and key isolation; (2) clarified PR #75 supersession and residual scope; (3) advanced delivery record in Work Item (status, branch `fix/task-ai-44-unverified-key`, PR #108, author); (4) recorded real Windows doctor execution evidence. |
 
 ## Follow-up delivery: an unverified key is not a configured key
 
@@ -175,8 +176,15 @@ deliberately invalid key makes the probe time out rather than print a 401, so
 a dead key read as a configured fallback, contrary to `AI-44-R01` and
 `AI-44-R02`. Each of those outcomes now reports `UNAVAILABLE: key present but
 unverified` and adds a failure, and the cached verdict carries the failure
-forward. The fix was first written on the superseded branch
-`fix/task-ai-44-gateway-naming` (Pull Request #75) and is carried here alone.
+forward.
+
+This delivery is carried on branch `fix/task-ai-44-unverified-key` (Pull
+Request #108, commit `7c5485eb174b6234df2998d4eaa2383a41870aa1`, repaired by
+GEMINI), superseding Pull Request #75 (`fix/task-ai-44-gateway-naming`).
+PR #75's residual scope outside TASK-AI-44 (`start-agent-orchestrator.ps1`
+rename, its `control.ps1:3304` call site, and `AI-TOOLCHAIN-DECISIONS.md`
+gateway-wording rewrite) belongs to a follow-up Work Item for
+`start-agent-orchestrator.ps1`.
 
 ## Residual limitations
 
