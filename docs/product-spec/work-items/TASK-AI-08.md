@@ -300,6 +300,35 @@ decomposition, and `main`'s function names already have merged dependents writte
 against them (`TASK-AI-09`, merge commit `cd2a45d`). No supervisor behavior is
 claimed or changed by this Pull Request.
 
+### Scope of this repair against the `TASK-AI-39` inventory
+
+Two limits must be stated plainly, because the exit-code convention above is a
+repair of a known defect class and is not yet the state of the repository.
+
+**This repairs three of the fourteen scripts that `main` already listed.**
+`docs/product-spec/work-items/TASK-AI-39.md` (the "Same shape outside this Work
+Item" paragraph) inventories the identical failure-path-exits-`0` shape in
+fourteen acceptance scripts and states that they are listed, not repaired, so
+that each requires its own Work Item and review. `ac-08-02-status-divergence.js`,
+`ac-08-04-dependency-unproven.js` and `ac-08-06-repair-budget-unbounded.js` are
+three of those fourteen. This Pull Request repairs exactly those three scripts
+and nothing else. Because `AGENTS.md` binds one Pull Request to one Work Item and
+the contract gate rejects a PR that edits a second Work Item file, this Pull
+Request does not edit the `TASK-AI-39` inventory. Removing these three scripts
+from that not-repaired list is left to the owner of `TASK-AI-39`, so that
+inventory is knowingly stale with respect to these three as of this head.
+
+**The remaining instances are declared open, not fixed.** An independent scan of
+`tools/ai-brain/acceptance/` at this head finds the same missed-tamper-exits-`0`
+branch still present in twenty-two scripts: `ac-07-04`, `ac-07-06`, `ac-07-13`,
+`ac-09-02`, `ac-09-04`, `ac-09-06`, `ac-27-02`, `ac-27-04`, `ac-27-06`,
+`ac-27-08`, `ac-29-02`, `ac-29-04`, `ac-29-08`, `ac-33-02`, `ac-35-06`,
+`ac-37-07`, `ac-38-08`, `ac-38-16`, `ac-41-02`, `ac-41-04`, `ac-41-06`,
+`ac-41-08`. Every one of these remains open and, per the `TASK-AI-39`
+instruction quoted above, each still requires its own Work Item and review. The
+convention this Pull Request applies to the three `ac-08` proofs is the target,
+not a claim that the repository already follows it.
+
 ## Residual limitations
 
 - Exact failure-evidence capture, the per-exact-HEAD repair budget and the
