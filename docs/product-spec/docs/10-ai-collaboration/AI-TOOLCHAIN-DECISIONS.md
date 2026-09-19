@@ -68,20 +68,22 @@ AgentRouter provides Claude model access under two separate topologies:
 
 ### Gateway routing record (TASK-AI-44)
 
-Two gateways exist and they are not interchangeable. The name `AgentRouter` is reserved for the cloud endpoint; the local endpoint is `9Router`. The names in code follow this table.
+Two gateways exist and they are not interchangeable. The names in code follow this table; `AgentRouter` names only the cloud endpoint.
 
-| Gateway | Endpoint | Credential | Code names in this repository | Serves |
+| Gateway | Endpoint | Credential | Code names | Serves |
 |---|---|---|---|---|
-| AgentRouter (cloud) | `https://agentrouter.org/` (no `/v1`) | `AGENTROUTER_API_KEY`, User environment | `doctor.ps1` AgentRouter credential probe | Manual Claude Code business/solution analysis; the Claude and Codex fallback route |
-| 9Router (local) | `http://localhost:20128/v1` | local token | `$script:NineRouterProfile`, `$script:NineRouterPort`, `Assert-ShipDeNineRouterProfile`, `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeNineRouterFailureSince` | Unattended AO sessions (`.claude` profile), Gemini, dsh |
+| AgentRouter (cloud) | `https://agentrouter.org/` (no `/v1`) | `AGENTROUTER_API_KEY`, User environment | `doctor.ps1` AgentRouter probe | Claude and Codex through the manual `.claude-orchestrator` profile |
+| 9Router (local) | `http://localhost:20128/v1` | local token | `$script:NineRouterProfile`, `$script:NineRouterPort`, `Assert-ShipDeNineRouterProfile`, `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeNineRouterFailureSince`, `start-agent-orchestrator.ps1 -NineRouterPort` | unattended AO sessions (`.claude` profile), Gemini, dsh |
 
 Fallback routing, as implemented:
 
-- **Codex review fails** -> `Invoke-ShipDeClaudeReviewFallback` runs the host-authenticated native Claude Code CLI after clearing `ANTHROPIC_BASE_URL` and `CLAUDE_CONFIG_DIR`. It uses neither gateway; it spends the Claude subscription quota. The function was previously named after AgentRouter, which it never called.
-- **An AO worker's provider fails** -> the local 9Router falls back across its configured upstreams; after every approved route is exhausted, TASK-AI-07 replaces the harness.
-- **AgentRouter credential** -> reported available only after a live probe authenticates (`AI-44-R01`); a rejected key is a `doctor.ps1` failure, never "configured" (`AI-44-R02`). Only a 16-character SHA-256 prefix of the key is cached; the key itself is never written to a log, report or dashboard (`AI-44-R04`).
+- **Codex review fails** -> `Invoke-ShipDeClaudeReviewFallback` runs the host-authenticated native Claude Code CLI with `ANTHROPIC_BASE_URL` and `CLAUDE_CONFIG_DIR` cleared. It uses neither gateway, and spends the Claude subscription quota. The function was previously named after AgentRouter, which it never called.
+- **An AO worker's provider fails** -> 9Router falls back across its configured upstreams; after every approved route is exhausted, TASK-AI-07 replaces the harness.
+- **AgentRouter credential** -> reported available only after a live probe authenticates (`AI-44-R01`); a rejected, timed-out or unverifiable key is a `doctor.ps1` failure, never "configured" (`AI-44-R02`). Only a 16-character SHA-256 prefix of the key is cached, to bind the verdict to the key; the key itself is never written to a log, report or dashboard (`AI-44-R04`).
 
-`scripts/ai/start-agent-orchestrator.ps1` still names its port parameter `-AgentRouterPort` while it addresses 9Router's port 20128; renaming that file is outside this Work Item's allowed paths (see the Work Item's Residual limitations).
+Earlier decision rows (`AI-SUP-06`, `AI-SUP-07`, `AI-SUP-11`) say "AgentRouter" where the runtime they describe is the local 9Router route; read them through this table. The rename changed no routing (`AI-44-R03`).
+
+`scripts/ai/start-agent-orchestrator.ps1` names its port parameter `-NineRouterPort` and its endpoint helper `Test-NineRouterEndpoint`; the old `-AgentRouterPort` name is still accepted as an alias, so a launcher outside the repository that still passes it keeps working (`AI-44-R03`).
 
 ### AO version pin raised to 0.13.0 (AI-AO-PIN-2026-09-16)
 
