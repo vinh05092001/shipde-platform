@@ -8,7 +8,8 @@
     "harness": "SWE-agent",
     "reasoning_setting": "high",
     "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/claude-opus-4-6-thinking",
-    "checked_on": "2026-08-15"
+    "checked_on": "2026-08-15",
+    "verified": false
   },
   {
     "model_id": "claude-sonnet-4-6",
@@ -19,7 +20,8 @@
     "harness": "SWE-agent",
     "reasoning_setting": "medium",
     "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/claude-sonnet-4-6",
-    "checked_on": "2026-08-15"
+    "checked_on": "2026-08-15",
+    "verified": false
   },
   {
     "model_id": "gemini-3.1-pro-high",
@@ -30,7 +32,8 @@
     "harness": "SWE-agent",
     "reasoning_setting": "high",
     "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/gemini-3.1-pro",
-    "checked_on": "2026-08-15"
+    "checked_on": "2026-08-15",
+    "verified": false
   },
   {
     "model_id": "gemini-3.8-flash-high",
@@ -41,7 +44,8 @@
     "harness": "SWE-agent",
     "reasoning_setting": "high",
     "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/gemini-3.8-flash",
-    "checked_on": "2026-08-15"
+    "checked_on": "2026-08-15",
+    "verified": false
   },
   {
     "model_id": "gpt-oss-120b-medium",
@@ -52,7 +56,8 @@
     "harness": "SWE-agent",
     "reasoning_setting": "medium",
     "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/gpt-oss-120b",
-    "checked_on": "2026-08-15"
+    "checked_on": "2026-08-15",
+    "verified": false
   },
   {
     "model_id": "cc/claude-opus-5",
@@ -63,7 +68,8 @@
     "harness": "SWE-agent",
     "reasoning_setting": "high",
     "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/claude-opus-5",
-    "checked_on": "2026-08-15"
+    "checked_on": "2026-08-15",
+    "verified": false
   },
   {
     "model_id": "cc/claude-sonnet-5",
@@ -74,6 +80,7 @@
     "harness": "SWE-agent",
     "reasoning_setting": "medium",
     "source_url": "https://github.com/swe-bench/SWE-bench/tree/main/docs/results/claude-sonnet-5",
-    "checked_on": "2026-08-15"
+    "checked_on": "2026-08-15",
+    "verified": false
   }
 ]

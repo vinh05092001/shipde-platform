@@ -76,6 +76,8 @@ function findBenchmarkEvidence(benchmarks, modelId, modelVersion) {
   const matches = benchmarks.filter((record) => {
     const rId = record.model_id || record.modelId || record.model;
     if (rId !== modelId) return false;
+    // A record whose source was not verified is not evidence (AI-46-R01).
+    if (record.verified === false) return false;
     if (modelVersion !== undefined && modelVersion !== null) {
       const rVer = record.model_version || record.modelVersion;
       if (rVer && rVer !== modelVersion) return false;
@@ -121,6 +123,9 @@ function findBenchmarkEvidence(benchmarks, modelId, modelVersion) {
  * - Missing checked_on date -> ERROR (BENCHMARK_MISSING_CHECKED_ON)
  * - Older than 90 days -> WARNING (BENCHMARK_STALE_RECORD)
  * - Model version does not match an offering -> WARNING (BENCHMARK_VERSION_MISMATCH)
+ * - Source marked verified: false -> WARNING (BENCHMARK_UNVERIFIED_SOURCE); it grades nothing
+ * - Duplicate (model_id, model_version, benchmark, benchmark_version) -> ERROR
+ *   (BENCHMARK_DUPLICATE_KEY); the tuple must be unique
  */
 function auditBenchmarks(benchmarks, offerings, options) {
   const opts = options || {};
@@ -140,10 +145,39 @@ function auditBenchmarks(benchmarks, offerings, options) {
     }
   }
 
+  const seenKeys = new Map();
   for (let i = 0; i < list.length; i++) {
     const record = list[i];
     const modelId = record.model_id || record.modelId || record.model || `entry-${i}`;
     const modelVersion = record.model_version || record.modelVersion;
+
+    const key = [
+      modelId,
+      modelVersion || '',
+      record.benchmark || '',
+      record.benchmark_version || record.benchmarkVersion || '',
+    ].join('|');
+    if (seenKeys.has(key)) {
+      findings.push({
+        id: modelId,
+        code: 'BENCHMARK_DUPLICATE_KEY',
+        severity: 'error',
+        message: `Benchmark record for ${modelId} repeats the key of record ${seenKeys.get(key)}`,
+        recordIndex: i,
+      });
+    } else {
+      seenKeys.set(key, i);
+    }
+
+    if (record.verified === false) {
+      findings.push({
+        id: modelId,
+        code: 'BENCHMARK_UNVERIFIED_SOURCE',
+        severity: 'warn',
+        message: `Benchmark record for ${modelId} has an unverified source and grades nothing`,
+        recordIndex: i,
+      });
+    }
     const sourceUrl = record.source_url || record.sourceUrl;
     const checkedOn = record.checked_on || record.checkedOn;
 

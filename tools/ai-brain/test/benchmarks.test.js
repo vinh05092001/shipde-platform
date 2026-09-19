@@ -291,6 +291,66 @@ describe('Separate capability from access (TASK-AI-46)', () => {
     assert.equal(rotated.selected.id, 'acc-2::model-c', 'must rotate to independent account acc-2');
     assert.equal(rotated.skippedExhausted.length, 2, 'both acc-1 offerings skipped');
   });
+
+  test('an offering with no headroom record is not selectable', () => {
+    const offerings = [
+      {
+        id: 'acc-1::model-a',
+        accountId: 'acc-1',
+        model: 'model-a',
+        codingGrade: Difficulty.COMPLEX,
+        access: ACCESS_TYPE.FREE,
+      },
+      {
+        id: 'acc-2::model-b',
+        accountId: 'acc-2',
+        model: 'model-b',
+        codingGrade: Difficulty.COMPLEX,
+        access: ACCESS_TYPE.PAY_PER_CALL,
+      },
+    ];
+    const res = selectOffering({
+      difficulty: Difficulty.COMPLEX,
+      offerings,
+      headrooms: { 'acc-2::model-b': { status: 'open' } },
+    });
+    assert.equal(res.selected.id, 'acc-2::model-b');
+  });
+});
+
+describe('Benchmark source verification and key uniqueness (TASK-AI-46)', () => {
+  const base = {
+    model_id: 'dup-model',
+    model_version: 'v1',
+    benchmark: 'SWE-bench Verified',
+    benchmark_version: 'v1.0',
+    source_url: 'https://example.com/1',
+    checked_on: '2026-09-01',
+  };
+
+  test('a record marked verified: false grades nothing and is reported', () => {
+    const records = [{ ...base, score: 75, verified: false }];
+    assert.equal(findBenchmarkEvidence(records, 'dup-model'), null);
+    const codes = auditBenchmarks(records, [], { now: NOW }).findings.map((f) => f.code);
+    assert.ok(codes.includes('BENCHMARK_UNVERIFIED_SOURCE'));
+  });
+
+  test('a repeated (model, version, benchmark, benchmark version) key is an audit error', () => {
+    const records = [
+      { ...base, score: 40 },
+      { ...base, score: 80, source_url: 'https://example.com/2' },
+    ];
+    const dup = auditBenchmarks(records, [], { now: NOW }).findings.filter(
+      (f) => f.code === 'BENCHMARK_DUPLICATE_KEY'
+    );
+    assert.equal(dup.length, 1);
+    assert.equal(dup[0].severity, 'error');
+    assert.equal(dup[0].recordIndex, 1);
+  });
+
+  test('every shipped benchmark record is marked unverified until a real source is recorded', () => {
+    for (const r of loadBenchmarks()) assert.strictEqual(r.verified, false);
+  });
 });
 
 describe('Benchmark staleness and completeness audit (TASK-AI-46)', () => {

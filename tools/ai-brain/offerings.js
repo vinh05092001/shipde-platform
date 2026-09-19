@@ -410,8 +410,8 @@ function selectOffering(options) {
     if (o.cooldownUntil && new Date(o.cooldownUntil).getTime() > now) {
       return false;
     }
-    const hd = headrooms[o.id];
-    if (hd && !isDispatchable(hd)) {
+    // A missing headroom record is unknown quota, never dispatchable (quota.js).
+    if (!isDispatchable(headrooms[o.id])) {
       return false;
     }
     return true;
