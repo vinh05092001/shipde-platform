@@ -254,49 +254,58 @@ describe('Single-writer claim guard', () => {
   });
 
   describe('Git hook installation lifecycle', () => {
-    test('reports not installed when core.hooksPath is unset', () => {
+    test('reports not installed when no hook exists and no override is set', () => {
       const repoDir = tempDir();
       execFileSync('git', ['init'], { cwd: repoDir, stdio: 'ignore' });
       const status = getHookStatus({ cwd: repoDir });
       assert.equal(status.installed, false);
       assert.equal(status.hooksPath, null);
+      assert.equal(status.hookManager, null);
+      assert.deepEqual(status.remediation, ['pnpm lefthook install']);
     });
 
-    test('installHook configures core.hooksPath to .githooks and getHookStatus detects it', () => {
+    test('a legacy .githooks override is detected but flagged for retirement', () => {
       const repoDir = tempDir();
       execFileSync('git', ['init'], { cwd: repoDir, stdio: 'ignore' });
-
-      const installRes = installHook({ cwd: repoDir });
-      assert.equal(installRes.success, true);
-      assert.equal(installRes.hooksPath, '.githooks');
-      // This repository has no .githooks/pre-commit, so the path is set and
-      // nothing guards anything. That is reported, not glossed over.
-      assert.equal(installRes.hookPresent, false);
-
-      const configured = getHookStatus({ cwd: repoDir });
-      assert.equal(configured.installed, false);
-      assert.equal(configured.configuredOnly, true);
-      assert.equal(configured.hooksPath, '.githooks');
-
-      // With the hook file in place the same configuration is a real install.
       fs.mkdirSync(path.join(repoDir, '.githooks'), { recursive: true });
       fs.writeFileSync(path.join(repoDir, '.githooks', 'pre-commit'), '#!/bin/sh\nexit 0\n');
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: repoDir });
+
       const status = getHookStatus({ cwd: repoDir });
-      assert.equal(status.installed, true);
+      assert.equal(status.installed, true, 'the hook behind the override does run');
+      assert.equal(status.hookManager, 'legacy-githooks');
+      assert.equal(status.legacyOverride, true);
       assert.equal(status.hooksPath, '.githooks');
+      assert.equal(status.configuredOnly, false);
     });
 
-    test('uninstallHook unsets core.hooksPath', () => {
+    test('installHook retires the override and installs the Lefthook hook', () => {
       const repoDir = tempDir();
       execFileSync('git', ['init'], { cwd: repoDir, stdio: 'ignore' });
-      installHook({ cwd: repoDir });
+      fs.mkdirSync(path.join(repoDir, '.githooks'), { recursive: true });
+      fs.writeFileSync(path.join(repoDir, '.githooks', 'pre-commit'), '#!/bin/sh\nexit 0\n');
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: repoDir });
+      fs.writeFileSync(
+        path.join(repoDir, 'lefthook.yml'),
+        'pre-commit:\n  commands:\n    writer-claim:\n      run: node tools/ai-guard/cli.js check\n'
+      );
 
-      const uninstallRes = uninstallHook({ cwd: repoDir });
-      assert.equal(uninstallRes.success, true);
+      const installRes = installHook({ cwd: repoDir });
+      assert.equal(installRes.success, true, installRes.error || '');
+      assert.equal(installRes.installed, true);
+      assert.equal(installRes.retired, '.githooks');
+
+      // The override is gone, so Git reads the common hooks directory again,
+      // and the hook living there delegates to Lefthook.
+      const hookText = fs.readFileSync(path.join(repoDir, '.git', 'hooks', 'pre-commit'), 'utf8');
+      assert.ok(hookText.includes('call_lefthook'), 'the written hook delegates');
 
       const status = getHookStatus({ cwd: repoDir });
-      assert.equal(status.installed, false);
-      assert.equal(status.hooksPath, null);
+      assert.equal(status.installed, true);
+      assert.equal(status.hookManager, 'lefthook');
+      assert.equal(status.legacyOverride, false);
+      assert.equal(status.hooksPath, null, 'nothing shadows the common hooks dir');
+      assert.deepEqual(status.remediation, []);
     });
   });
 });
@@ -317,14 +326,19 @@ describe('Uninstalling what is already gone is not a failure', () => {
     }
   });
 
-  test('install then uninstall still reports success', () => {
+  test('uninstall retires an existing override and the second pass is already absent', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-hook-'));
     try {
       execFileSync('git', ['init', '-q'], { cwd: dir });
-      installHook({ cwd: dir });
-      const r = uninstallHook({ cwd: dir });
-      assert.strictEqual(r.success, true);
-      assert.ok(!r.alreadyAbsent);
+      execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: dir });
+      const first = uninstallHook({ cwd: dir });
+      assert.strictEqual(first.success, true);
+      assert.strictEqual(first.alreadyAbsent, false);
+      assert.strictEqual(first.retired, '.githooks');
+      assert.strictEqual(first.scope, 'local');
+      const second = uninstallHook({ cwd: dir });
+      assert.strictEqual(second.success, true);
+      assert.strictEqual(second.alreadyAbsent, true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -398,27 +412,58 @@ describe('Where git looks for the hook is where we must look', () => {
   });
 });
 
-describe('installHook says when it configured nothing useful', () => {
-  test('a repository without the hook file reports hookPresent false', () => {
+describe('installHook refuses to claim an install it has not verified', () => {
+  // Lefthook invents an empty configuration and installs no hook when it
+  // finds none; running it blindly would create the file and announce success
+  // with nothing guarding the commit (AI-TOOL-10).
+  test('a repository without lefthook.yml is refused before any side effect', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-nohook-'));
     try {
       execFileSync('git', ['init', '-q'], { cwd: dir });
       const r = installHook({ cwd: dir });
-      assert.strictEqual(r.success, true);
-      assert.strictEqual(r.hookPresent, false);
+      assert.strictEqual(r.success, false);
+      assert.strictEqual(r.installed, false);
+      assert.match(r.error, /lefthook\.yml/);
+      assert.ok(!fs.existsSync(path.join(dir, 'lefthook.yml')), 'no config was invented');
+      assert.ok(!fs.existsSync(path.join(dir, '.git', 'hooks', 'pre-commit')));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test('a repository with the hook file reports hookPresent true', () => {
+  test('an installed hook is verified through the common hooks dir and the config', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-hook-'));
     try {
       execFileSync('git', ['init', '-q'], { cwd: dir });
-      fs.mkdirSync(path.join(dir, '.githooks'), { recursive: true });
-      fs.writeFileSync(path.join(dir, '.githooks', 'pre-commit'), '#!/bin/sh\nexit 0\n');
+      fs.writeFileSync(
+        path.join(dir, 'lefthook.yml'),
+        'pre-commit:\n  commands:\n    writer-claim:\n      run: node tools/ai-guard/cli.js check\n'
+      );
       const r = installHook({ cwd: dir });
-      assert.strictEqual(r.hookPresent, true);
+      assert.strictEqual(r.success, true, r.error || '');
+      assert.strictEqual(r.installed, true);
+      assert.strictEqual(r.hookManager, 'lefthook');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a delegation whose config lost the guard command is not installed', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-drift-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      fs.writeFileSync(
+        path.join(dir, 'lefthook.yml'),
+        'pre-commit:\n  commands:\n    writer-claim:\n      run: node tools/ai-guard/cli.js check\n'
+      );
+      installHook({ cwd: dir });
+      // The config drifts and no longer declares the guard command.
+      fs.writeFileSync(path.join(dir, 'lefthook.yml'), 'pre-commit:\n  commands: {}\n');
+      const s = getHookStatus({ cwd: dir });
+      assert.strictEqual(s.installed, false);
+      assert.strictEqual(s.configuredOnly, true);
+      assert.strictEqual(s.hookManager, 'lefthook');
+      assert.match(s.remediation[0], /Restore .*lefthook\.yml/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

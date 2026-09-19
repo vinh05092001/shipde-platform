@@ -4,8 +4,8 @@
 /**
  * Ship Dễ — Writer claim CLI.
  *
- *   node tools/ai-guard/cli.js install   [--global] [--strict]
- *   node tools/ai-guard/cli.js uninstall [--global] [--strict]
+ *   node tools/ai-guard/cli.js install   [--strict]  Install the hook via Lefthook (delegates to `lefthook install`)
+ *   node tools/ai-guard/cli.js uninstall [--strict]  Retire a bespoke core.hooksPath override
  *   node tools/ai-guard/cli.js claim     [--owner X] [--ttl 120] [--note "..."]
  *   node tools/ai-guard/cli.js release   [--branch X]
  *   node tools/ai-guard/cli.js status
@@ -63,26 +63,30 @@ async function main() {
   const branch = args.branch || currentBranch();
 
   if (command === 'install') {
-    const result = installHook({ global: args.global });
-    if (result.success) {
-      // installHook reports whether the hook file is actually there. Printing
-      // success regardless would announce a clean install on a checkout whose
-      // commits run unguarded, which is the one thing that function exists to
-      // distinguish.
-      if (!result.hookPresent) {
-        console.error(
-          'Cảnh báo: đã đặt core.hooksPath = .githooks nhưng không có .githooks/pre-commit; ' +
-            'hook chưa bảo vệ điều gì.'
+    if (args.global) {
+      console.error(
+        'Cảnh báo: --global không còn tác dụng; hook được Lefthook cài vào thư mục hooks chung.'
+      );
+    }
+    const result = installHook({ cwd: process.cwd() });
+    if (result.success && result.installed) {
+      console.log(
+        'Đã cài đặt pre-commit hook qua Lefthook (' + result.hooksDir + ' ← lefthook.yml).'
+      );
+      if (result.retired) {
+        console.log(
+          'Đã gỡ core.hooksPath=' +
+            result.retired +
+            ' (' +
+            result.scope +
+            ') vì nó che hook Lefthook.'
         );
-        if (args.strict) {
-          process.exit(1);
-        }
-        return;
       }
-      console.log('Đã cài đặt pre-commit hook (core.hooksPath = .githooks).');
       return;
     }
-    console.error('Cảnh báo: Không thể cấu hình core.hooksPath: ' + result.error);
+    // A completed command is not a verified guard: install reports failure
+    // unless the hook Git will run actually carries this guard.
+    console.error('Lỗi: ' + (result.error || 'hook không được xác minh sau khi cài.'));
     if (args.strict) {
       process.exit(1);
     }
@@ -90,15 +94,28 @@ async function main() {
   }
 
   if (command === 'uninstall') {
-    const result = uninstallHook({ global: args.global });
-    if (result.success) {
-      console.log('Đã gỡ cấu hình core.hooksPath.');
+    const result = uninstallHook({ cwd: process.cwd() });
+    if (!result.success) {
+      console.error('Cảnh báo: Không thể gỡ core.hooksPath: ' + result.error);
+      if (args.strict) {
+        process.exit(1);
+      }
       return;
     }
-    console.error('Cảnh báo: Không thể gỡ core.hooksPath: ' + result.error);
-    if (args.strict) {
-      process.exit(1);
+    if (result.alreadyAbsent) {
+      console.log(
+        'Không có core.hooksPath nào để gỡ. Hook Lefthook trong thư mục chung không bị ảnh hưởng.'
+      );
+      return;
     }
+    console.log(
+      'Đã gỡ core.hooksPath=' +
+        result.retired +
+        ' (' +
+        result.scope +
+        '). ' +
+        'Hook Lefthook trong thư mục chung không bị ảnh hưởng.'
+    );
     return;
   }
 
@@ -146,9 +163,14 @@ async function main() {
     console.log(
       'Git hook: ' +
         (hook.installed
-          ? 'ĐÃ CÀI ĐẶT (' + hook.hooksPath + ')'
-          : 'CHƯA CÀI ĐẶT (chạy: node tools/ai-guard/cli.js install)')
+          ? 'ĐÃ CÀI ĐẶT (' + (hook.hookManager || 'unknown') + ' @ ' + hook.hooksDir + ')'
+          : 'CHƯA CÀI ĐẶT (chạy: pnpm lefthook install)')
     );
+    if (!hook.installed) {
+      for (const step of hook.remediation || []) {
+        console.log('  Cách khắc phục: ' + step);
+      }
+    }
     console.log('');
     console.log(
       'Phiên AO đang sống (' +
