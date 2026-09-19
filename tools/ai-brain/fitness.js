@@ -110,7 +110,13 @@ function extractGradeFromEvidence(evidence) {
     if (evidence.benchmark && Number.isFinite(Number(evidence.score))) {
       try {
         const { gradeFromBenchmark } = require('./benchmarks');
-        return gradeFromBenchmark(evidence.benchmark, evidence.score);
+        // The score is read on the scale its record declares; an unmappable one
+        // grades nothing rather than falling back to the lowest rung.
+        return gradeFromBenchmark(
+          evidence.benchmark,
+          evidence.score,
+          evidence.score_scale || evidence.scoreScale
+        );
       } catch (e) {
         return null;
       }
@@ -169,7 +175,9 @@ function resolveGrade(offering, options) {
   }
   const extGrade = extractGradeFromEvidence(ext);
   if (extGrade !== null) {
-    const r = { class: extGrade, graded: true, source: GRADE_SOURCE.EXTERNAL };
+    // The record travels with the grade: a grade is only as good as the evidence
+    // it names, and the operator has to be able to see which record it was.
+    const r = { class: extGrade, graded: true, source: GRADE_SOURCE.EXTERNAL, evidence: ext };
     Object.defineProperty(r, 'layer', {
       value: EVIDENCE_LAYER.EXTERNAL,
       enumerable: false,
@@ -469,6 +477,34 @@ function resolveCapability(offering, options) {
   };
 }
 
+/**
+ * The operator-visible proof behind a grade record (TASK-AI-46 AC-46-02).
+ *
+ * A grade that came from anything other than verified external evidence is not
+ * reported as if it had, and a grade whose evidence was rejected says so with
+ * the rejection. Returns null when there is nothing to show, so the caller
+ * prints no line rather than a reassuring one.
+ */
+function formatGradeReason(gradeRecord) {
+  const record = gradeRecord || {};
+  if (record.error) return `No benchmark evidence: ${record.error}`;
+  if (record.source !== GRADE_SOURCE.EXTERNAL) return null;
+  const evidence = record.evidence;
+  if (!evidence || !evidence.benchmark) return null;
+  const name =
+    evidence.benchmark + (evidence.benchmarkVersion ? ` ${evidence.benchmarkVersion}` : '');
+  const scale = evidence.scoreScale || evidence.score_scale;
+  let shown;
+  if (Number.isFinite(Number(evidence.score))) {
+    shown =
+      scale === 'fraction' ? `${Math.round(Number(evidence.score) * 100)}%` : `${evidence.score}%`;
+  } else {
+    shown = 'an unreadable score';
+  }
+  const url = evidence.sourceUrl || evidence.source_url || 'no source recorded';
+  return `Graded from ${name} = ${shown} (${url}), not from a self-declared grade`;
+}
+
 function isSufficient(offering, difficulty) {
   return gradeOf(offering) >= difficulty;
 }
@@ -708,6 +744,7 @@ module.exports = {
   reviewGradeOf,
   resolveReviewGrade,
   resolveCapability,
+  formatGradeReason,
   isCapable,
   isSufficient,
   remainingTokens,
