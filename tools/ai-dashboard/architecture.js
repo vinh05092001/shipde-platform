@@ -123,7 +123,6 @@
     );
   }
 
-
   /* Đường gấp khúc vuông góc từ danh sách điểm; bo góc mềm nhờ linejoin. */
   function poly(pts) {
     return (
@@ -323,22 +322,26 @@
 
   /* =========================================================================
      DIAGRAM 1: Sơ đồ container (C4 mức 2)
-     viewBox="0 0 1470 680"
+     viewBox="0 0 1640 780"
      3 Ranh giới: Máy của bạn, Docker, Dịch vụ ngoài
-     Bố cục: cột trái (người vận hành → Claude Code), cột giữa (dispatch.sh +
-     ai-brain), nhóm "CLI thợ" nằm giữa dispatch.sh và GitHub, AO daemon +
-     9Router ở hàng ngay dưới nhóm, hàng cuối là Dashboard / Sổ việc & log /
-     runner.sh. Cạnh đi gấp khúc theo hành lang trống; nhãn cạnh có nền trắng
-     bo góc và không đè lên hộp nào.
+     Bố cục:
+       - Cột trái: Người vận hành (trên) -> Claude Code (dưới)
+       - Cột giữa: dispatch.sh (trên) -> ai-brain (dưới)
+       - Nhóm "CLI thợ" nằm giữa dispatch.sh và GitHub
+       - AO daemon và 9Router đặt dưới nhóm CLI thợ
+       - Hàng dưới cùng: Dashboard, Sổ việc & log, runner.sh
+     Cạnh đi vòng theo đường gấp khúc theo hành lang trống, không cắt xuyên qua hộp.
+     Mỗi nhãn cạnh có nền trắng bo góc vẽ trước chữ, không đè lên bất kỳ hộp nào.
+     Khoảng cách tối thiểu giữa hai hộp >= 24px.
      ========================================================================= */
   function renderDiagram1(m) {
-    var W = 1470,
-      H = 680;
+    var W = 1640,
+      H = 780;
     var p = [defs(), '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="none"/>'];
 
-    // --- Ranh giới 1: "Máy của bạn" (x: 16..821, y: 16..660) ---
+    // --- Ranh giới 1: "Máy của bạn" (x: 16..950, y: 16..764) ---
     p.push(
-      '<rect x="16" y="16" width="805" height="644" rx="14" fill="#faf8f5" stroke="' +
+      '<rect x="16" y="16" width="934" height="748" rx="14" fill="#faf8f5" stroke="' +
         C.machine +
         '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
         '<rect x="30" y="8" width="165" height="20" rx="4" fill="' +
@@ -347,36 +350,39 @@
         '<text x="112" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Máy của bạn</text>'
     );
 
-    // --- Ranh giới 2: "Docker" (x: 845..1085, y: 16..198) ---
+    // --- Ranh giới 2: "Docker" (x: 974..1234, y: 16..186) ---
     p.push(
-      '<rect x="845" y="16" width="240" height="182" rx="14" fill="#f0f9ff" stroke="' +
+      '<rect x="974" y="16" width="260" height="170" rx="14" fill="#f0f9ff" stroke="' +
         C.docker +
         '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
-        '<rect x="860" y="8" width="135" height="20" rx="4" fill="' +
+        '<rect x="989" y="8" width="135" height="20" rx="4" fill="' +
         C.docker +
         '"/>' +
-        '<text x="927" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Docker</text>'
+        '<text x="1056" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Docker</text>'
     );
 
-    // --- Ranh giới 3: "Dịch vụ ngoài" (x: 1109..1450, y: 16..660) ---
+    // --- Ranh giới 3: "Dịch vụ ngoài" (x: 1258..1624, y: 16..764) ---
     p.push(
-      '<rect x="1109" y="16" width="341" height="644" rx="14" fill="#faf5ff" stroke="' +
+      '<rect x="1258" y="16" width="366" height="748" rx="14" fill="#faf5ff" stroke="' +
         C.cloud +
         '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
-        '<rect x="1124" y="8" width="165" height="20" rx="4" fill="' +
+        '<rect x="1273" y="8" width="165" height="20" rx="4" fill="' +
         C.cloud +
         '"/>' +
-        '<text x="1206" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Dịch vụ ngoài</text>'
+        '<text x="1355" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Dịch vụ ngoài</text>'
     );
 
     // Nodes trong Ranh giới "Máy của bạn"
-    p.push(node(40, 64, 150, 52, 'Người vận hành', 'người', C.operator));
-    p.push(node(40, 188, 150, 52, 'Claude Code', 'CLI điều phối', C.dispatch));
+    // Cột 1
+    p.push(node(40, 60, 160, 52, 'Người vận hành', 'người', C.operator));
+    p.push(node(40, 180, 160, 52, 'Claude Code', 'CLI điều phối', C.dispatch));
+
+    // Cột 2
     p.push(
       node(
-        286,
-        188,
-        200,
+        280,
+        180,
+        210,
         52,
         'dispatch.sh',
         'bash, chọn thợ và đổi model',
@@ -384,32 +390,32 @@
         m.dispatchBadge
       )
     );
-    p.push(node(286, 312, 230, 52, 'ai-brain', 'Node, quota · fitness · cooldown', C.dispatch));
+    p.push(node(280, 300, 230, 52, 'ai-brain', 'Node, quota · fitness · cooldown', C.dispatch));
 
-    // Khung nhóm CLI thợ: nằm giữa dispatch.sh và GitHub
+    // Nhóm "CLI thợ": nằm giữa dispatch.sh và GitHub
     p.push(
-      '<rect x="592" y="176" width="205" height="228" rx="10" fill="#f0f9ff" stroke="' +
+      '<rect x="580" y="160" width="350" height="236" rx="10" fill="#f0f9ff" stroke="' +
         C.worker +
         '" stroke-width="1.2" stroke-dasharray="4 3"/>' +
-        '<text x="607" y="194" font-size="11" font-weight="bold" fill="' +
+        '<text x="595" y="180" font-size="11" font-weight="bold" fill="' +
         C.worker +
         '">CLI thợ</text>'
     );
-    p.push(node(607, 202, 175, 48, 'xKiro', 'cline + endpoint xKiro', C.worker));
-    p.push(node(607, 274, 175, 48, 'agy', 'CLI', C.worker));
-    p.push(node(607, 346, 175, 48, 'Cline', 'CLI', C.worker));
+    p.push(node(655, 188, 200, 44, 'xKiro', 'cline + endpoint xKiro', C.worker));
+    p.push(node(655, 258, 200, 44, 'agy', 'CLI', C.worker));
+    p.push(node(655, 328, 200, 44, 'Cline', 'CLI', C.worker));
 
-    // AO daemon và 9Router ở hàng ngay dưới nhóm CLI thợ
-    p.push(node(286, 452, 170, 52, 'AO daemon', ':4317, tạo phiên', C.worker));
-    p.push(node(592, 452, 180, 52, '9Router', ':20128, định tuyến model', C.worker));
+    // AO daemon và 9Router đặt dưới nhóm CLI thợ
+    p.push(node(580, 446, 160, 52, 'AO daemon', ':4317, tạo phiên', C.worker));
+    p.push(node(770, 446, 160, 52, '9Router', ':20128, định tuyến model', C.worker));
 
     // Hàng dưới cùng: Dashboard, Sổ việc & log, runner.sh
-    p.push(node(40, 560, 185, 52, 'Dashboard', 'Node HTTP :3333, chỉ đọc', C.docker));
+    p.push(node(40, 596, 175, 52, 'Dashboard', 'Node HTTP :3333, chỉ đọc', C.docker));
     p.push(
       node(
-        301,
-        560,
-        190,
+        280,
+        596,
+        210,
         52,
         'Sổ việc & log',
         'REGISTER.csv, log cục bộ',
@@ -417,18 +423,18 @@
         m.registerBadge
       )
     );
-    p.push(node(567, 560, 160, 52, 'runner.sh', 'bash, luật merge', C.result));
+    p.push(node(580, 596, 160, 52, 'runner.sh', 'bash, luật merge', C.result));
 
     // Nodes trong Ranh giới "Docker"
-    p.push(node(870, 52, 160, 52, 'agy (Docker)', 'container', C.docker));
-    p.push(node(870, 128, 190, 52, 'Claude (tài khoản 2)', 'container dự phòng', C.docker));
+    p.push(node(1005, 46, 170, 48, 'agy (Docker)', 'container', C.docker));
+    p.push(node(1005, 118, 200, 48, 'Claude (tài khoản 2)', 'container dự phòng', C.docker));
 
     // Nodes trong Ranh giới "Dịch vụ ngoài"
     p.push(
       node(
-        1130,
-        220,
-        200,
+        1285,
+        210,
+        210,
         52,
         'GitHub',
         'PR, CI, API REST',
@@ -438,9 +444,9 @@
     );
     p.push(
       node(
-        1130,
-        470,
-        255,
+        1285,
+        446,
+        275,
         52,
         'Nhà cung cấp model',
         'xKiro · Anthropic · Google · MiniMax',
@@ -450,165 +456,162 @@
 
     // --- Mũi tên và hành động ---
     // 1. Người vận hành → Claude Code
-    p.push(arrow(115, 116, 115, 188, 'giao việc', C.operator));
+    p.push(arrow(120, 112, 120, 180, 'giao việc', C.operator, false, undefined, 120, 146));
 
     // 2. Claude Code → dispatch.sh
-    p.push(arrow(190, 214, 286, 214, 'gọi CLI', C.dispatch));
+    p.push(arrow(200, 206, 280, 206, 'gọi CLI', C.dispatch, false, undefined, 240, 206));
 
     // 3. dispatch.sh → ai-brain
-    p.push(arrow(401, 240, 401, 312, 'hỏi hạn mức', C.dispatch));
+    p.push(arrow(385, 232, 385, 300, 'hỏi hạn mức', C.dispatch, false, undefined, 385, 266));
 
     // 4. dispatch.sh → CLI thợ
-    p.push(arrow(486, 214, 592, 214, 'chạy lệnh', C.dispatch));
+    p.push(arrow(490, 206, 580, 206, 'chạy lệnh', C.dispatch, false, undefined, 535, 206));
 
-    // 5. dispatch.sh → agy (Docker): leo lên hành lang y=78 rồi sang phải
+    // 5. dispatch.sh → agy (Docker): đi qua hành lang trống phía trên CLI thợ
     p.push(
       arrow(
-        400,
-        188,
-        870,
-        78,
+        385,
+        180,
+        1005,
+        70,
         'chạy lệnh',
         C.docker,
         false,
         poly([
-          [400, 188],
-          [400, 78],
-          [870, 78],
+          [385, 180],
+          [385, 70],
+          [1005, 70],
         ]),
-        640,
-        78
+        690,
+        70
       )
     );
 
-    // 6. AO daemon → CLI thợ: qua hành lang y=428 dưới ai-brain
+    // 6. AO daemon → CLI thợ: đi thẳng lên nhóm CLI thợ
+    p.push(arrow(660, 446, 660, 396, 'spawn phiên', C.worker, false, undefined, 660, 421));
+
+    // 7. CLI thợ → 9Router: đi thẳng xuống 9Router
+    p.push(arrow(850, 396, 850, 446, 'gọi model', C.worker, false, undefined, 850, 421));
+
+    // 8. 9Router → Nhà cung cấp model: đi thẳng sang phải qua hành lang trống
+    p.push(arrow(930, 472, 1285, 472, 'định tuyến', C.worker, false, undefined, 1105, 472));
+
+    // 9. CLI thợ → Nhà cung cấp model (gọi API): đi vòng qua hành lang giữa Máy và Dịch vụ ngoài
     p.push(
       arrow(
-        371,
-        452,
-        620,
-        404,
-        'spawn phiên',
-        C.worker,
-        false,
-        poly([
-          [371, 452],
-          [371, 428],
-          [620, 428],
-          [620, 404],
-        ]),
-        500,
-        428
-      )
-    );
-
-    // 7. CLI thợ → 9Router
-    p.push(arrow(682, 404, 682, 452, 'gọi model', C.worker));
-
-    // 8. 9Router → Nhà cung cấp model
-    p.push(arrow(772, 500, 1130, 500, 'định tuyến', C.worker));
-
-    // 9. CLI thợ → Nhà cung cấp model (gọi API)
-    p.push(
-      arrow(
-        797,
-        330,
-        1130,
-        480,
+        930,
+        350,
+        1285,
+        458,
         'gọi API',
         C.cloud,
         false,
         poly([
-          [797, 330],
-          [1070, 330],
-          [1070, 480],
-          [1130, 480],
+          [930, 350],
+          [1220, 350],
+          [1220, 458],
+          [1285, 458],
         ]),
-        900,
-        330
+        1075,
+        350
       )
     );
 
-    // 10. CLI thợ → GitHub (commit, push, mở PR)
-    p.push(arrow(797, 246, 1130, 246, 'commit, push, mở PR (gh REST)', C.cloud));
-
-    // 11. runner.sh → GitHub (quét PR, merge khi đủ điều kiện): đi vòng dưới
-    // hàng kết quả rồi lên biên phải của khối "Dịch vụ ngoài"
+    // 10. CLI thợ → GitHub (commit, push, mở PR gh REST)
     p.push(
       arrow(
-        647,
-        612,
-        1330,
-        254,
+        930,
+        236,
+        1285,
+        236,
+        'commit, push, mở PR (gh REST)',
+        C.cloud,
+        false,
+        undefined,
+        1105,
+        236
+      )
+    );
+
+    // 11. runner.sh → GitHub: đi qua hành lang dưới đáy rồi lên cạnh phải của GitHub
+    p.push(
+      arrow(
+        660,
+        648,
+        1495,
+        225,
         'quét PR, merge khi đủ điều kiện',
         C.result,
         false,
         poly([
-          [647, 612],
-          [647, 622],
-          [1408, 622],
-          [1408, 254],
-          [1330, 254],
+          [660, 648],
+          [660, 715],
+          [1585, 715],
+          [1585, 225],
+          [1495, 225],
         ]),
-        980,
-        622
+        1050,
+        715
       )
     );
 
-    // 12. Dashboard → đọc register, log, quota (nét đứt mảnh)
+    // 12. Dashboard → Sổ việc & log (đọc register, log, quota)
     p.push(
       arrow(
-        132,
-        612,
-        396,
-        612,
+        127,
+        648,
+        385,
+        648,
         'đọc register, log, quota',
         C.muted,
         true,
         poly([
-          [132, 612],
-          [132, 632],
-          [396, 632],
-          [396, 612],
+          [127, 648],
+          [127, 685],
+          [385, 685],
+          [385, 648],
         ]),
-        264,
-        632
+        256,
+        685
       )
     );
-    // Dashboard đọc log dispatch: lên hành lang x=236 giữa hai cột
+
+    // 13. Dashboard → dispatch.sh: lên hành lang x=245 giữa cột 1 và cột 2
     p.push(
       arrow(
-        225,
-        580,
-        286,
-        230,
+        180,
+        596,
+        280,
+        206,
         '',
         C.muted,
         true,
         poly([
-          [225, 580],
-          [236, 580],
-          [236, 230],
-          [286, 230],
+          [180, 596],
+          [180, 550],
+          [245, 550],
+          [245, 206],
+          [280, 206],
         ])
       )
     );
-    // Dashboard đọc GitHub: đi vòng dưới hàng kết quả rồi lên biên phải
+
+    // 14. Dashboard → GitHub: đi vòng qua hành lang đáy dưới cùng rồi lên cạnh phải của GitHub
     p.push(
       arrow(
-        90,
-        612,
-        1330,
-        226,
+        80,
+        648,
+        1495,
+        245,
         '',
         C.muted,
         true,
         poly([
-          [90, 612],
-          [90, 650],
-          [1430, 650],
-          [1430, 226],
-          [1330, 226],
+          [80, 648],
+          [80, 740],
+          [1605, 740],
+          [1605, 245],
+          [1495, 245],
         ])
       )
     );
@@ -630,8 +633,10 @@
      DIAGRAM 2: Sơ đồ làn (swimlane) vòng đời một Work Item
      5 làn: Người vận hành · Điều phối · Thợ · Kiểm chứng · Kết quả
      Bề rộng hộp bước tính theo nhãn (~8px mỗi ký tự + 28px đệm), khoảng cách
-     giữa hai hộp cùng làn chừa đủ chỗ cho nhãn cạnh (tối thiểu 40px), badge
-     nằm ở góc trên phải hộp chứ không đè lên chữ.
+     giữa hai hộp tối thiểu 40px theo chiều ngang, không hộp nào tràn khỏi làn,
+     badge nằm ở góc trên phải hộp không đè lên chữ, nhãn trên cạnh đặt giữa
+     hai hộp có nền trắng, mũi tên CHANGES_REQUIRED vòng dưới làn Kiểm chứng
+     rồi đi lên làn Thợ không cắt qua hộp nào.
      ========================================================================= */
   function renderDiagram2(m) {
     var laneH = 68;
@@ -639,11 +644,11 @@
     var firstLaneY = 20;
     var leftW = 158;
     var laneLeft = 18;
-    var contentLeft = laneLeft + leftW + 6;
+    var contentLeft = laneLeft + leftW + 8;
     var boxH = 52;
-    var boxPad = 8;
+    var boxPad = 12;
     var minGap = 40;
-    var loopBand = 44; // chỗ cho mũi tên vòng về làn đầu
+    var loopBand = 50; // chỗ cho mũi tên vòng về làn đầu
 
     var lanes = [
       { name: 'Người vận hành', sub: 'giao việc & nhận kết quả', color: C.operator, bg: '#faf8ff' },
@@ -723,15 +728,12 @@
     var cursor = contentLeft + boxPad;
     steps.forEach(function (s, i) {
       if (i > 0) {
-        s.gap =
-          s.lane === steps[i - 1].lane
-            ? Math.max(minGap, Math.round(edgeLabelW(s.inLabel) + 16))
-            : minGap;
+        s.gap = Math.max(minGap, Math.round(edgeLabelW(s.inLabel) + 20));
         cursor += s.gap;
       }
       s.w = Math.max(
         Math.round(textUnits(s.label) * 8 + 28),
-        s.badge ? Math.round(badgeW(s.badge) + 12) : 0
+        s.badge ? Math.round(badgeW(s.badge) + 24) : 0
       );
       s.x = cursor;
       s.y = lanes[s.lane].y + Math.round((laneH - boxH) / 2);
@@ -818,18 +820,7 @@
         bx = b.x,
         by = b.y + Math.round(boxH / 2);
       if (a.lane === b.lane) {
-        return arrow(
-          ax,
-          ay,
-          bx,
-          by,
-          label,
-          color,
-          false,
-          undefined,
-          Math.round((ax + bx) / 2),
-          ay
-        );
+        return arrow(ax, ay, bx, by, label, color, false, undefined, Math.round((ax + bx) / 2), ay);
       }
       var cx = Math.round((ax + bx) / 2);
       return arrow(
@@ -862,7 +853,7 @@
 
     // 6. Quay lui nếu CHANGES_REQUIRED về làn Thợ (sửa theo review):
     // xuất phát từ đáy hộp review, chạy ngang dưới làn Kiểm chứng rồi
-    // đi lên gặp đáy hộp "cập nhật" ở làn Thợ — không cắt qua hộp nào.
+    // đi lên gặp đáy hộp "chạy trong worktree riêng" ở làn Thợ — không cắt qua hộp nào.
     var fbFrom = steps[5],
       fbTo = steps[2];
     var fbX1 = fbFrom.x + Math.round(fbFrom.w / 2),
@@ -894,7 +885,7 @@
       lpTo = steps[0];
     var lpX1 = lpFrom.x + Math.round(lpFrom.w / 2),
       lpX2 = lpTo.x + Math.round(lpTo.w / 2);
-    var lpY = lanes[4].y + laneH + 20;
+    var lpY = lanes[4].y + laneH + 24;
     p.push(
       arrow(
         lpX1,
