@@ -30,6 +30,7 @@
   var ACCENT = {
     '9router': '#8b5cf6',
     xkiro: '#0ea5e9',
+    bai: '#2563eb',
     'agy-local': '#10b981',
     'agy-docker': '#0d9488',
     cline: '#f97316',
@@ -272,6 +273,7 @@
           fill: accent(src.id),
         })
       );
+      var nodeText = src.id === 'bai' && src.nodeLabel ? src.nodeLabel : src.label;
       g.appendChild(
         el(
           'text',
@@ -279,10 +281,10 @@
             x: nx - W / 2 + 26,
             y: ny - 1,
             fill: '#3f3a33',
-            'font-size': 12,
+            'font-size': src.id === 'bai' ? 11 : 12,
             'font-weight': 'bold',
           },
-          src.label
+          nodeText
         )
       );
       g.appendChild(
@@ -308,6 +310,15 @@
       ) {
         pct = Math.min(100, Math.round((lim.consumption / lim.declaredLimit) * 100));
       }
+      var cardTitle = src.id === 'bai' && src.nodeLabel ? src.nodeLabel : src.label;
+      var warningHtml =
+        src.warnings && src.warnings.length > 0
+          ? '<div class="truncate text-[10px] mt-0.5" style="color:#b45309" title="' +
+            src.warnings.join(', ') +
+            '">⚠️ ' +
+            src.warnings[0] +
+            '</div>'
+          : '';
       var card = document.createElement('div');
       card.className = 'rounded-xl border p-3 text-[11px] leading-5' + (down ? ' opacity-70' : '');
       card.style.borderColor = 'var(--line)';
@@ -319,7 +330,7 @@
         statusColor(src.status) +
         '"></span>' +
         '<span class="font-bold text-[12px]">' +
-        src.label +
+        cardTitle +
         '</span>' +
         '<span class="ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold" style="color:' +
         statusColor(src.status) +
@@ -340,7 +351,11 @@
         num(lim.declaredLimit) +
         '</div>' +
         (pct === null
-          ? '<div class="opacity-45">chưa khai hạn mức</div>'
+          ? '<div class="opacity-60 mt-0.5">' +
+            (lim.headroom !== 'UNKNOWN'
+              ? 'còn ' + num(lim.headroom)
+              : '<span class="opacity-45">chưa khai hạn mức</span>') +
+            '</div>'
           : '<div class="mt-1 h-1.5 rounded-full" style="background:#ece3d2">' +
             '<div class="h-1.5 rounded-full" style="width:' +
             pct +
@@ -350,6 +365,7 @@
             '<div class="opacity-60 mt-0.5">còn ' +
             num(lim.headroom) +
             '</div>') +
+        warningHtml +
         '<div class="mt-1 flex gap-2 opacity-70">' +
         '<span style="color:#0f766e" title="Thành công">✓ ' +
         counts.done +

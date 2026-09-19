@@ -17,6 +17,10 @@ const {
   readCooldowns,
   resolveLogDir,
   SOURCE_DEFS,
+  probeBai,
+  probeAllBaiBalances,
+  clearProbeCache,
+  getBaiKeyDefinitions,
 } = require('../rotation');
 const { createDashboardServer } = require('../server');
 
@@ -260,8 +264,14 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
 
     test('a lane the dashboard does not ship with still appears in the breakdown', () => {
       const { f, state } = stateFrom({});
-      const bai = state.sources.find((s) => s.id === 'bai7');
-      assert.ok(bai, 'bai7 ran 1 logged attempt and must not be invisible');
+      const bai = state.sources.find((s) => s.id === 'bai');
+      assert.ok(bai, 'bai (consolidated B.AI) ran 1 logged attempt and must not be invisible');
+      assert.strictEqual(bai.label, 'B.AI');
+      assert.strictEqual(
+        state.sources.some((s) => s.id === 'bai7'),
+        false,
+        'bai7 must not be a separate source node'
+      );
       const startedFor = (id) =>
         parseLogLines(state.log.dir).filter((e) => e.sourceId === id && e.started).length;
       let accounted = 0;
@@ -288,6 +298,285 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
       assert.strictEqual(state.log.exists, false);
       assert.strictEqual(state.totals.attempts, 'UNKNOWN');
       assert.ok(state.log.reason, 'the panel must be able to say why nothing is measured');
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+  });
+
+  describe('AC-AI-47-09: B.AI consolidation and status aggregation', () => {
+    test('merges multiple bai lanes into single source bai and sums metrics', () => {
+      const tmp = makeTmpDir();
+      const logs = path.join(tmp, '.worktrees', 'logs');
+      fs.mkdirSync(logs, { recursive: true });
+
+      const lines = [
+        '=== trying bai1 anthropic/claude-sonnet-4.5 10:00:00 ===',
+        '=== finished on bai1 anthropic/claude-sonnet-4.5 ===',
+        '=== trying bai2 anthropic/claude-sonnet-4.5 10:05:00 ===',
+        '--- bai2 anthropic/claude-sonnet-4.5 exhausted ---',
+        '--- skip bai3 anthropic/claude-sonnet-4.5: cooldown ---',
+      ].join('\n');
+      fs.writeFileSync(path.join(logs, 'multi-bai.log'), lines);
+
+      const state = buildRotationState({
+        homeDir: tmp,
+        probe: false,
+        logDir: logs,
+        ledgerFile: path.join(tmp, 'no-ledger.json'),
+        quotaFile: path.join(tmp, 'no-quota.json'),
+        totalKeys: 7,
+      });
+
+      const baiSources = state.sources.filter((s) => s.id === 'bai');
+      assert.strictEqual(baiSources.length, 1, 'must have exactly one consolidated bai source');
+      const bai = baiSources[0];
+      assert.strictEqual(bai.label, 'B.AI');
+      assert.strictEqual(bai.attempts, 2, 'bai1 and bai2 runs started');
+      assert.strictEqual(bai.skipped, 1, 'bai3 was skipped');
+      assert.strictEqual(bai.quotaRefused, 2, 'bai2 exhausted + bai3 skipped');
+      assert.strictEqual(bai.nodeLabel, 'B.AI 0/7 key', '0 keys running when ended');
+
+      // Individual lanes must not appear as separate sources
+      assert.strictEqual(
+        state.sources.some((s) => s.id === 'bai1'),
+        false
+      );
+      assert.strictEqual(
+        state.sources.some((s) => s.id === 'bai2'),
+        false
+      );
+      assert.strictEqual(
+        state.sources.some((s) => s.id === 'bai3'),
+        false
+      );
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    test('status is live when any key is active, and indicates running count', () => {
+      const tmp = makeTmpDir();
+      const logs = path.join(tmp, '.worktrees', 'logs');
+      fs.mkdirSync(logs, { recursive: true });
+
+      // Live run on bai2 (TRY without exhausted or finished, file fresh)
+      const lines = ['=== trying bai2 anthropic/claude-sonnet-4.5 10:00:00 ==='].join('\n');
+      fs.writeFileSync(path.join(logs, 'live-bai.log'), lines);
+
+      const state = buildRotationState({
+        homeDir: tmp,
+        probe: false,
+        logDir: logs,
+        ledgerFile: path.join(tmp, 'no-ledger.json'),
+        quotaFile: path.join(tmp, 'no-quota.json'),
+        totalKeys: 7,
+      });
+
+      const bai = state.sources.find((s) => s.id === 'bai');
+      assert.ok(bai);
+      assert.strictEqual(bai.status, 'live', 'must be live while key is running');
+      assert.strictEqual(bai.keys.running, 1);
+      assert.strictEqual(bai.keys.total, 7);
+      assert.strictEqual(bai.nodeLabel, 'B.AI 1/7 key');
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    test('status is quota-exhausted only when all keys are exhausted, otherwise idle', () => {
+      const tmp = makeTmpDir();
+      const ledger = path.join(tmp, 'ledger.json');
+      const logs = path.join(tmp, 'logs');
+      fs.mkdirSync(logs, { recursive: true });
+      fs.writeFileSync(path.join(logs, 'run.log'), '=== finished on bai1 model ===\n');
+
+      const now = Date.now();
+      const recent = new Date(now - 30000).toISOString();
+
+      // Only bai1 in cooldown -> bai should remain 'idle' because other keys exist
+      fs.writeFileSync(
+        ledger,
+        JSON.stringify({
+          version: 1,
+          observations: [
+            { accountId: 'bai1', outcome: 'refused', at: recent, reason: 'key 1 exhausted' },
+          ],
+        })
+      );
+
+      const state1 = buildRotationState({
+        homeDir: tmp,
+        probe: false,
+        logDir: logs,
+        ledgerFile: ledger,
+        quotaFile: path.join(tmp, 'no-quota.json'),
+        baiKeys: ['k1', 'k2', 'k3'],
+        now,
+      });
+
+      const bai1 = state1.sources.find((s) => s.id === 'bai');
+      assert.strictEqual(bai1.status, 'idle', 'status must be idle when only 1 key is on cooldown');
+
+      // When ALL keys are in cooldown -> status becomes quota-exhausted
+      fs.writeFileSync(
+        ledger,
+        JSON.stringify({
+          version: 1,
+          observations: [
+            { accountId: 'bai1', outcome: 'refused', at: recent, reason: 'k1 exhausted' },
+            { accountId: 'bai2', outcome: 'refused', at: recent, reason: 'k2 exhausted' },
+            { accountId: 'bai3', outcome: 'refused', at: recent, reason: 'k3 exhausted' },
+          ],
+        })
+      );
+
+      const state2 = buildRotationState({
+        homeDir: tmp,
+        probe: false,
+        logDir: logs,
+        ledgerFile: ledger,
+        quotaFile: path.join(tmp, 'no-quota.json'),
+        baiKeys: ['k1', 'k2', 'k3'],
+        now,
+      });
+
+      const bai2 = state2.sources.find((s) => s.id === 'bai');
+      assert.strictEqual(
+        bai2.status,
+        'quota-exhausted',
+        'status must be quota-exhausted when all keys exhausted'
+      );
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+  });
+
+  describe('AC-AI-47-10: B.AI real balance probing and quota rules (mock fetch)', () => {
+    const keys = [
+      { id: 'bai1', name: 'BAI_API_KEY', key: 'secret-key-1' },
+      { id: 'bai2', name: 'BAI_API_KEY_2', key: 'secret-key-2' },
+    ];
+
+    test('đo được: all keys succeed, total headroom is sum, low balance generates warning', async () => {
+      const mockFetch = async (url, opts) => {
+        assert.strictEqual(url, 'https://api.b.ai/v1/balance');
+        const auth = opts.headers.Authorization;
+        if (auth === 'Bearer secret-key-1') {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { personal_balance: 50000 } }),
+          };
+        }
+        if (auth === 'Bearer secret-key-2') {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { personal_balance: 7500 } }),
+          };
+        }
+        throw new Error('Unexpected key');
+      };
+
+      const result = await probeAllBaiBalances(keys, { fetch: mockFetch });
+
+      assert.strictEqual(
+        result.headroom,
+        57500,
+        'headroom must be sum of balances when all succeed'
+      );
+      assert.strictEqual(result.keys.length, 2);
+      assert.strictEqual(result.keys[0].balance, 50000);
+      assert.strictEqual(result.keys[1].balance, 7500);
+
+      // Warning when balance < 10000
+      assert.strictEqual(result.warnings.length, 1);
+      assert.ok(result.warnings[0].includes('bai2') && result.warnings[0].includes('7500'));
+
+      // Security: no secret key string must leak into results or JSON
+      const serialized = JSON.stringify(result);
+      assert.strictEqual(serialized.includes('secret-key-1'), false);
+      assert.strictEqual(serialized.includes('secret-key-2'), false);
+    });
+
+    test('một key lỗi: single key failure or timeout causes total headroom to be UNKNOWN, not zero', async () => {
+      const mockFetch = async (url, opts) => {
+        const auth = opts.headers.Authorization;
+        if (auth === 'Bearer secret-key-1') {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { personal_balance: 50000 } }),
+          };
+        }
+        // Key 2 fails with 500
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: 'Internal Server Error' }),
+        };
+      };
+
+      const result = await probeAllBaiBalances(keys, { fetch: mockFetch });
+
+      assert.strictEqual(result.keys[0].balance, 50000);
+      assert.strictEqual(result.keys[1].balance, 'UNKNOWN');
+      // Rule: if one key fails, total must be UNKNOWN, NEVER 0 and NEVER partial 50000
+      assert.strictEqual(
+        result.headroom,
+        'UNKNOWN',
+        'total headroom must be UNKNOWN when any key fails'
+      );
+    });
+
+    test('tất cả key lỗi: all keys failing yields UNKNOWN headroom and UNKNOWN balances', async () => {
+      const mockFetch = async () => {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      };
+
+      const result = await probeAllBaiBalances(keys, { fetch: mockFetch });
+
+      assert.strictEqual(result.keys[0].balance, 'UNKNOWN');
+      assert.strictEqual(result.keys[1].balance, 'UNKNOWN');
+      assert.strictEqual(result.headroom, 'UNKNOWN');
+    });
+
+    test('probeBai caches probe result and supplies headroom to buildRotationState', async () => {
+      clearProbeCache();
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { personal_balance: 42000 } }),
+      });
+
+      const probed = await probeBai(Date.now(), 60000, {
+        baiKeys: ['mock-k1'],
+        fetch: mockFetch,
+        async: true,
+      });
+      assert.strictEqual(probed.headroom, 42000);
+
+      const tmp = makeTmpDir();
+      const state = buildRotationState({
+        homeDir: tmp,
+        probe: true,
+        baiKeys: ['mock-k1'],
+        logDir: path.join(tmp, 'no-logs'),
+        ledgerFile: path.join(tmp, 'no-ledger.json'),
+        quotaFile: path.join(tmp, 'no-quota.json'),
+      });
+
+      const bai = state.sources.find((s) => s.id === 'bai');
+      assert.ok(bai);
+      assert.strictEqual(
+        bai.limits.headroom,
+        42000,
+        'buildRotationState must read cached headroom'
+      );
+
+      // Security check on the full state payload
+      const serializedState = JSON.stringify(state);
+      assert.strictEqual(serializedState.includes('mock-k1'), false, 'keys must not leak in state');
+
       fs.rmSync(tmp, { recursive: true, force: true });
     });
   });

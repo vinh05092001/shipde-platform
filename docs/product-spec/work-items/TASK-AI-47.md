@@ -127,6 +127,23 @@ the acceptance tests.
 | AC-AI-47-06 | `python docs/product-spec/scripts/validate_docs.py` | Exit 0 | CLI run |
 | AC-AI-47-07 | `node --test tools/ai-brain/test/*.test.js` | All pass | CLI run |
 | AC-AI-47-08 | Dashboard process runs in a linked worktree while `dispatch.sh` logs into the main checkout | `log.dir` is the main checkout `.worktrees/logs`, and `totals.attempts`/`totals.skipped`/`totals.quotaRefused` equal the dispatcher log's own line counts; a folder that cannot be read yields `UNKNOWN`, not `0` | `test/rotation.test.js` |
+| AC-AI-47-09 | Multi-key B.AI consolidation and aggregated status | Consolidated `bai` source reflects aggregate attempts/tokens, displays running key count `B.AI X/Y key`, live when any key active, `quota-exhausted` only when all keys exhausted | `test/rotation.test.js` |
+| AC-AI-47-10 | B.AI real balance probing and quota rules | Probes `/v1/balance` with 8s timeout, caches 60s TTL; aggregated headroom is UNKNOWN if any key fails/times out; balance warning at `< 10000`; API key secrets stripped | `test/rotation.test.js` |
+
+## B.AI consolidation and quota probing on 2026-09-19
+
+The dispatcher operates multiple rotation lanes `bai1`–`bai7` mapped to separate API keys (`BAI_API_KEY_1`..`7`).
+In the dashboard rotation panel, displaying seven separate nodes cluttered the layout and obscured operational status.
+These lanes are consolidated into a single access source:
+
+- **Source representation**: Unified source ID `'bai'` with label `'B.AI'`, blue accent color `#2563eb`, and dynamic node label `B.AI X/Y key` displaying active vs configured key count.
+- **Quota probing**: Queries real balances from `https://api.b.ai/v1/balance` with an 8-second abort timeout and a 60-second in-memory TTL cache (`probeBai`).
+- **Aggregated quota rules**:
+  - Headroom equals sum of all key balances when all keys report successfully.
+  - If any key probe fails, errors or times out, the aggregated headroom is set to `'UNKNOWN'` (never 0 or inaccurate partial sums).
+  - A warning notice is generated if total headroom falls below 10,000 credits.
+  - Overall status is marked `'quota-exhausted'` only when all configured keys are in cooldown/exhausted; otherwise `'idle'` or `'live'`.
+- **Security & PII minimization**: Strips secret keys entirely from returned payloads; only key IDs (`bai1`, etc.) and numeric balances are published.
 
 ## Data correction on 2026-09-18 (đối chiếu dashboard với nguồn thật)
 

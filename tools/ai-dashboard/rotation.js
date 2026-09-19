@@ -122,6 +122,7 @@ function countDispatcherLogs(dir) {
 const SOURCE_DEFS = [
   { id: '9router', label: '9Router' },
   { id: 'xkiro', label: 'xKiro' },
+  { id: 'bai', label: 'B.AI' },
   { id: 'agy-local', label: 'agy (local)' },
   { id: 'agy-docker', label: 'agy (docker)' },
   { id: 'cline', label: 'Cline' },
@@ -131,11 +132,10 @@ const SOURCE_DEFS = [
 ];
 
 // dispatch.sh names its author lanes after the key directory holding them
-// (bai1..bai7 are B.AI keys, each a separate Cline config), so a lane id read
-// from the log is a real source even when it is not one of the built-in defs.
+// (bai1..bai7 are B.AI keys, merged into single source id 'bai' with label 'B.AI'),
+// so a lane id read from the log is a real source even when it is not one of the built-in defs.
 function labelForLaneId(id) {
-  const bai = /^bai(\d+)$/.exec(String(id));
-  if (bai) return 'B.AI ' + bai[1];
+  if (/^bai\d*$/i.test(String(id))) return 'B.AI';
   return String(id);
 }
 
@@ -173,7 +173,11 @@ function parseLogLines(logDir) {
   const EXHAUSTED = /^--- (\S+) (\S+) exhausted/;
   const SKIP = /^--- skip (\S+) (\S+): (.+?) ---/;
   const DONE = /^=== finished on (\S+) (\S+) ===/;
-  const laneToSource = (lane) => (lane === 'agy' ? 'agy-local' : lane);
+  const laneToSource = (lane) => {
+    if (lane === 'agy') return 'agy-local';
+    if (/^bai\d*$/i.test(lane)) return 'bai';
+    return lane;
+  };
   for (const file of files) {
     let content;
     try {
@@ -213,6 +217,7 @@ function parseLogLines(logDir) {
         open = {
           at: isoAt(m[3]),
           sourceId: laneToSource(m[1]),
+          lane: m[1],
           modelId: m[2],
           runId,
           outcome: stale ? 'ended' : 'live',
@@ -228,6 +233,7 @@ function parseLogLines(logDir) {
           entries.push({
             at: null,
             sourceId: laneToSource(m[1]),
+            lane: m[1],
             modelId: m[2],
             runId,
             outcome: 'quota-refused',
@@ -240,6 +246,7 @@ function parseLogLines(logDir) {
         entries.push({
           at: null,
           sourceId: laneToSource(m[1]),
+          lane: m[1],
           modelId: m[2],
           runId,
           outcome: 'quota-refused',
@@ -255,6 +262,7 @@ function parseLogLines(logDir) {
           entries.push({
             at: null,
             sourceId: laneToSource(m[1]),
+            lane: m[1],
             modelId: m[2],
             runId,
             outcome: 'done',
@@ -316,6 +324,8 @@ function parseLogLines(logDir) {
 }
 
 const probeCache = new Map();
+const BAI_PROBE_TIMEOUT_MS = 8000;
+const BAI_PROBE_CACHE_KEY = 'bai-balance';
 
 function probeXkiro(now, ttlMs) {
   // Measured remaining quota from the provider. The probe runs in the background and
@@ -368,15 +378,174 @@ function probeXkiro(now, ttlMs) {
     : { declaredLimit: 'UNKNOWN', consumption: 'UNKNOWN', headroom: 'UNKNOWN' };
 }
 
-function detectConfigured(homeDir, explicit) {
+function getBaiKeyDefinitions(opts = {}) {
+  const env = opts.env || process.env;
+  if (Array.isArray(opts.baiKeys)) {
+    return opts.baiKeys
+      .map((k, idx) => ({
+        id: `bai${idx + 1}`,
+        name: `BAI_API_KEY_${idx + 1}`,
+        key: typeof k === 'object' && k ? k.key : k,
+      }))
+      .filter((d) => typeof d.key === 'string' && d.key.trim().length > 0);
+  }
+  const keys = [];
+  const k1 = env.BAI_API_KEY || env.BAI_API_KEY_1;
+  if (typeof k1 === 'string' && k1.trim().length > 0) {
+    keys.push({ id: 'bai1', name: 'BAI_API_KEY', key: k1.trim() });
+  }
+  for (let i = 2; i <= 7; i++) {
+    const k = env[`BAI_API_KEY_${i}`];
+    if (typeof k === 'string' && k.trim().length > 0) {
+      keys.push({ id: `bai${i}`, name: `BAI_API_KEY_${i}`, key: k.trim() });
+    }
+  }
+  return keys;
+}
+
+async function probeSingleBaiKey(keyDef, fetchFn) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, BAI_PROBE_TIMEOUT_MS);
+
+  try {
+    const res = await fetchFn('https://api.b.ai/v1/balance', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${keyDef.key}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      return { id: keyDef.id, balance: 'UNKNOWN', error: `HTTP ${res.status}` };
+    }
+    const json = await res.json();
+    const bal =
+      json && json.data && typeof json.data.personal_balance === 'number'
+        ? json.data.personal_balance
+        : null;
+    if (bal === null) {
+      return { id: keyDef.id, balance: 'UNKNOWN', error: 'Invalid response shape' };
+    }
+    const warning = bal < 10000 ? `Số dư dưới 10.000 (${bal})` : null;
+    return { id: keyDef.id, balance: bal, warning };
+  } catch (err) {
+    const isTimeout =
+      err && (err.name === 'AbortError' || String(err.message || err).includes('aborted'));
+    return {
+      id: keyDef.id,
+      balance: 'UNKNOWN',
+      error: isTimeout ? 'Timeout' : 'Network error',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function probeAllBaiBalances(keys, opts = {}) {
+  const fetchFn = opts.fetch || globalThis.fetch;
+  if (!keys || keys.length === 0) {
+    return {
+      headroom: 'UNKNOWN',
+      keys: [],
+      warnings: [],
+    };
+  }
+  const results = await Promise.all(keys.map((k) => probeSingleBaiKey(k, fetchFn)));
+
+  let hasUnknown = false;
+  let total = 0;
+  const warnings = [];
+
+  for (const r of results) {
+    if (r.balance === 'UNKNOWN') {
+      hasUnknown = true;
+    } else {
+      total += r.balance;
+      if (r.warning) {
+        warnings.push(`${r.id}: ${r.warning}`);
+      }
+    }
+  }
+
+  // If any key fails or timeouts, its part is UNKNOWN and total must also be UNKNOWN (never 0)
+  const headroom = hasUnknown ? 'UNKNOWN' : total;
+
+  return {
+    headroom,
+    keys: results.map((r) => ({
+      id: r.id,
+      balance: r.balance,
+      warning: r.warning || null,
+      error: r.error || null,
+    })),
+    warnings,
+  };
+}
+
+function probeBai(now, ttlMs, opts = {}) {
+  const key = BAI_PROBE_CACHE_KEY;
+  const cached = probeCache.get(key);
+  const ttl = ttlMs || 60000;
+  const stale = !cached || now - cached.at >= ttl;
+  const keys = getBaiKeyDefinitions(opts);
+
+  if (stale && keys.length > 0 && !probeCache.get(key + ':inflight')) {
+    probeCache.set(key + ':inflight', true);
+    const promise = probeAllBaiBalances(keys, opts)
+      .then((data) => {
+        probeCache.set(key, {
+          at: Date.now(),
+          value: data,
+        });
+        return data;
+      })
+      .catch(() => {
+        /* provider unreachable; keep last measurement */
+      })
+      .finally(() => {
+        probeCache.delete(key + ':inflight');
+      });
+
+    if (opts.async) {
+      return promise;
+    }
+  }
+
+  if (opts.async && cached) {
+    return Promise.resolve(cached.value);
+  }
+
+  return cached ? cached.value : { headroom: 'UNKNOWN', keys: [], warnings: [] };
+}
+
+function clearProbeCache() {
+  probeCache.clear();
+}
+
+function detectConfigured(homeDir, explicit, env) {
   // A source is listed only when this machine actually carries its configuration.
   const home = homeDir || os.homedir();
+  const environment = env || process.env;
   // With an explicit home (tests), that directory alone decides: no environment fallback,
   // so a developer's own key cannot make a test see a source that is not in the fixture.
   const useEnv = !explicit;
   const exists = (...p) => fs.existsSync(path.join(home, ...p));
   const found = new Set();
-  if ((useEnv && process.env.XKIRO_API_KEY) || exists('.cline-xkiro')) found.add('xkiro');
+  if ((useEnv && environment.XKIRO_API_KEY) || exists('.cline-xkiro')) found.add('xkiro');
+  if (
+    (useEnv &&
+      (environment.BAI_API_KEY ||
+        environment.BAI_API_KEY_1 ||
+        environment.BAI_API_KEY_2 ||
+        environment.BAI_API_KEY_3 ||
+        environment.BAI_API_KEY_4 ||
+        environment.BAI_API_KEY_5 ||
+        environment.BAI_API_KEY_6 ||
+        environment.BAI_API_KEY_7)) ||
+    exists('.cline-bai')
+  ) {
+    found.add('bai');
+  }
   if (exists('.cline')) found.add('cline');
   if (exists('.agy') || exists('AppData', 'Local', 'agy')) found.add('agy-local');
   if (exists('.codex')) found.add('codex');
@@ -449,11 +618,16 @@ function buildRotationState(options) {
   const cooldowns = readCooldowns(ledgerFile);
   const quotaAccounts = readQuotaStore(quotaFile);
 
-  const configuredIds = detectConfigured(opts.homeDir, Boolean(opts.homeDir));
+  const configuredIds = detectConfigured(opts.homeDir, Boolean(opts.homeDir), opts.env);
+  if (Array.isArray(opts.baiKeys) && opts.baiKeys.length > 0) {
+    configuredIds.add('bai');
+  }
   for (const e of logEntries) configuredIds.add(e.sourceId);
   const allowProbe = opts.probe !== false;
   const xkiroUsage =
     allowProbe && configuredIds.has('xkiro') ? probeXkiro(now, opts.probeTtlMs) : null;
+  const baiUsage =
+    allowProbe && configuredIds.has('bai') ? probeBai(now, opts.probeTtlMs, opts) : null;
   for (const id of Object.keys(cooldowns)) configuredIds.add(id);
   for (const id of Object.keys(quotaAccounts)) configuredIds.add(id.toLowerCase());
 
@@ -471,7 +645,7 @@ function buildRotationState(options) {
     const recentRuns = sourceLogs
       .filter((e) => e.outcome !== 'live')
       .slice(-10)
-      .map((e) => ({ outcome: e.outcome, at: e.at }));
+      .map((e) => ({ outcome: e.outcome, at: e.at, lane: e.lane }));
 
     const liveEntries = sourceLogs.filter((e) => e.outcome === 'live');
     const activeRun =
@@ -514,25 +688,111 @@ function buildRotationState(options) {
       // limits.js not reachable; keep UNKNOWN
     }
 
-    let status = 'idle';
-    if (activeRun.modelId) status = 'live';
-    if (isOnCooldown) status = 'cooldown';
-    // A source whose measured headroom is zero is exhausted, regardless of the ledger.
-    if (headroom === 0) {
-      status = 'quota-exhausted';
-      cooldown.reason = cooldown.reason || 'daily free quota exhausted (measured)';
+    let baiKeysInfo = null;
+    let nodeLabel = def.label;
+    let warnings = [];
+
+    if (def.id === 'bai') {
+      const configuredKeyList = getBaiKeyDefinitions(opts);
+      let totalConfigured = configuredKeyList.length;
+      if (totalConfigured === 0) {
+        if (typeof opts.totalKeys === 'number') {
+          totalConfigured = opts.totalKeys;
+        } else {
+          const observedBaiLanes = new Set(
+            logEntries.filter((e) => /^bai\d+$/i.test(e.lane || '')).map((e) => e.lane)
+          );
+          totalConfigured = observedBaiLanes.size > 0 ? Math.max(observedBaiLanes.size, 7) : 7;
+        }
+      }
+
+      const liveLanes = new Set(liveEntries.map((e) => e.lane || 'bai1'));
+      const runningCount = liveLanes.size;
+      baiKeysInfo = { running: runningCount, total: totalConfigured };
+      nodeLabel = 'B.AI ' + runningCount + '/' + totalConfigured + ' key';
+
+      if (baiUsage) {
+        headroom = baiUsage.headroom;
+        warnings = baiUsage.warnings || [];
+      }
     }
 
-    sources.push({
+    let status = 'idle';
+    if (def.id === 'bai') {
+      if (activeRun.modelId || (baiKeysInfo && baiKeysInfo.running > 0)) {
+        status = 'live';
+      } else {
+        // 'quota-exhausted' ONLY when ALL keys are exhausted
+        let allExhausted = false;
+        if (headroom === 0) {
+          allExhausted = true;
+        } else {
+          const configuredKeyList = getBaiKeyDefinitions(opts);
+          const keyIds =
+            configuredKeyList.length > 0
+              ? configuredKeyList.map((k) => k.id)
+              : ['bai1', 'bai2', 'bai3', 'bai4', 'bai5', 'bai6', 'bai7'];
+
+          if (cooldowns['bai'] && new Date(cooldowns['bai'].until).getTime() > now) {
+            allExhausted = true;
+          } else {
+            const allInCooldown =
+              keyIds.length > 0 &&
+              keyIds.every((id) => {
+                const c = cooldowns[id];
+                return c && c.until && new Date(c.until).getTime() > now;
+              });
+            if (allInCooldown) {
+              allExhausted = true;
+            }
+          }
+        }
+
+        if (allExhausted) {
+          status = 'quota-exhausted';
+          cooldown.reason = cooldown.reason || 'all B.AI keys quota exhausted';
+        } else {
+          status = 'idle';
+        }
+      }
+    } else {
+      if (activeRun.modelId) status = 'live';
+      if (isOnCooldown) status = 'cooldown';
+      // A source whose measured headroom is zero is exhausted, regardless of the ledger.
+      if (headroom === 0) {
+        status = 'quota-exhausted';
+        cooldown.reason = cooldown.reason || 'daily free quota exhausted (measured)';
+      }
+    }
+
+    const sourceObj = {
       id: def.id,
       label: def.label,
       configured: isConfigured || !hasAnyData,
       status,
       activeRun,
-      cooldown: isOnCooldown || status === 'exhausted' ? cooldown : { reason: null, until: null },
+      cooldown:
+        isOnCooldown || status === 'quota-exhausted' || status === 'exhausted'
+          ? cooldown
+          : { reason: null, until: null },
       limits: { declaredLimit, consumption, headroom },
       recentRuns,
-    });
+      attempts: sourceLogs.filter((e) => e.started).length,
+      skipped: sourceLogs.filter((e) => !e.started).length,
+      quotaRefused: sourceLogs.filter((e) => e.outcome === 'quota-refused').length,
+      tokens: consumption,
+    };
+
+    if (def.id === 'bai') {
+      sourceObj.keys = baiKeysInfo;
+      sourceObj.nodeLabel = nodeLabel;
+      sourceObj.warnings = warnings;
+      if (baiUsage && baiUsage.keys) {
+        sourceObj.keyDetails = baiUsage.keys;
+      }
+    }
+
+    sources.push(sourceObj);
   }
 
   // Flat, newest-first view of every attempt, so the page can list activity
@@ -544,6 +804,7 @@ function buildRotationState(options) {
     .map((e) => ({
       runId: e.runId,
       sourceId: e.sourceId,
+      lane: e.lane || e.sourceId,
       modelId: e.modelId,
       outcome: e.outcome,
       at: e.at || null,
@@ -595,6 +856,10 @@ module.exports = {
   SOURCE_DEFS,
   detectConfigured,
   probeXkiro,
+  probeBai,
+  probeAllBaiBalances,
+  clearProbeCache,
+  getBaiKeyDefinitions,
   parseLogLines,
   readCooldowns,
   readQuotaStore,
