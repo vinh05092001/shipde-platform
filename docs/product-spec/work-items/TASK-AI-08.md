@@ -6,33 +6,32 @@
 |---|---|
 | Work Item ID | `TASK-AI-08` |
 | Feature ID | `N/A` |
-| Status | `BLOCKED_DEPENDENCY` |
+| Status | `BACKLOG` |
 | Delivery order | `141` |
-| Dependencies | `TASK-AI-07` (merged into `origin/main`; register row 140 not yet reconciled to `MERGED`) |
+| Dependencies | `TASK-AI-07` (merged into `origin/main`) |
 | Assigned author | `GEMINI` |
 | Risk | `HIGH` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-08.md`, `scripts/ai/control.ps1`, `tools/ai-brain/**`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `docs/product-spec/docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `spec/task-ai-08` |
+| Branch | `feat/task-ai-08` |
 | Pull Request | `Pending` |
 
 ### Status transition ledger
 
-The durable delivery register (`docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, row 141) is the authoritative source for this Work Item's lifecycle state under `AGENTS.md` § Unit of delivery. The register records `BLOCKED_DEPENDENCY`, therefore the Control table above records `BLOCKED_DEPENDENCY` and no other value.
+The durable delivery register (`docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, row 141) is the authoritative source for this Work Item's lifecycle state under `AGENTS.md` § Unit of delivery. The register records `BACKLOG`, therefore the Control table above records `BACKLOG` and no other value.
 
 | Gate in the required flow | Traversed? | Transition evidence |
 |---|---|---|
-| `BACKLOG` | No | None. The register never moved this row out of the dependency block, so it has not reached `BACKLOG`. |
-| `BLOCKED_DEPENDENCY` | Yes — current stage | `FEATURE-DELIVERY-REGISTER.csv` row 141, column `status` = `BLOCKED_DEPENDENCY` |
+| `BLOCKED_DEPENDENCY` | Yes — cleared | The governed reconciler moved row 141 out of the dependency block; the file is not edited by hand. |
+| `BACKLOG` | Yes — current stage | `FEATURE-DELIVERY-REGISTER.csv` row 141, column `status` = `BACKLOG` |
 | `READY_FOR_AUTHOR` | No | None. No register write has occurred. |
 | `IN_PROGRESS` | No | None. No register write has occurred. |
 | `READY_FOR_CODEX` | No | None. No register write has occurred. |
 
 Consequences of this ledger, binding on any controller or reviewer:
 
-- This Work Item file must never declare `READY_FOR_CODEX` (or any later stage) while the register records `BLOCKED_DEPENDENCY`; doing so would route the item past gates for which no transition evidence exists. The Codex review record below is therefore `NOT_REVIEWED`, not a review verdict.
-- The dependency is satisfied in Git reality but not yet recorded: `TASK-AI-07` is merged into `origin/main` at `bdeb15b6f8bcb9c688caddfbd6a671384654179f` (PR #37) and again at `a485ed88d62df045109e7fbc2208892d3a884be6` (PR #53), while register row 140 still reads `BACKLOG` because no durable merge-evidence artifact exists for it. Clearing the block is the governed reconciler's job (`TASK-AI-19`), not this file's.
-- The intervening `READY_FOR_AUTHOR` and `IN_PROGRESS` transitions must be written to `FEATURE-DELIVERY-REGISTER.csv` by the governed register reconciler before this item is stage-eligible for review routing.
+- This Work Item file must never declare `READY_FOR_CODEX` (or any later stage) while the register records `BACKLOG`; doing so would route the item past gates for which no transition evidence exists. The Codex review record below is therefore `NOT_REVIEWED`, not a review verdict.
+- The intervening `READY_FOR_AUTHOR` and `IN_PROGRESS` transitions must be written to `FEATURE-DELIVERY-REGISTER.csv` by the governed register reconciler; this Pull Request does not write them.
 - `AC-AI-08-01` mechanically compares the `Status` cell of the Control table above against row 141 of the register and fails if they diverge, guaranteeing the two sources cannot silently disagree.
 
 ## Business outcome
@@ -68,7 +67,7 @@ The deterministic supervisor established by `TASK-AI-06` and extended with cross
 ## Preconditions and dependencies
 
 - Prerequisite `TASK-AI-07` is merged into `origin/main` at `bdeb15b6f8bcb9c688caddfbd6a671384654179f` (PR #37), with a follow-up on the shared-check rule at `a485ed88d62df045109e7fbc2208892d3a884be6` (PR #53). Both commits are reachable on `origin/main`; `AC-AI-08-03` proves this from the repository rather than from the register.
-- Delivery register alignment: `FEATURE-DELIVERY-REGISTER.csv` row 141 records `status: "BLOCKED_DEPENDENCY"`. The Control table records `BLOCKED_DEPENDENCY` exactly.
+- Delivery register alignment: `FEATURE-DELIVERY-REGISTER.csv` row 141 records `status: "BACKLOG"`. The Control table records `BACKLOG` exactly.
 - The deterministic supervisor exists in `scripts/ai/control.ps1` with `Supervise`, `Review`, `Resume`, `Status` and `Test` actions, and its behavioral suite runs under `powershell -NoProfile -File scripts/ai/control.ps1 -Action Test`.
 - GitHub check evidence is available through the paginated check rollup (`Get-ShipDeExactHeadCheckRollup`) grouped by name and provider identity (`AI-SUP-16`).
 - `supervisor-state.json` round-trips through `Normalize-ShipDeSupervisorState` with every property present, so a new evidence field can be added without breaking StrictMode.
@@ -158,8 +157,8 @@ Not applicable; this Work Item governs supervisor automation and terminal loggin
 
 | AC/Test ID | Scenario | Exact command to run | Exit code | Expected output string | File / artifact |
 |---|---|---|---|---|---|
-| `AC-AI-08-01` | Control table status and delivery register row 141 cannot diverge | `node tools/ai-brain/acceptance/ac-08-01-status-alignment.js` | `0` | `Control status matches register row 141: BLOCKED_DEPENDENCY (declared TASK-AI-08)` | `docs/product-spec/work-items/TASK-AI-08.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-brain/acceptance/ac-08-01-status-alignment.js`, `tools/ai-brain/acceptance/lib/spec-status-alignment.js` |
-| `AC-AI-08-02` | **Negative proof, must fail:** a tampered copy of the real specification diverges from the real register, and the comparison `AC-AI-08-01` runs detects it | `node tools/ai-brain/acceptance/ac-08-02-status-divergence.js` | `1` | `STATUS_DIVERGENCE_DETECTED: tampered copy READY_FOR_AUTHOR != register BLOCKED_DEPENDENCY` | `tools/ai-brain/acceptance/ac-08-02-status-divergence.js`, `tools/ai-brain/acceptance/lib/spec-status-alignment.js`; command stderr |
+| `AC-AI-08-01` | Control table status and delivery register row 141 cannot diverge | `node tools/ai-brain/acceptance/ac-08-01-status-alignment.js` | `0` | `Control status matches register row 141: BACKLOG (declared TASK-AI-08)` | `docs/product-spec/work-items/TASK-AI-08.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-brain/acceptance/ac-08-01-status-alignment.js`, `tools/ai-brain/acceptance/lib/spec-status-alignment.js` |
+| `AC-AI-08-02` | **Negative proof, must fail:** a tampered copy of the real specification diverges from the real register, and the comparison `AC-AI-08-01` runs detects it | `node tools/ai-brain/acceptance/ac-08-02-status-divergence.js` | `1` | `STATUS_DIVERGENCE_DETECTED: tampered copy READY_FOR_AUTHOR != register BACKLOG` | `tools/ai-brain/acceptance/ac-08-02-status-divergence.js`, `tools/ai-brain/acceptance/lib/spec-status-alignment.js`; command stderr |
 | `AC-AI-08-03` | Dependency resolution truthfulness: register row 141 declares `TASK-AI-07`, and `TASK-AI-07` is merged into `origin/main` | `node tools/ai-brain/acceptance/ac-08-03-dependency-merged.js` | `0` | `TASK-AI-07 dependency verified: merged into origin/main for TASK-AI-08` | `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-brain/acceptance/ac-08-03-dependency-merged.js`, `tools/ai-brain/acceptance/lib/dependency-merged.js` |
 | `AC-AI-08-04` | **Negative proof, must fail:** a copy of the real register that names a dependency with no merge commit is refused by the same rule `AC-AI-08-03` runs | `node tools/ai-brain/acceptance/ac-08-04-dependency-unproven.js` | `1` | `DEPENDENCY_UNPROVEN: TASK-AI-99 has no merge commit reachable on origin/main` | `tools/ai-brain/acceptance/ac-08-04-dependency-unproven.js`, `tools/ai-brain/acceptance/lib/dependency-merged.js`; command stderr |
 | `AC-AI-08-05` | Bounded-repair contract holds in the real supervisor source: a configurable budget, a fail-closed stop, and a repair bound to the exact HEAD | `node tools/ai-brain/acceptance/ac-08-05-repair-budget-surface.js` | `0` | `REPAIR_BUDGET_CONTRACT_HOLDS: bounded repair budget present in scripts/ai/control.ps1` | `scripts/ai/control.ps1`, `tools/ai-brain/acceptance/ac-08-05-repair-budget-surface.js`, `tools/ai-brain/acceptance/lib/repair-budget-contract.js` |
@@ -235,7 +234,7 @@ node tools/ai-brain/acceptance/ac-08-14-outside-repository.js
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `Pending` | `NOT_REVIEWED` | Specification authored for TASK-AI-08: extended CI/review diagnostics and bounded repair. The register records `BLOCKED_DEPENDENCY`, so under the status transition ledger above this item is not stage-eligible for review routing and no verdict is claimed. |
+| 1 | `Pending` | `NOT_REVIEWED` | Specification authored for TASK-AI-08: extended CI/review diagnostics and bounded repair. The register records `BACKLOG`, so under the status transition ledger above this item is not stage-eligible for review routing and no verdict is claimed. |
 
 ## Acceptance matrix validation
 
@@ -270,18 +269,82 @@ repository has already had to repair once:
    with `SOURCE_MISSING`; a proof that dies for an unrelated reason cannot be
    mistaken for a detection.
 
+### What Pull Request #80 adds on top of this matrix
+
+Each of the three proofs above carried a fourth branch that the matrix never
+described. The tamper is applied to the copy, the shared rule fails to see it,
+and the script printed `DIVERGENCE_NOT_DETECTED`, `DEPENDENCY_WRONGLY_PROVEN` or
+`REPAIR_BUDGET_UNBOUNDED_NOT_DETECTED` to stderr and then exited `0`. Every
+caller of an acceptance script reads `0` as a check that passed, so a negative
+proof that missed its own tamper was reported as a negative proof that held —
+which is precisely the failure a negative proof exists to catch.
+
+Those branches now exit `2`, the code the legends in
+`tools/ai-brain/acceptance/lib/spec-status-alignment.js` ("2 the claim cannot be
+measured") and `tools/ai-brain/acceptance/lib/repair-budget-contract.js` ("2 it
+cannot be measured") already reserve for it, and the convention already merged
+for `AC-AI-10-02`, `AC-AI-21-02` and `AC-AI-24-02` under `TASK-AI-39`. No row of
+the matrix above is weakened or restated: a detected tamper still exits `1` with
+the documented string, and a missing real source still exits `2`. Only the
+undetected-tamper path moved, from `0` to `2`.
+
+That is the whole of Pull Request #80 measured against `origin/main` — 7
+insertions and 3 deletions across `ac-08-02-status-divergence.js`,
+`ac-08-04-dependency-unproven.js` and `ac-08-06-repair-budget-unbounded.js`. The
+bounded repair that the PR title names shipped on `main` through Pull Request
+#91, at merge commit `669d17c`. Integrating `origin/main` into this branch
+therefore took `main`'s `scripts/ai/control.ps1`, `main`'s copy of this Work Item
+and `main`'s `repair-budget-contract.js`: both branches implemented the same
+requirements `AI-08-R01..R09` with mutually incompatible supervisor
+decomposition, and `main`'s function names already have merged dependents written
+against them (`TASK-AI-09`, merge commit `cd2a45d`). No supervisor behavior is
+claimed or changed by this Pull Request.
+
+### Scope of this repair against the `TASK-AI-39` inventory
+
+Two limits must be stated plainly, because the exit-code convention above is a
+repair of a known defect class and is not yet the state of the repository.
+
+**This repairs three of the fourteen scripts that `main` already listed.**
+`docs/product-spec/work-items/TASK-AI-39.md` (the "Same shape outside this Work
+Item" paragraph) inventories the identical failure-path-exits-`0` shape in
+fourteen acceptance scripts and states that they are listed, not repaired, so
+that each requires its own Work Item and review. `ac-08-02-status-divergence.js`,
+`ac-08-04-dependency-unproven.js` and `ac-08-06-repair-budget-unbounded.js` are
+three of those fourteen. This Pull Request repairs exactly those three scripts
+and nothing else. Because `AGENTS.md` binds one Pull Request to one Work Item and
+the contract gate rejects a PR that edits a second Work Item file, this Pull
+Request does not edit the `TASK-AI-39` inventory. Removing these three scripts
+from that not-repaired list is left to the owner of `TASK-AI-39`, so that
+inventory is knowingly stale with respect to these three as of this head.
+
+**The remaining instances are declared open, not fixed.** An independent scan of
+`tools/ai-brain/acceptance/` at this head finds the same missed-tamper-exits-`0`
+branch still present in twenty-two scripts: `ac-07-04`, `ac-07-06`, `ac-07-13`,
+`ac-09-02`, `ac-09-04`, `ac-09-06`, `ac-27-02`, `ac-27-04`, `ac-27-06`,
+`ac-27-08`, `ac-29-02`, `ac-29-04`, `ac-29-08`, `ac-33-02`, `ac-35-06`,
+`ac-37-07`, `ac-38-08`, `ac-38-16`, `ac-41-02`, `ac-41-04`, `ac-41-06`,
+`ac-41-08`. Every one of these remains open and, per the `TASK-AI-39`
+instruction quoted above, each still requires its own Work Item and review. The
+convention this Pull Request applies to the three `ac-08` proofs is the target,
+not a claim that the repository already follows it.
+
 ## Residual limitations
 
-- Implementation of exact failure-evidence capture, the per-exact-HEAD repair
-  budget and the checkpoint fields above is specified here and delivered during
-  the implementation phase of `TASK-AI-08`. `AC-AI-08-05` asserts the bounded
-  repair contract the real supervisor already satisfies today, so that extending
-  the budget cannot silently remove it; it does not assert the extended behavior,
-  which does not exist yet.
-- Delivery register row 141 displays `BLOCKED_DEPENDENCY` while `TASK-AI-07` is
-  merged in Git reality. The Control table stays strictly aligned to the register
-  under `AGENTS.md` § Unit of delivery; clearing the block is the governed
-  reconciler's job (`TASK-AI-19`), not a manual write.
+- Exact failure-evidence capture, the per-exact-HEAD repair budget and the
+  checkpoint fields above are implemented in `scripts/ai/control.ps1`
+  (`Get-ShipDeCiRepairEvidence`, `Get-ShipDeReviewRepairEvidence`,
+  `Get-ShipDeRepairAttemptCount`, `Add-ShipDeRepairAttempt`,
+  `Test-ShipDeRepairReattemptEligible`, `-MaxRepairAttemptsPerHead`) and covered
+  by the self-tests under `AC-AI-08-13`. `AC-AI-08-05` still asserts only the
+  preserved Work-Item bound; the extended behavior is proven by `AC-AI-08-13`.
+- An acknowledged repair of an unchanged HEAD is redispatched only when its AO
+  worker has returned to `COMPLETED` or `PARKED` outside the 120-second
+  reactivation window. An external-review run (no AO session) cannot observe
+  that, so it never redispatches the same HEAD; the author must push a new HEAD.
+- A `PendingDispatch` checkpoint written before this change carries no
+  `Evidence`; recovery rebuilds it from the current check rollup and stops
+  fail-closed when it cannot.
 - Register row 140 (`TASK-AI-07`) still reads `BACKLOG` although its work is
   merged and implemented, because no durable merge-evidence artifact carrying an
   exact-HEAD verdict exists for it. `AC-AI-08-03` therefore proves the dependency
@@ -290,3 +353,14 @@ repository has already had to repair once:
 - Checkpoint restart semantics — resuming a repair across a machine reboot or a
   deleted worktree — remain owned by `TASK-AI-09`; this Work Item only persists
   the fields `TASK-AI-09` will resume.
+- This Pull Request does not deliver this Work Item, and must not be read as the
+  delivery of bounded repair. `TASK-AI-08` shipped on `main` through Pull Request
+  #91 (merge commit `669d17c`). Pull Request #80 is a duplicate branch that
+  carried the same requirements with an incompatible decomposition; it was
+  reintegrated onto `main` by taking `main` as the baseline, and what survives of
+  it is the exit-code repair recorded in the section above. Register row 141
+  still records `BACKLOG` and this Pull Request does not write it, so the
+  `Status` cell of the Control table remains `BACKLOG` and `AC-AI-08-01`
+  continues to hold. Whether the branch is then merged for its three exit-code
+  repairs or closed as superseded is the human owner's decision, not the
+  author's.

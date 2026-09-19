@@ -179,9 +179,18 @@ Prohibited in this Work Item:
 ## UI states
 
 Not applicable; this Work Item has no user-facing web UI. Operator-facing console
-states:
+states **specified** by the manifest-audit integration (`AI-43-R01`):
+
 - **PASS**: `Ecosystem manifest audit: VALIDATED (27 checkable, 19 present, 8 missing, 0 errors, 1 warning [codex-cli drift])` with exit code 0.
 - **FAIL**: `Ecosystem manifest audit: FAILED (N errors: QUALITY_GATE_MISSING: tool-id) -> ACTION REQUIRED` with exit code 1.
+
+**Measured status at HEAD: NOT DELIVERED.** Neither string is produced by any
+script in the repository. `doctor.ps1` and `ecosystem.ps1` do not run the
+manifest audit (`AC-AI-43-08`: `MANIFEST_AUDIT_WIRED_SURFACES: 0`), so these are
+the states the wiring must produce once a later Work Item delivers `AI-43-R01`
+and `AI-43-R09`, not states an operator can observe today. The audit's own
+console finding line for an absent adopted gate is `QUALITY_GATE_MISSING:
+<tool-id>` (`AC-AI-43-03`). See Defect D7.
 
 ## API, event and data impact
 
@@ -391,25 +400,72 @@ all", which is a statement about file contents. A textual check is the correct
 instrument for a textual claim, and the mutation above shows the instrument
 reacts to the real files rather than to its own injected literals.
 
+### D7 — the `Verification commands` and `UI states` blocks state expectations the repository does not meet
+
+**Defect class:** stale pin and false claim, outside the acceptance matrix.
+
+The audit above covered the acceptance matrix. The same two defect classes also
+stood in two prose blocks of this Work Item; both were measured at HEAD before
+being rewritten.
+
+**Measurement (Verification commands §1), executed from the repository root:**
+
+| Command | Stored expectation | Measured at HEAD |
+|---|---|---|
+| `scripts/ai/ecosystem.ps1 -Action Validate` | exit 0, `Ecosystem manifest: VALID` | exit 0; prints `VALIDATION PASSED: All 37 approved adopted repositories, 14 product dependencies, 10 candidates, and 9 profiles conform to ecosystem policy.` No script anywhere prints `Ecosystem manifest: VALID`. |
+| `scripts/ai/doctor.ps1` | exit 0, `Ecosystem manifest audit: VALIDATED` | `doctor.ps1` does not run the manifest audit (`AC-AI-43-08`: `MANIFEST_AUDIT_WIRED_SURFACES: 0`), so it cannot print that line. This is the false claim D3 corrected in the Business outcome; §1 still carried it. |
+| `node tools/ai-brain/cli.js manifest` | exit 0, `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` | exit 0, `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` today; the warning and note counts are host-dependent (D1) and are not an invariant. |
+| `node tools/ai-brain/cli.js reconcile` | exit 0, `Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú` | exit 0, `Tổng: 0 lỗi, 0 cảnh báo, 150 ghi chú`. The pinned tally had drifted. |
+| `node --test <three globs>` | exit 0, 458 passed, 0 failed | exit 0, 25 test files, 641 tests, 641 passed, 0 failed. The pinned tally had drifted. |
+| `python docs/product-spec/scripts/validate_docs.py` | exit 0 | exit 0 today. |
+
+**Measurement (UI states).** Both operator-facing console strings are specified
+behaviour of the manifest-audit wiring, and neither is produced by any script in
+the repository at HEAD: `doctor.ps1` and `ecosystem.ps1` do not run the manifest
+audit, so the `VALIDATED` and `FAILED ... -> ACTION REQUIRED` states cannot be
+observed today. The audit's console surface today is the Brain CLI report, whose
+finding line for an absent adopted gate is `QUALITY_GATE_MISSING: <tool-id>`
+(`AC-AI-43-03`).
+
+**Replacement.** §1 now states only the invariants (exit code 0; `Tổng: 0 lỗi`)
+and names the string each command actually prints, deferring every count and
+pass tally to the acceptance script that asserts it (`AC-AI-43-01`,
+`AC-AI-43-02`, `AC-AI-43-07`); it records that `doctor.ps1` is not a
+manifest-audit surface. The `UI states` block now marks those two console
+states as specified but not delivered at HEAD, matching the `NOT IMPLEMENTED`
+marking already applied to `AI-43-R01`, `AI-43-R07` and `AI-43-R09`. No code
+changed; only the expectations.
+
 ## Verification commands
 
 ### 1. Standard repository verification suite
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ai/ecosystem.ps1 -Action Validate
-# Expected: Exit code 0, "Ecosystem manifest: VALID"
+# Expected: Exit code 0. Measured at HEAD it prints
+#   "VALIDATION PASSED: All 37 approved adopted repositories, 14 product dependencies,
+#    10 candidates, and 9 profiles conform to ecosystem policy."
+# asserted by AC-AI-43-01. No script prints "Ecosystem manifest: VALID"; see Defect D7.
 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ai/doctor.ps1
-# Expected: Exit code 0, "Ecosystem manifest audit: VALIDATED"
+# Expected: no manifest-audit verdict. doctor.ps1 does NOT run the manifest audit at HEAD
+# (AC-AI-43-08 measures MANIFEST_AUDIT_WIRED_SURFACES: 0), so it neither fails on manifest
+# audit errors nor prints "Ecosystem manifest audit: VALIDATED"; its exit code reflects
+# unrelated workstation findings only. See Defects D3 and D7.
 
 node tools/ai-brain/cli.js manifest
-# Expected: Exit code 0, "Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú", 1 warning (codex-cli version drift)
+# Expected: Exit code 0, "Tổng: 0 lỗi" (zero blocking errors). The warning and note counts are
+# host-dependent observations, not invariants (Defect D1); ac-43-02 asserts summary.error === 0
+# against the real manifest. Measured at HEAD: 0 errors, 1 warning (codex-cli pin drift), 2 notes.
 
 node tools/ai-brain/cli.js reconcile
-# Expected: Exit code 0, "Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú"
+# Expected: Exit code 0, "Tổng: 0 lỗi". Warning and note counts are host-dependent and are not
+# pinned here (Defect D1). Measured at HEAD: 0 errors, 0 warnings, 150 notes.
 
 node --test "tools/ai-brain/test/*.test.js" "tools/ai-dashboard/test/*.test.js" "tools/ai-guard/test/*.test.js"
-# Expected: Exit code 0, 458 passed, 0 failed
+# Expected: Exit code 0, fail 0. The pass count is not an invariant and is not pinned here;
+# ac-43-07 asserts the suite is non-vacuous (at least one test per file, pass > 0, fail 0).
+# Measured at HEAD: 25 test files, 641 tests, 641 passed, 0 failed.
 
 python docs/product-spec/scripts/validate_docs.py
 # Expected: Exit code 0, validation passes across all markdown specifications
