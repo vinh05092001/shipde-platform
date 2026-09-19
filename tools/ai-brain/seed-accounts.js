@@ -19,10 +19,14 @@
  * today, not what any document claims. Two separate outages this week traced
  * to a configured model name the provider did not have.
  *
- * Coding grades below are PROVISIONAL. Nothing here has been measured, so they
- * are a starting point that keeps obviously-small models away from
- * architectural work, not a judgement. TASK-AI-27 and TASK-AI-41 replace them
- * with grades derived from real outcomes.
+ * Coding grades below are PROVISIONAL declarations, explicitly marked with
+ * gradeProvenance: 'provisional' so a placeholder cannot read as a
+ * measurement. Nothing here has been measured. resolveGrade (fitness.js)
+ * reports a declared grade as graded: true with source: 'declared', an absent
+ * grade as graded: false with source: 'assumed' (STANDARD), and a value
+ * outside the ladder as an error naming the model and the value. TASK-AI-30
+ * replaces these provisional numbers with grades derived from recorded
+ * qualification outcomes; TASK-AI-41 adds review grading.
  */
 
 const { addAccount, listAccounts, updateAccount } = require('./accounts');
@@ -170,4 +174,18 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { ACCOUNTS, ANTIGRAVITY_MODELS, NINEROUTER_MODELS };
+// Every grade declared above is a PROVISIONAL starting point, explicitly
+// marked so a placeholder cannot read as a measurement. TASK-AI-30 replaces
+// these with grades derived from recorded qualification outcomes; until then
+// resolveGrade reports the class together with this provenance.
+const GRADE_PROVENANCE = 'provisional';
+for (const list of [ANTIGRAVITY_MODELS, NINEROUTER_MODELS]) {
+  for (const model of list) {
+    model.gradeProvenance = GRADE_PROVENANCE;
+    if (model.reviewGrade !== undefined) {
+      model.reviewGradeProvenance = GRADE_PROVENANCE;
+    }
+  }
+}
+
+module.exports = { ACCOUNTS, ANTIGRAVITY_MODELS, NINEROUTER_MODELS, GRADE_PROVENANCE };
