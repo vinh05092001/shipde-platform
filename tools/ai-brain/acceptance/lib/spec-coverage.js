@@ -74,9 +74,44 @@ function specIdentity(row, root) {
   };
 }
 
-/** Register rows whose `work_item_path` resolves to no file on disk. */
+/**
+ * Register rows whose `work_item_path` resolves to a file on disk. The set is
+ * derived by `coverageByPath`, never recomputed, so "specified" cannot drift
+ * away from "unspecified" inside this module.
+ */
+function specifiedRows(rows, root) {
+  return coverageByPath(rows, root).specified;
+}
+
+/**
+ * Register rows that are not specified: either the declared path resolves to no
+ * file, or the row declares no path at all. A row with a blank `work_item_path`
+ * names no document, so treating it as outside the measure would understate
+ * exactly the count this Work Item exists to drive to zero (AI-20-R01), and a
+ * row that names no file is the clearest case of "a line that looks like work
+ * and is not".
+ */
 function unspecifiedRows(rows, root) {
-  return rows.filter((row) => row.work_item_path && !specExists(row, root));
+  return coverageByPath(rows, root).unspecified;
+}
+
+/**
+ * The one partition the coverage measure is built from: every register row lands
+ * in exactly one of the two sets, so `specified.length + unspecified.length`
+ * always equals the number of rows handed in. The equality is a relation, not a
+ * pinned count, so it holds however the register drifts (AI-20-R08).
+ */
+function coverageByPath(rows, root) {
+  const specified = [];
+  const unspecified = [];
+  for (const row of rows) {
+    if (row && row.work_item_path && specExists(row, root)) {
+      specified.push(row);
+    } else {
+      unspecified.push(row);
+    }
+  }
+  return { specified, unspecified };
 }
 
 /** Register rows whose spec file exists but declares a different Work Item ID. */
@@ -94,6 +129,8 @@ module.exports = {
   registerRows,
   specExists,
   specIdentity,
+  coverageByPath,
+  specifiedRows,
   unspecifiedRows,
   identityMismatches,
 };

@@ -68,17 +68,44 @@ if (tamperedContent === realContent) {
   process.exit(2);
 }
 
-const tmpDir = os.tmpdir();
-const tmpPath = path.join(tmpDir, `tampered-${Date.now()}.md`);
-fs.writeFileSync(tmpPath, tamperedContent, 'utf8');
+// The copy lives in a directory this run creates and removes: never in the
+// repository, and never loose in the shared root of os.tmpdir() where a second run
+// in the same millisecond would overwrite the first. The identity is read out of
+// the copy before the directory is removed, so no exit path can leave the file
+// behind.
+function readTamperedIdentity() {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-ac-20-02-'));
+  try {
+    const tmpPath = path.join(tmpDir, 'tampered-spec.md');
+    fs.writeFileSync(tmpPath, tamperedContent, 'utf8');
+    // The tampered row is the real row with its path aimed at the copy, so the only
+    // thing under test is what the copy's Control table declares.
+    return specIdentity({ ...realRow, work_item_path: tmpPath }, '');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
 
-// Create a tampered row pointing at the tampered file.
-const tamperedRow = { ...realRow, work_item_path: tmpPath };
-const tamperedIdentity = specIdentity(tamperedRow, '');
+const tamperedIdentity = readTamperedIdentity();
+
+if (tamperedIdentity.declaredId !== otherRow.work_item_id) {
+  console.error(
+    `CONTROL_FAILURE: the copy declares "${tamperedIdentity.declaredId}", not the borrowed row "${otherRow.work_item_id}"`
+  );
+  process.exit(2);
+}
 
 if (tamperedIdentity.matches) {
   console.error('SPEC_IDENTITY_MISMATCH_NOT_DETECTED: tampered file was not rejected');
-  fs.unlinkSync(tmpPath);
+  process.exit(2);
+}
+
+// The real document must be exactly as this script found it: rejecting a copy may
+// not disturb the specification it was copied from.
+if (!specIdentity(realRow, root).matches) {
+  console.error(
+    `CONTROL_FAILURE: the real specification ${realRow.work_item_id} no longer matches its row`
+  );
   process.exit(2);
 }
 
@@ -86,6 +113,4 @@ console.error(
   `SPEC_IDENTITY_MISMATCH_DETECTED: tampered file declares "${tamperedIdentity.declaredId}", row expects "${realRow.work_item_id}"`
 );
 
-// Clean up.
-fs.unlinkSync(tmpPath);
 process.exit(1);

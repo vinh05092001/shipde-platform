@@ -207,24 +207,36 @@ CLI sub-command (`spec-author`) and a deterministic document layout under
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| `AC-AI-20-01` | The specification-identity rule over the real register: no existing specification belongs to a different row | `node tools/ai-brain/acceptance/ac-20-01-spec-coverage.js` exits 0 and prints the string `SPEC_COVERAGE: 0 identity mismatches`, after printing the measured `specified`/`unspecified` counts as evidence. The rule is not written into this row: the script requires `tools/ai-brain/acceptance/lib/spec-coverage.js`, the same module `AC-AI-20-02` requires, and it exits 2 outside the repository | command stdout |
-| `AC-AI-20-02` | **Negative proof, must fail:** the identity rule rejects a copy of a real specification whose Control table names a different register row, after a CONTROL proving the untouched file matches its row | `node tools/ai-brain/acceptance/ac-20-02-spec-identity.js` exits 1 and prints the string `SPEC_IDENTITY_MISMATCH_DETECTED:`. It reads the real register and a real Work Item file, tampers only a copy written to `os.tmpdir()`, and exits 2 outside the repository | command stderr; `tools/ai-brain/acceptance/ac-20-02-spec-identity.js`, `tools/ai-brain/acceptance/lib/spec-coverage.js` |
-| `AC-AI-20-03` | **Negative proof, must fail:** the reconciler's `SPEC_MISSING` severity escalates from `info` to `error` when a blocked row with an absent specification is recorded as ready, using the real rule in `tools/ai-brain/reconcile.js` | `node tools/ai-brain/acceptance/ac-20-03-spec-missing-severity.js` exits 1 and prints the string `SPEC_MISSING_ESCALATED:`. It CONTROLs that the real blocked row is reported as `info`, tampers a copy of the register in `os.tmpdir()`, and exits 2 outside the repository | command stderr; `tools/ai-brain/acceptance/ac-20-03-spec-missing-severity.js` |
+| `AC-AI-20-01` | The specification-identity rule over the real register: no existing specification belongs to a different row | `node tools/ai-brain/acceptance/ac-20-01-spec-coverage.js` exits 0 and prints the string `SPEC_COVERAGE: 0 identity mismatches`, after printing the measured `specified`/`unspecified` counts as evidence and refusing a partition that does not cover every register row exactly once. The rule is not written into this row: the script requires `tools/ai-brain/acceptance/lib/spec-coverage.js`, the same module `AC-AI-20-02` requires, and it exits 2 outside the repository | command stdout |
+| `AC-AI-20-02` | **Negative proof, must fail:** the identity rule rejects a copy of a real specification whose Control table names a different register row, after a CONTROL proving the untouched file matches its row | `node tools/ai-brain/acceptance/ac-20-02-spec-identity.js` exits 1 and prints the string `SPEC_IDENTITY_MISMATCH_DETECTED:`. It reads the real register and a real Work Item file, tampers only a copy written to a private directory under `os.tmpdir()` that the run removes, CONTROLs that the untouched real specification still matches its row, and exits 2 outside the repository | command stderr; `tools/ai-brain/acceptance/ac-20-02-spec-identity.js`, `tools/ai-brain/acceptance/lib/spec-coverage.js` |
+| `AC-AI-20-03` | **Negative proof, must fail:** the reconciler's `SPEC_MISSING` severity escalates from `info` to `error` when a blocked row with an absent specification is recorded as ready, using the real rule in `tools/ai-brain/reconcile.js` | `node tools/ai-brain/acceptance/ac-20-03-spec-missing-severity.js` exits 1 and prints the string `SPEC_MISSING_ESCALATED:`. It CONTROLs that the real blocked row is reported as `info`, then walks every rung of the `AI-20-R06` ladder over that same row by tampering a copy of the register in a private `os.tmpdir()` directory per rung, and exits 2 outside the repository | command stderr; `tools/ai-brain/acceptance/ac-20-03-spec-missing-severity.js` |
 | `AC-AI-20-04` | **Negative proof:** the three scripts above fail operationally (exit 2), not as findings, when run where no register exists | `node tools/ai-brain/acceptance/ac-20-04-outside-repository.js` exits 0 and prints the string `OUTSIDE_REPOSITORY_PROBE: 3 subjects exited 2 with no register present` | command stdout; `tools/ai-brain/acceptance/ac-20-04-outside-repository.js` |
 | `AC-AI-20-05` | The register does not overstate: no ready or terminal row names a specification that does not exist | `node tools/ai-brain/cli.js reconcile` exits 0 and prints the string `Tổng: 0 lỗi` (the warning and note counts are deliberately not pinned) | command stdout; `tools/ai-brain/cli.js` |
 
 ### Acceptance matrix: why each negative proof is not vacuous
 
 Every command in the table was extracted from the markdown and executed verbatim
-against `origin/main` at `ab54b3f`. All five rows produced the exit code and the
-string stated above.
+against the real register at this branch head. All five rows produced the exit code
+and the string stated above; the measurements are in `Executed acceptance evidence`
+below.
 
 | Script | In the repository | From an empty directory, no repository | The CONTROL it performs |
 |---|---|---|---|
-| `ac-20-01-spec-coverage.js` | exit `0`, `SPEC_COVERAGE: 0 identity mismatches` | exit `2`, `SOURCE_MISSING` | counts a real row whose path is altered to a nonexistent file, and stops counting a real unspecified row whose path is pointed at an existing file |
+| `ac-20-01-spec-coverage.js` | exit `0`, `SPEC_COVERAGE: 0 identity mismatches` | exit `2`, `SOURCE_MISSING` | counts a real row whose path is altered to a nonexistent file, stops counting a real unspecified row whose path is pointed at an existing file, counts a row that names no path at all as unspecified, and fails unless the two sets cover every register row exactly once and the exported sets agree with the partition |
 | `ac-20-02-spec-identity.js` | exit `1`, `SPEC_IDENTITY_MISMATCH_DETECTED:` | exit `2`, `SOURCE_MISSING` | proves the untouched real specification matches its register row before the tampered copy is rejected |
-| `ac-20-03-spec-missing-severity.js` | exit `1`, `SPEC_MISSING_ESCALATED:` | exit `2`, `SOURCE_MISSING` | proves the real blocked row's absent specification is reported as `info` before the ready copy is reported as `error` |
+| `ac-20-03-spec-missing-severity.js` | exit `1`, `SPEC_MISSING_ESCALATED:` | exit `2`, `SOURCE_MISSING` | proves the real blocked row's absent specification is reported as `info` first, then walks the whole `AI-20-R06` ladder over that one row - every `BACKLOG`/`BLOCKED_*` rung `info`, every `READY_*`/`MERGED` rung `error` - and fails unless the walk measured both an `info` rung and an `error` rung, so a rule answering one constant for every status cannot pass |
 | `ac-20-04-outside-repository.js` | exit `0`, `OUTSIDE_REPOSITORY_PROBE:` | exit `2`, `SOURCE_MISSING` | spawns each subject with a fresh empty working directory and fails if any subject exits without `SOURCE_MISSING` |
+
+Non-vacuity of the `AC-AI-20-03` walk was measured against the rule itself, in a
+throwaway copy of `tools/` outside the repository (the repository was not
+modified): with the real rule the walk prints the whole ladder and the
+escalation; with the rule replaced by the constant `'error'` the CONTROL fails,
+exit 2,
+`CONTROL_FAILURE: blocked row TASK-AI-11 reported as error, expected info`; with
+the constant `'info'` the walk fails, exit 2,
+`SPEC_MISSING_NOT_ESCALATED: TASK-AI-11 status=READY_FOR_AUTHOR -> SPEC_MISSING severity=info, expected error`.
+A harness that could not tell the real rule from a constant one would have passed
+all three runs.
 
 A command that still printed its expected string and exited as expected from an
 empty directory would prove nothing; none of these does. `AC-AI-20-05` reads the
@@ -248,24 +260,28 @@ private copy of it.
 ### Executed acceptance evidence
 
 Measured on the branch head that delivers this document and the acceptance
-harness (Node.js workstation, `Asia/Bangkok`, 2026-09-17), against the real
+harness (Node.js v24 workstation, `Asia/Bangkok`, 2026-09-19), against the real
 register. Every count below is a measurement, never a pinned assertion; the
-counts drift as rows are authored and are re-measured on every run.
+counts drift as rows are authored and are re-measured on every run. Each row
+quotes the `CONTROL` lines the command printed as well, so a run whose probe did
+not execute is visible in the evidence itself.
 
 | Command | Exit | Observed evidence |
 |---|---|---|
-| `node tools/ai-brain/acceptance/ac-20-01-spec-coverage.js` | 0 | `SPEC_COVERAGE: specified=36, unspecified=142`; `CONTROL: the rule counted an absent path and cleared an existing one`; `SPEC_COVERAGE: 0 identity mismatches` |
-| `node tools/ai-brain/acceptance/ac-20-02-spec-identity.js` | 1 | `SPEC_IDENTITY_MISMATCH_DETECTED: tampered file declares "TASK-AI-02", row expects "TASK-AI-01"` |
-| `node tools/ai-brain/acceptance/ac-20-03-spec-missing-severity.js` | 1 | `SPEC_MISSING_ESCALATED: TASK-AI-10 status=READY_FOR_AUTHOR -> SPEC_MISSING severity=error` |
+| `node tools/ai-brain/acceptance/ac-20-01-spec-coverage.js` | 0 | `SPEC_COVERAGE: specified=40, unspecified=138`; `CONTROL: the rule counted an absent path and cleared an existing one`; `CONTROL: every register row is counted exactly once (40+138=178)`; `SPEC_COVERAGE: 0 identity mismatches` |
+| `node tools/ai-brain/acceptance/ac-20-02-spec-identity.js` | 1 | `CONTROL: TASK-AI-01 -> "docs/product-spec/work-items/TASK-AI-01.md" declares "TASK-AI-01" OK`; `SPEC_IDENTITY_MISMATCH_DETECTED: tampered file declares "TASK-AI-02", row expects "TASK-AI-01"` |
+| `node tools/ai-brain/acceptance/ac-20-03-spec-missing-severity.js` | 1 | `CONTROL: TASK-AI-11 status=BLOCKED_DEPENDENCY -> SPEC_MISSING severity=info OK`; `CONTROL: TASK-AI-11 -> SPEC_MISSING severity per status: BACKLOG=info, BLOCKED_DEPENDENCY=info, BLOCKED_BY_FOUNDATION=info, READY_FOR_AUTHOR=error, READY_FOR_CODEX=error, READY_FOR_HUMAN_MERGE=error, MERGED=error`; `SPEC_MISSING_ESCALATED: TASK-AI-11 status=READY_FOR_AUTHOR -> SPEC_MISSING severity=error` |
 | `node tools/ai-brain/acceptance/ac-20-04-outside-repository.js` | 0 | `OUTSIDE_REPOSITORY_PROBE: 3 subjects exited 2 with no register present` |
 | `node tools/ai-brain/cli.js reconcile` | 0 | register summary reports 0 errors and 0 warnings against the real register; no ready or terminal row names a specification that does not exist |
-| `node --test tools/ai-brain/test/*.test.js` | 0 | tests 391, pass 391, fail 0 |
-| `python docs/product-spec/scripts/validate_docs.py` | 0 | Documentation validation passed: 101 markdown files |
+| `node --test tools/ai-brain/test/*.test.js` | 0 | tests 483, pass 483, fail 0 |
+| `python docs/product-spec/scripts/validate_docs.py` | 0 | Documentation validation passed: 105 markdown files, 130 feature IDs, 178 delivery rows, 853 unique identifiers |
 | `node tools/ai-guard/cli.js secret-surface` | 0 | SECRET_SURFACE_CLEAN |
 
 The engine tests in `Verification commands` step 4 belong to the engine
-increment the `Author boundary` names as a subsequent task. They are not run by
-this bounded increment, which changes only the three allowed paths.
+increment the `Author boundary` names as a subsequent task: `spec-author.js` and
+`test/spec-author.test.js` do not exist at this head, so step 4 was not run and
+its file-not-found exit code is not evidence about this increment. This bounded
+increment changes only the allowed paths.
 
 ## Verification commands
 
@@ -295,6 +311,8 @@ node --test tools/ai-brain/test/spec-author.test.js
 |---|---|---|---|
 | 1 | `Pending` | `PENDING` | Initial specification authoring for TASK-AI-20. |
 | 2 | `Pending` | `PENDING` | Acceptance harness completed against the real register, with the Control probes each row's evidence depends on in place, and the Control table re-aligned to the register. Awaiting the independent Codex review. |
+| 3 | `Pending` | `PENDING` | Acceptance harness hardened so no row's proof can pass vacuously: `tools/ai-brain/acceptance/lib/spec-coverage.js` derives `specified`/`unspecified` from one partition, `ac-20-01` CONTROLs that partition and a row that names no path, `ac-20-02` keeps its tampering in a private temporary directory the run removes, and `ac-20-03` walks the whole `AI-20-R06` severity ladder over one real row instead of a single rung. Evidence re-measured at this head. Awaiting the independent Codex review. |
+
 
 ## Residual limitations
 
