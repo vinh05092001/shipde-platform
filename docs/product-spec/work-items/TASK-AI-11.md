@@ -143,4 +143,3 @@ Written `2026-09-19`. Every `node` row was executed against this branch: the inv
 - **The Preview/DryRun guards are structural, not behavioral.** The acceptance tests prove the switches and banners exist in the source; they do not execute the supervisor against live worker harnesses. A full live worker integration test is out of scope for unit contract verification.
 - **The failover exhaustion guard is checked at loop entry.** If the `FailoverCount` is incremented during the loop body the guard will fire on the next iteration, not mid-poll. This is intentional: the supervisor's poll loop is a single-threaded state machine and a mid-poll interrupt would leave the checkpoint in an inconsistent state.
 - **`$MaxFailovers` defaults to 3.** The default is chosen so that an unconfigured supervisor still has a finite budget; operators who need more retries must pass `-MaxFailovers N` explicitly.
-
