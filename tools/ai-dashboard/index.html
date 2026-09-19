@@ -320,6 +320,186 @@
         <div id="capacityVendor"></div>
         <div id="capacityTable"></div>
         <div id="capacityClaude"></div>
+        <!-- Account & quota entry form (TASK-AI-29). The cockpit renders the
+             command an operator runs locally; AI15-R09 keeps this service
+             observational, so this panel never submits anything. -->
+        <section
+          id="accountEntryPanel"
+          aria-labelledby="accountEntryHeading"
+          class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-5"
+        >
+          <div
+            class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-slate-800"
+          >
+            <div>
+              <h3
+                id="accountEntryHeading"
+                class="text-sm font-bold text-white uppercase tracking-wider"
+              >
+                Nhập tài khoản &amp; hạn mức
+              </h3>
+              <p class="text-xs text-slate-400 mt-1">
+                Biểu mẫu <span class="font-semibold text-slate-300">chỉ soạn lệnh</span> để bạn chạy
+                tại máy. Cockpit vẫn chỉ quan sát (<span class="font-mono">AI15-R09</span>) và không
+                gửi gì cả.
+              </p>
+            </div>
+            <span
+              id="accountEntryStateBadge"
+              class="text-[11px] font-mono px-2.5 py-1 rounded-lg border bg-slate-800 text-slate-300 border-slate-700 self-start sm:self-auto"
+              role="status"
+              aria-live="polite"
+            >
+              —
+            </span>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div class="space-y-3">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label class="block">
+                  <span class="text-[11px] font-semibold uppercase text-slate-400">
+                    Mã tài khoản (id)
+                  </span>
+                  <input
+                    id="accId"
+                    type="text"
+                    placeholder="agy-docker-b"
+                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
+                  />
+                </label>
+                <label class="block">
+                  <span class="text-[11px] font-semibold uppercase text-slate-400">
+                    Nhà cung cấp (provider)
+                  </span>
+                  <input
+                    id="accProvider"
+                    type="text"
+                    placeholder="antigravity"
+                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
+                  />
+                </label>
+                <label class="block">
+                  <span class="text-[11px] font-semibold uppercase text-slate-400">Model</span>
+                  <input
+                    id="accModel"
+                    type="text"
+                    placeholder="gemini-3.8-flash-high"
+                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
+                  />
+                </label>
+                <label class="block">
+                  <span class="text-[11px] font-semibold uppercase text-slate-400">
+                    Cửa sổ ngữ cảnh (contextWindow)
+                  </span>
+                  <input
+                    id="accContextWindow"
+                    type="number"
+                    min="1"
+                    step="1"
+                    placeholder="1000000"
+                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
+                  />
+                </label>
+                <label class="block">
+                  <span class="text-[11px] font-semibold uppercase text-slate-400">
+                    Bậc (tier, tuỳ chọn)
+                  </span>
+                  <select
+                    id="accTier"
+                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-slate-200"
+                  >
+                    <option value="">— mặc định (external) —</option>
+                    <option value="0">0 · local</option>
+                    <option value="1">1 · account</option>
+                    <option value="2">2 · external</option>
+                  </select>
+                </label>
+                <div class="block">
+                  <span class="text-[11px] font-semibold uppercase text-slate-400">Năng lực</span>
+                  <div class="mt-2 flex items-center gap-4">
+                    <label class="inline-flex items-center gap-2 text-xs text-slate-300">
+                      <input id="accTools" type="checkbox" class="accent-brand w-3.5 h-3.5" />
+                      tools
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-xs text-slate-300">
+                      <input id="accJsonSchema" type="checkbox" class="accent-brand w-3.5 h-3.5" />
+                      jsonSchema
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <fieldset class="border border-slate-800 rounded-xl p-3 space-y-2">
+                <legend class="text-[11px] font-semibold uppercase text-slate-400 px-1">
+                  Hạn mức theo cửa sổ (bỏ trống = chưa khai)
+                </legend>
+                <div id="accountEntryLimits" class="space-y-2"></div>
+              </fieldset>
+            </div>
+
+            <div class="space-y-4">
+              <div
+                id="accountEntryRefused"
+                class="hidden rounded-xl border border-rose-500/40 bg-rose-500/10 p-3"
+              >
+                <div class="text-xs font-bold text-rose-300 uppercase tracking-wider mb-1">
+                  Bị từ chối — chưa có lệnh
+                </div>
+                <ul
+                  id="accountEntryFindings"
+                  class="list-disc list-inside text-xs text-rose-200 space-y-1"
+                ></ul>
+                <p class="text-[11px] text-rose-200/80 mt-2">
+                  Không có lệnh nào được đưa ra, vì một lệnh chắc chắn bị từ chối thì không nên
+                  chạy.
+                </p>
+              </div>
+
+              <div id="accountEntryCommandBlock" class="space-y-2">
+                <div class="text-[11px] font-semibold uppercase text-slate-400">Lệnh sẽ chạy</div>
+                <pre
+                  id="accountEntryCommand"
+                  class="text-[11px] leading-relaxed bg-black/40 border border-slate-800 rounded-xl p-3 overflow-x-auto custom-scroll text-emerald-300 font-mono"
+                ></pre>
+                <div class="text-[11px] font-semibold uppercase text-slate-400 pt-1">
+                  Nạp mật khẩu (không bao giờ qua tham số)
+                </div>
+                <pre
+                  id="accountEntrySecretCommand"
+                  class="text-[11px] leading-relaxed bg-black/40 border border-slate-800 rounded-xl p-3 overflow-x-auto custom-scroll text-sky-300 font-mono"
+                ></pre>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                  <div class="text-[11px] font-semibold uppercase text-emerald-400">
+                    Cửa sổ sẽ ghi (đã khai)
+                  </div>
+                  <ul id="accountEntryKnown" class="text-xs text-slate-200 mt-2 space-y-1"></ul>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                  <div class="text-[11px] font-semibold uppercase text-amber-400">
+                    Cửa sổ vẫn chưa biết
+                  </div>
+                  <ul id="accountEntryUnknown" class="text-xs text-slate-200 mt-2 space-y-1"></ul>
+                </div>
+              </div>
+
+              <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                <div class="text-[11px] font-semibold uppercase text-slate-400">
+                  Sau khi chạy (áp dụng)
+                </div>
+                <p class="text-xs text-slate-300 mt-1">
+                  Lệnh in lại mã tài khoản, các cửa sổ đã biết kèm nguồn gốc mỗi hạn mức, các cửa sổ
+                  còn chưa biết và việc <span class="font-mono">hasSecret</span> đã có hay chưa. Nó
+                  <span class="font-semibold text-slate-100">không bao giờ</span>
+                  in mật khẩu — kể cả dạng che.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
 
       <!-- TAB PANE 1: GATES & PR EVIDENCE -->
@@ -473,6 +653,214 @@
       Ship Dễ Platform Cockpit • Giám sát độc lập theo hợp đồng giao việc AGENTS.md • TASK-AI-15
     </footer>
 
+    <script>
+      /* Account & quota entry form (TASK-AI-29).
+       *
+       * The cockpit stays observational under AI15-R09: this form never
+       * submits anything. It composes the local command an operator runs and
+       * previews which windows will be written and which will stay unknown
+       * before that command runs. The gate is the command, not this page: the
+       * preliminary check below only names the required fields that are still
+       * empty, so a command that would obviously be refused is not offered.
+       */
+      (function () {
+        var WINDOWS = ['requestsPerMinute', 'requestsPerDay', 'tokensPerDay', 'tokensPerMonth'];
+        var ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/;
+
+        var el = function (id) {
+          return document.getElementById(id);
+        };
+
+        var limitsHost = el('accountEntryLimits');
+
+        // One row per window: a blank value means the window stays undeclared.
+        if (limitsHost) {
+          WINDOWS.forEach(function (windowName) {
+            var row = document.createElement('div');
+            row.className = 'grid grid-cols-1 sm:grid-cols-3 gap-2 items-center';
+
+            var label = document.createElement('span');
+            label.className = 'text-xs text-slate-300 font-mono break-words';
+            label.textContent = windowName;
+
+            var input = document.createElement('input');
+            input.type = 'number';
+            input.min = '1';
+            input.step = '1';
+            input.placeholder = 'bỏ trống = chưa khai';
+            input.dataset.limitWindow = windowName;
+            input.className =
+              'w-full bg-slate-800 border border-slate-700 px-2 py-1 rounded-lg text-xs text-white focus:outline-none focus:border-brand';
+
+            var select = document.createElement('select');
+            select.dataset.provenanceWindow = windowName;
+            select.className =
+              'w-full bg-slate-800 border border-slate-700 px-2 py-1 rounded-lg text-xs text-slate-200';
+            ['operator-declared', 'vendor-documented'].forEach(function (provenance) {
+              var option = document.createElement('option');
+              option.value = provenance;
+              option.textContent = provenance;
+              select.appendChild(option);
+            });
+
+            row.appendChild(label);
+            row.appendChild(input);
+            row.appendChild(select);
+            limitsHost.appendChild(row);
+          });
+        }
+
+        var badge = el('accountEntryStateBadge');
+        var refused = el('accountEntryRefused');
+        var findingsList = el('accountEntryFindings');
+        var commandBlock = el('accountEntryCommandBlock');
+        var commandEl = el('accountEntryCommand');
+        var secretEl = el('accountEntrySecretCommand');
+        var knownList = el('accountEntryKnown');
+        var unknownList = el('accountEntryUnknown');
+
+        function value(id) {
+          var node = el(id);
+          return node ? node.value.trim() : '';
+        }
+
+        function listItems(host, items, emptyText, className) {
+          if (!host) return;
+          host.innerHTML = '';
+          if (items.length === 0) {
+            var empty = document.createElement('li');
+            empty.className = 'text-slate-500';
+            empty.textContent = emptyText;
+            host.appendChild(empty);
+            return;
+          }
+          items.forEach(function (text) {
+            var item = document.createElement('li');
+            item.className = className || 'break-words';
+            item.textContent = text;
+            host.appendChild(item);
+          });
+        }
+
+        function collect() {
+          var id = value('accId');
+          var provider = value('accProvider');
+          var model = value('accModel');
+          var contextWindow = value('accContextWindow');
+          var tier = value('accTier');
+
+          var findings = [];
+          if (id === '') findings.push('id: còn trống');
+          else if (!ID_RE.test(id)) findings.push('id: chữ thường, số, . _ - (2-64 ký tự)');
+          if (provider === '') findings.push('provider: còn trống');
+          if (model === '') findings.push('model: còn trống');
+          if (contextWindow === '' || !(Number(contextWindow) > 0)) {
+            findings.push('contextWindow: phải là số dương');
+          }
+
+          var known = [];
+          var unknown = [];
+          WINDOWS.forEach(function (windowName) {
+            var input = document.querySelector('[data-limit-window="' + windowName + '"]');
+            var select = document.querySelector('[data-provenance-window="' + windowName + '"]');
+            var raw = input ? input.value.trim() : '';
+            if (raw === '') {
+              unknown.push(windowName);
+              return;
+            }
+            if (!(Number(raw) > 0)) {
+              findings.push(windowName + ': hạn mức phải là số dương');
+              unknown.push(windowName);
+              return;
+            }
+            known.push({
+              window: windowName,
+              value: raw,
+              provenance: select ? select.value : '',
+            });
+          });
+
+          return {
+            id: id,
+            provider: provider,
+            model: model,
+            contextWindow: contextWindow,
+            tier: tier,
+            tools: el('accTools') && el('accTools').checked,
+            jsonSchema: el('accJsonSchema') && el('accJsonSchema').checked,
+            findings: findings,
+            known: known,
+            unknown: unknown,
+          };
+        }
+
+        function composeCommand(form) {
+          var parts = ['node tools/ai-brain/cli.js account add'];
+          parts.push('--id ' + form.id);
+          parts.push('--provider ' + form.provider);
+          parts.push('--model ' + form.model);
+          parts.push('--context-window ' + form.contextWindow);
+          if (form.tier !== '') parts.push('--tier ' + form.tier);
+          if (form.tools) parts.push('--tools');
+          if (form.jsonSchema) parts.push('--json-schema');
+          form.known.forEach(function (entry) {
+            parts.push('--limit ' + entry.window + '=' + entry.value + ':' + entry.provenance);
+          });
+          return parts.join(' ');
+        }
+
+        function render() {
+          var form = collect();
+          var refusedNow = form.findings.length > 0;
+
+          if (badge) {
+            badge.textContent = refusedNow
+              ? 'BỊ TỪ CHỐI — ' + form.findings.length + ' trường'
+              : form.unknown.length === WINDOWS.length
+                ? 'SẴN SÀNG — mọi cửa sổ sẽ chưa biết'
+                : 'SẴN SÀNG — ' +
+                  form.known.length +
+                  ' đã khai, ' +
+                  form.unknown.length +
+                  ' chưa biết';
+            badge.className =
+              'text-[11px] font-mono px-2.5 py-1 rounded-lg border self-start sm:self-auto ' +
+              (refusedNow
+                ? 'bg-rose-500/15 text-rose-300 border-rose-500/40'
+                : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40');
+          }
+
+          if (refused) refused.classList.toggle('hidden', !refusedNow);
+          if (commandBlock) commandBlock.classList.toggle('hidden', refusedNow);
+
+          listItems(findingsList, form.findings, '', 'break-words');
+
+          if (!refusedNow) {
+            if (commandEl) commandEl.textContent = composeCommand(form);
+            if (secretEl) {
+              secretEl.textContent = 'node tools/ai-brain/cli.js account secret --id ' + form.id;
+            }
+          }
+
+          listItems(
+            knownList,
+            form.known.map(function (entry) {
+              return entry.window + ' = ' + entry.value + ' (' + entry.provenance + ')';
+            }),
+            'Không có — tất cả đều chưa khai',
+            'font-mono break-words'
+          );
+          listItems(unknownList, form.unknown, 'Không có', 'font-mono break-words');
+        }
+
+        var panel = el('accountEntryPanel');
+        if (panel) {
+          panel.addEventListener('input', render);
+          panel.addEventListener('change', render);
+          render();
+        }
+      })();
+    </script>
     <script src="/client.js"></script>
   </body>
 </html>

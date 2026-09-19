@@ -196,8 +196,14 @@ Prohibited in this Work Item:
     exact version `0.6.1` when installed.
   - Secondary packaging inspection: `python -m pip show snyk-agent-scan` exits `0`
     and verifies `Version: 0.6.1`.
-  - When uninstalled / pending (current baseline), binary is absent from PATH and
-    `scripts/ai/doctor.ps1` reports `PENDING` without false failure.
+  - When uninstalled / pending (current baseline), the binary is absent from PATH and
+    `snyk-agent-scan --version` resolves to nothing. No script under `scripts/ai` prints a
+    per-tool `PENDING` line today: `scripts/ai/doctor.ps1` is NOT an `agent-scan` surface
+    at HEAD, and its only governed-ecosystem output is the aggregate
+    `Ecosystem manifest & profiles: VALIDATED (37 adopted tools, 9 profiles)`. The
+    `PENDING` / `PASS agent-scan` doctor diagnosis is therefore specified but NOT
+    DELIVERED; wiring it means editing `scripts/ai/doctor.ps1`, outside this Work Item
+    (`AI-39-R08`, Defect D4).
 - Define manifest promotion criteria for `tools/ecosystem-manifest.json`:
   - Formal 10-point evidence checklist to transition `agent-scan` from `PENDING` to
     `ADOPTED` and `BLOCKING_GATE` in the implementation phase. Each of the 10 criteria
@@ -229,7 +235,7 @@ Prohibited in this Work Item:
 | `AI-39-R06` | Fail-closed operational policy and numeric thresholds: Clean scan exits 0. Security defect detected (severity >= 7.0) exits 1. Operational failure (syntax error, malformed frontmatter, invalid arguments) exits 2. Scan timeout is capped at 60000ms. Maximum skill file size budget is 512000 bytes. |
 | `AI-39-R07` | Network behavior under governed profiles: `agent-scan` belongs only to `SECURITY_REVIEW` (`local-scan-only`) and `PR_REVIEW` (`github-api-and-localhost-only`). Neither permits egress to `https://api.snyk.io` or `https://app.snyk.io`, so the only contracted execution mode today is tokenless offline local-rule-evaluation with exactly 0 outbound requests. Absent `SNYK_TOKEN` the scanner emits `SNYK_TOKEN_ABSENT_OFFLINE_MODE` and exits 0 (non-blocking) rather than hanging, retrying or leaking credentials. Manifest `local_mode` still reads `local-rule-evaluation (requires SNYK_TOKEN for rule catalog synchronization)`; catalog synchronization is therefore unavailable under these profiles and rules ship bundled and pinned with `0.6.1`. |
 | `AI-39-R10` | Recorded profile/manifest egress conflict: the manifest declares `snyk-api-outbound-https` with `required-snyk-token`, which no profile containing `agent-scan` allows. Authenticated Snyk platform analysis and Evo reporting are therefore OUT of contract until an owner amends either `tools/ecosystem-profiles.json` (adding an explicit 2-endpoint egress allowlist) or `tools/ecosystem-manifest.json` (narrowing `agent-scan` to local-only). Both files are outside this Work Item's allowed paths. The conflict must be resolved at source before promotion, and must never be resolved by weakening a profile `network_policy` to silence it. `AC-AI-39-15` proves the conflict currently exists. |
-| `AI-39-R08` | Authoritative health check contract: In accordance with `tools/ecosystem-manifest.json`, the authoritative health check is `snyk-agent-scan --version` (exits 0 with `0.6.1`). `python -m pip show snyk-agent-scan` provides non-executing packaging inspection. In uninstalled state, doctor reports `PENDING` without false failure. |
+| `AI-39-R08` | Authoritative health check contract: In accordance with `tools/ecosystem-manifest.json`, the authoritative health check is `snyk-agent-scan --version` (exits 0 with `0.6.1`). `python -m pip show snyk-agent-scan` provides non-executing packaging inspection. In uninstalled state the binary is absent from PATH and no tool-level diagnosis is observable at HEAD: `scripts/ai/doctor.ps1` is not an `agent-scan` surface (it prints only the aggregate `Ecosystem manifest & profiles: VALIDATED (37 adopted tools, 9 profiles)` line, and no script under `scripts/ai` prints `PENDING`), so the `PENDING` / `PASS agent-scan` doctor diagnosis is specified but NOT DELIVERED, and wiring it is outside this Work Item's allowed paths (Defect D4). |
 | `AI-39-R09` | Version pinning and provenance: Downstream installation must pin exact version `0.6.1` via pip, verifying package integrity and preventing unpinned drift across environments. |
 
 ## UI states
@@ -244,8 +250,18 @@ outputs are CLI output and PR checks:
   PR check fails closed.
 - **Operational failure**: Exit code 2, diagnostic explaining syntax error,
   invalid arguments, or missing dependencies.
-- **Doctor diagnosis**: `scripts/ai/doctor.ps1` reports `PENDING` when uninstalled
-  or `PASS agent-scan` at version `0.6.1` via authoritative health check `snyk-agent-scan --version`.
+- **Doctor diagnosis (specified, NOT DELIVERED at HEAD)**: a conforming
+  `scripts/ai/doctor.ps1` would report `PENDING` when `agent-scan` is uninstalled, or
+  `PASS agent-scan` at version `0.6.1` via the authoritative health check
+  `snyk-agent-scan --version`. Measured at HEAD the doctor reports no per-tool state: its
+  only governed-ecosystem output is the aggregate line
+  `Ecosystem manifest & profiles: VALIDATED (37 adopted tools, 9 profiles)`, and no script
+  under `scripts/ai` prints `PENDING`. Wiring a doctor surface means editing
+  `scripts/ai/doctor.ps1`, outside this Work Item's allowed paths (Defect D4).
+
+All four states above are the specified behaviour of an `agent-scan` that is still
+`PENDING` / `NON_BLOCKING` (`AC-AI-39-01`); none of them is observable in this repository
+today.
 
 ## API, event and data impact
 
@@ -269,7 +285,7 @@ Toolchain and quality gate impact:
 | `AC-AI-39-08` | STRUCTURAL GUARD, not evidence: confirms all 16 required sections exist in this document. It greps the document it lives in, so it is satisfied by writing the headings; it guards against accidental deletion in a later round and proves nothing about the gates | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); required=['## Control','## Business outcome','## Source references','## Preconditions and dependencies','## Author boundary','## In scope','## Out of scope','## Business rules and edge cases','## UI states','## API, event and data impact','## Acceptance matrix','## Downstream implementation acceptance contract','## Manifest promotion criteria','## Verification commands','## Codex review record','## Residual limitations']; missing=[s for s in required if s not in content]; assert not missing, f'Missing sections: {missing}'; print('Specification structural integrity verified: all required sections present');"` | `0` | `Specification structural integrity verified: all required sections present` | `docs/product-spec/work-items/TASK-AI-39.md` |
 | `AC-AI-39-09` | Specification contract, rules, and numeric thresholds completeness | `python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='utf-8').read(); tokens=['0.6.1','8.24.0','60000ms','512000','1048576','BLOCKED_DEPENDENCY','AI-39-R01','AI-39-R02','AI-39-R03','AI-39-R04','AI-39-R05','AI-39-R06','AI-39-R07','AI-39-R08','AI-39-R09','snyk-agent-scan --version','snyk-api-outbound-https','https://api.snyk.io','https://app.snyk.io','AI-39-R10','PROFILE_EGRESS_CONFLICT','local-scan-only','github-api-and-localhost-only','SNYK_TOKEN_ABSENT_OFFLINE_MODE','Governed Input Coverage','Tokenless Credential And Network Behavior Proof','Required CI Check At Exact HEAD','WILDCARD_HOST_BINDING_FORBIDDEN','PROMPT_INJECTION_DETECTED']; missing=[t for t in tokens if t not in content]; assert not missing, f'Missing required tokens: {missing}'; print('Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, promotion evidence, and health check tokens verified');"` | `0` | `Specification numeric thresholds, rules AI-39-R01 through R10, network, profile egress, promotion evidence, and health check tokens verified` | `docs/product-spec/work-items/TASK-AI-39.md` |
 | `AC-AI-39-10` | Manifest audit green with 0 errors and exactly 1 warning, that warning identified by code and tool | `node -e "const o=require('child_process').execSync('node tools/ai-brain/cli.js manifest',{encoding:'utf8'}); const need=['Tổng: 0 lỗi, 1 cảnh báo','PINNED_VERSION_DRIFT','codex-cli']; const miss=need.filter(t=>!o.includes(t)); if(miss.length\|\|(o.match(/\[CẢNH\]/g)\|\|[]).length!==1) throw new Error('manifest baseline mismatch: '+miss.join(',')); console.log('Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli');"` | `0` | `Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli` | `tools/ai-brain/cli.js stdout` |
-| `AC-AI-39-11` | Register reconciliation green with 0 errors | `node tools/ai-brain/cli.js reconcile` | `0` | `Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú` | `tools/ai-brain/cli.js stdout` |
+| `AC-AI-39-11` | Register reconciliation green with 0 errors | `node tools/ai-brain/cli.js reconcile` | `0` | `Tổng: 0 lỗi` (measured at HEAD: `Tổng: 0 lỗi, 0 cảnh báo, 150 ghi chú`; warning and note counts are observations about the register, not invariants) | `tools/ai-brain/cli.js stdout` |
 | `AC-AI-39-12` | Specification and documentation validation | `python docs/product-spec/scripts/validate_docs.py` | `0` | `Documentation validation passed` | `docs/product-spec/scripts/validate_docs.py stdout` |
 | `AC-AI-39-13` | Toolchain unit & integration test suites green | `node --test \"tools/ai-brain/test/*.test.js\" \"tools/ai-dashboard/test/*.test.js\" \"tools/ai-guard/test/*.test.js\"` | `0` | `fail 0` | `node --test stdout` |
 | `AC-AI-39-14` | Incremental code and document formatting check | `pnpm format:check` | `0` | `tuân thủ 100% chuẩn định dạng Prettier` | `scripts/verify-formatting.ts stdout` |
@@ -461,6 +477,62 @@ exit `0`, `Zero forbidden lifecycle scripts present in root and web manifests`.
 The rule module itself is unchanged, so `AC-AI-39-07`'s use of the same module
 is untouched.
 
+### Measured at HEAD -- D3 (a pinned tally nothing prints) and D4 (a doctor surface that does not exist)
+
+Two claims outside the acceptance commands were measured at HEAD and were false. Both are
+repaired here. No script, workflow or manifest was changed: every artifact named below is
+outside this Work Item's allowed paths, which is exactly why the claims were wrong and why
+the repair is to say so rather than to wire the missing surface.
+
+**Defect D3 -- `AC-AI-39-11` pinned a reconcile tally the command does not print.** The row
+demanded the output string `Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú` from
+`node tools/ai-brain/cli.js reconcile`. Measured at HEAD the command exits `0` and prints a
+different line.
+
+| Command | Stored expectation | Measured at HEAD |
+|---|---|---|
+| `node tools/ai-brain/cli.js reconcile` | exit `0`, `Tổng: 0 lỗi, 1 cảnh báo, 161 ghi chú` | exit `0`, `Tổng: 0 lỗi, 0 cảnh báo, 150 ghi chú (dùng --all để xem ghi chú)` |
+| `node tools/ai-brain/cli.js manifest` | exit `0`, `Tổng: 0 lỗi, 1 cảnh báo` | exit `0`, `Tổng: 0 lỗi, 1 cảnh báo, 2 ghi chú` (`AC-AI-39-10`; the manifest is committed data, so its one `PINNED_VERSION_DRIFT` warning is deterministic) |
+
+The reconcile warning and note counts are observations about the register and the host, not
+invariants: they move whenever a register row is added or a merge is recorded, and the string
+`161 ghi chú` is printed by nothing in the repository. Unlike `AC-AI-39-10`, whose counts the
+audited manifest fixes, the reconcile row pinned a number no artifact in this repository
+guarantees. The row now pins the invariant it exists to prove -- exit `0` and `Tổng: 0 lỗi` --
+and records the counts as the measurement they are.
+
+**Defect D4 -- `AI-39-R08`, `## In scope` and `## UI states` named a doctor surface that does
+not exist.** All three stated that `scripts/ai/doctor.ps1` reports `PENDING` for `agent-scan`
+while it is uninstalled and `PASS agent-scan` at `0.6.1` once installed. Measured at HEAD,
+`scripts/ai/doctor.ps1` declares no `agent-scan` surface at all: `agent-scan` appears under
+`scripts/ai/` only in `ecosystem.ps1` and `install-ecosystem.ps1`, and
+`git grep -n PENDING -- scripts/ai` matches only `control.ps1` and `install-ecosystem.ps1`,
+never `doctor.ps1`. The doctor's only governed-ecosystem output is the aggregate line it
+prints after running `ecosystem.ps1 -Action Validate`:
+
+```text
+=== GOVERNED ECOSYSTEM & HEALTH CHECKS ===
+Ecosystem manifest & profiles: VALIDATED (37 adopted tools, 9 profiles)
+```
+
+so neither `PENDING` nor `PASS agent-scan` can be observed today. This is not a workstation
+defect: the doctor reports `INVALID` / `ACTION REQUIRED` for the failure classes it implements,
+and a per-tool agent-scan surface is simply not one of them. Adding it means editing
+`scripts/ai/doctor.ps1`, which the Author boundary above prohibits.
+
+| Surface | Stored claim | Measured at HEAD |
+|---|---|---|
+| `scripts/ai/doctor.ps1` | prints `PENDING` for `agent-scan` when uninstalled | prints no per-tool state; its governed-ecosystem line is `Ecosystem manifest & profiles: VALIDATED (37 adopted tools, 9 profiles)` |
+| `scripts/ai/doctor.ps1` | prints `PASS agent-scan` at version `0.6.1` | no `agent-scan` string in the file; `PASS agent-scan` is printed by nothing |
+
+**Replacement.** `AI-39-R08` keeps the check the manifest actually names
+(`snyk-agent-scan --version`, `0.6.1`) and its secondary packaging inspection, and now states
+plainly that the per-tool doctor diagnosis is specified but NOT DELIVERED at HEAD. The
+`## In scope` health-check bullet and the `## UI states` entry say the same thing, and the
+`## UI states` block now marks all four states as the specified behaviour of a scanner that is
+still `PENDING` / `NON_BLOCKING` (`AC-AI-39-01`) rather than states an operator can observe
+today. No code changed; only the expectations.
+
 ## Downstream implementation acceptance contract
 
 **Implementation ownership.** `TASK-AI-39` itself retains ownership of installing
@@ -568,7 +640,10 @@ python -c "content=open('docs/product-spec/work-items/TASK-AI-39.md', encoding='
 # AC-AI-39-10: Manifest audit green with 0 errors and exactly 1 warning, identified by code and tool
 node -e "const o=require('child_process').execSync('node tools/ai-brain/cli.js manifest',{encoding:'utf8'}); const need=['Tổng: 0 lỗi, 1 cảnh báo','PINNED_VERSION_DRIFT','codex-cli']; const miss=need.filter(t=>!o.includes(t)); if(miss.length||(o.match(/\[CẢNH\]/g)||[]).length!==1) throw new Error('manifest baseline mismatch: '+miss.join(',')); console.log('Manifest audit: 0 errors, exactly 1 warning PINNED_VERSION_DRIFT for codex-cli');"
 
-# AC-AI-39-11: Register reconciliation green with 0 errors
+# AC-AI-39-11: Register reconciliation green with 0 errors (exit 0, "Tổng: 0 lỗi")
+# Warning and note counts are observations about the register, not invariants: the
+# previously pinned "1 cảnh báo, 161 ghi chú" is printed by nothing in the repository
+# (Defect D3). Measured at HEAD: 0 errors, 0 warnings, 150 notes.
 node tools/ai-brain/cli.js reconcile
 
 # AC-AI-39-12: Specification and documentation validation
