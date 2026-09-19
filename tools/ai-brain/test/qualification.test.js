@@ -103,6 +103,28 @@ describe('Probe rule', () => {
     });
     assert.ok(findings.some((f) => f.includes('outcome')));
   });
+
+  test('refuses a configuration with no entry admission at all', () => {
+    const findings = probeRuleFindings({
+      timeoutMs: 30_000,
+      treeKill: true,
+      cheapestModel: true,
+      cacheWindowMs: 60_000,
+    });
+    assert.ok(findings.some((f) => f.includes('entry-admitted')));
+  });
+
+  test('defaults entry admission to shared entry module when account is supplied', () => {
+    const invalidAccount = { id: 'bad', provider: 'antigravity', models: [] };
+    const findings = probeRuleFindings({
+      timeoutMs: 30_000,
+      treeKill: true,
+      cheapestModel: true,
+      cacheWindowMs: 60_000,
+      account: invalidAccount,
+    });
+    assert.ok(findings.some((f) => f.includes('entry-admitted')));
+  });
 });
 
 describe('Result credential rule', () => {

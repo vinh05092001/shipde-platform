@@ -7,6 +7,15 @@ const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 
+// Running outside the repository must be detected operationally (exit 2), not as
+// a finding (exit 1). The marker is relative to cwd, so this row refuses where no
+// repository exists even though the ai-guard CLI resolves its own root.
+const REPO_MARKER = 'tools/ai-guard/cli.js';
+if (!fs.existsSync(REPO_MARKER)) {
+  console.error('SOURCE_MISSING: ' + REPO_MARKER);
+  process.exit(2);
+}
+
 const CLI = path.join(__dirname, '..', '..', 'ai-guard', 'cli.js');
 if (!fs.existsSync(CLI)) {
   console.error('SOURCE_MISSING: ' + CLI.split(path.sep).join('/'));
