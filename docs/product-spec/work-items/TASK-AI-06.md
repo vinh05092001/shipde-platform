@@ -350,9 +350,12 @@ state, and it has since changed. At review on 2026-09-19 (file last modified 202
 it set `env.ANTHROPIC_BASE_URL` to `http://127.0.0.1:20128`, without the `/v1` path, and carried
 extra keys (`ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
 `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT`) and a top-level `apiKeyHelper`. With that
-file the supervisor gate fails closed with the actionable error above. To pass it, the operator sets
-`env.ANTHROPIC_BASE_URL` back to `http://localhost:20128/v1`; accepting `127.0.0.1` or a missing
-`/v1` would change the validated gateway contract and is not done here. No credential was copied from `%USERPROFILE%\.claude`. If AgentRouter later requires a token
+file the supervisor gate fails closed with the actionable error above. The failure is caused solely
+by the missing `/v1` path segment: `Assert-ShipDeNineRouterProfileBaseUrl` (`scripts/ai/common.ps1:384`)
+already accepts both `localhost` and `127.0.0.1` as valid hosts (`$uri.Host -notin @("localhost", "127.0.0.1")`),
+so using `127.0.0.1` does not change the validated gateway contract. To pass the gate, the operator sets
+`env.ANTHROPIC_BASE_URL` to either `http://localhost:20128/v1` or `http://127.0.0.1:20128/v1`.
+No credential was copied from `%USERPROFILE%\.claude`. If AgentRouter later requires a token
 for this profile, the operator pastes it into that file as `env.ANTHROPIC_AUTH_TOKEN`; nothing in
 this repository reads or writes it.
 
