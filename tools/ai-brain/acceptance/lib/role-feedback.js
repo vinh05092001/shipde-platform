@@ -100,21 +100,63 @@ function breachesFloor(agg) {
 
 // --- Evaluation ----------------------------------------------------------
 
-function evaluateNarrowing(roleId, offeringId, records, now) {
+// `supportingEntries` is optional: records the caller cites as prior evidence for
+// this same role (typically earlier qualifiedRole entries for `roleId`). Every
+// cited record is screened through validateEntry before it may count as
+// supporting evidence, so AI-25-R07 staleness/source refusal is enforced on the
+// decision path and not only on a direct validateEntry call. A screened-out
+// record is reported in `refusedEvidence` and never contributes to the decision,
+// and no cited record can ever grant: narrowing still requires a measured
+// two-of-three aggregate breach (AI-25-R04/R06) and the decision stays
+// 'keep'/'narrow' only (AI-25-R03).
+function evaluateNarrowing(roleId, offeringId, records, now, supportingEntries) {
   now = now == null ? Date.now() : now;
+
+  // AI-25-R07: refuse to count stale or source-less supporting evidence.
+  const cited = Array.isArray(supportingEntries) ? supportingEntries : [];
+  const supportingEvidence = [];
+  const refusedEvidence = [];
+  for (const entry of cited) {
+    if (!entry || entry.roleId !== roleId) continue;
+    const refusal = validateEntry(entry, now);
+    if (refusal) {
+      refusedEvidence.push({
+        roleId: entry.roleId,
+        source: entry.source == null ? null : entry.source,
+        refusal,
+      });
+    } else {
+      supportingEvidence.push(entry);
+    }
+  }
+  const refusalSuffix = refusedEvidence.length
+    ? '; supporting evidence refused (' +
+      refusedEvidence.map((r) => r.refusal).join(', ') +
+      ') - requires a fresh measured aggregate'
+    : '';
 
   // R05: non-delivery outcomes excluded.
   const deliveryRecords = records.filter((r) => r.tokens > 0 || r.retries > 0 || r.passed);
 
   if (deliveryRecords.length === 0) {
-    return { decision: 'keep', reason: 'no delivery outcomes in window' };
+    return {
+      decision: 'keep',
+      reason: 'no delivery outcomes in window' + refusalSuffix,
+      supportingEvidence: supportingEvidence.length,
+      refusedEvidence,
+    };
   }
 
   const windowEnd = now;
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
   const agg = aggregateWindow(deliveryRecords, windowStart, windowEnd);
   if (!agg) {
-    return { decision: 'keep', reason: 'insufficient records in window' };
+    return {
+      decision: 'keep',
+      reason: 'insufficient records in window' + refusalSuffix,
+      supportingEvidence: supportingEvidence.length,
+      refusedEvidence,
+    };
   }
 
   const breach = breachesFloor(agg);
@@ -123,8 +165,10 @@ function evaluateNarrowing(roleId, offeringId, records, now) {
   if (breach.count < 2) {
     return {
       decision: 'keep',
-      reason: 'below floor: ' + breach.count + ' of 3 breached',
+      reason: 'below floor: ' + breach.count + ' of 3 breached' + refusalSuffix,
       aggregates: agg,
+      supportingEvidence: supportingEvidence.length,
+      refusedEvidence,
     };
   }
 
@@ -132,17 +176,22 @@ function evaluateNarrowing(roleId, offeringId, records, now) {
     decision: 'narrow',
     reason: 'sustained breach: ' + breach.reasons.join(', '),
     aggregates: agg,
+    supportingEvidence: supportingEvidence.length,
+    refusedEvidence,
   };
 }
 
 // --- Validation ----------------------------------------------------------
 
-function validateEntry(entry) {
+// An entry may be validated against the caller's clock so a decision and the
+// staleness of the evidence it cites share one reference instant.
+function validateEntry(entry, now) {
   if (!entry) return 'ENTRY_MISSING';
   if (entry.source == null || entry.source === '') return 'SOURCE_MISSING';
   if (entry.removedAt == null) return 'MISSING_REMOVED_AT';
   if (entry.source === 'operator') {
-    const age = Date.now() - entry.removedAt;
+    const reference = now == null ? Date.now() : now;
+    const age = reference - entry.removedAt;
     if (age > STALE_AFTER_MS) return 'EVIDENCE_STALE';
   }
   return null;

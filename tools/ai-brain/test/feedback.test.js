@@ -191,6 +191,139 @@ describe('TASK-AI-25 — role-feedback shape and isolation invariants', () => {
     );
   });
 
+  // --- R07 enforced on the narrowing decision path -------------------------
+  //
+  // The rule's stated effect is that a *subsequent* narrowing decision refuses
+  // to count a stale or source-less record it is offered as supporting
+  // evidence. validateEntry alone does not prove that: these tests call
+  // evaluateNarrowing with cited supporting records and assert the decision
+  // itself refuses them, and that no supporting record — stale or fresh —
+  // ever substitutes for a measured aggregate breach (AI-25-R06) or grants
+  // (AI-25-R03).
+
+  const R07_ROLE = 'reviewer.primary';
+  const R07_OFFERING = 'acct-a::claude-sonnet-5';
+
+  // One merged item: passRate 0 breaches the floor, but retries (2 <= 3) and
+  // tokens per merged (100000 <= 500000) do not — one of three, so below floor.
+  const r07BelowFloor = (now) => [
+    rf.outcomeRecord(R07_OFFERING, R07_ROLE, 'FEAT-TEST-01', now, false, 2, 100000),
+  ];
+
+  // Ten merged items with no passes, 4 retries and 600000 tokens each: all
+  // three floors breached, which satisfies the two-of-three requirement.
+  const r07SustainedBreach = (now) => {
+    const records = [];
+    for (let i = 0; i < 10; i++) {
+      records.push(
+        rf.outcomeRecord(
+          R07_OFFERING,
+          R07_ROLE,
+          'FEAT-TEST-01-' + i,
+          now - i * 1000,
+          false,
+          4,
+          600000
+        )
+      );
+    }
+    return records;
+  };
+
+  test('evaluateNarrowing refuses a stale operator-declared supporting record (R07)', () => {
+    const now = Date.now();
+    const stale = rf.qualifiedRoleEntry(
+      R07_ROLE,
+      now - rf.STALE_AFTER_MS - 1,
+      'operator declared removal',
+      null,
+      'operator'
+    );
+    const result = rf.evaluateNarrowing(R07_ROLE, R07_OFFERING, r07BelowFloor(now), now, [stale]);
+    assert.equal(result.decision, 'keep', 'a refused stale record cannot narrow the role');
+    assert.equal(result.supportingEvidence, 0, 'the stale record must not be counted');
+    assert.equal(result.refusedEvidence.length, 1, 'the refusal must be reported');
+    assert.equal(result.refusedEvidence[0].refusal, 'EVIDENCE_STALE');
+    assert.ok(
+      result.reason.includes('below floor'),
+      'the decision still falls back to the measured floor'
+    );
+    assert.ok(result.reason.includes('EVIDENCE_STALE'), 'the reason names the refused evidence');
+    assert.ok(
+      result.reason.includes('requires a fresh measured aggregate'),
+      'the reason states what is required instead'
+    );
+  });
+
+  test('evaluateNarrowing refuses a source-less supporting record outright (R07)', () => {
+    const now = Date.now();
+    const noSource = rf.qualifiedRoleEntry(R07_ROLE, now, 'undocumented removal', null, null);
+    const result = rf.evaluateNarrowing(R07_ROLE, R07_OFFERING, r07BelowFloor(now), now, [
+      noSource,
+    ]);
+    assert.equal(result.decision, 'keep');
+    assert.equal(result.supportingEvidence, 0);
+    assert.equal(result.refusedEvidence[0].refusal, 'SOURCE_MISSING');
+    assert.ok(result.reason.includes('SOURCE_MISSING'), 'the reason names the refused evidence');
+  });
+
+  test('evaluateNarrowing counts a fresh supporting record yet never narrows without breach (R06+R07)', () => {
+    const now = Date.now();
+    const fresh = rf.qualifiedRoleEntry(
+      R07_ROLE,
+      now - 1000,
+      'measured removal',
+      { passRate: 0.1, avgRetriesPerMerged: 9, tokensPerMerged: 900000 },
+      'measured'
+    );
+    const result = rf.evaluateNarrowing(R07_ROLE, R07_OFFERING, r07BelowFloor(now), now, [fresh]);
+    assert.equal(result.supportingEvidence, 1, 'a valid record is counted as supporting');
+    assert.equal(result.refusedEvidence.length, 0, 'nothing is refused here');
+    assert.equal(
+      result.decision,
+      'keep',
+      'supporting evidence never substitutes for a measured two-of-three breach'
+    );
+  });
+
+  test('a stale supporting record cannot block a fresh measured breach nor grant a role (R03+R07)', () => {
+    const now = Date.now();
+    const stale = rf.qualifiedRoleEntry(
+      R07_ROLE,
+      now - rf.STALE_AFTER_MS - 1,
+      'operator declared removal',
+      null,
+      'operator'
+    );
+    const result = rf.evaluateNarrowing(R07_ROLE, R07_OFFERING, r07SustainedBreach(now), now, [
+      stale,
+    ]);
+    assert.equal(result.decision, 'narrow', 'the measured aggregate decides on its own');
+    assert.equal(result.supportingEvidence, 0, 'the stale record still is not counted');
+    assert.equal(result.refusedEvidence[0].refusal, 'EVIDENCE_STALE', 'refusal stays reported');
+    assert.notEqual(result.decision, 'restore', 'the decision never grants');
+    assert.ok(
+      !rf.applyNarrowing([], R07_ROLE).includes(R07_ROLE),
+      'refusing evidence cannot re-add a role'
+    );
+  });
+
+  test('evaluateNarrowing screens supporting records only for the role under decision (R07)', () => {
+    const now = Date.now();
+    const otherRole = rf.qualifiedRoleEntry(
+      'analyst.default',
+      now - rf.STALE_AFTER_MS - 1,
+      'stale removal of another role',
+      null,
+      'operator'
+    );
+    const result = rf.evaluateNarrowing(R07_ROLE, R07_OFFERING, r07BelowFloor(now), now, [
+      otherRole,
+    ]);
+    assert.equal(result.refusedEvidence.length, 0, 'another role record is not this role');
+    assert.equal(result.supportingEvidence, 0, 'and is not counted for this role either');
+  });
+
   // --- Constants ---------------------------------------------------------
 
   test('PASS_RATE_FLOOR is 0.5', () => {
