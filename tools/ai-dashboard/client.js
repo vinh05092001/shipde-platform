@@ -29,6 +29,9 @@ if (typeof document !== 'undefined') {
       // Fallback minimal tasks array
       renderMinimalStaticTasks(window.__STATIC_TASKS__);
     }
+    // No pane is visible until switchTab runs: every tabPane ships with `hidden`.
+    switchTab(activeTab || 'progress');
+
     // Initial API poll to ensure data is fresh
     fetchState();
   });
@@ -521,6 +524,48 @@ function renderActiveWorkItem() {
 // Human-readable labels for currentGate values that are not self-explanatory
 // codes — most notably EVIDENCE_UNAVAILABLE, which must read clearly as
 // "cannot verify", not as a fabricated PASS state (AI15-R03).
+// Work item statuses as the register spells them, in the dashboard's language.
+// renderActiveWorkItem and renderQueueTable both call this; without it they throw and
+// applyState aborts, blanking every panel rendered after them.
+// Orchestrator session states, in the dashboard's language. renderSessions calls this
+// inside a map, so a missing definition threw and aborted applyState before the activity,
+// diagnostics and capacity panels were ever rendered.
+const SESSION_STATUS_LABELS = {
+  IDLE: 'NGHỈ',
+  ACTIVE: 'ĐANG CHẠY',
+  WORKING: 'ĐANG LÀM',
+  EXITED: 'ĐÃ THOÁT',
+  TERMINATED: 'ĐÃ DỪNG',
+  MERGED: 'ĐÃ MERGE',
+  NO_SIGNAL: 'MẤT TÍN HIỆU',
+  ERROR: 'LỖI',
+};
+
+function formatSessionStatus(status) {
+  if (!status) return 'KHÔNG RÕ';
+  return SESSION_STATUS_LABELS[status] || String(status).replace(/_/g, ' ');
+}
+
+const WORK_ITEM_STATUS_LABELS = {
+  BACKLOG: 'CHỜ XẾP',
+  BLOCKED_BY_FOUNDATION: 'CHỜ NỀN TẢNG',
+  BLOCKED_DEPENDENCY: 'BỊ CHẶN PHỤ THUỘC',
+  BLOCKED: 'BỊ CHẶN',
+  READY_FOR_AUTHOR: 'SẴN SÀNG SOẠN',
+  IN_PROGRESS: 'ĐANG LÀM',
+  READY_FOR_CODEX: 'CHỜ THẨM ĐỊNH',
+  CHANGES_REQUIRED: 'CẦN SỬA',
+  CODEX_PASS: 'THẨM ĐỊNH ĐẠT',
+  READY_FOR_HUMAN_MERGE: 'CHỜ MERGE',
+  MERGED: 'ĐÃ MERGE',
+  SUPERSEDED: 'ĐÃ THAY THẾ',
+};
+
+function formatWorkItemStatus(status) {
+  if (!status) return 'KHÔNG RÕ';
+  return WORK_ITEM_STATUS_LABELS[status] || String(status).replace(/_/g, ' ');
+}
+
 const GATE_STAGE_LABELS = {
   IDLE: 'NGHỈ',
   AUTHORING: 'ĐANG SOẠN',
