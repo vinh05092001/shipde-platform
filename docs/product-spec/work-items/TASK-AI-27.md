@@ -340,3 +340,46 @@ node --test "tools/ai-brain/test/*.test.js"
    true, and `AC-AI-27-03` proves the dependency from Git instead of asserting the
    register status, which would fail while the reconciler correctly refuses to
    write `MERGED`.
+
+
+## Implementation record
+
+Author: `CLAUDE`. Branch: `feat/task-ai-27-coding-grade`. Control status at
+authoring: `BLOCKED_DEPENDENCY`, matching register row 160. This section records
+what was implemented; it does not move the Control table status or the delivery
+register, and `AC-AI-27-01` still confirms the two agree.
+
+### What changed
+
+- `tools/ai-brain/fitness.js`
+  - `gradeOf` is preserved: it still returns the declared class and falls back
+    to `STANDARD` for an absent grade, so `AC-AI-27-05` and its negative proof
+    `AC-AI-27-06` hold unchanged.
+  - `resolveGrade(offering)` is the new companion resolution. It returns
+    `{ class, graded, source }`, where `source` is `declared` for a ladder
+    member and `assumed` for an absent grade (`AI-27-R03`). A value outside
+    `1..4` is reported with an `error` naming the model and the value rather than
+    silently clamped (`AI-27-R04`); the class it returns still matches `gradeOf`,
+    so making the assumption visible changes no dispatch arithmetic.
+  - `gradeEvidence(outcomes)` and `deriveGrade(offering, outcomes, options)`
+    implement the derived-grade path. A class is granted only when at least the
+    floor of completed outcomes of that class are recorded (`AI-27-R05`,
+    `AI-27-R06`); the count is walked from the outcomes and never read from a
+    field; the previous grade is retained alongside the new one (`AI-27-R08`);
+    and the outcome that moved the grade is named (`AI-27-R07`).
+- `tools/ai-brain/offerings.js` - `expandOfferings` carries the grade record and
+  the declaration provenance on every offering.
+- `tools/ai-brain/scheduler.js` - every `planDispatch` assignment records the
+  grade used plus `graded`, `gradeSource` and `gradeProvenance` (`AI-27-R09`).
+- `tools/ai-brain/seed-accounts.js` - the 22 provisional declarations are
+  explicitly marked `gradeProvenance: 'provisional'`, and the header no longer
+  presents them as measured. Replacing them with measured grades is `TASK-AI-30`.
+- `tools/ai-brain/test/fitness.test.js` - deterministic tests for the new rules,
+  with no network and no real registry.
+
+### Verification
+
+Command-by-command evidence for `AC-AI-27-01` through `AC-AI-27-11`, plus
+`node --test tools/ai-brain/test/*.test.js` and
+`python docs/product-spec/scripts/validate_docs.py`, is recorded in the Pull
+Request.
