@@ -59,10 +59,145 @@ const DEFAULT_TOKENS_PER_TASK = {
  * Written by qualification runs, not guessed here — an unrated model defaults
  * to STANDARD so it is neither trusted with architecture nor barred from
  * ordinary work.
+ *
+ * Returns only the class. Use resolveGrade() for the same class together with
+ * its provenance, so a declared grade is distinguishable from an assumed one.
  */
 function gradeOf(offering) {
   const g = Number(offering && offering.codingGrade);
   return Number.isFinite(g) && g >= 1 && g <= 4 ? g : Difficulty.STANDARD;
+}
+
+/** How a coding grade was obtained. */
+const GRADE_SOURCE = {
+  DECLARED: 'declared',
+  ASSUMED: 'assumed',
+  DERIVED: 'derived',
+};
+
+/** Recorded outcomes a derivation needs before it may move a grade. */
+const GRADE_EVIDENCE_FLOOR = 3;
+
+/**
+ * A model's coding class together with its provenance (AI-27-R03, R04).
+ *
+ *   { class, graded, source, declared?, error? }
+ *
+ *   - a declared ladder member  -> graded: true,  source: 'declared'
+ *   - an absent grade           -> graded: false, source: 'assumed', class STANDARD
+ *   - a value outside 1..4      -> graded: false, source: 'assumed', plus an
+ *     `error` naming the model and the value. The class stays STANDARD so the
+ *     dispatch arithmetic is unchanged, but a typo is a finding rather than a
+ *     confident middle grade.
+ *
+ * The class always agrees with gradeOf(), so making the assumption visible never
+ * changes which work the fleet may take.
+ */
+function resolveGrade(offering) {
+  const declared = offering && offering.codingGrade;
+  if (declared === undefined || declared === null) {
+    return { class: Difficulty.STANDARD, graded: false, source: GRADE_SOURCE.ASSUMED };
+  }
+
+  const g = Number(declared);
+  if (!Number.isFinite(g) || g < 1 || g > 4) {
+    return {
+      class: Difficulty.STANDARD,
+      graded: false,
+      source: GRADE_SOURCE.ASSUMED,
+      declared,
+      error:
+        'out-of-ladder grade: ' +
+        ((offering && offering.id) || 'unknown') +
+        ' declares ' +
+        declared,
+    };
+  }
+
+  return { class: g, graded: true, source: GRADE_SOURCE.DECLARED };
+}
+
+/**
+ * Counts recorded outcomes per class (AI-27-R05, R06). Only a COMPLETED outcome
+ * counts as evidence for the class it was completed at; a failure is not
+ * evidence that a model can finish that class. The count is walked from the
+ * outcomes themselves and never read from a field, so a caller cannot claim
+ * evidence it did not record.
+ */
+function gradeEvidence(outcomes) {
+  const counts = {};
+  let completed = 0;
+  for (const o of outcomes || []) {
+    if (!o || o.outcome !== 'completed') continue;
+    const c = Number(o.class);
+    if (!Number.isFinite(c)) continue;
+    counts[c] = (counts[c] || 0) + 1;
+    completed += 1;
+  }
+  return { counts, completed };
+}
+
+/**
+ * Derives a grade from recorded outcomes (AI-27-R05..R08).
+ *
+ * A class is granted only when at least `floor` completed outcomes of that
+ * class are recorded, so a grade can never exceed its evidence (R06). Below the
+ * floor nothing moves: the previous grade stands and the derivation is reported
+ * as insufficient evidence rather than asserted (R05). When it does move, the
+ * previous grade is retained alongside the new one (R08) and the outcome that
+ * caused the move is named (R07). `now` may be injected so the computed instant
+ * is deterministic in a test.
+ */
+function deriveGrade(offering, outcomes, options) {
+  const opts = options || {};
+  const floor = Number(opts.floor) > 0 ? Number(opts.floor) : GRADE_EVIDENCE_FLOOR;
+  const current = gradeOf(offering);
+  const evidence = gradeEvidence(outcomes);
+
+  let derived = null;
+  let observations = 0;
+  for (const key of Object.keys(evidence.counts)) {
+    const c = Number(key);
+    if (evidence.counts[key] >= floor && (derived === null || c > derived)) {
+      derived = c;
+      observations = evidence.counts[key];
+    }
+  }
+
+  if (derived === null) {
+    return {
+      class: current,
+      previousClass: current,
+      graded: false,
+      source: GRADE_SOURCE.ASSUMED,
+      derived: false,
+      insufficientEvidence: true,
+      observations: evidence.completed,
+      floor,
+    };
+  }
+
+  const moved = derived !== current;
+  const supporting = (outcomes || []).filter(
+    (o) => o && o.outcome === 'completed' && Number(o.class) === derived
+  );
+  const last = supporting[supporting.length - 1];
+
+  return {
+    class: derived,
+    previousClass: current,
+    graded: true,
+    source: GRADE_SOURCE.DERIVED,
+    derived: true,
+    moved,
+    movedBy: moved && last ? last.id || null : null,
+    evidence: {
+      class: derived,
+      observations,
+      computedAt: opts.now || new Date().toISOString(),
+    },
+    floor,
+  };
 }
 
 /**
@@ -79,6 +214,45 @@ function reviewGradeOf(offering) {
   const explicit = Number(offering && offering.reviewGrade);
   if (Number.isFinite(explicit) && explicit >= 1 && explicit <= 4) return explicit;
   return Math.max(1, gradeOf(offering) - 1);
+}
+
+/**
+ * A model's review class together with its provenance (AI-41-R01..R06).
+ *
+ *   { class, graded, source, declared?, error? }
+ *
+ *   - a declared ladder member  -> graded: true,  source: 'declared'
+ *   - an absent review grade    -> graded: false, source: 'assumed', class Math.max(1, gradeOf(offering) - 1)
+ *   - a value outside 1..4      -> graded: false, source: 'assumed', class Math.max(1, gradeOf(offering) - 1),
+ *     plus an `error` naming the model and the value. The class stays one-below
+ *     so the dispatch arithmetic is unchanged, but a typo is a finding rather
+ *     than a silent clamp.
+ *
+ * The class always agrees with reviewGradeOf().
+ */
+function resolveReviewGrade(offering) {
+  const declared = offering && offering.reviewGrade;
+  const fallback = Math.max(1, gradeOf(offering) - 1);
+  if (declared === undefined || declared === null) {
+    return { class: fallback, graded: false, source: GRADE_SOURCE.ASSUMED };
+  }
+
+  const g = Number(declared);
+  if (!Number.isFinite(g) || g < 1 || g > 4) {
+    return {
+      class: fallback,
+      graded: false,
+      source: GRADE_SOURCE.ASSUMED,
+      declared,
+      error:
+        'out-of-ladder review grade: ' +
+        ((offering && offering.id) || 'unknown') +
+        ' declares ' +
+        declared,
+    };
+  }
+
+  return { class: g, graded: true, source: GRADE_SOURCE.DECLARED };
 }
 
 function isSufficient(offering, difficulty) {
@@ -303,8 +477,14 @@ module.exports = {
   Difficulty,
   DIFFICULTY_NAMES,
   DEFAULT_TOKENS_PER_TASK,
+  GRADE_SOURCE,
+  GRADE_EVIDENCE_FLOOR,
+  resolveGrade,
+  gradeEvidence,
+  deriveGrade,
   gradeOf,
   reviewGradeOf,
+  resolveReviewGrade,
   isSufficient,
   remainingTokens,
   runwayOf,

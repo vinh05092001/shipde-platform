@@ -43,7 +43,7 @@ The operator launches AO through the existing localhost AgentRouter profile and 
 - `docs/product-spec/docs/10-ai-collaboration/GEMINI-START-PROMPT.md` — implementation author prompt template.
 - `docs/product-spec/docs/10-ai-collaboration/NINEROUTER-START-PROMPT.md` — 9Router author prompt template.
 - `scripts/ai/control.ps1` — existing controller patterns to extend.
-- Agent Orchestrator canonical source: `https://github.com/Untrivial-ai/agent-orchestrator`; installed version `0.12.12`; health check requires `ao version` to match the pin and `ao status --json` to report `state=ready`.
+- Agent Orchestrator canonical source: `https://github.com/Untrivial-ai/agent-orchestrator`; installed version `0.12.12` at delivery, raised to `0.13.0` on 2026-09-16 by operator decision `AI-AO-PIN-2026-09-16` (AI-TOOLCHAIN-DECISIONS.md); health check requires `ao version` to match the pin and `ao status --json` to report `state=ready`.
 - AO CLI contract: `ao session ls --json`, `ao session get --json`, and `ao review ls <session> --json` from the pinned canonical source and installed skill documentation.
 
 ## Preconditions and dependencies
@@ -271,3 +271,15 @@ From a clean checkout:
 - The supervisor dispatches CI/review correction once per exact HEAD; richer diagnosis and retry budgeting remain TASK-AI-08.
 - Checkpoint restart is included; recovery from externally deleted AO sessions/worktrees remains TASK-AI-09.
 - Permission allowlist enforcement is deferred to TASK-AI-10.
+
+## Post-delivery change: AO pin 0.13.0 (2026-09-16)
+
+The installed desktop runtime moved to AO `0.13.0` and the supervisor failed closed on the pin, as `AI-SUP` intends. The operator approved raising the pin. Before the pin moved, every AO surface this Work Item depends on was checked against `0.13.0` on the host: `ao spawn` (`--project --kind --name --branch --harness --prompt --mode`), `ao session ls|get --project --json` (still `{ data, meta }`), `ao session kill --project`, `ao review ls <session> --json` and `ao status --json` (`state: ready`). All are accepted. A live spawn under `0.13.0` was not exercised. Changed: `tools/ecosystem-manifest.json` pin and health check, the canonical-pin self-test in `control.ps1`. Fixture comments naming `0.12.12` describe responses observed at that version and are unchanged.
+
+### Review round 1 repairs (2026-09-16)
+
+- The `newerVersionRejected` self-test used the literal `ao version 0.12.99`. Once the pin moved to `0.13.0`, that version is older than the pin, so the test no longer proved its name. The fixture is now derived from the pin (`<major>.<minor+1>.0`), and a separate `olderVersionRejected` case (`<major>.<minor-1>.99`) covers the other direction. `control.ps1 -Action Test` exits 0 with `ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED`.
+- Live read-only evidence on the 0.13.0 host: `agent-orchestrator.exe` ProductVersion `0.13.0`; `ao session ls --json` exits 0 and returns the `data,meta` shape; `ao status --json` exits 0 with `state: ready`.
+- Kept deliberately: the canonical-pin self-test compares against a literal as well as `$script:ExpectedAoVersion`. The literal is the point of that test. A manifest edit alone must not silently move the pin the controller accepts, so a pin change has to touch both, as this one does.
+- Not changed in this Pull Request: `TASK-AI-07.md` line 69 still says `0.12.12`. It records the version at TASK-AI-07's delivery, and the `contract` check refuses a Pull Request that changes more than one Work Item file.
+- Still unverified: a live `ao spawn` of a real worker under 0.13.0. It starts a paid agent session, so it will be observed on the first supervised dispatch after merge. The supervisor fails closed if spawn output does not match the contract.

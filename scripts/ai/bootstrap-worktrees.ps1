@@ -31,8 +31,39 @@ if ($mainBranch -ne "main") {
     throw "Integration workspace must remain on main: $($paths.Main)"
 }
 Invoke-ShipDeGit -Path $paths.Main -Arguments @("merge", "--ff-only", "origin/main") | Out-Null
-& git -C $paths.Main config core.hooksPath .githooks
-Write-Host "Configured core.hooksPath = .githooks for $($paths.Main)"
+# Git hooks are managed by Lefthook (TASK-AI-36), declared in the
+# version-controlled lefthook.yml. The bespoke core.hooksPath override this
+# replaces is retired rather than merged: while it is set, git ignores the
+# Lefthook hook that the rest of this block installs.
+& git -C $paths.Main config --unset core.hooksPath 2>$null | Out-Null
+
+# Installation is explicit. Repository supply-chain policy forbids install
+# lifecycle scripts (AI-36-R02), so `pnpm install` never registers a hook on
+# its own, and a bare `npx lefthook install` is forbidden under AI-TOOL-11
+# because it would run whatever version the registry serves today.
+$lefthookPackage = Join-Path $paths.Main "node_modules\lefthook"
+if (Test-Path -LiteralPath $lefthookPackage) {
+    # Requires a prior frozen install: the binary must come from the pinned
+    # workspace dependency, never from a network fetch.
+    & pnpm --dir $paths.Main exec lefthook install
+    if ($LASTEXITCODE -ne 0) {
+        throw "Lefthook hook installation failed for $($paths.Main)"
+    }
+    Write-Host "Installed Lefthook git hooks for $($paths.Main) (pnpm lefthook install)"
+} else {
+    # Pinned fallback only. Run from the repository root so the pinned
+    # package resolves against this checkout.
+    Push-Location $paths.Main
+    try {
+        & npx --yes lefthook@1.11.3 install
+        if ($LASTEXITCODE -ne 0) {
+            throw "Pinned Lefthook fallback installation failed for $($paths.Main)"
+        }
+    } finally {
+        Pop-Location
+    }
+    Write-Host "Installed Lefthook git hooks for $($paths.Main) via pinned npx lefthook@1.11.3"
+}
 
 $worktrees = @(
     @{ Path = $paths.Claude; Branch = "agent/claude" },

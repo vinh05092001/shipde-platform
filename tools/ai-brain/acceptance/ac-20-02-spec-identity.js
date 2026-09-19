@@ -1,77 +1,116 @@
 'use strict';
-// AC-AI-20-02 — negative proof that the specification-identity rule rejects a
-// spec whose Control table belongs to another register row.
+// AC-AI-20-02: Negative proof - the identity rule rejects a tampered copy
 //
-// The real register is read, a real Work Item file that it names is located, and
-// a CONTROL confirms the untouched file matches its row. The tampering is then
-// done on a COPY written to os.tmpdir(): the Control table is rewritten to
-// declare a different Work Item ID, and the same rule AC-AI-20-01 runs must
-// reject it. Nothing inside the repository is modified.
+// Expected: exit 1, print "SPEC_IDENTITY_MISMATCH_DETECTED:" after proving the
+// untouched file matches its row.
 //
-// The rule is ./lib/spec-coverage.js, required by AC-AI-20-01 as well, so the
-// gate and the proof of the gate cannot drift apart. Exit 2, never 1, when run
-// outside the repository, so an absent register cannot read as a rejection.
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { REGISTER_PATH, registerRows, specIdentity } = require('./lib/spec-coverage');
+// CONTROL: reads the real register and a real Work Item file, proves the
+// untouched file's Control table matches the register row, then tampers only a
+// copy written to os.tmpdir() - its Control table is rewritten to name a
+// DIFFERENT real register row - and shows the same rule rejecting it.
 
-if (!fs.existsSync(REGISTER_PATH)) {
-  console.error('SOURCE_MISSING: ' + REGISTER_PATH.split(path.sep).join('/'));
-  process.exit(2);
-}
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { REGISTER_PATH, registerRows, specExists, specIdentity } = require('./lib/spec-coverage');
 
 const root = process.cwd();
-const rows = registerRows(fs.readFileSync(REGISTER_PATH, 'utf8'));
+const registerPath = path.resolve(root, REGISTER_PATH);
 
-// CONTROL: a real row whose spec really does declare it, or rejecting a tampered
-// copy says nothing about the rule.
-const row = rows.find(
-  (candidate) => candidate.work_item_path && specIdentity(candidate, root).matches
-);
-if (!row) {
-  console.error('CONTROL_FAILED: no register row names a spec that declares it');
+// Exit 2 when no register exists - AC-AI-20-04 exercises this.
+if (!fs.existsSync(registerPath)) {
+  console.error('SOURCE_MISSING: no register at', registerPath);
   process.exit(2);
 }
 
-const other = rows.find(
-  (candidate) => candidate.work_item_id && candidate.work_item_id !== row.work_item_id
+const registerText = fs.readFileSync(registerPath, 'utf8');
+const rows = registerRows(registerText);
+
+// Find a real row whose specification exists.
+const realRow = rows.find((r) => r.work_item_path && specExists(r, root));
+if (!realRow) {
+  console.error('SOURCE_MISSING: no specified row found for CONTROL');
+  process.exit(2);
+}
+
+// CONTROL: prove the untouched real specification matches its row.
+const realIdentity = specIdentity(realRow, root);
+if (!realIdentity.matches) {
+  console.error(
+    `CONTROL_FAILURE: real row ${realRow.work_item_id} already mismatched before tampering`
+  );
+  process.exit(2);
+}
+
+console.log(
+  `CONTROL: ${realRow.work_item_id} -> "${realIdentity.path}" declares "${realIdentity.declaredId}" OK`
 );
-if (!other) {
+
+// The borrowed identity is never written into this script: it is read out of the
+// register, so the tampered copy names a row that really exists rather than a
+// literal that names nothing.
+const otherRow = rows.find((r) => r.work_item_id && r.work_item_id !== realRow.work_item_id);
+if (!otherRow) {
   console.error('SOURCE_MISSING: no second register row to borrow an identity from');
   process.exit(2);
 }
 
-const original = fs.readFileSync(path.resolve(root, row.work_item_path), 'utf8');
-const tampered = original.replace(
-  /(^\|\s*Work Item ID\s*\|\s*`?)([^`|\s]+)(`?\s*\|\s*$)/m,
-  '$1' + other.work_item_id + '$3'
+// Tamper a copy: change the Control table to name a different register row.
+const realPath = path.resolve(root, realRow.work_item_path);
+const realContent = fs.readFileSync(realPath, 'utf8');
+const tamperedContent = realContent.replace(
+  /(\|\s*Work Item ID\s*\|\s*`?)([^`|\s]+)(`?\s*\|\s*)/m,
+  (_match, before, _id, after) => before + otherRow.work_item_id + after
 );
-if (tampered === original) {
-  console.error('CONTROL_FAILED: the tamper changed nothing, so the Control cell was not found');
+
+if (tamperedContent === realContent) {
+  console.error('CONTROL_FAILURE: tamper pattern did not match real file');
   process.exit(2);
 }
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-ac-20-02-'));
-const tmpSpec = path.join(tmpDir, 'tampered.md');
-fs.writeFileSync(tmpSpec, tampered);
-
-// specIdentity resolves absolute paths unchanged, so the copy lives outside the
-// repository while the row still names its own path.
-const probe = Object.assign({}, row, { work_item_path: tmpSpec });
-const verdict = specIdentity(probe, root);
-fs.rmSync(tmpDir, { recursive: true, force: true });
-
-if (verdict.matches) {
-  console.error('SPEC_IDENTITY_MISMATCH_NOT_DETECTED');
-  process.exit(0);
+// The copy lives in a directory this run creates and removes: never in the
+// repository, and never loose in the shared root of os.tmpdir() where a second run
+// in the same millisecond would overwrite the first. The identity is read out of
+// the copy before the directory is removed, so no exit path can leave the file
+// behind.
+function readTamperedIdentity() {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-ac-20-02-'));
+  try {
+    const tmpPath = path.join(tmpDir, 'tampered-spec.md');
+    fs.writeFileSync(tmpPath, tamperedContent, 'utf8');
+    // The tampered row is the real row with its path aimed at the copy, so the only
+    // thing under test is what the copy's Control table declares.
+    return specIdentity({ ...realRow, work_item_path: tmpPath }, '');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
+
+const tamperedIdentity = readTamperedIdentity();
+
+if (tamperedIdentity.declaredId !== otherRow.work_item_id) {
+  console.error(
+    `CONTROL_FAILURE: the copy declares "${tamperedIdentity.declaredId}", not the borrowed row "${otherRow.work_item_id}"`
+  );
+  process.exit(2);
+}
+
+if (tamperedIdentity.matches) {
+  console.error('SPEC_IDENTITY_MISMATCH_NOT_DETECTED: tampered file was not rejected');
+  process.exit(2);
+}
+
+// The real document must be exactly as this script found it: rejecting a copy may
+// not disturb the specification it was copied from.
+if (!specIdentity(realRow, root).matches) {
+  console.error(
+    `CONTROL_FAILURE: the real specification ${realRow.work_item_id} no longer matches its row`
+  );
+  process.exit(2);
+}
+
 console.error(
-  'SPEC_IDENTITY_MISMATCH_DETECTED: ' +
-    row.work_item_path +
-    ' declares ' +
-    verdict.declaredId +
-    ', register row is ' +
-    row.work_item_id
+  `SPEC_IDENTITY_MISMATCH_DETECTED: tampered file declares "${tamperedIdentity.declaredId}", row expects "${realRow.work_item_id}"`
 );
+
 process.exit(1);
