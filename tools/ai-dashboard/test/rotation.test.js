@@ -192,6 +192,59 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
         server.close();
       }
     });
+
+    test('/api/rotation with disablePolling does not perform provider probe', async () => {
+      clearProbeCache();
+      let fetchCalled = false;
+      const server = createDashboardServer({
+        disablePolling: true,
+        fetch: () => {
+          fetchCalled = true;
+          throw new Error('Network probe should not be called when polling disabled');
+        },
+      });
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
+      const port = server.address().port;
+      try {
+        const res = await fetch('http://127.0.0.1:' + port + '/api/rotation');
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(fetchCalled, false, 'No probe fetch should be initiated during test');
+      } finally {
+        server.close();
+      }
+    });
+
+    test('/api/rotation with probe: true awaits balance probe and returns numeric headroom', async () => {
+      clearProbeCache();
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { personal_balance: 7500 } }),
+      });
+      const tmp = makeTmpDir();
+      const server = createDashboardServer({
+        probe: true,
+        homeDir: tmp,
+        baiKeys: ['mock-k1', 'mock-k2'],
+        fetch: mockFetch,
+        logDir: path.join(tmp, 'no-logs'),
+        ledgerFile: path.join(tmp, 'no-ledger.json'),
+        quotaFile: path.join(tmp, 'no-quota.json'),
+      });
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
+      const port = server.address().port;
+      try {
+        const res = await fetch('http://127.0.0.1:' + port + '/api/rotation');
+        assert.strictEqual(res.status, 200);
+        const data = await res.json();
+        const bai = data.sources.find((s) => s.id === 'bai');
+        assert.ok(bai);
+        assert.strictEqual(bai.limits.headroom, 15000);
+      } finally {
+        server.close();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('AC-AI-47-08: the dispatcher log is read where dispatch.sh writes it', () => {
@@ -577,6 +630,31 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
       const serializedState = JSON.stringify(state);
       assert.strictEqual(serializedState.includes('mock-k1'), false, 'keys must not leak in state');
 
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    test('buildRotationState with async: true queries balance probe directly', async () => {
+      clearProbeCache();
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { personal_balance: 12345 } }),
+      });
+      const tmp = makeTmpDir();
+      const state = await buildRotationState({
+        async: true,
+        probe: true,
+        homeDir: tmp,
+        baiKeys: ['async-k1'],
+        fetch: mockFetch,
+        logDir: path.join(tmp, 'no-logs'),
+        ledgerFile: path.join(tmp, 'no-ledger.json'),
+        quotaFile: path.join(tmp, 'no-quota.json'),
+      });
+
+      const bai = state.sources.find((s) => s.id === 'bai');
+      assert.ok(bai);
+      assert.strictEqual(bai.limits.headroom, 12345);
       fs.rmSync(tmp, { recursive: true, force: true });
     });
   });

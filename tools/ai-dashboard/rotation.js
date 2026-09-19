@@ -327,7 +327,7 @@ const probeCache = new Map();
 const BAI_PROBE_TIMEOUT_MS = 8000;
 const BAI_PROBE_CACHE_KEY = 'bai-balance';
 
-function probeXkiro(now, ttlMs) {
+function probeXkiro(now, ttlMs, opts = {}) {
   // Measured remaining quota from the provider. The probe runs in the background and
   // the page reads the last measurement, so rendering never blocks on the network and
   // the provider is queried at most once per TTL.
@@ -335,7 +335,9 @@ function probeXkiro(now, ttlMs) {
   var cached = probeCache.get(key);
   var ttl = ttlMs || 60000;
   var stale = !cached || now - cached.at >= ttl;
-  var token = process.env.XKIRO_API_KEY;
+  var env = opts.env || process.env;
+  var token = env.XKIRO_API_KEY;
+  var fetchFn = opts.fetch || globalThis.fetch;
 
   if (stale && token && !probeCache.get(key + ':inflight')) {
     probeCache.set(key + ':inflight', true);
@@ -343,7 +345,7 @@ function probeXkiro(now, ttlMs) {
     const timer = setTimeout(function () {
       controller.abort();
     }, 8000);
-    fetch('https://api.xkiro.com/v1/usage', {
+    const promise = fetchFn('https://api.xkiro.com/v1/usage', {
       headers: { Authorization: 'Bearer ' + token },
       signal: controller.signal,
     })
@@ -353,16 +355,18 @@ function probeXkiro(now, ttlMs) {
       .then(function (j) {
         const free = j && j.free_tokens;
         if (free && typeof free.used_today === 'number') {
+          const val = {
+            declaredLimit: typeof free.limit_per_day === 'number' ? free.limit_per_day : 'UNKNOWN',
+            consumption: free.used_today,
+            headroom: typeof free.remaining === 'number' ? free.remaining : 'UNKNOWN',
+          };
           probeCache.set(key, {
             at: Date.now(),
-            value: {
-              declaredLimit:
-                typeof free.limit_per_day === 'number' ? free.limit_per_day : 'UNKNOWN',
-              consumption: free.used_today,
-              headroom: typeof free.remaining === 'number' ? free.remaining : 'UNKNOWN',
-            },
+            value: val,
           });
+          return val;
         }
+        return null;
       })
       .catch(function () {
         /* provider unreachable; the last measurement stands */
@@ -370,7 +374,28 @@ function probeXkiro(now, ttlMs) {
       .finally(function () {
         clearTimeout(timer);
         probeCache.delete(key + ':inflight');
+        probeCache.delete(key + ':promise');
       });
+
+    probeCache.set(key + ':promise', promise);
+
+    if (opts.async) {
+      return promise;
+    }
+  }
+
+  if (opts.async) {
+    if (probeCache.get(key + ':inflight') && probeCache.get(key + ':promise')) {
+      return probeCache.get(key + ':promise').then(function () {
+        const c = probeCache.get(key);
+        return c
+          ? c.value
+          : { declaredLimit: 'UNKNOWN', consumption: 'UNKNOWN', headroom: 'UNKNOWN' };
+      });
+    }
+    if (cached) {
+      return Promise.resolve(cached.value);
+    }
   }
 
   return cached
@@ -504,15 +529,26 @@ function probeBai(now, ttlMs, opts = {}) {
       })
       .finally(() => {
         probeCache.delete(key + ':inflight');
+        probeCache.delete(key + ':promise');
       });
+
+    probeCache.set(key + ':promise', promise);
 
     if (opts.async) {
       return promise;
     }
   }
 
-  if (opts.async && cached) {
-    return Promise.resolve(cached.value);
+  if (opts.async) {
+    if (probeCache.get(key + ':inflight') && probeCache.get(key + ':promise')) {
+      return probeCache.get(key + ':promise').then(() => {
+        const c = probeCache.get(key);
+        return c ? c.value : { headroom: 'UNKNOWN', keys: [], warnings: [] };
+      });
+    }
+    if (cached) {
+      return Promise.resolve(cached.value);
+    }
   }
 
   return cached ? cached.value : { headroom: 'UNKNOWN', keys: [], warnings: [] };
@@ -598,7 +634,38 @@ function readQuotaStore(storeFile) {
   }
 }
 
+async function buildRotationStateAsync(options) {
+  const opts = options || {};
+  const allowProbe = opts.probe !== false;
+  const configuredIds = detectConfigured(opts.homeDir, Boolean(opts.homeDir), opts.env);
+  if (Array.isArray(opts.baiKeys) && opts.baiKeys.length > 0) {
+    configuredIds.add('bai');
+  }
+  const now = opts.now || Date.now();
+  const probePromises = [];
+  if (allowProbe && configuredIds.has('xkiro')) {
+    const p = probeXkiro(now, opts.probeTtlMs, { ...opts, async: true });
+    if (p && typeof p.then === 'function') probePromises.push(p);
+  }
+  if (allowProbe && configuredIds.has('bai')) {
+    const p = probeBai(now, opts.probeTtlMs, { ...opts, async: true });
+    if (p && typeof p.then === 'function') probePromises.push(p);
+  }
+  if (probePromises.length > 0) {
+    await Promise.allSettled(probePromises);
+  }
+  return buildRotationStateSync({ ...opts, async: false });
+}
+
 function buildRotationState(options) {
+  const opts = options || {};
+  if (opts.async) {
+    return buildRotationStateAsync(opts);
+  }
+  return buildRotationStateSync(opts);
+}
+
+function buildRotationStateSync(options) {
   const opts = options || {};
   const rootDir = opts.rootDir || path.resolve(__dirname, '../..');
   // The dispatcher log lives in the main checkout's .worktrees/logs even when
@@ -625,7 +692,7 @@ function buildRotationState(options) {
   for (const e of logEntries) configuredIds.add(e.sourceId);
   const allowProbe = opts.probe !== false;
   const xkiroUsage =
-    allowProbe && configuredIds.has('xkiro') ? probeXkiro(now, opts.probeTtlMs) : null;
+    allowProbe && configuredIds.has('xkiro') ? probeXkiro(now, opts.probeTtlMs, opts) : null;
   const baiUsage =
     allowProbe && configuredIds.has('bai') ? probeBai(now, opts.probeTtlMs, opts) : null;
   for (const id of Object.keys(cooldowns)) configuredIds.add(id);

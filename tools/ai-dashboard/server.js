@@ -91,6 +91,10 @@ function isPathTraversal(requestedPath, allowedRoots) {
 function createDashboardServer(options = {}) {
   const rootDir = options.rootDir || path.resolve(__dirname, '../..');
   const dashboardDir = path.resolve(__dirname);
+  const enableProbe =
+    options.probe !== undefined
+      ? Boolean(options.probe)
+      : !options.disablePolling && process.env.NODE_ENV !== 'test';
 
   // SSE connected clients
   const sseClients = new Set();
@@ -359,7 +363,9 @@ function createDashboardServer(options = {}) {
 
     // TASK-AI-47: Model rotation JSON endpoint
     if (pathname === '/api/rotation') {
-      const rotation = buildRotationState({ rootDir });
+      const rotation = enableProbe
+        ? await buildRotationState({ rootDir, probe: true, async: true, ...options })
+        : buildRotationState({ rootDir, probe: false, ...options, async: false });
       sendJson(req, res, 200, rotation);
       return;
     }
@@ -392,6 +398,9 @@ function createDashboardServer(options = {}) {
   if (!options.disablePolling) {
     // Initial warm aggregation
     aggregateCockpitState({ rootDir }).catch(() => {});
+    if (enableProbe) {
+      buildRotationState({ rootDir, probe: true, async: true, ...options }).catch(() => {});
+    }
     pollIntervalTimer = setInterval(pollAndBroadcast, pollIntervalMs);
     heartbeatTimer = setInterval(broadcastHeartbeat, 15000);
   }
