@@ -15,13 +15,17 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { retrieveLessons } = require('./lib/lesson-retrieval');
+const { matchesViolations } = require('./lib/lesson-schema');
 
 const SEED = 'tools/ai-brain/lessons/lesson-seed.json';
+const SCHEMA = 'tools/ai-brain/lessons/lesson-schema.json';
 const PINNED_DATE = '2026-09-17';
 
-if (!fs.existsSync(SEED)) {
-  console.error('SOURCE_MISSING: ' + SEED);
-  process.exit(2);
+for (const source of [SEED, SCHEMA]) {
+  if (!fs.existsSync(source)) {
+    console.error('SOURCE_MISSING: ' + source);
+    process.exit(2);
+  }
 }
 
 const real = JSON.parse(fs.readFileSync(SEED, 'utf8'));
@@ -48,15 +52,16 @@ if (realExcluded.length !== 2) {
 }
 
 // Build a COPY of the seed extended with one synthetic fixture record that is
-// approved, not superseded, and expired before the pinned date. This exercises
-// the expiry-only exclusion path the live seed cannot reach at this date.
+// schema-conforming, approved, not superseded, and expired before the pinned
+// date. This exercises the expiry-only exclusion path the live seed cannot
+// reach at this date.
 const syntheticId = 'LESSON-SYNTHETIC-EXPIRY-ONLY-FIXTURE';
 const tampered = JSON.parse(JSON.stringify(real));
-tampered.lessons.push({
+const fixture = {
   id: syntheticId,
   title: 'A synthetic fixture record built by AC-AI-23-05 to exercise expiry-only exclusion',
   status: 'approved',
-  scope: 'fixture',
+  scope: 'tooling',
   source_commit: 'e5e06918d0b6d62de988168d23bb1309fc7cf3ed',
   expiry: '2026-01-01',
   superseded_by: null,
@@ -65,7 +70,19 @@ tampered.lessons.push({
   created_at: '2026-09-17T00:00:00Z',
   proposed_by: 'acceptance',
   approved_by: 'vinh05092001',
-});
+};
+
+// Control: expiry must be the fixture's only defect, so its exclusion cannot
+// come from schema conformance instead.
+const fixtureViolations = [];
+matchesViolations(JSON.parse(fs.readFileSync(SCHEMA, 'utf8')), fixture, '$', fixtureViolations);
+if (fixtureViolations.length !== 0) {
+  console.error(
+    'CONTROL_FAILED: synthetic fixture is not schema-conforming: ' + fixtureViolations.join('; ')
+  );
+  process.exit(2);
+}
+tampered.lessons.push(fixture);
 
 const tmp = path.join(os.tmpdir(), 'shipde-ac23-05-' + process.pid + '.json');
 fs.writeFileSync(tmp, JSON.stringify(tampered));

@@ -15,13 +15,17 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { retrieveLessons } = require('./lib/lesson-retrieval');
+const { matchesViolations } = require('./lib/lesson-schema');
 
 const SEED = 'tools/ai-brain/lessons/lesson-seed.json';
+const SCHEMA = 'tools/ai-brain/lessons/lesson-schema.json';
 const PINNED_DATE = '2026-09-17';
 
-if (!fs.existsSync(SEED)) {
-  console.error('SOURCE_MISSING: ' + SEED);
-  process.exit(2);
+for (const source of [SEED, SCHEMA]) {
+  if (!fs.existsSync(source)) {
+    console.error('SOURCE_MISSING: ' + source);
+    process.exit(2);
+  }
 }
 
 const real = JSON.parse(fs.readFileSync(SEED, 'utf8'));
@@ -40,19 +44,19 @@ if (realAdmitted.length !== 4) {
 }
 
 // Build a COPY of the seed extended with one synthetic fixture record that is
-// approved, not superseded, not expired, but missing `source_commit` — so it
-// fails the schema's approved-lesson requirement (AI-21-R05) and is excluded as
-// `nonconforming`.
+// approved, not superseded, not expired, but missing `source_commit` — the
+// schema requires it, so the record is excluded as `nonconforming`. The control
+// below proves that missing field is the record's only schema violation.
 const syntheticId = 'LESSON-SYNTHETIC-NONCONFORMING-APPROVED-FIXTURE';
 const tampered = JSON.parse(JSON.stringify(real));
-tampered.lessons.push({
+const fixture = {
   id: syntheticId,
   title:
     'A synthetic fixture record built by AC-AI-23-08 to exercise nonconforming-approved exclusion',
   status: 'approved',
-  scope: 'fixture',
-  // `source_commit` is intentionally omitted — the schema requires it for an
-  // approved lesson (AI-21-R05), so this record is nonconforming.
+  scope: 'tooling',
+  // `source_commit` is intentionally omitted — the schema requires it, so this
+  // record is nonconforming.
   expiry: null,
   superseded_by: null,
   evidence:
@@ -60,7 +64,23 @@ tampered.lessons.push({
   created_at: '2026-09-17T00:00:00Z',
   proposed_by: 'acceptance',
   approved_by: 'vinh05092001',
-});
+};
+
+// Control: the missing `source_commit` must be the fixture's only defect. The
+// schema requires it both at top level and in the approved branch, so every
+// reported violation must name it.
+const fixtureViolations = [];
+matchesViolations(JSON.parse(fs.readFileSync(SCHEMA, 'utf8')), fixture, '$', fixtureViolations);
+if (
+  fixtureViolations.length === 0 ||
+  !fixtureViolations.every((v) => v === "$ missing required 'source_commit'")
+) {
+  console.error(
+    'CONTROL_FAILED: expected only the missing source_commit, got: ' + fixtureViolations.join('; ')
+  );
+  process.exit(2);
+}
+tampered.lessons.push(fixture);
 
 const tmp = path.join(os.tmpdir(), 'shipde-ac23-08-' + process.pid + '.json');
 fs.writeFileSync(tmp, JSON.stringify(tampered));
