@@ -12,7 +12,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 | ----------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Git, GitHub and Git worktrees                                                             | USE NOW                          | Isolated workspaces, durable handoff, CI and review                          | `main` is never an implementation workspace                                                                                                                                                                                                                   |
 | Claude app and Claude Code                                                                | USE NOW                          | Business and solution analysis                                               | Interactive analysis stays in `shipde-claude`; unattended AO uses the governed 9Router launcher; no self-approval                                                                                                                                         |
-| AgentRouter                                                                               | USE NOW                          | Claude Code-compatible provider and routing runtime                          | Keep upstream credentials outside Git; unattended AO routes via the localhost 9Router endpoint (port 20128) using `%USERPROFILE%\.claude`, while direct AgentRouter access is reserved for the manual `%USERPROFILE%\.claude-orchestrator` diagnostic profile |
+| AgentRouter                                                                               | USE NOW                          | Claude Code-compatible provider and routing runtime                          | Keep upstream credentials outside Git; unattended AO routes via the localhost 9Router endpoint (port 20128) using `%USERPROFILE%\.claude-9router`, while direct AgentRouter access is reserved for the manual `%USERPROFILE%\.claude-orchestrator` diagnostic profile |
 | Codex app and Codex CLI                                                                   | USE NOW                          | Work Item planning, documentation and fresh independent review               | Planning and review are separate tasks; no author self-review                                                                                                                                                                                                 |
 | Gemini app, Antigravity CLI and [Gemini CLI](https://github.com/google-gemini/gemini-cli) | USE NOW                          | Primary implementation for complete vertical and high-risk work              | Prefer authenticated `agy`; `gemini` is the fallback; one prepared Work Item and branch at a time                                                                                                                                                             |
 | [9Router](https://github.com/decolua/9router)                                             | USE NOW                          | Local OpenAI-compatible gateway, free-model fallback and usage visibility    | Localhost only; Ponytail and Caveman disabled                                                                                                                                                                                                                 |
@@ -64,7 +64,7 @@ DSH stores credentials outside the project and keeps only a credential reference
 AgentRouter provides Claude model access under two separate topologies:
 
 1. **Manual direct profile (`%USERPROFILE%\.claude-orchestrator`):** Used directly by Claude Code for manual business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. It connects directly to AgentRouter upstream without chaining through 9Router, and is not an implementation-author route. Its promotional balance is treated as temporary capacity rather than a permanent free entitlement. The repository stores no token, provider session or request log.
-2. **Unattended routed topology (`%USERPROFILE%\.claude`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
+2. **Unattended routed topology (`%USERPROFILE%\.claude-9router`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
 
 ### Gateway routing record (TASK-AI-44)
 
@@ -73,7 +73,7 @@ Two gateways exist and they are not interchangeable. The name `AgentRouter` is r
 | Gateway | Endpoint | Credential | Code names in this repository | Serves |
 |---|---|---|---|---|
 | AgentRouter (cloud) | `https://agentrouter.org/` (no `/v1`) | `AGENTROUTER_API_KEY`, User environment | `doctor.ps1` AgentRouter credential probe | Manual Claude Code business/solution analysis; the Claude and Codex fallback route |
-| 9Router (local) | `http://localhost:20128/v1` | local token | `$script:NineRouterProfile`, `$script:NineRouterPort`, `Assert-ShipDeNineRouterProfile`, `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeNineRouterFailureSince` | Unattended AO sessions (`.claude` profile), Gemini, dsh |
+| 9Router (local) | `http://localhost:20128/v1` | local token | `$script:NineRouterProfile`, `$script:NineRouterPort`, `Get-ShipDeNineRouterProfilePath`, `Assert-ShipDeNineRouterProfile`, `Assert-ShipDeNineRouterProfileBaseUrl`, `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeNineRouterFailureSince` | Unattended AO sessions (`.claude-9router` profile), Gemini, dsh |
 
 Fallback routing, as implemented:
 
@@ -365,7 +365,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### 9Router-backed orchestration and lifecycle
 
-6. **AI-SUP-06**: AO uses the existing `.claude` 9Router profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
+6. **AI-SUP-06**: AO uses its own 9Router profile directory for unattended orchestration, `%USERPROFILE%\.claude-9router` by default (overridable with `-NineRouterProfilePath` or `SHIPDE_NINEROUTER_PROFILE`). The default is never the operator's native `%USERPROFILE%\.claude` Claude Code profile, which a self-test enforces; an explicit override remains an operator decision. The direct `.claude-orchestrator` profile is not used by unattended mode.
 7. **AI-SUP-07**: 9Router owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
 8. **AI-SUP-08**: Inactivity timeout is configurable (default 10 minutes).
 9. **AI-SUP-09**: Maximum 1 nudge attempt per inactivity window before reporting stalled.
@@ -384,7 +384,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### Provider and harness policy
 
-Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost 9Router endpoint (`http://localhost:20128/v1`). The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after 9Router exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
+Unattended AO sessions always use the dedicated 9Router profile directory (`%USERPROFILE%\.claude-9router` by default), whose `env.ANTHROPIC_BASE_URL` is the localhost 9Router endpoint (`http://localhost:20128/v1`). The operator's `%USERPROFILE%\.claude` profile stays natively authenticated Claude Code and must not carry that override, so the two profiles are split; the launcher and the supervisor both resolve the AO profile through `Get-ShipDeNineRouterProfilePath` and validate it through `Assert-ShipDeNineRouterProfileBaseUrl`, which fails closed with an actionable error naming the profile file when `settings.json`, its `env` block, or the base URL is missing or wrong. `Invoke-ShipDeClaudeReviewFallback` is deliberately outside this split: it keeps running under the native login with `ANTHROPIC_BASE_URL` cleared. The AO profile directory is local machine state created by the operator, never repository state, and no credential is copied into it from the native profile. The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after 9Router exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
 
 ### Transient failure classification
 
@@ -401,6 +401,16 @@ Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the
 | Lint/type/test failure    | No               | Yes              |
 | Assertion failure         | No               | Yes              |
 | User code exception       | No               | Yes              |
+
+### TASK-AI-25 — qualifiedRoles feedback rule (2026-09-18)
+
+`TASK-AI-25` records an author-attempt outcome per `accountId::model + role` and may narrow `qualifiedRoles` from measured evidence. The decision rule is the only place that rule lives, in `tools/ai-brain/acceptance/lib/role-feedback.js`. The three aggregates the rule may act on, and only those three, are:
+
+1. **PASS rate** per merged item over the window (floor 0.5).
+2. **Median retries** per merged item over the window (ceiling 3).
+3. **Median tokens** per merged item over the window (ceiling 500 000).
+
+A narrowing requires **two of three** breaches in the same window with at least the floor sample count. The rule never narrows on cost, quota percentage, grade, quality, or preference. The rule is narrowing-only: a removed role returns only through `TASK-AI-30` / `TASK-AI-31` re-qualification. Restoration through any other path, including a stale operator-declared entry, is forbidden — staleness is a read-time refusal (`EVIDENCE_STALE`), not a re-add trigger.
 
 ### Permission boundaries (TASK-AI-10+)
 

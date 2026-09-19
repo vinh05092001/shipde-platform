@@ -10,10 +10,19 @@
 //
 // This pair deliberately asserts only the declared dependency NAME, never a merge
 // claim. `lib/dependency-merged.js` and `lib/dependency-delivered.js` already
-// exist to assert merge evidence via Git; this Work Item's dependency
-// (`TASK-AI-29`) has no merge evidence yet (the register records
-// `BLOCKED_DEPENDENCY`), so this pair asserts the weaker, true claim and leaves
-// the merge proof to the reconciler and to TASK-AI-29's own rows.
+// exist to assert merge evidence via Git. This Work Item does not use them,
+// because the gate it has to respect is the register: register row `162`
+// (`TASK-AI-29`) still records `BLOCKED_DEPENDENCY` with empty `pr` and empty
+// `merge_commit`, so the queue carries no recorded delivery to assert, and
+// `AGENTS.md` § Source of truth makes the register — not the commit log — the
+// authority for stage. Recorded, not resolved here: `git log origin/main
+// --grep=TASK-AI-29` does return two commits, `af16a1f` (PR #68, the
+// specification) and `cd3cfd8` (PR #99, the implementation), so
+// `dependencyProven('TASK-AI-29')` in the module re-exported below would report
+// `ok: true` today. Closing that gap belongs to the governed reconciler
+// (`TASK-AI-19`) and to TASK-AI-29's own rows; this item writes no register cell.
+// A later round may strengthen this pair to the merge claim once the register
+// records the delivery.
 //
 // Exit codes used by the scripts that require this file:
 //   0 the claim holds   1 the claim is violated   2 it cannot be measured

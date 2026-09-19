@@ -227,6 +227,29 @@ describe('Qualification record store', () => {
     assert.ok(q.validateResultShape([1]).some((f) => f.includes('not a plain object')));
   });
 
+  test('validateResultShape refuses a latency that was not measured', () => {
+    const reused = {
+      accountId: 'acc-1',
+      model: 'm1',
+      instant: '2026-09-17T00:00:00.000Z',
+      outcome: 'pass',
+      latencyMs: null,
+      reason: 'cached verdict reused inside the cache window',
+      cached: true,
+    };
+    assert.deepStrictEqual(q.validateResultShape(reused), []);
+
+    const fabricated = Object.assign({}, reused, { latencyMs: 0 });
+    assert.ok(q.validateResultShape(fabricated).some((f) => f.includes('reused verdict')));
+
+    const unmarked = Object.assign({}, reused);
+    delete unmarked.cached;
+    assert.ok(q.validateResultShape(unmarked).some((f) => f.includes('measured non-negative')));
+
+    const unmeasurable = Object.assign({}, reused, { cached: false, latencyMs: 'fast' });
+    assert.ok(q.validateResultShape(unmeasurable).some((f) => f.includes('measured non-negative')));
+  });
+
   test('loadResults returns an empty record for a missing file', () => {
     assert.deepStrictEqual(q.loadResults(tmpFile(), { fs }), {});
   });
@@ -506,6 +529,36 @@ describe('probeAccount — the recorded probe', () => {
     assert.ok(only.reason.startsWith('entry refused:'));
   });
 
+  test('the acceptance probe rule and the shipped probe refuse the same entry-refused account', async () => {
+    const refused = { ...cliAccount, id: 'acc-refused', capabilities: {} };
+    // The acceptance rule, with no gate injected, must refuse the account...
+    const findings = probeRuleFindings({
+      timeoutMs: 30_000,
+      treeKill: true,
+      cheapestModel: true,
+      cacheWindowMs: 60_000,
+      account: refused,
+      provider: refused.provider,
+      outcome: 'pass',
+      isProviderSupported: () => true,
+      recordOutcome: () => true,
+    });
+    assert.ok(findings.some((f) => f.includes('entry-admitted')));
+    // ...and so must the shipped probe, so the rule and the delivery cannot be
+    // two different rules (review finding F2).
+    const record = await q.probeAccount({
+      accountId: 'acc-refused',
+      accounts: [refused],
+      file: tmpFile(),
+      now,
+      run: async () => {
+        throw new Error('an entry-refused account must never be spawned');
+      },
+    });
+    assert.strictEqual(record.outcome, 'refused');
+    assert.ok(record.reason.startsWith('entry refused:'));
+  });
+
   test('runs the cheapest model through the declared command and records the outcome', async () => {
     const file = tmpFile();
     const io = { fs, fileIo: { writeFileSync: (p, c) => fs.writeFileSync(p, c) } };
@@ -565,7 +618,10 @@ describe('probeAccount — the recorded probe', () => {
     });
     assert.strictEqual(record.cached, true);
     assert.strictEqual(record.outcome, 'timeout');
-    assert.strictEqual(record.latencyMs, 0);
+    // A reused verdict is not a measurement: it carries no latency at all, and
+    // the record it returns still satisfies the declared shape (review N2).
+    assert.strictEqual(record.latencyMs, null);
+    assert.deepStrictEqual(q.validateResultShape(record), []);
     assert.strictEqual(calls, 0);
     const written = JSON.parse(fs.readFileSync(file, 'utf8'))['acc-1@cheap'];
     assert.strictEqual(written.outcome, 'timeout');

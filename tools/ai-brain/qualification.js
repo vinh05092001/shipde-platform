@@ -46,6 +46,21 @@ function validateResultShape(result) {
   if ('outcome' in result && !OUTCOMES.has(result.outcome)) {
     findings.push(`RESULT_SHAPE: unknown outcome ${result.outcome}`);
   }
+  // A record's latency is a measurement, or it is absent for a stated cause
+  // (review finding N2). A verdict reused from the cache measured nothing this
+  // time, so it reports `null` together with the `cached` marker instead of a
+  // fabricated `0` that reads like a real, impossibly fast probe.
+  if ('latencyMs' in result) {
+    if (result.cached === true) {
+      if (result.latencyMs !== null) {
+        findings.push(
+          'RESULT_SHAPE: a reused verdict must report latencyMs null, not a measurement'
+        );
+      }
+    } else if (!Number.isFinite(result.latencyMs) || result.latencyMs < 0) {
+      findings.push('RESULT_SHAPE: latencyMs is not a measured non-negative number');
+    }
+  }
   return findings;
 }
 
@@ -323,18 +338,11 @@ function runBounded(command, options) {
 }
 
 /**
- * The shape-validated record one probe produces. Internal, so every caller
- * of saveResult writes exactly the declared fields and nothing else.
+ * Refuses a record that breaks the declared shape, the same way `saveResult`
+ * refuses to write one: a caller that returns a record without storing it (the
+ * reused-verdict path below) still owes the shape contract.
  */
-function buildRecord(accountId, model, outcome, latencyMs, reason, now) {
-  const record = {
-    accountId,
-    model,
-    instant: new Date(now).toISOString(),
-    outcome,
-    latencyMs,
-    reason,
-  };
+function assertRecordShape(record) {
   const shape = validateResultShape(record);
   if (shape.length > 0) {
     throw Object.assign(new Error('RESULT_SHAPE: internal record refused: ' + shape.join('; ')), {
@@ -343,6 +351,21 @@ function buildRecord(accountId, model, outcome, latencyMs, reason, now) {
     });
   }
   return record;
+}
+
+/**
+ * The shape-validated record one probe produces. Internal, so every caller
+ * of saveResult writes exactly the declared fields and nothing else.
+ */
+function buildRecord(accountId, model, outcome, latencyMs, reason, now) {
+  return assertRecordShape({
+    accountId,
+    model,
+    instant: new Date(now).toISOString(),
+    outcome,
+    latencyMs,
+    reason,
+  });
 }
 
 /**
@@ -437,15 +460,19 @@ async function probeAccount(input) {
     ? opts.cachedVerdict(store, account.id, model)
     : cachedVerdict(store, account.id, model, { cacheWindowMs: opts.cacheWindowMs, now });
   if (verdict.action === 'reuse') {
-    return {
+    // The reused verdict is returned without being written again, so it is
+    // shape-checked here rather than in saveResult. Its latency is `null`: the
+    // probe spent no request this time, and a `0` would read as a measurement
+    // (review finding N2).
+    return assertRecordShape({
       accountId: account.id,
       model,
       instant: verdict.instant,
       outcome: verdict.outcome,
-      latencyMs: 0,
+      latencyMs: null,
       reason: 'cached verdict reused inside the cache window',
       cached: true,
-    };
+    });
   }
 
   const probeText = opts.probeText || 'Reply with the single word: ready.';
@@ -563,6 +590,11 @@ async function runProbeCli(argv, deps) {
 
   if (args.json) out(JSON.stringify(record, null, 2));
   else {
+    // A reused verdict measured nothing this time, so it says so instead of
+    // printing a latency number that was never taken (review finding N2).
+    const spent = record.cached
+      ? 'không đo lại, dùng kết quả đã ghi nhớ'
+      : record.latencyMs + ' ms';
     out(
       'Kết quả: ' +
         record.accountId +
@@ -571,9 +603,7 @@ async function runProbeCli(argv, deps) {
         ' → ' +
         record.outcome +
         ' (' +
-        record.latencyMs +
-        ' ms' +
-        (record.cached ? ', đã ghi nhớ' : '') +
+        spent +
         ')'
     );
     out('  Lý do: ' + record.reason);
