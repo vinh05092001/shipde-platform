@@ -7,7 +7,17 @@
 // `ac-30-06-probe-rule-refused.js` requires, so the gate and the proof of the gate
 // cannot drift apart. No real probe, registry or network is touched: the operational
 // checks are injected doubles. Run outside the repository it exits 2, not 0.
+const fs = require('fs');
 const { probeRuleFindings } = require('./lib/qualification');
+
+// Running outside the repository must be detected operationally (exit 2), not as
+// a finding (exit 1). The check is relative to cwd so a spawned child with a
+// different cwd refuses instead of running against the real modules by accident.
+const REPO_MARKER = 'tools/ai-brain/qualification.js';
+if (!fs.existsSync(REPO_MARKER)) {
+  console.error('SOURCE_MISSING: ' + REPO_MARKER);
+  process.exit(2);
+}
 
 // Control: the rule must be able to report a violation at all. A configuration
 // missing every required field must be refused.

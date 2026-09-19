@@ -7,6 +7,15 @@ const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 
+// Running outside the repository must be detected operationally (exit 2), not as
+// a finding (exit 1). The marker is relative to cwd, so this row refuses where no
+// repository exists even though the validator itself resolves its own root.
+const REPO_MARKER = 'docs/product-spec/scripts/validate_docs.py';
+if (!fs.existsSync(REPO_MARKER)) {
+  console.error('SOURCE_MISSING: ' + REPO_MARKER);
+  process.exit(2);
+}
+
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const SCRIPT = path.join(ROOT, 'docs', 'product-spec', 'scripts', 'validate_docs.py');
 if (!fs.existsSync(SCRIPT)) {

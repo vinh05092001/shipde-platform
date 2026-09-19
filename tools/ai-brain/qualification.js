@@ -15,7 +15,8 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const RESULT_DIR =
-  process.env.QUALIFICATION_RESULT_DIR || path.join(__dirname, 'qualification-results');
+  process.env.QUALIFICATION_RESULT_DIR ||
+  path.join(require('os').homedir(), '.shipde', 'qualification-results');
 const RESULT_PATH = path.join(RESULT_DIR, 'results.json');
 
 const OUTCOMES = new Set(['pass', 'fail', 'timeout', 'refused']);
@@ -391,10 +392,12 @@ async function probeAccount(input) {
   }
 
   // Entry rule, by reference to the shared entry module (AI-30-R06). The
-  // injected form may return a findings array, a boolean, or anything else
+  // default is account-entry.entryFindings, so the shipped CLI path is gated;
+  // an injected form may return a findings array, a boolean, or anything else
   // truthy for "admitted".
-  if (opts.isEntryAdmitted) {
-    const verdict = opts.isEntryAdmitted(account);
+  {
+    const isEntryAdmitted = opts.isEntryAdmitted || require('./account-entry').entryFindings;
+    const verdict = isEntryAdmitted(account);
     const failed = verdict === false || (Array.isArray(verdict) && verdict.length > 0);
     if (failed) {
       return saveResult(

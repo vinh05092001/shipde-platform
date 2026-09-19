@@ -103,6 +103,28 @@ describe('Probe rule', () => {
     });
     assert.ok(findings.some((f) => f.includes('outcome')));
   });
+
+  test('refuses a configuration with no entry admission at all', () => {
+    const findings = probeRuleFindings({
+      timeoutMs: 30_000,
+      treeKill: true,
+      cheapestModel: true,
+      cacheWindowMs: 60_000,
+    });
+    assert.ok(findings.some((f) => f.includes('entry-admitted')));
+  });
+
+  test('defaults entry admission to shared entry module when account is supplied', () => {
+    const invalidAccount = { id: 'bad', provider: 'antigravity', models: [] };
+    const findings = probeRuleFindings({
+      timeoutMs: 30_000,
+      treeKill: true,
+      cheapestModel: true,
+      cacheWindowMs: 60_000,
+      account: invalidAccount,
+    });
+    assert.ok(findings.some((f) => f.includes('entry-admitted')));
+  });
 });
 
 describe('Result credential rule', () => {
@@ -442,11 +464,47 @@ describe('probeAccount — the recorded probe', () => {
     id: 'acc-1',
     provider: 'claude-code',
     launch: { kind: 'cli', command: 'agent <model> <prompt>' },
+    capabilities: { contextWindow: 200000 },
     models: [
       { model: 'expensive', cost: { inputPerMillion: 9, outputPerMillion: 9 } },
       { model: 'cheap', cost: { inputPerMillion: 1, outputPerMillion: 1 } },
     ],
   };
+
+  test('refuses an account the shared entry module refuses when no gate is injected', async () => {
+    const file = tmpFile();
+    const refused = { ...cliAccount, id: 'acc-refused', capabilities: {} };
+    let spawned = 0;
+    const record = await q.probeAccount({
+      accountId: 'acc-refused',
+      accounts: [refused],
+      file,
+      now,
+      run: async () => {
+        spawned++;
+        return { outcome: 'pass', reason: 'answered' };
+      },
+    });
+    assert.strictEqual(record.outcome, 'refused');
+    assert.ok(record.reason.startsWith('entry refused: REGISTRY_VALIDATOR'));
+    assert.strictEqual(spawned, 0);
+  });
+
+  test('runProbeCli with no injected gate refuses an entry-refused account', async () => {
+    const file = tmpFile();
+    const refused = { ...cliAccount, id: 'acc-refused', capabilities: {} };
+    const lines = [];
+    const exit = await q.runProbeCli(['--account', 'acc-refused', '--json', '--file', file], {
+      accounts: [refused],
+      out: (l) => lines.push(l),
+      err: () => {},
+    });
+    assert.strictEqual(exit, 0);
+    const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const [only] = Object.values(written);
+    assert.strictEqual(only.outcome, 'refused');
+    assert.ok(only.reason.startsWith('entry refused:'));
+  });
 
   test('runs the cheapest model through the declared command and records the outcome', async () => {
     const file = tmpFile();
@@ -598,10 +656,13 @@ describe('probeAccount — the recorded probe', () => {
 
     const none = await q.probeAccount({
       accountId: 'acc-1',
-      accounts: [{ id: 'acc-1', provider: 'claude-code', models: [] }],
+      accounts: [{ ...cliAccount, models: [] }],
       file,
       io,
       now,
+      // The shared entry module already refuses an empty models[]; admit it
+      // here so the probe's own no-model refusal stays covered.
+      isEntryAdmitted: () => true,
     });
     assert.strictEqual(none.outcome, 'refused');
     assert.ok(none.reason.includes('no model'));
