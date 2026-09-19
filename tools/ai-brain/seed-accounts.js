@@ -36,32 +36,34 @@ const D = Difficulty;
 
 /** The 14 models both Antigravity accounts expose. */
 const ANTIGRAVITY_MODELS = [
-  { model: 'gemini-3.8-flash-high', codingGrade: D.COMPLEX, reviewGrade: D.STANDARD, quality: 84 },
-  { model: 'gemini-3.8-flash-medium', codingGrade: D.STANDARD, quality: 76 },
-  { model: 'gemini-3.8-flash-low', codingGrade: D.MECHANICAL, quality: 62 },
-  { model: 'gemini-3.7-flash-high', codingGrade: D.STANDARD, quality: 78 },
-  { model: 'gemini-3.7-flash-medium', codingGrade: D.STANDARD, quality: 72 },
-  { model: 'gemini-3.7-flash-low', codingGrade: D.MECHANICAL, quality: 58 },
-  { model: 'gemini-3.6-flash-high', codingGrade: D.STANDARD, quality: 74 },
-  { model: 'gemini-3.6-flash-medium', codingGrade: D.STANDARD, quality: 68 },
-  { model: 'gemini-3.6-flash-low', codingGrade: D.MECHANICAL, quality: 54 },
+  { model: 'gemini-3.8-flash-high', modelVersion: '20260201', codingGrade: D.COMPLEX, reviewGrade: D.STANDARD, quality: 84 },
+  { model: 'gemini-3.8-flash-medium', modelVersion: '20260201', codingGrade: D.STANDARD, quality: 76 },
+  { model: 'gemini-3.8-flash-low', modelVersion: '20260201', codingGrade: D.MECHANICAL, quality: 62 },
+  { model: 'gemini-3.7-flash-high', modelVersion: '20260101', codingGrade: D.STANDARD, quality: 78 },
+  { model: 'gemini-3.7-flash-medium', modelVersion: '20260101', codingGrade: D.STANDARD, quality: 72 },
+  { model: 'gemini-3.7-flash-low', modelVersion: '20260101', codingGrade: D.MECHANICAL, quality: 58 },
+  { model: 'gemini-3.6-flash-high', modelVersion: '20251101', codingGrade: D.STANDARD, quality: 74 },
+  { model: 'gemini-3.6-flash-medium', modelVersion: '20251101', codingGrade: D.STANDARD, quality: 68 },
+  { model: 'gemini-3.6-flash-low', modelVersion: '20251101', codingGrade: D.MECHANICAL, quality: 54 },
   // Pro carries the architectural work on this provider.
   {
     model: 'gemini-3.1-pro-high',
+    modelVersion: '20260115',
     codingGrade: D.ARCHITECTURAL,
     reviewGrade: D.COMPLEX,
     quality: 90,
   },
-  { model: 'gemini-3.1-pro-low', codingGrade: D.COMPLEX, reviewGrade: D.STANDARD, quality: 82 },
+  { model: 'gemini-3.1-pro-low', modelVersion: '20260115', codingGrade: D.COMPLEX, reviewGrade: D.STANDARD, quality: 82 },
   // A thinking model is the one worth reserving for review.
   {
     model: 'claude-opus-4-6-thinking',
+    modelVersion: '20260201',
     codingGrade: D.ARCHITECTURAL,
     reviewGrade: D.ARCHITECTURAL,
     quality: 94,
   },
-  { model: 'claude-sonnet-4-6', codingGrade: D.COMPLEX, reviewGrade: D.COMPLEX, quality: 86 },
-  { model: 'gpt-oss-120b-medium', codingGrade: D.STANDARD, quality: 70 },
+  { model: 'claude-sonnet-4-6', modelVersion: '20260201', codingGrade: D.COMPLEX, reviewGrade: D.COMPLEX, quality: 86 },
+  { model: 'gpt-oss-120b-medium', modelVersion: '20260101', codingGrade: D.STANDARD, quality: 70 },
 ];
 
 /**
@@ -72,17 +74,18 @@ const ANTIGRAVITY_MODELS = [
 const NINEROUTER_MODELS = [
   {
     model: 'cc/claude-opus-5',
+    modelVersion: '20260301',
     codingGrade: D.ARCHITECTURAL,
     reviewGrade: D.ARCHITECTURAL,
     quality: 96,
   },
-  { model: 'cc/claude-sonnet-5', codingGrade: D.COMPLEX, reviewGrade: D.COMPLEX, quality: 88 },
-  { model: 'cc/claude-haiku-4-5-20251001', codingGrade: D.MECHANICAL, quality: 60 },
-  { model: 'kimchi/glm-5.3', codingGrade: D.STANDARD, quality: 72 },
-  { model: 'kimchi/glm-5.3-flash', codingGrade: D.MECHANICAL, quality: 58 },
-  { model: 'kimchi/deepseek-v4-flash-0731', codingGrade: D.STANDARD, quality: 74 },
-  { model: 'kimchi/minimax-m3', codingGrade: D.STANDARD, quality: 70 },
-  { model: 'gh/gpt-5.3-codex', codingGrade: D.COMPLEX, quality: 84 },
+  { model: 'cc/claude-sonnet-5', modelVersion: '20260301', codingGrade: D.COMPLEX, reviewGrade: D.COMPLEX, quality: 88 },
+  { model: 'cc/claude-haiku-4-5-20251001', modelVersion: '20251001', codingGrade: D.MECHANICAL, quality: 60 },
+  { model: 'kimchi/glm-5.3', modelVersion: '20260101', codingGrade: D.STANDARD, quality: 72 },
+  { model: 'kimchi/glm-5.3-flash', modelVersion: '20260101', codingGrade: D.MECHANICAL, quality: 58 },
+  { model: 'kimchi/deepseek-v4-flash-0731', modelVersion: '0731', codingGrade: D.STANDARD, quality: 74 },
+  { model: 'kimchi/minimax-m3', modelVersion: '20260101', codingGrade: D.STANDARD, quality: 70 },
+  { model: 'gh/gpt-5.3-codex', modelVersion: '20260201', codingGrade: D.COMPLEX, quality: 84 },
 ];
 
 const ACCOUNTS = [
@@ -90,6 +93,7 @@ const ACCOUNTS = [
     id: 'agy-docker-b',
     provider: 'antigravity',
     tier: 0,
+    access: 'included-in-paid-plan',
     // How to reach it, recorded so the executor does not have to rediscover
     // that the default CMD opens a TUI and exits 255 without a terminal.
     launch: {
@@ -109,6 +113,7 @@ const ACCOUNTS = [
     id: 'agy-native-a',
     provider: 'antigravity',
     tier: 1,
+    access: 'included-in-paid-plan',
     launch: {
       kind: 'cli',
       command: 'agy --print-timeout 120s --print <prompt> --output-format text --model <model>',
@@ -123,6 +128,7 @@ const ACCOUNTS = [
     id: 'ninerouter',
     provider: 'oc',
     tier: 2,
+    access: 'pay-per-call',
     launch: {
       kind: 'openai-compatible',
       baseUrl: 'http://127.0.0.1:20128/v1',
