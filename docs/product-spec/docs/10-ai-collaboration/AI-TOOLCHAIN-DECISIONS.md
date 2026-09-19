@@ -402,6 +402,16 @@ Unattended AO sessions always use the dedicated 9Router profile directory (`%USE
 | Assertion failure         | No               | Yes              |
 | User code exception       | No               | Yes              |
 
+### TASK-AI-25 — qualifiedRoles feedback rule (2026-09-18)
+
+`TASK-AI-25` records an author-attempt outcome per `accountId::model + role` and may narrow `qualifiedRoles` from measured evidence. The decision rule is the only place that rule lives, in `tools/ai-brain/acceptance/lib/role-feedback.js`. The three aggregates the rule may act on, and only those three, are:
+
+1. **PASS rate** per merged item over the window (floor 0.5).
+2. **Median retries** per merged item over the window (ceiling 3).
+3. **Median tokens** per merged item over the window (ceiling 500 000).
+
+A narrowing requires **two of three** breaches in the same window with at least the floor sample count. The rule never narrows on cost, quota percentage, grade, quality, or preference. The rule is narrowing-only: a removed role returns only through `TASK-AI-30` / `TASK-AI-31` re-qualification. Restoration through any other path, including a stale operator-declared entry, is forbidden — staleness is a read-time refusal (`EVIDENCE_STALE`), not a re-add trigger.
+
 ### Permission boundaries (TASK-AI-10+)
 
 The supervisor operates with least-privilege permissions:

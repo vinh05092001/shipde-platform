@@ -298,7 +298,10 @@ profile directory that is routed to the local 9Router gateway, and the native pr
 is left untouched so Claude Code keeps its own login.
 
 This section supersedes the `.claude` statements in the baseline part of this Work Item: the
-`CLAUDE_CONFIG_DIR=%USERPROFILE%\.claude` bullet in section 1 and `AI-SUP-06`. The baseline text stays
+`CLAUDE_CONFIG_DIR=%USERPROFILE%\.claude` bullet in section 1, `AI-SUP-06`, and the expected results
+of acceptance rows `AC-AI-53` ("Marker proves `.claude`") and `AC-AI-57` ("relaunches AO through
+`.claude`"), which now read as the resolved 9Router profile directory, by default
+`%USERPROFILE%\.claude-9router`. The baseline text stays
 as the record of what was approved at delivery; the shipped behavior is the split described here, and
 `AI-TOOLCHAIN-DECISIONS.md` carries the canonical wording.
 
@@ -336,13 +339,23 @@ directory holding that setting moved off the operator's native profile.
 | Existing bootstrap behavior preserved | Self-tests 1-4 (manifest pin bypass, pre-creation failure, early exit, live marker binding) still pass through the injected `-ProfilePath` seam. |
 | Suite result | `powershell -File scripts/ai/control.ps1 -Action Test` printed `ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED`. |
 | `-Action Status` | Ran clean: worktrees listed, `9Router : UP`, 13 open Pull Requests listed. |
-| `-Action Supervise` | No longer dies on the profile. It resolves the AO executable, reports `EffectiveVersion 0.13.0`, validates the new profile, and reaches `[SUPERVISOR] Starting AO through the 9Router Claude profile...`. It then stops on a separate pre-existing condition, below. |
+| `-Action Supervise` | Recorded 2026-09-17 against the profile file described below: no longer dies on the profile, resolves the AO executable, reports `EffectiveVersion 0.13.0`, validates the new profile, and reaches `[SUPERVISOR] Starting AO through the 9Router Claude profile...`, then stops on a separate pre-existing condition, below. Not reproducible against the operator machine state observed at review on 2026-09-19; see the re-record below. |
+| `-Action Supervise`, re-recorded 2026-09-19 | The independent review of `f9cad78` ran the same validator the gate invokes (`Assert-ShipDeNineRouterProfileBaseUrl`, `common.ps1:350-391`, via `control.ps1:3259`) on the host and it failed closed before `Starting AO` with `9Router Claude profile C:\Users\gumac\.claude-9router\settings.json must set env.ANTHROPIC_BASE_URL to http://localhost:20128/v1.` That is the intended actionable failure, not a regression: the validator's URL contract is unchanged from before this Work Item. This re-record was written from the review's observation; the author did not re-run on that host. |
 
 ### Local machine state the operator owns
 
 `%USERPROFILE%\.claude-9router\settings.json` was created outside the repository with
 `{"env":{"ANTHROPIC_BASE_URL":"http://localhost:20128/v1"}}`. It is machine state, not repository
-state. No credential was copied from `%USERPROFILE%\.claude`. If AgentRouter later requires a token
+state, and it has since changed. At review on 2026-09-19 (file last modified 2026-09-17 14:43 local)
+it set `env.ANTHROPIC_BASE_URL` to `http://127.0.0.1:20128`, without the `/v1` path, and carried
+extra keys (`ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
+`CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT`) and a top-level `apiKeyHelper`. With that
+file the supervisor gate fails closed with the actionable error above. The failure is caused solely
+by the missing `/v1` path segment: `Assert-ShipDeNineRouterProfileBaseUrl` (`scripts/ai/common.ps1:384`)
+already accepts both `localhost` and `127.0.0.1` as valid hosts (`$uri.Host -notin @("localhost", "127.0.0.1")`),
+so using `127.0.0.1` does not change the validated gateway contract. To pass the gate, the operator sets
+`env.ANTHROPIC_BASE_URL` to either `http://localhost:20128/v1` or `http://127.0.0.1:20128/v1`.
+No credential was copied from `%USERPROFILE%\.claude`. If AgentRouter later requires a token
 for this profile, the operator pastes it into that file as `env.ANTHROPIC_AUTH_TOKEN`; nothing in
 this repository reads or writes it.
 
@@ -380,3 +393,16 @@ reserved `AgentRouter` for the cloud endpoint, so both sides are satisfied toget
 - Removed: conflict markers that an earlier resolution attempt had committed into this file.
 - Re-verified after the merge: `powershell -File scripts/ai/control.ps1 -Action Test` printed
   `ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED`.
+
+### Review repair (2026-09-19, review of `f9cad78`)
+
+Documentation-only; no script changed.
+
+- The `-Action Supervise` acceptance row and the local machine-state record now state what the
+  review observed on the operator host instead of the 2026-09-17 state.
+- The supersession note names `AC-AI-53` and `AC-AI-57`.
+- `SEMI-MANUAL-AI-WORKFLOW.md` § Unattended supervisor mode now names the dedicated 9Router profile
+  instead of `.claude`.
+- Deliberately left: `docs/product-spec/work-items/TASK-AI-07.md:56` still describes unattended AO on
+  `~/.claude`. It belongs to TASK-AI-07, and one Pull Request changes one Work Item file; TASK-AI-07
+  should adopt this wording when it is next edited.
