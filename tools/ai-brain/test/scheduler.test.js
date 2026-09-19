@@ -239,8 +239,8 @@ describe('Dispatch planning', () => {
     assert.equal(plan.deferred[0].reason, 'IMPLEMENTATION_LIMIT');
   });
 
-  test('raising the stability limit lets different Work Items run together', () => {
-    const plan = planDispatch(
+  test('raising the stability limit requires a governed decision, not an unvetted setting', () => {
+    const unvettedPlan = planDispatch(
       [
         item({ workItemId: 'A-1', branch: 'feat/a' }),
         item({ workItemId: 'B-1', branch: 'feat/b' }),
@@ -249,8 +249,24 @@ describe('Dispatch planning', () => {
       pool,
       { limits: { maxImplementationAgents: 3, maxPerAccount: 1 }, now: NOW }
     );
-    assert.equal(plan.assignments.length, 3);
-    const used = plan.assignments.map((a) => a.accountId);
+    assert.equal(unvettedPlan.assignments.length, 1, 'unvetted setting clamped to 1');
+    assert.equal(unvettedPlan.deferred[0].reason, 'IMPLEMENTATION_LIMIT');
+
+    const governedPlan = planDispatch(
+      [
+        item({ workItemId: 'A-1', branch: 'feat/a' }),
+        item({ workItemId: 'B-1', branch: 'feat/b' }),
+        item({ workItemId: 'C-1', branch: 'feat/c' }),
+      ],
+      pool,
+      {
+        limits: { maxImplementationAgents: 3, maxPerAccount: 1 },
+        governedDecision: 'DEC-017',
+        now: NOW,
+      }
+    );
+    assert.equal(governedPlan.assignments.length, 3);
+    const used = governedPlan.assignments.map((a) => a.accountId);
     assert.equal(new Set(used).size, 3, 'load is spread across accounts, not stacked on one');
   });
 
@@ -319,6 +335,7 @@ describe('Dispatch planning', () => {
   test('utilisation reports the real load against each ceiling', () => {
     const plan = planDispatch([item({ workItemId: 'A-1', branch: 'feat/a' })], pool, {
       limits: { maxImplementationAgents: 2, maxTotal: 4 },
+      governedDecision: 'DEC-017',
       now: NOW,
     });
     assert.equal(plan.utilisation.implementation, 1);
