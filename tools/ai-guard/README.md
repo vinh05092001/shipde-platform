@@ -14,7 +14,8 @@ Rather than forcing all work through AO (which destroys the ability to run quick
 
 - **AO sessions** are queried live from the local AO daemon via `http://127.0.0.1:<AO_PORT>/api/v1/sessions`.
 - **Direct sessions** record expiring advisory claim files in `~/.ao/data/writer-claims/`.
-- A Git pre-commit hook (`.githooks/pre-commit`) blocks commits when another active session holds the target branch.
+- A Git pre-commit hook, installed and managed by **Lefthook** from `lefthook.yml`, blocks
+  commits when another active session holds the target branch.
 
 ## How the Hook Works
 
@@ -53,16 +54,18 @@ In an AO worker session, `AO_SESSION_ID` matches the worker's own holder row in 
 
 ### How the hook gets installed
 
-The hook is installed explicitly, never by an install lifecycle script. The
-repository's regression audit forbids `preinstall`, `install`, `postinstall`
-and `prepare` in the root and web manifests, because an install hook runs
-whatever the dependency tree says it should — a supply-chain surface the
+The hook is installed explicitly through **Lefthook**, never by an install lifecycle
+script. The repository's regression audit forbids `preinstall`, `install`,
+`postinstall` and `prepare` in the root and web manifests, because an install hook
+runs whatever the dependency tree says it should — a supply-chain surface the
 project has deliberately closed.
 
-So `core.hooksPath` is set in three explicit places instead: by
-`scripts/ai/bootstrap-worktrees.ps1` when a worktree is created, by
-`pnpm guard:install` on demand, and it is verified by `scripts/ai/doctor.ps1`,
-which names the command to run when it is missing.
+The hook definition lives in the version-controlled `lefthook.yml` at the repository
+root. `lefthook install` (pinned 1.11.3) writes a delegate `pre-commit` into Git's
+common hooks directory, so one install covers the main checkout and every worktree.
+The legacy `.githooks` directory and the `core.hooksPath = .githooks` override are
+retired (TASK-AI-36): an override shadows the Lefthook delegate and silently disables
+the guard, so `cli.js install` unsets any existing `core.hooksPath` before installing.
 
 `pnpm install` does **not** install the hook. That is deliberate, and it is the
 whole point of the paragraph above.
@@ -72,10 +75,15 @@ whole point of the paragraph above.
 To install or verify:
 
 ```bash
-node tools/ai-guard/cli.js install
+pnpm lefthook install    # canonical way — runs the pinned Lefthook
+node tools/ai-guard/cli.js install    # retires any core.hooksPath override, delegates
+                                      # to lefthook install, then VERIFIES the result
 ```
 
-This configures `git config core.hooksPath .githooks`.
+`cli.js install` refuses to run when `lefthook.yml` is missing (Lefthook would
+invent an empty config and install an empty hook) and only reports success after
+re-reading the hook Git will actually execute and confirming `lefthook.yml` still
+declares the `writer-claim` guard command.
 
 To verify installation:
 
@@ -86,8 +94,11 @@ node tools/ai-guard/cli.js status
 Output includes:
 
 ```
-Git hook: ĐÃ CÀI ĐẶT (.githooks)
+Git hook: ĐÃ CÀI ĐẶT (lefthook @ C:\...\shipde-platform\.git\hooks)
 ```
+
+and when the guard is absent it prints remediation commands
+(`pnpm lefthook install`, restoring `lefthook.yml`, or unsetting an override).
 
 To uninstall:
 
@@ -95,16 +106,20 @@ To uninstall:
 node tools/ai-guard/cli.js uninstall
 ```
 
+This only retires a bespoke `core.hooksPath` override; it intentionally does not
+remove the Lefthook delegate from the common hooks directory (use
+`lefthook uninstall pre-commit` for that).
+
 ## CLI Reference
 
-| Command                                                                                | Purpose                                                                                           |
-| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `node tools/ai-guard/cli.js install [--global] [--strict]`                             | Configures `core.hooksPath` to `.githooks`.                                                       |
-| `node tools/ai-guard/cli.js uninstall [--global] [--strict]`                           | Unsets `core.hooksPath`.                                                                          |
-| `node tools/ai-guard/cli.js status`                                                    | Shows current branch, resolved identity, hook install state, live AO sessions, and direct claims. |
-| `node tools/ai-guard/cli.js claim [--branch X] [--owner X] [--ttl 120] [--note "..."]` | Claims a branch for direct work with an expiration TTL (default: 120 minutes).                    |
-| `node tools/ai-guard/cli.js release [--branch X]`                                      | Releases a direct claim on a branch.                                                              |
-| `node tools/ai-guard/cli.js check`                                                     | Evaluates single-writer safety for current branch. Exits 0 if allowed, 1 if blocked.              |
+| Command                                                                                | Purpose                                                                                                 |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `node tools/ai-guard/cli.js install [--strict]`                                        | Retires any `core.hooksPath` override, runs pinned `lefthook install`, and verifies the resulting hook. |
+| `node tools/ai-guard/cli.js uninstall [--strict]`                                      | Unsets a bespoke `core.hooksPath` override; leaves the Lefthook delegate in place.                      |
+| `node tools/ai-guard/cli.js status`                                                    | Shows current branch, resolved identity, hook manager/state, live AO sessions, and direct claims.       |
+| `node tools/ai-guard/cli.js claim [--branch X] [--owner X] [--ttl 120] [--note "..."]` | Claims a branch for direct work with an expiration TTL (default: 120 minutes).                          |
+| `node tools/ai-guard/cli.js release [--branch X]`                                      | Releases a direct claim on a branch.                                                                    |
+| `node tools/ai-guard/cli.js check`                                                     | Evaluates single-writer safety for current branch. Exits 0 if allowed, 1 if blocked.                    |
 
 ## Verification Suite
 
