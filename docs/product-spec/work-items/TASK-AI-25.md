@@ -147,6 +147,12 @@ One rule, one module: `lib/role-feedback.js` defines removal; invariants and neg
 
 The four `AC-AI-25-04` mutants were executed against this branch on 2026-09-19: each mutant exited `1` as listed, the unmutated row exited `0`, and every temporary mutant file was deleted afterwards, so the tree carries only `acceptance/lib/role-feedback.js`.
 
+**Re-verification of CHANGES_REQUIRED review findings (comment 5717598080).** On 2026-09-19, all four findings from the Codex review were re-verified at this head:
+1. CI format check: `pnpm format:check` runs clean (exit 0), verifying 100% Prettier conformance across all 11 format-governed files in the diff (`docs/` is excluded via `.prettierignore` by repository design).
+2. Spec-mandated unit test: `validateEntry returns EVIDENCE_STALE for stale operator-declared removal (R07)` is present in `tools/ai-brain/test/feedback.test.js:176` and passes; full suite passes with 413 tests across 92 suites.
+3. PR description alignment: Pull Request description was rewritten using `.github/pull_request_template.md` to accurately describe all 13 changed files and clarify that `Review status: READY_FOR_CODEX` serves as the author handoff marker required by `validate_pr_contract.py`.
+4. Single-source check: `AC-AI-25-04` compares resolution across two separate module bases (acceptance vs production wrapper via `createRequire`) and verifies function identity to forbid duplicate re-implementations while allowing sanctioned re-exports.
+
 No `node --test --test-name-pattern` rows: non-matching pattern exits 0 with zero subtests here, passing against empty file. No drifting counts pinned; totals printed as evidence only.
 
 **Rule-to-proof map.** `AI-25-R01`, `R03`, `R04`, `R06` are exercised by `AC-AI-25-03`/`06`. `R05` is exercised by `AC-AI-25-07`. The unit-test cases in `tools/ai-brain/test/feedback.test.js` are mapped to rules by name so every rule has at least one named, runnable proof:
