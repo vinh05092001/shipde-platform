@@ -3,7 +3,9 @@
 //
 // AC-AI-30-05 (positive: the probe rule holds over a compliant configuration)
 // and AC-AI-30-06 (negative: a non-compliant configuration is refused) both
-// require this module, so the gate and the proof of the gate cannot drift.
+// require this module, so the invariant and the negative proof cannot drift apart.
+// The probe rule mirrors the entry and operational rules enforced by the shipped
+// `probeAccount` gate in `tools/ai-brain/qualification.js`.
 // AC-AI-30-07/08 (result credential rule) and AC-AI-30-12 (unit tests) require
 // it too. Editing this module changes every row that depends on it.
 //
@@ -11,7 +13,9 @@
 // client here. Operational checks (entry admission, provider support, outcome
 // recording) are injected by the caller so the same rule can be exercised by
 // injected doubles in the acceptance harness and by real modules in the unit
-// tests. Nothing here reaches the network, the real registry, or Git.
+// tests. Entry admission defaults to the shared entry module (account-entry.entryFindings)
+// when no custom gate is injected, matching `qualification.js:probeAccount`.
+// Nothing here reaches the network, the real registry, or Git.
 //
 // Exit codes used by the scripts that require this file:
 //   0 the rule holds   1 it is violated   2 it cannot be measured
@@ -54,12 +58,24 @@ function probeRuleFindings(config) {
     findings.push('PROBE_VIOLATED: cacheWindowMs is not a positive number');
   }
 
-  // Operational guards are injected so the rule stays deterministic and network-free.
-  if (typeof config.isEntryAdmitted === 'function') {
-    if (!config.isEntryAdmitted(config.account)) {
+  // Operational guards: entry admission is required (AI-30-R06).
+  // Matches the shipped gate in qualification.js: defaults to the shared
+  // entry module (account-entry.entryFindings). A configuration with no entry
+  // admission mechanism and no valid account is refused.
+  const isEntryAdmitted =
+    config.isEntryAdmitted ||
+    (config.account ? require('../../account-entry').entryFindings : null);
+
+  if (!isEntryAdmitted) {
+    findings.push('PROBE_VIOLATED: account is not entry-admitted');
+  } else {
+    const verdict = typeof isEntryAdmitted === 'function' ? isEntryAdmitted(config.account) : false;
+    const admitted = verdict === true || (Array.isArray(verdict) && verdict.length === 0);
+    if (!admitted) {
       findings.push('PROBE_VIOLATED: account is not entry-admitted');
     }
   }
+
   if (typeof config.isProviderSupported === 'function') {
     if (!config.isProviderSupported(config.provider)) {
       findings.push('PROBE_VIOLATED: provider is not supported');
