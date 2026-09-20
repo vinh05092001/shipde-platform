@@ -10,9 +10,10 @@ import { validateConfig, AppConfig } from '@shipde/config';
 import { APP_CONFIG } from './config.token';
 
 import { AuthModule } from './auth/auth.module';
+import { SessionModule } from './session/session.module';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, SessionModule],
   controllers: [HealthController],
   providers: [
     {
