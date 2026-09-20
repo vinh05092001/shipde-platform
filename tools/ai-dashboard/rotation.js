@@ -195,6 +195,16 @@ function parseLogLines(logDir) {
     } catch {
       freshMs = Infinity;
     }
+    // The dispatcher only appends to <id>.log when it switches lane, while the agent's
+    // own transcript goes to <id>-run.log. Measuring freshness on <id>.log alone made a
+    // job that had been working for an hour on one lane look stale after five minutes, so
+    // nothing ever showed as live. Take whichever of the two was written most recently.
+    try {
+      const runMs = fs.statSync(path.join(logDir, `${runId}-run.log`)).mtimeMs;
+      freshMs = Math.min(freshMs, Date.now() - runMs);
+    } catch {
+      /* a lane that never started has no run log; the marker log's own age stands */
+    }
     const stale = freshMs > STALE_AFTER_MS;
     const fileDay = (function () {
       try {
@@ -871,9 +881,16 @@ function buildRotationStateSync(options) {
 
   // Flat, newest-first view of every attempt, so the page can list activity
   // the way an operator reads it: which run, which model, how it ended.
+  // Entries arrive in directory order, which is alphabetical, so reversing them gave
+  // z-to-a rather than newest-first and the 40-item cut dropped whatever was running
+  // under an earlier letter. Order by the attempt's own timestamp, and never let a live
+  // attempt fall off the end: what is running now is the whole point of the panel.
   const runs = logEntries
     .slice()
-    .reverse()
+    .sort((a, b) => {
+      if ((a.outcome === 'live') !== (b.outcome === 'live')) return a.outcome === 'live' ? -1 : 1;
+      return new Date(b.at || 0) - new Date(a.at || 0);
+    })
     .slice(0, 40)
     .map((e) => ({
       runId: e.runId,
