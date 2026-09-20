@@ -6,9 +6,11 @@
   'use strict';
 
   var SVG_NS = 'http://www.w3.org/2000/svg';
-  var CX = 220,
-    CY = 195,
-    R = 140;
+  var CX = 330,
+    CY = 260,
+    RX = 340,
+    RY = 195,
+    STAGGER = 40;
   var POLL_MS = 5000;
 
   function el(tag, attrs, text) {
@@ -28,6 +30,9 @@
 
   // One accent per source, the way 9Router gives every provider its own mark.
   var ACCENT = {
+    tencent: '#0ea5e9',
+    rqsty: '#8b5cf6',
+    thb: '#f97316',
     '9router': '#8b5cf6',
     xkiro: '#0ea5e9',
     bai: '#2563eb',
@@ -157,7 +162,7 @@
     if (!svg || !cards) return;
     svg.innerHTML = '';
     cards.innerHTML = '';
-    svg.setAttribute('viewBox', '10 20 420 350');
+    svg.setAttribute('viewBox', '-95 -75 850 675');
     if (stamp && data && data.observedAt)
       stamp.textContent = 'đo lúc ' + data.observedAt.slice(11, 19);
     var sources = (data && data.sources ? data.sources : []).filter(function (s) {
@@ -168,11 +173,11 @@
     // Hub: a card, not a bubble, so it reads like the rest of the cockpit.
     svg.appendChild(
       el('rect', {
-        x: CX - 60,
-        y: CY - 22,
-        width: 120,
-        height: 44,
-        rx: 12,
+        x: CX - 78,
+        y: CY - 30,
+        width: 156,
+        height: 60,
+        rx: 14,
         fill: '#fff7ed',
         stroke: '#ea4b12',
         'stroke-width': 2,
@@ -183,10 +188,10 @@
         'text',
         {
           x: CX,
-          y: CY + 5,
+          y: CY + 6,
           'text-anchor': 'middle',
           fill: '#9a3412',
-          'font-size': 13,
+          'font-size': 15,
           'font-weight': 'bold',
         },
         'Điều phối'
@@ -195,21 +200,26 @@
 
     sources.forEach(function (src, i) {
       var a = (2 * Math.PI * i) / sources.length - Math.PI / 2;
-      var nx = CX + R * Math.cos(a),
-        ny = CY + R * Math.sin(a);
+      var out = sources.length > 10 && i % 2 ? STAGGER : 0;
+      // Near the top and bottom of the ring neighbours are almost side by side, which is
+      // where wide cards collide. Push those further out along y in proportion to how
+      // vertical they sit, so the crowd thins exactly where it forms.
+      var vert = Math.abs(Math.sin(a));
+      var nx = CX + (RX + out) * Math.cos(a),
+        ny = CY + (RY + out + vert * 52) * Math.sin(a);
       var live = src.status === 'live';
       var down = src.status === 'quota-exhausted' || src.status === 'cooldown';
       var g = el('g', down ? { class: 'rot-dim' } : null);
-      var W = 116,
-        H = 40;
+      var W = 148,
+        H = 50;
 
       // Edge: idle links recede, the serving link is amber and flows.
       var edge = el('path', {
         d:
           'M' +
-          (CX + 60 * Math.cos(a)) +
+          (CX + 78 * Math.cos(a)) +
           ',' +
-          (CY + 22 * Math.sin(a)) +
+          (CY + 30 * Math.sin(a)) +
           ' Q' +
           (CX + nx) / 2 +
           ',' +

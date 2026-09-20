@@ -131,6 +131,10 @@ const SOURCE_DEFS = [
   { id: 'cline', label: 'Cline' },
   { id: 'autoclaw', label: 'AutoClaw' },
   { id: 'ao', label: 'AO' },
+  // Added 2026-09-20 after each answered a live coding prompt from its own account.
+  { id: 'tencent', label: 'Tencent' },
+  { id: 'rqsty', label: 'Requesty' },
+  { id: 'thb', label: 'TokenHarbor' },
 ];
 
 // dispatch.sh names its author lanes after the key directory holding them
