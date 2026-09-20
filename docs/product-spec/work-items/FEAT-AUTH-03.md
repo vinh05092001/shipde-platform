@@ -143,4 +143,3 @@ Live supertest suites additionally require `pnpm infra:up` (PostgreSQL on :5433)
 - OTP login availability is discovered by the web client at request time (`AUTH_OTP_LOGIN_DISABLED`); no separate options endpoint was added.
 - The seed password is a documented test-only credential for local/CI fixtures (`TestPassword123!`); production user provisioning is out of scope.
 - `verifyPhone`'s legacy tolerance for plaintext seed OTPs is retained from FEAT-AUTH-01; new login OTPs are always hashed.
-
