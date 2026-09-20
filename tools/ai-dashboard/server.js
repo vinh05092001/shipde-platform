@@ -135,7 +135,13 @@ function createDashboardServer(options = {}) {
   }
 
   function broadcastHeartbeat() {
-    const heartbeat = `: heartbeat ${new Date().toISOString()}\n\n`;
+    // A `: comment` line keeps the socket warm but EventSource drops it, so the page
+    // could not tell a live poll from a dead one. Send a named event the client can read.
+    const at = new Date().toISOString();
+    const heartbeat = `event: heartbeat
+data: ${JSON.stringify({ at })}
+
+`;
     for (const client of sseClients) {
       try {
         client.res.write(heartbeat);

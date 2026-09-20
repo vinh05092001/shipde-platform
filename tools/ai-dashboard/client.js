@@ -86,6 +86,22 @@ function initRealtime() {
   try {
     eventSource = new EventSource(sseUrl);
 
+    // The state event only fires when something actually changed, which can be minutes
+    // apart. Without this the page looks frozen even while the server polls every 5s, so
+    // show the heartbeat as a separate "checked at" line next to the data's own timestamp.
+    eventSource.addEventListener('heartbeat', (event) => {
+      reconnectAttempts = 0;
+      try {
+        const { at } = JSON.parse(event.data);
+        const el = document.getElementById('lastCheckedAt');
+        if (el && at) {
+          el.textContent = `Kiểm tra lúc: ${new Date(at).toLocaleTimeString()}`;
+        }
+      } catch {
+        /* a malformed heartbeat must never break the live connection */
+      }
+    });
+
     eventSource.addEventListener('state', (event) => {
       reconnectAttempts = 0;
       try {
