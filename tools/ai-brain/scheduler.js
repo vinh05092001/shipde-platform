@@ -14,11 +14,11 @@
  *   qualification, and two authors on one item corrupt the unit of delivery.
  *   It is not configurable, and `maxImplementationAgents` cannot raise it.
  *
- *   Stability limit — how many implementation agents run at once. AI-TOOL-03
- *   currently sets this to 1, but AGENTS.md frames it as holding "until the
- *   workflow is proven stable", which makes it a setting rather than a rule.
- *   It defaults to 1 so the current policy is what happens unless the operator
- *   deliberately raises it.
+ *   Stability limit — how many implementation agents run at once across different
+ *   Work Items. AI-TOOL-03 fixes it at 1 as a stability measure; raising it is a
+ *   governed decision, not an unvetted setting (TASK-AI-42, DEC-017). Passing
+ *   `maxImplementationAgents > 1` without an approved governed decision identifier
+ *   (DEC-* or HUMAN-DECISION-*) is held at 1.
  *
  * Parallelism across *different* Work Items is what the second limit governs.
  * Parallelism within one is what the first forbids, permanently.
@@ -35,6 +35,16 @@ const {
 } = require('./offerings');
 const { rankByFitness, Difficulty } = require('./fitness');
 const { observeRefusal } = require('./ceiling');
+
+const GOVERNED_DECISION_PATTERN = /^(?:HUMAN-DECISION-[A-Z0-9-]+|DEC-[0-9]{3,})$/;
+
+function isGovernedDecision(val) {
+  if (!val) return false;
+  if (typeof val === 'string') return GOVERNED_DECISION_PATTERN.test(val.trim());
+  if (typeof val === 'object' && val.id)
+    return GOVERNED_DECISION_PATTERN.test(String(val.id).trim());
+  return false;
+}
 
 const DEFAULTS = {
   maxImplementationAgents: 1,
@@ -130,7 +140,40 @@ function waiting(item, reason, detail) {
  */
 function planDispatch(items, accounts, context) {
   const ctx = context || {};
-  const limits = Object.assign({}, DEFAULTS, ctx.limits || {});
+  const ctxLimits = ctx.limits || {};
+  const decisionCandidate = ctx.governedDecision || ctxLimits.governedDecision || null;
+  const decisionValid = isGovernedDecision(decisionCandidate);
+  const decisionId = decisionValid
+    ? typeof decisionCandidate === 'string'
+      ? decisionCandidate.trim()
+      : String(decisionCandidate.id).trim()
+    : null;
+
+  let requestedMaxImpl =
+    ctxLimits.maxImplementationAgents !== undefined
+      ? Number(ctxLimits.maxImplementationAgents)
+      : DEFAULTS.maxImplementationAgents;
+
+  let effectiveMaxImpl = DEFAULTS.maxImplementationAgents;
+  let ceilingGoverned = false;
+
+  if (Number.isFinite(requestedMaxImpl)) {
+    if (requestedMaxImpl <= 1) {
+      effectiveMaxImpl = Math.max(0, requestedMaxImpl);
+    } else if (decisionValid) {
+      effectiveMaxImpl = requestedMaxImpl;
+      ceilingGoverned = true;
+    } else {
+      // AI-TOOL-03 / TASK-AI-42: Raising the implementation ceiling is a governed decision, not a setting.
+      // An unvetted setting without a valid governed decision identifier is clamped to 1.
+      effectiveMaxImpl = 1;
+      ceilingGoverned = false;
+    }
+  }
+
+  const limits = Object.assign({}, DEFAULTS, ctxLimits, {
+    maxImplementationAgents: effectiveMaxImpl,
+  });
   const now = ctx.now || Date.now();
 
   // Dispatch is per model, not per account: one key exposes many models and
@@ -365,6 +408,8 @@ function planDispatch(items, accounts, context) {
       maxTotal: limits.maxTotal,
       implementation: implementationLoad,
       maxImplementation: limits.maxImplementationAgents,
+      governedDecision: decisionId,
+      ceilingGoverned,
       research: researchLoad,
       maxResearch: limits.maxResearchAgents,
       review: reviewLoad,
@@ -382,4 +427,12 @@ function planDispatch(items, accounts, context) {
   };
 }
 
-module.exports = { planDispatch, DEFAULTS, IMPLEMENTATION_ROLES, RESEARCH_ROLES, REVIEW_ROLES };
+module.exports = {
+  planDispatch,
+  DEFAULTS,
+  IMPLEMENTATION_ROLES,
+  RESEARCH_ROLES,
+  REVIEW_ROLES,
+  isGovernedDecision,
+  GOVERNED_DECISION_PATTERN,
+};
