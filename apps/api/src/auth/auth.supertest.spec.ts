@@ -556,8 +556,187 @@ async function runAuthSupertestSuite() {
     assert.strictEqual(res18.body.error.code, 'OTP_MAX_ATTEMPTS_EXCEEDED');
     console.log('  PASS: OTP brute-force locked out with 429 OTP_MAX_ATTEMPTS_EXCEEDED');
 
+    // =========================================================================
+    // FEAT-AUTH-02: Admin-created shop account tests
+    // =========================================================================
     console.log('================================================================');
-    console.log('✅ ALL 18 SUPERTEST INTEGRATION TESTS PASSED (FEAT-AUTH-01)');
+    console.log('SHIP DE - ADMIN CREATE SHOP ACCOUNT SUITE (FEAT-AUTH-02)');
+    console.log('================================================================');
+
+    const operatorSecret = 'test-operator-secret-feat-auth-02';
+    process.env.OPERATOR_SECRET = operatorSecret;
+
+    // AC-AUTH-02-01: Valid admin creation with email -> 201 ACTIVE
+    console.log('[TEST 19 / AC-AUTH-02-01] Valid admin creation with email');
+    const adminEmail1 = `admin.owner.${testSuffix}@shipde.vn`;
+    const res19 = await request(app.getHttpServer())
+      .post('/auth/admin/create-shop-account')
+      .set('x-operator-token', operatorSecret)
+      .set('x-forwarded-for', '198.51.100.50')
+      .send({
+        merchant_name: `Admin Shop ${testSuffix}`,
+        full_name: 'Admin Created Owner',
+        email: adminEmail1,
+        password: 'SecurePassword123!',
+      })
+      .expect(201);
+
+    assert.strictEqual(res19.body.data.status, 'active');
+    assert.ok(res19.body.data.merchant_id);
+    assert.ok(res19.body.data.merchant_code);
+    assert.ok(res19.body.data.user_id);
+    assert.ok(res19.body.meta.correlation_id);
+
+    const adminCreatedUser = await prisma.user.findUnique({
+      where: { id: res19.body.data.user_id },
+    });
+    assert.strictEqual(adminCreatedUser?.status, 'active');
+    assert.strictEqual(adminCreatedUser?.role, 'OWNER');
+    assert.ok(adminCreatedUser?.email_verified_at);
+    console.log('  PASS: AC-AUTH-02-01 Admin created active owner with verified email');
+
+    // AC-AUTH-02-02: Valid admin creation with phone -> 201 ACTIVE
+    console.log('[TEST 20 / AC-AUTH-02-02] Valid admin creation with phone');
+    const adminPhone2 = `09123${testSuffix.slice(-5)}`;
+    const res20 = await request(app.getHttpServer())
+      .post('/auth/admin/create-shop-account')
+      .set('x-operator-token', operatorSecret)
+      .set('x-forwarded-for', '198.51.100.51')
+      .send({
+        merchant_name: `Admin Phone Shop ${testSuffix}`,
+        full_name: 'Phone Owner',
+        phone: adminPhone2,
+        password: 'SecurePassword123!',
+      })
+      .expect(201);
+
+    assert.strictEqual(res20.body.data.status, 'active');
+    const phoneUser = await prisma.user.findUnique({
+      where: { id: res20.body.data.user_id },
+    });
+    assert.ok(phoneUser?.phone_verified_at);
+    console.log('  PASS: AC-AUTH-02-02 Admin created active owner with verified phone');
+
+    // AC-AUTH-02-03: Missing required fields -> 400 VALIDATION_ERROR
+    console.log('[TEST 21 / AC-AUTH-02-03] Missing merchant_name returns validation error');
+    const res21 = await request(app.getHttpServer())
+      .post('/auth/admin/create-shop-account')
+      .set('x-operator-token', operatorSecret)
+      .send({
+        merchant_name: 'A',
+        full_name: 'Valid Name',
+        email: `valid.${testSuffix}@shipde.vn`,
+        password: 'SecurePassword123!',
+      })
+      .expect(400);
+
+    assert.strictEqual(res21.body.error.code, 'VALIDATION_ERROR');
+    assert.ok(res21.body.error.fields.some((f: any) => f.field === 'merchant_name'));
+    console.log('  PASS: AC-AUTH-02-03 Validation error for short merchant_name');
+
+    // AC-AUTH-02-04: Password too short -> 400 VALIDATION_ERROR
+    console.log('[TEST 22 / AC-AUTH-02-04] Password < 8 chars returns validation error');
+    const res22 = await request(app.getHttpServer())
+      .post('/auth/admin/create-shop-account')
+      .set('x-operator-token', operatorSecret)
+      .send({
+        merchant_name: 'Valid Shop Name',
+        full_name: 'Valid Name',
+        email: `pw.${testSuffix}@shipde.vn`,
+        password: 'short',
+      })
+      .expect(400);
+
+    assert.strictEqual(res22.body.error.code, 'VALIDATION_ERROR');
+    assert.ok(res22.body.error.fields.some((f: any) => f.field === 'password'));
+    console.log('  PASS: AC-AUTH-02-04 Password too short rejected');
+
+    // AC-AUTH-02-05: Missing operator token -> 401 UNAUTHORIZED
+    console.log('[TEST 23 / AC-AUTH-02-05] Missing operator token returns 401');
+    const res23 = await request(app.getHttpServer())
+      .post('/auth/admin/create-shop-account')
+      .send({
+        merchant_name: 'No Auth Shop',
+        full_name: 'No Auth Owner',
+        email: `noauth.${testSuffix}@shipde.vn`,
+        password: 'SecurePassword123!',
+      })
+      .expect(401);
+
+    assert.strictEqual(res23.body.error.code, 'UNAUTHORIZED');
+    console.log('  PASS: AC-AUTH-02-05 Missing operator token returns 401');
+
+    // AC-AUTH-02-06: Wrong operator token -> 403 FORBIDDEN
+    console.log('[TEST 24 / AC-AUTH-02-06] Wrong operator token returns 403');
+    const res24 = await request(app.getHttpServer())
+      .post('/auth/admin/create-shop-account')
+      .set('x-operator-token', 'wrong-token-value')
+      .send({
+        merchant_name: 'Wrong Auth Shop',
+        full_name: 'Wrong Auth Owner',
+        email: `wrongauth.${testSuffix}@shipde.vn`,
+        password: 'SecurePassword123!',
+      })
+      .expect(403);
+
+    assert.strictEqual(res24.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: AC-AUTH-02-06 Wrong operator token returns 403');
+
+    // AC-AUTH-02-07: Duplicate email -> 400 DUPLICATE_EMAIL
+    console.log('[TEST 25 / AC-AUTH-02-07] Duplicate email returns 400');
+    const res25 = await request(app.getHttpServer())
+      .post('/auth/admin/create-shop-account')
+      .set('x-operator-token', operatorSecret)
+      .send({
+        merchant_name: `Dup Shop ${testSuffix}`,
+        full_name: 'Dup Owner',
+        email: adminEmail1,
+        password: 'SecurePassword123!',
+      })
+      .expect(400);
+
+    assert.strictEqual(res25.body.error.code, 'VALIDATION_ERROR');
+    assert.ok(res25.body.error.fields.some((f: any) => f.field === 'email' && f.code === 'DUPLICATE'));
+    console.log('  PASS: AC-AUTH-02-07 Duplicate email rejected');
+
+    // AC-AUTH-02-08: Duplicate phone -> 400 DUPLICATE_PHONE
+    console.log('[TEST 26 / AC-AUTH-02-08] Duplicate phone returns 400');
+    const res26 = await request(app.getHttpServer())
+      .post('/auth/admin/create-shop-account')
+      .set('x-operator-token', operatorSecret)
+      .send({
+        merchant_name: `Dup Phone Shop ${testSuffix}`,
+        full_name: 'Dup Phone Owner',
+        phone: adminPhone2,
+        password: 'SecurePassword123!',
+      })
+      .expect(400);
+
+    assert.strictEqual(res26.body.error.code, 'VALIDATION_ERROR');
+    assert.ok(res26.body.error.fields.some((f: any) => f.field === 'phone' && f.code === 'DUPLICATE'));
+    console.log('  PASS: AC-AUTH-02-08 Duplicate phone rejected');
+
+    // AC-AUTH-02-09: Unconfigured OPERATOR_SECRET -> 503
+    console.log('[TEST 27 / AC-AUTH-02-09] Unconfigured operator auth returns 503');
+    const savedSecret = process.env.OPERATOR_SECRET;
+    delete process.env.OPERATOR_SECRET;
+    const res27 = await request(app.getHttpServer())
+      .post('/auth/admin/create-shop-account')
+      .set('x-operator-token', 'any-token')
+      .send({
+        merchant_name: 'Unconfigured Shop',
+        full_name: 'Unconfigured Owner',
+        email: `unconf.${testSuffix}@shipde.vn`,
+        password: 'SecurePassword123!',
+      })
+      .expect(503);
+
+    assert.strictEqual(res27.body.error.code, 'OPERATOR_AUTH_NOT_CONFIGURED');
+    process.env.OPERATOR_SECRET = savedSecret;
+    console.log('  PASS: AC-AUTH-02-09 Unconfigured operator auth returns 503');
+
+    console.log('================================================================');
+    console.log('ALL 9 ADMIN CREATE SHOP ACCOUNT TESTS PASSED (FEAT-AUTH-02)');
     console.log('================================================================');
   } finally {
     await app.close();

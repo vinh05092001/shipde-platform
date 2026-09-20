@@ -27,6 +27,18 @@ Every implementation use case includes actor, preconditions, trigger, main flow,
 - Audit: registration event and verification events logged with hashed IP and actor context; never log plaintext passwords, OTPs, or verification tokens.
 - Acceptance: AC-AUTH-02.
 
+## UC-AUTH-03 Admin-create shop account
+
+- Actor: Platform Operator (authenticated via `x-operator-token` shared secret).
+- Preconditions: operator possesses the valid `OPERATOR_SECRET` environment value.
+- Trigger: submit admin creation form or API call with merchant name, owner full name, email or phone, and password.
+- Main result: atomically create new Merchant (tenant) and User with role OWNER directly in ACTIVE state; `email_verified_at` or `phone_verified_at` populated immediately, bypassing PENDING_VERIFICATION.
+- Alternatives: creation by email only; creation by phone only.
+- Postconditions: tenant and owner are immediately usable without verification flow.
+- Failures: missing operator token (401), invalid operator token (403), missing required fields, weak password, duplicate verified identifier (400 VALIDATION_ERROR).
+- Audit: ADMIN_CREATE_SHOP_ACCOUNT event logged with hashed IP and operator context; never log plaintext passwords.
+- Acceptance: AC-AUTH-03.
+
 ## UC-USR-01 Invite and authorize a user
 
 - Actor: SHOP_OWNER or authorized administrator.

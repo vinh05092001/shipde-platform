@@ -58,6 +58,20 @@ interface AuthContextType {
     cooldownSeconds?: number;
     nextAction?: string;
   }>;
+  adminCreateShopAccount: (payload: {
+    merchant_name: string;
+    full_name: string;
+    email?: string;
+    phone?: string;
+    password: string;
+    operator_token: string;
+  }) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    fields?: FieldError[];
+    data?: any;
+  }>;
   logout: () => void;
   switchRole: (role: Role) => void;
 }
@@ -306,6 +320,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const adminCreateShopAccount = async (payload: {
+    merchant_name: string;
+    full_name: string;
+    email?: string;
+    phone?: string;
+    password: string;
+    operator_token: string;
+  }) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/admin/create-shop-account`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-operator-token': payload.operator_token,
+        },
+        body: JSON.stringify({
+          merchant_name: payload.merchant_name,
+          full_name: payload.full_name,
+          email: payload.email,
+          phone: payload.phone,
+          password: payload.password,
+        }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body?.error?.message || 'Tạo tài khoản thất bại',
+          code: body?.error?.code || 'VALIDATION_ERROR',
+          fields: body?.error?.fields,
+        };
+      }
+
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối máy chủ', code: 'NETWORK_ERROR' };
+    }
+  };
+
   const logout = () => {
     setUser(null);
     setMerchant(null);
@@ -340,6 +394,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         verifyEmail,
         verifyPhone,
         resendVerification,
+        adminCreateShopAccount,
         logout,
         switchRole,
       }}

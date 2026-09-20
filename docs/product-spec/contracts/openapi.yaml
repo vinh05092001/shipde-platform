@@ -152,6 +152,38 @@ paths:
           $ref: '#/components/responses/Error'
         '429':
           $ref: '#/components/responses/RateLimited'
+  /auth/admin/create-shop-account:
+    post:
+      tags: [Auth]
+      summary: Admin-create a shop and initial owner account (API-AUTH-ADMIN-CREATE-SHOP)
+      description: Operator creates a new merchant tenant and its initial OWNER user in ACTIVE status without public self-registration. Requires x-operator-token header.
+      operationId: adminCreateShopAccount
+      security: []
+      parameters:
+        - name: x-operator-token
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateShopAccountRequest'
+      responses:
+        '201':
+          description: Shop and owner account created, status active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCreateShopAccountResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
   /auth/login:
     post:
       tags: [Auth]
@@ -538,6 +570,47 @@ components:
             phone:
               type: string
             message:
+              type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    AdminCreateShopAccountRequest:
+      type: object
+      required: [merchant_name, full_name, password]
+      properties:
+        merchant_name:
+          type: string
+          minLength: 2
+        full_name:
+          type: string
+          minLength: 2
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        password:
+          type: string
+          minLength: 8
+    AdminCreateShopAccountResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [user_id, merchant_id, status]
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            merchant_id:
+              type: string
+              format: uuid
+            status:
+              type: string
+              enum: [ACTIVE]
+            email:
+              type: string
+            phone:
               type: string
         meta:
           $ref: '#/components/schemas/Meta'

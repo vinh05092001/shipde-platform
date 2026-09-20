@@ -12,6 +12,10 @@
 - BR-AUTH-08: Resend verification is bounded by a dedicated rate limit (1 request per 60 seconds cooldown, max 5/hour per identifier).
 - BR-AUTH-09: All registration, verification, and rate-limit events produce immutable audit records containing actor context and hashed IP without leaking passwords or verification tokens.
 - BR-AUTH-10: Concurrent submissions with the same unverified identifier must resolve idempotently; exactly one tenant/owner pair persists.
+- BR-AUTH-11: Admin shop creation requires a valid `x-operator-token` header matching the server-side `OPERATOR_SECRET`. Missing token returns 401 UNAUTHORIZED; invalid token returns 403 FORBIDDEN. This endpoint bypasses public self-registration rate limits.
+- BR-AUTH-12: Admin-created accounts start directly in ACTIVE status. The provided email or phone is marked as verified (`email_verified_at` / `phone_verified_at` populated) at creation time, bypassing the PENDING_VERIFICATION state used in FEAT-AUTH-01.
+- BR-AUTH-13: Admin creation requires merchant_name (min 2 chars), full_name (min 2 chars), password (min 8 chars), and at least one of email or phone. Terms acceptance is implicit for operator-created accounts. Validation errors return 400 with field-level details.
+- BR-AUTH-14: Duplicate email or phone on admin creation returns 400 VALIDATION_ERROR with field code DUPLICATE, identical to self-registration conflict behavior.
 
 ### Self-registration decision
 

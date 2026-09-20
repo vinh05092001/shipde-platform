@@ -50,6 +50,30 @@ State coverage:
 - **Verification success**: Confirmation screen celebrating account activation, leading into session start or login.
 - **Recovery**: Unsaved form warning on navigation; network interruptions preserve entered values.
 
+## SCR-AUTH-03 Admin create shop account
+
+Route: `/admin/shops/create`
+
+Fields/actions:
+
+- Shop/merchant name (text, required, min 2 chars).
+- Owner full name (text, required, min 2 chars).
+- Owner email (email format, required if phone not provided).
+- Owner phone (Vietnamese phone regex, required if email not provided).
+- Password (min 8 chars, with show/hide toggle).
+- "Tạo Cửa Hàng" submit button.
+- Link back to admin dashboard.
+
+State coverage:
+
+- **Loading**: Submit button disabled with spinning indicator during in-flight network submission.
+- **Empty**: Initial clean form with helpful placeholders.
+- **Validation**: Per-field inline error messages sourced from `ErrorResponse.error.fields`.
+- **Unauthorized**: Error display when operator token is missing or invalid (401/403), with guidance to re-authenticate.
+- **Duplicate error**: Explicit notice when email or phone already exists, with field-level DUPLICATE code.
+- **Success**: Confirmation screen showing created merchant_id and user_id, with link to shop detail or back to list.
+- **Recovery**: Unsaved form warning on navigation; network interruptions preserve entered values.
+
 ## SCR-ONB-01 Onboarding
 
 Steps:

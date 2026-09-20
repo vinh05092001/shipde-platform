@@ -220,5 +220,27 @@ export interface QueueSmokePayload {
   metadata?: Record<string, unknown>;
 }
 
+// --- Admin Create Shop Account (FEAT-AUTH-02) ---
+export interface AdminCreateShopAccountRequest {
+  merchant_name: string;
+  full_name: string;
+  email?: string;
+  phone?: string;
+  password: string;
+}
+
+export interface AdminCreateShopAccountResponse {
+  data: {
+    merchant_id: string;
+    merchant_code: string;
+    user_id: string;
+    status: 'active';
+    created_at: string;
+  };
+  meta: {
+    correlation_id: string;
+  };
+}
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

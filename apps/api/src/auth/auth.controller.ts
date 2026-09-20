@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Req, Res, HttpCode, HttpStatus, Inject } from '@nestjs/common';
+import { Controller, Post, Body, Req, Res, HttpCode, HttpStatus, Inject, Headers } from '@nestjs/common';
 import { Request, Response } from 'express';
 import {
   AuthService,
@@ -6,6 +6,7 @@ import {
   VerifyEmailDto,
   VerifyPhoneDto,
   ResendVerificationDto,
+  AdminCreateShopAccountDto,
 } from './auth.service';
 import { normalizeCorrelationId } from '@shipde/config';
 
@@ -62,6 +63,20 @@ export class AuthController {
     const clientIp = this.extractClientIp(req);
     const result = await this.authService.resendVerification(dto, clientIp, correlationId);
     return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('admin/create-shop-account')
+  @HttpCode(HttpStatus.CREATED)
+  async adminCreateShopAccount(
+    @Body() dto: AdminCreateShopAccountDto,
+    @Headers('x-operator-token') operatorToken: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = this.extractClientIp(req);
+    const result = await this.authService.createShopAccount(dto, operatorToken, clientIp, correlationId);
+    return res.status(HttpStatus.CREATED).json(result);
   }
 
   private extractClientIp(req: Request): string {

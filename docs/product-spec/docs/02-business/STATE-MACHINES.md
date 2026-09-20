@@ -5,6 +5,7 @@
 ```mermaid
 stateDiagram-v2
   [*] --> PENDING_VERIFICATION: self-register (FEAT-AUTH-01)
+  [*] --> ACTIVE: admin-create shop account (FEAT-AUTH-02)
   PENDING_VERIFICATION --> ACTIVE: verify email or phone (BR-AUTH-02)
   PENDING_VERIFICATION --> PENDING_VERIFICATION: resend verification token
   PENDING_VERIFICATION --> DISABLED: abuse/cleanup
