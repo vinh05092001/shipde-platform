@@ -9,7 +9,11 @@ if (!fs.existsSync(REPO_MARKER)) {
   process.exit(2);
 }
 
-const { gateRuleFindings, GRANT_CACHE_WINDOW_MS, GRANT_SOURCE } = require('./lib/qualification-gate');
+const {
+  gateRuleFindings,
+  GRANT_CACHE_WINDOW_MS,
+  GRANT_SOURCE,
+} = require('./lib/qualification-gate');
 
 // Control: the rule must be able to report a violation at all.
 const control = gateRuleFindings({});

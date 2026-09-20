@@ -26,9 +26,13 @@ if (deps === null) {
 
 const missing = REQUIRED_DEPS.filter((dep) => !deps.includes(dep));
 if (missing.length > 0) {
-  console.error('DEPENDENCY_MISSING: register row for ' + WORK_ITEM + ' does not declare ' + missing.join(', '));
+  console.error(
+    'DEPENDENCY_MISSING: register row for ' + WORK_ITEM + ' does not declare ' + missing.join(', ')
+  );
   process.exit(1);
 }
 
-console.log('DEPENDENCY_DECLARED: register row for ' + WORK_ITEM + ' declares ' + REQUIRED_DEPS.join('; '));
+console.log(
+  'DEPENDENCY_DECLARED: register row for ' + WORK_ITEM + ' declares ' + REQUIRED_DEPS.join('; ')
+);
 process.exit(0);

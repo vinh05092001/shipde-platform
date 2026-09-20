@@ -36,8 +36,11 @@ if (realDeps === null) {
 const realMissing = REQUIRED_DEPS.filter((dep) => !realDeps.includes(dep));
 if (realMissing.length > 0) {
   console.error(
-    'CONTROL_FAILED: the real dependency ' + realDeps +
-    ' is missing ' + realMissing.join(', ') + ', so the negative case is meaningless'
+    'CONTROL_FAILED: the real dependency ' +
+      realDeps +
+      ' is missing ' +
+      realMissing.join(', ') +
+      ', so the negative case is meaningless'
   );
   process.exit(2);
 }
@@ -73,7 +76,8 @@ if (tamperedMissing.length === 0) {
 }
 
 console.error(
-  'DEPENDENCY_WRONG_DECLARED: repointed copy missing ' + tamperedMissing.join(', ') +
-  ' (negative proof confirmed)'
+  'DEPENDENCY_WRONG_DECLARED: repointed copy missing ' +
+    tamperedMissing.join(', ') +
+    ' (negative proof confirmed)'
 );
 process.exit(1);

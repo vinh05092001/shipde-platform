@@ -815,7 +815,9 @@ function main() {
   }
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify');
+  console.error(
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify'
+  );
   process.exit(2);
 }
 

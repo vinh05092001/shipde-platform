@@ -14,7 +14,9 @@ const { gateRuleFindings, GRANT_SOURCE } = require('./lib/qualification-gate');
 // Verify the rule module is the same object referenced by qualification-gate.js
 const gateModule = require('../qualification-gate');
 if (gateModule.grantRule !== require('./lib/qualification-gate')) {
-  console.error('RULE_SOURCE_WRONG: qualification-gate.js does not re-export the rule by reference');
+  console.error(
+    'RULE_SOURCE_WRONG: qualification-gate.js does not re-export the rule by reference'
+  );
   process.exit(2);
 }
 
@@ -62,5 +64,7 @@ if (findings3.length === 0) {
   process.exit(2);
 }
 
-process.stderr.write('GATE_VIOLATED: all three non-compliant configs correctly refused (negative proof confirmed)\n');
+process.stderr.write(
+  'GATE_VIOLATED: all three non-compliant configs correctly refused (negative proof confirmed)\n'
+);
 process.exit(1);

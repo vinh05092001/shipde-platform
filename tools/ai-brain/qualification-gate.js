@@ -10,6 +10,7 @@
 
 const { listRoles } = require('./capabilities');
 const { loadResults, recordKey } = require('./qualification');
+const { loadRegistry, updateAccount } = require('./accounts');
 const {
   gateRuleFindings,
   grantCredentialFindings,
@@ -23,13 +24,24 @@ const grantRule = require('./acceptance/lib/qualification-gate');
 
 // --- Error codes ---------------------------------------------------------
 
-const RESULT_MISSING    = 'RESULT_MISSING';
-const RESULT_STALE      = 'RESULT_STALE';
-const RESULT_CORRUPT    = 'RESULT_CORRUPT';
-const NOT_QUALIFIED     = 'NOT_QUALIFIED';
+const RESULT_MISSING = 'RESULT_MISSING';
+const RESULT_STALE = 'RESULT_STALE';
+const RESULT_CORRUPT = 'RESULT_CORRUPT';
+const NOT_QUALIFIED = 'NOT_QUALIFIED';
 const ALREADY_QUALIFIED = 'ALREADY_QUALIFIED';
-const QUALIFIED         = 'QUALIFIED';
+const QUALIFIED = 'QUALIFIED';
 const CREDENTIAL_IN_GRANT = 'CREDENTIAL_IN_GRANT';
+
+// --- Default persistence -------------------------------------------------
+
+function defaultLoadAccount(accountId, options) {
+  const accounts = loadRegistry(options);
+  return accounts.find((a) => a.id === accountId) || null;
+}
+
+function defaultUpdateAccount(accountId, patch, options) {
+  return updateAccount(accountId, patch, options);
+}
 
 // --- Core grant logic ----------------------------------------------------
 
@@ -37,12 +49,23 @@ const CREDENTIAL_IN_GRANT = 'CREDENTIAL_IN_GRANT';
  * Evaluate whether a probe result justifies granting `roleId`.
  *
  * Returns `{ status, roleId, accountId, model, entry?, reason? }`.
- * `deps` is injectable for tests: { loadResults, now, file }
+ * `deps` is injectable for tests: { loadResults, now, file, roles }
  */
 function evaluateGrant({ accountId, model, roleId, deps }) {
   const d = deps || {};
   const now = typeof d.now === 'function' ? d.now() : Date.now();
   const file = d.file;
+
+  const validRoles = d.roles || listRoles();
+  if (!roleId || !validRoles.includes(roleId)) {
+    return {
+      status: NOT_QUALIFIED,
+      roleId,
+      accountId,
+      model,
+      reason: 'unknown role: ' + roleId,
+    };
+  }
 
   let results;
   try {
@@ -61,7 +84,9 @@ function evaluateGrant({ accountId, model, roleId, deps }) {
   if (!record) {
     return {
       status: RESULT_MISSING,
-      roleId, accountId, model,
+      roleId,
+      accountId,
+      model,
       reason: 'no probe result found — run probe first',
     };
   }
@@ -71,7 +96,9 @@ function evaluateGrant({ accountId, model, roleId, deps }) {
   if (age > GRANT_CACHE_WINDOW_MS) {
     return {
       status: RESULT_STALE,
-      roleId, accountId, model,
+      roleId,
+      accountId,
+      model,
       reason: 'result is ' + age + 'ms old, re-probe required',
       age,
     };
@@ -81,7 +108,9 @@ function evaluateGrant({ accountId, model, roleId, deps }) {
   if (record.outcome !== 'pass') {
     return {
       status: NOT_QUALIFIED,
-      roleId, accountId, model,
+      roleId,
+      accountId,
+      model,
       reason: 'probe outcome was ' + record.outcome,
       outcome: record.outcome,
     };
@@ -104,6 +133,7 @@ function evaluateGrant({ accountId, model, roleId, deps }) {
     entry,
     writtenFields: Array.from(GRANT_WRITTEN_FIELDS),
     removesRole: false,
+    knownRoles: validRoles,
   });
   if (findings.length > 0) {
     return { status: NOT_QUALIFIED, roleId, accountId, model, reason: findings[0] };
@@ -158,21 +188,22 @@ function applyGrant(account, entry) {
 function runGate({ accountId, model, roleId, deps }) {
   const d = deps || {};
   const roles = d.roles || (roleId ? [roleId] : listRoles());
+  const registryOptions = d.registryFile ? { registryFile: d.registryFile } : undefined;
+  const loadAccount = d.loadAccount || ((id) => defaultLoadAccount(id, registryOptions));
+  const updateAccountFn =
+    d.updateAccount || ((id, patch) => defaultUpdateAccount(id, patch, registryOptions));
 
   const results = [];
   for (const rid of roles) {
     const evaluation = evaluateGrant({ accountId, model, roleId: rid, deps: d });
     if (evaluation.status === QUALIFIED) {
-      const loadAccount  = d.loadAccount  || (() => null);
-      const updateAccount = d.updateAccount || (() => {});
       const account = loadAccount(accountId) || { id: accountId };
-      const already = Array.isArray(account.qualifiedRoles) &&
-        account.qualifiedRoles.includes(rid);
+      const already = Array.isArray(account.qualifiedRoles) && account.qualifiedRoles.includes(rid);
       if (already) {
         results.push(Object.assign({}, evaluation, { status: ALREADY_QUALIFIED }));
       } else {
         const updated = applyGrant(account, evaluation.entry);
-        updateAccount(accountId, updated);
+        updateAccountFn(accountId, updated);
         results.push(evaluation);
       }
     } else {
@@ -188,6 +219,8 @@ module.exports = {
   evaluateGrant,
   applyGrant,
   runGate,
+  defaultLoadAccount,
+  defaultUpdateAccount,
   RESULT_MISSING,
   RESULT_STALE,
   RESULT_CORRUPT,
@@ -216,7 +249,10 @@ function parseQualifyArgs(argv) {
       const key = token.slice(2);
       const next = argv[i + 1];
       if (next === undefined || next.startsWith('--')) out[key] = true;
-      else { out[key] = next; i += 1; }
+      else {
+        out[key] = next;
+        i += 1;
+      }
     } else out._.push(token);
   }
   return out;
@@ -259,23 +295,54 @@ async function runQualifyCli(argv, deps) {
 
   for (const r of results) {
     if (r.status === QUALIFIED) {
-      out('QUALIFIED: ' + r.accountId + ' ' + r.model + ' → ' + r.roleId +
-          ' (granted at ' + new Date(r.entry.grantedAt).toISOString() + ')');
+      out(
+        'QUALIFIED: ' +
+          r.accountId +
+          ' ' +
+          r.model +
+          ' → ' +
+          r.roleId +
+          ' (granted at ' +
+          new Date(r.entry.grantedAt).toISOString() +
+          ')'
+      );
     } else if (r.status === ALREADY_QUALIFIED) {
       out('ALREADY_QUALIFIED: ' + r.accountId + ' ' + r.model + ' → ' + r.roleId + ' (idempotent)');
     } else if (r.status === RESULT_MISSING) {
       out('RESULT_MISSING: ' + r.accountId + ' ' + r.model + ' — run probe first');
     } else if (r.status === RESULT_STALE) {
-      out('RESULT_STALE: ' + r.accountId + ' ' + r.model +
-          ' — result is ' + (r.age || '?') + 'ms old, re-probe required');
+      out(
+        'RESULT_STALE: ' +
+          r.accountId +
+          ' ' +
+          r.model +
+          ' — result is ' +
+          (r.age || '?') +
+          'ms old, re-probe required'
+      );
     } else if (r.status === NOT_QUALIFIED) {
-      out('NOT_QUALIFIED: ' + r.accountId + ' ' + r.model + ' → ' + r.roleId +
-          ' — probe outcome was ' + (r.outcome || r.reason));
+      out(
+        'NOT_QUALIFIED: ' +
+          r.accountId +
+          ' ' +
+          r.model +
+          ' → ' +
+          r.roleId +
+          ' — probe outcome was ' +
+          (r.outcome || r.reason)
+      );
     } else {
-      out(r.status + ': ' + r.accountId + ' ' + r.model + ' → ' + r.roleId +
-          (r.reason ? ' — ' + r.reason : ''));
+      out(
+        r.status +
+          ': ' +
+          r.accountId +
+          ' ' +
+          r.model +
+          ' → ' +
+          r.roleId +
+          (r.reason ? ' — ' + r.reason : '')
+      );
     }
   }
   return 0;
 }
-

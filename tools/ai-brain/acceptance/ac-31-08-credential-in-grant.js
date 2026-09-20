@@ -21,16 +21,27 @@ const CREDENTIAL_CASES = [
 
 let allDetected = true;
 for (const badEntry of CREDENTIAL_CASES) {
-  const findings = grantCredentialFindings(Object.assign(
-    { roleId: 'author.lowrisk', grantedAt: Date.now(), source: GRANT_SOURCE, probeOutcome: 'pass' },
-    badEntry
-  ));
+  const findings = grantCredentialFindings(
+    Object.assign(
+      {
+        roleId: 'author.lowrisk',
+        grantedAt: Date.now(),
+        source: GRANT_SOURCE,
+        probeOutcome: 'pass',
+      },
+      badEntry
+    )
+  );
   if (findings.length === 0) {
-    console.error('CONTROL_FAILED: credential key "' + Object.keys(badEntry)[0] + '" was not detected');
+    console.error(
+      'CONTROL_FAILED: credential key "' + Object.keys(badEntry)[0] + '" was not detected'
+    );
     allDetected = false;
   }
 }
 if (!allDetected) process.exit(2);
 
-process.stderr.write('CREDENTIAL_IN_GRANT: all credential key variants correctly detected (negative proof confirmed)\n');
+process.stderr.write(
+  'CREDENTIAL_IN_GRANT: all credential key variants correctly detected (negative proof confirmed)\n'
+);
 process.exit(1);

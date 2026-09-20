@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-31.md`, `tools/ai-brain/qualification-gate.js`, `tools/ai-brain/test/qualification-gate.test.js`, `tools/ai-brain/acceptance/ac-31-*.js`, `tools/ai-brain/acceptance/lib/qualification-gate.js`, `tools/ai-brain/cli.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-31-impl-214433` |
-| Pull Request | pending |
+| Pull Request | #119 |
 
 ### Status transition ledger
 

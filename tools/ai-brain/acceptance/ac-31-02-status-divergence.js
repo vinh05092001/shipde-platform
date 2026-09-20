@@ -74,9 +74,6 @@ if (!violations.some((violation) => violation.indexOf('STATUS_DIVERGENCE') === 0
   process.exit(2);
 }
 console.error(
-  'STATUS_DIVERGENCE: tampered copy ' +
-    controlStatus(tamperedText) +
-    ' != register ' +
-    register
+  'STATUS_DIVERGENCE: tampered copy ' + controlStatus(tamperedText) + ' != register ' + register
 );
 process.exit(1);

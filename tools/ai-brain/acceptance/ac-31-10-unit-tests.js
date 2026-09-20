@@ -49,7 +49,5 @@ if (failCount > 0) {
   process.exit(1);
 }
 
-console.log(
-  'UNIT_TESTS_PASS: ' + passCount + ' passing, ' + failCount + ' failing'
-);
+console.log('UNIT_TESTS_PASS: ' + passCount + ' passing, ' + failCount + ' failing');
 process.exit(0);

@@ -17,7 +17,7 @@
 // Exit codes used by the scripts that require this file:
 //   0 the rule holds   1 it is violated   2 it cannot be measured
 
-'use strict';
+const { listRoles } = require('../../capabilities');
 
 // --- Constants -----------------------------------------------------------
 
@@ -80,6 +80,13 @@ function gateRuleFindings(config) {
   const findings = [];
   const c = config || {};
 
+  // AI-31-R08: role must be a known role.
+  const targetRole = c.roleId || (c.entry && c.entry.roleId);
+  const validRoles = c.knownRoles || listRoles();
+  if (!targetRole || !validRoles.includes(targetRole)) {
+    findings.push('GATE_VIOLATED: unknown role "' + targetRole + '"');
+  }
+
   // AI-31-R01: only a 'pass' outcome grants.
   if (c.outcome !== 'pass') {
     findings.push('GATE_VIOLATED: outcome must be "pass" to grant; got ' + c.outcome);
@@ -120,16 +127,21 @@ function gateRuleFindings(config) {
     }
     if (c.entry.source != null && c.entry.source !== GRANT_SOURCE) {
       findings.push(
-        'GATE_VIOLATED: entry source must be "' +
-          GRANT_SOURCE +
-          '"; got "' +
-          c.entry.source +
-          '"'
+        'GATE_VIOLATED: entry source must be "' + GRANT_SOURCE + '"; got "' + c.entry.source + '"'
       );
     }
     if (c.entry.probeOutcome != null && c.entry.probeOutcome !== 'pass') {
       findings.push(
         'GATE_VIOLATED: entry probeOutcome must be "pass"; got "' + c.entry.probeOutcome + '"'
+      );
+    }
+    if (c.roleId && c.entry.roleId && c.roleId !== c.entry.roleId) {
+      findings.push(
+        'GATE_VIOLATED: roleId mismatch between config (' +
+          c.roleId +
+          ') and entry (' +
+          c.entry.roleId +
+          ')'
       );
     }
   } else {

@@ -37,15 +37,22 @@ for (const script of NEGATIVE_SCRIPTS) {
   });
   if (result.status !== 2) {
     console.error(
-      'OUTSIDE_REPO_WRONG_EXIT: ' + script + ' exited ' + result.status +
-      ' outside repo (expected 2); stderr: ' + (result.stderr || '').trim()
+      'OUTSIDE_REPO_WRONG_EXIT: ' +
+        script +
+        ' exited ' +
+        result.status +
+        ' outside repo (expected 2); stderr: ' +
+        (result.stderr || '').trim()
     );
     allPassed = false;
   } else {
     const stderr = result.stderr || '';
     if (!stderr.includes('SOURCE_MISSING')) {
       console.error(
-        'OUTSIDE_REPO_WRONG_MESSAGE: ' + script + ' exited 2 but did not print SOURCE_MISSING; got: ' + stderr.trim()
+        'OUTSIDE_REPO_WRONG_MESSAGE: ' +
+          script +
+          ' exited 2 but did not print SOURCE_MISSING; got: ' +
+          stderr.trim()
       );
       allPassed = false;
     }
@@ -55,5 +62,9 @@ for (const script of NEGATIVE_SCRIPTS) {
 fs.rmSync(tmpDir, { recursive: true, force: true });
 
 if (!allPassed) process.exit(1);
-console.log('OUTSIDE_REPO_GUARD: all ' + NEGATIVE_SCRIPTS.length + ' acceptance scripts exit 2 with SOURCE_MISSING outside repository');
+console.log(
+  'OUTSIDE_REPO_GUARD: all ' +
+    NEGATIVE_SCRIPTS.length +
+    ' acceptance scripts exit 2 with SOURCE_MISSING outside repository'
+);
 process.exit(0);
