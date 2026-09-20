@@ -412,6 +412,17 @@ Unattended AO sessions always use the dedicated 9Router profile directory (`%USE
 
 A narrowing requires **two of three** breaches in the same window with at least the floor sample count. The rule never narrows on cost, quota percentage, grade, quality, or preference. The rule is narrowing-only: a removed role returns only through `TASK-AI-30` / `TASK-AI-31` re-qualification. Restoration through any other path, including a stale operator-declared entry, is forbidden — staleness is a read-time refusal (`EVIDENCE_STALE`), not a re-add trigger.
 
+### TASK-AI-31 — Qualification gate grant rule (2026-09-18)
+
+`TASK-AI-31` reads the probe result written by `TASK-AI-30` and grants `qualifiedRoles` into the account registry only when the probe outcome was `pass` and the result is within the grant cache window (4 hours). The grant rule lives in exactly one place: `tools/ai-brain/acceptance/lib/qualification-gate.js`, re-exported by reference from `tools/ai-brain/qualification-gate.js` — never copied.
+
+Four properties make the gate safe:
+
+1. **Grant is bounded** — the gate adds a role to `qualifiedRoles`; it never removes one (removal is `TASK-AI-25`'s narrowing rule).
+2. **Grant requires source** — every written entry carries `{ roleId, grantedAt, source: 'qualification-gate', probeOutcome: 'pass' }` so the origin of every grant is auditable.
+3. **Grant is field-constrained** — the gate writes only `qualifiedRoles` and `qualificationHistory`; it never writes grade, quality, preference, limits, tier, cost, capabilities, forbiddenDomains, or any credential.
+4. **Grant is outcome-gated** — only `outcome: 'pass'` within the cache window grants; `fail`, `timeout`, `refused` and stale results never grant.
+
 ### Permission boundaries (TASK-AI-10+)
 
 The supervisor operates with least-privilege permissions:
