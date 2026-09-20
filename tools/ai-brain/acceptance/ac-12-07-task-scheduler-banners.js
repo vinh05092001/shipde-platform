@@ -18,7 +18,11 @@ const source = fs.readFileSync(SOURCE, 'utf8');
 const REQUIRED = [
   { id: 'PREVIEW_BANNER', pattern: /\[PREVIEW\]/, label: 'a [PREVIEW] banner' },
   { id: 'DRYRUN_BANNER', pattern: /\[DRY-RUN\]/, label: 'a [DRY-RUN] banner' },
-  { id: 'TASK_SCHEDULER_BANNER', pattern: /\[TASK-SCHEDULER\]/, label: 'a [TASK-SCHEDULER] banner' },
+  {
+    id: 'TASK_SCHEDULER_BANNER',
+    pattern: /\[TASK-SCHEDULER\]/,
+    label: 'a [TASK-SCHEDULER] banner',
+  },
 ];
 
 const missing = REQUIRED.filter((r) => !r.pattern.test(source));
@@ -28,6 +32,7 @@ if (missing.length > 0) {
 }
 
 console.log(
-  'TASK_SCHEDULER_BANNERS_PRESENT: [PREVIEW], [DRY-RUN], and [TASK-SCHEDULER] banners found in ' + SOURCE
+  'TASK_SCHEDULER_BANNERS_PRESENT: [PREVIEW], [DRY-RUN], and [TASK-SCHEDULER] banners found in ' +
+    SOURCE
 );
 process.exit(0);

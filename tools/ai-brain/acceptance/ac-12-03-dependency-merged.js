@@ -46,9 +46,5 @@ if (!verdict.ok) {
   process.exit(1);
 }
 
-console.log(
-  EXPECTED_DEPENDENCY +
-    ' dependency verified: merged into origin/main for ' +
-    WORK_ITEM
-);
+console.log(EXPECTED_DEPENDENCY + ' dependency verified: merged into origin/main for ' + WORK_ITEM);
 process.exit(0);

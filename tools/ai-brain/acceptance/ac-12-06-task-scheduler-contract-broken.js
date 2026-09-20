@@ -16,7 +16,9 @@ const real = fs.readFileSync(SOURCE, 'utf8');
 // Control: the untampered source must satisfy the contract.
 const controlMissing = missingTaskSchedulerParts(real);
 if (controlMissing.length > 0) {
-  console.error('CONTROL_FAILED: real source already violates contract: ' + JSON.stringify(controlMissing));
+  console.error(
+    'CONTROL_FAILED: real source already violates contract: ' + JSON.stringify(controlMissing)
+  );
   process.exit(2);
 }
 

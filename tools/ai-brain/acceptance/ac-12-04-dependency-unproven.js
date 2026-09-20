@@ -89,7 +89,9 @@ try {
     process.exit(2);
   }
 
-  console.log('DEPENDENCY_UNPROVEN: ' + UNPROVABLE + ' has no merge commit reachable on origin/main');
+  console.log(
+    'DEPENDENCY_UNPROVEN: ' + UNPROVABLE + ' has no merge commit reachable on origin/main'
+  );
   process.exit(1);
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });

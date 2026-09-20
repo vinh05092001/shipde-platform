@@ -72,9 +72,7 @@ try {
     process.exit(2);
   }
 
-  console.log(
-    'STATUS_DIVERGENCE_DETECTED: tampered copy READY_FOR_AUTHOR != register ' + register
-  );
+  console.log('STATUS_DIVERGENCE_DETECTED: tampered copy READY_FOR_AUTHOR != register ' + register);
   process.exit(1);
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
