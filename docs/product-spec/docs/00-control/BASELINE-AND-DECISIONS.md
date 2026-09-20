@@ -31,6 +31,7 @@ This repository supersedes the earlier PoV-only Dev Pack. The current baseline i
 | DEC-014 | DECIDED | Processing status and findings are independent. | A matched waybill can carry many findings. |
 | DEC-015 | DECIDED | Four monetary evidence levels are never summed together. | Separate reporting measures are mandatory. |
 | DEC-016 | DECIDED | TypeScript monorepo is the default implementation stack. | Shared schemas/types and one-language handover. |
+| DEC-017 | DECIDED | Concurrent implementation ceiling is fixed at one (AI-TOOL-03) as a stability measure. | Raising the ceiling requires an explicit governed decision (DEC-* or HUMAN-DECISION-*), never an unvetted runtime setting. |
 
 ## Evidence levels
 

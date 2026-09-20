@@ -12,7 +12,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 | ----------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Git, GitHub and Git worktrees                                                             | USE NOW                          | Isolated workspaces, durable handoff, CI and review                          | `main` is never an implementation workspace                                                                                                                                                                                                                   |
 | Claude app and Claude Code                                                                | USE NOW                          | Business and solution analysis                                               | Interactive analysis stays in `shipde-claude`; unattended AO uses the governed 9Router launcher; no self-approval                                                                                                                                         |
-| AgentRouter                                                                               | USE NOW                          | Claude Code-compatible provider and routing runtime                          | Keep upstream credentials outside Git; unattended AO routes via the localhost 9Router endpoint (port 20128) using `%USERPROFILE%\.claude`, while direct AgentRouter access is reserved for the manual `%USERPROFILE%\.claude-orchestrator` diagnostic profile |
+| AgentRouter                                                                               | USE NOW                          | Claude Code-compatible provider and routing runtime                          | Keep upstream credentials outside Git; unattended AO routes via the localhost 9Router endpoint (port 20128) using `%USERPROFILE%\.claude-9router`, while direct AgentRouter access is reserved for the manual `%USERPROFILE%\.claude-orchestrator` diagnostic profile |
 | Codex app and Codex CLI                                                                   | USE NOW                          | Work Item planning, documentation and fresh independent review               | Planning and review are separate tasks; no author self-review                                                                                                                                                                                                 |
 | Gemini app, Antigravity CLI and [Gemini CLI](https://github.com/google-gemini/gemini-cli) | USE NOW                          | Primary implementation for complete vertical and high-risk work              | Prefer authenticated `agy`; `gemini` is the fallback; one prepared Work Item and branch at a time                                                                                                                                                             |
 | [9Router](https://github.com/decolua/9router)                                             | USE NOW                          | Local OpenAI-compatible gateway, free-model fallback and usage visibility    | Localhost only; Ponytail and Caveman disabled                                                                                                                                                                                                                 |
@@ -64,7 +64,7 @@ DSH stores credentials outside the project and keeps only a credential reference
 AgentRouter provides Claude model access under two separate topologies:
 
 1. **Manual direct profile (`%USERPROFILE%\.claude-orchestrator`):** Used directly by Claude Code for manual business and solution analysis. Its token is stored only in the user's credential environment and injected into the Claude process by an untracked local launcher. It connects directly to AgentRouter upstream without chaining through 9Router, and is not an implementation-author route. Its promotional balance is treated as temporary capacity rather than a permanent free entitlement. The repository stores no token, provider session or request log.
-2. **Unattended routed topology (`%USERPROFILE%\.claude`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
+2. **Unattended routed topology (`%USERPROFILE%\.claude-9router`):** Used by unattended AO sessions. AO routes requests through the local 9Router endpoint at `http://localhost:20128/v1`, which manages provider fallback without manual token handling.
 
 ### Gateway routing record (TASK-AI-44)
 
@@ -73,7 +73,7 @@ Two gateways exist and they are not interchangeable. The name `AgentRouter` is r
 | Gateway | Endpoint | Credential | Code names in this repository | Serves |
 |---|---|---|---|---|
 | AgentRouter (cloud) | `https://agentrouter.org/` (no `/v1`) | `AGENTROUTER_API_KEY`, User environment | `doctor.ps1` AgentRouter credential probe | Manual Claude Code business/solution analysis; the Claude and Codex fallback route |
-| 9Router (local) | `http://localhost:20128/v1` | local token | `$script:NineRouterProfile`, `$script:NineRouterPort`, `Assert-ShipDeNineRouterProfile`, `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeNineRouterFailureSince` | Unattended AO sessions (`.claude` profile), Gemini, dsh |
+| 9Router (local) | `http://localhost:20128/v1` | local token | `$script:NineRouterProfile`, `$script:NineRouterPort`, `Get-ShipDeNineRouterProfilePath`, `Assert-ShipDeNineRouterProfile`, `Assert-ShipDeNineRouterProfileBaseUrl`, `Test-ShipDeNineRouterEndpoint`, `Ensure-ShipDeNineRouterRuntime`, `Get-ShipDeNineRouterFailureSince` | Unattended AO sessions (`.claude-9router` profile), Gemini, dsh |
 
 Fallback routing, as implemented:
 
@@ -194,8 +194,10 @@ genuinely absent entries — six failed gates plus `storybook` — are truthfull
 downgraded from `ADOPTED` to `PENDING` with `default_enabled: false` and
 `blocking_policy: "NON_BLOCKING"`, unblocking focused downstream Work Items:
 
-1. `lefthook` (`PENDING`): absent from devDependencies. Downstream Work Item
-   `TASK-AI-36` installs and configures Lefthook for pre-commit / pre-push hooks.
+1. `lefthook` (`PENDING` at this measurement; `ADOPTED` / `BLOCKING_GATE` since
+   `TASK-AI-36`): absent from devDependencies. Downstream Work Item `TASK-AI-36`
+   installs and configures Lefthook for pre-commit / pre-push hooks; see
+   "Git hook manager: Lefthook (TASK-AI-36)" below.
 2. `trivy` (`PENDING`): absent from system PATH. Downstream Work Item
    `TASK-AI-37` integrates Trivy container and dependency vulnerability scanning.
 3. `axe-core` (`PENDING`): absent from devDependencies. Downstream Work Item
@@ -363,7 +365,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### 9Router-backed orchestration and lifecycle
 
-6. **AI-SUP-06**: AO uses the existing `.claude` 9Router profile for unattended orchestration; the direct `.claude-orchestrator` profile is not used by unattended mode.
+6. **AI-SUP-06**: AO uses its own 9Router profile directory for unattended orchestration, `%USERPROFILE%\.claude-9router` by default (overridable with `-NineRouterProfilePath` or `SHIPDE_NINEROUTER_PROFILE`). The default is never the operator's native `%USERPROFILE%\.claude` Claude Code profile, which a self-test enforces; an explicit override remains an operator decision. The direct `.claude-orchestrator` profile is not used by unattended mode.
 7. **AI-SUP-07**: 9Router owns Claude/provider quota fallback below AO; surfaced exhaustion means all approved routes failed and the supervisor stops fail-closed.
 8. **AI-SUP-08**: Inactivity timeout is configurable (default 10 minutes).
 9. **AI-SUP-09**: Maximum 1 nudge attempt per inactivity window before reporting stalled.
@@ -382,7 +384,7 @@ The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Super
 
 ### Provider and harness policy
 
-Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the localhost 9Router endpoint (`http://localhost:20128/v1`). The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after 9Router exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
+Unattended AO sessions always use the dedicated 9Router profile directory (`%USERPROFILE%\.claude-9router` by default), whose `env.ANTHROPIC_BASE_URL` is the localhost 9Router endpoint (`http://localhost:20128/v1`). The operator's `%USERPROFILE%\.claude` profile stays natively authenticated Claude Code and must not carry that override, so the two profiles are split; the launcher and the supervisor both resolve the AO profile through `Get-ShipDeNineRouterProfilePath` and validate it through `Assert-ShipDeNineRouterProfileBaseUrl`, which fails closed with an actionable error naming the profile file when `settings.json`, its `env` block, or the base URL is missing or wrong. `Invoke-ShipDeClaudeReviewFallback` is deliberately outside this split: it keeps running under the native login with `ANTHROPIC_BASE_URL` cleared. The AO profile directory is local machine state created by the operator, never repository state, and no credential is copied into it from the native profile. The direct `%USERPROFILE%\.claude-orchestrator` profile is a separate manual profile reserved for explicit operator diagnosis, not the unattended path. Gemini implementation uses the supported `agy` harness; the unadvertised `gemini` AO harness is not attempted. Cross-harness replacement after 9Router exhausts every approved route belongs to TASK-AI-07 and must preserve the same Work Item, branch, and worktree. Consumer accounts are never aggregated or rotated to bypass provider limits; fallback uses approved providers and credentials within their terms.
 
 ### Transient failure classification
 
@@ -399,6 +401,27 @@ Unattended AO sessions always use `%USERPROFILE%\.claude`, whose base URL is the
 | Lint/type/test failure    | No               | Yes              |
 | Assertion failure         | No               | Yes              |
 | User code exception       | No               | Yes              |
+
+### TASK-AI-25 — qualifiedRoles feedback rule (2026-09-18)
+
+`TASK-AI-25` records an author-attempt outcome per `accountId::model + role` and may narrow `qualifiedRoles` from measured evidence. The decision rule is the only place that rule lives, in `tools/ai-brain/acceptance/lib/role-feedback.js`. The three aggregates the rule may act on, and only those three, are:
+
+1. **PASS rate** per merged item over the window (floor 0.5).
+2. **Median retries** per merged item over the window (ceiling 3).
+3. **Median tokens** per merged item over the window (ceiling 500 000).
+
+A narrowing requires **two of three** breaches in the same window with at least the floor sample count. The rule never narrows on cost, quota percentage, grade, quality, or preference. The rule is narrowing-only: a removed role returns only through `TASK-AI-30` / `TASK-AI-31` re-qualification. Restoration through any other path, including a stale operator-declared entry, is forbidden — staleness is a read-time refusal (`EVIDENCE_STALE`), not a re-add trigger.
+
+### TASK-AI-31 — Qualification gate grant rule (2026-09-18)
+
+`TASK-AI-31` reads the probe result written by `TASK-AI-30` and grants `qualifiedRoles` into the account registry only when the probe outcome was `pass` and the result is within the grant cache window (4 hours). The grant rule lives in exactly one place: `tools/ai-brain/acceptance/lib/qualification-gate.js`, re-exported by reference from `tools/ai-brain/qualification-gate.js` — never copied.
+
+Four properties make the gate safe:
+
+1. **Grant is bounded** — the gate adds a role to `qualifiedRoles`; it never removes one (removal is `TASK-AI-25`'s narrowing rule).
+2. **Grant requires source** — every written entry carries `{ roleId, grantedAt, source: 'qualification-gate', probeOutcome: 'pass' }` so the origin of every grant is auditable.
+3. **Grant is field-constrained** — the gate writes only `qualifiedRoles` and `qualificationHistory`; it never writes grade, quality, preference, limits, tier, cost, capabilities, forbiddenDomains, or any credential.
+4. **Grant is outcome-gated** — only `outcome: 'pass'` within the cache window grants; `fail`, `timeout`, `refused` and stale results never grant.
 
 ### Permission boundaries (TASK-AI-10+)
 
@@ -422,6 +445,59 @@ The supervisor operates with least-privilege permissions:
 - Broad unrestricted shell access
 - Install, remove, or upgrade machine tools
 
+## Git hook manager: Lefthook (TASK-AI-36)
+
+Git hooks are the developer and agent front line for repository safety: they
+refuse a commit when another live session already holds the branch (the
+single-writer invariant, `AI-TOOL-03`) and when a credential has been staged
+into the git index (`AI-36-R05`). Until this Work Item those hooks depended on
+a hand-set `core.hooksPath = .githooks` override, which is a per-checkout
+manual step that fails silently when it is skipped: a checkout with the path
+set and no `pre-commit` in it commits unguarded, and a checkout with neither
+has no hook at all.
+
+The override is replaced with Lefthook (`evilmartians/lefthook`), pinned at
+exact version `1.11.3` as a root devDependency, and configured in
+version-controlled `lefthook.yml`:
+
+- The `pre-commit` stage declares two commands, run sequentially.
+  - `writer-claim` runs `node tools/ai-guard/cli.js check` — the same command
+    the bespoke hook ran, so the guard behaviour is unchanged.
+  - `staged-secret-scan` runs `node tools/ai-guard/cli.js staged-secrets`, which
+    reads the git index (not the working tree) and evaluates `.gitleaks.toml`
+    rules in Node.
+- The authoritative secret barrier is unchanged: Gitleaks `8.24.0` remains a
+  blocking CI gate provisioned by the GitHub Actions workflows. The staged
+  scanner is local defence in depth, and it exists because on a clean Windows
+  workstation `pnpm security:secrets` answers with operational exit code 2 when
+  the Gitleaks binary is not on PATH — an answer a pre-commit hook cannot act
+  on, since it distinguishes neither clean nor leaked.
+- Installation is explicit, never implicit. Repository supply-chain policy
+  forbids all four install lifecycle scripts (`preinstall`, `install`,
+  `postinstall`, `prepare`) in the root and workspace manifests, so `pnpm
+  install` never registers a hook. The `lefthook` npm package’s own
+  `postinstall` runs `lefthook install -f`, which is exactly that forbidden
+  behaviour, so its build script is denied in `pnpm-workspace.yaml`
+  (`lefthook: false`); the binary is still resolved from the pinned
+  `lefthook-windows-x64` optional dependency. Hook installation stays an
+  explicit `pnpm lefthook install`, wired into
+  `scripts/ai/bootstrap-worktrees.ps1`, with the pinned fallback
+  `npx lefthook@1.11.3 install`. A bare `npx lefthook install` is forbidden
+  under `AI-TOOL-11` because it would run whatever version the registry serves
+  today.
+- `scripts/ai/doctor.ps1` verifies that the binary resolves from the workspace
+  pin, that the staged scanner answers, that the Lefthook `pre-commit` hook is
+  installed in the repository’s git common dir, and that no `core.hooksPath`
+  override is left in place to shadow it.
+- A deliberate exception stays available and auditable: `git commit --no-verify`
+  or `LEFTHOOK=0`. Lefthook does not tamper with Git’s own bypass flags
+  (`AI-36-R07`).
+
+`lefthook` moves from `PENDING` to `ADOPTED` / `BLOCKING_GATE` /
+`default_enabled: true` in `tools/ecosystem-manifest.json` only because the
+gating artifact landed in the same change: the exact `"lefthook": "1.11.3"` root
+devDependency pin that the manifest audit probes as `dependency "lefthook"`
+(`AI-36-R08`).
 ## Planner / executor split (TASK-AI-24)
 
 - `tools/ai-brain/scheduler.js` (`planDispatch`) plans and never launches; it references no process-launching API (`AC-AI-24-06`).
@@ -429,3 +505,11 @@ The supervisor operates with least-privilege permissions:
 - Dry run is the default (`node tools/ai-brain/cli.js dispatch`); launching requires `--execute`. Deferred entries and alternatives are never launched, a second writer or an implementation beyond `plan.utilisation.maxImplementation` is refused, and any AO failure is `FAILED`, never `LAUNCHED`, with no in-call retry.
 - A provider without a harness the controller already uses (`antigravity`/`gemini` → `agy`, `9router`/`anthropic`/`claude` → `claude-code`) is refused as `INCOMPLETE_ASSIGNMENT` rather than guessed.
 - The controller keeps its own launch path; switching it to the executor is a separate Work Item.
+
+## Concurrent implementation ceiling decision (TASK-AI-42)
+
+- Under `AI-TOOL-03` and `AGENTS.md` ("Keep one active implementation Work Item until the workflow is proven stable"), the concurrent implementation ceiling is fixed at one (`1`) as a stability measure (`DEC-017`).
+- Raising the implementation ceiling is a **governed decision, not an unvetted runtime setting**. An operator, caller, or runtime context cannot raise `maxImplementationAgents` via an arbitrary configuration knob.
+- In `tools/ai-brain/scheduler.js` (`planDispatch`), `maxImplementationAgents` defaults to 1. Any attempt to request `maxImplementationAgents > 1` without an approved governed decision identifier (`DEC-*` or `HUMAN-DECISION-*`) is rejected and clamped to 1, preserving the `AI-TOOL-03` stability measure.
+- The single-writer invariant (exactly one writer per Work Item / branch) remains absolute and non-configurable, holding permanently even when a governed decision raises concurrency across different Work Items.
+- In `tools/ai-brain/executor.js` (`executePlan`), `maxImplementation` is read from `plan.utilisation.maxImplementation` (defaulting to 1) and enforces `IMPLEMENTATION_CEILING` on any attempt to exceed it.

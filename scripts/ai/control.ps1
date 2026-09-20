@@ -8,6 +8,11 @@ param(
         Join-Path $userHome "AI"
     ),
 
+    # Dedicated Claude profile directory that AO is launched under. It must route to
+    # the local 9Router gateway. It is deliberately NOT ~/.claude, which belongs to
+    # the operator's natively-authenticated Claude Code CLI.
+    [string]$NineRouterProfilePath = "",
+
     [ValidateRange(0, [int]::MaxValue)]
     [int]$PullRequestNumber = 0,
 
@@ -17,7 +22,13 @@ param(
     [int]$SupervisorMaxNudges = 1,
     [int]$SupervisorReviewTimeoutMinutes = 20,
     [int]$MaxRecoveryAttempts = 1,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+
+    # TASK-AI-11: Preview/dry-run and bounded failover switches
+    [switch]$Preview,
+    [switch]$DryRun,
+    [ValidateRange(1, [int]::MaxValue)]
+    [int]$MaxFailovers = 3
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -3001,7 +3012,10 @@ function Show-ShipDeStatus {
 $script:SupervisorStateFile = Join-Path $script:HandoffRoot "supervisor-state.json"
 $script:SupervisorLockFile = Join-Path $script:HandoffRoot "supervisor.lock"
 $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.json"
-$script:NineRouterProfile = Join-Path (Get-ShipDeUserHome) ".claude"
+# AO runs under its own 9Router profile, never the operator's native ~/.claude
+# profile (TASK-AI-06). Get-ShipDeNineRouterProfilePath owns the default and the
+# SHIPDE_NINEROUTER_PROFILE override.
+$script:NineRouterProfile = Get-ShipDeNineRouterProfilePath -ProfilePath $NineRouterProfilePath
 $script:NineRouterPort = 20128
 $script:ExpectedAoVersion = Get-ShipDePinnedAoVersion
 $script:AoExecutablePath = $null
@@ -3249,31 +3263,9 @@ function Assert-ShipDeAoRuntimeMarker {
 }
 
 function Assert-ShipDeNineRouterProfile {
-    $settingsPath = Join-Path $script:NineRouterProfile "settings.json"
-    if (-not (Test-Path $settingsPath)) {
-        throw "9Router Claude profile is missing: $settingsPath"
-    }
-    try {
-        $config = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch {
-        throw "9Router Claude profile contains invalid JSON: $settingsPath"
-    }
-
-    $baseUrl = [string]$config.env.ANTHROPIC_BASE_URL
-    $uri = $null
-    if (
-        [string]::IsNullOrWhiteSpace($baseUrl) -or
-        -not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$uri) -or
-        $uri.Scheme -ne "http" -or
-        $uri.Host -notin @("localhost", "127.0.0.1") -or
-        $uri.Port -ne $script:NineRouterPort -or
-        $uri.AbsolutePath.TrimEnd('/') -ne "/v1" -or
-        -not [string]::IsNullOrWhiteSpace($uri.Query) -or
-        -not [string]::IsNullOrWhiteSpace($uri.Fragment) -or
-        -not [string]::IsNullOrWhiteSpace($uri.UserInfo)
-    ) {
-        throw "9Router Claude profile must use http://localhost:$($script:NineRouterPort)/v1."
-    }
+    $baseUrl = Assert-ShipDeNineRouterProfileBaseUrl `
+        -ProfilePath $script:NineRouterProfile `
+        -Port $script:NineRouterPort
     if (-not (Test-ShipDeNineRouterEndpoint -Port $script:NineRouterPort)) {
         throw "Port $($script:NineRouterPort) is not serving the expected local 9Router health and version contract."
     }
@@ -3298,10 +3290,10 @@ function Ensure-ShipDeNineRouterRuntime {
         [scriptblock]$ProfileValidator = { Assert-ShipDeNineRouterProfile },
         [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
         [scriptblock]$Launcher = {
-            param($Path, $Root, $Port, $Version)
+            param($Path, $Root, $Port, $Version, $ProfileDir)
             # `-AgentRouterPort` is start-agent-orchestrator.ps1's parameter name (out of
             # scope here); on that script it still addresses 9Router's local port (20128).
-            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -Restart
+            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -ProfilePath $ProfileDir -Restart
         }
     )
 
@@ -3323,7 +3315,7 @@ function Ensure-ShipDeNineRouterRuntime {
 
     Write-Host "[SUPERVISOR] Starting AO through the 9Router Claude profile..."
     try {
-        & $Launcher $launcherPath $AiRoot $script:NineRouterPort $script:ExpectedAoVersion
+        & $Launcher $launcherPath $AiRoot $script:NineRouterPort $script:ExpectedAoVersion $script:NineRouterProfile
     } catch {
         throw "The governed AO launcher failed: $($_.Exception.Message)"
     }
@@ -6598,7 +6590,8 @@ function Invoke-ShipDeSupervisorLoop {
         [scriptblock]$OwnershipVerifier = $null,
         [scriptblock]$MessageSender = $null,
         [scriptblock]$SessionsResolver = $null,
-        [scriptblock]$SessionDetailResolver = $null
+        [scriptblock]$SessionDetailResolver = $null,
+        [int]$MaxFailovers = 3
     )
 
     Assert-ShipDeSupervisorMaxNudges -MaxNudges $MaxNudges
@@ -6608,6 +6601,14 @@ function Invoke-ShipDeSupervisorLoop {
     }
     $State = Normalize-ShipDeSupervisorState -State $State
     $State.RepairAttemptsPerHead = $MaxRepairAttemptsPerHead
+
+    # TASK-AI-11: Failover exhaustion guard — the bounded failover budget.
+    # When FailoverCount exceeds MaxFailovers the supervisor terminates the
+    # session, preserves the existing branch, and fails closed.
+    if ([int]$State.FailoverCount -ge $MaxFailovers) {
+        Write-Host ("[FAIL-CLOSED] Supervisor failover budget exhausted ({0} failovers against limit {1}). Branch '{2}' preserved." -f [int]$State.FailoverCount, $MaxFailovers, [string]$State.Branch)
+        throw ("Supervisor failover budget exhausted ({0} failovers against limit {1}). Branch preserved. Failing closed." -f [int]$State.FailoverCount, $MaxFailovers)
+    }
 
     while ($true) {
         $sessionId = if ($State.ContainsKey("SessionId") -and $null -ne $State["SessionId"]) { [string]$State["SessionId"] } else { "" }
@@ -7232,6 +7233,55 @@ function Assert-ShipDeSupervisorCompatibility {
         try {
             New-Item -ItemType Directory -Path $behavioralProfile -Force | Out-Null
             Set-Content -Path $behavioralSettings -Value '{"env":{"ANTHROPIC_BASE_URL":"http://localhost:20128/v1"}}' -Encoding UTF8
+
+            # 0a. The AO profile default must never be the operator's native ~/.claude.
+            $savedProfileOverride = $env:SHIPDE_NINEROUTER_PROFILE
+            try {
+                Remove-Item Env:SHIPDE_NINEROUTER_PROFILE -ErrorAction SilentlyContinue
+                $defaultProfile = Get-ShipDeNineRouterProfilePath
+                $nativeProfile = Join-Path (Get-ShipDeUserHome) ".claude"
+                if ([StringComparer]::OrdinalIgnoreCase.Equals([string]$defaultProfile, [string]$nativeProfile)) {
+                    throw "AO profile split regression: the default 9Router profile is the native Claude Code profile $nativeProfile."
+                }
+                if ([string]::IsNullOrWhiteSpace($defaultProfile)) {
+                    throw "AO profile split regression: the default 9Router profile path is empty."
+                }
+                $overrideProbe = Join-Path $behavioralTestRoot "override-profile"
+                $env:SHIPDE_NINEROUTER_PROFILE = $overrideProbe
+                if ((Get-ShipDeNineRouterProfilePath) -ne $overrideProbe) {
+                    throw "AO profile split regression: SHIPDE_NINEROUTER_PROFILE did not override the default profile path."
+                }
+                if ((Get-ShipDeNineRouterProfilePath -ProfilePath $behavioralProfile) -ne $behavioralProfile) {
+                    throw "AO profile split regression: an explicit profile path did not win over the environment override."
+                }
+            } finally {
+                if (-not [string]::IsNullOrWhiteSpace($savedProfileOverride)) {
+                    $env:SHIPDE_NINEROUTER_PROFILE = $savedProfileOverride
+                } else {
+                    Remove-Item Env:SHIPDE_NINEROUTER_PROFILE -ErrorAction SilentlyContinue
+                }
+            }
+
+            # 0b. A profile without an 'env' block must produce an actionable error that
+            # names the profile file, never a raw PowerShell property-not-found error.
+            $envlessProfile = Join-Path $behavioralTestRoot "envless-profile"
+            $envlessSettings = Join-Path $envlessProfile "settings.json"
+            New-Item -ItemType Directory -Path $envlessProfile -Force | Out-Null
+            Set-Content -Path $envlessSettings -Value '{"model":"opus"}' -Encoding UTF8
+            $envlessMessage = ""
+            try {
+                & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
+                    -ProfilePath $envlessProfile `
+                    -AiRoot $behavioralAiRoot
+            } catch {
+                $envlessMessage = [string]$_.Exception.Message
+            }
+            if ($envlessMessage -match "cannot be found on this object") {
+                throw "AO bootstrap behavioral regression: a profile without an 'env' block produced a raw property error: $envlessMessage"
+            }
+            if ($envlessMessage -notlike "*$envlessSettings*" -or $envlessMessage -notmatch "env" -or $envlessMessage -notmatch "ANTHROPIC_BASE_URL") {
+                throw "AO bootstrap behavioral regression: a profile without an 'env' block did not raise an actionable error naming the profile file. Got: $envlessMessage"
+            }
 
             # 1. Manifest bypass prevention
             $manifestBypassCaught = $false
@@ -16053,10 +16103,30 @@ function Initialize-ShipDeSupervisorState {
 function Invoke-ShipDeSupervise {
     param(
         [int]$PullRequestNumber = 0,
-        [int]$MaxRecoveryAttempts = 1
+        [int]$MaxRecoveryAttempts = 1,
+        [int]$MaxFailovers = 3,
+        [switch]$Preview,
+        [switch]$DryRun
     )
 
     Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR"
+
+    # TASK-AI-11: Preview/dry-run surface — emit banners and skip mutating
+    # operations when either flag is active.
+    if ($Preview) {
+        Write-Host "[PREVIEW] Supervisor will preview actions without executing them."
+    }
+    if ($DryRun) {
+        Write-Host "[SUPERVISOR][DRY-RUN] Supervisor will emit commands without executing them."
+    }
+
+    # TASK-AI-11: Preview/DryRun early return — when either flag is set,
+    # emit the banner above and return without performing mutating operations.
+    if ($Preview -or $DryRun) {
+        Write-Host "[PREVIEW] No mutating operations will be executed. Exiting preview/dry-run mode."
+        return "PREVIEW"
+    }
+
     Assert-ShipDeSupervisorMaxNudges -MaxNudges $SupervisorMaxNudges
 
     # Finding 3: Acquire exclusive supervisor lock BEFORE any stateful startup operations
@@ -16106,7 +16176,7 @@ function Invoke-ShipDeSupervise {
             }
         }
 
-        $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes
+        $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes -MaxFailovers $MaxFailovers
 
         if ($result -eq "READY_FOR_HUMAN_MERGE") {
             Write-Host ("[SUPERVISOR] PR #{0} at {1} has CI GREEN and durable exact-HEAD Codex PASS." -f $state.PullRequestNumber, $state.HeadSha)
@@ -16248,7 +16318,7 @@ switch ($Action) {
     "Start" { Invoke-ShipDeStart }
     "Review" { Invoke-ShipDeReview -PullRequestNumber $PullRequestNumber -NonInteractive:$NonInteractive }
     "Sync" { Invoke-ShipDeSync }
-    "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts }
+    "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts -MaxFailovers $MaxFailovers -Preview:$Preview -DryRun:$DryRun }
     "Test" { Write-Host "ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED"; return }
     default { Show-ShipDeMenu }
 }

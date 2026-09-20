@@ -269,6 +269,66 @@ repository has already had to repair once:
    with `SOURCE_MISSING`; a proof that dies for an unrelated reason cannot be
    mistaken for a detection.
 
+### What Pull Request #80 adds on top of this matrix
+
+Each of the three proofs above carried a fourth branch that the matrix never
+described. The tamper is applied to the copy, the shared rule fails to see it,
+and the script printed `DIVERGENCE_NOT_DETECTED`, `DEPENDENCY_WRONGLY_PROVEN` or
+`REPAIR_BUDGET_UNBOUNDED_NOT_DETECTED` to stderr and then exited `0`. Every
+caller of an acceptance script reads `0` as a check that passed, so a negative
+proof that missed its own tamper was reported as a negative proof that held —
+which is precisely the failure a negative proof exists to catch.
+
+Those branches now exit `2`, the code the legends in
+`tools/ai-brain/acceptance/lib/spec-status-alignment.js` ("2 the claim cannot be
+measured") and `tools/ai-brain/acceptance/lib/repair-budget-contract.js` ("2 it
+cannot be measured") already reserve for it, and the convention already merged
+for `AC-AI-10-02`, `AC-AI-21-02` and `AC-AI-24-02` under `TASK-AI-39`. No row of
+the matrix above is weakened or restated: a detected tamper still exits `1` with
+the documented string, and a missing real source still exits `2`. Only the
+undetected-tamper path moved, from `0` to `2`.
+
+That is the whole of Pull Request #80 measured against `origin/main` — 7
+insertions and 3 deletions across `ac-08-02-status-divergence.js`,
+`ac-08-04-dependency-unproven.js` and `ac-08-06-repair-budget-unbounded.js`. The
+bounded repair that the PR title names shipped on `main` through Pull Request
+#91, at merge commit `669d17c`. Integrating `origin/main` into this branch
+therefore took `main`'s `scripts/ai/control.ps1`, `main`'s copy of this Work Item
+and `main`'s `repair-budget-contract.js`: both branches implemented the same
+requirements `AI-08-R01..R09` with mutually incompatible supervisor
+decomposition, and `main`'s function names already have merged dependents written
+against them (`TASK-AI-09`, merge commit `cd2a45d`). No supervisor behavior is
+claimed or changed by this Pull Request.
+
+### Scope of this repair against the `TASK-AI-39` inventory
+
+Two limits must be stated plainly, because the exit-code convention above is a
+repair of a known defect class and is not yet the state of the repository.
+
+**This repairs three of the fourteen scripts that `main` already listed.**
+`docs/product-spec/work-items/TASK-AI-39.md` (the "Same shape outside this Work
+Item" paragraph) inventories the identical failure-path-exits-`0` shape in
+fourteen acceptance scripts and states that they are listed, not repaired, so
+that each requires its own Work Item and review. `ac-08-02-status-divergence.js`,
+`ac-08-04-dependency-unproven.js` and `ac-08-06-repair-budget-unbounded.js` are
+three of those fourteen. This Pull Request repairs exactly those three scripts
+and nothing else. Because `AGENTS.md` binds one Pull Request to one Work Item and
+the contract gate rejects a PR that edits a second Work Item file, this Pull
+Request does not edit the `TASK-AI-39` inventory. Removing these three scripts
+from that not-repaired list is left to the owner of `TASK-AI-39`, so that
+inventory is knowingly stale with respect to these three as of this head.
+
+**The remaining instances are declared open, not fixed.** An independent scan of
+`tools/ai-brain/acceptance/` at this head finds the same missed-tamper-exits-`0`
+branch still present in twenty-two scripts: `ac-07-04`, `ac-07-06`, `ac-07-13`,
+`ac-09-02`, `ac-09-04`, `ac-09-06`, `ac-27-02`, `ac-27-04`, `ac-27-06`,
+`ac-27-08`, `ac-29-02`, `ac-29-04`, `ac-29-08`, `ac-33-02`, `ac-35-06`,
+`ac-37-07`, `ac-38-08`, `ac-38-16`, `ac-41-02`, `ac-41-04`, `ac-41-06`,
+`ac-41-08`. Every one of these remains open and, per the `TASK-AI-39`
+instruction quoted above, each still requires its own Work Item and review. The
+convention this Pull Request applies to the three `ac-08` proofs is the target,
+not a claim that the repository already follows it.
+
 ## Residual limitations
 
 - Exact failure-evidence capture, the per-exact-HEAD repair budget and the
@@ -293,3 +353,14 @@ repository has already had to repair once:
 - Checkpoint restart semantics — resuming a repair across a machine reboot or a
   deleted worktree — remain owned by `TASK-AI-09`; this Work Item only persists
   the fields `TASK-AI-09` will resume.
+- This Pull Request does not deliver this Work Item, and must not be read as the
+  delivery of bounded repair. `TASK-AI-08` shipped on `main` through Pull Request
+  #91 (merge commit `669d17c`). Pull Request #80 is a duplicate branch that
+  carried the same requirements with an incompatible decomposition; it was
+  reintegrated onto `main` by taking `main` as the baseline, and what survives of
+  it is the exit-code repair recorded in the section above. Register row 141
+  still records `BACKLOG` and this Pull Request does not write it, so the
+  `Status` cell of the Control table remains `BACKLOG` and `AC-AI-08-01`
+  continues to hold. Whether the branch is then merged for its three exit-code
+  repairs or closed as superseded is the human owner's decision, not the
+  author's.

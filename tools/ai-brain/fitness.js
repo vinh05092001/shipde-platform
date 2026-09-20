@@ -73,48 +73,149 @@ const GRADE_SOURCE = {
   DECLARED: 'declared',
   ASSUMED: 'assumed',
   DERIVED: 'derived',
+  PRODUCTION: 'productionResults',
+  LOCAL: 'localEvaluation',
+  EXTERNAL: 'externalEvidence',
+  INFERRED: 'inferred',
+  UNKNOWN: 'unknown',
+};
+
+/** Evidence layers with fixed precedence (TASK-AI-46). */
+const EVIDENCE_LAYER = {
+  PRODUCTION: 'productionResults',
+  LOCAL: 'localEvaluation',
+  EXTERNAL: 'externalEvidence',
+  INFERRED: 'inferred',
 };
 
 /** Recorded outcomes a derivation needs before it may move a grade. */
 const GRADE_EVIDENCE_FLOOR = 3;
 
+function extractGradeFromEvidence(evidence) {
+  if (evidence === undefined || evidence === null) return null;
+  if (typeof evidence === 'number' && Number.isFinite(evidence) && evidence >= 1 && evidence <= 4) {
+    return evidence;
+  }
+  if (typeof evidence === 'object') {
+    const candidate =
+      evidence.grade !== undefined
+        ? evidence.grade
+        : evidence.codingGrade !== undefined
+          ? evidence.codingGrade
+          : evidence.class !== undefined
+            ? evidence.class
+            : null;
+    const g = Number(candidate);
+    if (Number.isFinite(g) && g >= 1 && g <= 4) return g;
+    if (evidence.benchmark && Number.isFinite(Number(evidence.score))) {
+      try {
+        const { gradeFromBenchmark } = require('./benchmarks');
+        // The score is read on the scale its record declares; an unmappable one
+        // grades nothing rather than falling back to the lowest rung.
+        return gradeFromBenchmark(
+          evidence.benchmark,
+          evidence.score,
+          evidence.score_scale || evidence.scoreScale
+        );
+      } catch (e) {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
 /**
- * A model's coding class together with its provenance (AI-27-R03, R04).
+ * A model's coding class together with its provenance and evidence layer (AI-27-R03, AI-46).
  *
- *   { class, graded, source, declared?, error? }
+ * Precedence:
+ *   productionResults > localEvaluation > externalEvidence > declared > assumed/UNKNOWN
  *
- *   - a declared ladder member  -> graded: true,  source: 'declared'
- *   - an absent grade           -> graded: false, source: 'assumed', class STANDARD
- *   - a value outside 1..4      -> graded: false, source: 'assumed', plus an
- *     `error` naming the model and the value. The class stays STANDARD so the
- *     dispatch arithmetic is unchanged, but a typo is a finding rather than a
- *     confident middle grade.
- *
- * The class always agrees with gradeOf(), so making the assumption visible never
- * changes which work the fleet may take.
+ * Exposes the resolved grade plus which layer it came from, so a caller can
+ * tell measurement from inference.
  */
-function resolveGrade(offering) {
-  const declared = offering && offering.codingGrade;
-  if (declared === undefined || declared === null) {
-    return { class: Difficulty.STANDARD, graded: false, source: GRADE_SOURCE.ASSUMED };
+function resolveGrade(offering, options) {
+  const opts = options || {};
+  const o = offering || {};
+
+  // 1. productionResults (measured from real runs)
+  const prod = o.productionResults || opts.productionResults;
+  const prodGrade = extractGradeFromEvidence(prod);
+  if (prodGrade !== null) {
+    const r = { class: prodGrade, graded: true, source: GRADE_SOURCE.PRODUCTION };
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.PRODUCTION,
+      enumerable: false,
+      writable: true,
+    });
+    return r;
   }
 
-  const g = Number(declared);
-  if (!Number.isFinite(g) || g < 1 || g > 4) {
-    return {
-      class: Difficulty.STANDARD,
-      graded: false,
-      source: GRADE_SOURCE.ASSUMED,
-      declared,
-      error:
-        'out-of-ladder grade: ' +
-        ((offering && offering.id) || 'unknown') +
-        ' declares ' +
+  // 2. localEvaluation (smoke or promptfoo run on this machine)
+  const local = o.localEvaluation || opts.localEvaluation;
+  const localGrade = extractGradeFromEvidence(local);
+  if (localGrade !== null) {
+    const r = { class: localGrade, graded: true, source: GRADE_SOURCE.LOCAL };
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.LOCAL,
+      enumerable: false,
+      writable: true,
+    });
+    return r;
+  }
+
+  // 3. externalEvidence (benchmarks.json)
+  let ext = o.externalEvidence || opts.externalEvidence;
+  if (!ext && (o.model || o.id)) {
+    // No catch: damaged evidence must fail closed, not read as "no evidence".
+    const { findBenchmarkEvidence, loadBenchmarks } = require('./benchmarks');
+    const bmarks = opts.benchmarks || loadBenchmarks();
+    const match = findBenchmarkEvidence(bmarks, o.model || o.id, o.modelVersion);
+    if (match) ext = match;
+  }
+  const extGrade = extractGradeFromEvidence(ext);
+  if (extGrade !== null) {
+    // The record travels with the grade: a grade is only as good as the evidence
+    // it names, and the operator has to be able to see which record it was.
+    const r = { class: extGrade, graded: true, source: GRADE_SOURCE.EXTERNAL, evidence: ext };
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.EXTERNAL,
+      enumerable: false,
+      writable: true,
+    });
+    return r;
+  }
+
+  // 4. Declared grade (backward compatibility for explicit declarations)
+  const declared = o.codingGrade;
+  if (declared !== undefined && declared !== null) {
+    const g = Number(declared);
+    if (!Number.isFinite(g) || g < 1 || g > 4) {
+      const r = {
+        class: Difficulty.STANDARD,
+        graded: false,
+        source: GRADE_SOURCE.ASSUMED,
         declared,
-    };
+        error: 'out-of-ladder grade: ' + (o.id || 'unknown') + ' declares ' + declared,
+      };
+      Object.defineProperty(r, 'layer', { value: null, enumerable: false, writable: true });
+      return r;
+    }
+    const r = { class: g, graded: true, source: GRADE_SOURCE.DECLARED };
+    Object.defineProperty(r, 'layer', { value: 'declared', enumerable: false, writable: true });
+    return r;
   }
 
-  return { class: g, graded: true, source: GRADE_SOURCE.DECLARED };
+  // 5. Unrecorded model: UNKNOWN if requested, else legacy STANDARD fallback
+  if (opts.strict || opts.unknownIfUnrecorded || o.unknownIfUnrecorded) {
+    const r = { class: 'UNKNOWN', graded: false, source: GRADE_SOURCE.UNKNOWN };
+    Object.defineProperty(r, 'layer', { value: null, enumerable: false, writable: true });
+    return r;
+  }
+
+  const r = { class: Difficulty.STANDARD, graded: false, source: GRADE_SOURCE.ASSUMED };
+  Object.defineProperty(r, 'layer', { value: null, enumerable: false, writable: true });
+  return r;
 }
 
 /**
@@ -210,49 +311,198 @@ function deriveGrade(offering, outcomes, options) {
  * BELOW what it writes, and a model must be declared explicitly to review at
  * the level it codes.
  */
-function reviewGradeOf(offering) {
-  const explicit = Number(offering && offering.reviewGrade);
-  if (Number.isFinite(explicit) && explicit >= 1 && explicit <= 4) return explicit;
-  return Math.max(1, gradeOf(offering) - 1);
+function extractReviewGradeFromEvidence(evidence) {
+  if (evidence === undefined || evidence === null) return null;
+  if (typeof evidence === 'object') {
+    const candidate =
+      evidence.reviewGrade !== undefined
+        ? evidence.reviewGrade
+        : evidence.reviewClass !== undefined
+          ? evidence.reviewClass
+          : null;
+    const g = Number(candidate);
+    if (Number.isFinite(g) && g >= 1 && g <= 4) return g;
+  }
+  return null;
 }
 
 /**
- * A model's review class together with its provenance (AI-41-R01..R06).
+ * The hardest class this model may REVIEW.
+ *
+ * Reviewing is not the easier half of writing. An author needs to produce one
+ * correct solution; a reviewer has to hold the specification, the diff and the
+ * space of things that could be wrong at once, and say so against an author
+ * that already believes it is done. So an unrated model reviews one class
+ * BELOW what it writes, and a model must be declared explicitly to review at
+ * the level it codes.
+ *
+ * Real review evidence (productionResults > localEvaluation > externalEvidence)
+ * overrides the inferred one-below rule (TASK-AI-46).
+ */
+function reviewGradeOf(offering, options) {
+  const opts = options || {};
+  const o = offering || {};
+
+  const prod = extractReviewGradeFromEvidence(o.productionResults || opts.productionResults);
+  if (prod !== null) return prod;
+  const local = extractReviewGradeFromEvidence(o.localEvaluation || opts.localEvaluation);
+  if (local !== null) return local;
+  const ext = extractReviewGradeFromEvidence(o.externalEvidence || opts.externalEvidence);
+  if (ext !== null) return ext;
+
+  const explicit = Number(o.reviewGrade);
+  if (Number.isFinite(explicit) && explicit >= 1 && explicit <= 4) return explicit;
+  return Math.max(1, gradeOf(o) - 1);
+}
+
+/**
+ * A model's review class together with its provenance (AI-41-R01..R06, AI-46).
  *
  *   { class, graded, source, declared?, error? }
  *
- *   - a declared ladder member  -> graded: true,  source: 'declared'
- *   - an absent review grade    -> graded: false, source: 'assumed', class Math.max(1, gradeOf(offering) - 1)
- *   - a value outside 1..4      -> graded: false, source: 'assumed', class Math.max(1, gradeOf(offering) - 1),
- *     plus an `error` naming the model and the value. The class stays one-below
- *     so the dispatch arithmetic is unchanged, but a typo is a finding rather
- *     than a silent clamp.
+ * Precedence:
+ *   productionResults > localEvaluation > externalEvidence > declared > inferred fallback
  *
- * The class always agrees with reviewGradeOf().
+ * The existing rule in reviewGradeOf (review grade defaults one class below the
+ * coding grade) is marked as INFERRED (layer: 'inferred', inferred: true) and
+ * is overridden by any real review evidence.
  */
-function resolveReviewGrade(offering) {
-  const declared = offering && offering.reviewGrade;
-  const fallback = Math.max(1, gradeOf(offering) - 1);
+function resolveReviewGrade(offering, options) {
+  const opts = options || {};
+  const o = offering || {};
+
+  // 1. Real review evidence in productionResults
+  const prod = extractReviewGradeFromEvidence(o.productionResults || opts.productionResults);
+  if (prod !== null) {
+    const r = { class: prod, graded: true, source: GRADE_SOURCE.PRODUCTION };
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.PRODUCTION,
+      enumerable: false,
+      writable: true,
+    });
+    Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
+    return r;
+  }
+
+  // 2. Real review evidence in localEvaluation
+  const local = extractReviewGradeFromEvidence(o.localEvaluation || opts.localEvaluation);
+  if (local !== null) {
+    const r = { class: local, graded: true, source: GRADE_SOURCE.LOCAL };
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.LOCAL,
+      enumerable: false,
+      writable: true,
+    });
+    Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
+    return r;
+  }
+
+  // 3. Real review evidence in externalEvidence
+  const ext = extractReviewGradeFromEvidence(o.externalEvidence || opts.externalEvidence);
+  if (ext !== null) {
+    const r = { class: ext, graded: true, source: GRADE_SOURCE.EXTERNAL };
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.EXTERNAL,
+      enumerable: false,
+      writable: true,
+    });
+    Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
+    return r;
+  }
+
+  // 4. Declared reviewGrade
+  const declared = o.reviewGrade;
+  const codingClass = gradeOf(o);
+  const fallback = Math.max(1, codingClass - 1);
+
   if (declared === undefined || declared === null) {
-    return { class: fallback, graded: false, source: GRADE_SOURCE.ASSUMED };
+    const r = { class: fallback, graded: false, source: GRADE_SOURCE.ASSUMED };
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.INFERRED,
+      enumerable: false,
+      writable: true,
+    });
+    Object.defineProperty(r, 'inferred', { value: true, enumerable: false, writable: true });
+    return r;
   }
 
   const g = Number(declared);
   if (!Number.isFinite(g) || g < 1 || g > 4) {
-    return {
+    const r = {
       class: fallback,
       graded: false,
       source: GRADE_SOURCE.ASSUMED,
       declared,
-      error:
-        'out-of-ladder review grade: ' +
-        ((offering && offering.id) || 'unknown') +
-        ' declares ' +
-        declared,
+      error: 'out-of-ladder review grade: ' + (o.id || 'unknown') + ' declares ' + declared,
     };
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.INFERRED,
+      enumerable: false,
+      writable: true,
+    });
+    Object.defineProperty(r, 'inferred', { value: true, enumerable: false, writable: true });
+    return r;
   }
 
-  return { class: g, graded: true, source: GRADE_SOURCE.DECLARED };
+  const r = { class: g, graded: true, source: GRADE_SOURCE.DECLARED };
+  Object.defineProperty(r, 'layer', { value: 'declared', enumerable: false, writable: true });
+  Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
+  return r;
+}
+
+/**
+ * Resolves capability across coding and review grades with explicit layer provenance.
+ *
+ * Invariants:
+ * - Precedence: productionResults > localEvaluation > externalEvidence > declared > inferred
+ * - A model with no record is UNKNOWN, never "weak".
+ * - Review grade defaults to one-below coding grade (INFERRED) and is overridden by real evidence.
+ */
+function resolveCapability(offering, options) {
+  const coding = resolveGrade(offering, Object.assign({ unknownIfUnrecorded: true }, options));
+  const review = resolveReviewGrade(offering, options);
+  const codingLayer = coding.layer || (coding.graded ? 'declared' : null);
+  const reviewLayer = review.layer || (review.graded ? 'declared' : EVIDENCE_LAYER.INFERRED);
+
+  return {
+    class: coding.class,
+    grade: coding.class,
+    layer: codingLayer,
+    source: coding.source,
+    reviewGrade: review.class,
+    reviewLayer,
+    reviewInferred: Boolean(review.inferred),
+    coding,
+    review,
+  };
+}
+
+/**
+ * The operator-visible proof behind a grade record (TASK-AI-46 AC-46-02).
+ *
+ * A grade that came from anything other than verified external evidence is not
+ * reported as if it had, and a grade whose evidence was rejected says so with
+ * the rejection. Returns null when there is nothing to show, so the caller
+ * prints no line rather than a reassuring one.
+ */
+function formatGradeReason(gradeRecord) {
+  const record = gradeRecord || {};
+  if (record.error) return `No benchmark evidence: ${record.error}`;
+  if (record.source !== GRADE_SOURCE.EXTERNAL) return null;
+  const evidence = record.evidence;
+  if (!evidence || !evidence.benchmark) return null;
+  const name =
+    evidence.benchmark + (evidence.benchmarkVersion ? ` ${evidence.benchmarkVersion}` : '');
+  const scale = evidence.scoreScale || evidence.score_scale;
+  let shown;
+  if (Number.isFinite(Number(evidence.score))) {
+    shown =
+      scale === 'fraction' ? `${Math.round(Number(evidence.score) * 100)}%` : `${evidence.score}%`;
+  } else {
+    shown = 'an unreadable score';
+  }
+  const url = evidence.sourceUrl || evidence.source_url || 'no source recorded';
+  return `Graded from ${name} = ${shown} (${url}), not from a self-declared grade`;
 }
 
 function isSufficient(offering, difficulty) {
@@ -473,11 +723,19 @@ function runwayReport(offerings, difficulty, headrooms, history, options) {
   };
 }
 
+function isCapable(offering, difficulty, options) {
+  const cap = resolveCapability(offering, options);
+  const grade = cap.coding ? cap.coding.class : gradeOf(offering);
+  if (grade === 'UNKNOWN' || typeof grade !== 'number') return false;
+  return grade >= difficulty;
+}
+
 module.exports = {
   Difficulty,
   DIFFICULTY_NAMES,
   DEFAULT_TOKENS_PER_TASK,
   GRADE_SOURCE,
+  EVIDENCE_LAYER,
   GRADE_EVIDENCE_FLOOR,
   resolveGrade,
   gradeEvidence,
@@ -485,6 +743,9 @@ module.exports = {
   gradeOf,
   reviewGradeOf,
   resolveReviewGrade,
+  resolveCapability,
+  formatGradeReason,
+  isCapable,
   isSufficient,
   remainingTokens,
   runwayOf,

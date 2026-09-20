@@ -179,6 +179,7 @@ describe('Spare capacity goes to review', () => {
   test('utilisation reports idle slots so waste is visible', () => {
     const plan = planDispatch([authoring], pool, {
       limits: { maxImplementationAgents: 3, maxReviewAgents: 2 },
+      governedDecision: 'DEC-017',
       now: NOW,
     });
     assert.equal(plan.utilisation.idleImplementation, 2);
