@@ -6,13 +6,15 @@ import {
   HttpStatus,
   Optional,
 } from '@nestjs/common';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, randomInt } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RateLimitService } from './rate-limit.service';
-import { hashPassword } from './password.util';
+import { hashPassword, verifyPassword } from './password.util';
+import { resolveAccessTokenSecret, signAccessToken } from './token.util';
 import { VERIFICATION_ADAPTER } from './auth.tokens';
 import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
-import { formatStructuredLog } from '@shipde/config';
+import { formatStructuredLog, AppConfig } from '@shipde/config';
+import { APP_CONFIG } from '../config.token';
 import { RoleEnum } from '@prisma/client';
 
 export interface RegisterDto {
@@ -38,6 +40,24 @@ export interface ResendVerificationDto {
   identifier: string;
   channel: 'email' | 'phone';
 }
+
+export interface LoginDto {
+  identifier: string;
+  password: string;
+  remember_device?: boolean;
+}
+
+export interface LoginOtpRequestDto {
+  identifier: string;
+}
+
+export interface LoginOtpVerifyDto {
+  identifier: string;
+  otp: string;
+}
+
+/** Max failed OTP verify attempts per identifier before the token is consumed (BR-AUTH-12). */
+const OTP_MAX_VERIFY_ATTEMPTS = 5;
 
 export interface CanonicalFieldError {
   field: string;
@@ -76,7 +96,10 @@ export class AuthService {
     @Inject(RateLimitService) private readonly rateLimitService: RateLimitService,
     @Optional()
     @Inject(VERIFICATION_ADAPTER)
-    private readonly deliveryAdapter?: IVerificationDeliveryAdapter
+    private readonly deliveryAdapter?: IVerificationDeliveryAdapter,
+    @Optional()
+    @Inject(APP_CONFIG)
+    private readonly config?: AppConfig
   ) {}
 
   /**
@@ -340,11 +363,14 @@ export class AuthService {
     const rawToken = dto.token.trim();
     const hashedToken = this.hashSecret(rawToken);
 
-    // Look up by raw token or hashed digest (backward compatible with seed fixtures)
+    // Look up by raw token or hashed digest (backward compatible with seed fixtures).
+    // FEAT-AUTH-03 (BR-AUTH-12): only VERIFICATION-purpose tokens may activate an
+    // account; a LOGIN OTP can never be used here and vice versa.
     const tokenRecord = await this.prisma.verificationToken.findFirst({
       where: {
         token: { in: [rawToken, hashedToken] },
         channel: 'email',
+        purpose: 'VERIFICATION',
       },
       include: {
         user: true,
@@ -448,11 +474,14 @@ export class AuthService {
       );
     }
 
-    // Look up latest verification token for this phone
+    // Look up latest verification token for this phone.
+    // FEAT-AUTH-03 (BR-AUTH-12): only VERIFICATION-purpose tokens may verify a
+    // channel; a LOGIN OTP can never satisfy account verification.
     const tokenRecord = await this.prisma.verificationToken.findFirst({
       where: {
         identifier: phone,
         channel: 'phone',
+        purpose: 'VERIFICATION',
       },
       orderBy: {
         created_at: 'desc',
@@ -709,6 +738,530 @@ export class AuthService {
   }
 
   /**
+   * Request a login OTP (FEAT-AUTH-03 / SCR-AUTH-01 "if configured" / BR-AUTH-12).
+   * Gated by AUTH_LOGIN_OTP_ENABLED; generic OTP_SENT response (CD-4..5, CD-7).
+   */
+  async requestLoginOtp(dto: LoginOtpRequestDto, clientIp: string, correlationId: string) {
+    if (this.config && !this.config.AUTH_LOGIN_OTP_ENABLED) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'AUTH_OTP_LOGIN_DISABLED',
+        'Đăng nhập bằng mã OTP chưa được bật cho hệ thống.',
+        false,
+        'Vui lòng đăng nhập bằng mật khẩu'
+      );
+    }
+
+    if (!dto.identifier || dto.identifier.trim().length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Email hoặc số điện thoại không được để trống',
+        false,
+        undefined,
+        [
+          {
+            field: 'identifier',
+            code: 'REQUIRED',
+            message: 'Email hoặc số điện thoại không được để trống',
+          },
+        ]
+      );
+    }
+
+    const normalized = this.normalizeIdentifier(dto.identifier);
+    if (!normalized) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Định dạng email hoặc số điện thoại không hợp lệ',
+        false,
+        undefined,
+        [
+          {
+            field: 'identifier',
+            code: 'INVALID_FORMAT',
+            message: 'Email hoặc số điện thoại không đúng định dạng Việt Nam',
+          },
+        ]
+      );
+    }
+
+    // BR-AUTH-12 limits: IP max 10/hour; identifier 60s cooldown + max 5/hour (recorded upfront)
+    const ipCheck = await this.rateLimitService.checkLoginOtpIpLimit(clientIp);
+    if (!ipCheck.allowed) {
+      await this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_OTP_RATE_LIMITED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { scope: 'ip' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        ipCheck.reason || 'Quá nhiều yêu cầu mã OTP. Vui lòng thử lại sau.',
+        true,
+        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 3600} giây trước khi thử lại`
+      );
+    }
+    const idCheck = await this.rateLimitService.checkLoginOtpRequestLimit(normalized.stored);
+    if (!idCheck.allowed) {
+      await this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_OTP_RATE_LIMITED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { scope: 'identifier' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        idCheck.reason || 'Quá nhiều yêu cầu mã OTP cho tài khoản này.',
+        true,
+        `Vui lòng chờ ${idCheck.retryAfterSeconds || 60} giây trước khi thử lại`
+      );
+    }
+    await this.rateLimitService.recordLoginOtpIpAttempt(clientIp);
+    await this.rateLimitService.recordLoginOtpRequest(normalized.stored, 60);
+
+    const channel: 'email' | 'phone' = normalized.email ? 'email' : 'phone';
+    const user = await this.prisma.user.findFirst({
+      where: normalized.email ? { email: normalized.email } : { phone: normalized.phone },
+    });
+
+    const genericResponse = {
+      data: {
+        status: 'OTP_SENT' as const,
+        channel,
+        recipient_masked: this.maskIdentifier(normalized.stored),
+        cooldown_seconds: 60,
+        expires_in_seconds: 300,
+        message: 'Nếu tài khoản tồn tại, mã OTP đăng nhập đã được gửi đến bạn.',
+      },
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
+
+    // Verified-channel-only delivery (CD-5): unknown identifier or unverified channel
+    // receives the identical generic response with no delivery.
+    const channelVerified =
+      !!user &&
+      ((channel === 'email' && !!user.email_verified_at) ||
+        (channel === 'phone' && !!user.phone_verified_at));
+
+    if (!user || !channelVerified) {
+      await this.logAudit({
+        merchantId: user?.merchant_id,
+        userId: user?.id,
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_OTP_REQUESTED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: {
+          delivered: false,
+          reason: user ? 'channel_unverified' : 'unknown_identifier',
+        },
+      });
+      return genericResponse;
+    }
+
+    const rawOtp = randomInt(100000, 1000000).toString();
+    const hashedOtp = this.hashSecret(rawOtp);
+    const tokenValue = this.hashSecret(randomBytes(32).toString('hex'));
+
+    await this.prisma.verificationToken.create({
+      data: {
+        user_id: user.id,
+        token: tokenValue,
+        channel,
+        identifier: normalized.stored,
+        otp: hashedOtp,
+        purpose: 'LOGIN',
+        expires_at: new Date(Date.now() + 5 * 60 * 1000),
+      },
+    });
+
+    if (this.deliveryAdapter) {
+      await this.deliveryAdapter.sendVerification({
+        channel,
+        recipient: (channel === 'email' ? user.email : user.phone) as string,
+        otp: rawOtp,
+      });
+    }
+
+    await this.logAudit({
+      merchantId: user.merchant_id,
+      userId: user.id,
+      actor: this.hashIp(clientIp),
+      action: 'AUTH_LOGIN_OTP_REQUESTED',
+      resource: `user:${user.id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { delivered: true, channel },
+    });
+
+    return genericResponse;
+  }
+
+  private maskIdentifier(identifier: string): string {
+    if (identifier.includes('@')) {
+      const [local, domain] = identifier.split('@');
+      const visible = local.slice(0, 1);
+      return `${visible}${'*'.repeat(Math.max(3, local.length - 1))}@${domain}`;
+    }
+    if (identifier.length <= 4) return '*'.repeat(identifier.length);
+    return `${identifier.slice(0, 4)}${'*'.repeat(Math.max(3, identifier.length - 8))}${identifier.slice(-4)}`;
+  }
+
+  /**
+   * Verify a login OTP and issue a session (FEAT-AUTH-03 / SCR-AUTH-01 / BR-AUTH-12).
+   * Error semantics follow FEAT-AUTH-01: OTP_ALREADY_CONSUMED / OTP_EXPIRED (410),
+   * INVALID_OTP (400), OTP_MAX_ATTEMPTS_EXCEEDED (429). Status is re-checked at verify.
+   */
+  async verifyLoginOtp(dto: LoginOtpVerifyDto, clientIp: string, correlationId: string) {
+    if (this.config && !this.config.AUTH_LOGIN_OTP_ENABLED) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'AUTH_OTP_LOGIN_DISABLED',
+        'Đăng nhập bằng mã OTP chưa được bật cho hệ thống.',
+        false,
+        'Vui lòng đăng nhập bằng mật khẩu'
+      );
+    }
+
+    const fields: CanonicalFieldError[] = [];
+    if (!dto.identifier || dto.identifier.trim().length === 0) {
+      fields.push({
+        field: 'identifier',
+        code: 'REQUIRED',
+        message: 'Email hoặc số điện thoại không được để trống',
+      });
+    }
+    if (!dto.otp || dto.otp.trim().length === 0) {
+      fields.push({ field: 'otp', code: 'REQUIRED', message: 'Mã OTP không được để trống' });
+    }
+    if (fields.length > 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Thông tin xác thực OTP không hợp lệ',
+        false,
+        'Vui lòng kiểm tra lại thông tin',
+        fields
+      );
+    }
+
+    const normalized = this.normalizeIdentifier(dto.identifier);
+    if (!normalized) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Định dạng email hoặc số điện thoại không hợp lệ',
+        false,
+        undefined,
+        [
+          {
+            field: 'identifier',
+            code: 'INVALID_FORMAT',
+            message: 'Email hoặc số điện thoại không đúng định dạng Việt Nam',
+          },
+        ]
+      );
+    }
+    const channel: 'email' | 'phone' = normalized.email ? 'email' : 'phone';
+
+    const otpLimit = await this.rateLimitService.checkOtpAttemptLimit(normalized.stored);
+    if (!otpLimit.allowed) {
+      await this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_OTP_RATE_LIMITED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { scope: 'otp_attempts' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        otpLimit.reason || 'Quá nhiều lần thử mã OTP. Vui lòng thử lại sau.',
+        true,
+        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây trước khi thử lại`
+      );
+    }
+
+    const tokenRecord = await this.prisma.verificationToken.findFirst({
+      where: { identifier: normalized.stored, channel, purpose: 'LOGIN' },
+      orderBy: { created_at: 'desc' },
+      include: { user: { include: { merchant: true } } },
+    });
+
+    if (!tokenRecord) {
+      await this.rateLimitService.recordOtpFailure(normalized.stored);
+      await this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_OTP_FAILED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { reason: 'unknown_or_invalid' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_OTP',
+        'Mã OTP không chính xác hoặc không tồn tại',
+        false,
+        'Vui lòng kiểm tra lại mã OTP hoặc yêu cầu gửi mã mới'
+      );
+    }
+
+    if (tokenRecord.consumed_at) {
+      await this.logAudit({
+        merchantId: tokenRecord.user.merchant_id,
+        userId: tokenRecord.user.id,
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_OTP_FAILED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { reason: 'already_consumed' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.GONE,
+        'OTP_ALREADY_CONSUMED',
+        'Mã OTP đã được sử dụng',
+        false,
+        'Vui lòng yêu cầu gửi mã OTP mới nếu bạn chưa đăng nhập thành công'
+      );
+    }
+
+    if (tokenRecord.expires_at.getTime() <= Date.now()) {
+      await this.logAudit({
+        merchantId: tokenRecord.user.merchant_id,
+        userId: tokenRecord.user.id,
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_OTP_FAILED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { reason: 'expired' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.GONE,
+        'OTP_EXPIRED',
+        'Mã OTP đã hết hạn',
+        false,
+        'Vui lòng yêu cầu gửi mã OTP mới'
+      );
+    }
+
+    const hashedOtp = this.hashSecret(dto.otp.trim());
+    if (tokenRecord.otp !== hashedOtp) {
+      const failCount = await this.rateLimitService.recordOtpFailure(normalized.stored);
+      if (failCount >= OTP_MAX_VERIFY_ATTEMPTS) {
+        await this.prisma.verificationToken.update({
+          where: { id: tokenRecord.id },
+          data: { consumed_at: new Date() },
+        });
+        await this.logAudit({
+          merchantId: tokenRecord.user.merchant_id,
+          userId: tokenRecord.user.id,
+          actor: this.hashIp(clientIp),
+          action: 'AUTH_LOGIN_OTP_FAILED',
+          resource: 'auth/login',
+          correlationId,
+          ipAddress: this.hashIp(clientIp),
+          details: { reason: 'max_attempts_exceeded' },
+        });
+        throw new CanonicalApiException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          'OTP_MAX_ATTEMPTS_EXCEEDED',
+          'Bạn đã nhập sai mã OTP quá số lần cho phép',
+          false,
+          'Vui lòng yêu cầu gửi mã OTP mới'
+        );
+      }
+      await this.logAudit({
+        merchantId: tokenRecord.user.merchant_id,
+        userId: tokenRecord.user.id,
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_OTP_FAILED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { reason: 'invalid_otp' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_OTP',
+        'Mã OTP không chính xác',
+        false,
+        `Vui lòng kiểm tra lại mã OTP (còn ${OTP_MAX_VERIFY_ATTEMPTS - failCount} lần thử)`
+      );
+    }
+
+    // Atomic consume before any session issuance; blocked statuses consume the OTP
+    // because channel possession was proven, but no session is created (CD-6).
+    await this.prisma.verificationToken.update({
+      where: { id: tokenRecord.id },
+      data: { consumed_at: new Date() },
+    });
+
+    await this.assertStatusAllowsLogin(tokenRecord.user, clientIp, correlationId);
+
+    await this.rateLimitService.resetOtpAttempts(normalized.stored);
+
+    return this.createLoginSessionAndResponse(
+      tokenRecord.user,
+      false,
+      clientIp,
+      correlationId,
+      'AUTH_LOGIN_OTP_SUCCESS'
+    );
+  }
+
+  /**
+   * Password login (FEAT-AUTH-03 / UC-AUTH-01 / BR-AUTH-11..13).
+   * Identical `INVALID_CREDENTIALS` response for unknown identifier and wrong password (CD-7).
+   */
+  async login(dto: LoginDto, clientIp: string, correlationId: string) {
+    const fields: CanonicalFieldError[] = [];
+    if (!dto.identifier || dto.identifier.trim().length === 0) {
+      fields.push({
+        field: 'identifier',
+        code: 'REQUIRED',
+        message: 'Email hoặc số điện thoại không được để trống',
+      });
+    }
+    if (!dto.password) {
+      fields.push({ field: 'password', code: 'REQUIRED', message: 'Mật khẩu không được để trống' });
+    }
+    if (fields.length > 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Thông tin đăng nhập không hợp lệ',
+        false,
+        'Vui lòng kiểm tra lại thông tin đăng nhập',
+        fields
+      );
+    }
+
+    const normalized = this.normalizeIdentifier(dto.identifier);
+    if (!normalized) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Định dạng email hoặc số điện thoại không hợp lệ',
+        false,
+        undefined,
+        [
+          {
+            field: 'identifier',
+            code: 'INVALID_FORMAT',
+            message: 'Email hoặc số điện thoại không đúng định dạng Việt Nam',
+          },
+        ]
+      );
+    }
+
+    // BR-AUTH-11: IP gate (max 10 attempts / 15 minutes), recorded upfront
+    const ipCheck = await this.rateLimitService.checkLoginIpLimit(clientIp);
+    if (!ipCheck.allowed) {
+      await this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_RATE_LIMITED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { scope: 'ip' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        ipCheck.reason || 'Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau.',
+        true,
+        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 900} giây trước khi thử lại`
+      );
+    }
+    await this.rateLimitService.recordLoginIpAttempt(clientIp);
+
+    // BR-AUTH-11: identifier failure gate (max 5 failures / 15 minutes)
+    const identifierCheck = await this.rateLimitService.checkLoginIdentifierFailureLimit(
+      normalized.stored
+    );
+    if (!identifierCheck.allowed) {
+      await this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_RATE_LIMITED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { scope: 'identifier' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        identifierCheck.reason || 'Quá nhiều lần đăng nhập thất bại. Vui lòng thử lại sau.',
+        true,
+        `Vui lòng chờ ${identifierCheck.retryAfterSeconds || 900} giây trước khi thử lại`
+      );
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          ...(normalized.email ? [{ email: normalized.email }] : []),
+          ...(normalized.phone ? [{ phone: normalized.phone }] : []),
+        ],
+      },
+      include: { merchant: true },
+    });
+
+    const passwordMatches = user
+      ? await verifyPassword(dto.password, user.password_hash).catch(() => false)
+      : false;
+
+    if (!user || !passwordMatches) {
+      await this.rateLimitService.recordLoginIdentifierFailure(normalized.stored);
+      await this.logAudit({
+        merchantId: user?.merchant_id,
+        userId: user?.id,
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_LOGIN_FAILED',
+        resource: 'auth/login',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { reason: 'invalid_credentials' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.UNAUTHORIZED,
+        'INVALID_CREDENTIALS',
+        'Email/số điện thoại hoặc mật khẩu không chính xác',
+        false,
+        'Vui lòng thử lại hoặc đặt lại mật khẩu nếu bạn đã quên'
+      );
+    }
+
+    await this.assertStatusAllowsLogin(user, clientIp, correlationId);
+
+    // Success resets the identifier failure counter only (the IP counter is not reset, CD-9)
+    await this.rateLimitService.resetLoginIdentifierFailures(normalized.stored);
+
+    return this.createLoginSessionAndResponse(
+      user,
+      dto.remember_device === true,
+      clientIp,
+      correlationId,
+      'AUTH_LOGIN_SUCCESS'
+    );
+  }
+
+  /**
    * BR-AUTH-03 / BR-AUTH-10: resolve duplicate / pending account conflicts
    */
   private async resolveExistingAccountConflict(
@@ -790,6 +1343,189 @@ export class AuthService {
     }
 
     return null;
+  }
+
+  /**
+   * Distinct, spec-mandated 403 outcomes for non-active statuses (BR-AUTH-13 / CD-6).
+   * Every blocked attempt is audited without credentials.
+   */
+  private async assertStatusAllowsLogin(
+    user: { id: string; merchant_id: string; status: string },
+    clientIp: string,
+    correlationId: string
+  ): Promise<void> {
+    if (user.status === 'active') return;
+
+    const blockedByStatus: Record<string, { code: string; message: string; next_action: string }> =
+      {
+        pending_verification: {
+          code: 'AUTH_PENDING_VERIFICATION',
+          message:
+            'Tài khoản chưa được xác thực. Vui lòng xác thực qua liên kết email hoặc mã OTP đã gửi.',
+          next_action: 'Mở liên kết xác thực trong email hoặc yêu cầu gửi lại mã xác thực',
+        },
+        suspended: {
+          code: 'AUTH_ACCOUNT_SUSPENDED',
+          message: 'Tài khoản đã bị tạm ngưng. Vui lòng liên hệ bộ phận hỗ trợ Ship Dễ.',
+          next_action: 'Liên hệ CSKH Ship Dễ để được hỗ trợ kích hoạt lại tài khoản',
+        },
+        disabled: {
+          code: 'AUTH_ACCOUNT_DISABLED',
+          message: 'Tài khoản đã bị vô hiệu hóa.',
+          next_action: 'Liên hệ chủ cửa hàng hoặc CSKH Ship Dễ để biết thêm chi tiết',
+        },
+        invited: {
+          code: 'AUTH_INVITATION_PENDING',
+          message: 'Lời mời tham gia cửa hàng chưa được chấp nhận.',
+          next_action: 'Làm theo hướng dẫn trong lời mời để kích hoạt tài khoản',
+        },
+      };
+
+    const blocked = blockedByStatus[user.status];
+    if (!blocked) return;
+
+    await this.logAudit({
+      merchantId: user.merchant_id,
+      userId: user.id,
+      actor: `user:${user.id}`,
+      action: 'AUTH_LOGIN_BLOCKED_STATUS',
+      resource: `user:${user.id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { status: user.status },
+    });
+
+    throw new CanonicalApiException(
+      HttpStatus.FORBIDDEN,
+      blocked.code,
+      blocked.message,
+      false,
+      blocked.next_action
+    );
+  }
+
+  /**
+   * Normalizes a login identifier to its canonical stored form.
+   * Email is lowercased; Vietnamese phone accepts 0/+84/84 prefixes and stores the 0-prefixed form.
+   */
+  private normalizeIdentifier(raw: string): {
+    email?: string;
+    phone?: string;
+    stored: string;
+  } | null {
+    const trimmed = raw.trim();
+    if (trimmed.includes('@')) {
+      const email = trimmed.toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+      return { email, stored: email };
+    }
+
+    const digits = trimmed.replace(/[\s.\-()]/g, '');
+    let phone: string;
+    if (digits.startsWith('+84')) {
+      phone = `0${digits.slice(3)}`;
+    } else if (digits.startsWith('84') && digits.length === 11) {
+      phone = `0${digits.slice(2)}`;
+    } else {
+      phone = digits;
+    }
+    if (!/^0[3|5|7|8|9][0-9]{8}$/.test(phone)) return null;
+    return { phone, stored: phone };
+  }
+
+  /**
+   * Creates the device session row, signs the access token, audits and returns the
+   * canonical AUTHENTICATED response (CD-1..2).
+   */
+  private async createLoginSessionAndResponse(
+    user: {
+      id: string;
+      merchant_id: string;
+      full_name: string;
+      email: string | null;
+      phone: string | null;
+      role: RoleEnum;
+      status: string;
+      email_verified_at: Date | null;
+      phone_verified_at: Date | null;
+      created_at: Date;
+      merchant: {
+        id: string;
+        name: string;
+        code: string;
+        status: string;
+        created_at: Date;
+      };
+    },
+    rememberDevice: boolean,
+    clientIp: string,
+    correlationId: string,
+    auditAction: 'AUTH_LOGIN_SUCCESS' | 'AUTH_LOGIN_OTP_SUCCESS'
+  ) {
+    const ttlSeconds = this.config?.AUTH_TOKEN_TTL_SECONDS ?? 43200;
+    const merchant = user.merchant;
+
+    const session = await this.prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        device_id: rememberDevice ? 'web-remember' : 'web-session',
+        last_active_at: new Date(),
+      },
+    });
+
+    const secret = resolveAccessTokenSecret(this.config?.AUTH_TOKEN_SECRET);
+    const { token } = signAccessToken(
+      {
+        sub: user.id,
+        sid: session.id,
+        mid: user.merchant_id,
+        role: user.role,
+        st: user.status,
+      },
+      secret,
+      ttlSeconds
+    );
+
+    await this.logAudit({
+      merchantId: user.merchant_id,
+      userId: user.id,
+      actor: `user:${user.id}`,
+      action: auditAction,
+      resource: `user:${user.id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { session_id: session.id, role: user.role },
+    });
+
+    return {
+      data: {
+        status: 'AUTHENTICATED' as const,
+        access_token: token,
+        expires_in: ttlSeconds,
+        user: {
+          id: user.id,
+          merchant_id: user.merchant_id,
+          full_name: user.full_name,
+          email: user.email,
+          phone: user.phone,
+          role: user.role,
+          status: user.status.toUpperCase(),
+          email_verified_at: user.email_verified_at ? user.email_verified_at.toISOString() : null,
+          phone_verified_at: user.phone_verified_at ? user.phone_verified_at.toISOString() : null,
+          created_at: user.created_at.toISOString(),
+        },
+        merchant: {
+          id: merchant.id,
+          name: merchant.name,
+          business_code: merchant.code,
+          status: merchant.status,
+          created_at: merchant.created_at.toISOString(),
+        },
+      },
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
   }
 
   private isUniqueConstraintViolation(err: unknown): boolean {
