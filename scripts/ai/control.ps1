@@ -22,7 +22,13 @@ param(
     [int]$SupervisorMaxNudges = 1,
     [int]$SupervisorReviewTimeoutMinutes = 20,
     [int]$MaxRecoveryAttempts = 1,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+
+    # TASK-AI-11: Preview/dry-run and bounded failover switches
+    [switch]$Preview,
+    [switch]$DryRun,
+    [ValidateRange(1, [int]::MaxValue)]
+    [int]$MaxFailovers = 3
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -6584,7 +6590,8 @@ function Invoke-ShipDeSupervisorLoop {
         [scriptblock]$OwnershipVerifier = $null,
         [scriptblock]$MessageSender = $null,
         [scriptblock]$SessionsResolver = $null,
-        [scriptblock]$SessionDetailResolver = $null
+        [scriptblock]$SessionDetailResolver = $null,
+        [int]$MaxFailovers = 3
     )
 
     Assert-ShipDeSupervisorMaxNudges -MaxNudges $MaxNudges
@@ -6594,6 +6601,14 @@ function Invoke-ShipDeSupervisorLoop {
     }
     $State = Normalize-ShipDeSupervisorState -State $State
     $State.RepairAttemptsPerHead = $MaxRepairAttemptsPerHead
+
+    # TASK-AI-11: Failover exhaustion guard — the bounded failover budget.
+    # When FailoverCount exceeds MaxFailovers the supervisor terminates the
+    # session, preserves the existing branch, and fails closed.
+    if ([int]$State.FailoverCount -ge $MaxFailovers) {
+        Write-Host ("[FAIL-CLOSED] Supervisor failover budget exhausted ({0} failovers against limit {1}). Branch '{2}' preserved." -f [int]$State.FailoverCount, $MaxFailovers, [string]$State.Branch)
+        throw ("Supervisor failover budget exhausted ({0} failovers against limit {1}). Branch preserved. Failing closed." -f [int]$State.FailoverCount, $MaxFailovers)
+    }
 
     while ($true) {
         $sessionId = if ($State.ContainsKey("SessionId") -and $null -ne $State["SessionId"]) { [string]$State["SessionId"] } else { "" }
@@ -16088,10 +16103,30 @@ function Initialize-ShipDeSupervisorState {
 function Invoke-ShipDeSupervise {
     param(
         [int]$PullRequestNumber = 0,
-        [int]$MaxRecoveryAttempts = 1
+        [int]$MaxRecoveryAttempts = 1,
+        [int]$MaxFailovers = 3,
+        [switch]$Preview,
+        [switch]$DryRun
     )
 
     Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR"
+
+    # TASK-AI-11: Preview/dry-run surface — emit banners and skip mutating
+    # operations when either flag is active.
+    if ($Preview) {
+        Write-Host "[PREVIEW] Supervisor will preview actions without executing them."
+    }
+    if ($DryRun) {
+        Write-Host "[SUPERVISOR][DRY-RUN] Supervisor will emit commands without executing them."
+    }
+
+    # TASK-AI-11: Preview/DryRun early return — when either flag is set,
+    # emit the banner above and return without performing mutating operations.
+    if ($Preview -or $DryRun) {
+        Write-Host "[PREVIEW] No mutating operations will be executed. Exiting preview/dry-run mode."
+        return "PREVIEW"
+    }
+
     Assert-ShipDeSupervisorMaxNudges -MaxNudges $SupervisorMaxNudges
 
     # Finding 3: Acquire exclusive supervisor lock BEFORE any stateful startup operations
@@ -16141,7 +16176,7 @@ function Invoke-ShipDeSupervise {
             }
         }
 
-        $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes
+        $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes -MaxFailovers $MaxFailovers
 
         if ($result -eq "READY_FOR_HUMAN_MERGE") {
             Write-Host ("[SUPERVISOR] PR #{0} at {1} has CI GREEN and durable exact-HEAD Codex PASS." -f $state.PullRequestNumber, $state.HeadSha)
@@ -16283,7 +16318,7 @@ switch ($Action) {
     "Start" { Invoke-ShipDeStart }
     "Review" { Invoke-ShipDeReview -PullRequestNumber $PullRequestNumber -NonInteractive:$NonInteractive }
     "Sync" { Invoke-ShipDeSync }
-    "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts }
+    "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts -MaxFailovers $MaxFailovers -Preview:$Preview -DryRun:$DryRun }
     "Test" { Write-Host "ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED"; return }
     default { Show-ShipDeMenu }
 }
