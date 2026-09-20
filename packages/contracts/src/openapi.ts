@@ -128,7 +128,51 @@ export interface paths {
     };
     get?: never;
     put?: never;
+    /**
+     * Password login (API-AUTH-LOGIN, FEAT-AUTH-03)
+     * @description Authenticates with email/Vietnamese phone + password. Identical INVALID_CREDENTIALS response for unknown identifier or wrong password. Non-active statuses are rejected with distinct 403 codes (AUTH_PENDING_VERIFICATION, AUTH_ACCOUNT_SUSPENDED, AUTH_ACCOUNT_DISABLED, AUTH_INVITATION_PENDING). Rate limited per IP and per identifier.
+     */
     post: operations['login'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/login/otp/request': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Request a login OTP (API-AUTH-LOGIN-OTP-REQUEST, FEAT-AUTH-03)
+     * @description Sends a 6-digit login OTP over the verified channel (email or phone). Requires AUTH_LOGIN_OTP_ENABLED. Generic OTP_SENT response; unknown identifiers or unverified channels receive the same response without delivery.
+     */
+    post: operations['requestLoginOtp'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/login/otp/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Verify a login OTP and issue a session (API-AUTH-LOGIN-OTP-VERIFY, FEAT-AUTH-03)
+     * @description Verifies the 6-digit login OTP (5-minute TTL, single use, max 5 wrong attempts) and returns the same session shape as password login.
+     */
+    post: operations['verifyLoginOtp'];
     delete?: never;
     options?: never;
     head?: never;
@@ -473,19 +517,79 @@ export interface components {
       meta: components['schemas']['Meta'];
     };
     LoginRequest: {
+      /** @description Email or Vietnamese phone number of the account. */
       identifier: string;
       /** Format: password */
       password: string;
       /** @default false */
       remember_device: boolean;
     };
+    AuthenticatedUser: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      merchant_id: string;
+      full_name: string;
+      email?: string | null;
+      phone?: string | null;
+      /** @enum {string} */
+      role: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT';
+      /** @enum {string} */
+      status: 'ACTIVE' | 'PENDING_VERIFICATION' | 'SUSPENDED' | 'DISABLED' | 'INVITED';
+      /** Format: date-time */
+      email_verified_at?: string | null;
+      /** Format: date-time */
+      phone_verified_at?: string | null;
+      /** Format: date-time */
+      created_at: string;
+    };
+    AuthenticatedMerchant: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      business_code?: string | null;
+      phone?: string | null;
+      email?: string | null;
+      address?: string | null;
+      status?: string | null;
+      /** Format: date-time */
+      created_at: string;
+    };
     AuthResponse: {
-      data?: {
+      data: {
         /** @enum {string} */
-        status?: 'AUTHENTICATED' | 'MFA_REQUIRED' | 'ORG_SELECTION_REQUIRED';
+        status: 'AUTHENTICATED' | 'MFA_REQUIRED' | 'ORG_SELECTION_REQUIRED';
         access_token?: string;
+        /** @description Access token lifetime in seconds (present when access_token is returned). */
+        expires_in?: number;
         challenge_id?: string;
+        user?: components['schemas']['AuthenticatedUser'];
+        merchant?: components['schemas']['AuthenticatedMerchant'];
       };
+      meta: components['schemas']['Meta'];
+    };
+    LoginOtpRequestRequest: {
+      /** @description Email or Vietnamese phone number of the account. */
+      identifier: string;
+    };
+    LoginOtpChallengeResponse: {
+      data: {
+        /** @enum {string} */
+        status: 'OTP_SENT';
+        /** @enum {string} */
+        channel: 'email' | 'phone';
+        /** @description Masked recipient, e.g. m***@shipde.vn or 0901***4567. */
+        recipient_masked: string;
+        cooldown_seconds: number;
+        expires_in_seconds: number;
+        message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    LoginOtpVerifyRequest: {
+      /** @description Email or Vietnamese phone number of the account. */
+      identifier: string;
+      otp: string;
     };
     ShopInput: {
       name: string;
@@ -826,7 +930,72 @@ export interface operations {
           'application/json': components['schemas']['AuthResponse'];
         };
       };
+      400: components['responses']['Error'];
+      /** @description INVALID_CREDENTIALS */
       401: components['responses']['Error'];
+      /** @description Account status gate or OTP login disabled */
+      403: components['responses']['Error'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  requestLoginOtp: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['LoginOtpRequestRequest'];
+      };
+    };
+    responses: {
+      /** @description Generic OTP challenge (anti-enumeration) */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['LoginOtpChallengeResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      /** @description AUTH_OTP_LOGIN_DISABLED when OTP login is not enabled */
+      403: components['responses']['Error'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  verifyLoginOtp: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['LoginOtpVerifyRequest'];
+      };
+    };
+    responses: {
+      /** @description Authenticated session */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AuthResponse'];
+        };
+      };
+      /** @description INVALID_OTP */
+      400: components['responses']['Error'];
+      /** @description Account status gate or OTP login disabled */
+      403: components['responses']['Error'];
+      /** @description OTP_ALREADY_CONSUMED or OTP_EXPIRED */
+      410: components['responses']['Error'];
+      /** @description OTP_MAX_ATTEMPTS_EXCEEDED or RATE_LIMITED */
+      429: components['responses']['RateLimited'];
     };
   };
   getMe: {

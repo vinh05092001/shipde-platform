@@ -12,6 +12,9 @@
 - BR-AUTH-08: Resend verification is bounded by a dedicated rate limit (1 request per 60 seconds cooldown, max 5/hour per identifier).
 - BR-AUTH-09: All registration, verification, and rate-limit events produce immutable audit records containing actor context and hashed IP without leaking passwords or verification tokens.
 - BR-AUTH-10: Concurrent submissions with the same unverified identifier must resolve idempotently; exactly one tenant/owner pair persists.
+- BR-AUTH-11: Login attempts are rate-limited per IP (max 10/15 min) and per identifier (max 5 failures/15 min); exceeding returns `RATE_LIMITED` with a retry-after hint. Unknown identifier and wrong password return identical `INVALID_CREDENTIALS` responses.
+- BR-AUTH-12: OTP login is enabled by configuration only. Login OTPs are single-use, 5 minutes, hashed at rest, bounded (5 requests/hour/identifier, 60 s cooldown, 10 requests/hour/IP, 5 failed verifications/15 min) and delivered only to verified channels. A verification OTP can never authorize a login and vice versa (`purpose` column).
+- BR-AUTH-13: Login of a `pending_verification`, `suspended`, `disabled` or `invited` user is rejected with a distinct canonical error and an audit record that never contains the password or OTP.
 
 ### Self-registration decision
 
