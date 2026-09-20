@@ -148,4 +148,3 @@ python docs/product-spec/scripts/validate_docs.py
 - **`TASK-AI-30` not in declared dependencies.** The register row lists `TASK-AI-20; TASK-AI-25`, not `TASK-AI-30`. The probe result store is a prerequisite in practice; this is a planning gap recorded here.
 - **No live dispatch wiring tested end-to-end.** `qualification-gate.js` writes `qualifiedRoles` via `updateAccount`; `capabilities.disqualify` already reads it. Full dispatch integration is not tested here.
 - **Probe is connectivity only.** A passing probe says the model answered; coding grade remains `TASK-AI-27`'s scope.
-
