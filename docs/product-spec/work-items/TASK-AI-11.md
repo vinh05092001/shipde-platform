@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-11.md`, `scripts/ai/control.ps1`, `tools/ai-brain/acceptance/ac-11-*.js`, `tools/ai-brain/acceptance/lib/preview-dryrun-contract.js`, `tools/ai-brain/acceptance/lib/failover-exhaustion-contract.js` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-11-impl-214438` |
-| Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/120` |
+| Pull Request | `Pending` |
 
 ### Status transition ledger
 
