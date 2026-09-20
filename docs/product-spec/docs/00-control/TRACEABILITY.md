@@ -23,6 +23,7 @@
 | ------------ | ---------- | ---------- | ------------ | -------------------- | ---------------------- | ------------ | ---------- | ----------- |
 | FEAT-AUTH    | UC-AUTH-01 | BR-SEC-01  | SCR-AUTH-01  | API-AUTH-LOGIN       | ENT-USER               | ST-USER      | AC-AUTH-01 | EPIC-FND    |
 | FEAT-AUTH-01 | UC-AUTH-02 | BR-AUTH-01 | SCR-AUTH-02  | API-AUTH-REGISTER    | ENT-MERCHANT, ENT-USER | ST-USER      | AC-AUTH-02 | EPIC-FND    |
+| FEAT-AUTH-02 | UC-AUTH-03 | BR-ADMIN-01| SCR-ADMIN-01 | API-ADMIN-SHOPS      | ENT-MERCHANT, ENT-USER | ST-USER, ST-MERCHANT | AC-ADMIN-01..16 | EPIC-FND |
 | FEAT-USR     | UC-USR-01  | BR-RBAC-01 | SCR-USR-01   | API-USR              | ENT-USER, ENT-ROLE     | ST-INVITE    | AC-USR-01  | EPIC-FND    |
 | FEAT-AVL     | UC-SHIP-01 | BR-AVL-01  | SCR-QUOTE-01 | API-AVL              | ENT-QUOTE-REQUEST      | ST-QUOTE     | AC-AVL-01  | EPIC-QUOTE  |
 | FEAT-QTE     | UC-SHIP-01 | BR-QTE-01  | SCR-QUOTE-01 | API-QUOTES           | ENT-QUOTE              | ST-QUOTE     | AC-QTE-01  | EPIC-QUOTE  |

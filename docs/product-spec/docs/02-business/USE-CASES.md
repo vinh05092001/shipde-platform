@@ -27,6 +27,18 @@ Every implementation use case includes actor, preconditions, trigger, main flow,
 - Audit: registration event and verification events logged with hashed IP and actor context; never log plaintext passwords, OTPs, or verification tokens.
 - Acceptance: AC-AUTH-02.
 
+## UC-AUTH-03 Admin creates initial shop owner account
+
+- Actor: platform operator (Ship Dễ back-office staff).
+- Preconditions: operator possesses valid `PLATFORM_ADMIN_KEY` (BR-ADMIN-01).
+- Trigger: `POST /admin/shops` with merchant name, owner full name, at least one identifier (email or phone), and optional password.
+- Main result: atomically create new Merchant (tenant) and User with role OWNER in ACTIVE status; if password is omitted, auto-generate a 16-character temporary password and return it in the response (BR-ADMIN-05). Verification timestamps are pre-set because the operator vouches for identity (BR-ADMIN-03).
+- Alternatives: both email and phone provided (both verified); only email provided; only phone provided.
+- Postconditions: new merchant and owner are ACTIVE and ready for login (pending FEAT-AUTH-03); audit record `ADMIN_CREATE_SHOP` is persisted (BR-ADMIN-07).
+- Failures: missing/short merchant name, missing identifiers, invalid email/phone format, duplicate active identifier (BR-ADMIN-06), missing/invalid admin key, rate limit exceeded.
+- Audit: `ADMIN_CREATE_SHOP` with merchant ID, user ID, identifiers, IP and correlation ID; plaintext passwords and temporary passwords are never logged.
+- Acceptance: AC-ADMIN-01 through AC-ADMIN-16.
+
 ## UC-USR-01 Invite and authorize a user
 
 - Actor: SHOP_OWNER or authorized administrator.

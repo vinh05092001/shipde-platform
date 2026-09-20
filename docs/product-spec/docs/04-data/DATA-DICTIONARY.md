@@ -8,13 +8,25 @@ This dictionary lists high-value fields. Machine schema and migrations must expa
 | ----------------------------- | ----------- | ----------: | ------------------------------------------------------ |
 | Tenant.id                     | UUID        |         Yes | Isolation key                                          |
 | Tenant.name                   | string      |         Yes | Display name                                           |
+| Merchant.id                   | UUID        |         Yes | Isolation key; aliased as Tenant                      |
+| Merchant.name                 | string      |         Yes | Shop display name                                      |
+| Merchant.code                 | string      |         Yes | Auto-generated unique code (e.g. `SHOP_NAME_1234`)     |
+| Merchant.status               | string      |         Yes | `active`/`suspended`/`disabled` (ST-MERCHANT)          |
+| Merchant.created_at           | timestamp   |         Yes | Immutable creation timestamp                           |
 | User.id                       | UUID        |         Yes | Platform identity                                      |
+| User.merchant_id              | UUID        |         Yes | FK → Merchant.id; tenant scope (never client-inferred) |
 | User.email/phone              | string      | Conditional | At least one verified login identifier                 |
+| User.full_name                | string      |         Yes | Owner/operator display name                            |
+| User.password_hash            | string      |         Yes | scrypt/argon2 hash; plaintext never stored/logged      |
+| User.role                     | enum        |         Yes | OWNER/OPERATOR/etc. (RoleEnum)                         |
 | User.status                   | enum        |         Yes | PENDING_VERIFICATION/INVITED/ACTIVE/SUSPENDED/DISABLED |
-| User.email_verified_at        | timestamp   |          No | Timestamp of confirmed email verification              |
-| User.phone_verified_at        | timestamp   |          No | Timestamp of confirmed phone OTP verification          |
-| User.terms_accepted_at        | timestamp   |         Yes | Timestamp when Terms & Privacy Policy accepted         |
-| User.terms_version            | string      |         Yes | Version of terms accepted (e.g. 2026.1)                |
+| User.created_by               | string      |          No | `platform_admin` for FEAT-AUTH-02; null for self-reg   |
+| User.created_by_ip            | string      |          No | IP of creator (hashed, BR-ADMIN-07)                    |
+| User.activated_at             | timestamp   |          No | Set immediately for admin-created; on verify for self-reg|
+| User.email_verified_at        | timestamp   |          No | Pre-set for admin-created (BR-ADMIN-03); null until verify for self-reg |
+| User.phone_verified_at        | timestamp   |          No | Pre-set for admin-created (BR-ADMIN-03); null until verify for self-reg |
+| User.terms_accepted_at        | timestamp   |          No | Null for admin-created; set during self-registration   |
+| User.terms_version            | string      |          No | Null for admin-created; set during self-registration   |
 | VerificationToken.token       | string      |         Yes | Single-use cryptographically random token / OTP        |
 | VerificationToken.channel     | enum/string |         Yes | EMAIL/PHONE                                            |
 | VerificationToken.expires_at  | timestamp   |         Yes | Token expiry deadline                                  |

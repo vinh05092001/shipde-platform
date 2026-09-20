@@ -24,6 +24,28 @@
 | Any               | Yes            | No (<8 chars)  | Any         | 400 VALIDATION_ERROR               | Prompt valid password             |
 | Any               | Any            | Any            | Exceeded    | 429 RATE_LIMITED                   | Display cooldown window           |
 
+## Admin-created shop provisioning
+
+- BR-ADMIN-01: Platform admin authentication is via `X-Platform-Admin-Key` header matched against the `PLATFORM_ADMIN_KEY` environment variable. Missing or mismatched key returns 403 FORBIDDEN. A full RBAC admin model is deferred.
+- BR-ADMIN-02: Admin-created shops atomically create a new Merchant (tenant) and a User with role `OWNER` and status `ACTIVE` in a single database transaction. Failure at any point rolls back all rows; no orphan Merchant or User may persist.
+- BR-ADMIN-03: Admin-created accounts are immediately `ACTIVE` with email/phone verification timestamps pre-set (operator vouches for identity). No verification token is issued. This differs from self-registration (FEAT-AUTH-01) which starts in `PENDING_VERIFICATION`.
+- BR-ADMIN-04: At least one valid identifier (email or phone) is required. Both may be provided; in that case both verification timestamps are pre-set.
+- BR-ADMIN-05: If `owner_password` is omitted, a cryptographically random 16-character temporary password is auto-generated and returned in the response. The stored hash uses the same memory-hard algorithm as self-registration (BR-AUTH-05). The temporary password is never logged or stored in plaintext.
+- BR-ADMIN-06: Email and phone uniqueness is checked against `ACTIVE` users only. An identifier belonging to a non-active (disabled/suspended) account does not block creation, preserving recovery paths.
+- BR-ADMIN-07: Every admin shop creation produces an immutable audit record (`ADMIN_CREATE_SHOP`) with actor, merchant ID, user ID, identifiers, IP and correlation ID. Audit logging failure does not block the creation response.
+
+### Admin shop creation decision
+
+| Merchant name valid | Identifier provided | Identifier format valid | Duplicate active identifier | Rate limit | Result                        | Next action                     |
+| ------------------- | ------------------- | ----------------------- | --------------------------- | ---------- | ----------------------------- | ------------------------------- |
+| Yes (≥2 chars)      | Email or phone      | Yes                     | No                          | Under limit | 201 Created (ACTIVE)          | Return merchant + user + opt temp password |
+| Yes                 | Email or phone      | Yes                     | Yes                         | Under limit | 400 VALIDATION_ERROR DUPLICATE | Show duplicate identifier error |
+| Yes                 | Neither             | N/A                     | N/A                         | Under limit | 400 VALIDATION_ERROR REQUIRED  | Prompt for email or phone       |
+| No (<2 chars)       | Any                 | Any                     | Any                         | Under limit | 400 VALIDATION_ERROR REQUIRED  | Prompt valid merchant name      |
+| Any                 | Email or phone      | No                      | Any                         | Under limit | 400 VALIDATION_ERROR FORMAT    | Prompt valid identifier format  |
+| Any                 | Any                 | Any                     | Any                         | Exceeded    | 429 RATE_LIMITED              | Display cooldown window         |
+| Any                 | Any                 | Any                     | Any                         | N/A        | 403 FORBIDDEN                 | Check admin key configuration   |
+
 ## Address and availability
 
 - BR-ADR-01: Canonical administrative address must be confirmed when normalization has multiple candidates.

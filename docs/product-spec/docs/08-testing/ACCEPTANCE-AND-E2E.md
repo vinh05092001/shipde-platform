@@ -62,6 +62,70 @@ Given one bank transaction allocated across multiple batches, when allocations e
 
 Given complete evidence and verified policy, when auto-submit is disabled, then claim waits for confirmation; when enabled within limit it submits once; expired/incomplete claims never auto-submit.
 
+### AC-ADMIN-01
+
+Given a valid platform admin key, when creating a shop with email and password, then 201 is returned with a new Merchant and User(role=OWNER, status=ACTIVE) where email_verified_at is pre-set and the password is stored as a scrypt hash.
+
+### AC-ADMIN-02
+
+Given a valid platform admin key, when creating a shop with phone only (no email), then 201 is returned with User.email=null, phone_verified_at pre-set, and the merchant is ACTIVE.
+
+### AC-ADMIN-03
+
+Given a valid platform admin key, when creating a shop without specifying a password, then 201 is returned with a `temporary_password` field containing a 16-character random string; the stored password_hash is a valid scrypt hash.
+
+### AC-ADMIN-04
+
+Given a valid platform admin key, when creating a shop with missing or short (<2 chars) merchant_name, then 400 VALIDATION_ERROR is returned with field-level error on `merchant_name`.
+
+### AC-ADMIN-05
+
+Given a valid platform admin key, when creating a shop without email and without phone, then 400 VALIDATION_ERROR is returned requiring at least one identifier.
+
+### AC-ADMIN-06
+
+Given a valid platform admin key, when creating a shop with an invalid email format, then 400 VALIDATION_ERROR with code INVALID_FORMAT is returned on `owner_email`.
+
+### AC-ADMIN-07
+
+Given a valid platform admin key, when creating a shop with an invalid phone format, then 400 VALIDATION_ERROR with code INVALID_FORMAT is returned on `owner_phone`.
+
+### AC-ADMIN-08
+
+Given a valid platform admin key, when creating a shop with an email that belongs to an existing ACTIVE user, then 400 VALIDATION_ERROR with code DUPLICATE is returned on `owner_email` and no new rows are created.
+
+### AC-ADMIN-09
+
+Given a valid platform admin key, when creating a shop with a phone that belongs to an existing ACTIVE user, then 400 VALIDATION_ERROR with code DUPLICATE is returned on `owner_phone` and no new rows are created.
+
+### AC-ADMIN-10
+
+Given no `X-Platform-Admin-Key` header, when calling POST /admin/shops, then 403 FORBIDDEN is returned.
+
+### AC-ADMIN-11
+
+Given an invalid `X-Platform-Admin-Key` header, when calling POST /admin/shops, then 403 FORBIDDEN is returned.
+
+### AC-ADMIN-12
+
+Given a valid admin key, when merchant creation fails after User creation (e.g. constraint violation), then the entire transaction is rolled back; no orphan Merchant or User rows persist.
+
+### AC-ADMIN-13
+
+Given a successful shop creation, when checking the audit_logs table, then an `ADMIN_CREATE_SHOP` record exists with correct merchant_id, user_id, identifiers, ip_address and correlation data; the record is immutable.
+
+### AC-ADMIN-14
+
+Given a valid admin key, when calling GET /admin/shops, then 200 is returned with a paginated list of merchants including their owner's id, full_name, email, phone and status.
+
+### AC-ADMIN-15
+
+Given a shop creation with a provided password, when querying the database, then the password_hash column contains a scrypt-format hash and no plaintext password appears in logs or response (except the temporary_password field when auto-generated).
+
+### AC-ADMIN-16
+
+Given a shop creation with both email and phone, when querying the created User, then both email_verified_at and phone_verified_at are set to non-null timestamps immediately, and status is ACTIVE.
+
 ## End-to-end scenarios
 
 ### E2E-01 Happy shipping

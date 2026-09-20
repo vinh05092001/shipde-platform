@@ -5,6 +5,7 @@
 ```mermaid
 stateDiagram-v2
   [*] --> PENDING_VERIFICATION: self-register (FEAT-AUTH-01)
+  [*] --> ACTIVE: admin create (FEAT-AUTH-02, BR-ADMIN-03)
   PENDING_VERIFICATION --> ACTIVE: verify email or phone (BR-AUTH-02)
   PENDING_VERIFICATION --> PENDING_VERIFICATION: resend verification token
   PENDING_VERIFICATION --> DISABLED: abuse/cleanup
@@ -178,3 +179,14 @@ CARRIER_REJECTED --> CLOSED_UNRECOVERED
 \`\`\`
 
 Carry-forward is a case-period link, not a case state.
+
+## Merchant lifecycle (ST-MERCHANT)
+
+```mermaid
+stateDiagram-v2
+  [*] --> ACTIVE: admin create (FEAT-AUTH-02)
+  ACTIVE --> SUSPENDED: admin suspension
+  SUSPENDED --> ACTIVE: admin reinstate
+  ACTIVE --> DISABLED: deactivation
+  DISABLED --> ACTIVE: reactivation
+```
