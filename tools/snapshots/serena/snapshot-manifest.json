@@ -1,0 +1,17 @@
+{
+  "id": "serena",
+  "name": "Serena Code Toolkit",
+  "repository": "oraios/serena",
+  "pinned_version": "0.1.0",
+  "install_method": "pinned-snapshot",
+  "lifecycle_state": "PENDING",
+  "profiles": ["RESEARCH_ONLY"],
+  "permissions": "ast-index-read",
+  "health_check": "Test-Path tools/snapshots/serena",
+  "pilot": {
+    "work_item_id": "TASK-AI-32",
+    "role": "read-only code retrieval",
+    "target_metric": "TokenPerMergedItem",
+    "token_ceiling": 500000
+  }
+}

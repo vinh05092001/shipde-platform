@@ -813,10 +813,16 @@ function main() {
       });
     return;
   }
+  // serena (TASK-AI-32): Serena read-only pilot for code retrieval
+  // Symbol and reference lookup for authors, measured against TokenPerMergedItem
+  if (command === 'serena') {
+    const { runSerenaCli } = require('./serena');
+    process.exit(runSerenaCli(process.argv.slice(3)));
+  }
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify | serena'
   );
   process.exit(2);
 }
