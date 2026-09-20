@@ -11,19 +11,19 @@
 | Dependencies | `TASK-AI-24` (merged into `origin/main`, commit `e66f766`, PR #90; register row 157 `MERGED`) |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-42.md`, `docs/00-control/BASELINE-AND-DECISIONS.md`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ai-brain/scheduler.js`, `tools/ai-brain/test/scheduler.test.js`, `tools/ai-brain/test/review-lane.test.js`, `tools/ai-brain/test/ceiling-governance.test.js`, `tools/ai-brain/acceptance/ac-42-*.js`, `tools/ai-brain/acceptance/lib/implementation-ceiling.js` |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-42.md`, `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`, `tools/ai-brain/scheduler.js`, `tools/ai-brain/test/scheduler.test.js`, `tools/ai-brain/test/review-lane.test.js`, `tools/ai-brain/test/ceiling-governance.test.js`, `tools/ai-brain/acceptance/ac-42-*.js`, `tools/ai-brain/acceptance/lib/implementation-ceiling.js` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-42-impl` |
 | Pull Request | `Pending` |
 
 ### Status transition ledger
 
-The durable delivery register (`docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, row 177, `work_item_id` `TASK-AI-42`) is the authoritative source for this Work Item's lifecycle state under `AGENTS.md` Unit of delivery. The register records `BLOCKED_DEPENDENCY`, therefore the Control table above records `BLOCKED_DEPENDENCY` and no other value.
+The durable delivery register (`docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, row 175 — line 177 of the file, `work_item_id` `TASK-AI-42`) is the authoritative source for this Work Item's lifecycle state under `AGENTS.md` Unit of delivery. The register records `BLOCKED_DEPENDENCY`, therefore the Control table above records `BLOCKED_DEPENDENCY` and no other value.
 
 | Gate in the required flow | Traversed? | Transition evidence |
 |---|---|---|
 | `BACKLOG` | No | None. The register records `BLOCKED_DEPENDENCY`. |
-| `BLOCKED_DEPENDENCY` | Yes — current stage | `FEATURE-DELIVERY-REGISTER.csv` row 177, column `status` = `BLOCKED_DEPENDENCY` |
+| `BLOCKED_DEPENDENCY` | Yes — current stage | `FEATURE-DELIVERY-REGISTER.csv` row 175 (line 177 of the file), column `status` = `BLOCKED_DEPENDENCY` |
 | `READY_FOR_AUTHOR` | No | None. No register write has occurred. |
 | `IN_PROGRESS` | No | None. No register write has occurred. |
 | `READY_FOR_CODEX` | No | None. No register write has occurred. |
@@ -51,7 +51,7 @@ This Work Item formalizes and enforces the concurrent implementation ceiling dec
 
 - `AGENTS.md` § Unit of delivery: "Keep one active implementation Work Item until the workflow is proven stable."
 - `AGENTS.md` § Role separation: "The author never approves its own work. A feature is not complete because an author says it is complete."
-- `docs/00-control/BASELINE-AND-DECISIONS.md`: `DEC-017` (concurrent implementation ceiling fixed at 1 under AI-TOOL-03; raising is a governed decision).
+- `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`: `DEC-017` (concurrent implementation ceiling fixed at 1 under AI-TOOL-03; raising is a governed decision).
 - `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`: Policy `AI-TOOL-03` and the Concurrent implementation ceiling decision section.
 - `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`: Row 175 (`TASK-AI-42`).
 - `docs/product-spec/work-items/TASK-AI-24.md`: Explicit boundary warning "Do NOT raise `maxImplementationAgents` or any other `DEFAULTS` value. That decision is `TASK-AI-42`."
@@ -80,7 +80,7 @@ Prohibited in this Work Item:
 ## In scope
 
 1. Author the authoritative specification `docs/product-spec/work-items/TASK-AI-42.md`.
-2. Record decision `DEC-017` in `docs/00-control/BASELINE-AND-DECISIONS.md`.
+2. Record decision `DEC-017` in `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`.
 3. Document the concurrent implementation ceiling decision in `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`.
 4. Update `tools/ai-brain/scheduler.js`:
    - Replace erroneous commentary with governed stability statement.
@@ -161,7 +161,8 @@ python3 docs/product-spec/scripts/validate_docs.py
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `Pending` | `NOT_REVIEWED` | Initial delivery on branch feat/task-ai-42-impl. Status in register is BLOCKED_DEPENDENCY pending reconciler gate. |
+| 1 | `74d7f9c` | `CHANGES_REQUIRED` | Initial delivery on branch feat/task-ai-42-impl. Verdicts on PR #118 (issue comments 5743329871 and 5743339496). Findings: (1) trailing blank line at EOF in `AI-TOOLCHAIN-DECISIONS.md` broke CI `git diff --check`; (2) `ac-42-11-docs-validate.js` hardcoded `python3` (fails on the Windows baseline) and lacked the repository/`SOURCE_MISSING` operational guards other acceptance rows have; (3) `docs/00-control/BASELINE-AND-DECISIONS.md` path inconsistencies in Allowed paths, Source references and In scope; (4) unevidenced verification checkboxes in the PR body; (5) PR body declared `Review status: READY_FOR_CODEX` while the register records `BLOCKED_DEPENDENCY`; (6) "row 177" vs delivery order 175 ambiguity in the status ledger. |
+| 2 | `74d7f9c` + repair commit | In repair | (1) removed the trailing blank line at EOF so `git diff --check origin/main...HEAD` is clean; (2) `ac-42-11` resolves the interpreter as `process.env.PYTHON || (win32 ? python : python3)` and gained the relative repo-marker, script and documentation-tree guards (exit 2 `SOURCE_MISSING:`) mirroring `ac-30-11-docs-validate.js`; (3) all three BASELINE-AND-DECISIONS.md references corrected to `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`; (4) PR body rewritten with re-run command evidence only; (5) PR body de-claimed to `CHANGES_REQUIRED` with no `READY_FOR_CODEX` stage claim — register stage transitions stay owned by the reconciler/controller and the Control table keeps the authoritative register status `BLOCKED_DEPENDENCY`; (6) status ledger now cites row 175 (line 177 of the file). |
 
 ## Residual limitations
 
