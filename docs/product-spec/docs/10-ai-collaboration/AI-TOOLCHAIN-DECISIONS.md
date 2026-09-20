@@ -423,6 +423,20 @@ Four properties make the gate safe:
 3. **Grant is field-constrained** — the gate writes only `qualifiedRoles` and `qualificationHistory`; it never writes grade, quality, preference, limits, tier, cost, capabilities, forbiddenDomains, or any credential.
 4. **Grant is outcome-gated** — only `outcome: 'pass'` within the cache window grants; `fail`, `timeout`, `refused` and stale results never grant.
 
+### TASK-AI-32 — Serena read-only code retrieval pilot (2026-09-20)
+
+`TASK-AI-32` implements the read-only code retrieval pilot for `oraios/serena` under ecosystem profile `RESEARCH_ONLY` and permission boundary `ast-index-read`. The pilot provides authors (Gemini, Claude, 9Router) with symbol and reference lookup rather than loading whole files into context, evaluated against the `TokenPerMergedItem` efficiency metric.
+
+The single-source pilot invariants live in `tools/ai-brain/acceptance/lib/serena-pilot.js` and `tools/ai-brain/serena.js`:
+
+1. **Read-only invariant (`AI-32-R01`)**: Serena retrieval operations are strictly read-only. Any attempt to pass mutation or write flags (`write: true`, `mutate: true`, `--write`) throws or exits with `MUTATION_REFUSED`.
+2. **Source of truth boundary (`AI-32-R02`)**: Serena is a code analysis assistant; output is implementation evidence, never business authority.
+3. **TokenPerMergedItem efficiency (`AI-32-R03`)**: Symbol and reference retrieval is measured against full-file context ingestion, targeting prompt token reduction under `TOKENS_PER_MERGED_CEILING` (500,000 tokens from `TASK-AI-25`).
+4. **Deterministic extraction (`AI-32-R04`)**: Symbol definitions report accurate line bounds (`startLine`, `endLine`), declarations, and code slices.
+5. **Reference resolution (`AI-32-R05`)**: Resolves symbol usages across codebase files.
+6. **Fail-closed on missing sources (`AI-32-R06`)**: Non-existent files or directories report `SOURCE_MISSING` and fail gracefully.
+
+
 ### Permission boundaries (TASK-AI-10+)
 
 The supervisor operates with least-privilege permissions:
