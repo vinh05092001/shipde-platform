@@ -45,7 +45,7 @@
 
   function statusColor(status) {
     if (status === 'live') return '#16a34a';
-    if (status === 'exhausted' || status === 'quota-exhausted' || status === 'cooldown')
+    if (status === 'quota-exhausted' || status === 'cooldown')
       return '#dc2626';
     return '#64748b';
   }
@@ -53,7 +53,7 @@
   function statusLabelVi(status) {
     if (status === 'live') return 'đang chạy';
     if (status === 'idle') return 'rảnh';
-    if (status === 'exhausted' || status === 'quota-exhausted') return 'hết hạn mức';
+    if (status === 'quota-exhausted') return 'hết hạn mức';
     if (status === 'cooldown') return 'tạm nghỉ';
     return status || 'chưa rõ';
   }

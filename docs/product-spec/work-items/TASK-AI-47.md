@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-26` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-47.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-dashboard/rotation.js`, `tools/ai-dashboard/rotation.html`, `tools/ai-dashboard/server.js`, `tools/ai-dashboard/test/rotation.test.js`, `tools/ai-dashboard/rotation-view.js` (the panel added by the 2026-09-18 scope widening renders the rotation payload, so it carries the new state fields) |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-47.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-dashboard/rotation.js`, `tools/ai-dashboard/server.js`, `tools/ai-dashboard/index.html`, `tools/ai-dashboard/client.js`, `tools/ai-dashboard/test/rotation.test.js`, `tools/ai-dashboard/test/rotation-parse.test.js`, `tools/ai-dashboard/rotation-view.js` (the panel added by the 2026-09-18 scope widening renders the rotation payload inside the Capacity tab of the main dashboard, so it carries the new state fields; `rotation.html` was removed in favour of embedding into `index.html`) |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-47-rotation-view` |
 | Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/105` |
@@ -32,7 +32,7 @@ All numbers come from real measurements already on disk. Where a value cannot be
 
 ### AI-47-R01: Radial layout
 
-The view is a radial diagram rendered as SVG inside a standalone HTML page at `/rotation`. The hub sits at the centre. Each configured access source occupies a node arranged around the hub. Sources: 9Router, xKiro, agy (local), agy (docker), Cline, AutoClaw, AO. Only sources that are actually configured (present in logs, quota store, or limits) appear; unconfigured sources are omitted rather than shown as empty.
+The view is a radial diagram rendered as SVG inside the Capacity tab of the main dashboard at `/rotation`. The hub sits at the centre. Each configured access source occupies a node arranged around the hub. Sources: 9Router, xKiro, B.AI, agy (local), agy (docker), Cline, AutoClaw, AO, Codex. B.AI was added because dispatch.sh routes through numbered B.AI keys (bai1..bai7) which are aggregated into a single source. Codex was added because the dispatcher log records Codex CLI runs as a distinct lane with its own token measurements. Only sources that are actually configured (present in logs, quota store, or limits) appear; unconfigured sources are omitted rather than shown as empty.
 
 ### AI-47-R02: Live arrows
 
@@ -103,7 +103,8 @@ an architecture diagram. That work necessarily edits `tools/ai-dashboard/index.h
 `client.js`, `server.js` and the adapters, which the original boundary forbade.
 
 Recorded rather than hidden: `tools/ai-dashboard/rotation.html` is deleted, `/rotation`
-now redirects into the cockpit, and `AI-47-R01`/`AI-47-R07` no longer describe a
+now serves the main dashboard HTML (HTTP 200) with the Capacity tab active so that
+`rotation-view.js` can mount inside it, and `AI-47-R01`/`AI-47-R07` no longer describe a
 standalone page. Everything else the item claims - measured values only, `UNKNOWN`
 wherever nothing is measured, read-only behaviour - is unchanged and still enforced by
 the acceptance tests.

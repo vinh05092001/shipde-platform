@@ -12,6 +12,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
+const ceiling = require('../ai-brain/ceiling');
+const quotaStore = require('../ai-brain/quota-store');
 
 const CODEX_TOKENS_RE = /tokens used\s*[\r\n]+([\d,]+)/g;
 const STALE_AFTER_MS = 5 * 60 * 1000;
@@ -594,29 +596,52 @@ function detectConfigured(homeDir, explicit, env) {
   return found;
 }
 
+/**
+ * Reads active cooldowns from the canonical ceiling ledger (AI-47-R06).
+ *
+ * The previous implementation re-parsed quota.observations.json directly with a
+ * hardcoded 5-minute cooldown instead of using the window-based durations that
+ * ceiling.js computes (2 min for per-minute, 60 min for daily, 240 min for
+ * monthly). It also treated every refused row as a cooldown without filtering
+ * through isQuotaRefusal, so non-quota errors (socket timeouts, 500s) could
+ * park an account for five minutes when they should not have cooled at all.
+ *
+ * This version delegates to ceiling.readLedger() for the evidence and
+ * ceiling.cooldownFor() for the duration, and only cools on genuine quota
+ * refusals.
+ */
 function readCooldowns(ledgerFile) {
   const cooldowns = {};
-  const file = ledgerFile || path.join(HOME_DIR, 'quota.observations.json');
-  let observations;
+  const now = Date.now();
+  let ledger;
   try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    observations = Array.isArray(raw.observations) ? raw.observations : [];
+    ledger = ceiling.readLedger(ledgerFile || undefined);
   } catch {
     return cooldowns;
   }
-  const now = Date.now();
-  const refusals = observations.filter((o) => o && o.outcome === 'refused' && o.accountId);
-  for (const ref of refusals) {
-    const id = String(ref.accountId).toLowerCase();
-    const refTime = ref.at ? new Date(ref.at).getTime() : 0;
-    if (!refTime || Number.isNaN(refTime)) continue;
-    const untilMs = refTime + 5 * 60 * 1000;
+  const entries = Array.isArray(ledger) ? ledger : [];
+  for (const entry of entries) {
+    if (!entry || !entry.accountId) continue;
+    // Only genuine quota refusals trigger a cooldown. A socket error, timeout or
+    // 500 says nothing about the budget.
+    const errorText = entry.error || entry.reason || '';
+    if (!ceiling.isQuotaRefusal(errorText)) continue;
+    const id = String(entry.accountId).toLowerCase();
+    const observedAt = entry.at ? new Date(entry.at).getTime() : 0;
+    if (!observedAt || Number.isNaN(observedAt)) continue;
+    // Use the window-based cooldown from ceiling.js rather than a flat 5 minutes.
+    // Ledger entries may carry a window field; if absent, default to the shortest
+    // safe cooldown (per-minute = 2 min) so a transient refusal does not park an
+    // account for hours.
+    const window = entry.window || 'requestsPerMinute';
+    const until = ceiling.cooldownFor(window, observedAt);
+    const untilMs = new Date(until).getTime();
     if (untilMs > now) {
       const existing = cooldowns[id];
       if (!existing || new Date(existing.until).getTime() < untilMs) {
         cooldowns[id] = {
-          reason: ref.reason || 'quota refusal',
-          until: new Date(untilMs).toISOString(),
+          reason: errorText.slice(0, 120) || 'quota refusal',
+          until,
         };
       }
     }
@@ -624,11 +649,16 @@ function readCooldowns(ledgerFile) {
   return cooldowns;
 }
 
+/**
+ * Reads the vendor quota cache through the canonical quota-store module
+ * (AI-47-R06), which applies freshness and identity checks. The previous
+ * implementation read agy-quota.json directly, so stale or switched-identity
+ * readings were used as live data.
+ */
 function readQuotaStore(storeFile) {
-  const file = storeFile || path.join(HOME_DIR, 'agy-quota.json');
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return parsed && typeof parsed === 'object' && parsed.accounts ? parsed.accounts : {};
+    const store = quotaStore.loadStore(storeFile ? { path: storeFile } : undefined);
+    return store.accounts || {};
   } catch {
     return {};
   }
@@ -839,7 +869,7 @@ function buildRotationStateSync(options) {
       status,
       activeRun,
       cooldown:
-        isOnCooldown || status === 'quota-exhausted' || status === 'exhausted'
+        isOnCooldown || status === 'quota-exhausted'
           ? cooldown
           : { reason: null, until: null },
       limits: { declaredLimit, consumption, headroom },

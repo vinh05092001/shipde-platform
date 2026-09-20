@@ -449,7 +449,7 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
         JSON.stringify({
           version: 1,
           observations: [
-            { accountId: 'bai1', outcome: 'refused', at: recent, reason: 'key 1 exhausted' },
+            { accountId: 'bai1', outcome: 'refused', at: recent, reason: 'rate limit exceeded' },
           ],
         })
       );
@@ -473,9 +473,9 @@ describe('TASK-AI-47 Model Rotation Suite', () => {
         JSON.stringify({
           version: 1,
           observations: [
-            { accountId: 'bai1', outcome: 'refused', at: recent, reason: 'k1 exhausted' },
-            { accountId: 'bai2', outcome: 'refused', at: recent, reason: 'k2 exhausted' },
-            { accountId: 'bai3', outcome: 'refused', at: recent, reason: 'k3 exhausted' },
+            { accountId: 'bai1', outcome: 'refused', at: recent, reason: 'rate limit exceeded' },
+            { accountId: 'bai2', outcome: 'refused', at: recent, reason: 'too many requests' },
+            { accountId: 'bai3', outcome: 'refused', at: recent, reason: 'quota exceeded' },
           ],
         })
       );
