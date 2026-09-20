@@ -13,6 +13,9 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 
+const ceiling = require('../ai-brain/ceiling');
+const quotaStore = require('../ai-brain/quota-store');
+
 const CODEX_TOKENS_RE = /tokens used\s*[\r\n]+([\d,]+)/g;
 const STALE_AFTER_MS = 5 * 60 * 1000;
 const SPLIT_RE = /\r?\n/;
@@ -128,7 +131,6 @@ const SOURCE_DEFS = [
   { id: 'cline', label: 'Cline' },
   { id: 'autoclaw', label: 'AutoClaw' },
   { id: 'ao', label: 'AO' },
-  { id: 'codex', label: 'Codex' },
 ];
 
 // dispatch.sh names its author lanes after the key directory holding them
@@ -584,7 +586,6 @@ function detectConfigured(homeDir, explicit, env) {
   }
   if (exists('.cline')) found.add('cline');
   if (exists('.agy') || exists('AppData', 'Local', 'agy')) found.add('agy-local');
-  if (exists('.codex')) found.add('codex');
   if (exists('.ao')) {
     found.add('ao');
     found.add('agy-docker');
@@ -594,29 +595,34 @@ function detectConfigured(homeDir, explicit, env) {
   return found;
 }
 
-function readCooldowns(ledgerFile) {
+/**
+ * Reads cooldown states from the canonical ceiling ledger (AI-47-R06).
+ * Only genuine quota refusals trigger cooldowns; transient errors (500, socket) do not.
+ * Cooldown duration is derived from ceiling.cooldownFor(window, refTime) rather than
+ * a hardcoded timer.
+ */
+function readCooldowns(ledgerFile, nowMs) {
   const cooldowns = {};
-  const file = ledgerFile || path.join(HOME_DIR, 'quota.observations.json');
-  let observations;
-  try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    observations = Array.isArray(raw.observations) ? raw.observations : [];
-  } catch {
-    return cooldowns;
-  }
-  const now = Date.now();
-  const refusals = observations.filter((o) => o && o.outcome === 'refused' && o.accountId);
+  const observations = ceiling.readLedger(ledgerFile || undefined);
+  const now = typeof nowMs === 'number' ? nowMs : Date.now();
+  const refusals = observations.filter((o) => {
+    if (!o || o.outcome !== 'refused' || !o.accountId) return false;
+    const errorText = o.error || o.reason || '';
+    return ceiling.isQuotaRefusal(errorText);
+  });
   for (const ref of refusals) {
     const id = String(ref.accountId).toLowerCase();
     const refTime = ref.at ? new Date(ref.at).getTime() : 0;
     if (!refTime || Number.isNaN(refTime)) continue;
-    const untilMs = refTime + 5 * 60 * 1000;
+    const window = ref.window || 'requestsPerMinute';
+    const until = ceiling.cooldownFor(window, refTime);
+    const untilMs = new Date(until).getTime();
     if (untilMs > now) {
       const existing = cooldowns[id];
       if (!existing || new Date(existing.until).getTime() < untilMs) {
         cooldowns[id] = {
-          reason: ref.reason || 'quota refusal',
-          until: new Date(untilMs).toISOString(),
+          reason: (ref.reason || ref.error || 'quota refusal').slice(0, 120),
+          until,
         };
       }
     }
@@ -624,11 +630,14 @@ function readCooldowns(ledgerFile) {
   return cooldowns;
 }
 
+/**
+ * Reads the vendor quota cache through the canonical quota-store module
+ * (AI-47-R06), which applies freshness and identity checks.
+ */
 function readQuotaStore(storeFile) {
-  const file = storeFile || path.join(HOME_DIR, 'agy-quota.json');
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return parsed && typeof parsed === 'object' && parsed.accounts ? parsed.accounts : {};
+    const store = quotaStore.loadStore(storeFile ? { path: storeFile } : undefined);
+    return store && typeof store === 'object' && store.accounts ? store.accounts : {};
   } catch {
     return {};
   }
@@ -682,7 +691,7 @@ function buildRotationStateSync(options) {
 
   const logEntries = parseLogLines(logDir);
   const logReadable = logSource.exists;
-  const cooldowns = readCooldowns(ledgerFile);
+  const cooldowns = readCooldowns(ledgerFile, now);
   const quotaAccounts = readQuotaStore(quotaFile);
 
   const configuredIds = detectConfigured(opts.homeDir, Boolean(opts.homeDir), opts.env);
@@ -839,9 +848,7 @@ function buildRotationStateSync(options) {
       status,
       activeRun,
       cooldown:
-        isOnCooldown || status === 'quota-exhausted' || status === 'exhausted'
-          ? cooldown
-          : { reason: null, until: null },
+        isOnCooldown || status === 'quota-exhausted' ? cooldown : { reason: null, until: null },
       limits: { declaredLimit, consumption, headroom },
       recentRuns,
       attempts: sourceLogs.filter((e) => e.started).length,
