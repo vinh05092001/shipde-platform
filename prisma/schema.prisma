@@ -139,6 +139,9 @@ model User {
   store_scopes      String[]          @default([])
   warehouse_scopes  String[]          @default([])
   status            String            @default("pending_verification") @db.VarChar(32)
+  created_by        String?           @db.VarChar(64)
+  activated_at      DateTime?         @db.Timestamptz
+  created_by_ip     String?           @db.VarChar(64)
   email_verified_at DateTime?         @db.Timestamptz
   phone_verified_at DateTime?         @db.Timestamptz
   terms_accepted_at DateTime?         @db.Timestamptz

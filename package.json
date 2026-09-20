@@ -40,7 +40,8 @@
     "verify:inventory": "tsx scripts/verify-inventory.ts",
     "concierge:audit": "tsx scripts/concierge-audit.ts",
     "guard:install": "node tools/ai-guard/cli.js install",
-    "guard:status": "node tools/ai-guard/cli.js status"
+    "guard:status": "node tools/ai-guard/cli.js status",
+    "test:admin": "PLATFORM_ADMIN_KEY=test-admin-key-2026 tsx apps/api/src/auth/admin-auth.supertest.spec.ts"
   },
   "devDependencies": {
     "@prisma/client": "^6.19.2",

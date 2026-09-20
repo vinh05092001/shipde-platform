@@ -193,6 +193,13 @@ export const OutboxStatus = {
   FAILED: 'FAILED',
 } as const;
 
+// --- Admin Provisioning (FEAT-AUTH-02) ---
+export const AdminAction = {
+  CREATE_SHOP: 'ADMIN_CREATE_SHOP',
+} as const;
+
+export type AdminAction = (typeof AdminAction)[keyof typeof AdminAction];
+
 export type OutboxStatus = (typeof OutboxStatus)[keyof typeof OutboxStatus];
 
 export interface OutboxMessagePayload {
