@@ -31,22 +31,33 @@ function json(res, status, body) {
 
 function createLauncher(scriptPath) {
   return ({ profile, mode, workspace }) => {
+    const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+    const terminalArgs = [
+      '-NoExit',
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      scriptPath,
+      '-ProfileId',
+      profile.id,
+      '-ProfileHome',
+      profile.home,
+      '-Workspace',
+      workspace,
+      '-Mode',
+      mode,
+    ];
+    const command = `Start-Process -FilePath 'powershell.exe' -WindowStyle Normal -ArgumentList @(${terminalArgs
+      .map(quote)
+      .join(',')}) -WorkingDirectory ${quote(workspace)}`;
+    const encodedCommand = Buffer.from(command, 'utf16le').toString('base64');
     const child = spawn(
       'powershell.exe',
       [
         '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        scriptPath,
-        '-ProfileId',
-        profile.id,
-        '-ProfileHome',
-        profile.home,
-        '-Workspace',
-        workspace,
-        '-Mode',
-        mode,
+        '-EncodedCommand',
+        encodedCommand,
       ],
       { detached: true, stdio: 'ignore', windowsHide: false }
     );
