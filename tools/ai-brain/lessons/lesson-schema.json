@@ -30,7 +30,7 @@
       "description": "One-line statement of the lesson."
     },
     "status": {
-      "enum": ["proposed", "approved", "superseded", "rejected"],
+      "enum": ["approved", "superseded", "rejected"],
       "description": "Only a human review moves a lesson to approved (AI-TOOL-06)."
     },
     "scope": {
@@ -93,6 +93,14 @@
     },
     {
       "if": { "properties": { "status": { "const": "rejected" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "approved_by": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "proposed" } }, "required": ["status"] },
       "then": {
         "properties": {
           "approved_by": { "type": "null" }
