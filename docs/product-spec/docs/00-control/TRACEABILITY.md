@@ -23,6 +23,7 @@
 | ------------ | ---------- | ---------- | ------------ | -------------------- | ---------------------- | ------------ | ---------- | ----------- |
 | FEAT-AUTH    | UC-AUTH-01 | BR-SEC-01  | SCR-AUTH-01  | API-AUTH-LOGIN       | ENT-USER               | ST-USER      | AC-AUTH-01 | EPIC-FND    |
 | FEAT-AUTH-01 | UC-AUTH-02 | BR-AUTH-01 | SCR-AUTH-02  | API-AUTH-REGISTER    | ENT-MERCHANT, ENT-USER | ST-USER      | AC-AUTH-02 | EPIC-FND    |
+| FEAT-AUTH-03 | UC-AUTH-01 | BR-AUTH-02, BR-AUTH-05, BR-AUTH-06, BR-AUTH-09, BR-AUTH-11, BR-AUTH-12, BR-AUTH-13 | SCR-AUTH-01 | API-AUTH-LOGIN, API-AUTH-LOGIN-OTP-REQUEST, API-AUTH-LOGIN-OTP-VERIFY | ENT-USER, ENT-DEVICE-SESSION, ENT-VERIFICATION-TOKEN | ST-USER | AC-AUTH-01 | EPIC-FND |
 | FEAT-USR     | UC-USR-01  | BR-RBAC-01 | SCR-USR-01   | API-USR              | ENT-USER, ENT-ROLE     | ST-INVITE    | AC-USR-01  | EPIC-FND    |
 | FEAT-AVL     | UC-SHIP-01 | BR-AVL-01  | SCR-QUOTE-01 | API-AVL              | ENT-QUOTE-REQUEST      | ST-QUOTE     | AC-AVL-01  | EPIC-QUOTE  |
 | FEAT-QTE     | UC-SHIP-01 | BR-QTE-01  | SCR-QUOTE-01 | API-QUOTES           | ENT-QUOTE              | ST-QUOTE     | AC-QTE-01  | EPIC-QUOTE  |
