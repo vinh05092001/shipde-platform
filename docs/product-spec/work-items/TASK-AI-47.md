@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-26` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-47.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-dashboard/rotation.js`, `tools/ai-dashboard/rotation.html`, `tools/ai-dashboard/server.js`, `tools/ai-dashboard/test/rotation.test.js`, `tools/ai-dashboard/rotation-view.js` (the panel added by the 2026-09-18 scope widening renders the rotation payload, so it carries the new state fields) |
+| Allowed paths | `.gitignore`, `.gitleaks.toml`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/work-items/TASK-AI-47.md`, `tools/ai-dashboard/ao-adapter.js`, `tools/ai-dashboard/architecture.js`, `tools/ai-dashboard/client.js`, `tools/ai-dashboard/git-adapter.js`, `tools/ai-dashboard/github-adapter.js`, `tools/ai-dashboard/index.html`, `tools/ai-dashboard/progress-view.js`, `tools/ai-dashboard/register-adapter.js`, `tools/ai-dashboard/roster-view.js`, `tools/ai-dashboard/rotation-view.js`, `tools/ai-dashboard/rotation.js`, `tools/ai-dashboard/server.js`, `tools/ai-dashboard/summary-view.js`, `tools/ai-dashboard/test/dashboard.test.js`, `tools/ai-dashboard/test/rotation-parse.test.js`, `tools/ai-dashboard/test/rotation.test.js` (widened on 2026-09-21 to the files this Pull Request actually changes: the cockpit renders the rotation payload, so the panel, its adapters, the page and the shared test files all move together, and the gitleaks allowlist had to follow because the scan reads the same tree) |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-47-rotation-view` |
 | Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/105` |

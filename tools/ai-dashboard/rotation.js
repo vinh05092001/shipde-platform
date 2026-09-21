@@ -182,6 +182,9 @@ function parseLogLines(logDir) {
   const laneToSource = (lane) => {
     if (lane === 'agy') return 'agy-local';
     if (/^bai\d*$/i.test(lane)) return 'bai';
+    // dispatch.sh calls the 9Router lane `nine`; SOURCE_DEFS calls the provider `9router`.
+    // Left unmapped the panel drew the same provider twice, once per spelling.
+    if (lane === 'nine') return '9router';
     return lane;
   };
   for (const file of files) {
