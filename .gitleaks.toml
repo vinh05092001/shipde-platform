@@ -39,6 +39,11 @@ regexes = [
   # cannot reach a commit that already exists. The string states outright that
   # it is a length fixture, so exempting this exact text costs nothing.
   '''a-very-long-secret-key-that-exceeds-32-characters''',
+  # Reading a key out of the environment is how a key is supposed to be handled, but the
+  # generic rule sees the variable's name and flags the line. Exempt only the shape that
+  # names an env var without assigning a literal, so a real embedded key still trips.
+  '''env\.[A-Z0-9_]*API_KEY[A-Z0-9_]*''',
+  '''process\.env\.[A-Z0-9_]*(API_KEY|TOKEN|SECRET)[A-Z0-9_]*''',
 ]
 
 [[rules]]
