@@ -696,7 +696,9 @@ async function runAuthSupertestSuite() {
       .expect(400);
 
     assert.strictEqual(res25.body.error.code, 'VALIDATION_ERROR');
-    assert.ok(res25.body.error.fields.some((f: any) => f.field === 'email' && f.code === 'DUPLICATE'));
+    assert.ok(
+      res25.body.error.fields.some((f: any) => f.field === 'email' && f.code === 'DUPLICATE')
+    );
     console.log('  PASS: AC-AUTH-02-07 Duplicate email rejected');
 
     // AC-AUTH-02-08: Duplicate phone -> 400 DUPLICATE_PHONE
@@ -713,7 +715,9 @@ async function runAuthSupertestSuite() {
       .expect(400);
 
     assert.strictEqual(res26.body.error.code, 'VALIDATION_ERROR');
-    assert.ok(res26.body.error.fields.some((f: any) => f.field === 'phone' && f.code === 'DUPLICATE'));
+    assert.ok(
+      res26.body.error.fields.some((f: any) => f.field === 'phone' && f.code === 'DUPLICATE')
+    );
     console.log('  PASS: AC-AUTH-02-08 Duplicate phone rejected');
 
     // AC-AUTH-02-09: Unconfigured OPERATOR_SECRET -> 503

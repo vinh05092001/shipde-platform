@@ -36,7 +36,11 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
   const [loading, setLoading] = useState(false);
   const [generalError, setGeneralError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [createdData, setCreatedData] = useState<{ merchant_id: string; merchant_code: string; user_id: string } | null>(null);
+  const [createdData, setCreatedData] = useState<{
+    merchant_id: string;
+    merchant_code: string;
+    user_id: string;
+  } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,7 +104,9 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Token Operator</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Token Operator
+                </label>
                 <div className="relative">
                   <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input
@@ -111,11 +117,15 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
                     placeholder="Nhập token xác thực operator"
                   />
                 </div>
-                {fieldErrors.operator_token && <p className="text-xs text-red-500 mt-1">{fieldErrors.operator_token}</p>}
+                {fieldErrors.operator_token && (
+                  <p className="text-xs text-red-500 mt-1">{fieldErrors.operator_token}</p>
+                )}
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Tên cửa hàng</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Tên cửa hàng
+                </label>
                 <div className="relative">
                   <Store className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input
@@ -126,11 +136,15 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
                     placeholder="VD: Thời Trang ABC"
                   />
                 </div>
-                {fieldErrors.merchant_name && <p className="text-xs text-red-500 mt-1">{fieldErrors.merchant_name}</p>}
+                {fieldErrors.merchant_name && (
+                  <p className="text-xs text-red-500 mt-1">{fieldErrors.merchant_name}</p>
+                )}
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Họ tên chủ shop</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Họ tên chủ shop
+                </label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input
@@ -141,7 +155,9 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
                     placeholder="Nguyễn Văn A"
                   />
                 </div>
-                {fieldErrors.full_name && <p className="text-xs text-red-500 mt-1">{fieldErrors.full_name}</p>}
+                {fieldErrors.full_name && (
+                  <p className="text-xs text-red-500 mt-1">{fieldErrors.full_name}</p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -157,10 +173,14 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
                       placeholder="owner@shop.vn"
                     />
                   </div>
-                  {fieldErrors.email && <p className="text-xs text-red-500 mt-1">{fieldErrors.email}</p>}
+                  {fieldErrors.email && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.email}</p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Điện thoại</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    Điện thoại
+                  </label>
                   <div className="relative">
                     <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
@@ -171,12 +191,16 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
                       placeholder="0901234567"
                     />
                   </div>
-                  {fieldErrors.phone && <p className="text-xs text-red-500 mt-1">{fieldErrors.phone}</p>}
+                  {fieldErrors.phone && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.phone}</p>
+                  )}
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Mật khẩu tạm</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Mật khẩu tạm
+                </label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input
@@ -187,7 +211,9 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
                     placeholder="Tối thiểu 8 ký tự"
                   />
                 </div>
-                {fieldErrors.password && <p className="text-xs text-red-500 mt-1">{fieldErrors.password}</p>}
+                {fieldErrors.password && (
+                  <p className="text-xs text-red-500 mt-1">{fieldErrors.password}</p>
+                )}
               </div>
 
               <button
@@ -207,7 +233,10 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
             </form>
 
             {onBack && (
-              <button onClick={onBack} className="w-full text-center text-xs text-slate-500 hover:text-slate-700 font-medium">
+              <button
+                onClick={onBack}
+                className="w-full text-center text-xs text-slate-500 hover:text-slate-700 font-medium"
+              >
                 ← Quay lại
               </button>
             )}
@@ -221,7 +250,12 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
             </div>
             <h3 className="text-lg font-extrabold text-slate-900">Không Có Quyền</h3>
             <p className="text-sm text-slate-600">{generalError}</p>
-            <button onClick={() => setStep('FORM')} className="text-sm text-[#ea4b12] font-bold hover:underline">Thử lại</button>
+            <button
+              onClick={() => setStep('FORM')}
+              className="text-sm text-[#ea4b12] font-bold hover:underline"
+            >
+              Thử lại
+            </button>
           </div>
         )}
 
@@ -237,9 +271,14 @@ export const AdminCreateShopView: React.FC<Props> = ({ onBack }) => {
               <p>User ID: {createdData.user_id}</p>
               <p>Status: active</p>
             </div>
-            <p className="text-xs text-slate-500">Tài khoản đã ACTIVE. Vui lòng thông báo mật khẩu cho chủ shop qua kênh an toàn.</p>
+            <p className="text-xs text-slate-500">
+              Tài khoản đã ACTIVE. Vui lòng thông báo mật khẩu cho chủ shop qua kênh an toàn.
+            </p>
             {onBack && (
-              <button onClick={onBack} className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2">
+              <button
+                onClick={onBack}
+                className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2"
+              >
                 <span>Tiếp tục</span>
                 <ArrowRight className="w-4 h-4" />
               </button>

@@ -343,56 +343,185 @@ export class AuthService {
   ) {
     const expectedSecret = process.env.OPERATOR_SECRET;
     if (!expectedSecret) {
-      throw new CanonicalApiException(HttpStatus.SERVICE_UNAVAILABLE, 'OPERATOR_AUTH_NOT_CONFIGURED', 'Xác thực operator chưa được cấu hình', false, 'Liên hệ quản trị viên nền tảng');
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'OPERATOR_AUTH_NOT_CONFIGURED',
+        'Xác thực operator chưa được cấu hình',
+        false,
+        'Liên hệ quản trị viên nền tảng'
+      );
     }
     if (!operatorToken || operatorToken.trim().length === 0) {
-      throw new CanonicalApiException(HttpStatus.UNAUTHORIZED, 'UNAUTHORIZED', 'Thiếu token xác thực operator', false, 'Vui lòng cung cấp x-operator-token');
+      throw new CanonicalApiException(
+        HttpStatus.UNAUTHORIZED,
+        'UNAUTHORIZED',
+        'Thiếu token xác thực operator',
+        false,
+        'Vui lòng cung cấp x-operator-token'
+      );
     }
     if (operatorToken !== expectedSecret) {
-      await this.logAudit({ actor: this.hashIp(clientIp), action: 'ADMIN_CREATE_SHOP_ACCOUNT_FORBIDDEN', resource: 'auth/admin/create-shop-account', correlationId, ipAddress: this.hashIp(clientIp) });
-      throw new CanonicalApiException(HttpStatus.FORBIDDEN, 'FORBIDDEN', 'Token operator không hợp lệ', false, 'Liên hệ quản trị viên nền tảng');
+      await this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'ADMIN_CREATE_SHOP_ACCOUNT_FORBIDDEN',
+        resource: 'auth/admin/create-shop-account',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+      });
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Token operator không hợp lệ',
+        false,
+        'Liên hệ quản trị viên nền tảng'
+      );
     }
     const fields: CanonicalFieldError[] = [];
-    if (!dto.merchant_name || dto.merchant_name.trim().length < 2) fields.push({ field: 'merchant_name', code: 'REQUIRED', message: 'Tên cửa hàng phải có ít nhất 2 ký tự' });
-    if (!dto.full_name || dto.full_name.trim().length < 2) fields.push({ field: 'full_name', code: 'REQUIRED', message: 'Họ và tên người đại diện phải có ít nhất 2 ký tự' });
+    if (!dto.merchant_name || dto.merchant_name.trim().length < 2)
+      fields.push({
+        field: 'merchant_name',
+        code: 'REQUIRED',
+        message: 'Tên cửa hàng phải có ít nhất 2 ký tự',
+      });
+    if (!dto.full_name || dto.full_name.trim().length < 2)
+      fields.push({
+        field: 'full_name',
+        code: 'REQUIRED',
+        message: 'Họ và tên người đại diện phải có ít nhất 2 ký tự',
+      });
     const email = dto.email ? dto.email.trim().toLowerCase() : undefined;
     const phone = dto.phone ? dto.phone.trim() : undefined;
-    if (!email && !phone) fields.push({ field: 'email', code: 'REQUIRED', message: 'Phải cung cấp ít nhất email hoặc số điện thoại' });
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fields.push({ field: 'email', code: 'INVALID_FORMAT', message: 'Định dạng email không hợp lệ' });
-    if (phone && !/^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(phone.replace(/\s+/g, ''))) fields.push({ field: 'phone', code: 'INVALID_FORMAT', message: 'Số điện thoại không hợp lệ' });
-    if (!dto.password || dto.password.length < 8) fields.push({ field: 'password', code: 'TOO_SHORT', message: 'Mật khẩu phải có độ dài tối thiểu 8 ký tự' });
-    if (fields.length > 0) throw new CanonicalApiException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Dữ liệu tạo tài khoản không hợp lệ', false, 'Vui lòng sửa các trường bị lỗi', fields);
-    const existingUsers = await this.prisma.user.findMany({ where: { OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] } });
+    if (!email && !phone)
+      fields.push({
+        field: 'email',
+        code: 'REQUIRED',
+        message: 'Phải cung cấp ít nhất email hoặc số điện thoại',
+      });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      fields.push({
+        field: 'email',
+        code: 'INVALID_FORMAT',
+        message: 'Định dạng email không hợp lệ',
+      });
+    if (phone && !/^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(phone.replace(/\s+/g, '')))
+      fields.push({
+        field: 'phone',
+        code: 'INVALID_FORMAT',
+        message: 'Số điện thoại không hợp lệ',
+      });
+    if (!dto.password || dto.password.length < 8)
+      fields.push({
+        field: 'password',
+        code: 'TOO_SHORT',
+        message: 'Mật khẩu phải có độ dài tối thiểu 8 ký tự',
+      });
+    if (fields.length > 0)
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Dữ liệu tạo tài khoản không hợp lệ',
+        false,
+        'Vui lòng sửa các trường bị lỗi',
+        fields
+      );
+    const existingUsers = await this.prisma.user.findMany({
+      where: { OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] },
+    });
     for (const existing of existingUsers) {
-      if (email && existing.email === email && existing.status !== 'pending_verification') throw new CanonicalApiException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Email đã được sử dụng', false, 'Sử dụng email khác', [{ field: 'email', code: 'DUPLICATE', message: 'Email đã được đăng ký' }]);
-      if (phone && existing.phone === phone && existing.status !== 'pending_verification') throw new CanonicalApiException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Số điện thoại đã được sử dụng', false, 'Sử dụng số điện thoại khác', [{ field: 'phone', code: 'DUPLICATE', message: 'Số điện thoại đã được đăng ký' }]);
+      if (email && existing.email === email && existing.status !== 'pending_verification')
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Email đã được sử dụng',
+          false,
+          'Sử dụng email khác',
+          [{ field: 'email', code: 'DUPLICATE', message: 'Email đã được đăng ký' }]
+        );
+      if (phone && existing.phone === phone && existing.status !== 'pending_verification')
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Số điện thoại đã được sử dụng',
+          false,
+          'Sử dụng số điện thoại khác',
+          [{ field: 'phone', code: 'DUPLICATE', message: 'Số điện thoại đã được đăng ký' }]
+        );
     }
     const passwordHash = await hashPassword(dto.password!);
-    let merchant: any; let user: any; let lastError: unknown;
+    let merchant: any;
+    let user: any;
+    let lastError: unknown;
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
         const created = await this.prisma.$transaction(async (tx) => {
           const mc = this.generateMerchantCode(dto.merchant_name);
-          const nm = await tx.merchant.create({ data: { name: dto.merchant_name.trim(), code: mc, status: 'active' } });
-          const nu = await tx.user.create({ data: { merchant_id: nm.id, email: email || null, phone: phone || null, full_name: dto.full_name.trim(), password_hash: passwordHash, role: RoleEnum.OWNER, status: 'active', email_verified_at: email ? new Date() : null, phone_verified_at: phone ? new Date() : null, terms_accepted_at: new Date(), terms_version: 'operator-provisioned' } });
+          const nm = await tx.merchant.create({
+            data: { name: dto.merchant_name.trim(), code: mc, status: 'active' },
+          });
+          const nu = await tx.user.create({
+            data: {
+              merchant_id: nm.id,
+              email: email || null,
+              phone: phone || null,
+              full_name: dto.full_name.trim(),
+              password_hash: passwordHash,
+              role: RoleEnum.OWNER,
+              status: 'active',
+              email_verified_at: email ? new Date() : null,
+              phone_verified_at: phone ? new Date() : null,
+              terms_accepted_at: new Date(),
+              terms_version: 'operator-provisioned',
+            },
+          });
           return { merchant: nm, user: nu };
         });
-        merchant = created.merchant; user = created.user; break;
+        merchant = created.merchant;
+        user = created.user;
+        break;
       } catch (err: unknown) {
         lastError = err;
         if (this.isUniqueConstraintViolation(err)) {
           const target = (err as { meta?: { target?: string[] | string } })?.meta?.target;
-          if ((Array.isArray(target) && target.includes('code')) || (typeof target === 'string' && target.includes('merchants_code_key'))) continue;
-          throw new CanonicalApiException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Email hoặc số điện thoại đã được sử dụng', false, 'Sử dụng thông tin khác', [{ field: 'email', code: 'DUPLICATE', message: 'Đã tồn tại' }]);
+          if (
+            (Array.isArray(target) && target.includes('code')) ||
+            (typeof target === 'string' && target.includes('merchants_code_key'))
+          )
+            continue;
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            'Email hoặc số điện thoại đã được sử dụng',
+            false,
+            'Sử dụng thông tin khác',
+            [{ field: 'email', code: 'DUPLICATE', message: 'Đã tồn tại' }]
+          );
         }
         throw err;
       }
     }
-    if (!merchant || !user) throw lastError || new Error('Failed to create merchant and owner account.');
-    await this.logAudit({ merchantId: merchant.id, userId: user.id, actor: 'operator', action: 'ADMIN_CREATE_SHOP_ACCOUNT', resource: `user:${user.id}`, details: { email: user.email, phone: user.phone, merchant_code: merchant.code }, correlationId, ipAddress: this.hashIp(clientIp) });
-    return { data: { merchant_id: merchant.id, merchant_code: merchant.code, user_id: user.id, status: 'active' as const, created_at: user.created_at }, meta: { correlation_id: correlationId } };
+    if (!merchant || !user)
+      throw lastError || new Error('Failed to create merchant and owner account.');
+    await this.logAudit({
+      merchantId: merchant.id,
+      userId: user.id,
+      actor: 'operator',
+      action: 'ADMIN_CREATE_SHOP_ACCOUNT',
+      resource: `user:${user.id}`,
+      details: { email: user.email, phone: user.phone, merchant_code: merchant.code },
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+    });
+    return {
+      data: {
+        merchant_id: merchant.id,
+        merchant_code: merchant.code,
+        user_id: user.id,
+        status: 'active' as const,
+        created_at: user.created_at,
+      },
+      meta: { correlation_id: correlationId },
+    };
   }
-
 
   /**
    * Verify Email Link Token (BR-AUTH-02, BR-AUTH-06)

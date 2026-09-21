@@ -1,4 +1,14 @@
-import { Controller, Post, Body, Req, Res, HttpCode, HttpStatus, Inject, Headers } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Req,
+  Res,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Headers,
+} from '@nestjs/common';
 import { Request, Response } from 'express';
 import {
   AuthService,
@@ -75,7 +85,12 @@ export class AuthController {
   ): Promise<Response> {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = this.extractClientIp(req);
-    const result = await this.authService.createShopAccount(dto, operatorToken, clientIp, correlationId);
+    const result = await this.authService.createShopAccount(
+      dto,
+      operatorToken,
+      clientIp,
+      correlationId
+    );
     return res.status(HttpStatus.CREATED).json(result);
   }
 
