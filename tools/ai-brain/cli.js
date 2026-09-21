@@ -942,17 +942,9 @@ function main() {
   }
 
   console.error('Lệnh không rõ: ' + command);
-<<<<<<< HEAD
   console.error(
     'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | lesson | account'
   );
-||||||| 8cec992
-  console.error('Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account');
-=======
-  console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | lesson | account'
-  );
->>>>>>> 165c11ca5ace342cad3fee1222f2aec4afec686d
   process.exit(2);
 }
 

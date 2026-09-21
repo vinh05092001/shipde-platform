@@ -30,8 +30,8 @@
       "description": "One-line statement of the lesson."
     },
     "status": {
-      "enum": ["approved", "superseded", "rejected"],
-      "description": "Only a human review moves a lesson to approved (AI-TOOL-06)."
+      "enum": ["proposed", "approved", "superseded", "rejected"],
+      "description": "A lesson enters as proposed; only a human review moves it to approved (AI-TOOL-06)."
     },
     "scope": {
       "enum": ["repo", "spec", "domain", "workflow", "tooling", "security"],
