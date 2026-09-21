@@ -943,7 +943,7 @@ function main() {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | lesson | account'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | lesson | account | probe | qualify | serena'
   );
   process.exit(2);
 }
