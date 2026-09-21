@@ -52,15 +52,11 @@ function createLauncher(scriptPath) {
       .map(quote)
       .join(',')}) -WorkingDirectory ${quote(workspace)}`;
     const encodedCommand = Buffer.from(command, 'utf16le').toString('base64');
-    const child = spawn(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-EncodedCommand',
-        encodedCommand,
-      ],
-      { detached: true, stdio: 'ignore', windowsHide: false }
-    );
+    const child = spawn('powershell.exe', ['-NoProfile', '-EncodedCommand', encodedCommand], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
     child.unref();
     return child.pid;
   };

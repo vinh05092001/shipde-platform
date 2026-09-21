@@ -45,7 +45,7 @@ The manager runs beside the read-only AI dashboard on `127.0.0.1:3344`. Mutating
 
 ## Known limitations
 
-- On Windows, the OS credential manager may still supply a shared host login ahead of profile-local token files. Presence is therefore evidence, not proof of account identity. The operator must verify the displayed Google account inside each Agy terminal.
+- **Measured 2026-09-21 on this Windows host:** Agy takes its Google account from a single machine-wide Windows Credential Manager entry; per-profile `HOME` and `JETSKI_APP_DATA_DIR` do **not** isolate accounts. Three proofs: (1) launching Agy with an empty profile directory still authenticated using the existing credential entry; (2) deleting the Windows Credential Manager entry forced a fresh Google login prompt regardless of profile; (3) a valid OAuth token file manually copied into all three candidate profile paths (`HOME`, `USERPROFILE`, `JETSKI_APP_DATA_DIR`) was ignored — Agy continued to use the credential-manager entry. Profile-local token file presence is therefore evidence of a previous session, not proof of account identity. The operator must verify the displayed Google account inside each Agy terminal.
 - This Work Item opens pinned interactive workers. Automatic Work Item dispatch remains owned by the governed scheduler/controller and is not silently added here.
 - Runtime state is local to the pool-manager process; restarting it does not claim that previously opened terminals are still alive.
 
