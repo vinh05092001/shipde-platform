@@ -8,9 +8,20 @@
  *   node tools/ai-brain/cli.js prove --tests "<command>" [...]
  *   node tools/ai-brain/cli.js dispatch [--dry-run | --execute] [--plan <file>]
  *   node tools/ai-brain/cli.js shadow --project|--compare [--register <p>] [--shadow <p>] [--json] [--dry-run]
+ *   node tools/ai-brain/cli.js probe --account <id> [--model <m>] [--json]
+ *                                   [--file <p>] [--timeout <ms>] [--cache-window <ms>]
+ *   node tools/ai-brain/cli.js qualify --account <id> --model <m> [--role <roleId>]
+ *                                      [--json] [--file <p>]
  *
  * `reconcile` asks whether the register can back up what it claims.
  * `prove` runs the checks an agent says it ran, and reports what happened.
+ * `probe` runs the one bounded, recorded account-qualification probe
+ * (TASK-AI-30): a cheapest-model real request through the account's own
+ * launch path, whose outcome — pass, fail, timeout or refused — is recorded
+ * in tools/ai-brain/qualification-results/results.json and reused inside the
+ * cache window. It never grants qualification; that is TASK-AI-31.
+ * `qualify` (TASK-AI-31) reads the probe result and grants qualifiedRoles
+ * only when the outcome was 'pass' and the result is within the cache window.
  *
  * Exit codes: 0 when nothing is overstated, 1 when it is. --strict also fails
  * on warnings, for use in CI where an unrecorded merge should block.
@@ -768,9 +779,51 @@ function main() {
     const { runAccountCli } = require('./account-entry');
     process.exit(runAccountCli(process.argv.slice(3)));
   }
+  // probe (TASK-AI-30): one bounded, recorded qualification probe. Async, so
+  // the exit code is set via process.exitCode instead of process.exit — an
+  // abrupt exit could truncate the result line or the record write. A
+  // refused, fail or timeout outcome still exits 0: the record is the
+  // committed outcome either way, and exit 2 is reserved for bad argv.
+  if (command === 'probe') {
+    const { runProbeCli } = require('./qualification');
+    runProbeCli(process.argv.slice(3))
+      .then((code) => {
+        process.exitCode = code;
+      })
+      .catch((e) => {
+        console.error('Probe lỗi: ' + (e && e.message ? e.message : e));
+        process.exitCode = 1;
+      });
+    return;
+  }
+  // qualify (TASK-AI-31): reads the probe result written by TASK-AI-30 and
+  // grants qualifiedRoles only when the probe outcome was 'pass' and the
+  // result is within the cache window. Exit 0 for any recorded outcome
+  // (QUALIFIED, ALREADY_QUALIFIED, NOT_QUALIFIED, RESULT_STALE,
+  // RESULT_MISSING); exit 2 for bad argv.
+  if (command === 'qualify') {
+    const { runQualifyCli } = require('./qualification-gate');
+    runQualifyCli(process.argv.slice(3))
+      .then((code) => {
+        process.exitCode = code;
+      })
+      .catch((e) => {
+        console.error('Qualify lỗi: ' + (e && e.message ? e.message : e));
+        process.exitCode = 1;
+      });
+    return;
+  }
+  // serena (TASK-AI-32): Serena read-only pilot for code retrieval
+  // Symbol and reference lookup for authors, measured against TokenPerMergedItem
+  if (command === 'serena') {
+    const { runSerenaCli } = require('./serena');
+    process.exit(runSerenaCli(process.argv.slice(3)));
+  }
 
   console.error('Lệnh không rõ: ' + command);
-  console.error('Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account');
+  console.error(
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify | serena'
+  );
   process.exit(2);
 }
 

@@ -25,7 +25,8 @@ const { accountHeadroom, isDispatchable } = require('./quota');
 const { effectiveLimits } = require('./ceiling');
 const agyQuota = require('./agy-quota');
 const { sameAccount } = require('./agy-identity');
-const { resolveGrade, resolveCapability, gradeOf } = require('./fitness');
+const { resolveGrade, resolveCapability, gradeOf, formatGradeReason } = require('./fitness');
+const { loadBenchmarks } = require('./benchmarks');
 
 /** Access dimension independent of capability (TASK-AI-46). */
 const ACCESS_TYPE = {
@@ -104,6 +105,8 @@ function offeringId(accountId, model) {
  */
 function expandOfferings(accounts, options) {
   const out = [];
+  // Read the evidence table once per expansion; a damaged table throws here.
+  const benchmarks = (options && options.benchmarks) || loadBenchmarks();
   for (const account of accounts || []) {
     if (account.enabled === false) continue;
 
@@ -142,7 +145,13 @@ function expandOfferings(accounts, options) {
             ? account.gradeProvenance
             : undefined;
 
-      const gradeRecord = resolveGrade({ id: offerId, codingGrade });
+      const modelVersion = e.modelVersion || account.modelVersion || null;
+
+      // Benchmark evidence is keyed by model, not by offering id.
+      const gradeRecord = resolveGrade(
+        { id: offerId, model, modelVersion, codingGrade },
+        { benchmarks }
+      );
       if (gradeProvenance !== undefined) gradeRecord.provenance = gradeProvenance;
 
       const access =
@@ -151,8 +160,6 @@ function expandOfferings(accounts, options) {
           : account.access !== undefined
             ? account.access
             : ACCESS_TYPE.PAY_PER_CALL;
-
-      const modelVersion = e.modelVersion || account.modelVersion || null;
 
       out.push({
         id: offerId,
@@ -182,7 +189,12 @@ function expandOfferings(accounts, options) {
         // from `quality`: quality ranks two models against each other, grade
         // says whether either may take the task at all.
         codingGrade,
-        reviewGrade: e.reviewGrade !== undefined ? Number(e.reviewGrade) : account.reviewGrade !== undefined ? Number(account.reviewGrade) : undefined,
+        reviewGrade:
+          e.reviewGrade !== undefined
+            ? Number(e.reviewGrade)
+            : account.reviewGrade !== undefined
+              ? Number(account.reviewGrade)
+              : undefined,
         // Full grade record with provenance: { class, graded, source, error? }
         gradeRecord,
         gradeProvenance,
@@ -351,6 +363,60 @@ function nextTierDown(ladder, fromTier, headrooms, strategy) {
 }
 
 /**
+ * The offerings the ladder turned down on the way to this selection.
+ *
+ * A rotation is only reassuring if the operator can see what was skipped and
+ * why, so the skipped offerings are named as well as counted.
+ */
+function formatSkippedExhausted(selection) {
+  const skipped = (selection || {}).skippedExhausted || [];
+  if (skipped.length === 0) return [];
+  const noun = skipped.length === 1 ? 'offering' : 'offerings';
+  const lines = [`Rotated from ${skipped.length} ${noun} that declined this task:`];
+  for (const o of skipped) {
+    lines.push(`- ${o.id} (${o.model}): ${o.refusalReason || o.reason || 'quota exhausted'}`);
+  }
+  return lines;
+}
+
+/**
+ * The operator-console lines for a selection (TASK-AI-46 UI states,
+ * AC-AI-46-05 ROTATION PASS / ROTATION REFUSED).
+ *
+ * The rotation line carries the access dimension, never a capability grade:
+ * AI-46-R06 forbids reading one through the other, so a strong model reached
+ * through a free source is named as free and keeps its grade. A refusal is kept
+ * distinct from a rotation because they need different reactions: a rotation
+ * means the ladder moved, a refusal means the capable set was empty, so the
+ * task is deferred rather than quietly downgraded.
+ */
+function formatSelectionResult(selection) {
+  const result = selection || {};
+  const lines = [];
+  if (!result.selected) {
+    // A refusal must never read as silence or as a completed selection.
+    lines.push('No offering selected');
+    if (result.reason && result.reason !== 'No offering selected') lines.push(result.reason);
+    lines.push(...formatSkippedExhausted(result));
+    return lines;
+  }
+  const chosen = result.selected;
+  const skipped = (result.skippedExhausted || []).length;
+  // An offering with no access dimension is a defect, but the console must say
+  // `unknown` rather than print an undefined value as if it were a tier.
+  const access = chosen.access || 'unknown';
+  lines.push(
+    `Selected offering ${chosen.id} ` +
+      `(access: ${access}, skipped ${skipped} sharing exhausted quota)`
+  );
+  const record = result.gradeRecord || {};
+  const reason = formatGradeReason(record);
+  if (reason) lines.push(reason);
+  lines.push(...formatSkippedExhausted(result));
+  return lines;
+}
+
+/**
  * Selects the best offering for a task with quota-aware rotation (TASK-AI-46).
  *
  * Selection order:
@@ -405,8 +471,8 @@ function selectOffering(options) {
     if (o.cooldownUntil && new Date(o.cooldownUntil).getTime() > now) {
       return false;
     }
-    const hd = headrooms[o.id];
-    if (hd && !isDispatchable(hd)) {
+    // A missing headroom record is unknown quota, never dispatchable (quota.js).
+    if (!isDispatchable(headrooms[o.id])) {
       return false;
     }
     return true;
@@ -426,12 +492,20 @@ function selectOffering(options) {
     return a.id.localeCompare(b.id);
   });
 
-  return {
+  const selection = {
     selected: dispatchable[0] || null,
     candidates: dispatchable,
     capableCount: capable.length,
     skippedExhausted: capable.filter((o) => exhaustedAccounts.has(o.accountId)),
   };
+  if (selection.selected) {
+    // Carry the grade and the record behind it, so the console line can name the
+    // evidence the selection was made on instead of asserting a grade silently.
+    selection.gradeRecord = resolveCapability(selection.selected, opts).coding;
+  }
+  // The state lines the operator reads in the console for this selection.
+  selection.message = formatSelectionResult(selection).join('\n');
+  return selection;
 }
 
 module.exports = {
@@ -446,5 +520,6 @@ module.exports = {
   laddered,
   nextTierDown,
   selectOffering,
+  formatSelectionResult,
   blendedCost,
 };

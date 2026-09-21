@@ -39,7 +39,13 @@ if (buggyReview.class === Difficulty.ARCHITECTURAL) {
   console.error('CONTROL_FAILED: stubborn resolver unexpectedly honored real review evidence');
   process.exit(2);
 }
-console.log('CONTROL: stubborn inferred rule ignoring real review evidence detected (inferred ' + buggyReview.class + ' over real ' + controlCandidate.localEvaluation.reviewGrade + ')');
+console.log(
+  'CONTROL: stubborn inferred rule ignoring real review evidence detected (inferred ' +
+    buggyReview.class +
+    ' over real ' +
+    controlCandidate.localEvaluation.reviewGrade +
+    ')'
+);
 
 // MEASUREMENT: Real fitness resolution
 // 1. Without review evidence: defaults to 1-below coding grade and marked as INFERRED
@@ -49,11 +55,15 @@ const unratedModel = {
 };
 const r1 = resolveCapability(unratedModel);
 if (r1.reviewGrade !== Difficulty.COMPLEX) {
-  console.error('INFERRED_REVIEW_VIOLATION: expected reviewGrade COMPLEX (3), got ' + r1.reviewGrade);
+  console.error(
+    'INFERRED_REVIEW_VIOLATION: expected reviewGrade COMPLEX (3), got ' + r1.reviewGrade
+  );
   process.exit(1);
 }
 if (r1.reviewLayer !== EVIDENCE_LAYER.INFERRED) {
-  console.error('INFERRED_REVIEW_VIOLATION: expected reviewLayer "inferred", got ' + r1.reviewLayer);
+  console.error(
+    'INFERRED_REVIEW_VIOLATION: expected reviewLayer "inferred", got ' + r1.reviewLayer
+  );
   process.exit(1);
 }
 if (r1.reviewInferred !== true) {
@@ -69,17 +79,26 @@ const modelWithRealReview = {
 };
 const r2 = resolveCapability(modelWithRealReview);
 if (r2.reviewGrade !== Difficulty.ARCHITECTURAL) {
-  console.error('INFERRED_REVIEW_VIOLATION: real review evidence did not override inferred grade: got ' + r2.reviewGrade);
+  console.error(
+    'INFERRED_REVIEW_VIOLATION: real review evidence did not override inferred grade: got ' +
+      r2.reviewGrade
+  );
   process.exit(1);
 }
 if (r2.reviewLayer !== EVIDENCE_LAYER.LOCAL) {
-  console.error('INFERRED_REVIEW_VIOLATION: expected reviewLayer "localEvaluation", got ' + r2.reviewLayer);
+  console.error(
+    'INFERRED_REVIEW_VIOLATION: expected reviewLayer "localEvaluation", got ' + r2.reviewLayer
+  );
   process.exit(1);
 }
 if (r2.reviewInferred !== false) {
-  console.error('INFERRED_REVIEW_VIOLATION: reviewInferred was true when real review evidence existed');
+  console.error(
+    'INFERRED_REVIEW_VIOLATION: reviewInferred was true when real review evidence existed'
+  );
   process.exit(1);
 }
 
-console.log('INFERRED_REVIEW_OVERRIDE_VERIFIED: inferred review grade marked INFERRED and overridden by real review evidence');
+console.log(
+  'INFERRED_REVIEW_OVERRIDE_VERIFIED: inferred review grade marked INFERRED and overridden by real review evidence'
+);
 process.exit(0);

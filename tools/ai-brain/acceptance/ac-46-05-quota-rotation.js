@@ -16,7 +16,7 @@ if (!fs.existsSync(OFFERINGS_PATH) || !fs.existsSync(FITNESS_PATH)) {
   process.exit(2);
 }
 
-const { selectOffering } = require(OFFERINGS_PATH);
+const { selectOffering, ACCESS_TYPE } = require(OFFERINGS_PATH);
 const { Difficulty } = require(FITNESS_PATH);
 
 // CONTROL NEGATIVE STEP:
@@ -27,9 +27,29 @@ function buggySharedQuotaRotator(offerings, refusedOffering) {
 }
 
 const pool = [
-  { id: 'acc-alpha::model-1', accountId: 'acc-alpha', model: 'model-1', codingGrade: Difficulty.COMPLEX },
-  { id: 'acc-alpha::model-2', accountId: 'acc-alpha', model: 'model-2', codingGrade: Difficulty.COMPLEX },
-  { id: 'acc-beta::model-3', accountId: 'acc-beta', model: 'model-3', codingGrade: Difficulty.COMPLEX },
+  {
+    id: 'acc-alpha::model-1',
+    accountId: 'acc-alpha',
+    model: 'model-1',
+    access: ACCESS_TYPE.FREE,
+    codingGrade: Difficulty.COMPLEX,
+  },
+  {
+    id: 'acc-alpha::model-2',
+    accountId: 'acc-alpha',
+    model: 'model-2',
+    access: ACCESS_TYPE.FREE,
+    codingGrade: Difficulty.COMPLEX,
+  },
+  {
+    id: 'acc-beta::model-3',
+    accountId: 'acc-beta',
+    model: 'model-3',
+    // Pay-per-call, so this rotation also proves the ladder moved on to a dearer
+    // access source and still reports the tier it moved to, not a capability.
+    access: ACCESS_TYPE.PAY_PER_CALL,
+    codingGrade: Difficulty.COMPLEX,
+  },
 ];
 
 const refused = pool[0];
@@ -38,7 +58,13 @@ if (buggySelected.accountId !== refused.accountId) {
   console.error('CONTROL_FAILED: buggy rotator did not select sibling on shared account');
   process.exit(2);
 }
-console.log('CONTROL: detected failure to skip shared quota (buggy rotator picked sibling ' + buggySelected.id + ' sharing ' + refused.accountId + ')');
+console.log(
+  'CONTROL: detected failure to skip shared quota (buggy rotator picked sibling ' +
+    buggySelected.id +
+    ' sharing ' +
+    refused.accountId +
+    ')'
+);
 
 // MEASUREMENT: Real quota-aware rotation in selectOffering
 const headrooms = {
@@ -55,7 +81,9 @@ const initial = selectOffering({
 });
 
 if (!initial.selected || initial.selected.id !== 'acc-alpha::model-1') {
-  console.error('ROTATION_VIOLATION: initial selection failed: ' + (initial.selected && initial.selected.id));
+  console.error(
+    'ROTATION_VIOLATION: initial selection failed: ' + (initial.selected && initial.selected.id)
+  );
   process.exit(1);
 }
 
@@ -75,7 +103,11 @@ if (!rotated.selected) {
 }
 
 if (rotated.selected.accountId === 'acc-alpha') {
-  console.error('ROTATION_VIOLATION: rotation selected ' + rotated.selected.id + ' which shares exhausted quota with acc-alpha');
+  console.error(
+    'ROTATION_VIOLATION: rotation selected ' +
+      rotated.selected.id +
+      ' which shares exhausted quota with acc-alpha'
+  );
   process.exit(1);
 }
 
@@ -87,9 +119,88 @@ if (rotated.selected.id !== 'acc-beta::model-3') {
 // Verify skippedExhausted records both offerings from acc-alpha
 const skipped = rotated.skippedExhausted.map((o) => o.id);
 if (!skipped.includes('acc-alpha::model-1') || !skipped.includes('acc-alpha::model-2')) {
-  console.error('ROTATION_VIOLATION: skippedExhausted did not contain both shared-quota models: ' + JSON.stringify(skipped));
+  console.error(
+    'ROTATION_VIOLATION: skippedExhausted did not contain both shared-quota models: ' +
+      JSON.stringify(skipped)
+  );
   process.exit(1);
 }
 
-console.log('QUOTA_ROTATION_VERIFIED: on quota refusal, rotation re-selects inside capable set and skips all sources sharing exhausted quota');
+// 3. The operator console text must read as the ROTATION PASS state the Work
+//    Item specifies, naming the offering, its access tier and how many offerings
+//    sharing the exhausted quota were skipped. A count alone is not enough: the
+//    whole point of the ladder is that the operator can see the strong account
+//    was skipped, not that all is well.
+const { formatSelectionResult } = require(OFFERINGS_PATH);
+const rotationLines = formatSelectionResult(rotated);
+const expectedRotation =
+  'Selected offering acc-beta::model-3 (access: pay-per-call, skipped 2 sharing exhausted quota)';
+if (rotationLines[0] !== expectedRotation) {
+  console.error(
+    'ROTATION_VIOLATION: rotation line does not match the specified state: ' +
+      JSON.stringify(rotationLines[0]) +
+      ' expected ' +
+      JSON.stringify(expectedRotation)
+  );
+  process.exit(1);
+}
+if (/\bgrade|capab/i.test(rotationLines[0])) {
+  console.error(
+    'ROTATION_VIOLATION: the rotation line conflates access with capability: ' +
+      JSON.stringify(rotationLines[0])
+  );
+  process.exit(1);
+}
+if (!rotationLines.some((l) => l === 'Rotated from 2 offerings that declined this task:')) {
+  console.error(
+    'ROTATION_VIOLATION: rotation line omits the declined offerings: ' +
+      JSON.stringify(rotationLines)
+  );
+  process.exit(1);
+}
+if (!rotationLines.some((l) => l === '- acc-alpha::model-1 (model-1): quota exhausted')) {
+  console.error(
+    'ROTATION_VIOLATION: declined offering acc-alpha::model-1 is not named: ' +
+      JSON.stringify(rotationLines)
+  );
+  process.exit(1);
+}
+if (rotated.message !== rotationLines.join('\n')) {
+  console.error('ROTATION_VIOLATION: selection message does not match the console lines');
+  process.exit(1);
+}
+
+// 4. A refusal must read as a refusal, never as silence and never as a selection.
+const refusal = selectOffering({
+  difficulty: Difficulty.COMPLEX,
+  offerings: pool,
+  headrooms,
+  exhaustedAccounts: ['acc-alpha', 'acc-beta'],
+});
+if (refusal.selected) {
+  console.error('ROTATION_VIOLATION: expected refusal with every account exhausted');
+  process.exit(1);
+}
+const refusalLines = formatSelectionResult(refusal);
+if (refusalLines[0] !== 'No offering selected') {
+  console.error('ROTATION_VIOLATION: refusal line does not read as a refusal: ' + refusalLines[0]);
+  process.exit(1);
+}
+if (refusalLines.some((l) => l.startsWith('Selected '))) {
+  console.error(
+    'ROTATION_VIOLATION: a refusal printed a selection line: ' + JSON.stringify(refusalLines)
+  );
+  process.exit(1);
+}
+
+console.log(
+  'QUOTA_ROTATION_VERIFIED: on quota refusal, rotation re-selects inside capable set and skips all sources sharing exhausted quota'
+);
+console.log(
+  'OPERATOR_STATE_VERIFIED: rotation names the declined offerings (' +
+    rotationLines[2] +
+    ') and a refusal reads as a refusal (' +
+    refusalLines[0] +
+    ')'
+);
 process.exit(0);

@@ -54,6 +54,90 @@ export interface IVerificationDeliveryAdapter {
   ): Promise<{ success: boolean; messageId: string }>;
 }
 
+// --- Login Contracts (FEAT-AUTH-03 / UC-AUTH-01) ---
+export const LoginAuthStatus = {
+  AUTHENTICATED: 'AUTHENTICATED',
+  /** Reserved for FEAT-AUTH-05 (MFA challenge); never returned by FEAT-AUTH-03. */
+  MFA_REQUIRED: 'MFA_REQUIRED',
+  /** Reserved for multi-organization selection; never returned by FEAT-AUTH-03. */
+  ORG_SELECTION_REQUIRED: 'ORG_SELECTION_REQUIRED',
+  /** Login OTP requested and (when the account exists) delivered. */
+  OTP_SENT: 'OTP_SENT',
+} as const;
+
+export type LoginAuthStatus = (typeof LoginAuthStatus)[keyof typeof LoginAuthStatus];
+
+export interface LoginRequest {
+  /** Email or Vietnamese phone number of the account. */
+  identifier: string;
+  password: string;
+  remember_device?: boolean;
+}
+
+export interface AuthenticatedUser {
+  id: string;
+  merchant_id: string;
+  full_name: string;
+  email?: string | null;
+  phone?: string | null;
+  role: UserRole;
+  status: Uppercase<UserStatus>;
+  email_verified_at?: string | null;
+  phone_verified_at?: string | null;
+  created_at: string;
+}
+
+export interface AuthenticatedMerchant {
+  id: string;
+  name: string;
+  business_code?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  status?: string | null;
+  created_at: string;
+}
+
+export interface AuthSessionData {
+  status: Exclude<LoginAuthStatus, 'OTP_SENT'>;
+  access_token?: string;
+  /** Access token lifetime in seconds (present when access_token is returned). */
+  expires_in?: number;
+  challenge_id?: string;
+  user?: AuthenticatedUser;
+  merchant?: AuthenticatedMerchant;
+}
+
+export interface AuthResponse {
+  data: AuthSessionData;
+  meta: { correlation_id: string };
+}
+
+export interface LoginOtpRequestRequest {
+  identifier: string;
+}
+
+export interface LoginOtpChallengeData {
+  status: 'OTP_SENT';
+  /** Delivery channel resolved for the identifier. */
+  channel: 'email' | 'phone';
+  /** Masked recipient, e.g. m***@shipde.vn or 0901***567. */
+  recipient_masked: string;
+  cooldown_seconds: number;
+  expires_in_seconds: number;
+  message: string;
+}
+
+export interface LoginOtpChallengeResponse {
+  data: LoginOtpChallengeData;
+  meta: { correlation_id: string };
+}
+
+export interface LoginOtpVerifyRequest {
+  identifier: string;
+  otp: string;
+}
+
 // --- Prototype Navigation Personas ---
 export const PrototypePersona = {
   ...UserRole,

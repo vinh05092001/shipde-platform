@@ -31,14 +31,22 @@ if (buggyResult.grade !== Difficulty.MECHANICAL) {
   console.error('CONTROL_FAILED: buggy weak resolver did not default to MECHANICAL');
   process.exit(2);
 }
-console.log('CONTROL: detected and rejected false "weak" classification of unrecorded model (graded as ' + buggyResult.grade + ')');
+console.log(
+  'CONTROL: detected and rejected false "weak" classification of unrecorded model (graded as ' +
+    buggyResult.grade +
+    ')'
+);
 
 // MEASUREMENT: Real resolution of unrecorded model
 const unrecordedModel = { id: 'unrecorded-model-2026' };
 const cap = resolveCapability(unrecordedModel, { benchmarks: [] });
 
 if (cap.grade !== 'UNKNOWN') {
-  console.error('UNKNOWN_PROPAGATION_VIOLATION: unrecorded model resolved to ' + cap.grade + ', expected UNKNOWN');
+  console.error(
+    'UNKNOWN_PROPAGATION_VIOLATION: unrecorded model resolved to ' +
+      cap.grade +
+      ', expected UNKNOWN'
+  );
   process.exit(1);
 }
 
@@ -49,7 +57,9 @@ if (cap.grade === Difficulty.MECHANICAL) {
 
 // Ensure isCapable refuses UNKNOWN
 if (isCapable(unrecordedModel, Difficulty.MECHANICAL, { benchmarks: [] })) {
-  console.error('UNKNOWN_PROPAGATION_VIOLATION: UNKNOWN model was falsely treated as capable for MECHANICAL');
+  console.error(
+    'UNKNOWN_PROPAGATION_VIOLATION: UNKNOWN model was falsely treated as capable for MECHANICAL'
+  );
   process.exit(1);
 }
 
@@ -65,7 +75,10 @@ const sel = selectOffering({
 });
 
 if (!sel.selected || sel.selected.id !== 'capable-known') {
-  console.error('UNKNOWN_PROPAGATION_VIOLATION: UNKNOWN model was selected over capable candidate: ' + (sel.selected && sel.selected.id));
+  console.error(
+    'UNKNOWN_PROPAGATION_VIOLATION: UNKNOWN model was selected over capable candidate: ' +
+      (sel.selected && sel.selected.id)
+  );
   process.exit(1);
 }
 

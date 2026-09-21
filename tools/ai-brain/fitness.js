@@ -110,7 +110,13 @@ function extractGradeFromEvidence(evidence) {
     if (evidence.benchmark && Number.isFinite(Number(evidence.score))) {
       try {
         const { gradeFromBenchmark } = require('./benchmarks');
-        return gradeFromBenchmark(evidence.benchmark, evidence.score);
+        // The score is read on the scale its record declares; an unmappable one
+        // grades nothing rather than falling back to the lowest rung.
+        return gradeFromBenchmark(
+          evidence.benchmark,
+          evidence.score,
+          evidence.score_scale || evidence.scoreScale
+        );
       } catch (e) {
         return null;
       }
@@ -137,7 +143,11 @@ function resolveGrade(offering, options) {
   const prodGrade = extractGradeFromEvidence(prod);
   if (prodGrade !== null) {
     const r = { class: prodGrade, graded: true, source: GRADE_SOURCE.PRODUCTION };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.PRODUCTION, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.PRODUCTION,
+      enumerable: false,
+      writable: true,
+    });
     return r;
   }
 
@@ -146,24 +156,33 @@ function resolveGrade(offering, options) {
   const localGrade = extractGradeFromEvidence(local);
   if (localGrade !== null) {
     const r = { class: localGrade, graded: true, source: GRADE_SOURCE.LOCAL };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.LOCAL, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.LOCAL,
+      enumerable: false,
+      writable: true,
+    });
     return r;
   }
 
   // 3. externalEvidence (benchmarks.json)
   let ext = o.externalEvidence || opts.externalEvidence;
   if (!ext && (o.model || o.id)) {
-    try {
-      const { findBenchmarkEvidence, loadBenchmarks } = require('./benchmarks');
-      const bmarks = opts.benchmarks || loadBenchmarks();
-      const match = findBenchmarkEvidence(bmarks, o.model || o.id, o.modelVersion);
-      if (match) ext = match;
-    } catch (e) {}
+    // No catch: damaged evidence must fail closed, not read as "no evidence".
+    const { findBenchmarkEvidence, loadBenchmarks } = require('./benchmarks');
+    const bmarks = opts.benchmarks || loadBenchmarks();
+    const match = findBenchmarkEvidence(bmarks, o.model || o.id, o.modelVersion);
+    if (match) ext = match;
   }
   const extGrade = extractGradeFromEvidence(ext);
   if (extGrade !== null) {
-    const r = { class: extGrade, graded: true, source: GRADE_SOURCE.EXTERNAL };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.EXTERNAL, enumerable: false, writable: true });
+    // The record travels with the grade: a grade is only as good as the evidence
+    // it names, and the operator has to be able to see which record it was.
+    const r = { class: extGrade, graded: true, source: GRADE_SOURCE.EXTERNAL, evidence: ext };
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.EXTERNAL,
+      enumerable: false,
+      writable: true,
+    });
     return r;
   }
 
@@ -177,11 +196,7 @@ function resolveGrade(offering, options) {
         graded: false,
         source: GRADE_SOURCE.ASSUMED,
         declared,
-        error:
-          'out-of-ladder grade: ' +
-          (o.id || 'unknown') +
-          ' declares ' +
-          declared,
+        error: 'out-of-ladder grade: ' + (o.id || 'unknown') + ' declares ' + declared,
       };
       Object.defineProperty(r, 'layer', { value: null, enumerable: false, writable: true });
       return r;
@@ -360,7 +375,11 @@ function resolveReviewGrade(offering, options) {
   const prod = extractReviewGradeFromEvidence(o.productionResults || opts.productionResults);
   if (prod !== null) {
     const r = { class: prod, graded: true, source: GRADE_SOURCE.PRODUCTION };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.PRODUCTION, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.PRODUCTION,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
     return r;
   }
@@ -369,7 +388,11 @@ function resolveReviewGrade(offering, options) {
   const local = extractReviewGradeFromEvidence(o.localEvaluation || opts.localEvaluation);
   if (local !== null) {
     const r = { class: local, graded: true, source: GRADE_SOURCE.LOCAL };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.LOCAL, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.LOCAL,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
     return r;
   }
@@ -378,7 +401,11 @@ function resolveReviewGrade(offering, options) {
   const ext = extractReviewGradeFromEvidence(o.externalEvidence || opts.externalEvidence);
   if (ext !== null) {
     const r = { class: ext, graded: true, source: GRADE_SOURCE.EXTERNAL };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.EXTERNAL, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.EXTERNAL,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: false, enumerable: false, writable: true });
     return r;
   }
@@ -390,7 +417,11 @@ function resolveReviewGrade(offering, options) {
 
   if (declared === undefined || declared === null) {
     const r = { class: fallback, graded: false, source: GRADE_SOURCE.ASSUMED };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.INFERRED, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.INFERRED,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: true, enumerable: false, writable: true });
     return r;
   }
@@ -402,13 +433,13 @@ function resolveReviewGrade(offering, options) {
       graded: false,
       source: GRADE_SOURCE.ASSUMED,
       declared,
-      error:
-        'out-of-ladder review grade: ' +
-        (o.id || 'unknown') +
-        ' declares ' +
-        declared,
+      error: 'out-of-ladder review grade: ' + (o.id || 'unknown') + ' declares ' + declared,
     };
-    Object.defineProperty(r, 'layer', { value: EVIDENCE_LAYER.INFERRED, enumerable: false, writable: true });
+    Object.defineProperty(r, 'layer', {
+      value: EVIDENCE_LAYER.INFERRED,
+      enumerable: false,
+      writable: true,
+    });
     Object.defineProperty(r, 'inferred', { value: true, enumerable: false, writable: true });
     return r;
   }
@@ -444,6 +475,34 @@ function resolveCapability(offering, options) {
     coding,
     review,
   };
+}
+
+/**
+ * The operator-visible proof behind a grade record (TASK-AI-46 AC-46-02).
+ *
+ * A grade that came from anything other than verified external evidence is not
+ * reported as if it had, and a grade whose evidence was rejected says so with
+ * the rejection. Returns null when there is nothing to show, so the caller
+ * prints no line rather than a reassuring one.
+ */
+function formatGradeReason(gradeRecord) {
+  const record = gradeRecord || {};
+  if (record.error) return `No benchmark evidence: ${record.error}`;
+  if (record.source !== GRADE_SOURCE.EXTERNAL) return null;
+  const evidence = record.evidence;
+  if (!evidence || !evidence.benchmark) return null;
+  const name =
+    evidence.benchmark + (evidence.benchmarkVersion ? ` ${evidence.benchmarkVersion}` : '');
+  const scale = evidence.scoreScale || evidence.score_scale;
+  let shown;
+  if (Number.isFinite(Number(evidence.score))) {
+    shown =
+      scale === 'fraction' ? `${Math.round(Number(evidence.score) * 100)}%` : `${evidence.score}%`;
+  } else {
+    shown = 'an unreadable score';
+  }
+  const url = evidence.sourceUrl || evidence.source_url || 'no source recorded';
+  return `Graded from ${name} = ${shown} (${url}), not from a self-declared grade`;
 }
 
 function isSufficient(offering, difficulty) {
@@ -685,6 +744,7 @@ module.exports = {
   reviewGradeOf,
   resolveReviewGrade,
   resolveCapability,
+  formatGradeReason,
   isCapable,
   isSufficient,
   remainingTokens,
