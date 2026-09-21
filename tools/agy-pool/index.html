@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Ship Dễ · Agy Worker Pool</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, system-ui, sans-serif;
+        background: #08111f;
+        color: #e5eefc;
+      }
+      body {
+        margin: 0;
+        padding: 32px;
+        background: radial-gradient(circle at top, #132541, #08111f 55%);
+        min-height: 100vh;
+      }
+      main {
+        max-width: 1100px;
+        margin: auto;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        align-items: end;
+        margin-bottom: 24px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: clamp(28px, 5vw, 48px);
+      }
+      .sub,
+      .meta,
+      .path,
+      .runtime {
+        color: #91a4bf;
+      }
+      .workspace {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+        gap: 16px;
+      }
+      .card {
+        background: #0d1a2d;
+        border: 1px solid #243754;
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: 0 16px 50px #0005;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: start;
+      }
+      h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .badge {
+        padding: 5px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .ok {
+        color: #66e3a4;
+        background: #0d3a2a;
+      }
+      .warn {
+        color: #ffd37a;
+        background: #3c2e11;
+      }
+      .path {
+        font:
+          11px ui-monospace,
+          monospace;
+        overflow-wrap: anywhere;
+        margin: 16px 0 10px;
+      }
+      .runtime {
+        min-height: 38px;
+        font-size: 12px;
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 18px;
+      }
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 14px;
+        color: white;
+        background: #2d6cff;
+        cursor: pointer;
+        font-weight: 700;
+      }
+      button.secondary {
+        background: #22344f;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+      }
+      .notice {
+        margin-top: 20px;
+        padding: 14px 16px;
+        border-left: 3px solid #5d87ff;
+        background: #0d1a2d;
+        color: #aebed4;
+        font-size: 13px;
+      }
+      @media (max-width: 640px) {
+        body {
+          padding: 18px;
+        }
+        header {
+          align-items: start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Agy Worker Pool</h1>
+          <div class="sub">4 worker cố định · account riêng · không tự xoay quota</div>
+          <div id="workspace" class="workspace"></div>
+        </div>
+        <button id="refresh" class="secondary">Refresh</button>
+      </header>
+      <section id="profiles" class="grid" aria-live="polite"></section>
+      <div class="notice">
+        “Open login” mở terminal riêng cho profile. Trong Agy, dùng luồng đăng nhập chính thức. Pool
+        manager không đọc hoặc ghi token vào dashboard.
+      </div>
+    </main>
+    <script src="/client.js"></script>
+  </body>
+</html>

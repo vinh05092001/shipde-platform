@@ -526,4 +526,15 @@ devDependency pin that the manifest audit probes as `dependency "lefthook"`
 - Raising the implementation ceiling is a **governed decision, not an unvetted runtime setting**. An operator, caller, or runtime context cannot raise `maxImplementationAgents` via an arbitrary configuration knob.
 - In `tools/ai-brain/scheduler.js` (`planDispatch`), `maxImplementationAgents` defaults to 1. Any attempt to request `maxImplementationAgents > 1` without an approved governed decision identifier (`DEC-*` or `HUMAN-DECISION-*`) is rejected and clamped to 1, preserving the `AI-TOOL-03` stability measure.
 - The single-writer invariant (exactly one writer per Work Item / branch) remains absolute and non-configurable, holding permanently even when a governed decision raises concurrency across different Work Items.
+
+### Governed four-profile Agy pool (TASK-AI-45)
+
+`HUMAN-DECISION-AGY-POOL-FOUR-2026-09-21` approves four pinned Agy profiles on the operator's host. This is a bounded exception to the default capacity ceiling, not account rotation:
+
+- a profile is assigned to at most one Work Item and one isolated worktree at a time;
+- a Work Item and branch still have exactly one writer;
+- quota exhaustion pauses that profile's task and never switches its account automatically;
+- credentials remain outside the repository and the pool manager reports only credential-file presence;
+- login and launch actions run through a separate loopback-only service with confirmation tokens and audit records; the AI dashboard remains observational;
+- the default pool size is four and cannot be raised through the UI.
 - In `tools/ai-brain/executor.js` (`executePlan`), `maxImplementation` is read from `plan.utilisation.maxImplementation` (defaulting to 1) and enforces `IMPLEMENTATION_CEILING` on any attempt to exceed it.

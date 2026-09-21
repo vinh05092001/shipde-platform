@@ -1,5 +1,15 @@
 # Ship Dễ AI control scripts
 
+## Agy worker pool
+
+`start-agy-pool.ps1` starts a separate loopback manager at `http://127.0.0.1:3344` for four pinned Agy profiles. Use **Open login** once per profile, verify the Google account shown inside Agy, and use **Open Agy** to return to that worker. The manager never rotates accounts and never exposes token contents.
+
+```powershell
+.\scripts\ai\start-agy-pool.ps1
+```
+
+Profile data and action audit records live outside Git under `%USERPROFILE%\.shipde\agy-pool`. Four profiles are capacity, not permission for four writers on one Work Item; every implementation worker still requires a distinct Work Item, branch and worktree.
+
 Run these scripts from Windows PowerShell. They default to `%USERPROFILE%\AI` and repository `vinh05092001/shipde-platform`.
 
 | Script                         | Purpose                                                                                                                                                                                                    | Writes external state                                                                                                                                          |
