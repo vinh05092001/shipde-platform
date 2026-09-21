@@ -1465,11 +1465,20 @@ export class AuthService {
     const ttlSeconds = this.config?.AUTH_TOKEN_TTL_SECONDS ?? 43200;
     const merchant = user.merchant;
 
+    // Generate session token hash (matches SessionService.create pattern)
+    const rawSessionToken = randomBytes(48).toString('hex');
+    const sessionTokenHash = createHash('sha256').update(rawSessionToken).digest('hex');
+    const sessionExpiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000); // 90-day absolute lifetime
+
     const session = await this.prisma.deviceSession.create({
       data: {
         user_id: user.id,
+        merchant_id: user.merchant_id,
+        session_token_hash: sessionTokenHash,
         device_id: rememberDevice ? 'web-remember' : 'web-session',
         last_active_at: new Date(),
+        status: 'ACTIVE' as const,
+        expires_at: sessionExpiresAt,
       },
     });
 

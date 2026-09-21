@@ -1,6 +1,9 @@
 -- FEAT-AUTH-06: Session management migration
 -- Adds session lifecycle fields to device_sessions table
 
+-- Ensure pgcrypto is available for gen_random_bytes (required for PG <17)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- CreateEnum
 CREATE TYPE "SessionStatusEnum" AS ENUM ('ACTIVE', 'REVOKED', 'EXPIRED', 'INACTIVE');
 
