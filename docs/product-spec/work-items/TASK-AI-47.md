@@ -32,7 +32,7 @@ All numbers come from real measurements already on disk. Where a value cannot be
 
 ### AI-47-R01: Radial layout
 
-The view is a radial diagram rendered as SVG inside a standalone HTML page at `/rotation`. The hub sits at the centre. Each configured access source occupies a node arranged around the hub. Sources: 9Router, xKiro, agy (local), agy (docker), Cline, AutoClaw, AO. Only sources that are actually configured (present in logs, quota store, or limits) appear; unconfigured sources are omitted rather than shown as empty.
+The view is a radial diagram rendered as SVG inside a standalone HTML page at `/rotation`. The hub sits at the centre. Each configured access source occupies a node arranged around the hub. Sources: 9Router, xKiro, agy (local), agy (docker), Cline, AutoClaw, AO, bai (B.AI), tencent, rqsty, thb. Only sources that are actually configured (present in logs, quota store, or limits) appear; unconfigured sources are omitted rather than shown as empty.
 
 ### AI-47-R02: Live arrows
 
