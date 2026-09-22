@@ -1,0 +1,172 @@
+﻿Review verdict: CHANGES_REQUIRED
+
+### Review Summary
+- **Work Item:** [FEAT-AUTH-02](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/docs/product-spec/work-items/FEAT-AUTH-02.md)
+- **Pull Request:** #123 (`[FEAT-AUTH-02] Admin-created shop account: operator provisions initial owner without public signup`)
+- **Reviewed Commit SHA:** `0d0180504e40fbacd8f74c73aeec807e241bd032`
+- **Role:** Independent Reviewer (Codex)
+- **Review Status:** Re-review of PR #123 at current HEAD (commit `0d0180504e40fbacd8f74c73aeec807e241bd032`)
+
+---
+
+### Earlier Blocking Findings Re-check
+
+Earlier reviews of PR #123 on commit `7ae6473db4a22d2d7382b656c1070734bba112ca` identified 5 blocking/remediation findings. While commit `0d0180504e40fbacd8f74c73aeec807e241bd032` added specification docs under `docs/product-spec/docs/`, **all five earlier findings remain UNRESOLVED at the current HEAD**:
+
+1. **Finding 1 (Blocking) — OpenAPI Contract Drift:**
+   - **Status:** **UNRESOLVED**
+   - **Details:** `docs/product-spec/contracts/openapi.yaml` remains unedited in the PR (`git diff origin/main...FETCH_HEAD -- docs/product-spec/contracts/openapi.yaml` is empty). The manual edits to [packages/contracts/src/openapi.ts:410-427](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/packages/contracts/src/openapi.ts#L410-L427) do not originate from the source YAML specification. `pnpm contract:check` continues to fail with exit code 1.
+
+2. **Finding 2 (Blocking) — PR Body Contract Validation Failure:**
+   - **Status:** **UNRESOLVED**
+   - **Details:** The PR description under `## Codex review` continues to contain template placeholder `<PASS/CHANGES_REQUIRED/BLOCKED — filled by Codex>`. As a result, `validate_pr_contract.py` fails with `PR body still contains required template placeholders`.
+
+3. **Finding 3 (Blocking) — Windows Incompatibility & Missing API Test Script Integration:**
+   - **Status:** **UNRESOLVED**
+   - **Details:** [package.json:44](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/package.json#L44) still defines `"test:admin"` using inline POSIX env syntax (`PLATFORM_ADMIN_KEY=test-admin-key-2026 ...`), which fails on Windows with `'PLATFORM_ADMIN_KEY' is not recognized as an internal or external command`. Additionally, [apps/api/package.json:12](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/apps/api/package.json#L12) still omits `admin-auth.supertest.spec.ts` from `"test"`.
+
+4. **Finding 4 (Blocking) — Missing 255 Character Upper Bound on `merchant_name` (BR-ADMIN-02):**
+   - **Status:** **UNRESOLVED**
+   - **Details:** [apps/api/src/auth/admin-auth.service.ts:39-45](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/apps/api/src/auth/admin-auth.service.ts#L39-L45) only validates `dto.merchant_name.trim().length < 2`. Inputs longer than 255 characters are not rejected with a 400 `VALIDATION_ERROR`, causing an unhandled Prisma P2000 database exception against `Merchant.name VARCHAR(255)`.
+
+5. **Finding 5 (Documentation / Traceability) — Work Item Document Metadata Not Updated:**
+   - **Status:** **UNRESOLVED**
+   - **Details:** In [docs/product-spec/work-items/FEAT-AUTH-02.md](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/docs/product-spec/work-items/FEAT-AUTH-02.md), line 9 still lists `| Status | IN_PROGRESS |`, line 17 still lists `| Pull Request | — |`, and lines 170-174 still show `Not yet implemented; no Pull Request opened`.
+
+---
+
+### Supersession & Dependency Claims Check
+- The PR description claims:
+  > All dependencies are merged (TASK-FOUND-04, FEAT-AUTH-01).
+- **Verification against repository history (`origin/main`):**
+  - `TASK-FOUND-04`: Merged as commit `9d101f4e5d9de9b880cc4311126ce8fe06de4206` (PR #13).
+  - `FEAT-AUTH-01`: Merged as commit `4f32b93` (PR #14).
+  - **Verdict:** Validated. All declared dependencies are present in `origin/main`. No supersession claims are made.
+
+---
+
+### Automated Validation and Test Output
+
+#### 1. `python docs/product-spec/scripts/validate_docs.py`
+```text
+Documentation validation passed: 115 markdown files, 130 feature IDs, 179 delivery rows, 998 unique identifiers.
+```
+*(Exit code: 0)*
+
+#### 2. `python docs/product-spec/scripts/validate_pr_contract.py`
+```text
+Pull Request contract validation failed:
+- PR body still contains required template placeholders
+```
+*(Exit code: 1)*
+
+#### 3. `pnpm contract:check`
+```text
+$ tsx scripts/verify-contracts.ts
+================================================================
+📜 SHIP DỄ — BỘ KIỂM SOÁT VÀ KIỂM TOÁN HỢP ĐỒNG (OPENAPI CONTRACT GATE)
+================================================================
+
+❌ PHÁT HIỆN LỖI HỢP ĐỒNG HOẶC DRIFT CONTRACT:
+ - Contract drift detected! packages/contracts/src/openapi.ts does not match docs/product-spec/contracts/openapi.yaml. Run 'pnpm contract:generate' to update.
+[ELIFECYCLE] Command failed with exit code 1.
+```
+*(Exit code: 1)*
+
+#### 4. `pnpm run test:admin` (Windows CMD/PowerShell)
+```text
+$ PLATFORM_ADMIN_KEY=test-admin-key-2026 tsx apps/api/src/auth/admin-auth.supertest.spec.ts
+'PLATFORM_ADMIN_KEY' is not recognized as an internal or external command,
+operable program or batch file.
+[ELIFECYCLE] Command failed with exit code 1.
+```
+*(Exit code: 1)*
+
+#### 5. `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/auth/admin-auth.supertest.spec.ts`
+```text
+================================================================
+SHIP DE - ADMIN AUTH SUPERTEST SUITE (FEAT-AUTH-02)
+================================================================
+[AC-ADMIN-01] Missing admin key returns 403
+  PASS: AC-ADMIN-01
+[AC-ADMIN-02] Invalid admin key returns 403
+  PASS: AC-ADMIN-02
+[AC-ADMIN-03] Valid admin key, email-only registration
+  PASS: AC-ADMIN-03
+[AC-ADMIN-04] DB: user active, verified timestamps
+  PASS: AC-ADMIN-04
+[AC-ADMIN-05] Merchant code generation
+  PASS: AC-ADMIN-05
+[AC-ADMIN-06] Phone-only registration
+  PASS: AC-ADMIN-06
+[AC-ADMIN-07] Custom password: no temporary_password
+  PASS: AC-ADMIN-07
+[AC-ADMIN-08] Duplicate email (active) returns 400
+  PASS: AC-ADMIN-08
+[AC-ADMIN-09] Missing both email and phone
+  PASS: AC-ADMIN-09
+[AC-ADMIN-10] Invalid email format
+  PASS: AC-ADMIN-10
+[AC-ADMIN-11] Invalid phone format
+  PASS: AC-ADMIN-11
+[AC-ADMIN-12] Short password
+  PASS: AC-ADMIN-12
+[AC-ADMIN-13] Missing merchant_name
+  PASS: AC-ADMIN-13
+[AC-ADMIN-14] GET /admin/shops lists merchants
+  PASS: AC-ADMIN-14
+[AC-ADMIN-15] GET /admin/shops without key returns 403
+  PASS: AC-ADMIN-15
+[AC-ADMIN-16] Duplicate phone (active) returns 400
+  PASS: AC-ADMIN-16
+[AC-ADMIN-17] Pagination
+  PASS: AC-ADMIN-17
+[AC-ADMIN-18] Both email + phone: both verified
+  PASS: AC-ADMIN-18
+[AC-ADMIN-19] Audit log persisted for ADMIN_CREATE_SHOP
+  PASS: AC-ADMIN-19
+[AC-ADMIN-20] Email case normalization
+  PASS: AC-ADMIN-20
+================================================================
+RESULTS: 20 passed, 0 failed
+================================================================
+```
+*(Exit code: 0)*
+
+---
+
+### Detailed Findings & File:Line Evidence
+
+#### Finding 1 (Blocking): OpenAPI Contract Drift
+- **Location:** [packages/contracts/src/openapi.ts:410-427](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/packages/contracts/src/openapi.ts#L410-L427) vs [docs/product-spec/contracts/openapi.yaml](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/docs/product-spec/contracts/openapi.yaml)
+- **Evidence:** `packages/contracts/src/openapi.ts` was manually modified to add `/admin/shops` endpoints and DTO schemas (`AdminCreateShopRequest`, `AdminShopResponse`), while `docs/product-spec/contracts/openapi.yaml` was not updated.
+- **Impact:** Fails single-source OpenAPI contract integrity (`pnpm contract:check`).
+
+#### Finding 2 (Blocking): Template Placeholder in PR Description
+- **Location:** PR #123 body (`## Codex review`)
+- **Evidence:** Line in PR description contains `- Verdict: <PASS/CHANGES_REQUIRED/BLOCKED — filled by Codex>`.
+- **Impact:** `validate_pr_contract.py` regex `r"<[^>\n]+>"` flags unresolved placeholders and exits with code 1.
+
+#### Finding 3 (Blocking): Windows Incompatibility in Root `package.json` & Incomplete API Package Tests
+- **Location:** [package.json:44](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/package.json#L44) and [apps/api/package.json:12](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/apps/api/package.json#L12)
+- **Evidence:**
+  - `package.json:44` has `"test:admin": "PLATFORM_ADMIN_KEY=test-admin-key-2026 tsx apps/api/src/auth/admin-auth.supertest.spec.ts"`. In Windows command prompt, prepending env variables inline is not valid syntax. Because `admin-auth.supertest.spec.ts:53` already sets `process.env.PLATFORM_ADMIN_KEY = VALID_ADMIN_KEY;` internally, the inline env definition is unnecessary.
+  - `apps/api/package.json:12` only executes `api.test.ts`, `api.supertest.spec.ts`, and `auth.supertest.spec.ts`, leaving out `admin-auth.supertest.spec.ts` from `pnpm --filter @shipde/api test`.
+
+#### Finding 4 (Blocking): Missing 255 Character Upper Bound on `merchant_name`
+- **Location:** [apps/api/src/auth/admin-auth.service.ts:39-45](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/apps/api/src/auth/admin-auth.service.ts#L39-L45)
+- **Evidence:** Rule BR-ADMIN-02 states: `merchant_name required, 2-255 characters.` Currently, the service only verifies `dto.merchant_name.trim().length < 2`. If an input exceeds 255 characters, Prisma throws a P2000 column length constraint exception, resulting in an unhandled 500 error instead of a 400 `VALIDATION_ERROR`.
+
+#### Finding 5 (Traceability): Unupdated Work Item Document
+- **Location:** [docs/product-spec/work-items/FEAT-AUTH-02.md:9,17,170-174](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/docs/product-spec/work-items/FEAT-AUTH-02.md#L9)
+- **Evidence:** Metadata in `FEAT-AUTH-02.md` still reflects pre-implementation status (`IN_PROGRESS`, `Pull Request: —`, and `Not yet implemented; no Pull Request opened`).
+
+---
+
+### Required Remediations
+1. Add `/admin/shops` paths, operations, and schemas to [docs/product-spec/contracts/openapi.yaml](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/docs/product-spec/contracts/openapi.yaml), then run `pnpm contract:generate` to regenerate [packages/contracts/src/openapi.ts](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/packages/contracts/src/openapi.ts), and ensure `pnpm contract:check` passes.
+2. Edit PR #123 body to replace `<PASS/CHANGES_REQUIRED/BLOCKED — filled by Codex>` with the actual status (e.g. `CHANGES_REQUIRED`), ensuring `validate_pr_contract.py` passes cleanly.
+3. Fix [package.json:44](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/package.json#L44) to be cross-platform (e.g. `tsx --tsconfig apps/api/tsconfig.json apps/api/src/auth/admin-auth.supertest.spec.ts`) and include `admin-auth.supertest.spec.ts` in [apps/api/package.json:12](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/apps/api/package.json#L12).
+4. Add upper-bound check `dto.merchant_name.trim().length > 255` returning `VALIDATION_ERROR` in [apps/api/src/auth/admin-auth.service.ts:39](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/apps/api/src/auth/admin-auth.service.ts#L39).
+5. Update status, PR reference, and review table in [docs/product-spec/work-items/FEAT-AUTH-02.md](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f4945-run/docs/product-spec/work-items/FEAT-AUTH-02.md).
+

@@ -1,0 +1,216 @@
+﻿Review verdict: CHANGES_REQUIRED
+
+### Review Summary
+- **Work Item:** [FEAT-AUTH-02](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/docs/product-spec/work-items/FEAT-AUTH-02.md)
+- **Pull Request:** #123 (`[FEAT-AUTH-02] Admin-created shop account: operator provisions initial owner without public signup`)
+- **Reviewed Commit SHA:** `0d0180504e40fbacd8f74c73aeec807e241bd032`
+- **Role:** Independent Reviewer (Codex)
+- **Review Round:** Re-review at current HEAD commit `0d0180504e40fbacd8f74c73aeec807e241bd032`
+
+---
+
+### Earlier Blocking Findings Re-check
+
+Review of earlier blocking findings from comments starting with 'Review verdict' on issue #123 (Comments #5751203744, #5751204188, and #5751560611):
+
+1. **Finding 1 (OpenAPI Contract Drift):**
+   - **Status:** **UNRESOLVED**
+   - **Evidence:** `docs/product-spec/contracts/openapi.yaml` does not contain `/admin/shops` or related schemas (`AdminCreateShopRequest`, `AdminShopResponse`). In contrast, [packages/contracts/src/openapi.ts:410-427](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/packages/contracts/src/openapi.ts#L410-L427) has manually added TypeScript interfaces and paths. Running `pnpm contract:check` fails with exit code 1.
+2. **Finding 2 (Template Placeholder in PR Body):**
+   - **Status:** **UNRESOLVED**
+   - **Evidence:** PR #123 description under `## Codex review` line 73 still contains `- Verdict: <PASS/CHANGES_REQUIRED/BLOCKED — filled by Codex>`. Running `validate_pr_contract.py` fails with exit code 1.
+3. **Finding 3 (Windows Incompatibility in package.json & Missing Integration in apps/api/package.json):**
+   - **Status:** **UNRESOLVED**
+   - **Evidence:** [package.json:44](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/package.json#L44) still defines `"test:admin": "PLATFORM_ADMIN_KEY=test-admin-key-2026 tsx apps/api/src/auth/admin-auth.supertest.spec.ts"`, which fails on Windows with `'PLATFORM_ADMIN_KEY' is not recognized as an internal or external command`. In addition, [apps/api/package.json:12](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/package.json#L12) still omits `admin-auth.supertest.spec.ts` from the package test suite.
+4. **Finding 4 (Missing 255 Character Upper Bound on merchant_name):**
+   - **Status:** **UNRESOLVED**
+   - **Evidence:** In [apps/api/src/auth/admin-auth.service.ts:39-45](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L39-L45), `createShop` only validates `dto.merchant_name.trim().length < 2`. No upper-bound check (`> 255`) is enforced, violating BR-ADMIN-02 and allowing Prisma P2000 column overflow to produce an unhandled 500 error instead of a 400 `VALIDATION_ERROR`.
+5. **Finding 5 (Unupdated Work Item Document Metadata):**
+   - **Status:** **UNRESOLVED**
+   - **Evidence:** In [docs/product-spec/work-items/FEAT-AUTH-02.md:9,17,174](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/docs/product-spec/work-items/FEAT-AUTH-02.md#L9), the Status remains `IN_PROGRESS`, Pull Request remains `—`, and the review record table shows `— | — | — | Not yet implemented; no Pull Request opened`.
+
+---
+
+### Specification Rules & Acceptance Matrix Check
+
+#### Business Rules (docs/product-spec/work-items/FEAT-AUTH-02.md):
+- **BR-ADMIN-01 (Admin key required):** PASS. Implemented via `AdminAuthGuard` in [apps/api/src/auth/admin-auth.guard.ts:16-43](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.guard.ts#L16-L43).
+- **BR-ADMIN-02 (merchant_name 2-255 chars):** **FAIL**. Upper bound (> 255 chars) not checked in [apps/api/src/auth/admin-auth.service.ts:39-45](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L39-L45).
+- **BR-ADMIN-03 (At least email or phone required):** PASS. Validated in [apps/api/src/auth/admin-auth.service.ts:50-56](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L50-L56).
+- **BR-ADMIN-04 (owner_email regex):** PASS. Validated in [apps/api/src/auth/admin-auth.service.ts:58-65](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L58-L65).
+- **BR-ADMIN-05 (owner_phone regex):** PASS. Validated in [apps/api/src/auth/admin-auth.service.ts:67-74](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L67-L74).
+- **BR-ADMIN-06 (Duplicate active email):** PASS. Handled in [apps/api/src/auth/admin-auth.service.ts:89-106](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L89-L106).
+- **BR-ADMIN-07 (Duplicate active phone):** PASS. Handled in [apps/api/src/auth/admin-auth.service.ts:108-124](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L108-L124).
+- **BR-ADMIN-08 (Temporary password auto-generation):** PASS. Handled in [apps/api/src/auth/admin-auth.service.ts:133-138,206-218](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L133-L138).
+- **BR-ADMIN-09 (Password minimum 8 chars):** PASS. Validated in [apps/api/src/auth/admin-auth.service.ts:76-83](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L76-L83).
+- **BR-ADMIN-10 (status=active, role=OWNER, timestamps set):** PASS. Enforced in [apps/api/src/auth/admin-auth.service.ts:178-185](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L178-L185).
+- **BR-ADMIN-11 (Merchant code auto-generated):** PASS. Handled in [apps/api/src/auth/admin-auth.service.ts:145-164](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L145-L164).
+- **BR-ADMIN-12 (User.created_by = 'platform_admin'):** PASS. Set in [apps/api/src/auth/admin-auth.service.ts:184](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L184).
+- **BR-ADMIN-13 (User.activated_at = now()):** PASS. Set in [apps/api/src/auth/admin-auth.service.ts:183](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L183).
+- **BR-ADMIN-14 (Transaction atomicity):** PASS. Executed in prisma.$transaction in [apps/api/src/auth/admin-auth.service.ts:168](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L168).
+- **BR-ADMIN-15 (Duplicate merchant name allowed, unique code):** PASS. Code retry loop in [apps/api/src/auth/admin-auth.service.ts:147-164](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L147-L164).
+- **BR-ADMIN-16 (scrypt password hashing):** PASS. Handled in [apps/api/src/auth/admin-auth.service.ts:140-142](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L140-L142).
+- **BR-ADMIN-17 (Audit log ADMIN_CREATE_SHOP):** PASS. Handled in [apps/api/src/auth/admin-auth.service.ts:192-204](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L192-L204).
+- **BR-ADMIN-18 (GET /admin/shops paginated with owner):** PASS. Handled in [apps/api/src/auth/admin-auth.service.ts:221-274](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L221-L274).
+- **BR-ADMIN-19 (No rate limiting on admin):** PASS. No rate limiter guard on AdminAuthController.
+- **BR-ADMIN-20 (Immediate active status):** PASS. Set in [apps/api/src/auth/admin-auth.service.ts:179](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L179).
+
+#### Acceptance Criteria Matrix (AC-ADMIN-01..16):
+| AC/Test ID | Scenario | Result | Evidence / Finding |
+|---|---|---|---|
+| AC-ADMIN-01 | Create shop with email + password | PASS | admin-auth.supertest.spec.ts L67-93 |
+| AC-ADMIN-02 | Create shop with phone only | PASS | admin-auth.supertest.spec.ts L131-155 |
+| AC-ADMIN-03 | Create shop without password (auto-gen) | PASS | admin-auth.supertest.spec.ts L157-184 |
+| AC-ADMIN-04 | Missing merchant_name | PARTIAL / FAIL | admin-auth.supertest.spec.ts L276-291 tests empty name, but >255 char length check is missing in service (BR-ADMIN-02) |
+| AC-ADMIN-05 | Missing both email and phone | PASS | admin-auth.supertest.spec.ts L209-223 |
+| AC-ADMIN-06 | Invalid email format | PASS | admin-auth.supertest.spec.ts L225-239 |
+| AC-ADMIN-07 | Invalid phone format | PASS | admin-auth.supertest.spec.ts L241-255 |
+| AC-ADMIN-08 | Duplicate active email | PASS | admin-auth.supertest.spec.ts L186-207 |
+| AC-ADMIN-09 | Duplicate active phone | PASS | admin-auth.supertest.spec.ts L314-335 |
+| AC-ADMIN-10 | Missing admin API key | PASS | admin-auth.supertest.spec.ts L55-65 |
+| AC-ADMIN-11 | Invalid admin API key | PASS | admin-auth.supertest.spec.ts L67-77 |
+| AC-ADMIN-12 | Transaction atomicity | PASS | Prisma $transaction ensures rollback on failure |
+| AC-ADMIN-13 | Audit log recorded | PASS | admin-auth.supertest.spec.ts L358-380 |
+| AC-ADMIN-14 | GET /admin/shops returns shops | PASS | admin-auth.supertest.spec.ts L293-305 |
+| AC-ADMIN-15 | Password hashing | PASS | admin-auth.supertest.spec.ts L114-118 verifies scrypt hash |
+| AC-ADMIN-16 | Admin-created account immediately ACTIVE | PASS | admin-auth.supertest.spec.ts L95-112 |
+
+---
+
+### Supersession & Dependency Claims Check
+
+- **PR #123 claims:**
+  > All dependencies are merged (TASK-FOUND-04, FEAT-AUTH-01).
+- **Verification against git repository history (`origin/main`):**
+  - `TASK-FOUND-04`: Verified merged as commit `9d101f4e5d9de9b880cc4311126ce8fe06de4206` (PR #13).
+  - `FEAT-AUTH-01`: Verified merged as commit `4f32b93b18db6087559169f34eaa619cfd56da49` (PR #14).
+  - **Verdict:** Stated dependencies are verified present in `origin/main`.
+- **Supersession Check:** No supersession claims are made in the PR body. In the repository PR queue, PR #125 (`feat/feat-auth-02-admin-shop-account`) exists as a parallel branch for `FEAT-AUTH-02`, but neither PR is merged into `origin/main`, and PR #123 remains an unmerged candidate.
+
+---
+
+### Automated Validation and Test Output
+
+#### 1. `python docs/product-spec/scripts/validate_docs.py`
+```text
+Documentation validation passed: 115 markdown files, 130 feature IDs, 179 delivery rows, 998 unique identifiers.
+```
+*(Exit code: 0)*
+
+#### 2. `python docs/product-spec/scripts/validate_pr_contract.py`
+```text
+Pull Request contract validation failed:
+- PR body still contains required template placeholders
+```
+*(Exit code: 1)*
+
+#### 3. `pnpm contract:check`
+```text
+$ tsx scripts/verify-contracts.ts
+================================================================
+📜 SHIP DỄ — BỘ KIỂM SOÁT VÀ KIỂM TOÁN HỢP ĐỒNG (OPENAPI CONTRACT GATE)
+================================================================
+
+❌ PHÁT HIỆN LỖI HỢP ĐỒNG HOẶC DRIFT CONTRACT:
+ - Contract drift detected! packages/contracts/src/openapi.ts does not match docs/product-spec/contracts/openapi.yaml. Run 'pnpm contract:generate' to update.
+[ELIFECYCLE] Command failed with exit code 1.
+```
+*(Exit code: 1)*
+
+#### 4. `pnpm run test:admin` (Windows environment)
+```text
+$ PLATFORM_ADMIN_KEY=test-admin-key-2026 tsx apps/api/src/auth/admin-auth.supertest.spec.ts
+'PLATFORM_ADMIN_KEY' is not recognized as an internal or external command,
+operable program or batch file.
+[ELIFECYCLE] Command failed with exit code 1.
+```
+*(Exit code: 1)*
+
+#### 5. `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/auth/admin-auth.supertest.spec.ts`
+```text
+================================================================
+SHIP DE - ADMIN AUTH SUPERTEST SUITE (FEAT-AUTH-02)
+================================================================
+[AC-ADMIN-01] Missing admin key returns 403
+  PASS: AC-ADMIN-01
+[AC-ADMIN-02] Invalid admin key returns 403
+  PASS: AC-ADMIN-02
+[AC-ADMIN-03] Valid admin key, email-only registration
+  PASS: AC-ADMIN-03
+[AC-ADMIN-04] DB: user active, verified timestamps
+  PASS: AC-ADMIN-04
+[AC-ADMIN-05] Merchant code generation
+  PASS: AC-ADMIN-05
+[AC-ADMIN-06] Phone-only registration
+  PASS: AC-ADMIN-06
+[AC-ADMIN-07] Custom password: no temporary_password
+  PASS: AC-ADMIN-07
+[AC-ADMIN-08] Duplicate email (active) returns 400
+  PASS: AC-ADMIN-08
+[AC-ADMIN-09] Missing both email and phone
+  PASS: AC-ADMIN-09
+[AC-ADMIN-10] Invalid email format
+  PASS: AC-ADMIN-10
+[AC-ADMIN-11] Invalid phone format
+  PASS: AC-ADMIN-11
+[AC-ADMIN-12] Short password
+  PASS: AC-ADMIN-12
+[AC-ADMIN-13] Missing merchant_name
+  PASS: AC-ADMIN-13
+[AC-ADMIN-14] GET /admin/shops lists merchants
+  PASS: AC-ADMIN-14
+[AC-ADMIN-15] GET /admin/shops without key returns 403
+  PASS: AC-ADMIN-15
+[AC-ADMIN-16] Duplicate phone (active) returns 400
+  PASS: AC-ADMIN-16
+[AC-ADMIN-17] Pagination
+  PASS: AC-ADMIN-17
+[AC-ADMIN-18] Both email + phone: both verified
+  PASS: AC-ADMIN-18
+[AC-ADMIN-19] Audit log persisted for ADMIN_CREATE_SHOP
+  PASS: AC-ADMIN-19
+[AC-ADMIN-20] Email case normalization
+  PASS: AC-ADMIN-20
+================================================================
+RESULTS: 20 passed, 0 failed
+================================================================
+```
+*(Exit code: 0)*
+
+---
+
+### Detailed Findings & File:Line Evidence
+
+#### Finding 1 (Blocking): OpenAPI Contract Drift
+- **Location:** [packages/contracts/src/openapi.ts:410-427](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/packages/contracts/src/openapi.ts#L410-L427) vs [docs/product-spec/contracts/openapi.yaml](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/docs/product-spec/contracts/openapi.yaml)
+- **Evidence:** `packages/contracts/src/openapi.ts` contains hand-written TypeScript endpoints for `/admin/shops`, while the single-source schema `docs/product-spec/contracts/openapi.yaml` does not have `/admin/shops`.
+- **Impact:** `pnpm contract:check` fails on CI and locally.
+
+#### Finding 2 (Blocking): Template Placeholder in PR Description
+- **Location:** PR #123 body (`## Codex review`)
+- **Evidence:** Line 73 in PR description contains `- Verdict: <PASS/CHANGES_REQUIRED/BLOCKED — filled by Codex>`.
+- **Impact:** `validate_pr_contract.py` regex `r"<[^>
+]+>"` flags unresolved placeholders and exits with code 1.
+
+#### Finding 3 (Blocking): Windows Incompatibility in Root `package.json` & Incomplete API Package Tests
+- **Location:** [package.json:44](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/package.json#L44) and [apps/api/package.json:12](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/package.json#L12)
+- **Evidence:**
+  - `package.json:44` has `"test:admin": "PLATFORM_ADMIN_KEY=test-admin-key-2026 tsx apps/api/src/auth/admin-auth.supertest.spec.ts"`. On Windows, inline env var setting syntax fails in standard cmd.exe. `admin-auth.supertest.spec.ts:53` already initializes `process.env.PLATFORM_ADMIN_KEY = VALID_ADMIN_KEY;` internally.
+  - `apps/api/package.json:12` only runs `api.test.ts`, `api.supertest.spec.ts`, and `auth.supertest.spec.ts`, leaving `admin-auth.supertest.spec.ts` out of monorepo API package testing.
+
+#### Finding 4 (Blocking): Missing 255 Character Upper Bound on `merchant_name`
+- **Location:** [apps/api/src/auth/admin-auth.service.ts:39-45](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L39-L45)
+- **Evidence:** Rule BR-ADMIN-02 mandates: `merchant_name required, 2-255 characters.` The service checks only minimum length `< 2`, but omits `> 255`. If exceeded, Prisma throws a P2000 column length exception resulting in an unhandled 500 error instead of a 400 `VALIDATION_ERROR`.
+
+#### Finding 5 (Traceability): Unupdated Work Item Document
+- **Location:** [docs/product-spec/work-items/FEAT-AUTH-02.md:9,17,174](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/docs/product-spec/work-items/FEAT-AUTH-02.md#L9)
+- **Evidence:** Metadata in `FEAT-AUTH-02.md` still reflects pre-implementation status (`IN_PROGRESS`, `Pull Request: —`, and `Not yet implemented; no Pull Request opened`).
+
+---
+
+### Required Remediations
+1. Add `/admin/shops` paths, operations, and schemas to [docs/product-spec/contracts/openapi.yaml](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/docs/product-spec/contracts/openapi.yaml), run `pnpm contract:generate` to update [packages/contracts/src/openapi.ts](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/packages/contracts/src/openapi.ts), and confirm `pnpm contract:check` passes.
+2. Edit PR #123 body to replace `<PASS/CHANGES_REQUIRED/BLOCKED — filled by Codex>` with actual status (e.g. `CHANGES_REQUIRED`), ensuring `validate_pr_contract.py` passes.
+3. Update [package.json:44](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/package.json#L44) to cross-platform execution (e.g. `tsx --tsconfig apps/api/tsconfig.json apps/api/src/auth/admin-auth.supertest.spec.ts`) and include `admin-auth.supertest.spec.ts` in [apps/api/package.json:12](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/package.json#L12).
+4. Add upper-bound check `dto.merchant_name.trim().length > 255` returning `VALIDATION_ERROR` in [apps/api/src/auth/admin-auth.service.ts:39](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/apps/api/src/auth/admin-auth.service.ts#L39).
+5. Update status to `READY_FOR_CODEX`, record Pull Request #123, and log review entry in [docs/product-spec/work-items/FEAT-AUTH-02.md](file:///C:/Users/gumac/AI/shipde-platform/.worktrees/c123f2057-run/docs/product-spec/work-items/FEAT-AUTH-02.md).

@@ -1,0 +1,561 @@
+﻿// ============================================================================
+// Ship Dễ — Database Schema for PostgreSQL 16+ (Tập 1, 2, 4)
+// Thiết kế bảo đảm: Append-only Events, Multi-tenant Isolation, Immutable Audits,
+// Maker-Checker Segregation, 6 Discrepancy Rules & Optimistic Locking.
+// ============================================================================
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum RoleEnum {
+  OWNER
+  OPS_CSKH
+  WAREHOUSE
+  ACCOUNTANT
+}
+
+enum CarrierCodeEnum {
+  GHN
+  GHTK
+  VIETTEL_POST
+  JT
+}
+
+enum CarrierTierEnum {
+  L0_OBSERVE
+  L1_ASSIST
+  L2_EXECUTE
+}
+
+enum ShipmentStatusEnum {
+  DRAFT
+  PICKING
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  RETURNING
+  RETURNED
+  CANCELLED
+  LOST
+  DAMAGED
+}
+
+enum ExceptionTypeEnum {
+  PICKUP_DELAY
+  STUCK_IN_TRANSIT
+  DELIVERY_FAIL
+  STATUS_MISMATCH
+}
+
+enum ExceptionCaseStatusEnum {
+  OPEN
+  ASSIGNED
+  CONTACTING
+  WAITING_CUSTOMER
+  REATTEMPT_REQUESTED
+  WAITING_REATTEMPT
+  RESCUED
+  RETURNING
+  RETURNED
+  UNRESOLVED
+}
+
+enum MatchingStatusEnum {
+  MATCHED_EXACT
+  MATCHED_FUZZY
+  UNMATCHED
+  AMBIGUOUS
+}
+
+enum DiscrepancyTypeEnum {
+  D1_WEIGHT
+  D2_FREIGHT
+  D3_SURCHARGE
+  D4_DUPLICATE
+  D5_COD_MISMATCH
+  D6_OVERDUE_COD
+  D7_MISSING
+}
+
+enum DiscrepancyStatusEnum {
+  OPEN
+  CONFIRMED
+  DISPUTED
+  WAIVED
+  CARRIED_FORWARD
+  RESOLVED
+}
+
+enum ClaimStatusEnum {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  ACCEPTED
+  REJECTED
+  CLOSED
+}
+
+// ----------------------------------------------------------------------------
+// 1. IAM & Multi-tenant Organization
+// ----------------------------------------------------------------------------
+
+model Merchant {
+  id                String            @id @default(uuid()) @db.Uuid
+  name              String            @db.VarChar(255)
+  code              String            @unique @db.VarChar(64)
+  status            String            @default("active") @db.VarChar(32)
+  created_at        DateTime          @default(now()) @db.Timestamptz
+  updated_at        DateTime          @updatedAt @db.Timestamptz
+
+  users             User[]
+  carrier_accounts  CarrierAccount[]
+  rate_cards        RateCard[]
+  orders            Order[]
+  shipments         Shipment[]
+  exception_cases   ExceptionCase[]
+  return_records    ReturnRecord[]
+  statements        CarrierStatement[]
+  discrepancies     Discrepancy[]
+  claims            Claim[]
+  audit_logs        AuditLog[]
+
+  @@map("merchants")
+}
+
+model User {
+  id                String            @id @default(uuid()) @db.Uuid
+  merchant_id       String            @db.Uuid
+  email             String?           @unique @db.VarChar(255)
+  phone             String?           @unique @db.VarChar(32)
+  full_name         String            @db.VarChar(255)
+  password_hash     String            @db.VarChar(255)
+  role              RoleEnum
+  store_scopes      String[]          @default([])
+  warehouse_scopes  String[]          @default([])
+  status            String            @default("pending_verification") @db.VarChar(32)
+  created_by        String?           @db.VarChar(64)
+  activated_at      DateTime?         @db.Timestamptz
+  created_by_ip     String?           @db.VarChar(64)
+  email_verified_at DateTime?         @db.Timestamptz
+  phone_verified_at DateTime?         @db.Timestamptz
+  terms_accepted_at DateTime?         @db.Timestamptz
+  terms_version     String?           @db.VarChar(32)
+  created_at        DateTime          @default(now()) @db.Timestamptz
+  updated_at        DateTime          @updatedAt @db.Timestamptz
+
+  merchant          Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  assigned_cases    ExceptionCase[]   @relation("CaseAssignee")
+  contact_logs      ExceptionContactLog[]
+  device_sessions   DeviceSession[]
+  verification_tokens VerificationToken[]
+
+  @@index([merchant_id, role])
+  @@map("users")
+}
+
+model VerificationToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  user_id     String    @db.Uuid
+  token       String    @unique @db.VarChar(255)
+  channel     String    @db.VarChar(16)
+  identifier  String    @db.VarChar(255)
+  otp         String?   @db.VarChar(64)
+  expires_at  DateTime  @db.Timestamptz
+  consumed_at DateTime? @db.Timestamptz
+  created_at  DateTime  @default(now()) @db.Timestamptz
+
+  user        User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([identifier, channel])
+  @@map("verification_tokens")
+}
+
+model DeviceSession {
+  id                String            @id @default(uuid()) @db.Uuid
+  user_id           String            @db.Uuid
+  device_id         String            @db.VarChar(255)
+  device_model      String?           @db.VarChar(255)
+  fcm_token         String?           @db.Text
+  is_revoked        Boolean           @default(false)
+  created_at        DateTime          @default(now()) @db.Timestamptz
+  last_active_at    DateTime          @default(now()) @db.Timestamptz
+
+  user              User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, is_revoked])
+  @@map("device_sessions")
+}
+
+// ----------------------------------------------------------------------------
+// 2. Carrier Accounts & Versioned Rate Cards
+// ----------------------------------------------------------------------------
+
+model CarrierAccount {
+  id                String            @id @default(uuid()) @db.Uuid
+  merchant_id       String            @db.Uuid
+  carrier_code      CarrierCodeEnum
+  label             String            @db.VarChar(128)
+  encrypted_credentials String        @db.Text // Encrypted with master key outside DB
+  tier              CarrierTierEnum   @default(L1_ASSIST)
+  status            String            @default("active") @db.VarChar(32)
+  created_at        DateTime          @default(now()) @db.Timestamptz
+  expires_at        DateTime?         @db.Timestamptz
+
+  merchant          Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  rate_cards        RateCard[]
+  shipments         Shipment[]
+  statements        CarrierStatement[]
+
+  @@unique([merchant_id, label])
+  @@index([merchant_id, carrier_code])
+  @@map("carrier_accounts")
+}
+
+model RateCard {
+  id                   String         @id @default(uuid()) @db.Uuid
+  merchant_id          String         @db.Uuid
+  carrier_account_id   String         @db.Uuid
+  version              Int            @default(1)
+  effective_from       DateTime       @db.Date
+  effective_to         DateTime?      @db.Date
+  volumetric_divisor   Int            @default(5000) // 5000 hoặc 6000
+  cod_payout_sla_days  Int            @default(3)    // Hạn chuyển COD (ngày)
+  checksum             String         @db.VarChar(64)
+  created_at           DateTime       @default(now()) @db.Timestamptz
+
+  merchant             Merchant       @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  carrier_account      CarrierAccount @relation(fields: [carrier_account_id], references: [id], onDelete: Cascade)
+  tiers                RateTier[]
+
+  @@index([carrier_account_id, effective_from, effective_to])
+  @@map("rate_cards")
+}
+
+model RateTier {
+  id                   String         @id @default(uuid()) @db.Uuid
+  rate_card_id         String         @db.Uuid
+  route_type           String         @db.VarChar(32) // INTRA_PROVINCE, INTER_PROVINCE, SPECIAL
+  weight_from_g        Int
+  weight_to_g          Int
+  base_fee             BigInt         // Đơn vị VNĐ
+  step_fee             BigInt         @default(0)
+  step_weight_g        Int            @default(0)
+
+  rate_card            RateCard       @relation(fields: [rate_card_id], references: [id], onDelete: Cascade)
+
+  @@index([rate_card_id, route_type, weight_from_g, weight_to_g])
+  @@map("rate_tiers")
+}
+
+// ----------------------------------------------------------------------------
+// 3. Orders & Shipment Ledger (Append-Only Events)
+// ----------------------------------------------------------------------------
+
+model Order {
+  id                   String         @id @default(uuid()) @db.Uuid
+  merchant_id          String         @db.Uuid
+  source_type          String         @default("pancake") @db.VarChar(32)
+  order_code           String         @db.VarChar(128)
+  created_at           DateTime       @db.Timestamptz
+  cod_amount           BigInt         @default(0)
+  declared_weight_g    Int            @default(0)
+  dimensions           Json?          // { length, width, height }
+  recipient_name       String         @db.VarChar(255)
+  recipient_phone      String         @db.VarChar(32)
+  recipient_province   String         @db.VarChar(128)
+  recipient_address    String         @db.Text
+  item_value           BigInt?        @default(0)
+
+  merchant             Merchant       @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  shipments            Shipment[]
+
+  @@unique([merchant_id, order_code])
+  @@index([merchant_id, created_at])
+  @@map("orders")
+}
+
+model Shipment {
+  id                   String             @id @default(uuid()) @db.Uuid
+  merchant_id          String             @db.Uuid
+  order_id             String             @db.Uuid
+  order_code           String             @db.VarChar(128)
+  carrier_code         CarrierCodeEnum
+  carrier_account_id   String             @db.Uuid
+  tracking_code        String             @db.VarChar(128) // Chuẩn hóa viết hoa, không khoảng trắng
+  current_status       ShipmentStatusEnum @default(DRAFT)
+  declared_weight_g    Int                @default(0)
+  charged_weight_g     Int?
+  dimensions           Json?
+  quoted_fee           BigInt             @default(0)
+  charged_fee          BigInt?
+  cod_amount           BigInt             @default(0)
+  cod_collected        BigInt?
+  cod_paid_at          DateTime?          @db.Timestamptz
+  delivered_at         DateTime?          @db.Timestamptz
+  created_at           DateTime           @default(now()) @db.Timestamptz
+  version              Int                @default(1) // Khóa lạc quan BR-27
+  last_modified_by     String?            @db.VarChar(255)
+
+  merchant             Merchant           @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  order                Order              @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  carrier_account      CarrierAccount     @relation(fields: [carrier_account_id], references: [id], onDelete: Cascade)
+  events               ShipmentEvent[]
+  exceptions           ExceptionCase[]
+  return_record        ReturnRecord?
+  discrepancies        Discrepancy[]
+  claims               Claim[]
+
+  @@unique([merchant_id, tracking_code])
+  @@index([merchant_id, current_status])
+  @@index([merchant_id, delivered_at])
+  @@map("shipments")
+}
+
+model ShipmentEvent {
+  id                   String             @id @default(uuid()) @db.Uuid
+  shipment_id          String             @db.Uuid
+  raw_status           String             @db.VarChar(128)
+  normalized_status    ShipmentStatusEnum
+  occurred_at          DateTime           @db.Timestamptz // Cột quyết định trạng thái (BR-03, BR-32)
+  received_at          DateTime           @default(now()) @db.Timestamptz
+  source               String             @db.VarChar(32) // WEBHOOK, POLLING
+  raw_payload          Json?
+
+  shipment             Shipment           @relation(fields: [shipment_id], references: [id], onDelete: Cascade)
+
+  @@unique([shipment_id, raw_status, occurred_at]) // Chống trùng sự kiện (BR-17)
+  @@index([shipment_id, occurred_at])
+  @@map("shipment_events")
+}
+
+// ----------------------------------------------------------------------------
+// 4. Exception Cases & Rescuing (BR-31, BR-32, BR-33)
+// ----------------------------------------------------------------------------
+
+model ExceptionCase {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  merchant_id          String                  @db.Uuid
+  shipment_id          String                  @db.Uuid
+  tracking_code        String                  @db.VarChar(128)
+  exception_type       ExceptionTypeEnum
+  status               ExceptionCaseStatusEnum @default(OPEN)
+  assigned_to          String?                 @db.Uuid
+  locked_until         DateTime?               @db.Timestamptz // Khóa mềm 30 phút (CN-09)
+  deadline_at          DateTime                @db.Timestamptz // Tính từ occurred_at của hãng
+  priority_score       Int                     @default(0)
+  carrier_raw_reason   String?                 @db.Text
+  standard_reason      String?                 @db.VarChar(255)
+  version              Int                     @default(1)     // Khóa lạc quan
+  created_at           DateTime                @default(now()) @db.Timestamptz
+  updated_at           DateTime                @updatedAt @db.Timestamptz
+
+  merchant             Merchant                @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  shipment             Shipment                @relation(fields: [shipment_id], references: [id], onDelete: Cascade)
+  assignee             User?                   @relation("CaseAssignee", fields: [assigned_to], references: [id])
+  contact_logs         ExceptionContactLog[]
+
+  @@unique([shipment_id, exception_type]) // Ràng buộc duy nhất 1 hồ sơ mở cho mỗi cặp (BR-31)
+  @@index([merchant_id, status, deadline_at])
+  @@map("exception_cases")
+}
+
+model ExceptionContactLog {
+  id                   String            @id @default(uuid()) @db.Uuid
+  case_id              String            @db.Uuid
+  user_id              String            @db.Uuid
+  channel              String            @db.VarChar(32) // PHONE, ZALO, SMS
+  result               String            @db.VarChar(32) // ANSWERED, NO_ANSWER, WRONG_NUMBER, REFUSED
+  note                 String            @db.Text
+  created_at           DateTime          @default(now()) @db.Timestamptz
+
+  exception_case       ExceptionCase     @relation(fields: [case_id], references: [id], onDelete: Cascade)
+  user                 User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([case_id, created_at])
+  @@map("exception_contact_logs")
+}
+
+// ----------------------------------------------------------------------------
+// 5. Return Management & Scanning (BR-35, BR-36, BR-40)
+// ----------------------------------------------------------------------------
+
+model ReturnRecord {
+  id                   String            @id @default(uuid()) @db.Uuid
+  merchant_id          String            @db.Uuid
+  shipment_id          String            @unique @db.Uuid
+  tracking_code        String            @db.VarChar(128)
+  return_warehouse_id  String?           @db.VarChar(128)
+  expected_return_at   DateTime?         @db.Timestamptz
+  received_at          DateTime?         @db.Timestamptz
+  condition            String?           @db.VarChar(32) // INTACT, DAMAGED, MISSING_ITEM
+  evidence_urls        String[]          @default([])
+  evidence_checksum    String?           @db.VarChar(64)
+  received_by          String?           @db.VarChar(255)
+  created_at           DateTime          @default(now()) @db.Timestamptz
+
+  merchant             Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  shipment             Shipment          @relation(fields: [shipment_id], references: [id], onDelete: Cascade)
+
+  @@index([merchant_id, expected_return_at])
+  @@map("return_records")
+}
+
+// ----------------------------------------------------------------------------
+// 6. Reconciliation, Statements & Discrepancies (BR-11, BR-12, D1-D7)
+// ----------------------------------------------------------------------------
+
+model CarrierStatement {
+  id                   String            @id @default(uuid()) @db.Uuid
+  merchant_id          String            @db.Uuid
+  carrier_account_id   String            @db.Uuid
+  period_start         DateTime          @db.Date
+  period_end           DateTime          @db.Date
+  checksum             String            @db.VarChar(64) // SHA-256 file gốc (BR-02, CN-13)
+  file_storage_key     String            @db.VarChar(512)
+  total_rows           Int               @default(0)
+  total_cod_collected  BigInt            @default(0)
+  total_fees           BigInt            @default(0)
+  status               String            @default("DRAFT") @db.VarChar(32) // DRAFT, RECONCILED, CLOSED
+  closed_at            DateTime?         @db.Timestamptz
+  closed_by            String?           @db.VarChar(255)
+  created_at           DateTime          @default(now()) @db.Timestamptz
+
+  merchant             Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  carrier_account      CarrierAccount    @relation(fields: [carrier_account_id], references: [id], onDelete: Cascade)
+  rows                 StatementRow[]
+
+  @@unique([merchant_id, carrier_account_id, checksum]) // Từ chối file trùng (CN-13)
+  @@index([merchant_id, period_start, period_end])
+  @@map("carrier_statements")
+}
+
+model StatementRow {
+  id                   String              @id @default(uuid()) @db.Uuid
+  statement_id         String              @db.Uuid
+  line_number          Int
+  tracking_code        String              @db.VarChar(128)
+  order_code           String?             @db.VarChar(128)
+  fee_type             String              @db.VarChar(64)
+  charged_weight_g     Int                 @default(0)
+  charged_fee          BigInt              @default(0)
+  cod_collected        BigInt              @default(0)
+  cod_paid_at          DateTime?           @db.Date
+  raw_data             Json
+  match_status         MatchingStatusEnum  @default(UNMATCHED)
+  matched_shipment_id  String?             @db.Uuid
+
+  statement            CarrierStatement    @relation(fields: [statement_id], references: [id], onDelete: Cascade)
+  discrepancies        Discrepancy[]
+
+  @@index([statement_id, tracking_code])
+  @@map("statement_rows")
+}
+
+model Discrepancy {
+  id                   String                @id @default(uuid()) @db.Uuid
+  merchant_id          String                @db.Uuid
+  statement_row_id     String?               @db.Uuid
+  shipment_id          String                @db.Uuid
+  tracking_code        String                @db.VarChar(128)
+  type                 DiscrepancyTypeEnum
+  amount               BigInt                @default(0) // Số tiền chênh lệch (VNĐ)
+  status               DiscrepancyStatusEnum @default(OPEN)
+  reason               String?               @db.Text   // Bắt buộc khi waive/resolve (BR-22)
+  resolved_by          String?               @db.VarChar(255)
+  resolved_at          DateTime?             @db.Timestamptz
+  evidence_files       String[]              @default([])
+  version              Int                   @default(1)
+  created_at           DateTime              @default(now()) @db.Timestamptz
+
+  merchant             Merchant              @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  statement_row        StatementRow?         @relation(fields: [statement_row_id], references: [id])
+  shipment             Shipment              @relation(fields: [shipment_id], references: [id], onDelete: Cascade)
+  claims               Claim[]
+
+  @@index([merchant_id, status, type])
+  @@map("discrepancies")
+}
+
+// ----------------------------------------------------------------------------
+// 7. Claims & Immutable Audit Logs (BR-21, BR-47, BR-48)
+// ----------------------------------------------------------------------------
+
+model Claim {
+  id                   String            @id @default(uuid()) @db.Uuid
+  merchant_id          String            @db.Uuid
+  shipment_id          String            @db.Uuid
+  discrepancy_id       String?           @db.Uuid
+  claim_type           String            @db.VarChar(32) // LOST, DAMAGED, FEE, COD
+  carrier_ticket       String?           @db.VarChar(128)
+  requested_amount     BigInt            @default(0)
+  accepted_amount      BigInt            @default(0)
+  recovered_amount     BigInt            @default(0) // Chỉ ghi khi tiền thực về (Sổ 1)
+  status               ClaimStatusEnum   @default(DRAFT)
+  deadline_at          DateTime          @db.Timestamptz
+  evidence_pack_url    String?           @db.VarChar(512)
+  created_at           DateTime          @default(now()) @db.Timestamptz
+  updated_at           DateTime          @updatedAt @db.Timestamptz
+
+  merchant             Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  shipment             Shipment          @relation(fields: [shipment_id], references: [id], onDelete: Cascade)
+  discrepancy          Discrepancy?      @relation(fields: [discrepancy_id], references: [id])
+
+  @@index([merchant_id, status, deadline_at])
+  @@map("claims")
+}
+
+model AuditLog {
+  id                   String            @id @default(uuid()) @db.Uuid
+  merchant_id          String            @db.Uuid
+  user_id              String?           @db.VarChar(255)
+  action               String            @db.VarChar(128)
+  entity_type          String            @db.VarChar(64)
+  entity_id            String            @db.VarChar(255)
+  old_value            Json?
+  new_value            Json?
+  reason               String?           @db.Text
+  ip_address           String?           @db.VarChar(64)
+  created_at           DateTime          @default(now()) @db.Timestamptz // Bất biến (BR-02, BR-21)
+
+  merchant             Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+
+  @@index([merchant_id, entity_type, entity_id])
+  @@index([merchant_id, created_at])
+  @@map("audit_logs")
+}
+
+// ----------------------------------------------------------------------------
+// 8. Technical Outbox & Durable Dispatch Foundation (ENT-FOUND-OUTBOX)
+// ----------------------------------------------------------------------------
+
+enum OutboxStatusEnum {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+}
+
+model OutboxEvent {
+  id              String            @id @default(uuid()) @db.Uuid
+  event_type      String            @db.VarChar(128)
+  payload         Json
+  correlation_id  String            @db.VarChar(128)
+  status          OutboxStatusEnum  @default(PENDING)
+  attempts        Int               @default(0)
+  last_error      String?           @db.Text
+  idempotency_key String?           @unique @db.VarChar(128)
+  created_at      DateTime          @default(now()) @db.Timestamptz
+  scheduled_at    DateTime          @default(now()) @db.Timestamptz
+  published_at    DateTime?         @db.Timestamptz
+
+  @@index([status, scheduled_at])
+  @@index([correlation_id])
+  @@map("outbox_events")
+}

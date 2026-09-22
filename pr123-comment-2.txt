@@ -1,0 +1,156 @@
+﻿Review verdict: CHANGES_REQUIRED
+
+### Summary
+- **Reviewed commit SHA:** `7ae6473db4a22d2d7382b656c1070734bba112ca`
+- **Work Item:** `FEAT-AUTH-02` (`docs/product-spec/work-items/FEAT-AUTH-02.md`)
+- **PR Title:** `[FEAT-AUTH-02] Admin-created shop account: operator provisions initial owner without public signup`
+- **Review Round:** 1 (No earlier comments starting with `Review verdict` exist on issue #123)
+- **Role:** Independent Reviewer (Codex)
+
+---
+
+### Earlier Blocking Findings Re-check
+There are no earlier review comments on PR #123 (`gh api repos/vinh05092001/shipde-platform/issues/123/comments` returned `[]`). This is the initial review round.
+
+---
+
+### Supersession & Dependency Claims Check
+- The PR body claims:
+  > All dependencies are merged (TASK-FOUND-04, FEAT-AUTH-01).
+- **Verification against git log in `origin/main`:**
+  - `TASK-FOUND-04`: Merged as commit `9d101f4e5d9de9b880cc4311126ce8fe06de4206` (PR #13).
+  - `FEAT-AUTH-01`: Merged as commit `4f32b93` (PR #14).
+  - **Verdict:** Claim is verified against git repository history; all stated dependencies are present in `origin/main`. No supersession claims are made.
+
+---
+
+### Automated Validation and Test Output
+
+#### 1. `python docs/product-spec/scripts/validate_docs.py`
+```text
+Documentation validation passed: 115 markdown files, 130 feature IDs, 179 delivery rows, 994 unique identifiers.
+```
+*(Exit code: 0)*
+
+#### 2. `python docs/product-spec/scripts/validate_pr_contract.py`
+```text
+Pull Request contract validation failed:
+- PR body still contains required template placeholders
+```
+*(Exit code: 1)*
+
+#### 3. `pnpm contract:check`
+```text
+$ tsx scripts/verify-contracts.ts
+================================================================
+📜 SHIP DỄ — BỘ KIỂM SOÁT VÀ KIỂM TOÁN HỢP ĐỒNG (OPENAPI CONTRACT GATE)
+================================================================
+
+❌ PHÁT HIỆN LỖI HỢP ĐỒNG HOẶC DRIFT CONTRACT:
+ - Contract drift detected! packages/contracts/src/openapi.ts does not match docs/product-spec/contracts/openapi.yaml. Run 'pnpm contract:generate' to update.
+[ELIFECYCLE] Command failed with exit code 1.
+```
+*(Exit code: 1)*
+
+#### 4. `pnpm run test:admin` (Windows environment)
+```text
+$ PLATFORM_ADMIN_KEY=test-admin-key-2026 tsx apps/api/src/auth/admin-auth.supertest.spec.ts
+'PLATFORM_ADMIN_KEY' is not recognized as an internal or external command,
+operable program or batch file.
+[ELIFECYCLE] Command failed with exit code 1.
+```
+*(Exit code: 1)*
+
+#### 5. `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/auth/admin-auth.supertest.spec.ts`
+```text
+================================================================
+SHIP DE - ADMIN AUTH SUPERTEST SUITE (FEAT-AUTH-02)
+================================================================
+[AC-ADMIN-01] Missing admin key returns 403
+  PASS: AC-ADMIN-01
+[AC-ADMIN-02] Invalid admin key returns 403
+  PASS: AC-ADMIN-02
+[AC-ADMIN-03] Valid admin key, email-only registration
+  PASS: AC-ADMIN-03
+[AC-ADMIN-04] DB: user active, verified timestamps
+  PASS: AC-ADMIN-04
+[AC-ADMIN-05] Merchant code generation
+  PASS: AC-ADMIN-05
+[AC-ADMIN-06] Phone-only registration
+  PASS: AC-ADMIN-06
+[AC-ADMIN-07] Custom password: no temporary_password
+  PASS: AC-ADMIN-07
+[AC-ADMIN-08] Duplicate email (active) returns 400
+  PASS: AC-ADMIN-08
+[AC-ADMIN-09] Missing both email and phone
+  PASS: AC-ADMIN-09
+[AC-ADMIN-10] Invalid email format
+  PASS: AC-ADMIN-10
+[AC-ADMIN-11] Invalid phone format
+  PASS: AC-ADMIN-11
+[AC-ADMIN-12] Short password
+  PASS: AC-ADMIN-12
+[AC-ADMIN-13] Missing merchant_name
+  PASS: AC-ADMIN-13
+[AC-ADMIN-14] GET /admin/shops lists merchants
+  PASS: AC-ADMIN-14
+[AC-ADMIN-15] GET /admin/shops without key returns 403
+  PASS: AC-ADMIN-15
+[AC-ADMIN-16] Duplicate phone (active) returns 400
+  PASS: AC-ADMIN-16
+[AC-ADMIN-17] Pagination
+  PASS: AC-ADMIN-17
+[AC-ADMIN-18] Both email + phone: both verified
+  PASS: AC-ADMIN-18
+[AC-ADMIN-19] Audit log persisted for ADMIN_CREATE_SHOP
+  PASS: AC-ADMIN-19
+[AC-ADMIN-20] Email case normalization
+  PASS: AC-ADMIN-20
+================================================================
+RESULTS: 20 passed, 0 failed
+================================================================
+```
+*(Exit code: 0)*
+
+---
+
+### Detailed Findings & Required Changes
+
+#### Finding 1 (Blocking): OpenAPI Contract Drift between YAML source and generated TS
+- **Location:** `packages/contracts/src/openapi.ts:410-427` vs `docs/product-spec/contracts/openapi.yaml`
+- **Issue:** The author directly modified `packages/contracts/src/openapi.ts` by adding `/admin/shops`, `AdminCreateShopRequest`, `AdminShopResponse`, and related operations, but did NOT update the source contract `docs/product-spec/contracts/openapi.yaml`.
+- **Consequence:** `pnpm contract:check` fails with contract drift error. `AGENTS.md` establishes single-source contract gates.
+- **Remediation:** Add the `/admin/shops` endpoints and schemas to `docs/product-spec/contracts/openapi.yaml`, then generate `packages/contracts/src/openapi.ts` via `pnpm contract:generate` and verify `pnpm contract:check` passes.
+
+#### Finding 2 (Blocking): PR Body Contract Validation Failure (Placeholder Left Unreplaced)
+- **Location:** PR #123 description (`## Codex review`)
+- **Issue:** Under `## Codex review`, line 73 is left as `- Verdict: <PASS/CHANGES_REQUIRED/BLOCKED — filled by Codex>`.
+- **Consequence:** `validate_pr_contract.py` regex `r"<[^>\n]+>"` detects unresolved template placeholders and fails the check.
+- **Remediation:** Update the PR body to remove the `<...>` placeholder (e.g., `- Verdict: pending Codex review` or `- Verdict: CHANGES_REQUIRED`).
+
+#### Finding 3 (Blocking): Windows Incompatibility in `package.json` & Missing Integration in `apps/api/package.json`
+- **Location:** `package.json:44` and `apps/api/package.json:12`
+- **Issue:**
+  1. In `package.json:44`, `"test:admin"` was added as:
+     `"test:admin": "PLATFORM_ADMIN_KEY=test-admin-key-2026 tsx apps/api/src/auth/admin-auth.supertest.spec.ts"`
+     On Windows, inline POSIX environment variable definitions are not supported by `cmd.exe`, causing `pnpm run test:admin` to fail with `'PLATFORM_ADMIN_KEY' is not recognized as an internal or external command`.
+     Notice `admin-auth.supertest.spec.ts:53` already sets `process.env.PLATFORM_ADMIN_KEY = VALID_ADMIN_KEY;` internally, so the inline variable is redundant.
+  2. In `apps/api/package.json:12`, `"test"` only invokes `api.test.ts`, `api.supertest.spec.ts`, and `auth.supertest.spec.ts`. It does not include `admin-auth.supertest.spec.ts`. Therefore, standard monorepo CI / `pnpm --filter @shipde/api test` does not execute the new admin-auth test suite.
+- **Remediation:** Update `package.json:44` to run cross-platform without inline env syntax (e.g., `tsx --tsconfig apps/api/tsconfig.json apps/api/src/auth/admin-auth.supertest.spec.ts`), and update `apps/api/package.json` line 12 to run `admin-auth.supertest.spec.ts` with `--tsconfig tsconfig.json`.
+
+#### Finding 4 (Blocking): Missing 255 Character Upper Bound on `merchant_name` (BR-ADMIN-02)
+- **Location:** `apps/api/src/auth/admin-auth.service.ts:39-45`
+- **Issue:** Specification rule BR-ADMIN-02 mandates:
+  > `merchant_name` required, 2-255 characters.
+  The service only validates `dto.merchant_name.trim().length < 2`. It does not check `dto.merchant_name.trim().length > 255`.
+- **Consequence:** An input with > 255 characters reaches Prisma where `Merchant.name` is `@db.VarChar(255)`, triggering an unhandled database exception (P2000) resulting in an unhandled 500 error instead of a canonical 400 `VALIDATION_ERROR`.
+- **Remediation:** Add `dto.merchant_name.trim().length > 255` check in `createShop()` returning `VALIDATION_ERROR`.
+
+#### Finding 5 (Documentation / Traceability): Work Item Document Metadata Not Updated
+- **Location:** `docs/product-spec/work-items/FEAT-AUTH-02.md:9,17,170-174`
+- **Issue:**
+  - Line 9 remains `| Status | IN_PROGRESS |` rather than `READY_FOR_CODEX`.
+  - Line 17 remains `| Pull Request | — |` rather than referencing PR #123.
+  - Lines 170-174 Codex review record table still shows `— | — | — | Not yet implemented; no Pull Request opened`.
+- **Remediation:** Update `FEAT-AUTH-02.md` control table and review record to reflect PR #123 and commit `7ae6473db4a22d2d7382b656c1070734bba112ca`.
+
