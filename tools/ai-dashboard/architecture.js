@@ -411,6 +411,11 @@
     // Paseo (thay AO) và 9Router đặt dưới nhóm CLI thợ
     p.push(node(580, 446, 160, 52, 'Paseo', ':6767, daemon agent', C.worker));
     p.push(node(770, 446, 160, 52, '9Router', ':20128, định tuyến model', C.worker));
+    // agy pool: one local Windows user per Antigravity account, run one at a time by a
+    // Scheduled Task (see C:/Tools/agy-runs). Badge comes from sources.agyPool.
+    p.push(
+      node(580, 522, 350, 44, 'agy pool', 'mỗi tài khoản một user Windows, chạy lần lượt', C.worker, m.agyBadge)
+    );
 
     // Hàng dưới cùng: Dashboard, Sổ việc & log, runner.sh
     p.push(node(40, 596, 175, 52, 'Dashboard', 'Node HTTP :3333, chỉ đọc', C.operator));
@@ -473,6 +478,17 @@
 
     // 6. Paseo → CLI thợ: đi thẳng lên nhóm CLI thợ
     p.push(arrow(660, 446, 660, 396, 'tạo agent', C.worker, false, undefined, 660, 421));
+
+    // 6b. dispatch.sh → agy pool: hành lang dọc x=545, giữa ai-brain và nhóm CLI thợ
+    p.push(
+      arrow(490, 222, 580, 544, 'Scheduled Task', C.dispatch, false,
+        poly([[490, 222], [545, 222], [545, 544], [580, 544]]), 545, 400)
+    );
+    // 6c. agy pool → Nhà cung cấp model (Antigravity): sang phải rồi lên đáy hộp nhà cung cấp
+    p.push(
+      arrow(930, 544, 1420, 498, 'Antigravity', C.cloud, false,
+        poly([[930, 544], [1420, 544], [1420, 498]]), 1160, 544)
+    );
 
     // 7. CLI thợ → 9Router: đi thẳng xuống 9Router
     p.push(arrow(850, 396, 850, 446, 'gọi model', C.worker, false, undefined, 850, 421));
@@ -1045,6 +1061,10 @@
           m.reviewCount = byStatus.READY_FOR_CODEX;
           m.reviewBadge = byStatus.READY_FOR_CODEX + ' chờ review';
         }
+      }
+      if (state && state.agyPool && state.agyPool.counts) {
+        var ac = state.agyPool.counts;
+        m.agyBadge = ac.ready + '/' + ac.total + ' sẵn sàng' + (ac.cooling ? ' · ' + ac.cooling + ' nghỉ' : '');
       }
       if (rot && rot.totals && typeof rot.totals.attempts === 'number') {
         m.dispatchCount = rot.totals.attempts;
