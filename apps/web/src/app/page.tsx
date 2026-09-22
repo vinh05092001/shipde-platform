@@ -22,6 +22,7 @@ import { ReturnScanTab } from '@/components/ReturnScanTab';
 import { ClaimCasesTab } from '@/components/ClaimCasesTab';
 import { AdminSystemTab } from '@/components/AdminSystemTab';
 import { SettingsWorkspace } from '@/components/SettingsWorkspace';
+import { SessionsTab } from '@/components/sessions/SessionsTab';
 import { UnifiedTrackingModal } from '@/components/UnifiedTrackingModal';
 import { UploadStatementModal } from '@/components/UploadStatementModal';
 import { CreateOrderModal } from '@/components/CreateOrderModal';
@@ -365,19 +366,34 @@ export default function ShipDeConsoleApp() {
 
               {/* Settings (Full-Page View) */}
               {currentRole === 'OWNER' && (
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('settings')}
-                  className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg border transition cursor-pointer ${
-                    activeTab === 'settings'
-                      ? 'bg-[#EA4B12] text-white border-[#EA4B12]'
-                      : 'bg-[#F6F5F3] text-slate-700 hover:bg-[#EAE7E4] border-[#EAE7E4]'
-                  }`}
-                  title="Cài đặt cửa hàng, nhân sự, kết nối hãng và bảo mật"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  <span>Cài Đặt Cửa Hàng</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('settings')}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg border transition cursor-pointer ${
+                      activeTab === 'settings'
+                        ? 'bg-[#EA4B12] text-white border-[#EA4B12]'
+                        : 'bg-[#F6F5F3] text-slate-700 hover:bg-[#EAE7E4] border-[#EAE7E4]'
+                    }`}
+                    title="Cài đặt cửa hàng, nhân sự, kết nối hãng và bảo mật"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    <span>Cài Đặt Cửa Hàng</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('sessions')}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg border transition cursor-pointer ${
+                      activeTab === 'sessions'
+                        ? 'bg-[#EA4B12] text-white border-[#EA4B12]'
+                        : 'bg-[#F6F5F3] text-slate-700 hover:bg-[#EAE7E4] border-[#EAE7E4]'
+                    }`}
+                    title="Quản lý phiên làm việc"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Phiên Làm Việc</span>
+                  </button>
+                </>
               )}
 
               {/* User Dropdown */}
@@ -454,17 +470,30 @@ export default function ShipDeConsoleApp() {
 
                     <div className="pt-1 space-y-0.5">
                       {currentRole === 'OWNER' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActiveTab('settings');
-                            setUserMenuOpen(false);
-                          }}
-                          className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-1.5"
-                        >
-                          <Settings className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Cài Đặt Cửa Hàng</span>
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTab('settings');
+                              setUserMenuOpen(false);
+                            }}
+                            className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-1.5"
+                          >
+                            <Settings className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Cài Đặt Cửa Hàng</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTab('sessions');
+                              setUserMenuOpen(false);
+                            }}
+                            className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-1.5"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Phiên Làm Việc</span>
+                          </button>
+                        </>
                       )}
                       <button
                         type="button"
@@ -572,6 +601,10 @@ export default function ShipDeConsoleApp() {
               carrierGhnTier={carrierGhnTier}
               onToggleGhnTier={(t) => setCarrierGhnTier(t)}
             />
+          )}
+
+          {activeTab === 'sessions' && (
+            <SessionsTab onToast={showToast} />
           )}
 
           {/* Backoffice System Management */}

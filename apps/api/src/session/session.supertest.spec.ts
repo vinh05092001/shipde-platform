@@ -147,7 +147,7 @@ async function runSessionSupertestSuite() {
     // AC-SESS-02: List sessions with Bearer token
     console.log('[TEST 2 / AC-SESS-02] List sessions');
     const res2 = await request(server)
-      .get('/sessions')
+      .get('/api/v1/sessions')
       .set('Authorization', `Bearer ${createdToken}`)
       .expect(200);
 
@@ -163,7 +163,7 @@ async function runSessionSupertestSuite() {
     // AC-SESS-03: Revoke a session
     console.log('[TEST 3 / AC-SESS-03] Revoke a session');
     const res3 = await request(server)
-      .delete(`/sessions/${createdSessionId}`)
+      .delete(`/api/v1/sessions/${createdSessionId}`)
       .set('Authorization', `Bearer ${createdToken}`)
       .expect(200);
 
@@ -175,7 +175,7 @@ async function runSessionSupertestSuite() {
     // AC-SESS-04: Revoke already-revoked is idempotent
     console.log('[TEST 4 / AC-SESS-04] Idempotent revoke');
     const res4 = await request(server)
-      .delete(`/sessions/${createdSessionId}`)
+      .delete(`/api/v1/sessions/${createdSessionId}`)
       .set('Authorization', `Bearer ${createdToken}`)
       .expect(200);
 
@@ -197,7 +197,7 @@ async function runSessionSupertestSuite() {
       },
     });
     const res5 = await request(server)
-      .delete('/sessions/nonexistent-session-id')
+      .delete('/api/v1/sessions/nonexistent-session-id')
       .set('Authorization', `Bearer ${tok5.raw}`)
       .expect(404);
 
@@ -219,7 +219,7 @@ async function runSessionSupertestSuite() {
       },
     });
     const res6 = await request(server)
-      .patch(`/sessions/${sess6.id}/heartbeat`)
+      .patch(`/api/v1/sessions/${sess6.id}/heartbeat`)
       .set('Authorization', `Bearer ${tok6.raw}`)
       .expect(200);
 
@@ -242,7 +242,7 @@ async function runSessionSupertestSuite() {
       },
     });
     const res7 = await request(server)
-      .post('/sessions/revoke-all')
+      .post('/api/v1/sessions/revoke-all')
       .set('Authorization', `Bearer ${tok7.raw}`)
       .send({ include_current: false })
       .expect(200);
@@ -253,7 +253,7 @@ async function runSessionSupertestSuite() {
 
     // AC-SESS-08: Missing Bearer token returns 401
     console.log('[TEST 8 / AC-SESS-08] Missing token returns 401');
-    const res8 = await request(server).get('/sessions').expect(401);
+    const res8 = await request(server).get('/api/v1/sessions').expect(401);
     assert.strictEqual(res8.body.error.code, 'UNAUTHENTICATED');
     console.log('  PASS: AC-SESS-08 Missing token rejected');
 

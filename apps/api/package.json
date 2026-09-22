@@ -9,13 +9,7 @@
     "dev": "tsx --env-file-if-exists=../../.env --env-file-if-exists=.env watch src/main.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-<<<<<<< HEAD
     "test": "tsx src/api.test.ts && tsx --tsconfig tsconfig.json src/api.supertest.spec.ts && tsx --tsconfig tsconfig.json src/auth/auth.supertest.spec.ts && tsx --tsconfig tsconfig.json src/auth/auth.login.supertest.spec.ts && tsx --tsconfig tsconfig.json src/session/session.supertest.spec.ts"
-||||||| parent of f35e2f2 (feat(FEAT-AUTH-06): wire session supertest into test script and fix PR body)
-    "test": "tsx src/api.test.ts && tsx --tsconfig tsconfig.json src/api.supertest.spec.ts && tsx --tsconfig tsconfig.json src/auth/auth.supertest.spec.ts"
-=======
-    "test": "tsx src/api.test.ts && tsx --tsconfig tsconfig.json src/api.supertest.spec.ts && tsx --tsconfig tsconfig.json src/auth/auth.supertest.spec.ts && tsx --tsconfig tsconfig.json src/session/session.supertest.spec.ts"
->>>>>>> f35e2f2 (feat(FEAT-AUTH-06): wire session supertest into test script and fix PR body)
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.758.0",
