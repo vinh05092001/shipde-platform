@@ -12,6 +12,7 @@ const { collectPaseoState } = require('./paseo-adapter');
 const { collectGitHubState } = require('./github-adapter');
 const { collectUsageState } = require('./usage-adapter');
 const { collectCapacity } = require('./capacity-adapter');
+const { collectAgyPoolState } = require('./agy-pool-adapter');
 const { detectConflicts } = require('./conflict-detector');
 const { redactObject } = require('./redaction');
 
@@ -293,7 +294,7 @@ function hasStateChanged(prevState, candidate) {
 
   if (prevState.overallStatus !== candidate.overallStatus) return true;
 
-  for (const key of ['register', 'git', 'ao', 'github']) {
+  for (const key of ['register', 'git', 'ao', 'github', 'agyPool']) {
     const p = prevState.sources[key];
     const n = candidate.sources[key];
     if (!p || !n) return true;
@@ -325,6 +326,7 @@ function hasStateChanged(prevState, candidate) {
   if (prevState.git?.headOid !== candidate.git?.headOid) return true;
   if (prevState.git?.dirtyCount !== candidate.git?.dirtyCount) return true;
   if (prevState.github?.authenticated !== candidate.github?.authenticated) return true;
+  if (JSON.stringify(prevState.agyPool) !== JSON.stringify(candidate.agyPool)) return true;
 
   const prevPrs = prevState.github?.pullRequests || [];
   const nextPrs = candidate.github?.pullRequests || [];
@@ -348,6 +350,7 @@ const SOURCE_TTL_MS = {
   // once per turn, so a 5s poll re-reading them was pure waste.
   usage: 30000,
   capacity: 30000,
+  agyPool: 15000,
 };
 const sourceCache = new Map();
 
@@ -414,17 +417,21 @@ async function aggregateCockpitState(options = {}) {
 
   const capacityPromise = options.mockCapacity
     ? Promise.resolve(options.mockCapacity)
-    : cachedCollect('capacity', () =>
-        Promise.resolve(collectCapacity(options.capacityOptions))
-      );
+    : cachedCollect('capacity', () => Promise.resolve(collectCapacity(options.capacityOptions)));
 
-  let [gitResult, aoResult, githubResult, usageResult, capacityResult] = await Promise.all([
-    gitPromise,
-    aoPromise,
-    githubPromise,
-    usagePromise,
-    capacityPromise,
-  ]);
+  const agyPoolPromise = options.mockAgyPool
+    ? Promise.resolve(options.mockAgyPool)
+    : cachedCollect('agyPool', () => Promise.resolve(collectAgyPoolState(options.agyPoolOptions)));
+
+  let [gitResult, aoResult, githubResult, usageResult, capacityResult, agyPoolResult] =
+    await Promise.all([
+      gitPromise,
+      aoPromise,
+      githubPromise,
+      usagePromise,
+      capacityPromise,
+      agyPoolPromise,
+    ]);
 
   // Handle cached last-known state on failure (AI15-R01)
   if (gitResult.health.status === 'unavailable' && lastKnownSourceData.git) {
@@ -528,6 +535,7 @@ async function aggregateCockpitState(options = {}) {
     github: withFreshness(githubResult.health, 'github'),
     usage: withFreshness(usageResult.health, 'usage'),
     capacity: withFreshness(capacityResult.health, 'capacity'),
+    agyPool: withFreshness(agyPoolResult.health, 'agyPool'),
   };
 
   const conflicts = detectConflicts(
@@ -575,6 +583,7 @@ async function aggregateCockpitState(options = {}) {
     daemon: aoResult.data.daemon,
     usage: usageResult.data,
     capacity: capacityResult.data,
+    agyPool: agyPoolResult.data,
     git: gitResult.data,
     github: githubResult.data,
   };

@@ -203,6 +203,7 @@ function applyState(newState) {
   renderActivity();
   renderDiagnostics();
   renderCapacity();
+  renderAgyPool();
 
   // Restore focus if element still exists
   if (activeId) {
@@ -943,7 +944,8 @@ function renderActivity() {
     .map((act) => {
       const timeStr = act.timestamp ? new Date(act.timestamp).toLocaleTimeString() : '';
       let badgeColor = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-      if (act.badge === 'Paseo') badgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+      if (act.badge === 'Paseo')
+        badgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
 
       return `
       <div class="flex items-start gap-3 p-3 rounded-xl bg-base-200 border border-base-300 text-xs">
@@ -1343,6 +1345,52 @@ function renderDiagnostics() {
   `
     )
     .join('');
+}
+
+function renderAgyPool() {
+  const container = document.getElementById('agyPoolCard');
+  if (!container || !state) return;
+  const health = state.sources && state.sources.agyPool;
+  const pool = state.agyPool;
+  const accounts = pool && Array.isArray(pool.accounts) ? pool.accounts : [];
+  const counts = (pool && pool.counts) || {};
+  const statusLabels = {
+    ok: 'sẵn sàng',
+    quota: 'hết lượt',
+    'login-required': 'cần đăng nhập',
+    error: 'lỗi',
+    'never-run': 'chưa chạy',
+  };
+  const formatDate = (value) => (value ? new Date(value).toLocaleString('vi-VN') : '—');
+  const countText = `${counts.ready || 0} sẵn sàng · ${counts.cooling || 0} đang nghỉ · ${counts.loginRequired || 0} cần đăng nhập · ${counts.error || 0} lỗi · ${counts.neverRun || 0} chưa chạy`;
+  const rows = accounts
+    .map(
+      (account) => `
+    <tr class="border-b border-base-300 last:border-0">
+      <td data-label="Tài khoản" class="p-3 font-mono font-bold">${escapeHtml(account.name || '')}${account.active ? ' <span class="badge badge-info badge-sm">đang hoạt động</span>' : ''}</td>
+      <td data-label="Trạng thái" class="p-3" title="${escapeHtml(account.note || '')}">${escapeHtml(statusLabels[account.state] || account.state || '—')}</td>
+      <td data-label="Lần chạy cuối" class="p-3 font-mono">${escapeHtml(formatDate(account.finishedAt || account.startedAt))}</td>
+      <td data-label="Nghỉ tới" class="p-3 font-mono">${escapeHtml(formatDate(account.cooldownUntil))}</td>
+    </tr>`
+    )
+    .join('');
+  const emptyReason = escapeHtml((health && health.impact) || 'Chưa có dữ liệu tài khoản agy.');
+
+  container.innerHTML = `
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-base-300">
+      <h3 class="text-sm font-bold text-base-content uppercase tracking-wider">Tài khoản agy (Antigravity)</h3>
+      <span class="text-[11px] font-mono text-base-content/70">${escapeHtml(String(counts.total || 0))} tài khoản · ${escapeHtml(countText)}</span>
+    </div>
+    ${
+      accounts.length === 0
+        ? `<p class="text-xs text-base-content/70">${emptyReason}</p>`
+        : `
+      <div class="overflow-x-auto custom-scroll"><table class="responsive-table w-full text-left text-xs border-collapse">
+        <thead><tr class="border-b border-base-300 text-[11px] font-mono uppercase text-base-content/70 bg-base-200">
+          <th class="p-3">Tài khoản</th><th class="p-3">Trạng thái</th><th class="p-3">Lần chạy cuối</th><th class="p-3">Nghỉ tới</th>
+        </tr></thead><tbody>${rows}</tbody>
+      </table></div>`
+    }`;
 }
 
 function switchTab(tabId) {
