@@ -1,1 +1,1 @@
-export * from './sessions/SessionsTab';
+export * from './SessionsTab';
