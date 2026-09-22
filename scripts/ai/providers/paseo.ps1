@@ -11,8 +11,13 @@
 function Invoke-ShipDePaseoNativeCommand {
     param(
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [int]$TimeoutMilliseconds = 30000
+        [int]$TimeoutMilliseconds = 30000,
+        [scriptblock]$CommandRunner = $null
     )
+
+    if ($null -ne $CommandRunner) {
+        return (& $CommandRunner $Arguments)
+    }
 
     $paseoCmd = Get-Command paseo -ErrorAction SilentlyContinue
     if ($null -eq $paseoCmd) {
@@ -37,10 +42,7 @@ function Invoke-ShipDePaseoNativeCommand {
             Stderr   = "paseo: cannot resolve executable path."
         }
     }
-    return (Invoke-ShipDeNativeProcess ``
-        -FilePath $src ``
-        -ArgumentList $Arguments ``
-        -TimeoutMilliseconds $TimeoutMilliseconds)
+    return (Invoke-ShipDeNativeProcess -FilePath $src -ArgumentList $Arguments -TimeoutMilliseconds $TimeoutMilliseconds)
 }
 
 function ConvertFrom-ShipDePaseoJson {
@@ -70,12 +72,14 @@ function Test-ShipDePaseoProviderReadiness {
     AI-48-R03: fail fast with named error; no silent fallback.
     AI-48-R04: PROVIDER_UNAVAILABLE vs PROVIDER_UNREACHABLE are distinct.
     #>
+    param([scriptblock]$CommandRunner = $null)
+
     $paseoCmd = Get-Command paseo -ErrorAction SilentlyContinue
     if ($null -eq $paseoCmd) {
         return @{ Ready = $false; Reason = "PROVIDER_UNAVAILABLE: paseo command not found in PATH. Install: npm install -g @getpaseo/cli" }
     }
     try {
-        $res = Invoke-ShipDePaseoNativeCommand -Arguments @("status")
+        $res = Invoke-ShipDePaseoNativeCommand -Arguments @("status") -CommandRunner $CommandRunner
         if ($res.ExitCode -ne 0) {
             $err = if (-not [string]::IsNullOrWhiteSpace($res.Stderr)) { $res.Stderr.Trim() } else { $res.Stdout.Trim() }
             return @{ Ready = $false; Reason = ("PROVIDER_UNREACHABLE: paseo status failed (exit {0}): {1}. Start daemon: paseo start" -f $res.ExitCode, $err) }

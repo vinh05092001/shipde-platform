@@ -321,50 +321,69 @@ Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128)")
 Write-Host ""
 Write-Host "=== EXECUTION PROVIDER (TASK-AI-48) ==="
 # AI-48-R01/R02: doctor reports which provider is selected and its readiness.
-# Initialize the provider subsystem by dot-sourcing the relevant parts of control.ps1.
-# This is deliberately NOT a full invocation of control.ps1, which would start the supervisor.
 $controlPath = Join-Path $PSScriptRoot "control.ps1"
-$providerBlock = @"
-. (Join-Path `$PSScriptRoot "common.ps1")
-`$script:CurrentProvider = `$null
-`$script:HandoffRoot = Join-Path (Join-Path `$env:USERPROFILE "AI") "handoff"
-. `$controlPath -Replace '(?s)^.*?# TASK-AI-48: Execution provider abstraction\..*?(?=^function [A-Z])' -Match
-"@
 
 try {
-    # Load just the provider initialization and readiness functions from control.ps1
-    $providerInitStart = (Select-String -Path $controlPath -Pattern "^# TASK-AI-48: Execution provider abstraction\." -Raw).LineNumber
-    $providerInitEnd = (Select-String -Path $controlPath -Pattern "^function Initialize-ShipDeExecutionProvider" -Context 0,200 | Select-Object -First 1).LineNumber
-
-    # Simpler approach: just source the needed functions directly
-    . $controlPath
+    # AI-48-R05: a readiness report must not execute the controller. Extract only the
+    # provider-abstraction functions and run them in a throwaway scope, so the doctor's
+    # own state and the operator's environment are left untouched.
+    $providerSource = Get-Content -LiteralPath $controlPath -Raw
+    $providerMarker = "# ── provider abstraction shims"
+    $providerStart = $providerSource.IndexOf($providerMarker)
+    if ($providerStart -lt 0) {
+        throw "Provider abstraction shims were not found in control.ps1."
+    }
+    $providerEnd = $providerSource.IndexOf("`nfunction New-ShipDeAoReviewRepairMessage", $providerStart)
+    if ($providerEnd -lt 0) {
+        throw "Provider abstraction shims have no recognised end marker in control.ps1."
+    }
+    $providerFunctions = $providerSource.Substring($providerStart, $providerEnd - $providerStart)
 
     $selectedProvider = if ([string]::IsNullOrWhiteSpace($env:SHIPDE_EXECUTION_PROVIDER)) { "ao" } else { $env:SHIPDE_EXECUTION_PROVIDER.ToLowerInvariant().Trim() }
     Write-Host ("Selected provider: {0} (via {1})" -f $selectedProvider, $(if ([string]::IsNullOrWhiteSpace($env:SHIPDE_EXECUTION_PROVIDER)) { "default" } else { "SHIPDE_EXECUTION_PROVIDER" }))
 
-    $readiness = Test-ShipDeProviderReadiness
-    if ($readiness.Ready) {
-        Write-Host ("Provider readiness: READY")
-        if ($script:CurrentProvider -eq "ao") {
-            Write-Host ("  AO executable: {0}" -f (Get-ShipDeProviderExecutablePath))
-            Write-Host ("  AO version: {0}" -f (Get-ShipDeProviderVersion))
-        } elseif ($script:CurrentProvider -eq "paseo") {
-            Write-Host ("  Paseo executable: {0}" -f (Get-ShipDeProviderExecutablePath))
-            Write-Host ("  Paseo version: {0}" -f (Get-ShipDeProviderVersion))
-        }
-    } else {
-        Write-Host ("Provider readiness: NOT READY - {0}" -f $readiness.Reason)
-        # AI-48-R03: unreachable provider is reported but is informational when not the default
-        # Only fail when the selected provider is unavailable, not when an alternate is missing
-        if ($selectedProvider -eq $script:CurrentProvider) {
-            $failures.Add("Selected execution provider ($selectedProvider) is not ready: $($readiness.Reason)")
+    # Load provider-specific functions into the throwaway scope.
+    $additionalFunctions = ""
+    if ($selectedProvider -eq "paseo") {
+        $paseoPath = Join-Path $PSScriptRoot "providers\paseo.ps1"
+        if (Test-Path -LiteralPath $paseoPath) {
+            $additionalFunctions = Get-Content -LiteralPath $paseoPath -Raw
         } else {
-            Write-Host "  Note: Alternate providers being unavailable is informational when not selected"
+            throw "Paseo provider module not found at $paseoPath"
         }
     }
 
+    $providerScope = New-Module -Name ShipDeDoctorProvider -ScriptBlock {
+        param($Functions, $AdditionalFunctions, $CommonPath, $Provider)
+        . $CommonPath
+        $script:CurrentProvider = $Provider
+        $script:ExpectedAoVersion = "0.10.1"
+        Invoke-Expression $Functions
+        if (-not [string]::IsNullOrWhiteSpace($AdditionalFunctions)) {
+            Invoke-Expression $AdditionalFunctions
+        }
+        Export-ModuleMember -Function Test-ShipDeProviderReadiness, Get-ShipDeProviderExecutablePath, Get-ShipDeProviderVersion
+    } -ArgumentList $providerFunctions, $additionalFunctions, (Join-Path $PSScriptRoot "common.ps1"), $selectedProvider
+
+    $readiness = & $providerScope { Test-ShipDeProviderReadiness }
+    if ($readiness.Ready) {
+        Write-Host ("Provider readiness: READY")
+        if ($selectedProvider -eq "ao") {
+            Write-Host ("  AO executable: {0}" -f (& $providerScope { Get-ShipDeProviderExecutablePath }))
+            Write-Host ("  AO version: {0}" -f (& $providerScope { Get-ShipDeProviderVersion }))
+        } elseif ($selectedProvider -eq "paseo") {
+            Write-Host ("  Paseo executable: {0}" -f (& $providerScope { Get-ShipDeProviderExecutablePath }))
+            Write-Host ("  Paseo version: {0}" -f (& $providerScope { Get-ShipDeProviderVersion }))
+        }
+    } else {
+        Write-Host ("Provider readiness: NOT READY - {0}" -f $readiness.Reason)
+        # AI-48-R03: the selected provider being unreachable is a failure. There is no
+        # alternate provider to fall back to, so an unreachable selection is never informational.
+        $failures.Add("Selected execution provider ($selectedProvider) is not ready: $($readiness.Reason)")
+    }
+
     # AI-48-R02: Report AO status separately; absence is informational when Paseo is selected
-    if ($script:CurrentProvider -eq "paseo") {
+    if ($selectedProvider -eq "paseo") {
         $aoCmd = Get-Command ao -ErrorAction SilentlyContinue
         if ($aoCmd) {
             Write-Host ("AO installation: PRESENT (not required for Paseo provider) - {0}" -f $aoCmd.Source)

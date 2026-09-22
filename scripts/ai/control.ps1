@@ -3729,8 +3729,7 @@ $script:AoMessageMaxCharacters = 3000
 
 function Initialize-ShipDeExecutionProvider {
     <#
-    Reads SHIPDE_EXECUTION_PROVIDER, validates, sets `$script:CurrentProvider,
-    and dot-sources the provider module when needed.
+    Reads SHIPDE_EXECUTION_PROVIDER, validates, sets `$script:CurrentProvider.
     AI-48-R03: unrecognised provider is a fast-fail; no silent fallback.
     AI-48-R04: UNSUPPORTED, UNAVAILABLE and UNVERIFIED are distinct states.
     #>
@@ -3739,20 +3738,21 @@ function Initialize-ShipDeExecutionProvider {
     $provider = $provider.ToLowerInvariant().Trim()
     $supported = @("ao", "paseo")
     if ($provider -notin $supported) {
-        throw ("UNSUPPORTED_PROVIDER: ''$provider'' is not a recognised execution provider. Supported values: $($supported -join '', '')")
+        throw ("UNSUPPORTED_PROVIDER: '$provider' is not a recognised execution provider. Supported values: $($supported -join '', '')")
     }
     $script:CurrentProvider = $provider
-
-    if ($provider -eq "paseo") {
-        $providerModulePath = Join-Path $PSScriptRoot "providers\paseo.ps1"
-        if (-not (Test-Path -LiteralPath $providerModulePath)) {
-            throw "PROVIDER_MODULE_MISSING: Paseo provider module not found at $providerModulePath"
-        }
-        . $providerModulePath
-    }
 }
 
 Initialize-ShipDeExecutionProvider
+
+# Dot-source the Paseo provider module at global scope so its functions are globally available.
+if ($script:CurrentProvider -eq "paseo") {
+    $providerModulePath = Join-Path $PSScriptRoot "providers\paseo.ps1"
+    if (-not (Test-Path -LiteralPath $providerModulePath)) {
+        throw "PROVIDER_MODULE_MISSING: Paseo provider module not found at $providerModulePath"
+    }
+    . $providerModulePath
+}
 
 # ── provider abstraction shims ───────────────────────────────────────────────────────
 # AI-48-R01: AO assertions remain when provider="ao".
@@ -3883,10 +3883,12 @@ function Test-ShipDeProviderReadiness {
     <#
     AI-48-R03: unreachable provider fails fast with named error; no silent fallback.
     #>
+    param([scriptblock]$CommandRunner = $null)
+
     if ($script:CurrentProvider -eq "ao") {
-        return Test-ShipDeAoReadiness
+        return Test-ShipDeAoReadiness -CommandRunner $CommandRunner
     } else {
-        return Test-ShipDePaseoProviderReadiness
+        return Test-ShipDePaseoProviderReadiness -CommandRunner $CommandRunner
     }
 }
 
@@ -4020,6 +4022,7 @@ function Normalize-ShipDeSupervisorState {
         Author = ""
         SessionId = $null
         Harness = $null
+        Provider = if (-not [string]::IsNullOrWhiteSpace([string]$script:CurrentProvider)) { [string]$script:CurrentProvider } else { $null }
         State = "STARTED"
         PullRequestNumber = $null
         HeadSha = $null
@@ -4446,12 +4449,19 @@ function Assert-ShipDeRestoredCheckpointValidity {
         throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber has Author '$ckptAuthor' which does not match live target Author '$ExpectedAuthor'. Rejecting before any checkpoint-driven effects."
     }
 
+    # AI-48-R07: a session created under one provider is never adopted by another.
+    $ckptProvider = [string](Get-ShipDeObjectProperty -Object $Checkpoint -Names @("Provider", "provider"))
+    $liveProvider = [string]$script:CurrentProvider
+    if (-not [string]::IsNullOrWhiteSpace($ckptProvider) -and -not [string]::IsNullOrWhiteSpace($liveProvider) -and $ckptProvider -cne $liveProvider) {
+        throw "FOREIGN_PROVIDER_SESSION: Supervisor checkpoint for PR #$ExpectedPullRequestNumber was produced by execution provider '$ckptProvider', but the controller is running provider '$liveProvider'. The foreign session is not adopted."
+    }
+
     $ckptSessionId = [string](Get-ShipDeObjectProperty -Object $Checkpoint -Names @("SessionId", "sessionId"))
     if (-not [string]::IsNullOrWhiteSpace($ckptSessionId)) {
         $sessDetail = if ($null -ne $SessionDetailResolver) {
             & $SessionDetailResolver $ckptSessionId "shipde-platform"
         } else {
-            Get-ShipDeAoSessionById -SessionId $ckptSessionId -Project "shipde-platform"
+            Get-ShipDeSessionById -SessionId $ckptSessionId -Project "shipde-platform"
         }
         if ($null -eq $sessDetail) {
             Write-Host ("[BLOCKED] Recovery target is missing: AO session '{0}'. Stopping fail-closed; recovery never re-creates a branch, worktree or Work Item." -f $ckptSessionId)
@@ -4470,7 +4480,7 @@ function Assert-ShipDeRestoredCheckpointValidity {
             throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber binds AO session '$ckptSessionId' with kind '$sessKind'; expected 'worker'. Rejecting before any checkpoint-driven effects."
         }
         if (-not [string]::IsNullOrWhiteSpace($ExpectedAuthor)) {
-            $allowedHarnesses = @(Get-ShipDeAoHarnessCandidates -Author $ExpectedAuthor)
+            $allowedHarnesses = @(Get-ShipDeHarnessCandidates -Author $ExpectedAuthor)
             $sessHarness = [string](Get-ShipDeObjectProperty -Object $sessDetail -Names @("harness"))
             if ([string]::IsNullOrWhiteSpace($sessHarness) -or $allowedHarnesses.Count -eq 0 -or -not ($allowedHarnesses -ccontains $sessHarness)) {
                 throw "Supervisor checkpoint for PR #$ExpectedPullRequestNumber binds AO session '$ckptSessionId' with harness '$sessHarness', which does not match allowed harnesses ($($allowedHarnesses -join ', ')) for Author '$ExpectedAuthor'. Rejecting before any checkpoint-driven effects."
@@ -5062,18 +5072,18 @@ function Ensure-ShipDeRepairWorker {
         }
     }
 
-    # Requirement 4: When a trusted CHANGES_REQUIRED verdict arrives, select only the author-allowed agy harness
-    $allowedHarnesses = @(Get-ShipDeAoHarnessCandidates -Author $item.Author)
+    # Requirement 4: When a trusted CHANGES_REQUIRED verdict arrives, select only the author-allowed harness
+    $allowedHarnesses = @(Get-ShipDeHarnessCandidates -Author $item.Author)
     $targetHarness = $allowedHarnesses[0]
 
     # Requirement 3: Check if currently bound session is valid and allowed, asserting only when repair is needed
     $currentSessionId = if ($State.ContainsKey("SessionId") -and $null -ne $State["SessionId"]) { [string]$State["SessionId"] } else { "" }
     if (-not [string]::IsNullOrWhiteSpace($currentSessionId)) {
-        $detail = if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $currentSessionId $Project } else { Get-ShipDeAoSessionById -SessionId $currentSessionId -Project $Project }
+        $detail = if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $currentSessionId $Project } else { Get-ShipDeSessionById -SessionId $currentSessionId -Project $Project }
         if ($null -ne $detail) {
             $harness = [string](Get-ShipDeObjectProperty -Object $detail -Names @("harness"))
             if ($allowedHarnesses -contains $harness) {
-                $verifiedHarness = Assert-ShipDeReusedAoSession -SessionDetail $detail -Item $item -AllowedHarnesses $allowedHarnesses -Project $Project
+                $verifiedHarness = Assert-ShipDeReusedSession -SessionDetail $detail -Item $item -AllowedHarnesses $allowedHarnesses -Project $Project
                 $State["Harness"] = $verifiedHarness
                 return $currentSessionId
             }
@@ -5081,7 +5091,7 @@ function Ensure-ShipDeRepairWorker {
     }
 
     # Discover existing sessions in AO project that may own the worktree/branch
-    $allSessions = if ($null -ne $SessionsResolver) { @(& $SessionsResolver $Project) } else { @(Get-ShipDeAoSessions -Project $Project) }
+    $allSessions = if ($null -ne $SessionsResolver) { @(& $SessionsResolver $Project) } else { @(Get-ShipDeSessions -Project $Project) }
     $matchingDisallowedParked = @()
     $matchingAllowed = @()
 
@@ -5092,8 +5102,8 @@ function Ensure-ShipDeRepairWorker {
             continue
         }
 
-        $sid = Get-ShipDeAoSessionId -Response $cand
-        $candDetail = if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $sid $Project } else { Get-ShipDeAoSessionById -SessionId $sid -Project $Project }
+        $sid = Get-ShipDeSessionId -Response $cand
+        $candDetail = if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $sid $Project } else { Get-ShipDeSessionById -SessionId $sid -Project $Project }
         $sessionToCheck = if ($candDetail) { $candDetail } else { $cand }
 
         # Check if this session owns the worktree or matches the branch
@@ -5104,7 +5114,7 @@ function Ensure-ShipDeRepairWorker {
         } else {
             $candWorktree = [string](Get-ShipDeObjectProperty -Object $sessionToCheck -Names @("worktree", "worktreePath", "worktree_path", "workingDir", "path"))
             if ([string]::IsNullOrWhiteSpace($candWorktree) -and -not [string]::IsNullOrWhiteSpace($sid)) {
-                $candWorktree = Join-Path (Get-ShipDeAoWorktreesDir -Project $Project) $sid
+                $candWorktree = Join-Path (Get-ShipDeWorktreesDir -Project $Project) $sid
             }
             if (-not [string]::IsNullOrWhiteSpace($candWorktree) -and (Test-Path -LiteralPath (Join-Path $candWorktree ".git"))) {
                 $worktreeBranch = (& git -C $candWorktree rev-parse --abbrev-ref HEAD 2>$null).Trim()
@@ -5125,9 +5135,9 @@ function Ensure-ShipDeRepairWorker {
     }
 
     if ($matchingAllowed.Count -eq 1) {
-        $sid = Get-ShipDeAoSessionId -Response $matchingAllowed[0]
-        $detail = if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $sid $Project } else { Get-ShipDeAoSessionById -SessionId $sid -Project $Project }
-        $verifiedHarness = Assert-ShipDeReusedAoSession -SessionDetail $detail -Item $item -AllowedHarnesses $allowedHarnesses -Project $Project
+        $sid = Get-ShipDeSessionId -Response $matchingAllowed[0]
+        $detail = if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $sid $Project } else { Get-ShipDeSessionById -SessionId $sid -Project $Project }
+        $verifiedHarness = Assert-ShipDeReusedSession -SessionDetail $detail -Item $item -AllowedHarnesses $allowedHarnesses -Project $Project
         $State["SessionId"] = $sid
         $State["Harness"] = $verifiedHarness
         return $sid
@@ -5138,13 +5148,13 @@ function Ensure-ShipDeRepairWorker {
     # Requirement 5: If a parked disallowed session owns the worktree, prove ownership, release it, then spawn agy
     if ($matchingDisallowedParked.Count -gt 0) {
         foreach ($disallowed in $matchingDisallowedParked) {
-            $sid = Get-ShipDeAoSessionId -Response $disallowed
+            $sid = Get-ShipDeSessionId -Response $disallowed
             $harness = [string](Get-ShipDeObjectProperty -Object $disallowed -Names @("harness"))
 
             $proven = if ($null -ne $OwnershipVerifier) {
                 & $OwnershipVerifier $disallowed $item $Project
             } else {
-                Test-ShipDeSupervisorSessionOwnership_Ao -Session $disallowed -Item $item -Project $Project
+                Test-ShipDeSupervisorSessionOwnership -Session $disallowed -Item $item -Project $Project
             }
 
             if (-not $proven) {
@@ -5160,14 +5170,14 @@ function Ensure-ShipDeRepairWorker {
                 if ($null -ne $SessionReleaser) {
                     & $SessionReleaser $sid $Project
                 } else {
-                    Stop-ShipDeAoSession -SessionId $sid -Project $Project
+                    Stop-ShipDeSession -SessionId $sid -Project $Project
                 }
             } catch {
                 throw "Failed to safely release disallowed AO session '$sid': $($_.Exception.Message)"
             }
 
             # Verify session is terminated before spawning replacement worker
-            $postKillDetail = if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $sid $Project } else { Get-ShipDeAoSessionById -SessionId $sid -Project $Project }
+            $postKillDetail = if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $sid $Project } else { Get-ShipDeSessionById -SessionId $sid -Project $Project }
             if ($null -ne $postKillDetail) {
                 $isTerm = [bool](Get-ShipDeObjectProperty -Object $postKillDetail -Names @("isTerminated", "is_terminated"))
                 $postStatus = [string](Get-ShipDeObjectProperty -Object $postKillDetail -Names @("status", "state"))
@@ -5184,7 +5194,7 @@ function Ensure-ShipDeRepairWorker {
     $spawned = if ($null -ne $WorkerStarter) {
         & $WorkerStarter $item $prompt
     } else {
-        Start-ShipDeAoWorker -Item $item -Prompt $prompt -Project $Project -Harness $targetHarness
+        Start-ShipDeWorker -Item $item -Prompt $prompt -Project $Project -Harness $targetHarness
     }
 
     $State["SessionId"] = [string]$spawned.SessionId
@@ -6818,7 +6828,7 @@ function Invoke-ShipDeSupervisorLoop {
     while ($true) {
         $sessionId = if ($State.ContainsKey("SessionId") -and $null -ne $State["SessionId"]) { [string]$State["SessionId"] } else { "" }
         $session = if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
-            if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $sessionId $Project } else { Get-ShipDeAoSessionById -SessionId $sessionId -Project $Project }
+            if ($null -ne $SessionDetailResolver) { & $SessionDetailResolver $sessionId $Project } else { Get-ShipDeSessionById -SessionId $sessionId -Project $Project }
         } else {
             $null
         }
@@ -6943,7 +6953,7 @@ function Invoke-ShipDeSupervisorLoop {
                         $targetSessionId = Ensure-ShipDeRepairWorker -State $State -PullRequest $pullRequest -Project $Project -WorkerStarter $WorkerStarter -SessionReleaser $SessionReleaser -SessionDetailResolver $SessionDetailResolver -SessionsResolver $SessionsResolver -OwnershipVerifier $OwnershipVerifier -CheckpointWriter $CheckpointWriter
                         $delivered = $false
                         if (-not [string]::IsNullOrWhiteSpace($targetSessionId)) {
-                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeAoMessage -SessionId $targetSessionId -Message $message }
+                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeMessage -SessionId $targetSessionId -Message $message }
                         } else {
                             Write-Host ("[SUPERVISOR] CI failed for PR #{0} at exact HEAD {1}. In external review mode; awaiting author repair." -f $pullRequest.number, $curHead)
                             $delivered = $true
@@ -6978,7 +6988,7 @@ function Invoke-ShipDeSupervisorLoop {
                         $targetSessionId = Ensure-ShipDeRepairWorker -State $State -PullRequest $pullRequest -Project $Project -WorkerStarter $WorkerStarter -SessionReleaser $SessionReleaser -SessionDetailResolver $SessionDetailResolver -SessionsResolver $SessionsResolver -OwnershipVerifier $OwnershipVerifier -CheckpointWriter $CheckpointWriter
                         $delivered = $false
                         if (-not [string]::IsNullOrWhiteSpace($targetSessionId)) {
-                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeAoMessage -SessionId $targetSessionId -Message $message }
+                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeMessage -SessionId $targetSessionId -Message $message }
                         } else {
                             Write-Host ("[SUPERVISOR] PR #{0} at exact HEAD {1} requires changes. External review findings posted to PR; awaiting author repair." -f $pullRequest.number, $curHead)
                             $delivered = $true
@@ -7026,7 +7036,7 @@ function Invoke-ShipDeSupervisorLoop {
                         $message = "Continue the assigned Work Item autonomously. If genuinely blocked, report one concrete blocker. Do not wait for routine confirmation."
                         $delivered = $false
                         if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
-                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $sessionId $message } else { Send-ShipDeAoMessage -SessionId $sessionId -Message $message }
+                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $sessionId $message } else { Send-ShipDeMessage -SessionId $sessionId -Message $message }
                         }
                         if ($delivered) {
                             $State.NudgeCount = [int]$State.NudgeCount + 1
@@ -7102,7 +7112,7 @@ function Invoke-ShipDeSupervisorLoop {
                     $targetSessionId = Ensure-ShipDeRepairWorker -State $State -PullRequest $pullRequest -Project $Project -WorkerStarter $WorkerStarter -SessionReleaser $SessionReleaser -SessionDetailResolver $SessionDetailResolver -SessionsResolver $SessionsResolver -OwnershipVerifier $OwnershipVerifier -CheckpointWriter $CheckpointWriter
                     $delivered = $false
                     if (-not [string]::IsNullOrWhiteSpace($targetSessionId)) {
-                        $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeAoMessage -SessionId $targetSessionId -Message $message }
+                        $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeMessage -SessionId $targetSessionId -Message $message }
                     } else {
                         Write-Host ("[SUPERVISOR] CI failed for PR #{0} at exact HEAD {1}. In external review mode; awaiting author repair." -f $pullRequest.number, $headSha)
                         $delivered = $true
@@ -7179,7 +7189,7 @@ function Invoke-ShipDeSupervisorLoop {
                         $targetSessionId = Ensure-ShipDeRepairWorker -State $State -PullRequest $pullRequest -Project $Project -WorkerStarter $WorkerStarter -SessionReleaser $SessionReleaser -SessionDetailResolver $SessionDetailResolver -SessionsResolver $SessionsResolver -OwnershipVerifier $OwnershipVerifier -CheckpointWriter $CheckpointWriter
                         $delivered = $false
                         if (-not [string]::IsNullOrWhiteSpace($targetSessionId)) {
-                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeAoMessage -SessionId $targetSessionId -Message $message }
+                            $delivered = if ($null -ne $MessageSender) { & $MessageSender $targetSessionId $message } else { Send-ShipDeMessage -SessionId $targetSessionId -Message $message }
                         } else {
                             Write-Host ("[SUPERVISOR] PR #{0} at exact HEAD {1} requires changes. External review findings posted to PR; awaiting author repair." -f $pullRequest.number, $headSha)
                             $delivered = $true
@@ -7273,7 +7283,7 @@ function Invoke-ShipDeSupervisorLoop {
                 $message = "Continue the assigned Work Item autonomously. If genuinely blocked, report one concrete blocker. Do not wait for routine confirmation."
                 $delivered = $false
                 if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
-                    $delivered = if ($null -ne $MessageSender) { & $MessageSender $sessionId $message } else { Send-ShipDeAoMessage -SessionId $sessionId -Message $message }
+                    $delivered = if ($null -ne $MessageSender) { & $MessageSender $sessionId $message } else { Send-ShipDeMessage -SessionId $sessionId -Message $message }
                 }
                 if (-not $delivered) {
                     throw "AO worker is idle and could not be nudged."
@@ -15535,13 +15545,13 @@ function Initialize-ShipDeSupervisorState {
         [object]$State,
         [scriptblock]$OpenPrResolver = { @(Get-ShipDeOpenPullRequests) },
         [scriptblock]$NextItemResolver = { Get-ShipDeNextPreparedItem },
-        [scriptblock]$WorkerStarter = { param($item, $prompt) Start-ShipDeAoWorker -Item $item -Prompt $prompt },
+        [scriptblock]$WorkerStarter = { param($item, $prompt) Start-ShipDeWorker -Item $item -Prompt $prompt },
         [scriptblock]$CheckpointWriter = { param($s) Write-ShipDeSupervisorCheckpoint -State $s },
         [scriptblock]$CheckpointClearer = { Clear-ShipDeSupervisorCheckpoint },
         [scriptblock]$RegisterSynchronizer = $null,
         [scriptblock]$CodexParker = { Park-ShipDeCodex },
         [scriptblock]$ActiveWorkersResolver = {
-            @(Get-ShipDeAoSessions -Project "shipde-platform" | Where-Object {
+            @(Get-ShipDeSessions -Project "shipde-platform" | Where-Object {
                 $isTerm = [bool](Get-ShipDeObjectProperty -Object $_ -Names @("isTerminated", "is_terminated"))
                 $role = [string](Get-ShipDeObjectProperty -Object $_ -Names @("role", "kind"))
                 $status = [string](Get-ShipDeObjectProperty -Object $_ -Names @("status", "state"))
@@ -15812,7 +15822,7 @@ function Initialize-ShipDeSupervisorState {
             $sessDetail = if ($null -ne $SessionDetailResolver) {
                 & $SessionDetailResolver $sessionId "shipde-platform"
             } else {
-                Get-ShipDeAoSessionById -SessionId $sessionId -Project "shipde-platform"
+                Get-ShipDeSessionById -SessionId $sessionId -Project "shipde-platform"
             }
 
             $isSessionActive = $false
@@ -15989,18 +15999,18 @@ function Initialize-ShipDeSupervisorState {
             Assert-ShipDeGovernedPullRequest -PullRequest $matchedPr -WorkItemId $workItemId -Branch $branch -ExpectedRepository $Repository
             $recoveredSessionId = $null
             $recoveredHarness = $null
-            $expectedWorkerName = Get-ShipDeAoWorkerName -Item ([PSCustomObject]@{ WorkItemId = $workItemId })
+            $expectedWorkerName = Get-ShipDeWorkerName -Item ([PSCustomObject]@{ WorkItemId = $workItemId })
             $activeSessions = @(& $ActiveWorkersResolver)
             $matchingSessions = @()
             foreach ($candSession in $activeSessions) {
-                $candName = Get-ShipDeAoSessionName -Session $candSession
+                $candName = Get-ShipDeSessionName -Session $candSession
                 if (-not [string]::IsNullOrWhiteSpace($candName) -and $candName -eq $expectedWorkerName) {
                     $matchingSessions += $candSession
                     continue
                 }
-                $sid = Get-ShipDeAoSessionId -Response $candSession
+                $sid = Get-ShipDeSessionId -Response $candSession
                 if (-not [string]::IsNullOrWhiteSpace($sid)) {
-                    $candidateWorktree = Join-Path (Get-ShipDeAoWorktreesDir -Project "shipde-platform") $sid
+                    $candidateWorktree = Join-Path (Get-ShipDeWorktreesDir -Project "shipde-platform") $sid
                     if (Test-Path -LiteralPath (Join-Path $candidateWorktree ".git")) {
                         $worktreeBranch = (& git -C $candidateWorktree rev-parse --abbrev-ref HEAD 2>$null).Trim()
                         if ($worktreeBranch -ceq $branch) {
@@ -16014,10 +16024,10 @@ function Initialize-ShipDeSupervisorState {
                 throw "Multiple active AO worker sessions match expected worker name '$expectedWorkerName' or branch '$branch' during SPAWNING recovery."
             }
             if ($matchingSessions.Count -eq 1) {
-                $recoveredSessionId = Get-ShipDeAoSessionId -Response $matchingSessions[0]
-                $sessionDetail = Get-ShipDeAoSessionById -SessionId $recoveredSessionId -Project "shipde-platform"
-                $candidates = if (-not [string]::IsNullOrWhiteSpace($author)) { @(Get-ShipDeAoHarnessCandidates -Author $author) } else { @("agy", "claude-code", "open-code") }
-                $recoveredHarness = Assert-ShipDeReusedAoSession -SessionDetail $sessionDetail -Item ([PSCustomObject]@{ WorkItemId = $workItemId; Branch = $branch }) -AllowedHarnesses $candidates -Project "shipde-platform"
+                $recoveredSessionId = Get-ShipDeSessionId -Response $matchingSessions[0]
+                $sessionDetail = Get-ShipDeSessionById -SessionId $recoveredSessionId -Project "shipde-platform"
+                $candidates = if (-not [string]::IsNullOrWhiteSpace($author)) { @(Get-ShipDeHarnessCandidates -Author $author) } else { @("agy", "claude-code", "open-code") }
+                $recoveredHarness = Assert-ShipDeReusedSession -SessionDetail $sessionDetail -Item ([PSCustomObject]@{ WorkItemId = $workItemId; Branch = $branch }) -AllowedHarnesses $candidates -Project "shipde-platform"
             }
 
             if ($State -is [System.Collections.IDictionary]) {
@@ -16264,7 +16274,7 @@ function Initialize-ShipDeSupervisorState {
 
     $activeAoWorkers = @(& $ActiveWorkersResolver)
     if ($activeAoWorkers.Count -gt 0) {
-        $workerSummary = @($activeAoWorkers | ForEach-Object { Get-ShipDeAoSessionId -Response $_ }) -join ", "
+        $workerSummary = @($activeAoWorkers | ForEach-Object { Get-ShipDeSessionId -Response $_ }) -join ", "
         throw "Active or idle AO worker session(s) exist without a resumable checkpoint ($workerSummary). Resume or recover that session before consuming another prepared row."
     }
 
