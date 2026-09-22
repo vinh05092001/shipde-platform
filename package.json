@@ -22,6 +22,7 @@
     "test:a11y": "tsx scripts/verify-a11y.ts",
     "test:visual": "tsx scripts/verify-visual.ts",
     "test:perf": "tsx scripts/verify-perf.ts",
+    "test:admin": "tsx --tsconfig apps/api/tsconfig.json apps/api/src/auth/admin-auth.supertest.spec.ts",
     "test:baseline": "tsx apps/web/src/tests/preservation-smoke.test.ts",
     "contract:check": "tsx scripts/verify-contracts.ts",
     "contract:generate": "tsx scripts/verify-contracts.ts --generate",

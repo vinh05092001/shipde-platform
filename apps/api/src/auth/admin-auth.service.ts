@@ -168,7 +168,7 @@ export class AdminAuthService {
       : await hashPassword(temporaryPassword!);
 
     // BR-ADMIN-08/09: Single transaction atomicity for merchant + user creation
-    const result = await this.prisma.\(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // Create merchant
       const merchant = await tx.merchant.create({
         data: {
@@ -295,7 +295,7 @@ export class AdminAuthService {
       .replace(/^_+|_+$/g, '')
       .substring(0, 20);
     const rand = Math.floor(1000 + Math.random() * 9000);
-    return ${slug || 'SHOP'}_\;
+    return `${slug || 'SHOP'}_${rand}`;
   }
 
   private async logAudit(meta: {
@@ -312,7 +312,7 @@ export class AdminAuthService {
       formatStructuredLog({
         level: 'info',
         service: 'api',
-        message: AUDIT: \ on \ by \,
+        message: `AUDIT: ${meta.action} on ${meta.resource} by ${meta.actor}`,
         metadata: { ...meta, timestamp: new Date().toISOString() },
       })
     );
