@@ -39,6 +39,11 @@ regexes = [
   # cannot reach a commit that already exists. The string states outright that
   # it is a length fixture, so exempting this exact text costs nothing.
   '''a-very-long-secret-key-that-exceeds-32-characters''',
+  # The dashboard redaction test needs a string that looks like a real key in
+  # order to assert that it gets redacted. The alphabet is A-Z0-9 in order, so
+  # it is plainly synthetic, and weakening the test to dodge the scanner would
+  # remove the only proof that redaction works on a realistic token.
+  '''sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789''',
 ]
 
 [[rules]]

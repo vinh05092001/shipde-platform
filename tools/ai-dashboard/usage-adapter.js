@@ -169,6 +169,56 @@ function listTranscripts(dir, acc) {
   return out;
 }
 
+// Transcripts are append-only and the dashboard re-reads them every poll, so a
+// full parse of every file each time dominated the poll cost. Keying the parsed
+// result on {mtimeMs, size} means only the session being written to is re-read.
+const transcriptCache = new Map();
+
+/** Extracts the billable turns of one transcript, reusing the last parse when the file is unchanged. */
+function parseTranscript(file, stat) {
+  const hit = transcriptCache.get(file);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.entries;
+
+  let content;
+  try {
+    content = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    return [];
+  }
+
+  const entries = [];
+  for (const line of content.split('\n')) {
+    if (!line) continue;
+    let row;
+    try {
+      row = JSON.parse(line);
+    } catch (e) {
+      continue;
+    }
+    const message = row && row.message;
+    const usage = message && message.usage;
+    if (!usage) continue;
+
+    const model = message.model || 'unknown';
+    // Synthetic turns are locally generated, carry zeroed counters, and
+    // were never billed.
+    if (model === '<synthetic>') continue;
+
+    entries.push({
+      id: message.id || null,
+      model,
+      day: typeof row.timestamp === 'string' ? row.timestamp.slice(0, 10) : null,
+      input: usage.input_tokens || 0,
+      output: usage.output_tokens || 0,
+      cacheWrite: usage.cache_creation_input_tokens || 0,
+      cacheRead: usage.cache_read_input_tokens || 0,
+    });
+  }
+
+  transcriptCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, entries });
+  return entries;
+}
+
 /** Aggregates Claude Code's own per-turn token records. */
 function collectClaudeUsage(projectsDir) {
   const dir = projectsDir || CLAUDE_PROJECTS;
@@ -199,43 +249,21 @@ function collectClaudeUsage(projectsDir) {
     }
     if (stat.size > MAX_TRANSCRIPT_BYTES) continue;
 
-    let content;
-    try {
-      content = fs.readFileSync(file, 'utf8');
-    } catch (e) {
-      continue;
-    }
-
-    for (const line of content.split('\n')) {
-      if (!line) continue;
-      let row;
-      try {
-        row = JSON.parse(line);
-      } catch (e) {
-        continue;
-      }
-      const message = row && row.message;
-      const usage = message && message.usage;
-      if (!usage) continue;
-
-      const model = message.model || 'unknown';
-      // Synthetic turns are locally generated, carry zeroed counters, and
-      // were never billed.
-      if (model === '<synthetic>') continue;
-      if (message.id) {
-        if (seen.has(message.id)) continue;
-        seen.add(message.id);
+    for (const entry of parseTranscript(file, stat)) {
+      if (entry.id) {
+        if (seen.has(entry.id)) continue;
+        seen.add(entry.id);
       }
 
       const rec = {
-        input: usage.input_tokens || 0,
-        output: usage.output_tokens || 0,
-        cacheWrite: usage.cache_creation_input_tokens || 0,
-        cacheRead: usage.cache_read_input_tokens || 0,
+        input: entry.input,
+        output: entry.output,
+        cacheWrite: entry.cacheWrite,
+        cacheRead: entry.cacheRead,
         cost: 0,
       };
 
-      const price = priceFor(model);
+      const price = priceFor(entry.model);
       if (price) {
         rec.cost =
           (rec.input * price.input +
@@ -247,14 +275,13 @@ function collectClaudeUsage(projectsDir) {
         unpriced += 1;
       }
 
-      if (!byModel[model]) byModel[model] = emptyBucket();
-      addInto(byModel[model], rec);
+      if (!byModel[entry.model]) byModel[entry.model] = emptyBucket();
+      addInto(byModel[entry.model], rec);
       addInto(totals, rec);
 
-      const day = typeof row.timestamp === 'string' ? row.timestamp.slice(0, 10) : null;
-      if (day) {
-        if (!byDay[day]) byDay[day] = emptyBucket();
-        addInto(byDay[day], rec);
+      if (entry.day) {
+        if (!byDay[entry.day]) byDay[entry.day] = emptyBucket();
+        addInto(byDay[entry.day], rec);
       }
     }
   }

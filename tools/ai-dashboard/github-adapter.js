@@ -235,7 +235,7 @@ async function collectGitHubState(repo = 'vinh05092001/shipde-platform') {
           observedAt: new Date().toISOString(),
           latencyMs: Date.now() - startTime,
           provenance: 'gh auth status',
-          impact: 'GitHub CLI unauthenticated; Pull Request and CI gates unavailable',
+          impact: 'GitHub CLI chưa đăng nhập; không đọc được Pull Request và CI',
           error: safeGitHubErrorReason(authRes.stderr, 'gh auth status failed'),
         },
         data: {
@@ -266,7 +266,7 @@ async function collectGitHubState(repo = 'vinh05092001/shipde-platform') {
           observedAt: new Date().toISOString(),
           latencyMs: Date.now() - startTime,
           provenance: `gh pr list --repo ${repo}`,
-          impact: 'Cannot list pull requests from GitHub repository',
+          impact: 'Không liệt kê được Pull Request từ GitHub',
           error: safeGitHubErrorReason(prListRes.stderr, 'gh pr list failed'),
         },
         data: {
@@ -360,7 +360,7 @@ async function collectGitHubState(repo = 'vinh05092001/shipde-platform') {
         observedAt: new Date().toISOString(),
         latencyMs: Date.now() - startTime,
         provenance: `gh CLI (authenticated as repo ${repo})`,
-        impact: 'None — Pull Request and CI observations verified',
+        impact: 'Bình thường — số liệu Pull Request và CI đã kiểm chứng',
         error: null,
       },
       data: {
@@ -377,7 +377,7 @@ async function collectGitHubState(repo = 'vinh05092001/shipde-platform') {
         observedAt: new Date().toISOString(),
         latencyMs: Date.now() - startTime,
         provenance: 'gh CLI',
-        impact: 'GitHub adapter execution failed',
+        impact: 'Bộ đọc GitHub chạy lỗi',
         error: safeGitHubErrorReason(err.message, 'gh CLI execution failed'),
       },
       data: {

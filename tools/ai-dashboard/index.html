@@ -1,10 +1,97 @@
 <!doctype html>
-<html lang="vi" class="dark">
+<html lang="vi" data-theme="shipde">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ship Dễ — AI Developer Cockpit & Realtime Delivery Tracker</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Ship Dễ — Bảng Điều Phối AI &amp; Tiến Độ Giao Việc</title>
+    <!-- Tailwind 4 in the browser plus daisyUI 5 as its plugin: the combination daisyUI
+         documents for a build-free page. Tailwind 3's CDN could not be used because its
+         unlayered preflight overrode every daisyUI component. -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5/daisyui.css" />
+    <style type="text/tailwindcss">
+      @theme {
+        --color-brand: #ea4b12;
+      }
+      /* Ship Dễ cream theme. */
+      :root,
+      [data-theme='shipde'] {
+        color-scheme: light;
+        --color-base-100: #fffdf7;
+        --color-base-200: #faf6ec;
+        --color-base-300: #e6ddc9;
+        --color-base-content: #3f3a33;
+        --color-primary: #ea4b12;
+        --color-primary-content: #fff7ed;
+        --color-secondary: #8b5cf6;
+        --color-secondary-content: #f5f3ff;
+        --color-accent: #0ea5e9;
+        --color-accent-content: #f0f9ff;
+        --color-neutral: #3f3a33;
+        --color-neutral-content: #faf6ec;
+        --color-info: #0284c7;
+        --color-info-content: #f0f9ff;
+        --color-success: #16a34a;
+        --color-success-content: #f0fdf4;
+        --color-warning: #b45309;
+        --color-warning-content: #fffbeb;
+        --color-error: #dc2626;
+        --color-error-content: #fef2f2;
+        --radius-selector: 0.5rem;
+        --radius-field: 0.6rem;
+        --radius-box: 0.9rem;
+        --size-selector: 0.25rem;
+        --size-field: 0.25rem;
+        --border: 1px;
+        --depth: 0;
+        --noise: 0;
+      }
+    </style>
+    <style>
+      /* daisyUI 5 is authored for Tailwind 4; this page runs the Tailwind 3 CDN,
+         so the v4 base variables it expects are declared here. */
+      :root {
+        --spacing: 0.25rem;
+        --radius-selector: 0.5rem;
+        --radius-field: 0.6rem;
+        --radius-box: 0.9rem;
+        --size-selector: 0.25rem;
+        --size-field: 0.25rem;
+        --border: 1px;
+        --depth: 1;
+        --noise: 0;
+        --color-black: #000;
+        --color-white: #fff;
+        --font-weight-medium: 500;
+        --font-weight-semibold: 600;
+        --text-xs: 0.75rem;
+        --text-sm: 0.875rem;
+        --text-base: 1rem;
+        --text-lg: 1.125rem;
+        --text-xs--line-height: 1rem;
+        --text-sm--line-height: 1.25rem;
+        --text-base--line-height: 1.5rem;
+        --default-transition-duration: 0.2s;
+      }
+      /* Ship Dễ cream theme mapped onto daisyUI's tokens. */
+      :root,
+      [data-theme='shipde'] {
+        --color-base-100: #fffdf7;
+        --color-base-200: #faf6ec;
+        --color-base-300: #f1e9d8;
+        --color-base-content: #3f3a33;
+        --color-primary: #ea4b12;
+        --color-primary-content: #fff7ed;
+        --color-secondary: #8b5cf6;
+        --color-accent: #0ea5e9;
+        --color-neutral: #3f3a33;
+        --color-success: #16a34a;
+        --color-warning: #b45309;
+        --color-error: #dc2626;
+        --radius-box: 0.9rem;
+        --radius-field: 0.6rem;
+      }
+    </style>
     <script>
       tailwind.config = {
         darkMode: 'class',
@@ -26,6 +113,63 @@
       html {
         width: 100%;
         overflow-x: hidden;
+      }
+      /* Cream theme (TASK-AI-47): one palette, applied over the existing markup. */
+      :root {
+        --cream: #faf6ec;
+        --panel: #fffdf7;
+        --line: #e6ddc9;
+        --ink: #3f3a33;
+        --muted: #5c5349;
+      }
+      body {
+        background-color: var(--cream) !important;
+        color: var(--ink) !important;
+      }
+      [class*='bg-slate-9'],
+      [class*='bg-slate-8'],
+      [class*='bg-[#0B1120]'],
+      [class*='bg-slate-95'],
+      .bg-black\/40,
+      [class*='bg-gray-9'] {
+        background-color: var(--panel) !important;
+      }
+      [class*='border-slate-'],
+      [class*='border-gray-'] {
+        border-color: var(--line) !important;
+      }
+      [class*='text-slate-1'],
+      [class*='text-slate-2'],
+      [class*='text-base-content'] {
+        color: var(--ink) !important;
+      }
+      [class*='text-slate-3'],
+      [class*='text-slate-4'],
+      [class*='text-slate-5'],
+      [class*='text-gray-3'],
+      [class*='text-gray-4'],
+      [class*='text-gray-5'] {
+        color: var(--muted) !important;
+      }
+      [class*='text-slate-6'],
+      [class*='text-slate-7'] {
+        color: #6b6257 !important;
+      }
+      .tab-btn:hover {
+        background-color: #f1e9d8 !important;
+        color: var(--ink) !important;
+      }
+      @keyframes rot-flow {
+        to {
+          stroke-dashoffset: -24;
+        }
+      }
+      .rot-flow {
+        stroke-dasharray: 9 5;
+        animation: rot-flow 0.7s linear infinite;
+      }
+      .rot-dim {
+        opacity: 0.45;
       }
       body {
         background-color: #080d1a;
@@ -114,27 +258,28 @@
   <body class="min-h-screen w-full flex flex-col antialiased overflow-x-hidden">
     <!-- Top Navigation Header -->
     <header
-      class="sticky top-0 z-40 bg-[#0B1120]/95 backdrop-blur-md border-b border-slate-800 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 w-full min-w-0"
+      class="sticky top-0 z-40 bg-base-100/95 backdrop-blur-md border-b border-base-300 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 w-full min-w-0"
     >
       <div class="flex items-center gap-3 min-w-0">
         <div
-          class="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-tr from-brand to-amber-500 text-white flex items-center justify-center font-black text-base shadow-lg shadow-brand/30 glow-brand"
+          class="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-tr from-brand to-amber-500 text-base-content flex items-center justify-center font-black text-base shadow-lg shadow-brand/30 glow-brand"
         >
           ⚡
         </div>
         <div class="min-w-0">
           <div class="flex items-center gap-2 flex-wrap min-w-0">
-            <span class="font-black text-white text-sm sm:text-base tracking-tight break-words"
-              >Ship Dễ AI Developer Cockpit</span
+            <span
+              class="font-black text-base-content text-sm sm:text-base tracking-tight break-words"
+              >Bảng điều phối Ship Dễ AI</span
             >
             <span
               class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold shrink-0"
             >
-              MISSION CONTROL v3.3
+              ĐIỀU HÀNH v3.3
             </span>
           </div>
-          <div class="text-[11px] text-slate-400 font-mono hidden sm:block break-words">
-            Bảng Điều Phối & Bằng Chứng Giao Việc Độc Lập Theo AGENTS.md
+          <div class="text-[11px] text-base-content/70 font-mono hidden sm:block break-words">
+            Điều phối &amp; chứng chỉ giao việc độc lập theo AGENTS.md
           </div>
         </div>
       </div>
@@ -143,7 +288,7 @@
         <!-- Realtime Connection Status Badge -->
         <div
           id="connectionBadge"
-          class="text-[11px] font-mono px-2.5 py-1 rounded-lg border font-bold flex items-center gap-1.5 bg-slate-800 text-slate-400 border-slate-700"
+          class="text-[11px] font-mono px-2.5 py-1 rounded-lg border font-bold flex items-center gap-1.5 bg-base-200 text-base-content/70 border-base-300"
           role="status"
           aria-live="polite"
         >
@@ -152,18 +297,20 @@
 
         <div
           id="writerStateBadge"
-          class="hidden md:flex items-center gap-2 bg-slate-800/80 px-3 py-1 rounded-lg border border-slate-700 text-xs font-mono"
+          class="hidden md:flex items-center gap-2 bg-base-200 px-3 py-1 rounded-lg border border-base-300 text-xs font-mono"
           role="status"
           aria-live="polite"
         >
-          <span id="writerStateDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
-          <span class="text-slate-300">Single Writer:</span>
-          <span id="writerStateLabel" class="text-slate-400 font-bold">Đang kiểm tra AO...</span>
+          <span id="writerStateDot" class="w-2 h-2 rounded-full bg-base-200"></span>
+          <span class="text-base-content/70">Tác giả ghi:</span>
+          <span id="writerStateLabel" class="text-base-content/70 font-bold"
+            >Đang kiểm tra AO...</span
+          >
         </div>
 
         <button
           onclick="fetchState()"
-          class="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition"
+          class="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-base-200 hover:bg-base-200 text-base-content/70 border border-base-300 text-xs font-semibold transition"
           title="Làm mới quan sát"
         >
           <span>🔄 Làm Mới</span>
@@ -179,7 +326,8 @@
       <!-- Top Hero HUD -->
       <section
         aria-labelledby="hud-heading"
-        class="bg-gradient-to-r from-slate-900 via-slate-900 to-slate-800 rounded-2xl p-5 sm:p-6 border border-slate-800 shadow-2xl relative overflow-hidden"
+        class="rounded-2xl p-5 sm:p-6 border shadow-sm relative overflow-hidden"
+        style="background: linear-gradient(90deg, #fffdf7, #f6efdf); border-color: var(--line)"
       >
         <div
           class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 relative z-10 min-w-0"
@@ -188,64 +336,70 @@
             <div
               class="inline-flex items-center gap-2 px-3 py-0.5 rounded-full bg-brand/20 text-brand text-[11px] font-black uppercase tracking-wider border border-brand/30 max-w-full"
             >
-              <span class="break-words">Autonomous AI Delivery Engine</span>
+              <span class="break-words">Hệ thống AI tự động giao việc</span>
             </div>
             <h1
               id="hud-heading"
-              class="text-xl sm:text-2xl lg:text-3xl font-black text-white break-words"
+              class="text-xl sm:text-2xl lg:text-3xl font-black text-base-content break-words"
             >
-              Giám Sát <span id="heroTaskCount">—</span> Đầu Việc & Tiến Độ Các Mô Hình AI Ship Dễ
+              Giám sát <span id="heroTaskCount">—</span> đầu việc &amp; tiến độ mô hình AI
             </h1>
-            <p class="text-xs sm:text-sm text-slate-300 max-w-3xl leading-relaxed break-words">
-              Quan sát trạng thái thực tế từ Register CSV, Git worktrees, Agent Orchestrator và
-              GitHub Pull Request. Dữ liệu trung thực, phân định rõ ràng vai trò tác giả, rà soát và
-              kiểm soát chất lượng.
+            <p class="text-xs text-base-content/70 break-words">
+              Register · Git · Agent Orchestrator · GitHub — số đo thật, không suy đoán.
             </p>
-            <div id="observedAtLabel" class="text-[11px] font-mono text-slate-400 break-words">
+            <div
+              id="observedAtLabel"
+              class="text-[11px] font-mono text-base-content/70 break-words"
+            >
               Đang tải dữ liệu quan sát...
             </div>
+            <div id="lastCheckedAt" class="text-[10px] font-mono text-base-content/50"></div>
           </div>
 
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 min-w-0 w-full lg:w-auto" id="topStats">
-            <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
-              <div class="text-[11px] text-slate-400 font-semibold uppercase">
-                Đầu Việc Trong Hàng Đợi
+            <div class="bg-base-200 p-3 rounded-xl border border-base-300 min-w-0">
+              <div class="text-[11px] text-base-content/70 font-semibold uppercase">
+                Hàng đợi đầu việc
               </div>
-              <div class="text-xl font-black text-white mt-1" id="statTotal">— Tasks</div>
-              <div class="text-[10px] text-emerald-400 mt-0.5" id="statMerged">— Merged</div>
+              <div class="text-xl font-black text-base-content mt-1" id="statTotal">— đầu việc</div>
+              <div class="text-[10px] text-emerald-400 mt-0.5" id="statMerged">— đã merge</div>
             </div>
-            <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
-              <div class="text-[11px] text-slate-400 font-semibold uppercase">
-                Phiên AO Hoạt Động
+            <div class="bg-base-200 p-3 rounded-xl border border-base-300 min-w-0">
+              <div class="text-[11px] text-base-content/70 font-semibold uppercase">
+                Phiên AO hoạt động
               </div>
-              <div class="text-xl font-black text-emerald-400 mt-1" id="statSessions">— Phiên</div>
+              <div class="text-xl font-black text-emerald-400 mt-1" id="statSessions">— phiên</div>
               <div
-                class="text-[10px] text-slate-300 mt-0.5 break-words"
+                class="text-[10px] text-base-content/70 mt-0.5 break-words"
                 title="AGENTS.md: Gemini là tác giả chính; Claude là phân tích/tác giả phụ/sửa lỗi/rà soát dự phòng; 9Router chỉ dự phòng rủi ro thấp có giới hạn"
               >
                 Gemini (tác giả chính) • Claude (phân tích/dự phòng) • 9Router (dự phòng)
               </div>
             </div>
-            <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
-              <div class="text-[11px] text-slate-400 font-semibold uppercase">Quy Tắc Tác Giả</div>
+            <div class="bg-base-200 p-3 rounded-xl border border-base-300 min-w-0">
+              <div class="text-[11px] text-base-content/70 font-semibold uppercase">
+                Quy tắc tác giả
+              </div>
               <div class="text-xl font-black text-cyan-400 mt-1" id="writerCountValue">—</div>
-              <div class="text-[10px] text-slate-300 mt-0.5">AGENTS.md Single Writer</div>
+              <div class="text-[10px] text-base-content/70 mt-0.5">AGENTS.md một tác giả ghi</div>
             </div>
-            <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 min-w-0">
-              <div class="text-[11px] text-slate-400 font-semibold uppercase">Task Đang Chạy</div>
+            <div class="bg-base-200 p-3 rounded-xl border border-base-300 min-w-0">
+              <div class="text-[11px] text-base-content/70 font-semibold uppercase">
+                Đầu việc đang chạy
+              </div>
               <div class="text-base font-black text-brand mt-1 truncate" id="statActiveTask">—</div>
-              <div class="text-[10px] text-amber-400 mt-0.5">Delivery Pipeline</div>
+              <div class="text-[10px] text-amber-400 mt-0.5">Quy trình giao việc</div>
             </div>
           </div>
         </div>
 
         <!-- Global Deterministic Progress Bar -->
-        <div class="mt-5 pt-4 border-t border-slate-800/80 relative z-10">
+        <div class="mt-5 pt-4 border-t border-base-300 relative z-10">
           <div class="flex items-center justify-between text-xs mb-1.5 font-semibold">
-            <span class="text-slate-300">Tiến Độ Giao Việc Toàn Dự Án:</span>
+            <span class="text-base-content/70">Tiến độ toàn dự án:</span>
             <span class="font-mono text-emerald-400" id="progressLabel">—</span>
           </div>
-          <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden flex">
+          <div class="w-full h-2.5 bg-base-200 rounded-full overflow-hidden flex">
             <div
               class="bg-emerald-500 h-full transition-all duration-500 shadow-sm"
               id="progressBarMerged"
@@ -257,282 +411,458 @@
 
       <!-- Source Health Bar (4 Primary Sources) -->
       <section aria-label="Tình trạng các nguồn dữ liệu">
+        <div id="exec-summary" class="mb-4"></div>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3" id="sourceHealthBar">
           <!-- Filled dynamically -->
         </div>
       </section>
 
       <!-- Navigation Tabs -->
-      <nav
-        class="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto custom-scroll"
-        aria-label="Bảng điều khiển tabs"
-      >
-        <button
-          onclick="switchTab('gates')"
-          id="tabBtn-gates"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs bg-brand text-white shadow-sm flex items-center gap-2 glow-brand"
-        >
-          <span>🛡️ 1. Cổng Giao Việc & Bằng Chứng PR</span>
+      <nav class="tabs tabs-lift overflow-x-auto custom-scroll" aria-label="Bảng điều khiển tabs">
+        <button onclick="switchTab('roster')" id="tabBtn-roster" class="tab font-bold">
+          <span>🗂️ 1. Phiên làm việc</span>
         </button>
-        <button
-          onclick="switchTab('roster')"
-          id="tabBtn-roster"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
-        >
-          <span>🤖 2. Phiên Làm Việc & Worktrees</span>
-        </button>
-        <button
-          onclick="switchTab('queue')"
-          id="tabBtn-queue"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
-        >
-          <span>🗺️ 3. Lộ Trình <span id="tabQueueCountLabel">—</span> Đầu Việc</span>
-        </button>
-        <button
-          onclick="switchTab('activity')"
-          id="tabBtn-activity"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
-        >
-          <span>📜 4. Nhật Ký Hoạt Động</span>
-        </button>
-        <button
-          onclick="switchTab('capacity')"
-          id="tabBtn-capacity"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
-        >
+        <button onclick="switchTab('progress')" id="tabBtn-progress" class="tab font-bold">
           <span
-            >&#9981; 5. S&#7913;c Ch&#7913;a &amp; Quota
-            <span id="tabCapacityLabel">&#8212;</span></span
+            >📈 2. Tiến độ &amp; Nhật ký
+            <span id="tabQueueCountLabel" class="badge badge-sm badge-ghost">—</span></span
           >
         </button>
-        <button
-          onclick="switchTab('health')"
-          id="tabBtn-health"
-          class="tab-btn px-4 py-2.5 rounded-xl font-bold text-xs text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2"
-        >
-          <span>🩺 6. Sức Khỏe Nguồn Dữ Liệu</span>
+        <button onclick="switchTab('system')" id="tabBtn-system" class="tab font-bold">
+          <span
+            >🧭 3. Hệ thống &amp; Hạn mức
+            <span id="tabCapacityLabel" class="badge badge-sm badge-ghost">—</span></span
+          >
         </button>
       </nav>
 
-      <!-- TAB PANE: CAPACITY & QUOTA -->
-      <div id="tabPane-capacity" class="hidden space-y-6">
-        <div id="capacitySummary"></div>
-        <div id="capacityVendor"></div>
-        <div id="capacityTable"></div>
-        <div id="capacityClaude"></div>
-        <!-- Account & quota entry form (TASK-AI-29). The cockpit renders the
-             command an operator runs locally; AI15-R09 keeps this service
-             observational, so this panel never submits anything. -->
-        <section
-          id="accountEntryPanel"
-          aria-labelledby="accountEntryHeading"
-          class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-5"
-        >
-          <div
-            class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-slate-800"
-          >
-            <div>
-              <h3
-                id="accountEntryHeading"
-                class="text-sm font-bold text-white uppercase tracking-wider"
-              >
-                Nhập tài khoản &amp; hạn mức
-              </h3>
-              <p class="text-xs text-slate-400 mt-1">
-                Biểu mẫu <span class="font-semibold text-slate-300">chỉ soạn lệnh</span> để bạn chạy
-                tại máy. Cockpit vẫn chỉ quan sát (<span class="font-mono">AI15-R09</span>) và không
-                gửi gì cả.
-              </p>
-            </div>
-            <span
-              id="accountEntryStateBadge"
-              class="text-[11px] font-mono px-2.5 py-1 rounded-lg border bg-slate-800 text-slate-300 border-slate-700 self-start sm:self-auto"
-              role="status"
-              aria-live="polite"
-            >
-              —
-            </span>
+      <!-- TAB: TIẾN ĐỘ & NHẬT KÝ (lộ trình + hoạt động) -->
+      <div id="tabPane-progress" class="space-y-6 hidden">
+        <div id="conflictsContainer" class="hidden"></div>
+        <div id="progress-visual"></div>
+        <div class="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <div class="space-y-4">
+            <details class="rounded-box border border-base-300 p-3">
+              <summary class="cursor-pointer text-sm font-bold">Bảng chi tiết 179 đầu việc</summary>
+              <div class="mt-3 space-y-4">
+                <div
+                  class="flex flex-col md:flex-row gap-3 items-center justify-between bg-base-100 p-4 rounded-xl border border-base-300"
+                >
+                  <input
+                    type="text"
+                    id="searchInput"
+                    placeholder="🔍 Tìm mã việc (FEAT-AUTH, TASK-AI), tên tính năng..."
+                    class="w-full md:w-80 bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content focus:outline-none focus:border-brand"
+                  />
+                  <div class="flex flex-wrap items-center gap-2">
+                    <select
+                      id="sliceFilter"
+                      class="bg-base-200 border border-base-300 text-xs px-3 py-1.5 rounded-lg text-base-content/70"
+                    >
+                      <option value="ALL">Tất cả Slices (S00..S11)</option>
+                      <option value="S00">S00: Nền tảng &amp; Quy trình AI</option>
+                      <option value="S01">S01: Định danh &amp; Đa người dùng</option>
+                      <option value="S02">S02: Tài khoản nhà vận chuyển</option>
+                      <option value="S03">S03: Tiếp nhận đơn &amp; Địa chỉ</option>
+                      <option value="S04">S04: So sánh cước &amp; Chính sách</option>
+                      <option value="S05">S05: Xử lý đơn &amp; Vận đơn</option>
+                      <option value="S06">S06: Hành trình &amp; Chuẩn hóa</option>
+                      <option value="S07">S07: Xử lý sự cố &amp; CSKH</option>
+                      <option value="S08">S08: Bảng giá &amp; Cước hợp đồng</option>
+                      <option value="S09">S09: Đối soát COD &amp; 3 Sổ cái</option>
+                      <option value="S10">S10: Khiếu nại &amp; Bồi thường</option>
+                      <option value="S11">S11: Đối soát &amp; Ma trận kiểm toán</option>
+                    </select>
+                    <select
+                      id="statusFilter"
+                      class="bg-base-200 border border-base-300 text-xs px-3 py-1.5 rounded-lg text-base-content/70"
+                    >
+                      <option value="ALL">Tất cả trạng thái</option>
+                      <option value="MERGED">Đã merge</option>
+                      <option value="READY_FOR_CODEX">Chờ Codex thẩm định</option>
+                      <option value="READY_FOR_AUTHOR">Sẵn sàng thực hiện</option>
+                      <option value="IN_PROGRESS">Đang thực hiện</option>
+                      <option value="BLOCKED_DEPENDENCY">Bị khóa phụ thuộc</option>
+                      <option value="BLOCKED_BY_FOUNDATION">Chờ nền tảng S00</option>
+                    </select>
+                    <span class="text-xs text-base-content/70 font-mono" id="taskCountLabel"
+                      >Đang tải...</span
+                    >
+                  </div>
+                </div>
+
+                <div class="bg-base-100 rounded-2xl border border-base-300 overflow-hidden">
+                  <div class="overflow-x-auto custom-scroll">
+                    <table class="responsive-table w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr
+                          class="border-b border-base-300 text-[11px] font-mono uppercase text-base-content/70 bg-base-200"
+                        >
+                          <th class="p-3 w-12">#</th>
+                          <th class="p-3 w-16">Slice</th>
+                          <th class="p-3 w-32">Mã Task</th>
+                          <th class="p-3">Tính năng &amp; Hành vi</th>
+                          <th class="p-3 w-36">Trạng thái</th>
+                          <th class="p-3 w-28">Tác giả</th>
+                          <th class="p-3 w-24">PR</th>
+                          <th class="p-3 w-28">Codex</th>
+                        </tr>
+                      </thead>
+                      <tbody id="tasksTableBody">
+                        <!-- Dynamically populated -->
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
+          <div class="space-y-4">
+            <div id="activeWorkItemCard"></div>
+            <div id="gatePipelineCard"></div>
 
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <div class="space-y-3">
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <label class="block">
-                  <span class="text-[11px] font-semibold uppercase text-slate-400">
-                    Mã tài khoản (id)
-                  </span>
-                  <input
-                    id="accId"
-                    type="text"
-                    placeholder="agy-docker-b"
-                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
-                  />
-                </label>
-                <label class="block">
-                  <span class="text-[11px] font-semibold uppercase text-slate-400">
-                    Nhà cung cấp (provider)
-                  </span>
-                  <input
-                    id="accProvider"
-                    type="text"
-                    placeholder="antigravity"
-                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
-                  />
-                </label>
-                <label class="block">
-                  <span class="text-[11px] font-semibold uppercase text-slate-400">Model</span>
-                  <input
-                    id="accModel"
-                    type="text"
-                    placeholder="gemini-3.8-flash-high"
-                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
-                  />
-                </label>
-                <label class="block">
-                  <span class="text-[11px] font-semibold uppercase text-slate-400">
-                    Cửa sổ ngữ cảnh (contextWindow)
-                  </span>
-                  <input
-                    id="accContextWindow"
-                    type="number"
-                    min="1"
-                    step="1"
-                    placeholder="1000000"
-                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
-                  />
-                </label>
-                <label class="block">
-                  <span class="text-[11px] font-semibold uppercase text-slate-400">
-                    Bậc (tier, tuỳ chọn)
-                  </span>
-                  <select
-                    id="accTier"
-                    class="mt-1 w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-slate-200"
-                  >
-                    <option value="">— mặc định (external) —</option>
-                    <option value="0">0 · local</option>
-                    <option value="1">1 · account</option>
-                    <option value="2">2 · external</option>
-                  </select>
-                </label>
-                <div class="block">
-                  <span class="text-[11px] font-semibold uppercase text-slate-400">Năng lực</span>
-                  <div class="mt-2 flex items-center gap-4">
-                    <label class="inline-flex items-center gap-2 text-xs text-slate-300">
-                      <input id="accTools" type="checkbox" class="accent-brand w-3.5 h-3.5" />
-                      tools
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-xs text-slate-300">
-                      <input id="accJsonSchema" type="checkbox" class="accent-brand w-3.5 h-3.5" />
-                      jsonSchema
-                    </label>
-                  </div>
+            <details class="rounded-box border border-base-300 p-3">
+              <summary class="cursor-pointer text-sm font-bold">Nhật ký chi tiết</summary>
+              <div class="mt-3 space-y-4">
+                <div class="flex items-center justify-between pb-3 border-b border-base-300">
+                  <h3 class="text-sm font-bold text-base-content uppercase tracking-wider">
+                    Nhật ký hoạt động (Git &amp; AO)
+                  </h3>
+                  <span class="text-xs font-mono text-base-content/70">Thời gian thực</span>
+                </div>
+                <div class="space-y-2.5" id="activityStreamList">
+                  <!-- Dynamically populated -->
                 </div>
               </div>
+            </details>
+          </div>
+        </div>
+      </div>
 
-              <fieldset class="border border-slate-800 rounded-xl p-3 space-y-2">
-                <legend class="text-[11px] font-semibold uppercase text-slate-400 px-1">
-                  Hạn mức theo cửa sổ (bỏ trống = chưa khai)
-                </legend>
-                <div id="accountEntryLimits" class="space-y-2"></div>
-              </fieldset>
+      <!-- TAB: HỆ THỐNG & QUOTA (kiến trúc + sức chứa + sức khoẻ nguồn) -->
+      <div id="tabPane-system" class="space-y-4 hidden">
+        <div class="card bg-base-100 border border-base-300">
+          <div class="card-body gap-3 p-4">
+            <div class="flex items-baseline justify-between">
+              <h3 class="card-title text-sm">Kiến trúc hệ thống</h3>
+              <div class="flex gap-3 text-[10px]">
+                <span
+                  ><span
+                    class="inline-block w-2 h-2 rounded-full align-middle"
+                    style="background: #8b5cf6"
+                  ></span>
+                  sự thật</span
+                >
+                <span
+                  ><span
+                    class="inline-block w-2 h-2 rounded-full align-middle"
+                    style="background: #ea4b12"
+                  ></span>
+                  điều phối</span
+                >
+                <span
+                  ><span
+                    class="inline-block w-2 h-2 rounded-full align-middle"
+                    style="background: #0ea5e9"
+                  ></span>
+                  tác nhân</span
+                >
+                <span
+                  ><span
+                    class="inline-block w-2 h-2 rounded-full align-middle"
+                    style="background: #16a34a"
+                  ></span>
+                  cổng chất lượng</span
+                >
+              </div>
             </div>
+            <div id="architecture-diagram"></div>
+          </div>
+        </div>
 
-            <div class="space-y-4">
+        <!-- TASK-AI-47: live rotation topology, measured from dispatcher logs and provider usage. -->
+        <section
+          class="rounded-2xl border p-4 space-y-4"
+          style="border-color: var(--line); background: var(--panel)"
+        >
+          <div class="flex items-baseline justify-between">
+            <h3 class="font-bold text-sm">Xoay model theo nguồn</h3>
+            <span id="rotationObservedAt" class="text-[11px] opacity-60">—</span>
+          </div>
+          <div id="rotation-kpis" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+          <div class="grid gap-4 items-start">
+            <div class="flex justify-center">
+              <svg id="rotation-svg" viewBox="-95 -75 850 675" class="w-full max-w-[880px]"></svg>
+            </div>
+            <div class="space-y-3 min-w-0">
               <div
-                id="accountEntryRefused"
-                class="hidden rounded-xl border border-rose-500/40 bg-rose-500/10 p-3"
-              >
-                <div class="text-xs font-bold text-rose-300 uppercase tracking-wider mb-1">
-                  Bị từ chối — chưa có lệnh
+                id="rotation-cards"
+                class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2"
+              ></div>
+              <div>
+                <div class="text-[11px] font-bold uppercase tracking-wide opacity-60 mb-1">
+                  Lượt chạy gần đây
                 </div>
-                <ul
-                  id="accountEntryFindings"
-                  class="list-disc list-inside text-xs text-rose-200 space-y-1"
-                ></ul>
-                <p class="text-[11px] text-rose-200/80 mt-2">
-                  Không có lệnh nào được đưa ra, vì một lệnh chắc chắn bị từ chối thì không nên
-                  chạy.
-                </p>
-              </div>
-
-              <div id="accountEntryCommandBlock" class="space-y-2">
-                <div class="text-[11px] font-semibold uppercase text-slate-400">Lệnh sẽ chạy</div>
-                <pre
-                  id="accountEntryCommand"
-                  class="text-[11px] leading-relaxed bg-black/40 border border-slate-800 rounded-xl p-3 overflow-x-auto custom-scroll text-emerald-300 font-mono"
-                ></pre>
-                <div class="text-[11px] font-semibold uppercase text-slate-400 pt-1">
-                  Nạp mật khẩu (không bao giờ qua tham số)
-                </div>
-                <pre
-                  id="accountEntrySecretCommand"
-                  class="text-[11px] leading-relaxed bg-black/40 border border-slate-800 rounded-xl p-3 overflow-x-auto custom-scroll text-sky-300 font-mono"
-                ></pre>
-              </div>
-
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-                  <div class="text-[11px] font-semibold uppercase text-emerald-400">
-                    Cửa sổ sẽ ghi (đã khai)
-                  </div>
-                  <ul id="accountEntryKnown" class="text-xs text-slate-200 mt-2 space-y-1"></ul>
-                </div>
-                <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-                  <div class="text-[11px] font-semibold uppercase text-amber-400">
-                    Cửa sổ vẫn chưa biết
-                  </div>
-                  <ul id="accountEntryUnknown" class="text-xs text-slate-200 mt-2 space-y-1"></ul>
-                </div>
-              </div>
-
-              <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-                <div class="text-[11px] font-semibold uppercase text-slate-400">
-                  Sau khi chạy (áp dụng)
-                </div>
-                <p class="text-xs text-slate-300 mt-1">
-                  Lệnh in lại mã tài khoản, các cửa sổ đã biết kèm nguồn gốc mỗi hạn mức, các cửa sổ
-                  còn chưa biết và việc <span class="font-mono">hasSecret</span> đã có hay chưa. Nó
-                  <span class="font-semibold text-slate-100">không bao giờ</span>
-                  in mật khẩu — kể cả dạng che.
-                </p>
+                <div
+                  id="rotation-runs"
+                  class="rounded-xl border overflow-hidden text-[11px]"
+                  style="border-color: var(--line)"
+                ></div>
               </div>
             </div>
           </div>
         </section>
-      </div>
+        <div id="capacitySummary"></div>
+        <details
+          class="rounded-2xl border p-3"
+          style="border-color: var(--line); background: var(--panel)"
+        >
+          <summary class="cursor-pointer text-sm font-bold">
+            Hạn mức nhà cung cấp &amp; bảng model
+          </summary>
+          <div class="mt-3 space-y-4">
+            <div id="capacityVendor"></div>
+            <div id="capacityTable"></div>
+          </div>
+        </details>
+        <div id="capacityClaude"></div>
+        <!-- Account & quota entry form (TASK-AI-29). The cockpit renders the
+             command an operator runs locally; AI15-R09 keeps this service
+             observational, so this panel never submits anything. -->
+        <details
+          class="rounded-2xl border p-3"
+          style="border-color: var(--line); background: var(--panel)"
+        >
+          <summary class="cursor-pointer text-sm font-bold">Nhập tài khoản &amp; hạn mức</summary>
+          <section
+            id="accountEntryPanel"
+            aria-labelledby="accountEntryHeading"
+            class="bg-base-100 rounded-2xl border border-base-300 p-5 space-y-5"
+          >
+            <div
+              class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-base-300"
+            >
+              <div>
+                <h3
+                  id="accountEntryHeading"
+                  class="text-sm font-bold text-base-content uppercase tracking-wider"
+                >
+                  Nhập tài khoản &amp; hạn mức
+                </h3>
+                <p class="text-xs text-base-content/70 mt-1">
+                  Biểu mẫu
+                  <span class="font-semibold text-base-content/70">chỉ soạn lệnh</span> chạy tại máy
+                  theo nguyên tắc quan sát độc lập (<span class="font-mono">AI15-R09</span>).
+                </p>
+              </div>
+              <span
+                id="accountEntryStateBadge"
+                class="text-[11px] font-mono px-2.5 py-1 rounded-lg border bg-base-200 text-base-content/70 border-base-300 self-start sm:self-auto"
+                role="status"
+                aria-live="polite"
+              >
+                —
+              </span>
+            </div>
 
-      <!-- TAB PANE 1: GATES & PR EVIDENCE -->
-      <div id="tabPane-gates" class="space-y-6">
-        <div id="conflictsContainer" class="hidden"></div>
-        <div id="activeWorkItemCard"></div>
-        <div id="gatePipelineCard"></div>
-      </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <div class="space-y-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label class="block">
+                    <span class="text-[11px] font-semibold uppercase text-base-content/70">
+                      Mã tài khoản (id)
+                    </span>
+                    <input
+                      id="accId"
+                      type="text"
+                      placeholder="agy-docker-b"
+                      class="mt-1 w-full bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content focus:outline-none focus:border-brand"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="text-[11px] font-semibold uppercase text-base-content/70">
+                      Nhà cung cấp (provider)
+                    </span>
+                    <input
+                      id="accProvider"
+                      type="text"
+                      placeholder="antigravity"
+                      class="mt-1 w-full bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content focus:outline-none focus:border-brand"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="text-[11px] font-semibold uppercase text-base-content/70"
+                      >Mô hình (model)</span
+                    >
+                    <input
+                      id="accModel"
+                      type="text"
+                      placeholder="gemini-3.8-flash-high"
+                      class="mt-1 w-full bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content focus:outline-none focus:border-brand"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="text-[11px] font-semibold uppercase text-base-content/70">
+                      Cửa sổ ngữ cảnh (contextWindow)
+                    </span>
+                    <input
+                      id="accContextWindow"
+                      type="number"
+                      min="1"
+                      step="1"
+                      placeholder="1000000"
+                      class="mt-1 w-full bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content focus:outline-none focus:border-brand"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="text-[11px] font-semibold uppercase text-base-content/70">
+                      Bậc (tier, tuỳ chọn)
+                    </span>
+                    <select
+                      id="accTier"
+                      class="mt-1 w-full bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content/70"
+                    >
+                      <option value="">— mặc định (ngoại vi) —</option>
+                      <option value="0">0 · cục bộ (local)</option>
+                      <option value="1">1 · tài khoản (account)</option>
+                      <option value="2">2 · ngoại vi (external)</option>
+                    </select>
+                  </label>
+                  <div class="block">
+                    <span class="text-[11px] font-semibold uppercase text-base-content/70"
+                      >Năng lực</span
+                    >
+                    <div class="mt-2 flex items-center gap-4">
+                      <label class="inline-flex items-center gap-2 text-xs text-base-content/70">
+                        <input id="accTools" type="checkbox" class="accent-brand w-3.5 h-3.5" />
+                        Công cụ (tools)
+                      </label>
+                      <label class="inline-flex items-center gap-2 text-xs text-base-content/70">
+                        <input
+                          id="accJsonSchema"
+                          type="checkbox"
+                          class="accent-brand w-3.5 h-3.5"
+                        />
+                        JSON Schema
+                      </label>
+                    </div>
+                  </div>
+                </div>
 
-      <!-- TAB PANE 2: SESSIONS & WORKTREES -->
-      <div id="tabPane-roster" class="space-y-6 hidden">
-        <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
-          <div class="flex items-center justify-between">
-            <h3 class="text-sm font-bold text-white uppercase tracking-wider">
-              Danh Sách Phiên Làm Việc Agent Orchestrator & Worktrees
+                <fieldset class="border border-base-300 rounded-xl p-3 space-y-2">
+                  <legend class="text-[11px] font-semibold uppercase text-base-content/70 px-1">
+                    Hạn mức theo cửa sổ (bỏ trống = chưa khai)
+                  </legend>
+                  <div id="accountEntryLimits" class="space-y-2"></div>
+                </fieldset>
+              </div>
+
+              <div class="space-y-4">
+                <div
+                  id="accountEntryRefused"
+                  class="hidden rounded-xl border border-rose-500/40 bg-rose-500/10 p-3"
+                >
+                  <div class="text-xs font-bold text-rose-300 uppercase tracking-wider mb-1">
+                    Bị từ chối — chưa có lệnh
+                  </div>
+                  <ul
+                    id="accountEntryFindings"
+                    class="list-disc list-inside text-xs text-rose-200 space-y-1"
+                  ></ul>
+                  <p class="text-[11px] text-rose-200/80 mt-2">
+                    Lệnh không hợp lệ sẽ không được tạo.
+                  </p>
+                </div>
+
+                <div id="accountEntryCommandBlock" class="space-y-2">
+                  <div class="text-[11px] font-semibold uppercase text-base-content/70">
+                    Lệnh sẽ chạy
+                  </div>
+                  <pre
+                    id="accountEntryCommand"
+                    class="text-[11px] leading-relaxed bg-black/40 border border-base-300 rounded-xl p-3 overflow-x-auto custom-scroll text-emerald-300 font-mono"
+                  ></pre>
+                  <div class="text-[11px] font-semibold uppercase text-base-content/70 pt-1">
+                    Nạp mật khẩu (qua lệnh riêng)
+                  </div>
+                  <pre
+                    id="accountEntrySecretCommand"
+                    class="text-[11px] leading-relaxed bg-black/40 border border-base-300 rounded-xl p-3 overflow-x-auto custom-scroll text-sky-300 font-mono"
+                  ></pre>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div class="rounded-xl border border-base-300 bg-base-100 p-3">
+                    <div class="text-[11px] font-semibold uppercase text-emerald-400">
+                      Cửa sổ đã khai
+                    </div>
+                    <ul
+                      id="accountEntryKnown"
+                      class="text-xs text-base-content/70 mt-2 space-y-1"
+                    ></ul>
+                  </div>
+                  <div class="rounded-xl border border-base-300 bg-base-100 p-3">
+                    <div class="text-[11px] font-semibold uppercase text-amber-400">
+                      Cửa sổ chưa khai
+                    </div>
+                    <ul
+                      id="accountEntryUnknown"
+                      class="text-xs text-base-content/70 mt-2 space-y-1"
+                    ></ul>
+                  </div>
+                </div>
+
+                <div class="rounded-xl border border-base-300 bg-base-100 p-3">
+                  <div class="text-[11px] font-semibold uppercase text-base-content/70">
+                    Sau khi chạy
+                  </div>
+                  <p class="text-xs text-base-content/70 mt-1">
+                    Lệnh in lại mã tài khoản, hạn mức từng cửa sổ và trạng thái
+                    <span class="font-mono">hasSecret</span> mà không để lộ mật khẩu.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </details>
+
+        <div class="bg-base-100 rounded-2xl border border-base-300 p-5 space-y-4">
+          <div class="flex items-center justify-between pb-3 border-b border-base-300">
+            <h3 class="text-sm font-bold text-base-content uppercase tracking-wider">
+              Chẩn đoán sức khỏe từng nguồn dữ liệu
             </h3>
-            <span class="text-xs font-mono text-slate-400"
-              >Phân định vai trò tác giả / thẩm định theo AGENTS.md</span
+            <span class="text-xs font-mono text-base-content/70">Đo trực tiếp</span>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="diagnosticsPanel">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+      </div>
+
+      <div id="tabPane-roster" class="space-y-6 hidden">
+        <div id="roster-visual"></div>
+        <div class="bg-base-100 rounded-2xl border border-base-300 p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-bold text-base-content uppercase tracking-wider">
+              Phiên làm việc Agent Orchestrator &amp; Worktree
+            </h3>
+            <span class="text-xs font-mono text-base-content/70"
+              >Phân định vai trò theo AGENTS.md</span
             >
           </div>
           <div class="overflow-x-auto custom-scroll">
             <table class="responsive-table w-full text-left text-xs border-collapse">
               <thead>
                 <tr
-                  class="border-b border-slate-800 text-[11px] font-mono uppercase text-slate-400 bg-slate-800/40"
+                  class="border-b border-base-300 text-[11px] font-mono uppercase text-base-content/70 bg-base-200"
                 >
                   <th class="p-3">Session ID</th>
-                  <th class="p-3">Vai Trò Được Phân Công</th>
+                  <th class="p-3">Vai trò</th>
                   <th class="p-3">Harness</th>
                   <th class="p-3">Nhánh / Worktree</th>
-                  <th class="p-3">Trạng Thái</th>
-                  <th class="p-3">Quyền Ghi Code</th>
-                  <th class="p-3">Độ Tươi Dữ Liệu</th>
+                  <th class="p-3">Trạng thái</th>
+                  <th class="p-3">Quyền ghi</th>
+                  <th class="p-3">Độ tươi</th>
                 </tr>
               </thead>
               <tbody id="sessionsTableBody">
@@ -542,115 +872,12 @@
           </div>
         </div>
       </div>
-
-      <!-- TAB PANE 3: QUEUE (dynamic total, never hardcoded) -->
-      <div id="tabPane-queue" class="space-y-6 hidden">
-        <div
-          class="flex flex-col md:flex-row gap-3 items-center justify-between bg-slate-900/60 p-4 rounded-xl border border-slate-800"
-        >
-          <input
-            type="text"
-            id="searchInput"
-            placeholder="🔍 Tìm mã task (FEAT-AUTH, TASK-AI), tên tính năng..."
-            class="w-full md:w-80 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-white focus:outline-none focus:border-brand"
-          />
-          <div class="flex flex-wrap items-center gap-2">
-            <select
-              id="sliceFilter"
-              class="bg-slate-800 border border-slate-700 text-xs px-3 py-1.5 rounded-lg text-slate-200"
-            >
-              <option value="ALL">Tất Cả Slices (S00..S11)</option>
-              <option value="S00">S00: Foundation & AI Workflow</option>
-              <option value="S01">S01: Identity & Multi-tenant</option>
-              <option value="S02">S02: Carrier Credentials</option>
-              <option value="S03">S03: Orders Intake & Address</option>
-              <option value="S04">S04: Rate Comparison & Policy</option>
-              <option value="S05">S05: Fulfillment & Waybills</option>
-              <option value="S06">S06: Tracking & Normalisation</option>
-              <option value="S07">S07: Delivery Exceptions & CSKH</option>
-              <option value="S08">S08: Pricing & Contract Rates</option>
-              <option value="S09">S09: COD Settlement & 3-Ledgers</option>
-              <option value="S10">S10: Claims & Damages</option>
-              <option value="S11">S11: Reconciliation & Audit Matrix</option>
-            </select>
-            <select
-              id="statusFilter"
-              class="bg-slate-800 border border-slate-700 text-xs px-3 py-1.5 rounded-lg text-slate-200"
-            >
-              <option value="ALL">Tất Cả Trạng Thái</option>
-              <option value="MERGED">Đã Merge</option>
-              <option value="READY_FOR_CODEX">Chờ Codex Review</option>
-              <option value="READY_FOR_AUTHOR">Sẵn Sàng Làm</option>
-              <option value="IN_PROGRESS">Đang Thực Hiện</option>
-              <option value="BLOCKED_DEPENDENCY">Khóa Phụ Thuộc</option>
-              <option value="BLOCKED_BY_FOUNDATION">Chờ Nền Tảng S00</option>
-            </select>
-            <span class="text-xs text-slate-400 font-mono" id="taskCountLabel">Đang tải...</span>
-          </div>
-        </div>
-
-        <div class="bg-slate-900/80 rounded-2xl border border-slate-800 overflow-hidden">
-          <div class="overflow-x-auto custom-scroll">
-            <table class="responsive-table w-full text-left text-xs border-collapse">
-              <thead>
-                <tr
-                  class="border-b border-slate-800 text-[11px] font-mono uppercase text-slate-400 bg-slate-800/40"
-                >
-                  <th class="p-3 w-12">#</th>
-                  <th class="p-3 w-16">Slice</th>
-                  <th class="p-3 w-32">Mã Task</th>
-                  <th class="p-3">Tên & Hành Vi Tính Năng</th>
-                  <th class="p-3 w-36">Trạng Thái</th>
-                  <th class="p-3 w-28">Tác Giả</th>
-                  <th class="p-3 w-24">PR</th>
-                  <th class="p-3 w-28">Codex</th>
-                </tr>
-              </thead>
-              <tbody id="tasksTableBody">
-                <!-- Dynamically populated -->
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <!-- TAB PANE 4: ACTIVITY -->
-      <div id="tabPane-activity" class="space-y-6 hidden">
-        <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
-          <div class="flex items-center justify-between pb-3 border-b border-slate-800">
-            <h3 class="text-sm font-bold text-white uppercase tracking-wider">
-              Nhật Ký Hoạt Động Gần Đây (Git Commits & AO Events)
-            </h3>
-            <span class="text-xs font-mono text-slate-400">Thời gian thực</span>
-          </div>
-          <div class="space-y-2.5" id="activityStreamList">
-            <!-- Dynamically populated -->
-          </div>
-        </div>
-      </div>
-
-      <!-- TAB PANE 5: HEALTH & DIAGNOSTICS -->
-      <div id="tabPane-health" class="space-y-6 hidden">
-        <div class="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-4">
-          <div class="flex items-center justify-between pb-3 border-b border-slate-800">
-            <h3 class="text-sm font-bold text-white uppercase tracking-wider">
-              Chi Tiết Sức Khỏe & Chẩn Đoán Từng Nguồn Dữ Liệu
-            </h3>
-            <span class="text-xs font-mono text-slate-400"
-              >Không dùng dữ liệu mô phỏng giả lập</span
-            >
-          </div>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="diagnosticsPanel">
-            <!-- Dynamically populated -->
-          </div>
-        </div>
-      </div>
     </main>
 
     <footer
-      class="border-t border-slate-800/80 py-4 px-6 text-center text-xs text-slate-400 font-mono"
+      class="border-t border-base-300 py-4 px-6 text-center text-xs text-base-content/70 font-mono"
     >
-      Ship Dễ Platform Cockpit • Giám sát độc lập theo hợp đồng giao việc AGENTS.md • TASK-AI-15
+      Ship Dễ Platform • Giám sát độc lập theo AGENTS.md • TASK-AI-15
     </footer>
 
     <script>
@@ -680,7 +907,7 @@
             row.className = 'grid grid-cols-1 sm:grid-cols-3 gap-2 items-center';
 
             var label = document.createElement('span');
-            label.className = 'text-xs text-slate-300 font-mono break-words';
+            label.className = 'text-xs text-base-content/70 font-mono break-words';
             label.textContent = windowName;
 
             var input = document.createElement('input');
@@ -690,16 +917,19 @@
             input.placeholder = 'bỏ trống = chưa khai';
             input.dataset.limitWindow = windowName;
             input.className =
-              'w-full bg-slate-800 border border-slate-700 px-2 py-1 rounded-lg text-xs text-white focus:outline-none focus:border-brand';
+              'w-full bg-base-200 border border-base-300 px-2 py-1 rounded-lg text-xs text-base-content focus:outline-none focus:border-brand';
 
             var select = document.createElement('select');
             select.dataset.provenanceWindow = windowName;
             select.className =
-              'w-full bg-slate-800 border border-slate-700 px-2 py-1 rounded-lg text-xs text-slate-200';
-            ['operator-declared', 'vendor-documented'].forEach(function (provenance) {
+              'w-full bg-base-200 border border-base-300 px-2 py-1 rounded-lg text-xs text-base-content/70';
+            [
+              { value: 'operator-declared', label: 'người vận hành khai' },
+              { value: 'vendor-documented', label: 'nhà cung cấp công bố' },
+            ].forEach(function (opt) {
               var option = document.createElement('option');
-              option.value = provenance;
-              option.textContent = provenance;
+              option.value = opt.value;
+              option.textContent = opt.label;
               select.appendChild(option);
             });
 
@@ -729,7 +959,7 @@
           host.innerHTML = '';
           if (items.length === 0) {
             var empty = document.createElement('li');
-            empty.className = 'text-slate-500';
+            empty.className = 'text-base-content/70';
             empty.textContent = emptyText;
             host.appendChild(empty);
             return;
@@ -845,7 +1075,13 @@
           listItems(
             knownList,
             form.known.map(function (entry) {
-              return entry.window + ' = ' + entry.value + ' (' + entry.provenance + ')';
+              var provText =
+                entry.provenance === 'operator-declared'
+                  ? 'người vận hành khai'
+                  : entry.provenance === 'vendor-documented'
+                    ? 'tài liệu nhà cung cấp'
+                    : entry.provenance;
+              return entry.window + ' = ' + entry.value + ' (' + provText + ')';
             }),
             'Không có — tất cả đều chưa khai',
             'font-mono break-words'
@@ -862,5 +1098,10 @@
       })();
     </script>
     <script src="/client.js"></script>
+    <script src="/rotation-view.js"></script>
+    <script src="/architecture.js"></script>
+    <script src="/progress-view.js"></script>
+    <script src="/roster-view.js"></script>
+    <script src="/summary-view.js"></script>
   </body>
 </html>

@@ -336,6 +336,60 @@ function hasStateChanged(prevState, candidate) {
   return false;
 }
 
+// Per-source refresh windows. The dispatcher's own logs are cheap and stay live; the three
+// collectors that spawn processes (gh, git, ao) are throttled because their subjects do not
+// change between one five-second poll and the next.
+const SOURCE_TTL_MS = {
+  git: 20000,
+  ao: 60000,
+  github: 45000,
+  // Quota ledgers and capacity are re-derived from files that change at most
+  // once per turn, so a 5s poll re-reading them was pure waste.
+  usage: 30000,
+  capacity: 30000,
+};
+const sourceCache = new Map();
+
+function cachedCollect(name, run) {
+  const ttl = SOURCE_TTL_MS[name] || 0;
+  const now = Date.now();
+  const hit = sourceCache.get(name);
+
+  // Fresh enough: serve what we have.
+  if (hit && hit.value !== undefined && now - hit.at < ttl) return Promise.resolve(hit.value);
+
+  // A refresh is already running. Serve the previous answer if there is one, otherwise wait
+  // for it. Without this check every poll started another collector while the first was
+  // still running, so throttling turned into pile-up and the server used twice the CPU.
+  if (hit && hit.inflight) {
+    return hit.value !== undefined ? Promise.resolve(hit.value) : hit.inflight;
+  }
+
+  const inflight = Promise.resolve()
+    .then(run)
+    .then((value) => {
+      sourceCache.set(name, { at: Date.now(), value, inflight: null });
+      return value;
+    })
+    .catch((err) => {
+      const prev = sourceCache.get(name);
+      if (prev && prev.value !== undefined) {
+        // Keep the last good answer rather than dropping the source to unavailable.
+        sourceCache.set(name, { at: Date.now(), value: prev.value, inflight: null });
+        return prev.value;
+      }
+      sourceCache.set(name, { at: 0, value: undefined, inflight: null });
+      throw err;
+    });
+
+  sourceCache.set(name, {
+    at: hit ? hit.at : 0,
+    value: hit ? hit.value : undefined,
+    inflight,
+  });
+  return hit && hit.value !== undefined ? Promise.resolve(hit.value) : inflight;
+}
+
 async function aggregateCockpitState(options = {}) {
   const rootDir = options.rootDir || process.cwd();
   const csvPath =
@@ -343,21 +397,25 @@ async function aggregateCockpitState(options = {}) {
     path.join(rootDir, 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv');
   const repo = options.repo || 'vinh05092001/shipde-platform';
 
-  const gitPromise = options.mockGit ? Promise.resolve(options.mockGit) : collectGitState(rootDir);
+  const gitPromise = options.mockGit
+    ? Promise.resolve(options.mockGit)
+    : cachedCollect('git', () => collectGitState(rootDir));
   const aoPromise = options.mockAo
     ? Promise.resolve(options.mockAo)
-    : collectAoState('shipde-platform');
+    : cachedCollect('ao', () => collectAoState('shipde-platform'));
   const githubPromise = options.mockGitHub
     ? Promise.resolve(options.mockGitHub)
-    : collectGitHubState(repo);
+    : cachedCollect('github', () => collectGitHubState(repo));
 
   const usagePromise = options.mockUsage
     ? Promise.resolve(options.mockUsage)
-    : collectUsageState(options.usageOptions);
+    : cachedCollect('usage', () => collectUsageState(options.usageOptions));
 
   const capacityPromise = options.mockCapacity
     ? Promise.resolve(options.mockCapacity)
-    : Promise.resolve(collectCapacity(options.capacityOptions));
+    : cachedCollect('capacity', () =>
+        Promise.resolve(collectCapacity(options.capacityOptions))
+      );
 
   let [gitResult, aoResult, githubResult, usageResult, capacityResult] = await Promise.all([
     gitPromise,
