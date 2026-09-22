@@ -3738,7 +3738,7 @@ function Initialize-ShipDeExecutionProvider {
     $provider = $provider.ToLowerInvariant().Trim()
     $supported = @("ao", "paseo")
     if ($provider -notin $supported) {
-        throw ("UNSUPPORTED_PROVIDER: '$provider' is not a recognised execution provider. Supported values: $($supported -join '', '')")
+        throw ("UNSUPPORTED_PROVIDER: '$provider' is not a recognised execution provider. Supported values: $($supported -join ', ')")
     }
     $script:CurrentProvider = $provider
 }
@@ -3754,7 +3754,7 @@ if ($script:CurrentProvider -eq "paseo") {
     . $providerModulePath
 }
 
-# ── provider abstraction shims ───────────────────────────────────────────────────────
+# provider abstraction shims
 # AI-48-R01: AO assertions remain when provider="ao".
 # AI-48-R02: provider="paseo" requires no ao binary, version or data directory.
 # AI-48-R05: merge-authority path (TASK-AI-13 preflight) is unchanged.
