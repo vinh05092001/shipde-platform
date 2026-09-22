@@ -103,6 +103,8 @@ function resolveAccounts(router, options) {
   return { accounts, derived: true };
 }
 
+const CAPACITY_PROVENANCE = 'sổ tài khoản đã đăng ký, hoặc suy ra từ kết nối 9Router';
+
 function collectCapacity(options) {
   const opts = options || {};
   const now = opts.now || Date.now();
@@ -115,6 +117,8 @@ function collectCapacity(options) {
   if (accounts.length === 0) {
     return {
       health: {
+        name: 'capacity',
+        provenance: CAPACITY_PROVENANCE,
         status: 'unavailable',
         observedAt: new Date(now).toISOString(),
         impact: 'Chưa có tài khoản nào được đăng ký và không đọc được sổ 9router',
@@ -204,11 +208,13 @@ function collectCapacity(options) {
 
   return {
     health: {
+      name: 'capacity',
+      provenance: CAPACITY_PROVENANCE,
       status: derived ? 'degraded' : 'live',
       observedAt: new Date(now).toISOString(),
       impact: derived
         ? 'Chưa đăng ký tài khoản nào; đang suy ra từ kết nối 9router, nên hạn mức và cấp độ đều chưa rõ'
-        : null,
+        : 'Bình thường — tính từ sổ tài khoản đã đăng ký',
     },
     data: Object.assign({}, report, {
       derivedFromRouter: derived,

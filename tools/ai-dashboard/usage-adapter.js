@@ -316,7 +316,10 @@ function collectClaudeUsage(projectsDir) {
  * data. The source is only "live" when at least one ledger could be read;
  * neither readable means unavailable, never an empty success.
  */
+const USAGE_PROVENANCE = 'sổ 9Router (usageHistory) + transcript ~/.claude/projects';
+
 async function collectUsageState(options) {
+  const startedAt = Date.now();
   const opts = options || {};
   const router = collectRouterUsage(opts.routerDbPath);
   const claude = collectClaudeUsage(opts.claudeProjectsDir);
@@ -327,6 +330,9 @@ async function collectUsageState(options) {
   if (readable === 0) {
     return {
       health: {
+        name: 'usage',
+        provenance: USAGE_PROVENANCE,
+        latencyMs: Date.now() - startedAt,
         status: 'unavailable',
         observedAt,
         impact:
@@ -362,11 +368,14 @@ async function collectUsageState(options) {
 
   return {
     health: {
+      name: 'usage',
+      provenance: USAGE_PROVENANCE,
+      latencyMs: Date.now() - startedAt,
       status: readable === 2 ? 'live' : 'degraded',
       observedAt,
       impact:
         readable === 2
-          ? null
+          ? 'Bình thường — đọc được cả sổ 9Router và transcript Claude Code'
           : 'Only one of two token ledgers readable: ' +
             [router.available ? null : router.reason, claude.available ? null : claude.reason]
               .filter(Boolean)

@@ -500,23 +500,34 @@ async function aggregateCockpitState(options = {}) {
   const observationTime = options.now || Date.now();
   const freshnessThresholds = options.freshnessThresholdsMs || DEFAULT_FRESHNESS_THRESHOLDS_MS;
 
-  function withFreshness(health) {
+  // A source served from the TTL cache is deliberately re-queried only once per
+  // TTL, so judging it against the 5s poll cadence labelled every cached source
+  // "stale" while it was exactly on schedule. Its window widens to its TTL; a
+  // source that misses several refreshes still ages out.
+  function withFreshness(health, key) {
+    const ttl = options.freshnessThresholdsMs ? 0 : SOURCE_TTL_MS[key] || 0;
+    const thresholds = ttl
+      ? {
+          liveMs: Math.max(freshnessThresholds.liveMs, ttl + 10000),
+          staleMs: Math.max(freshnessThresholds.staleMs, ttl * 3),
+        }
+      : freshnessThresholds;
     const { ageMs, freshness } = computeSourceFreshness(
       health.observedAt,
       health.status,
-      freshnessThresholds,
+      thresholds,
       observationTime
     );
-    return Object.assign({}, health, { ageMs, freshness });
+    return Object.assign({ name: key }, health, { ageMs, freshness });
   }
 
   const sources = {
-    register: withFreshness(registerResult.health),
-    git: withFreshness(gitResult.health),
-    ao: withFreshness(aoResult.health),
-    github: withFreshness(githubResult.health),
-    usage: withFreshness(usageResult.health),
-    capacity: withFreshness(capacityResult.health),
+    register: withFreshness(registerResult.health, 'register'),
+    git: withFreshness(gitResult.health, 'git'),
+    ao: withFreshness(aoResult.health, 'ao'),
+    github: withFreshness(githubResult.health, 'github'),
+    usage: withFreshness(usageResult.health, 'usage'),
+    capacity: withFreshness(capacityResult.health, 'capacity'),
   };
 
   const conflicts = detectConflicts(

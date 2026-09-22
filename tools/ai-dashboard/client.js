@@ -1335,7 +1335,7 @@ function renderDiagnostics() {
         <span class="${src.status === 'live' ? 'badge badge-success badge-sm' : 'badge badge-warning badge-sm'}">${escapeHtml(freshnessLabel(src.status))}</span>
       </div>
       <div><span class="opacity-60">Nguồn:</span> ${escapeHtml(src.provenance || '—')}</div>
-      <div><span class="opacity-60">Đo lúc:</span> ${escapeHtml(src.observedAt || '—')} (${src.latencyMs}ms)</div>
+      <div><span class="opacity-60">Đo lúc:</span> ${escapeHtml(src.observedAt || '—')} (${typeof src.latencyMs === 'number' ? src.latencyMs + 'ms' : 'không đo độ trễ'})</div>
       <div><span class="opacity-60">Độ mới:</span> ${escapeHtml(freshnessLabel(src.freshness))} (Tuổi: ${escapeHtml(formatSourceAge(src.ageMs))})</div>
       <div><span class="opacity-60">Ảnh hưởng:</span> ${escapeHtml(src.impact || '—')}</div>
       ${src.error ? `<div class="text-error"><span class="opacity-60">Lỗi:</span> ${escapeHtml(src.error)}</div>` : ''}
