@@ -224,7 +224,7 @@ function applyState(newState) {
 function deriveWriterState(currentState) {
   const aoStatus = currentState?.sources?.ao?.status;
   if (aoStatus !== 'live') {
-    return { level: 'unavailable', label: 'AO KHÔNG KHẢ DỤNG', countLabel: 'Không có' };
+    return { level: 'unavailable', label: 'PASEO KHÔNG KHẢ DỤNG', countLabel: 'Không có' };
   }
 
   const sessions = Array.isArray(currentState.sessions) ? currentState.sessions : [];
@@ -402,7 +402,7 @@ function renderSourceHealth() {
   const sources = [
     { key: 'register', label: '1. Register CSV', icon: '📋' },
     { key: 'git', label: '2. Git & Worktree', icon: '🌿' },
-    { key: 'ao', label: '3. Agent Orchestrator', icon: '🤖' },
+    { key: 'ao', label: '3. Paseo', icon: '🤖' },
     { key: 'github', label: '4. GitHub PR / CI', icon: '🐙' },
   ];
 
@@ -822,7 +822,7 @@ function renderSessions() {
     container.innerHTML = `
       <tr>
         <td colspan="7" class="p-6 text-center text-base-content/70 text-xs">
-          Không có phiên AO nào đang chạy. Trạng thái AO: ${escapeHtml(state.daemon?.state || 'đã dừng')}.
+          Không có agent Paseo nào đang chạy. Trạng thái Paseo: ${escapeHtml(state.daemon?.state || 'đã dừng')}.
         </td>
       </tr>
     `;

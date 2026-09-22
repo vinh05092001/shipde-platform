@@ -8,7 +8,7 @@
 const path = require('path');
 const { loadRegister, deriveGatePipeline } = require('./register-adapter');
 const { collectGitState } = require('./git-adapter');
-const { collectAoState } = require('./ao-adapter');
+const { collectPaseoState } = require('./paseo-adapter');
 const { collectGitHubState } = require('./github-adapter');
 const { collectUsageState } = require('./usage-adapter');
 const { collectCapacity } = require('./capacity-adapter');
@@ -341,7 +341,8 @@ function hasStateChanged(prevState, candidate) {
 // change between one five-second poll and the next.
 const SOURCE_TTL_MS = {
   git: 20000,
-  ao: 60000,
+  // Paseo replaced AO; the key stays 'ao' so every consumer of sources.ao keeps working.
+  ao: 15000,
   github: 45000,
   // Quota ledgers and capacity are re-derived from files that change at most
   // once per turn, so a 5s poll re-reading them was pure waste.
@@ -402,7 +403,7 @@ async function aggregateCockpitState(options = {}) {
     : cachedCollect('git', () => collectGitState(rootDir));
   const aoPromise = options.mockAo
     ? Promise.resolve(options.mockAo)
-    : cachedCollect('ao', () => collectAoState('shipde-platform'));
+    : cachedCollect('ao', () => collectPaseoState());
   const githubPromise = options.mockGitHub
     ? Promise.resolve(options.mockGitHub)
     : cachedCollect('github', () => collectGitHubState(repo));
