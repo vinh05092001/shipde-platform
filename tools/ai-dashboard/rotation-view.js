@@ -37,10 +37,9 @@
     xkiro: '#0ea5e9',
     bai: '#2563eb',
     'agy-local': '#10b981',
-    'agy-docker': '#0d9488',
+    paseo: '#0d9488',
     cline: '#f97316',
     autoclaw: '#e11d48',
-    ao: '#6366f1',
     codex: '#334155',
   };
 
@@ -162,7 +161,7 @@
     if (!svg || !cards) return;
     svg.innerHTML = '';
     cards.innerHTML = '';
-    svg.setAttribute('viewBox', '-95 -75 850 675');
+    svg.setAttribute('viewBox', '-135 -75 930 675');
     if (stamp && data && data.observedAt)
       stamp.textContent = 'đo lúc ' + data.observedAt.slice(11, 19);
     var sources = (data && data.sources ? data.sources : []).filter(function (s) {

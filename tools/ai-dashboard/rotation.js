@@ -133,14 +133,19 @@ const SOURCE_DEFS = [
   { id: 'xkiro', label: 'xKiro' },
   { id: 'bai', label: 'B.AI' },
   { id: 'agy-local', label: 'agy (local)' },
-  { id: 'agy-docker', label: 'agy (docker)' },
   { id: 'cline', label: 'Cline' },
   { id: 'autoclaw', label: 'AutoClaw' },
-  { id: 'ao', label: 'AO' },
+  // Paseo replaced AO on 2026-09-22; Docker (and with it agy-docker) was removed the same day.
+  { id: 'paseo', label: 'Paseo' },
   // Added 2026-09-20 after each answered a live coding prompt from its own account.
   { id: 'tencent', label: 'Tencent' },
   { id: 'rqsty', label: 'Requesty' },
   { id: 'thb', label: 'TokenHarbor' },
+  // Lanes that appear in dispatch logs; without a label the ring showed their raw codes.
+  { id: 'codex', label: 'Codex' },
+  { id: 'qwen', label: 'Qwen' },
+  { id: 'aihub', label: 'AiHubMix' },
+  { id: 'oc', label: 'OpenCode' },
 ];
 
 // dispatch.sh names its author lanes after the key directory holding them
@@ -191,6 +196,8 @@ function parseLogLines(logDir) {
     // dispatch.sh calls the 9Router lane `nine`; SOURCE_DEFS calls the provider `9router`.
     // Left unmapped the panel drew the same provider twice, once per spelling.
     if (lane === 'nine') return '9router';
+    // dispatch.sh names the AutoClaw lane `aclaw`; same provider, one ring node.
+    if (lane === 'aclaw') return 'autoclaw';
     return lane;
   };
   for (const file of files) {
@@ -628,10 +635,7 @@ function detectConfigured(homeDir, explicit, env) {
   }
   if (exists('.cline')) found.add('cline');
   if (exists('.agy') || exists('AppData', 'Local', 'agy')) found.add('agy-local');
-  if (exists('.ao')) {
-    found.add('ao');
-    found.add('agy-docker');
-  }
+  if (exists('.paseo')) found.add('paseo');
   if (exists('.claude-9router')) found.add('9router');
   if (exists('.openclaw-autoclaw')) found.add('autoclaw');
   return found;

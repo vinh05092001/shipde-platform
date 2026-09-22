@@ -109,7 +109,7 @@
 
   function timeline(activity) {
     // Activity as a strip of hours instead of a wall of lines: each bar is one hour,
-    // height is the number of events, colour tells git commits from AO events apart.
+    // height is the number of events, colour tells git commits from Paseo events apart.
     var items = Array.isArray(activity)
       ? activity
       : Object.keys(activity || {}).map(function (k) {
@@ -140,7 +140,7 @@
           k.replace('T', ' ') +
           'h · git ' +
           b.git +
-          ' · AO ' +
+          ' · Paseo ' +
           b.ao +
           '">' +
           (ha
@@ -161,7 +161,7 @@
       .join('');
     return (
       '<div><div class="text-[11px] font-bold uppercase tracking-wide opacity-70 mb-1">Hoạt động theo giờ ' +
-      '<span class="font-normal normal-case"><span style="color:#16a34a">▮</span> commit · <span style="color:#8b5cf6">▮</span> AO</span></div>' +
+      '<span class="font-normal normal-case"><span style="color:#16a34a">▮</span> commit · <span style="color:#8b5cf6">▮</span> Paseo</span></div>' +
       '<div class="flex items-end gap-1 h-16">' +
       bars +
       '</div></div>'

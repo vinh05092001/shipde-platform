@@ -93,6 +93,9 @@
       }
     </style>
     <script>
+      // Tailwind v4's browser build defines no global `tailwind` (v3's CDN did), so this
+      // assignment threw on every page load; theme colours come from the CSS variables above.
+      window.tailwind = window.tailwind || {};
       tailwind.config = {
         darkMode: 'class',
         theme: {
@@ -304,7 +307,7 @@
           <span id="writerStateDot" class="w-2 h-2 rounded-full bg-base-200"></span>
           <span class="text-base-content/70">Tác giả ghi:</span>
           <span id="writerStateLabel" class="text-base-content/70 font-bold"
-            >Đang kiểm tra AO...</span
+            >Đang kiểm tra Paseo...</span
           >
         </div>
 
@@ -526,7 +529,7 @@
               <div class="mt-3 space-y-4">
                 <div class="flex items-center justify-between pb-3 border-b border-base-300">
                   <h3 class="text-sm font-bold text-base-content uppercase tracking-wider">
-                    Nhật ký hoạt động (Git &amp; AO)
+                    Nhật ký hoạt động (Git &amp; Paseo)
                   </h3>
                   <span class="text-xs font-mono text-base-content/70">Thời gian thực</span>
                 </div>
@@ -592,7 +595,7 @@
           <div id="rotation-kpis" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
           <div class="grid gap-4 items-start">
             <div class="flex justify-center">
-              <svg id="rotation-svg" viewBox="-95 -75 850 675" class="w-full max-w-[880px]"></svg>
+              <svg id="rotation-svg" viewBox="-135 -75 930 675" class="w-full max-w-[960px]"></svg>
             </div>
             <div class="space-y-3 min-w-0">
               <div
@@ -675,7 +678,7 @@
                     <input
                       id="accId"
                       type="text"
-                      placeholder="agy-docker-b"
+                      placeholder="kiro-vinh1032012"
                       class="mt-1 w-full bg-base-200 border border-base-300 px-3 py-1.5 rounded-lg text-xs text-base-content focus:outline-none focus:border-brand"
                     />
                   </label>

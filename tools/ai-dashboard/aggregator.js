@@ -1,7 +1,7 @@
 /**
  * Ship Dễ — Multi-Source State Aggregator
  * TASK-AI-15: AI15-R01, AI15-R02, AI15-R05, AI15-AC01..AC06
- * Consolidates truthful register, git, AO, and GitHub observations into a single
+ * Consolidates truthful register, git, Paseo, and GitHub observations into a single
  * versioned payload with monotonic revision and source health records.
  */
 
@@ -188,7 +188,7 @@ function buildActivityStream(gitCommits, aoSessions) {
     }
   }
 
-  // AO session updates as activity items
+  // Paseo agent updates as activity items (the source key stays 'ao')
   if (Array.isArray(aoSessions)) {
     for (const session of aoSessions) {
       if (session.lastActivityAt || session.updatedAt) {
@@ -196,9 +196,9 @@ function buildActivityStream(gitCommits, aoSessions) {
           id: `ao-${session.id}`,
           type: 'AO_SESSION',
           timestamp: session.lastActivityAt || session.updatedAt,
-          title: `Phiên làm việc [${session.id}] — ${session.displayRole} (${session.status})`,
+          title: `Agent Paseo [${session.id}] — ${session.displayRole} (${session.status})`,
           actor: session.harness,
-          badge: 'AO',
+          badge: 'Paseo',
           detail: `Nhánh: ${session.branch || 'N/A'}`,
         });
       }
@@ -444,7 +444,7 @@ async function aggregateCockpitState(options = {}) {
     aoResult = {
       health: Object.assign({}, aoResult.health, {
         status: 'stale',
-        impact: 'Agent Orchestrator unavailable; serving cached last-known state (AI15-R01)',
+        impact: 'Paseo unavailable; serving cached last-known state (AI15-R01)',
         observedAt: lastKnownSourceData.ao.health.observedAt,
       }),
       data: lastKnownSourceData.ao.data,

@@ -1,5 +1,5 @@
 /* TASK-AI-47 — Kiến trúc hệ thống & Vòng đời Work Item.
-   Diagram 1: Sơ đồ container (C4 mức 2) với 3 ranh giới (Máy của bạn, Docker, Dịch vụ ngoài).
+   Diagram 1: Sơ đồ container (C4 mức 2) với 3 ranh giới (Máy của bạn, Dịch vụ nền, Dịch vụ ngoài).
    Diagram 2: Sơ đồ làn (swimlane) vòng đời một Work Item qua 5 làn ngang.
    Toàn bộ nhãn tiếng Việt. Số liệu badge đọc trực tiếp từ /api/state và /api/rotation. */
 (function () {
@@ -323,12 +323,12 @@
   /* =========================================================================
      DIAGRAM 1: Sơ đồ container (C4 mức 2)
      viewBox="0 0 1640 780"
-     3 Ranh giới: Máy của bạn, Docker, Dịch vụ ngoài
+     3 Ranh giới: Máy của bạn, Dịch vụ nền (native, thay Docker từ 22/9), Dịch vụ ngoài
      Bố cục:
        - Cột trái: Người vận hành (trên) -> Claude Code (dưới)
        - Cột giữa: dispatch.sh (trên) -> ai-brain (dưới)
        - Nhóm "CLI thợ" nằm giữa dispatch.sh và GitHub
-       - AO daemon và 9Router đặt dưới nhóm CLI thợ
+       - Paseo (thay AO từ 22/9) và 9Router đặt dưới nhóm CLI thợ
        - Hàng dưới cùng: Dashboard, Sổ việc & log, runner.sh
      Cạnh đi vòng theo đường gấp khúc theo hành lang trống, không cắt xuyên qua hộp.
      Mỗi nhãn cạnh có nền trắng bo góc vẽ trước chữ, không đè lên bất kỳ hộp nào.
@@ -350,15 +350,16 @@
         '<text x="112" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Máy của bạn</text>'
     );
 
-    // --- Ranh giới 2: "Docker" (x: 974..1234, y: 16..186) ---
+    // --- Ranh giới 2: "Dịch vụ nền" (x: 974..1234, y: 16..186) ---
+    // Docker Desktop was removed; these run as native Windows processes (NativeStack.ps1).
     p.push(
       '<rect x="974" y="16" width="260" height="170" rx="14" fill="#f0f9ff" stroke="' +
         C.docker +
         '" stroke-width="1.8" stroke-dasharray="6 5"/>' +
-        '<rect x="989" y="8" width="135" height="20" rx="4" fill="' +
+        '<rect x="989" y="8" width="150" height="20" rx="4" fill="' +
         C.docker +
         '"/>' +
-        '<text x="1056" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Docker</text>'
+        '<text x="1064" y="22" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">Ranh giới: Dịch vụ nền</text>'
     );
 
     // --- Ranh giới 3: "Dịch vụ ngoài" (x: 1258..1624, y: 16..764) ---
@@ -401,16 +402,18 @@
         C.worker +
         '">CLI thợ</text>'
     );
-    p.push(node(655, 188, 200, 44, 'xKiro', 'cline + endpoint xKiro', C.worker));
-    p.push(node(655, 258, 200, 44, 'agy', 'CLI', C.worker));
-    p.push(node(655, 328, 200, 44, 'Cline', 'CLI', C.worker));
+    // Every author lane runs the Cline CLI; lanes differ only in the endpoint
+    // config they pass (dispatch.sh), so the boxes are endpoints, not tools.
+    p.push(node(598, 188, 314, 44, 'cline → 9Router', 'phần lớn lane tác giả', C.worker));
+    p.push(node(598, 258, 314, 44, 'cline → endpoint riêng', 'xKiro · TokenHarbor · Requesty · Tencent', C.worker));
+    p.push(node(598, 328, 314, 44, 'codex · AutoClaw', 'lane review & dự phòng', C.worker));
 
-    // AO daemon và 9Router đặt dưới nhóm CLI thợ
-    p.push(node(580, 446, 160, 52, 'AO daemon', ':4317, tạo phiên', C.worker));
+    // Paseo (thay AO) và 9Router đặt dưới nhóm CLI thợ
+    p.push(node(580, 446, 160, 52, 'Paseo', ':6767, daemon agent', C.worker));
     p.push(node(770, 446, 160, 52, '9Router', ':20128, định tuyến model', C.worker));
 
     // Hàng dưới cùng: Dashboard, Sổ việc & log, runner.sh
-    p.push(node(40, 596, 175, 52, 'Dashboard', 'Node HTTP :3333, chỉ đọc', C.docker));
+    p.push(node(40, 596, 175, 52, 'Dashboard', 'Node HTTP :3333, chỉ đọc', C.operator));
     p.push(
       node(
         280,
@@ -425,9 +428,10 @@
     );
     p.push(node(580, 596, 160, 52, 'runner.sh', 'bash, luật merge', C.result));
 
-    // Nodes trong Ranh giới "Docker"
-    p.push(node(1005, 46, 170, 48, 'agy (Docker)', 'container', C.docker));
-    p.push(node(1005, 118, 200, 48, 'Claude (tài khoản 2)', 'container dự phòng', C.docker));
+    // Nodes trong Ranh giới "Dịch vụ nền"
+    p.push(node(1000, 38, 208, 40, 'PostgreSQL 16', ':5433, shipde_dev', C.docker));
+    p.push(node(1000, 88, 208, 40, 'Redis', ':6379', C.docker));
+    p.push(node(1000, 138, 208, 40, 'SeaweedFS (S3)', ':9000, thay MinIO', C.docker));
 
     // Nodes trong Ranh giới "Dịch vụ ngoài"
     p.push(
@@ -449,7 +453,7 @@
         275,
         52,
         'Nhà cung cấp model',
-        'xKiro · Anthropic · Google · MiniMax',
+        'Copilot · Antigravity · Kiro · Cloudflare · …',
         C.cloud
       )
     );
@@ -467,28 +471,8 @@
     // 4. dispatch.sh → CLI thợ
     p.push(arrow(490, 206, 580, 206, 'chạy lệnh', C.dispatch, false, undefined, 535, 206));
 
-    // 5. dispatch.sh → agy (Docker): đi qua hành lang trống phía trên CLI thợ
-    p.push(
-      arrow(
-        385,
-        180,
-        1005,
-        70,
-        'chạy lệnh',
-        C.docker,
-        false,
-        poly([
-          [385, 180],
-          [385, 70],
-          [1005, 70],
-        ]),
-        690,
-        70
-      )
-    );
-
-    // 6. AO daemon → CLI thợ: đi thẳng lên nhóm CLI thợ
-    p.push(arrow(660, 446, 660, 396, 'spawn phiên', C.worker, false, undefined, 660, 421));
+    // 6. Paseo → CLI thợ: đi thẳng lên nhóm CLI thợ
+    p.push(arrow(660, 446, 660, 396, 'tạo agent', C.worker, false, undefined, 660, 421));
 
     // 7. CLI thợ → 9Router: đi thẳng xuống 9Router
     p.push(arrow(850, 396, 850, 446, 'gọi model', C.worker, false, undefined, 850, 421));
@@ -653,7 +637,7 @@
     var lanes = [
       { name: 'Người vận hành', sub: 'giao việc & nhận kết quả', color: C.operator, bg: '#faf8ff' },
       { name: 'Điều phối', sub: 'Claude Code & dispatch.sh', color: C.dispatch, bg: '#fffaf5' },
-      { name: 'Thợ', sub: 'xKiro · agy · Cline', color: C.worker, bg: '#f8fcff' },
+      { name: 'Thợ', sub: 'cline qua 9Router & endpoint riêng', color: C.worker, bg: '#f8fcff' },
       { name: 'Kiểm chứng', sub: 'CI & review chéo', color: C.gate, bg: '#fffdf2' },
       { name: 'Kết quả', sub: 'runner.sh merge & main', color: C.result, bg: '#f6fef9' },
     ];
@@ -983,7 +967,7 @@
       '"></span> Máy của bạn</span>' +
       '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
       C.docker +
-      '"></span> Docker</span>' +
+      '"></span> Dịch vụ nền</span>' +
       '      <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:' +
       C.cloud +
       '"></span> Dịch vụ ngoài</span>' +

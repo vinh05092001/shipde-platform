@@ -218,8 +218,8 @@ function applyState(newState) {
   }
 }
 
-// Derives the single-writer badge state honestly from AO source health and
-// real session data — never a hardcoded assertion. AO source not live means
+// Derives the single-writer badge state honestly from Paseo source health and
+// real session data — never a hardcoded assertion. Paseo source not live means
 // writer state is genuinely unknown/unavailable, not "1 Writer Active".
 function deriveWriterState(currentState) {
   const aoStatus = currentState?.sources?.ao?.status;
@@ -943,7 +943,7 @@ function renderActivity() {
     .map((act) => {
       const timeStr = act.timestamp ? new Date(act.timestamp).toLocaleTimeString() : '';
       let badgeColor = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-      if (act.badge === 'AO') badgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+      if (act.badge === 'Paseo') badgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
 
       return `
       <div class="flex items-start gap-3 p-3 rounded-xl bg-base-200 border border-base-300 text-xs">
@@ -1331,7 +1331,7 @@ function renderDiagnostics() {
       ([key, src]) => `
     <div class="card bg-base-100 border border-base-300 p-4 space-y-2 text-xs font-mono">
       <div class="flex items-center justify-between pb-2 border-b border-base-300">
-        <span class="font-bold uppercase">${escapeHtml(key)}</span>
+        <span class="font-bold uppercase">${escapeHtml(src.name || key)}</span>
         <span class="${src.status === 'live' ? 'badge badge-success badge-sm' : 'badge badge-warning badge-sm'}">${escapeHtml(freshnessLabel(src.status))}</span>
       </div>
       <div><span class="opacity-60">Nguồn:</span> ${escapeHtml(src.provenance || '—')}</div>
