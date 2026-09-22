@@ -335,13 +335,13 @@ try {
     # Load just the provider initialization and readiness functions from control.ps1
     $providerInitStart = (Select-String -Path $controlPath -Pattern "^# TASK-AI-48: Execution provider abstraction\." -Raw).LineNumber
     $providerInitEnd = (Select-String -Path $controlPath -Pattern "^function Initialize-ShipDeExecutionProvider" -Context 0,200 | Select-Object -First 1).LineNumber
-    
+
     # Simpler approach: just source the needed functions directly
     . $controlPath
-    
+
     $selectedProvider = if ([string]::IsNullOrWhiteSpace($env:SHIPDE_EXECUTION_PROVIDER)) { "ao" } else { $env:SHIPDE_EXECUTION_PROVIDER.ToLowerInvariant().Trim() }
     Write-Host ("Selected provider: {0} (via {1})" -f $selectedProvider, $(if ([string]::IsNullOrWhiteSpace($env:SHIPDE_EXECUTION_PROVIDER)) { "default" } else { "SHIPDE_EXECUTION_PROVIDER" }))
-    
+
     $readiness = Test-ShipDeProviderReadiness
     if ($readiness.Ready) {
         Write-Host ("Provider readiness: READY")
@@ -362,7 +362,7 @@ try {
             Write-Host "  Note: Alternate providers being unavailable is informational when not selected"
         }
     }
-    
+
     # AI-48-R02: Report AO status separately; absence is informational when Paseo is selected
     if ($script:CurrentProvider -eq "paseo") {
         $aoCmd = Get-Command ao -ErrorAction SilentlyContinue

@@ -19,7 +19,7 @@ function Assert-TestCondition {
         [Parameter(Mandatory = $true)][bool]$Condition,
         [string]$FailureMessage = ""
     )
-    
+
     if ($Condition) {
         Write-Host "[PASS] $TestId - $Description" -ForegroundColor Green
         $script:TestsPassed++
@@ -61,26 +61,26 @@ if ($aoCmd) {
     $env:SHIPDE_EXECUTION_PROVIDER = "ao"
     try {
         . $controlScript
-        
+
         Assert-TestCondition `
             -TestId "AC-AI-48-01-A" `
             -Description "Provider initialization selects 'ao' when SHIPDE_EXECUTION_PROVIDER=ao" `
             -Condition ($script:CurrentProvider -eq "ao") `
             -FailureMessage "Expected 'ao', got '$script:CurrentProvider'"
-        
+
         Assert-TestCondition `
             -TestId "AC-AI-48-01-B" `
             -Description "AO assertions are available when provider=ao" `
             -Condition ((Get-Command Assert-ShipDeAoCommand -ErrorAction SilentlyContinue) -ne $null) `
             -FailureMessage "Assert-ShipDeAoCommand function not found"
-        
+
         $readiness = Test-ShipDeProviderReadiness
         Assert-TestCondition `
             -TestId "AC-AI-48-01-C" `
             -Description "Provider readiness check returns structured result" `
             -Condition ($null -ne $readiness -and $readiness.PSObject.Properties['Ready'] -ne $null) `
             -FailureMessage "Readiness check did not return expected structure"
-        
+
     } catch {
         Assert-TestCondition `
             -TestId "AC-AI-48-01-ERROR" `
@@ -109,25 +109,25 @@ try {
         $errorThrown = $true
         $errorMessage = $_.Exception.Message
     }
-    
+
     Assert-TestCondition `
         -TestId "AC-AI-48-04-A" `
         -Description "Unrecognised provider throws during initialization" `
         -Condition $errorThrown `
         -FailureMessage "No error was thrown for invalid provider"
-    
+
     Assert-TestCondition `
         -TestId "AC-AI-48-04-B" `
         -Description "Error message states UNSUPPORTED_PROVIDER" `
         -Condition ($errorMessage -match "UNSUPPORTED_PROVIDER") `
         -FailureMessage "Error did not contain UNSUPPORTED_PROVIDER: $errorMessage"
-    
+
     Assert-TestCondition `
         -TestId "AC-AI-48-04-C" `
         -Description "Error message lists supported providers" `
         -Condition ($errorMessage -match "ao" -and $errorMessage -match "paseo") `
         -FailureMessage "Error did not list supported providers: $errorMessage"
-    
+
 } finally {
     $env:SHIPDE_EXECUTION_PROVIDER = $null
 }

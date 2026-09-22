@@ -1,4 +1,4 @@
-﻿param(
+param(
     [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync", "Supervise", "Test")]
     [string]$Action = "Menu",
 
@@ -16350,7 +16350,7 @@ $providerReadiness = Test-ShipDeProviderReadiness
            Write-Host "[SUPERVISOR] Paseo executable: $(Get-ShipDeProviderExecutablePath)"
            Write-Host "[SUPERVISOR] Paseo version: $(Get-ShipDeProviderVersion)"
          }
-        
+
         Ensure-ShipDeNineRouterRuntime
 
         $syncScript = { param($s) Sync-ShipDeRegisterAfterAutoMerge -State $s -Repository $Repository }
