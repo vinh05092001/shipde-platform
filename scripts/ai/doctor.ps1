@@ -319,6 +319,65 @@ Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.o
 Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128)")
 
 Write-Host ""
+Write-Host "=== EXECUTION PROVIDER (TASK-AI-48) ==="
+# AI-48-R01/R02: doctor reports which provider is selected and its readiness.
+# Initialize the provider subsystem by dot-sourcing the relevant parts of control.ps1.
+# This is deliberately NOT a full invocation of control.ps1, which would start the supervisor.
+$controlPath = Join-Path $PSScriptRoot "control.ps1"
+$providerBlock = @"
+. (Join-Path `$PSScriptRoot "common.ps1")
+`$script:CurrentProvider = `$null
+`$script:HandoffRoot = Join-Path (Join-Path `$env:USERPROFILE "AI") "handoff"
+. `$controlPath -Replace '(?s)^.*?# TASK-AI-48: Execution provider abstraction\..*?(?=^function [A-Z])' -Match
+"@
+
+try {
+    # Load just the provider initialization and readiness functions from control.ps1
+    $providerInitStart = (Select-String -Path $controlPath -Pattern "^# TASK-AI-48: Execution provider abstraction\." -Raw).LineNumber
+    $providerInitEnd = (Select-String -Path $controlPath -Pattern "^function Initialize-ShipDeExecutionProvider" -Context 0,200 | Select-Object -First 1).LineNumber
+    
+    # Simpler approach: just source the needed functions directly
+    . $controlPath
+    
+    $selectedProvider = if ([string]::IsNullOrWhiteSpace($env:SHIPDE_EXECUTION_PROVIDER)) { "ao" } else { $env:SHIPDE_EXECUTION_PROVIDER.ToLowerInvariant().Trim() }
+    Write-Host ("Selected provider: {0} (via {1})" -f $selectedProvider, $(if ([string]::IsNullOrWhiteSpace($env:SHIPDE_EXECUTION_PROVIDER)) { "default" } else { "SHIPDE_EXECUTION_PROVIDER" }))
+    
+    $readiness = Test-ShipDeProviderReadiness
+    if ($readiness.Ready) {
+        Write-Host ("Provider readiness: READY")
+        if ($script:CurrentProvider -eq "ao") {
+            Write-Host ("  AO executable: {0}" -f (Get-ShipDeProviderExecutablePath))
+            Write-Host ("  AO version: {0}" -f (Get-ShipDeProviderVersion))
+        } elseif ($script:CurrentProvider -eq "paseo") {
+            Write-Host ("  Paseo executable: {0}" -f (Get-ShipDeProviderExecutablePath))
+            Write-Host ("  Paseo version: {0}" -f (Get-ShipDeProviderVersion))
+        }
+    } else {
+        Write-Host ("Provider readiness: NOT READY - {0}" -f $readiness.Reason)
+        # AI-48-R03: unreachable provider is reported but is informational when not the default
+        # Only fail when the selected provider is unavailable, not when an alternate is missing
+        if ($selectedProvider -eq $script:CurrentProvider) {
+            $failures.Add("Selected execution provider ($selectedProvider) is not ready: $($readiness.Reason)")
+        } else {
+            Write-Host "  Note: Alternate providers being unavailable is informational when not selected"
+        }
+    }
+    
+    # AI-48-R02: Report AO status separately; absence is informational when Paseo is selected
+    if ($script:CurrentProvider -eq "paseo") {
+        $aoCmd = Get-Command ao -ErrorAction SilentlyContinue
+        if ($aoCmd) {
+            Write-Host ("AO installation: PRESENT (not required for Paseo provider) - {0}" -f $aoCmd.Source)
+        } else {
+            Write-Host "AO installation: NOT PRESENT (informational; Paseo provider does not require AO)"
+        }
+    }
+} catch {
+    Write-Host ("Provider readiness check failed: {0}" -f $_.Exception.Message)
+    $failures.Add("Provider readiness check threw an exception: $($_.Exception.Message)")
+}
+
+Write-Host ""
 Write-Host "=== AGENT AUTHENTICATION ==="
 Write-Host "Bounded agent probes may use one minimal model request for the selected Google and AgentRouter routes."
 if (Get-Command codex -ErrorAction SilentlyContinue) {

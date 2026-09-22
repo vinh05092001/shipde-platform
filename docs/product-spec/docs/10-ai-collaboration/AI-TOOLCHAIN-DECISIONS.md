@@ -29,6 +29,27 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 
 [Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is the control layer around the adopted ecosystem, not another adopted repository/provider. Ship Dễ pins the installed Windows runtime at `0.13.0` (raised from `0.12.12`, see AI-AO-PIN-2026-09-16), checks it with `ao status --json`, and starts it only through `scripts/ai/start-agent-orchestrator.ps1`. Its provenance is recorded in the top-level `orchestrator_runtime` object of `tools/ecosystem-manifest.json`, outside `adopted`.
 
+### TASK-AI-48: Execution provider abstraction (2026-09-22)
+
+The deterministic controller abstracts execution-provider concerns through a provider layer in `scripts/ai/control.ps1` and isolated provider modules under `scripts/ai/providers/`. The abstraction covers exactly what the controller needs: spawn a session, send a message, list sessions, resolve session details, stop a session, and verify ownership. Provider selection is controlled by the `SHIPDE_EXECUTION_PROVIDER` environment variable.
+
+**Supported providers:**
+
+- **`ao` (default):** Agent Orchestrator 0.13.0 or compatible. Requires the `ao` command in PATH, the expected version, and the AO data directory. The supervisor calls `Assert-ShipDeAoCommand` and `Assert-ShipDeAoVersion` before any work when this provider is selected.
+- **`paseo`:** [@getpaseo/cli](https://www.npmjs.com/package/@getpaseo/cli) 0.8.0 or compatible. Requires the `paseo` command in PATH and a reachable daemon on `127.0.0.1:6767` (started with `paseo start`). When this provider is selected, the controller does not require the `ao` binary, the AO version, or the AO data directory.
+
+**Provider selection rules:**
+
+1. An unrecognised provider name is a fast-fail error listing the supported values; no silent fallback occurs.
+2. A selected provider whose runtime is unreachable fails fast with a named, actionable error (e.g., `PROVIDER_UNREACHABLE: paseo status failed`).
+3. `UNSUPPORTED`, `UNAVAILABLE`, and `UNREACHABLE` are distinct provider states and are reported distinctly.
+4. Sessions created under one provider are never adopted implicitly by another; the supervisor verifies session ownership before reuse.
+5. Merge authority (`READY_FOR_HUMAN_MERGE` and the TASK-AI-13 preflight) behaves identically under either provider.
+
+**Measured status at 2026-09-22:** The Paseo provider is new and unproven under sustained load. A trivial file-creation task was verified on the operator host at 74 MB resident memory (versus 820 MB for the AO Electron application), but only a complete Work Item delivered end-to-end under Paseo will validate production readiness. AO remains selectable until that evidence exists. Paseo's pull-request and CI tracking was not evaluated in this Work Item; only spawn, send, and session operations are abstracted.
+
+The provider decision record is in `scripts/ai/control.ps1:3730` (`Initialize-ShipDeExecutionProvider`) and the provider modules are in `scripts/ai/providers/ao.ps1` (preserved for future extraction) and `scripts/ai/providers/paseo.ps1`. The `doctor.ps1` health check reports which provider is selected and its readiness status.
+
 ## Explicitly not adopted
 
 | Tool family                                                                         | Decision          | Reason                                                                                                                                 |

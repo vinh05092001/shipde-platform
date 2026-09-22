@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync", "Supervise", "Test")]
     [string]$Action = "Menu",
 
@@ -3020,6 +3020,13 @@ $script:NineRouterPort = 20128
 $script:ExpectedAoVersion = Get-ShipDePinnedAoVersion
 $script:AoExecutablePath = $null
 
+# TASK-AI-48: Execution provider abstraction.
+# $script:CurrentProvider is set by Initialize-ShipDeExecutionProvider (called below).
+# Supported values: "ao" (default) and "paseo".
+# Override via the SHIPDE_EXECUTION_PROVIDER environment variable.
+$script:CurrentProvider = $null
+
+
 function Assert-ShipDeAoCommand {
     $script:AoExecutablePath = Resolve-ShipDeAoExecutable
     return $script:AoExecutablePath
@@ -3716,6 +3723,204 @@ function Start-ShipDeAoWorker {
 }
 
 $script:AoMessageMaxCharacters = 3000
+
+# TASK-AI-48: Execution provider initialization and abstraction layer.
+# Must be defined before Invoke-ShipDeSupervise calls Test-ShipDeProviderReadiness.
+
+function Initialize-ShipDeExecutionProvider {
+    <#
+    Reads SHIPDE_EXECUTION_PROVIDER, validates, sets `$script:CurrentProvider,
+    and dot-sources the provider module when needed.
+    AI-48-R03: unrecognised provider is a fast-fail; no silent fallback.
+    AI-48-R04: UNSUPPORTED, UNAVAILABLE and UNVERIFIED are distinct states.
+    #>
+    $provider = $env:SHIPDE_EXECUTION_PROVIDER
+    if ([string]::IsNullOrWhiteSpace($provider)) { $provider = "ao" }
+    $provider = $provider.ToLowerInvariant().Trim()
+    $supported = @("ao", "paseo")
+    if ($provider -notin $supported) {
+        throw ("UNSUPPORTED_PROVIDER: ''$provider'' is not a recognised execution provider. Supported values: $($supported -join '', '')")
+    }
+    $script:CurrentProvider = $provider
+
+    if ($provider -eq "paseo") {
+        $providerModulePath = Join-Path $PSScriptRoot "providers\paseo.ps1"
+        if (-not (Test-Path -LiteralPath $providerModulePath)) {
+            throw "PROVIDER_MODULE_MISSING: Paseo provider module not found at $providerModulePath"
+        }
+        . $providerModulePath
+    }
+}
+
+Initialize-ShipDeExecutionProvider
+
+# ── provider abstraction shims ───────────────────────────────────────────────────────
+# AI-48-R01: AO assertions remain when provider="ao".
+# AI-48-R02: provider="paseo" requires no ao binary, version or data directory.
+# AI-48-R05: merge-authority path (TASK-AI-13 preflight) is unchanged.
+# AI-48-R07: sessions created under one provider are not adopted by another.
+
+function Send-ShipDeMessage {
+    param(
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+    if ($script:CurrentProvider -eq "ao") {
+        return Send-ShipDeAoMessage -SessionId $SessionId -Message $Message
+    } else {
+        return Send-ShipDePaseoMessage -SessionId $SessionId -Message $Message
+    }
+}
+
+function Get-ShipDeSessionById {
+    param(
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [string]$Project = "shipde-platform"
+    )
+    if ($script:CurrentProvider -eq "ao") {
+        return Get-ShipDeAoSessionById -SessionId $SessionId -Project $Project
+    } else {
+        return Get-ShipDePaseoSessionById -SessionId $SessionId -Project $Project
+    }
+}
+
+function Get-ShipDeSessions {
+    param([string]$Project = "shipde-platform")
+    if ($script:CurrentProvider -eq "ao") {
+        return Get-ShipDeAoSessions -Project $Project
+    } else {
+        return Get-ShipDePaseoSessions -Project $Project
+    }
+}
+
+function Stop-ShipDeSession {
+    param(
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [string]$Project = "shipde-platform"
+    )
+    if ($script:CurrentProvider -eq "ao") {
+        return Stop-ShipDeAoSession -SessionId $SessionId -Project $Project
+    } else {
+        return Stop-ShipDePaseoSession -SessionId $SessionId -Project $Project
+    }
+}
+
+function Get-ShipDeWorkerName {
+    param([Parameter(Mandatory = $true)][object]$Item)
+    if ($script:CurrentProvider -eq "ao") {
+        return Get-ShipDeAoWorkerName -Item $Item
+    } else {
+        return Get-ShipDePaseoWorkerName -Item $Item
+    }
+}
+
+function Get-ShipDeSessionId {
+    param([Parameter(Mandatory = $true)][object]$Response)
+    if ($script:CurrentProvider -eq "ao") {
+        return Get-ShipDeAoSessionId -Response $Response
+    } else {
+        return Get-ShipDePaseoSessionId -Response $Response
+    }
+}
+
+function Get-ShipDeSessionName {
+    param([Parameter(Mandatory = $true)][object]$Response)
+    if ($script:CurrentProvider -eq "ao") {
+        return Get-ShipDeAoSessionName -Response $Response
+    } else {
+        return Get-ShipDePaseoSessionName -Response $Response
+    }
+}
+
+function Get-ShipDeWorktreesDir {
+    param([string]$Project = "shipde-platform")
+    if ($script:CurrentProvider -eq "ao") {
+        return Get-ShipDeAoWorktreesDir -Project $Project
+    } else {
+        return Get-ShipDePaseoWorktreesDir -Project $Project
+    }
+}
+
+function Get-ShipDeHarnessCandidates {
+    param([Parameter(Mandatory = $true)][string]$Author)
+    if ($script:CurrentProvider -eq "ao") {
+        return Get-ShipDeAoHarnessCandidates -Author $Author
+    } else {
+        return Get-ShipDePaseoHarnessCandidates -Author $Author
+    }
+}
+
+function Assert-ShipDeReusedSession {
+    param(
+        [Parameter(Mandatory = $true)][object]$SessionDetail,
+        [Parameter(Mandatory = $true)][object]$Item,
+        [Parameter(Mandatory = $true)][string[]]$AllowedHarnesses,
+        [string]$Project = "shipde-platform"
+    )
+    if ($script:CurrentProvider -eq "ao") {
+        return Assert-ShipDeReusedAoSession -SessionDetail $SessionDetail -Item $Item -AllowedHarnesses $AllowedHarnesses -Project $Project
+    } else {
+        return Assert-ShipDePaseoReusedSession -SessionDetail $SessionDetail -Item $Item -AllowedHarnesses $AllowedHarnesses -Project $Project
+    }
+}
+
+function Start-ShipDeWorker {
+    param(
+        [Parameter(Mandatory = $true)][object]$Item,
+        [Parameter(Mandatory = $true)][string]$Prompt,
+        [string]$Harness = "",
+        [string]$Project = "shipde-platform",
+        [switch]$DryRun
+    )
+    if ($script:CurrentProvider -eq "ao") {
+        return Start-ShipDeAoWorker -Item $Item -Prompt $Prompt -Harness $Harness -Project $Project -DryRun:$DryRun
+    } else {
+        return Start-ShipDePaseoWorker -Item $Item -Prompt $Prompt -Harness $Harness -Project $Project -DryRun:$DryRun
+    }
+}
+
+function Test-ShipDeProviderReadiness {
+    <#
+    AI-48-R03: unreachable provider fails fast with named error; no silent fallback.
+    #>
+    if ($script:CurrentProvider -eq "ao") {
+        return Test-ShipDeAoReadiness
+    } else {
+        return Test-ShipDePaseoProviderReadiness
+    }
+}
+
+function Get-ShipDeProviderExecutablePath {
+    if ($script:CurrentProvider -eq "ao") {
+        return Get-ShipDeAoInvocationPath
+    } else {
+        return Get-ShipDePaseoProviderExecutablePath
+    }
+}
+
+function Get-ShipDeProviderVersion {
+    if ($script:CurrentProvider -eq "ao") {
+        return $script:ExpectedAoVersion
+    } else {
+        return Get-ShipDePaseoProviderVersion
+    }
+}
+
+function Test-ShipDeSupervisorSessionOwnership {
+    <#
+    AI-48-R07: session created under one provider not adopted by the other.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Session,
+        [Parameter(Mandatory = $true)][object]$Item,
+        [string]$Project = "shipde-platform"
+    )
+    if ($script:CurrentProvider -eq "ao") {
+        return Test-ShipDeSupervisorSessionOwnership_Ao -Session $Session -Item $Item -Project $Project
+    } else {
+        return Test-ShipDePaseoSupervisorSessionOwnership -Session $Session -Item $Item -Project $Project
+    }
+}
 
 function New-ShipDeAoReviewRepairMessage {
     param(
@@ -16332,187 +16537,4 @@ switch ($Action) {
     "Supervise" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts -MaxFailovers $MaxFailovers -Preview:$Preview -DryRun:$DryRun }
     "Test" { Write-Host "ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED"; return }
     default { Show-ShipDeMenu }
-}
-# Execution provider abstraction - Part 1
-$script:CurrentProvider = $null
-
-function Initialize-ShipDeExecutionProvider {
-  $provider = $env:SHIPDE_EXECUTION_PROVIDER
-  if ([string]::IsNullOrWhiteSpace($provider)) {
-    $provider = "ao"
-  }
-  $provider = $provider.ToLowerInvariant()
-  if ($provider -notin @("ao", "paseo")) {
-    throw "Unsupported execution provider '$provider'. Supported values are 'ao' and 'paseo'."
-  }
-  $script:CurrentProvider = $provider
-
-  # Load the provider-specific module if needed
-  if ($provider -eq "paseo") {
-    $providerModulePath = Join-Path $PSScriptRoot "providers\paseo.ps1"
-    if (Test-Path -LiteralPath $providerModulePath) {
-      . $providerModulePath
-    } else {
-      throw "Paseo provider module not found at $providerModulePath"
-    }
-  }
-}
-
-Initialize-ShipDeExecutionProvider
-
-# Abstraction functions
-
-function Send-ShipDeMessage {
-  param(
-    [Parameter(Mandatory = $true)][string]$SessionId,
-    [Parameter(Mandatory = $true)][string]$Message
-  )
-  if ($script:CurrentProvider -eq "ao") {
-    return Send-ShipDeAoMessage -SessionId $SessionId -Message $Message
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Send-ShipDePaseoMessage -SessionId $SessionId -Message $Message
-  }
-}
-
-function Get-ShipDeSessionById {
-  param(
-    [Parameter(Mandatory = $true)][string]$SessionId,
-    [string]$Project = "shipde-platform"
-  )
-  if ($script:CurrentProvider -eq "ao") {
-    return Get-ShipDeAoSessionById -SessionId $SessionId -Project $Project
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Get-ShipDePaseoSessionById -SessionId $SessionId -Project $Project
-# Execution provider abstraction - Part 2
-
-function Get-ShipDeWorkerName {
-  param([Parameter(Mandatory = $true)][object]$Item)
-  # This function is provider-agnostic, so we can use the existing implementation
-  return Get-ShipDeAoWorkerName -Item $Item
-}
-
-function Get-ShipDeSessionId {
-  param([Parameter(Mandatory = $true)][object]$Response)
-  if ($script:CurrentProvider -eq "ao") {
-    return Get-ShipDeAoSessionId -Response $Response
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Get-ShipDePaseoSessionId -Response $Response
-  }
-}
-
-function Get-ShipDeSessionName {
-  param([Parameter(Mandatory = $true)][object]$Response)
-  if ($script:CurrentProvider -eq "ao") {
-    return Get-ShipDeAoSessionName -Response $Response
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Get-ShipDePaseoSessionName -Response $Response
-  }
-}
-
-function Get-ShipDeWorktreesDir {
-  param([string]$Project = "shipde-platform")
-  if ($script:CurrentProvider -eq "ao") {
-    return Get-ShipDeAoWorktreesDir -Project $Project
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Get-ShipDePaseoWorktreesDir -Project $Project
-  }
-}
-
-function Get-ShipDeHarnessCandidates {
-  param([string]$Author)
-  if ($script:CurrentProvider -eq "ao") {
-    return Get-ShipDeAoHarnessCandidates -Author $Author
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Get-ShipDePaseoHarnessCandidates -Author $Author
-  }
-}
-
-function Assert-ShipDeReusedSession {
-  param(
-    [Parameter(Mandatory = $true)][object]$SessionDetail,
-    [Parameter(Mandatory = $true)][object]$Item,
-    [Parameter(Mandatory = $true)][string[]]$AllowedHarnesses,
-    [string]$Project = "shipde-platform"
-  )
-  if ($script:CurrentProvider -eq "ao") {
-    return Assert-ShipDeReusedAoSession -SessionDetail $SessionDetail -Item $Item -AllowedHarnesses $AllowedHarnesses -Project $Project
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Assert-ShipDePaseoReusedSession -SessionDetail $SessionDetail -Item $Item -AllowedHarnesses $AllowedHarnesses -Project $Project
-  }
-}
-
-function Start-ShipDeWorker {
-  param(
-    [Parameter(Mandatory = $true)][object]$Item,
-    [Parameter(Mandatory = $true)][object]$Prompt,
-    [string]$Project = "shipde-platform",
-    [string]$Harness
-  )
-  if ($script:CurrentProvider -eq "ao") {
-    return Start-ShipDeAoWorker -Item $Item -Prompt $Prompt -Project $Project -Harness $Harness
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Start-ShipDePaseoWorker -Item $Item -Prompt $Prompt -Project $Project -Harness $Harness
-  }
-}
-
-function Test-ShipDeProviderReadiness {
-  if ($script:CurrentProvider -eq "ao") {
-    return Test-ShipDeAoReadiness
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Test-ShipDePaseoProviderReadiness
-  }
-}
-
-function Get-ShipDeProviderExecutablePath {
-  if ($script:CurrentProvider -eq "ao") {
-    return Get-ShipDeAoExecutablePath
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Get-ShipDePaseoProviderExecutablePath
-  }
-}
-
-function Get-ShipDeProviderVersion {
-  if ($script:CurrentProvider -eq "ao") {
-    return Get-ShipDeAoVersion
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Get-ShipDePaseoProviderVersion
-  }
-}
-  }
-}
-
-function Get-ShipDeSessions {
-  param(
-    [string]$Project = "shipde-platform"
-  )
-  if ($script:CurrentProvider -eq "ao") {
-    return Get-ShipDeAoSessions -Project $Project
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Get-ShipDePaseoSessions -Project $Project
-  }
-}
-
-function Stop-ShipDeSession {
-  param(
-    [Parameter(Mandatory = $true)][string]$SessionId,
-    [string]$Project = "shipde-platform"
-  )
-  if ($script:CurrentProvider -eq "ao") {
-    return Stop-ShipDeAoSession -SessionId $SessionId -Project $Project
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Stop-ShipDePaseoSession -SessionId $SessionId -Project $Project
-  }
-}
-
-function Test-ShipDeSupervisorSessionOwnership {
-  param(
-    [Parameter(Mandatory = $true)][object]$Session,
-    [Parameter(Mandatory = $true)][object]$Item,
-    [string]$Project = "shipde-platform"
-  )
-  if ($script:CurrentProvider -eq "ao") {
-    return Test-ShipDeSupervisorSessionOwnership_Ao -Session $Session -Item $Item -Project $Project
-  } elseif ($script:CurrentProvider -eq "paseo") {
-    return Test-ShipDePaseoSupervisorSessionOwnership -Session $Session -Item $Item -Project $Project
-  }
 }
