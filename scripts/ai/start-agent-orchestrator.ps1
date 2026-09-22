@@ -8,8 +8,9 @@ param(
     # the operator's native ~/.claude profile. Resolved against
     # SHIPDE_NINEROUTER_PROFILE and the shared default when left empty.
     [string]$ProfilePath = "",
-    [Alias("AgentRouterPort")]
-    [int]$NineRouterPort = 20128,
+    # The old name stays accepted so an operator launcher still passing it keeps
+    # working; the rename must change no behaviour (AI-44-R03).
+    [Alias('AgentRouterPort')][int]$NineRouterPort = 20128,
     [string]$ExpectedAoVersion = "",
     [int]$StartupTimeoutSeconds = 30,
     [switch]$Restart,
@@ -245,7 +246,7 @@ function Get-LiveAoProcess {
 $existing = @(Get-ExistingAoProcess -ExecutablePath $aoExecutablePath)
 if ($existing.Count -gt 0) {
     if (-not $Restart) {
-        throw "Agent Orchestrator is already running. Re-run with -Restart to replace it with the governed AgentRouter profile."
+        throw "Agent Orchestrator is already running. Re-run with -Restart to replace it with the governed 9Router profile."
     }
 
     & $aoExecutablePath stop --timeout 15s 2>$null | Out-Null
