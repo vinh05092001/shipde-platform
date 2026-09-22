@@ -10,7 +10,8 @@ export const SEED_USERS = [
     email: 'owner@shipde.vn',
     phone: '0901234567',
     full_name: 'Chủ Shop Dễ',
-    password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
+    password_hash:
+      'scrypt$16384$8$1$208ddd440a6244a84de5619d5882aa64$b5109485f7030459cb2bf6f372a5ab053363f1aa31051a681750ccb86176bc28413aea018c52bb24207b5b9232968b5656cd57cb0a176e3a8cbfd51ebcb8a343',
     role: RoleEnum.OWNER,
     status: 'active',
     email_verified_at: new Date('2026-09-01T00:00:00Z'),
@@ -24,7 +25,8 @@ export const SEED_USERS = [
     email: 'ops@shipde.vn',
     phone: '0901234568',
     full_name: 'Điều Phối Viên',
-    password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
+    password_hash:
+      'scrypt$16384$8$1$208ddd440a6244a84de5619d5882aa64$b5109485f7030459cb2bf6f372a5ab053363f1aa31051a681750ccb86176bc28413aea018c52bb24207b5b9232968b5656cd57cb0a176e3a8cbfd51ebcb8a343',
     role: RoleEnum.OPS_CSKH,
     status: 'active',
     email_verified_at: new Date('2026-09-01T00:00:00Z'),
@@ -37,7 +39,8 @@ export const SEED_USERS = [
     email: 'accountant@shipde.vn',
     phone: '0901234569',
     full_name: 'Kế Toán Viên',
-    password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
+    password_hash:
+      'scrypt$16384$8$1$208ddd440a6244a84de5619d5882aa64$b5109485f7030459cb2bf6f372a5ab053363f1aa31051a681750ccb86176bc28413aea018c52bb24207b5b9232968b5656cd57cb0a176e3a8cbfd51ebcb8a343',
     role: RoleEnum.ACCOUNTANT,
     status: 'active',
     email_verified_at: new Date('2026-09-01T00:00:00Z'),
@@ -50,7 +53,8 @@ export const SEED_USERS = [
     email: 'pending@shipde.vn',
     phone: '0909999001',
     full_name: 'Pending Test User',
-    password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
+    password_hash:
+      'scrypt$16384$8$1$208ddd440a6244a84de5619d5882aa64$b5109485f7030459cb2bf6f372a5ab053363f1aa31051a681750ccb86176bc28413aea018c52bb24207b5b9232968b5656cd57cb0a176e3a8cbfd51ebcb8a343',
     role: RoleEnum.OWNER,
     status: 'pending_verification',
     email_verified_at: null,
@@ -64,7 +68,8 @@ export const SEED_USERS = [
     email: 'expired@shipde.vn',
     phone: '0909999002',
     full_name: 'Expired Token Test User',
-    password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
+    password_hash:
+      'scrypt$16384$8$1$208ddd440a6244a84de5619d5882aa64$b5109485f7030459cb2bf6f372a5ab053363f1aa31051a681750ccb86176bc28413aea018c52bb24207b5b9232968b5656cd57cb0a176e3a8cbfd51ebcb8a343',
     role: RoleEnum.OWNER,
     status: 'pending_verification',
     email_verified_at: null,
@@ -78,7 +83,8 @@ export const SEED_USERS = [
     email: 'consumed.phone@shipde.vn',
     phone: '0909999003',
     full_name: 'Consumed Phone Test User',
-    password_hash: '$2b$10$hashedpasswordsampleforseedtestingonly0000000000000000000',
+    password_hash:
+      'scrypt$16384$8$1$208ddd440a6244a84de5619d5882aa64$b5109485f7030459cb2bf6f372a5ab053363f1aa31051a681750ccb86176bc28413aea018c52bb24207b5b9232968b5656cd57cb0a176e3a8cbfd51ebcb8a343',
     role: RoleEnum.OWNER,
     status: 'pending_verification',
     email_verified_at: null,
@@ -211,6 +217,11 @@ export async function seedDatabase(client?: PrismaClient): Promise<{
         update: {
           phone: u.phone,
           full_name: u.full_name,
+          // Keep the seeded password authoritative so dev databases seeded
+          // before a hash-format change converge back to the documented
+          // TestPassword123! credential instead of silently keeping stale
+          // hashes that break login.
+          password_hash: u.password_hash,
           role: u.role,
           status: u.status,
           email_verified_at: u.email_verified_at,

@@ -163,6 +163,8 @@ model VerificationToken {
   channel     String    @db.VarChar(16)
   identifier  String    @db.VarChar(255)
   otp         String?   @db.VarChar(64)
+  // FEAT-AUTH-03: VERIFICATION tokens activate an account; LOGIN tokens authorize an OTP login.
+  purpose     String    @default("VERIFICATION") @db.VarChar(32)
   expires_at  DateTime  @db.Timestamptz
   consumed_at DateTime? @db.Timestamptz
   created_at  DateTime  @default(now()) @db.Timestamptz
@@ -171,6 +173,7 @@ model VerificationToken {
 
   @@index([user_id])
   @@index([identifier, channel])
+  @@index([purpose])
   @@map("verification_tokens")
 }
 

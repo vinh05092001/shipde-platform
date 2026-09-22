@@ -3291,9 +3291,9 @@ function Ensure-ShipDeNineRouterRuntime {
         [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
         [scriptblock]$Launcher = {
             param($Path, $Root, $Port, $Version, $ProfileDir)
-            # `-AgentRouterPort` is start-agent-orchestrator.ps1's parameter name (out of
-            # scope here); on that script it still addresses 9Router's local port (20128).
-            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -ProfilePath $ProfileDir -Restart
+            # `-NineRouterPort` is start-agent-orchestrator.ps1's parameter name (with
+            # `AgentRouterPort` kept as an alias for backward compatibility).
+            & $Path -AiRoot $Root -NineRouterPort $Port -ExpectedAoVersion $Version -ProfilePath $ProfileDir -Restart
         }
     )
 

@@ -9,12 +9,51 @@ export interface FieldError {
   message: string;
 }
 
+/** 403 status gate returned by the login APIs, rendered as a full state on SCR-AUTH-01 (FEAT-AUTH-03 CD-6). */
+export interface AuthStatusBlock {
+  code: string;
+  message: string;
+  nextAction?: string;
+}
+
 interface AuthContextType {
   user: User | null;
   merchant: Merchant | null;
   isAuthenticated: boolean;
   token: string | null;
-  login: (emailOrPhone: string, pass: string) => Promise<{ success: boolean; error?: string }>;
+  login: (
+    emailOrPhone: string,
+    pass: string,
+    rememberDevice?: boolean
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    retryAfterSeconds?: number;
+    statusBlock?: AuthStatusBlock;
+  }>;
+  requestLoginOtp: (identifier: string) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    retryAfterSeconds?: number;
+    maskedIdentifier?: string;
+    channel?: string;
+    expiresIn?: number;
+    cooldownSeconds?: number;
+  }>;
+  verifyLoginOtp: (
+    identifier: string,
+    otp: string,
+    rememberDevice?: boolean
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    retryAfterSeconds?: number;
+    maskedIdentifier?: string;
+    statusBlock?: AuthStatusBlock;
+  }>;
   register: (payload: {
     merchantName: string;
     fullName: string;
@@ -62,6 +101,46 @@ interface AuthContextType {
   switchRole: (role: Role) => void;
 }
 
+/** 403 status codes that must surface as dedicated login states (FEAT-AUTH-03 CD-6). */
+const STATUS_GATE_CODES = [
+  'AUTH_PENDING_VERIFICATION',
+  'AUTH_ACCOUNT_SUSPENDED',
+  'AUTH_ACCOUNT_DISABLED',
+  'AUTH_INVITATION_PENDING',
+];
+
+function parseDate(value: unknown): Date {
+  if (value instanceof Date) return value;
+  const parsed = new Date(String(value ?? ''));
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function mapUser(raw: any): User {
+  if (!raw) return raw;
+  return { ...raw, created_at: parseDate(raw.created_at ?? raw.createdAt) };
+}
+
+function mapMerchant(raw: any): Merchant {
+  if (!raw) return raw;
+  return { ...raw, created_at: parseDate(raw.created_at ?? raw.createdAt) };
+}
+
+interface ExtractedError {
+  code?: string;
+  message?: string;
+  nextAction?: string;
+  retryAfter?: number;
+}
+
+function extractError(body: any): ExtractedError {
+  return {
+    code: body?.error?.code,
+    message: body?.error?.message,
+    nextAction: body?.error?.next_action,
+    retryAfter: body?.error?.retry_after,
+  };
+}
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -69,115 +148,167 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [token, setToken] = useState<string | null>(null);
 
-  // Initialize with persisted or default authenticated state
+  // Restore a persisted session when present. No fabricated default session:
+  // FEAT-AUTH-03 (CD-10) removes the prototype's mock auto-login.
   useEffect(() => {
     const savedUser = localStorage.getItem('shipde_user');
     const savedMerchant = localStorage.getItem('shipde_merchant');
     const savedToken = localStorage.getItem('shipde_token');
 
-    if (savedUser && savedMerchant && savedToken) {
-      try {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- Legacy prototype localStorage hydration pattern
-        setUser(JSON.parse(savedUser));
-        setMerchant(JSON.parse(savedMerchant));
-        setToken(savedToken);
-        return;
-      } catch (e) {
-        // Fallback
-      }
+    if (!savedUser || !savedMerchant || !savedToken) {
+      return;
     }
 
-    // Default mock initial session for instant usability
-    const defaultMerchant: Merchant = {
-      id: 'merc_prod_01',
-      name: 'Thời Trang An An Boutique',
-      business_code: '0318928192',
-      phone: '0901234567',
-      email: 'contact@ananboutique.vn',
-      address: '128 Nguyễn Trãi, Phường 3, Quận 5, TP. Hồ Chí Minh',
-      subscription_plan: 'BUSINESS_CONTROL',
-      status: 'ACTIVE',
-      created_at: new Date('2026-01-01'),
-    };
-
-    const defaultUser: User = {
-      id: 'usr_01',
-      merchant_id: 'merc_prod_01',
-      full_name: 'Nguyễn Văn An',
-      email: 'owner@ananboutique.vn',
-      phone: '0901234567',
-      role: Role.OWNER,
-      status: 'ACTIVE',
-      created_at: new Date('2026-01-01'),
-    };
-
-    const defaultToken = 'jwt_shipde_session_token_prod_9981';
-
-    setUser(defaultUser);
-    setMerchant(defaultMerchant);
-    setToken(defaultToken);
-
-    localStorage.setItem('shipde_user', JSON.stringify(defaultUser));
-    localStorage.setItem('shipde_merchant', JSON.stringify(defaultMerchant));
-    localStorage.setItem('shipde_token', defaultToken);
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- persisted session hydration
+      setUser(mapUser(JSON.parse(savedUser)));
+      setMerchant(mapMerchant(JSON.parse(savedMerchant)));
+      setToken(savedToken);
+    } catch {
+      localStorage.removeItem('shipde_user');
+      localStorage.removeItem('shipde_merchant');
+      localStorage.removeItem('shipde_token');
+    }
   }, []);
 
-  const login = async (emailOrPhone: string, pass: string) => {
-    if (!emailOrPhone || !pass) {
-      return { success: false, error: 'Vui lòng nhập đầy đủ tài khoản và mật khẩu' };
-    }
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-    // Map role based on email hint or default
-    let role: Role = Role.OWNER;
-    let name = 'Nguyễn Văn An (Chủ Shop)';
-    if (emailOrPhone.includes('cskh')) {
-      role = Role.OPS_CSKH;
-      name = 'Trần Thị Hoa (CSKH)';
-    } else if (emailOrPhone.includes('ketoan') || emailOrPhone.includes('acc')) {
-      role = Role.ACCOUNTANT;
-      name = 'Lê Minh Kế Toán';
-    } else if (emailOrPhone.includes('kho')) {
-      role = Role.WAREHOUSE;
-      name = 'Phạm Văn Kho (Thủ Kho)';
-    }
+  const applySession = (data: any) => {
+    const nextUser = mapUser(data?.user);
+    const nextMerchant = mapMerchant(data?.merchant);
+    const accessToken = String(data?.access_token ?? '');
 
-    const authMerchant: Merchant = {
-      id: 'merc_prod_01',
-      name: 'Thời Trang An An Boutique',
-      business_code: '0318928192',
-      phone: '0901234567',
-      email: 'contact@ananboutique.vn',
-      address: '128 Nguyễn Trãi, Phường 3, Quận 5, TP. Hồ Chí Minh',
-      subscription_plan: 'BUSINESS_CONTROL',
-      status: 'ACTIVE',
-      created_at: new Date('2026-01-01'),
-    };
+    setUser(nextUser);
+    setMerchant(nextMerchant);
+    setToken(accessToken);
 
-    const authUser: User = {
-      id: `usr_${Date.now()}`,
-      merchant_id: 'merc_prod_01',
-      full_name: name,
-      email: emailOrPhone.includes('@') ? emailOrPhone : `${emailOrPhone}@shipde.net`,
-      phone: emailOrPhone.startsWith('0') ? emailOrPhone : '0901234567',
-      role,
-      status: 'ACTIVE',
-      created_at: new Date(),
-    };
-
-    const authToken = `jwt_token_${Date.now()}`;
-
-    setUser(authUser);
-    setMerchant(authMerchant);
-    setToken(authToken);
-
-    localStorage.setItem('shipde_user', JSON.stringify(authUser));
-    localStorage.setItem('shipde_merchant', JSON.stringify(authMerchant));
-    localStorage.setItem('shipde_token', authToken);
-
-    return { success: true };
+    localStorage.setItem('shipde_user', JSON.stringify(nextUser));
+    localStorage.setItem('shipde_merchant', JSON.stringify(nextMerchant));
+    localStorage.setItem('shipde_token', accessToken);
   };
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+  const login = async (emailOrPhone: string, pass: string, rememberDevice = true) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: emailOrPhone,
+          password: pass,
+          remember_device: rememberDevice,
+        }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = extractError(body);
+        if (STATUS_GATE_CODES.includes(err.code ?? '')) {
+          return {
+            success: false,
+            error: err.message || 'Tài khoản của bạn hiện không thể đăng nhập.',
+            code: err.code,
+            statusBlock: {
+              code: err.code ?? '',
+              message: err.message ?? '',
+              nextAction: err.nextAction,
+            },
+          };
+        }
+        return {
+          success: false,
+          error: err.message || 'Đăng nhập không thành công.',
+          code: err.code || 'VALIDATION_ERROR',
+          retryAfterSeconds: err.retryAfter,
+        };
+      }
+
+      applySession(body.data);
+      return { success: true };
+    } catch {
+      return {
+        success: false,
+        error: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra đường truyền mạng.',
+        code: 'NETWORK_ERROR',
+      };
+    }
+  };
+
+  const requestLoginOtp = async (identifier: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/login/otp/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = extractError(body);
+        return {
+          success: false,
+          error: err.message || 'Không gửi được mã OTP.',
+          code: err.code || 'VALIDATION_ERROR',
+          retryAfterSeconds: err.retryAfter,
+        };
+      }
+
+      return {
+        success: true,
+        maskedIdentifier: body.data?.recipient_masked,
+        channel: body.data?.channel,
+        expiresIn: body.data?.expires_in_seconds,
+        cooldownSeconds: body.data?.cooldown_seconds,
+      };
+    } catch {
+      return {
+        success: false,
+        error: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra đường truyền mạng.',
+        code: 'NETWORK_ERROR',
+      };
+    }
+  };
+
+  const verifyLoginOtp = async (identifier: string, otp: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/login/otp/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, otp }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = extractError(body);
+        if (STATUS_GATE_CODES.includes(err.code ?? '')) {
+          return {
+            success: false,
+            error: err.message || 'Tài khoản của bạn hiện không thể đăng nhập.',
+            code: err.code,
+            statusBlock: {
+              code: err.code ?? '',
+              message: err.message ?? '',
+              nextAction: err.nextAction,
+            },
+          };
+        }
+        return {
+          success: false,
+          error: err.message || 'Xác thực mã OTP thất bại.',
+          code: err.code || 'VALIDATION_ERROR',
+          retryAfterSeconds: err.retryAfter,
+        };
+      }
+
+      applySession(body.data);
+      return { success: true };
+    } catch {
+      return {
+        success: false,
+        error: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra đường truyền mạng.',
+        code: 'NETWORK_ERROR',
+      };
+    }
+  };
 
   const register = async (payload: {
     merchantName: string;
@@ -336,6 +467,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAuthenticated: !!user && !!token,
         token,
         login,
+        requestLoginOtp,
+        verifyLoginOtp,
         register,
         verifyEmail,
         verifyPhone,
