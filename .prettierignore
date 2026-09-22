@@ -17,6 +17,9 @@ coverage
 .git
 .gemini
 
+# PR body files (temporary, not source code)
+.pr-body.md
+
 # Unsupported syntax without native Prettier parser
 prisma/schema.prisma
 *.toml
