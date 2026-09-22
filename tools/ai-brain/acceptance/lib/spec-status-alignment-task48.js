@@ -11,8 +11,9 @@
 // Exit codes used by the scripts that require this file:
 //   0 the documents agree   1 they diverge   2 the claim cannot be measured
 
-const STATUS_CELL = /\n\|[\s]*Status[\s]*\|[\s]*`?([A-Z_]+)`?[\s]*\|[\r?\n/;
-const REGISTER_STATUS = /"(BACKLOG|MERGED|BLOCKED_[A-Z_]+|READY_FOR_[A-Z]+|IN_PROGRESS|CHANGES_REQUIRED|CODEX_PASS|SUPERSEDED)"/;
+const STATUS_CELL = /\n\|[\s]*Status[\s]*\|[\s]*`?([A-Z_]+)`?[\s]*\|[\r?\n]/;
+const REGISTER_STATUS =
+  /"(BACKLOG|MERGED|BLOCKED_[A-Z_]+|READY_FOR_[A-Z]+|IN_PROGRESS|CHANGES_REQUIRED|CODEX_PASS|SUPERSEDED)"/;
 
 /** The status the Control table declares, or null when there is no Status cell. */
 function controlStatus(specText) {

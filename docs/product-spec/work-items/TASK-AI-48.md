@@ -6,7 +6,7 @@
 |---|---|
 | Work Item ID | `TASK-AI-48` |
 | Feature ID | `N/A` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | `180` |
 | Dependencies | `TASK-AI-13` (auto-merge preflight), `TASK-AI-06` (9Router profile isolation) |
 | Assigned author | `GEMINI` |
