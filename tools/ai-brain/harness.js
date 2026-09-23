@@ -148,6 +148,18 @@ const hermes = {
     args.push('--yolo', '--accept-hooks', '-z', prompt);
     return args;
   },
+  /**
+   * Stopping a Hermes run means stopping the process, because the handle is a
+   * workspace rather than a session the daemon can interrupt. The pid comes
+   * from the launch record, so a caller that never kept it cannot stop the run
+   * — which is the honest limitation, not something to paper over with a
+   * command that does nothing.
+   */
+  stop(sessionId, job) {
+    const pid = job && job.pid;
+    if (!pid) return null;
+    return { kill: Number(pid) };
+  },
   sessionIdFrom(parsed, job) {
     if (job && job.cwd) return DIR_HANDLE + job.cwd;
     return pickId(parsed);
@@ -160,6 +172,41 @@ const DIR_HANDLE = 'dir:';
 function handleToDir(handle) {
   const s = String(handle || '');
   return s.startsWith(DIR_HANDLE) ? s.slice(DIR_HANDLE.length) : null;
+}
+
+/**
+ * The smallest context window a harness can be given a model for.
+ *
+ * Hermes loads its own tools, rules and memory before the task even starts, so
+ * a small model answers "this conversation has grown too large" and the run is
+ * lost without producing anything (observed 2026-09-23 with an 8k model). The
+ * number is the harness's floor, not a model's quality: a model below it is
+ * refused for this harness and may still be perfectly good for another.
+ *
+ * Paseo and Cline pass the prompt through to whatever the provider accepts, so
+ * they state no floor.
+ */
+const MIN_CONTEXT = Object.freeze({ hermes: 32000 });
+
+/**
+ * Why this harness cannot take this model, or null when it can.
+ * An unknown context window is not a refusal: the registry does not always
+ * record one, and refusing on a missing field would ground a working model.
+ */
+function contextRefusal(harnessName, contextWindow) {
+  const floor = MIN_CONTEXT[String(harnessName || '').toLowerCase()];
+  if (!floor) return null;
+  const window = Number(contextWindow);
+  if (!Number.isFinite(window) || window <= 0) return null;
+  if (window >= floor) return null;
+  return (
+    'CONTEXT_TOO_SMALL: ' +
+    harnessName +
+    ' needs at least ' +
+    floor +
+    ' tokens of context and this model has ' +
+    window
+  );
 }
 
 const HARNESSES = Object.freeze({ paseo, cline, hermes });
@@ -343,6 +390,8 @@ module.exports = {
   executableFor,
   DIR_HANDLE,
   handleToDir,
+  MIN_CONTEXT,
+  contextRefusal,
   parseLastJson,
   pickId,
 };

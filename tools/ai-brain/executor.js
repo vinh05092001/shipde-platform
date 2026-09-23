@@ -32,7 +32,7 @@
 
 const { REVIEW_ROLES, IMPLEMENTATION_ROLES } = require('./scheduler');
 const { offeringId: toOfferingId } = require('./offerings');
-const { getHarness, runHarness, parseLastJson } = require('./harness');
+const { getHarness, runHarness, parseLastJson, contextRefusal } = require('./harness');
 const { loadSources, dispatchRoute, qualifyModel } = require('./sources');
 const decisions = require('./decisions');
 
@@ -232,6 +232,17 @@ function executePlan(plan, options) {
     }
     record.harness = adapter.id;
 
+    // A harness with a context floor must refuse a model below it here, not
+    // discover it in the session. Hermes loads its own tools and rules before
+    // the task starts, so a small model answers "this conversation has grown
+    // too large" and the run produces nothing — a launch that was never going
+    // to work, charged for and logged as if it might.
+    const tooSmall = contextRefusal(adapter.id, a.contextWindow);
+    if (tooSmall) {
+      refuse(tooSmall);
+      continue;
+    }
+
     const isReview = REVIEW_ROLES.has(a.role);
     const existing = isReview ? null : openByItem.get(a.workItemId);
 
@@ -404,6 +415,9 @@ function executePlan(plan, options) {
 
     record.outcome = resuming ? Outcome.RESUMED : Outcome.LAUNCHED;
     record.sessionId = id;
+    // A detached harness reports its pid and nothing else can find it again;
+    // without this the operator's only way to stop the run is Task Manager.
+    if (parsed && parsed.pid) record.pid = parsed.pid;
     decisions.recordDecision(
       {
         stage: resuming ? decisions.Stage.RESUMED : decisions.Stage.LAUNCHED,
@@ -412,6 +426,7 @@ function executePlan(plan, options) {
         chosen: record.offeringId,
         harness: adapter.id,
         sessionId: id,
+        pid: (parsed && parsed.pid) || null,
         branch: a.branch,
       },
       logOpts
