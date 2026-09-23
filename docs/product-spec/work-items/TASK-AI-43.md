@@ -6,7 +6,7 @@
 |---|---|
 | Work Item ID | `TASK-AI-43` |
 | Feature ID | `N/A` |
-| Status | `BLOCKED_DEPENDENCY` |
+| Status | `IN_PROGRESS` |
 | Delivery order | `176` |
 | Dependencies | `TASK-AI-17` |
 | Assigned author | `GEMINI` |
