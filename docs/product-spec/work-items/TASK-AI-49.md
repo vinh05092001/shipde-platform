@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-24; TASK-AI-42; TASK-AI-46` |
 | Assigned author | `CLAUDE` |
 | Risk | `MEDIUM` |
-| Allowed paths | `tools/ai-brain/**`, `apps/web/src/context/AuthContext.tsx`, `apps/web/src/app/page.tsx`, `docs/product-spec/work-items/TASK-AI-49.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths | `tools/ai-brain/**`, `apps/web/src/context/AuthContext.tsx`, `apps/web/src/app/page.tsx`, `apps/web/src/app/paseo/page.tsx`, `docs/product-spec/work-items/TASK-AI-49.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-49-paseo-dispatch-adapter` |
 | Pull Request | `TBD` |
@@ -57,7 +57,8 @@ planner ceiling) and touches the dispatch rules that keep concurrent work safe,
 which is outside the 9Router boundary. It also includes the auth hydration gate
 on `apps/web/src/app/page.tsx` and `apps/web/src/context/AuthContext.tsx`,
 which covers all six dashboard auth UI states (loading, empty, validation-error,
-error, forbidden, success). No database migration. Two decisions remain the
+error, forbidden, success), and the `/paseo` dispatch status screen that
+reuses the same gate. No database migration. Two decisions remain the
 human's: the concurrent implementation ceiling, which stays a governed decision,
 and whether the measured per-agent memory figure (350 MB) is the one to plan
 against.
@@ -87,6 +88,10 @@ against.
   auth UI states (loading, empty, validation-error, error, forbidden,
   success) are covered by the existing `LoginView` and `RegisterView`
   components.
+- A Next.js `/paseo` screen (`apps/web/src/app/paseo/page.tsx`) reusing
+  the same auth hydration gate and six UI states, presenting the Paseo
+  dispatch adapter status (source registry, harness adapters, open
+  writers) as its authenticated success view.
 
 ## Out of scope
 
