@@ -517,13 +517,11 @@ for items moved to `BACKLOG` remains bounded by `TASK-AI-20`.
 | `TASK-AI-43` | `#94` | `dc289e00c3fb5bb8165bc8c16fb6a7b047cce72c` | `PASS` |
 
 Recording these 11 merged items (TASK-AI-22 excluded: verdict `CHANGES_REQUIRED` does not permit `MERGED` transition per `AI-19-R04`):
-- `TASK-AI-11` (dependency `TASK-AI-10` merged) -> `BACKLOG` (per `AI-19-R03`: stale blocks clear to `BACKLOG`, not `READY_FOR_AUTHOR`)
-- `TASK-AI-31` remains `BLOCKED_DEPENDENCY` (dependency `TASK-AI-20` not merged)
-- `TASK-AI-42` remains `BLOCKED_DEPENDENCY` (dependency `TASK-AI-24` not merged)
-
-Items remaining blocked due to unmerged dependencies:
-- `TASK-AI-12` (depends on `TASK-AI-11`, not merged) -> `BLOCKED_DEPENDENCY`
-- `TASK-AI-32` (depends on `TASK-AI-31`, not in main) -> `BLOCKED_DEPENDENCY`
+- `TASK-AI-11` (PR #120, `6301e06`, dependency `TASK-AI-10` merged) -> `MERGED` (corrected: `git log origin/main --oneline --grep="TASK-AI-11"` returns `6301e06`; `git merge-base --is-ancestor 6301e06 origin/main` exits 0)
+- `TASK-AI-12` (PR #122, `42f97c5`, dependency `TASK-AI-11` merged) -> `MERGED` (corrected: `git log origin/main --oneline --grep="TASK-AI-12"` returns `42f97c5`; `git merge-base --is-ancestor 42f97c5 origin/main` exits 0)
+- `TASK-AI-31` (PR #119, `a7c1bc9`, dependencies `TASK-AI-20`+`TASK-AI-25` both merged) -> `MERGED` (corrected: `git log origin/main --oneline --grep="TASK-AI-31"` returns `a7c1bc9`; `git merge-base --is-ancestor a7c1bc9 origin/main` exits 0)
+- `TASK-AI-32` (PR #121, `44cda29`, dependency `TASK-AI-31` merged) -> `MERGED` (corrected: `git log origin/main --oneline --grep="TASK-AI-32"` returns `44cda29`; `git merge-base --is-ancestor 44cda29 origin/main` exits 0)
+- `TASK-AI-42` (PR #118, `ceb0bca`, dependency `TASK-AI-24` merged) -> `MERGED` (corrected: `git log origin/main --oneline --grep="TASK-AI-42"` returns `ceb0bca`; `git merge-base --is-ancestor ceb0bca origin/main` exits 0)
 
 Corrections applied vs. original PR #117:
 - TASK-AI-30: corrected from PR #87 (`583bb3696f`) to PR #104 (`9a8c6b9716`) — authoritative merge on `origin/main`
