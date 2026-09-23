@@ -37,7 +37,12 @@ const lines = doctor.split(/\r?\n/);
 const block = lines.slice(135, 323).join('\r\n');
 
 function computeKeyHash(key) {
-  return crypto.createHash('sha256').update(key, 'utf8').digest('hex').toUpperCase().substring(0, 16);
+  return crypto
+    .createHash('sha256')
+    .update(key, 'utf8')
+    .digest('hex')
+    .toUpperCase()
+    .substring(0, 16);
 }
 
 function getPowershellCmd() {
@@ -104,12 +109,28 @@ function runScenarioOnBlock(codeBlock, scenario, secretKey, setupCache = null) {
     '    failure = $agentRouterFailure',
     '    failures = @($failures)',
     '    probeCalled = $script:probeCalled',
-    '} | ConvertTo-Json -Compress'
+    '} | ConvertTo-Json -Compress',
   ].join('\r\n');
 
   fs.writeFileSync(psScriptPath, harnessPs1, 'utf8');
 
-  const res = cp.spawnSync(psCmd, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psScriptPath, '-Scenario', scenario, '-SecretKey', secretKey || '', '-TempDir', testDir], { encoding: 'utf8' });
+  const res = cp.spawnSync(
+    psCmd,
+    [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      psScriptPath,
+      '-Scenario',
+      scenario,
+      '-SecretKey',
+      secretKey || '',
+      '-TempDir',
+      testDir,
+    ],
+    { encoding: 'utf8' }
+  );
 
   let cacheContent = null;
   const cachePath = path.join(testDir, 'shipde-agentrouter-probe.json');
@@ -146,23 +167,70 @@ if (tamperedBlock === block) {
   process.exit(2);
 }
 const tamperedResult = runScenarioOnBlock(tamperedBlock, 'timeout', secretKey);
-if (tamperedResult.failures.length !== 0 || !tamperedResult.detail.includes('CONFIGURED but unverified')) {
+if (
+  tamperedResult.failures.length !== 0 ||
+  !tamperedResult.detail.includes('CONFIGURED but unverified')
+) {
   console.error('CONTROL_FAILED: tampered block did not reproduce un-failed state');
   process.exit(2);
 }
-console.log('CONTROL: removed fail-closed timeout arm detected in tampered copy (' + tamperedResult.detail + ')');
+console.log(
+  'CONTROL: removed fail-closed timeout arm detected in tampered copy (' +
+    tamperedResult.detail +
+    ')'
+);
 
 // 3. Shipped block scenarios
 const scenarios = [
-  { name: 'timeout', expectedLive: false, expectedFailures: 1, detailSubstring: 'UNAVAILABLE: key present but unverified (probe timed out)' },
-  { name: 'unexpected', expectedLive: false, expectedFailures: 1, detailSubstring: 'UNAVAILABLE: key present but unverified (unexpected probe output)' },
-  { name: 'exception', expectedLive: false, expectedFailures: 1, detailSubstring: 'UNAVAILABLE: key present but unverified' },
-  { name: 'auth_ok', expectedLive: true, expectedFailures: 0, detailSubstring: 'AUTHENTICATED via deepseek-v4-flash' },
+  {
+    name: 'timeout',
+    expectedLive: false,
+    expectedFailures: 1,
+    detailSubstring: 'UNAVAILABLE: key present but unverified (probe timed out)',
+  },
+  {
+    name: 'unexpected',
+    expectedLive: false,
+    expectedFailures: 1,
+    detailSubstring: 'UNAVAILABLE: key present but unverified (unexpected probe output)',
+  },
+  {
+    name: 'exception',
+    expectedLive: false,
+    expectedFailures: 1,
+    detailSubstring: 'UNAVAILABLE: key present but unverified',
+  },
+  {
+    name: 'auth_ok',
+    expectedLive: true,
+    expectedFailures: 0,
+    detailSubstring: 'AUTHENTICATED via deepseek-v4-flash',
+  },
   { name: 'no_key', expectedLive: false, expectedFailures: 0, detailSubstring: 'NOT CONFIGURED' },
-  { name: '401', expectedLive: false, expectedFailures: 1, detailSubstring: 'KEY PRESENT BUT REJECTED' },
-  { name: '402', expectedLive: false, expectedFailures: 1, detailSubstring: 'budget pool is exhausted' },
-  { name: '503', expectedLive: false, expectedFailures: 0, detailSubstring: 'no channel for deepseek-v4-flash' },
-  { name: 'catalog', expectedLive: false, expectedFailures: 0, detailSubstring: 'does not recognise the probe model' },
+  {
+    name: '401',
+    expectedLive: false,
+    expectedFailures: 1,
+    detailSubstring: 'KEY PRESENT BUT REJECTED',
+  },
+  {
+    name: '402',
+    expectedLive: false,
+    expectedFailures: 1,
+    detailSubstring: 'budget pool is exhausted',
+  },
+  {
+    name: '503',
+    expectedLive: false,
+    expectedFailures: 0,
+    detailSubstring: 'no channel for deepseek-v4-flash',
+  },
+  {
+    name: 'catalog',
+    expectedLive: false,
+    expectedFailures: 0,
+    detailSubstring: 'does not recognise the probe model',
+  },
 ];
 
 for (const sc of scenarios) {
@@ -172,11 +240,15 @@ for (const sc of scenarios) {
     process.exit(1);
   }
   if (res.failures.length !== sc.expectedFailures) {
-    console.error(`SCENARIO_FAILED: ${sc.name} expected failures=${sc.expectedFailures}, got ${res.failures.length}`);
+    console.error(
+      `SCENARIO_FAILED: ${sc.name} expected failures=${sc.expectedFailures}, got ${res.failures.length}`
+    );
     process.exit(1);
   }
   if (!res.detail.includes(sc.detailSubstring)) {
-    console.error(`SCENARIO_FAILED: ${sc.name} detail mismatch: "${res.detail}" does not contain "${sc.detailSubstring}"`);
+    console.error(
+      `SCENARIO_FAILED: ${sc.name} detail mismatch: "${res.detail}" does not contain "${sc.detailSubstring}"`
+    );
     process.exit(1);
   }
 
@@ -216,23 +288,37 @@ const cachedSetup = {
   observedAt: new Date(Date.now() - 60000).toISOString(),
   keyHash: computeKeyHash(secretKey),
   live: false,
-  detail: 'UNAVAILABLE: key present but unverified (probe timed out); the Claude and Codex fallback route is not reported available',
-  failure: 'AGENTROUTER_API_KEY could not be verified (probe timed out); treat the AgentRouter fallback as unavailable -- see TASK-AI-44'
+  detail:
+    'UNAVAILABLE: key present but unverified (probe timed out); the Claude and Codex fallback route is not reported available',
+  failure:
+    'AGENTROUTER_API_KEY could not be verified (probe timed out); treat the AgentRouter fallback as unavailable -- see TASK-AI-44',
 };
 const cachedRes = runScenarioOnBlock(block, 'cached_replay', secretKey, cachedSetup);
 if (cachedRes.probeCalled !== false) {
   console.error('CACHED_REPLAY_FAILED: probe was called despite valid cache');
   process.exit(1);
 }
-if (cachedRes.live !== false || cachedRes.failures.length !== 1 || !cachedRes.detail.includes('[cached')) {
-  console.error('CACHED_REPLAY_FAILED: cached replay did not produce expected unverified failure', cachedRes);
+if (
+  cachedRes.live !== false ||
+  cachedRes.failures.length !== 1 ||
+  !cachedRes.detail.includes('[cached')
+) {
+  console.error(
+    'CACHED_REPLAY_FAILED: cached replay did not produce expected unverified failure',
+    cachedRes
+  );
   process.exit(1);
 }
-if (cachedRes.detail.includes(secretKey) || (cachedRes.failure && cachedRes.failure.includes(secretKey))) {
+if (
+  cachedRes.detail.includes(secretKey) ||
+  (cachedRes.failure && cachedRes.failure.includes(secretKey))
+) {
   console.error('SECRET_LEAK: cached replay leaked secret key!');
   process.exit(1);
 }
 
 console.log('SANITY OK: no stale CONFIGURED-but-unverified text in doctor.ps1');
-console.log('AC-AI-44-01 held: all unverified arms fail-closed, cached replay verified, zero secret leaks');
+console.log(
+  'AC-AI-44-01 held: all unverified arms fail-closed, cached replay verified, zero secret leaks'
+);
 process.exit(0);
