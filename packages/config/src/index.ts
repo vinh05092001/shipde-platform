@@ -33,6 +33,12 @@ export interface AppConfig {
   S3_FORCE_PATH_STYLE: boolean;
   CARRIER_MODE: CarrierMode;
   LOG_LEVEL: LogLevel;
+  /** HMAC secret for access-token signing (FEAT-AUTH-03). Required in production (>= 32 chars). */
+  AUTH_TOKEN_SECRET?: string;
+  /** Access token TTL in seconds (default 43200 = 12h). */
+  AUTH_TOKEN_TTL_SECONDS: number;
+  /** Passwordless OTP login alternative (SCR-AUTH-01 "if configured"); default false. */
+  AUTH_LOGIN_OTP_ENABLED: boolean;
 }
 
 export class ConfigValidationError extends Error {
@@ -193,6 +199,42 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   }
   const LOG_LEVEL = logLevelRaw as LogLevel;
 
+  // --- FEAT-AUTH-03: session token secret + TTL + OTP login gate ---
+  const authTokenSecretRaw = rawEnv.AUTH_TOKEN_SECRET;
+  if (NODE_ENV === 'production') {
+    if (!authTokenSecretRaw || authTokenSecretRaw.trim().length < 32) {
+      invalidFields.push('AUTH_TOKEN_SECRET (required in production with at least 32 characters)');
+    }
+  }
+  const AUTH_TOKEN_SECRET = authTokenSecretRaw || undefined;
+
+  const authTokenTtlRaw = rawEnv.AUTH_TOKEN_TTL_SECONDS;
+  let authTokenTtlParsed: number | null = 43200;
+  if (authTokenTtlRaw !== undefined && authTokenTtlRaw !== '') {
+    if (!/^\d+$/.test(authTokenTtlRaw)) {
+      authTokenTtlParsed = null;
+    } else {
+      const ttlNum = Number(authTokenTtlRaw);
+      if (!Number.isSafeInteger(ttlNum) || ttlNum < 60 || ttlNum > 30 * 24 * 3600) {
+        authTokenTtlParsed = null;
+      } else {
+        authTokenTtlParsed = ttlNum;
+      }
+    }
+  }
+  if (authTokenTtlParsed === null) {
+    invalidFields.push(
+      'AUTH_TOKEN_TTL_SECONDS (must be an integer number of seconds between 60 and 2592000 when provided)'
+    );
+  }
+  const AUTH_TOKEN_TTL_SECONDS = authTokenTtlParsed ?? 43200;
+
+  const authLoginOtpRaw = rawEnv.AUTH_LOGIN_OTP_ENABLED;
+  if (authLoginOtpRaw !== undefined && authLoginOtpRaw !== 'true' && authLoginOtpRaw !== 'false') {
+    invalidFields.push('AUTH_LOGIN_OTP_ENABLED (must be explicit true or false)');
+  }
+  const AUTH_LOGIN_OTP_ENABLED = authLoginOtpRaw === 'true';
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -213,6 +255,9 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     S3_FORCE_PATH_STYLE,
     CARRIER_MODE,
     LOG_LEVEL,
+    AUTH_TOKEN_SECRET,
+    AUTH_TOKEN_TTL_SECONDS,
+    AUTH_LOGIN_OTP_ENABLED,
   };
 }
 

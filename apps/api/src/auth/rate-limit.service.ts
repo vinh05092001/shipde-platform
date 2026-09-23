@@ -321,6 +321,119 @@ export class RateLimitService {
     this.cooldownStore.set(key, Date.now() + cooldownSeconds * 1000);
   }
 
+  // --- FEAT-AUTH-03: login rate limits (BR-AUTH-11 / CD-9) ---
+
+  /** Password login IP gate: max 10 attempts per 15 minutes per IP. */
+  async checkLoginIpLimit(ip: string): Promise<RateLimitResult> {
+    const windowSeconds = 900;
+    const check = await this.getAttempts(`ratelimit:login:ip:${ip}`, windowSeconds);
+    if (check.count >= 10) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: 'Quá nhiều lần thử đăng nhập từ địa chỉ IP này',
+      };
+    }
+    return { allowed: true };
+  }
+
+  async recordLoginIpAttempt(ip: string): Promise<void> {
+    await this.recordAttemptKey(`ratelimit:login:ip:${ip}`, 900);
+  }
+
+  /** Password login identifier gate: max 5 failures per 15 minutes per identifier. */
+  async checkLoginIdentifierFailureLimit(identifier: string): Promise<RateLimitResult> {
+    const windowSeconds = 900;
+    const cleanId = identifier.toLowerCase().trim();
+    const check = await this.getAttempts(`ratelimit:login:fail:${cleanId}`, windowSeconds);
+    if (check.count >= 5) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: 'Quá nhiều lần đăng nhập thất bại cho tài khoản này',
+      };
+    }
+    return { allowed: true };
+  }
+
+  /** Records a failed login for the identifier and returns the failure count in the window. */
+  async recordLoginIdentifierFailure(identifier: string): Promise<number> {
+    const cleanId = identifier.toLowerCase().trim();
+    await this.recordAttemptKey(`ratelimit:login:fail:${cleanId}`, 900);
+    const check = await this.getAttempts(`ratelimit:login:fail:${cleanId}`, 900);
+    return check.count;
+  }
+
+  /** A successful login resets the identifier failure counter (the IP counter is NOT reset). */
+  async resetLoginIdentifierFailures(identifier: string): Promise<void> {
+    await this.resetKey(`ratelimit:login:fail:${identifier.toLowerCase().trim()}`);
+  }
+
+  /** Login OTP requests per IP: max 10 per hour (BR-AUTH-12). */
+  async checkLoginOtpIpLimit(ip: string): Promise<RateLimitResult> {
+    const windowSeconds = 3600;
+    const check = await this.getAttempts(`ratelimit:login:otpreq:ip:${ip}`, windowSeconds);
+    if (check.count >= 10) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: 'Quá nhiều yêu cầu mã OTP từ địa chỉ IP này',
+      };
+    }
+    return { allowed: true };
+  }
+
+  async recordLoginOtpIpAttempt(ip: string): Promise<void> {
+    await this.recordAttemptKey(`ratelimit:login:otpreq:ip:${ip}`, 3600);
+  }
+
+  /** Login OTP requests per identifier: 60s cooldown + max 5 per hour (BR-AUTH-12). */
+  async checkLoginOtpRequestLimit(identifier: string): Promise<RateLimitResult> {
+    const cleanId = identifier.toLowerCase().trim();
+    const cooldownKey = `ratelimit:login:otpreq:cooldown:${cleanId}`;
+    const hourlyKey = `ratelimit:login:otpreq:id:${cleanId}`;
+
+    const cooldownSeconds = await this.getCooldown(cooldownKey);
+    if (cooldownSeconds !== null && cooldownSeconds > 0) {
+      return {
+        allowed: false,
+        retryAfterSeconds: cooldownSeconds,
+        reason: 'Vui lòng chờ trước khi yêu cầu mã OTP mới',
+      };
+    }
+
+    const hourly = await this.getAttempts(hourlyKey, 3600);
+    if (hourly.count >= 5) {
+      return {
+        allowed: false,
+        retryAfterSeconds: hourly.retryAfterSeconds,
+        reason: 'Quá nhiều yêu cầu mã OTP cho tài khoản này',
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  async recordLoginOtpRequest(identifier: string, cooldownSeconds = 60): Promise<void> {
+    const cleanId = identifier.toLowerCase().trim();
+    await this.setCooldown(`ratelimit:login:otpreq:cooldown:${cleanId}`, cooldownSeconds);
+    await this.recordAttemptKey(`ratelimit:login:otpreq:id:${cleanId}`, 3600);
+  }
+
+  private async resetKey(key: string): Promise<void> {
+    if (this.redisService) {
+      try {
+        const client = this.redisService.getClient();
+        if (client.status === 'ready') {
+          await client.del(key);
+        }
+      } catch {
+        // Fallback to in-memory reset below
+      }
+    }
+    this.memoryStore.delete(key);
+  }
+
   clear(): void {
     this.memoryStore.clear();
     this.cooldownStore.clear();
