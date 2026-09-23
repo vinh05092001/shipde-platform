@@ -41,13 +41,13 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
   const [lookupResult, setLookupResult] = useState<SessionItem | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
 
-  // `showLoading` exists because the mount path must not set state synchronously:
-  // the effect below calls this, and a setState before the first await triggers
-  // the cascading-render the lint rule refuses. On mount the component is already
-  // in 'loading', so nothing needs to say so again; a manual refresh does, because
-  // by then the screen is showing the previous list.
-  const fetchSessions = useCallback(async ({ showLoading = false } = {}) => {
-    if (showLoading) setFetchState('loading');
+  // Nothing here sets state before the first await. The effect below calls this
+  // on mount, and a setState reached synchronously from an effect — even one
+  // behind a flag the compiler cannot prove false — is the cascading render the
+  // lint rule refuses. Announcing "loading" is the caller's job: on mount the
+  // component already starts there, and a manual refresh says so itself, because
+  // by then the previous list is still on screen.
+  const fetchSessions = useCallback(async () => {
     try {
       const res = await fetch('/api/sessions');
       if (res.status === 403) { setFetchState('forbidden'); return; }
@@ -59,6 +59,10 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
   }, []);
 
   useEffect(() => {
+    // Fetch-on-mount: the list has to come from the server before anything can
+    // be shown, and every state this sets lands after the await. Same exemption
+    // and same reason as ShipmentListTab and ThreeLedgersTab.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch
     void fetchSessions();
   }, [fetchSessions]);
 
@@ -87,7 +91,8 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
         const data = await res.json();
         onToast?.('Revoked ' + data.revoked_count + ' sessions');
         setRevokeAllOpen(false);
-        void fetchSessions({ showLoading: true });
+        setFetchState('loading');
+        void fetchSessions();
       } else { onToast?.('Revoke failed - please try again'); }
     } catch { onToast?.('Network error'); }
     finally { setRevokeAllLoading(false); }
@@ -144,7 +149,17 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
           <p className="text-sm text-red-700 font-medium mb-1">You do not have permission to view sessions.</p>
           <p className="text-xs text-red-500">Session belongs to another user or store.</p>
           {merchant && <p className="text-xs text-red-400 mt-2 font-mono">Store: {merchant.id}</p>}
-          <button type="button" onClick={() => setFetchState('loading')} className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-xs font-bold cursor-pointer">
+          <button
+            type="button"
+            onClick={() => {
+              // This button only set 'loading' and never fetched, so the
+              // forbidden screen turned into a spinner that nothing would ever
+              // resolve. Retry has to retry.
+              setFetchState('loading');
+              void fetchSessions();
+            }}
+            className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-xs font-bold cursor-pointer"
+          >
             <RefreshCw className="w-3.5 h-3.5" /> Retry
           </button>
         </div>
@@ -162,7 +177,10 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
           </div>
           <h2 className="text-xl font-black text-amber-800 mb-2">Failed to load sessions</h2>
           <p className="text-sm text-amber-700 font-medium mb-4">An error occurred while fetching sessions. Please check your connection and try again.</p>
-          <button type="button" onClick={() => void fetchSessions({ showLoading: true })} className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#EA4B12] hover:bg-[#c93a0a] text-white rounded-xl text-sm font-bold cursor-pointer shadow-sm">
+          <button type="button" onClick={() => {
+            setFetchState('loading');
+            void fetchSessions();
+          }} className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#EA4B12] hover:bg-[#c93a0a] text-white rounded-xl text-sm font-bold cursor-pointer shadow-sm">
             <RefreshCw className="w-4 h-4" /> Retry
           </button>
         </div>
