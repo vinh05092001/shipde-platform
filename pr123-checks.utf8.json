@@ -1,6 +1,0 @@
-﻿{"conclusion":"failure","html_url":"https://github.com/vinh05092001/shipde-platform/actions/runs/35524166473/job/106113558862","name":"application-gate","output":null}
-{"conclusion":"failure","html_url":"https://github.com/vinh05092001/shipde-platform/actions/runs/35524166473/job/106113319135","name":"current-application","output":null}
-{"conclusion":"failure","html_url":"https://github.com/vinh05092001/shipde-platform/actions/runs/35524166514/job/106113303809","name":"contract","output":null}
-{"conclusion":"success","html_url":"https://github.com/vinh05092001/shipde-platform/actions/runs/35524166477/job/106113303764","name":"secret-scan","output":null}
-{"conclusion":"success","html_url":"https://github.com/vinh05092001/shipde-platform/actions/runs/35524166473/job/106113303613","name":"detect-application-scope","output":null}
-{"conclusion":"success","html_url":"https://github.com/vinh05092001/shipde-platform/actions/runs/35524166464/job/106113303519","name":"validate","output":null}

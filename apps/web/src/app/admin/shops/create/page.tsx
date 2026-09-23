@@ -76,14 +76,10 @@ export default function CreateShopPage() {
     }
 
     if (!ownerEmail && !ownerPhone) {
-      errors.owner_email =
-        'Vui lòng cung cấp ít nhất email hoặc số điện thoại cho chủ cửa hàng.';
+      errors.owner_email = 'Vui lòng cung cấp ít nhất email hoặc số điện thoại cho chủ cửa hàng.';
     }
 
-    if (
-      ownerPassword &&
-      (ownerPassword.length < 8 || ownerPassword.length > 128)
-    ) {
+    if (ownerPassword && (ownerPassword.length < 8 || ownerPassword.length > 128)) {
       errors.owner_password = 'Mật khẩu phải có từ 8 đến 128 ký tự.';
     }
 
@@ -120,9 +116,7 @@ export default function CreateShopPage() {
 
       if (!res.ok) {
         const code = body?.error?.code || 'UNKNOWN_ERROR';
-        const message =
-          body?.error?.message ||
-          'Không thể tạo cửa hàng. Vui lòng thử lại.';
+        const message = body?.error?.message || 'Không thể tạo cửa hàng. Vui lòng thử lại.';
 
         if (code === 'VALIDATION_ERROR' && body?.error?.fields) {
           const fieldErr: FieldErrorMap = {};
@@ -177,9 +171,7 @@ export default function CreateShopPage() {
           {/* Breadcrumb */}
           <div className="flex items-center gap-2 mb-4 text-xs text-slate-500">
             <Link href="/admin/shops">
-              <span className="hover:text-slate-900 cursor-pointer">
-                Cửa Hàng
-              </span>
+              <span className="hover:text-slate-900 cursor-pointer">Cửa Hàng</span>
             </Link>
             <span>/</span>
             <span>Tạo Cửa Hàng</span>
@@ -189,9 +181,7 @@ export default function CreateShopPage() {
             <div className="w-14 h-14 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-4">
               <AlertTriangle className="w-6 h-6" />
             </div>
-            <h2 className="text-lg font-bold text-slate-900 mb-2">
-              Truy cập bị từ chối
-            </h2>
+            <h2 className="text-lg font-bold text-slate-900 mb-2">Truy cập bị từ chối</h2>
             <p className="text-sm text-slate-600 mb-4">{submitError.message}</p>
             <p className="text-xs text-slate-500">
               Liên hệ với quản trị viên nền tảng để cấu hình
@@ -215,9 +205,7 @@ export default function CreateShopPage() {
           {/* Breadcrumb */}
           <div className="flex items-center gap-2 mb-4 text-xs text-slate-500">
             <Link href="/admin/shops">
-              <span className="hover:text-slate-900 cursor-pointer">
-                Cửa Hàng
-              </span>
+              <span className="hover:text-slate-900 cursor-pointer">Cửa Hàng</span>
             </Link>
             <span>/</span>
             <span>Tạo Cửa Hàng</span>
@@ -234,9 +222,7 @@ export default function CreateShopPage() {
                 </h2>
                 <p className="text-xs text-slate-500">
                   {result.data?.merchant?.name || merchantName} — Mã:{' '}
-                  <code className="font-mono">
-                    {result.data?.merchant?.code || '—'}
-                  </code>
+                  <code className="font-mono">{result.data?.merchant?.code || '—'}</code>
                 </p>
               </div>
             </div>
@@ -253,12 +239,8 @@ export default function CreateShopPage() {
 
               {(result.data?.user?.email || ownerEmail) && (
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">
-                    Email
-                  </label>
-                  <p className="text-slate-900">
-                    {result.data?.user?.email || ownerEmail}
-                  </p>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">Email</label>
+                  <p className="text-slate-900">{result.data?.user?.email || ownerEmail}</p>
                 </div>
               )}
 
@@ -267,9 +249,7 @@ export default function CreateShopPage() {
                   <label className="block text-xs font-medium text-slate-500 mb-1">
                     Điện thoại
                   </label>
-                  <p className="text-slate-900">
-                    {result.data?.user?.phone || ownerPhone}
-                  </p>
+                  <p className="text-slate-900">{result.data?.user?.phone || ownerPhone}</p>
                 </div>
               )}
 
@@ -289,8 +269,8 @@ export default function CreateShopPage() {
               {!result.data?.temporary_password && !ownerPassword && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                   <p className="text-xs text-amber-800">
-                    Người dùng sẽ nhận được mật khẩu tạm thời qua kênh đã đăng
-                    ký. Hãy chia sẻ mật khẩu này một cách bảo mật.
+                    Người dùng sẽ nhận được mật khẩu tạm thời qua kênh đã đăng ký. Hãy chia sẻ mật
+                    khẩu này một cách bảo mật.
                   </p>
                 </div>
               )}
@@ -332,9 +312,7 @@ export default function CreateShopPage() {
         {/* Breadcrumb */}
         <nav className="flex items-center gap-2 mb-4 text-xs text-slate-500">
           <Link href="/admin/shops">
-            <span className="hover:text-slate-900 cursor-pointer">
-              Cửa Hàng
-            </span>
+            <span className="hover:text-slate-900 cursor-pointer">Cửa Hàng</span>
           </Link>
           <span>/</span>
           <span className="text-slate-900">Tạo Cửa Hàng</span>
@@ -346,20 +324,16 @@ export default function CreateShopPage() {
         </div>
 
         {/* Submit Error (non-field) */}
-        {submitError &&
-          submitError.code !== 'FORBIDDEN' &&
-          !result && (
-            <div className="mb-4 modern-card border border-rose-200 bg-rose-50 p-4">
-              <div className="flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-rose-600 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-xs font-medium text-rose-800 mb-1">
-                    {submitError.message}
-                  </p>
-                </div>
+        {submitError && submitError.code !== 'FORBIDDEN' && !result && (
+          <div className="mb-4 modern-card border border-rose-200 bg-rose-50 p-4">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-rose-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-xs font-medium text-rose-800 mb-1">{submitError.message}</p>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -367,10 +341,7 @@ export default function CreateShopPage() {
           <div className="modern-card p-4">
             <div className="flex items-center gap-2 mb-2">
               <Store className="w-3.5 h-3.5 text-slate-600" />
-              <label
-                htmlFor="merchant_name"
-                className="block text-xs font-medium text-slate-700"
-              >
+              <label htmlFor="merchant_name" className="block text-xs font-medium text-slate-700">
                 Tên Cửa Hàng <span className="text-rose-500">*</span>
               </label>
             </div>
@@ -395,9 +366,7 @@ export default function CreateShopPage() {
               }`}
             />
             {fieldErrors.merchant_name && (
-              <p className="text-xs text-rose-600 mt-1.5">
-                {fieldErrors.merchant_name}
-              </p>
+              <p className="text-xs text-rose-600 mt-1.5">{fieldErrors.merchant_name}</p>
             )}
           </div>
 
@@ -405,10 +374,7 @@ export default function CreateShopPage() {
           <div className="modern-card p-4">
             <div className="flex items-center gap-2 mb-2">
               <User className="w-3.5 h-3.5 text-slate-600" />
-              <label
-                htmlFor="owner_full_name"
-                className="block text-xs font-medium text-slate-700"
-              >
+              <label htmlFor="owner_full_name" className="block text-xs font-medium text-slate-700">
                 Họ Và Tên Chủ Cửa Hàng <span className="text-rose-500">*</span>
               </label>
             </div>
@@ -433,9 +399,7 @@ export default function CreateShopPage() {
               }`}
             />
             {fieldErrors.owner_full_name && (
-              <p className="text-xs text-rose-600 mt-1.5">
-                {fieldErrors.owner_full_name}
-              </p>
+              <p className="text-xs text-rose-600 mt-1.5">{fieldErrors.owner_full_name}</p>
             )}
           </div>
 
@@ -443,10 +407,7 @@ export default function CreateShopPage() {
           <div className="modern-card p-4">
             <div className="flex items-center gap-2 mb-2">
               <Mail className="w-3.5 h-3.5 text-slate-600" />
-              <label
-                htmlFor="owner_email"
-                className="block text-xs font-medium text-slate-700"
-              >
+              <label htmlFor="owner_email" className="block text-xs font-medium text-slate-700">
                 Email Chủ Cửa Hàng
               </label>
             </div>
@@ -471,9 +432,7 @@ export default function CreateShopPage() {
               }`}
             />
             {fieldErrors.owner_email && (
-              <p className="text-xs text-rose-600 mt-1.5">
-                {fieldErrors.owner_email}
-              </p>
+              <p className="text-xs text-rose-600 mt-1.5">{fieldErrors.owner_email}</p>
             )}
             {fieldErrors.owner_email && (
               <p className="text-xs text-slate-400 mt-1">
@@ -486,10 +445,7 @@ export default function CreateShopPage() {
           <div className="modern-card p-4">
             <div className="flex items-center gap-2 mb-2">
               <Phone className="w-3.5 h-3.5 text-slate-600" />
-              <label
-                htmlFor="owner_phone"
-                className="block text-xs font-medium text-slate-700"
-              >
+              <label htmlFor="owner_phone" className="block text-xs font-medium text-slate-700">
                 Số Điện Thoại Chủ Cửa Hàng
               </label>
             </div>
@@ -514,9 +470,7 @@ export default function CreateShopPage() {
               }`}
             />
             {fieldErrors.owner_phone && (
-              <p className="text-xs text-rose-600 mt-1.5">
-                {fieldErrors.owner_phone}
-              </p>
+              <p className="text-xs text-rose-600 mt-1.5">{fieldErrors.owner_phone}</p>
             )}
           </div>
 
@@ -524,10 +478,7 @@ export default function CreateShopPage() {
           <div className="modern-card p-4">
             <div className="flex items-center gap-2 mb-2">
               <Lock className="w-3.5 h-3.5 text-slate-600" />
-              <label
-                htmlFor="owner_password"
-                className="block text-xs font-medium text-slate-700"
-              >
+              <label htmlFor="owner_password" className="block text-xs font-medium text-slate-700">
                 Mật Khẩu (Tùy chọn)
               </label>
             </div>
@@ -562,13 +513,10 @@ export default function CreateShopPage() {
               </button>
             </div>
             {fieldErrors.owner_password && (
-              <p className="text-xs text-rose-600 mt-1.5">
-                {fieldErrors.owner_password}
-              </p>
+              <p className="text-xs text-rose-600 mt-1.5">{fieldErrors.owner_password}</p>
             )}
             <p className="text-xs text-slate-400 mt-1.5">
-              Để trống để hệ thống tạo mật khẩu tạm thời và gửi qua email
-              hoặc SMS.
+              Để trống để hệ thống tạo mật khẩu tạm thời và gửi qua email hoặc SMS.
             </p>
           </div>
 

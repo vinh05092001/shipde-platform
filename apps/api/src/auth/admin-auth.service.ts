@@ -49,7 +49,8 @@ export class AdminAuthService {
       fields.push({
         field: 'merchant_name',
         code: 'MAX_LENGTH_EXCEEDED',
-        message: 'T\u00ean c\u1eeda h\u00e0ng kh\u00f4ng \u0111\u01b0\u1ee3c v\u01b0\u1ee3t qu\u00e1 255 k\u00fd t\u1ef1',
+        message:
+          'T\u00ean c\u1eeda h\u00e0ng kh\u00f4ng \u0111\u01b0\u1ee3c v\u01b0\u1ee3t qu\u00e1 255 k\u00fd t\u1ef1',
       });
     }
 
@@ -60,7 +61,8 @@ export class AdminAuthService {
       fields.push({
         field: 'owner_email',
         code: 'REQUIRED',
-        message: 'Ph\u1ea3i cung c\u1ea5p \u00edt nh\u1ea5t email ho\u1eb7c s\u1ed1 \u0111i\u1ec7n tho\u1ea1i',
+        message:
+          'Ph\u1ea3i cung c\u1ea5p \u00edt nh\u1ea5t email ho\u1eb7c s\u1ed1 \u0111i\u1ec7n tho\u1ea1i',
       });
     }
 
@@ -123,7 +125,8 @@ export class AdminAuthService {
             {
               field: 'owner_email',
               code: 'DUPLICATE',
-              message: 'Email \u0111\u00e3 \u0111\u01b0\u1ee3c s\u1eed d\u1ee5ng b\u1edfi t\u00e0i kho\u1ea3n \u0111ang ho\u1ea1t \u0111\u1ed9ng',
+              message:
+                'Email \u0111\u00e3 \u0111\u01b0\u1ee3c s\u1eed d\u1ee5ng b\u1edfi t\u00e0i kho\u1ea3n \u0111ang ho\u1ea1t \u0111\u1ed9ng',
             },
           ]
         );
@@ -145,7 +148,8 @@ export class AdminAuthService {
             {
               field: 'owner_phone',
               code: 'DUPLICATE',
-              message: 'S\u1ed1 \u0111i\u1ec7n tho\u1ea1i \u0111\u00e3 \u0111\u01b0\u1ee3c s\u1eed d\u1ee5ng b\u1edfi t\u00e0i kho\u1ea3n \u0111ang ho\u1ea1t \u0111\u1ed9ng',
+              message:
+                'S\u1ed1 \u0111i\u1ec7n tho\u1ea1i \u0111\u00e3 \u0111\u01b0\u1ee3c s\u1eed d\u1ee5ng b\u1edfi t\u00e0i kho\u1ea3n \u0111ang ho\u1ea1t \u0111\u1ed9ng',
             },
           ]
         );
@@ -175,7 +179,6 @@ export class AdminAuthService {
           name: dto.merchant_name.trim(),
           code,
           status: 'active',
-          created_by_operator: true,
         },
       });
 
@@ -188,13 +191,10 @@ export class AdminAuthService {
           full_name: dto.owner_full_name.trim(),
           email,
           phone,
-          password: hashedPassword,
+          password_hash: hashedPassword,
           status: 'active',
-          is_verified: true,
           email_verified_at: email ? now : null,
           phone_verified_at: phone ? now : null,
-          created_at: now,
-          last_login_at: now,
         },
       });
 

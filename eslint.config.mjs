@@ -1,4 +1,5 @@
 import tsParser from '@typescript-eslint/parser';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 export default [
   {
@@ -23,6 +24,11 @@ export default [
         sourceType: 'module',
       },
     },
-    rules: {},
+    plugins: {
+      'react-hooks': reactHooks,
+    },
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+    },
   },
 ];

@@ -73,8 +73,7 @@ export default function AdminShopsPage() {
       if (!res.ok) {
         const body: ErrorBody = await res.json().catch(() => ({}));
         const code = body.error?.code || 'UNKNOWN_ERROR';
-        const message =
-          body.error?.message || 'Không thể tải danh sách cửa hàng.';
+        const message = body.error?.message || 'Không thể tải danh sách cửa hàng.';
         throw { code, message };
       }
 
@@ -98,6 +97,7 @@ export default function AdminShopsPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchShops();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -132,10 +132,7 @@ export default function AdminShopsPage() {
           </div>
           <div className="space-y-3">
             {Array.from({ length: 5 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-14 bg-slate-200 rounded-xl animate-pulse"
-              />
+              <div key={i} className="h-14 bg-slate-200 rounded-xl animate-pulse" />
             ))}
           </div>
         </div>
@@ -158,9 +155,7 @@ export default function AdminShopsPage() {
             <div className="w-14 h-14 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-4">
               <AlertTriangle className="w-6 h-6" />
             </div>
-            <h2 className="text-lg font-bold text-slate-900 mb-2">
-              Truy cập bị từ chối
-            </h2>
+            <h2 className="text-lg font-bold text-slate-900 mb-2">Truy cập bị từ chối</h2>
             <p className="text-sm text-slate-600 mb-4">{error.message}</p>
             <p className="text-xs text-slate-500">
               Liên hệ với quản trị viên nền tảng để cấu hình
@@ -230,12 +225,8 @@ export default function AdminShopsPage() {
             <div className="w-14 h-14 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-4">
               <Store className="w-6 h-6" />
             </div>
-            <h2 className="text-base font-bold text-slate-900 mb-1">
-              Chưa có cửa hàng nào
-            </h2>
-            <p className="text-sm text-slate-500 mb-4">
-              Hãy tạo cửa hàng đầu tiên để bắt đầu.
-            </p>
+            <h2 className="text-base font-bold text-slate-900 mb-1">Chưa có cửa hàng nào</h2>
+            <p className="text-sm text-slate-500 mb-4">Hãy tạo cửa hàng đầu tiên để bắt đầu.</p>
             <Link href="/admin/shops/create">
               <button type="button" className="btn-primary text-xs py-2 px-4">
                 Tạo Cửa Hàng Mới
@@ -294,130 +285,109 @@ export default function AdminShopsPage() {
           </div>
         </div>
 
-          {/* Search Filters (below header bar) */}
-          <div className="mb-4 flex items-center gap-2 text-xs">
-            <Search className="w-3.5 h-3.5 text-slate-400" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setCurrentPage(1);
-              }}
-              placeholder="Tìm theo tên cửa hàng, mã số, email hoặc tên chủ..."
-              className="modern-input text-xs py-1.5 px-3 w-full sm:w-80"
-            />
-          </div>
+        {/* Search Filters (below header bar) */}
+        <div className="mb-4 flex items-center gap-2 text-xs">
+          <Search className="w-3.5 h-3.5 text-slate-400" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
+            placeholder="Tìm theo tên cửa hàng, mã số, email hoặc tên chủ..."
+            className="modern-input text-xs py-1.5 px-3 w-full sm:w-80"
+          />
+        </div>
 
-          {/* Shops Table */}
-          <div className="modern-card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-50 border-b border-slate-100">
-                  <tr>
-                    <th className="text-left py-2.5 px-4 font-medium text-slate-700">
-                      Tên Cửa Hàng
-                    </th>
-                    <th className="text-left py-2.5 px-4 font-medium text-slate-700">
-                      Mã Số
-                    </th>
-                    <th className="text-left py-2.5 px-4 font-medium text-slate-700">
-                      Trạng Thái
-                    </th>
-                    <th className="text-left py-2.5 px-4 font-medium text-slate-700">
-                      Chủ Cửa Hàng
-                    </th>
-                    <th className="text-left py-2.5 px-4 font-medium text-slate-700">
-                      Ngày Tạo
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredShops.map((shop) => (
-                    <tr
-                      key={shop.id}
-                      className="hover:bg-slate-50 transition-colors"
-                    >
-                      <td className="py-2.5 px-4">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center">
-                            <Store className="w-3.5 h-3.5 text-slate-700" />
-                          </div>
-                          <span className="font-medium text-slate-900">
-                            {shop.name}
-                          </span>
+        {/* Shops Table */}
+        <div className="modern-card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 border-b border-slate-100">
+                <tr>
+                  <th className="text-left py-2.5 px-4 font-medium text-slate-700">Tên Cửa Hàng</th>
+                  <th className="text-left py-2.5 px-4 font-medium text-slate-700">Mã Số</th>
+                  <th className="text-left py-2.5 px-4 font-medium text-slate-700">Trạng Thái</th>
+                  <th className="text-left py-2.5 px-4 font-medium text-slate-700">Chủ Cửa Hàng</th>
+                  <th className="text-left py-2.5 px-4 font-medium text-slate-700">Ngày Tạo</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredShops.map((shop) => (
+                  <tr key={shop.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="py-2.5 px-4">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center">
+                          <Store className="w-3.5 h-3.5 text-slate-700" />
                         </div>
-                      </td>
-                      <td className="py-2.5 px-4">
-                        <code className="text-xs text-slate-600">
-                          {shop.code}
-                        </code>
-                      </td>
-                      <td className="py-2.5 px-4">
-                        <span className="inline-flex items-center gap-1">
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              shop.status === 'ACTIVE'
-                                ? 'bg-emerald-400'
-                                : shop.status === 'SUSPENDED'
+                        <span className="font-medium text-slate-900">{shop.name}</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-4">
+                      <code className="text-xs text-slate-600">{shop.code}</code>
+                    </td>
+                    <td className="py-2.5 px-4">
+                      <span className="inline-flex items-center gap-1">
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            shop.status === 'ACTIVE'
+                              ? 'bg-emerald-400'
+                              : shop.status === 'SUSPENDED'
                                 ? 'bg-amber-400'
                                 : shop.status === 'PENDING_VERIFICATION'
-                                ? 'bg-sky-400'
-                                : 'bg-slate-400'
-                            }`}
-                          />
-                          {getStatusLabel(shop.status)}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-4 text-slate-700">
-                        {shop.owner?.full_name || '—'}
-                        {shop.owner?.email && (
-                          <span className="block text-xs text-slate-400">
-                            {shop.owner.email}
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-4 text-slate-500">
-                        {new Date(shop.created_at).toLocaleDateString('vi-VN')}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {/* Table Footer */}
-            <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-              Hiển thị {filteredShops.length} / {total} cửa hàng
-            </div>
+                                  ? 'bg-sky-400'
+                                  : 'bg-slate-400'
+                          }`}
+                        />
+                        {getStatusLabel(shop.status)}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-4 text-slate-700">
+                      {shop.owner?.full_name || '—'}
+                      {shop.owner?.email && (
+                        <span className="block text-xs text-slate-400">{shop.owner.email}</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-4 text-slate-500">
+                      {new Date(shop.created_at).toLocaleDateString('vi-VN')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-
-          {/* Pagination Controls */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-end gap-2 mt-4 text-xs">
-              <button
-                type="button"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage <= 1 || loading}
-                className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded disabled:opacity-50"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-              <span className="text-slate-600 px-2 py-1">
-                Trang {currentPage} / {totalPages}
-              </span>
-              <button
-                type="button"
-                onClick={() =>
-                  setCurrentPage((p) => Math.min(totalPages, p + 1))
-                }
-                disabled={currentPage >= totalPages || loading}
-                className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded disabled:opacity-50"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
+          {/* Table Footer */}
+          <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+            Hiển thị {filteredShops.length} / {total} cửa hàng
+          </div>
         </div>
+
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-end gap-2 mt-4 text-xs">
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage <= 1 || loading}
+              className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded disabled:opacity-50"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+            <span className="text-slate-600 px-2 py-1">
+              Trang {currentPage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages || loading}
+              className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded disabled:opacity-50"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
-    );
-  }
+    </div>
+  );
+}
