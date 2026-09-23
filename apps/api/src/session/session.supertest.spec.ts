@@ -10,7 +10,7 @@ import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { APP_CONFIG } from '../config.token';
 import { AppConfig } from '@shipde/config';
-import { SessionStatusEnum } from '@prisma/client';
+import { SessionStatusEnum, RoleEnum } from '@prisma/client';
 
 function createSessionToken(): { raw: string; hash: string } {
   const raw = randomBytes(48).toString('hex');
@@ -122,6 +122,11 @@ async function runSessionSupertestSuite() {
       email: `session.owner.${testSuffix}@shipde.vn`,
       full_name: 'Session Test Owner',
       password_hash: 'test-hash-not-real',
+      // `role` has no default on User, so Prisma refuses the insert without it.
+      // OWNER is what the suite needs: every session endpoint it exercises is
+      // scoped to the caller's own store, and an OWNER is the actor the
+      // acceptance criteria describe.
+      role: RoleEnum.OWNER,
       status: 'ACTIVE',
     },
   });
