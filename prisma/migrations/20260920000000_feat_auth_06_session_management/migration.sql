@@ -26,9 +26,19 @@ UPDATE "device_sessions" SET "merchant_id" = (
 -- Make merchant_id NOT NULL after backfill
 ALTER TABLE "device_sessions" ALTER COLUMN "merchant_id" SET NOT NULL;
 
--- Migrate existing rows: generate token hashes and set expiry for legacy sessions
+-- Migrate existing rows: generate token hashes and set expiry for legacy sessions.
+--
+-- gen_random_bytes() belongs to the pgcrypto extension, which this database does
+-- not enable, so the migration aborted with 42883 and nothing after it ran.
+-- gen_random_uuid() is built in from PostgreSQL 13 and gives 32 hex characters of
+-- the same v4 randomness; two of them fill the 64-character hash this column
+-- holds, with no extension to install and no privilege to grant.
+--
+-- The value is deliberately unguessable rather than derived from anything: a
+-- legacy row has no token anybody could present, so its hash must match nothing.
 UPDATE "device_sessions" SET
-  "session_token_hash" = encode(gen_random_bytes(32), 'hex'),
+  "session_token_hash" =
+    replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', ''),
   "expires_at" = CURRENT_TIMESTAMP + INTERVAL '90 days'
 WHERE "session_token_hash" IS NULL;
 
