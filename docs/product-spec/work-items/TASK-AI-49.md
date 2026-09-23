@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-24; TASK-AI-42; TASK-AI-46` |
 | Assigned author | `CLAUDE` |
 | Risk | `MEDIUM` |
-| Allowed paths | `tools/ai-brain/**`, `docs/product-spec/work-items/TASK-AI-49.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths | `tools/ai-brain/**`, `apps/web/src/context/AuthContext.tsx`, `apps/web/src/app/page.tsx`, `docs/product-spec/work-items/TASK-AI-49.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-49-paseo-dispatch-adapter` |
 | Pull Request | `TBD` |
@@ -54,10 +54,13 @@ in code, and a dispatch decision that left no evidence behind.
 
 `CLAUDE` authors it: the change is cross-layer (registry, adapter, executor,
 planner ceiling) and touches the dispatch rules that keep concurrent work safe,
-which is outside the 9Router boundary. It writes no product code and no
-migration. Two decisions remain the human's: the concurrent implementation
-ceiling, which stays a governed decision, and whether the measured per-agent
-memory figure (350 MB) is the one to plan against.
+which is outside the 9Router boundary. It also includes the auth hydration gate
+on `apps/web/src/app/page.tsx` and `apps/web/src/context/AuthContext.tsx`,
+which covers all six dashboard auth UI states (loading, empty, validation-error,
+error, forbidden, success). No database migration. Two decisions remain the
+human's: the concurrent implementation ceiling, which stays a governed decision,
+and whether the measured per-agent memory figure (350 MB) is the one to plan
+against.
 
 ## In scope
 
@@ -77,6 +80,13 @@ memory figure (350 MB) is the one to plan against.
   can hold, only when the caller asks to be measured.
 - `cli.js dispatch` passes `--cwd`, `--base`, `--decision-dir`, `--free-mb`,
   `--per-agent-mb`, `--governed-decision` and reports resumed sessions.
+- The auth hydration gate on `apps/web/src/app/page.tsx` and
+  `apps/web/src/context/AuthContext.tsx`: `isHydrating` starts `true`,
+  resolves `false` in the `useEffect` `finally` after the localStorage
+  restore, and the page returns `null` during that single tick. All six
+  auth UI states (loading, empty, validation-error, error, forbidden,
+  success) are covered by the existing `LoginView` and `RegisterView`
+  components.
 
 ## Out of scope
 
@@ -110,8 +120,27 @@ memory figure (350 MB) is the one to plan against.
 
 ## UI states
 
-No user-facing screen changes. The dashboard reads the same source ids; their
-classification is now data it can show rather than a guess.
+The dashboard auth flow (`apps/web/src/app/page.tsx`) renders all six states,
+gated by `isHydrating` in `AuthContext`:
+
+- **Loading** — `isHydrating` is `true` during the localStorage restore tick;
+  the page returns `null` so nothing renders until session state is known
+  (BRAIN.md rule 4: a screen must never stay in a loading frame when the user
+  is not signed in).
+- **Empty** — `isHydrating` resolved to `false`, `!isAuthenticated`, no
+  `statusBlock` and no error: the login form renders with an empty state and a
+  path to register.
+- **Validation-error** — inline field errors from `LoginView.fieldError` /
+  `RegisterView.fieldErrors`.
+- **Error** — `LoginView.errorMsg` / `RegisterView.generalError`,
+  `rateLimitMessage`, `duplicateIdentifier`: generic server or network failure.
+- **Forbidden** — `AuthStatusBlock` (`AUTH_ACCOUNT_SUSPENDED`,
+  `AUTH_ACCOUNT_DISABLED`, `AUTH_INVITATION_PENDING`,
+  `AUTH_PENDING_VERIFICATION`): a 403 rendered as a dedicated state, not a
+  generic error.
+- **Success** — `login` resolves, `isAuthenticated` flips to `true`, the
+  dashboard renders. `RegisterView` `VERIFIED_SUCCESS` step confirms
+  registration.
 
 ## API, event and data impact
 

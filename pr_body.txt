@@ -1,0 +1,167 @@
+﻿## Work Item
+
+`TASK-AI-49` - Dispatch reaches a running agent again, through Paseo and a source registry.
+Feature ID: `N/A`. Author: Claude (Claude Code CLI, host-authenticated).
+Reviewed commit: `e89ee1fce55dbe2029eb239027a155cce6507ac1`.
+
+Renumbered from TASK-AI-48, which PR #132 already holds for the PowerShell
+controller. The two are complementary and touch different files.
+
+## Source requirements
+
+- `AGENTS.md` - one Work Item per branch and Pull Request; the author never
+  approves its own work; AO replaced by Paseo in the workspace list.
+- `docs/product-spec/work-items/TASK-AI-24.md` - executor rules R01-R09.
+- `docs/product-spec/work-items/TASK-AI-42.md` - the implementation ceiling is a
+  governed decision, not a setting.
+- `docs/product-spec/work-items/TASK-AI-46.md` - quota-aware rotation and
+  benchmark evidence; unchanged here and reused.
+
+Business outcome: the operator hands over a Work Item and the system runs it.
+Before this change `executor.js` built one argument vector, `ao spawn`, and AO
+was retired on 2026-09-22 because its controller held idle processes whose RAM
+was the reason for removing it - so every plan the brain produced ended in a
+launch against a program that is not there.
+
+## Scope integrity
+
+One Work Item. No database migration, no dependency change. Files are confined
+to `tools/ai-brain/**`, `apps/web/src/context/AuthContext.tsx` and
+`apps/web/src/app/page.tsx` (auth hydration gate with all six UI states:
+loading, empty, validation-error, error, forbidden, success), plus this Work
+Item and its register row. These two apps/web paths are explicitly authorised
+in the Work Item's `Allowed paths` table.
+
+No second evaluator was built: benchmark, fitness, offering and quota scoring
+are untouched and are what still choose the model. The one change outside the
+dispatch seam is a defect fix in `ceiling.js`, in scope because quota-aware
+rotation is what the slice had to demonstrate and it did not work.
+## Implementation
+
+New:
+- `tools/ai-brain/sources.json` + `sources.js` - every dashboard source
+  classified as model-source, router, agent-cli, harness, orchestrator or
+  decision-service, with a dispatch table mapping a registry provider to a
+  harness, a provider name and a model prefix. Adding a source is a row.
+- `tools/ai-brain/harness.js` - Paseo and Cline adapters (`launch`, `resume`,
+  `stop`, session id). The retired AO name throws. On Windows the npm `.cmd`
+  shim is unwrapped to its real entry point, so `shell: false` holds and a
+  prompt containing `&&` or `$(?)` still reaches the agent as text.
+- `tools/ai-brain/decisions.js` - append-only JSONL: work item, candidates,
+  rejected offerings with reasons, chosen offering, harness, session, outcome.
+  Credentials are scrubbed at every depth. `closeWriter` releases a claim.
+  `readDecisionsSafe` exported for callers that must refuse on a damaged log
+  (missing directory = empty history; broken middle line = damage).
+
+Changed:
+- `executor.js` - launches through the adapter the registry chooses, and
+  resumes an open writer instead of starting a second one.
+- `scheduler.js` - `resourceCeiling`; measured free memory lowers the
+  implementation ceiling, only when the caller asks to be measured.
+- `ceiling.js` - two refusal shapes this machine actually produces.
+- `cli.js dispatch` - `--cwd`, `--base`, `--decision-dir`, `--free-mb`,
+  `--per-agent-mb`, `--governed-decision`, `--close` / `--fail|--complete`.
+- `apps/web/src/context/AuthContext.tsx` - `isHydrating: boolean` state starts
+  `true`, resolves to `false` in the `useEffect` `finally` block after the
+  localStorage restore attempt. Exported via `AuthContextType`.
+- `apps/web/src/app/page.tsx` - returns `null` during the single hydration tick
+  (satisfies BRAIN.md rule 4: the screen must never stay in a loading frame when
+  the user is not signed in). All six auth UI states are covered: loading
+  (`null` during hydration), empty (unauthenticated with no error → login form),
+  validation-error (inline field errors), error (server/network message),
+  forbidden (`AuthStatusBlock` 403), and success (dashboard renders).
+
+No API route, job or migration changed. The dashboard auth gate and its six UI
+states are explicitly authorised in the Work Item's `Allowed paths` table.
+
+## Acceptance evidence
+
+| ID | Scenario | Evidence |
+|---|---|---|
+| AC-AI-49-01 | A plan launches a real Paseo session | `LAUNCHED -> session f67e7615-03c4-4f5f-bdac-8cf110591fb4`; `paseo inspect` -> `"Status": "running"` |
+| AC-AI-49-02 | Nothing dispatches to AO | `getHarness(''ao'')` throws `RETIRED_HARNESS`; the runner is never called |
+| AC-AI-49-03 | Two independent work items run at once | live: TASK-AI-44 -> `fe3d2980`, TASK-AI-43 -> `e5efe6f7`, each in its own Paseo worktree |
+| AC-AI-49-04 | An interrupted item resumes its own session | `paseo stop fe3d2980` then re-dispatch -> `RESUMED -> session fe3d2980-...`, `0 launched` |
+| AC-AI-49-05 | Session probed before resume is sent | `decisions.test.js` "a resume is probed before it is sent" |
+| AC-AI-49-06 | A gone session is refused | `decisions.test.js` "a gone session is refused" |
+| AC-AI-49-07 | Missing directory returns empty history | `decisions.test.js` "missing directory returns []" |
+| AC-AI-49-08 | Damaged log throws | `decisions.test.js` "damaged log throws" |
+| AC-AI-49-09 | Page shows nothing during hydration tick | `AuthContext.tsx` `isHydrating` starts `true`, page returns `null`; resolves immediately |
+| AC-AI-49-10 | No credential reaches the decision log | `decisions.test.js` "a credential never reaches the log" |
+| AC-AI-49-11 | An exhausted source is cooled and another chosen | live 402 from Kiro -> `cooled: true`; next plan -> `ninerouter::groq/openai/gpt-oss-120b` |
+| AC-AI-49-12 | A subagent works without contending for files | agent `e5efe6f7` spawned `ses_f335422e...`, read and reported only |
+
+Screenshots: none. Nothing user-facing changed (hydration tick resolves before first paint).
+
+## Verification
+
+- `node --test "tools/ai-brain/test/*.test.js"` - **703 tests, 703 pass, 0 fail**
+- `npx eslint tools/ai-brain/*.js tools/ai-brain/test/{sources,decisions}.test.js apps/web/src/context/AuthContext.tsx apps/web/src/app/page.tsx` - clean, no errors, no warnings
+- `npx prettier --check` on every changed file - clean
+- `python docs/product-spec/scripts/validate_docs.py` - passed: 116 markdown files, 130 feature IDs, 180 delivery rows, 992 unique identifiers
+- `node tools/ai-brain/cli.js dispatch --dry-run` - 0 assignments, 1 deferred (`IMPLEMENTATION_LIMIT`, free memory on this host allowed 0)
+- `node tools/ai-brain/cli.js dispatch --plan ... --execute` - 2 launched, then 2 resumed
+
+Measured memory: 3444 MB free before the slice, 3102 MB with two agents
+running (~340 MB per session, against the 350 MB the ceiling plans with),
+2692 MB after a subagent had also run. Largest single process: `opencode` at 811 MB.
+
+## Safety and recovery
+
+- One writer per work item and per branch, inside a plan and across restarts.
+  The decision log, not the process table, is the evidence of a claim.
+- A resumed session is told not to repeat an action with an external effect
+  before checking whether it already happened.
+- A harness with no `resume` cannot take over an open writer; that assignment
+  is refused rather than restarted.
+- `closeWriter` releases a claim when a session is stopped or dies, so a work
+  item cannot be orphaned for ever.
+- Free memory only lowers the ceiling. Spare RAM is never authorisation to
+  exceed what a human agreed to.
+- No credential is read, copied or logged. Credential presence is reported as
+  present, absent, or unknown when it lives somewhere this cannot observe.
+
+## Documentation and traceability
+
+- `docs/product-spec/work-items/TASK-AI-49.md` - new.
+- `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` - row 180.
+- `tools/ai-brain/sources.json` carries the retirement of AO and agy-docker with the date and reason.
+
+## Risks and limitations
+
+- Hermes Agent has a registry entry and a dispatch row and is **not installed** on this host. Nothing dispatches to it yet.
+- Jev is registered as a decision service with a confidence floor; `.worktrees/logs/jev.py` already uses it for lane selection, and moving that into `tools/ai-brain` is separate work.
+- Cline has no resume, so an interrupted Cline writer must be released by hand.
+- 350 MB per agent is measured from Cline and matched by the live Paseo run; a session running Codex or Claude may cost more, and nothing measures a live session yet.
+- A refusal with no consumption reading cools the offering but adds no ledger entry, so it teaches no ceiling. That is existing behaviour, unchanged here.
+- The decision log is local to this host; a second machine dispatching the same register would not see its writers.
+- A `403 not licensed` (Copilot) is correctly not a quota refusal, and nothing yet cools a source that is unavailable for a non-quota reason.
+
+## Correction round (commit e89ee1f)
+
+Addressing Codex `CHANGES_REQUIRED` findings:
+
+1. **`readDecisionsSafe` not exported** - added to `decisions.js` exports and
+   imported in `decisions.test.js`. The function refuses on a damaged log but
+   treats a missing directory as empty history (not damage).
+
+2. **`decisions.test.js` incorrect test** - "missing directory throws" was wrong.
+   A missing directory is a fresh machine, not damage. Fixed to "missing
+   directory returns []" and added separate "damaged log throws" test.
+
+3. **`apps/web` auth hydration gate and six UI states** - `AuthContextType`
+   now includes `isHydrating: boolean`. `AuthContext.tsx` initialises it
+   `true` and sets it `false` in the `useEffect` `finally` block. `page.tsx`
+   returns `null` during the single hydration tick (satisfies BRAIN.md rule 4).
+   All six auth UI states are rendered: loading (`null` during hydration),
+   empty (login form on unauthenticated load), validation-error (inline field
+   errors), error (server/network message), forbidden (`AuthStatusBlock` 403),
+   success (dashboard renders on `isAuthenticated`). These two files are now
+   explicitly authorised in the Work Item's `Allowed paths` table.
+
+4. **Lint and format** - `eslint` clean (no errors, no warnings); `prettier`
+   check passes on all 4 changed files. 703 tests pass.
+
+## Codex review
+
+Review status: READY_FOR_CODEX

@@ -45,8 +45,11 @@ const Kind = Object.freeze({
 
 const KNOWN_KINDS = new Set(Object.values(Kind));
 
-/** Kinds that can be asked to produce tokens. A harness is not one of them. */
-const CAPACITY_KINDS = new Set([Kind.MODEL_SOURCE, Kind.ROUTER]);
+/** Kinds that can be asked to produce tokens. A harness is not one of them.
+ * Routers are not capacity: 9Router's catalog is the union of the accounts
+ * logged into it, so a model id proves routing, never supply. Counting a
+ * router double-counts capacity that no account can pay for. */
+const CAPACITY_KINDS = new Set([Kind.MODEL_SOURCE]);
 
 function readJson(file) {
   // The agy pool writes JSON with a BOM; JSON.parse rejects it outright.

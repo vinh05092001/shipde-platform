@@ -26,6 +26,9 @@ describe('source registry', () => {
     // A router forwards to somebody else's accounts; counting its catalog as
     // capacity would plan work that no account can pay for.
     assert.equal(byId.get('9router').kind, 'router');
+    assert.equal(byId.get('9router').countsAsCapacity, false);
+    assert.equal(byId.get('rqsty').countsAsCapacity, false);
+    assert.equal(byId.get('thb').countsAsCapacity, false);
     assert.equal(byId.get('paseo').countsAsCapacity, false);
     assert.equal(byId.get('cline').countsAsCapacity, false);
     assert.equal(byId.get('hermes').countsAsCapacity, false);
