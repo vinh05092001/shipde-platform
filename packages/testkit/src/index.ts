@@ -177,6 +177,8 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     S3_FORCE_PATH_STYLE: true,
     CARRIER_MODE: 'mock',
     LOG_LEVEL: 'info',
+    AUTH_TOKEN_TTL_SECONDS: 43200,
+    AUTH_LOGIN_OTP_ENABLED: false,
     ...overrides,
   };
 }

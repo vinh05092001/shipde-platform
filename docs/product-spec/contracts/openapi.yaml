@@ -155,8 +155,15 @@ paths:
   /auth/login:
     post:
       tags: [Auth]
-      security: []
+      summary: Password login (API-AUTH-LOGIN, FEAT-AUTH-03)
+      description: >-
+        Authenticates with email/Vietnamese phone + password. Identical
+        INVALID_CREDENTIALS response for unknown identifier or wrong password.
+        Non-active statuses are rejected with distinct 403 codes
+        (AUTH_PENDING_VERIFICATION, AUTH_ACCOUNT_SUSPENDED, AUTH_ACCOUNT_DISABLED,
+        AUTH_INVITATION_PENDING). Rate limited per IP and per identifier.
       operationId: login
+      security: []
       requestBody:
         required: true
         content:
@@ -170,8 +177,80 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthResponse'
-        '401':
+        '400':
           $ref: '#/components/responses/Error'
+        '401':
+          description: INVALID_CREDENTIALS
+          $ref: '#/components/responses/Error'
+        '403':
+          description: Account status gate or OTP login disabled
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/login/otp/request:
+    post:
+      tags: [Auth]
+      summary: Request a login OTP (API-AUTH-LOGIN-OTP-REQUEST, FEAT-AUTH-03)
+      description: >-
+        Sends a 6-digit login OTP over the verified channel (email or phone).
+        Requires AUTH_LOGIN_OTP_ENABLED. Generic OTP_SENT response; unknown
+        identifiers or unverified channels receive the same response without delivery.
+      operationId: requestLoginOtp
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginOtpRequestRequest'
+      responses:
+        '200':
+          description: Generic OTP challenge (anti-enumeration)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginOtpChallengeResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          description: AUTH_OTP_LOGIN_DISABLED when OTP login is not enabled
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/login/otp/verify:
+    post:
+      tags: [Auth]
+      summary: Verify a login OTP and issue a session (API-AUTH-LOGIN-OTP-VERIFY, FEAT-AUTH-03)
+      description: >-
+        Verifies the 6-digit login OTP (5-minute TTL, single use, max 5 wrong
+        attempts) and returns the same session shape as password login.
+      operationId: verifyLoginOtp
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginOtpVerifyRequest'
+      responses:
+        '200':
+          description: Authenticated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: INVALID_OTP
+          $ref: '#/components/responses/Error'
+        '403':
+          description: Account status gate or OTP login disabled
+          $ref: '#/components/responses/Error'
+        '410':
+          description: OTP_ALREADY_CONSUMED or OTP_EXPIRED
+          $ref: '#/components/responses/Error'
+        '429':
+          description: OTP_MAX_ATTEMPTS_EXCEEDED or RATE_LIMITED
+          $ref: '#/components/responses/RateLimited'
   /me:
     get:
       tags: [Auth]
@@ -666,25 +745,143 @@ components:
       properties:
         identifier:
           type: string
+          description: Email or Vietnamese phone number of the account.
         password:
           type: string
           format: password
         remember_device:
           type: boolean
           default: false
+    AuthenticatedUser:
+      type: object
+      required: [id, merchant_id, full_name, role, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        merchant_id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        email:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [OWNER, OPS_CSKH, WAREHOUSE, ACCOUNTANT]
+        status:
+          type: string
+          enum: [ACTIVE, PENDING_VERIFICATION, SUSPENDED, DISABLED, INVITED]
+        email_verified_at:
+          type: string
+          format: date-time
+          nullable: true
+        phone_verified_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    AuthenticatedMerchant:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        business_code:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
     AuthResponse:
       type: object
+      required: [data, meta]
       properties:
         data:
           type: object
+          required: [status]
           properties:
             status:
               type: string
               enum: [AUTHENTICATED, MFA_REQUIRED, ORG_SELECTION_REQUIRED]
             access_token:
               type: string
+            expires_in:
+              type: integer
+              description: Access token lifetime in seconds (present when access_token is returned).
             challenge_id:
               type: string
+            user:
+              $ref: '#/components/schemas/AuthenticatedUser'
+            merchant:
+              $ref: '#/components/schemas/AuthenticatedMerchant'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    LoginOtpRequestRequest:
+      type: object
+      required: [identifier]
+      properties:
+        identifier:
+          type: string
+          description: Email or Vietnamese phone number of the account.
+    LoginOtpChallengeResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required:
+            [status, channel, recipient_masked, cooldown_seconds, expires_in_seconds, message]
+          properties:
+            status:
+              type: string
+              enum: [OTP_SENT]
+            channel:
+              type: string
+              enum: [email, phone]
+            recipient_masked:
+              type: string
+              description: Masked recipient, e.g. m***@shipde.vn or 0901***4567.
+            cooldown_seconds:
+              type: integer
+            expires_in_seconds:
+              type: integer
+            message:
+              type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    LoginOtpVerifyRequest:
+      type: object
+      required: [identifier, otp]
+      properties:
+        identifier:
+          type: string
+          description: Email or Vietnamese phone number of the account.
+        otp:
+          type: string
+          minLength: 6
+          maxLength: 6
     ShopInput:
       type: object
       required: [name]
