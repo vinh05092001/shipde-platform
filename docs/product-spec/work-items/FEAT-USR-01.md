@@ -6,7 +6,7 @@
 |---|---|
 | Work Item ID | `FEAT-USR-01` |
 | Feature ID | `FEAT-USR-01` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `BACKLOG` |
 | Delivery order | `11` |
 | Dependencies | `TASK-FOUND-04` — `MERGED` by PR `#13` at `9d101f4e5d9de9b880cc4311126ce8fe06de4206` |
 | Assigned author | `GEMINI` |
