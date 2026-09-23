@@ -11,6 +11,32 @@
       "priority": 1,
       "enabled": true,
       "cooldown_seconds": 300,
+      "quota_groups": [
+        {
+          "name": "gemini",
+          "models": [
+            "gemini-3.1-pro-high",
+            "gemini-3.1-pro-low",
+            "gemini-3.8-flash-high",
+            "gemini-3.8-flash-medium",
+            "gemini-3.8-flash-low",
+            "gemini-3.7-flash-medium",
+            "gemini-3.7-flash-low",
+            "gemini-3.6-flash-medium",
+            "gemini-3.6-flash-low"
+          ],
+          "cooldown_seconds": 300
+        },
+        {
+          "name": "external",
+          "models": [
+            "claude-opus-4-6-thinking",
+            "claude-sonnet-4-6",
+            "gpt-oss-120b-medium"
+          ],
+          "cooldown_seconds": 300
+        }
+      ],
       "metadata": {
         "description": "Primary Gemini REST account",
         "endpoint": "REPLACE_WITH_THE_OFFICIAL_GENERATE_CONTENT_ENDPOINT",
@@ -26,6 +52,26 @@
       "priority": 2,
       "enabled": false,
       "cooldown_seconds": 300,
+      "quota_groups": [
+        {
+          "name": "gemini",
+          "models": [
+            "gemini-3.1-pro-high",
+            "gemini-3.8-flash-high",
+            "gemini-3.8-flash-medium"
+          ],
+          "cooldown_seconds": 300
+        },
+        {
+          "name": "external",
+          "models": [
+            "claude-opus-4-6-thinking",
+            "claude-sonnet-4-6",
+            "gpt-oss-120b-medium"
+          ],
+          "cooldown_seconds": 300
+        }
+      ],
       "executable_path": "C:\\REPLACE\\WITH\\agy.exe",
       "args_template": ["REPLACE_WITH_VERIFIED_NONINTERACTIVE_FLAG", "{prompt}"],
       "profile_path": "C:\\REPLACE\\WITH\\PROFILE",
@@ -41,6 +87,24 @@
       "priority": 3,
       "enabled": false,
       "cooldown_seconds": 300,
+      "quota_groups": [
+        {
+          "name": "gemini",
+          "models": [
+            "gemini-3.1-pro-high",
+            "gemini-3.8-flash-high"
+          ],
+          "cooldown_seconds": 300
+        },
+        {
+          "name": "external",
+          "models": [
+            "claude-opus-4-6-thinking",
+            "claude-sonnet-4-6"
+          ],
+          "cooldown_seconds": 300
+        }
+      ],
       "windows_username": "REPLACE_WITH_LOCAL_WINDOWS_USERNAME",
       "scheduled_task_name": "ShipDe-Agy-User02-Worker",
       "task_request_path": "C:\\ProgramData\\ShipDe\\agy-user02\\request.json",

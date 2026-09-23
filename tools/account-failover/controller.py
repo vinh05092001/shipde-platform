@@ -144,6 +144,27 @@ def validate_config(raw: dict[str, Any]) -> dict[str, Any]:
             raise ConfigError(f"account {name} requires credential_ref")
         if account["type"] == "windows_user" and not account.get("scheduled_task_name"):
             raise ConfigError(f"account {name} requires scheduled_task_name; runtime passwords are not accepted")
+        groups = account.get("quota_groups")
+        if groups is not None:
+            if not isinstance(groups, list) or not groups:
+                raise ConfigError(f"account {name}.quota_groups must be a non-empty array when present")
+            group_names: set[str] = set()
+            for gi, group in enumerate(groups):
+                if not isinstance(group, dict):
+                    raise ConfigError(f"account {name}.quota_groups[{gi}] must be an object")
+                gname = group.get("name")
+                if not isinstance(gname, str) or not gname.strip() or gname in group_names:
+                    raise ConfigError(f"account {name}.quota_groups[{gi}].name must be unique and non-empty")
+                group_names.add(gname)
+                models = group.get("models")
+                if not isinstance(models, list) or not models:
+                    raise ConfigError(f"account {name}.quota_groups[{gi}].models must be a non-empty array")
+                for mi, model in enumerate(models):
+                    if not isinstance(model, str) or not model.strip():
+                        raise ConfigError(f"account {name}.quota_groups[{gi}].models[{mi}] must be non-empty string")
+                gcd = group.get("cooldown_seconds", account["cooldown_seconds"])
+                if not isinstance(gcd, int) or gcd < 0:
+                    raise ConfigError(f"account {name}.quota_groups[{gi}].cooldown_seconds must be a non-negative integer")
     return raw
 
 
@@ -172,6 +193,12 @@ class StateStore:
             "failure_count": 0, "cooldown_until": None, "disabled_reason": None,
             "credential_check_required": False,
         })
+
+    def group_state(self, account_name: str, group_name: str) -> dict[str, Any]:
+        """Per-group state nested under the account state."""
+        acc = self.account(account_name)
+        groups = acc.setdefault("groups", {})
+        return groups.setdefault(group_name, {"cooldown_until": None})
 
     def save(self) -> None:
         with self.lock:
@@ -279,6 +306,28 @@ class AccountFailoverController:
                 offset = (names.index(previous) + 1) % len(ordered)
                 ordered = ordered[offset:] + ordered[:offset]
         return ordered
+
+    def _available_groups(self, account: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return quota groups on this account that are not on cooldown."""
+        groups = account.get("quota_groups")
+        if not groups:
+            return []
+        now = utc_now()
+        result = []
+        for group in groups:
+            gs = self.state.group_state(account["name"], group["name"])
+            cooldown = parse_time(gs.get("cooldown_until"))
+            if cooldown and cooldown > now:
+                continue
+            result.append(group)
+        return result
+
+    def _all_groups_spent(self, account: dict[str, Any]) -> bool:
+        """True when every group on the account is on cooldown or the account has no groups."""
+        groups = account.get("quota_groups")
+        if not groups:
+            return False  # no groups means legacy single-group behaviour
+        return len(self._available_groups(account)) == 0
 
     def _secret(self, account: dict[str, Any]) -> str:
         ref = account.get("credential_ref")
@@ -397,31 +446,54 @@ class AccountFailoverController:
         self.state.data["last_used_account"] = account["name"]
         self.state.save()
 
-    def _mark_success(self, account: dict[str, Any]) -> None:
+    def _mark_success(self, account: dict[str, Any],
+                      group_name: str | None = None, model: str | None = None) -> None:
         now = iso()
         state = self.state.account(account["name"])
         state.update({"last_success_at": now, "failure_count": 0, "cooldown_until": None})
         self.state.data["last_success_at"] = now
         self.state.save()
-        self._log(logging.INFO, account["name"], "success", "return_result")
+        extra: dict[str, Any] = {}
+        if group_name:
+            extra["group"] = group_name
+        if model:
+            extra["model"] = model
+        self._log(logging.INFO, account["name"], "success", "return_result", **extra)
 
-    def _mark_failure(self, account: dict[str, Any], error: ClassifiedError) -> None:
+    def _mark_failure(self, account: dict[str, Any], error: ClassifiedError,
+                      group_name: str | None = None, model: str | None = None) -> None:
         now = utc_now()
         state = self.state.account(account["name"])
         state["last_failure_at"] = iso(now)
         state["failure_count"] = int(state.get("failure_count", 0)) + 1
         self.state.data["last_failure_at"] = iso(now)
-        action = "try_next_account"
+        action = "try_next_group" if group_name else "try_next_account"
         if error.disable:
             state["credential_check_required"] = True
             state["disabled_reason"] = error.category
             action = "disable_until_operator_enable"
+        elif error.cooldown and group_name:
+            # Apply cooldown to the specific group, not the whole account
+            group_cfg = None
+            for g in account.get("quota_groups", []):
+                if g["name"] == group_name:
+                    group_cfg = g
+                    break
+            cd_seconds = (group_cfg or {}).get("cooldown_seconds", account["cooldown_seconds"])
+            gs = self.state.group_state(account["name"], group_name)
+            gs["cooldown_until"] = iso(now + dt.timedelta(seconds=cd_seconds))
+            action = "cooldown_group_try_next"
         elif error.cooldown:
+            # Legacy: no group dimension, cooldown the whole account
             state["cooldown_until"] = iso(now + dt.timedelta(seconds=account["cooldown_seconds"]))
             action = "cooldown_and_try_next"
         self.state.save()
-        self._log(logging.WARNING, account["name"], error.category, action,
-                  status_code=error.status_code, message=error.message)
+        extra: dict[str, Any] = {"status_code": error.status_code, "message": error.message}
+        if group_name:
+            extra["group"] = group_name
+        if model:
+            extra["model"] = model
+        self._log(logging.WARNING, account["name"], error.category, action, **extra)
 
     def send_prompt(self, prompt: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
         if not isinstance(prompt, str) or not prompt.strip():
@@ -433,22 +505,74 @@ class AccountFailoverController:
                 raise NoAccountAvailable("no usable account remains; inspect status and re-enable credentials after correction")
             account = ordered[0]
             self._mark_attempt(account)
-            same_account_attempts = 0
+            groups = account.get("quota_groups")
+            if groups:
+                # Two-level rotation: exhaust all groups on this account first
+                result = self._send_with_groups(account, prompt, options or {})
+                if result is not None:
+                    return result
+                # All groups on this account are spent; move to the next account
+                excluded.add(account["name"])
+                self._log(logging.INFO, account["name"], "exhausted",
+                          "all_groups_spent_try_next_account")
+            else:
+                # Legacy path: no group dimension
+                result = self._send_legacy(account, prompt, options or {})
+                if result is not None:
+                    return result
+                excluded.add(account["name"])
+
+    def _send_with_groups(self, account: dict[str, Any], prompt: str,
+                          options: dict[str, Any]) -> dict[str, Any] | None:
+        """Try each available group on this account.  Return a result dict or
+        None when every group is exhausted."""
+        available = self._available_groups(account)
+        for group in available:
+            model = group["models"][0]  # first model in configured order
+            self._log(logging.INFO, account["name"], "attempt", "try_group",
+                      group=group["name"], model=model)
+            same_attempts = 0
             while True:
                 try:
-                    result = self._send_with(account, prompt, options or {})
-                    self._mark_success(account)
-                    return {"account": account["name"], "result": result}
+                    result = self._send_with(account, prompt, options)
+                    self._mark_success(account, group_name=group["name"], model=model)
+                    return {"account": account["name"], "group": group["name"],
+                            "model": model, "result": result}
                 except ConfigError:
                     raise
                 except ClassifiedError as error:
-                    same_account_attempts += 1
-                    if error.retry_same_account and same_account_attempts == 1:
-                        self._log(logging.WARNING, account["name"], error.category, "retry_same_account_once")
+                    same_attempts += 1
+                    if error.disable:
+                        # Auth failure disables the whole account, not just the group
+                        self._mark_failure(account, error, group_name=group["name"], model=model)
+                        return None  # account is disabled; caller will exclude it
+                    if error.retry_same_account and same_attempts == 1:
+                        self._log(logging.WARNING, account["name"], error.category,
+                                  "retry_same_group_once", group=group["name"], model=model)
                         continue
-                    self._mark_failure(account, error)
-                    excluded.add(account["name"])
-                    break
+                    # Cooldown this group and try next group on same account
+                    self._mark_failure(account, error, group_name=group["name"], model=model)
+                    break  # next group
+        return None  # all groups exhausted on this account
+
+    def _send_legacy(self, account: dict[str, Any], prompt: str,
+                     options: dict[str, Any]) -> dict[str, Any] | None:
+        """Original single-level send for accounts without quota_groups."""
+        same_account_attempts = 0
+        while True:
+            try:
+                result = self._send_with(account, prompt, options)
+                self._mark_success(account)
+                return {"account": account["name"], "result": result}
+            except ConfigError:
+                raise
+            except ClassifiedError as error:
+                same_account_attempts += 1
+                if error.retry_same_account and same_account_attempts == 1:
+                    self._log(logging.WARNING, account["name"], error.category, "retry_same_account_once")
+                    continue
+                self._mark_failure(account, error)
+                return None
 
     def health_check(self, account_name: str) -> dict[str, Any]:
         account = self._account_by_name(account_name)
@@ -464,9 +588,19 @@ class AccountFailoverController:
         elif account["type"] == "windows_user":
             configured = bool(account.get("scheduled_task_name"))
             detail = "scheduled task configured" if configured else "scheduled task missing"
-        return {"name": account_name, "enabled": account["enabled"], "configured": configured,
+        result = {"name": account_name, "enabled": account["enabled"], "configured": configured,
                 "detail": detail, "cooldown_until": state.get("cooldown_until"),
                 "credential_check_required": state.get("credential_check_required", False)}
+        groups = account.get("quota_groups")
+        if groups:
+            result["groups"] = []
+            for group in groups:
+                gs = self.state.group_state(account_name, group["name"])
+                result["groups"].append({
+                    "name": group["name"], "models": group["models"],
+                    "cooldown_until": gs.get("cooldown_until"),
+                })
+        return result
 
     def get_status(self) -> dict[str, Any]:
         return {"strategy": self.config.get("strategy", "priority_failover"),
