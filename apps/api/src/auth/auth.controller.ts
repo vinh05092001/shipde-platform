@@ -9,11 +9,9 @@ import {
   ForgotPasswordDto,
   VerifyResetTokenDto,
   ResetPasswordDto,
-
   LoginDto,
   LoginOtpRequestDto,
   LoginOtpVerifyDto,
-
 } from './auth.service';
 import { normalizeCorrelationId } from '@shipde/config';
 
@@ -110,7 +108,6 @@ export class AuthController {
     return res.status(HttpStatus.OK).json(result);
   }
 
-
   /**
    * FEAT-AUTH-03: password login. 200 AUTHENTICATED, or canonical
    * 400/401/403/429 errors (INVALID_CREDENTIALS, status gates, RATE_LIMITED).
@@ -158,7 +155,6 @@ export class AuthController {
     const result = await this.authService.verifyLoginOtp(dto, clientIp, correlationId);
     return res.status(HttpStatus.OK).json(result);
   }
-
 
   private extractClientIp(req: Request): string {
     const forwarded = req.headers['x-forwarded-for'];

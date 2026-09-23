@@ -56,7 +56,6 @@ export interface ResetPasswordDto {
   password_confirm: string;
 }
 
-
 export interface LoginDto {
   identifier: string;
   password: string;
@@ -74,7 +73,6 @@ export interface LoginOtpVerifyDto {
 
 /** Max failed OTP verify attempts per identifier before the token is consumed (BR-AUTH-12). */
 const OTP_MAX_VERIFY_ATTEMPTS = 5;
-
 
 export interface CanonicalFieldError {
   field: string;
