@@ -155,6 +155,7 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
           <button
             type="button"
             onClick={handleBackToLogin}
+            aria-label="Quay lai dang nhap"
             className="text-slate-400 hover:text-slate-600 transition-colors"
           >
             <ChevronLeft className="w-6 h-6 mx-auto" />
@@ -295,6 +296,7 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
+                    aria-label="Hien thi mat khau"
                     className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -334,6 +336,7 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
                   <button
                     type="button"
                     onClick={() => setShowConfirm(!showConfirm)}
+                    aria-label="Hien thi xac nhan mat khau"
                     className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
                   >
                     {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
