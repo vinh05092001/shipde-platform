@@ -32,6 +32,7 @@ This repository supersedes the earlier PoV-only Dev Pack. The current baseline i
 | DEC-015 | DECIDED | Four monetary evidence levels are never summed together. | Separate reporting measures are mandatory. |
 | DEC-016 | DECIDED | TypeScript monorepo is the default implementation stack. | Shared schemas/types and one-language handover. |
 | DEC-017 | DECIDED | Concurrent implementation ceiling is fixed at one (AI-TOOL-03) as a stability measure. | Raising the ceiling requires an explicit governed decision (DEC-* or HUMAN-DECISION-*), never an unvetted runtime setting. |
+| DEC-018 | DECIDED | A local account failover controller may rotate only among explicitly configured, user-owned Gemini/Antigravity accounts. | No auth bypass, credential copying, device impersonation, undocumented CLI flags, or public bind; Windows-user execution uses a pre-created task/helper boundary. |
 
 ## Evidence levels
 
