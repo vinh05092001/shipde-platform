@@ -594,6 +594,9 @@ function dispatchCommand(args) {
   }
 
   let plan;
+  // writeState is set only for the plan-from-register path; a plan loaded from
+  // --plan <file> has no dispatch-state context to update.
+  let writeState = null;
   if (typeof args.plan === 'string') {
     plan = readJsonOrExit(path.resolve(args.plan), 'plan');
   } else {
@@ -619,13 +622,48 @@ function dispatchCommand(args) {
         riskDomains: [],
         priority: 0,
       }));
-    plan = planDispatch(items, listAccounts() || [], {});
+    const { readDispatchState, writeDispatchState, DispatchStateError } = require('./dispatch-state');
+    let dispatchState;
+    try {
+      dispatchState = readDispatchState({});
+    } catch (e) {
+      if (e instanceof DispatchStateError) {
+        console.error('DISPATCH_STATE_UNREADABLE: ' + e.message);
+        console.error(
+          'Xoá hoặc sửa tệp trên rồi chạy lại. Không lập kế hoạch vì không biết có gì đang chạy.'
+        );
+        process.exit(2);
+      }
+      throw e;
+    }
+    plan = planDispatch(items, listAccounts() || [], {
+      running: dispatchState.running,
+      claims: dispatchState.claims,
+    });
+    writeState = writeDispatchState;
   }
 
   const result = executePlan(plan, {
     dryRun: !execute,
     project: args.project || 'shipde-platform',
   });
+
+  // Persist what just launched so the next dispatch sees real load, not empty.
+  // Written only on real executions: a dry-run changes nothing on the machine,
+  // so the prior state remains correct and must not be overwritten with zeros.
+  if (!result.dryRun && writeState) {
+    try {
+      writeState(plan.assignments || [], result.records || []);
+    } catch (e) {
+      // A write failure is logged but does not fail the dispatch that already
+      // ran: the sessions are live regardless. The next dispatch will read
+      // stale state and may plan as if idle, which is the original bug, so
+      // the error is visible and worth investigating — but killing a just-
+      // launched session to punish a log write would be worse.
+      console.error('DISPATCH_STATE_WRITE_FAILED: ' + e.message);
+    }
+  }
+
   const deferred = plan.deferred || [];
   const planned = (plan.assignments || []).length;
 
