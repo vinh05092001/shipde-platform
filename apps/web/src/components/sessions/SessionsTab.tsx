@@ -41,8 +41,13 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
   const [lookupResult, setLookupResult] = useState<SessionItem | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
 
-  const fetchSessions = useCallback(async () => {
-    setFetchState('loading');
+  // `showLoading` exists because the mount path must not set state synchronously:
+  // the effect below calls this, and a setState before the first await triggers
+  // the cascading-render the lint rule refuses. On mount the component is already
+  // in 'loading', so nothing needs to say so again; a manual refresh does, because
+  // by then the screen is showing the previous list.
+  const fetchSessions = useCallback(async ({ showLoading = false } = {}) => {
+    if (showLoading) setFetchState('loading');
     try {
       const res = await fetch('/api/sessions');
       if (res.status === 403) { setFetchState('forbidden'); return; }
@@ -53,7 +58,9 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
     } catch { setFetchState('error'); }
   }, []);
 
-  useEffect(() => { fetchSessions(); }, [fetchSessions]);
+  useEffect(() => {
+    void fetchSessions();
+  }, [fetchSessions]);
 
   const activeSessions = sessions.filter((s) => !s.is_revoked);
   const hasActiveSessions = activeSessions.length > 0;
@@ -80,7 +87,7 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
         const data = await res.json();
         onToast?.('Revoked ' + data.revoked_count + ' sessions');
         setRevokeAllOpen(false);
-        fetchSessions();
+        void fetchSessions({ showLoading: true });
       } else { onToast?.('Revoke failed - please try again'); }
     } catch { onToast?.('Network error'); }
     finally { setRevokeAllLoading(false); }
@@ -155,7 +162,7 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
           </div>
           <h2 className="text-xl font-black text-amber-800 mb-2">Failed to load sessions</h2>
           <p className="text-sm text-amber-700 font-medium mb-4">An error occurred while fetching sessions. Please check your connection and try again.</p>
-          <button type="button" onClick={fetchSessions} className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#EA4B12] hover:bg-[#c93a0a] text-white rounded-xl text-sm font-bold cursor-pointer shadow-sm">
+          <button type="button" onClick={() => void fetchSessions({ showLoading: true })} className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#EA4B12] hover:bg-[#c93a0a] text-white rounded-xl text-sm font-bold cursor-pointer shadow-sm">
             <RefreshCw className="w-4 h-4" /> Retry
           </button>
         </div>
