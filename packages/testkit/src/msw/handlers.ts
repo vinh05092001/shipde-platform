@@ -365,9 +365,9 @@ export const handlers = [
   }),
 
   // --- Session: Revoke ---
-  http.delete(`${BASE_API_URL}/api/v1/sessions/:id`, async ({ params }) => {
+  http.delete(`${BASE_API_URL}/api/v1/sessions/:sessionId`, async ({ params }) => {
     const successRevoke = {
-      session_id: params.id,
+      session_id: params.sessionId,
       status: 'REVOKED',
       message: 'Phiên đã được thu hồi',
     };
@@ -389,9 +389,9 @@ export const handlers = [
   }),
 
   // --- Session: Heartbeat ---
-  http.patch(`${BASE_API_URL}/api/v1/sessions/:id/heartbeat`, async ({ params }) => {
+  http.patch(`${BASE_API_URL}/api/v1/sessions/:sessionId/heartbeat`, async ({ params }) => {
     const successHeartbeat = {
-      session_id: params.id,
+      session_id: params.sessionId,
       last_active_at: new Date().toISOString(),
     };
 

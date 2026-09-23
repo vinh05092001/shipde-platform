@@ -186,10 +186,23 @@ async function runSessionSupertestSuite() {
     console.log('  PASS: AC-SESS-03 Session revoked');
 
     // AC-SESS-04: Revoke already-revoked is idempotent
+    // The session from AC-SESS-03 is now REVOKED, so we need a fresh active
+    // token to authenticate this request. The guard only passes ACTIVE sessions.
     console.log('[TEST 4 / AC-SESS-04] Idempotent revoke');
+    const tok4 = createSessionToken();
+    await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tok4.hash,
+        device_id: 'test_device_4_idempotent',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
     const res4 = await request(server)
       .delete(`/api/v1/sessions/${createdSessionId}`)
-      .set('Authorization', `Bearer ${createdToken}`)
+      .set('Authorization', `Bearer ${tok4.raw}`)
       .expect(200);
 
     assert.strictEqual(res4.body.status, 'REVOKED');

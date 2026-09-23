@@ -86,6 +86,27 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
     return otherActive.length === 0;
   };
 
+  const [revokeLoadingId, setRevokeLoadingId] = useState<string | null>(null);
+
+  const handleRevokeSession = async (sessionId: string) => {
+    setRevokeLoadingId(sessionId);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+      if (res.ok) {
+        onToast?.('Session revoked');
+        setSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, is_revoked: true } : s))
+        );
+      } else {
+        onToast?.('Revoke failed - please try again');
+      }
+    } catch {
+      onToast?.('Network error');
+    } finally {
+      setRevokeLoadingId(null);
+    }
+  };
+
   const handleRevokeAll = async () => {
     if (safetyCheck()) {
       onToast?.('Warning: cannot revoke - this is the only active session');
@@ -390,10 +411,16 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
                     {!session.is_revoked && (
                       <button
                         type="button"
-                        className="text-xs font-bold text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-1.5 rounded-lg transition cursor-pointer"
+                        onClick={() => void handleRevokeSession(session.id)}
+                        disabled={revokeLoadingId === session.id}
+                        className="text-xs font-bold text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-1.5 rounded-lg transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Revoke this session"
                       >
-                        Revoke
+                        {revokeLoadingId === session.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          'Revoke'
+                        )}
                       </button>
                     )}
                   </td>
