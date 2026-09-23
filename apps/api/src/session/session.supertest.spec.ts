@@ -106,7 +106,15 @@ async function runSessionSupertestSuite() {
 
   const testSuffix = Date.now().toString().slice(-6);
   const merchant = await prisma.merchant.create({
-    data: { name: `Session Test Shop ${testSuffix}`, status: 'ACTIVE' },
+    // `code` is required and unique on Merchant, and the fixture omitted it:
+    // prisma.merchant.create() threw PrismaClientValidationError and the whole
+    // session suite failed before its first assertion. The suffix is already
+    // unique per run, so it keeps parallel runs from colliding on the index.
+    data: {
+      name: `Session Test Shop ${testSuffix}`,
+      code: `SESSTEST${testSuffix}`,
+      status: 'ACTIVE',
+    },
   });
   const user = await prisma.user.create({
     data: {
