@@ -73,6 +73,7 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
       }
     };
     verify();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- verifyResetToken is stable from context
   }, [tokenFromUrl]);
 
   const handlePasswordChange = (val: string) => {
