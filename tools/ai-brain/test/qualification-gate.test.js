@@ -494,3 +494,51 @@ describe('applyGrant', () => {
     assert.deepStrictEqual(updated.cost, { inputPerMillion: 0 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fix (d): evaluateGrant defaults to RESULT_PATH when deps.file is absent
+// ---------------------------------------------------------------------------
+
+describe('evaluateGrant missing-file default', () => {
+  test('evaluateGrant does not throw when deps.file is undefined', () => {
+    // Before the fix, d.file was used without a default, so loadResults
+    // received undefined and threw RESULT_UNREADABLE. The fix applies the
+    // same default as qualification.js:385.
+    const now = Date.now();
+    const r = evaluateGrant({
+      accountId: 'acc-1',
+      model: 'claude-code',
+      roleId: 'author.lowrisk',
+      deps: {
+        // file is deliberately absent — this is the bug scenario
+        loadResults: () => ({}),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    // The probe record is missing because loadResults returned {}, not because
+    // it threw. This is RESULT_MISSING, not RESULT_CORRUPT.
+    assert.strictEqual(r.status, RESULT_MISSING);
+    assert.ok(r.reason.includes('run probe first'));
+  });
+
+  test('evaluateGrant uses the explicit deps.file when provided', () => {
+    const now = Date.now();
+    let fileUsed = null;
+    evaluateGrant({
+      accountId: 'acc-1',
+      model: 'claude-code',
+      roleId: 'author.lowrisk',
+      deps: {
+        file: '/explicit/path.json',
+        loadResults: (f) => {
+          fileUsed = f;
+          return {};
+        },
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(fileUsed, '/explicit/path.json');
+  });
+});

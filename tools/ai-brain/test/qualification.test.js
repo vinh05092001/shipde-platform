@@ -775,3 +775,61 @@ describe('runProbeCli — argument handling', () => {
     assert.strictEqual(store['ghost@'].outcome, 'refused');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fix (a): the oc provider is now probe-supported
+// ---------------------------------------------------------------------------
+
+describe('probeAccount — oc provider support', () => {
+  const now = 1_800_000_000_000;
+  const ocAccount = {
+    id: 'ninerouter',
+    provider: 'oc',
+    launch: { kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:20128/v1' },
+    capabilities: { jsonSchema: true, tools: true, contextWindow: 200000 },
+    models: [
+      { model: 'cc/claude-opus-5', cost: { inputPerMillion: 10, outputPerMillion: 30 } },
+      { model: 'cc/claude-haiku-4-5-20251001', cost: { inputPerMillion: 0.8, outputPerMillion: 4 } },
+    ],
+  };
+
+  test('the oc provider is no longer refused — the probe reaches the run step', async () => {
+    const file = tmpFile();
+    const io = { fs, fileIo: { writeFileSync: (p, c) => fs.writeFileSync(p, c) } };
+    let ranCommand = null;
+    const record = await q.probeAccount({
+      accountId: 'ninerouter',
+      accounts: [ocAccount],
+      file,
+      io,
+      now,
+      isEntryAdmitted: () => true,
+      run: async (command) => {
+        ranCommand = command;
+        return { outcome: 'pass', reason: 'answered' };
+      },
+    });
+    assert.strictEqual(record.outcome, 'pass');
+    assert.strictEqual(record.model, 'cc/claude-haiku-4-5-20251001');
+    assert.ok(ranCommand !== null, 'the probe must have run a command');
+    assert.ok(ranCommand.includes('curl'), 'an openai-compatible probe uses curl');
+    assert.ok(ranCommand.includes('127.0.0.1:20128'), 'the command targets the gateway');
+  });
+
+  test('an unknown provider is still refused and no command is run', async () => {
+    const file = tmpFile();
+    const io = { fs, fileIo: { writeFileSync: (p, c) => fs.writeFileSync(p, c) } };
+    const record = await q.probeAccount({
+      accountId: 'ninerouter',
+      accounts: [{ ...ocAccount, provider: 'martian' }],
+      file,
+      io,
+      now,
+      run: async () => {
+        throw new Error('must not reach here');
+      },
+    });
+    assert.strictEqual(record.outcome, 'refused');
+    assert.ok(record.reason.includes('has no reader'));
+  });
+});

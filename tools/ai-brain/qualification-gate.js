@@ -54,7 +54,7 @@ function defaultUpdateAccount(accountId, patch, options) {
 function evaluateGrant({ accountId, model, roleId, deps }) {
   const d = deps || {};
   const now = typeof d.now === 'function' ? d.now() : Date.now();
-  const file = d.file;
+  const file = d.file || require('./qualification').RESULT_PATH;
 
   const validRoles = d.roles || listRoles();
   if (!roleId || !validRoles.includes(roleId)) {
