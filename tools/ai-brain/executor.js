@@ -133,8 +133,19 @@ function executePlan(plan, options) {
 
   // Writers already open according to the log, so an interrupted run resumes
   // instead of racing itself.
+  //
+  // A log that cannot be read is not a log that says nothing. If the directory
+  // is unreadable or a file is damaged, the claims may still exist and simply
+  // be out of reach, and treating that as "no writers" is exactly how a second
+  // agent lands on a branch that already has one. So an unreadable log stops
+  // every writing assignment in this plan; reviews, which claim nothing, still
+  // run.
+  const writerState = decisions.openWritersDetailed(logOpts);
   const openByItem = new Map();
-  for (const writer of decisions.openWriters(logOpts)) openByItem.set(writer.workItemId, writer);
+  for (const writer of writerState.writers) openByItem.set(writer.workItemId, writer);
+  const logUnreadable = writerState.readable
+    ? null
+    : 'DECISION_LOG_UNREADABLE: ' + (writerState.damaged.join('; ') || 'unknown');
 
   const writerItems = new Set();
   const writerBranches = new Set();
@@ -199,6 +210,11 @@ function executePlan(plan, options) {
 
     const isReview = REVIEW_ROLES.has(a.role);
     const existing = isReview ? null : openByItem.get(a.workItemId);
+
+    if (!isReview && logUnreadable) {
+      refuse(logUnreadable);
+      continue;
+    }
 
     if (!isReview) {
       // AI-24-R04, within this plan.

@@ -90,11 +90,21 @@ function recordDecision(entry, options) {
 }
 
 /**
- * Every record from the last `days` days, oldest first.
- * A missing directory is an empty history, not an error: the first dispatch on
- * a fresh machine must not fail because nothing has been decided yet.
+ * Every record from the last `days` days, oldest first, plus what went wrong
+ * while reading: `{ records, damaged, readable }`.
+ *
+ * The distinction matters more than it looks. A directory that has never
+ * existed is an empty history — the first dispatch on a fresh machine must not
+ * fail because nothing has been decided yet. A directory that cannot be read,
+ * or a file that cannot be opened, is not evidence of anything: the claims may
+ * still be there and simply be unreachable. Collapsing the two into "no
+ * writers" is what lets a second agent onto a branch that already has one.
+ *
+ * A truncated last line is different again, and is not damage: it is the
+ * normal shape of a file whose writer was killed mid-append, and every
+ * complete line before it is still good evidence.
  */
-function readDecisions(options) {
+function readDecisionsDetailed(options) {
   const opts = options || {};
   const dir = opts.dir || DEFAULT_DIR;
   const days = opts.days || 7;
@@ -108,29 +118,48 @@ function readDecisions(options) {
   let files;
   try {
     files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl') && wanted.has(f.slice(0, -6)));
-  } catch (_) {
-    return [];
+  } catch (err) {
+    // ENOENT is a history that has not started. Anything else — a permission
+    // error, a broken mount — is a history we cannot see, which is not the
+    // same thing and must not read as "nothing is claimed".
+    if (err && err.code === 'ENOENT') return { records: [], damaged: [], readable: true };
+    return {
+      records: [],
+      damaged: [dir + ': ' + (err && err.code ? err.code : 'unreadable')],
+      readable: false,
+    };
   }
 
   const out = [];
+  const damaged = [];
   for (const file of files.sort()) {
     let raw;
     try {
       raw = fs.readFileSync(path.join(dir, file), 'utf8');
-    } catch (_) {
+    } catch (err) {
+      damaged.push(file + ': ' + (err && err.code ? err.code : 'unreadable'));
       continue;
     }
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
+    const lines = raw.split('\n');
+    for (let i = 0; i < lines.length; i += 1) {
+      const trimmed = lines[i].trim();
       if (!trimmed) continue;
       try {
         out.push(JSON.parse(trimmed));
       } catch (_) {
-        // A half-written last line is what a killed writer leaves behind.
+        // Only the final line may be half-written; a broken line anywhere else
+        // means the file was damaged rather than interrupted.
+        const isLast = lines.slice(i + 1).every((l) => l.trim() === '');
+        if (!isLast) damaged.push(file + ': unparsable line ' + (i + 1));
       }
     }
   }
-  return out;
+  return { records: out, damaged, readable: damaged.length === 0 };
+}
+
+/** The records alone, for callers that only want the history. */
+function readDecisions(options) {
+  return readDecisionsDetailed(options).records;
 }
 
 /**
@@ -142,7 +171,24 @@ function readDecisions(options) {
  * whose daemon restarted is still the rightful writer of its branch.
  */
 function openWriters(options) {
-  const records = (options && options.records) || readDecisions(options);
+  return openWritersDetailed(options).writers;
+}
+
+/**
+ * The open writers plus whether the log could be read at all:
+ * `{ writers, readable, damaged }`.
+ *
+ * A caller deciding whether a branch is free must look at `readable`. An
+ * unreadable log means "unknown", and unknown has to stop a launch — the whole
+ * point of the log is that it is the only evidence of a claim, so losing it
+ * cannot be the same as there being no claim.
+ */
+function openWritersDetailed(options) {
+  const detail =
+    options && options.records
+      ? { records: options.records, damaged: [], readable: true }
+      : readDecisionsDetailed(options);
+  const records = detail.records;
   const state = new Map();
   for (const r of records) {
     if (!r || !r.workItemId) continue;
@@ -159,7 +205,11 @@ function openWriters(options) {
       state.delete(r.workItemId);
     }
   }
-  return Array.from(state.values());
+  return {
+    writers: Array.from(state.values()),
+    readable: detail.readable,
+    damaged: detail.damaged,
+  };
 }
 
 /** The open writer for this work item, or null when it is free to claim. */
@@ -199,7 +249,9 @@ module.exports = {
   DEFAULT_DIR,
   recordDecision,
   readDecisions,
+  readDecisionsDetailed,
   openWriters,
+  openWritersDetailed,
   writerFor,
   closeWriter,
   scrub,
