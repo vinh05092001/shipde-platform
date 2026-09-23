@@ -64,7 +64,8 @@ not evidence either.
 
 - Hermes Agent installed (`hermes-agent` 0.21.4) and configured to take its
   models from 9Router, with no model pinned.
-- A `hermes` harness adapter: launch, resume, and a durable handle.
+- A `hermes` harness adapter: launch, resume, stop, and a durable handle.
+- A per-harness context floor, enforced by the executor before it launches.
 - `runHarness` supports a detached adapter, so a harness with no background
   mode does not hold the dispatching process for the length of a Work Item.
 - `tools/ai-brain/jev.js`: the closed-question decision layer, with
@@ -125,6 +126,9 @@ and is not committed.
 | AC-AI-50-09 | Jev only offers roles the capability registry defines | `jev.test.js` asserts every offered role exists in `ROLES` |
 | AC-AI-50-10 | A live classification is logged with its confidence | real call on TASK-AI-44 → `planner.default`, confidence 0.98, written to the decision log |
 | AC-AI-50-11 | A non-authoring verdict does not reassign the author | same run kept `author.foundation` for TASK-AI-44 |
+| AC-AI-50-12 | A model too small for the harness is refused before launch | `jev.test.js` "the executor refuses before launching"; the runner is never called |
+| AC-AI-50-13 | A missing context window is not a refusal | `jev.test.js` "an unrecorded context window is not a refusal" |
+| AC-AI-50-14 | A detached run keeps its pid so it can be stopped | `jev.test.js` "a detached launch keeps its pid"; `stop` returns null when no pid was kept |
 
 ## Verification commands
 
@@ -141,16 +145,17 @@ Pending. The author does not review its own work.
 
 ## Residual limitations
 
-- Hermes has no background mode, so the adapter starts it detached and nothing
-  watches it afterwards. Paseo sessions can be listed, stopped and inspected;
-  a Hermes run can only be found through `hermes sessions list`.
-- Nothing yet stops a Hermes run: the adapter has no `stop`.
+- Hermes has no background mode, so nothing watches a run after it starts.
+  Paseo sessions can be listed and inspected; a Hermes run is found through
+  `hermes sessions list` or its recorded pid.
+- `stop` works only for a run whose pid was recorded at launch. A run started
+  by something else, or whose record was lost, can be stopped only by hand —
+  the adapter returns null rather than pretending otherwise.
 - Subagents Hermes spawns are not counted against the implementation ceiling.
 - `.worktrees/logs/jev.py` still exists and the shell dispatcher still uses it.
   Two implementations of the same contract can drift.
 - Jev's live verdict on TASK-AI-44 was `planner.default` at 0.98 — that item
   may genuinely need planning before an author takes it, which is a product
   decision for the human, not something this change acts on.
-- Hermes loads its own tools and rules, so a small-context model refuses the
-  request outright ("grown too large"). The pool must prefer models with a
-  large context for this harness, and nothing enforces that yet.
+- The context floor is a per-harness constant (32k for Hermes), not something
+  measured. A model that clears it can still be too small for a long task.

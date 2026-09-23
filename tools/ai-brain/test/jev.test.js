@@ -4,7 +4,16 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const jev = require('../jev');
-const { getHarness, handleToDir, DIR_HANDLE, runHarness } = require('../harness');
+const {
+  getHarness,
+  handleToDir,
+  DIR_HANDLE,
+  runHarness,
+  contextRefusal,
+  MIN_CONTEXT,
+} = require('../harness');
+const { executePlan, Outcome } = require('../executor');
+const { loadSources } = require('../sources');
 
 /** A transport that answers without a network, and records what was asked. */
 function fakeTransport(answers) {
@@ -16,6 +25,14 @@ function fakeTransport(answers) {
   };
   fn.calls = calls;
   return fn;
+}
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+function tempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-jev-'));
 }
 
 const withKey = (over) => Object.assign({ env: { TYPESAFE_API_KEY: 'k' } }, over || {});
@@ -253,5 +270,92 @@ describe('hermes harness', () => {
     });
     assert.equal(res.exitCode, -1);
     assert.match(res.stderr, /ENOENT/);
+  });
+});
+
+describe('a harness that needs room to think', () => {
+  test('a model below the floor is refused for hermes', () => {
+    // Hermes loads its own tools, rules and memory before the task starts, so
+    // an 8k model answers "this conversation has grown too large" and the run
+    // produces nothing. Observed live on 2026-09-23.
+    assert.match(contextRefusal('hermes', 8000), /^CONTEXT_TOO_SMALL/);
+    assert.equal(contextRefusal('hermes', MIN_CONTEXT.hermes), null);
+  });
+
+  test('an unrecorded context window is not a refusal', () => {
+    // The registry does not always carry one, and grounding a working model
+    // over a missing field is worse than letting the harness decide.
+    assert.equal(contextRefusal('hermes', undefined), null);
+    assert.equal(contextRefusal('hermes', 0), null);
+  });
+
+  test('a harness with no floor accepts anything', () => {
+    assert.equal(contextRefusal('paseo', 4000), null);
+    assert.equal(contextRefusal('cline', 4000), null);
+  });
+
+  test('the executor refuses before launching, not after the model does', () => {
+    const calls = [];
+    const plan = {
+      assignments: [
+        {
+          workItemId: 'TASK-AI-50',
+          role: 'analyst.default',
+          branch: 'slice/too-small',
+          accountId: 'ninerouter',
+          provider: 'hermes',
+          model: 'tiny',
+          contextWindow: 8000,
+        },
+      ],
+      deferred: [],
+      utilisation: { maxImplementation: 2 },
+    };
+    const result = executePlan(plan, {
+      registry: loadSources(),
+      dryRun: false,
+      decisionDir: tempDir(),
+      run: (adapter, args) => {
+        calls.push(args);
+        return { exitCode: 0, stdout: '{"pid":1}', stderr: '' };
+      },
+    });
+    assert.equal(result.records[0].outcome, Outcome.REFUSED);
+    assert.match(result.records[0].detail, /CONTEXT_TOO_SMALL/);
+    assert.equal(calls.length, 0, 'nothing may be launched that cannot work');
+  });
+
+  test('a detached launch keeps its pid, so the run can be stopped', () => {
+    const result = executePlan(
+      {
+        assignments: [
+          {
+            workItemId: 'TASK-AI-50',
+            role: 'analyst.default',
+            branch: 'slice/ok',
+            accountId: 'ninerouter',
+            provider: 'hermes',
+            model: 'big',
+            contextWindow: 200000,
+          },
+        ],
+        deferred: [],
+        utilisation: { maxImplementation: 2 },
+      },
+      {
+        registry: loadSources(),
+        dryRun: false,
+        cwd: 'C:/w',
+        decisionDir: tempDir(),
+        run: () => ({ exitCode: 0, stdout: '{"started":true,"pid":7788}', stderr: '' }),
+      }
+    );
+    assert.equal(result.records[0].outcome, Outcome.LAUNCHED);
+    assert.equal(result.records[0].pid, 7788);
+    assert.deepEqual(getHarness('hermes').stop('dir:C:/w', { pid: 7788 }), { kill: 7788 });
+  });
+
+  test('stopping a run whose pid was never kept says so rather than pretending', () => {
+    assert.equal(getHarness('hermes').stop('dir:C:/w', {}), null);
   });
 });
