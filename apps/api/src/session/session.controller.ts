@@ -1,5 +1,6 @@
 import {
   Controller,
+  Inject,
   Post,
   Get,
   Delete,
@@ -28,7 +29,7 @@ import { SessionGuard } from './session.guard';
  */
 @Controller('api/v1/sessions')
 export class SessionController {
-  constructor(private readonly sessionService: SessionService) {}
+  constructor(@Inject(SessionService) private readonly sessionService: SessionService) {}
 
   /** POST /api/v1/sessions — Create session (at login) — PUBLIC (no guard) */
   @Post()

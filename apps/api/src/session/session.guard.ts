@@ -1,4 +1,10 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Inject,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { SessionService } from './session.service';
 
@@ -16,7 +22,13 @@ import { SessionService } from './session.service';
  */
 @Injectable()
 export class SessionGuard implements CanActivate {
-  constructor(private readonly sessionService: SessionService) {}
+  // Explicit @Inject, like every other injectable in this app. The test and
+  // dev paths run through tsx, and esbuild does not emit decorator metadata
+  // whatever tsconfig says, so Nest has no parameter type to resolve and
+  // hands the constructor undefined. The guard then died on
+  // `this.sessionService.validateSession` with a 500 that read as an auth
+  // failure rather than a wiring one.
+  constructor(@Inject(SessionService) private readonly sessionService: SessionService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<Request>();
