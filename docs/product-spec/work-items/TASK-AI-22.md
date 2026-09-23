@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-22.md`, `tools/ai-brain/lessons/promote.js`, `tools/ai-brain/lessons/lesson-schema.json`, `tools/ai-brain/cli.js`, `tools/ai-brain/test/promote.test.js`, `tools/ai-brain/acceptance/ac-22-*.js`, `tools/ai-brain/acceptance/lib/lesson-promotion.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-22-promotion-gate` |
-| Pull Request | `pending` |
+| Pull Request | `#100` |
 
 ### Status transition ledger
 

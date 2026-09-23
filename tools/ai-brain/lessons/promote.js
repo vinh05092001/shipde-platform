@@ -21,7 +21,7 @@ const { execFileSync } = require('child_process');
 const { isAgentIdentity, AGENT_IDENTITIES } = require('../acceptance/lib/lesson-promotion');
 const { matchesViolations } = require('../acceptance/lib/lesson-schema');
 
-const DEFAULT_LESSONS_DIR = path.resolve(__dirname);
+const DEFAULT_LESSONS_DIR = null;
 const DEFAULT_SCHEMA_PATH = path.resolve(__dirname, 'lesson-schema.json');
 const DEFAULT_RECORD_FILE = 'promotion-record.jsonl';
 
@@ -35,6 +35,7 @@ const REFUSAL_CODES = {
   SCHEMA_VIOLATION: 'SCHEMA_VIOLATION',
   CREDENTIALS_OR_PII_DETECTED: 'CREDENTIALS_OR_PII_DETECTED',
   LESSON_NOT_FOUND: 'LESSON_NOT_FOUND',
+  LESSON_ALREADY_EXISTS: 'LESSON_ALREADY_EXISTS',
   MISSING_SUPERSEDING_ID: 'MISSING_SUPERSEDING_ID',
 };
 
@@ -74,7 +75,12 @@ function detectCredentialsOrPii(value) {
 }
 
 function resolveLessonsDir(options = {}) {
-  return options.dir || options.lessonsDir || process.env.BRAIN_LESSONS_DIR || DEFAULT_LESSONS_DIR;
+  const dir = options.dir || options.lessonsDir || process.env.BRAIN_LESSONS_DIR;
+  if (dir) return dir;
+  throw new PromotionError(
+    REFUSAL_CODES.LESSON_NOT_FOUND,
+    'lessons directory must be specified via --dir or BRAIN_LESSONS_DIR; defaulting to the platform repository is not permitted'
+  );
 }
 
 function resolveRecordPath(options = {}) {
@@ -95,9 +101,6 @@ function validateLesson(lesson, schemaPath) {
 }
 
 function getAuthenticatedApprover(options = {}) {
-  if (options.approver && typeof options.approver === 'string' && options.approver.trim()) {
-    return options.approver.trim();
-  }
   const envUser = process.env.GITHUB_USER || process.env.GITHUB_ACTOR || process.env.GH_USER;
   if (envUser && typeof envUser === 'string' && envUser.trim()) {
     return envUser.trim();
@@ -252,6 +255,14 @@ function proposeLesson(data, options = {}) {
     );
   }
 
+  const existing = readLesson(data.id, options);
+  if (existing) {
+    throw new PromotionError(
+      REFUSAL_CODES.LESSON_ALREADY_EXISTS,
+      `lesson '${data.id}' already exists as ${existing.lesson.status}; propose refuses to overwrite an existing lesson`
+    );
+  }
+
   const piiFinding = detectCredentialsOrPii(data);
   if (piiFinding) {
     throw new PromotionError(
@@ -260,11 +271,7 @@ function proposeLesson(data, options = {}) {
     );
   }
 
-  const sourceCommit =
-    data.source_commit ||
-    options.sourceCommit ||
-    resolveHeadSha(options.cwd) ||
-    '0000000000000000000000000000000000000000';
+  const sourceCommit = data.source_commit || options.sourceCommit || resolveHeadSha(options.cwd);
 
   const lesson = {
     id: data.id,
@@ -383,8 +390,6 @@ function approveLesson(id, options = {}) {
     );
   }
 
-  const writtenTo = writeLesson(lesson, existing, options);
-
   const record = appendPromotionRecord(
     {
       lesson_id: lesson.id,
@@ -397,6 +402,8 @@ function approveLesson(id, options = {}) {
     },
     options
   );
+
+  const writtenTo = writeLesson(lesson, existing, options);
 
   return {
     ok: true,
@@ -425,7 +432,6 @@ function rejectLesson(id, options = {}) {
     );
   }
 
-  const approver = getAuthenticatedApprover(options);
   const fromState = lesson.status;
   lesson.status = 'rejected';
   lesson.approved_by = null;
@@ -437,8 +443,6 @@ function rejectLesson(id, options = {}) {
       `AI-22-R07: rejected lesson violates schema: ${violations.join('; ')}`
     );
   }
-
-  const writtenTo = writeLesson(lesson, existing, options);
 
   const record = appendPromotionRecord(
     {
@@ -452,6 +456,8 @@ function rejectLesson(id, options = {}) {
     },
     options
   );
+
+  const writtenTo = writeLesson(lesson, existing, options);
 
   return {
     ok: true,
@@ -481,7 +487,11 @@ function supersedeLesson(id, replacingId, options = {}) {
   }
 
   const lesson = target.lesson;
-  if (lesson.status === 'rejected' || lesson.status === 'superseded') {
+  if (
+    lesson.status === 'proposed' ||
+    lesson.status === 'rejected' ||
+    lesson.status === 'superseded'
+  ) {
     throw new PromotionError(
       REFUSAL_CODES.INVALID_STATE,
       `cannot supersede lesson '${id}' currently in status '${lesson.status}'`
@@ -504,6 +514,35 @@ function supersedeLesson(id, replacingId, options = {}) {
   }
 
   const approver = getAuthenticatedApprover(options);
+  if (!approver) {
+    throw new PromotionError(
+      REFUSAL_CODES.UNAUTHENTICATED_APPROVER,
+      'AI-22-R04: could not determine authenticated GitHub login for operator'
+    );
+  }
+  const piiFinding = detectCredentialsOrPii(approver);
+  if (piiFinding) {
+    throw new PromotionError(
+      REFUSAL_CODES.CREDENTIALS_OR_PII_DETECTED,
+      `AI-22-R09: credentials or PII in approver login (${piiFinding})`
+    );
+  }
+  const proposerNormalized = String(lesson.proposed_by || '')
+    .trim()
+    .toLowerCase();
+  const approverNormalized = String(approver).trim().toLowerCase();
+  if (approverNormalized === proposerNormalized) {
+    throw new PromotionError(
+      REFUSAL_CODES.SELF_APPROVAL,
+      `AI-22-R02: lesson '${id}' proposed by '${lesson.proposed_by}' cannot be approved by its proposer '${approver}'`
+    );
+  }
+  if (isAgentIdentity(approver)) {
+    throw new PromotionError(
+      REFUSAL_CODES.AGENT_APPROVAL,
+      `AI-22-R03: approver '${approver}' is an agent identity, agent approval is prohibited`
+    );
+  }
   const fromState = lesson.status;
   lesson.status = 'superseded';
   lesson.superseded_by = cleanReplacingId;
@@ -516,14 +555,12 @@ function supersedeLesson(id, replacingId, options = {}) {
     );
   }
 
-  const writtenTo = writeLesson(lesson, target, options);
-
   const record = appendPromotionRecord(
     {
       lesson_id: lesson.id,
       from_state: fromState,
       to_state: 'superseded',
-      approver: approver || null,
+      approver,
       proposer: lesson.proposed_by,
       source_commit: lesson.source_commit,
       superseded_by: cleanReplacingId,
@@ -531,6 +568,8 @@ function supersedeLesson(id, replacingId, options = {}) {
     },
     options
   );
+
+  const writtenTo = writeLesson(lesson, target, options);
 
   return {
     ok: true,

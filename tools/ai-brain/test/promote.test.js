@@ -87,11 +87,15 @@ describe('AI-22-R01: An agent may propose', () => {
 
 describe('AI-22-R02: No one approves their own lesson (SELF_APPROVAL)', () => {
   let env;
+  const oldEnv = process.env.GITHUB_USER;
   beforeEach(() => {
     env = createTempEnv();
+    process.env.GITHUB_USER = 'vinh05092001';
   });
   afterEach(() => {
     cleanupTempEnv(env);
+    if (oldEnv === undefined) delete process.env.GITHUB_USER;
+    else process.env.GITHUB_USER = oldEnv;
   });
 
   test('refuses promotion when approver equals proposer', () => {
@@ -112,7 +116,6 @@ describe('AI-22-R02: No one approves their own lesson (SELF_APPROVAL)', () => {
         approveLesson('LESSON-SELF-APPROVAL-TEST', {
           dir: env.dir,
           schemaPath: env.schemaPath,
-          approver: 'vinh05092001',
         });
       },
       (err) => {
@@ -125,6 +128,7 @@ describe('AI-22-R02: No one approves their own lesson (SELF_APPROVAL)', () => {
   });
 
   test('refuses promotion case-insensitively for self approval', () => {
+    process.env.GITHUB_USER = 'vinh05092001';
     proposeLesson(
       {
         id: 'LESSON-SELF-APPROVAL-CASE',
@@ -142,7 +146,6 @@ describe('AI-22-R02: No one approves their own lesson (SELF_APPROVAL)', () => {
         approveLesson('LESSON-SELF-APPROVAL-CASE', {
           dir: env.dir,
           schemaPath: env.schemaPath,
-          approver: 'vinh05092001',
         });
       },
       { code: REFUSAL_CODES.SELF_APPROVAL }
@@ -152,11 +155,15 @@ describe('AI-22-R02: No one approves their own lesson (SELF_APPROVAL)', () => {
 
 describe('AI-22-R03: No agent approves (AGENT_APPROVAL)', () => {
   let env;
+  const oldEnv = process.env.GITHUB_USER;
   beforeEach(() => {
     env = createTempEnv();
+    process.env.GITHUB_USER = 'claude';
   });
   afterEach(() => {
     cleanupTempEnv(env);
+    if (oldEnv === undefined) delete process.env.GITHUB_USER;
+    else process.env.GITHUB_USER = oldEnv;
   });
 
   test('refuses approval by an agent even when different from proposer', () => {
@@ -172,13 +179,11 @@ describe('AI-22-R03: No agent approves (AGENT_APPROVAL)', () => {
       { dir: env.dir, schemaPath: env.schemaPath }
     );
 
-    // claude is a different agent than gemini, but still an agent
     assert.throws(
       () => {
         approveLesson('LESSON-AGENT-APPROVAL-TEST', {
           dir: env.dir,
           schemaPath: env.schemaPath,
-          approver: 'claude',
         });
       },
       (err) => {
@@ -191,6 +196,7 @@ describe('AI-22-R03: No agent approves (AGENT_APPROVAL)', () => {
   });
 
   test('refuses approval by agent in agent/model form', () => {
+    process.env.GITHUB_USER = 'codex/o3-mini';
     proposeLesson(
       {
         id: 'LESSON-AGENT-MODEL-FORM',
@@ -208,7 +214,6 @@ describe('AI-22-R03: No agent approves (AGENT_APPROVAL)', () => {
         approveLesson('LESSON-AGENT-MODEL-FORM', {
           dir: env.dir,
           schemaPath: env.schemaPath,
-          approver: 'codex/o3-mini',
         });
       },
       { code: REFUSAL_CODES.AGENT_APPROVAL }
@@ -276,11 +281,15 @@ describe('AI-22-R04: Approver identity from authenticated environment', () => {
 
 describe('AI-22-R05: Only proposed can be approved or rejected', () => {
   let env;
+  const oldEnv = process.env.GITHUB_USER;
   beforeEach(() => {
     env = createTempEnv();
+    process.env.GITHUB_USER = 'human-reviewer';
   });
   afterEach(() => {
     cleanupTempEnv(env);
+    if (oldEnv === undefined) delete process.env.GITHUB_USER;
+    else process.env.GITHUB_USER = oldEnv;
   });
 
   test('cannot approve an already approved lesson', () => {
@@ -299,7 +308,6 @@ describe('AI-22-R05: Only proposed can be approved or rejected', () => {
     approveLesson('LESSON-ALREADY-APPROVED-TEST', {
       dir: env.dir,
       schemaPath: env.schemaPath,
-      approver: 'human-reviewer',
     });
 
     assert.throws(
@@ -307,7 +315,6 @@ describe('AI-22-R05: Only proposed can be approved or rejected', () => {
         approveLesson('LESSON-ALREADY-APPROVED-TEST', {
           dir: env.dir,
           schemaPath: env.schemaPath,
-          approver: 'other-human',
         });
       },
       (err) => {
@@ -319,6 +326,7 @@ describe('AI-22-R05: Only proposed can be approved or rejected', () => {
   });
 
   test('cannot reject an already approved lesson', () => {
+    process.env.GITHUB_USER = 'human-reviewer';
     proposeLesson(
       {
         id: 'LESSON-REJECT-APPROVED-TEST',
@@ -351,11 +359,15 @@ describe('AI-22-R05: Only proposed can be approved or rejected', () => {
 
 describe('AI-22-R06: A superseding lesson must itself be approved', () => {
   let env;
+  const oldEnv = process.env.GITHUB_USER;
   beforeEach(() => {
     env = createTempEnv();
+    process.env.GITHUB_USER = 'human-reviewer';
   });
   afterEach(() => {
     cleanupTempEnv(env);
+    if (oldEnv === undefined) delete process.env.GITHUB_USER;
+    else process.env.GITHUB_USER = oldEnv;
   });
 
   test('refuses superseding when replacement does not exist', () => {
@@ -374,7 +386,6 @@ describe('AI-22-R06: A superseding lesson must itself be approved', () => {
     approveLesson('LESSON-TARGET-SUPERSEDE-1', {
       dir: env.dir,
       schemaPath: env.schemaPath,
-      approver: 'human-reviewer',
     });
 
     assert.throws(
@@ -404,7 +415,6 @@ describe('AI-22-R06: A superseding lesson must itself be approved', () => {
     approveLesson('LESSON-TARGET-SUPERSEDE-2', {
       dir: env.dir,
       schemaPath: env.schemaPath,
-      approver: 'human-reviewer',
     });
 
     proposeLesson(
@@ -446,7 +456,6 @@ describe('AI-22-R06: A superseding lesson must itself be approved', () => {
     approveLesson('LESSON-OLD-PRACTICE', {
       dir: env.dir,
       schemaPath: env.schemaPath,
-      approver: 'human-reviewer',
     });
 
     proposeLesson(
@@ -528,11 +537,15 @@ describe('AI-22-R07: Schema validation before write', () => {
 
 describe('AI-22-R08: Promotion record append-only log', () => {
   let env;
+  const oldEnv = process.env.GITHUB_USER;
   beforeEach(() => {
     env = createTempEnv();
+    process.env.GITHUB_USER = 'human-operator';
   });
   afterEach(() => {
     cleanupTempEnv(env);
+    if (oldEnv === undefined) delete process.env.GITHUB_USER;
+    else process.env.GITHUB_USER = oldEnv;
   });
 
   test('every transition is appended with all required fields', () => {
@@ -551,7 +564,6 @@ describe('AI-22-R08: Promotion record append-only log', () => {
     approveLesson('LESSON-RECORD-CYCLE', {
       dir: env.dir,
       schemaPath: env.schemaPath,
-      approver: 'human-operator',
     });
 
     const records = readPromotionRecords({ dir: env.dir });
@@ -659,20 +671,12 @@ describe('CLI Integration: tools/ai-brain/cli.js lesson', () => {
     assert.equal(proposeChild.status, 0);
     assert.match(proposeChild.stdout, /proposed: LESSON-CLI-TEST/);
 
-    // Approve with human approver
+    // Approve with human approver from authenticated environment
+    const approveEnv = Object.assign({}, process.env, { GITHUB_USER: 'alice-human' });
     const approveChild = cp.spawnSync(
       process.execPath,
-      [
-        cliPath,
-        'lesson',
-        'approve',
-        'LESSON-CLI-TEST',
-        '--approver',
-        'alice-human',
-        '--dir',
-        env.dir,
-      ],
-      { encoding: 'utf8' }
+      [cliPath, 'lesson', 'approve', 'LESSON-CLI-TEST', '--dir', env.dir],
+      { encoding: 'utf8', env: approveEnv }
     );
     assert.equal(approveChild.status, 0);
     assert.match(approveChild.stdout, /approved: LESSON-CLI-TEST by alice-human/);
@@ -692,19 +696,11 @@ describe('CLI Integration: tools/ai-brain/cli.js lesson', () => {
     );
     cp.spawnSync(process.execPath, [cliPath, 'lesson', 'propose', secondLesson, '--dir', env.dir]);
 
+    const selfApproveEnv = Object.assign({}, process.env, { GITHUB_USER: 'bob-author' });
     const selfApproveChild = cp.spawnSync(
       process.execPath,
-      [
-        cliPath,
-        'lesson',
-        'approve',
-        'LESSON-CLI-SELF',
-        '--approver',
-        'bob-author',
-        '--dir',
-        env.dir,
-      ],
-      { encoding: 'utf8' }
+      [cliPath, 'lesson', 'approve', 'LESSON-CLI-SELF', '--dir', env.dir],
+      { encoding: 'utf8', env: selfApproveEnv }
     );
     assert.equal(selfApproveChild.status, 1);
     assert.match(selfApproveChild.stderr, /SELF_APPROVAL/);
