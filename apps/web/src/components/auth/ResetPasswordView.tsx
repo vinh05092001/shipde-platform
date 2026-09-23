@@ -40,6 +40,10 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
   // Verify token on mount
   useEffect(() => {
     if (!tokenFromUrl) {
+      // A link with no token can be answered without asking the server, so this
+      // one state is set straight away. Same exemption and reason as
+      // ShipmentListTab, ThreeLedgersTab and AuthContext.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- no token to verify
       setState('INVALID_TOKEN');
       return;
     }
