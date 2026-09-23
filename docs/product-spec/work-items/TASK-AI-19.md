@@ -507,21 +507,27 @@ for items moved to `BACKLOG` remains bounded by `TASK-AI-20`.
 | `TASK-AI-09` | `#102` | `cd2a45dd6dd6f5c8182d9328ab4d2ef50d086980` | `PASS` |
 | `TASK-AI-10` | `#83` | `d804c27c79dc2c5545c81040110033751f91c686` | `PASS` |
 | `TASK-AI-21` | `#84` | `2b348f2bc49b21b3bc18c17cd5d3212cef872297` | `PASS` |
-| `TASK-AI-22` | `#79` | `685f400ed111486b5a83d172e7a2a7a9ab46f28f` | `CHANGES_REQUIRED` |
 | `TASK-AI-23` | `#115` | `12c4a175645bf3d522df6f429592af70729c53f4` | `PASS` |
 | `TASK-AI-25` | `#86` | `3c6ac43e2d3088022168cb0f5906ff02cd57e4d9` | `PASS` |
-| `TASK-AI-30` | `#87` | `583bb3696f5c51cedfbd355d8ee2e34807cc3b9f` | `PASS` |
-| `TASK-AI-36` | `#96` | `8cec992def3385da55596395db2e137411f0fece` | `PASS` |
+| `TASK-AI-30` | `#104` | `9a8c6b9716a0fb915a3b5297e40a2709954b7b06` | `PASS` |
+| `TASK-AI-36` | `#111` | `6a79166dec34b938bce4c6866379cc6783d00824` | `PASS` |
 | `TASK-AI-37` | `#103` | `d3401e7423bd4b093e1c8a87bb409e0c9f1502f0` | `PASS` |
 | `TASK-AI-39` | `#95` | `d27159099a34dcd8fe1881190228add5de69825a` | `PASS` |
 | `TASK-AI-41` | `#101` | `0496acf2bea52f137b5f20fdfaefa3a4db741806` | `PASS` |
 | `TASK-AI-43` | `#94` | `dc289e00c3fb5bb8165bc8c16fb6a7b047cce72c` | `PASS` |
 
-Recording these 12 merged items unblocks the following items whose dependencies are now all merged:
-- `TASK-AI-11` (dependency `TASK-AI-10` merged) -> `READY_FOR_AUTHOR`
-- `TASK-AI-31` (dependencies `TASK-AI-20` and `TASK-AI-25` merged) -> `READY_FOR_AUTHOR`
-- `TASK-AI-42` (dependency `TASK-AI-24` merged) -> `READY_FOR_AUTHOR`
+Recording these 11 merged items (TASK-AI-22 excluded: verdict `CHANGES_REQUIRED` does not permit `MERGED` transition per `AI-19-R04`):
+- `TASK-AI-11` (dependency `TASK-AI-10` merged) -> `BACKLOG` (per `AI-19-R03`: stale blocks clear to `BACKLOG`, not `READY_FOR_AUTHOR`)
+- `TASK-AI-31` remains `BLOCKED_DEPENDENCY` (dependency `TASK-AI-20` not merged)
+- `TASK-AI-42` remains `BLOCKED_DEPENDENCY` (dependency `TASK-AI-24` not merged)
 
 Items remaining blocked due to unmerged dependencies:
-- `TASK-AI-12` (depends on `TASK-AI-11`, not in main) -> `BLOCKED_DEPENDENCY`
+- `TASK-AI-12` (depends on `TASK-AI-11`, not merged) -> `BLOCKED_DEPENDENCY`
 - `TASK-AI-32` (depends on `TASK-AI-31`, not in main) -> `BLOCKED_DEPENDENCY`
+
+Corrections applied vs. original PR #117:
+- TASK-AI-30: corrected from PR #87 (`583bb3696f`) to PR #104 (`9a8c6b9716`) — authoritative merge on `origin/main`
+- TASK-AI-36: corrected from PR #96 (`8cec992def`) to PR #111 (`6a79166dec`) — authoritative merge on `origin/main`
+- TASK-AI-22: excluded from `MERGED` (verdict `CHANGES_REQUIRED`)
+- Dependent unblocking follows `AI-19-R03` strictly to `BACKLOG`; no bulk promotion to `READY_FOR_AUTHOR`
+- TASK-AI-46 row preserved (not deleted)
