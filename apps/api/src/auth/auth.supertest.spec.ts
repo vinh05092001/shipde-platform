@@ -556,9 +556,230 @@ async function runAuthSupertestSuite() {
     assert.strictEqual(res18.body.error.code, 'OTP_MAX_ATTEMPTS_EXCEEDED');
     console.log('  PASS: OTP brute-force locked out with 429 OTP_MAX_ATTEMPTS_EXCEEDED');
 
-    console.log('================================================================');
-    console.log('✅ ALL 18 SUPERTEST INTEGRATION TESTS PASSED (FEAT-AUTH-01)');
-    console.log('================================================================');
+    // -------------------------------------------------------------------------
+    // [TEST 19] Forgot Password Anti-Enumeration & Rate Limiting (FEAT-AUTH-04)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 19 / FEAT-AUTH-04] Forgot password anti-enumeration and rate limiting');
+
+    // 19a. Non-existent email returns generic 200 SENT (anti-enumeration)
+    const res19a = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.10')
+      .send({ identifier: `nonexistent.${testSuffix}@shipde.vn` })
+      .expect(200);
+    assert.strictEqual(res19a.body.data.status, 'SENT');
+    assert.strictEqual(res19a.body.data.channel, 'email');
+    console.log('  PASS: Non-existent email returned generic SENT (anti-enumeration)');
+
+    // 19b. Non-existent phone returns generic 200 SENT (anti-enumeration)
+    const res19b = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.11')
+      .send({ identifier: '0909999999' })
+      .expect(200);
+    assert.strictEqual(res19b.body.data.status, 'SENT');
+    assert.strictEqual(res19b.body.data.channel, 'phone');
+    console.log('  PASS: Non-existent phone returned generic SENT (anti-enumeration)');
+
+    // 19c. Unverified user returns generic 200 SENT (anti-enumeration)
+    const res19c = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.12')
+      .send({ identifier: `unverified.${testSuffix}@shipde.vn` })
+      .expect(200);
+    assert.strictEqual(res19c.body.data.status, 'SENT');
+    console.log('  PASS: Unverified user returned generic SENT (anti-enumeration)');
+
+    // 19d. Valid user gets token sent and stored in mock adapter
+    rateLimitService.clear();
+    const res19d = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({ identifier: email1 })
+      .expect(200);
+    assert.strictEqual(res19d.body.data.status, 'SENT');
+    assert.strictEqual(res19d.body.data.channel, 'email');
+    const lastMsg19d = mockDeliveryAdapter.getLastMessage();
+    assert.ok(lastMsg19d, 'Expected token delivery message');
+    assert.strictEqual(lastMsg19d.recipient, email1);
+    assert.ok(lastMsg19d.token, 'Expected reset token in delivery message');
+    const resetToken19d = lastMsg19d.token!;
+    console.log('  PASS: Valid user received reset token via delivery adapter');
+
+    // 19e. IP rate limit: 5 requests/hour per IP
+    rateLimitService.clear();
+    for (let i = 1; i <= 5; i++) {
+      await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', '198.51.100.50')
+        .send({ identifier: `rateip${i}.${testSuffix}@shipde.vn` })
+        .expect(200);
+    }
+    const res19e = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '198.51.100.50')
+      .send({ identifier: `rateip6.${testSuffix}@shipde.vn` })
+      .expect(429);
+    assert.strictEqual(res19e.body.error.code, 'RATE_LIMITED');
+    console.log('  PASS: IP rate limit enforced at 5 requests/hour (429 RATE_LIMITED)');
+
+    // 19f. Identifier rate limit: 3 requests/hour per identifier
+    rateLimitService.clear();
+    const testId19f = `rateid.${testSuffix}@shipde.vn`;
+    for (let i = 1; i <= 3; i++) {
+      await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', `198.51.100.${50 + i}`)
+        .send({ identifier: testId19f })
+        .expect(200);
+    }
+    const res19f = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '198.51.100.55')
+      .send({ identifier: testId19f })
+      .expect(429);
+    assert.strictEqual(res19f.body.error.code, 'RATE_LIMITED');
+    console.log('  PASS: Identifier rate limit enforced at 3 requests/hour (429 RATE_LIMITED)');
+
+    // 19g. Invalid email format returns 400 VALIDATION_ERROR
+    const res19g = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .send({ identifier: 'invalid-email' })
+      .expect(400);
+    assert.strictEqual(res19g.body.error.code, 'VALIDATION_ERROR');
+    assert.strictEqual(res19g.body.error.fields[0].field, 'identifier');
+    console.log('  PASS: Invalid email format rejected with 400 VALIDATION_ERROR');
+
+    // 19h. Invalid phone format returns 400 VALIDATION_ERROR
+    const res19h = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .send({ identifier: '12345' })
+      .expect(400);
+    assert.strictEqual(res19h.body.error.code, 'VALIDATION_ERROR');
+    assert.strictEqual(res19h.body.error.fields[0].field, 'identifier');
+    console.log('  PASS: Invalid phone format rejected with 400 VALIDATION_ERROR');
+
+    // 19i. Empty identifier returns 400 VALIDATION_ERROR
+    const res19i = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .send({ identifier: '' })
+      .expect(400);
+    assert.strictEqual(res19i.body.error.code, 'VALIDATION_ERROR');
+    assert.strictEqual(res19i.body.error.fields[0].field, 'identifier');
+    console.log('  PASS: Empty identifier rejected with 400 VALIDATION_ERROR');
+
+    // -------------------------------------------------------------------------
+    // [TEST 20] Verify Reset Token (FEAT-AUTH-04)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 20 / FEAT-AUTH-04] Verify reset token');
+
+    // 20a. Valid token returns identifier and channel
+    const res20a = await request(app.getHttpServer())
+      .post('/auth/verify-reset-token')
+      .send({ token: resetToken19d })
+      .expect(200);
+    assert.strictEqual(res20a.body.data.valid, true);
+    assert.strictEqual(res20a.body.data.identifier, email1);
+    assert.strictEqual(res20a.body.data.channel, 'email');
+    console.log('  PASS: Valid token returns identifier and channel');
+
+    // 20b. Invalid token returns 400 INVALID_TOKEN
+    const res20b = await request(app.getHttpServer())
+      .post('/auth/verify-reset-token')
+      .send({ token: 'invalid-token-123' })
+      .expect(400);
+    assert.strictEqual(res20b.body.error.code, 'INVALID_TOKEN');
+    console.log('  PASS: Invalid token rejected with 400 INVALID_TOKEN');
+
+    // 20c. Missing token returns 400 VALIDATION_ERROR
+    const res20c = await request(app.getHttpServer())
+      .post('/auth/verify-reset-token')
+      .send({})
+      .expect(400);
+    assert.strictEqual(res20c.body.error.code, 'VALIDATION_ERROR');
+    assert.strictEqual(res20c.body.error.fields[0].field, 'token');
+    console.log('  PASS: Missing token rejected with 400 VALIDATION_ERROR');
+
+    // -------------------------------------------------------------------------
+    // [TEST 21] Reset Password (FEAT-AUTH-04)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 21 / FEAT-AUTH-04] Reset password');
+
+    // 21a. Valid token + strong matching password → 200, token consumed, sessions revoked
+    const res21a = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({
+        token: resetToken19d,
+        password: 'NewPassword123!',
+        password_confirm: 'NewPassword123!',
+      })
+      .expect(200);
+    assert.strictEqual(
+      res21a.body.data.message,
+      'Mật khẩu đã được đặt lại thành công. Tất cả phiên đăng nhập khác đã bị thu hồi.'
+    );
+    console.log('  PASS: Valid reset succeeded, token consumed, sessions revoked');
+
+    // 21b. Reuse consumed token → 400 TOKEN_ALREADY_USED
+    const res21b = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({
+        token: resetToken19d,
+        password: 'AnotherPass123!',
+        password_confirm: 'AnotherPass123!',
+      })
+      .expect(400);
+    assert.strictEqual(res21b.body.error.code, 'TOKEN_ALREADY_USED');
+    console.log('  PASS: Consumed token rejected with 400 TOKEN_ALREADY_USED');
+
+    // 21c. Invalid token + valid password → 400 INVALID_TOKEN
+    const res21c = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({
+        token: 'invalid-token-xyz',
+        password: 'ValidPass123!',
+        password_confirm: 'ValidPass123!',
+      })
+      .expect(400);
+    assert.strictEqual(res21c.body.error.code, 'INVALID_TOKEN');
+    console.log('  PASS: Invalid token rejected with 400 INVALID_TOKEN');
+
+    // 21d. Fresh token + weak password → 400 VALIDATION_ERROR with WEAK_PASSWORD
+    rateLimitService.clear();
+    const res21dFP = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({ identifier: email1 })
+      .expect(200);
+    const lastMsg21d = mockDeliveryAdapter.getLastMessage();
+    const resetToken21d = lastMsg21d.token!;
+    const res21d = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({ token: resetToken21d, password: 'weakpass', password_confirm: 'weakpass' })
+      .expect(400);
+    assert.strictEqual(res21d.body.error.code, 'VALIDATION_ERROR');
+    const weakField = res21d.body.error.fields?.find((f) => f.code === 'WEAK_PASSWORD');
+    assert.ok(weakField, 'Expected WEAK_PASSWORD field error');
+    console.log('  PASS: Weak password rejected with 400 VALIDATION_ERROR WEAK_PASSWORD');
+
+    // 21e. Fresh token + password mismatch → 400 VALIDATION_ERROR with MISMATCH
+    const res21e = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({
+        token: resetToken21d,
+        password: 'ValidPass123!',
+        password_confirm: 'DifferentPass123!',
+      })
+      .expect(400);
+    assert.strictEqual(res21e.body.error.code, 'VALIDATION_ERROR');
+    const mismatchField = res21e.body.error.fields?.find((f) => f.code === 'MISMATCH');
+    assert.ok(mismatchField, 'Expected MISMATCH field error');
+    console.log('  PASS: Password mismatch rejected with 400 VALIDATION_ERROR MISMATCH');
   } finally {
     await app.close();
   }
@@ -567,6 +788,6 @@ async function runAuthSupertestSuite() {
 runAuthSupertestSuite()
   .then(() => process.exit(0))
   .catch((err) => {
-    console.error('❌ Auth Supertest Suite Failed:', err);
+    console.error('Auth Supertest Suite Failed:', err);
     process.exit(1);
   });

@@ -6,6 +6,9 @@ import {
   VerifyEmailDto,
   VerifyPhoneDto,
   ResendVerificationDto,
+  ForgotPasswordDto,
+  VerifyResetTokenDto,
+  ResetPasswordDto,
 } from './auth.service';
 import { normalizeCorrelationId } from '@shipde/config';
 
@@ -61,6 +64,44 @@ export class AuthController {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = this.extractClientIp(req);
     const result = await this.authService.resendVerification(dto, clientIp, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = this.extractClientIp(req);
+    const result = await this.authService.forgotPassword(dto, clientIp, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('verify-reset-token')
+  @HttpCode(HttpStatus.OK)
+  async verifyResetToken(
+    @Body() dto: VerifyResetTokenDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const result = await this.authService.verifyResetToken(dto, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = this.extractClientIp(req);
+    const result = await this.authService.resetPassword(dto, clientIp, correlationId);
     return res.status(HttpStatus.OK).json(result);
   }
 

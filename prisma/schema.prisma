@@ -146,11 +146,12 @@ model User {
   created_at        DateTime          @default(now()) @db.Timestamptz
   updated_at        DateTime          @updatedAt @db.Timestamptz
 
-  merchant          Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
-  assigned_cases    ExceptionCase[]   @relation("CaseAssignee")
-  contact_logs      ExceptionContactLog[]
-  device_sessions   DeviceSession[]
-  verification_tokens VerificationToken[]
+  merchant              Merchant              @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  assigned_cases        ExceptionCase[]       @relation("CaseAssignee")
+  contact_logs          ExceptionContactLog[]
+  device_sessions       DeviceSession[]
+  verification_tokens   VerificationToken[]
+  password_reset_tokens PasswordResetToken[]
 
   @@index([merchant_id, role])
   @@map("users")
@@ -172,6 +173,23 @@ model VerificationToken {
   @@index([user_id])
   @@index([identifier, channel])
   @@map("verification_tokens")
+}
+
+model PasswordResetToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  user_id      String    @db.Uuid
+  token        String    @unique @db.VarChar(255)
+  channel      String    @db.VarChar(16)
+  identifier   String    @db.VarChar(255)
+  expires_at   DateTime  @db.Timestamptz
+  consumed_at  DateTime? @db.Timestamptz
+  created_at   DateTime  @default(now()) @db.Timestamptz
+
+  user         User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([identifier, channel])
+  @@map("password_reset_tokens")
 }
 
 model DeviceSession {

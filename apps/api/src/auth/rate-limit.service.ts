@@ -119,6 +119,39 @@ export class RateLimitService {
     return { allowed: true };
   }
 
+  /**
+   * Check forgot password rate limits (FEAT-AUTH-04):
+   * - IP: max 5 attempts per 3600 seconds
+   * - Identifier (email or phone): max 3 attempts per 3600 seconds
+   */
+  async checkForgotPasswordLimit(identifier: string): Promise<RateLimitResult> {
+    const windowSeconds = 3600;
+    const key = `ratelimit:forgot:${identifier}`;
+
+    const check = await this.getAttempts(key, windowSeconds);
+    // IP addresses typically don't contain @ or . - for IP allow 5/hour, for email/phone allow 3/hour
+    const maxAttempts = identifier.includes('@') || identifier.includes('.') ? 3 : 5;
+
+    if (check.count >= maxAttempts) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: `Too many forgot password attempts for ${identifier}`,
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  /**
+   * Record a forgot password attempt.
+   */
+  async recordForgotPasswordAttempt(ip: string, identifier: string): Promise<void> {
+    const windowSeconds = 3600;
+    await this.recordAttemptKey(`ratelimit:forgot:${ip}`, windowSeconds);
+    await this.recordAttemptKey(`ratelimit:forgot:${identifier}`, windowSeconds);
+  }
+
   async recordResendAttempt(
     identifier: string,
     channel: string,
