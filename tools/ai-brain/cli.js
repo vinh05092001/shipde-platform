@@ -583,7 +583,7 @@ function quotaCommand(args) {
  * Dry run unless --execute is given; the plan comes from --plan <file> or is
  * built from READY_FOR_AUTHOR register rows and the account registry.
  */
-function dispatchCommand(args) {
+async function dispatchCommand(args) {
   const fs = require('fs');
   const { executePlan } = require('./executor');
   const rootDir = args.root || process.cwd();
@@ -631,15 +631,62 @@ function dispatchCommand(args) {
       process.exit(2);
     }
     const register = loadRegister(csvPath, null, rootDir);
-    const items = ((register.data && register.data.items) || [])
-      .filter((row) => row.status === 'READY_FOR_AUTHOR')
-      .map((row) => ({
-        workItemId: row.work_item_id,
-        role: 'author.foundation',
-        branch: row.branch || null,
-        riskDomains: [],
-        priority: 0,
-      }));
+    const rows = ((register.data && register.data.items) || []).filter(
+      (row) => row.status === 'READY_FOR_AUTHOR'
+    );
+    const items = rows.map((row) => ({
+      workItemId: row.work_item_id,
+      role: 'author.foundation',
+      branch: row.branch || null,
+      riskDomains: [],
+      priority: 0,
+    }));
+
+    // TASK-AI-50: every item used to be an author.foundation, which ranked a
+    // top-grade model for work that is sometimes a fixture. Jev answers that
+    // closed question in about a second; below its confidence floor, or with
+    // Jev unreachable, the item keeps the conservative default, which is the
+    // behaviour that existed before this call.
+    if (args['no-jev'] !== true) {
+      const jev = require('./jev');
+      const decisions = require('./decisions');
+      const logOpts = { dir: args['decision-dir'] || undefined };
+      for (let i = 0; i < items.length; i += 1) {
+        const row = rows[i];
+        const verdict = await jev.classifyTask({
+          workItemId: row.work_item_id,
+          outcome: row.outcome || row.title || null,
+          inScope: row.rationale || null,
+        });
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.SELECTED,
+            workItemId: row.work_item_id,
+            detail: 'role classification by jev',
+            candidates: [
+              'author.lowrisk',
+              'author.foundation',
+              'reviewer.primary',
+              'planner.default',
+            ],
+            chosen: verdict.role || items[i].role,
+            jev: {
+              outcome: verdict.outcome,
+              confidence: verdict.confidence,
+              accepted: Boolean(verdict.role),
+              detail: verdict.detail,
+            },
+          },
+          logOpts
+        );
+        // A planner or reviewer verdict does not change who authors an item
+        // that the register has already marked ready for an author; only the
+        // two authoring roles are acted on.
+        if (verdict.role === 'author.lowrisk' || verdict.role === 'author.foundation') {
+          items[i].role = verdict.role;
+        }
+      }
+    }
     // TASK-AI-49: the machine's free memory is the second ceiling, and the
     // planner needs it stated rather than assumed. Omitting --free-mb lets it
     // read the host, which is the right default for an unattended run.
@@ -806,7 +853,15 @@ function main() {
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
-  if (command === 'dispatch') return dispatchCommand(args);
+  // dispatch is async (it may ask Jev to classify each item). A rejection here
+  // must not disappear into an unhandled promise: the operator would see an
+  // empty run and no reason for it.
+  if (command === 'dispatch') {
+    return dispatchCommand(args).catch((err) => {
+      console.error('Dispatch failed: ' + ((err && err.message) || err));
+      process.exitCode = 1;
+    });
+  }
   if (command === 'shadow') return shadowCommand(args);
   // account add | account limits | account secret (TASK-AI-29). The account
   // surface parses its own argv strictly, so a mistyped flag is refused

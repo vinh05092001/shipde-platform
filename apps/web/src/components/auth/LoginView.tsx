@@ -563,3 +563,5 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
     </div>
   );
 };
+
+export default LoginView;

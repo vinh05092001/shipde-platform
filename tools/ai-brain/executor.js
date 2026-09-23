@@ -32,7 +32,7 @@
 
 const { REVIEW_ROLES, IMPLEMENTATION_ROLES } = require('./scheduler');
 const { offeringId: toOfferingId } = require('./offerings');
-const { getHarness, runHarness, parseLastJson } = require('./harness');
+const { getHarness, runHarness, parseLastJson, contextRefusal } = require('./harness');
 const { loadSources, dispatchRoute, qualifyModel } = require('./sources');
 const decisions = require('./decisions');
 
@@ -232,6 +232,17 @@ function executePlan(plan, options) {
     }
     record.harness = adapter.id;
 
+    // A harness with a context floor must refuse a model below it here, not
+    // discover it in the session. Hermes loads its own tools and rules before
+    // the task starts, so a small model answers "this conversation has grown
+    // too large" and the run produces nothing — a launch that was never going
+    // to work, charged for and logged as if it might.
+    const tooSmall = contextRefusal(adapter.id, a.contextWindow);
+    if (tooSmall) {
+      refuse(tooSmall);
+      continue;
+    }
+
     const isReview = REVIEW_ROLES.has(a.role);
     const existing = isReview ? null : openByItem.get(a.workItemId);
 
@@ -263,6 +274,20 @@ function executePlan(plan, options) {
       writerBranches.add(a.branch);
     }
     if (IMPLEMENTATION_ROLES.has(a.role)) implementationCount += 1;
+
+    // One description of the job, given to whichever call runs it. A resume
+    // needs it too: a harness whose durable handle is a workspace (Hermes)
+    // cannot resume from an id alone.
+    const job = {
+      provider: route.provider,
+      model: route.model,
+      prompt: promptFor(a),
+      branch: isReview ? null : a.branch,
+      base: opts.base || 'main',
+      cwd: opts.cwd,
+      title: workerName(a.workItemId),
+      labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
+    };
 
     const resuming = Boolean(existing && existing.sessionId && adapter.resume);
 
@@ -316,17 +341,8 @@ function executePlan(plan, options) {
     }
 
     record.args = resuming
-      ? adapter.resume(existing.sessionId, resumePrompt(a))
-      : adapter.launch({
-          provider: route.provider,
-          model: route.model,
-          prompt: promptFor(a),
-          branch: isReview ? null : a.branch,
-          base: opts.base || 'main',
-          cwd: opts.cwd,
-          title: workerName(a.workItemId),
-          labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
-        });
+      ? adapter.resume(existing.sessionId, resumePrompt(a), job)
+      : adapter.launch(job);
 
     if (dryRun) {
       record.outcome = Outcome.DRY_RUN;
@@ -389,7 +405,7 @@ function executePlan(plan, options) {
       fail('HARNESS_INVALID_JSON');
       continue;
     }
-    const id = resuming ? existing.sessionId : adapter.sessionIdFrom(parsed);
+    const id = resuming ? existing.sessionId : adapter.sessionIdFrom(parsed, job);
     if (!id) {
       // No id means no way to find this session again, which makes it
       // unstoppable and unresumable. Reported as failed so a human looks.
@@ -399,6 +415,9 @@ function executePlan(plan, options) {
 
     record.outcome = resuming ? Outcome.RESUMED : Outcome.LAUNCHED;
     record.sessionId = id;
+    // A detached harness reports its pid and nothing else can find it again;
+    // without this the operator's only way to stop the run is Task Manager.
+    if (parsed && parsed.pid) record.pid = parsed.pid;
     decisions.recordDecision(
       {
         stage: resuming ? decisions.Stage.RESUMED : decisions.Stage.LAUNCHED,
@@ -407,6 +426,7 @@ function executePlan(plan, options) {
         chosen: record.offeringId,
         harness: adapter.id,
         sessionId: id,
+        pid: (parsed && parsed.pid) || null,
         branch: a.branch,
       },
       logOpts

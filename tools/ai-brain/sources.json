@@ -14,7 +14,10 @@
         "env": "NINEROUTER_API_KEY",
         "store": "%APPDATA%/9router/db/data.sqlite:apiKeys"
       },
-      "verify": { "method": "models-list", "path": "/models" },
+      "verify": {
+        "method": "models-list",
+        "path": "/models"
+      },
       "modelPrefix": "ninerouter/",
       "comment": "A gateway, not a model vendor. Its catalog is the union of the accounts logged into it, so a model id here is evidence of routing, never of capacity."
     },
@@ -25,9 +28,18 @@
       "servesModels": true,
       "reachedVia": "9router",
       "routerAlias": "kr",
-      "credential": { "type": "oauth", "store": "9router:providerConnections" },
-      "verify": { "method": "completion" },
-      "quota": { "unit": "credit", "perMonth": 50, "scope": "account" }
+      "credential": {
+        "type": "oauth",
+        "store": "9router:providerConnections"
+      },
+      "verify": {
+        "method": "completion"
+      },
+      "quota": {
+        "unit": "credit",
+        "perMonth": 50,
+        "scope": "account"
+      }
     },
     {
       "id": "bai",
@@ -39,7 +51,9 @@
         "env": "BAI_API_KEY",
         "keyDirs": ["bai1", "bai2", "bai3", "bai4", "bai5", "bai6", "bai7"]
       },
-      "verify": { "method": "completion" }
+      "verify": {
+        "method": "completion"
+      }
     },
     {
       "id": "agy-local",
@@ -52,7 +66,10 @@
         "store": "windows-credential-manager:gemini:antigravity",
         "perWindowsUser": true
       },
-      "verify": { "method": "quota-command", "command": "agy -p /quota --output-format json" },
+      "verify": {
+        "method": "quota-command",
+        "command": "agy -p /quota --output-format json"
+      },
       "quota": {
         "unit": "fraction",
         "windows": ["5h", "weekly"],
@@ -66,8 +83,14 @@
       "kind": "agent-cli",
       "servesModels": false,
       "harness": "cline",
-      "credential": { "type": "account", "store": "~/.cline-*/data" },
-      "verify": { "method": "version-command", "command": "cline version" },
+      "credential": {
+        "type": "account",
+        "store": "~/.cline-*/data"
+      },
+      "verify": {
+        "method": "version-command",
+        "command": "cline version"
+      },
       "comment": "A harness. It brings no models of its own: every model it runs arrives through 9Router or a configured endpoint."
     },
     {
@@ -76,8 +99,14 @@
       "kind": "agent-cli",
       "servesModels": false,
       "harness": "autoclaw",
-      "credential": { "type": "account", "store": "~/.openclaw" },
-      "verify": { "method": "version-command", "command": "openclaw --version" }
+      "credential": {
+        "type": "account",
+        "store": "~/.openclaw"
+      },
+      "verify": {
+        "method": "version-command",
+        "command": "openclaw --version"
+      }
     },
     {
       "id": "paseo",
@@ -86,8 +115,13 @@
       "servesModels": false,
       "harness": "paseo",
       "endpoint": "http://127.0.0.1:6767",
-      "credential": { "type": "none" },
-      "verify": { "method": "daemon-ping", "command": "paseo ls -g --json" },
+      "credential": {
+        "type": "none"
+      },
+      "verify": {
+        "method": "daemon-ping",
+        "command": "paseo ls -g --json"
+      },
       "comment": "Opens, watches, stops and resumes agent sessions. It replaced AO on 2026-09-22 and chooses no model itself."
     },
     {
@@ -96,10 +130,19 @@
       "kind": "harness",
       "servesModels": false,
       "harness": "hermes",
-      "credential": { "type": "api-key", "env": "HERMES_MODEL_ENDPOINT" },
-      "verify": { "method": "version-command", "command": "hermes --version" },
-      "modelPool": "registry",
-      "comment": "Planning harness with tool use and subagents. Its reasoning model is resolved per task from the registry, never pinned."
+      "credential": {
+        "type": "api-key",
+        "env": "NINEROUTER_API_KEY",
+        "store": "hermes-home/.env"
+      },
+      "verify": {
+        "method": "version-command",
+        "command": "hermes --version"
+      },
+      "modelPool": "registry via 9router",
+      "comment": "Planning harness with tool use and subagents. Installed 2026-09-23 and pointed at 9Router, so its reasoning model is resolved per task from the registry and passed as -m; nothing is pinned. Its durable handle is the workspace directory, not a session id: it resumes with --resume latest --in.",
+      "installedVersion": "0.21.4",
+      "config": "%LOCALAPPDATA%/hermes/config.yaml"
     },
     {
       "id": "tencent",
@@ -107,8 +150,13 @@
       "kind": "model-source",
       "servesModels": true,
       "endpoint": "https://tokenhub-intl.tencentcloudmaas.com/v1",
-      "credential": { "type": "api-key", "env": "TENCENT_TOKENHUB_API_KEY" },
-      "verify": { "method": "completion" }
+      "credential": {
+        "type": "api-key",
+        "env": "TENCENT_TOKENHUB_API_KEY"
+      },
+      "verify": {
+        "method": "completion"
+      }
     },
     {
       "id": "rqsty",
@@ -116,8 +164,13 @@
       "kind": "router",
       "servesModels": true,
       "endpoint": "https://router.requesty.ai/v1",
-      "credential": { "type": "api-key", "env": "REQUESTY_API_KEY" },
-      "verify": { "method": "completion" }
+      "credential": {
+        "type": "api-key",
+        "env": "REQUESTY_API_KEY"
+      },
+      "verify": {
+        "method": "completion"
+      }
     },
     {
       "id": "thb",
@@ -125,9 +178,17 @@
       "kind": "router",
       "servesModels": true,
       "endpoint": "https://tokenharbor.ai/v1",
-      "credential": { "type": "api-key", "env": "TOKENHARBOR_API_KEY" },
-      "verify": { "method": "completion" },
-      "quota": { "unit": "request", "window": "daily" }
+      "credential": {
+        "type": "api-key",
+        "env": "TOKENHARBOR_API_KEY"
+      },
+      "verify": {
+        "method": "completion"
+      },
+      "quota": {
+        "unit": "request",
+        "window": "daily"
+      }
     },
     {
       "id": "codex",
@@ -135,9 +196,18 @@
       "kind": "agent-cli",
       "servesModels": false,
       "harness": "codex",
-      "credential": { "type": "account", "store": "~/.codex" },
-      "verify": { "method": "version-command", "command": "codex --version" },
-      "quota": { "unit": "session", "window": "5h" }
+      "credential": {
+        "type": "account",
+        "store": "~/.codex"
+      },
+      "verify": {
+        "method": "version-command",
+        "command": "codex --version"
+      },
+      "quota": {
+        "unit": "session",
+        "window": "5h"
+      }
     },
     {
       "id": "qwen",
@@ -145,8 +215,14 @@
       "kind": "agent-cli",
       "servesModels": true,
       "harness": "qwen",
-      "credential": { "type": "account", "store": "~/.qwen" },
-      "verify": { "method": "version-command", "command": "qwen --version" }
+      "credential": {
+        "type": "account",
+        "store": "~/.qwen"
+      },
+      "verify": {
+        "method": "version-command",
+        "command": "qwen --version"
+      }
     },
     {
       "id": "oc",
@@ -155,8 +231,13 @@
       "servesModels": false,
       "harness": "opencode",
       "reachedVia": "9router",
-      "credential": { "type": "none" },
-      "verify": { "method": "version-command", "command": "opencode --version" },
+      "credential": {
+        "type": "none"
+      },
+      "verify": {
+        "method": "version-command",
+        "command": "opencode --version"
+      },
       "comment": "The path Paseo uses to reach every 9Router model; it must be given an explicit --model."
     },
     {
@@ -165,29 +246,64 @@
       "kind": "decision-service",
       "servesModels": false,
       "endpoint": "https://api.typesafe.ai/v1/systemone",
-      "credential": { "type": "api-key", "env": "TYPESAFE_API_KEY", "store": "~/.typesafe-key" },
-      "verify": { "method": "closed-question" },
+      "credential": {
+        "type": "api-key",
+        "env": "TYPESAFE_API_KEY",
+        "store": "~/.typesafe-key"
+      },
+      "verify": {
+        "method": "closed-question"
+      },
       "mayWriteCode": false,
       "minConfidence": 0.7,
-      "comment": "Closed, checkable questions only — classify a task, filter lanes. Below minConfidence the answer is discarded and a reasoning model decides."
+      "comment": "Closed, checkable questions only — classify a Work Item, pick among probed lanes, name a CI failure, judge a quiet session. The module has no free-text mode, so it cannot be asked to write code or to call a Work Item done. Below minConfidence the answer is discarded and a reasoning model decides; an unreachable Jev is undecided, never a guess.",
+      "module": "tools/ai-brain/jev.js"
     }
   ],
   "dispatch": {
     "note": "How a registry account's `provider` reaches a running session. This table is why the executor needs no provider branch: a new provider is a row here.",
     "providers": {
-      "claude-code": { "harness": "paseo", "provider": "claude" },
-      "anthropic": { "harness": "paseo", "provider": "claude" },
+      "claude-code": {
+        "harness": "paseo",
+        "provider": "claude"
+      },
+      "anthropic": {
+        "harness": "paseo",
+        "provider": "claude"
+      },
       "antigravity": {
         "harness": "paseo",
         "provider": "opencode",
         "modelPrefix": "ninerouter/ag/"
       },
-      "gemini": { "harness": "paseo", "provider": "opencode", "modelPrefix": "ninerouter/ag/" },
-      "oc": { "harness": "paseo", "provider": "opencode", "modelPrefix": "ninerouter/" },
-      "9router": { "harness": "paseo", "provider": "opencode", "modelPrefix": "ninerouter/" },
-      "codex": { "harness": "paseo", "provider": "codex" },
-      "copilot": { "harness": "paseo", "provider": "copilot" },
-      "hermes": { "harness": "hermes", "provider": "hermes" }
+      "gemini": {
+        "harness": "paseo",
+        "provider": "opencode",
+        "modelPrefix": "ninerouter/ag/"
+      },
+      "oc": {
+        "harness": "paseo",
+        "provider": "opencode",
+        "modelPrefix": "ninerouter/"
+      },
+      "9router": {
+        "harness": "paseo",
+        "provider": "opencode",
+        "modelPrefix": "ninerouter/"
+      },
+      "codex": {
+        "harness": "paseo",
+        "provider": "codex"
+      },
+      "copilot": {
+        "harness": "paseo",
+        "provider": "copilot"
+      },
+      "hermes": {
+        "harness": "hermes",
+        "provider": "hermes",
+        "modelPrefix": ""
+      }
     }
   },
   "retired": [
