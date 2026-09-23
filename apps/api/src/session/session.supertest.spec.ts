@@ -182,7 +182,7 @@ async function runSessionSupertestSuite() {
 
     assert.strictEqual(res3.body.session_id, createdSessionId);
     assert.strictEqual(res3.body.status, 'REVOKED');
-    assert.ok(res3.body.message.includes('thu hoi'));
+    assert.ok(res3.body.message.includes('thu hồi'));
     console.log('  PASS: AC-SESS-03 Session revoked');
 
     // AC-SESS-04: Revoke already-revoked is idempotent
@@ -261,7 +261,7 @@ async function runSessionSupertestSuite() {
       .expect(200);
 
     assert.ok(res7.body.revoked_count >= 1);
-    assert.ok(res7.body.message.includes('thu hoi'));
+    assert.ok(res7.body.message.includes('thu hồi'));
     console.log(`  PASS: AC-SESS-07 Revoke-all: ${res7.body.revoked_count} sessions`);
 
     // AC-SESS-08: Missing Bearer token returns 401
