@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Ship Dễ — Source registry (TASK-AI-48)
+ * Ship Dễ — Source registry (TASK-AI-49)
  *
  * The dashboard lists twelve "sources" side by side, which invites a mistake
  * this module exists to prevent: treating them as twelve suppliers of model

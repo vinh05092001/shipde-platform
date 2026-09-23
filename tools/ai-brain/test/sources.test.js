@@ -125,11 +125,11 @@ describe('harness adapters', () => {
       prompt: 'do the thing',
       branch: 'feat/x',
       base: 'main',
-      labels: { workItem: 'TASK-AI-48' },
+      labels: { workItem: 'TASK-AI-49' },
     });
     assert.ok(args.includes('--background'));
     assert.equal(args[args.indexOf('--mode') + 1], 'full-access');
-    assert.equal(args[args.indexOf('--label') + 1], 'workItem=TASK-AI-48');
+    assert.equal(args[args.indexOf('--label') + 1], 'workItem=TASK-AI-49');
     assert.equal(args[args.length - 1], 'do the thing');
   });
 

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Ship Dễ — Harness adapters (TASK-AI-48)
+ * Ship Dễ — Harness adapters (TASK-AI-49)
  *
  * The executor used to build one argument vector: `ao spawn …`. AO was retired
  * on 2026-09-22 because its controller held idle processes whose RAM was the

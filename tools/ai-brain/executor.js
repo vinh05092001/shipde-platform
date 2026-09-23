@@ -1,14 +1,14 @@
 'use strict';
 
 /**
- * Ship Dễ — Dispatch executor (TASK-AI-24, re-targeted by TASK-AI-48)
+ * Ship Dễ — Dispatch executor (TASK-AI-24, re-targeted by TASK-AI-49)
  *
  * The planner (scheduler.js, planDispatch) decides; this module launches. It
  * turns each `plan.assignments[]` entry into exactly one session and nothing
  * else. The planner stays side-effect free, and the seam between the two is
  * the plain plan object, which this module reads and never mutates.
  *
- * Until TASK-AI-48 the only launch it knew was `ao spawn`. AO was retired on
+ * Until TASK-AI-49 the only launch it knew was `ao spawn`. AO was retired on
  * 2026-09-22 — its controller held idle processes, and the RAM they cost was
  * the reason for removing it — so the argument vector now comes from a harness
  * adapter (harness.js) and the provider-to-harness lookup from the registry

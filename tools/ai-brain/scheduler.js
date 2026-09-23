@@ -47,7 +47,7 @@ function isGovernedDecision(val) {
 }
 
 /**
- * How many concurrent agents the machine can actually hold (TASK-AI-48).
+ * How many concurrent agents the machine can actually hold (TASK-AI-49).
  *
  * The governed decision says how many the *process* permits; this says how
  * many the hardware permits, and the smaller of the two wins. They answer

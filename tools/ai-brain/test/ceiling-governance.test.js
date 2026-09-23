@@ -158,7 +158,7 @@ describe('Ceiling governance: dispatch planning enforcement', () => {
       {
         limits: { maxImplementationAgents: 3, maxPerAccount: 1 },
         governedDecision: 'DEC-017',
-        // TASK-AI-48: memory is the second ceiling. Stated here so this test
+        // TASK-AI-49: memory is the second ceiling. Stated here so this test
         // measures the governance rule rather than whatever the host has free.
         resources: { freeMb: 8192 },
         now: NOW,
@@ -184,7 +184,7 @@ describe('Ceiling governance: dispatch planning enforcement', () => {
   });
 
   test('measured memory lowers a governed ceiling, and the plan says which limit bound', () => {
-    // TASK-AI-48: a human may authorise three agents; the machine still has to
+    // TASK-AI-49: a human may authorise three agents; the machine still has to
     // hold them. 2.4 GB free leaves room for one worker after the 2 GB the
     // daemons and the editor need, so two items wait rather than swap.
     const plan = planDispatch(

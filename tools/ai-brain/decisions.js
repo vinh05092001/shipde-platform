@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Ship Dễ — Dispatch decision log (TASK-AI-48)
+ * Ship Dễ — Dispatch decision log (TASK-AI-49)
  *
  * Every routing choice writes one line here: the work item, the candidates,
  * the evidence each was judged on, the ones refused and why, the one chosen,
@@ -167,6 +167,33 @@ function writerFor(workItemId, options) {
   return openWriters(options).find((w) => w.workItemId === workItemId) || null;
 }
 
+/**
+ * Records that a work item's writer has ended, releasing its claim.
+ *
+ * Without this a session that was stopped, or that died with its daemon, reads
+ * as an open writer for ever and the work item can never be picked up again —
+ * the log is the only evidence of a claim, so it has to be the evidence of a
+ * release too.
+ *
+ * Returns null when nothing held the item, so calling it twice is harmless.
+ */
+function closeWriter(workItemId, outcome, options) {
+  const writer = writerFor(workItemId, options);
+  if (!writer) return null;
+  return recordDecision(
+    {
+      stage: outcome === 'completed' ? Stage.COMPLETED : Stage.FAILED,
+      workItemId,
+      harness: writer.harness,
+      sessionId: writer.sessionId,
+      branch: writer.branch,
+      chosen: writer.chosen,
+      detail: (options && options.detail) || null,
+    },
+    options
+  );
+}
+
 module.exports = {
   Stage,
   DEFAULT_DIR,
@@ -174,5 +201,6 @@ module.exports = {
   readDecisions,
   openWriters,
   writerFor,
+  closeWriter,
   scrub,
 };

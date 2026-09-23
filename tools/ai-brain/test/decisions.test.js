@@ -11,6 +11,7 @@ const {
   readDecisions,
   openWriters,
   writerFor,
+  closeWriter,
   scrub,
   Stage,
 } = require('../decisions');
@@ -26,7 +27,7 @@ describe('decision log', () => {
     recordDecision(
       {
         stage: Stage.SELECTED,
-        workItemId: 'TASK-AI-48',
+        workItemId: 'TASK-AI-49',
         role: 'author.foundation',
         candidates: ['a::m1', 'b::m2'],
         rejected: [{ offeringId: 'b::m2', reason: 'cooling until 14:00' }],
@@ -36,7 +37,7 @@ describe('decision log', () => {
       { dir }
     );
     const [record] = readDecisions({ dir });
-    assert.equal(record.workItemId, 'TASK-AI-48');
+    assert.equal(record.workItemId, 'TASK-AI-49');
     assert.equal(record.chosen, 'a::m1');
     assert.equal(record.rejected[0].reason, 'cooling until 14:00');
     assert.ok(record.at);
@@ -120,6 +121,41 @@ describe('open writers', () => {
     );
     assert.deepEqual(openWriters({ dir }), []);
     assert.equal(readDecisions({ dir }).length, 1);
+  });
+});
+
+describe('closing a writer', () => {
+  test('a stopped session releases its work item', () => {
+    const dir = tempDir();
+    recordDecision(
+      {
+        stage: Stage.LAUNCHED,
+        workItemId: 'A',
+        sessionId: 's1',
+        branch: 'feat/a',
+        harness: 'paseo',
+      },
+      { dir }
+    );
+    const released = closeWriter('A', 'failed', { dir, detail: 'interrupted by the operator' });
+    assert.equal(released.sessionId, 's1');
+    assert.equal(released.stage, Stage.FAILED);
+    assert.deepEqual(openWriters({ dir }), []);
+  });
+
+  test('closing twice is harmless', () => {
+    const dir = tempDir();
+    recordDecision({ stage: Stage.LAUNCHED, workItemId: 'A', sessionId: 's1' }, { dir });
+    closeWriter('A', 'completed', { dir });
+    assert.equal(closeWriter('A', 'completed', { dir }), null);
+  });
+
+  test('a released item can be claimed again', () => {
+    const dir = tempDir();
+    recordDecision({ stage: Stage.LAUNCHED, workItemId: 'A', sessionId: 's1' }, { dir });
+    closeWriter('A', 'failed', { dir });
+    recordDecision({ stage: Stage.LAUNCHED, workItemId: 'A', sessionId: 's2' }, { dir });
+    assert.equal(writerFor('A', { dir }).sessionId, 's2');
   });
 });
 

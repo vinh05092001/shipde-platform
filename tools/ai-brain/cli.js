@@ -588,6 +588,27 @@ function dispatchCommand(args) {
   const { executePlan } = require('./executor');
   const rootDir = args.root || process.cwd();
   const execute = args.execute === true;
+
+  // Releasing a claim is its own operation, not a side effect of planning: a
+  // session that was stopped, or that died with its daemon, otherwise reads as
+  // an open writer for ever and its work item can never be picked up again.
+  const close = args.close || args.complete || args.fail;
+  if (typeof close === 'string') {
+    const decisions = require('./decisions');
+    const outcome = args.fail ? 'failed' : 'completed';
+    const released = decisions.closeWriter(close, outcome, {
+      dir: args['decision-dir'] || undefined,
+      detail: typeof args.detail === 'string' ? args.detail : null,
+    });
+    if (!released) {
+      console.log('No open writer for ' + close + '; nothing to release.');
+      return;
+    }
+    console.log(
+      'Released ' + close + ' (' + outcome + ', session ' + (released.sessionId || 'unknown') + ')'
+    );
+    return;
+  }
   if (execute && (args['dry-run'] || args.dryRun)) {
     console.error('Dispatch refused: --execute and --dry-run are exclusive.');
     process.exit(2);
@@ -619,7 +640,7 @@ function dispatchCommand(args) {
         riskDomains: [],
         priority: 0,
       }));
-    // TASK-AI-48: the machine's free memory is the second ceiling, and the
+    // TASK-AI-49: the machine's free memory is the second ceiling, and the
     // planner needs it stated rather than assumed. Omitting --free-mb lets it
     // read the host, which is the right default for an unattended run.
     const resources = {};
