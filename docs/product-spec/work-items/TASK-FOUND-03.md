@@ -201,4 +201,3 @@ Executed sequentially from a clean checkout on branch `feat/task-found-03-api-wo
 before the `watch` subcommand, so tsx read `watch` as the entry file and `src/main.ts` as
 an argument. The flags now follow `tsx watch`. Verified by booting the worker with the
 corrected order: it starts and stays up (only Redis 5.0 version advice is printed).
-
