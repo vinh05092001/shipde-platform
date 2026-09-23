@@ -336,6 +336,47 @@ function hasStateChanged(prevState, candidate) {
   return false;
 }
 
+// Per-source refresh windows. The dispatcher's own logs are cheap and stay live; the three
+// collectors that spawn processes (gh, git, ao) are throttled because their subjects do not
+// change between one five-second poll and the next.
+const SOURCE_TTL_MS = {
+  git: 20000,
+  ao: 60000,
+  github: 45000,
+};
+const sourceCache = new Map();
+
+function cachedCollect(name, run) {
+  const ttl = SOURCE_TTL_MS[name] || 0;
+  const hit = sourceCache.get(name);
+  const now = Date.now();
+  if (hit && now - hit.at < ttl) {
+    if (hit.promise) return hit.promise;
+    return Promise.resolve(hit.value);
+  }
+  // Keep serving the previous answer while the refresh is in flight, so a slow collector
+  // never makes a poll wait on it.
+  const promise = Promise.resolve()
+    .then(run)
+    .then((value) => {
+      sourceCache.set(name, { at: Date.now(), value, promise: null });
+      return value;
+    })
+    .catch((err) => {
+      if (hit) {
+        sourceCache.set(name, { at: Date.now(), value: hit.value, promise: null });
+        return hit.value;
+      }
+      throw err;
+    });
+  if (hit) {
+    sourceCache.set(name, { at: hit.at, value: hit.value, promise: null });
+    return Promise.resolve(hit.value);
+  }
+  sourceCache.set(name, { at: now, value: null, promise });
+  return promise;
+}
+
 async function aggregateCockpitState(options = {}) {
   const rootDir = options.rootDir || process.cwd();
   const csvPath =
@@ -343,13 +384,15 @@ async function aggregateCockpitState(options = {}) {
     path.join(rootDir, 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv');
   const repo = options.repo || 'vinh05092001/shipde-platform';
 
-  const gitPromise = options.mockGit ? Promise.resolve(options.mockGit) : collectGitState(rootDir);
+  const gitPromise = options.mockGit
+    ? Promise.resolve(options.mockGit)
+    : cachedCollect('git', () => collectGitState(rootDir));
   const aoPromise = options.mockAo
     ? Promise.resolve(options.mockAo)
-    : collectAoState('shipde-platform');
+    : cachedCollect('ao', () => collectAoState('shipde-platform'));
   const githubPromise = options.mockGitHub
     ? Promise.resolve(options.mockGitHub)
-    : collectGitHubState(repo);
+    : cachedCollect('github', () => collectGitHubState(repo));
 
   const usagePromise = options.mockUsage
     ? Promise.resolve(options.mockUsage)
