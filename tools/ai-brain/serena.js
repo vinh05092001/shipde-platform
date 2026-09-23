@@ -521,6 +521,7 @@ function runSerenaCli(argv) {
   }
 
   if (sub === 'health') {
+    options.root = options.root || path.resolve(path.dirname(require.resolve('./serena.js')), '..', '..');
     const health = checkHealth(options);
     if (options.json) {
       console.log(JSON.stringify(health, null, 2));
