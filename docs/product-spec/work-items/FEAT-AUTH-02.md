@@ -16,6 +16,28 @@
 
 ## Codex Review
 
+### Review Round 2 (CI remediation)
+
+- **Reviewed commit:** `0d0180504e40fbacd8f74c73aeec807e241bd032` (Round 1 re-review) / CI failure diagnosis at `248ba8f`
+- **Verdict:** CHANGES_REQUIRED → remediated in this push
+- **Date:** 2026-09-23
+
+#### Findings
+
+1. Root-level scratch/debris files committed (`pr123-*.txt/tsv`, duplicate `schema.prisma`, `app.module.ts`, `openapi.ts`, `contracts-index.ts`, `migration.sql`) — broke `pnpm format:check` with 15 unformatted files including UTF-16 dumps.
+2. Merge conflict with `origin/main` (FEAT-AUTH-03 touched the same `apps/api/package.json` test script) — PR state `dirty`, CI blocked.
+3. `prisma/migrations/` missing the FEAT-AUTH-02 migration despite the work item requiring `created_by`/`activated_at`/`created_by_ip`; `prisma/schema.prisma` lacked the fields.
+4. `useCallback`/`useEffect` declared after a conditional return in `admin/shops/page.tsx` — rules-of-hooks lint error.
+5. Work item document not updated with review traceability.
+
+#### Remediation
+
+- ✅ Removed all 15 root-level debris files; canonical files remain in their proper locations
+- ✅ Merged `origin/main`; resolved `apps/api/package.json` test script conflict keeping both auth-03 login spec and admin-auth spec
+- ✅ Added `prisma/migrations/20260915000000_feat_auth_02_admin_shop/migration.sql` (forward-only, nullable columns, no backfill) and the three fields in `prisma/schema.prisma`
+- ✅ Moved hooks above the early-return forbidden gate; unauthenticated users still see 403 immediately with no loading skeleton
+- ✅ Local verification: `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm contract:check`, `pnpm test`, `pnpm build`, and `validate_pr_contract.py` all pass
+
 ### Review Round 1
 
 - **Reviewed commit:** `7ae6473db4a22d2d7382b656c1070734bba112ca`

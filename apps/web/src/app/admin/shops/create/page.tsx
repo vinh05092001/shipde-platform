@@ -69,9 +69,7 @@ export default function CreateShopPage() {
           <p className="text-slate-600">
             Bạn cần đăng nhập với tài khoản quản trị nền tảng để truy cập trang này.
           </p>
-          <div className="mt-4 text-sm text-slate-400">
-            Liên hệ admin nếu cần hỗ trợ.
-          </div>
+          <div className="mt-4 text-sm text-slate-400">Liên hệ admin nếu cần hỗ trợ.</div>
         </div>
       </div>
     );
