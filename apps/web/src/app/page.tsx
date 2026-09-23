@@ -48,7 +48,7 @@ import {
 } from 'lucide-react';
 
 export default function ShipDeConsoleApp() {
-  const { user, merchant, isAuthenticated, isHydrating, logout, switchRole } = useAuth();
+  const { user, merchant, isAuthenticated, logout, switchRole } = useAuth();
   const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -230,15 +230,6 @@ export default function ShipDeConsoleApp() {
     }
     showToast(`Đã chuyển vai trò: ${newRole}`);
   };
-
-  // During the single-tick localStorage restore, show nothing rather than a
-  // loading skeleton that could persist when the user is not signed in.
-  // isHydrating resolves to false immediately after the effect runs on the
-  // client (BRAIN.md rule 4: a screen must never stay in a loading frame
-  // when the user is not signed in).
-  if (isHydrating) {
-    return null;
-  }
 
   if (!isAuthenticated) {
     if (authMode === 'REGISTER') {

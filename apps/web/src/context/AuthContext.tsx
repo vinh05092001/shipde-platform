@@ -20,7 +20,6 @@ interface AuthContextType {
   user: User | null;
   merchant: Merchant | null;
   isAuthenticated: boolean;
-  isHydrating: boolean;
   token: string | null;
   login: (
     emailOrPhone: string,
@@ -148,11 +147,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  // isHydrating is true until the localStorage restore effect completes.
-  // Callers use this to avoid showing a loading skeleton when the user is
-  // simply not signed in — the skeleton must resolve to the login screen
-  // after hydration, never stay stuck (BRAIN.md rule 4).
-  const [isHydrating, setIsHydrating] = useState(true);
 
   // Restore a persisted session when present. No fabricated default session:
   // FEAT-AUTH-03 (CD-10) removes the prototype's mock auto-login.
@@ -162,12 +156,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const savedToken = localStorage.getItem('shipde_token');
 
     if (!savedUser || !savedMerchant || !savedToken) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration gate only
-      setIsHydrating(false);
       return;
     }
 
     try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- persisted session hydration
       setUser(mapUser(JSON.parse(savedUser)));
       setMerchant(mapMerchant(JSON.parse(savedMerchant)));
       setToken(savedToken);
@@ -175,8 +168,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.removeItem('shipde_user');
       localStorage.removeItem('shipde_merchant');
       localStorage.removeItem('shipde_token');
-    } finally {
-      setIsHydrating(false);
     }
   }, []);
 
@@ -474,7 +465,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         merchant,
         isAuthenticated: !!user && !!token,
-        isHydrating,
         token,
         login,
         requestLoginOtp,
