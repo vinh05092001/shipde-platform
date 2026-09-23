@@ -11,6 +11,7 @@ import {
   ChevronRight,
   AlertTriangle,
 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 
 interface ShopOwner {
   id: string;
@@ -51,6 +52,7 @@ type ApiError = {
 };
 
 export default function AdminShopsPage() {
+  const { isAuthenticated } = useAuth();
   const [shops, setShops] = useState<AdminShop[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
@@ -58,6 +60,28 @@ export default function AdminShopsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(20);
   const [total, setTotal] = useState(0);
+
+  // Never show loading skeleton when not signed in — show forbidden immediately
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-50 p-6">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5 text-red-600" />
+            </div>
+            <h1 className="text-2xl font-bold text-red-700">403 — Chưa được cấp quyền</h1>
+          </div>
+          <p className="text-slate-600">
+            Bạn cần đăng nhập với tài khoản quản trị nền tảng để truy cập trang này.
+          </p>
+          <div className="mt-4 text-sm text-slate-400">
+            Liên hệ admin nếu cần hỗ trợ.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const fetchShops = useCallback(async () => {
     setLoading(true);
@@ -95,10 +119,11 @@ export default function AdminShopsPage() {
   }, [currentPage, pageSize]);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchShops();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, pageSize]);
+  }, [currentPage, pageSize, isAuthenticated]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
