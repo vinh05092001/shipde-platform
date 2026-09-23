@@ -603,9 +603,7 @@ export default function ShipDeConsoleApp() {
             />
           )}
 
-          {activeTab === 'sessions' && (
-            <SessionsTab onToast={showToast} />
-          )}
+          {activeTab === 'sessions' && <SessionsTab onToast={showToast} />}
 
           {/* Backoffice System Management */}
           {activeTab === 'admin_matrix' && <AdminSystemTab activeSection="carrier_matrix" />}

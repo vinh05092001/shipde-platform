@@ -34,7 +34,9 @@ export async function POST(req: NextRequest) {
     if (path.endsWith('/revoke-all')) {
       const body = await req.json();
       const { include_current = true } = body;
-      const revokedCount = db.deviceSessions.filter((s) => include_current || s.id !== 'dev_current').length;
+      const revokedCount = db.deviceSessions.filter(
+        (s) => include_current || s.id !== 'dev_current'
+      ).length;
       db.deviceSessions.forEach((s) => {
         if (include_current || s.id !== 'dev_current') {
           s.is_revoked = true;
@@ -51,7 +53,10 @@ export async function POST(req: NextRequest) {
 
     if (!device_id || !user_id) {
       return NextResponse.json(
-        { success: false, error: { code: 'validation_error', message: 'Thiếu device_id hoặc user_id' } },
+        {
+          success: false,
+          error: { code: 'validation_error', message: 'Thiếu device_id hoặc user_id' },
+        },
         { status: 400 }
       );
     }
