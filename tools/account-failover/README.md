@@ -111,3 +111,16 @@ python -m py_compile controller.py
 
 Manual Windows acceptance must also verify task ACLs, timeout termination,
 visible account identity, and the installed CLI's documented behavior.
+
+## Ship De Windows Agy pool bridge
+
+The machine-local `agy01` through `agy10` pool uses the existing
+`\ShipDe\ShipDe-agyNN` Scheduled Tasks without changing their principals or
+stored logon credentials. Install `windows-pool-dispatcher.ps1` as
+`C:\Tools\agy-pool\worker.ps1`, preserve the previous worker as
+`worker-core.ps1`, and install `windows-pool-worker.ps1` beside them.
+
+The dispatcher keeps dashboard quota jobs on `worker-core.ps1`. Controller
+requests use `controller-request.json` and atomically publish
+`controller-response.json`. Real identities and `accounts.json` remain
+machine-local and ignored; never commit Gmail addresses or credential data.
