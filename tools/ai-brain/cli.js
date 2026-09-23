@@ -619,12 +619,25 @@ function dispatchCommand(args) {
         riskDomains: [],
         priority: 0,
       }));
-    plan = planDispatch(items, listAccounts() || [], {});
+    // TASK-AI-48: the machine's free memory is the second ceiling, and the
+    // planner needs it stated rather than assumed. Omitting --free-mb lets it
+    // read the host, which is the right default for an unattended run.
+    const resources = {};
+    if (args['free-mb'] !== undefined) resources.freeMb = Number(args['free-mb']);
+    if (args['per-agent-mb'] !== undefined) resources.perAgentMb = Number(args['per-agent-mb']);
+    plan = planDispatch(items, listAccounts() || [], {
+      resources,
+      governedDecision: args['governed-decision'] || args.governedDecision || null,
+      limits: args['max-impl'] ? { maxImplementationAgents: Number(args['max-impl']) } : undefined,
+    });
   }
 
   const result = executePlan(plan, {
     dryRun: !execute,
     project: args.project || 'shipde-platform',
+    cwd: args.cwd || undefined,
+    base: args.base || undefined,
+    decisionDir: args['decision-dir'] || undefined,
   });
   const deferred = plan.deferred || [];
   const planned = (plan.assignments || []).length;
@@ -664,6 +677,8 @@ function dispatchCommand(args) {
     'Dispatch executed: ' +
       s.launched +
       ' launched, ' +
+      (s.resumed || 0) +
+      ' resumed, ' +
       s.refused +
       ' refused, ' +
       s.failed +

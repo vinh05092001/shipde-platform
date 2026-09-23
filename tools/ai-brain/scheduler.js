@@ -46,6 +46,55 @@ function isGovernedDecision(val) {
   return false;
 }
 
+/**
+ * How many concurrent agents the machine can actually hold (TASK-AI-48).
+ *
+ * The governed decision says how many the *process* permits; this says how
+ * many the hardware permits, and the smaller of the two wins. They answer
+ * different questions and neither substitutes for the other: a ceiling of
+ * three agreed by a human is still three sessions of 300–400 MB each, and on a
+ * host with 1 GB free the third one does not fail cleanly — it makes every
+ * other process on the machine slower while it swaps.
+ *
+ * Reserve is held back for the daemons that must keep answering while agents
+ * run (Paseo, 9Router, the dashboard) plus the editor the operator is using.
+ * Measured worker cost: Cline holds 270–375 MB and has no memory knob, so 350
+ * is the honest figure rather than a hopeful one.
+ *
+ * Returns { allowed, freeMb, reserveMb, perAgentMb, limiting }. A machine that
+ * cannot report its free memory yields `allowed: null`, which callers treat as
+ * "no opinion" — refusing to dispatch because a reading was unavailable would
+ * stop the queue over a missing number rather than a missing resource.
+ */
+function resourceCeiling(options) {
+  const opts = options || {};
+  const perAgentMb = Number(opts.perAgentMb) > 0 ? Number(opts.perAgentMb) : 350;
+  const reserveMb = Number.isFinite(Number(opts.reserveMb)) ? Number(opts.reserveMb) : 2048;
+
+  let freeMb = opts.freeMb;
+  if (freeMb === undefined || freeMb === null) {
+    try {
+      freeMb = require('os').freemem() / (1024 * 1024);
+    } catch (_) {
+      freeMb = null;
+    }
+  }
+  freeMb = Number(freeMb);
+  if (!Number.isFinite(freeMb)) {
+    return { allowed: null, freeMb: null, reserveMb, perAgentMb, limiting: 'unmeasured' };
+  }
+
+  const usable = freeMb - reserveMb;
+  const allowed = usable <= 0 ? 0 : Math.floor(usable / perAgentMb);
+  return {
+    allowed,
+    freeMb: Math.round(freeMb),
+    reserveMb,
+    perAgentMb,
+    limiting: allowed === 0 ? 'ram' : null,
+  };
+}
+
 const DEFAULTS = {
   maxImplementationAgents: 1,
   maxResearchAgents: 1,
@@ -169,6 +218,24 @@ function planDispatch(items, accounts, context) {
       effectiveMaxImpl = 1;
       ceilingGoverned = false;
     }
+  }
+
+  // The governed ceiling says what the process allows; the machine says what
+  // it can hold. Memory only ever lowers the number — a host with spare RAM is
+  // not authorisation to run more agents than a human agreed to.
+  //
+  // Only a caller that asks gets measured. Reading `os.freemem()` by default
+  // made every plan depend on whatever else the machine happened to be doing,
+  // which is right for an unattended dispatch and wrong for a test: the same
+  // inputs produced a different plan an hour later. The operator opts in by
+  // passing `resources` (`{}` means "measure this host").
+  const resources = ctx.resources
+    ? resourceCeiling(ctx.resources)
+    : { allowed: null, freeMb: null, reserveMb: null, perAgentMb: null, limiting: 'not consulted' };
+  let ramLimited = false;
+  if (resources.allowed !== null && resources.allowed < effectiveMaxImpl) {
+    effectiveMaxImpl = resources.allowed;
+    ramLimited = true;
   }
 
   const limits = Object.assign({}, DEFAULTS, ctxLimits, {
@@ -410,6 +477,10 @@ function planDispatch(items, accounts, context) {
       maxImplementation: limits.maxImplementationAgents,
       governedDecision: decisionId,
       ceilingGoverned,
+      // What the memory reading did to the ceiling, so an operator who
+      // expected three agents and got one can see which limit bound.
+      ramLimited,
+      resources,
       research: researchLoad,
       maxResearch: limits.maxResearchAgents,
       review: reviewLoad,
@@ -429,6 +500,7 @@ function planDispatch(items, accounts, context) {
 
 module.exports = {
   planDispatch,
+  resourceCeiling,
   DEFAULTS,
   IMPLEMENTATION_ROLES,
   RESEARCH_ROLES,

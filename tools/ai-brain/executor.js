@@ -1,62 +1,52 @@
 'use strict';
 
 /**
- * Ship Dễ — Dispatch executor (TASK-AI-24)
+ * Ship Dễ — Dispatch executor (TASK-AI-24, re-targeted by TASK-AI-48)
  *
- * The planner (scheduler.js, planDispatch) decides; this module launches.
- * It turns each `plan.assignments[]` entry into exactly one `ao spawn` call and
- * nothing else. The planner stays side-effect free, and the seam between the
- * two is the plain plan object, which this module reads and never mutates.
+ * The planner (scheduler.js, planDispatch) decides; this module launches. It
+ * turns each `plan.assignments[]` entry into exactly one session and nothing
+ * else. The planner stays side-effect free, and the seam between the two is
+ * the plain plan object, which this module reads and never mutates.
  *
- * The argument vector is the one `New-ShipDeAoSpawnArguments` builds in
- * scripts/ai/control.ps1, flag for flag, so a plan executed here and a launch
- * made by the controller cannot be told apart by AO.
+ * Until TASK-AI-48 the only launch it knew was `ao spawn`. AO was retired on
+ * 2026-09-22 — its controller held idle processes, and the RAM they cost was
+ * the reason for removing it — so the argument vector now comes from a harness
+ * adapter (harness.js) and the provider-to-harness lookup from the registry
+ * (sources.json). Neither this file nor anything below it branches on a
+ * provider name, which is what makes a new source a row in a table rather than
+ * another arm of an `if`.
+ *
+ * Two rules survive unchanged from AI-24 because they are what keep concurrent
+ * work safe rather than merely fast:
+ *
+ *   R04  one writer per work item and per branch, always
+ *   R05  the implementation ceiling the plan carries is a limit, not a hint
+ *
+ * And one is new. Before claiming a work item, the executor asks the decision
+ * log whether a writer is already open on it. A session whose daemon restarted
+ * is still the rightful writer of its branch, so "nothing is running" is not
+ * evidence that the branch is free; only the log is. When a writer is found,
+ * the work continues through the adapter's `resume`, keeping one agent and its
+ * history instead of starting a second one on commits it has never seen.
  */
 
-const { spawnSync } = require('child_process');
-const { IMPLEMENTATION_ROLES, REVIEW_ROLES } = require('./scheduler');
+const { REVIEW_ROLES, IMPLEMENTATION_ROLES } = require('./scheduler');
 const { offeringId: toOfferingId } = require('./offerings');
+const { getHarness, runHarness, parseLastJson } = require('./harness');
+const { loadSources, dispatchRoute, qualifyModel } = require('./sources');
+const decisions = require('./decisions');
 
 const Outcome = Object.freeze({
   LAUNCHED: 'LAUNCHED',
   REFUSED: 'REFUSED',
   FAILED: 'FAILED',
+  RESUMED: 'RESUMED',
   DRY_RUN: 'DRY_RUN',
 });
-
-// Only harnesses the controller already launches. A provider absent here has
-// no proven AO harness, and guessing one would launch an unobservable session.
-const HARNESS_BY_PROVIDER = Object.freeze({
-  antigravity: 'agy',
-  gemini: 'agy',
-  '9router': 'claude-code',
-  anthropic: 'claude-code',
-  claude: 'claude-code',
-});
-
-// The flag order of New-ShipDeAoSpawnArguments, read back by AC-AI-24-02.
-const SPAWN_FLAGS = [
-  '--project',
-  '--kind',
-  '--name',
-  '--mode',
-  '--branch',
-  '--harness',
-  '--prompt',
-];
 
 function workerName(workItemId) {
   const name = String(workItemId).toLowerCase() + '-worker';
   return name.length > 20 ? name.slice(0, 20) : name;
-}
-
-function resolveHarness(assignment, options) {
-  if (assignment.harness) return assignment.harness;
-  if (typeof options.harnessFor === 'function') {
-    const chosen = options.harnessFor(assignment);
-    if (chosen) return chosen;
-  }
-  return HARNESS_BY_PROVIDER[String(assignment.provider || '').toLowerCase()] || null;
 }
 
 function defaultPrompt(assignment) {
@@ -70,89 +60,81 @@ function defaultPrompt(assignment) {
   );
 }
 
-function buildSpawnArgs({ project, name, harness, branch, prompt }) {
-  const mode = harness === 'claude-code' ? 'chat' : 'tui';
-  return [
-    'spawn',
-    '--project',
-    project,
-    '--kind',
-    'worker',
-    '--name',
-    name,
-    '--mode',
-    mode,
-    '--branch',
-    branch,
-    '--harness',
-    harness,
-    '--prompt',
-    prompt,
-  ];
-}
-
-function pickId(obj) {
-  if (!obj || typeof obj !== 'object') return null;
-  for (const key of ['id', 'sessionId', 'session_id']) {
-    const v = obj[key];
-    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v);
-  }
-  return null;
+function resumePrompt(assignment) {
+  return (
+    'Continue Work Item ' +
+    assignment.workItemId +
+    ' on branch ' +
+    assignment.branch +
+    '. Read the branch as it stands now — it already carries your earlier commits — then finish ' +
+    'the remaining in-scope items, run the verification, and update the Pull Request. ' +
+    'Do not redo work that is already committed and do not repeat any action with an external effect ' +
+    'before checking whether it already happened.'
+  );
 }
 
 /**
- * Same accepted shapes as Get-ShipDeAoSessionPayload / Get-ShipDeAoSessionId:
- * the response itself, its `session`, or its `result` / `data`, each of which
- * may nest a `session`. Returns the id, or null when there is none.
+ * Where an assignment should run: which harness, which provider name that
+ * harness understands, and the model spelled the way it expects.
+ *
+ * `assignment.harness` wins when the plan states one, then an injected
+ * `harnessFor`, then the registry. A provider with no row resolves to null and
+ * the assignment is refused — guessing a harness launches a session nothing can
+ * observe, which is worse than not launching one.
  */
-function sessionIdFromResponse(response) {
-  if (!response || typeof response !== 'object') return null;
-  const candidates = [response, response.session, response.result || response.data];
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== 'object') continue;
-    if (candidate.session && typeof candidate.session === 'object') {
-      return pickId(candidate.session);
-    }
-    const id = pickId(candidate);
-    if (id) return id;
-  }
-  return null;
+function resolveRoute(assignment, options, registry) {
+  const opts = options || {};
+  const route = dispatchRoute(assignment.provider, registry);
+  const harnessName =
+    assignment.harness ||
+    (typeof opts.harnessFor === 'function' ? opts.harnessFor(assignment) : null) ||
+    (route && route.harness) ||
+    null;
+  if (!harnessName) return null;
+  return {
+    harnessName,
+    provider: (route && route.provider) || assignment.provider,
+    model: qualifyModel(assignment.model, route),
+  };
 }
 
-function aoDetail(reason, res) {
+function detailOf(reason, res) {
   return (
     reason +
     ' (exit ' +
     (res && res.exitCode !== undefined ? res.exitCode : 'unknown') +
     ')' +
-    (res && res.stderr ? ': ' + String(res.stderr).trim() : '')
+    (res && res.stderr ? ': ' + String(res.stderr).trim().slice(0, 300) : '')
   );
-}
-
-// AI-24-R09: the vector goes to the child as an array with no shell.
-function defaultRunAo(args) {
-  const r = spawnSync('ao', args, { encoding: 'utf8', shell: false, windowsHide: true });
-  if (r.error) return { exitCode: -1, stdout: '', stderr: String(r.error.message) };
-  return { exitCode: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
 /**
  * @param plan    the object planDispatch returned; read only
- * @param options { runAo, project, dryRun (default true), now, harnessFor, promptFor }
+ * @param options {
+ *   dryRun (default true), project, now, promptFor, harnessFor,
+ *   run, registry, decisionDir, cwd, base
+ * }
  */
 function executePlan(plan, options) {
   const opts = options || {};
   const dryRun = opts.dryRun !== false; // AI-24-R03
   const project = opts.project || 'shipde-platform';
-  const runAo = typeof opts.runAo === 'function' ? opts.runAo : defaultRunAo;
   const promptFor = typeof opts.promptFor === 'function' ? opts.promptFor : defaultPrompt;
+  const run = typeof opts.run === 'function' ? opts.run : runHarness;
   const now = opts.now || Date.now();
+  const registry = opts.registry || loadSources();
+  const logOpts = { dir: opts.decisionDir, now };
 
   const assignments = (plan && Array.isArray(plan.assignments) && plan.assignments) || [];
   const utilisation = (plan && plan.utilisation) || {};
   const maxImplementation = Number.isFinite(utilisation.maxImplementation)
     ? utilisation.maxImplementation
     : 1;
+
+  // Writers already open according to the log, so an interrupted run resumes
+  // instead of racing itself.
+  const openByItem = new Map();
+  for (const writer of decisions.openWriters(logOpts)) openByItem.set(writer.workItemId, writer);
 
   const writerItems = new Set();
   const writerBranches = new Set();
@@ -166,6 +148,7 @@ function executePlan(plan, options) {
       workItemId: a.workItemId || null,
       role: a.role || null,
       offeringId: a.accountId && a.model ? toOfferingId(a.accountId, a.model) : null,
+      harness: null,
       args: null,
       outcome: null,
       sessionId: null,
@@ -173,25 +156,66 @@ function executePlan(plan, options) {
     };
     records.push(record);
 
-    const harness = resolveHarness(a, opts);
-    if (!a.workItemId || !a.branch || !harness) {
+    const refuse = (reason) => {
       record.outcome = Outcome.REFUSED;
-      record.detail = 'INCOMPLETE_ASSIGNMENT'; // AI-24-R07
+      record.detail = reason;
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.REFUSED,
+          workItemId: record.workItemId,
+          role: record.role,
+          chosen: record.offeringId,
+          branch: a.branch || null,
+          detail: reason,
+          rejected: (a.alternatives || []).map((id) => ({
+            offeringId: id,
+            reason: 'not selected',
+          })),
+        },
+        logOpts
+      );
+    };
+
+    const route = resolveRoute(a, opts, registry);
+    if (!a.workItemId || !a.branch || !route) {
+      refuse('INCOMPLETE_ASSIGNMENT'); // AI-24-R07
       continue;
     }
 
+    let adapter;
+    try {
+      adapter = getHarness(route.harnessName);
+    } catch (err) {
+      // A retired harness throws rather than resolving to null: AO's removal
+      // is a decision, and reaching for it must fail loudly.
+      refuse(String(err.message));
+      continue;
+    }
+    if (!adapter) {
+      refuse('UNKNOWN_HARNESS: ' + route.harnessName);
+      continue;
+    }
+    record.harness = adapter.id;
+
     const isReview = REVIEW_ROLES.has(a.role);
+    const existing = isReview ? null : openByItem.get(a.workItemId);
+
     if (!isReview) {
-      // AI-24-R04
+      // AI-24-R04, within this plan.
       if (writerItems.has(a.workItemId) || writerBranches.has(a.branch)) {
-        record.outcome = Outcome.REFUSED;
-        record.detail = 'DUPLICATE_WRITER';
+        refuse('DUPLICATE_WRITER');
+        continue;
+      }
+      // AI-24-R04, across restarts. An open writer with no way to resume is a
+      // refusal, not a fresh launch: Cline cannot be continued, and starting it
+      // again would be the second writer this rule exists to prevent.
+      if (existing && !adapter.resume) {
+        refuse('WRITER_OPEN_ELSEWHERE: session ' + (existing.sessionId || 'unknown'));
         continue;
       }
     }
     if (IMPLEMENTATION_ROLES.has(a.role) && implementationCount >= maxImplementation) {
-      record.outcome = Outcome.REFUSED;
-      record.detail = 'IMPLEMENTATION_CEILING'; // AI-24-R05
+      refuse('IMPLEMENTATION_CEILING'); // AI-24-R05
       continue;
     }
     if (!isReview) {
@@ -200,52 +224,103 @@ function executePlan(plan, options) {
     }
     if (IMPLEMENTATION_ROLES.has(a.role)) implementationCount += 1;
 
-    record.args = buildSpawnArgs({
-      project,
-      name: workerName(a.workItemId),
-      harness,
-      branch: a.branch,
-      prompt: promptFor(a),
-    });
+    const resuming = Boolean(existing && existing.sessionId && adapter.resume);
+    record.args = resuming
+      ? adapter.resume(existing.sessionId, resumePrompt(a))
+      : adapter.launch({
+          provider: route.provider,
+          model: route.model,
+          prompt: promptFor(a),
+          branch: isReview ? null : a.branch,
+          base: opts.base || 'main',
+          cwd: opts.cwd,
+          title: workerName(a.workItemId),
+          labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
+        });
 
     if (dryRun) {
       record.outcome = Outcome.DRY_RUN;
       continue;
     }
 
+    decisions.recordDecision(
+      {
+        stage: decisions.Stage.SELECTED,
+        workItemId: a.workItemId,
+        role: a.role,
+        chosen: record.offeringId,
+        harness: adapter.id,
+        branch: a.branch,
+        candidates: (a.alternatives || []).concat(record.offeringId ? [record.offeringId] : []),
+        rejected: (a.alternatives || []).map((id) => ({
+          offeringId: id,
+          reason: 'ranked below chosen',
+        })),
+        resuming,
+      },
+      logOpts
+    );
+
     // AI-24-R02 / R06: one call, fail closed, no retry.
     let res;
     try {
-      res = runAo(record.args.slice());
+      res = run(adapter, record.args.slice(), opts);
     } catch (err) {
       res = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
     }
-    if (!res || res.exitCode !== 0) {
+
+    const fail = (reason) => {
       record.outcome = Outcome.FAILED;
-      record.detail = aoDetail('AO_NONZERO_EXIT', res);
+      record.detail = detailOf(reason, res);
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.FAILED,
+          workItemId: a.workItemId,
+          role: a.role,
+          chosen: record.offeringId,
+          harness: adapter.id,
+          branch: a.branch,
+          detail: record.detail,
+        },
+        logOpts
+      );
+    };
+
+    if (!res || res.exitCode !== 0) {
+      fail('HARNESS_NONZERO_EXIT');
       continue;
     }
     if (!res.stdout || String(res.stdout).trim() === '') {
-      record.outcome = Outcome.FAILED;
-      record.detail = aoDetail('AO_EMPTY_STDOUT', res);
+      fail('HARNESS_EMPTY_STDOUT');
       continue;
     }
-    let parsed;
-    try {
-      parsed = JSON.parse(res.stdout);
-    } catch (_) {
-      record.outcome = Outcome.FAILED;
-      record.detail = aoDetail('AO_INVALID_JSON', res);
+    const parsed = parseLastJson(res.stdout);
+    if (!parsed) {
+      fail('HARNESS_INVALID_JSON');
       continue;
     }
-    const id = sessionIdFromResponse(parsed);
+    const id = resuming ? existing.sessionId : adapter.sessionIdFrom(parsed);
     if (!id) {
-      record.outcome = Outcome.FAILED;
-      record.detail = aoDetail('AO_NO_SESSION_ID', res);
+      // No id means no way to find this session again, which makes it
+      // unstoppable and unresumable. Reported as failed so a human looks.
+      fail('HARNESS_NO_SESSION_ID');
       continue;
     }
-    record.outcome = Outcome.LAUNCHED;
+
+    record.outcome = resuming ? Outcome.RESUMED : Outcome.LAUNCHED;
     record.sessionId = id;
+    decisions.recordDecision(
+      {
+        stage: resuming ? decisions.Stage.RESUMED : decisions.Stage.LAUNCHED,
+        workItemId: a.workItemId,
+        role: a.role,
+        chosen: record.offeringId,
+        harness: adapter.id,
+        sessionId: id,
+        branch: a.branch,
+      },
+      logOpts
+    );
   }
 
   const count = (o) => records.filter((r) => r.outcome === o).length;
@@ -255,6 +330,7 @@ function executePlan(plan, options) {
     records,
     summary: {
       launched: count(Outcome.LAUNCHED),
+      resumed: count(Outcome.RESUMED),
       refused: count(Outcome.REFUSED),
       failed: count(Outcome.FAILED),
     },
@@ -263,10 +339,9 @@ function executePlan(plan, options) {
 
 module.exports = {
   executePlan,
-  buildSpawnArgs,
-  sessionIdFromResponse,
+  resolveRoute,
   workerName,
+  defaultPrompt,
+  resumePrompt,
   Outcome,
-  SPAWN_FLAGS,
-  HARNESS_BY_PROVIDER,
 };
