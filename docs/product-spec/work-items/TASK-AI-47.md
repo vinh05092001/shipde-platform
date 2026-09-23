@@ -13,6 +13,7 @@
 | Risk | `HIGH` |
 | Governed decision | `HUMAN-DECISION-ACCOUNT-FAILOVER-2026-09-23` / `DEC-018` |
 | Branch | `feat/task-ai-47-account-failover-controller` |
+| Pull Request | `#133` |
 | Allowed paths | `tools/account-failover/**`, this Work Item, `BASELINE-AND-DECISIONS.md`, `FEATURE-DELIVERY-REGISTER.csv` |
 
 ## Business outcome
@@ -79,4 +80,4 @@ control is bypassed.
 
 | Round | Commit | Verdict | Notes |
 |---|---|---|---|
-| 1 | `pending` | `pending` | Awaiting independent review. |
+| 1 | `pending` | `pending` | PR #133 awaiting independent review. |
