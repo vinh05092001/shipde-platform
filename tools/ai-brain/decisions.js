@@ -157,9 +157,30 @@ function readDecisionsDetailed(options) {
   return { records: out, damaged, readable: damaged.length === 0 };
 }
 
-/** The records alone, for callers that only want the history. */
+/** The records alone, for callers that only want the history.
+ *
+ * Note: This discards the `readable` and `damaged` flags. Callers that need
+ * to know whether the log could be trusted (e.g. the executor deciding
+ * whether to launch a new writer) MUST use `readDecisionsDetailed` or
+ * `openWritersDetailed` instead.
+ */
 function readDecisions(options) {
   return readDecisionsDetailed(options).records;
+}
+
+/**
+ * Reads decisions and throws if the log is damaged/unreadable.
+ * Use this when the caller must refuse rather than guess on a damaged log.
+ */
+function readDecisionsSafe(options) {
+  const detail = readDecisionsDetailed(options);
+  if (!detail.readable) {
+    const err = new Error('Decision log unreadable: ' + detail.damaged.join('; '));
+    err.code = 'DECISION_LOG_UNREADABLE';
+    err.damaged = detail.damaged;
+    throw err;
+  }
+  return detail.records;
 }
 
 /**
@@ -249,6 +270,7 @@ module.exports = {
   DEFAULT_DIR,
   recordDecision,
   readDecisions,
+  readDecisionsSafe,
   readDecisionsDetailed,
   openWriters,
   openWritersDetailed,

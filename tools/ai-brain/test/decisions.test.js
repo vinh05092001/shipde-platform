@@ -9,6 +9,7 @@ const path = require('node:path');
 const {
   recordDecision,
   readDecisions,
+  readDecisionsSafe,
   openWriters,
   writerFor,
   closeWriter,
@@ -75,6 +76,32 @@ describe('decision log', () => {
       readDecisions({ dir: path.join(os.tmpdir(), 'shipde-nope-' + Date.now()) }),
       []
     );
+  });
+
+  test('readDecisionsSafe throws on a damaged log', () => {
+    const dir = tempDir();
+    recordDecision({ stage: Stage.LAUNCHED, workItemId: 'A', sessionId: 's1' }, { dir });
+    const file = path.join(dir, fs.readdirSync(dir)[0]);
+    // A broken line followed by a good one cannot be a half-written append.
+    fs.appendFileSync(
+      file,
+      '{\"workItemId\":\"B\"\n{\"stage\":\"launched\",\"workItemId\":\"C\"}\n',
+      'utf8'
+    );
+    assert.throws(() => readDecisionsSafe({ dir }), { code: 'DECISION_LOG_UNREADABLE' });
+  });
+
+  test('readDecisionsSafe returns empty array for a missing directory (fresh machine)', () => {
+    const records = readDecisionsSafe({ dir: path.join(os.tmpdir(), 'shipde-nope-' + Date.now()) });
+    assert.deepEqual(records, []);
+  });
+
+  test('readDecisionsSafe returns records on a clean log', () => {
+    const dir = tempDir();
+    recordDecision({ stage: Stage.LAUNCHED, workItemId: 'A', sessionId: 's1' }, { dir });
+    const records = readDecisionsSafe({ dir });
+    assert.equal(records.length, 1);
+    assert.equal(records[0].workItemId, 'A');
   });
 });
 
