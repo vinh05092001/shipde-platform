@@ -803,7 +803,7 @@ export class AuthService {
       );
     }
 
-    const ipRateCheck = await this.rateLimitService.checkForgotPasswordLimit(clientIp);
+    const ipRateCheck = await this.rateLimitService.checkForgotPasswordLimit(clientIp, 'ip');
     if (!ipRateCheck.allowed) {
       throw new CanonicalApiException(
         HttpStatus.TOO_MANY_REQUESTS,
@@ -814,8 +814,10 @@ export class AuthService {
       );
     }
 
-    const identifierRateCheck =
-      await this.rateLimitService.checkForgotPasswordLimit(normalizedIdentifier);
+    const identifierRateCheck = await this.rateLimitService.checkForgotPasswordLimit(
+      normalizedIdentifier,
+      'identifier'
+    );
     if (!identifierRateCheck.allowed) {
       throw new CanonicalApiException(
         HttpStatus.TOO_MANY_REQUESTS,
