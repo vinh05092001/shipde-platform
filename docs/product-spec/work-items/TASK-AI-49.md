@@ -133,6 +133,8 @@ No API, database or migration change. Two new local artefacts:
 | AC-AI-49-08 | Measured memory lowers a governed ceiling and says so | `ceiling-governance.test.js` "measured memory lowers a governed ceiling" |
 | AC-AI-49-09 | An unmeasured caller plans the same way every time | `ceiling-governance.test.js` "a caller that does not ask about memory is not measured" |
 | AC-AI-49-10 | No credential reaches the decision log | `decisions.test.js` "a credential never reaches the log" |
+| AC-AI-49-12 | An unreadable decision log stops a writer rather than launching one | `decisions.test.js` "the executor refuses to write when the log cannot be trusted"; a review in the same plan still runs |
+| AC-AI-49-13 | A truncated final line is an interruption, not damage | `decisions.test.js` "a truncated final line is still a readable log" |
 | AC-AI-49-11 | An exhausted source is refused with its reason, not retried blindly | live probe: `kr/*` 402, `gh/*` 403, `ag/*` unavailable; the run selected `groq/openai/gpt-oss-120b` |
 
 ## Verification commands
@@ -157,6 +159,15 @@ Pending. The author does not review its own work.
   yet.
 - The decision log is local to this host. A second machine dispatching the same
   register would not see its writers.
+- There is no lock on it either. Two `executePlan` calls running at the same
+  instant can both read the log before either appends, and both launch. The
+  one-writer rule holds against restarts, not against a race between two
+  dispatchers on one machine. Raised by the independent review of PR #136.
+- A resume does not probe whether the session is still alive. A stale id — the
+  daemon restarted and cleaned the session up — is sent to anyway. Probing
+  first is the right shape, but a session that answers `idle` is still the
+  rightful writer, so the probe has to tell "gone" apart from "not currently
+  running" and that needs its own acceptance test.
 - `paseo stop` interrupts a session but nothing yet marks the work item
   completed or failed in the log, so a stopped session still reads as an open
   writer until something records the end.
