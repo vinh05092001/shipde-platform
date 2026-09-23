@@ -81,7 +81,7 @@ mode and ACLs appropriate to the machine. Its background helper must:
 3. atomically write `task_response_path` with either
    `{ "request_id": "...", "ok": true, "result": "..." }` or
    `{ "request_id": "...", "ok": false, "error_type": "quota",
-   "status_code": 429, "error": "..." }`;
+"status_code": 429, "error": "..." }`;
 4. exit.
 
 The controller verifies and starts the task, waits with a timeout, then calls
