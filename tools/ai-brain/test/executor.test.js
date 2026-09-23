@@ -177,7 +177,7 @@ describe('executePlan — one writer', () => {
 });
 
 describe('executePlan — recovery after an interruption', () => {
-  test('an open writer is resumed on its own session, not launched again', () => {
+  test('an open writer is probed, then resumed on its own session', () => {
     const dir = tempDir();
     recordDecision(
       {
@@ -191,7 +191,12 @@ describe('executePlan — recovery after an interruption', () => {
       { dir }
     );
 
-    const run = fakeRun([{ exitCode: 0, stdout: '{"ok":true}', stderr: '' }]);
+    const run = fakeRun([
+      // The probe: the session still answers, so it is the rightful writer.
+      { exitCode: 0, stdout: '{"Id":"sess-old","Status":"idle"}', stderr: '' },
+      // The resume: a send, never a launch.
+      { exitCode: 0, stdout: '{"ok":true}', stderr: '' },
+    ]);
     const result = executePlan(plan([assignment()]), {
       registry,
       run,
@@ -201,10 +206,106 @@ describe('executePlan — recovery after an interruption', () => {
 
     assert.equal(result.records[0].outcome, Outcome.RESUMED);
     assert.equal(result.records[0].sessionId, 'sess-old');
-    assert.equal(run.calls[0].args[0], 'send');
-    assert.equal(run.calls[0].args[1], 'sess-old');
+    assert.equal(run.calls.length, 2);
+    assert.equal(run.calls[0].command, 'paseo');
+    // The probe is an inspect of the logged session, nothing more.
+    assert.deepEqual(run.calls[0].args.slice(0, 2), ['inspect', 'sess-old']);
+    assert.ok(run.calls[0].args.includes('--json'));
+    assert.equal(run.calls[1].args[0], 'send');
+    assert.equal(run.calls[1].args[1], 'sess-old');
     // Resuming must not create another branch: the commits are already there.
-    assert.ok(!run.calls[0].args.includes('--new-branch'));
+    assert.ok(!run.calls[1].args.includes('--new-branch'));
+  });
+
+  test('a session the daemon no longer has is refused, not sent to', () => {
+    const dir = tempDir();
+    recordDecision(
+      {
+        stage: Stage.LAUNCHED,
+        workItemId: 'TASK-AI-99',
+        role: 'author.foundation',
+        harness: 'paseo',
+        sessionId: 'sess-dead',
+        branch: 'feat/task-ai-99-x',
+      },
+      { dir }
+    );
+
+    const run = fakeRun([
+      {
+        exitCode: 1,
+        stdout:
+          '{"error":{"code":"INSPECT_FAILED","message":"Failed to inspect agent: Agent not found: sess-dead"}}',
+        stderr: '',
+      },
+    ]);
+    const result = executePlan(plan([assignment()]), {
+      registry,
+      run,
+      dryRun: false,
+      decisionDir: dir,
+    });
+
+    assert.equal(result.records[0].outcome, Outcome.REFUSED);
+    assert.match(result.records[0].detail, /WRITER_SESSION_GONE/);
+    // The resume was never attempted: only the probe ran.
+    assert.equal(run.calls.length, 1);
+    assert.equal(run.calls[0].args[0], 'inspect');
+  });
+
+  test('a probe that cannot be read refuses rather than guessing', () => {
+    const dir = tempDir();
+    recordDecision(
+      {
+        stage: Stage.LAUNCHED,
+        workItemId: 'TASK-AI-99',
+        role: 'author.foundation',
+        harness: 'paseo',
+        sessionId: 'sess-old',
+        branch: 'feat/task-ai-99-x',
+      },
+      { dir }
+    );
+
+    const run = fakeRun([{ exitCode: 1, stdout: '', stderr: 'daemon unreachable' }]);
+    const result = executePlan(plan([assignment()]), {
+      registry,
+      run,
+      dryRun: false,
+      decisionDir: dir,
+    });
+
+    assert.equal(result.records[0].outcome, Outcome.REFUSED);
+    assert.match(result.records[0].detail, /SESSION_STATE_UNKNOWN/);
+    assert.equal(run.calls.length, 1);
+  });
+
+  test('a dry run skips the probe and records the intended resume', () => {
+    const dir = tempDir();
+    recordDecision(
+      {
+        stage: Stage.LAUNCHED,
+        workItemId: 'TASK-AI-99',
+        role: 'author.foundation',
+        harness: 'paseo',
+        sessionId: 'sess-old',
+        branch: 'feat/task-ai-99-x',
+      },
+      { dir }
+    );
+
+    const run = fakeRun([]);
+    const result = executePlan(plan([assignment()]), {
+      registry,
+      run,
+      decisionDir: dir,
+    });
+
+    assert.equal(result.records[0].outcome, Outcome.DRY_RUN);
+    assert.equal(run.calls.length, 0);
+    // The planned argv is still the resume, not a fresh launch.
+    assert.equal(result.records[0].args[0], 'send');
+    assert.ok(!result.records[0].args.includes('--new-branch'));
   });
 
   test('a finished work item is claimed fresh', () => {

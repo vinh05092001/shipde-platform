@@ -126,7 +126,7 @@ No API, database or migration change. Two new local artefacts:
 | AC-AI-49-01 | A plan launches a real Paseo session and records its id | `cli.js dispatch --execute` → `LAUNCHED … session f67e7615-03c4-4f5f-bdac-8cf110591fb4`; `paseo inspect` shows `"Status": "running"` |
 | AC-AI-49-02 | Nothing dispatches to AO | `getHarness('ao')` throws `RETIRED_HARNESS`; executor refuses the assignment without calling the runner |
 | AC-AI-49-03 | Two independent work items run at once, one writer each | `executor.test.js` "two independent work items run in parallel"; live run in the slice log |
-| AC-AI-49-04 | An interrupted work item resumes its own session | `executor.test.js` "an open writer is resumed on its own session"; `send <id>` with no `--new-branch` |
+| AC-AI-49-04 | An interrupted work item resumes its own session | `executor.test.js` "an open writer is probed, then resumed on its own session"; `send <id>` with no `--new-branch`; the session is probed with `inspect <id> --json` first |
 | AC-AI-49-05 | A harness that cannot resume refuses instead of starting a second writer | `executor.test.js` "a harness that cannot resume refuses" |
 | AC-AI-49-06 | A source with no capacity is never counted as capacity | `sources.test.js` "only capacity kinds count as capacity" |
 | AC-AI-49-07 | A new source routes with no code change | `sources.test.js` "a new source needs no code change" |
@@ -135,19 +135,40 @@ No API, database or migration change. Two new local artefacts:
 | AC-AI-49-10 | No credential reaches the decision log | `decisions.test.js` "a credential never reaches the log" |
 | AC-AI-49-12 | An unreadable decision log stops a writer rather than launching one | `decisions.test.js` "the executor refuses to write when the log cannot be trusted"; a review in the same plan still runs |
 | AC-AI-49-13 | A truncated final line is an interruption, not damage | `decisions.test.js` "a truncated final line is still a readable log" |
+| AC-AI-49-14 | A resume never reaches a session the daemon no longer has | `executor.test.js` "a session the daemon no longer has is refused, not sent to" (`WRITER_SESSION_GONE`) and "a probe that cannot be read refuses rather than guessing" (`SESSION_STATE_UNKNOWN`); live probe against the running daemon on 2026-09-23: gone session → `WRITER_SESSION_GONE`, running session → `alive`, resumed |
 | AC-AI-49-11 | An exhausted source is refused with its reason, not retried blindly | live probe: `kr/*` 402, `gh/*` 403, `ag/*` unavailable; the run selected `groq/openai/gpt-oss-120b` |
 
 ## Verification commands
 
-- `node --test "tools/ai-brain/test/*.test.js"` → 688 tests, 688 pass, 0 fail
-- `npx eslint tools/ai-brain/*.js tools/ai-brain/test/sources.test.js tools/ai-brain/test/decisions.test.js` → clean
+- `node --test "tools/ai-brain/test/*.test.js"` → 700 tests, 700 pass, 0 fail
+- `npx eslint tools/ai-brain/executor.js tools/ai-brain/test/executor.test.js` → clean
 - `npx prettier --check tools/ai-brain/{sources,harness,decisions,executor,scheduler,cli}.js tools/ai-brain/sources.json` → clean
 - `node tools/ai-brain/cli.js dispatch --dry-run`
 - `node tools/ai-brain/cli.js dispatch --plan <plan> --execute --cwd <worktree> --decision-dir <dir>`
+- Live probe of the resume path against the running daemon (2026-09-23): a
+  logged session that no longer exists → `REFUSED WRITER_SESSION_GONE`; a
+  running session → probe verdict `alive` through
+  `paseo inspect <id> --json` (exit 0), a gone one → exit 1 with
+  `INSPECT_FAILED / Agent not found`.
 
 ## Codex review record
 
-Pending. The author does not review its own work.
+Independent review of commit `e4d0152` returned CHANGES_REQUIRED
+(2026-09-23; reviewer noted in the PR — a non-Codex model, no review grade,
+so its findings are evidence, not an authoritative verdict). Findings:
+
+1. `readDecisions` collapsed missing/corrupted/truncated into "empty", so a
+   lost log read as "no writer" — fixed in `086aa5c`
+   (AC-AI-49-12, AC-AI-49-13).
+2. The resume path sent to a session without checking it still exists —
+   fixed by this change: the session is probed before every resume, a gone
+   session is refused `WRITER_SESSION_GONE`, an unreadable probe refuses
+   `SESSION_STATE_UNKNOWN`, and a live but idle session still resumes
+   (AC-AI-49-14).
+3. The old `ao` mapping on `main` — follow-up; this branch's executor has no
+   `ao` path.
+4–6. Credential scrubbing, test behaviour and contract compliance confirmed
+   correct.
 
 ## Residual limitations
 
@@ -163,11 +184,6 @@ Pending. The author does not review its own work.
   instant can both read the log before either appends, and both launch. The
   one-writer rule holds against restarts, not against a race between two
   dispatchers on one machine. Raised by the independent review of PR #136.
-- A resume does not probe whether the session is still alive. A stale id — the
-  daemon restarted and cleaned the session up — is sent to anyway. Probing
-  first is the right shape, but a session that answers `idle` is still the
-  rightful writer, so the probe has to tell "gone" apart from "not currently
-  running" and that needs its own acceptance test.
 - `paseo stop` interrupts a session but nothing yet marks the work item
   completed or failed in the log, so a stopped session still reads as an open
   writer until something records the end.

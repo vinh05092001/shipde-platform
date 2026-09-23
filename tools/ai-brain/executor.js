@@ -109,6 +109,30 @@ function detailOf(reason, res) {
 }
 
 /**
+ * Reads a session probe (`paseo inspect <id> --json`) into one of three
+ * verdicts: 'gone', 'alive', 'unknown'.
+ *
+ * Measured against the real daemon on 2026-09-23: a session that does not
+ * exist answers exit 1 with `{"error":{"code":"INSPECT_FAILED",
+ * "message":"… Agent not found: <id>"}}`; a session that exists answers
+ * exit 0 with its record whatever its status. The message is matched on
+ * "agent not found" case-insensitively so a wording tweak upstream does not
+ * silently reclassify a gone session as unknown; anything else that is not a
+ * clean exit is unknown, and unknown refuses rather than guesses.
+ */
+function inspectVerdict(res) {
+  if (!res) return 'unknown';
+  const stdout = String(res.stdout || '');
+  if (res.exitCode === 0) {
+    return stdout.trim() === '' ? 'unknown' : 'alive';
+  }
+  if (/agent not found/i.test(stdout) || /agent not found/i.test(String(res.stderr || ''))) {
+    return 'gone';
+  }
+  return 'unknown';
+}
+
+/**
  * @param plan    the object planDispatch returned; read only
  * @param options {
  *   dryRun (default true), project, now, promptFor, harnessFor,
@@ -241,6 +265,56 @@ function executePlan(plan, options) {
     if (IMPLEMENTATION_ROLES.has(a.role)) implementationCount += 1;
 
     const resuming = Boolean(existing && existing.sessionId && adapter.resume);
+
+    // A session id in the log is a claim, not a proof of life. Before the
+    // executor continues a session it asks its daemon whether that session
+    // still exists: a daemon restart or its housekeeping can remove a session
+    // while the log still names it, and a `send` to a gone session is an
+    // untested remote behaviour rather than a resume. Three answers are told
+    // apart, because a session that answers but is not running — idle, paused —
+    // is still the rightful writer and must be resumed, not relaunched:
+    //
+    //   gone     the daemon answers with a not-found failure → refuse; the
+    //            claim is released by a human with `dispatch --close`, never
+    //            silently rewritten here, because a probe that wrongly reports
+    //            gone is exactly how a second writer is born.
+    //   alive    the daemon answers with a session record → resume.
+    //   unknown  the probe itself failed in some other way → refuse; refusing
+    //            on unknown keeps the rule symmetric with the unreadable-log
+    //            case: the executor never guesses.
+    let sessionGone = false;
+    if (resuming && adapter.inspect && !dryRun) {
+      const probe = adapter.inspect(existing.sessionId);
+      let probeRes;
+      try {
+        probeRes = run(adapter, probe.slice(), opts);
+      } catch (err) {
+        probeRes = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
+      }
+      const verdict = inspectVerdict(probeRes);
+      if (verdict === 'gone') {
+        sessionGone = true;
+      } else if (verdict === 'unknown') {
+        refuse(
+          'SESSION_STATE_UNKNOWN: probe of session ' +
+            existing.sessionId +
+            ' failed (exit ' +
+            probeRes.exitCode +
+            '); release the claim by hand with dispatch --close if it is truly gone'
+        );
+        continue;
+      }
+    }
+
+    if (resuming && sessionGone) {
+      refuse(
+        'WRITER_SESSION_GONE: session ' +
+          existing.sessionId +
+          ' no longer exists on the harness; release the claim with dispatch --close and re-plan'
+      );
+      continue;
+    }
+
     record.args = resuming
       ? adapter.resume(existing.sessionId, resumePrompt(a))
       : adapter.launch({
@@ -359,5 +433,6 @@ module.exports = {
   workerName,
   defaultPrompt,
   resumePrompt,
+  inspectVerdict,
   Outcome,
 };
