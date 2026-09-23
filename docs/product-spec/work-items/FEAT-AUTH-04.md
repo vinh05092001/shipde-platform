@@ -2,12 +2,12 @@
 
 ## Feature Overview
 
-**Feature ID**: FEAT-AUTH-04  
-**Slice**: S01 — Identity and organization  
-**Group**: Identity and organization  
-**Status**: BACKLOG  
-**Dependencies**: TASK-FOUND-04 (see BACKLOG-DEPENDENCIES.md)  
-**Work Item Path**: docs/product-spec/work-items/FEAT-AUTH-04.md
+- **Feature ID**: FEAT-AUTH-04
+- **Slice**: S01 — Identity and organization
+- **Group**: Identity and organization
+- **Status**: BACKLOG
+- **Dependencies**: TASK-FOUND-04 (see BACKLOG-DEPENDENCIES.md)
+- **Work Item Path**: docs/product-spec/work-items/FEAT-AUTH-04.md
 
 ## Business Outcome
 
