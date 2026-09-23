@@ -25,7 +25,7 @@
  * sources.json. Nothing downstream may branch on a harness name.
  */
 
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -101,7 +101,68 @@ const cline = {
   },
 };
 
-const HARNESSES = Object.freeze({ paseo, cline });
+/**
+ * Hermes Agent (TASK-AI-50): a planning harness with tool use and subagents.
+ *
+ * Two things make it different from Paseo and both are handled here rather
+ * than pushed onto the caller.
+ *
+ * It has no `--background`. `-z` runs the whole task and prints only the final
+ * text, so the executor would sit holding a child process for the length of a
+ * Work Item. The adapter is marked `detached`, and `runHarness` starts it
+ * without waiting.
+ *
+ * It has no session id on stdout either — `-z` suppresses it deliberately. The
+ * durable handle is the working directory: `--resume latest --in <dir>` picks
+ * up the most recent session for that workspace with its history intact
+ * (verified 2026-09-23: a number stored in one run was recalled in the next).
+ * So the handle this adapter writes into the decision log is the directory,
+ * which is what a later resume actually needs.
+ *
+ * The reasoning model is never pinned. `~/AppData/Local/hermes/config.yaml`
+ * points Hermes at 9Router, and the model for each task arrives as `-m`, so
+ * the pool is whatever the registry and the qualification probe currently
+ * allow.
+ */
+const hermes = {
+  id: 'hermes',
+  command: 'hermes',
+  detached: true,
+  launch(job) {
+    const args = [];
+    if (job.model) args.push('-m', job.model);
+    if (job.cwd) args.push('--in', job.cwd);
+    // Headless: nothing is present to answer an approval or a hook prompt, and
+    // an unanswered prompt hangs the run to its timeout.
+    args.push('--yolo', '--accept-hooks');
+    if (job.reasoning) args.push('--reasoning', job.reasoning);
+    if (job.usageFile) args.push('--usage-file', job.usageFile);
+    args.push('-z', job.prompt);
+    return args;
+  },
+  resume(sessionId, prompt, job) {
+    const dir = handleToDir(sessionId) || (job && job.cwd);
+    const args = ['--resume', 'latest'];
+    if (dir) args.push('--in', dir);
+    if (job && job.model) args.push('-m', job.model);
+    args.push('--yolo', '--accept-hooks', '-z', prompt);
+    return args;
+  },
+  sessionIdFrom(parsed, job) {
+    if (job && job.cwd) return DIR_HANDLE + job.cwd;
+    return pickId(parsed);
+  },
+};
+
+/** Marks a handle that is a workspace rather than a provider-issued id. */
+const DIR_HANDLE = 'dir:';
+
+function handleToDir(handle) {
+  const s = String(handle || '');
+  return s.startsWith(DIR_HANDLE) ? s.slice(DIR_HANDLE.length) : null;
+}
+
+const HARNESSES = Object.freeze({ paseo, cline, hermes });
 
 function pickId(obj) {
   if (!obj || typeof obj !== 'object') return null;
@@ -176,10 +237,44 @@ function executableFor(command, options) {
   return { file: command, prefixArgs: [] };
 }
 
-/** Runs an adapter's argv with no shell, and reports what came back. */
+/**
+ * Runs an adapter's argv with no shell, and reports what came back.
+ *
+ * A `detached` adapter is started and not waited for. That is not a
+ * convenience: a harness with no background mode would otherwise hold the
+ * dispatching process for the length of a Work Item, and the second assignment
+ * in the plan would not start until the first one finished — which is the
+ * parallelism the ceiling exists to govern, lost to an implementation detail.
+ * The caller gets exit 0 and the handle, and the session's own logs are the
+ * record of what happened after that.
+ */
 function runHarness(adapter, args, options) {
   const opts = options || {};
   const exe = executableFor(adapter.command, opts);
+
+  if (adapter.detached) {
+    const spawnFn = opts.spawn || spawn;
+    let child;
+    try {
+      child = spawnFn(exe.file, exe.prefixArgs.concat(args), {
+        windowsHide: true,
+        shell: false,
+        detached: true,
+        stdio: 'ignore',
+      });
+    } catch (err) {
+      return { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
+    }
+    if (child && typeof child.unref === 'function') child.unref();
+    // The executor reads a JSON object from stdout; a detached start has none,
+    // so the handle the adapter already knows is reported in that shape.
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({ started: true, pid: child && child.pid }),
+      stderr: '',
+    };
+  }
+
   const res = spawnSync(exe.file, exe.prefixArgs.concat(args), {
     encoding: 'utf8',
     timeout: opts.timeoutMs || 120000,
@@ -246,6 +341,8 @@ module.exports = {
   listHarnesses,
   runHarness,
   executableFor,
+  DIR_HANDLE,
+  handleToDir,
   parseLastJson,
   pickId,
 };

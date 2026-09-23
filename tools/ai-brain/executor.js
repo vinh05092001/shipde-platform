@@ -240,19 +240,24 @@ function executePlan(plan, options) {
     }
     if (IMPLEMENTATION_ROLES.has(a.role)) implementationCount += 1;
 
+    // One description of the job, given to whichever call runs it. A resume
+    // needs it too: a harness whose durable handle is a workspace (Hermes)
+    // cannot resume from an id alone.
+    const job = {
+      provider: route.provider,
+      model: route.model,
+      prompt: promptFor(a),
+      branch: isReview ? null : a.branch,
+      base: opts.base || 'main',
+      cwd: opts.cwd,
+      title: workerName(a.workItemId),
+      labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
+    };
+
     const resuming = Boolean(existing && existing.sessionId && adapter.resume);
     record.args = resuming
-      ? adapter.resume(existing.sessionId, resumePrompt(a))
-      : adapter.launch({
-          provider: route.provider,
-          model: route.model,
-          prompt: promptFor(a),
-          branch: isReview ? null : a.branch,
-          base: opts.base || 'main',
-          cwd: opts.cwd,
-          title: workerName(a.workItemId),
-          labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
-        });
+      ? adapter.resume(existing.sessionId, resumePrompt(a), job)
+      : adapter.launch(job);
 
     if (dryRun) {
       record.outcome = Outcome.DRY_RUN;
@@ -315,7 +320,7 @@ function executePlan(plan, options) {
       fail('HARNESS_INVALID_JSON');
       continue;
     }
-    const id = resuming ? existing.sessionId : adapter.sessionIdFrom(parsed);
+    const id = resuming ? existing.sessionId : adapter.sessionIdFrom(parsed, job);
     if (!id) {
       // No id means no way to find this session again, which makes it
       // unstoppable and unresumable. Reported as failed so a human looks.
