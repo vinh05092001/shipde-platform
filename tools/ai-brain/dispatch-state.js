@@ -37,6 +37,23 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+/**
+ * Maximum age (ms) of a running entry before it is considered expired.
+ * A session that has been running longer than this is assumed dead: its worker
+ * probably crashed without cleaning up. The default of 4 hours is generous —
+ * most AI sessions finish within 30 minutes — but conservative enough that
+ * a legitimately long session is not prematurely evicted.
+ *
+ * When an entry expires, readDispatchState emits a visible warning to stderr
+ * so the operator knows a branch was unblocked automatically.
+ *
+ * This avoids a live `ao session ls` query on the read path (deliberate
+ * design choice for planning latency) while preventing indefinite stale claims.
+ *
+ * Override via options.sessionTtlMs in tests; the default is used in production.
+ */
+const SESSION_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
+
 /** Sentinel error type so the caller can distinguish parse failures. */
 class DispatchStateError extends Error {
   constructor(message, cause) {
@@ -73,7 +90,7 @@ function readDispatchState(options) {
     raw = fs.readFileSync(file, 'utf8');
   } catch (e) {
     if (e.code === 'ENOENT') {
-      return { running: [], claims: [] };
+      return { running: [], claims: [], expired: [] };
     }
     throw new DispatchStateError(
       'Không đọc được dispatch-state: ' + file + ' (' + e.message + ')',
@@ -97,16 +114,46 @@ function readDispatchState(options) {
     );
   }
 
-  const running = parsed.running.filter(
+  const opts = options || {};
+  const ttl = opts.sessionTtlMs != null ? opts.sessionTtlMs : SESSION_TTL_MS;
+  const now = opts.now ? new Date(opts.now).getTime() : Date.now();
+
+  const allValid = parsed.running.filter(
     (r) => r && typeof r === 'object' && r.workItemId && r.role
   );
+
+  // Finding 2: expire entries whose launchedAt is older than the TTL.
+  // A LAUNCHED session whose worker dies would otherwise leave its branch
+  // claimed forever. The TTL is a passive safety net — no live `ao session ls`
+  // query, just a timestamp comparison. Expired entries are logged to stderr
+  // so the operator can see what was released and investigate if needed.
+  const running = [];
+  const expired = [];
+  for (const r of allValid) {
+    const age = r.launchedAt ? now - new Date(r.launchedAt).getTime() : 0;
+    if (ttl > 0 && age > ttl) {
+      expired.push(r);
+    } else {
+      running.push(r);
+    }
+  }
+  if (expired.length > 0) {
+    for (const r of expired) {
+      const ageH = ((now - new Date(r.launchedAt).getTime()) / 3600000).toFixed(1);
+      console.error(
+        'DISPATCH_STATE_EXPIRED: ' + r.workItemId +
+        ' (session ' + (r.sessionId || '?') + ', branch ' + (r.branch || '?') +
+        ') ran for ' + ageH + 'h — released from ceiling. Investigate if the session is still alive.'
+      );
+    }
+  }
 
   // claims are derived from running so they are always consistent with it.
   const claims = running
     .filter((r) => r.branch)
     .map((r) => ({ branch: r.branch, owner: r.workItemId }));
 
-  return { running, claims };
+  return { running, claims, expired };
 }
 
 /**
@@ -116,6 +163,12 @@ function readDispatchState(options) {
  * are parallel arrays in plan order. Only entries whose record outcome is
  * LAUNCHED are kept: dry-run, refused and failed records have no live session
  * and must not be counted as running.
+ *
+ * MERGE BEHAVIOR (finding 1 fix): the function reads the existing state file
+ * first and merges prior running entries with newly LAUNCHED entries. A new
+ * LAUNCHED record for the same workItemId replaces the old one. Prior entries
+ * for other work items are preserved. This prevents a dispatch that defers
+ * everything (0 assignments) from erasing sessions that are still alive.
  *
  * accountId and branch are sourced from the assignment (the executor's slim
  * record carries neither). The two arrays are parallel by plan order; the
@@ -128,14 +181,18 @@ function writeDispatchState(assignments, records, options) {
   const file = statePath(options);
   const asgns = assignments || [];
   const recs = records || [];
-  const running = [];
+
+  // Collect newly LAUNCHED entries from this dispatch.
+  const newEntries = [];
+  const newWorkItemIds = new Set();
   const n = Math.min(asgns.length, recs.length);
   for (let i = 0; i < n; i += 1) {
     const r = recs[i];
     const a = asgns[i];
     if (!r || r.outcome !== 'LAUNCHED') continue;
     if (!r.workItemId || !r.role) continue;
-    running.push({
+    newWorkItemIds.add(r.workItemId);
+    newEntries.push({
       workItemId: r.workItemId,
       role: r.role,
       accountId: (a && a.accountId) || null,
@@ -144,6 +201,32 @@ function writeDispatchState(assignments, records, options) {
       launchedAt: new Date().toISOString(),
     });
   }
+
+  // Finding 1 fix: merge with prior state. Read the existing file and keep
+  // entries for work items that were NOT re-launched in this dispatch.
+  // A new LAUNCHED record for the same workItemId replaces the old one
+  // (the new session supersedes the prior). Prior entries for other work
+  // items are preserved so a dispatch that defers everything does not erase
+  // sessions that are still alive.
+  let prior = [];
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.running)) {
+      prior = parsed.running.filter(
+        (r) => r && typeof r === 'object' && r.workItemId && r.role
+      );
+    }
+  } catch (_) {
+    // No prior file or unparseable: start fresh. This is fine because
+    // a missing file means no prior sessions, and a corrupt file was
+    // already surfaced by readDispatchState on the previous dispatch.
+  }
+
+  // Keep prior entries whose workItemId is not superseded by a new launch.
+  const running = prior.filter((r) => !newWorkItemIds.has(r.workItemId));
+  // Append new entries after the preserved prior entries.
+  running.push(...newEntries);
 
   const content = JSON.stringify(
     { version: 1, updatedAt: new Date().toISOString(), running },
@@ -163,9 +246,31 @@ function writeDispatchState(assignments, records, options) {
   }
 }
 
+/**
+ * Clears the dispatch state file. This is the operator's escape hatch when
+ * a stuck claim needs to be manually released (e.g. `node cli.js dispatch --clear-state`).
+ *
+ * Returns true if a file was removed, false if none existed.
+ */
+function clearDispatchState(options) {
+  const file = statePath(options);
+  try {
+    fs.unlinkSync(file);
+    return true;
+  } catch (e) {
+    if (e.code === 'ENOENT') return false;
+    throw new DispatchStateError(
+      'Không xoá được dispatch-state: ' + file + ' (' + e.message + ')',
+      e
+    );
+  }
+}
+
 module.exports = {
   DispatchStateError,
+  SESSION_TTL_MS,
   statePath,
   readDispatchState,
   writeDispatchState,
+  clearDispatchState,
 };

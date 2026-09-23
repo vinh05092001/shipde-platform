@@ -14,7 +14,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { readDispatchState, writeDispatchState, DispatchStateError, statePath } = require('../dispatch-state');
+const { readDispatchState, writeDispatchState, clearDispatchState, DispatchStateError, statePath, SESSION_TTL_MS } = require('../dispatch-state');
 const { planDispatch } = require('../scheduler');
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -214,6 +214,100 @@ describe('dispatch-state: ceiling holds across repeated dispatches', () => {
   });
 });
 
+describe('dispatch-state: ceiling holds across THREE dispatches (finding 1 / finding 3)', () => {
+  test('a deferred second dispatch must not erase state so a third dispatch still sees the ceiling', () => {
+    const file = tmpFile();
+
+    // Dispatch 1: FEAT-1 is LAUNCHED.
+    const d1Assignments = [
+      { workItemId: 'FEAT-1', role: 'author.foundation', accountId: 'free-a', branch: 'feat/1' },
+    ];
+    const d1Records = [
+      { workItemId: 'FEAT-1', role: 'author.foundation', outcome: 'LAUNCHED', sessionId: 'sess-1' },
+    ];
+    writeDispatchState(d1Assignments, d1Records, { path: file });
+
+    // Dispatch 2: FEAT-2 arrives but is deferred (ceiling = 1, already 1 running).
+    const state2 = readDispatchState({ path: file });
+    const plan2 = planDispatch(
+      [item({ workItemId: 'FEAT-2', branch: 'feat/2' })],
+      POOL,
+      { running: state2.running, claims: state2.claims, now: NOW }
+    );
+    assert.equal(plan2.assignments.length, 0, 'dispatch 2 must defer');
+
+    // Dispatch 2 write-back: cli.js writes on every non-dry-run, even with 0 assignments.
+    // This is the bug: writeDispatchState([], []) erases FEAT-1.
+    writeDispatchState(plan2.assignments || [], [], { path: file });
+
+    // Dispatch 3: FEAT-2 arrives again. Without the fix, running=[] and it gets assigned.
+    const state3 = readDispatchState({ path: file });
+    const plan3 = planDispatch(
+      [item({ workItemId: 'FEAT-2', branch: 'feat/2' })],
+      POOL,
+      { running: state3.running, claims: state3.claims, now: NOW }
+    );
+
+    assert.equal(plan3.assignments.length, 0, 'dispatch 3 must STILL defer — ceiling must hold');
+    assert.equal(plan3.deferred.length, 1);
+    assert.equal(plan3.deferred[0].reason, 'IMPLEMENTATION_LIMIT');
+
+    fs.unlinkSync(file);
+  });
+
+  test('a dispatch that launches one session while another is already running preserves both', () => {
+    const file = tmpFile();
+
+    // Dispatch 1: FEAT-1 is LAUNCHED.
+    writeDispatchState(
+      [{ workItemId: 'FEAT-1', role: 'author.foundation', accountId: 'free-a', branch: 'feat/1' }],
+      [{ workItemId: 'FEAT-1', role: 'author.foundation', outcome: 'LAUNCHED', sessionId: 'sess-1' }],
+      { path: file }
+    );
+
+    // Dispatch 2: ceiling raised to 2; FEAT-2 is LAUNCHED alongside FEAT-1.
+    const state2 = readDispatchState({ path: file });
+    const plan2 = planDispatch(
+      [item({ workItemId: 'FEAT-2', branch: 'feat/2' })],
+      POOL,
+      {
+        running: state2.running,
+        claims: state2.claims,
+        limits: { maxImplementationAgents: 2, maxTotal: 10 },
+        governedDecision: 'DEC-017',
+        now: NOW,
+      }
+    );
+    assert.equal(plan2.assignments.length, 1, 'dispatch 2 assigns FEAT-2');
+
+    // Write-back from dispatch 2: only FEAT-2 was launched this time.
+    const d2Records = [
+      { workItemId: 'FEAT-2', role: 'author.foundation', outcome: 'LAUNCHED', sessionId: 'sess-2' },
+    ];
+    writeDispatchState(plan2.assignments, d2Records, { path: file });
+
+    // Dispatch 3: FEAT-3 arrives; ceiling is still 2, both slots occupied.
+    const state3 = readDispatchState({ path: file });
+    assert.equal(state3.running.length, 2, 'both FEAT-1 and FEAT-2 must be running');
+    const plan3 = planDispatch(
+      [item({ workItemId: 'FEAT-3', branch: 'feat/3' })],
+      POOL,
+      {
+        running: state3.running,
+        claims: state3.claims,
+        limits: { maxImplementationAgents: 2, maxTotal: 10 },
+        governedDecision: 'DEC-017',
+        now: NOW,
+      }
+    );
+
+    assert.equal(plan3.assignments.length, 0, 'dispatch 3 must defer — both slots full');
+    assert.equal(plan3.deferred[0].reason, 'IMPLEMENTATION_LIMIT');
+
+    fs.unlinkSync(file);
+  });
+});
+
 // ─── unreadable-state must not be idle ──────────────────────────────────────
 
 describe('dispatch-state: unreadable state does not silently read as idle', () => {
@@ -249,7 +343,7 @@ describe('dispatch-state: unreadable state does not silently read as idle', () =
     const file = tmpFile();
     // File does not exist; should return empty arrays, not throw.
     const state = readDispatchState({ path: file });
-    assert.deepStrictEqual(state, { running: [], claims: [] });
+    assert.deepStrictEqual(state, { running: [], claims: [], expired: [] });
   });
 
   test('statePath uses a path under .shipde by default', () => {
@@ -261,5 +355,167 @@ describe('dispatch-state: unreadable state does not silently read as idle', () =
   test('statePath accepts a custom path override', () => {
     const custom = '/tmp/custom-dispatch.json';
     assert.equal(statePath({ path: custom }), custom);
+  });
+});
+
+// ─── TTL expiry (finding 2) ─────────────────────────────────────────────────
+
+describe('dispatch-state: TTL expires stale entries (finding 2)', () => {
+  test('a session older than the TTL is expired and reported', () => {
+    const file = tmpFile();
+    // Write a session launched 5 hours ago.
+    const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    const content = JSON.stringify({
+      version: 1,
+      updatedAt: fiveHoursAgo,
+      running: [{
+        workItemId: 'FEAT-OLD', role: 'author.foundation',
+        accountId: 'free-a', branch: 'feat/old',
+        sessionId: 'sess-dead', launchedAt: fiveHoursAgo,
+      }],
+    });
+    fs.writeFileSync(file, content);
+
+    const state = readDispatchState({ path: file });
+    assert.equal(state.running.length, 0, 'expired entry must not be in running');
+    assert.equal(state.expired.length, 1, 'expired entry must be in expired');
+    assert.equal(state.expired[0].workItemId, 'FEAT-OLD');
+    assert.equal(state.claims.length, 0, 'expired entry must not create a claim');
+
+    fs.unlinkSync(file);
+  });
+
+  test('a session within the TTL is kept', () => {
+    const file = tmpFile();
+    const oneHourAgo = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+    const content = JSON.stringify({
+      version: 1,
+      updatedAt: oneHourAgo,
+      running: [{
+        workItemId: 'FEAT-LIVE', role: 'author.foundation',
+        accountId: 'free-a', branch: 'feat/live',
+        sessionId: 'sess-live', launchedAt: oneHourAgo,
+      }],
+    });
+    fs.writeFileSync(file, content);
+
+    const state = readDispatchState({ path: file });
+    assert.equal(state.running.length, 1, 'live entry must remain in running');
+    assert.equal(state.expired.length, 0);
+    assert.equal(state.claims.length, 1, 'live entry must still claim its branch');
+
+    fs.unlinkSync(file);
+  });
+
+  test('a mixed set of entries: one expired, one alive', () => {
+    const file = tmpFile();
+    const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    const oneHourAgo = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+    const content = JSON.stringify({
+      version: 1,
+      updatedAt: oneHourAgo,
+      running: [
+        {
+          workItemId: 'FEAT-OLD', role: 'author.foundation',
+          accountId: 'free-a', branch: 'feat/old',
+          sessionId: 'sess-dead', launchedAt: fiveHoursAgo,
+        },
+        {
+          workItemId: 'FEAT-LIVE', role: 'author.foundation',
+          accountId: 'free-b', branch: 'feat/live',
+          sessionId: 'sess-live', launchedAt: oneHourAgo,
+        },
+      ],
+    });
+    fs.writeFileSync(file, content);
+
+    const state = readDispatchState({ path: file });
+    assert.equal(state.running.length, 1);
+    assert.equal(state.running[0].workItemId, 'FEAT-LIVE');
+    assert.equal(state.expired.length, 1);
+    assert.equal(state.expired[0].workItemId, 'FEAT-OLD');
+    // The branch held by the dead session is now free.
+    assert.ok(
+      !state.claims.some((c) => c.branch === 'feat/old'),
+      'expired branch must be released'
+    );
+
+    fs.unlinkSync(file);
+  });
+
+  test('a custom sessionTtlMs overrides the default', () => {
+    const file = tmpFile();
+    // Launched 10 minutes ago — within default TTL but outside a 5-minute custom one.
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const content = JSON.stringify({
+      version: 1,
+      updatedAt: tenMinAgo,
+      running: [{
+        workItemId: 'FEAT-SHORT', role: 'author.foundation',
+        accountId: 'free-a', branch: 'feat/short',
+        sessionId: 'sess-short', launchedAt: tenMinAgo,
+      }],
+    });
+    fs.writeFileSync(file, content);
+
+    // With default TTL: should still be alive
+    const stateDefault = readDispatchState({ path: file });
+    assert.equal(stateDefault.running.length, 1, 'alive under default TTL');
+
+    // With 5-minute TTL: should be expired
+    const stateShort = readDispatchState({ path: file, sessionTtlMs: 5 * 60 * 1000 });
+    assert.equal(stateShort.running.length, 0, 'expired under short TTL');
+    assert.equal(stateShort.expired.length, 1);
+
+    fs.unlinkSync(file);
+  });
+
+  test('an expired branch is dispatchable again', () => {
+    const file = tmpFile();
+    const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    const content = JSON.stringify({
+      version: 1,
+      updatedAt: fiveHoursAgo,
+      running: [{
+        workItemId: 'FEAT-1', role: 'author.foundation',
+        accountId: 'free-a', branch: 'feat/1',
+        sessionId: 'sess-dead', launchedAt: fiveHoursAgo,
+      }],
+    });
+    fs.writeFileSync(file, content);
+
+    const state = readDispatchState({ path: file });
+    // The branch should be free again so a new dispatch can take it.
+    const plan = planDispatch(
+      [item({ workItemId: 'FEAT-1', branch: 'feat/1' })],
+      POOL,
+      { running: state.running, claims: state.claims, now: NOW }
+    );
+    assert.equal(plan.assignments.length, 1, 'expired branch is dispatchable');
+
+    fs.unlinkSync(file);
+  });
+});
+
+// ─── clearDispatchState (operator escape hatch) ─────────────────────────────
+
+describe('dispatch-state: clearDispatchState', () => {
+  test('removes the state file', () => {
+    const file = tmpFile();
+    writeDispatchState(
+      [{ workItemId: 'FEAT-1', role: 'author.foundation', accountId: 'free-a', branch: 'feat/1' }],
+      [{ workItemId: 'FEAT-1', role: 'author.foundation', outcome: 'LAUNCHED', sessionId: 's1' }],
+      { path: file }
+    );
+    assert.ok(fs.existsSync(file), 'file exists before clear');
+    const removed = clearDispatchState({ path: file });
+    assert.ok(removed, 'returns true when file was removed');
+    assert.ok(!fs.existsSync(file), 'file gone after clear');
+  });
+
+  test('returns false when no file exists', () => {
+    const file = tmpFile();
+    const removed = clearDispatchState({ path: file });
+    assert.equal(removed, false);
   });
 });
