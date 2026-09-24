@@ -39,6 +39,7 @@ const Scope = {
   ACCOUNT: 'account',
   ACCESS_PATH: 'access_path',
   HARNESS: 'harness',
+  UNKNOWN: 'unknown',
 };
 
 /**
@@ -285,10 +286,12 @@ function classifyFailure(input) {
     };
   }
 
-  // Unknown cause
+  // Unknown cause — scope UNKNOWN means no fault location can be inferred.
+  // Callers must apply the 5-minute cooldown to the (upstream, model)
+  // combination that produced the signal, not to the harness globally.
   return {
     cause: Cause.UNKNOWN,
-    scope: Scope.HARNESS,
+    scope: Scope.UNKNOWN,
     cooldownMs: DEFAULT_COOLDOWNS[Cause.UNKNOWN],
     humanAction: HumanAction.NONE,
     evidence,

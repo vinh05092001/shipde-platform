@@ -331,8 +331,8 @@ describe('Unrecognised failure returns UNKNOWN', () => {
     assert.equal(result.cause, Cause.UNKNOWN);
   });
 
-  test('scope is HARNESS', () => {
-    assert.equal(result.scope, Scope.HARNESS);
+  test('scope is UNKNOWN (no fault location inferred)', () => {
+    assert.equal(result.scope, Scope.UNKNOWN);
   });
 
   test('humanAction is NONE', () => {
@@ -346,13 +346,28 @@ describe('Unrecognised failure returns UNKNOWN', () => {
   test('evidence preserved', () => {
     assert.ok(result.evidence.body.includes('unexpected'));
   });
+
+  test('unrecognised body does not produce harness-wide scope', () => {
+    // Scope.HARNESS would imply the local harness is at fault.
+    // An unrecognised upstream body is as likely to be a novel upstream
+    // error, so the scope must not claim a fault location.
+    const unrecognised = classifyFailure({
+      httpStatus: 502,
+      body: 'Bad gateway: upstream returned something completely novel',
+    });
+    assert.notEqual(unrecognised.scope, Scope.HARNESS);
+    assert.equal(unrecognised.scope, Scope.UNKNOWN);
+  });
 });
 
 describe('Scope test: 402 on one upstream leaves others eligible', () => {
+  // upstream-a: genuine 402 credit-exhausted failure
   const upstream1 = {
     httpStatus: 503,
     body: '[upstream-a/model-x] [402]: {"error": "out of credit"}',
   };
+  // upstream-b: a different upstream that returns an unrecognised body —
+  // it should be classified independently, unaffected by upstream-a's 402
   const upstream2 = {
     httpStatus: 503,
     body: '[upstream-b/model-x] [200]: {"ok": true}',
@@ -366,18 +381,20 @@ describe('Scope test: 402 on one upstream leaves others eligible', () => {
     assert.equal(result1.scope, Scope.UPSTREAM);
   });
 
-  test('upstream-b succeeds (not classified as failure)', () => {
-    // A successful response would not go through classifyFailure in practice,
-    // but the point is that the scope is UPSTREAM, not ACCOUNT or MODEL
-    assert.equal(result1.scope, Scope.UPSTREAM);
+  test('upstream-b is not classified as UPSTREAM_CREDIT_EXHAUSTED', () => {
+    // result2 is the classification of upstream-b independently.
+    // upstream-a's 402 must not bleed into upstream-b's result.
+    assert.notEqual(result2.cause, Cause.UPSTREAM_CREDIT_EXHAUSTED);
+    assert.notEqual(result2.scope, Scope.UPSTREAM);
   });
 
-  test('scope UPSTREAM means only that upstream is cooled', () => {
-    // The classifier returns UPSTREAM scope, meaning the scheduler should
-    // only cool this specific upstream, not the model or account
-    assert.equal(result1.scope, Scope.UPSTREAM);
-    assert.notEqual(result1.scope, Scope.ACCOUNT);
-    assert.notEqual(result1.scope, Scope.MODEL);
+  test("upstream-b's scope is independent of upstream-a's", () => {
+    // The two calls are independent: upstream-a's UPSTREAM scope must not
+    // determine upstream-b's scope. An unrecognised body produces UNKNOWN,
+    // not UPSTREAM or ACCOUNT.
+    assert.notEqual(result2.scope, result1.scope);
+    assert.notEqual(result2.scope, Scope.ACCOUNT);
+    assert.notEqual(result2.scope, Scope.MODEL);
   });
 });
 
