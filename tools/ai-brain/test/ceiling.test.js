@@ -50,6 +50,38 @@ describe('Telling a quota refusal from any other failure', () => {
     }
   });
 
+  test('reads the shapes the local gateway and the CLIs actually refuse in', () => {
+    // TASK-AI-49. Captured live on 2026-09-23: none of these matched, so an
+    // account that had genuinely run out kept being ranked first and chosen
+    // again on the next pass. 9Router puts the status in brackets, which is
+    // neither a keyword before the code nor a separator after it, and Kiro and
+    // Codex refuse in words with no code at all.
+    const observed = [
+      '[kiro/claude-sonnet-4.5-agentic] [402]: {"message":"You have reached the limit.","reason":"MONTHLY_REQUEST_COUNT"} (reset after 1m 59s)',
+      '[cloudflare-ai/@cf/qwen/qwen2.5-coder-32b-instruct] [429]: {"errors":[]}',
+      "You've hit your usage limit",
+      'You have reached the limit.',
+    ];
+    for (const e of observed) {
+      assert.equal(isQuotaRefusal(e), true, 'observed refusal must count: ' + e);
+    }
+  });
+
+  test('a sentence that merely contains the words is not a refusal', () => {
+    // The bracket and word patterns are bounded on purpose: an unbounded
+    // "hit … limit" would pin a ceiling from ordinary build output.
+    const notRefusals = [
+      'the build hit a compile error. limit is unrelated',
+      'reached the end of the file; no limit was involved here at all',
+      'completed in 402 ms',
+      'finished 429 items in the queue',
+      '[github/gpt-4.1] [403]: unauthorized: not licensed to use Copilot',
+    ];
+    for (const e of notRefusals) {
+      assert.equal(isQuotaRefusal(e), false, 'must not count as quota: ' + e);
+    }
+  });
+
   test('does not treat routing or channel availability errors as quota refusals', () => {
     // Finding #4: a 503 or "no available channel" means post-auth routing/model
     // naming state, not quota exhaustion. Learning a ceiling from it permanently
