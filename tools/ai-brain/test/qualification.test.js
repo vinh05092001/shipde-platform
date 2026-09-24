@@ -415,13 +415,15 @@ describe('Probe command construction', () => {
     );
   });
 
-  test('builds the openai-compatible curl with max_tokens 1 and no credential', () => {
+  test('builds the openai-compatible curl with max_tokens 1, HTTP status trailer, and no credential', () => {
     const cmd = q.probeCommand(
       { launch: { kind: 'openai-compatible', baseUrl: 'https://gw/v1/' } },
       'm1',
       'hi'
     );
-    assert.ok(cmd.startsWith('curl -sS -X POST "https://gw/v1/chat/completions"'));
+    assert.ok(cmd.startsWith('curl -sS -w'));
+    assert.ok(cmd.includes(q.HTTP_STATUS_TRAILER));
+    assert.ok(cmd.includes('https://gw/v1/chat/completions'));
     // The JSON body is shell-embedded, so quotes are escaped in the command.
     assert.ok(/\\?"max_tokens\\?":1/.test(cmd));
     assert.ok(/\\?"content\\?":\\?"hi/.test(cmd));
@@ -571,7 +573,7 @@ describe('probeAccount — the recorded probe', () => {
       now,
       run: async (command, opts) => {
         seen.push({ command, opts });
-        return { outcome: 'pass', reason: 'answered' };
+        return { outcome: 'pass', reason: 'answered', stdout: 'ready' };
       },
     });
     assert.strictEqual(record.model, 'cheap');
@@ -647,7 +649,7 @@ describe('probeAccount — the recorded probe', () => {
       now: now + 31 * 60_000,
       run: async () => {
         calls += 1;
-        return { outcome: 'pass', reason: 'answered' };
+        return { outcome: 'pass', reason: 'answered', stdout: 'ready' };
       },
     });
     assert.strictEqual(record.cached, undefined);
@@ -706,7 +708,7 @@ describe('probeAccount — the recorded probe', () => {
       io,
       now,
       model: 'expensive',
-      run: async () => ({ outcome: 'pass', reason: 'answered' }),
+      run: async () => ({ outcome: 'pass', reason: 'answered', stdout: 'ready' }),
     });
     assert.strictEqual(chosen.model, 'expensive');
 
@@ -797,6 +799,11 @@ describe('probeAccount — oc provider support', () => {
     const file = tmpFile();
     const io = { fs, fileIo: { writeFileSync: (p, c) => fs.writeFileSync(p, c) } };
     let ranCommand = null;
+    // Simulate a real OpenAI completion response with HTTP status trailer.
+    const fakeCompletion = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: 'ready' }, finish_reason: 'stop' }],
+    });
+    const fakeStdout = fakeCompletion + '\n' + q.HTTP_STATUS_TRAILER + '200';
     const record = await q.probeAccount({
       accountId: 'ninerouter',
       accounts: [ocAccount],
@@ -806,7 +813,7 @@ describe('probeAccount — oc provider support', () => {
       isEntryAdmitted: () => true,
       run: async (command) => {
         ranCommand = command;
-        return { outcome: 'pass', reason: 'answered' };
+        return { outcome: 'pass', reason: 'answered', stdout: fakeStdout };
       },
     });
     assert.strictEqual(record.outcome, 'pass');
@@ -831,5 +838,198 @@ describe('probeAccount — oc provider support', () => {
     });
     assert.strictEqual(record.outcome, 'refused');
     assert.ok(record.reason.includes('has no reader'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Response validation — a pass requires evidence the model answered
+// ---------------------------------------------------------------------------
+
+describe('parseProbeOutput — response validation', () => {
+  test('an HTTP 401 error body is a fail, not a pass', () => {
+    const errorBody = JSON.stringify({
+      error: { message: 'Missing API key', type: 'authentication_error', code: 'invalid_api_key' },
+    });
+    const stdout = errorBody + '\n' + q.HTTP_STATUS_TRAILER + '401';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('401'));
+    assert.ok(result.reason.includes('Missing API key'));
+  });
+
+  test('an HTTP 403 preserves the gateway reason in the evidence', () => {
+    const errorBody = JSON.stringify({
+      error: { message: 'Forbidden: quota exceeded', type: 'forbidden' },
+    });
+    const stdout = errorBody + '\n' + q.HTTP_STATUS_TRAILER + '403';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('403'));
+    assert.ok(result.reason.includes('quota exceeded'));
+  });
+
+  test('an HTTP 500 from upstream is a fail with the error preserved', () => {
+    const errorBody = JSON.stringify({
+      error: { message: 'Internal server error', type: 'server_error' },
+    });
+    const stdout = errorBody + '\n' + q.HTTP_STATUS_TRAILER + '500';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('500'));
+  });
+
+  test('an HTTP 502 from upstream is a fail', () => {
+    const stdout = 'Bad Gateway\n' + q.HTTP_STATUS_TRAILER + '502';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('502'));
+  });
+
+  test('a real HTTP 200 completion is a pass with the status in the reason', () => {
+    const completion = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: 'ready' }, finish_reason: 'stop' }],
+    });
+    const stdout = completion + '\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'pass');
+    assert.ok(result.reason.includes('200'));
+  });
+
+  test('HTTP 200 with no choices array is a fail', () => {
+    const stdout = '{"id":"x","object":"chat.completion"}\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('no choices'));
+  });
+
+  test('HTTP 200 with invalid JSON body is a fail', () => {
+    const stdout = 'not json at all\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('not valid JSON'));
+  });
+
+  test('no HTTP status trailer (missing -w) is a fail', () => {
+    const errorBody = JSON.stringify({
+      error: { message: 'Missing API key' },
+    });
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout: errorBody,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('???') || result.reason.includes('0'));
+  });
+
+  test('cli launch kind with non-empty stdout is accepted', () => {
+    const result = q.parseProbeOutput('cli', {
+      outcome: 'pass', reason: 'answered', stdout: 'ready',
+    });
+    assert.strictEqual(result, null); // no override, raw outcome stands
+  });
+
+  test('cli launch kind with empty stdout is a fail', () => {
+    const result = q.parseProbeOutput('cli', {
+      outcome: 'pass', reason: 'answered', stdout: '',
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('no output'));
+  });
+
+  test('docker-compose launch kind follows the same rule as cli', () => {
+    const pass = q.parseProbeOutput('docker-compose', {
+      outcome: 'pass', reason: 'answered', stdout: 'something',
+    });
+    assert.strictEqual(pass, null);
+
+    const fail = q.parseProbeOutput('docker-compose', {
+      outcome: 'pass', reason: 'answered', stdout: '  \n  ',
+    });
+    assert.strictEqual(fail.outcome, 'fail');
+  });
+
+  test('non-pass outcomes are never overridden', () => {
+    for (const outcome of ['fail', 'timeout', 'refused']) {
+      const result = q.parseProbeOutput('openai-compatible', {
+        outcome, reason: 'already failed', stdout: '',
+      });
+      assert.strictEqual(result, null, `outcome ${outcome} should not be overridden`);
+    }
+  });
+});
+
+describe('probeAccount — HTTP error body produces fail, not pass (end-to-end)', () => {
+  const now = 1_800_000_000_000;
+  const ocAccount = {
+    id: 'ninerouter',
+    provider: 'oc',
+    launch: { kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:20128/v1' },
+    capabilities: { jsonSchema: true, tools: true, contextWindow: 200000 },
+    models: [
+      { model: 'cc/claude-haiku-4-5-20251001', cost: { inputPerMillion: 0.8, outputPerMillion: 4 } },
+    ],
+  };
+
+  test('a 401 from the gateway is recorded as fail with the error message', async () => {
+    const file = tmpFile();
+    const io = { fs, fileIo: { writeFileSync: (p, c) => fs.writeFileSync(p, c) } };
+    const errorBody = JSON.stringify({
+      error: { message: 'Missing API key', type: 'authentication_error', code: 'invalid_api_key' },
+    });
+    const record = await q.probeAccount({
+      accountId: 'ninerouter',
+      accounts: [ocAccount],
+      file,
+      io,
+      now,
+      isEntryAdmitted: () => true,
+      run: async () => ({
+        outcome: 'pass',
+        reason: 'answered',
+        stdout: errorBody + '\n' + q.HTTP_STATUS_TRAILER + '401',
+      }),
+    });
+    assert.strictEqual(record.outcome, 'fail');
+    assert.ok(record.reason.includes('401'));
+    assert.ok(record.reason.includes('Missing API key'));
+    // Verify the fail is written to the store, not just returned.
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.strictEqual(stored['ninerouter@cc/claude-haiku-4-5-20251001'].outcome, 'fail');
+  });
+
+  test('a real completion from the gateway is recorded as pass', async () => {
+    const file = tmpFile();
+    const io = { fs, fileIo: { writeFileSync: (p, c) => fs.writeFileSync(p, c) } };
+    const completion = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: 'ready' }, finish_reason: 'stop' }],
+    });
+    const record = await q.probeAccount({
+      accountId: 'ninerouter',
+      accounts: [ocAccount],
+      file,
+      io,
+      now,
+      isEntryAdmitted: () => true,
+      run: async () => ({
+        outcome: 'pass',
+        reason: 'answered',
+        stdout: completion + '\n' + q.HTTP_STATUS_TRAILER + '200',
+      }),
+    });
+    assert.strictEqual(record.outcome, 'pass');
+    assert.ok(record.reason.includes('200'));
   });
 });

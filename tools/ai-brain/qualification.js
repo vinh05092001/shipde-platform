@@ -97,7 +97,18 @@ function loadResults(file, io) {
   }
   try {
     const parsed = JSON.parse(text);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+
+    // Purge any old false passes from before we parsed HTTP responses.
+    // The previous bug recorded curl exit 0 as { outcome: 'pass', reason: 'answered' }
+    // for all HTTP responses including 4xx/5xx.
+    for (const key of Object.keys(obj)) {
+      if (obj[key].outcome === 'pass' && obj[key].reason === 'answered') {
+        delete obj[key];
+      }
+    }
+
+    return obj;
   } catch (e) {
     throw Object.assign(new Error('RESULT_CORRUPT: ' + e.message), {
       code: 'RESULT_CORRUPT',
@@ -222,8 +233,11 @@ function probeCommand(account, model, probeText) {
       max_tokens: 1,
       messages: [{ role: 'user', content: probeText }],
     });
+    // -w appends the HTTP status as a parseable trailer. Without it, curl exits
+    // 0 for any HTTP response including 4xx/5xx and the probe records an error
+    // body as 'pass'. The trailer is extracted by parseProbeOutput.
     return (
-      'curl -sS -X POST "' +
+      'curl -sS -w "\\n__PROBE_HTTP_STATUS__%{http_code}" -X POST "' +
       url +
       '" -H "Content-Type: application/json" -d "' +
       body.replace(/"/g, '\\"') +
@@ -289,7 +303,7 @@ function runBounded(command, options) {
         finish({ outcome: 'timeout', treeKilled, reason: 'probe exceeded its timeout' });
         return;
       }
-      if (code === 0) finish({ outcome: 'pass', treeKilled, reason: 'answered' });
+      if (code === 0) finish({ outcome: 'pass', treeKilled, reason: 'answered', stdout });
       else
         finish({
           outcome: 'fail',
@@ -366,6 +380,106 @@ function buildRecord(accountId, model, outcome, latencyMs, reason, now) {
     latencyMs,
     reason,
   });
+}
+
+// The HTTP status trailer that probeCommand appends to curl stdout.
+const HTTP_STATUS_TRAILER = '__PROBE_HTTP_STATUS__';
+
+/**
+ * Decides whether a probe's stdout represents a real model completion or an
+ * error that curl reported as exit 0.
+ *
+ * The three launch kinds each have their own evidence standard:
+ *
+ * - `openai-compatible`: curl appends `__PROBE_HTTP_STATUS__<code>` to stdout.
+ *   A pass requires HTTP 2xx **and** a response body with `choices[*].message`
+ *   containing non-empty `content`. An error body — 401, 403, 429, 500, 502
+ *   — produces `fail` with the status code and the gateway's own error message
+ *   preserved, because "Missing API key" and "upstream timeout" are different
+ *   facts and the outcome must not flatten them.
+ *
+ * - `cli` / `docker-compose`: exit code 0 with non-empty stdout is accepted.
+ *   These commands run the provider's own client, which is expected to exit
+ *   non-zero on failure. A future enhancement could parse structured output,
+ *   but exit code is already a meaningful signal for host commands.
+ *
+ * This function returns either `null` (the raw outcome stands) or an override
+ * `{ outcome, reason }` that replaces it.
+ */
+function parseProbeOutput(launchKind, rawResult) {
+  // Only override when the raw result claims success.
+  if (rawResult.outcome !== 'pass') return null;
+  const stdout = rawResult.stdout || '';
+
+  if (launchKind === 'openai-compatible') {
+    // Extract HTTP status from the trailer appended by -w.
+    const trailerIdx = stdout.lastIndexOf(HTTP_STATUS_TRAILER);
+    let httpStatus = 0;
+    let responseBody = stdout;
+    if (trailerIdx >= 0) {
+      httpStatus = parseInt(stdout.slice(trailerIdx + HTTP_STATUS_TRAILER.length).trim(), 10) || 0;
+      responseBody = stdout.slice(0, trailerIdx).trim();
+    }
+
+    // An HTTP error is a fail, not a pass.
+    if (httpStatus >= 400 || httpStatus === 0) {
+      let errorMsg = '';
+      try {
+        const parsed = JSON.parse(responseBody);
+        if (parsed && parsed.error) {
+          errorMsg = parsed.error.message || parsed.error.type || JSON.stringify(parsed.error);
+        }
+      } catch (_) {
+        errorMsg = responseBody.slice(0, 80);
+      }
+      return {
+        outcome: 'fail',
+        reason: (
+          'HTTP ' + (httpStatus || '???') + ': ' + errorMsg
+        ).slice(0, 160),
+      };
+    }
+
+    // HTTP 2xx: verify the body actually contains a completion.
+    try {
+      const parsed = JSON.parse(responseBody);
+      const choices = parsed && parsed.choices;
+      if (!Array.isArray(choices) || choices.length === 0) {
+        return {
+          outcome: 'fail',
+          reason: ('HTTP ' + httpStatus + ': response has no choices').slice(0, 160),
+        };
+      }
+      const msg = choices[0] && choices[0].message;
+      const content = (msg && (msg.content || '')) || '';
+      if (content.length === 0 && !(choices[0] && choices[0].finish_reason)) {
+        return {
+          outcome: 'fail',
+          reason: ('HTTP ' + httpStatus + ': response choice has no content').slice(0, 160),
+        };
+      }
+      // A genuine completion.
+      return {
+        outcome: 'pass',
+        reason: 'answered (HTTP ' + httpStatus + ')',
+      };
+    } catch (_) {
+      return {
+        outcome: 'fail',
+        reason: ('HTTP ' + httpStatus + ': response body is not valid JSON').slice(0, 160),
+      };
+    }
+  }
+
+  // cli / docker-compose: exit code 0 is the provider client's own verdict.
+  // Non-empty stdout is minimal evidence that something was produced.
+  if (stdout.trim().length === 0) {
+    return {
+      outcome: 'fail',
+      reason: 'process exited 0 but produced no output',
+    };
+  }
+  return null;
 }
 
 /**
@@ -492,13 +606,22 @@ async function probeAccount(input) {
       });
   const latencyMs = Date.now() - started;
 
+  // Validate the response content. An exit-code-0 from curl does not mean the
+  // model answered: it means the HTTP transaction completed. parseProbeOutput
+  // checks the actual response and overrides the outcome when the body is an
+  // error, preserving the gateway's own reason as evidence.
+  const launchKind = (account.launch && account.launch.kind) || 'unknown';
+  const override = parseProbeOutput(launchKind, ran);
+  const finalOutcome = override ? override.outcome : ran.outcome;
+  const finalReason = override ? override.reason : ran.reason;
+
   return saveResult(
     buildRecord(
       account.id,
       model,
-      ran.outcome,
+      finalOutcome,
       latencyMs,
-      String(ran.reason || '').slice(0, 160),
+      String(finalReason || '').slice(0, 160),
       now
     ),
     file,
@@ -618,6 +741,7 @@ module.exports = {
   REQUIRED_FIELDS,
   DEFAULT_PROBE_TIMEOUT_MS,
   DEFAULT_CACHE_WINDOW_MS,
+  HTTP_STATUS_TRAILER,
   validateResultShape,
   recordKey,
   loadResults,
@@ -626,6 +750,7 @@ module.exports = {
   cheapestModel,
   probeCommand,
   runBounded,
+  parseProbeOutput,
   probeAccount,
   parseProbeArgs,
   runProbeCli,
