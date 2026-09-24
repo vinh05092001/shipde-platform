@@ -425,7 +425,7 @@ describe('ranking', () => {
 
     const decision = ranking.rankAndRecord(testCandidates, {
       workItemId: 'TASK-TEST-CATALOG', role: 'author.foundation', dryRun: true,
-      catalogueSet,
+      cataloguesByPath: { 'http': catalogueSet },
     });
 
     // test-gone/invented-removed is rejected because it is not in the catalogue.
@@ -454,12 +454,124 @@ describe('ranking', () => {
 
     const decision = ranking.rankAndRecord(testCandidates, {
       workItemId: 'TASK-TEST-EXEMPT', role: 'author.foundation', dryRun: true,
-      catalogueSet,
+      cataloguesByPath: { 'http': catalogueSet },
     });
 
     // Neither should be rejected — wildcards and CLI are exempt.
     assert.equal(decision.rejected.length, 0, 'no rejections for exempt candidates');
     assert.equal(decision.candidates.length, 2, 'both candidates are eligible');
+  });
+
+  // NEW TESTS FOR PER-PATH CATALOGUE VALIDATION
+  test('validates candidate against its own access path catalogue', () => {
+    // two catalogues, one per access path, with different contents
+    const cataloguesByPath = {
+      'http': ranking.buildCatalogueSet(['test-a/invented-alpha']),
+      'opencode': ranking.buildCatalogueSet(['test-b/invented-beta'])
+    };
+
+    const testCandidates = [
+      // Present in http, should survive
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-alpha',
+        source: '9router', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' },
+      // Absent in http, should be rejected
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-b', modelId: 'test-b/invented-beta',
+        source: '9router', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' },
+      // Present in opencode, should survive
+      { harness: 'opencode', accessPath: 'opencode', upstream: 'test-b', modelId: 'test-b/invented-beta',
+        source: 'oc', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' },
+      // Absent in opencode, should be rejected
+      { harness: 'opencode', accessPath: 'opencode', upstream: 'test-a', modelId: 'test-a/invented-alpha',
+        source: 'oc', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' },
+    ];
+
+    const decision = ranking.rankAndRecord(testCandidates, {
+      workItemId: 'TASK-TEST-PER-PATH', role: 'author.foundation', dryRun: true,
+      cataloguesByPath, // Pass new property instead of catalogueSet
+    });
+
+    const httpAbsentRej = decision.rejected.find((r) => r.modelId === 'test-b/invented-beta' && r.scope === 'model');
+    assert.ok(httpAbsentRej, 'candidate absent from http path catalogue is rejected');
+
+    const ocAbsentRej = decision.rejected.find((r) => r.modelId === 'test-a/invented-alpha' && r.scope === 'model');
+    assert.ok(ocAbsentRej, 'candidate absent from opencode path catalogue is rejected');
+
+    const httpSurviving = decision.candidates.find((c) => c.modelId === 'test-a/invented-alpha');
+    assert.ok(httpSurviving, 'candidate present in http path catalogue survives');
+
+    const ocSurviving = decision.candidates.find((c) => c.modelId === 'test-b/invented-beta');
+    assert.ok(ocSurviving, 'candidate present in opencode path catalogue survives');
+  });
+
+  test('same upstream model under two different ids validated against its own path', () => {
+    const cataloguesByPath = {
+      'http': ranking.buildCatalogueSet(['gh/gpt-4.1-2025-04-14']),
+      'opencode': ranking.buildCatalogueSet(['gh/gpt-4.1'])
+    };
+
+    const testCandidates = [
+      // HTTP candidate uses the http id, exists in http catalogue
+      { harness: 'paseo', accessPath: 'http', upstream: 'gh', modelId: 'gh/gpt-4.1-2025-04-14',
+        source: '9router', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' },
+      // OpenCode candidate uses the oc alias, exists in opencode catalogue
+      { harness: 'opencode', accessPath: 'opencode', upstream: 'gh', modelId: 'gh/gpt-4.1',
+        source: 'oc', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' },
+      // A mixed-up candidate that borrows presence: OpenCode path but HTTP id
+      { harness: 'opencode', accessPath: 'opencode', upstream: 'gh', modelId: 'gh/gpt-4.1-2025-04-14',
+        source: 'oc', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' }
+    ];
+
+    const decision = ranking.rankAndRecord(testCandidates, {
+      workItemId: 'TASK-TEST-ALIAS', role: 'author.foundation', dryRun: true,
+      cataloguesByPath,
+    });
+
+    const validHttp = decision.candidates.find((c) => c.modelId === 'gh/gpt-4.1-2025-04-14' && c.accessPath === 'http');
+    assert.ok(validHttp, 'valid http candidate survives');
+
+    const validOc = decision.candidates.find((c) => c.modelId === 'gh/gpt-4.1' && c.accessPath === 'opencode');
+    assert.ok(validOc, 'valid opencode candidate survives');
+
+    const invalidOc = decision.rejected.find((r) => r.modelId === 'gh/gpt-4.1-2025-04-14');
+    assert.ok(invalidOc, 'opencode candidate with http id rejected from opencode path');
+  });
+
+  test('cli path without catalogue marks status unknown but allows candidate', () => {
+    const cataloguesByPath = {
+      'http': ranking.buildCatalogueSet(['test-a/invented-alpha'])
+    };
+    const testCandidates = [
+      { harness: 'agy', accessPath: 'cli', upstream: 'agy-local', modelId: 'specific-model',
+        source: 'agy-local', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' }
+    ];
+
+    const decision = ranking.rankAndRecord(testCandidates, {
+      workItemId: 'TASK-TEST-CLI', role: 'author.foundation', dryRun: true,
+      cataloguesByPath,
+    });
+
+    assert.equal(decision.rejected.length, 0, 'cli candidate is not rejected');
+    const cliCandidate = decision.candidates[0];
+    assert.equal(cliCandidate.headroom, 'unknown', 'cli candidate status marked as unknown due to missing catalogue');
+  });
+
+  test('wildcard model bypasses catalogue check and is marked unknown', () => {
+    const cataloguesByPath = {
+      'http': ranking.buildCatalogueSet(['test-a/invented-alpha'])
+    };
+    const testCandidates = [
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: '*',
+        source: '9router', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' }
+    ];
+
+    const decision = ranking.rankAndRecord(testCandidates, {
+      workItemId: 'TASK-TEST-WILDCARD', role: 'author.foundation', dryRun: true,
+      cataloguesByPath,
+    });
+
+    assert.equal(decision.rejected.length, 0, 'wildcard candidate is not rejected');
+    const wildcardCandidate = decision.candidates[0];
+    assert.equal(wildcardCandidate.headroom, 'unknown', 'wildcard status marked as unknown');
   });
 
   // F1: buildCatalogueSet strips trailing CR from Windows command output
@@ -798,7 +910,7 @@ describe('integration: catalogue snapshot validation', () => {
       registry,
       evidenceData: evData,
       dryRun: true,
-      catalogueSet,
+      cataloguesByPath: { 'http://127.0.0.1:20128/v1': catalogueSet },
       credentialOpts: { env: { NINEROUTER_API_KEY: 'present' } },
     });
 
@@ -845,7 +957,7 @@ describe('integration: catalogue snapshot validation', () => {
 
     const decision = ranking.rankAndRecord(testCandidates, {
       workItemId: 'INTEG-STALE-01', role: 'author.foundation', dryRun: true,
-      catalogueSet,
+      cataloguesByPath: { 'http://127.0.0.1:20128/v1': catalogueSet },
     });
 
     // The stale model is rejected.

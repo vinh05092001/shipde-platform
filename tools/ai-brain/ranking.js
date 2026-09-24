@@ -190,22 +190,31 @@ function rankAndRecord(candidates, context) {
     if (c.modelId === '*' && !c.resolvedModel) {
       // Keep as eligible but mark as unknown — it can still be selected
       // if no better candidate exists.
-      c.status = c.status || 'unknown';
+      c.status = 'unknown';
     }
 
     // Catalogue validation: before dispatch, the chosen model id must exist
     // in the current catalogue FOR THAT ACCESS PATH.  A model that has left
     // the catalogue is not silently substituted — it is rejected with a named
     // cause so the selector moves to the next candidate.
-    if (ctx.catalogueSet && c.modelId !== '*' && c.accessPath !== 'cli') {
-      if (!ctx.catalogueSet.has(c.modelId)) {
-        rejected.push({
-          offeringId: evidence.candidateKey(c),
-          reason: 'MODEL_NOT_IN_CATALOG',
-          scope: 'model',
-          modelId: c.modelId,
-        });
-        continue;
+    if (c.modelId !== '*') {
+      const cataloguesByPath = ctx.cataloguesByPath || {};
+      const catalogue = cataloguesByPath[c.accessPath];
+
+      if (catalogue) {
+        if (!catalogue.has(c.modelId)) {
+          rejected.push({
+            offeringId: evidence.candidateKey(c),
+            reason: 'MODEL_NOT_IN_CATALOG',
+            scope: 'model',
+            modelId: c.modelId,
+          });
+          continue;
+        }
+      } else {
+        // If there is no enumerable catalogue for this access path (like cli),
+        // we cannot verify its presence. We record it as unknown.
+        c.status = 'unknown';
       }
     }
 
