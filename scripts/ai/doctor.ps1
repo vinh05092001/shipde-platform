@@ -133,9 +133,7 @@ $agyCommand = Get-Command agy -ErrorAction SilentlyContinue
 Write-Host ("Antigravity CLI: {0}" -f $(if ($agyCommand) { "OK  $($agyCommand.Source)" } else { "NOT INSTALLED; Gemini CLI fallback remains available" }))
 
 $agentRouterKey = [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
-$agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
-
-$agentRouterSaved = $false
+$agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)`r`n$agentRouterSaved = $false
 
 # Presence is not configuration. A key that is set but rejected reports as
 # CONFIGURED under a presence check, so the dashboard and this report both
@@ -406,15 +404,7 @@ Write-Host "=== CODEX HOOK REGISTRATION (TASK-AI-16) ==="
 # AI-16-R03: a flag that parses is not a hook that fired. The only evidence
 # that a Codex session was observed is a row the daemon wrote, so the ledger
 # is read directly and compared against the harnesses already known to work.
-$codexActivity = [PSCustomObject]@{
-    Verifiable = $false
-    Reason = "Skipped for testing"
-    RecentWithActivity = 0
-    Sessions = 0
-    WithActivity = 0
-    LastActivityAt = "never"
-    WindowHours = 24
-}
+$codexActivity = Get-ShipDeAoHarnessActivity -Harness "codex"
 if (-not $codexActivity.Verifiable) {
     # AI-16-R04: unreadable is "cannot verify", never a pass.
     Write-Host ("Codex hook registration: CANNOT VERIFY ({0})" -f $codexActivity.Reason)
@@ -458,8 +448,13 @@ if (-not $codexActivity.Verifiable) {
 
 $googleCommand = $null
 $googleProbe = $null
-
-$googleCommand = $null
+if (Get-Command agy -ErrorAction SilentlyContinue) {
+    $googleCommand = "agy"
+    $googleProbe = Invoke-ShipDeBoundedProbe -CommandText "& agy --print-timeout 45s --print 'Reply exactly: SHIPDE_AUTH_OK' --output-format text" -TimeoutSeconds 60
+} elseif (Get-Command gemini -ErrorAction SilentlyContinue) {
+    $googleCommand = "gemini"
+    $googleProbe = Invoke-ShipDeBoundedProbe -CommandText "& gemini --prompt 'Reply exactly: SHIPDE_AUTH_OK' --output-format text" -TimeoutSeconds 60
+}
 if ($googleCommand) {
     if ($googleProbe.TimedOut -or $googleProbe.ExitCode -ne 0 -or $googleProbe.Output -notmatch "SHIPDE_AUTH_OK") {
         Write-Host ("{0}: NOT AUTHENTICATED OR UNREACHABLE" -f $googleCommand)
@@ -679,8 +674,7 @@ if ($unmanagedMcp.Count -gt 0 -and [string]::IsNullOrWhiteSpace($env:SHIPDE_ACTI
 $rootCanonical = (Resolve-Path $AiRoot -ErrorAction SilentlyContinue).Path
 $pathsOutside = [System.Collections.Generic.List[string]]::new()
 foreach ($entry in $paths.GetEnumerator()) {
-    $resolved = Resolve-Path $entry.Value -ErrorAction SilentlyContinue
-$targetPath = if ($resolved) { $resolved.Path } else { $null }
+    $targetPath = (Resolve-Path $entry.Value -ErrorAction SilentlyContinue).Path
     if ($targetPath -and -not $targetPath.StartsWith($rootCanonical, [System.StringComparison]::OrdinalIgnoreCase)) {
         $pathsOutside.Add("$($entry.Key): $targetPath")
     }
@@ -692,38 +686,94 @@ if ($pathsOutside.Count -gt 0) {
     Write-Host ("Workspace containment: VERIFIED (All worktrees reside inside {0})" -f $AiRoot)
 }
 
-# Writer claim guard hook check
+# Git hook manager check (TASK-AI-36)
 #
-# Scoped per worktree with -C, like every other git call in this file. An
-# unscoped git config reads whatever directory the operator ran the doctor
-# from, and the doctor is normally run from the shell against worktrees under
-# $AiRoot -- a container directory, not a repository. Outside a repository the
-# command fails, the result is empty, and this reported ACTION REQUIRED on
-# machines where the hook was installed correctly in every worktree.
-# The hook directory pattern, defined once so the loop reads cleanly.
-$script:HooksPathPattern = "(^|[\\/])\.githooks$"
-$hooksMissing = New-Object System.Collections.Generic.List[string]
-$hooksConfigured = New-Object System.Collections.Generic.List[string]
-foreach ($entry in $paths.GetEnumerator()) {
-    if (-not (Test-Path -LiteralPath (Join-Path $entry.Value ".git"))) { continue }
-    $hooksHere = (@(& git -C $entry.Value config core.hooksPath 2>$null) -join "").Trim()
-    # A configured path is not an installed hook. Checking only the path would
-    # report CONFIGURED for precisely the case getHookStatus was written to
-    # catch: the directory set, no pre-commit in it, commits running free.
-    $hookFileHere = if ($hooksHere) { Join-Path $entry.Value (Join-Path $hooksHere "pre-commit") } else { $null }
-    if ($hooksHere -and ($hooksHere -match $script:HooksPathPattern) -and (Test-Path -LiteralPath $hookFileHere)) {
-        $hooksConfigured.Add($entry.Key)
-    } else {
-        $hooksMissing.Add($entry.Key)
+# Hooks are declared in the version-controlled lefthook.yml and installed by
+# Lefthook into the repository git common dir, so one installation covers
+# every worktree of the repository. The bespoke core.hooksPath override this
+# replaced is retired: while it is set, git ignores the Lefthook hook, so its
+# presence is reported as a failure rather than silently tolerated.
+#
+# The binary is resolved through the workspace pin. `npx lefthook` without a
+# version would run whatever the registry serves today, which AI-TOOL-11
+# forbids, so a missing pin is a failure and not a fallback.
+# The probes target the checkout this script belongs to, not the integration
+# baseline: each checkout installs its own node_modules, and the binary the
+# developer commits through is the one that has to resolve.
+$currentRepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$lefthookBinaryText = ""
+$lefthookBinaryOk = $false
+if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+    $lefthookBinaryProbe = Invoke-ShipDeBoundedProbe -CommandText ("& pnpm --dir '{0}' exec lefthook version" -f $currentRepoRoot) -TimeoutSeconds 60
+    $lefthookBinaryText = ([string]$lefthookBinaryProbe.Output).Trim()
+    if ((-not $lefthookBinaryProbe.TimedOut) -and $lefthookBinaryProbe.ExitCode -eq 0 -and $lefthookBinaryText -match '1\.11\.3') {
+        $lefthookBinaryOk = $true
     }
 }
-if ($hooksConfigured.Count -eq 0 -and $hooksMissing.Count -eq 0) {
-    Write-Host "Single-writer guard hook: CANNOT VERIFY (no git worktree under the approved AI root)"
-} elseif ($hooksMissing.Count -eq 0) {
-    Write-Host ("Single-writer guard hook: CONFIGURED in all {0} worktrees" -f $hooksConfigured.Count)
+if ($lefthookBinaryOk) {
+    Write-Host "PASS lefthook: binary resolves from the workspace pin (1.11.3)"
 } else {
-    Write-Host ("Single-writer guard hook: NOT CONFIGURED in {0} (run: pnpm guard:install there)" -f ($hooksMissing -join ", "))
-    $failures.Add("ai-guard core.hooksPath is not configured in: $($hooksMissing -join ', '); run pnpm guard:install there")
+    Write-Host "FAIL lefthook: the pinned binary 1.11.3 does not resolve from the workspace install"
+    Write-Host "  Remediation: pnpm install --frozen-lockfile"
+    $failures.Add("Lefthook binary does not resolve to the pinned 1.11.3 from the workspace install; run pnpm install --frozen-lockfile")
+}
+
+# Staged-scanner readiness (AI-36-R05). The pre-commit secret scan runs in
+# Node and must answer without the Gitleaks binary being on PATH. Exit 0
+# (clean) and exit 1 (a secret is staged) are both the scanner working; exit
+# 2 is the scanner reporting it could not answer, which the hook cannot act
+# on and which would silently pass every commit if it were read as success.
+$stagedScannerPath = Join-Path $currentRepoRoot "tools\ai-guard\cli.js"
+$stagedScannerOk = $false
+if (Test-Path -LiteralPath $stagedScannerPath) {
+    $stagedScannerProbe = Invoke-ShipDeBoundedProbe -CommandText ("& node '{0}' staged-secrets --root '{1}'" -f $stagedScannerPath, $currentRepoRoot) -TimeoutSeconds 60
+    if ((-not $stagedScannerProbe.TimedOut) -and ($stagedScannerProbe.ExitCode -eq 0 -or $stagedScannerProbe.ExitCode -eq 1)) {
+        $stagedScannerOk = $true
+    }
+}
+if ($stagedScannerOk) {
+    Write-Host "PASS lefthook: staged secret scanner is ready (node tools/ai-guard/cli.js staged-secrets)"
+} else {
+    Write-Host "FAIL lefthook: staged secret scanner did not answer"
+    Write-Host "  Remediation: node tools/ai-guard/cli.js staged-secrets --root <repo>"
+    $failures.Add("Staged secret scanner is not ready; the pre-commit secret gate cannot answer")
+}
+
+# Hook installation status across governed worktrees. Scoped per worktree with
+# -C, like every other git call in this file: an unscoped git config reads
+# whatever directory the operator ran the doctor from.
+$lefthookHookInstalled = New-Object System.Collections.Generic.List[string]
+$lefthookHookMissing = New-Object System.Collections.Generic.List[string]
+$hooksPathOverrides = New-Object System.Collections.Generic.List[string]
+foreach ($entry in $paths.GetEnumerator()) {
+    if (-not (Test-Path -LiteralPath (Join-Path $entry.Value ".git"))) { continue }
+    $hooksPathHere = (@(& git -C $entry.Value config core.hooksPath 2>$null) -join "").Trim()
+    if ($hooksPathHere) { $hooksPathOverrides.Add(("{0}={1}" -f $entry.Key, $hooksPathHere)) }
+    $commonDirHere = (@(& git -C $entry.Value rev-parse --path-format=absolute --git-common-dir 2>$null) -join "").Trim()
+    $hookFileHere = if ($commonDirHere) { Join-Path $commonDirHere "hooks\pre-commit" } else { $null }
+    # A file in the hook directory is not a hook manager. A stale hand-written
+    # pre-commit would otherwise report as installed while the Lefthook config
+    # never runs, which is the failure this check exists to catch.
+    $hookTextHere = if ($hookFileHere -and (Test-Path -LiteralPath $hookFileHere)) { Get-Content -LiteralPath $hookFileHere -Raw } else { "" }
+    if ($hookTextHere -match "call_lefthook") {
+        $lefthookHookInstalled.Add($entry.Key)
+    } else {
+        $lefthookHookMissing.Add($entry.Key)
+    }
+}
+if ($hooksPathOverrides.Count -gt 0) {
+    Write-Host ("FAIL lefthook: core.hooksPath override is set ({0}); git would ignore the Lefthook hook" -f ($hooksPathOverrides -join ", "))
+    Write-Host "  Remediation: git -C <worktree> config --unset core.hooksPath; pnpm lefthook install"
+    $failures.Add("core.hooksPath is still set in: $($hooksPathOverrides -join ', '); it shadows the Lefthook pre-commit hook")
+}
+if ($lefthookHookInstalled.Count -eq 0 -and $lefthookHookMissing.Count -eq 0) {
+    Write-Host "PASS lefthook: CANNOT VERIFY (no git worktree under the approved AI root)"
+} elseif ($lefthookHookMissing.Count -eq 0) {
+    Write-Host ("PASS lefthook: pre-commit hook installed in all {0} worktrees (git common dir)" -f $lefthookHookInstalled.Count)
+} else {
+    Write-Host ("FAIL lefthook: pre-commit hook NOT installed for: {0}" -f ($lefthookHookMissing -join ", "))
+    Write-Host "  Remediation: pnpm install --frozen-lockfile; pnpm lefthook install"
+    $failures.Add("Lefthook pre-commit hook is not installed for: $($lefthookHookMissing -join ', '); run pnpm lefthook install")
 }
 
 if ($failures.Count -gt 0) {
