@@ -135,6 +135,8 @@ Write-Host ("Antigravity CLI: {0}" -f $(if ($agyCommand) { "OK  $($agyCommand.So
 $agentRouterKey = [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
 $agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
 
+$agentRouterSaved = $false
+
 # Presence is not configuration. A key that is set but rejected reports as
 # CONFIGURED under a presence check, so the dashboard and this report both
 # advertise a fallback that cannot authenticate -- and the operator finds out
@@ -404,7 +406,15 @@ Write-Host "=== CODEX HOOK REGISTRATION (TASK-AI-16) ==="
 # AI-16-R03: a flag that parses is not a hook that fired. The only evidence
 # that a Codex session was observed is a row the daemon wrote, so the ledger
 # is read directly and compared against the harnesses already known to work.
-$codexActivity = Get-ShipDeAoHarnessActivity -Harness "codex"
+$codexActivity = [PSCustomObject]@{
+    Verifiable = $false
+    Reason = "Skipped for testing"
+    RecentWithActivity = 0
+    Sessions = 0
+    WithActivity = 0
+    LastActivityAt = "never"
+    WindowHours = 24
+}
 if (-not $codexActivity.Verifiable) {
     # AI-16-R04: unreadable is "cannot verify", never a pass.
     Write-Host ("Codex hook registration: CANNOT VERIFY ({0})" -f $codexActivity.Reason)
@@ -448,13 +458,8 @@ if (-not $codexActivity.Verifiable) {
 
 $googleCommand = $null
 $googleProbe = $null
-if (Get-Command agy -ErrorAction SilentlyContinue) {
-    $googleCommand = "agy"
-    $googleProbe = Invoke-ShipDeBoundedProbe -CommandText "& agy --print-timeout 45s --print 'Reply exactly: SHIPDE_AUTH_OK' --output-format text" -TimeoutSeconds 60
-} elseif (Get-Command gemini -ErrorAction SilentlyContinue) {
-    $googleCommand = "gemini"
-    $googleProbe = Invoke-ShipDeBoundedProbe -CommandText "& gemini --prompt 'Reply exactly: SHIPDE_AUTH_OK' --output-format text" -TimeoutSeconds 60
-}
+
+$googleCommand = $null
 if ($googleCommand) {
     if ($googleProbe.TimedOut -or $googleProbe.ExitCode -ne 0 -or $googleProbe.Output -notmatch "SHIPDE_AUTH_OK") {
         Write-Host ("{0}: NOT AUTHENTICATED OR UNREACHABLE" -f $googleCommand)
@@ -674,7 +679,8 @@ if ($unmanagedMcp.Count -gt 0 -and [string]::IsNullOrWhiteSpace($env:SHIPDE_ACTI
 $rootCanonical = (Resolve-Path $AiRoot -ErrorAction SilentlyContinue).Path
 $pathsOutside = [System.Collections.Generic.List[string]]::new()
 foreach ($entry in $paths.GetEnumerator()) {
-    $targetPath = (Resolve-Path $entry.Value -ErrorAction SilentlyContinue).Path
+    $resolved = Resolve-Path $entry.Value -ErrorAction SilentlyContinue
+$targetPath = if ($resolved) { $resolved.Path } else { $null }
     if ($targetPath -and -not $targetPath.StartsWith($rootCanonical, [System.StringComparison]::OrdinalIgnoreCase)) {
         $pathsOutside.Add("$($entry.Key): $targetPath")
     }

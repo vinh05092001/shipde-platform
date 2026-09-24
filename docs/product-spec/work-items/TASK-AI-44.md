@@ -6,7 +6,7 @@
 |---|---|
 | Work Item ID | `TASK-AI-44` |
 | Feature ID | `N/A` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | `178` |
 | Dependencies | `TASK-AI-17` |
 | Assigned author | `GEMINI` |
