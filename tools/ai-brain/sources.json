@@ -1,0 +1,207 @@
+{
+  "version": 2,
+  "updatedAt": "2026-09-23",
+  "note": "Adding a source is an entry here plus a qualification probe. Nothing in the dispatch path may branch on a source id.",
+  "sources": [
+    {
+      "id": "9router",
+      "label": "9Router",
+      "kind": "router",
+      "servesModels": true,
+      "endpoint": "http://127.0.0.1:20128/v1",
+      "credential": {
+        "type": "api-key",
+        "env": "NINEROUTER_API_KEY",
+        "store": "%APPDATA%/9router/db/data.sqlite:apiKeys"
+      },
+      "verify": { "method": "models-list", "path": "/models" },
+      "modelPrefix": "ninerouter/",
+      "comment": "A gateway, not a model vendor. Its catalog is the union of the accounts logged into it, so a model id here is evidence of routing, never of capacity."
+    },
+    {
+      "id": "xkiro",
+      "label": "xKiro",
+      "kind": "model-source",
+      "servesModels": true,
+      "reachedVia": "9router",
+      "routerAlias": "kr",
+      "credential": { "type": "oauth", "store": "9router:providerConnections" },
+      "verify": { "method": "completion" },
+      "quota": { "unit": "credit", "perMonth": 50, "scope": "account" }
+    },
+    {
+      "id": "bai",
+      "label": "B.AI",
+      "kind": "model-source",
+      "servesModels": true,
+      "credential": {
+        "type": "api-key",
+        "env": "BAI_API_KEY",
+        "keyDirs": ["bai1", "bai2", "bai3", "bai4", "bai5", "bai6", "bai7"]
+      },
+      "verify": { "method": "completion" }
+    },
+    {
+      "id": "agy-local",
+      "label": "agy (local)",
+      "kind": "agent-cli",
+      "servesModels": true,
+      "harness": "agy",
+      "credential": {
+        "type": "oauth",
+        "store": "windows-credential-manager:gemini:antigravity",
+        "perWindowsUser": true
+      },
+      "verify": { "method": "quota-command", "command": "agy -p /quota --output-format json" },
+      "quota": {
+        "unit": "fraction",
+        "windows": ["5h", "weekly"],
+        "groups": ["gemini", "claude-gpt"]
+      },
+      "comment": "One account per Windows user, read only by that user's own session. The pool never copies a token between users."
+    },
+    {
+      "id": "cline",
+      "label": "Cline",
+      "kind": "agent-cli",
+      "servesModels": false,
+      "harness": "cline",
+      "credential": { "type": "account", "store": "~/.cline-*/data" },
+      "verify": { "method": "version-command", "command": "cline version" },
+      "comment": "A harness. It brings no models of its own: every model it runs arrives through 9Router or a configured endpoint."
+    },
+    {
+      "id": "autoclaw",
+      "label": "AutoClaw",
+      "kind": "agent-cli",
+      "servesModels": false,
+      "harness": "autoclaw",
+      "credential": { "type": "account", "store": "~/.openclaw" },
+      "verify": { "method": "version-command", "command": "openclaw --version" }
+    },
+    {
+      "id": "paseo",
+      "label": "Paseo",
+      "kind": "orchestrator",
+      "servesModels": false,
+      "harness": "paseo",
+      "endpoint": "http://127.0.0.1:6767",
+      "credential": { "type": "none" },
+      "verify": { "method": "daemon-ping", "command": "paseo ls -g --json" },
+      "comment": "Opens, watches, stops and resumes agent sessions. It replaced AO on 2026-09-22 and chooses no model itself."
+    },
+    {
+      "id": "hermes",
+      "label": "Hermes Agent",
+      "kind": "harness",
+      "servesModels": false,
+      "harness": "hermes",
+      "credential": { "type": "api-key", "env": "HERMES_MODEL_ENDPOINT" },
+      "verify": { "method": "version-command", "command": "hermes --version" },
+      "modelPool": "registry",
+      "comment": "Planning harness with tool use and subagents. Its reasoning model is resolved per task from the registry, never pinned."
+    },
+    {
+      "id": "tencent",
+      "label": "Tencent",
+      "kind": "model-source",
+      "servesModels": true,
+      "endpoint": "https://tokenhub-intl.tencentcloudmaas.com/v1",
+      "credential": { "type": "api-key", "env": "TENCENT_TOKENHUB_API_KEY" },
+      "verify": { "method": "completion" }
+    },
+    {
+      "id": "rqsty",
+      "label": "Requesty",
+      "kind": "router",
+      "servesModels": true,
+      "endpoint": "https://router.requesty.ai/v1",
+      "credential": { "type": "api-key", "env": "REQUESTY_API_KEY" },
+      "verify": { "method": "completion" }
+    },
+    {
+      "id": "thb",
+      "label": "TokenHarbor",
+      "kind": "router",
+      "servesModels": true,
+      "endpoint": "https://tokenharbor.ai/v1",
+      "credential": { "type": "api-key", "env": "TOKENHARBOR_API_KEY" },
+      "verify": { "method": "completion" },
+      "quota": { "unit": "request", "window": "daily" }
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "kind": "agent-cli",
+      "servesModels": false,
+      "harness": "codex",
+      "credential": { "type": "account", "store": "~/.codex" },
+      "verify": { "method": "version-command", "command": "codex --version" },
+      "quota": { "unit": "session", "window": "5h" }
+    },
+    {
+      "id": "qwen",
+      "label": "Qwen",
+      "kind": "agent-cli",
+      "servesModels": true,
+      "harness": "qwen",
+      "credential": { "type": "account", "store": "~/.qwen" },
+      "verify": { "method": "version-command", "command": "qwen --version" }
+    },
+    {
+      "id": "oc",
+      "label": "OpenCode",
+      "kind": "agent-cli",
+      "servesModels": false,
+      "harness": "opencode",
+      "reachedVia": "9router",
+      "credential": { "type": "none" },
+      "verify": { "method": "version-command", "command": "opencode --version" },
+      "comment": "The path Paseo uses to reach every 9Router model; it must be given an explicit --model."
+    },
+    {
+      "id": "jev",
+      "label": "Jev",
+      "kind": "decision-service",
+      "servesModels": false,
+      "endpoint": "https://api.typesafe.ai/v1/systemone",
+      "credential": { "type": "api-key", "env": "TYPESAFE_API_KEY", "store": "~/.typesafe-key" },
+      "verify": { "method": "closed-question" },
+      "mayWriteCode": false,
+      "minConfidence": 0.7,
+      "comment": "Closed, checkable questions only — classify a task, filter lanes. Below minConfidence the answer is discarded and a reasoning model decides."
+    }
+  ],
+  "dispatch": {
+    "note": "How a registry account's `provider` reaches a running session. This table is why the executor needs no provider branch: a new provider is a row here.",
+    "providers": {
+      "claude-code": { "harness": "paseo", "provider": "claude" },
+      "anthropic": { "harness": "paseo", "provider": "claude" },
+      "antigravity": {
+        "harness": "paseo",
+        "provider": "opencode",
+        "modelPrefix": "ninerouter/ag/"
+      },
+      "gemini": { "harness": "paseo", "provider": "opencode", "modelPrefix": "ninerouter/ag/" },
+      "oc": { "harness": "paseo", "provider": "opencode", "modelPrefix": "ninerouter/" },
+      "9router": { "harness": "paseo", "provider": "opencode", "modelPrefix": "ninerouter/" },
+      "codex": { "harness": "paseo", "provider": "codex" },
+      "copilot": { "harness": "paseo", "provider": "copilot" },
+      "hermes": { "harness": "hermes", "provider": "hermes" }
+    }
+  },
+  "retired": [
+    {
+      "id": "ao",
+      "label": "AO",
+      "retiredOn": "2026-09-22",
+      "reason": "Replaced by Paseo; its controller held idle processes and the RAM they cost was the reason it was removed. Nothing may dispatch to it again."
+    },
+    {
+      "id": "agy-docker",
+      "label": "agy (docker)",
+      "retiredOn": "2026-09-22",
+      "reason": "The Docker boundary was removed the same day; the native agy pool replaced it."
+    }
+  ]
+}

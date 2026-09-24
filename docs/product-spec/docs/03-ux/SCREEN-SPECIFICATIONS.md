@@ -23,6 +23,18 @@ Fields/actions:
 - MFA challenge and recovery code.
   Success routes to organization selection or role dashboard.
 
+State coverage:
+
+- **Loading**: Submit button disabled with spinning indicator; fields set to read-only during in-flight network submission.
+- **Empty**: Initial clean form with helpful placeholders; zero production-like pre-filled sample text.
+- **Validation**: Per-field inline error messages sourced from `ErrorResponse.error.fields`; highlight fields with errors.
+- **Error (forbidden)**: Distinct screens for:
+  - `INVALID_CREDENTIALS`: "Email/số điện thoại hoặc mật khẩu không chính xác"
+  - `AUTH_PENDING_VERIFICATION`: "Tài khoản chưa được xác thực. Vui lòng xác thực qua liên kết email hoặc mã OTP đã gửi."
+  - `AUTH_ACCOUNT_SUSPENDED`: "Tài khoản đã bị tạm ngưng. Vui lòng liên hệ bộ phận hỗ trợ Ship Dễ."
+  - `AUTH_ACCOUNT_DISABLED`: "Tài khoản đã bị vô hiệu hoá. Vui lòng liên hệ bộ phận hỗ trợ Ship Dễ."
+  - `RATE_LIMITED`: Actionable warning with cooldown countdown window hint.
+- **Success**: Confirmation screen celebrating successful login, leading into session start or organization selection.
 ## SCR-AUTH-02 Self-registration
 
 Route: `/register`

@@ -588,6 +588,27 @@ function dispatchCommand(args) {
   const { executePlan } = require('./executor');
   const rootDir = args.root || process.cwd();
   const execute = args.execute === true;
+
+  // Releasing a claim is its own operation, not a side effect of planning: a
+  // session that was stopped, or that died with its daemon, otherwise reads as
+  // an open writer for ever and its work item can never be picked up again.
+  const close = args.close || args.complete || args.fail;
+  if (typeof close === 'string') {
+    const decisions = require('./decisions');
+    const outcome = args.fail ? 'failed' : 'completed';
+    const released = decisions.closeWriter(close, outcome, {
+      dir: args['decision-dir'] || undefined,
+      detail: typeof args.detail === 'string' ? args.detail : null,
+    });
+    if (!released) {
+      console.log('No open writer for ' + close + '; nothing to release.');
+      return;
+    }
+    console.log(
+      'Released ' + close + ' (' + outcome + ', session ' + (released.sessionId || 'unknown') + ')'
+    );
+    return;
+  }
   if (execute && (args['dry-run'] || args.dryRun)) {
     console.error('Dispatch refused: --execute and --dry-run are exclusive.');
     process.exit(2);
@@ -619,12 +640,25 @@ function dispatchCommand(args) {
         riskDomains: [],
         priority: 0,
       }));
-    plan = planDispatch(items, listAccounts() || [], {});
+    // TASK-AI-49: the machine's free memory is the second ceiling, and the
+    // planner needs it stated rather than assumed. Omitting --free-mb lets it
+    // read the host, which is the right default for an unattended run.
+    const resources = {};
+    if (args['free-mb'] !== undefined) resources.freeMb = Number(args['free-mb']);
+    if (args['per-agent-mb'] !== undefined) resources.perAgentMb = Number(args['per-agent-mb']);
+    plan = planDispatch(items, listAccounts() || [], {
+      resources,
+      governedDecision: args['governed-decision'] || args.governedDecision || null,
+      limits: args['max-impl'] ? { maxImplementationAgents: Number(args['max-impl']) } : undefined,
+    });
   }
 
   const result = executePlan(plan, {
     dryRun: !execute,
     project: args.project || 'shipde-platform',
+    cwd: args.cwd || undefined,
+    base: args.base || undefined,
+    decisionDir: args['decision-dir'] || undefined,
   });
   const deferred = plan.deferred || [];
   const planned = (plan.assignments || []).length;
@@ -664,6 +698,8 @@ function dispatchCommand(args) {
     'Dispatch executed: ' +
       s.launched +
       ' launched, ' +
+      (s.resumed || 0) +
+      ' resumed, ' +
       s.refused +
       ' refused, ' +
       s.failed +
@@ -813,10 +849,16 @@ function main() {
       });
     return;
   }
+  // serena (TASK-AI-32): Serena read-only pilot for code retrieval
+  // Symbol and reference lookup for authors, measured against TokenPerMergedItem
+  if (command === 'serena') {
+    const { runSerenaCli } = require('./serena');
+    process.exit(runSerenaCli(process.argv.slice(3)));
+  }
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify | serena'
   );
   process.exit(2);
 }

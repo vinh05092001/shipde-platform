@@ -6,10 +6,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=../../.env --env-file-if-exists=.env dist/main.js",
-    "dev": "tsx --env-file-if-exists=../../.env --env-file-if-exists=.env watch src/main.ts",
+    "dev": "tsx watch --env-file-if-exists=../../.env --env-file-if-exists=.env src/main.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/api.test.ts && tsx --tsconfig tsconfig.json src/api.supertest.spec.ts && tsx --tsconfig tsconfig.json src/auth/auth.supertest.spec.ts"
+    "test": "tsx src/api.test.ts && tsx --tsconfig tsconfig.json src/api.supertest.spec.ts && tsx --tsconfig tsconfig.json src/auth/auth.supertest.spec.ts && tsx --tsconfig tsconfig.json src/auth/auth.login.supertest.spec.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.758.0",

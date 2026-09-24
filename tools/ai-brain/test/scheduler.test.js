@@ -247,7 +247,11 @@ describe('Dispatch planning', () => {
         item({ workItemId: 'C-1', branch: 'feat/c' }),
       ],
       pool,
-      { limits: { maxImplementationAgents: 3, maxPerAccount: 1 }, now: NOW }
+      {
+        limits: { maxImplementationAgents: 3, maxPerAccount: 1 },
+        resources: { freeMb: 8192 },
+        now: NOW,
+      }
     );
     assert.equal(unvettedPlan.assignments.length, 1, 'unvetted setting clamped to 1');
     assert.equal(unvettedPlan.deferred[0].reason, 'IMPLEMENTATION_LIMIT');
@@ -262,6 +266,7 @@ describe('Dispatch planning', () => {
       {
         limits: { maxImplementationAgents: 3, maxPerAccount: 1 },
         governedDecision: 'DEC-017',
+        resources: { freeMb: 8192 },
         now: NOW,
       }
     );
@@ -336,6 +341,7 @@ describe('Dispatch planning', () => {
     const plan = planDispatch([item({ workItemId: 'A-1', branch: 'feat/a' })], pool, {
       limits: { maxImplementationAgents: 2, maxTotal: 4 },
       governedDecision: 'DEC-017',
+      resources: { freeMb: 8192 },
       now: NOW,
     });
     assert.equal(plan.utilisation.implementation, 1);
