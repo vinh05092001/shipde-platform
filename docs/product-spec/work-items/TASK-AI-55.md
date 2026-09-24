@@ -1,10 +1,10 @@
-# PROPOSED — Landing the Paseo view on the AI dashboard
+# TASK-AI-55 — Landing the Paseo view on the AI dashboard
 
 ## Control
 
 | Field | Value |
 |---|---|
-| Work Item ID | PROPOSED |
+| Work Item ID | TASK-AI-55 |
 | Feature ID | N/A |
 | Status | READY_FOR_AUTHOR |
 | Delivery order | 100 |
@@ -14,7 +14,7 @@
 | Allowed paths | tools/ai-dashboard |
 | Reviewer | Codex — fresh independent task |
 | Branch | feat/dashboard-paseo-view |
-| Pull Request | pending |
+| Pull Request | None |
 
 ## Business outcome
 
@@ -34,7 +34,7 @@ Gemini is chosen since this includes multiple changes across the dashboard appli
 
 ## In scope
 
-Replaces AO with Paseo in the dashboard state aggregator, drops AO and Docker from panels, adds harness, source, and model to the active sessions view.
+Replaces AO with Paseo in the dashboard state aggregator, drops AO and Docker from panels, adds harness to the active sessions view. Includes the agy pool data collector (`agy-pool-adapter.js`) which supplies data to the architecture diagram (`architecture.js`), though no dedicated pool panel is added to the main dashboard.
 
 ## Out of scope
 
@@ -42,11 +42,11 @@ No changes to the actual backend logic. No prisma or web app changes.
 
 ## Business rules and edge cases
 
-Defaults missing agent source and model to unknown. Keeps ao-adapter for roles and freshness computation.
+Defaults missing agent provider to empty string. Keeps ao-adapter for roles and freshness computation.
 
 ## UI states
 
-Displays unknown if source or model is missing. Renders agent list with three new columns.
+Renders agent list with the new harness column.
 
 ## API, event and data impact
 
@@ -66,7 +66,7 @@ node --test tools/ai-dashboard/test/*.test.js
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | pending | pending | None |
+| 1 | 234be34920d2549301e4df069f77e987b928dc17 | CHANGES_REQUIRED | None |
 
 ## Residual limitations
 
