@@ -1033,3 +1033,377 @@ describe('probeAccount — HTTP error body produces fail, not pass (end-to-end)'
     assert.ok(record.reason.includes('200'));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Finding 2: Response validation — real content required for pass
+// ---------------------------------------------------------------------------
+
+describe('parseProbeOutput — empty and whitespace completions must fail (Finding 2)', () => {
+  test('HTTP 200 with empty content string is a fail even with finish_reason stop', () => {
+    const body = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'stop' }],
+    });
+    const stdout = body + '\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('no content'));
+    assert.ok(result.reason.includes('200'));
+  });
+
+  test('HTTP 200 with whitespace-only content is a fail even with finish_reason stop', () => {
+    const body = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: '   \n\t  ' }, finish_reason: 'stop' }],
+    });
+    const stdout = body + '\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('no content'));
+    assert.ok(result.reason.includes('200'));
+  });
+
+  test('HTTP 200 with empty content and finish_reason length is a fail', () => {
+    const body = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'length' }],
+    });
+    const stdout = body + '\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('no content'));
+  });
+
+  test('HTTP 200 with missing content property in message is a fail', () => {
+    const body = JSON.stringify({
+      choices: [{ message: { role: 'assistant' }, finish_reason: 'stop' }],
+    });
+    const stdout = body + '\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('no content'));
+  });
+
+  test('HTTP 200 with null content in message is a fail', () => {
+    const body = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: null }, finish_reason: 'stop' }],
+    });
+    const stdout = body + '\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('no content'));
+  });
+
+  test('HTTP 200 with choice lacking message object is a fail', () => {
+    const body = JSON.stringify({
+      choices: [{ finish_reason: 'stop' }],
+    });
+    const stdout = body + '\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'fail');
+    assert.ok(result.reason.includes('no content'));
+  });
+
+  test('HTTP 200 with single non-whitespace character passes', () => {
+    const body = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: 'r' }, finish_reason: 'stop' }],
+    });
+    const stdout = body + '\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'pass');
+    assert.ok(result.reason.includes('200'));
+  });
+
+  test('HTTP 200 with whitespace-padded non-empty content passes', () => {
+    const body = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: '  ready \n' }, finish_reason: 'stop' }],
+    });
+    const stdout = body + '\n' + q.HTTP_STATUS_TRAILER + '200';
+    const result = q.parseProbeOutput('openai-compatible', {
+      outcome: 'pass', reason: 'answered', stdout,
+    });
+    assert.strictEqual(result.outcome, 'pass');
+    assert.ok(result.reason.includes('200'));
+  });
+
+  test('probeAccount end-to-end: empty 200 completion fails', async () => {
+    const file = tmpFile();
+    const io = { fs, fileIo: { writeFileSync: (p, c) => fs.writeFileSync(p, c) } };
+    const empty200 = JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'stop' }],
+    });
+    const record = await q.probeAccount({
+      accountId: 'ninerouter',
+      accounts: [
+        {
+          id: 'ninerouter',
+          provider: 'oc',
+          launch: { kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:20128/v1' },
+          models: [{ model: 'cc/claude-haiku-4-5-20251001' }],
+        },
+      ],
+      file,
+      io,
+      now: 1_800_000_000_000,
+      isEntryAdmitted: () => true,
+      run: async () => ({
+        outcome: 'pass',
+        reason: 'answered',
+        stdout: empty200 + '\n' + q.HTTP_STATUS_TRAILER + '200',
+      }),
+    });
+    assert.strictEqual(record.outcome, 'fail');
+    assert.ok(record.reason.includes('no content'));
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.strictEqual(stored['ninerouter@cc/claude-haiku-4-5-20251001'].outcome, 'fail');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 1: Real passes survive load, false passes are removed
+// ---------------------------------------------------------------------------
+
+describe('loadResults & migrateResults — preserve real passes and remove false passes (Finding 1)', () => {
+  test('real cli and docker-compose passes survive loadResults', () => {
+    const file = tmpFile();
+    const initialData = {
+      'agy-native-a@gemini-3.8-flash-high': {
+        accountId: 'agy-native-a',
+        model: 'gemini-3.8-flash-high',
+        instant: '2026-09-24T00:00:00.000Z',
+        outcome: 'pass',
+        latencyMs: 150,
+        reason: 'answered',
+      },
+      'agy-docker-b@gemini-3.8-flash-high': {
+        accountId: 'agy-docker-b',
+        model: 'gemini-3.8-flash-high',
+        instant: '2026-09-24T00:00:00.000Z',
+        outcome: 'pass',
+        latencyMs: 200,
+        reason: 'answered',
+      },
+    };
+    fs.writeFileSync(file, JSON.stringify(initialData, null, 2));
+
+    const loaded = q.loadResults(file, { fs });
+    assert.ok(loaded['agy-native-a@gemini-3.8-flash-high']);
+    assert.strictEqual(loaded['agy-native-a@gemini-3.8-flash-high'].outcome, 'pass');
+    assert.strictEqual(loaded['agy-native-a@gemini-3.8-flash-high'].reason, 'answered');
+
+    assert.ok(loaded['agy-docker-b@gemini-3.8-flash-high']);
+    assert.strictEqual(loaded['agy-docker-b@gemini-3.8-flash-high'].outcome, 'pass');
+    assert.strictEqual(loaded['agy-docker-b@gemini-3.8-flash-high'].reason, 'answered');
+  });
+
+  test('real openai-compatible pass with HTTP status survives loadResults', () => {
+    const file = tmpFile();
+    const initialData = {
+      'ninerouter@cc/claude-haiku-4-5-20251001': {
+        accountId: 'ninerouter',
+        model: 'cc/claude-haiku-4-5-20251001',
+        instant: '2026-09-24T00:00:00.000Z',
+        outcome: 'pass',
+        latencyMs: 350,
+        reason: 'answered (HTTP 200)',
+      },
+    };
+    fs.writeFileSync(file, JSON.stringify(initialData, null, 2));
+
+    const loaded = q.loadResults(file, { fs });
+    assert.ok(loaded['ninerouter@cc/claude-haiku-4-5-20251001']);
+    assert.strictEqual(loaded['ninerouter@cc/claude-haiku-4-5-20251001'].outcome, 'pass');
+    assert.strictEqual(loaded['ninerouter@cc/claude-haiku-4-5-20251001'].reason, 'answered (HTTP 200)');
+  });
+
+  test('pre-fix false pass lacking HTTP status is removed by loadResults', () => {
+    const file = tmpFile();
+    const initialData = {
+      // False pass from before the fix: curl exited 0 on 401 error
+      'ninerouter@cc/claude-haiku-4-5-20251001': {
+        accountId: 'ninerouter',
+        model: 'cc/claude-haiku-4-5-20251001',
+        instant: '2026-09-24T00:00:00.000Z',
+        outcome: 'pass',
+        latencyMs: 80,
+        reason: 'answered',
+      },
+      // Real CLI pass
+      'agy-native-a@gemini-3.8-flash-high': {
+        accountId: 'agy-native-a',
+        model: 'gemini-3.8-flash-high',
+        instant: '2026-09-24T00:00:00.000Z',
+        outcome: 'pass',
+        latencyMs: 120,
+        reason: 'answered',
+      },
+      // Honest failure is preserved
+      'ninerouter@cc/claude-opus-5': {
+        accountId: 'ninerouter',
+        model: 'cc/claude-opus-5',
+        instant: '2026-09-24T00:00:00.000Z',
+        outcome: 'fail',
+        latencyMs: 80,
+        reason: 'HTTP 401: Missing API key',
+      },
+    };
+    fs.writeFileSync(file, JSON.stringify(initialData, null, 2));
+
+    const loaded = q.loadResults(file, { fs });
+    // False pass is removed
+    assert.strictEqual(loaded['ninerouter@cc/claude-haiku-4-5-20251001'], undefined);
+    // Real pass survives
+    assert.ok(loaded['agy-native-a@gemini-3.8-flash-high']);
+    assert.strictEqual(loaded['agy-native-a@gemini-3.8-flash-high'].outcome, 'pass');
+    // Honest failure survives
+    assert.ok(loaded['ninerouter@cc/claude-opus-5']);
+    assert.strictEqual(loaded['ninerouter@cc/claude-opus-5'].outcome, 'fail');
+  });
+
+  test('saveResult does not delete existing real cli or docker passes from disk', () => {
+    const file = tmpFile();
+    const io = { fs, fileIo: { writeFileSync: (p, c) => fs.writeFileSync(p, c) } };
+
+    // 1. Save a real CLI pass
+    q.saveResult(
+      {
+        accountId: 'agy-native-a',
+        model: 'gemini-3.8-flash-high',
+        instant: '2026-09-24T00:00:00.000Z',
+        outcome: 'pass',
+        latencyMs: 120,
+        reason: 'answered',
+      },
+      file,
+      io
+    );
+
+    // 2. Save a real Docker-compose pass
+    q.saveResult(
+      {
+        accountId: 'agy-docker-b',
+        model: 'gemini-3.8-flash-high',
+        instant: '2026-09-24T00:00:01.000Z',
+        outcome: 'pass',
+        latencyMs: 180,
+        reason: 'answered',
+      },
+      file,
+      io
+    );
+
+    // 3. Save a third unrelated probe
+    q.saveResult(
+      {
+        accountId: 'agy-native-a',
+        model: 'gemini-3.1-pro-high',
+        instant: '2026-09-24T00:00:02.000Z',
+        outcome: 'pass',
+        latencyMs: 250,
+        reason: 'answered',
+      },
+      file,
+      io
+    );
+
+    // Verify all three real passes still exist on disk!
+    const diskStore = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(diskStore['agy-native-a@gemini-3.8-flash-high']);
+    assert.strictEqual(diskStore['agy-native-a@gemini-3.8-flash-high'].outcome, 'pass');
+    assert.ok(diskStore['agy-docker-b@gemini-3.8-flash-high']);
+    assert.strictEqual(diskStore['agy-docker-b@gemini-3.8-flash-high'].outcome, 'pass');
+    assert.ok(diskStore['agy-native-a@gemini-3.1-pro-high']);
+    assert.strictEqual(diskStore['agy-native-a@gemini-3.1-pro-high'].outcome, 'pass');
+  });
+
+  test('migrateResults cleans false passes and leaves real passes on disk', () => {
+    const file = tmpFile();
+    const io = { fs, fileIo: { writeFileSync: (p, c) => fs.writeFileSync(p, c) } };
+    const initialData = {
+      'agy-native-a@gemini-3.8-flash-high': {
+        accountId: 'agy-native-a',
+        model: 'gemini-3.8-flash-high',
+        instant: '2026-09-24T00:00:00.000Z',
+        outcome: 'pass',
+        latencyMs: 120,
+        reason: 'answered',
+      },
+      'ninerouter@cc/claude-haiku-4-5-20251001': {
+        accountId: 'ninerouter',
+        model: 'cc/claude-haiku-4-5-20251001',
+        instant: '2026-09-24T00:00:00.000Z',
+        outcome: 'pass',
+        latencyMs: 50,
+        reason: 'answered',
+      },
+    };
+    fs.writeFileSync(file, JSON.stringify(initialData, null, 2));
+
+    const report = q.migrateResults(file, io);
+    assert.strictEqual(report.migratedCount, 1);
+    assert.ok(report.store['agy-native-a@gemini-3.8-flash-high']);
+    assert.strictEqual(report.store['ninerouter@cc/claude-haiku-4-5-20251001'], undefined);
+
+    // Verify disk was updated
+    const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(onDisk['agy-native-a@gemini-3.8-flash-high']);
+    assert.strictEqual(onDisk['ninerouter@cc/claude-haiku-4-5-20251001'], undefined);
+  });
+
+  test('cachedVerdict reuses real passes but refuses unverified false passes', () => {
+    const now = Date.now();
+    const store = {
+      'agy-native-a@gemini-3.8-flash-high': {
+        accountId: 'agy-native-a',
+        model: 'gemini-3.8-flash-high',
+        instant: new Date(now - 1000).toISOString(),
+        outcome: 'pass',
+        latencyMs: 120,
+        reason: 'answered',
+      },
+      'ninerouter@cc/claude-haiku-4-5-20251001': {
+        accountId: 'ninerouter',
+        model: 'cc/claude-haiku-4-5-20251001',
+        instant: new Date(now - 1000).toISOString(),
+        outcome: 'pass',
+        latencyMs: 50,
+        reason: 'answered', // False pass
+      },
+      'ninerouter@cc/claude-opus-5': {
+        accountId: 'ninerouter',
+        model: 'cc/claude-opus-5',
+        instant: new Date(now - 1000).toISOString(),
+        outcome: 'pass',
+        latencyMs: 500,
+        reason: 'answered (HTTP 200)', // Genuine pass
+      },
+    };
+
+    // Real CLI pass inside cache window is reused
+    const cliVerdict = q.cachedVerdict(store, 'agy-native-a', 'gemini-3.8-flash-high', { now });
+    assert.strictEqual(cliVerdict.action, 'reuse');
+    assert.strictEqual(cliVerdict.outcome, 'pass');
+
+    // Real HTTP 200 pass inside cache window is reused
+    const httpVerdict = q.cachedVerdict(store, 'ninerouter', 'cc/claude-opus-5', { now });
+    assert.strictEqual(httpVerdict.action, 'reuse');
+    assert.strictEqual(httpVerdict.outcome, 'pass');
+
+    // Unverified false pass is REFUSED loudly
+    const falseVerdict = q.cachedVerdict(store, 'ninerouter', 'cc/claude-haiku-4-5-20251001', { now });
+    assert.strictEqual(falseVerdict.action, 'probe');
+    assert.strictEqual(falseVerdict.stale, true);
+    assert.ok(falseVerdict.reason.includes('lacking HTTP status'));
+  });
+});

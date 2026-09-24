@@ -542,3 +542,102 @@ describe('evaluateGrant missing-file default', () => {
     assert.strictEqual(fileUsed, '/explicit/path.json');
   });
 });
+
+describe('evaluateGrant false-pass refusal vs real-pass admission (Finding 1)', () => {
+  const now = Date.now();
+
+  test('real cli pass qualifies for role', () => {
+    const record = {
+      accountId: 'agy-native-a',
+      model: 'gemini-3.8-flash-high',
+      instant: now - 1000,
+      outcome: 'pass',
+      latencyMs: 120,
+      reason: 'answered',
+    };
+    const key = 'agy-native-a@gemini-3.8-flash-high';
+    const r = evaluateGrant({
+      accountId: 'agy-native-a',
+      model: 'gemini-3.8-flash-high',
+      roleId: 'author.lowrisk',
+      deps: {
+        loadResults: () => ({ [key]: record }),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(r.status, QUALIFIED);
+    assert.strictEqual(r.entry.roleId, 'author.lowrisk');
+  });
+
+  test('real docker-compose pass qualifies for role', () => {
+    const record = {
+      accountId: 'agy-docker-b',
+      model: 'gemini-3.8-flash-high',
+      instant: now - 1000,
+      outcome: 'pass',
+      latencyMs: 200,
+      reason: 'answered',
+    };
+    const key = 'agy-docker-b@gemini-3.8-flash-high';
+    const r = evaluateGrant({
+      accountId: 'agy-docker-b',
+      model: 'gemini-3.8-flash-high',
+      roleId: 'author.lowrisk',
+      deps: {
+        loadResults: () => ({ [key]: record }),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(r.status, QUALIFIED);
+    assert.strictEqual(r.entry.roleId, 'author.lowrisk');
+  });
+
+  test('real openai-compatible pass with verified HTTP 200 qualifies for role', () => {
+    const record = {
+      accountId: 'ninerouter',
+      model: 'cc/claude-haiku-4-5-20251001',
+      instant: now - 1000,
+      outcome: 'pass',
+      latencyMs: 300,
+      reason: 'answered (HTTP 200)',
+    };
+    const key = 'ninerouter@cc/claude-haiku-4-5-20251001';
+    const r = evaluateGrant({
+      accountId: 'ninerouter',
+      model: 'cc/claude-haiku-4-5-20251001',
+      roleId: 'author.lowrisk',
+      deps: {
+        loadResults: () => ({ [key]: record }),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(r.status, QUALIFIED);
+  });
+
+  test('unverified openai-compatible false pass is refused qualification', () => {
+    const record = {
+      accountId: 'ninerouter',
+      model: 'cc/claude-haiku-4-5-20251001',
+      instant: now - 1000,
+      outcome: 'pass',
+      latencyMs: 50,
+      reason: 'answered', // Lacks HTTP status
+    };
+    const key = 'ninerouter@cc/claude-haiku-4-5-20251001';
+    const r = evaluateGrant({
+      accountId: 'ninerouter',
+      model: 'cc/claude-haiku-4-5-20251001',
+      roleId: 'author.lowrisk',
+      deps: {
+        loadResults: () => ({ [key]: record }),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(r.status, NOT_QUALIFIED);
+    assert.ok(r.reason.includes('lacks verified HTTP status'));
+  });
+});

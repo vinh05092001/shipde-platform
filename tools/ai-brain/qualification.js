@@ -74,6 +74,64 @@ function recordKey(accountId, model) {
 }
 
 /**
+ * Checks whether an account uses an openai-compatible launch kind.
+ */
+function isOpenAiCompatibleAccount(accountId, options) {
+  if (!accountId) return false;
+  const opts = options || {};
+
+  // 1. Explicitly supplied accounts list (in io or options)
+  const accounts = opts.accounts;
+  if (Array.isArray(accounts)) {
+    const acc = accounts.find((a) => a && a.id === accountId);
+    if (acc) return Boolean(acc.launch && acc.launch.kind === 'openai-compatible');
+  }
+
+  // 2. Check accounts registry if available
+  try {
+    const { listAccounts } = require('./accounts');
+    const registered = listAccounts(opts);
+    const acc = registered.find((a) => a && a.id === accountId);
+    if (acc) return Boolean(acc.launch && acc.launch.kind === 'openai-compatible');
+  } catch (_) {}
+
+  // 3. Check seed accounts declarations
+  try {
+    const { ACCOUNTS } = require('./seed-accounts');
+    const acc = ACCOUNTS.find((a) => a && a.id === accountId);
+    if (acc) return Boolean(acc.launch && acc.launch.kind === 'openai-compatible');
+  } catch (_) {}
+
+  // 4. Default: ninerouter is the known openai-compatible gateway account
+  if (accountId === 'ninerouter') return true;
+
+  return false;
+}
+
+/**
+ * Identifies whether a record is an unverified false pass from before HTTP status checking.
+ *
+ * Before the fix, curl exited 0 on any HTTP response (including 401, 403, 500)
+ * and the probe recorded: { outcome: 'pass', reason: 'answered' } without HTTP
+ * status verification.
+ *
+ * Genuine openai-compatible completions record "answered (HTTP 2xx)".
+ * Genuine cli and docker-compose passes are not openai-compatible; their exit
+ * code 0 and non-empty stdout represent genuine command completions.
+ *
+ * Hence, a record is a false pass if and only if:
+ * 1. outcome === 'pass'
+ * 2. It does NOT record verified HTTP status (matching /HTTP\s+2\d\d/i)
+ * 3. The account is an openai-compatible provider requiring HTTP verification.
+ */
+function isFalsePass(record, options) {
+  if (!record || typeof record !== 'object') return false;
+  if (record.outcome !== 'pass') return false;
+  if (/HTTP\s+2\d\d/i.test(record.reason || '')) return false;
+  return isOpenAiCompatibleAccount(record.accountId, options);
+}
+
+/**
  * Loads the result record, tolerating absence and corruption where absence
  * is the only survivable case.
  *
@@ -99,12 +157,13 @@ function loadResults(file, io) {
     const parsed = JSON.parse(text);
     const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 
-    // Purge any old false passes from before we parsed HTTP responses.
-    // The previous bug recorded curl exit 0 as { outcome: 'pass', reason: 'answered' }
-    // for all HTTP responses including 4xx/5xx.
-    for (const key of Object.keys(obj)) {
-      if (obj[key].outcome === 'pass' && obj[key].reason === 'answered') {
-        delete obj[key];
+    // Purge only pre-fix false passes from openai-compatible providers.
+    // Genuine passes from cli/docker-compose or verified HTTP 2xx completions are preserved.
+    if (!sink.noScrub) {
+      for (const key of Object.keys(obj)) {
+        if (isFalsePass(obj[key], sink)) {
+          delete obj[key];
+        }
       }
     }
 
@@ -114,6 +173,29 @@ function loadResults(file, io) {
       code: 'RESULT_CORRUPT',
     });
   }
+}
+
+/**
+ * One-time migration to clean false passes from a stored results file.
+ * Preserves genuine cli/docker-compose passes and verified HTTP 2xx passes.
+ */
+function migrateResults(file, io) {
+  const sink = io || {};
+  const fsMod = sink.fs || require('fs');
+  const fileIo = sink.fileIo || fsMod;
+  const store = loadResults(file, Object.assign({}, sink, { noScrub: true }));
+  let migratedCount = 0;
+  for (const key of Object.keys(store)) {
+    if (isFalsePass(store[key], sink)) {
+      delete store[key];
+      migratedCount += 1;
+    }
+  }
+  if (migratedCount > 0) {
+    fsMod.mkdirSync(path.dirname(file), { recursive: true });
+    fileIo.writeFileSync(file, JSON.stringify(store, null, 2) + '\n');
+  }
+  return { migratedCount, store };
 }
 
 /**
@@ -155,6 +237,14 @@ function cachedVerdict(store, accountId, model, options) {
   const opts = options || {};
   const entry = (store || {})[recordKey(accountId, model)];
   if (!entry) return { action: 'probe' };
+
+  // Refuse unverified false passes: an offering from an openai-compatible
+  // provider lacking verified HTTP status evidence must never be reused from
+  // cache; it must trigger a real probe.
+  if (isFalsePass(entry, opts)) {
+    return { action: 'probe', stale: true, reason: 'unverified legacy pass lacking HTTP status' };
+  }
+
   const windowMs = opts.cacheWindowMs === undefined ? DEFAULT_CACHE_WINDOW_MS : opts.cacheWindowMs;
   const now = opts.now || Date.now();
   const taken = Date.parse(entry.instant);
@@ -450,9 +540,19 @@ function parseProbeOutput(launchKind, rawResult) {
           reason: ('HTTP ' + httpStatus + ': response has no choices').slice(0, 160),
         };
       }
-      const msg = choices[0] && choices[0].message;
-      const content = (msg && (msg.content || '')) || '';
-      if (content.length === 0 && !(choices[0] && choices[0].finish_reason)) {
+      const choice = choices[0];
+      const msg = choice && choice.message;
+      let rawContent = msg && msg.content;
+      if (rawContent === undefined && choice && typeof choice.text === 'string') {
+        rawContent = choice.text;
+      }
+      if (Array.isArray(rawContent)) {
+        rawContent = rawContent
+          .map((part) => (typeof part === 'string' ? part : (part && part.text) || ''))
+          .join('');
+      }
+      const content = typeof rawContent === 'string' ? rawContent.trim() : '';
+      if (content.length === 0) {
         return {
           outcome: 'fail',
           reason: ('HTTP ' + httpStatus + ': response choice has no content').slice(0, 160),
@@ -751,6 +851,9 @@ module.exports = {
   probeCommand,
   runBounded,
   parseProbeOutput,
+  isOpenAiCompatibleAccount,
+  isFalsePass,
+  migrateResults,
   probeAccount,
   parseProbeArgs,
   runProbeCli,

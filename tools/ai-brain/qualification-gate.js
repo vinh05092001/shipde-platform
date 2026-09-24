@@ -9,7 +9,7 @@
 // re-exported by reference so acceptance scripts and this module share one copy.
 
 const { listRoles } = require('./capabilities');
-const { loadResults, recordKey } = require('./qualification');
+const { loadResults, recordKey, isFalsePass } = require('./qualification');
 const { loadRegistry, updateAccount } = require('./accounts');
 const {
   gateRuleFindings,
@@ -113,6 +113,19 @@ function evaluateGrant({ accountId, model, roleId, deps }) {
       model,
       reason: 'probe outcome was ' + record.outcome,
       outcome: record.outcome,
+    };
+  }
+
+  // Refuse unverified false passes: an offering lacking verified HTTP status
+  // evidence must never be granted qualification.
+  if (isFalsePass(record, { accounts: d.accounts })) {
+    return {
+      status: NOT_QUALIFIED,
+      roleId,
+      accountId,
+      model,
+      reason: 'probe result lacks verified HTTP status (unverified legacy pass)',
+      outcome: 'fail',
     };
   }
 
