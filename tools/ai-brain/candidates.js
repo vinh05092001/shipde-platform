@@ -78,16 +78,21 @@ function generateCandidates(opts) {
       // that router alias.  Otherwise, the source provides its own models
       // through evidence or caller-supplied data.
       if (source.reachedVia && source.routerAlias) {
+        // Resolve the router's endpoint so accessPath is a URL the dispatcher
+        // can act on, not a source id string (F2 review finding).
+        const router = registry.sources.find((s) => s.id === source.reachedVia);
+        const routerEndpoint = (router && router.endpoint) || source.reachedVia;
         const prefix = source.routerAlias + '/';
         for (const fullId of catalogue) {
           if (fullId.startsWith(prefix)) {
             candidates.push({
               harness: 'paseo',
-              accessPath: source.reachedVia,
+              accessPath: routerEndpoint,
               upstream: source.routerAlias,
               modelId: fullId,
               source: source.id,
               kind: source.kind,
+              reachedVia: source.reachedVia,
               sharedQuota: 'unknown',
             });
           }

@@ -4,6 +4,17 @@
  * Acceptance tests for Slices B+C: candidate generation, ranking, and
  * decision recording.
  *
+ * LAYER 1 — Unit tests of the algorithm.
+ * Use fixed, obviously-invented ids (test-up/invented-*).  They test ranking,
+ * scoring, scope and fallback.  They must not call the network, and they must
+ * not pretend their ids are real models.
+ *
+ * LAYER 2 — Integration check against data.
+ * Loads catalogue-snapshot.json (committed, with provenance) and validates
+ * that the chosen id exists in the snapshot.  When the snapshot drifts from
+ * the live catalogue, the test fails with MODEL_NOT_IN_CATALOG — that is the
+ * signal to refresh the snapshot, not to ignore the mismatch.
+ *
  * Every test is deterministic — no network calls, all I/O mocked through
  * temp directories.
  */
@@ -20,22 +31,6 @@ const ranking = require('../ranking');
 const decisions = require('../decisions');
 const sourcesApi = require('../sources');
 
-/** Create a temp dir with a sources.json and optional evidence. */
-function setup(opts) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-bc-'));
-  const decDir = path.join(dir, 'decisions');
-  fs.mkdirSync(decDir, { recursive: true });
-
-  // The real sources.json from the repository, loaded for reference.
-  const registry = sourcesApi.loadSources();
-
-  if (opts && opts.evidence) {
-    evidence.saveEvidence(dir, opts.evidence);
-  }
-
-  return { dir, decDir, registry };
-}
-
 // ── Evidence Store ────────────────────────────────────────────────────
 
 describe('evidence store', () => {
@@ -50,7 +45,7 @@ describe('evidence store', () => {
   test('records a probe and updates upstream status', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev-'));
     evidence.recordProbe(dir, {
-      harness: 'paseo', accessPath: 'http', upstream: 'gh', modelId: 'gh/gpt-4.1',
+      harness: 'paseo', accessPath: 'http', upstream: 'test-up', modelId: 'test-up/invented-alpha',
     }, {
       level: evidence.Level.API, status: 'passed', httpStatus: 200, source: 'test',
     });
@@ -62,46 +57,46 @@ describe('evidence store', () => {
   test('blocks upstream on 402, scoped to that upstream only', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev-'));
     evidence.recordProbe(dir, {
-      harness: 'paseo', accessPath: 'http', upstream: 'kimchi', modelId: 'kimchi/some-model',
+      harness: 'paseo', accessPath: 'http', upstream: 'test-blocked', modelId: 'test-blocked/invented-model',
     }, {
       level: evidence.Level.API, status: 'failed', httpStatus: 402,
       source: 'test', cause: '402 Payment Required',
     });
     const data = evidence.loadEvidence(dir);
 
-    // kimchi is blocked.
-    const kimchiBlock = evidence.isUpstreamBlocked(data, 'kimchi');
-    assert.equal(kimchiBlock.blocked, true);
-    assert.match(kimchiBlock.reason, /402/);
-    assert.equal(kimchiBlock.scope, 'upstream');
+    // test-blocked is blocked.
+    const blockedBlock = evidence.isUpstreamBlocked(data, 'test-blocked');
+    assert.equal(blockedBlock.blocked, true);
+    assert.match(blockedBlock.reason, /402/);
+    assert.equal(blockedBlock.scope, 'upstream');
 
-    // ag is NOT blocked — failure scope is per-upstream.
-    const agBlock = evidence.isUpstreamBlocked(data, 'ag');
-    assert.equal(agBlock.blocked, false);
+    // test-up is NOT blocked — failure scope is per-upstream.
+    const otherBlock = evidence.isUpstreamBlocked(data, 'test-up');
+    assert.equal(otherBlock.blocked, false);
   });
 
   test('block expires after TTL', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev-'));
     evidence.recordProbe(dir, {
-      harness: 'paseo', accessPath: 'http', upstream: 'kr', modelId: 'kr/model',
+      harness: 'paseo', accessPath: 'http', upstream: 'test-ttl', modelId: 'test-ttl/invented-model',
     }, {
       level: evidence.Level.API, status: 'failed', httpStatus: 402, source: 'test',
     });
     const data = evidence.loadEvidence(dir);
     // Simulate time passing beyond TTL.
     const future = Date.now() + evidence.BLOCK_TTL_MS + 1000;
-    const block = evidence.isUpstreamBlocked(data, 'kr', { now: future });
+    const block = evidence.isUpstreamBlocked(data, 'test-ttl', { now: future });
     assert.equal(block.blocked, false);
   });
 
   test('records aliases with verified flag', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev-'));
-    evidence.recordAlias(dir, 'gh', 'gpt-4.1-2025-04-14', 'opencode', 'gpt-4.1', false,
+    evidence.recordAlias(dir, 'test-up', 'invented-model-v2', 'opencode', 'invented-model', false,
       'OpenCode alias differs from HTTP id');
     const data = evidence.loadEvidence(dir);
     assert.equal(data.aliases.length, 1);
     assert.equal(data.aliases[0].verified, false);
-    assert.equal(data.aliases[0].canonical, 'gpt-4.1-2025-04-14');
+    assert.equal(data.aliases[0].canonical, 'invented-model-v2');
   });
 
   test('shared-quota defaults to unknown', () => {
@@ -114,9 +109,9 @@ describe('evidence store', () => {
 
   test('candidateKey produces four-part identity', () => {
     const key = evidence.candidateKey({
-      harness: 'paseo', accessPath: 'http', upstream: 'gh', modelId: 'gh/gpt-4o',
+      harness: 'paseo', accessPath: 'http', upstream: 'test-up', modelId: 'test-up/invented-model',
     });
-    assert.equal(key, 'paseo::http::gh::gh/gpt-4o');
+    assert.equal(key, 'paseo::http::test-up::test-up/invented-model');
   });
 });
 
@@ -125,24 +120,20 @@ describe('evidence store', () => {
 describe('candidate generation', () => {
   test('generates candidates from gateway catalogue without hard-coded models', () => {
     const registry = sourcesApi.loadSources();
-    // Simulate a live catalogue with a few models across different upstreams.
+    // Invented catalogue — these ids are not real models.
     const catalogue = [
-      'gh/gpt-4.1-2025-04-14',
-      'ag/gemini-2.5-pro',
-      'kr/claude-sonnet-4',
-      'cerebras/llama3-70b',
-      'kimchi/glm-5.3-flash',
-      'groq/llama-3.1-8b',
+      'test-a/invented-alpha',
+      'test-b/invented-beta',
+      'test-c/invented-gamma',
     ];
 
     const result = candidates.generateCandidates({ registry, catalogue });
 
     // Must have candidates from multiple different upstreams.
     const upstreams = new Set(result.map((c) => c.upstream));
-    assert.ok(upstreams.has('gh'), 'has gh upstream');
-    assert.ok(upstreams.has('ag'), 'has ag upstream');
-    assert.ok(upstreams.has('kr'), 'has kr upstream');
-    assert.ok(upstreams.has('cerebras'), 'has cerebras upstream');
+    assert.ok(upstreams.has('test-a'), 'has test-a upstream');
+    assert.ok(upstreams.has('test-b'), 'has test-b upstream');
+    assert.ok(upstreams.has('test-c'), 'has test-c upstream');
 
     // Every candidate has the four-part identity.
     for (const c of result) {
@@ -166,18 +157,18 @@ describe('candidate generation', () => {
 
   test('OpenCode alias and HTTP id are separate candidates', () => {
     const registry = sourcesApi.loadSources();
-    const catalogue = ['gh/gpt-4.1-2025-04-14'];
-    const openCodeIds = ['ninerouter/gh/gpt-4.1'];
+    const catalogue = ['test-up/invented-model-v2'];
+    const openCodeIds = ['ninerouter/test-up/invented-model'];
 
     const result = candidates.generateCandidates({ registry, catalogue, openCodeIds });
 
     // The HTTP candidate.
     const httpCandidate = result.find(
-      (c) => c.modelId === 'gh/gpt-4.1-2025-04-14' && c.harness === 'paseo' && c.accessPath.includes('127.0.0.1')
+      (c) => c.modelId === 'test-up/invented-model-v2' && c.harness === 'paseo' && c.accessPath.includes('127.0.0.1')
     );
     // The OpenCode candidate (via oc source).
     const ocCandidate = result.find(
-      (c) => c.modelId === 'ninerouter/gh/gpt-4.1' && c.harness === 'opencode'
+      (c) => c.modelId === 'ninerouter/test-up/invented-model' && c.harness === 'opencode'
     );
 
     assert.ok(httpCandidate, 'HTTP candidate exists');
@@ -194,8 +185,8 @@ describe('candidate generation', () => {
     const evData = {
       combinations: [
         {
-          harness: 'paseo', accessPath: 'http', upstream: 'cc',
-          model: 'cc/claude-sonnet-5', source: 'cc',
+          harness: 'paseo', accessPath: 'http', upstream: 'test-ev',
+          model: 'test-ev/invented-recovered', source: 'test-ev',
           evidence: [{ level: 1, status: 'failed', httpStatus: 403 }],
         },
       ],
@@ -205,14 +196,14 @@ describe('candidate generation', () => {
     };
     const fromEvidence = candidates.candidatesFromEvidence(evData);
     assert.equal(fromEvidence.length, 1);
-    assert.equal(fromEvidence[0].modelId, 'cc/claude-sonnet-5');
+    assert.equal(fromEvidence[0].modelId, 'test-ev/invented-recovered');
   });
 
   test('mergeCandidates deduplicates by four-part key', () => {
-    const a = [{ harness: 'paseo', accessPath: 'http', upstream: 'gh', modelId: 'gh/model-a' }];
+    const a = [{ harness: 'paseo', accessPath: 'http', upstream: 'test-up', modelId: 'test-up/invented-a' }];
     const b = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'gh', modelId: 'gh/model-a' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'ag', modelId: 'ag/model-b' },
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-up', modelId: 'test-up/invented-a' },
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-up2', modelId: 'test-up2/invented-b' },
     ];
     const merged = candidates.mergeCandidates(a, b);
     assert.equal(merged.length, 2);
@@ -249,28 +240,45 @@ describe('candidate generation', () => {
     fs.writeFileSync(file, JSON.stringify(customRegistry), 'utf8');
 
     const registry = sourcesApi.loadSources({ file });
-    const catalogue = ['np/some-new-model', 'gh/gpt-4o'];
+    const catalogue = ['np/invented-new-model', 'test-up/invented-other'];
     const result = candidates.generateCandidates({ registry, catalogue });
 
     // The new provider's model appears without any code change.
-    const np = result.find((c) => c.upstream === 'np' && c.modelId === 'np/some-new-model');
+    const np = result.find((c) => c.upstream === 'np' && c.modelId === 'np/invented-new-model');
     assert.ok(np, 'new data-only source produced a candidate');
     assert.equal(np.source, 'newprovider');
   });
+
+  // F2: model-source accessPath resolves to router endpoint, not source id
+  test('model-source candidate carries router endpoint as accessPath, not source id (F2)', () => {
+    const registry = sourcesApi.loadSources();
+    const catalogue = ['kr/invented-model-f2'];
+    const result = candidates.generateCandidates({ registry, catalogue });
+
+    const krCandidate = result.find(
+      (c) => c.upstream === 'kr' && c.source === 'xkiro'
+    );
+    assert.ok(krCandidate, 'xkiro model-source candidate exists');
+    // accessPath must be the router endpoint URL, not '9router'.
+    assert.ok(
+      krCandidate.accessPath.startsWith('http'),
+      'accessPath is a URL, not a source id: ' + krCandidate.accessPath
+    );
+    assert.equal(krCandidate.accessPath, 'http://127.0.0.1:20128/v1');
+    // reachedVia records the indirection.
+    assert.equal(krCandidate.reachedVia, '9router');
+  });
 });
 
-// ── Ranking ───────────────────────────────────────────────────────────
+// ── Ranking (LAYER 1 — unit tests with invented ids) ─────────────────
 
 describe('ranking', () => {
   test('ranks candidates and selects winner with stated reason', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rank-'));
-    const decDir = path.join(dir, 'decisions');
-
     const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'ag', modelId: 'ag/gemini-2.5-pro',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-alpha',
         source: '9router', status: 'passed', evidence: [{ level: 3, status: 'passed' }],
         blocked: false, sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'gh', modelId: 'gh/gpt-4.1',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-b', modelId: 'test-b/invented-beta',
         source: '9router', status: 'unknown', evidence: [],
         blocked: false, sharedQuota: 'unknown' },
     ];
@@ -291,13 +299,13 @@ describe('ranking', () => {
 
   test('rejects blocked upstream, scoped to that upstream only', () => {
     const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'kimchi', modelId: 'kimchi/model',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-blocked', modelId: 'test-blocked/invented-model',
         source: '9router', status: 'failed', evidence: [],
         blocked: true, blockReason: 'HTTP 402', blockScope: 'upstream', sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'ag', modelId: 'ag/gemini',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-alpha',
         source: '9router', status: 'passed', evidence: [{ level: 2, status: 'passed' }],
         blocked: false, sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'cerebras', modelId: 'cerebras/llama',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-c', modelId: 'test-c/invented-gamma',
         source: '9router', status: 'unknown', evidence: [],
         blocked: false, sharedQuota: 'unknown' },
     ];
@@ -306,23 +314,23 @@ describe('ranking', () => {
       workItemId: 'TASK-TEST-02', role: 'author.foundation', dryRun: true,
     });
 
-    // kimchi is rejected.
-    const kimchiRejection = decision.rejected.find((r) => r.upstream === 'kimchi');
-    assert.ok(kimchiRejection, 'kimchi is rejected');
-    assert.match(kimchiRejection.reason, /402/);
-    assert.equal(kimchiRejection.scope, 'upstream');
+    // test-blocked is rejected.
+    const blockedRejection = decision.rejected.find((r) => r.upstream === 'test-blocked');
+    assert.ok(blockedRejection, 'blocked upstream is rejected');
+    assert.match(blockedRejection.reason, /402/);
+    assert.equal(blockedRejection.scope, 'upstream');
 
-    // ag and cerebras are still eligible.
-    const agCandidate = decision.candidates.find((c) => c.upstream === 'ag');
-    assert.ok(agCandidate, 'ag is still eligible');
-    const cereCandidate = decision.candidates.find((c) => c.upstream === 'cerebras');
-    assert.ok(cereCandidate, 'cerebras is still eligible');
+    // test-a and test-c are still eligible.
+    const aCandidate = decision.candidates.find((c) => c.upstream === 'test-a');
+    assert.ok(aCandidate, 'test-a is still eligible');
+    const cCandidate = decision.candidates.find((c) => c.upstream === 'test-c');
+    assert.ok(cCandidate, 'test-c is still eligible');
   });
 
   test('rejects candidate with absent credential', () => {
     const registry = sourcesApi.loadSources();
     const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'bai', modelId: 'bai/model',
+      { harness: 'paseo', accessPath: 'http', upstream: 'bai', modelId: 'bai/invented-model',
         source: 'bai', status: 'unknown', evidence: [],
         blocked: false, sharedQuota: 'unknown' },
     ];
@@ -350,13 +358,13 @@ describe('ranking', () => {
   test('spreads load across providers', () => {
     // Two candidates from the same upstream, one from a different one.
     const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'ag', modelId: 'ag/model-a',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-model-1',
         source: '9router', status: 'passed', evidence: [{ level: 2, status: 'passed' }],
         blocked: false, sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'ag', modelId: 'ag/model-b',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-model-2',
         source: '9router', status: 'passed', evidence: [{ level: 2, status: 'passed' }],
         blocked: false, sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'gh', modelId: 'gh/model-c',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-b', modelId: 'test-b/invented-model-3',
         source: '9router', status: 'passed', evidence: [{ level: 2, status: 'passed' }],
         blocked: false, sharedQuota: 'unknown' },
     ];
@@ -365,15 +373,14 @@ describe('ranking', () => {
       workItemId: 'TASK-TEST-05', role: 'author.foundation', dryRun: true,
     });
 
-    // gh has better spread score (only 1 from that upstream) vs ag (2 from ag).
-    const ghScore = decision.candidates.find((c) => c.upstream === 'gh');
-    const agScore = decision.candidates.find((c) => c.upstream === 'ag');
-    assert.ok(ghScore, 'gh candidate present');
-    assert.ok(agScore, 'ag candidate present');
-    // The spread component should favour gh.
+    // test-b has better spread score (only 1 from that upstream) vs test-a (2).
+    const bScore = decision.candidates.find((c) => c.upstream === 'test-b');
+    const aScore = decision.candidates.find((c) => c.upstream === 'test-a');
+    assert.ok(bScore, 'test-b candidate present');
+    assert.ok(aScore, 'test-a candidate present');
     assert.ok(
-      ghScore.scoreBreakdown.spread > agScore.scoreBreakdown.spread,
-      'gh has better spread score than ag'
+      bScore.scoreBreakdown.spread > aScore.scoreBreakdown.spread,
+      'test-b has better spread score than test-a'
     );
   });
 
@@ -399,38 +406,107 @@ describe('ranking', () => {
     assert.ok(record.chosen, 'chosen is recorded');
     assert.ok(record.reason, 'reason is recorded');
   });
+
+  // F1: MODEL_NOT_IN_CATALOG rejection
+  test('rejects candidate whose modelId is not in the catalogue', () => {
+    const catalogueSet = ranking.buildCatalogueSet([
+      'test-a/invented-alpha',
+      'test-b/invented-beta',
+    ]);
+
+    const testCandidates = [
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-alpha',
+        source: '9router', status: 'passed', evidence: [{ level: 3, status: 'passed' }],
+        blocked: false, sharedQuota: 'unknown' },
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-gone', modelId: 'test-gone/invented-removed',
+        source: '9router', status: 'passed', evidence: [{ level: 3, status: 'passed' }],
+        blocked: false, sharedQuota: 'unknown' },
+    ];
+
+    const decision = ranking.rankAndRecord(testCandidates, {
+      workItemId: 'TASK-TEST-CATALOG', role: 'author.foundation', dryRun: true,
+      catalogueSet,
+    });
+
+    // test-gone/invented-removed is rejected because it is not in the catalogue.
+    const goneRejection = decision.rejected.find((r) => r.reason === 'MODEL_NOT_IN_CATALOG');
+    assert.ok(goneRejection, 'missing model is rejected with MODEL_NOT_IN_CATALOG');
+    assert.equal(goneRejection.modelId, 'test-gone/invented-removed');
+    assert.equal(goneRejection.scope, 'model');
+
+    // test-a/invented-alpha is still eligible and chosen.
+    assert.ok(decision.chosen, 'a valid model was chosen');
+    assert.ok(decision.chosen.includes('test-a/invented-alpha'), 'winner is the model in catalogue');
+  });
+
+  // F1: wildcard and CLI candidates are exempt from catalogue validation
+  test('wildcard and CLI candidates are exempt from catalogue validation', () => {
+    const catalogueSet = ranking.buildCatalogueSet(['test-a/invented-alpha']);
+
+    const testCandidates = [
+      { harness: 'agy', accessPath: 'cli', upstream: 'agy-local', modelId: '*',
+        source: 'agy-local', status: 'unknown', evidence: [],
+        blocked: false, sharedQuota: 'unknown' },
+      { harness: 'opencode', accessPath: 'cli', upstream: 'test-oc', modelId: 'test-oc/invented-cli',
+        source: 'oc', status: 'unknown', evidence: [],
+        blocked: false, sharedQuota: 'unknown' },
+    ];
+
+    const decision = ranking.rankAndRecord(testCandidates, {
+      workItemId: 'TASK-TEST-EXEMPT', role: 'author.foundation', dryRun: true,
+      catalogueSet,
+    });
+
+    // Neither should be rejected — wildcards and CLI are exempt.
+    assert.equal(decision.rejected.length, 0, 'no rejections for exempt candidates');
+    assert.equal(decision.candidates.length, 2, 'both candidates are eligible');
+  });
+
+  // F1: buildCatalogueSet strips trailing CR from Windows command output
+  test('buildCatalogueSet strips trailing CR from Windows command output', () => {
+    const set = ranking.buildCatalogueSet([
+      "test-a/model-one\r",
+      "test-b/model-two\r",
+      "test-c/model-three",
+    ]);
+
+    assert.ok(set.has('test-a/model-one'), 'CR-stripped id found');
+    assert.ok(set.has('test-b/model-two'), 'CR-stripped id found');
+    assert.ok(set.has('test-c/model-three'), 'plain id found');
+    assert.ok(!set.has("test-a/model-one\r"), 'CR-suffixed id not stored');
+  });
 });
 
-// ── Full Acceptance Run ───────────────────────────────────────────────
+// ── Full Acceptance Run (LAYER 1 — invented ids) ─────────────────────
 
 describe('acceptance: full ranking run', () => {
   test('candidate list has agy, multiple 9Router upstreams, 402 rejection, unknown, and stated reason', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'accept-'));
     const registry = sourcesApi.loadSources();
 
-    // Simulated live catalogue — models from different upstreams.
+    // Invented catalogue — NOT real models.  This tests the algorithm.
     const catalogue = [
-      'ag/gemini-2.5-pro',
-      'gh/gpt-4.1-2025-04-14',
-      'kr/claude-sonnet-4',
-      'kimchi/glm-5.3-flash',
-      'cerebras/llama3-70b',
-      'groq/llama-3.1-8b',
-      'cc/claude-sonnet-5',
+      'test-a/invented-alpha',
+      'test-b/invented-beta',
+      'test-c/invented-gamma',
+      'test-blocked/invented-model',
+      'test-d/invented-delta',
+      'test-e/invented-epsilon',
+      'test-f/invented-zeta',
     ];
 
-    // Seed evidence: kimchi returned 402.
+    // Seed evidence: test-blocked returned 402.
     const evData = {
       combinations: [
         {
-          harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'kimchi',
-          model: 'kimchi/glm-5.3-flash',
+          harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'test-blocked',
+          model: 'test-blocked/invented-model',
           evidence: [{ level: 1, status: 'failed', httpStatus: 402, source: 'probe',
             cause: '402 Payment Required' }],
         },
         {
-          harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'ag',
-          model: 'ag/gemini-2.5-pro',
+          harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'test-a',
+          model: 'test-a/invented-alpha',
           evidence: [{ level: 3, status: 'passed', source: 'production run' }],
         },
         {
@@ -440,12 +516,12 @@ describe('acceptance: full ranking run', () => {
         },
       ],
       aliases: [
-        { upstream: 'gh', canonical: 'gpt-4.1-2025-04-14', harness: 'opencode',
-          alias: 'gpt-4.1', verified: false },
+        { upstream: 'test-b', canonical: 'invented-beta-v2', harness: 'opencode',
+          alias: 'invented-beta', verified: false },
       ],
       sharedQuotas: [],
       upstreamStatus: {
-        kimchi: { lastStatus: 'blocked', failCount: 1,
+        'test-blocked': { lastStatus: 'blocked', failCount: 1,
           blockedAt: new Date().toISOString(), blockReason: 'HTTP 402', scope: 'upstream' },
       },
     };
@@ -457,7 +533,7 @@ describe('acceptance: full ranking run', () => {
     const merged = candidates.mergeCandidates(fromCatalogue, fromEvidence);
     const annotated = candidates.annotateCandidates(merged, evData);
 
-    // Rank.
+    // Rank — no catalogue validation in this layer (unit test of algorithm).
     const decision = ranking.rankAndRecord(annotated, {
       workItemId: 'TASK-ACCEPT-01',
       role: 'author.foundation',
@@ -488,14 +564,14 @@ describe('acceptance: full ranking run', () => {
     const rejection402 = decision.rejected.find((r) => r.reason && r.reason.includes('402'));
     assert.ok(rejection402, 'has a 402 rejection');
     assert.equal(rejection402.scope, 'upstream', '402 rejection is scoped to upstream');
-    // Other upstreams of the same gateway are still eligible.
+    // Other upstreams are still eligible.
     assert.ok(
-      decision.candidates.some((c) => c.upstream === 'ag'),
-      'ag is still eligible despite kimchi 402'
+      decision.candidates.some((c) => c.upstream === 'test-a'),
+      'test-a is still eligible despite test-blocked 402'
     );
     assert.ok(
-      decision.candidates.some((c) => c.upstream === 'cerebras'),
-      'cerebras is still eligible despite kimchi 402'
+      decision.candidates.some((c) => c.upstream === 'test-d'),
+      'test-d is still eligible despite test-blocked 402'
     );
 
     // 4. One candidate that has never been verified, carried as unknown.
@@ -550,32 +626,35 @@ describe('acceptance: data-only source addition', () => {
     fs.writeFileSync(file, JSON.stringify(customRegistry), 'utf8');
     const registry = sourcesApi.loadSources({ file });
 
-    const catalogue = ['bn/new-model-v1', 'gh/gpt-4o'];
+    const catalogue = ['bn/invented-new-model-v1', 'test-up/invented-other'];
     const result = candidates.generateCandidates({ registry, catalogue });
 
     const bnCandidate = result.find((c) => c.upstream === 'bn');
     assert.ok(bnCandidate, 'brand-new data-only source produced a candidate');
     assert.equal(bnCandidate.source, 'brandnew');
-    assert.equal(bnCandidate.modelId, 'bn/new-model-v1');
+    assert.equal(bnCandidate.modelId, 'bn/invented-new-model-v1');
   });
 });
+
+// ── Acceptance: Unassigned Work Item (LAYER 1 — invented ids) ────────
 
 describe('acceptance: unassigned work item', () => {
   test('dispatching with no model, account or harness named in input', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'unassigned-'));
     const registry = sourcesApi.loadSources();
 
+    // Invented ids — test the ranking algorithm, not real model availability.
     const catalogue = [
-      'ag/gemini-2.5-pro',
-      'gh/gpt-4.1-2025-04-14',
-      'cerebras/llama3-70b',
+      'test-a/invented-alpha',
+      'test-b/invented-beta',
+      'test-c/invented-gamma',
     ];
 
     const evData = {
       combinations: [
         {
-          harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'ag',
-          model: 'ag/gemini-2.5-pro',
+          harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'test-a',
+          model: 'test-a/invented-alpha',
           evidence: [{ level: 3, status: 'passed', source: 'previous run' }],
         },
       ],
@@ -651,5 +730,133 @@ describe('acceptance: unassigned work item', () => {
         'fallback chose a different candidate after first-choice failure');
     }
     // Or it might refuse if no alternative qualifies — that is also correct.
+  });
+});
+
+// ── LAYER 2: Integration — Catalogue Snapshot Validation ─────────────
+
+describe('integration: catalogue snapshot validation', () => {
+  // Load the committed snapshot.
+  const snapshotPath = path.join(__dirname, 'catalogue-snapshot.json');
+  let snapshot;
+  try {
+    snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8').replace(/^\uFEFF/, ''));
+  } catch {
+    snapshot = null;
+  }
+
+  test('catalogue snapshot exists and has provenance', () => {
+    assert.ok(snapshot, 'catalogue-snapshot.json must exist');
+    assert.ok(snapshot.fetchedAt, 'snapshot records when it was taken');
+    assert.ok(snapshot.endpoint, 'snapshot records where it came from');
+    assert.ok(snapshot.fetchedBy, 'snapshot records how it was fetched');
+    assert.ok(Array.isArray(snapshot.models), 'snapshot has a models array');
+    assert.ok(snapshot.models.length > 100, 'snapshot has a reasonable number of models: ' + snapshot.models.length);
+  });
+
+  test('acceptance run with real catalogue: chosen model exists in snapshot', () => {
+    if (!snapshot) return; // skip if snapshot missing (caught above)
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'integ-'));
+    const registry = sourcesApi.loadSources();
+
+    // Use REAL model ids from the snapshot for the catalogue.
+    const catalogueModels = snapshot.models;
+    const catalogueSet = ranking.buildCatalogueSet(catalogueModels);
+
+    // Pick a few models from different upstreams that are actually in the snapshot.
+    const agModel = catalogueModels.find((m) => m.startsWith('ag/'));
+    const ghModel = catalogueModels.find((m) => m.startsWith('gh/'));
+    assert.ok(agModel, 'snapshot has an ag/ model');
+    assert.ok(ghModel, 'snapshot has a gh/ model');
+
+    // Seed evidence with real ids from the snapshot.
+    const evData = {
+      combinations: [],
+      aliases: [],
+      sharedQuotas: [],
+      upstreamStatus: {},
+    };
+    if (agModel) {
+      evData.combinations.push({
+        harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1',
+        upstream: agModel.split('/')[0], model: agModel,
+        evidence: [{ level: 3, status: 'passed', source: 'snapshot integration test' }],
+      });
+    }
+    evidence.saveEvidence(dir, evData);
+
+    const fromCatalogue = candidates.generateCandidates({ registry, catalogue: catalogueModels });
+    const fromEvidence = candidates.candidatesFromEvidence(evData);
+    const merged = candidates.mergeCandidates(fromCatalogue, fromEvidence);
+    const annotated = candidates.annotateCandidates(merged, evData);
+
+    // Rank WITH catalogue validation — this is the layer 2 check.
+    const decision = ranking.rankAndRecord(annotated, {
+      workItemId: 'INTEG-SNAPSHOT-01',
+      role: 'author.foundation',
+      registry,
+      evidenceData: evData,
+      dryRun: true,
+      catalogueSet,
+      credentialOpts: { env: { NINEROUTER_API_KEY: 'present' } },
+    });
+
+    assert.ok(decision.chosen, 'integration run chose a candidate');
+    // The winner's modelId must be in the snapshot catalogue.
+    const winnerCandidate = decision.candidates.find(
+      (c) => evidence.candidateKey(c) === decision.chosen ||
+             c.offeringId === decision.chosen
+    );
+    assert.ok(winnerCandidate, 'winner found in candidates list');
+    if (winnerCandidate.modelId !== '*') {
+      assert.ok(
+        catalogueSet.has(winnerCandidate.modelId),
+        'winning model ' + winnerCandidate.modelId + ' exists in the snapshot catalogue'
+      );
+    }
+
+    // No MODEL_NOT_IN_CATALOG rejections when all models come from the snapshot.
+    const catalogRejections = decision.rejected.filter(
+      (r) => r.reason === 'MODEL_NOT_IN_CATALOG'
+    );
+    assert.equal(catalogRejections.length, 0,
+      'no MODEL_NOT_IN_CATALOG rejections when catalogue is self-consistent');
+  });
+
+  test('stale model id is rejected with MODEL_NOT_IN_CATALOG when validated against snapshot', () => {
+    if (!snapshot) return;
+
+    const catalogueSet = ranking.buildCatalogueSet(snapshot.models);
+
+    // A stale model id that is NOT in the snapshot.
+    const staleId = 'ag/gemini-2.5-pro';
+    assert.ok(!catalogueSet.has(staleId), 'stale model is indeed absent from snapshot');
+
+    const testCandidates = [
+      { harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'ag',
+        modelId: staleId, source: '9router', status: 'passed',
+        evidence: [{ level: 3, status: 'passed' }],
+        blocked: false, sharedQuota: 'unknown' },
+      { harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'ag',
+        modelId: 'ag/gemini-3.8-flash-high', source: '9router', status: 'unknown',
+        evidence: [], blocked: false, sharedQuota: 'unknown' },
+    ];
+
+    const decision = ranking.rankAndRecord(testCandidates, {
+      workItemId: 'INTEG-STALE-01', role: 'author.foundation', dryRun: true,
+      catalogueSet,
+    });
+
+    // The stale model is rejected.
+    const staleRejection = decision.rejected.find(
+      (r) => r.reason === 'MODEL_NOT_IN_CATALOG' && r.modelId === staleId
+    );
+    assert.ok(staleRejection, 'ag/gemini-2.5-pro is rejected as MODEL_NOT_IN_CATALOG');
+
+    // The valid model is chosen instead.
+    assert.ok(decision.chosen, 'a valid model was chosen');
+    assert.ok(decision.chosen.includes('ag/gemini-3.8-flash-high'),
+      'winner is the model that exists in the catalogue');
   });
 });

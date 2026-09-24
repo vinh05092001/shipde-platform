@@ -49,9 +49,6 @@ function evidenceScore(candidate) {
 
 /** Map capability (from the model family table) to a sub-score. */
 function capabilityScore(candidate, workKind) {
-  // We use pattern matching on the base model name (strip upstream prefix).
-  // This avoids hard-coding any model name in the ranking logic itself.
-  const base = extractBaseName(candidate.modelId);
   // Delegate to the capability table that already exists on main.
   // We import lazily to avoid circular deps in test mocks.
   try {
@@ -196,6 +193,22 @@ function rankAndRecord(candidates, context) {
       c.status = c.status || 'unknown';
     }
 
+    // Catalogue validation: before dispatch, the chosen model id must exist
+    // in the current catalogue FOR THAT ACCESS PATH.  A model that has left
+    // the catalogue is not silently substituted — it is rejected with a named
+    // cause so the selector moves to the next candidate.
+    if (ctx.catalogueSet && c.modelId !== '*' && c.accessPath !== 'cli') {
+      if (!ctx.catalogueSet.has(c.modelId)) {
+        rejected.push({
+          offeringId: evidence.candidateKey(c),
+          reason: 'MODEL_NOT_IN_CATALOG',
+          scope: 'model',
+          modelId: c.modelId,
+        });
+        continue;
+      }
+    }
+
     eligible.push(c);
   }
 
@@ -267,6 +280,23 @@ function rankAndRecord(candidates, context) {
   return decisionEntry;
 }
 
+/**
+ * Build a Set of model ids from an array, normalising each id by trimming
+ * whitespace and stripping trailing carriage returns.
+ *
+ * Ids parsed from Windows command output (`opencode models --json`, PowerShell
+ * Invoke-RestMethod) carry a trailing \r; without stripping it, the same model
+ * appears under two keys and catalogue validation fails on an id that is
+ * visually present.
+ */
+function buildCatalogueSet(ids) {
+  const set = new Set();
+  for (const id of ids || []) {
+    set.add(String(id).replace(/\r$/, '').trim());
+  }
+  return set;
+}
+
 module.exports = {
   WEIGHTS,
   evidenceScore,
@@ -277,4 +307,5 @@ module.exports = {
   scoreCandidate,
   rankAndRecord,
   extractBaseName,
+  buildCatalogueSet,
 };
