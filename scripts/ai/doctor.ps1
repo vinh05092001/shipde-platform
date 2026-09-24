@@ -322,8 +322,8 @@ if ($agentRouterCached) {
     }
 }
 Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)
-Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.org, no /v1 in the base URL)")
-Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128)")
+Write-Host ("AgentRouter serves: Manual Claude Code business/solution analysis; the Claude and Codex fallback route")
+Write-Host ("9Router serves:     Unattended AO sessions (.claude-9router profile), Gemini, dsh")
 
 Write-Host ""
 Write-Host "=== AGENT AUTHENTICATION ==="
