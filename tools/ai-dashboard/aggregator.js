@@ -1,17 +1,18 @@
 /**
  * Ship Dễ — Multi-Source State Aggregator
  * TASK-AI-15: AI15-R01, AI15-R02, AI15-R05, AI15-AC01..AC06
- * Consolidates truthful register, git, AO, and GitHub observations into a single
+ * Consolidates truthful register, git, Paseo, and GitHub observations into a single
  * versioned payload with monotonic revision and source health records.
  */
 
 const path = require('path');
 const { loadRegister, deriveGatePipeline } = require('./register-adapter');
 const { collectGitState } = require('./git-adapter');
-const { collectAoState } = require('./ao-adapter');
+const { collectPaseoState } = require('./paseo-adapter');
 const { collectGitHubState } = require('./github-adapter');
 const { collectUsageState } = require('./usage-adapter');
 const { collectCapacity } = require('./capacity-adapter');
+const { collectAgyPoolState } = require('./agy-pool-adapter');
 const { detectConflicts } = require('./conflict-detector');
 const { redactObject } = require('./redaction');
 
@@ -188,7 +189,7 @@ function buildActivityStream(gitCommits, aoSessions) {
     }
   }
 
-  // AO session updates as activity items
+  // Paseo agent updates as activity items (the source key stays 'ao')
   if (Array.isArray(aoSessions)) {
     for (const session of aoSessions) {
       if (session.lastActivityAt || session.updatedAt) {
@@ -196,9 +197,9 @@ function buildActivityStream(gitCommits, aoSessions) {
           id: `ao-${session.id}`,
           type: 'AO_SESSION',
           timestamp: session.lastActivityAt || session.updatedAt,
-          title: `Phiên làm việc [${session.id}] — ${session.displayRole} (${session.status})`,
+          title: `Agent Paseo [${session.id}] — ${session.displayRole} (${session.status})`,
           actor: session.harness,
-          badge: 'AO',
+          badge: 'Paseo',
           detail: `Nhánh: ${session.branch || 'N/A'}`,
         });
       }
@@ -293,7 +294,7 @@ function hasStateChanged(prevState, candidate) {
 
   if (prevState.overallStatus !== candidate.overallStatus) return true;
 
-  for (const key of ['register', 'git', 'ao', 'github']) {
+  for (const key of ['register', 'git', 'ao', 'github', 'agyPool']) {
     const p = prevState.sources[key];
     const n = candidate.sources[key];
     if (!p || !n) return true;
@@ -325,6 +326,7 @@ function hasStateChanged(prevState, candidate) {
   if (prevState.git?.headOid !== candidate.git?.headOid) return true;
   if (prevState.git?.dirtyCount !== candidate.git?.dirtyCount) return true;
   if (prevState.github?.authenticated !== candidate.github?.authenticated) return true;
+  if (JSON.stringify(prevState.agyPool) !== JSON.stringify(candidate.agyPool)) return true;
 
   const prevPrs = prevState.github?.pullRequests || [];
   const nextPrs = candidate.github?.pullRequests || [];
@@ -336,6 +338,62 @@ function hasStateChanged(prevState, candidate) {
   return false;
 }
 
+// Per-source refresh windows. The dispatcher's own logs are cheap and stay live; the three
+// collectors that spawn processes (gh, git, ao) are throttled because their subjects do not
+// change between one five-second poll and the next.
+const SOURCE_TTL_MS = {
+  git: 20000,
+  // Paseo replaced AO; the key stays 'ao' so every consumer of sources.ao keeps working.
+  ao: 15000,
+  github: 45000,
+  // Quota ledgers and capacity are re-derived from files that change at most
+  // once per turn, so a 5s poll re-reading them was pure waste.
+  usage: 30000,
+  capacity: 30000,
+  agyPool: 15000,
+};
+const sourceCache = new Map();
+
+function cachedCollect(name, run) {
+  const ttl = SOURCE_TTL_MS[name] || 0;
+  const now = Date.now();
+  const hit = sourceCache.get(name);
+
+  // Fresh enough: serve what we have.
+  if (hit && hit.value !== undefined && now - hit.at < ttl) return Promise.resolve(hit.value);
+
+  // A refresh is already running. Serve the previous answer if there is one, otherwise wait
+  // for it. Without this check every poll started another collector while the first was
+  // still running, so throttling turned into pile-up and the server used twice the CPU.
+  if (hit && hit.inflight) {
+    return hit.value !== undefined ? Promise.resolve(hit.value) : hit.inflight;
+  }
+
+  const inflight = Promise.resolve()
+    .then(run)
+    .then((value) => {
+      sourceCache.set(name, { at: Date.now(), value, inflight: null });
+      return value;
+    })
+    .catch((err) => {
+      const prev = sourceCache.get(name);
+      if (prev && prev.value !== undefined) {
+        // Keep the last good answer rather than dropping the source to unavailable.
+        sourceCache.set(name, { at: Date.now(), value: prev.value, inflight: null });
+        return prev.value;
+      }
+      sourceCache.set(name, { at: 0, value: undefined, inflight: null });
+      throw err;
+    });
+
+  sourceCache.set(name, {
+    at: hit ? hit.at : 0,
+    value: hit ? hit.value : undefined,
+    inflight,
+  });
+  return hit && hit.value !== undefined ? Promise.resolve(hit.value) : inflight;
+}
+
 async function aggregateCockpitState(options = {}) {
   const rootDir = options.rootDir || process.cwd();
   const csvPath =
@@ -343,29 +401,37 @@ async function aggregateCockpitState(options = {}) {
     path.join(rootDir, 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv');
   const repo = options.repo || 'vinh05092001/shipde-platform';
 
-  const gitPromise = options.mockGit ? Promise.resolve(options.mockGit) : collectGitState(rootDir);
+  const gitPromise = options.mockGit
+    ? Promise.resolve(options.mockGit)
+    : cachedCollect('git', () => collectGitState(rootDir));
   const aoPromise = options.mockAo
     ? Promise.resolve(options.mockAo)
-    : collectAoState('shipde-platform');
+    : cachedCollect('ao', () => collectPaseoState());
   const githubPromise = options.mockGitHub
     ? Promise.resolve(options.mockGitHub)
-    : collectGitHubState(repo);
+    : cachedCollect('github', () => collectGitHubState(repo));
 
   const usagePromise = options.mockUsage
     ? Promise.resolve(options.mockUsage)
-    : collectUsageState(options.usageOptions);
+    : cachedCollect('usage', () => collectUsageState(options.usageOptions));
 
   const capacityPromise = options.mockCapacity
     ? Promise.resolve(options.mockCapacity)
-    : Promise.resolve(collectCapacity(options.capacityOptions));
+    : cachedCollect('capacity', () => Promise.resolve(collectCapacity(options.capacityOptions)));
 
-  let [gitResult, aoResult, githubResult, usageResult, capacityResult] = await Promise.all([
-    gitPromise,
-    aoPromise,
-    githubPromise,
-    usagePromise,
-    capacityPromise,
-  ]);
+  const agyPoolPromise = options.mockAgyPool
+    ? Promise.resolve(options.mockAgyPool)
+    : cachedCollect('agyPool', () => Promise.resolve(collectAgyPoolState(options.agyPoolOptions)));
+
+  let [gitResult, aoResult, githubResult, usageResult, capacityResult, agyPoolResult] =
+    await Promise.all([
+      gitPromise,
+      aoPromise,
+      githubPromise,
+      usagePromise,
+      capacityPromise,
+      agyPoolPromise,
+    ]);
 
   // Handle cached last-known state on failure (AI15-R01)
   if (gitResult.health.status === 'unavailable' && lastKnownSourceData.git) {
@@ -385,7 +451,7 @@ async function aggregateCockpitState(options = {}) {
     aoResult = {
       health: Object.assign({}, aoResult.health, {
         status: 'stale',
-        impact: 'Agent Orchestrator unavailable; serving cached last-known state (AI15-R01)',
+        impact: 'Paseo unavailable; serving cached last-known state (AI15-R01)',
         observedAt: lastKnownSourceData.ao.health.observedAt,
       }),
       data: lastKnownSourceData.ao.data,
@@ -441,23 +507,35 @@ async function aggregateCockpitState(options = {}) {
   const observationTime = options.now || Date.now();
   const freshnessThresholds = options.freshnessThresholdsMs || DEFAULT_FRESHNESS_THRESHOLDS_MS;
 
-  function withFreshness(health) {
+  // A source served from the TTL cache is deliberately re-queried only once per
+  // TTL, so judging it against the 5s poll cadence labelled every cached source
+  // "stale" while it was exactly on schedule. Its window widens to its TTL; a
+  // source that misses several refreshes still ages out.
+  function withFreshness(health, key) {
+    const ttl = options.freshnessThresholdsMs ? 0 : SOURCE_TTL_MS[key] || 0;
+    const thresholds = ttl
+      ? {
+          liveMs: Math.max(freshnessThresholds.liveMs, ttl + 10000),
+          staleMs: Math.max(freshnessThresholds.staleMs, ttl * 3),
+        }
+      : freshnessThresholds;
     const { ageMs, freshness } = computeSourceFreshness(
       health.observedAt,
       health.status,
-      freshnessThresholds,
+      thresholds,
       observationTime
     );
-    return Object.assign({}, health, { ageMs, freshness });
+    return Object.assign({ name: key }, health, { ageMs, freshness });
   }
 
   const sources = {
-    register: withFreshness(registerResult.health),
-    git: withFreshness(gitResult.health),
-    ao: withFreshness(aoResult.health),
-    github: withFreshness(githubResult.health),
-    usage: withFreshness(usageResult.health),
-    capacity: withFreshness(capacityResult.health),
+    register: withFreshness(registerResult.health, 'register'),
+    git: withFreshness(gitResult.health, 'git'),
+    ao: withFreshness(aoResult.health, 'ao'),
+    github: withFreshness(githubResult.health, 'github'),
+    usage: withFreshness(usageResult.health, 'usage'),
+    capacity: withFreshness(capacityResult.health, 'capacity'),
+    agyPool: withFreshness(agyPoolResult.health, 'agyPool'),
   };
 
   const conflicts = detectConflicts(
@@ -505,6 +583,7 @@ async function aggregateCockpitState(options = {}) {
     daemon: aoResult.data.daemon,
     usage: usageResult.data,
     capacity: capacityResult.data,
+    agyPool: agyPoolResult.data,
     git: gitResult.data,
     github: githubResult.data,
   };

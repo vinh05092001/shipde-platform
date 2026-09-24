@@ -125,7 +125,7 @@ async function collectGitState(cwd) {
           observedAt: new Date().toISOString(),
           latencyMs: Date.now() - startTime,
           provenance: 'git CLI',
-          impact: 'Cannot determine git branch or worktree state',
+          impact: 'Không xác định được nhánh git hoặc trạng thái worktree',
           error: headRes.stderr || 'Git repository unreachable',
         },
         data: {
@@ -159,7 +159,7 @@ async function collectGitState(cwd) {
         observedAt: new Date().toISOString(),
         latencyMs: Date.now() - startTime,
         provenance: `git status/worktree at ${redactPath(workDir)}`,
-        impact: 'None — git observations verified',
+        impact: 'Bình thường — số liệu git đã kiểm chứng',
         error: null,
       },
       data: {
@@ -180,7 +180,7 @@ async function collectGitState(cwd) {
         observedAt: new Date().toISOString(),
         latencyMs: Date.now() - startTime,
         provenance: 'git CLI',
-        impact: 'Git command invocation failed',
+        impact: 'Chạy lệnh git thất bại',
         error: err.message,
       },
       data: {

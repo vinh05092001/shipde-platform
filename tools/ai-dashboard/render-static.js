@@ -49,7 +49,7 @@ function renderStaticDashboard(rootDir, options = {}) {
         observedAt: new Date().toISOString(),
         latencyMs: 0,
         provenance: 'Offline file mode',
-        impact: 'Khởi động server để quan sát AO live',
+        impact: 'Khởi động server để quan sát Paseo live',
         error: null,
       }),
       github: withFreshness({
