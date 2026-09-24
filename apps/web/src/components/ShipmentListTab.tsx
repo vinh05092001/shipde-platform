@@ -76,7 +76,7 @@ export const ShipmentListTab: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- Legacy prototype initial fetch pattern
+    // eslint-disable-next-line
     fetchShipments();
   }, []);
 

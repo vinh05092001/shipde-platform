@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   PackagePlus,
   X,
@@ -27,8 +27,7 @@ interface Props {
 
 export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCreated }) => {
   // Order information
-  // eslint-disable-next-line react-hooks/purity -- Legacy prototype random order code generator
-  const [orderCode, setOrderCode] = useState(`ORD_${Math.floor(Math.random() * 89999) + 10000}`);
+  const [orderCode, setOrderCode] = useState('');
   const [pickupWarehouse, setPickupWarehouse] = useState('store_01');
   const [recipientName, setRecipientName] = useState('Nguyễn Văn Khách');
   const [recipientPhone, setRecipientPhone] = useState('0901234567');
@@ -53,6 +52,13 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
   const [selectedCarrier, setSelectedCarrier] = useState<'GHN' | 'GHTK'>('GHN');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      // eslint-disable-next-line
+      setOrderCode(`ORD_${Math.floor(Math.random() * 89999) + 10000}`);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

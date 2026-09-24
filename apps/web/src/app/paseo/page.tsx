@@ -58,8 +58,9 @@ const PaseoPage = () => {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line
     if (isAuthenticated) fetchData();
-  }, [isAuthenticated]); // eslint-disable-line -- fetchData is stable; only re-run on auth change
+  }, [isAuthenticated]);
 
   // During the single-tick localStorage restore, show nothing rather than a
   // loading skeleton that could persist when the user is not signed in.

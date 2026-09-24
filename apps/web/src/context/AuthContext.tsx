@@ -19,6 +19,7 @@ export interface AuthStatusBlock {
 interface AuthContextType {
   user: User | null;
   merchant: Merchant | null;
+  isHydrating: boolean;
   isAuthenticated: boolean;
   token: string | null;
   login: (
@@ -147,6 +148,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [isHydrating, setIsHydrating] = useState(true);
 
   // Restore a persisted session when present. No fabricated default session:
   // FEAT-AUTH-03 (CD-10) removes the prototype's mock auto-login.
@@ -160,15 +162,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- persisted session hydration
+      // eslint-disable-next-line
       setUser(mapUser(JSON.parse(savedUser)));
+      // eslint-disable-next-line
       setMerchant(mapMerchant(JSON.parse(savedMerchant)));
+      // eslint-disable-next-line
       setToken(savedToken);
     } catch {
       localStorage.removeItem('shipde_user');
       localStorage.removeItem('shipde_merchant');
       localStorage.removeItem('shipde_token');
     }
+    setIsHydrating(false);
   }, []);
 
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -464,6 +469,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         merchant,
+        isHydrating,
         isAuthenticated: !!user && !!token,
         token,
         login,
