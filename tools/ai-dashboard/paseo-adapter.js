@@ -24,13 +24,25 @@ function runPaseo(args) {
       win ? ['/d', '/s', '/c', 'paseo', ...args] : args,
       { timeout: TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout, stderr) => {
-        resolve({ success: !err, stdout: stdout || '', stderr: stderr || (err ? err.message : '') });
+        resolve({
+          success: !err,
+          stdout: stdout || '',
+          stderr: stderr || (err ? err.message : ''),
+        });
       }
     );
   });
 }
 
-const UNIT_MS = { second: 1e3, minute: 6e4, hour: 36e5, day: 864e5, week: 6048e5, month: 2592e6, year: 31536e6 };
+const UNIT_MS = {
+  second: 1e3,
+  minute: 6e4,
+  hour: 36e5,
+  day: 864e5,
+  week: 6048e5,
+  month: 2592e6,
+  year: 31536e6,
+};
 
 /** `ls` reports age as text ("15 hours ago"); turn it back into an approximate timestamp. */
 function relativeToIso(text, now = Date.now()) {

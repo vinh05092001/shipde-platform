@@ -75,7 +75,12 @@ test('missing root is unavailable with an empty account list', () => {
 test('a result.json written by Windows PowerShell 5.1 (UTF-8 with BOM) reads as its real state', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-pool-bom-'));
   fs.mkdirSync(path.join(root, 'agy01'));
-  const body = JSON.stringify({ name: 'agy01', state: 'ok', exitCode: 0, finishedAt: '2026-09-22T08:24:29Z' });
+  const body = JSON.stringify({
+    name: 'agy01',
+    state: 'ok',
+    exitCode: 0,
+    finishedAt: '2026-09-22T08:24:29Z',
+  });
   fs.writeFileSync(path.join(root, 'agy01', 'result.json'), '﻿' + body, 'utf8');
   const result = await collectAgyPoolState({ root });
   assert.strictEqual(result.data.accounts[0].state, 'ok');

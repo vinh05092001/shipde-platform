@@ -945,7 +945,8 @@ function renderActivity() {
     .map((act) => {
       const timeStr = act.timestamp ? new Date(act.timestamp).toLocaleTimeString() : '';
       let badgeColor = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-      if (act.badge === 'Paseo') badgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+      if (act.badge === 'Paseo')
+        badgeColor = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
 
       return `
       <div class="flex items-start gap-3 p-3 rounded-xl bg-base-200 border border-base-300 text-xs">

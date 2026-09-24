@@ -977,7 +977,10 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
     test('deriveWriterState reflects zero, one, and multiple real writer sessions from AO data', () => {
       const live = { status: 'live' };
-      assert.strictEqual(deriveWriterState({ sources: { paseo: live }, sessions: [] }).level, 'idle');
+      assert.strictEqual(
+        deriveWriterState({ sources: { paseo: live }, sessions: [] }).level,
+        'idle'
+      );
       assert.strictEqual(
         deriveWriterState({
           sources: { paseo: live },

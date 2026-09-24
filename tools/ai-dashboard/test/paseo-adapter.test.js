@@ -20,8 +20,23 @@ test('provider names map onto the harnesses the role classifier knows', () => {
 
 test('agents are shaped like the sessions the panels already render', () => {
   const json = JSON.stringify([
-    { id: 'a5f0b392-full', shortId: 'a5f0b39', name: 'probe', provider: 'codex/gpt-5.6-sol', status: 'running', cwd: 'C:/x', created: '2 minutes ago' },
-    { id: 'b1', shortId: 'b1', name: 'old', provider: 'opencode/kimi', status: 'archived', created: '3 days ago' },
+    {
+      id: 'a5f0b392-full',
+      shortId: 'a5f0b39',
+      name: 'probe',
+      provider: 'codex/gpt-5.6-sol',
+      status: 'running',
+      cwd: 'C:/x',
+      created: '2 minutes ago',
+    },
+    {
+      id: 'b1',
+      shortId: 'b1',
+      name: 'old',
+      provider: 'opencode/kimi',
+      status: 'archived',
+      created: '3 days ago',
+    },
   ]);
   const [a, b] = parsePaseoAgents(json, NOW);
   assert.strictEqual(a.id, 'a5f0b39');

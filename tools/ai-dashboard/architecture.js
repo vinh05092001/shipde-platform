@@ -405,7 +405,17 @@
     // Every author lane runs the Cline CLI; lanes differ only in the endpoint
     // config they pass (dispatch.sh), so the boxes are endpoints, not tools.
     p.push(node(598, 188, 314, 44, 'cline → 9Router', 'phần lớn lane tác giả', C.worker));
-    p.push(node(598, 258, 314, 44, 'cline → endpoint riêng', 'xKiro · TokenHarbor · Requesty · Tencent', C.worker));
+    p.push(
+      node(
+        598,
+        258,
+        314,
+        44,
+        'cline → endpoint riêng',
+        'xKiro · TokenHarbor · Requesty · Tencent',
+        C.worker
+      )
+    );
     p.push(node(598, 328, 314, 44, 'codex · AutoClaw', 'lane review & dự phòng', C.worker));
 
     // Paseo (thay AO) và 9Router đặt dưới nhóm CLI thợ
@@ -414,7 +424,16 @@
     // agy pool: one local Windows user per Antigravity account, run one at a time by a
     // Scheduled Task (see C:/Tools/agy-runs). Badge comes from sources.agyPool.
     p.push(
-      node(580, 522, 350, 44, 'agy pool', 'mỗi tài khoản một user Windows, chạy lần lượt', C.worker, m.agyBadge)
+      node(
+        580,
+        522,
+        350,
+        44,
+        'agy pool',
+        'mỗi tài khoản một user Windows, chạy lần lượt',
+        C.worker,
+        m.agyBadge
+      )
     );
 
     // Hàng dưới cùng: Dashboard, Sổ việc & log, runner.sh
@@ -481,13 +500,42 @@
 
     // 6b. dispatch.sh → agy pool: hành lang dọc x=545, giữa ai-brain và nhóm CLI thợ
     p.push(
-      arrow(490, 222, 580, 544, 'Scheduled Task', C.dispatch, false,
-        poly([[490, 222], [545, 222], [545, 544], [580, 544]]), 545, 400)
+      arrow(
+        490,
+        222,
+        580,
+        544,
+        'Scheduled Task',
+        C.dispatch,
+        false,
+        poly([
+          [490, 222],
+          [545, 222],
+          [545, 544],
+          [580, 544],
+        ]),
+        545,
+        400
+      )
     );
     // 6c. agy pool → Nhà cung cấp model (Antigravity): sang phải rồi lên đáy hộp nhà cung cấp
     p.push(
-      arrow(930, 544, 1420, 498, 'Antigravity', C.cloud, false,
-        poly([[930, 544], [1420, 544], [1420, 498]]), 1160, 544)
+      arrow(
+        930,
+        544,
+        1420,
+        498,
+        'Antigravity',
+        C.cloud,
+        false,
+        poly([
+          [930, 544],
+          [1420, 544],
+          [1420, 498],
+        ]),
+        1160,
+        544
+      )
     );
 
     // 7. CLI thợ → 9Router: đi thẳng xuống 9Router
@@ -1064,7 +1112,12 @@
       }
       if (state && state.agyPool && state.agyPool.counts) {
         var ac = state.agyPool.counts;
-        m.agyBadge = ac.ready + '/' + ac.total + ' sẵn sàng' + (ac.cooling ? ' · ' + ac.cooling + ' nghỉ' : '');
+        m.agyBadge =
+          ac.ready +
+          '/' +
+          ac.total +
+          ' sẵn sàng' +
+          (ac.cooling ? ' · ' + ac.cooling + ' nghỉ' : '');
       }
       if (rot && rot.totals && typeof rot.totals.attempts === 'number') {
         m.dispatchCount = rot.totals.attempts;
