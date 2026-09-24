@@ -193,3 +193,11 @@ Executed sequentially from a clean checkout on branch `feat/task-found-03-api-wo
 - The existing Next.js API handlers, in-memory state, static authentication and simulated carrier actions remain prototype-only and are not connected to the new API/database by this Work Item.
 - `TASK-FOUND-04` still owns complete OpenAPI drift enforcement, Supertest/Vitest/Playwright, deterministic carrier mocks, Storybook/MSW/a11y/visual/performance gates and seed-reset procedures.
 - The `TASK-AI-05` delivery-register row is stale at `READY_FOR_CODEX`, but GitHub PR `#7` and planning base commit `a344b69af3c1c9dc4469d0ccdefe15c130bb2188` prove it is merged. This Work Item does not alter another row.
+
+## Correction on 2026-09-23
+
+`pnpm --filter @shipde/api dev` and the worker equivalent died immediately with
+`ERR_MODULE_NOT_FOUND ... /apps/api/watch`: the scripts passed `--env-file-if-exists`
+before the `watch` subcommand, so tsx read `watch` as the entry file and `src/main.ts` as
+an argument. The flags now follow `tsx watch`. Verified by booting the worker with the
+corrected order: it starts and stays up (only Redis 5.0 version advice is printed).
