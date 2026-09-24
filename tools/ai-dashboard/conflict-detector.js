@@ -5,7 +5,7 @@
  * to detect operational conflicts without silently promoting any state.
  */
 
-function detectConflicts(registerData, gitData, aoData, githubData) {
+function detectConflicts(registerData, gitData, paseoData, githubData) {
   const conflicts = [];
   const activeItem = registerData?.activeItem;
 
@@ -74,8 +74,8 @@ function detectConflicts(registerData, gitData, aoData, githubData) {
   }
 
   // 4. AO session vs Register branch alignment
-  if (aoData?.sessions && aoData.sessions.length > 0) {
-    const activeAuthorSession = aoData.sessions.find(
+  if (paseoData?.sessions && paseoData.sessions.length > 0) {
+    const activeAuthorSession = paseoData.sessions.find(
       (s) => s.roleCategory === 'AUTHOR' && !s.isTerminated
     );
     if (activeAuthorSession && activeBranch && activeAuthorSession.branch) {
@@ -90,7 +90,7 @@ function detectConflicts(registerData, gitData, aoData, githubData) {
           description: `Agent Paseo ${activeAuthorSession.id} gắn với nhánh "${activeAuthorSession.branch}", trong khi task active hiện tại là "${activeBranch}".`,
           sources: [
             { name: 'register', value: activeBranch },
-            { name: 'ao', value: activeAuthorSession.branch },
+            { name: 'paseo', value: activeAuthorSession.branch },
           ],
           impact: 'Có thể có nhiều phiên song song hoặc phiên trước chưa đồng bộ',
         });

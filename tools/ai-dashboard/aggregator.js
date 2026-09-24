@@ -23,7 +23,7 @@ let lastAggregatedState = null;
 // adapter failures or timeouts occur, honest aging rather than dropping data.
 const lastKnownSourceData = {
   git: null,
-  ao: null,
+  paseo: null,
   github: null,
   register: null,
 };
@@ -31,7 +31,7 @@ const lastKnownSourceData = {
 let previousSourceStatuses = {
   register: null,
   git: null,
-  ao: null,
+  paseo: null,
   github: null,
 };
 
@@ -171,7 +171,7 @@ function buildGitHubEvidence(activeItem, gitData, githubData, githubSource) {
   };
 }
 
-function buildActivityStream(gitCommits, aoSessions) {
+function buildActivityStream(gitCommits, paseoSessions) {
   const activities = [];
 
   // Git commits as activity items
@@ -189,12 +189,12 @@ function buildActivityStream(gitCommits, aoSessions) {
     }
   }
 
-  // Paseo agent updates as activity items (the source key stays 'ao')
-  if (Array.isArray(aoSessions)) {
-    for (const session of aoSessions) {
+  // Paseo agent updates as activity items (the source key stays 'paseo')
+  if (Array.isArray(paseoSessions)) {
+    for (const session of paseoSessions) {
       if (session.lastActivityAt || session.updatedAt) {
         activities.push({
-          id: `ao-${session.id}`,
+          id: `paseo-${session.id}`,
           type: 'AO_SESSION',
           timestamp: session.lastActivityAt || session.updatedAt,
           title: `Agent Paseo [${session.id}] — ${session.displayRole} (${session.status})`,
@@ -294,7 +294,7 @@ function hasStateChanged(prevState, candidate) {
 
   if (prevState.overallStatus !== candidate.overallStatus) return true;
 
-  for (const key of ['register', 'git', 'ao', 'github', 'agyPool']) {
+  for (const key of ['register', 'git', 'paseo', 'github', 'agyPool']) {
     const p = prevState.sources[key];
     const n = candidate.sources[key];
     if (!p || !n) return true;
@@ -339,12 +339,12 @@ function hasStateChanged(prevState, candidate) {
 }
 
 // Per-source refresh windows. The dispatcher's own logs are cheap and stay live; the three
-// collectors that spawn processes (gh, git, ao) are throttled because their subjects do not
+// collectors that spawn processes (gh, git, paseo) are throttled because their subjects do not
 // change between one five-second poll and the next.
 const SOURCE_TTL_MS = {
   git: 20000,
-  // Paseo replaced AO; the key stays 'ao' so every consumer of sources.ao keeps working.
-  ao: 15000,
+  // Paseo replaced AO; the key stays 'paseo' so every consumer of sources.paseo keeps working.
+  paseo: 15000,
   github: 45000,
   // Quota ledgers and capacity are re-derived from files that change at most
   // once per turn, so a 5s poll re-reading them was pure waste.
@@ -404,9 +404,9 @@ async function aggregateCockpitState(options = {}) {
   const gitPromise = options.mockGit
     ? Promise.resolve(options.mockGit)
     : cachedCollect('git', () => collectGitState(rootDir));
-  const aoPromise = options.mockAo
-    ? Promise.resolve(options.mockAo)
-    : cachedCollect('ao', () => collectPaseoState());
+  const paseoPromise = options.mockPaseo
+    ? Promise.resolve(options.mockPaseo)
+    : cachedCollect('paseo', () => collectPaseoState());
   const githubPromise = options.mockGitHub
     ? Promise.resolve(options.mockGitHub)
     : cachedCollect('github', () => collectGitHubState(repo));
@@ -423,10 +423,10 @@ async function aggregateCockpitState(options = {}) {
     ? Promise.resolve(options.mockAgyPool)
     : cachedCollect('agyPool', () => Promise.resolve(collectAgyPoolState(options.agyPoolOptions)));
 
-  let [gitResult, aoResult, githubResult, usageResult, capacityResult, agyPoolResult] =
+  let [gitResult, paseoResult, githubResult, usageResult, capacityResult, agyPoolResult] =
     await Promise.all([
       gitPromise,
-      aoPromise,
+      paseoPromise,
       githubPromise,
       usagePromise,
       capacityPromise,
@@ -447,17 +447,17 @@ async function aggregateCockpitState(options = {}) {
     lastKnownSourceData.git = gitResult;
   }
 
-  if (aoResult.health.status === 'unavailable' && lastKnownSourceData.ao) {
-    aoResult = {
-      health: Object.assign({}, aoResult.health, {
+  if (paseoResult.health.status === 'unavailable' && lastKnownSourceData.paseo) {
+    paseoResult = {
+      health: Object.assign({}, paseoResult.health, {
         status: 'stale',
         impact: 'Paseo unavailable; serving cached last-known state (AI15-R01)',
-        observedAt: lastKnownSourceData.ao.health.observedAt,
+        observedAt: lastKnownSourceData.paseo.health.observedAt,
       }),
-      data: lastKnownSourceData.ao.data,
+      data: lastKnownSourceData.paseo.data,
     };
-  } else if (aoResult.health.status === 'live') {
-    lastKnownSourceData.ao = aoResult;
+  } else if (paseoResult.health.status === 'live') {
+    lastKnownSourceData.paseo = paseoResult;
   }
 
   if (githubResult.health.status === 'unavailable' && lastKnownSourceData.github) {
@@ -531,7 +531,7 @@ async function aggregateCockpitState(options = {}) {
   const sources = {
     register: withFreshness(registerResult.health, 'register'),
     git: withFreshness(gitResult.health, 'git'),
-    ao: withFreshness(aoResult.health, 'ao'),
+    paseo: withFreshness(paseoResult.health, 'paseo'),
     github: withFreshness(githubResult.health, 'github'),
     usage: withFreshness(usageResult.health, 'usage'),
     capacity: withFreshness(capacityResult.health, 'capacity'),
@@ -541,14 +541,14 @@ async function aggregateCockpitState(options = {}) {
   const conflicts = detectConflicts(
     registerResult.data,
     gitResult.data,
-    aoResult.data,
+    paseoResult.data,
     githubResult.data
   );
 
   const overallStatus = deriveOverallStatus(sources, conflicts);
 
   const recoveryEvents = detectRecoveryTransitions(sources, observationTime);
-  let activity = buildActivityStream(gitResult.data.recentCommits, aoResult.data.sessions);
+  let activity = buildActivityStream(gitResult.data.recentCommits, paseoResult.data.sessions);
   if (recoveryEvents.length > 0) {
     activity = recoveryEvents.concat(activity).slice(0, 15);
   }
@@ -579,8 +579,8 @@ async function aggregateCockpitState(options = {}) {
       gatePipeline,
       items: registerResult.data.items,
     },
-    sessions: aoResult.data.sessions,
-    daemon: aoResult.data.daemon,
+    sessions: paseoResult.data.sessions,
+    daemon: paseoResult.data.daemon,
     usage: usageResult.data,
     capacity: capacityResult.data,
     agyPool: agyPoolResult.data,
@@ -612,10 +612,10 @@ function resetRevisionForTest(val = 1) {
   currentRevision = val;
   lastAggregatedState = null;
   lastKnownSourceData.git = null;
-  lastKnownSourceData.ao = null;
+  lastKnownSourceData.paseo = null;
   lastKnownSourceData.github = null;
   lastKnownSourceData.register = null;
-  previousSourceStatuses = { register: null, git: null, ao: null, github: null };
+  previousSourceStatuses = { register: null, git: null, paseo: null, github: null };
 }
 
 module.exports = {

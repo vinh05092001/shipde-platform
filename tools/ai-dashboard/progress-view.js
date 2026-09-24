@@ -121,27 +121,27 @@
       var t = new Date(it.timestamp || it.at || 0);
       if (isNaN(t)) return;
       var key = t.toISOString().slice(0, 13);
-      var b = (buckets[key] = buckets[key] || { git: 0, ao: 0 });
+      var b = (buckets[key] = buckets[key] || { git: 0, paseo: 0 });
       if (String(it.type || '').indexOf('GIT') === 0) b.git++;
-      else b.ao++;
+      else b.paseo++;
     });
     var keys = Object.keys(buckets).sort().slice(-24);
     if (!keys.length) return '';
     var max = keys.reduce(function (m, k) {
-      return Math.max(m, buckets[k].git + buckets[k].ao);
+      return Math.max(m, buckets[k].git + buckets[k].paseo);
     }, 1);
     var bars = keys
       .map(function (k) {
         var b = buckets[k];
         var hg = Math.round((b.git / max) * 46),
-          ha = Math.round((b.ao / max) * 46);
+          ha = Math.round((b.paseo / max) * 46);
         return (
           '<div class="flex flex-col justify-end items-center gap-0.5" style="width:14px" title="' +
           k.replace('T', ' ') +
           'h · git ' +
           b.git +
           ' · Paseo ' +
-          b.ao +
+          b.paseo +
           '">' +
           (ha
             ? '<div style="height:' +

@@ -222,8 +222,8 @@ function applyState(newState) {
 // real session data — never a hardcoded assertion. Paseo source not live means
 // writer state is genuinely unknown/unavailable, not "1 Writer Active".
 function deriveWriterState(currentState) {
-  const aoStatus = currentState?.sources?.ao?.status;
-  if (aoStatus !== 'live') {
+  const paseoStatus = currentState?.sources?.paseo?.status;
+  if (paseoStatus !== 'live') {
     return { level: 'unavailable', label: 'PASEO KHÔNG KHẢ DỤNG', countLabel: 'Không có' };
   }
 
@@ -402,7 +402,7 @@ function renderSourceHealth() {
   const sources = [
     { key: 'register', label: '1. Register CSV', icon: '📋' },
     { key: 'git', label: '2. Git & Worktree', icon: '🌿' },
-    { key: 'ao', label: '3. Paseo', icon: '🤖' },
+    { key: 'paseo', label: '3. Paseo', icon: '🤖' },
     { key: 'github', label: '4. GitHub PR / CI', icon: '🐙' },
   ];
 
@@ -821,7 +821,7 @@ function renderSessions() {
   if (sessions.length === 0) {
     container.innerHTML = `
       <tr>
-        <td colspan="7" class="p-6 text-center text-base-content/70 text-xs">
+        <td colspan="9" class="p-6 text-center text-base-content/70 text-xs">
           Không có agent Paseo nào đang chạy. Trạng thái Paseo: ${escapeHtml(state.daemon?.state || 'đã dừng')}.
         </td>
       </tr>
@@ -1381,7 +1381,7 @@ function renderMinimalStaticTasks(tasks) {
         impact: 'Offline Snapshot',
       },
       git: { status: 'unavailable', impact: 'Server offline' },
-      ao: { status: 'unavailable', impact: 'Server offline' },
+      paseo: { status: 'unavailable', impact: 'Server offline' },
       github: { status: 'unavailable', impact: 'Server offline' },
     },
     workItems: {
