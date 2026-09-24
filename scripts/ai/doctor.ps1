@@ -133,7 +133,8 @@ $agyCommand = Get-Command agy -ErrorAction SilentlyContinue
 Write-Host ("Antigravity CLI: {0}" -f $(if ($agyCommand) { "OK  $($agyCommand.Source)" } else { "NOT INSTALLED; Gemini CLI fallback remains available" }))
 
 $agentRouterKey = [Environment]::GetEnvironmentVariable("AGENTROUTER_API_KEY", "User")
-$agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)`r`n$agentRouterSaved = $false
+$agentRouterSaved = -not [string]::IsNullOrWhiteSpace($agentRouterKey)
+$agentRouterSaved = $false
 
 # Presence is not configuration. A key that is set but rejected reports as
 # CONFIGURED under a presence check, so the dashboard and this report both
