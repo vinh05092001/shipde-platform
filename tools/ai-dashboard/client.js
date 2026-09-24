@@ -841,6 +841,8 @@ function renderSessions() {
         <td data-label="Session ID" class="p-3 font-mono text-base-content font-bold">${escapeHtml(s.id)}</td>
         <td data-label="Vai Trò" class="p-3 text-base-content/70 font-semibold">${escapeHtml(s.displayRole)}</td>
         <td data-label="Harness" class="p-3 font-mono text-base-content/70">${escapeHtml(s.harness)}</td>
+        <td data-label="Source" class="p-3 font-mono text-base-content/70">${escapeHtml(s.source || 'unknown')}</td>
+        <td data-label="Model" class="p-3 font-mono text-base-content/70">${escapeHtml(s.model || 'unknown')}</td>
         <td data-label="Nhánh / Worktree" class="p-3 font-mono text-base-content/70 truncate max-w-xs" title="${escapeHtml(s.branch)}">${escapeHtml(s.branch || '—')}</td>
         <td data-label="Trạng Thái" class="p-3 font-mono">${escapeHtml(formatSessionStatus(s.status))}</td>
         <td data-label="Quyền Ghi" class="p-3 text-xs">${writerBadge}</td>

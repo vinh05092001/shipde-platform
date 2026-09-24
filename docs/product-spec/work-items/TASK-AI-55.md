@@ -34,7 +34,7 @@ Gemini is chosen since this includes multiple changes across the dashboard appli
 
 ## In scope
 
-Replaces AO with Paseo in the dashboard state aggregator, drops AO and Docker from panels, adds harness to the active sessions view. Includes the agy pool data collector (`agy-pool-adapter.js`) which supplies data to the architecture diagram (`architecture.js`), though no dedicated pool panel is added to the main dashboard.
+Replaces AO with Paseo in the dashboard state aggregator, drops AO and Docker from panels, adds harness, source, and model to the active sessions view. Includes the agy pool data collector (`agy-pool-adapter.js`) which supplies data to the architecture diagram (`architecture.js`), though no dedicated pool panel is added to the main dashboard.
 
 ## Out of scope
 
