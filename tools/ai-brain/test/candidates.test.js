@@ -1844,3 +1844,232 @@ describe('integration: catalogue snapshot validation', () => {
     );
   });
 });
+
+// ── Master-queue item 3: chooser quota, cooldown, reservations and load ──
+
+describe('chooser quota, cooldown, reservations and load (item 3)', () => {
+  // Test 1: an exhausted account is excluded while another account on the same upstream stays eligible
+  test('an exhausted account is excluded while another account on the same upstream stays eligible', () => {
+    const cExhausted = {
+      harness: 'paseo',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      gateway: '9router',
+      upstream: 'gh',
+      accountId: 'acc-exhausted',
+      quotaScope: 'acc-exhausted',
+      modelId: 'gh/gpt-4o',
+      source: '9router',
+      status: 'passed',
+      evidence: [{ level: 3, status: 'passed' }],
+      blocked: false,
+      qualifiedRoles: ['author.foundation'],
+    };
+    const cEligible = {
+      harness: 'paseo',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      gateway: '9router',
+      upstream: 'gh',
+      accountId: 'acc-eligible',
+      quotaScope: 'acc-eligible',
+      modelId: 'gh/gpt-4o',
+      source: '9router',
+      status: 'passed',
+      evidence: [{ level: 3, status: 'passed' }],
+      blocked: false,
+      qualifiedRoles: ['author.foundation'],
+    };
+
+    const decision = ranking.rankAndRecord([cExhausted, cEligible], {
+      workItemId: 'TASK-QUOTA-01',
+      role: 'author.foundation',
+      dryRun: true,
+      headrooms: {
+        'acc-exhausted': { status: 'exhausted', reason: 'Đã chạm hạn mức requestsPerDay' },
+        'acc-eligible': { status: 'open' },
+      },
+    });
+
+    const exhaustedRejection = decision.rejected.find((r) => r.accountId === 'acc-exhausted');
+    assert.ok(exhaustedRejection, 'exhausted account is rejected');
+    assert.equal(exhaustedRejection.scope, 'account', 'scope is account, not upstream');
+    assert.ok(
+      !decision.candidates.some((c) => c.accountId === 'acc-exhausted'),
+      'exhausted account is not in eligible candidates'
+    );
+    assert.ok(
+      decision.candidates.some((c) => c.accountId === 'acc-eligible'),
+      'eligible account remains in candidates'
+    );
+    assert.equal(
+      decision.chosen,
+      candidates.candidateKey(cEligible),
+      'eligible candidate on same upstream is chosen'
+    );
+  });
+
+  // Test 2: unknown quota ranks below known-available quota and is not unlimited
+  test('unknown quota ranks below known-available quota and is not unlimited', () => {
+    const cKnown = {
+      harness: 'paseo',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      gateway: '9router',
+      upstream: 'gh',
+      accountId: 'acc-known',
+      quotaScope: 'acc-known',
+      modelId: 'gh/gpt-4o',
+      source: '9router',
+      status: 'passed',
+      evidence: [{ level: 3, status: 'passed' }],
+      blocked: false,
+      qualifiedRoles: ['author.foundation'],
+    };
+    const cUnknown = {
+      harness: 'paseo',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      gateway: '9router',
+      upstream: 'cl',
+      accountId: 'acc-unknown',
+      quotaScope: 'acc-unknown',
+      modelId: 'cl/claude-3-5-sonnet',
+      source: '9router',
+      status: 'passed',
+      evidence: [{ level: 3, status: 'passed' }],
+      blocked: false,
+      qualifiedRoles: ['author.foundation'],
+    };
+
+    const decision = ranking.rankAndRecord([cUnknown, cKnown], {
+      workItemId: 'TASK-QUOTA-02',
+      role: 'author.foundation',
+      dryRun: true,
+      accounts: [
+        { id: 'acc-known', limits: { requestsPerDay: 100 } },
+        { id: 'acc-unknown', limits: {} },
+      ],
+    });
+
+    const knownCandidate = decision.candidates.find((c) => c.accountId === 'acc-known');
+    const unknownCandidate = decision.candidates.find((c) => c.accountId === 'acc-unknown');
+    assert.ok(knownCandidate, 'known candidate present');
+    assert.ok(unknownCandidate, 'unknown candidate present');
+    assert.equal(knownCandidate.headroom, 'open', 'known account with limits has open headroom');
+    assert.equal(
+      unknownCandidate.headroom,
+      'unknown',
+      'account with no limits has unknown headroom'
+    );
+    assert.ok(
+      knownCandidate.score > unknownCandidate.score,
+      'known-available quota ranks above unknown quota'
+    );
+    assert.ok(
+      unknownCandidate.scoreBreakdown.headroom < 90,
+      'unknown quota is not unlimited (scores below open)'
+    );
+    assert.equal(decision.chosen, candidates.candidateKey(cKnown));
+  });
+
+  // Test 3: a held reservation lowers the candidate's headroom
+  test("a held reservation lowers the candidate's headroom", () => {
+    const candidate = {
+      harness: 'paseo',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      gateway: '9router',
+      upstream: 'gh',
+      accountId: 'acc-res',
+      quotaScope: 'acc-res',
+      modelId: 'gh/gpt-4o',
+      source: '9router',
+      status: 'passed',
+      evidence: [{ level: 3, status: 'passed' }],
+      blocked: false,
+      qualifiedRoles: ['author.foundation'],
+    };
+
+    const ctxNoRes = {
+      accounts: [{ id: 'acc-res', limits: { requestsPerDay: 5 } }],
+      eventsByAccount: {
+        'acc-res': [{ at: Date.now() }, { at: Date.now() }, { at: Date.now() }],
+      },
+      reservations: [],
+    };
+
+    const ctxWithRes = {
+      accounts: [{ id: 'acc-res', limits: { requestsPerDay: 5 } }],
+      eventsByAccount: {
+        'acc-res': [{ at: Date.now() }, { at: Date.now() }, { at: Date.now() }],
+      },
+      reservations: [
+        {
+          workItemId: 'TASK-HELD-01',
+          accountId: 'acc-res',
+          quotaScope: 'acc-res',
+          at: Date.now(),
+        },
+      ],
+    };
+
+    const scoreNoRes = ranking.headroomScore(candidate, ctxNoRes);
+    const scoreWithRes = ranking.headroomScore(candidate, ctxWithRes);
+
+    assert.ok(scoreWithRes < scoreNoRes, 'a held reservation lowers the candidate headroom score');
+  });
+
+  // Test 4: load counts live sessions, not catalogue entries
+  test('load counts live sessions, not catalogue entries', () => {
+    const candidateA = {
+      harness: 'paseo',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      gateway: '9router',
+      upstream: 'test-a',
+      accountId: 'acc-a',
+      quotaScope: 'test-a',
+      modelId: 'test-a/model-1',
+      source: '9router',
+      blocked: false,
+    };
+    const candidateB = {
+      harness: 'paseo',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      gateway: '9router',
+      upstream: 'test-b',
+      accountId: 'acc-b',
+      quotaScope: 'test-b',
+      modelId: 'test-b/model-1',
+      source: '9router',
+      blocked: false,
+    };
+
+    // Catalogue has 10 models for test-a and 1 model for test-b
+    const allCandidates = [
+      candidateB,
+      ...Array.from({ length: 10 }, (_, i) => ({
+        ...candidateA,
+        modelId: 'test-a/model-' + (i + 1),
+      })),
+    ];
+
+    // Live session running on test-b only (test-a has 0 live sessions)
+    const ctx = {
+      running: [{ upstream: 'test-b', role: 'author.foundation', accountId: 'acc-b' }],
+      reservations: [],
+    };
+
+    const spreadA = ranking.spreadPenalty(candidateA, ctx, allCandidates);
+    const spreadB = ranking.spreadPenalty(candidateB, ctx, allCandidates);
+
+    // test-a has 0 live sessions -> spread 100 (not penalized by 10 catalogue entries)
+    // test-b has 1 live session -> spread 70
+    assert.equal(
+      spreadA,
+      100,
+      'test-a with 0 live sessions has full spread (100) despite 10 catalogue entries'
+    );
+    assert.equal(
+      spreadB,
+      70,
+      'test-b with 1 live session is penalized (70) despite only 1 catalogue entry'
+    );
+    assert.ok(spreadA > spreadB, 'load counts live sessions, not catalogue entries');
+  });
+});

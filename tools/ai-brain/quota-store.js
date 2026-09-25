@@ -237,7 +237,9 @@ function withQuotaLock(options, fn) {
   try {
     return fn();
   } finally {
-    try { fs.rmdirSync(lock); } catch (e) {}
+    try {
+      fs.rmdirSync(lock);
+    } catch (e) {}
   }
 }
 
@@ -273,7 +275,7 @@ function pruneReservations(now, runningWorkItems, options, queuedWorkItems) {
   const queued = queuedWorkItems || new Set();
   for (const [id, r] of Object.entries(res)) {
     const at = typeof r.at === 'number' ? r.at : Date.parse(r.at);
-    const isExpired = !Number.isFinite(at) || (now - at > 2 * 60 * 1000) || (at > now + 60 * 1000);
+    const isExpired = !Number.isFinite(at) || now - at > 2 * 60 * 1000 || at > now + 60 * 1000;
     const isQueued = queued.has(r.workItemId);
     if (!running.has(r.workItemId) && (isExpired || isQueued)) {
       delete res[id];
@@ -302,7 +304,7 @@ function recordReservation(workItemId, role, accountId, offeringId, tokens, opti
     offeringId,
     tokens,
     at: (options && options.now) || Date.now(),
-    cost: 0
+    cost: 0,
   };
   saveReservations(res, options);
 }

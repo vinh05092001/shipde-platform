@@ -632,8 +632,10 @@ function scoreOffering(offering, difficulty, headroom, history, options) {
   const blended = Number(c.inputPerMillion || 0) * 0.8 + Number(c.outputPerMillion || 0) * 0.2;
 
   const recent = (opts.recentUsage && opts.recentUsage[offering.accountId]) || 0;
-  const usagePenalty = recent * (opts.recentUsagePenalty !== undefined ? opts.recentUsagePenalty : 5);
-  const diversityPenalty = pLoad * (opts.providerDiversity !== undefined ? opts.providerDiversity : 10);
+  const usagePenalty =
+    recent * (opts.recentUsagePenalty !== undefined ? opts.recentUsagePenalty : 5);
+  const diversityPenalty =
+    pLoad * (opts.providerDiversity !== undefined ? opts.providerDiversity : 10);
 
   let explorationBonus = 0;
   if (!offering.gradeRecord || !offering.gradeRecord.graded) {

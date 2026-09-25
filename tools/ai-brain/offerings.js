@@ -251,7 +251,8 @@ function expandOfferings(accounts, options) {
 function offeringHeadroom(offering, eventsByAccount, eventsByOffering, options) {
   const accountEvents = (eventsByAccount || {})[offering.accountId] || [];
   const modelEvents = (eventsByOffering || {})[offering.id] || [];
-  const accountReservations = ((options || {}).reservationsByAccount || {})[offering.accountId] || [];
+  const accountReservations =
+    ((options || {}).reservationsByAccount || {})[offering.accountId] || [];
   const modelReservations = ((options || {}).reservationsByOffering || {})[offering.id] || [];
 
   const accountView = accountHeadroom(

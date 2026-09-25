@@ -361,16 +361,36 @@ describe('Dispatch planning', () => {
 
   test('maxConcurrentPerModel and maxConcurrentPerQuotaScope actually cap', () => {
     const plan = planDispatch([item({ workItemId: 'W-1' }), item({ workItemId: 'W-2' })], pool, {
-      running: [{ workItemId: 'R-1', role: 'author.foundation', accountId: 'paid', model: 'claude-sonnet-5' }],
-      limits: { maxImplementationAgents: 10, maxConcurrentPerModel: 1, maxPerAccount: 10, maxConcurrentPerQuotaScope: 10 },
+      running: [
+        {
+          workItemId: 'R-1',
+          role: 'author.foundation',
+          accountId: 'paid',
+          model: 'claude-sonnet-5',
+        },
+      ],
+      limits: {
+        maxImplementationAgents: 10,
+        maxConcurrentPerModel: 1,
+        maxPerAccount: 10,
+        maxConcurrentPerQuotaScope: 10,
+      },
       now: NOW,
     });
     assert.ok(plan.assignments.every((a) => a.model !== 'claude-sonnet-5'));
   });
 
   test('after heavy recent use of one provider, a comparable candidate on another provider ranks higher', () => {
-    const providerA = account({ id: 'pA', provider: 'A', cost: { inputPerMillion: 10, outputPerMillion: 10 } });
-    const providerB = account({ id: 'pB', provider: 'B', cost: { inputPerMillion: 10, outputPerMillion: 10 } });
+    const providerA = account({
+      id: 'pA',
+      provider: 'A',
+      cost: { inputPerMillion: 10, outputPerMillion: 10 },
+    });
+    const providerB = account({
+      id: 'pB',
+      provider: 'B',
+      cost: { inputPerMillion: 10, outputPerMillion: 10 },
+    });
     const plan = planDispatch([item({ workItemId: 'W-1' })], [providerA, providerB], {
       eventsByAccount: { pA: Array(20).fill({ at: NOW - 1000 }) },
       limits: { recentUsagePenalty: 5 },
@@ -384,7 +404,7 @@ describe('Dispatch planning', () => {
     const ctx = {
       now: NOW,
       governedDecision: 'DEC-017',
-      limits: { maxImplementationAgents: 10 }
+      limits: { maxImplementationAgents: 10 },
     };
     const plan1 = planDispatch([item({ workItemId: 'RACE-1', branch: 'feat/r1' })], [limited], ctx);
     assert.equal(plan1.assignments.length, 1);
@@ -396,11 +416,24 @@ describe('Dispatch planning', () => {
   test('a reservation released after the worker ends frees the slot', () => {
     const limited = account({ id: 'release-slot', limits: { requestsPerDay: 1 } });
     const ctx1 = { now: NOW, governedDecision: 'DEC-017', limits: { maxImplementationAgents: 10 } };
-    const plan1 = planDispatch([item({ workItemId: 'REL-1', branch: 'feat/rel1' })], [limited], ctx1);
+    const plan1 = planDispatch(
+      [item({ workItemId: 'REL-1', branch: 'feat/rel1' })],
+      [limited],
+      ctx1
+    );
     assert.equal(plan1.assignments.length, 1);
 
-    const ctx2 = { now: NOW + 3 * 60 * 1000, governedDecision: 'DEC-017', running: [], limits: { maxImplementationAgents: 10 } };
-    const plan2 = planDispatch([item({ workItemId: 'REL-2', branch: 'feat/rel2' })], [limited], ctx2);
+    const ctx2 = {
+      now: NOW + 3 * 60 * 1000,
+      governedDecision: 'DEC-017',
+      running: [],
+      limits: { maxImplementationAgents: 10 },
+    };
+    const plan2 = planDispatch(
+      [item({ workItemId: 'REL-2', branch: 'feat/rel2' })],
+      [limited],
+      ctx2
+    );
     assert.equal(plan2.assignments.length, 1, 'reservation was released');
   });
 
@@ -416,7 +449,11 @@ describe('Dispatch planning', () => {
         item({ workItemId: 'W-6', branch: 'feat/w6' }),
       ],
       [unk],
-      { governedDecision: 'DEC-017', limits: { maxImplementationAgents: 10, maxPerAccount: 10 }, now: NOW }
+      {
+        governedDecision: 'DEC-017',
+        limits: { maxImplementationAgents: 10, maxPerAccount: 10 },
+        now: NOW,
+      }
     );
     assert.equal(plan.assignments.length, 5);
     assert.equal(plan.deferred.length, 1);
@@ -424,21 +461,27 @@ describe('Dispatch planning', () => {
   });
 
   test('fallback after a quota failure excludes the proven-shared scope and nothing wider', () => {
-     const fs = require('fs');
-     const path = require('path');
-     const os = require('os');
-     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-'));
-     fs.writeFileSync(path.join(dir, new Date(NOW).toISOString().slice(0, 10) + '.jsonl'), JSON.stringify({
-       stage: 'failed',
-       workItemId: 'W-FAIL',
-       chosen: 'acct-a::claude-sonnet-5' // full offeringId
-     }) + '\n');
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-'));
+    fs.writeFileSync(
+      path.join(dir, new Date(NOW).toISOString().slice(0, 10) + '.jsonl'),
+      JSON.stringify({
+        stage: 'failed',
+        workItemId: 'W-FAIL',
+        chosen: 'acct-a::claude-sonnet-5', // full offeringId
+      }) + '\n'
+    );
 
-     const acc = account({ id: 'acct-a', provider: 'anthropic', model: 'claude-sonnet-5' });
-     const other = account({ id: 'acct-b', provider: 'other', model: 'other' });
-     const plan = planDispatch([item({ workItemId: 'W-FAIL' })], [acc, other], { now: NOW, decisionDir: dir });
+    const acc = account({ id: 'acct-a', provider: 'anthropic', model: 'claude-sonnet-5' });
+    const other = account({ id: 'acct-b', provider: 'other', model: 'other' });
+    const plan = planDispatch([item({ workItemId: 'W-FAIL' })], [acc, other], {
+      now: NOW,
+      decisionDir: dir,
+    });
 
-     assert.equal(plan.assignments[0].model, 'other');
+    assert.equal(plan.assignments[0].model, 'other');
   });
 
   test('fallback is recomputed from data, not read from a stored order', () => {

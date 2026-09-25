@@ -29,6 +29,9 @@ const sourcesApi = require('./sources');
 const evidence = require('./evidence');
 const decisions = require('./decisions');
 const { candidateKey: sevenWayKey } = require('./candidates');
+const quota = require('./quota');
+const quotaStore = require('./quota-store');
+const { readIdentity } = require('./agy-identity');
 
 /**
  * Scoring weights. Sub-scores are 0–100; unknown sub-scores (cost) are
@@ -83,13 +86,75 @@ function capabilityScore(candidate, workKind) {
 }
 
 /**
- * Quota headroom sub-score, read from the real headroom readings passed in
- * context (quota.js accountHeadroom / quota-store). Lookup order:
- * accountId, then quotaScope, then sevenWayKey, then unknown. Higher = more room.
- * Safely unpacks object readings (reading.status) or string primitives.
+ * Read active reservations from context or from quota-store.
  */
-function headroomScore(candidate, ctx) {
-  if (candidate.blocked) return 0;
+function getActiveReservations(ctx) {
+  if (ctx && Array.isArray(ctx.reservations)) {
+    return ctx.reservations;
+  }
+  if (ctx && Array.isArray(ctx._cachedReservations)) {
+    return ctx._cachedReservations;
+  }
+  try {
+    const lockOpts = {
+      home: ctx && ctx.home,
+      path: ctx && (ctx.storePath || ctx.quotaFile),
+      now: ctx && ctx.now,
+    };
+    const resMap = quotaStore.getReservations(lockOpts);
+    const resList = Object.values(resMap || {});
+    if (ctx) ctx._cachedReservations = resList;
+    return resList;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Filter reservations that apply to a candidate.
+ */
+function reservationsForCandidate(candidate, reservations) {
+  const key = sevenWayKey(candidate);
+  const out = [];
+  for (const r of reservations || []) {
+    if (r.offeringId && r.offeringId === key) {
+      out.push(r);
+    } else if (
+      r.accountId &&
+      candidate.accountId &&
+      r.accountId !== '*' &&
+      r.accountId === candidate.accountId
+    ) {
+      out.push(r);
+    } else if (r.quotaScope && candidate.quotaScope && r.quotaScope === candidate.quotaScope) {
+      out.push(r);
+    } else if (
+      r.modelId &&
+      r.modelId === candidate.modelId &&
+      r.upstream &&
+      r.upstream === candidate.upstream
+    ) {
+      out.push(r);
+    }
+  }
+  return out;
+}
+
+/**
+ * Resolve quota remaining, cooldown, and reservations for a candidate.
+ * Reads from real quota modules: quota.js accountHeadroom, quota-store.js
+ * usableReadings, evidence.js isCandidateBlocked, and held reservations.
+ */
+function resolveCandidateHeadroom(candidate, ctx) {
+  if (candidate.blocked) {
+    return {
+      status: 'cooling',
+      reason: candidate.blockReason || 'upstream/candidate blocked',
+      worstRatio: 1,
+      reservationsHeld: 0,
+    };
+  }
+
   const readings = (ctx && ctx.headrooms) || {};
   let reading = undefined;
   if (candidate.accountId && readings[candidate.accountId] !== undefined) {
@@ -101,31 +166,140 @@ function headroomScore(candidate, ctx) {
   if (reading === undefined && readings[key] !== undefined) {
     reading = readings[key];
   }
+
+  const allReservations = getActiveReservations(ctx);
+  const candReservations = reservationsForCandidate(candidate, allReservations);
+
+  // If reading not in headrooms, check ctx.accounts to compute headroom from quota module
+  if (reading === undefined && ctx && Array.isArray(ctx.accounts)) {
+    const acc = ctx.accounts.find(
+      (a) => a.id === candidate.accountId || a.id === candidate.quotaScope
+    );
+    if (acc) {
+      const events = (ctx.eventsByAccount && ctx.eventsByAccount[acc.id]) || [];
+      reading = quota.accountHeadroom(acc, events, {
+        now: (ctx && ctx.now) || Date.now(),
+        warnAt: ctx && ctx.warnAt,
+        reservations: candReservations,
+      });
+    }
+  }
+
+  // If still not resolved, check cached reported readings from quota-store
+  if (reading === undefined) {
+    let reported = ctx && ctx.reported;
+    if (!reported && (!ctx || ctx.useStoredQuota !== false)) {
+      try {
+        const idRes = readIdentity({ home: ctx && ctx.home });
+        reported = quotaStore.usableReadings(idRes, {
+          home: ctx && ctx.home,
+          now: (ctx && ctx.now) || Date.now(),
+        }).reported;
+      } catch {}
+    }
+    if (reported) {
+      if (candidate.accountId && reported[candidate.accountId] !== undefined) {
+        reading = reported[candidate.accountId];
+      } else if (candidate.quotaScope && reported[candidate.quotaScope] !== undefined) {
+        reading = reported[candidate.quotaScope];
+      }
+    }
+  }
+
+  // Active cooldown check from evidence store if present
+  if (ctx && ctx.evidenceData) {
+    try {
+      const block = evidence.isCandidateBlocked(ctx.evidenceData, candidate, {
+        now: (ctx && ctx.now) || Date.now(),
+      });
+      if (block && block.blocked) {
+        return {
+          status: 'cooling',
+          reason: block.reason || 'provider cooldown in effect',
+          worstRatio: 1,
+          reservationsHeld: candReservations.length,
+        };
+      }
+    } catch {}
+  }
+
+  // Active cooldown on candidate or account
+  const now = (ctx && ctx.now) || Date.now();
+  if (candidate.cooldownUntil && Date.parse(candidate.cooldownUntil) > now) {
+    return {
+      status: 'cooling',
+      reason: 'Nhà cung cấp vừa từ chối; đang chờ hết thời gian nguội',
+      worstRatio: 1,
+      reservationsHeld: candReservations.length,
+    };
+  }
+
   let status = 'unknown';
+  let worstRatio = null;
+  let reason = 'chưa khai hạn mức token';
   if (typeof reading === 'string') {
     status = reading;
-  } else if (reading && typeof reading === 'object' && reading.status) {
-    status = reading.status;
+  } else if (reading && typeof reading === 'object') {
+    if (reading.status) status = reading.status;
+    if (reading.worstRatio !== undefined) worstRatio = reading.worstRatio;
+    if (reading.reason) reason = reading.reason;
   }
-  candidate.headroomStatus = status;
+
+  return {
+    status,
+    worstRatio,
+    reason,
+    reservationsHeld: candReservations.length,
+  };
+}
+
+/**
+ * Quota headroom sub-score, read from the real headroom readings passed in
+ * context (quota.js accountHeadroom / quota-store). Lookup order:
+ * accountId, then quotaScope, then sevenWayKey, then unknown. Higher = more room.
+ * Safely unpacks object readings (reading.status) or string primitives.
+ * A held reservation lowers the candidate's headroom.
+ */
+function headroomScore(candidate, ctx) {
+  if (candidate.blocked) return 0;
+  const headroom = resolveCandidateHeadroom(candidate, ctx);
+  candidate.headroomStatus = headroom.status;
+  candidate.headroomReason = headroom.reason;
+
+  if (headroom.status === 'exhausted' || headroom.status === 'cooling') {
+    return 0;
+  }
+
   const map = { open: 90, unknown: 30, tight: 40, exhausted: 0, cooling: 0 };
-  return map[status] !== undefined ? map[status] : 30;
+  let score = map[headroom.status] !== undefined ? map[headroom.status] : 30;
+
+  // A held reservation lowers the candidate's headroom
+  if (headroom.reservationsHeld > 0) {
+    const penalty = headroom.reservationsHeld * 20;
+    score = Math.max(10, score - penalty);
+  }
+
+  return score;
 }
 
 /**
  * Count how much live load and how many outstanding reservations already sit
  * on the same upstream (per quota scope) as the candidate.
+ * Load counts live sessions (running/load) and reservations, NOT catalogue entries.
  */
-function countSpread(candidate, ctx) {
+function countSpread(candidate, ctx, allCandidates) {
   let count = 0;
-  for (const e of (ctx && ctx.load) || []) {
+  const liveSessions = (ctx && (ctx.load || ctx.running)) || [];
+  for (const e of liveSessions) {
     if (
       e.upstream === candidate.upstream &&
       (!e.quotaScope || e.quotaScope === candidate.quotaScope)
-    )
+    ) {
       count += 1;
+    }
   }
-  for (const r of (ctx && ctx.reservations) || []) {
+  const reservations = getActiveReservations(ctx);
+  for (const r of reservations) {
     if (
       r.modelId &&
       r.modelId === candidate.modelId &&
@@ -135,14 +309,23 @@ function countSpread(candidate, ctx) {
       count += 1;
     } else if (r.offeringId && r.offeringId === sevenWayKey(candidate)) {
       count += 1;
+    } else if (
+      r.accountId &&
+      candidate.accountId &&
+      r.accountId !== '*' &&
+      r.accountId === candidate.accountId
+    ) {
+      count += 1;
+    } else if (r.quotaScope && candidate.quotaScope && r.quotaScope === candidate.quotaScope) {
+      count += 1;
     }
   }
   return count;
 }
 
 /** Spread penalty: fewer active sessions/reservations on this upstream → 100. */
-function spreadPenalty(candidate, ctx) {
-  const count = countSpread(candidate, ctx);
+function spreadPenalty(candidate, ctx, allCandidates) {
+  const count = countSpread(candidate, ctx, allCandidates);
   if (count <= 0) return 100;
   if (count <= 1) return 70;
   if (count <= 3) return 50;
@@ -176,7 +359,7 @@ function scoreCandidate(candidate, allCandidates, workKind, ctx) {
     evidence: evidenceScore(candidate),
     capability: capabilityScore(candidate, workKind),
     headroom: headroomScore(candidate, ctx),
-    spread: spreadPenalty(candidate, ctx),
+    spread: spreadPenalty(candidate, ctx, allCandidates),
     cost: costScore(candidate),
   };
 
@@ -242,6 +425,18 @@ function rankAndRecord(candidates, context) {
   const explorationBudget = Number.isFinite(Number(ctx.explorationBudget))
     ? Number(ctx.explorationBudget)
     : 0;
+
+  if (ctx && ctx.reported === undefined && ctx.useStoredQuota !== false) {
+    try {
+      const idRes = readIdentity({ home: ctx.home });
+      ctx.reported = quotaStore.usableReadings(idRes, {
+        home: ctx.home,
+        now: ctx.now || Date.now(),
+      }).reported;
+    } catch {
+      ctx.reported = {};
+    }
+  }
 
   const rejected = [];
   const eligible = [];
@@ -333,6 +528,46 @@ function rankAndRecord(candidates, context) {
       // No enumerable catalogue for this access path (like cli) → the
       // candidate's presence cannot be verified here; keep it, marked unknown.
       if (!c.status || c.status === 'passed') c.status = 'unknown';
+    }
+
+    // Quota headroom & cooldown check:
+    // Read quota remaining for candidate's account and quotaScope, and active cooldown
+    const headroom = resolveCandidateHeadroom(c, ctx);
+    c.headroomStatus = headroom.status;
+    c.headroomReason = headroom.reason;
+
+    if (headroom.status === 'exhausted') {
+      rejected.push({
+        offeringId: sevenWayKey(c),
+        reason: headroom.reason || 'QUOTA_EXHAUSTED',
+        scope:
+          c.accountId && c.accountId !== '*'
+            ? 'account'
+            : c.quotaScope
+              ? 'quotaScope'
+              : 'candidate',
+        upstream: c.upstream,
+        modelId: c.modelId,
+        accountId: c.accountId || '*',
+      });
+      continue;
+    }
+
+    if (headroom.status === 'cooling') {
+      rejected.push({
+        offeringId: sevenWayKey(c),
+        reason: headroom.reason || 'COOLDOWN_ACTIVE',
+        scope:
+          c.accountId && c.accountId !== '*'
+            ? 'account'
+            : c.quotaScope
+              ? 'quotaScope'
+              : 'candidate',
+        upstream: c.upstream,
+        modelId: c.modelId,
+        accountId: c.accountId || '*',
+      });
+      continue;
     }
 
     eligible.push(c);
@@ -464,4 +699,7 @@ module.exports = {
   rankAndRecord,
   extractBaseName,
   buildCatalogueSet,
+  getActiveReservations,
+  reservationsForCandidate,
+  resolveCandidateHeadroom,
 };
