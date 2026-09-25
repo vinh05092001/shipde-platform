@@ -1940,10 +1940,10 @@ IMPORTANT: You MUST respond ONLY with valid JSON satisfying the schema. Do not w
             Pop-Location
         }
 
-        # Fallback to Claude Code if Codex execution failed or produced invalid/empty review
+        # Fall back to the native Claude Code CLI if Codex execution failed or produced invalid/empty review
         $codexReviewValid = ($exitCode -eq 0) -and (Test-Path -LiteralPath $reviewFile) -and (-not [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $reviewFile -Raw -ErrorAction SilentlyContinue)))
         if (-not $codexReviewValid) {
-            Write-Warning "Codex review execution was not successful (Exit code: $exitCode). Initiating Claude Code fallback chain..."
+            Write-Warning "Codex review execution was not successful (Exit code: $exitCode). Initiating native Claude Code CLI fallback..."
             $fallbackSuccess = Invoke-ShipDeClaudeReviewFallback `
                 -ReviewPrompt $reviewPrompt `
                 -ReviewHeadSha $reviewHeadSha `
@@ -3005,7 +3005,7 @@ function Show-ShipDeStatus {
 
 # ============================================================================
 # SUPERVISOR FUNCTIONS (TASK-AI-06)
-# Deterministic AO control. AO is launched through the existing 9Router
+# Deterministic AO control. AO is launched through the local 9Router gateway (127.0.0.1:20128), not the cloud AgentRouter
 # Claude profile by start-agent-orchestrator.ps1.
 # ============================================================================
 
@@ -3291,9 +3291,10 @@ function Ensure-ShipDeNineRouterRuntime {
         [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
         [scriptblock]$Launcher = {
             param($Path, $Root, $Port, $Version, $ProfileDir)
-            # `-AgentRouterPort` is start-agent-orchestrator.ps1's parameter name (out of
-            # scope here); on that script it still addresses 9Router's local port (20128).
-            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -ProfilePath $ProfileDir -Restart
+            # The parameter is `-NineRouterPort` on start-agent-orchestrator.ps1; that
+            # script still accepts the old AgentRouterPort name as an [Alias], so a
+            # launcher outside this repository keeps working (AI-44-R03).
+            & $Path -AiRoot $Root -NineRouterPort $Port -ExpectedAoVersion $Version -ProfilePath $ProfileDir -Restart
         }
     )
 
