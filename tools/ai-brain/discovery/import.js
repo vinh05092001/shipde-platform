@@ -255,7 +255,8 @@ async function importCheckpoint(filePath, opts) {
     }
   }
 
-  const candidateList = [...candidates.values()].map((c) => {
+  const candidateList = [...candidates.keys()].sort().map((k) => {
+    const c = candidates.get(k);
     let resultState = 'UNTESTED';
     if (c.failures.length > 0) resultState = 'FAIL';
     else if (c.passes > 0) resultState = 'PASS';
@@ -355,27 +356,31 @@ async function importOuter(filePath, opts) {
     ) {
       status = 'FAIL';
       tier = 'FAIL';
-      httpStatus = httpCode || (has401 ? 401 : 400);
+      httpStatus = httpCode;
       reclassifiedFails++;
     } else if (status === 'ALIVE') {
       // Keep exactly PASS, FAIL, DEFERRED, UNTESTED as the result states
       status = 'PASS';
+      httpStatus = httpCode;
     } else if (status === 'UNTESTED') {
       status = 'UNTESTED';
+      httpStatus = httpCode;
     } else if (status === 'DEFERRED') {
       status = 'DEFERRED';
+      httpStatus = httpCode;
     } else if (status === 'FAIL') {
       status = 'FAIL';
+      httpStatus = httpCode;
     } else {
       status = 'UNTESTED';
+      httpStatus = httpCode;
     }
 
-    rec.probes.push({
+    const probeEntry = {
       probeName: row.probeName,
       status,
       tier,
       latencyMs: row.latencyMs,
-      httpStatus,
       exitCode: row.exitCode,
       error,
       classification: row.classification,
@@ -388,7 +393,11 @@ async function importOuter(filePath, opts) {
           : undefined,
       sharedUpstream: row.sharedUpstream,
       evidenceLevel: row.evidenceLevel,
-    });
+    };
+    if (httpStatus !== undefined) {
+      probeEntry.httpStatus = httpStatus;
+    }
+    rec.probes.push(probeEntry);
   }
   const sources = [...perSource.values()].map((s) => ({
     ...s,

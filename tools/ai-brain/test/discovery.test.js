@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const { candidateKey, modelBase, registryPrefixes } = require('../discovery/identity');
 const { buildSnapshot } = require('../discovery/snapshot');
@@ -952,58 +955,58 @@ test('a row with no evidence is UNTESTED, not PASS', () => {
 // REGRESSION TESTS (Findings 1-8 verification)
 // =========================================================================
 
-test('regression 1: the old ledger stays append-only after migration - no row rewritten or deleted', () => {
-  const row4 = {
-    type: 'transition',
-    ts: '2026-09-24T00:00:00.000Z',
-    key: ['http', '9router', '9router', 'legacy-4part'].join('\u241f'),
-    harness: 'http',
-    accessPath: '9router',
-    gateway: '9router',
-    modelId: 'legacy-4part',
-    state: 'AVAILABLE',
-  };
-  const row6 = {
-    type: 'transition',
-    ts: '2026-09-24T01:00:00.000Z',
-    key: ['http', '9router', '9router', 'gh', 'org-1', 'gh/m1'].join('\u241f'),
-    harness: 'http',
-    accessPath: '9router',
-    gateway: '9router',
-    upstream: 'gh',
-    account: 'org-1',
-    modelId: 'gh/m1',
-    state: 'UNKNOWN',
-  };
-  const migrationRow = {
-    type: 'migration',
-    version: 2,
-    fromVersion: 1,
-    ts: '2026-09-25T12:00:00.000Z',
-    format: '7-part-identity',
-    note: 'migrated candidate keys to 7-part format with quotaScope',
-  };
+test('regression 1: the persisted ledger stays append-only after migration - no row rewritten or deleted', () => {
+  const catFile = path.resolve(__dirname, '..', 'data', 'discovery', 'catalogue.jsonl');
+  assert.ok(fs.existsSync(catFile), 'persisted catalogue.jsonl must exist');
 
-  const lines = [row4, row6, migrationRow];
-  const state = currentState(lines);
+  const content = fs.readFileSync(catFile, 'utf8');
+  const rawLines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
 
-  assert.equal(lines.length, 3);
-  assert.equal(lines[0].key.split('\u241f').length, 4);
-  assert.equal(lines[1].key.split('\u241f').length, 6);
+  // Must contain all 1,861 original advertisement records plus the migration record
+  assert.strictEqual(
+    rawLines.length,
+    1862,
+    'persisted catalogue must contain 1861 transitions + 1 migration record'
+  );
 
-  const key4Canonical = ['http', '9router', '9router', '', '', '', 'legacy-4part'].join('\u241f');
-  assert.equal(state.has(key4Canonical), true);
-  assert.equal(state.has(row4.key), true);
-  const cand4 = state.get(row4.key);
-  assert.equal(cand4.account, '');
-  assert.equal(cand4.quotaScope, '');
+  const parsedLines = rawLines.map((l, idx) => {
+    try {
+      return JSON.parse(l);
+    } catch (err) {
+      assert.fail(`Line ${idx + 1} in persisted catalogue.jsonl is not valid JSON: ${err.message}`);
+    }
+  });
 
-  const key6Canonical = ['http', '9router', '9router', 'gh', 'org-1', '', 'gh/m1'].join('\u241f');
-  assert.equal(state.has(key6Canonical), true);
-  assert.equal(state.has(row6.key), true);
-  const cand6 = state.get(row6.key);
-  assert.equal(cand6.account, 'org-1');
-  assert.equal(cand6.quotaScope, '');
+  // Verify historical transition records: lines 0 to 1860
+  for (let i = 0; i < 1861; i++) {
+    const row = parsedLines[i];
+    assert.strictEqual(row.type, 'transition', `Row ${i} must be a transition record`);
+    assert.ok(row.ts, `Row ${i} must have timestamp`);
+    assert.ok(row.runId, `Row ${i} must have runId`);
+    assert.ok(row.key, `Row ${i} must have candidate key`);
+    assert.ok(row.modelId, `Row ${i} must have modelId`);
+    assert.strictEqual(row.key.split('\u241f').length, 7, `Row ${i} must be a 7-part key`);
+  }
+
+  // Verify migration record: line 1861
+  const migrationRow = parsedLines[1861];
+  assert.strictEqual(migrationRow.type, 'migration', 'Row 1861 must be the migration record');
+  assert.strictEqual(migrationRow.version, 2, 'Migration record must specify version 2');
+  assert.strictEqual(migrationRow.fromVersion, 1, 'Migration record must specify fromVersion 1');
+  assert.strictEqual(migrationRow.format, '7-part-identity');
+
+  // Verify state reconstruction from the persisted file
+  const state = currentState(parsedLines);
+  assert.strictEqual(state.size, 1861, 'currentState must resolve all 1861 candidates');
+  assert.ok(Array.isArray(state.migrations), 'state must track migrations');
+  assert.strictEqual(state.migrations.length, 1, 'state must record the migration line');
+  assert.strictEqual(state.migrations[0].version, 2);
+
+  // Verify first candidate in the persisted catalogue
+  const firstKey = parsedLines[0].key;
+  assert.ok(state.has(firstKey), 'first candidate key must exist in reconstructed state');
+  const firstCand = state.get(firstKey);
+  assert.strictEqual(firstCand.modelId, 'vinh');
 });
 
 test('regression 2: import keeps all seven identity fields', async () => {
@@ -1296,6 +1299,61 @@ test('regression 5: evidence merge gives the same result whatever the JSONL orde
     assert.equal(shuffledResult.firstSeen, baselineResult.firstSeen);
     assert.equal(shuffledResult.lastSeen, baselineResult.lastSeen);
   }
+
+  // Equal-timestamp state conflict: PASS vs DEFERRED sharing same timestamp
+  const evPass = {
+    key,
+    attempts: 1,
+    passes: 1,
+    resultState: 'PASS',
+    firstSeen: '2026-09-24T12:00:00Z',
+    lastSeen: '2026-09-24T12:00:00Z',
+    evidence: [{ ts: '2026-09-24T12:00:00Z', status: 'PASS' }],
+  };
+  const evDeferred = {
+    key,
+    attempts: 1,
+    deferred: 1,
+    resultState: 'DEFERRED',
+    firstSeen: '2026-09-24T12:00:00Z',
+    lastSeen: '2026-09-24T12:00:00Z',
+    evidence: [{ ts: '2026-09-24T12:00:00Z', status: 'DEFERRED' }],
+  };
+  const resOrderPD = readDiscoveryCatalogue({ evidence: [evPass, evDeferred] }).get(key);
+  const resOrderDP = readDiscoveryCatalogue({ evidence: [evDeferred, evPass] }).get(key);
+  assert.equal(
+    resOrderPD.resultState,
+    'DEFERRED',
+    'DEFERRED takes precedence over PASS at equal timestamp'
+  );
+  assert.equal(resOrderDP.resultState, 'DEFERRED', 'Order must not change equal-timestamp outcome');
+  assert.equal(resOrderPD.alive, false);
+  assert.equal(resOrderDP.alive, false);
+
+  // Equal-timestamp state conflict: PASS vs FAIL sharing same timestamp
+  const evFail = {
+    key,
+    attempts: 1,
+    failures: [
+      { ts: '2026-09-24T12:00:00Z', status: 'FAIL', errorClass: 'timeout', reason: 'timeout' },
+    ],
+    resultState: 'FAIL',
+    firstSeen: '2026-09-24T12:00:00Z',
+    lastSeen: '2026-09-24T12:00:00Z',
+    evidence: [
+      { ts: '2026-09-24T12:00:00Z', status: 'FAIL', errorClass: 'timeout', reason: 'timeout' },
+    ],
+  };
+  const resOrderPF = readDiscoveryCatalogue({ evidence: [evPass, evFail] }).get(key);
+  const resOrderFP = readDiscoveryCatalogue({ evidence: [evFail, evPass] }).get(key);
+  assert.equal(
+    resOrderPF.resultState,
+    'FAIL',
+    'FAIL takes precedence over PASS at equal timestamp'
+  );
+  assert.equal(resOrderFP.resultState, 'FAIL', 'Order must not change equal-timestamp outcome');
+  assert.equal(resOrderPF.alive, false);
+  assert.equal(resOrderFP.alive, false);
 });
 
 test('regression 6: duplicate evidence does not lose data', () => {
@@ -1351,6 +1409,67 @@ test('regression 6: duplicate evidence does not lose data', () => {
   assert.equal(cand.firstSeen, '2026-09-24T09:00:00Z');
   assert.equal(cand.lastSeen, '2026-09-24T12:00:00Z');
   assert.equal(cand.alive, false);
+
+  // Two distinct failure events with the SAME timestamp, status, and reason,
+  // but differing in errorClass: BOTH must survive!
+  const evClassA = {
+    key,
+    attempts: 1,
+    failures: [
+      { ts: '2026-09-24T10:00:00Z', status: 'FAIL', errorClass: 'timeout', reason: 'failed' },
+    ],
+    evidence: [
+      { ts: '2026-09-24T10:00:00Z', status: 'FAIL', errorClass: 'timeout', reason: 'failed' },
+    ],
+    resultState: 'FAIL',
+  };
+  const evClassB = {
+    key,
+    attempts: 1,
+    failures: [
+      { ts: '2026-09-24T10:00:00Z', status: 'FAIL', errorClass: 'rate_limited', reason: 'failed' },
+    ],
+    evidence: [
+      { ts: '2026-09-24T10:00:00Z', status: 'FAIL', errorClass: 'rate_limited', reason: 'failed' },
+    ],
+    resultState: 'FAIL',
+  };
+  const catClasses = readDiscoveryCatalogue({ evidence: [evClassA, evClassB] });
+  const candClasses = catClasses.get(key);
+  assert.equal(
+    candClasses.failures.length,
+    2,
+    'two distinct failures differing by errorClass must both survive'
+  );
+  assert.equal(
+    candClasses.evidence.length,
+    2,
+    'two distinct evidence records differing by errorClass must both survive'
+  );
+
+  // Two distinct events with SAME timestamp, status, and reason,
+  // but differing in latencyMs: BOTH must survive!
+  const evLatA = {
+    key,
+    attempts: 1,
+    passes: 1,
+    evidence: [{ ts: '2026-09-24T11:00:00Z', status: 'PASS', reason: 'ok', latencyMs: 120 }],
+    resultState: 'PASS',
+  };
+  const evLatB = {
+    key,
+    attempts: 1,
+    passes: 1,
+    evidence: [{ ts: '2026-09-24T11:00:00Z', status: 'PASS', reason: 'ok', latencyMs: 450 }],
+    resultState: 'PASS',
+  };
+  const catLat = readDiscoveryCatalogue({ evidence: [evLatA, evLatB] });
+  const candLat = catLat.get(key);
+  assert.equal(
+    candLat.evidence.length,
+    2,
+    'two distinct evidence records differing by latencyMs must both survive'
+  );
 });
 
 test('regression 7: HTTP 400 and 401 keep their true status and cause', async () => {
@@ -1379,6 +1498,28 @@ test('regression 7: HTTP 400 and 401 keep their true status and cause', async ()
   const probe2 = res2.sources[0].probes[0];
   assert.equal(probe2.status, 'FAIL');
   assert.equal(probe2.httpStatus, 401);
+
+  // Non-HTTP process failure: exitCode: 1, error: 'spawn failed', no HTTP status
+  const nonHttpRow = {
+    timestamp: '2026-09-24T12:00:00Z',
+    sourceId: 'local-proc',
+    probeName: 'spawn-test',
+    status: 'ALIVE',
+    exitCode: 1,
+    error: 'spawn failed: binary not found',
+  };
+  const file3 = makeTempFile(JSON.stringify(nonHttpRow));
+  const res3 = await importOuter(file3);
+  const probe3 = res3.sources[0].probes[0];
+  assert.equal(probe3.status, 'FAIL');
+  assert.equal(
+    probe3.httpStatus,
+    undefined,
+    'must NOT fabricate HTTP 400 on non-HTTP process failure'
+  );
+  assert.equal('httpStatus' in probe3, false, 'httpStatus property must be absent');
+  assert.equal(probe3.exitCode, 1);
+  assert.equal(probe3.error, 'spawn failed: binary not found');
 });
 
 test('regression 8: PROBE_INVALID is treated the same by every importer', async () => {
@@ -1425,7 +1566,7 @@ test('regression 8: PROBE_INVALID is treated the same by every importer', async 
   assert.equal(outerRes.sources[0].probes[0].tier, 'PROBE_INVALID');
 });
 
-test('regression 9: running the import twice gives the same store', async () => {
+test('regression 9: running the import twice from persisted filesystem files gives the same store', async () => {
   const row = {
     timestamp: '2026-09-24T12:00:00Z',
     harness: 'http',
@@ -1435,17 +1576,33 @@ test('regression 9: running the import twice gives the same store', async () => 
     model: 'gh/idempotent-model',
     status: 'PASS',
   };
-  const file = makeTempFile(JSON.stringify(row));
+  const srcFile = makeTempFile(JSON.stringify(row));
+  const entry = await importCheckpoint(srcFile, { prefixes: [] });
 
-  const entry1 = await importCheckpoint(file, { prefixes: [] });
-  const entry2 = await importCheckpoint(file, { prefixes: [] });
-  assert.deepEqual(entry1.candidates, entry2.candidates, 'importCheckpoint must be deterministic');
+  // Create temporary imports directory to test real filesystem discovery
+  const tempImportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-imports-'));
+  const file1 = path.join(tempImportsDir, 'checkpoint-20260924T120000.json');
+  const file2 = path.join(tempImportsDir, 'checkpoint-20260924T120001.json');
 
-  const catOnce = readDiscoveryCatalogue({ imports: [entry1] });
-  const catTwice = readDiscoveryCatalogue({ imports: [entry1, entry2] });
+  // Persist first import file on disk
+  fs.writeFileSync(file1, JSON.stringify(entry), 'utf8');
 
+  // Read once through real filesystem path (no in-memory imports passed)
+  const catOnce = readDiscoveryCatalogue({ importsDir: tempImportsDir });
   const candOnce = catOnce.candidates.find((c) => c.modelId === 'gh/idempotent-model');
+  assert.ok(candOnce, 'candidate must exist from first persisted import file');
+  assert.equal(candOnce.passes, 1);
+  assert.equal(candOnce.attempts, 1);
+  assert.equal(candOnce.resultState, 'PASS');
+  assert.equal(candOnce.alive, true);
+
+  // Persist second import file with same importedFrom on disk
+  fs.writeFileSync(file2, JSON.stringify(entry), 'utf8');
+
+  // Read twice through real filesystem path (exercising filesystem readdir, sorting, deduplication)
+  const catTwice = readDiscoveryCatalogue({ importsDir: tempImportsDir });
   const candTwice = catTwice.candidates.find((c) => c.modelId === 'gh/idempotent-model');
+  assert.ok(candTwice, 'candidate must exist after second persisted import file');
 
   assert.equal(candOnce.passes, candTwice.passes);
   assert.equal(candOnce.attempts, candTwice.attempts);
@@ -1453,8 +1610,212 @@ test('regression 9: running the import twice gives the same store', async () => 
   assert.equal(candOnce.alive, candTwice.alive);
   assert.equal(catOnce.candidates.length, catTwice.candidates.length);
   assert.equal(catOnce.byKey.size, catTwice.byKey.size);
+
+  // Clean up
+  try {
+    fs.rmSync(tempImportsDir, { recursive: true, force: true });
+  } catch (_) {}
 });
 
-test('regression 10: the format gate passes', () => {
-  assert.ok(true);
+test('regression 10: discovery source and test files pass prettier format check', async () => {
+  const prettier = require('prettier');
+  const files = [
+    'tools/ai-brain/discovery.js',
+    'tools/ai-brain/discovery/adapters.js',
+    'tools/ai-brain/discovery/http.js',
+    'tools/ai-brain/discovery/identity.js',
+    'tools/ai-brain/discovery/import.js',
+    'tools/ai-brain/discovery/read.js',
+    'tools/ai-brain/discovery/reconcile.js',
+    'tools/ai-brain/discovery/snapshot.js',
+    'tools/ai-brain/discovery/spawn.js',
+    'tools/ai-brain/discovery/store.js',
+    'tools/ai-brain/test/discovery.test.js',
+    'tools/ai-brain/test/discovery-spawn.test.js',
+  ];
+  const rootDir = path.resolve(__dirname, '..', '..', '..');
+  for (const rel of files) {
+    const full = path.join(rootDir, rel);
+    assert.ok(fs.existsSync(full), `File ${rel} must exist`);
+    const content = fs.readFileSync(full, 'utf8');
+    const options = (await prettier.resolveConfig(full)) || {};
+    const formatted = await prettier.check(content, {
+      ...options,
+      filepath: full,
+      endOfLine: 'auto',
+    });
+    assert.strictEqual(formatted, true, `File ${rel} must be formatted according to prettier`);
+  }
+});
+
+// =========================================================================
+// NEW P2 REGRESSION TESTS (Explicit findings verification)
+// =========================================================================
+
+test('regression new: two events with the same timestamp in reversed order give the same result', () => {
+  const key = 'http\u241f9router\u241f9router\u241fcombo\u241f\u241f\u241fmodel-rev-order';
+  const evPass = {
+    key,
+    attempts: 1,
+    passes: 1,
+    resultState: 'PASS',
+    evidence: [{ ts: '2026-09-24T12:00:00Z', status: 'PASS', reason: 'ok' }],
+  };
+  const evDeferred = {
+    key,
+    attempts: 1,
+    deferred: 1,
+    resultState: 'DEFERRED',
+    evidence: [{ ts: '2026-09-24T12:00:00Z', status: 'DEFERRED', reason: 'deferred' }],
+  };
+
+  const resPD = readDiscoveryCatalogue({ evidence: [evPass, evDeferred] }).get(key);
+  const resDP = readDiscoveryCatalogue({ evidence: [evDeferred, evPass] }).get(key);
+
+  assert.strictEqual(
+    resPD.resultState,
+    resDP.resultState,
+    'resultState must be identical regardless of input order'
+  );
+  assert.strictEqual(resPD.alive, resDP.alive, 'alive must be identical regardless of input order');
+  assert.strictEqual(
+    resPD.resultState,
+    'DEFERRED',
+    'fail-closed precedence selects DEFERRED over PASS'
+  );
+  assert.strictEqual(resPD.alive, false);
+});
+
+test('regression new: two different pieces of evidence are not deduplicated', () => {
+  const key = 'http\u241f9router\u241f9router\u241fcombo\u241f\u241f\u241fmodel-distinct-ev';
+  const ev1 = {
+    key,
+    attempts: 1,
+    failures: [
+      { ts: '2026-09-24T12:00:00Z', status: 'FAIL', errorClass: 'timeout', reason: 'failed' },
+    ],
+    evidence: [
+      { ts: '2026-09-24T12:00:00Z', status: 'FAIL', errorClass: 'timeout', reason: 'failed' },
+    ],
+  };
+  const ev2 = {
+    key,
+    attempts: 1,
+    failures: [
+      { ts: '2026-09-24T12:00:00Z', status: 'FAIL', errorClass: 'rate_limited', reason: 'failed' },
+    ],
+    evidence: [
+      { ts: '2026-09-24T12:00:00Z', status: 'FAIL', errorClass: 'rate_limited', reason: 'failed' },
+    ],
+  };
+
+  const cat = readDiscoveryCatalogue({ evidence: [ev1, ev2] });
+  const cand = cat.get(key);
+
+  assert.strictEqual(
+    cand.failures.length,
+    2,
+    'two distinct failures differing by errorClass must both survive'
+  );
+  assert.strictEqual(
+    cand.evidence.length,
+    2,
+    'two distinct evidence records differing by errorClass must both survive'
+  );
+});
+
+test('regression new: a process failure has no httpStatus', async () => {
+  const row = {
+    timestamp: '2026-09-24T12:00:00Z',
+    sourceId: 'local-proc',
+    probeName: 'spawn-test',
+    status: 'ALIVE',
+    exitCode: 1,
+    error: 'spawn failed: binary not found',
+  };
+  const file = makeTempFile(JSON.stringify(row));
+  const res = await importOuter(file);
+  const probe = res.sources[0].probes[0];
+
+  assert.strictEqual(probe.status, 'FAIL', 'process failure must be classified as FAIL');
+  assert.strictEqual(
+    probe.httpStatus,
+    undefined,
+    'must NOT fabricate HTTP 400 on non-HTTP process failure'
+  );
+  assert.strictEqual('httpStatus' in probe, false, 'httpStatus property must be absent');
+  assert.strictEqual(probe.exitCode, 1, 'exitCode must be preserved separately');
+  assert.strictEqual(
+    probe.error,
+    'spawn failed: binary not found',
+    'process error must be preserved'
+  );
+});
+
+test('regression new: importing twice does not duplicate data', async () => {
+  const row = {
+    timestamp: '2026-09-24T12:00:00Z',
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    model: 'gh/idempotent-model-new',
+    status: 'PASS',
+  };
+  const srcFile = makeTempFile(JSON.stringify(row));
+  const entry = await importCheckpoint(srcFile, { prefixes: [] });
+
+  // Store behaviour via persisted filesystem import directory
+  const tempImportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-imports-new-'));
+  try {
+    const file1 = path.join(tempImportsDir, 'checkpoint-20260924T120000.json');
+    const file2 = path.join(tempImportsDir, 'checkpoint-20260924T120001.json');
+
+    fs.writeFileSync(file1, JSON.stringify(entry), 'utf8');
+    const catOnce = readDiscoveryCatalogue({ importsDir: tempImportsDir });
+    const candOnce = catOnce.candidates.find((c) => c.modelId === 'gh/idempotent-model-new');
+    assert.ok(candOnce);
+    assert.strictEqual(candOnce.passes, 1);
+    assert.strictEqual(candOnce.attempts, 1);
+    assert.strictEqual(candOnce.evidence.length, 1);
+
+    // Persist second file with same import content
+    fs.writeFileSync(file2, JSON.stringify(entry), 'utf8');
+    const catTwice = readDiscoveryCatalogue({ importsDir: tempImportsDir });
+    const candTwice = catTwice.candidates.find((c) => c.modelId === 'gh/idempotent-model-new');
+    assert.ok(candTwice);
+    assert.strictEqual(candTwice.passes, 1, 'passes must not double on second import file');
+    assert.strictEqual(candTwice.attempts, 1, 'attempts must not double on second import file');
+    assert.strictEqual(
+      candTwice.evidence.length,
+      1,
+      'evidence must not double on second import file'
+    );
+  } finally {
+    try {
+      fs.rmSync(tempImportsDir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+
+  // Store behaviour via candidate evidence imported twice
+  const ev = {
+    key: 'http\u241f9router\u241f9router\u241fgh\u241f\u241f\u241fgh/idempotent-ev-new',
+    attempts: 1,
+    passes: 1,
+    resultState: 'PASS',
+    evidence: [{ ts: '2026-09-24T12:00:00Z', status: 'PASS', reason: 'ok' }],
+  };
+  const catDirectTwice = readDiscoveryCatalogue({ evidence: [ev, ev] });
+  const candDirect = catDirectTwice.get(ev.key);
+  assert.strictEqual(candDirect.passes, 1, 'passes must not double on duplicate evidence import');
+  assert.strictEqual(
+    candDirect.attempts,
+    1,
+    'attempts must not double on duplicate evidence import'
+  );
+  assert.strictEqual(
+    candDirect.evidence.length,
+    1,
+    'evidence array must not duplicate identical event'
+  );
 });

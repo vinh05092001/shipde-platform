@@ -70,6 +70,98 @@ const { readCatalogue, currentState } = require('./store');
 
 const DEFAULT_DATA_DIR = path.join(__dirname, '..', 'data', 'discovery');
 
+const STATUS_RANK = {
+  UNTESTED: 0,
+  PASS: 1,
+  ALIVE: 1,
+  DEFERRED: 2,
+  FAIL: 3,
+};
+
+function statusRank(s) {
+  const norm = String(s || '').toUpperCase();
+  return STATUS_RANK[norm] !== undefined ? STATUS_RANK[norm] : -1;
+}
+
+/**
+ * Canonical evidence signature string for deduplication and total ordering.
+ * Captures all distinguishing attributes: timestamp, status, reason, errorClass,
+ * httpStatus, latencyMs, exitCode, source, route, probe, and identification fields.
+ */
+function canonicalEvidenceSignature(e) {
+  if (!e || typeof e !== 'object') return String(e || '');
+  return JSON.stringify({
+    ts: e.ts || e.timestamp || '',
+    status: String(e.status || '').toUpperCase(),
+    reason: e.reason || '',
+    errorClass: e.errorClass || '',
+    httpStatus: e.httpStatus !== undefined && e.httpStatus !== null ? e.httpStatus : '',
+    latencyMs: e.latencyMs !== undefined && e.latencyMs !== null ? e.latencyMs : '',
+    exitCode: e.exitCode !== undefined && e.exitCode !== null ? e.exitCode : '',
+    source: e.source || e.sourceId || '',
+    route: e.route || '',
+    levelName: e.levelName || '',
+    probeName: e.probeName || '',
+    error: e.error || '',
+    eventId: e.eventId || e.id || '',
+    sequence: e.sequence !== undefined ? e.sequence : e.seq !== undefined ? e.seq : '',
+  });
+}
+
+/**
+ * TOTAL ordering comparator for evidence events.
+ * Explicit precedence:
+ * 1. Timestamp (ts) ascending
+ * 2. Sequence (sequence/seq) ascending
+ * 3. Event ID (eventId/id) ascending
+ * 4. Source (source/sourceId) ascending
+ * 5. Status rank (UNTESTED: 0 < PASS: 1 < DEFERRED: 2 < FAIL: 3)
+ * 6. Canonical signature string comparison (deterministic fallback)
+ */
+function compareEvidenceTotalOrder(a, b) {
+  const ta = a.ts || a.timestamp || '';
+  const tb = b.ts || b.timestamp || '';
+  const c = ta.localeCompare(tb);
+  if (c !== 0) return c;
+
+  const seqA = Number(a.sequence !== undefined ? a.sequence : a.seq !== undefined ? a.seq : 0);
+  const seqB = Number(b.sequence !== undefined ? b.sequence : b.seq !== undefined ? b.seq : 0);
+  if (seqA !== seqB) return seqA - seqB;
+
+  const idA = String(a.eventId || a.id || '');
+  const idB = String(b.eventId || b.id || '');
+  const idCmp = idA.localeCompare(idB);
+  if (idCmp !== 0) return idCmp;
+
+  const srcA = String(a.source || a.sourceId || '');
+  const srcB = String(b.source || b.sourceId || '');
+  const srcCmp = srcA.localeCompare(srcB);
+  if (srcCmp !== 0) return srcCmp;
+
+  const s = statusRank(a.status) - statusRank(b.status);
+  if (s !== 0) return s;
+
+  return canonicalEvidenceSignature(a).localeCompare(canonicalEvidenceSignature(b));
+}
+
+/**
+ * Candidate summary signature to ensure idempotent ingestion across duplicate imports.
+ */
+function candidateSummarySignature(c) {
+  if (!c || typeof c !== 'object') return '';
+  return JSON.stringify({
+    key: c.key || '',
+    firstSeen: c.firstSeen || '',
+    lastSeen: c.lastSeen || '',
+    passes: c.passes !== undefined ? c.passes : '',
+    attempts: c.attempts !== undefined ? c.attempts : '',
+    deferred: c.deferred !== undefined ? c.deferred : '',
+    resultState: c.resultState || '',
+    failures: Array.isArray(c.failures) ? c.failures.map(canonicalEvidenceSignature) : [],
+    evidence: Array.isArray(c.evidence) ? c.evidence.map(canonicalEvidenceSignature) : [],
+  });
+}
+
 /**
  * Normalise a candidate record to ensure full 7-part identity.
  */
@@ -180,6 +272,8 @@ function readDiscoveryCatalogue(opts) {
           (c.deferred || 0) +
           (c.probeInvalid || 0);
 
+    const candSig = candidateSummarySignature(c);
+
     if (!existing) {
       evidenceByKey.set(key, {
         ...c,
@@ -199,6 +293,7 @@ function readDiscoveryCatalogue(opts) {
         evidence: Array.isArray(c.evidence) ? [...c.evidence] : [],
         firstSeen: c.firstSeen || null,
         lastSeen: c.lastSeen || null,
+        seenSummaries: new Set([candSig]),
         _snapshots: [
           {
             passes: c.passes || 0,
@@ -212,6 +307,14 @@ function readDiscoveryCatalogue(opts) {
         ],
       });
     } else {
+      if (existing.seenSummaries && existing.seenSummaries.has(candSig)) {
+        // True duplicate candidate summary imported a second time is idempotent
+        return;
+      }
+      if (existing.seenSummaries) {
+        existing.seenSummaries.add(candSig);
+      }
+
       existing.passes = (existing.passes || 0) + (c.passes || 0);
       existing.deferred = (existing.deferred || 0) + (c.deferred || 0);
       existing.probeInvalid = (existing.probeInvalid || 0) + (c.probeInvalid || 0);
@@ -226,13 +329,9 @@ function readDiscoveryCatalogue(opts) {
       }
 
       if (Array.isArray(c.failures)) {
-        const seenFailures = new Set(
-          existing.failures.map(
-            (f) => `${f.ts || ''}::${f.status || ''}::${f.errorClass || ''}::${f.reason || ''}`
-          )
-        );
+        const seenFailures = new Set(existing.failures.map(canonicalEvidenceSignature));
         for (const f of c.failures) {
-          const sig = `${f.ts || ''}::${f.status || ''}::${f.errorClass || ''}::${f.reason || ''}`;
+          const sig = canonicalEvidenceSignature(f);
           if (!seenFailures.has(sig)) {
             seenFailures.add(sig);
             existing.failures.push(f);
@@ -241,11 +340,9 @@ function readDiscoveryCatalogue(opts) {
       }
 
       if (Array.isArray(c.evidence)) {
-        const seenEvidence = new Set(
-          existing.evidence.map((e) => `${e.ts || ''}::${e.status || ''}::${e.reason || ''}`)
-        );
+        const seenEvidence = new Set(existing.evidence.map(canonicalEvidenceSignature));
         for (const e of c.evidence) {
-          const sig = `${e.ts || ''}::${e.status || ''}::${e.reason || ''}`;
+          const sig = canonicalEvidenceSignature(e);
           if (!seenEvidence.has(sig)) {
             seenEvidence.add(sig);
             existing.evidence.push(e);
@@ -333,11 +430,16 @@ function readDiscoveryCatalogue(opts) {
 
     const sortedEvidence = [...evidenceList]
       .filter((e) => e && e.status)
-      .sort((a, b) => {
-        const ta = a.ts || '';
-        const tb = b.ts || '';
-        return ta.localeCompare(tb);
-      });
+      .sort(compareEvidenceTotalOrder);
+
+    const sortedFailures = [...failures].sort(compareEvidenceTotalOrder);
+
+    for (const e of sortedEvidence) {
+      if (e.ts) {
+        if (!firstSeen || e.ts < firstSeen) firstSeen = e.ts;
+        if (!lastSeen || e.ts > lastSeen) lastSeen = e.ts;
+      }
+    }
 
     let resultState = 'UNTESTED';
 
@@ -359,7 +461,9 @@ function readDiscoveryCatalogue(opts) {
         validSnapshots.sort((a, b) => {
           const ta = a.lastSeen || a.firstSeen || '';
           const tb = b.lastSeen || b.firstSeen || '';
-          return ta.localeCompare(tb);
+          const c = ta.localeCompare(tb);
+          if (c !== 0) return c;
+          return statusRank(a.resultState) - statusRank(b.resultState);
         });
         const latestSnap = validSnapshots[validSnapshots.length - 1];
         const s = String(latestSnap.resultState).toUpperCase();
@@ -399,10 +503,10 @@ function readDiscoveryCatalogue(opts) {
 
     return {
       passes,
-      failures,
+      failures: sortedFailures,
       deferred,
       probeInvalid,
-      evidence: evidenceList,
+      evidence: sortedEvidence,
       firstSeen,
       lastSeen,
       attempts,

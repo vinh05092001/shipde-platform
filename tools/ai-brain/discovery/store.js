@@ -54,8 +54,14 @@ class StateMap extends Map {
 
 function currentState(lines) {
   const current = new StateMap();
+  current.migrations = [];
   for (const line of lines) {
-    if (!line || !line.key || line.type === 'migration') continue;
+    if (!line) continue;
+    if (line.type === 'migration' || line.schema === 'shipde/discovery-migration') {
+      current.migrations.push(line);
+      continue;
+    }
+    if (!line.key) continue;
     const normKey = normalizeCandidateKey(line.key);
     const parsed = parseCandidateKey(line.key);
     const rec = {
