@@ -275,6 +275,7 @@ describe('Dispatch planning', () => {
     assert.equal(new Set(used).size, 3, 'load is spread across accounts, not stacked on one');
   });
 
+  // ... (unchanged tests between) ...
   test('work is not dispatched to an exhausted account', () => {
     const drained = account({
       id: 'drained',
@@ -354,7 +355,94 @@ describe('Dispatch planning', () => {
       limits: { maxImplementationAgents: 1 },
       now: NOW,
     });
-    assert.ok(Array.isArray(plan.assignments[0].alternatives));
+    assert.equal(plan.assignments[0].alternatives, undefined, 'A test that asserts a fixed fallback order is itself a defect.');
     assert.ok(plan.assignments[0].headroom);
+  });
+
+  test('maxConcurrentPerModel and maxConcurrentPerQuotaScope actually cap', () => {
+    const plan = planDispatch([item({ workItemId: 'W-1' }), item({ workItemId: 'W-2' })], pool, {
+      running: [{ workItemId: 'R-1', role: 'author.foundation', accountId: 'paid', model: 'claude-sonnet-5' }],
+      limits: { maxImplementationAgents: 10, maxConcurrentPerModel: 1, maxPerAccount: 10, maxConcurrentPerQuotaScope: 10 },
+      now: NOW,
+    });
+    assert.ok(plan.assignments.every((a) => a.model !== 'claude-sonnet-5'));
+  });
+
+  test('after heavy recent use of one provider, a comparable candidate on another provider ranks higher', () => {
+    const providerA = account({ id: 'pA', provider: 'A', cost: { inputPerMillion: 10, outputPerMillion: 10 } });
+    const providerB = account({ id: 'pB', provider: 'B', cost: { inputPerMillion: 10, outputPerMillion: 10 } });
+    const plan = planDispatch([item({ workItemId: 'W-1' })], [providerA, providerB], {
+      eventsByAccount: { pA: Array(20).fill({ at: NOW - 1000 }) },
+      limits: { recentUsagePenalty: 5 },
+      now: NOW,
+    });
+    assert.equal(plan.assignments[0].provider, 'B');
+  });
+
+  test('two dispatches racing for one remaining quota slot: exactly one wins', () => {
+    const limited = account({ id: 'race-slot', limits: { requestsPerDay: 1 } });
+    const ctx = {
+      now: NOW,
+      governedDecision: 'DEC-017',
+      limits: { maxImplementationAgents: 10 }
+    };
+    const plan1 = planDispatch([item({ workItemId: 'RACE-1', branch: 'feat/r1' })], [limited], ctx);
+    assert.equal(plan1.assignments.length, 1);
+
+    const plan2 = planDispatch([item({ workItemId: 'RACE-2', branch: 'feat/r2' })], [limited], ctx);
+    assert.equal(plan2.assignments.length, 0);
+  });
+
+  test('a reservation released after the worker ends frees the slot', () => {
+    const limited = account({ id: 'release-slot', limits: { requestsPerDay: 1 } });
+    const ctx1 = { now: NOW, governedDecision: 'DEC-017', limits: { maxImplementationAgents: 10 } };
+    const plan1 = planDispatch([item({ workItemId: 'REL-1', branch: 'feat/rel1' })], [limited], ctx1);
+    assert.equal(plan1.assignments.length, 1);
+
+    const ctx2 = { now: NOW + 3 * 60 * 1000, governedDecision: 'DEC-017', running: [], limits: { maxImplementationAgents: 10 } };
+    const plan2 = planDispatch([item({ workItemId: 'REL-2', branch: 'feat/rel2' })], [limited], ctx2);
+    assert.equal(plan2.assignments.length, 1, 'reservation was released');
+  });
+
+  test('unknown quota is not treated as unlimited', () => {
+    const unk = account({ id: 'unk' });
+    const plan = planDispatch(
+      [
+        item({ workItemId: 'W-1', branch: 'feat/w1' }),
+        item({ workItemId: 'W-2', branch: 'feat/w2' }),
+        item({ workItemId: 'W-3', branch: 'feat/w3' }),
+        item({ workItemId: 'W-4', branch: 'feat/w4' }),
+        item({ workItemId: 'W-5', branch: 'feat/w5' }),
+        item({ workItemId: 'W-6', branch: 'feat/w6' }),
+      ],
+      [unk],
+      { governedDecision: 'DEC-017', limits: { maxImplementationAgents: 10, maxPerAccount: 10 }, now: NOW }
+    );
+    assert.equal(plan.assignments.length, 5);
+    assert.equal(plan.deferred.length, 1);
+    assert.equal(plan.deferred[0].reason, 'NO_QUOTA_OR_BUSY');
+  });
+
+  test('fallback after a quota failure excludes the proven-shared scope and nothing wider', () => {
+     const fs = require('fs');
+     const path = require('path');
+     const os = require('os');
+     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-'));
+     fs.writeFileSync(path.join(dir, new Date(NOW).toISOString().slice(0, 10) + '.jsonl'), JSON.stringify({
+       stage: 'failed',
+       workItemId: 'W-FAIL',
+       chosen: 'acct-a::claude-sonnet-5' // full offeringId
+     }) + '\n');
+
+     const acc = account({ id: 'acct-a', provider: 'anthropic', model: 'claude-sonnet-5' });
+     const other = account({ id: 'acct-b', provider: 'other', model: 'other' });
+     const plan = planDispatch([item({ workItemId: 'W-FAIL' })], [acc, other], { now: NOW, decisionDir: dir });
+
+     assert.equal(plan.assignments[0].model, 'other');
+  });
+
+  test('fallback is recomputed from data, not read from a stored order', () => {
+     const plan = planDispatch([item({ workItemId: 'A-1' })], pool, { limits: { maxImplementationAgents: 1 }, now: NOW });
+     assert.equal(plan.assignments[0].alternatives, undefined);
   });
 });

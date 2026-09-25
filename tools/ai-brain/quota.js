@@ -40,11 +40,7 @@ function windowStart(now, window) {
   return now - WINDOW_MS[window];
 }
 
-/**
- * Consumption inside a window, from measured events.
- * `events` are {at, tokens, cost} — whatever the usage adapters produced.
- */
-function consumedIn(events, window, now) {
+function consumedIn(events, window, now, reservations) {
   const from = windowStart(now, window);
   let requests = 0;
   let tokens = 0;
@@ -55,6 +51,13 @@ function consumedIn(events, window, now) {
     requests += 1;
     tokens += e.tokens || 0;
     cost += e.cost || 0;
+  }
+  for (const r of reservations || []) {
+    const at = typeof r.at === 'number' ? r.at : Date.parse(r.at);
+    if (!Number.isFinite(at) || at < from) continue;
+    requests += 1; // Reservation counts as one request
+    tokens += r.tokens || 0;
+    cost += r.cost || 0;
   }
   return { requests, tokens, cost };
 }
@@ -96,9 +99,9 @@ function accountHeadroom(account, events, options) {
   let worst = null;
   let worstLabel = null;
 
-  const perMinute = consumedIn(events, 'minute', now);
-  const perDay = consumedIn(events, 'day', now);
-  const perMonth = consumedIn(events, 'month', now);
+  const perMinute = consumedIn(events, 'minute', now, opts.reservations);
+  const perDay = consumedIn(events, 'day', now, opts.reservations);
+  const perMonth = consumedIn(events, 'month', now, opts.reservations);
 
   const checks = [
     ['requestsPerMinute', perMinute.requests, limits.requestsPerMinute],
