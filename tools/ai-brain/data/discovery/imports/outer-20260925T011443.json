@@ -1,15 +1,16 @@
 {
   "evidenceKind": "outer-import",
-  "importedAt": "2026-09-25T01:14:43.754Z",
+  "importedAt": "2026-09-25T01:14:43.342Z",
   "importedFrom": "outer.jsonl",
   "totalRows": 56,
+  "reclassifiedFails": 1,
   "sources": [
     {
       "sourceId": "bai",
       "probes": [
         {
           "probeName": "balance",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 251,
           "httpStatus": 200,
@@ -28,7 +29,7 @@
         },
         {
           "probeName": "balance-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 75,
           "httpStatus": 200,
@@ -47,7 +48,7 @@
         },
         {
           "probeName": "cert-balance-1",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 307,
           "httpStatus": 200,
@@ -66,7 +67,7 @@
         },
         {
           "probeName": "cert-balance-1",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 353,
           "httpStatus": 200,
@@ -85,7 +86,7 @@
         },
         {
           "probeName": "cert-balance-1",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 283,
           "httpStatus": 200,
@@ -104,7 +105,7 @@
         },
         {
           "probeName": "cert-balance-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 187,
           "httpStatus": 200,
@@ -123,7 +124,7 @@
         },
         {
           "probeName": "cert-balance-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 171,
           "httpStatus": 200,
@@ -142,7 +143,7 @@
         },
         {
           "probeName": "cert-balance-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 170,
           "httpStatus": 200,
@@ -161,7 +162,7 @@
         },
         {
           "probeName": "cert-completion-1",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 1383,
           "httpStatus": 200,
@@ -180,7 +181,7 @@
         },
         {
           "probeName": "cert-completion-1",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 2422,
           "httpStatus": 200,
@@ -199,7 +200,7 @@
         },
         {
           "probeName": "cert-completion-1",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 1270,
           "httpStatus": 200,
@@ -218,7 +219,7 @@
         },
         {
           "probeName": "cert-completion-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 1243,
           "httpStatus": 200,
@@ -237,7 +238,7 @@
         },
         {
           "probeName": "cert-completion-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 1428,
           "httpStatus": 200,
@@ -256,7 +257,7 @@
         },
         {
           "probeName": "cert-completion-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 2400,
           "httpStatus": 200,
@@ -275,7 +276,7 @@
         },
         {
           "probeName": "cert-models-1",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 73,
           "httpStatus": 200,
@@ -294,7 +295,7 @@
         },
         {
           "probeName": "cert-models-1",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 79,
           "httpStatus": 200,
@@ -313,7 +314,7 @@
         },
         {
           "probeName": "cert-models-1",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 73,
           "httpStatus": 200,
@@ -332,7 +333,7 @@
         },
         {
           "probeName": "cert-models-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 166,
           "httpStatus": 200,
@@ -351,7 +352,7 @@
         },
         {
           "probeName": "cert-models-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 169,
           "httpStatus": 200,
@@ -370,7 +371,7 @@
         },
         {
           "probeName": "cert-models-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 165,
           "httpStatus": 200,
@@ -389,7 +390,7 @@
         },
         {
           "probeName": "completion-deepseek",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 1178,
           "httpStatus": 200,
@@ -408,7 +409,7 @@
         },
         {
           "probeName": "completion-deepseek-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 1113,
           "httpStatus": 200,
@@ -427,7 +428,7 @@
         },
         {
           "probeName": "models",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 66,
           "httpStatus": 200,
@@ -446,7 +447,7 @@
         },
         {
           "probeName": "models-2",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 67,
           "httpStatus": 200,
@@ -516,7 +517,7 @@
         },
         {
           "probeName": "models",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 13515,
           "httpStatus": 200,
@@ -539,7 +540,7 @@
         },
         {
           "probeName": "models",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 8196,
           "httpStatus": 200,
@@ -616,7 +617,7 @@
         },
         {
           "probeName": "models",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 686,
           "httpStatus": 200,
@@ -635,7 +636,7 @@
         },
         {
           "probeName": "models",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 708,
           "httpStatus": 200,
@@ -666,7 +667,7 @@
       "probes": [
         {
           "probeName": "help",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 163,
           "exitCode": 0,
@@ -683,7 +684,7 @@
         },
         {
           "probeName": "help",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 121,
           "exitCode": 0,
@@ -701,9 +702,10 @@
         },
         {
           "probeName": "prompt",
-          "status": "ALIVE",
-          "tier": "ALIVE",
+          "status": "FAIL",
+          "tier": "FAIL",
           "latencyMs": 4352,
+          "httpStatus": 401,
           "exitCode": 1,
           "error": "[API Error: 400 credit insufficient balance: balance=519 required=2256 (request id: 20260924123736301540134c955d568BfJwlTi6)]\n",
           "classification": {
@@ -736,7 +738,7 @@
         },
         {
           "probeName": "version",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 107,
           "exitCode": 0,
@@ -753,7 +755,7 @@
         },
         {
           "probeName": "version",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 81,
           "exitCode": 0,
@@ -776,7 +778,7 @@
       "probes": [
         {
           "probeName": "headless",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 6526,
           "exitCode": 0,
@@ -793,7 +795,7 @@
         },
         {
           "probeName": "headless",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 14643,
           "exitCode": 0,
@@ -811,7 +813,7 @@
         },
         {
           "probeName": "version",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 126,
           "exitCode": 0,
@@ -828,7 +830,7 @@
         },
         {
           "probeName": "version",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 105,
           "exitCode": 0,
@@ -876,7 +878,7 @@
         },
         {
           "probeName": "version",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 562,
           "exitCode": 0,
@@ -899,7 +901,7 @@
       "probes": [
         {
           "probeName": "bounded-task",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 14167,
           "exitCode": 0,
@@ -916,7 +918,7 @@
         },
         {
           "probeName": "bounded-task",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 14348,
           "exitCode": 0,
@@ -934,7 +936,7 @@
         },
         {
           "probeName": "version",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 113,
           "exitCode": 0,
@@ -951,7 +953,7 @@
         },
         {
           "probeName": "version",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 77,
           "exitCode": 0,
@@ -996,7 +998,7 @@
         },
         {
           "probeName": "version",
-          "status": "ALIVE",
+          "status": "PASS",
           "tier": "ALIVE",
           "latencyMs": 1883,
           "exitCode": 0,
@@ -1036,57 +1038,75 @@
   ],
   "summary": {
     "bai": {
-      "alive": 24,
+      "pass": 24,
       "fail": 0,
+      "deferred": 0,
       "untested": 0,
+      "alive": 24,
       "probes": 24
     },
     "xkiro": {
-      "alive": 2,
+      "pass": 2,
       "fail": 2,
+      "deferred": 0,
       "untested": 1,
+      "alive": 2,
       "probes": 5
     },
     "tencent": {
-      "alive": 2,
+      "pass": 2,
       "fail": 2,
+      "deferred": 0,
       "untested": 1,
+      "alive": 2,
       "probes": 5
     },
     "qwen": {
-      "alive": 5,
-      "fail": 1,
+      "pass": 4,
+      "fail": 2,
+      "deferred": 0,
       "untested": 0,
+      "alive": 4,
       "probes": 6
     },
     "dsh": {
-      "alive": 4,
+      "pass": 4,
       "fail": 0,
+      "deferred": 0,
       "untested": 0,
+      "alive": 4,
       "probes": 4
     },
     "hermes": {
-      "alive": 1,
+      "pass": 1,
       "fail": 1,
+      "deferred": 0,
       "untested": 1,
+      "alive": 1,
       "probes": 3
     },
     "autoclaw": {
-      "alive": 4,
+      "pass": 4,
       "fail": 0,
+      "deferred": 0,
       "untested": 0,
+      "alive": 4,
       "probes": 4
     },
     "cline": {
-      "alive": 1,
+      "pass": 1,
       "fail": 2,
+      "deferred": 0,
       "untested": 0,
+      "alive": 1,
       "probes": 3
     },
     "agy-pool": {
-      "alive": 0,
+      "pass": 0,
       "fail": 0,
+      "deferred": 0,
       "untested": 2,
+      "alive": 0,
       "probes": 2
     }
   },

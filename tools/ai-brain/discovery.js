@@ -35,6 +35,7 @@ const { reconcileRun } = require('./discovery/reconcile');
 const { readCatalogue, appendLine, STATES } = require('./discovery/store');
 const { importCheckpoint, importOuter } = require('./discovery/import');
 const { ADAPTERS, NOT_PERMITTED, RECALL, recall } = require('./discovery/adapters');
+const { readDiscoveryCatalogue } = require('./discovery/read');
 
 function loadRegistry() {
   return JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
@@ -275,13 +276,15 @@ async function main(argv) {
   throw new Error('usage: discovery.js run|import checkpoint|outer|status|adapters [--json]');
 }
 
-main(process.argv).then(
-  () => process.exit(0),
-  (e) => {
-    process.stderr.write(String((e && e.message) || e) + '\n');
-    process.exit(1);
-  }
-);
+if (require.main === module) {
+  main(process.argv).then(
+    () => process.exit(0),
+    (e) => {
+      process.stderr.write(String((e && e.message) || e) + '\n');
+      process.exit(1);
+    }
+  );
+}
 
 module.exports = {
   cmdRun,
@@ -291,4 +294,8 @@ module.exports = {
   enumerateRegistry,
   loadRegistry,
   classifyPresence,
+  readDiscoveryCatalogue,
+  readCatalogue: readDiscoveryCatalogue,
+  getCandidates: readDiscoveryCatalogue,
+  readCandidates: readDiscoveryCatalogue,
 };

@@ -10,21 +10,22 @@
   "failuresByClass": {
     "unknown": 46,
     "model_not_found": 9,
-    "quota_exhausted": 68,
+    "quota_exhausted": 67,
     "unauthorized": 8,
     "not_licensed": 18,
     "invalid_request": 6
   },
-  "failureTotal": 155,
+  "failureTotal": 154,
   "candidateCount": 54,
   "candidates": [
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.8-flash-high",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.8-flash-high",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.8-flash-high",
       "base": "ag/gemini-3.8-flash-high",
       "firstSeen": "2026-09-24T09:32:27.789Z",
@@ -41,15 +42,17 @@
           "latencyMs": 2851
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟alims-intl␟␟alims-intl/qwen3.5-plus",
+      "key": "http␟9router␟9router␟alims-intl␟␟␟alims-intl/qwen3.5-plus",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "alims-intl",
       "account": "",
+      "quotaScope": "",
       "modelId": "alims-intl/qwen3.5-plus",
       "base": "alims-intl/qwen3.5-plus",
       "firstSeen": "2026-09-24T09:32:29.846Z",
@@ -130,15 +133,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟bpm␟␟bpm/seed-2-0-pro-260328",
+      "key": "http␟9router␟9router␟bpm␟␟␟bpm/seed-2-0-pro-260328",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "bpm",
       "account": "",
+      "quotaScope": "",
       "modelId": "bpm/seed-2-0-pro-260328",
       "base": "bpm/seed-2-0-pro-260328",
       "firstSeen": "2026-09-24T09:32:31.895Z",
@@ -219,15 +224,17 @@
           "errorClass": "unauthorized"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟cbai␟␟cbai/glm-5.2",
+      "key": "http␟9router␟9router␟cbai␟␟␟cbai/glm-5.2",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "cbai",
       "account": "",
+      "quotaScope": "",
       "modelId": "cbai/glm-5.2",
       "base": "cbai/glm-5.2",
       "firstSeen": "2026-09-24T09:32:33.942Z",
@@ -308,15 +315,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟cc␟␟cc/claude-opus-5-5",
+      "key": "http␟9router␟9router␟cc␟␟␟cc/claude-opus-5-5",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "cc",
       "account": "",
+      "quotaScope": "",
       "modelId": "cc/claude-opus-5-5",
       "base": "cc/claude-opus-5-5",
       "firstSeen": "2026-09-24T09:32:35.988Z",
@@ -397,15 +406,17 @@
           "errorClass": "not_licensed"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟cerebras␟␟cerebras/gpt-oss-120b",
+      "key": "http␟9router␟9router␟cerebras␟␟␟cerebras/gpt-oss-120b",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "cerebras",
       "account": "",
+      "quotaScope": "",
       "modelId": "cerebras/gpt-oss-120b",
       "base": "cerebras/gpt-oss-120b",
       "firstSeen": "2026-09-24T09:32:38.034Z",
@@ -486,15 +497,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟cf␟␟cf/@cf/meta/llama-3.2-1b-instruct",
+      "key": "http␟9router␟9router␟cf␟␟␟cf/@cf/meta/llama-3.2-1b-instruct",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "cf",
       "account": "",
+      "quotaScope": "",
       "modelId": "cf/@cf/meta/llama-3.2-1b-instruct",
       "base": "cf/@cf/meta/llama-3.2-1b-instruct",
       "firstSeen": "2026-09-24T09:32:40.066Z",
@@ -575,15 +588,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟cl␟␟cl/fireworks/ember-1",
+      "key": "http␟9router␟9router␟cl␟␟␟cl/fireworks/ember-1",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "cl",
       "account": "",
+      "quotaScope": "",
       "modelId": "cl/fireworks/ember-1",
       "base": "cl/fireworks/ember-1",
       "firstSeen": "2026-09-24T09:32:42.103Z",
@@ -664,15 +679,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟combo␟␟vinh",
+      "key": "http␟9router␟9router␟combo␟␟␟vinh",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "combo",
       "account": "",
+      "quotaScope": "",
       "modelId": "vinh",
       "base": "vinh",
       "firstSeen": "2026-09-24T09:32:44.153Z",
@@ -689,15 +706,17 @@
           "latencyMs": 5958
         }
       ],
-      "probeInvalid": 3
+      "probeInvalid": 3,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟gcli␟␟gcli/grok-4.7",
+      "key": "http␟9router␟9router␟gcli␟␟␟gcli/grok-4.7",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "gcli",
       "account": "",
+      "quotaScope": "",
       "modelId": "gcli/grok-4.7",
       "base": "gcli/grok-4.7",
       "firstSeen": "2026-09-24T09:32:46.199Z",
@@ -757,15 +776,17 @@
           "latencyMs": 31076
         }
       ],
-      "probeInvalid": 8
+      "probeInvalid": 8,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟gh␟␟gh/copilot-search-a",
+      "key": "http␟9router␟9router␟gh␟␟␟gh/copilot-search-a",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "gh",
       "account": "",
+      "quotaScope": "",
       "modelId": "gh/copilot-search-a",
       "base": "gh/copilot-search-a",
       "firstSeen": "2026-09-24T09:32:48.248Z",
@@ -782,15 +803,17 @@
           "latencyMs": 972
         }
       ],
-      "probeInvalid": 3
+      "probeInvalid": 3,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟groq␟␟groq/llama-3.3-70b-versatile",
+      "key": "http␟9router␟9router␟groq␟␟␟groq/llama-3.3-70b-versatile",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "groq",
       "account": "",
+      "quotaScope": "",
       "modelId": "groq/llama-3.3-70b-versatile",
       "base": "groq/llama-3.3-70b-versatile",
       "firstSeen": "2026-09-24T09:32:50.301Z",
@@ -871,15 +894,17 @@
           "errorClass": "model_not_found"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟kc␟␟kc/anthropic/claude-sonnet-4-20250514",
+      "key": "http␟9router␟9router␟kc␟␟␟kc/anthropic/claude-sonnet-4-20250514",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kc",
       "account": "",
+      "quotaScope": "",
       "modelId": "kc/anthropic/claude-sonnet-4-20250514",
       "base": "kc/anthropic/claude-sonnet-4-20250514",
       "firstSeen": "2026-09-24T09:32:52.355Z",
@@ -960,15 +985,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟kgw␟␟kgw/kilo-auto/free",
+      "key": "http␟9router␟9router␟kgw␟␟␟kgw/kilo-auto/free",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kgw",
       "account": "",
+      "quotaScope": "",
       "modelId": "kgw/kilo-auto/free",
       "base": "kgw/kilo-auto/free",
       "firstSeen": "2026-09-24T09:32:54.433Z",
@@ -1000,15 +1027,17 @@
           "latencyMs": 16101
         }
       ],
-      "probeInvalid": 8
+      "probeInvalid": 8,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟kimchi␟␟kimchi/glm-5.3",
+      "key": "http␟9router␟9router␟kimchi␟␟␟kimchi/glm-5.3",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kimchi",
       "account": "",
+      "quotaScope": "",
       "modelId": "kimchi/glm-5.3",
       "base": "kimchi/glm-5.3",
       "firstSeen": "2026-09-24T09:32:56.481Z",
@@ -1047,15 +1076,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟kr␟␟kr/claude-opus-5",
+      "key": "http␟9router␟9router␟kr␟␟␟kr/claude-opus-5",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kr",
       "account": "",
+      "quotaScope": "",
       "modelId": "kr/claude-opus-5",
       "base": "kr/claude-opus-5",
       "firstSeen": "2026-09-24T09:32:58.535Z",
@@ -1064,15 +1095,17 @@
       "passes": 0,
       "failures": [],
       "evidence": [],
-      "probeInvalid": 2
+      "probeInvalid": 2,
+      "resultState": "UNTESTED"
     },
     {
-      "key": "http␟9router␟9router␟llm7␟␟llm7/gpt-5.5",
+      "key": "http␟9router␟9router␟llm7␟␟␟llm7/gpt-5.5",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "llm7",
       "account": "",
+      "quotaScope": "",
       "modelId": "llm7/gpt-5.5",
       "base": "llm7/gpt-5.5",
       "firstSeen": "2026-09-24T09:33:00.573Z",
@@ -1153,15 +1186,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟mistral␟␟mistral/mistral-large-latest",
+      "key": "http␟9router␟9router␟mistral␟␟␟mistral/mistral-large-latest",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "mistral",
       "account": "",
+      "quotaScope": "",
       "modelId": "mistral/mistral-large-latest",
       "base": "mistral/mistral-large-latest",
       "firstSeen": "2026-09-24T09:33:02.618Z",
@@ -1242,15 +1277,17 @@
           "errorClass": "not_licensed"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟ocz␟␟ocz/claude-fable-5",
+      "key": "http␟9router␟9router␟ocz␟␟␟ocz/claude-fable-5",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ocz",
       "account": "",
+      "quotaScope": "",
       "modelId": "ocz/claude-fable-5",
       "base": "ocz/claude-fable-5",
       "firstSeen": "2026-09-24T09:33:04.660Z",
@@ -1331,15 +1368,17 @@
           "errorClass": "not_licensed"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟ollama␟␟ollama/gpt-oss:120b",
+      "key": "http␟9router␟9router␟ollama␟␟␟ollama/gpt-oss:120b",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ollama",
       "account": "",
+      "quotaScope": "",
       "modelId": "ollama/gpt-oss:120b",
       "base": "ollama/gpt-oss:120b",
       "firstSeen": "2026-09-24T09:33:06.709Z",
@@ -1356,15 +1395,17 @@
           "latencyMs": 1030
         }
       ],
-      "probeInvalid": 11
+      "probeInvalid": 11,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟openrouter␟␟openrouter/typesafe/jev-1.13",
+      "key": "http␟9router␟9router␟openrouter␟␟␟openrouter/typesafe/jev-1.13",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "openrouter",
       "account": "",
+      "quotaScope": "",
       "modelId": "openrouter/typesafe/jev-1.13",
       "base": "openrouter/typesafe/jev-1.13",
       "firstSeen": "2026-09-24T09:33:08.752Z",
@@ -1445,15 +1486,17 @@
           "errorClass": "invalid_request"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟qd␟␟qd/qmodel_38max",
+      "key": "http␟9router␟9router␟qd␟␟␟qd/qmodel_38max",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "qd",
       "account": "",
+      "quotaScope": "",
       "modelId": "qd/qmodel_38max",
       "base": "qd/qmodel_38max",
       "firstSeen": "2026-09-24T09:33:10.788Z",
@@ -1534,15 +1577,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟siliconflow␟␟siliconflow/deepseek-ai/DeepSeek-V4-Pro",
+      "key": "http␟9router␟9router␟siliconflow␟␟␟siliconflow/deepseek-ai/DeepSeek-V4-Pro",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "siliconflow",
       "account": "",
+      "quotaScope": "",
       "modelId": "siliconflow/deepseek-ai/DeepSeek-V4-Pro",
       "base": "siliconflow/deepseek-ai/DeepSeek-V4-Pro",
       "firstSeen": "2026-09-24T09:33:12.833Z",
@@ -1623,15 +1668,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 4
+      "probeInvalid": 4,
+      "resultState": "FAIL"
     },
     {
-      "key": "paseo␟opencode␟opencode␟agentrouter␟␟agentrouter/claude-opus-4-8",
+      "key": "paseo␟opencode␟opencode␟agentrouter␟␟␟agentrouter/claude-opus-4-8",
       "harness": "paseo",
       "accessPath": "opencode",
       "gateway": "opencode",
       "upstream": "agentrouter",
       "account": "",
+      "quotaScope": "",
       "modelId": "agentrouter/claude-opus-4-8",
       "base": "agentrouter/claude-opus-4-8",
       "firstSeen": "2026-09-24T09:33:21.409Z",
@@ -1656,15 +1703,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "FAIL"
     },
     {
-      "key": "paseo␟opencode␟opencode␟llmtr␟␟llmtr/gemma-4",
+      "key": "paseo␟opencode␟opencode␟llmtr␟␟␟llmtr/gemma-4",
       "harness": "paseo",
       "accessPath": "opencode",
       "gateway": "opencode",
       "upstream": "llmtr",
       "account": "",
+      "quotaScope": "",
       "modelId": "llmtr/gemma-4",
       "base": "llmtr/gemma-4",
       "firstSeen": "2026-09-24T09:33:29.137Z",
@@ -1689,15 +1738,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "FAIL"
     },
     {
-      "key": "paseo␟opencode␟opencode␟ninerouter␟␟ninerouter/ag/claude-sonnet-4-6",
+      "key": "paseo␟opencode␟opencode␟ninerouter␟␟␟ninerouter/ag/claude-sonnet-4-6",
       "harness": "paseo",
       "accessPath": "opencode",
       "gateway": "opencode",
       "upstream": "ninerouter",
       "account": "",
+      "quotaScope": "",
       "modelId": "ninerouter/ag/claude-sonnet-4-6",
       "base": "claude-sonnet-4-6",
       "firstSeen": "2026-09-24T09:34:11.154Z",
@@ -1722,15 +1773,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "FAIL"
     },
     {
-      "key": "paseo␟opencode␟opencode␟opencode␟␟opencode/big-pickle",
+      "key": "paseo␟opencode␟opencode␟opencode␟␟␟opencode/big-pickle",
       "harness": "paseo",
       "accessPath": "opencode",
       "gateway": "opencode",
       "upstream": "opencode",
       "account": "",
+      "quotaScope": "",
       "modelId": "opencode/big-pickle",
       "base": "opencode/big-pickle",
       "firstSeen": "2026-09-24T09:34:20.987Z",
@@ -1747,15 +1800,17 @@
           "latencyMs": 7825
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "PASS"
     },
     {
-      "key": "paseo␟opencode␟opencode␟requesty␟␟requesty/claude-fable-5",
+      "key": "paseo␟opencode␟opencode␟requesty␟␟␟requesty/claude-fable-5",
       "harness": "paseo",
       "accessPath": "opencode",
       "gateway": "opencode",
       "upstream": "requesty",
       "account": "",
+      "quotaScope": "",
       "modelId": "requesty/claude-fable-5",
       "base": "requesty/claude-fable-5",
       "firstSeen": "2026-09-24T09:34:27.638Z",
@@ -1780,15 +1835,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "FAIL"
     },
     {
-      "key": "paseo␟opencode␟opencode␟tencent-tokenhub␟␟tencent-tokenhub/hy3",
+      "key": "paseo␟opencode␟opencode␟tencent-tokenhub␟␟␟tencent-tokenhub/hy3",
       "harness": "paseo",
       "accessPath": "opencode",
       "gateway": "opencode",
       "upstream": "tencent-tokenhub",
       "account": "",
+      "quotaScope": "",
       "modelId": "tencent-tokenhub/hy3",
       "base": "tencent-tokenhub/hy3",
       "firstSeen": "2026-09-24T09:34:34.458Z",
@@ -1813,15 +1870,17 @@
           "errorClass": "model_not_found"
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟kimchi␟␟kimchi/kimi-k3",
+      "key": "http␟9router␟9router␟kimchi␟␟␟kimchi/kimi-k3",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kimchi",
       "account": "",
+      "quotaScope": "",
       "modelId": "kimchi/kimi-k3",
       "base": "kimchi/kimi-k3",
       "firstSeen": "2026-09-24T09:51:15.450Z",
@@ -1860,15 +1919,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 2
+      "probeInvalid": 2,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟kr␟␟kr/auto",
+      "key": "http␟9router␟9router␟kr␟␟␟kr/auto",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kr",
       "account": "",
+      "quotaScope": "",
       "modelId": "kr/auto",
       "base": "kr/auto",
       "firstSeen": "2026-09-24T10:05:47.274Z",
@@ -1949,15 +2010,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 2
+      "probeInvalid": 2,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟kimchi␟␟kimchi/nemotron-3-ultra-fp4",
+      "key": "http␟9router␟9router␟kimchi␟␟␟kimchi/nemotron-3-ultra-fp4",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kimchi",
       "account": "",
+      "quotaScope": "",
       "modelId": "kimchi/nemotron-3-ultra-fp4",
       "base": "kimchi/nemotron-3-ultra-fp4",
       "firstSeen": "2026-09-24T10:21:55.635Z",
@@ -1982,15 +2045,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟kimchi␟␟kimchi/glm-5.3-flash",
+      "key": "http␟9router␟9router␟kimchi␟␟␟kimchi/glm-5.3-flash",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kimchi",
       "account": "",
+      "quotaScope": "",
       "modelId": "kimchi/glm-5.3-flash",
       "base": "kimchi/glm-5.3-flash",
       "firstSeen": "2026-09-24T10:40:58.335Z",
@@ -2029,15 +2094,17 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟kimchi␟␟kimchi/deepseek-v4-flash-0731",
+      "key": "http␟9router␟9router␟kimchi␟␟␟kimchi/deepseek-v4-flash-0731",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kimchi",
       "account": "",
+      "quotaScope": "",
       "modelId": "kimchi/deepseek-v4-flash-0731",
       "base": "kimchi/deepseek-v4-flash-0731",
       "firstSeen": "2026-09-24T11:06:23.615Z",
@@ -2062,29 +2129,24 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟kimchi␟␟kimchi/minimax-m3",
+      "key": "http␟9router␟9router␟kimchi␟␟␟kimchi/minimax-m3",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "kimchi",
       "account": "",
+      "quotaScope": "",
       "modelId": "kimchi/minimax-m3",
       "base": "kimchi/minimax-m3",
       "firstSeen": "2026-09-24T11:33:12.186Z",
       "lastSeen": "2026-09-24T11:33:12.186Z",
       "attempts": 1,
       "passes": 0,
-      "failures": [
-        {
-          "ts": "2026-09-24T11:33:12.186Z",
-          "status": "DEFERRED",
-          "errorClass": "quota_exhausted",
-          "reason": "Deferred: upstream kimchi has known hard failure (quota_exhausted)"
-        }
-      ],
+      "failures": [],
       "evidence": [
         {
           "ts": "2026-09-24T11:33:12.186Z",
@@ -2095,15 +2157,18 @@
           "errorClass": "quota_exhausted"
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "DEFERRED",
+      "deferred": 1
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.8-flash-medium",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.8-flash-medium",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.8-flash-medium",
       "base": "ag/gemini-3.8-flash-medium",
       "firstSeen": "2026-09-24T11:35:02.178Z",
@@ -2120,15 +2185,17 @@
           "latencyMs": 4091
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.8-flash-low",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.8-flash-low",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.8-flash-low",
       "base": "ag/gemini-3.8-flash-low",
       "firstSeen": "2026-09-24T11:35:07.862Z",
@@ -2145,15 +2212,17 @@
           "latencyMs": 3673
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.8-flash",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.8-flash",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.8-flash",
       "base": "ag/gemini-3.8-flash",
       "firstSeen": "2026-09-24T11:35:12.650Z",
@@ -2170,15 +2239,17 @@
           "latencyMs": 2773
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.7-flash-high",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.7-flash-high",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.7-flash-high",
       "base": "ag/gemini-3.7-flash-high",
       "firstSeen": "2026-09-24T11:35:17.839Z",
@@ -2195,15 +2266,17 @@
           "latencyMs": 3174
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.7-flash-medium",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.7-flash-medium",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.7-flash-medium",
       "base": "ag/gemini-3.7-flash-medium",
       "firstSeen": "2026-09-24T11:35:22.687Z",
@@ -2220,15 +2293,17 @@
           "latencyMs": 2839
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.7-flash-low",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.7-flash-low",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.7-flash-low",
       "base": "ag/gemini-3.7-flash-low",
       "firstSeen": "2026-09-24T11:35:26.571Z",
@@ -2245,15 +2320,17 @@
           "latencyMs": 1882
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.6-flash-high",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.6-flash-high",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.6-flash-high",
       "base": "ag/gemini-3.6-flash-high",
       "firstSeen": "2026-09-24T11:35:45.884Z",
@@ -2270,15 +2347,17 @@
           "latencyMs": 17306
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.6-flash-medium",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.6-flash-medium",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.6-flash-medium",
       "base": "ag/gemini-3.6-flash-medium",
       "firstSeen": "2026-09-24T11:36:01.031Z",
@@ -2295,15 +2374,17 @@
           "latencyMs": 13136
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.6-flash-low",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.6-flash-low",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.6-flash-low",
       "base": "ag/gemini-3.6-flash-low",
       "firstSeen": "2026-09-24T11:36:18.636Z",
@@ -2320,15 +2401,17 @@
           "latencyMs": 15588
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.5-flash-high",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.5-flash-high",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.5-flash-high",
       "base": "ag/gemini-3.5-flash-high",
       "firstSeen": "2026-09-24T11:36:21.129Z",
@@ -2367,15 +2450,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3-flash-agent",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3-flash-agent",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3-flash-agent",
       "base": "ag/gemini-3-flash-agent",
       "firstSeen": "2026-09-24T11:36:23.747Z",
@@ -2392,15 +2477,17 @@
           "latencyMs": 607
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.5-flash-low",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.5-flash-low",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.5-flash-low",
       "base": "ag/gemini-3.5-flash-low",
       "firstSeen": "2026-09-24T11:36:26.276Z",
@@ -2417,15 +2504,17 @@
           "latencyMs": 520
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.5-flash-extra-low",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.5-flash-extra-low",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.5-flash-extra-low",
       "base": "ag/gemini-3.5-flash-extra-low",
       "firstSeen": "2026-09-24T11:36:28.607Z",
@@ -2442,15 +2531,17 @@
           "latencyMs": 321
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-pro-agent",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-pro-agent",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-pro-agent",
       "base": "ag/gemini-pro-agent",
       "firstSeen": "2026-09-24T11:36:33.559Z",
@@ -2467,15 +2558,17 @@
           "latencyMs": 2810
         }
       ],
-      "probeInvalid": 1
+      "probeInvalid": 1,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.1-pro-low",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3.1-pro-low",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3.1-pro-low",
       "base": "ag/gemini-3.1-pro-low",
       "firstSeen": "2026-09-24T11:36:37.845Z",
@@ -2492,15 +2585,17 @@
           "latencyMs": 2276
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "PASS"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/claude-sonnet-4-6",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/claude-sonnet-4-6",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/claude-sonnet-4-6",
       "base": "ag/claude-sonnet-4-6",
       "firstSeen": "2026-09-24T11:36:39.922Z",
@@ -2525,15 +2620,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/claude-opus-4-6-thinking",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/claude-opus-4-6-thinking",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/claude-opus-4-6-thinking",
       "base": "ag/claude-opus-4-6-thinking",
       "firstSeen": "2026-09-24T11:36:42.002Z",
@@ -2558,15 +2655,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gpt-oss-120b-medium",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gpt-oss-120b-medium",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gpt-oss-120b-medium",
       "base": "ag/gpt-oss-120b-medium",
       "firstSeen": "2026-09-24T11:36:44.077Z",
@@ -2591,15 +2690,17 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "FAIL"
     },
     {
-      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3-flash",
+      "key": "http␟9router␟9router␟ag␟␟␟ag/gemini-3-flash",
       "harness": "http",
       "accessPath": "9router",
       "gateway": "9router",
       "upstream": "ag",
       "account": "",
+      "quotaScope": "",
       "modelId": "ag/gemini-3-flash",
       "base": "ag/gemini-3-flash",
       "firstSeen": "2026-09-24T11:36:51.376Z",
@@ -2624,7 +2725,8 @@
           "errorClass": "unknown"
         }
       ],
-      "probeInvalid": 0
+      "probeInvalid": 0,
+      "resultState": "FAIL"
     }
   ]
 }

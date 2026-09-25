@@ -46,8 +46,41 @@ function candidateKey(identity) {
     i.gateway || '',
     i.upstream || '',
     i.account || '',
+    i.quotaScope || '',
     i.modelId || '',
   ].join(GATEWAY_PREFIX_SEPARATOR);
+}
+
+/**
+ * Parse a candidate key back into its identity attributes.
+ * Supports both 7-field format and legacy 6-field format (defaulting quotaScope to '').
+ */
+function parseCandidateKey(key) {
+  if (typeof key !== 'string') return null;
+  const parts = key.split(GATEWAY_PREFIX_SEPARATOR);
+  if (parts.length === 7) {
+    return {
+      harness: parts[0],
+      accessPath: parts[1],
+      gateway: parts[2],
+      upstream: parts[3],
+      account: parts[4],
+      quotaScope: parts[5],
+      modelId: parts[6],
+    };
+  }
+  if (parts.length === 6) {
+    return {
+      harness: parts[0],
+      accessPath: parts[1],
+      gateway: parts[2],
+      upstream: parts[3],
+      account: parts[4],
+      quotaScope: '',
+      modelId: parts[5],
+    };
+  }
+  return null;
 }
 
 /**
@@ -105,6 +138,7 @@ function modelBase(modelId, prefixes) {
 module.exports = {
   GATEWAY_PREFIX_SEPARATOR,
   candidateKey,
+  parseCandidateKey,
   registryPrefixes,
   modelBase,
   DATE_SUFFIX,

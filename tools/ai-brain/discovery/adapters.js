@@ -57,12 +57,14 @@ const RECALL = {
 /**
  * A catalog is one coherent collection of models reachable through one route.
  */
-function catalog({ upstream, gateway, accessPath, harness, models }) {
+function catalog({ upstream, gateway, accessPath, harness, account, quotaScope, models }) {
   return {
     upstream: String(upstream),
     gateway: gateway === null || gateway === undefined ? '' : String(gateway),
     accessPath: String(accessPath),
     harness: String(harness),
+    account: account === null || account === undefined ? '' : String(account),
+    quotaScope: quotaScope === null || quotaScope === undefined ? '' : String(quotaScope),
     count: models.length,
     models,
   };
@@ -117,13 +119,20 @@ function routerAdapter() {
     }
     const verifyPath = (source.verify && source.verify.path) || DEFAULT_MODELS_PATH;
     const url = joinUrl(endpoint, verifyPath);
-    const res = await ctx.httpGet(url, { envName: source.credential && source.credential.env });
+    const res = await ctx.httpGet(url, {
+      envName: source.credential && source.credential.env,
+      timeoutMs: 10000,
+    });
     if (!res.ok || !res.parsed || !Array.isArray(res.parsed.data)) {
+      const isUnavailable =
+        !res.ok && (res.status === 0 || (res.error && /abort|timeout|refused|reset|fetch/i.test(res.error)));
       return {
-        status: 'error',
-        reason: res.ok
-          ? 'catalogue did not contain a data array'
-          : `catalogue request failed with http ${res.status}`,
+        status: isUnavailable ? 'unavailable' : 'error',
+        reason: isUnavailable
+          ? 'catalogue unavailable at this moment'
+          : res.ok
+            ? 'catalogue did not contain a data array'
+            : `catalogue request failed with http ${res.status}`,
         catalogs: [],
         requests: [res.request],
       };

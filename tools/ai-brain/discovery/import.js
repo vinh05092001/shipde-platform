@@ -28,12 +28,36 @@ const trimId = (id) =>
   id === null || id === undefined ? null : String(id).trim().replace(/\r$/, '');
 
 function isProbeInvalid(row) {
-  return (
+  if (!row) return false;
+  // 1. Client empty-response / parser failure on SSE
+  if (
     row.status === 'FAIL' &&
     row.contentLength === 0 &&
-    row.reason === 'answered' &&
-    row.errorClass === 'unknown'
-  );
+    (row.reason === 'answered' || (row.reason && /empty content|sse|parser/i.test(row.reason)))
+  ) {
+    return true;
+  }
+  if (
+    row.status === 'FAIL' &&
+    row.error &&
+    /empty content|sse|parser/i.test(String(row.error)) &&
+    (row.contentLength === 0 || row.contentLength === undefined)
+  ) {
+    return true;
+  }
+  // 2. ENOENT from spawning an npm .cmd shim without a shell
+  if (
+    row.enoent === true ||
+    (row.errorClass && /ENOENT/i.test(String(row.errorClass))) ||
+    (row.reason && /ENOENT/i.test(String(row.reason))) ||
+    (row.error && /ENOENT/i.test(String(row.error))) ||
+    (row.reason && /\.cmd\b/i.test(String(row.reason)) && /spawn|shell|enoent/i.test(String(row.reason))) ||
+    (row.error && /\.cmd\b/i.test(String(row.error)) && /spawn|shell|enoent/i.test(String(row.error))) ||
+    (row.classification && (row.classification.class === 'enoent' || /enoent/i.test(String(row.classification.innerCause || ''))))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function checkpointIdentity(row) {
@@ -52,12 +76,15 @@ function checkpointIdentity(row) {
       : modelId.slice(0, modelId.indexOf('/'))
     : trimId(row.upstreamOrAccount) || '9router';
   const gateway = opencodePath ? 'opencode' : '9router';
+  const account = trimId(row.account) || '';
+  const quotaScope = trimId(row.quotaScope) || '';
   const identity = {
     harness,
     accessPath: opencodePath ? 'opencode' : '9router',
     gateway,
     upstream,
-    account: '',
+    account,
+    quotaScope,
     modelId,
   };
   return { identity, key: candidateKey(identity), modelId };
@@ -104,6 +131,7 @@ async function importCheckpoint(filePath, opts) {
         gateway: attrs.identity.gateway,
         upstream: attrs.identity.upstream,
         account: attrs.identity.account,
+        quotaScope: attrs.identity.quotaScope,
         modelId: attrs.modelId,
         base: modelBase(attrs.modelId, prefixes),
         firstSeen: row.timestamp,
@@ -113,6 +141,7 @@ async function importCheckpoint(filePath, opts) {
         failures: [],
         evidence: [],
         probeInvalid: 0,
+        resultState: 'UNTESTED',
       };
       candidates.set(attrs.key, cand);
     } else {
@@ -127,36 +156,66 @@ async function importCheckpoint(filePath, opts) {
       continue;
     }
 
+    let status = row.status;
+    let reason = row.reason;
+    let errorClass = row.errorClass;
+
+    // A row whose status says ALIVE while its HTTP status is 401 or 400 is wrong;
+    // import it as a failure with the real status
+    const is401 =
+      row.httpStatus === 401 ||
+      (typeof row.error === 'string' && /401/.test(row.error)) ||
+      (typeof row.reason === 'string' && (/\[401\]/.test(row.reason) || /\b401\b/.test(row.reason)));
+    const is400 =
+      row.httpStatus === 400 ||
+      (typeof row.error === 'string' && (/400/.test(row.error) || /API Error: 400/.test(row.error))) ||
+      (typeof row.reason === 'string' && (/\[400\]/.test(row.reason) || /\b400\b/.test(row.reason)));
+
+    if ((status === 'ALIVE' || status === 'PASS') && (is401 || is400)) {
+      status = 'FAIL';
+      errorClass = is401 ? 'unauthorized' : 'invalid_request';
+      reason = is401 ? 'HTTP 401: Unauthorized' : 'HTTP 400: Bad Request';
+    }
+
     const evidence = {
       ts: row.timestamp,
-      status: row.status,
-      reason: row.reason,
+      status,
+      reason,
       levelName: row.levelName,
     };
     if (typeof row.latencyMs === 'number') evidence.latencyMs = row.latencyMs;
-    if (row.errorClass) evidence.errorClass = row.errorClass;
+    if (errorClass) evidence.errorClass = errorClass;
     cand.evidence.push(evidence);
 
-    if (row.status === 'PASS') {
+    if (status === 'PASS') {
       cand.passes += 1;
       PASS.count += 1;
+    } else if (status === 'DEFERRED') {
+      cand.deferred = (cand.deferred || 0) + 1;
     } else {
-      const key = row.errorClass || 'unknown';
+      const key = errorClass || 'unknown';
       failures[key] = (failures[key] || 0) + 1;
       cand.failures.push({
         ts: row.timestamp,
-        status: row.status,
+        status,
         errorClass: key,
-        reason: row.reason,
+        reason,
       });
     }
   }
 
-  const candidateList = [...candidates.values()].map((c) => ({
-    ...c,
-    evidence: c.evidence.slice(-5),
-    failures: c.failures.slice(0, 5),
-  }));
+  const candidateList = [...candidates.values()].map((c) => {
+    let resultState = 'UNTESTED';
+    if (c.passes > 0) resultState = 'PASS';
+    else if (c.failures.length > 0) resultState = 'FAIL';
+    else if (c.deferred > 0) resultState = 'DEFERRED';
+    return {
+      ...c,
+      resultState,
+      evidence: c.evidence.slice(-5),
+      failures: c.failures.slice(0, 5),
+    };
+  });
 
   const entry = {
     evidenceKind: 'checkpoint-import',
@@ -195,19 +254,50 @@ async function importOuter(filePath, opts) {
     }
   }
   const perSource = new Map();
+  let reclassifiedFails = 0;
   for (const row of rows) {
     if (row.malformed) continue;
     const sid = row.sourceId;
     if (!perSource.has(sid)) perSource.set(sid, { sourceId: sid, probes: [] });
     const rec = perSource.get(sid);
+
+    let status = row.status;
+    let tier = row.tier;
+    let httpStatus = row.httpStatus;
+    let error = row.error && typeof row.error === 'string' ? row.error.slice(0, 1000) : row.error;
+
+    // Rule: a row whose status says ALIVE while its HTTP status is 401 or 400 is wrong; import it as a failure with the real status;
+    const has401 = httpStatus === 401 || (typeof error === 'string' && /401/.test(error));
+    const has400 = httpStatus === 400 || (typeof error === 'string' && (/400/.test(error) || /API Error: 400/.test(error)));
+
+    if (status === 'ALIVE' && (has401 || has400 || (row.exitCode !== undefined && row.exitCode !== 0))) {
+      status = 'FAIL';
+      tier = 'FAIL';
+      if (!httpStatus) {
+        httpStatus = has401 ? 401 : 400;
+      }
+      reclassifiedFails++;
+    } else if (status === 'ALIVE') {
+      // Keep exactly PASS, FAIL, DEFERRED, UNTESTED as the result states
+      status = 'PASS';
+    } else if (status === 'UNTESTED') {
+      status = 'UNTESTED';
+    } else if (status === 'DEFERRED') {
+      status = 'DEFERRED';
+    } else if (status === 'FAIL') {
+      status = 'FAIL';
+    } else {
+      status = 'UNTESTED';
+    }
+
     rec.probes.push({
       probeName: row.probeName,
-      status: row.status,
-      tier: row.tier,
+      status,
+      tier,
       latencyMs: row.latencyMs,
-      httpStatus: row.httpStatus,
+      httpStatus,
       exitCode: row.exitCode,
-      error: row.error && typeof row.error === 'string' ? row.error.slice(0, 1000) : row.error,
+      error,
       classification: row.classification,
       responseShape: row.responseShape,
       authRequired: row.authRequired,
@@ -227,10 +317,18 @@ async function importOuter(filePath, opts) {
 
   const summary = {};
   for (const s of sources) {
-    const alive = s.probes.filter((p) => p.status === 'ALIVE').length;
+    const pass = s.probes.filter((p) => p.status === 'PASS').length;
     const fail = s.probes.filter((p) => p.status === 'FAIL').length;
+    const deferred = s.probes.filter((p) => p.status === 'DEFERRED').length;
     const untested = s.probes.filter((p) => p.status === 'UNTESTED').length;
-    summary[s.sourceId] = { alive, fail, untested, probes: s.probes.length };
+    summary[s.sourceId] = {
+      pass,
+      fail,
+      deferred,
+      untested,
+      alive: pass, // backward compatibility
+      probes: s.probes.length,
+    };
   }
 
   return {
@@ -238,6 +336,7 @@ async function importOuter(filePath, opts) {
     importedAt: now,
     importedFrom: path.basename(filePath),
     totalRows: rows.length,
+    reclassifiedFails,
     sources,
     summary,
     perSourceTotal: sources.length,

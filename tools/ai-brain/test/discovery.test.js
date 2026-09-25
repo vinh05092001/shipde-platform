@@ -12,8 +12,9 @@ const {
   DISCOVERY_WRITABLE,
   currentState,
 } = require('../discovery/store');
-const { importCheckpoint, isProbeInvalid } = require('../discovery/import');
+const { importCheckpoint, importOuter, isProbeInvalid } = require('../discovery/import');
 const { enumerate, NOT_PERMITTED } = require('../discovery/adapters');
+const { readDiscoveryCatalogue } = require('../discovery');
 
 function registryOnly(registry) {
   const sources = (registry.sources || []).filter((s) => s && s.id);
@@ -283,9 +284,17 @@ test('a model seen on one path then absent is REMOVED with history intact', () =
 
   // Append-only: the run-1 UNKNOWN line is still in the ledger.
   const current2 = readCatalogueFrom([...storeLines, ...run2.transitions]);
+  const expectedKey = candidateKey({
+    harness: 'paseo',
+    accessPath: 'paseo',
+    gateway: 'opencode',
+    upstream: 'ninerouter',
+    account: '',
+    quotaScope: '',
+    modelId: 'ninerouter/gh/gpt-4.1',
+  });
   assert.equal(
-    current2.get('paseo\u241fpaseo\u241fopencode\u241fninerouter\u241f\u241fninerouter/gh/gpt-4.1')
-      .state,
+    current2.get(expectedKey).state,
     'REMOVED'
   );
   const records = [...storeLines, ...run2.transitions];
@@ -337,7 +346,15 @@ test('a re-advertised REMOVED candidate returns to UNKNOWN, never AVAILABLE', ()
 test('a listing never promotes or demotes a judged state', () => {
   const fix = fixtureTwoPaths();
   const current = new Map();
-  const httpKey = 'http\u241f9router\u241f9router\u241fgh\u241f\u241fgh/gpt-4.1-2025-04-14';
+  const httpKey = candidateKey({
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    account: '',
+    quotaScope: '',
+    modelId: 'gh/gpt-4.1-2025-04-14',
+  });
   current.set(httpKey, {
     key: httpKey,
     harness: 'http',
@@ -675,4 +692,237 @@ test('store appends and reads catalogue, last line per key wins', () => {
 test('discovery may only write UNKNOWN and REMOVED', () => {
   assert.deepEqual([...DISCOVERY_WRITABLE].sort(), ['REMOVED', 'UNKNOWN']);
   assert.ok(NOT_PERMITTED.codex);
+});
+
+// ---------- Controller Read Contract & Old Scan Import (W2 Flow B) ----------
+
+test('a model that is alive over HTTP is NOT reported alive over OpenCode', () => {
+  const httpKey = candidateKey({
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    account: '',
+    quotaScope: '',
+    modelId: 'gh/gpt-4.1',
+  });
+  const openCodeKey = candidateKey({
+    harness: 'paseo',
+    accessPath: 'opencode',
+    gateway: 'opencode',
+    upstream: 'ninerouter',
+    account: '',
+    quotaScope: '',
+    modelId: 'ninerouter/gh/gpt-4.1',
+  });
+
+  const catalogue = readDiscoveryCatalogue({
+    lines: [
+      {
+        type: 'transition',
+        key: httpKey,
+        harness: 'http',
+        accessPath: '9router',
+        gateway: '9router',
+        upstream: 'gh',
+        account: '',
+        quotaScope: '',
+        modelId: 'gh/gpt-4.1',
+        base: 'gh/gpt-4.1',
+        state: 'AVAILABLE',
+      },
+      {
+        type: 'transition',
+        key: openCodeKey,
+        harness: 'paseo',
+        accessPath: 'opencode',
+        gateway: 'opencode',
+        upstream: 'ninerouter',
+        account: '',
+        quotaScope: '',
+        modelId: 'ninerouter/gh/gpt-4.1',
+        base: 'gh/gpt-4.1',
+        state: 'UNKNOWN',
+      },
+    ],
+    evidence: [
+      {
+        key: httpKey,
+        passes: 1,
+        failures: [],
+        resultState: 'PASS',
+      },
+      {
+        key: openCodeKey,
+        passes: 0,
+        failures: [{ ts: '2026-09-24T09:33:00Z', errorClass: 'unauthorized', status: 'FAIL' }],
+        resultState: 'FAIL',
+      },
+    ],
+  });
+
+  // Querying HTTP shows alive
+  assert.equal(catalogue.isModelAlive({ accessPath: '9router', account: '', modelId: 'gh/gpt-4.1' }), true);
+
+  // The model is alive over HTTP, but NOT reported alive over OpenCode
+  assert.equal(catalogue.isModelAlive({ accessPath: 'opencode', account: '', modelId: 'gh/gpt-4.1' }), false);
+  assert.equal(catalogue.isModelAlive({ accessPath: 'opencode', account: '', modelId: 'ninerouter/gh/gpt-4.1' }), false);
+
+  const opencodeCand = catalogue.getModel('opencode', '', 'ninerouter/gh/gpt-4.1');
+  assert.ok(opencodeCand);
+  assert.equal(opencodeCand.alive, false);
+  assert.equal(opencodeCand.resultState, 'FAIL');
+});
+
+test('the same upstream under two accounts is two entries', () => {
+  const identA = {
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    account: 'org-account-1',
+    quotaScope: 'account',
+    modelId: 'gh/gpt-4.1',
+  };
+  const identB = {
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    account: 'org-account-2',
+    quotaScope: 'account',
+    modelId: 'gh/gpt-4.1',
+  };
+
+  const keyA = candidateKey(identA);
+  const keyB = candidateKey(identB);
+  assert.notEqual(keyA, keyB, 'keys under different accounts must be distinct');
+
+  const catalogue = readDiscoveryCatalogue({
+    lines: [
+      { type: 'transition', key: keyA, ...identA, base: 'gh/gpt-4.1', state: 'UNKNOWN' },
+      { type: 'transition', key: keyB, ...identB, base: 'gh/gpt-4.1', state: 'UNKNOWN' },
+    ],
+  });
+
+  assert.equal(catalogue.candidates.length, 2, 'two accounts must create two separate catalogue entries');
+  const forAcc1 = catalogue.candidatesFor({ account: 'org-account-1' });
+  const forAcc2 = catalogue.candidatesFor({ account: 'org-account-2' });
+  assert.equal(forAcc1.length, 1);
+  assert.equal(forAcc2.length, 1);
+  assert.equal(forAcc1[0].account, 'org-account-1');
+  assert.equal(forAcc2[0].account, 'org-account-2');
+
+  // Verify path + account query isolation:
+  assert.equal(catalogue.hasModel('9router', 'org-account-1', 'gh/gpt-4.1'), true);
+  assert.equal(catalogue.hasModel('9router', 'org-account-2', 'gh/gpt-4.1'), true);
+  assert.equal(catalogue.hasModel('9router', 'nonexistent-account', 'gh/gpt-4.1'), false);
+});
+
+test('a PROBE_INVALID row does not count as a model failure', async () => {
+  const parserSseRow = {
+    timestamp: '2026-09-24T09:32:27.789Z',
+    harness: 'http',
+    accessPath: '9router',
+    upstreamOrAccount: 'ag',
+    model: 'ag/gemini-3.8-flash-high',
+    modelIdHttp: 'ag/gemini-3.8-flash-high',
+    status: 'FAIL',
+    latencyMs: 48,
+    reason: 'answered',
+    errorClass: 'unknown',
+    contentLength: 0,
+  };
+  const shimEnoentRow = {
+    timestamp: '2026-09-24T09:32:28.000Z',
+    harness: 'paseo',
+    accessPath: 'opencode',
+    upstreamOrAccount: 'opencode',
+    model: 'opencode/test-model',
+    modelIdOpenCode: 'opencode/test-model',
+    status: 'FAIL',
+    reason: 'spawn ENOENT opencode.cmd',
+    errorClass: 'ENOENT',
+    enoent: true,
+  };
+
+  assert.equal(isProbeInvalid(parserSseRow), true);
+  assert.equal(isProbeInvalid(shimEnoentRow), true);
+
+  const file = makeTempFile([JSON.stringify(parserSseRow), JSON.stringify(shimEnoentRow)].join('\n'));
+  const entry = await importCheckpoint(file, { prefixes: [] });
+
+  assert.equal(entry.probeInvalid, 2);
+  assert.equal(entry.failureTotal, 0, 'PROBE_INVALID rows must not count toward failureTotal');
+  assert.deepEqual(entry.failuresByClass, {});
+
+  const cand = entry.candidates.find((c) => c.modelId === 'ag/gemini-3.8-flash-high');
+  assert.ok(cand);
+  assert.equal(cand.failures.length, 0, 'failures list must be empty for PROBE_INVALID row');
+  assert.equal(cand.probeInvalid, 1);
+  assert.equal(cand.resultState, 'UNTESTED', 'PROBE_INVALID does not fail model, remains UNTESTED');
+});
+
+test('an imported ALIVE-with-401 row is recorded as a failure', async () => {
+  const badAliveRow = {
+    timestamp: '2026-09-24T12:37:35.214Z',
+    sourceId: 'test-gateway',
+    sourceLabel: 'Test Gateway',
+    sourceKind: 'model-source',
+    probeName: 'models',
+    status: 'ALIVE',
+    tier: 'ALIVE',
+    latencyMs: 120,
+    httpStatus: 401,
+    error: 'HTTP 401: Unauthorized access',
+  };
+
+  const file = makeTempFile(JSON.stringify(badAliveRow));
+  const imported = await importOuter(file);
+
+  const source = imported.sources.find((s) => s.sourceId === 'test-gateway');
+  assert.ok(source);
+  assert.equal(source.probes.length, 1);
+  const probe = source.probes[0];
+  assert.equal(probe.status, 'FAIL', 'ALIVE-with-401 must be imported with status FAIL');
+  assert.equal(probe.httpStatus, 401, 'real HTTP status 401 must be recorded');
+
+  assert.equal(imported.summary['test-gateway'].fail, 1);
+  assert.equal(imported.summary['test-gateway'].pass, 0);
+  assert.equal(imported.summary['test-gateway'].alive, 0);
+});
+
+test('a row with no evidence is UNTESTED, not PASS', () => {
+  const ident = {
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'combo',
+    account: '',
+    quotaScope: '',
+    modelId: 'combo/untested-model',
+  };
+  const key = candidateKey(ident);
+
+  const catalogue = readDiscoveryCatalogue({
+    lines: [
+      {
+        type: 'transition',
+        key,
+        ...ident,
+        base: 'combo/untested-model',
+        state: 'UNKNOWN',
+      },
+    ],
+    // No evidence provided
+    evidence: [],
+  });
+
+  const cand = catalogue.get(key);
+  assert.ok(cand);
+  assert.equal(cand.resultState, 'UNTESTED', 'row with no evidence must be UNTESTED');
+  assert.notEqual(cand.resultState, 'PASS', 'nothing without evidence becomes PASS');
+  assert.equal(cand.passes, 0);
+  assert.equal(cand.failures.length, 0);
+  assert.equal(cand.alive, false);
 });

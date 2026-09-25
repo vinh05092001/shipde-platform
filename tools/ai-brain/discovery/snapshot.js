@@ -70,6 +70,8 @@ function buildSnapshot(opts) {
         gateway: c.gateway,
         accessPath: c.accessPath,
         harness: c.harness,
+        account: c.account || '',
+        quotaScope: c.quotaScope || '',
         count: c.count,
       }));
       entry.requestedCount = res.catalogs.reduce((n, c) => n + c.count, 0);
@@ -110,7 +112,8 @@ function buildCandidates(catalogues, prefixes) {
           accessPath: c.accessPath,
           gateway: c.gateway,
           upstream: c.upstream,
-          account: '',
+          account: c.account || '',
+          quotaScope: c.quotaScope || '',
           modelId,
         };
         const key = candidateKey(identity);
@@ -126,7 +129,8 @@ function buildCandidates(catalogues, prefixes) {
           accessPath: c.accessPath,
           gateway: c.gateway,
           upstream: c.upstream,
-          account: '',
+          account: c.account || '',
+          quotaScope: c.quotaScope || '',
           modelId,
           base: modelBase(modelId, prefixes),
           sourceIds: [entry.sourceId],
@@ -169,6 +173,7 @@ function buildAliases(candidates, prefixes, classifyShared) {
       gateway: c.gateway,
       upstream: c.upstream,
       account: c.account,
+      quotaScope: c.quotaScope,
       modelId: c.modelId,
       sourceIds: c.sourceIds,
     }));
