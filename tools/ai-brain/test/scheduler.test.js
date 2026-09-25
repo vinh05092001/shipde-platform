@@ -355,7 +355,7 @@ describe('Dispatch planning', () => {
       limits: { maxImplementationAgents: 1 },
       now: NOW,
     });
-    assert.equal(plan.assignments[0].alternatives, undefined, 'A test that asserts a fixed fallback order is itself a defect.');
+    assert.ok(Array.isArray(plan.assignments[0].alternatives));
     assert.ok(plan.assignments[0].headroom);
   });
 
@@ -442,7 +442,31 @@ describe('Dispatch planning', () => {
   });
 
   test('fallback is recomputed from data, not read from a stored order', () => {
-     const plan = planDispatch([item({ workItemId: 'A-1' })], pool, { limits: { maxImplementationAgents: 1 }, now: NOW });
-     assert.equal(plan.assignments[0].alternatives, undefined);
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-'));
+    const plan1 = planDispatch([item({ workItemId: 'A-1' })], pool, {
+      limits: { maxImplementationAgents: 1 },
+      now: NOW,
+      decisionDir: dir,
+    });
+    assert.equal(plan1.assignments[0].accountId, 'free-a');
+
+    fs.writeFileSync(
+      path.join(dir, new Date(NOW).toISOString().slice(0, 10) + '.jsonl'),
+      JSON.stringify({
+        stage: 'failed',
+        workItemId: 'A-1',
+        chosen: 'free-a::claude-sonnet-5',
+      }) + '\n'
+    );
+
+    const plan2 = planDispatch([item({ workItemId: 'A-1' })], pool, {
+      limits: { maxImplementationAgents: 1 },
+      now: NOW,
+      decisionDir: dir,
+    });
+    assert.equal(plan2.assignments[0].accountId, 'free-b');
   });
 });

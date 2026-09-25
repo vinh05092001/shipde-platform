@@ -266,16 +266,31 @@ function activeReservations(options) {
   return { byAccount, byOffering };
 }
 
-function pruneReservations(now, runningWorkItems, options) {
+function pruneReservations(now, runningWorkItems, options, queuedWorkItems) {
   const res = getReservations(options);
   let changed = false;
+  const running = runningWorkItems || new Set();
+  const queued = queuedWorkItems || new Set();
   for (const [id, r] of Object.entries(res)) {
-    if (now - r.at > 2 * 60 * 1000 && !runningWorkItems.has(r.workItemId)) {
+    const at = typeof r.at === 'number' ? r.at : Date.parse(r.at);
+    const isExpired = !Number.isFinite(at) || (now - at > 2 * 60 * 1000) || (at > now + 60 * 1000);
+    const isQueued = queued.has(r.workItemId);
+    if (!running.has(r.workItemId) && (isExpired || isQueued)) {
       delete res[id];
       changed = true;
     }
   }
   if (changed) saveReservations(res, options);
+}
+
+function releaseReservation(workItemId, options) {
+  const res = getReservations(options);
+  if (res[workItemId]) {
+    delete res[workItemId];
+    saveReservations(res, options);
+    return true;
+  }
+  return false;
 }
 
 function recordReservation(workItemId, role, accountId, offeringId, tokens, options) {
@@ -305,5 +320,6 @@ module.exports = {
   withQuotaLock,
   activeReservations,
   pruneReservations,
+  releaseReservation,
   recordReservation,
 };

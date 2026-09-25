@@ -35,6 +35,13 @@ const {
 } = require('./offerings');
 const { rankByFitness, Difficulty } = require('./fitness');
 const { observeRefusal } = require('./ceiling');
+const {
+  withQuotaLock,
+  activeReservations,
+  pruneReservations,
+  recordReservation,
+} = require('./quota-store');
+const decisions = require('./decisions');
 
 const GOVERNED_DECISION_PATTERN = /^(?:HUMAN-DECISION-[A-Z0-9-]+|DEC-[0-9]{3,})$/;
 
@@ -189,277 +196,348 @@ function waiting(item, reason, detail) {
  */
 function planDispatch(items, accounts, context) {
   const ctx = context || {};
-  const {
-    withQuotaLock,
-    activeReservations,
-    pruneReservations,
-    recordReservation,
-  } = require('./quota-store');
-  const decisions = require('./decisions');
+  const ctxLimits = ctx.limits || {};
+  const decisionCandidate = ctx.governedDecision || ctxLimits.governedDecision || null;
+  const decisionValid = isGovernedDecision(decisionCandidate);
+  const decisionId = decisionValid
+    ? typeof decisionCandidate === 'string'
+      ? decisionCandidate.trim()
+      : String(decisionCandidate.id).trim()
+    : null;
 
+  let requestedMaxImpl =
+    ctxLimits.maxImplementationAgents !== undefined
+      ? Number(ctxLimits.maxImplementationAgents)
+      : DEFAULTS.maxImplementationAgents;
+
+  let effectiveMaxImpl = DEFAULTS.maxImplementationAgents;
+  let ceilingGoverned = false;
+
+  if (Number.isFinite(requestedMaxImpl)) {
+    if (requestedMaxImpl <= 1) {
+      effectiveMaxImpl = Math.max(0, requestedMaxImpl);
+    } else if (decisionValid) {
+      effectiveMaxImpl = requestedMaxImpl;
+      ceilingGoverned = true;
+    } else {
+      // AI-TOOL-03 / TASK-AI-42: Raising the implementation ceiling is a governed decision, not a setting.
+      // An unvetted setting without a valid governed decision identifier is clamped to 1.
+      effectiveMaxImpl = 1;
+      ceilingGoverned = false;
+    }
+  }
+
+  // The governed ceiling says what the process allows; the machine says what
+  // it can hold. Memory only ever lowers the number — a host with spare RAM is
+  // not authorisation to run more agents than a human agreed to.
+  //
+  // Only a caller that asks gets measured. Reading `os.freemem()` by default
+  // made every plan depend on whatever else the machine happened to be doing,
+  // which is right for an unattended dispatch and wrong for a test: the same
+  // inputs produced a different plan an hour later. The operator opts in by
+  // passing `resources` (`{}` means "measure this host").
+  const resources = ctx.resources
+    ? resourceCeiling(ctx.resources)
+    : { allowed: null, freeMb: null, reserveMb: null, perAgentMb: null, limiting: 'not consulted' };
+  let ramLimited = false;
+  if (resources.allowed !== null && resources.allowed < effectiveMaxImpl) {
+    effectiveMaxImpl = resources.allowed;
+    ramLimited = true;
+  }
+
+  const limits = Object.assign({}, DEFAULTS, ctxLimits, {
+    maxImplementationAgents: effectiveMaxImpl,
+  });
   const now = ctx.now || Date.now();
-  const lockOpts = { home: ctx.home, now };
+  const lockOpts = { home: ctx.home, path: ctx.storePath || ctx.quotaFile, now };
+
   return withQuotaLock(lockOpts, () => {
-    const ctxLimits = ctx.limits || {};
-    const decisionCandidate = ctx.governedDecision || ctxLimits.governedDecision || null;
-    const decisionValid = isGovernedDecision(decisionCandidate);
-    const decisionId = decisionValid
-      ? typeof decisionCandidate === 'string'
-        ? decisionCandidate.trim()
-        : String(decisionCandidate.id).trim()
-      : null;
+  // Dispatch is per model, not per account: one key exposes many models and
+  // choosing "the account" says nothing about which will write the code.
+  const offerings = expandOfferings(accounts);
 
-    let requestedMaxImpl =
-      ctxLimits.maxImplementationAgents !== undefined
-        ? Number(ctxLimits.maxImplementationAgents)
-        : DEFAULTS.maxImplementationAgents;
+  // What each provider says is left. Without this the ladder drops a tier only
+  // after a refusal has already been collected, which costs a dispatch, a wait
+  // and a retry to learn something the provider was willing to state up front.
+  // Read from the cache rather than by calling a CLI: planning must not block
+  // on a round trip per account.
+  const reported = ctx.reported !== undefined ? ctx.reported : cachedReadings(ctx);
 
-    let effectiveMaxImpl = DEFAULTS.maxImplementationAgents;
-    let ceilingGoverned = false;
+  // Refusals are observed before headroom is computed, so the cooldown they
+  // write is visible to the very plan that observed them rather than to the
+  // one after it.
+  const cooldowns = coolRefusedOfferings(offerings, reported, ctx, now);
 
-    if (Number.isFinite(requestedMaxImpl)) {
-      if (requestedMaxImpl <= 1) {
-        effectiveMaxImpl = Math.max(0, requestedMaxImpl);
-      } else if (decisionValid) {
-        effectiveMaxImpl = requestedMaxImpl;
-        ceilingGoverned = true;
-      } else {
-        effectiveMaxImpl = 1;
-        ceilingGoverned = false;
+  // What is already in flight, from the caller rather than inferred: the
+  // scheduler must never assume a slot is free because it cannot see the work.
+  const running = ctx.running || [];
+  const claims = ctx.claims || [];
+
+  const runningWorkItems = new Set(running.map((r) => r.workItemId).filter(Boolean));
+  const queuedWorkItems = new Set((items || []).map((i) => i.workItemId).filter(Boolean));
+  if (ctx.prune !== false) pruneReservations(now, runningWorkItems, lockOpts, queuedWorkItems);
+
+  const reservations = activeReservations(lockOpts);
+
+  const headrooms = headroomForAll(
+    offerings,
+    ctx.eventsByAccount || {},
+    ctx.eventsByOffering || {},
+    {
+      now,
+      reported,
+      reservationsByAccount: reservations.byAccount,
+      reservationsByOffering: reservations.byOffering,
+    }
+  );
+
+  const decisionLog = decisions.readDecisionsDetailed({ dir: ctx.decisionDir, now }).records || [];
+  const failuresByItem = {};
+  for (const rec of decisionLog) {
+    if (rec.stage === 'failed' || rec.stage === 'refused') {
+      if (rec.workItemId && rec.chosen) {
+        failuresByItem[rec.workItemId] = failuresByItem[rec.workItemId] || new Set();
+        failuresByItem[rec.workItemId].add(rec.chosen);
+      }
+    }
+  }
+
+  const busyWorkItems = new Set(running.map((r) => r.workItemId).filter(Boolean));
+  const claimedBranches = new Map();
+  for (const claim of claims) {
+    if (claim.branch) claimedBranches.set(claim.branch, claim.owner);
+  }
+
+  const perAccountLoad = {};
+  const perModelLoad = {};
+  const perProviderLoad = {};
+  for (const r of running) {
+    if (r.accountId) perAccountLoad[r.accountId] = (perAccountLoad[r.accountId] || 0) + 1;
+    if (r.model) perModelLoad[r.model] = (perModelLoad[r.model] || 0) + 1;
+    if (r.provider) perProviderLoad[r.provider] = (perProviderLoad[r.provider] || 0) + 1;
+  }
+
+  const recentUsage = {};
+  for (const [accId, evs] of Object.entries(ctx.eventsByAccount || {})) {
+    recentUsage[accId] = (evs || []).filter((e) => {
+      const at = typeof e.at === 'number' ? e.at : Date.parse(e.at);
+      return now - at < 60 * 60 * 1000;
+    }).length;
+  }
+
+  let implementationLoad = running.filter((r) => IMPLEMENTATION_ROLES.has(r.role)).length;
+  let researchLoad = running.filter((r) => RESEARCH_ROLES.has(r.role)).length;
+  let reviewLoad = running.filter((r) => REVIEW_ROLES.has(r.role)).length;
+  let totalLoad = running.length;
+
+  const assignments = [];
+  const deferred = [];
+
+  // Highest priority first; a stable tiebreak keeps the plan reproducible,
+  // which matters because this output is compared across runs.
+  const queue = [...(items || [])].sort((a, b) => {
+    const pa = Number(a.priority || 0);
+    const pb = Number(b.priority || 0);
+    if (pa !== pb) return pb - pa;
+    return String(a.workItemId).localeCompare(String(b.workItemId));
+  });
+
+  for (const item of queue) {
+    if (totalLoad >= limits.maxTotal) {
+      deferred.push(waiting(item, 'TOTAL_LIMIT', 'đã đạt trần ' + limits.maxTotal + ' phiên'));
+      continue;
+    }
+
+    // The invariant, checked before anything else so it can never be traded
+    // away by a later condition.
+    if (busyWorkItems.has(item.workItemId)) {
+      deferred.push(waiting(item, 'WORK_ITEM_ALREADY_WRITING', 'đầu mục này đã có writer'));
+      continue;
+    }
+
+    const isImplementation = IMPLEMENTATION_ROLES.has(item.role);
+    const isResearch = RESEARCH_ROLES.has(item.role);
+    const isReview = REVIEW_ROLES.has(item.role);
+
+    if (isImplementation && implementationLoad >= limits.maxImplementationAgents) {
+      deferred.push(
+        waiting(
+          item,
+          'IMPLEMENTATION_LIMIT',
+          'trần ' + limits.maxImplementationAgents + ' agent hiện thực'
+        )
+      );
+      continue;
+    }
+    if (isResearch && researchLoad >= limits.maxResearchAgents) {
+      deferred.push(
+        waiting(item, 'RESEARCH_LIMIT', 'trần ' + limits.maxResearchAgents + ' agent nghiên cứu')
+      );
+      continue;
+    }
+    if (isReview && reviewLoad >= limits.maxReviewAgents) {
+      deferred.push(
+        waiting(item, 'REVIEW_LIMIT', 'trần ' + limits.maxReviewAgents + ' agent review')
+      );
+      continue;
+    }
+
+    // A branch held by someone else is the cross-session collision the writer
+    // claim exists to catch. Catching it here avoids dispatching work that
+    // would only be refused at commit time.
+    if (!isReview && item.branch && claimedBranches.has(item.branch)) {
+      const owner = claimedBranches.get(item.branch);
+      if (owner !== item.workItemId && owner !== item.owner) {
+        deferred.push(waiting(item, 'BRANCH_CLAIMED', 'nhánh đang do ' + owner + ' giữ'));
+        continue;
       }
     }
 
-    const resources = ctx.resources
-      ? resourceCeiling(ctx.resources)
-      : { allowed: null, freeMb: null, reserveMb: null, perAgentMb: null, limiting: 'not consulted' };
-    let ramLimited = false;
-    if (resources.allowed !== null && resources.allowed < effectiveMaxImpl) {
-      effectiveMaxImpl = resources.allowed;
-      ramLimited = true;
+    const { role, eligible, rejected } = eligibleAccounts(item.role, offerings, item);
+    if (!role) {
+      deferred.push(waiting(item, 'UNKNOWN_ROLE', item.role));
+      continue;
+    }
+    if (eligible.length === 0) {
+      deferred.push(
+        waiting(
+          item,
+          'NO_ELIGIBLE_ACCOUNT',
+          rejected.map((r) => r.account + ': ' + r.reason).join('; ')
+        )
+      );
+      continue;
     }
 
-    const limits = Object.assign({}, DEFAULTS, ctxLimits, {
-      maxImplementationAgents: effectiveMaxImpl,
-    });
-    const now = ctx.now || Date.now();
-
-    const offerings = expandOfferings(accounts);
-    const reported = ctx.reported !== undefined ? ctx.reported : cachedReadings(ctx);
-    const cooldowns = coolRefusedOfferings(offerings, reported, ctx, now);
-
-    const running = ctx.running || [];
-    const claims = ctx.claims || [];
-
-    const runningWorkItems = new Set(running.map(r => r.workItemId).filter(Boolean));
-    if (ctx.prune !== false) pruneReservations(now, runningWorkItems, lockOpts);
-
-    const reservations = activeReservations(lockOpts);
-
-    const headrooms = headroomForAll(
-      offerings,
-      ctx.eventsByAccount || {},
-      ctx.eventsByOffering || {},
-      { now, reported, reservationsByAccount: reservations.byAccount, reservationsByOffering: reservations.byOffering }
+    // Escalation ladder: exhaust tier 0 before spending tier 1, and tier 1
+    // before tier 2. Without this the cheapest-first sort inside a tier would
+    // happily reach past free local capacity into a metered API key merely
+    // because that key reported more headroom.
+    // The role decides how to choose inside a tier: authoring wants the best
+    // model that still has room, mechanical work wants the cheapest that works.
+    // Difficulty, not raw model strength, decides what is needed. Fitness then
+    // prefers the sufficient model with the most runway over the strongest one,
+    // and refuses any model that cannot finish a task of this size at all.
+    const difficulty = Number(item.difficulty) || role.difficulty || Difficulty.STANDARD;
+    // The strategy only sets how hard price presses on the choice; it can
+    // never let an insufficient or nearly-drained model through.
+    const strategy = item.strategy || role.strategy || Strategy.QUALITY_FIRST;
+    const fitnessOpts = Object.assign(
+      {
+        costWeight: strategy === Strategy.COST_FIRST ? 200 : 1,
+        reviewing: isReview,
+        providerLoad: perProviderLoad,
+        modelLoad: perModelLoad,
+        scopeLoad: perAccountLoad,
+        recentUsage,
+        maxConcurrentPerModel: limits.maxConcurrentPerModel,
+        maxConcurrentPerQuotaScope: limits.maxConcurrentPerQuotaScope,
+        recentUsagePenalty: limits.recentUsagePenalty,
+        explorationBudget: limits.explorationBudget,
+        providerDiversity: limits.providerDiversity,
+      },
+      ctx.fitness
     );
 
-    const decisionLog = decisions.readDecisionsDetailed({ dir: ctx.decisionDir, now }).records || [];
-    const failuresByItem = {};
-    for (const rec of decisionLog) {
-      if (rec.stage === 'failed' || rec.stage === 'refused') {
-        if (rec.workItemId && rec.chosen) {
-          failuresByItem[rec.workItemId] = failuresByItem[rec.workItemId] || new Set();
-          failuresByItem[rec.workItemId].add(rec.chosen);
-        }
+    const failedIds = failuresByItem[item.workItemId] || new Set();
+
+    let withRoom = [];
+    let chosenTier = null;
+    let fitness = null;
+    let fitnessRejected = [];
+    for (const { tier, offerings: inTier } of laddered(eligible)) {
+      const free = inTier.filter(
+        (o) => !failedIds.has(o.id) && (perAccountLoad[o.accountId] || 0) < limits.maxPerAccount
+      );
+      const { ranked, rejected } = rankByFitness(
+        free,
+        difficulty,
+        headrooms,
+        ctx.history || {},
+        fitnessOpts
+      );
+      fitnessRejected = fitnessRejected.concat(rejected);
+      if (ranked.length > 0) {
+        withRoom = ranked.map((r) => r.offering);
+        fitness = ranked[0].verdict;
+        chosenTier = tier;
+        break;
       }
     }
 
-    const busyWorkItems = new Set(runningWorkItems);
-    const claimedBranches = new Map();
-    for (const claim of claims) {
-      if (claim.branch) claimedBranches.set(claim.branch, claim.owner);
+    if (withRoom.length === 0) {
+      const why =
+        fitnessRejected.length > 0
+          ? fitnessRejected
+              .map((r) => {
+                const h = headrooms[r.offeringId];
+                return (
+                  r.offeringId +
+                  ': ' +
+                  r.reason +
+                  (h && h.boundBy ? ' (theo ' + h.boundBy + ')' : '')
+                );
+              })
+              .join('; ')
+          : eligible.map((o) => o.id + ': đang bận hoặc đã thử và thất bại').join('; ');
+      deferred.push(waiting(item, 'NO_QUOTA_OR_BUSY', why));
+      continue;
     }
 
-    const perAccountLoad = {};
-    const perModelLoad = {};
-    const perProviderLoad = {};
-    for (const r of running) {
-      if (r.accountId) perAccountLoad[r.accountId] = (perAccountLoad[r.accountId] || 0) + 1;
-      if (r.model) perModelLoad[r.model] = (perModelLoad[r.model] || 0) + 1;
-      if (r.provider) perProviderLoad[r.provider] = (perProviderLoad[r.provider] || 0) + 1;
+    const chosen = withRoom[0];
+
+    if (!ctx.dryRun && item.workItemId && chosen.accountId && chosen.id) {
+      recordReservation(
+        item.workItemId,
+        item.role,
+        chosen.accountId,
+        chosen.id,
+        fitness.tokensPerTask,
+        lockOpts
+      );
     }
 
-    const recentUsage = {};
-    for (const [accId, evs] of Object.entries(ctx.eventsByAccount || {})) {
-       recentUsage[accId] = (evs || []).filter(e => {
-         const at = typeof e.at === 'number' ? e.at : Date.parse(e.at);
-         return now - at < 60 * 60 * 1000;
-       }).length;
-    }
-
-    let implementationLoad = running.filter((r) => IMPLEMENTATION_ROLES.has(r.role)).length;
-    let researchLoad = running.filter((r) => RESEARCH_ROLES.has(r.role)).length;
-    let reviewLoad = running.filter((r) => REVIEW_ROLES.has(r.role)).length;
-    let totalLoad = running.length;
-
-    const assignments = [];
-    const deferred = [];
-
-    const queue = [...(items || [])].sort((a, b) => {
-      const pa = Number(a.priority || 0);
-      const pb = Number(b.priority || 0);
-      if (pa !== pb) return pb - pa;
-      return String(a.workItemId).localeCompare(String(b.workItemId));
+    assignments.push({
+      workItemId: item.workItemId,
+      role: item.role,
+      branch: item.branch || null,
+      accountId: chosen.accountId,
+      provider: chosen.provider,
+      model: chosen.model,
+      quality: chosen.quality,
+      difficulty,
+      strategy,
+      grade: fitness.grade,
+      graded: chosen.gradeRecord ? chosen.gradeRecord.graded : false,
+      gradeSource: chosen.gradeRecord ? chosen.gradeRecord.source : 'assumed',
+      gradeProvenance: chosen.gradeRecord ? chosen.gradeRecord.provenance || null : null,
+      runway: fitness.runway,
+      tokensPerTask: fitness.tokensPerTask,
+      fitReason: fitness.reason,
+      headroom: headrooms[chosen.id].status,
+      tier: chosenTier,
+      // Recorded so a later review can see the model was not chosen at random.
+      alternatives: withRoom.slice(1, 4).map((o) => o.id),
     });
 
-    for (const item of queue) {
-      if (totalLoad >= limits.maxTotal) {
-        deferred.push(waiting(item, 'TOTAL_LIMIT', 'đã đạt trần ' + limits.maxTotal + ' phiên'));
-        continue;
-      }
-
-      if (busyWorkItems.has(item.workItemId)) {
-        deferred.push(waiting(item, 'WORK_ITEM_ALREADY_WRITING', 'đầu mục này đã có writer'));
-        continue;
-      }
-
-      const isImplementation = IMPLEMENTATION_ROLES.has(item.role);
-      const isResearch = RESEARCH_ROLES.has(item.role);
-      const isReview = REVIEW_ROLES.has(item.role);
-
-      if (isImplementation && implementationLoad >= limits.maxImplementationAgents) {
-        deferred.push(waiting(item, 'IMPLEMENTATION_LIMIT', 'trần ' + limits.maxImplementationAgents + ' agent hiện thực'));
-        continue;
-      }
-      if (isResearch && researchLoad >= limits.maxResearchAgents) {
-        deferred.push(waiting(item, 'RESEARCH_LIMIT', 'trần ' + limits.maxResearchAgents + ' agent nghiên cứu'));
-        continue;
-      }
-      if (isReview && reviewLoad >= limits.maxReviewAgents) {
-        deferred.push(waiting(item, 'REVIEW_LIMIT', 'trần ' + limits.maxReviewAgents + ' agent review'));
-        continue;
-      }
-
-      if (!isReview && item.branch && claimedBranches.has(item.branch)) {
-        const owner = claimedBranches.get(item.branch);
-        if (owner !== item.workItemId && owner !== item.owner) {
-          deferred.push(waiting(item, 'BRANCH_CLAIMED', 'nhánh đang do ' + owner + ' giữ'));
-          continue;
-        }
-      }
-
-      const { role, eligible, rejected } = eligibleAccounts(item.role, offerings, item);
-      if (!role) {
-        deferred.push(waiting(item, 'UNKNOWN_ROLE', item.role));
-        continue;
-      }
-      if (eligible.length === 0) {
-        deferred.push(waiting(item, 'NO_ELIGIBLE_ACCOUNT', rejected.map((r) => r.account + ': ' + r.reason).join('; ')));
-        continue;
-      }
-
-      const difficulty = Number(item.difficulty) || role.difficulty || Difficulty.STANDARD;
-      const strategy = item.strategy || role.strategy || Strategy.QUALITY_FIRST;
-      const fitnessOpts = Object.assign(
-        {
-          costWeight: strategy === Strategy.COST_FIRST ? 200 : 1,
-          reviewing: isReview,
-          providerLoad: perProviderLoad,
-          modelLoad: perModelLoad,
-          scopeLoad: perAccountLoad,
-          recentUsage,
-          maxConcurrentPerModel: limits.maxConcurrentPerModel,
-          maxConcurrentPerQuotaScope: limits.maxConcurrentPerQuotaScope,
-          recentUsagePenalty: limits.recentUsagePenalty,
-          explorationBudget: limits.explorationBudget,
-          providerDiversity: limits.providerDiversity,
-        },
-        ctx.fitness
-      );
-
-      const failedIds = failuresByItem[item.workItemId] || new Set();
-
-      let withRoom = [];
-      let chosenTier = null;
-      let fitness = null;
-      let fitnessRejected = [];
-
-      for (const { tier, offerings: inTier } of laddered(eligible)) {
-        const free = inTier.filter(o =>
-          !failedIds.has(o.id) &&
-          (perAccountLoad[o.accountId] || 0) < limits.maxPerAccount
-        );
-
-        const { ranked, rejected } = rankByFitness(
-          free,
-          difficulty,
-          headrooms,
-          ctx.history || {},
-          fitnessOpts
-        );
-        fitnessRejected = fitnessRejected.concat(rejected);
-
-        if (ranked.length > 0) {
-          withRoom = ranked.map((r) => r.offering);
-          fitness = ranked[0].verdict;
-          chosenTier = tier;
-          break;
-        }
-      }
-
-      if (withRoom.length === 0) {
-        const why = fitnessRejected.length > 0
-          ? fitnessRejected.map((r) => {
-              const h = headrooms[r.offeringId];
-              return r.offeringId + ': ' + r.reason + (h && h.boundBy ? ' (theo ' + h.boundBy + ')' : '');
-            }).join('; ')
-          : eligible.map((o) => o.id + ': đang bận hoặc đã thử và thất bại').join('; ');
-        deferred.push(waiting(item, 'NO_QUOTA_OR_BUSY', why));
-        continue;
-      }
-
-      const chosen = withRoom[0];
-
-      if (!ctx.dryRun && item.workItemId && chosen.accountId && chosen.id) {
-         recordReservation(item.workItemId, item.role, chosen.accountId, chosen.id, fitness.tokensPerTask, lockOpts);
-      }
-
-      assignments.push({
-        workItemId: item.workItemId,
-        role: item.role,
-        branch: item.branch || null,
-        accountId: chosen.accountId,
-        provider: chosen.provider,
-        model: chosen.model,
-        quality: chosen.quality,
-        difficulty,
-        strategy,
-        grade: fitness.grade,
-        graded: chosen.gradeRecord ? chosen.gradeRecord.graded : false,
-        gradeSource: chosen.gradeRecord ? chosen.gradeRecord.source : 'assumed',
-        gradeProvenance: chosen.gradeRecord ? chosen.gradeRecord.provenance || null : null,
-        runway: fitness.runway,
-        tokensPerTask: fitness.tokensPerTask,
-        fitReason: fitness.reason,
-        headroom: headrooms[chosen.id].status,
-        tier: 0,
-      });
-
-      if (!isReview) {
-        busyWorkItems.add(item.workItemId);
-        if (item.branch) claimedBranches.set(item.branch, item.workItemId);
-      }
-      perAccountLoad[chosen.accountId] = (perAccountLoad[chosen.accountId] || 0) + 1;
-      perModelLoad[chosen.model] = (perModelLoad[chosen.model] || 0) + 1;
-      perProviderLoad[chosen.provider] = (perProviderLoad[chosen.provider] || 0) + 1;
-      totalLoad += 1;
-      if (isImplementation) implementationLoad += 1;
-      if (isResearch) researchLoad += 1;
-      if (isReview) reviewLoad += 1;
+    // A review does not occupy the Work Item as a writer, so authoring on it
+    // may continue and a second review of a different item stays possible.
+    if (!isReview) {
+      busyWorkItems.add(item.workItemId);
+      if (item.branch) claimedBranches.set(item.branch, item.workItemId);
     }
+    perAccountLoad[chosen.accountId] = (perAccountLoad[chosen.accountId] || 0) + 1;
+    perModelLoad[chosen.model] = (perModelLoad[chosen.model] || 0) + 1;
+    perProviderLoad[chosen.provider] = (perProviderLoad[chosen.provider] || 0) + 1;
+    totalLoad += 1;
+    if (isImplementation) implementationLoad += 1;
+    if (isResearch) researchLoad += 1;
+    if (isReview) reviewLoad += 1;
+  }
 
-    return {
-      assignments,
-      deferred,
+  return {
+    assignments,
+    deferred,
     utilisation: {
       total: totalLoad,
       maxTotal: limits.maxTotal,
