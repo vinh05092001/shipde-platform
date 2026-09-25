@@ -20,4 +20,3 @@ test('inspectVerdict falls back to ALIVE for non‑JSON output', () => {
   const verdict = inspectVerdict(res);
   assert.strictEqual(verdict, 'alive');
 });
-

@@ -28,13 +28,7 @@ function assessProgress(prev, curr) {
   if (!curr || typeof curr !== 'object') return 'UNKNOWN';
 
   // Any forward‑motion flag means ALIVE.
-  const forwardFlags = [
-    'diffChanged',
-    'commitChanged',
-    'testRan',
-    'checkpointWritten',
-    'logGrew',
-  ];
+  const forwardFlags = ['diffChanged', 'commitChanged', 'testRan', 'checkpointWritten', 'logGrew'];
   for (const f of forwardFlags) {
     if (curr[f]) return 'ALIVE';
   }

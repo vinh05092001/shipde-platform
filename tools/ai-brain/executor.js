@@ -127,29 +127,33 @@ function inspectVerdict(res) {
   try {
     const parsed = JSON.parse(stdout);
     if (parsed && typeof parsed === 'object') {
-        // Detect explicit 'gone' via error message.
-        if (parsed.error && typeof parsed.error.message === 'string' && /not found/i.test(parsed.error.message)) {
-          return 'gone';
-        }
-        // Forward‑motion flags indicate the session is alive.
-        const forwardFlags = [
-          'diffChanged',
-          'commitChanged',
-          'testRan',
-          'checkpointWritten',
-          'logGrew',
-        ];
-        for (const f of forwardFlags) {
-          if (parsed[f]) return 'alive';
-        }
-        // If the JSON has any other keys (e.g., a session record), treat as alive.
-        const otherKeys = Object.keys(parsed).filter(k => !['progress','error'].includes(k));
-        if (otherKeys.length > 0) return 'alive';
-        // Explicit progress verdicts can be provided.
-        if (parsed.progress === 'stalled') return 'stalled';
-        if (parsed.progress === 'unknown') return 'unknown';
-        // No forward signal and no other data – unknown.
-        return 'unknown';
+      // Detect explicit 'gone' via error message.
+      if (
+        parsed.error &&
+        typeof parsed.error.message === 'string' &&
+        /not found/i.test(parsed.error.message)
+      ) {
+        return 'gone';
+      }
+      // Forward‑motion flags indicate the session is alive.
+      const forwardFlags = [
+        'diffChanged',
+        'commitChanged',
+        'testRan',
+        'checkpointWritten',
+        'logGrew',
+      ];
+      for (const f of forwardFlags) {
+        if (parsed[f]) return 'alive';
+      }
+      // If the JSON has any other keys (e.g., a session record), treat as alive.
+      const otherKeys = Object.keys(parsed).filter((k) => !['progress', 'error'].includes(k));
+      if (otherKeys.length > 0) return 'alive';
+      // Explicit progress verdicts can be provided.
+      if (parsed.progress === 'stalled') return 'stalled';
+      if (parsed.progress === 'unknown') return 'unknown';
+      // No forward signal and no other data – unknown.
+      return 'unknown';
     }
   } catch (_) {
     // Not JSON – fall back to original heuristic.
@@ -163,7 +167,6 @@ function inspectVerdict(res) {
   }
   return 'unknown';
 }
-
 
 /**
  * @param plan    the object planDispatch returned; read only
@@ -342,19 +345,19 @@ function executePlan(plan, options) {
           probeRes = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
         }
       }
-        const verdict = inspectVerdict(probeRes);
-        if (verdict === 'gone') {
-          sessionGone = true;
-        } else if (verdict === 'stalled' || verdict === 'unknown') {
-          refuse(
-            'SESSION_STATE_UNKNOWN: probe of session ' +
-              existing.sessionId +
-              ' failed (exit ' +
-              probeRes.exitCode +
-              '); release the claim by hand with dispatch --close if it is truly gone'
-          );
-          continue;
-        }
+      const verdict = inspectVerdict(probeRes);
+      if (verdict === 'gone') {
+        sessionGone = true;
+      } else if (verdict === 'stalled' || verdict === 'unknown') {
+        refuse(
+          'SESSION_STATE_UNKNOWN: probe of session ' +
+            existing.sessionId +
+            ' failed (exit ' +
+            probeRes.exitCode +
+            '); release the claim by hand with dispatch --close if it is truly gone'
+        );
+        continue;
+      }
     }
 
     if (resuming && sessionGone) {
