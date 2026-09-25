@@ -341,8 +341,8 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
             recentCommits: [],
           },
         },
-        mockAo: {
-          health: mockHealth('ao', 'unavailable'),
+        mockPaseo: {
+          health: mockHealth('paseo', 'unavailable'),
           data: { daemon: { ready: false, state: 'stopped' }, sessions: [] },
         },
         mockGitHub: {
@@ -364,7 +364,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
         },
       });
 
-      for (const key of ['register', 'git', 'ao', 'github']) {
+      for (const key of ['register', 'git', 'paseo', 'github']) {
         const src = state.sources[key];
         assert.ok(src.observedAt, `${key} must expose observedAt`);
         assert.ok('ageMs' in src, `${key} must expose ageMs`);
@@ -375,8 +375,8 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       assert.strictEqual(state.sources.git.ageMs, 1000);
       // AO's own status was collected as unavailable, so freshness must never
       // be fabricated as live/stale even though observedAt is recent.
-      assert.strictEqual(state.sources.ao.freshness, 'unavailable');
-      assert.strictEqual(state.sources.ao.ageMs, null);
+      assert.strictEqual(state.sources.paseo.freshness, 'unavailable');
+      assert.strictEqual(state.sources.paseo.ageMs, null);
     });
 
     test('formatSourceAge renders human-readable ages and N/A for unknown age', () => {
@@ -388,9 +388,17 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     });
 
     test('FRESHNESS_BADGE provides a distinct, non-color-only label for each freshness state', () => {
-      assert.strictEqual(FRESHNESS_BADGE.live.text.includes('LIVE'), true);
-      assert.strictEqual(FRESHNESS_BADGE.stale.text.includes('STALE'), true);
-      assert.strictEqual(FRESHNESS_BADGE.unavailable.text.includes('UNAVAILABLE'), true);
+      // The cockpit reads Vietnamese; what matters is that each state carries its own
+      // word, so colour is never the only signal.
+      assert.strictEqual(FRESHNESS_BADGE.live.text.includes('Trực tiếp'), true);
+      assert.strictEqual(FRESHNESS_BADGE.stale.text.includes('Cũ'), true);
+      assert.strictEqual(FRESHNESS_BADGE.unavailable.text.includes('Không có'), true);
+      const labels = [
+        FRESHNESS_BADGE.live.text,
+        FRESHNESS_BADGE.stale.text,
+        FRESHNESS_BADGE.unavailable.text,
+      ];
+      assert.strictEqual(new Set(labels).size, 3);
     });
   });
 
@@ -425,7 +433,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     test('classifies AO roles correctly separating author, reviewer, analyst, supervisor', () => {
       const sup = classifySessionRole({
         role: 'orchestrator',
-        branch: 'ao/shipde-platf-orchestrator',
+        branch: 'paseo/shipde-platf-orchestrator',
       });
       assert.strictEqual(sup.category, 'SUPERVISOR');
       assert.strictEqual(sup.isWriter, false);
@@ -441,7 +449,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const ana = classifySessionRole({
         role: 'worker',
         harness: 'claude-code',
-        branch: 'ao/shipde-platform-13/root',
+        branch: 'paseo/shipde-platform-13/root',
       });
       assert.strictEqual(ana.category, 'ANALYST');
       assert.strictEqual(ana.isWriter, false);
@@ -463,7 +471,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const pastTenMins = new Date(Date.now() - 600 * 1000).toISOString();
       const fStale = computeFreshness(pastTenMins);
       assert.strictEqual(fStale.status, 'stale');
-      assert.ok(fStale.label.includes('STALE'));
+      assert.ok(fStale.label.includes('STALE') || fStale.label.includes('cũ'));
     });
 
     test('handles malformed AO json without crashing', () => {
@@ -558,7 +566,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const sources = {
         register: { status: 'live' },
         git: { status: 'live' },
-        ao: { status: 'unavailable' },
+        paseo: { status: 'unavailable' },
         github: { status: 'live' },
       };
       assert.strictEqual(deriveOverallStatus(sources, []), 'partial');
@@ -568,7 +576,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const sources = {
         register: { status: 'live' },
         git: { status: 'live' },
-        ao: { status: 'live' },
+        paseo: { status: 'live' },
         github: { status: 'live' },
       };
       const conflicts = [{ severity: 'error', title: 'Fatal mismatch' }];
@@ -593,7 +601,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const stream = buildActivityStream(commits, sessions);
       assert.strictEqual(stream.length, 3);
       assert.strictEqual(stream[0].id, 'commit-c2'); // 12:00
-      assert.strictEqual(stream[1].id, 'ao-s1'); // 11:00
+      assert.strictEqual(stream[1].id, 'paseo-s1'); // 11:00
       assert.strictEqual(stream[2].id, 'commit-c1'); // 10:00
     });
   });
@@ -960,26 +968,26 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
     test('deriveWriterState reports UNAVAILABLE honestly when AO is not live, never asserting an active writer', () => {
       const result = deriveWriterState({
-        sources: { ao: { status: 'unavailable' } },
+        sources: { paseo: { status: 'unavailable' } },
         sessions: [{ isWriter: true, isTerminated: false }],
       });
       assert.strictEqual(result.level, 'unavailable');
-      assert.strictEqual(result.countLabel, 'UNAVAILABLE');
+      assert.strictEqual(result.countLabel, 'Không có');
     });
 
     test('deriveWriterState reflects zero, one, and multiple real writer sessions from AO data', () => {
       const live = { status: 'live' };
-      assert.strictEqual(deriveWriterState({ sources: { ao: live }, sessions: [] }).level, 'idle');
+      assert.strictEqual(deriveWriterState({ sources: { paseo: live }, sessions: [] }).level, 'idle');
       assert.strictEqual(
         deriveWriterState({
-          sources: { ao: live },
+          sources: { paseo: live },
           sessions: [{ isWriter: false }, { isWriter: true, isTerminated: false }],
         }).level,
         'single'
       );
       assert.strictEqual(
         deriveWriterState({
-          sources: { ao: live },
+          sources: { paseo: live },
           sessions: [
             { isWriter: true, isTerminated: false },
             { isWriter: true, isTerminated: false },
@@ -990,7 +998,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       // Terminated writer sessions must not count as currently active.
       assert.strictEqual(
         deriveWriterState({
-          sources: { ao: live },
+          sources: { paseo: live },
           sessions: [{ isWriter: true, isTerminated: true }],
         }).level,
         'idle'
@@ -998,7 +1006,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
     });
 
     test('gate pipeline renders EVIDENCE_UNAVAILABLE as a clear, non-PASS label', () => {
-      assert.strictEqual(GATE_STAGE_LABELS.EVIDENCE_UNAVAILABLE.includes('UNAVAILABLE'), true);
+      assert.match(GATE_STAGE_LABELS.EVIDENCE_UNAVAILABLE, /CHỜ BẰNG CHỨNG/);
       assert.notStrictEqual(GATE_STAGE_LABELS.EVIDENCE_UNAVAILABLE, 'PASSED');
     });
   });
@@ -1279,7 +1287,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const sourcesStale = {
         register: { status: 'live', freshness: 'live' },
         git: { status: 'live', freshness: 'stale' }, // collection says live, but age makes freshness stale
-        ao: { status: 'live', freshness: 'live' },
+        paseo: { status: 'live', freshness: 'live' },
         github: { status: 'live', freshness: 'live' },
       };
       assert.strictEqual(deriveOverallStatus(sourcesStale, []), 'stale');
@@ -1287,7 +1295,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
       const sourcesUnavailable = {
         register: { status: 'live', freshness: 'live' },
         git: { status: 'live', freshness: 'unavailable' },
-        ao: { status: 'live', freshness: 'live' },
+        paseo: { status: 'live', freshness: 'live' },
         github: { status: 'live', freshness: 'live' },
       };
       assert.strictEqual(deriveOverallStatus(sourcesUnavailable, []), 'partial');
@@ -1311,8 +1319,8 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
           health: mockHealth('git', 'live'),
           data: { currentBranch: 'feat/test-branch', headOid: 'sha1', recentCommits: [] },
         },
-        mockAo: {
-          health: mockHealth('ao', 'live'),
+        mockPaseo: {
+          health: mockHealth('paseo', 'live'),
           data: { daemon: { ready: true, state: 'ready' }, sessions: [] },
         },
         mockGitHub: {
@@ -1341,8 +1349,8 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
           health: mockHealth('git', 'unavailable'),
           data: { currentBranch: null, headOid: '', recentCommits: [] },
         },
-        mockAo: {
-          health: mockHealth('ao', 'live'),
+        mockPaseo: {
+          health: mockHealth('paseo', 'live'),
           data: { daemon: { ready: true, state: 'ready' }, sessions: [] },
         },
         mockGitHub: {
@@ -1381,14 +1389,14 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
         error: null,
       });
 
-      // Pass 1: Initial state (ao unavailable)
+      // Pass 1: Initial state (paseo unavailable)
       const state1 = await aggregateCockpitState({
         mockGit: {
           health: mockHealth('git', 'live'),
           data: { currentBranch: 'main', headOid: 'sha1', recentCommits: [] },
         },
-        mockAo: {
-          health: mockHealth('ao', 'unavailable'),
+        mockPaseo: {
+          health: mockHealth('paseo', 'unavailable'),
           data: { daemon: { ready: false }, sessions: [] },
         },
         mockGitHub: {
@@ -1417,8 +1425,8 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
           health: mockHealth('git', 'live'),
           data: { currentBranch: 'main', headOid: 'sha1', recentCommits: [] },
         },
-        mockAo: {
-          health: mockHealth('ao', 'live'),
+        mockPaseo: {
+          health: mockHealth('paseo', 'live'),
           data: { daemon: { ready: true, state: 'ready' }, sessions: [] },
         },
         mockGitHub: {
@@ -1442,7 +1450,7 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
 
       const recoveryAct = state2.activity.find((a) => a.type === 'SOURCE_RECOVERY');
       assert.ok(recoveryAct, 'Expected a SOURCE_RECOVERY activity record upon AO recovery');
-      assert.ok(recoveryAct.title.includes('AO'));
+      assert.ok(recoveryAct.title.includes('PASEO'));
       assert.strictEqual(state2.revision > rev1, true);
 
       // Pass 3: Identical state again -> revision must NOT increment
@@ -1451,8 +1459,8 @@ multiline detail","MERGED","","docs/item1.md","feat/item1","#1","PASS","abc1234"
           health: mockHealth('git', 'live'),
           data: { currentBranch: 'main', headOid: 'sha1', recentCommits: [] },
         },
-        mockAo: {
-          health: mockHealth('ao', 'live'),
+        mockPaseo: {
+          health: mockHealth('paseo', 'live'),
           data: { daemon: { ready: true, state: 'ready' }, sessions: [] },
         },
         mockGitHub: {

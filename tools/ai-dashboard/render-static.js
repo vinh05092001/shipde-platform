@@ -43,13 +43,13 @@ function renderStaticDashboard(rootDir, options = {}) {
         impact: 'Khởi động server để quan sát git live',
         error: null,
       }),
-      ao: withFreshness({
-        name: 'ao',
+      paseo: withFreshness({
+        name: 'paseo',
         status: 'unavailable',
         observedAt: new Date().toISOString(),
         latencyMs: 0,
         provenance: 'Offline file mode',
-        impact: 'Khởi động server để quan sát AO live',
+        impact: 'Khởi động server để quan sát Paseo live',
         error: null,
       }),
       github: withFreshness({
