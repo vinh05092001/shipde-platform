@@ -1,0 +1,2630 @@
+{
+  "evidenceKind": "checkpoint-import",
+  "importedAt": "2026-09-25T01:14:40.330Z",
+  "importedFrom": "checkpoint.jsonl",
+  "totalRows": 285,
+  "malformedRows": 0,
+  "rowsWithModel": 54,
+  "probeInvalid": 109,
+  "passes": 21,
+  "failuresByClass": {
+    "unknown": 46,
+    "model_not_found": 9,
+    "quota_exhausted": 68,
+    "unauthorized": 8,
+    "not_licensed": 18,
+    "invalid_request": 6
+  },
+  "failureTotal": 155,
+  "candidateCount": 54,
+  "candidates": [
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.8-flash-high",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.8-flash-high",
+      "base": "ag/gemini-3.8-flash-high",
+      "firstSeen": "2026-09-24T09:32:27.789Z",
+      "lastSeen": "2026-09-24T09:49:29.738Z",
+      "attempts": 2,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T09:49:29.738Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2851
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "http␟9router␟9router␟alims-intl␟␟alims-intl/qwen3.5-plus",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "alims-intl",
+      "account": "",
+      "modelId": "alims-intl/qwen3.5-plus",
+      "base": "alims-intl/qwen3.5-plus",
+      "firstSeen": "2026-09-24T09:32:29.846Z",
+      "lastSeen": "2026-09-24T11:23:05.799Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:30:10.156Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-06772860-b0be-95fd-b28f-8065fb07aa5a\",\"request_id\":\"06772860-b0be-95fd-b28f-8065fb07aa5a\"}"
+        },
+        {
+          "ts": "2026-09-24T10:32:49.508Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-78b1da7b-7545-9a9b-82b9-743b23575814\",\"request_id\":\"78b1da7b-7545-9a9b-82b9-743b23575814\"}"
+        },
+        {
+          "ts": "2026-09-24T10:40:11.471Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-608d0c71-d5d4-9c4a-9726-05927a2df561\",\"request_id\":\"608d0c71-d5d4-9c4a-9726-05927a2df561\"}"
+        },
+        {
+          "ts": "2026-09-24T10:45:26.542Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-d565cb68-7717-9521-8de5-42f1a9b05532\",\"request_id\":\"d565cb68-7717-9521-8de5-42f1a9b05532\"}"
+        },
+        {
+          "ts": "2026-09-24T10:55:55.507Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-64233403-d090-9492-a657-8ec3603f1a95\",\"request_id\":\"64233403-d090-9492-a657-8ec3603f1a95\"}"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:45:26.542Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-d565cb68-7717-9521-8de5-42f1a9b05532\",\"request_id\":\"d565cb68-7717-9521-8de5-42f1a9b05532\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 328,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T10:55:55.507Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-64233403-d090-9492-a657-8ec3603f1a95\",\"request_id\":\"64233403-d090-9492-a657-8ec3603f1a95\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 285,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:00:04.919Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-8caefdaa-5ebc-97aa-bbce-08d2ea0a39ef\",\"request_id\":\"8caefdaa-5ebc-97aa-bbce-08d2ea0a39ef\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 297,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:05:35.522Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-749819c2-cc82-9052-9914-e83d0b6b4f70\",\"request_id\":\"749819c2-cc82-9052-9914-e83d0b6b4f70\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 384,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:23:05.799Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#overdue-payment\",\"type\":\"Arrearage\",\"param\":null,\"code\":\"Arrearage\"},\"id\":\"chatcmpl-bfaefeb4-47be-9c69-96bf-7c2e48feb66f\",\"request_id\":\"bfaefeb4-47be-9c69-96bf-7c2e48feb66f\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 307,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟bpm␟␟bpm/seed-2-0-pro-260328",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "bpm",
+      "account": "",
+      "modelId": "bpm/seed-2-0-pro-260328",
+      "base": "bpm/seed-2-0-pro-260328",
+      "firstSeen": "2026-09-24T09:32:31.895Z",
+      "lastSeen": "2026-09-24T11:23:08.153Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:30:12.492Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770801) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 021790245813502b8350bdfd357a856ad43651cfdb51f6e4888eb\",\"param\":\"\",\"type\":\"Bad Request\"}}"
+        },
+        {
+          "ts": "2026-09-24T10:32:51.860Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770794) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 02179024597288222877b9ff06629ca98d99f0267ba452b1a4af9\",\"param\":\"\",\"type\":\"Bad Request\"}}"
+        },
+        {
+          "ts": "2026-09-24T10:40:13.811Z",
+          "status": "FAIL",
+          "errorClass": "unauthorized",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770801) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 02179024641484150b1c418616fd9b5f78a16c5c9d34162a3005a\",\"param\":\"\",\"type\":\"Bad Request\"}}"
+        },
+        {
+          "ts": "2026-09-24T10:45:28.837Z",
+          "status": "FAIL",
+          "errorClass": "unauthorized",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770794) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 021790246729890ec39001cad8ae999c8f17eed1b37944e6781af\",\"param\":\"\",\"type\":\"Bad Request\"}}"
+        },
+        {
+          "ts": "2026-09-24T10:55:57.843Z",
+          "status": "FAIL",
+          "errorClass": "unauthorized",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770801) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 021790247358898c1826595e581f7a440f247fe98485b57e7fc8b\",\"param\":\"\",\"type\":\"Bad Request\"}}"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:45:28.837Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770794) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 021790246729890ec39001cad8ae999c8f17eed1b37944e6781af\",\"param\":\"\",\"type\":\"Bad Request\"}}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 285,
+          "errorClass": "unauthorized"
+        },
+        {
+          "ts": "2026-09-24T10:55:57.843Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770801) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 021790247358898c1826595e581f7a440f247fe98485b57e7fc8b\",\"param\":\"\",\"type\":\"Bad Request\"}}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 317,
+          "errorClass": "unauthorized"
+        },
+        {
+          "ts": "2026-09-24T11:00:07.271Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770794) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 0217902476083419953a9193bc3926b190298875f636f3e6fe65f\",\"param\":\"\",\"type\":\"Bad Request\"}}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 340,
+          "errorClass": "unauthorized"
+        },
+        {
+          "ts": "2026-09-24T11:05:37.825Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770801) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 021790247938902e0570d30189b68d5608c0b11774ff85b762fe3\",\"param\":\"\",\"type\":\"Bad Request\"}}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 294,
+          "errorClass": "unauthorized"
+        },
+        {
+          "ts": "2026-09-24T11:23:08.153Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"code\":\"InvalidSubscription\",\"message\":\"Your account (3004770794) does not have a valid CodingPlan subscription, or your subscription has expired. Please visit https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?OpenModelVisible=false\\u0026tab=CodingPlan to review your subscription status or complete the subscription or renewal process.  Request id: 02179024898926907b4b942199433a510c68da6d01b36ec557252\",\"param\":\"\",\"type\":\"Bad Request\"}}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 346,
+          "errorClass": "unauthorized"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟cbai␟␟cbai/glm-5.2",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cbai",
+      "account": "",
+      "modelId": "cbai/glm-5.2",
+      "base": "cbai/glm-5.2",
+      "firstSeen": "2026-09-24T09:32:33.942Z",
+      "lastSeen": "2026-09-24T11:33:07.592Z",
+      "attempts": 13,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:30:15.175Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"ed3fa8a2-5561-42bd-aa47-246f7ba34c96\"}}} (reset after 5m)"
+        },
+        {
+          "ts": "2026-09-24T10:32:53.928Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"dd2d6ba (reset after 2m 22s)"
+        },
+        {
+          "ts": "2026-09-24T10:40:16.182Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"eb534fad-3e4c-47c4-960c-68367a1c3402\"}}} (reset after 5m)"
+        },
+        {
+          "ts": "2026-09-24T10:45:32.425Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"ed21288f-28c3-4142-bdf6-939bafaaf6ee\"}}} (reset after 4m 59s)"
+        },
+        {
+          "ts": "2026-09-24T10:56:00.867Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"6eb4e524-3c42-4c76-a5d0-e9d35e069168\"}}} (reset after 5m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:56:00.867Z",
+          "status": "FAIL",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"6eb4e524-3c42-4c76-a5d0-e9d35e069168\"}}} (reset after 5m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1016,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:00:09.335Z",
+          "status": "FAIL",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"5cfd639 (reset after 52s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 60,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:05:40.200Z",
+          "status": "FAIL",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"a86cbdf5-e93a-48a5-ae7a-7d011c4b81ef\"}}} (reset after 5m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 367,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:23:11.849Z",
+          "status": "FAIL",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"7ac00e98-8d1e-4c4c-a4ef-0b9d9e573101\"}}} (reset after 5m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1693,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:33:07.592Z",
+          "status": "FAIL",
+          "reason": "[codebuddy-intl/glm-5.2] [429]: {\"error\":{\"data\":{\"code\":14018,\"msg\":\"Credits exhausted. Please visit the link below to purchase add-on packs and get more credits: https://www.codebuddy.ai/profile/usage \",\"requestId\":\"4e97f92a-341b-4154-92b5-d1842edbfc8a\"}}} (reset after 5m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 364,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟cc␟␟cc/claude-opus-5-5",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cc",
+      "account": "",
+      "modelId": "cc/claude-opus-5-5",
+      "base": "cc/claude-opus-5-5",
+      "firstSeen": "2026-09-24T09:32:35.988Z",
+      "lastSeen": "2026-09-24T11:23:15.727Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:30:18.945Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfN7HVW6MZLyfXime8JDW\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:32:57.719Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfN7VC8uHJ5eUztWLDfXX\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:40:19.803Z",
+          "status": "FAIL",
+          "errorClass": "not_licensed",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfN83ntaqnk3dyQVQ2XxH\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:45:36.151Z",
+          "status": "FAIL",
+          "errorClass": "not_licensed",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfN8T7PTjyjK6qnEG9Yjp\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:56:04.743Z",
+          "status": "FAIL",
+          "errorClass": "not_licensed",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfN9FSMGTtxfSvM1NR5yi\"} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:45:36.151Z",
+          "status": "FAIL",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfN8T7PTjyjK6qnEG9Yjp\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1711,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T10:56:04.743Z",
+          "status": "FAIL",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfN9FSMGTtxfSvM1NR5yi\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1870,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T11:00:13.498Z",
+          "status": "FAIL",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfN9ZkUBqbNrKze3bTgxt\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2146,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T11:05:43.888Z",
+          "status": "FAIL",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfN9z9Ac3CgbfEgk1AR1X\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1673,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T11:23:15.727Z",
+          "status": "FAIL",
+          "reason": "[claude/claude-opus-5-5] [403]: {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth authentication is currently not allowed for this organization.\",\"details\":{\"error_code\":\"oauth_not_allowed_for_organization\"}},\"request_id\":\"req_011CfNBKfPgeLfX3oCpSVUkH\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1872,
+          "errorClass": "not_licensed"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟cerebras␟␟cerebras/gpt-oss-120b",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cerebras",
+      "account": "",
+      "modelId": "cerebras/gpt-oss-120b",
+      "base": "cerebras/gpt-oss-120b",
+      "firstSeen": "2026-09-24T09:32:38.034Z",
+      "lastSeen": "2026-09-24T11:23:18.656Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:30:22.019Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:33:00.523Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:40:22.662Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:45:39.940Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:56:07.644Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:45:39.940Z",
+          "status": "FAIL",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1774,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T10:56:07.644Z",
+          "status": "FAIL",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 884,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:00:16.309Z",
+          "status": "FAIL",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 804,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:05:46.721Z",
+          "status": "FAIL",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 819,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:23:18.656Z",
+          "status": "FAIL",
+          "reason": "[cerebras/gpt-oss-120b] [402]: {\"message\":\"Payment required to access this resource. Visit your billing tab.\",\"type\":\"payment_required_error\",\"param\":\"quota\",\"code\":\"payment_required\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 929,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟cf␟␟cf/@cf/meta/llama-3.2-1b-instruct",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cf",
+      "account": "",
+      "modelId": "cf/@cf/meta/llama-3.2-1b-instruct",
+      "base": "cf/@cf/meta/llama-3.2-1b-instruct",
+      "firstSeen": "2026-09-24T09:32:40.066Z",
+      "lastSeen": "2026-09-24T11:33:10.182Z",
+      "attempts": 13,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:30:24.964Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (978900de-3287-4595-a6e9-553402f2a334)\",\"code\":4006}],\"success\":false,\"result\":{},\"messages\":[]} (reset after 5m)"
+        },
+        {
+          "ts": "2026-09-24T10:33:02.613Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (97 (reset after 2m 23s)"
+        },
+        {
+          "ts": "2026-09-24T10:40:25.204Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (c814d373-1608-46e9-8041-d7af2a10e55c)\",\"code\":4006}],\"success\":false,\"result\":{},\"messages\":[]} (reset after 5m)"
+        },
+        {
+          "ts": "2026-09-24T10:45:42.667Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (c14659fa-8d19-4ccf-9f2c-8b9d17c92040)\",\"code\":4006}],\"success\":false,\"result\":{},\"messages\":[]} (reset after 5m)"
+        },
+        {
+          "ts": "2026-09-24T10:56:10.224Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (5476f325-50ce-4e9e-b0ec-889164e641b3)\",\"code\":4006}],\"success\":false,\"result\":{},\"messages\":[]} (reset after 5m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:56:10.224Z",
+          "status": "FAIL",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (5476f325-50ce-4e9e-b0ec-889164e641b3)\",\"code\":4006}],\"success\":false,\"result\":{},\"messages\":[]} (reset after 5m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 572,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:00:18.373Z",
+          "status": "FAIL",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (54 (reset after 52s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 58,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:05:49.329Z",
+          "status": "FAIL",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (7067d574-77b1-43fc-99a7-0a1f9d2f1453)\",\"code\":4006}],\"success\":false,\"result\":{},\"messages\":[]} (reset after 5m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 601,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:23:21.205Z",
+          "status": "FAIL",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (5c2c4ce9-eeda-4245-b634-e5dc119da5f0)\",\"code\":4006}],\"success\":false,\"result\":{},\"messages\":[]} (reset after 5m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 544,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:33:10.182Z",
+          "status": "FAIL",
+          "reason": "[cloudflare-ai/@cf/meta/llama-3.2-1b-instruct] [429]: {\"errors\":[{\"message\":\"AiError: AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage. (30a1ed0b-5db5-484a-939f-d4441dd990a5)\",\"code\":4006}],\"success\":false,\"result\":{},\"messages\":[]} (reset after 5m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 578,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟cl␟␟cl/fireworks/ember-1",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cl",
+      "account": "",
+      "modelId": "cl/fireworks/ember-1",
+      "base": "cl/fireworks/ember-1",
+      "firstSeen": "2026-09-24T09:32:42.103Z",
+      "lastSeen": "2026-09-24T11:23:24.207Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:30:29.533Z",
+          "status": "FAIL",
+          "errorClass": "unauthorized",
+          "reason": "[cline/fireworks/ember-1] [401]: {\"error\":\"Unauthorized: Please make sure you're using the latest version of Cline and re-authenticate your Cline account.\"}\n (reset after 1m 59s)"
+        },
+        {
+          "ts": "2026-09-24T10:33:05.456Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[cline/fireworks/ember-1] [402]: {\"error\":{\"code\":\"insufficient_credits\",\"message\":\"Insufficient balance. Your Cline Credits balance is $0.00\",\"current_balance\":0.004822,\"total_spent\":0,\"total_promotions\":0,\"buy_credits_url\":\"https://app.cline.bot/credits\"}}\n (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:40:28.062Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cline/fireworks/ember-1] [402]: {\"error\":{\"code\":\"insufficient_credits\",\"message\":\"Insufficient balance. Your Cline Credits balance is $0.00\",\"current_balance\":0.004822,\"total_spent\":0,\"total_promotions\":0,\"buy_credits_url\":\"https://app.cline.bot/credits\"}}\n (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:45:45.595Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cline/fireworks/ember-1] [402]: {\"error\":{\"code\":\"insufficient_credits\",\"message\":\"Insufficient balance. Your Cline Credits balance is $0.00\",\"current_balance\":0.004822,\"total_spent\":0,\"total_promotions\":0,\"buy_credits_url\":\"https://app.cline.bot/credits\"}}\n (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:56:13.150Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[cline/fireworks/ember-1] [402]: {\"error\":{\"code\":\"insufficient_credits\",\"message\":\"Insufficient balance. Your Cline Credits balance is $0.00\",\"current_balance\":0.004822,\"total_spent\":0,\"total_promotions\":0,\"buy_credits_url\":\"https://app.cline.bot/credits\"}}\n (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:45:45.595Z",
+          "status": "FAIL",
+          "reason": "[cline/fireworks/ember-1] [402]: {\"error\":{\"code\":\"insufficient_credits\",\"message\":\"Insufficient balance. Your Cline Credits balance is $0.00\",\"current_balance\":0.004822,\"total_spent\":0,\"total_promotions\":0,\"buy_credits_url\":\"https://app.cline.bot/credits\"}}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 917,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T10:56:13.150Z",
+          "status": "FAIL",
+          "reason": "[cline/fireworks/ember-1] [402]: {\"error\":{\"code\":\"insufficient_credits\",\"message\":\"Insufficient balance. Your Cline Credits balance is $0.00\",\"current_balance\":0.004822,\"total_spent\":0,\"total_promotions\":0,\"buy_credits_url\":\"https://app.cline.bot/credits\"}}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 908,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:00:21.517Z",
+          "status": "FAIL",
+          "reason": "[cline/fireworks/ember-1] [402]: {\"error\":{\"code\":\"insufficient_credits\",\"message\":\"Insufficient balance. Your Cline Credits balance is $0.00\",\"current_balance\":0.004822,\"total_spent\":0,\"total_promotions\":0,\"buy_credits_url\":\"https://app.cline.bot/credits\"}}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1128,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:05:53.476Z",
+          "status": "FAIL",
+          "reason": "[cline/fireworks/ember-1] [401]: {\"error\":\"Unauthorized: Please make sure you're using the latest version of Cline and re-authenticate your Cline account.\"}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2134,
+          "errorClass": "unauthorized"
+        },
+        {
+          "ts": "2026-09-24T11:23:24.207Z",
+          "status": "FAIL",
+          "reason": "[cline/fireworks/ember-1] [402]: {\"error\":{\"code\":\"insufficient_credits\",\"message\":\"Insufficient balance. Your Cline Credits balance is $0.00\",\"current_balance\":0.004822,\"total_spent\":0,\"total_promotions\":0,\"buy_credits_url\":\"https://app.cline.bot/credits\"}}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 994,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟combo␟␟vinh",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "combo",
+      "account": "",
+      "modelId": "vinh",
+      "base": "vinh",
+      "firstSeen": "2026-09-24T09:32:44.153Z",
+      "lastSeen": "2026-09-24T10:21:09.654Z",
+      "attempts": 4,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:21:09.654Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 5958
+        }
+      ],
+      "probeInvalid": 3
+    },
+    {
+      "key": "http␟9router␟9router␟gcli␟␟gcli/grok-4.7",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "gcli",
+      "account": "",
+      "modelId": "gcli/grok-4.7",
+      "base": "gcli/grok-4.7",
+      "firstSeen": "2026-09-24T09:32:46.199Z",
+      "lastSeen": "2026-09-24T11:23:57.291Z",
+      "attempts": 12,
+      "passes": 1,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:33:25.350Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[grok-cli/grok-4.7] [429]: {\"code\":\"subscription:free-usage-exhausted\",\"error\":\"You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 1078179/1000000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"} (reset after 2s)"
+        },
+        {
+          "ts": "2026-09-24T10:46:07.509Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[grok-cli/grok-4.7] [429]: {\"code\":\"subscription:free-usage-exhausted\",\"error\":\"You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 1078179/1000000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"} (reset after 2s)"
+        },
+        {
+          "ts": "2026-09-24T11:00:28.848Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[grok-cli/grok-4.7] [429]: {\"code\":\"subscription:free-usage-exhausted\",\"error\":\"You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 1078179/1000000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"} (reset after 2s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:33:25.350Z",
+          "status": "FAIL",
+          "reason": "[grok-cli/grok-4.7] [429]: {\"code\":\"subscription:free-usage-exhausted\",\"error\":\"You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 1078179/1000000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"} (reset after 2s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 17879,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T10:46:07.509Z",
+          "status": "FAIL",
+          "reason": "[grok-cli/grok-4.7] [429]: {\"code\":\"subscription:free-usage-exhausted\",\"error\":\"You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 1078179/1000000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"} (reset after 2s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 19897,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T11:00:28.848Z",
+          "status": "FAIL",
+          "reason": "[grok-cli/grok-4.7] [429]: {\"code\":\"subscription:free-usage-exhausted\",\"error\":\"You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 1078179/1000000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"} (reset after 2s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 5312,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T11:23:57.291Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 31076
+        }
+      ],
+      "probeInvalid": 8
+    },
+    {
+      "key": "http␟9router␟9router␟gh␟␟gh/copilot-search-a",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "gh",
+      "account": "",
+      "modelId": "gh/copilot-search-a",
+      "base": "gh/copilot-search-a",
+      "firstSeen": "2026-09-24T09:32:48.248Z",
+      "lastSeen": "2026-09-24T10:21:29.974Z",
+      "attempts": 4,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:21:29.974Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 972
+        }
+      ],
+      "probeInvalid": 3
+    },
+    {
+      "key": "http␟9router␟9router␟groq␟␟groq/llama-3.3-70b-versatile",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "groq",
+      "account": "",
+      "modelId": "groq/llama-3.3-70b-versatile",
+      "base": "groq/llama-3.3-70b-versatile",
+      "firstSeen": "2026-09-24T09:32:50.301Z",
+      "lastSeen": "2026-09-24T11:23:59.861Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:30:56.335Z",
+          "status": "FAIL",
+          "errorClass": "model_not_found",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:33:27.870Z",
+          "status": "FAIL",
+          "errorClass": "model_not_found",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:40:47.560Z",
+          "status": "FAIL",
+          "errorClass": "model_not_found",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:46:10.627Z",
+          "status": "FAIL",
+          "errorClass": "model_not_found",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:56:39.092Z",
+          "status": "FAIL",
+          "errorClass": "model_not_found",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:46:10.627Z",
+          "status": "FAIL",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1110,
+          "errorClass": "model_not_found"
+        },
+        {
+          "ts": "2026-09-24T10:56:39.092Z",
+          "status": "FAIL",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 529,
+          "errorClass": "model_not_found"
+        },
+        {
+          "ts": "2026-09-24T11:00:31.591Z",
+          "status": "FAIL",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 729,
+          "errorClass": "model_not_found"
+        },
+        {
+          "ts": "2026-09-24T11:06:17.829Z",
+          "status": "FAIL",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 516,
+          "errorClass": "model_not_found"
+        },
+        {
+          "ts": "2026-09-24T11:23:59.861Z",
+          "status": "FAIL",
+          "reason": "[groq/llama-3.3-70b-versatile] [404]: {\"error\":{\"message\":\"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 563,
+          "errorClass": "model_not_found"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟kc␟␟kc/anthropic/claude-sonnet-4-20250514",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kc",
+      "account": "",
+      "modelId": "kc/anthropic/claude-sonnet-4-20250514",
+      "base": "kc/anthropic/claude-sonnet-4-20250514",
+      "firstSeen": "2026-09-24T09:32:52.355Z",
+      "lastSeen": "2026-09-24T11:24:03.670Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:30:59.059Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:33:31.436Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:40:50.209Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:46:13.282Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:56:41.785Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:46:13.282Z",
+          "status": "FAIL",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 647,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T10:56:41.785Z",
+          "status": "FAIL",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 681,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:00:34.611Z",
+          "status": "FAIL",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1005,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:06:20.629Z",
+          "status": "FAIL",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 784,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:24:03.670Z",
+          "status": "FAIL",
+          "reason": "[kilocode/anthropic/claude-sonnet-4-20250514] [402]: {\"error\":{\"title\":\"Paid Model - Credits Required\",\"message\":\"Add credits to continue, or switch to a free model\",\"balance\":-0.00002,\"buyCreditsUrl\":\"https://app.kilo.ai/profile\"},\"error_type\":\"usage_limit_exceeded\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1793,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟kgw␟␟kgw/kilo-auto/free",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kgw",
+      "account": "",
+      "modelId": "kgw/kilo-auto/free",
+      "base": "kgw/kilo-auto/free",
+      "firstSeen": "2026-09-24T09:32:54.433Z",
+      "lastSeen": "2026-09-24T11:00:52.726Z",
+      "attempts": 10,
+      "passes": 1,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:57:03.721Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[kilo-gateway/kilo-auto/free] [522]: {\"error\":{\"message\":\"Provider returned error\",\"code\":522,\"metadata\":{\"raw\":\"error code: 522\\n\",\"provider_name\":\"Nex AGI\",\"is_byok\":false}},\"user_id\":\"org_2uwFc1szZKyZweUX7pX97kXQf2O\"} (reset after 30s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:57:03.721Z",
+          "status": "FAIL",
+          "reason": "[kilo-gateway/kilo-auto/free] [522]: {\"error\":{\"message\":\"Provider returned error\",\"code\":522,\"metadata\":{\"raw\":\"error code: 522\\n\",\"provider_name\":\"Nex AGI\",\"is_byok\":false}},\"user_id\":\"org_2uwFc1szZKyZweUX7pX97kXQf2O\"} (reset after 30s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 19930,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T11:00:52.726Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 16101
+        }
+      ],
+      "probeInvalid": 8
+    },
+    {
+      "key": "http␟9router␟9router␟kimchi␟␟kimchi/glm-5.3",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kimchi",
+      "account": "",
+      "modelId": "kimchi/glm-5.3",
+      "base": "kimchi/glm-5.3",
+      "firstSeen": "2026-09-24T09:32:56.481Z",
+      "lastSeen": "2026-09-24T11:00:55.292Z",
+      "attempts": 3,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:57:06.650Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kimchi/glm-5.3] [402]: {\"error\": \"the provider for model glm-5.3 has exhausted its credits and cannot process requests\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T11:00:55.292Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kimchi/glm-5.3] [402]: {\"error\": \"the provider for model glm-5.3 has exhausted its credits and cannot process requests\"} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:57:06.650Z",
+          "status": "FAIL",
+          "reason": "[kimchi/glm-5.3] [402]: {\"error\": \"the provider for model glm-5.3 has exhausted its credits and cannot process requests\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 916,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:00:55.292Z",
+          "status": "FAIL",
+          "reason": "[kimchi/glm-5.3] [402]: {\"error\": \"the provider for model glm-5.3 has exhausted its credits and cannot process requests\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 558,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "http␟9router␟9router␟kr␟␟kr/claude-opus-5",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kr",
+      "account": "",
+      "modelId": "kr/claude-opus-5",
+      "base": "kr/claude-opus-5",
+      "firstSeen": "2026-09-24T09:32:58.535Z",
+      "lastSeen": "2026-09-24T09:51:19.444Z",
+      "attempts": 2,
+      "passes": 0,
+      "failures": [],
+      "evidence": [],
+      "probeInvalid": 2
+    },
+    {
+      "key": "http␟9router␟9router␟llm7␟␟llm7/gpt-5.5",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "llm7",
+      "account": "",
+      "modelId": "llm7/gpt-5.5",
+      "base": "llm7/gpt-5.5",
+      "firstSeen": "2026-09-24T09:33:00.573Z",
+      "lastSeen": "2026-09-24T11:24:15.430Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:31:18.806Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:33:58.136Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:41:05.786Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:46:42.244Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 1m 59s)"
+        },
+        {
+          "ts": "2026-09-24T10:57:18.602Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 1m 59s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:46:42.244Z",
+          "status": "FAIL",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2101,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T10:57:18.602Z",
+          "status": "FAIL",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2148,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:01:04.244Z",
+          "status": "FAIL",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2568,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:06:30.970Z",
+          "status": "FAIL",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1258,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:24:15.430Z",
+          "status": "FAIL",
+          "reason": "[llm7/gpt-5.5] [402]: {\"error\":{\"message\":\"Insufficient balance.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_balance\"}} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2762,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟mistral␟␟mistral/mistral-large-latest",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "mistral",
+      "account": "",
+      "modelId": "mistral/mistral-large-latest",
+      "base": "mistral/mistral-large-latest",
+      "firstSeen": "2026-09-24T09:33:02.618Z",
+      "lastSeen": "2026-09-24T11:24:21.455Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:31:24.337Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:34:03.645Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:41:11.778Z",
+          "status": "FAIL",
+          "errorClass": "not_licensed",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:46:47.755Z",
+          "status": "FAIL",
+          "errorClass": "not_licensed",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:57:24.658Z",
+          "status": "FAIL",
+          "errorClass": "not_licensed",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:46:47.755Z",
+          "status": "FAIL",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 3509,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T10:57:24.658Z",
+          "status": "FAIL",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 4047,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T11:01:09.743Z",
+          "status": "FAIL",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 3497,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T11:06:36.443Z",
+          "status": "FAIL",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 3466,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T11:24:21.455Z",
+          "status": "FAIL",
+          "reason": "[mistral/mistral-large-latest] [403]: {\"object\":\"error\",\"message\":\"This model is not available in your subscription tier\",\"type\":\"tier_not_allowed\",\"param\":null,\"code\":\"1910\",\"raw_status_code\":403} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 4010,
+          "errorClass": "not_licensed"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟ocz␟␟ocz/claude-fable-5",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ocz",
+      "account": "",
+      "modelId": "ocz/claude-fable-5",
+      "base": "ocz/claude-fable-5",
+      "firstSeen": "2026-09-24T09:33:04.660Z",
+      "lastSeen": "2026-09-24T11:24:27.582Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:31:30.382Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:34:09.611Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:41:17.629Z",
+          "status": "FAIL",
+          "errorClass": "not_licensed",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:46:53.739Z",
+          "status": "FAIL",
+          "errorClass": "not_licensed",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:57:31.012Z",
+          "status": "FAIL",
+          "errorClass": "not_licensed",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:46:53.739Z",
+          "status": "FAIL",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 3976,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T10:57:31.012Z",
+          "status": "FAIL",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 4344,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T11:01:15.536Z",
+          "status": "FAIL",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 3784,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T11:06:42.418Z",
+          "status": "FAIL",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 3970,
+          "errorClass": "not_licensed"
+        },
+        {
+          "ts": "2026-09-24T11:24:27.582Z",
+          "status": "FAIL",
+          "reason": "[opencode-zen/claude-fable-5] [403]: {\"error\":{\"type\":\"server_error\",\"message\":\"Upstream request failed: Model access is disabled\"}} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 4118,
+          "errorClass": "not_licensed"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟ollama␟␟ollama/gpt-oss:120b",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ollama",
+      "account": "",
+      "modelId": "ollama/gpt-oss:120b",
+      "base": "ollama/gpt-oss:120b",
+      "firstSeen": "2026-09-24T09:33:06.709Z",
+      "lastSeen": "2026-09-24T11:24:30.621Z",
+      "attempts": 12,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:24:30.621Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1030
+        }
+      ],
+      "probeInvalid": 11
+    },
+    {
+      "key": "http␟9router␟9router␟openrouter␟␟openrouter/typesafe/jev-1.13",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "openrouter",
+      "account": "",
+      "modelId": "openrouter/typesafe/jev-1.13",
+      "base": "openrouter/typesafe/jev-1.13",
+      "firstSeen": "2026-09-24T09:33:08.752Z",
+      "lastSeen": "2026-09-24T11:24:33.855Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:31:36.015Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3Jau6usBd47xShD8GKkoxMdiqGU\"}"
+        },
+        {
+          "ts": "2026-09-24T10:34:15.112Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3AcAtSCiQoXgJO5ffPy9mMmX2o5\"}"
+        },
+        {
+          "ts": "2026-09-24T10:41:23.273Z",
+          "status": "FAIL",
+          "errorClass": "invalid_request",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3FiOyGIM1ORM3mychuQJAcEXCXC\"}"
+        },
+        {
+          "ts": "2026-09-24T10:46:59.457Z",
+          "status": "FAIL",
+          "errorClass": "invalid_request",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3Jatxp8GmAu6IDBh48jHcY1uWa9\"}"
+        },
+        {
+          "ts": "2026-09-24T10:57:36.777Z",
+          "status": "FAIL",
+          "errorClass": "invalid_request",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3Jau6usBd47xShD8GKkoxMdiqGU\"}"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:46:59.457Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3Jatxp8GmAu6IDBh48jHcY1uWa9\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 797,
+          "errorClass": "invalid_request"
+        },
+        {
+          "ts": "2026-09-24T10:57:36.777Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3Jau6usBd47xShD8GKkoxMdiqGU\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 874,
+          "errorClass": "invalid_request"
+        },
+        {
+          "ts": "2026-09-24T11:01:21.187Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3AcAtSCiQoXgJO5ffPy9mMmX2o5\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 809,
+          "errorClass": "invalid_request"
+        },
+        {
+          "ts": "2026-09-24T11:06:48.110Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3FiOyGIM1ORM3mychuQJAcEXCXC\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 801,
+          "errorClass": "invalid_request"
+        },
+        {
+          "ts": "2026-09-24T11:24:33.855Z",
+          "status": "FAIL",
+          "reason": "[400]: {\"error\":{\"message\":\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\",\"code\":400},\"user_id\":\"user_3Jatxp8GmAu6IDBh48jHcY1uWa9\"}",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1225,
+          "errorClass": "invalid_request"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟qd␟␟qd/qmodel_38max",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "qd",
+      "account": "",
+      "modelId": "qd/qmodel_38max",
+      "base": "qd/qmodel_38max",
+      "firstSeen": "2026-09-24T09:33:10.788Z",
+      "lastSeen": "2026-09-24T11:24:45.883Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:31:48.010Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)"
+        },
+        {
+          "ts": "2026-09-24T10:34:27.054Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)"
+        },
+        {
+          "ts": "2026-09-24T10:41:35.354Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)"
+        },
+        {
+          "ts": "2026-09-24T10:47:11.411Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)"
+        },
+        {
+          "ts": "2026-09-24T10:57:48.870Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:47:11.411Z",
+          "status": "FAIL",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 9942,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T10:57:48.870Z",
+          "status": "FAIL",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 10083,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T11:01:33.443Z",
+          "status": "FAIL",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 10242,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T11:07:00.511Z",
+          "status": "FAIL",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 10385,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T11:24:45.883Z",
+          "status": "FAIL",
+          "reason": "[qoder/qmodel_38max] [403]: {\"error\":{\"message\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"code\":403}} (reset after 1m 54s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 10018,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "http␟9router␟9router␟siliconflow␟␟siliconflow/deepseek-ai/DeepSeek-V4-Pro",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "siliconflow",
+      "account": "",
+      "modelId": "siliconflow/deepseek-ai/DeepSeek-V4-Pro",
+      "base": "siliconflow/deepseek-ai/DeepSeek-V4-Pro",
+      "firstSeen": "2026-09-24T09:33:12.833Z",
+      "lastSeen": "2026-09-24T11:24:49.909Z",
+      "attempts": 12,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:31:52.291Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:34:31.307Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 1m 59s)"
+        },
+        {
+          "ts": "2026-09-24T10:41:39.288Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:47:16.999Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 1m 59s)"
+        },
+        {
+          "ts": "2026-09-24T10:57:53.472Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 1m 59s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:47:16.999Z",
+          "status": "FAIL",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 3580,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T10:57:53.472Z",
+          "status": "FAIL",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2598,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:01:37.815Z",
+          "status": "FAIL",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2360,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:07:04.329Z",
+          "status": "FAIL",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1815,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:24:49.909Z",
+          "status": "FAIL",
+          "reason": "[siliconflow/deepseek-ai/DeepSeek-V4-Pro] [402]: {\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\",\"data\":null} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2011,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 4
+    },
+    {
+      "key": "paseo␟opencode␟opencode␟agentrouter␟␟agentrouter/claude-opus-4-8",
+      "harness": "paseo",
+      "accessPath": "opencode",
+      "gateway": "opencode",
+      "upstream": "agentrouter",
+      "account": "",
+      "modelId": "agentrouter/claude-opus-4-8",
+      "base": "agentrouter/claude-opus-4-8",
+      "firstSeen": "2026-09-24T09:33:21.409Z",
+      "lastSeen": "2026-09-24T09:52:06.365Z",
+      "attempts": 2,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T09:33:21.409Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "exit code 1: \u001b[0m\r\n> build · claude-opus-4-8\r\n\u001b[0m\r\n\u001b[91m\u001b[1mError: \u001b[0mBudget pool quota has been exhausted. Please ask an administrator to increase the limit or select ano"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T09:33:21.409Z",
+          "status": "FAIL",
+          "reason": "exit code 1: \u001b[0m\r\n> build · claude-opus-4-8\r\n\u001b[0m\r\n\u001b[91m\u001b[1mError: \u001b[0mBudget pool quota has been exhausted. Please ask an administrator to increase the limit or select ano",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 4496,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "paseo␟opencode␟opencode␟llmtr␟␟llmtr/gemma-4",
+      "harness": "paseo",
+      "accessPath": "opencode",
+      "gateway": "opencode",
+      "upstream": "llmtr",
+      "account": "",
+      "modelId": "llmtr/gemma-4",
+      "base": "llmtr/gemma-4",
+      "firstSeen": "2026-09-24T09:33:29.137Z",
+      "lastSeen": "2026-09-24T09:52:12.290Z",
+      "attempts": 2,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T09:33:29.137Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "exit code 1: \u001b[0m\r\n> build · gemma-4\r\n\u001b[0m\r\n\u001b[91m\u001b[1mError: \u001b[0mInsufficient credits. Please top up.\r\n"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T09:33:29.137Z",
+          "status": "FAIL",
+          "reason": "exit code 1: \u001b[0m\r\n> build · gemma-4\r\n\u001b[0m\r\n\u001b[91m\u001b[1mError: \u001b[0mInsufficient credits. Please top up.\r\n",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 5726,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "paseo␟opencode␟opencode␟ninerouter␟␟ninerouter/ag/claude-sonnet-4-6",
+      "harness": "paseo",
+      "accessPath": "opencode",
+      "gateway": "opencode",
+      "upstream": "ninerouter",
+      "account": "",
+      "modelId": "ninerouter/ag/claude-sonnet-4-6",
+      "base": "claude-sonnet-4-6",
+      "firstSeen": "2026-09-24T09:34:11.154Z",
+      "lastSeen": "2026-09-24T09:52:18.147Z",
+      "attempts": 2,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T09:34:11.154Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "probe exceeded its timeout"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T09:34:11.154Z",
+          "status": "FAIL",
+          "reason": "probe exceeded its timeout",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 40009,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "paseo␟opencode␟opencode␟opencode␟␟opencode/big-pickle",
+      "harness": "paseo",
+      "accessPath": "opencode",
+      "gateway": "opencode",
+      "upstream": "opencode",
+      "account": "",
+      "modelId": "opencode/big-pickle",
+      "base": "opencode/big-pickle",
+      "firstSeen": "2026-09-24T09:34:20.987Z",
+      "lastSeen": "2026-09-24T09:52:24.109Z",
+      "attempts": 2,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T09:34:20.987Z",
+          "status": "PASS",
+          "reason": "Harness answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 7825
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "paseo␟opencode␟opencode␟requesty␟␟requesty/claude-fable-5",
+      "harness": "paseo",
+      "accessPath": "opencode",
+      "gateway": "opencode",
+      "upstream": "requesty",
+      "account": "",
+      "modelId": "requesty/claude-fable-5",
+      "base": "requesty/claude-fable-5",
+      "firstSeen": "2026-09-24T09:34:27.638Z",
+      "lastSeen": "2026-09-24T09:52:30.100Z",
+      "attempts": 2,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T09:34:27.638Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "exit code 1: \u001b[0m\r\n> build · claude-fable-5\r\n\u001b[0m\r\n\u001b[91m\u001b[1mError: \u001b[0mYour organization's balance is too low to run this request. Top up at https://app.requesty.ai/settings"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T09:34:27.638Z",
+          "status": "FAIL",
+          "reason": "exit code 1: \u001b[0m\r\n> build · claude-fable-5\r\n\u001b[0m\r\n\u001b[91m\u001b[1mError: \u001b[0mYour organization's balance is too low to run this request. Top up at https://app.requesty.ai/settings",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 4638,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "paseo␟opencode␟opencode␟tencent-tokenhub␟␟tencent-tokenhub/hy3",
+      "harness": "paseo",
+      "accessPath": "opencode",
+      "gateway": "opencode",
+      "upstream": "tencent-tokenhub",
+      "account": "",
+      "modelId": "tencent-tokenhub/hy3",
+      "base": "tencent-tokenhub/hy3",
+      "firstSeen": "2026-09-24T09:34:34.458Z",
+      "lastSeen": "2026-09-24T09:52:36.087Z",
+      "attempts": 2,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T09:34:34.458Z",
+          "status": "FAIL",
+          "errorClass": "model_not_found",
+          "reason": "exit code 1: \u001b[0m\r\n> build · hy3\r\n\u001b[0m\r\n\u001b[91m\u001b[1mError: \u001b[0mThe API Key does not exist or signature verification failed. Please check whether the API Key is correct. See: ht"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T09:34:34.458Z",
+          "status": "FAIL",
+          "reason": "exit code 1: \u001b[0m\r\n> build · hy3\r\n\u001b[0m\r\n\u001b[91m\u001b[1mError: \u001b[0mThe API Key does not exist or signature verification failed. Please check whether the API Key is correct. See: ht",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 4809,
+          "errorClass": "model_not_found"
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "http␟9router␟9router␟kimchi␟␟kimchi/kimi-k3",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kimchi",
+      "account": "",
+      "modelId": "kimchi/kimi-k3",
+      "base": "kimchi/kimi-k3",
+      "firstSeen": "2026-09-24T09:51:15.450Z",
+      "lastSeen": "2026-09-24T10:33:50.372Z",
+      "attempts": 4,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:31:10.433Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[kimchi/kimi-k3] [402]: {\"error\": \"the provider for model kimi-k3 has exhausted its credits and cannot process requests\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T10:33:50.372Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[kimchi/kimi-k3] [402]: {\"error\": \"the provider for model kimi-k3 has exhausted its credits and cannot process requests\"} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:31:10.433Z",
+          "status": "FAIL",
+          "reason": "[kimchi/kimi-k3] [402]: {\"error\": \"the provider for model kimi-k3 has exhausted its credits and cannot process requests\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 917,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T10:33:50.372Z",
+          "status": "FAIL",
+          "reason": "[kimchi/kimi-k3] [402]: {\"error\": \"the provider for model kimi-k3 has exhausted its credits and cannot process requests\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 446,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 2
+    },
+    {
+      "key": "http␟9router␟9router␟kr␟␟kr/auto",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kr",
+      "account": "",
+      "modelId": "kr/auto",
+      "base": "kr/auto",
+      "firstSeen": "2026-09-24T10:05:47.274Z",
+      "lastSeen": "2026-09-24T11:33:16.265Z",
+      "attempts": 11,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:31:14.692Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 59s)"
+        },
+        {
+          "ts": "2026-09-24T10:33:54.317Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 59s)"
+        },
+        {
+          "ts": "2026-09-24T10:41:02.311Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 59s)"
+        },
+        {
+          "ts": "2026-09-24T10:46:38.138Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 59s)"
+        },
+        {
+          "ts": "2026-09-24T10:57:14.441Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 57s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:57:14.441Z",
+          "status": "FAIL",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 57s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 5775,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:00:59.667Z",
+          "status": "FAIL",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2361,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:06:27.702Z",
+          "status": "FAIL",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2081,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:24:10.667Z",
+          "status": "FAIL",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2040,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:33:16.265Z",
+          "status": "FAIL",
+          "reason": "[kiro/auto] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1m 59s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 4078,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 2
+    },
+    {
+      "key": "http␟9router␟9router␟kimchi␟␟kimchi/nemotron-3-ultra-fp4",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kimchi",
+      "account": "",
+      "modelId": "kimchi/nemotron-3-ultra-fp4",
+      "base": "kimchi/nemotron-3-ultra-fp4",
+      "firstSeen": "2026-09-24T10:21:55.635Z",
+      "lastSeen": "2026-09-24T10:46:32.971Z",
+      "attempts": 2,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:46:32.971Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kimchi/nemotron-3-ultra-fp4] [402]: {\"error\": \"the provider for model nemotron-3-ultra-fp4 has exhausted its credits and cannot process requests\"} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:46:32.971Z",
+          "status": "FAIL",
+          "reason": "[kimchi/nemotron-3-ultra-fp4] [402]: {\"error\": \"the provider for model nemotron-3-ultra-fp4 has exhausted its credits and cannot process requests\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1473,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "http␟9router␟9router␟kimchi␟␟kimchi/glm-5.3-flash",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kimchi",
+      "account": "",
+      "modelId": "kimchi/glm-5.3-flash",
+      "base": "kimchi/glm-5.3-flash",
+      "firstSeen": "2026-09-24T10:40:58.335Z",
+      "lastSeen": "2026-09-24T11:24:06.620Z",
+      "attempts": 2,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T10:40:58.335Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kimchi/glm-5.3-flash] [402]: {\"error\": \"the provider for model glm-5.3-flash has exhausted its credits and cannot process requests\"} (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T11:24:06.620Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kimchi/glm-5.3-flash] [402]: {\"error\": \"the provider for model glm-5.3-flash has exhausted its credits and cannot process requests\"} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T10:40:58.335Z",
+          "status": "FAIL",
+          "reason": "[kimchi/glm-5.3-flash] [402]: {\"error\": \"the provider for model glm-5.3-flash has exhausted its credits and cannot process requests\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 789,
+          "errorClass": "quota_exhausted"
+        },
+        {
+          "ts": "2026-09-24T11:24:06.620Z",
+          "status": "FAIL",
+          "reason": "[kimchi/glm-5.3-flash] [402]: {\"error\": \"the provider for model glm-5.3-flash has exhausted its credits and cannot process requests\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 936,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟kimchi␟␟kimchi/deepseek-v4-flash-0731",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kimchi",
+      "account": "",
+      "modelId": "kimchi/deepseek-v4-flash-0731",
+      "base": "kimchi/deepseek-v4-flash-0731",
+      "firstSeen": "2026-09-24T11:06:23.615Z",
+      "lastSeen": "2026-09-24T11:06:23.615Z",
+      "attempts": 1,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T11:06:23.615Z",
+          "status": "FAIL",
+          "errorClass": "quota_exhausted",
+          "reason": "[kimchi/deepseek-v4-flash-0731] [402]: {\"error\": \"the provider for model deepseek-v4-flash-0731 has exhausted its credits and cannot process requests\"} (reset after 2m)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:06:23.615Z",
+          "status": "FAIL",
+          "reason": "[kimchi/deepseek-v4-flash-0731] [402]: {\"error\": \"the provider for model deepseek-v4-flash-0731 has exhausted its credits and cannot process requests\"} (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 969,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟kimchi␟␟kimchi/minimax-m3",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "kimchi",
+      "account": "",
+      "modelId": "kimchi/minimax-m3",
+      "base": "kimchi/minimax-m3",
+      "firstSeen": "2026-09-24T11:33:12.186Z",
+      "lastSeen": "2026-09-24T11:33:12.186Z",
+      "attempts": 1,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T11:33:12.186Z",
+          "status": "DEFERRED",
+          "errorClass": "quota_exhausted",
+          "reason": "Deferred: upstream kimchi has known hard failure (quota_exhausted)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:33:12.186Z",
+          "status": "DEFERRED",
+          "reason": "Deferred: upstream kimchi has known hard failure (quota_exhausted)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 0,
+          "errorClass": "quota_exhausted"
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.8-flash-medium",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.8-flash-medium",
+      "base": "ag/gemini-3.8-flash-medium",
+      "firstSeen": "2026-09-24T11:35:02.178Z",
+      "lastSeen": "2026-09-24T11:35:02.178Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:35:02.178Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 4091
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.8-flash-low",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.8-flash-low",
+      "base": "ag/gemini-3.8-flash-low",
+      "firstSeen": "2026-09-24T11:35:07.862Z",
+      "lastSeen": "2026-09-24T11:35:07.862Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:35:07.862Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 3673
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.8-flash",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.8-flash",
+      "base": "ag/gemini-3.8-flash",
+      "firstSeen": "2026-09-24T11:35:12.650Z",
+      "lastSeen": "2026-09-24T11:35:12.650Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:35:12.650Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2773
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.7-flash-high",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.7-flash-high",
+      "base": "ag/gemini-3.7-flash-high",
+      "firstSeen": "2026-09-24T11:35:17.839Z",
+      "lastSeen": "2026-09-24T11:35:17.839Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:35:17.839Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 3174
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.7-flash-medium",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.7-flash-medium",
+      "base": "ag/gemini-3.7-flash-medium",
+      "firstSeen": "2026-09-24T11:35:22.687Z",
+      "lastSeen": "2026-09-24T11:35:22.687Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:35:22.687Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2839
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.7-flash-low",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.7-flash-low",
+      "base": "ag/gemini-3.7-flash-low",
+      "firstSeen": "2026-09-24T11:35:26.571Z",
+      "lastSeen": "2026-09-24T11:35:26.571Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:35:26.571Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 1882
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.6-flash-high",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.6-flash-high",
+      "base": "ag/gemini-3.6-flash-high",
+      "firstSeen": "2026-09-24T11:35:45.884Z",
+      "lastSeen": "2026-09-24T11:35:45.884Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:35:45.884Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 17306
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.6-flash-medium",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.6-flash-medium",
+      "base": "ag/gemini-3.6-flash-medium",
+      "firstSeen": "2026-09-24T11:36:01.031Z",
+      "lastSeen": "2026-09-24T11:36:01.031Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:01.031Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 13136
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.6-flash-low",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.6-flash-low",
+      "base": "ag/gemini-3.6-flash-low",
+      "firstSeen": "2026-09-24T11:36:18.636Z",
+      "lastSeen": "2026-09-24T11:36:18.636Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:18.636Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 15588
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.5-flash-high",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.5-flash-high",
+      "base": "ag/gemini-3.5-flash-high",
+      "firstSeen": "2026-09-24T11:36:21.129Z",
+      "lastSeen": "2026-09-24T11:41:20.635Z",
+      "attempts": 2,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T11:36:21.129Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[antigravity/gemini-3.5-flash-high] [404]: {\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Requested entity was not found.\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n (reset after 2m)"
+        },
+        {
+          "ts": "2026-09-24T11:41:20.635Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[antigravity/gemini-3.5-flash-high] [404]: {\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Requested entity was not found.\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n (reset after 1m 30s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:21.129Z",
+          "status": "FAIL",
+          "reason": "[antigravity/gemini-3.5-flash-high] [404]: {\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Requested entity was not found.\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n (reset after 2m)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 359,
+          "errorClass": "unknown"
+        },
+        {
+          "ts": "2026-09-24T11:41:20.635Z",
+          "status": "FAIL",
+          "reason": "[antigravity/gemini-3.5-flash-high] [404]: {\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Requested entity was not found.\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n (reset after 1m 30s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 404,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3-flash-agent",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3-flash-agent",
+      "base": "ag/gemini-3-flash-agent",
+      "firstSeen": "2026-09-24T11:36:23.747Z",
+      "lastSeen": "2026-09-24T11:36:23.747Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:23.747Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 607
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.5-flash-low",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.5-flash-low",
+      "base": "ag/gemini-3.5-flash-low",
+      "firstSeen": "2026-09-24T11:36:26.276Z",
+      "lastSeen": "2026-09-24T11:36:26.276Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:26.276Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 520
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.5-flash-extra-low",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.5-flash-extra-low",
+      "base": "ag/gemini-3.5-flash-extra-low",
+      "firstSeen": "2026-09-24T11:36:28.607Z",
+      "lastSeen": "2026-09-24T11:36:28.607Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:28.607Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 321
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-pro-agent",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-pro-agent",
+      "base": "ag/gemini-pro-agent",
+      "firstSeen": "2026-09-24T11:36:33.559Z",
+      "lastSeen": "2026-09-24T11:41:58.284Z",
+      "attempts": 2,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:41:58.284Z",
+          "status": "PASS",
+          "reason": "answered",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2810
+        }
+      ],
+      "probeInvalid": 1
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3.1-pro-low",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3.1-pro-low",
+      "base": "ag/gemini-3.1-pro-low",
+      "firstSeen": "2026-09-24T11:36:37.845Z",
+      "lastSeen": "2026-09-24T11:36:37.845Z",
+      "attempts": 1,
+      "passes": 1,
+      "failures": [],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:37.845Z",
+          "status": "PASS",
+          "reason": "API answered with content",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 2276
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/claude-sonnet-4-6",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/claude-sonnet-4-6",
+      "base": "ag/claude-sonnet-4-6",
+      "firstSeen": "2026-09-24T11:36:39.922Z",
+      "lastSeen": "2026-09-24T11:36:39.922Z",
+      "attempts": 1,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T11:36:39.922Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[antigravity/claude-sonnet-4-6] Unavailable (reset after 143h 3m 41s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:39.922Z",
+          "status": "FAIL",
+          "reason": "[antigravity/claude-sonnet-4-6] Unavailable (reset after 143h 3m 41s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 64,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/claude-opus-4-6-thinking",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/claude-opus-4-6-thinking",
+      "base": "ag/claude-opus-4-6-thinking",
+      "firstSeen": "2026-09-24T11:36:42.002Z",
+      "lastSeen": "2026-09-24T11:36:42.002Z",
+      "attempts": 1,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T11:36:42.002Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[antigravity/claude-opus-4-6-thinking] Unavailable (reset after 143h 3m 39s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:42.002Z",
+          "status": "FAIL",
+          "reason": "[antigravity/claude-opus-4-6-thinking] Unavailable (reset after 143h 3m 39s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 72,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gpt-oss-120b-medium",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gpt-oss-120b-medium",
+      "base": "ag/gpt-oss-120b-medium",
+      "firstSeen": "2026-09-24T11:36:44.077Z",
+      "lastSeen": "2026-09-24T11:36:44.077Z",
+      "attempts": 1,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T11:36:44.077Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "[antigravity/gpt-oss-120b-medium] Unavailable (reset after 143h 3m 36s)"
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:44.077Z",
+          "status": "FAIL",
+          "reason": "[antigravity/gpt-oss-120b-medium] Unavailable (reset after 143h 3m 36s)",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 63,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 0
+    },
+    {
+      "key": "http␟9router␟9router␟ag␟␟ag/gemini-3-flash",
+      "harness": "http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "account": "",
+      "modelId": "ag/gemini-3-flash",
+      "base": "ag/gemini-3-flash",
+      "firstSeen": "2026-09-24T11:36:51.376Z",
+      "lastSeen": "2026-09-24T11:36:51.376Z",
+      "attempts": 1,
+      "passes": 0,
+      "failures": [
+        {
+          "ts": "2026-09-24T11:36:51.376Z",
+          "status": "FAIL",
+          "errorClass": "unknown",
+          "reason": "exit code 1: "
+        }
+      ],
+      "evidence": [
+        {
+          "ts": "2026-09-24T11:36:51.376Z",
+          "status": "FAIL",
+          "reason": "exit code 1: ",
+          "levelName": "API_ANSWERS",
+          "latencyMs": 5295,
+          "errorClass": "unknown"
+        }
+      ],
+      "probeInvalid": 0
+    }
+  ]
+}
