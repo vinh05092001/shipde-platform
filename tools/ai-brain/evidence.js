@@ -20,6 +20,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { classifyFailure, Scope, Cause, DEFAULT_COOLDOWNS } = require('./failure-classifier');
 
 const SCHEMA_VERSION = 2;
 
@@ -27,8 +28,8 @@ const SCHEMA_VERSION = 2;
 const Level = { API: 1, HARNESS: 2, OUTCOME: 3 };
 const Status = { PASSED: 'passed', FAILED: 'failed', UNKNOWN: 'unknown' };
 
-const BLOCK_CODES = new Set([401, 402, 403, 503]);
-const BLOCK_TTL_MS = 3600_000; // 1 hour
+const BLOCK_CODES = new Set([401, 402, 403, 404, 429, 503]);
+const BLOCK_TTL_MS = 24 * 3600_000; // 24 hours default fallback
 
 function evidencePath(dir) {
   return path.join(dir, 'evidence.json');
@@ -135,10 +136,37 @@ function recordProbe(dir, candidate, item) {
     };
     data.combinations.push(combo);
   }
-  combo.evidence.push(Object.assign({ ts: new Date().toISOString() }, item));
 
-  // Update cooldowns / blocking status on blocking errors.
-  if (item.httpStatus && BLOCK_CODES.has(item.httpStatus)) {
+  // A failure with no HTTP response carries no httpStatus; a process exit is recorded as a process exit
+  const evItem = Object.assign({ ts: new Date().toISOString() }, item);
+  if (evItem.httpStatus === undefined || evItem.httpStatus === null) {
+    delete evItem.httpStatus;
+  }
+  if (item.exitCode !== undefined && item.exitCode !== null) {
+    evItem.exitCode = item.exitCode;
+  }
+  combo.evidence.push(evItem);
+
+  const isFailure =
+    item.status === 'failed' ||
+    item.status === Status.FAILED ||
+    (typeof item.httpStatus === 'number' && item.httpStatus >= 400) ||
+    (typeof item.exitCode === 'number' && item.exitCode !== 0);
+
+  if (isFailure) {
+    const classification = classifyFailure({
+      exitCode: item.exitCode,
+      httpStatus: item.httpStatus,
+      body:
+        item.body ||
+        item.cause ||
+        (typeof item.error === 'string' ? item.error : '') ||
+        item.message ||
+        '',
+      stderr: item.stderr || '',
+      accountId: candidate.accountId,
+    });
+
     const key = candidateKey(candidate);
     const nowIso = new Date().toISOString();
     if (!data.cooldowns) data.cooldowns = {};
@@ -149,15 +177,33 @@ function recordProbe(dir, candidate, item) {
     cd.lastStatus = 'blocked';
     cd.failCount += 1;
     cd.blockedAt = nowIso;
-    cd.blockReason = 'HTTP ' + item.httpStatus;
-    cd.scope = candidate.accountId && candidate.accountId !== '*' ? 'account' : 'candidate';
+    cd.blockReason =
+      classification.cause +
+      (classification.evidence && classification.evidence.httpStatus
+        ? ' (HTTP ' + classification.evidence.httpStatus + ')'
+        : item.exitCode !== undefined
+          ? ' (exit ' + item.exitCode + ')'
+          : '');
+    cd.cause = classification.cause;
+    cd.scope = classification.scope;
+    cd.cooldownMs = classification.cooldownMs;
+    cd.resetTime = classification.resetTime;
+    cd.humanAction = classification.humanAction;
     cd.offeringId = key;
+    cd.harness = candidate.harness;
+    cd.accessPath = candidate.accessPath;
+    cd.gateway = candidate.gateway || '';
+    cd.upstream = candidate.upstream;
+    cd.accountId = candidate.accountId || '*';
+    cd.quotaScope = candidate.quotaScope || '';
+    cd.modelId = candidate.modelId || candidate.model;
 
-    // Upstream-level status: update upstreamStatus only when:
-    // 1. It is HTTP 503 (upstream outage), OR
-    // 2. The candidate is a shared/unbound candidate (accountId is '*' or not set)
-    if (item.httpStatus === 503 || !candidate.accountId || candidate.accountId === '*') {
+    // Apply the scope the classifier returns:
+    // model, upstream, account, access path, gateway or harness - and nothing wider.
+    // UNKNOWN cools down exactly the one candidate that produced it - never a harness, never a gateway.
+    if (classification.scope === Scope.UPSTREAM || classification.scope === 'upstream') {
       const uKey = candidate.upstream;
+      if (!data.upstreamStatus) data.upstreamStatus = {};
       if (!data.upstreamStatus[uKey]) {
         data.upstreamStatus[uKey] = { lastStatus: 'unknown', failCount: 0 };
       }
@@ -165,8 +211,11 @@ function recordProbe(dir, candidate, item) {
       us.lastStatus = 'blocked';
       us.failCount += 1;
       us.blockedAt = nowIso;
-      us.blockReason = 'HTTP ' + item.httpStatus;
+      us.blockReason = cd.blockReason;
+      us.cause = classification.cause;
       us.scope = 'upstream';
+      us.cooldownMs = classification.cooldownMs;
+      us.resetTime = classification.resetTime;
     }
   }
 
@@ -181,37 +230,154 @@ function getEvidence(data, candidate) {
   return combo.evidence || [];
 }
 
+function isCooldownActive(record, now) {
+  if (!record || record.lastStatus !== 'blocked') return false;
+  const blockedAt = new Date(record.blockedAt).getTime();
+  if (isNaN(blockedAt)) return false;
+  if (record.resetTime) {
+    const resetAt =
+      typeof record.resetTime === 'number'
+        ? record.resetTime
+        : new Date(record.resetTime).getTime();
+    if (!isNaN(resetAt)) {
+      return now < resetAt;
+    }
+  }
+  if (record.cooldownMs === null) {
+    return true; // Never recovers on time alone
+  }
+  const ttl = typeof record.cooldownMs === 'number' ? record.cooldownMs : BLOCK_TTL_MS;
+  return now - blockedAt < ttl;
+}
+
 /** Is a candidate currently blocked by account/candidate cooldown or upstream outage? */
 function isCandidateBlocked(data, candidate, opts) {
   if (!candidate || !data) return { blocked: false, status: 'unknown' };
   const now = (opts && opts.now) || Date.now();
 
-  // 1. Candidate-level cooldown
-  const key = candidateKey(candidate);
-  if (data.cooldowns && data.cooldowns[key]) {
-    const cd = data.cooldowns[key];
-    if (cd.lastStatus === 'blocked') {
-      const age = now - new Date(cd.blockedAt).getTime();
-      if (age < BLOCK_TTL_MS) {
-        return {
-          blocked: true,
-          reason: cd.blockReason,
-          since: cd.blockedAt,
-          scope: cd.scope || 'account',
-        };
+  let candObj = candidate;
+  let cKey = candidate;
+  if (typeof candidate === 'string') {
+    cKey = candidate;
+    const parts = candidate.split('::');
+    candObj = {
+      harness: parts[0] || '',
+      accessPath: parts[1] || '',
+      gateway: parts[2] || '',
+      upstream: parts[3] || '',
+      accountId: parts[4] || '*',
+      quotaScope: parts[5] || '',
+      modelId: parts[6] || '',
+    };
+  } else {
+    cKey = candidateKey(candidate);
+  }
+  const candModel = candObj.modelId || candObj.model || '';
+
+  // 1. Candidate-level cooldown (exact 7-part key)
+  if (data.cooldowns && data.cooldowns[cKey]) {
+    const cd = data.cooldowns[cKey];
+    if (isCooldownActive(cd, now)) {
+      return {
+        blocked: true,
+        reason: cd.blockReason,
+        since: cd.blockedAt,
+        scope: cd.scope || 'candidate',
+      };
+    }
+  }
+
+  // 2. Scoped cooldowns in data.cooldowns
+  if (data.cooldowns) {
+    for (const [key, cd] of Object.entries(data.cooldowns)) {
+      if (!isCooldownActive(cd, now)) continue;
+
+      // Account scope: only candidates on the same upstream and same account
+      if (cd.scope === Scope.ACCOUNT || cd.scope === 'account') {
+        const cdAccount = cd.accountId || key.split('::')[4];
+        const cdUpstream = cd.upstream || key.split('::')[3];
+        if (
+          candObj.accountId &&
+          candObj.accountId !== '*' &&
+          candObj.accountId === cdAccount &&
+          candObj.upstream === cdUpstream
+        ) {
+          return {
+            blocked: true,
+            reason: cd.blockReason,
+            since: cd.blockedAt,
+            scope: 'account',
+          };
+        }
+      }
+
+      // Access path scope: "a 404 excludes that model on that access path only"
+      if (cd.scope === Scope.ACCESS_PATH || cd.scope === 'access_path') {
+        const cdAccessPath = cd.accessPath || key.split('::')[1];
+        const cdModel = cd.modelId || key.split('::')[6];
+        if (candObj.accessPath === cdAccessPath && candModel === cdModel) {
+          return {
+            blocked: true,
+            reason: cd.blockReason,
+            since: cd.blockedAt,
+            scope: 'access_path',
+          };
+        }
+      }
+
+      // Model scope
+      if (cd.scope === Scope.MODEL || cd.scope === 'model') {
+        const cdModel = cd.modelId || key.split('::')[6];
+        const cdUpstream = cd.upstream || key.split('::')[3];
+        if (candModel === cdModel && (!cdUpstream || candObj.upstream === cdUpstream)) {
+          return {
+            blocked: true,
+            reason: cd.blockReason,
+            since: cd.blockedAt,
+            scope: 'model',
+          };
+        }
+      }
+
+      // Gateway scope
+      if (cd.scope === Scope.GATEWAY || cd.scope === 'gateway') {
+        const cdGateway = cd.gateway || key.split('::')[2];
+        if (candObj.gateway && candObj.gateway === cdGateway) {
+          return {
+            blocked: true,
+            reason: cd.blockReason,
+            since: cd.blockedAt,
+            scope: 'gateway',
+          };
+        }
+      }
+
+      // Harness scope
+      if (cd.scope === Scope.HARNESS || cd.scope === 'harness') {
+        const cdHarness = cd.harness || key.split('::')[0];
+        if (candObj.harness && candObj.harness === cdHarness) {
+          return {
+            blocked: true,
+            reason: cd.blockReason,
+            since: cd.blockedAt,
+            scope: 'harness',
+          };
+        }
       }
     }
   }
 
-  // 2. Upstream-level block (e.g. 503 outage or shared upstream block)
-  const upstream = candidate.upstream || (typeof candidate === 'string' && candidate);
+  // 3. Upstream-level block (e.g. 503 outage or shared upstream block)
+  const upstream = candObj.upstream;
   if (upstream && data.upstreamStatus && data.upstreamStatus[upstream]) {
     const us = data.upstreamStatus[upstream];
-    if (us.lastStatus === 'blocked') {
-      const age = now - new Date(us.blockedAt).getTime();
-      if (age < BLOCK_TTL_MS) {
-        return { blocked: true, reason: us.blockReason, since: us.blockedAt, scope: 'upstream' };
-      }
+    if (isCooldownActive(us, now)) {
+      return {
+        blocked: true,
+        reason: us.blockReason,
+        since: us.blockedAt,
+        scope: 'upstream',
+      };
     }
   }
 
@@ -231,8 +397,7 @@ function isUpstreamBlocked(data, target, opts) {
   if (!us || us.lastStatus !== 'blocked')
     return { blocked: false, status: us ? us.lastStatus : 'unknown' };
   const now = (opts && opts.now) || Date.now();
-  const age = now - new Date(us.blockedAt).getTime();
-  if (age >= BLOCK_TTL_MS) return { blocked: false, status: 'expired' };
+  if (!isCooldownActive(us, now)) return { blocked: false, status: 'expired' };
   return { blocked: true, reason: us.blockReason, since: us.blockedAt, scope: 'upstream' };
 }
 
@@ -355,6 +520,7 @@ module.exports = {
   migrateEvidence,
   candidateKey,
   recordProbe,
+  recordOutcome: recordProbe,
   getEvidence,
   isCandidateBlocked,
   isUpstreamBlocked,
