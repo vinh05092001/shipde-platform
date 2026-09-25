@@ -211,6 +211,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/admin/shops': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List shop tenants created by platform admin (API-AUTH-ADMIN-SHOPS)
+     * @description Platform-admin listing of merchant tenants and their owner accounts. Requires the X-Platform-Admin-Key header. Returns an empty data array when no shops exist.
+     */
+    get: operations['listAdminShops'];
+    put?: never;
+    /**
+     * Create a shop tenant and its owner account (API-AUTH-ADMIN-SHOPS)
+     * @description Platform admin creates a merchant tenant and its initial owner in one transaction. The owner is activated immediately. A temporary password is returned only when the caller did not supply one. Requires the X-Platform-Admin-Key header.
+     */
+    post: operations['createAdminShop'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/carrier-accounts': {
     parameters: {
       query?: never;
@@ -713,6 +737,74 @@ export interface components {
         [key: string]: 'up' | 'down';
       };
     };
+    AdminCreateShopRequest: {
+      /** @description Merchant tenant name */
+      merchant_name: string;
+      /** @description Owner full name */
+      owner_full_name: string;
+      /**
+       * Format: email
+       * @description Owner email address (optional if phone provided)
+       */
+      owner_email?: string;
+      /** @description Owner phone number in Vietnam format (optional if email provided) */
+      owner_phone?: string;
+      /**
+       * Format: password
+       * @description Owner password (optional, auto-generated if omitted)
+       */
+      owner_password?: string;
+    };
+    AdminCreateShopResponse: {
+      data: {
+        merchant: {
+          /** Format: uuid */
+          id: string;
+          name: string;
+          code: string;
+          status: string;
+          /** Format: date-time */
+          created_at: string;
+        };
+        user: {
+          /** Format: uuid */
+          id: string;
+          full_name: string;
+          email: string | null;
+          phone: string | null;
+          role: string;
+          status: string;
+        };
+        /** @description Generated temporary password (only present when not supplied in request) */
+        temporary_password?: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    AdminShopResponse: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      code: string;
+      status: string;
+      /** Format: date-time */
+      created_at: string;
+      owner: {
+        /** Format: uuid */
+        id: string;
+        full_name: string;
+        email: string | null;
+        phone: string | null;
+        status: string;
+      };
+    };
+    AdminShopListResponse: {
+      data: components['schemas']['AdminShopResponse'][];
+      meta: {
+        total: number;
+        page: number;
+        limit: number;
+      };
+    };
   };
   responses: {
     /** @description Canonical error */
@@ -1055,6 +1147,59 @@ export interface operations {
         content?: never;
       };
       400: components['responses']['Error'];
+    };
+  };
+  listAdminShops: {
+    parameters: {
+      query?: {
+        page?: components['parameters']['Page'];
+        page_size?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paged shop tenants */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminShopListResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  createAdminShop: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AdminCreateShopRequest'];
+      };
+    };
+    responses: {
+      /** @description Shop and owner created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminCreateShopResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
     };
   };
   listCarrierAccounts: {

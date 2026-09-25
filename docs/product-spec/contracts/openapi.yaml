@@ -279,6 +279,60 @@ paths:
           description: Created
         '400':
           $ref: '#/components/responses/Error'
+  /admin/shops:
+    get:
+      tags: [Auth]
+      summary: List shop tenants created by platform admin (API-AUTH-ADMIN-SHOPS)
+      description: Platform-admin listing of merchant tenants and their owner accounts. Requires the X-Platform-Admin-Key header. Returns an empty data array when no shops exist.
+      operationId: listAdminShops
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Paged shop tenants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminShopListResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Auth]
+      summary: Create a shop tenant and its owner account (API-AUTH-ADMIN-SHOPS)
+      description: Platform admin creates a merchant tenant and its initial owner in one transaction. The owner is activated immediately. A temporary password is returned only when the caller did not supply one. Requires the X-Platform-Admin-Key header.
+      operationId: createAdminShop
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateShopRequest'
+      responses:
+        '201':
+          description: Shop and owner created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCreateShopResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /carrier-accounts:
     get:
       tags: [Carriers]
@@ -1062,3 +1116,129 @@ components:
           additionalProperties:
             type: string
             enum: [up, down]
+    AdminCreateShopRequest:
+      type: object
+      required: [merchant_name, owner_full_name]
+      properties:
+        merchant_name:
+          type: string
+          minLength: 2
+          maxLength: 255
+          description: Merchant tenant name
+        owner_full_name:
+          type: string
+          minLength: 2
+          maxLength: 255
+          description: Owner full name
+        owner_email:
+          type: string
+          format: email
+          description: Owner email address (optional if phone provided)
+        owner_phone:
+          type: string
+          pattern: '^(0|\\+84)[3|5|7|8|9][0-9]{8}$'
+          description: Owner phone number in Vietnam format (optional if email provided)
+        owner_password:
+          type: string
+          format: password
+          minLength: 8
+          description: Owner password (optional, auto-generated if omitted)
+    AdminCreateShopResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [merchant, user]
+          properties:
+            merchant:
+              type: object
+              required: [id, name, code, status, created_at]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                code:
+                  type: string
+                status:
+                  type: string
+                created_at:
+                  type: string
+                  format: date-time
+            user:
+              type: object
+              required: [id, full_name, email, phone, role, status]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                full_name:
+                  type: string
+                email:
+                  type: string
+                  nullable: true
+                phone:
+                  type: string
+                  nullable: true
+                role:
+                  type: string
+                status:
+                  type: string
+            temporary_password:
+              type: string
+              description: Generated temporary password (only present when not supplied in request)
+        meta:
+          $ref: '#/components/schemas/Meta'
+    AdminShopResponse:
+      type: object
+      required: [id, name, code, status, created_at, owner]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        code:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        owner:
+          type: object
+          required: [id, full_name, email, phone, status]
+          properties:
+            id:
+              type: string
+              format: uuid
+            full_name:
+              type: string
+            email:
+              type: string
+              nullable: true
+            phone:
+              type: string
+              nullable: true
+            status:
+              type: string
+    AdminShopListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminShopResponse'
+        meta:
+          type: object
+          required: [total, page, limit]
+          properties:
+            total:
+              type: integer
+            page:
+              type: integer
+            limit:
+              type: integer
