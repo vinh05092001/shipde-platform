@@ -92,7 +92,30 @@ const Strategy = {
   COST_FIRST: 'cost-first',
 };
 
-function offeringId(accountId, model) {
+function offeringId(accountId, model, harness, accessPath, gateway, upstream, quotaScope) {
+  if (typeof accountId === 'object' && accountId !== null) {
+    const c = accountId;
+    return [
+      c.harness || '',
+      c.accessPath || '',
+      c.gateway || '',
+      c.upstream || '',
+      c.accountId || '*',
+      c.quotaScope || '',
+      c.modelId || c.model || '',
+    ].join('::');
+  }
+  if (harness && accessPath) {
+    return [
+      harness,
+      accessPath,
+      gateway || '',
+      upstream || '',
+      accountId || '*',
+      quotaScope || '',
+      model,
+    ].join('::');
+  }
   return accountId + '::' + model;
 }
 
