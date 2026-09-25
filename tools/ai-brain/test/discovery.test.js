@@ -1819,3 +1819,275 @@ test('regression new: importing twice does not duplicate data', async () => {
     'evidence array must not duplicate identical event'
   );
 });
+
+// =========================================================================
+// NEW P1/P2 REGRESSION TESTS (Findings N1, N2, N3 verification)
+// =========================================================================
+
+test('same timestamp, PASS and DEFERRED from DIFFERENT producers: not alive', async () => {
+  const catFile = path.resolve(__dirname, '..', 'data', 'discovery', 'catalogue.jsonl');
+  const rawLines = fs
+    .readFileSync(catFile, 'utf8')
+    .split(/\r?\n/)
+    .filter((l) => l.trim().length > 0);
+  const firstKey = JSON.parse(rawLines[0]).key;
+
+  const tempImportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-test-diff-producers-'));
+  try {
+    const entry = {
+      importedFrom: 'checkpoint-20260924T120000.json',
+      candidates: [
+        {
+          key: firstKey,
+          passes: 1,
+          deferred: 1,
+          attempts: 2,
+          resultState: 'PASS',
+          evidence: [
+            {
+              ts: '2026-09-24T12:00:00Z',
+              status: 'DEFERRED',
+              producer: 'prodA',
+              source: 'prodA',
+              sequence: 1,
+            },
+            {
+              ts: '2026-09-24T12:00:00Z',
+              status: 'PASS',
+              producer: 'prodB',
+              source: 'prodB',
+              sequence: 9,
+            },
+          ],
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(tempImportsDir, 'checkpoint-20260924T120000.json'),
+      JSON.stringify(entry),
+      'utf8'
+    );
+
+    const cat = readDiscoveryCatalogue({ importsDir: tempImportsDir });
+    const cand = cat.get(firstKey);
+    assert.ok(cand, 'candidate must exist in catalogue');
+    assert.strictEqual(
+      cand.alive,
+      false,
+      'candidate must not be alive when PASS and DEFERRED share instant across different producers'
+    );
+    assert.strictEqual(cand.resultState, 'DEFERRED', 'fail-closed precedence must select DEFERRED');
+  } finally {
+    try {
+      fs.rmSync(tempImportsDir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+});
+
+test('same timestamp, PASS after DEFERRED by sequence within ONE producer: alive', async () => {
+  const catFile = path.resolve(__dirname, '..', 'data', 'discovery', 'catalogue.jsonl');
+  const rawLines = fs
+    .readFileSync(catFile, 'utf8')
+    .split(/\r?\n/)
+    .filter((l) => l.trim().length > 0);
+  const firstKey = JSON.parse(rawLines[0]).key;
+
+  const tempImportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-test-same-producer-'));
+  try {
+    const entry = {
+      importedFrom: 'checkpoint-20260924T120000.json',
+      candidates: [
+        {
+          key: firstKey,
+          passes: 1,
+          deferred: 1,
+          attempts: 2,
+          resultState: 'PASS',
+          failures: [
+            {
+              ts: '2026-09-24T12:00:00Z',
+              status: 'FAIL',
+              producer: 'prodA',
+              source: 'prodA',
+              sequence: 1,
+            },
+          ],
+          evidence: [
+            {
+              ts: '2026-09-24T12:00:00Z',
+              status: 'DEFERRED',
+              producer: 'prodA',
+              source: 'prodA',
+              sequence: 1,
+            },
+            {
+              ts: '2026-09-24T12:00:00Z',
+              status: 'PASS',
+              producer: 'prodA',
+              source: 'prodA',
+              sequence: 2,
+            },
+          ],
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(tempImportsDir, 'checkpoint-20260924T120000.json'),
+      JSON.stringify(entry),
+      'utf8'
+    );
+
+    const cat = readDiscoveryCatalogue({ importsDir: tempImportsDir });
+    const cand = cat.get(firstKey);
+    assert.ok(cand, 'candidate must exist in catalogue');
+    assert.strictEqual(
+      cand.alive,
+      true,
+      'candidate must be alive when PASS is provably newer by sequence within same producer'
+    );
+    assert.strictEqual(cand.resultState, 'PASS', 'resultState must be PASS');
+  } finally {
+    try {
+      fs.rmSync(tempImportsDir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+});
+
+test('a later-timestamp PASS after a DEFERRED: eligibility restored', async () => {
+  const catFile = path.resolve(__dirname, '..', 'data', 'discovery', 'catalogue.jsonl');
+  const rawLines = fs
+    .readFileSync(catFile, 'utf8')
+    .split(/\r?\n/)
+    .filter((l) => l.trim().length > 0);
+  const firstKey = JSON.parse(rawLines[0]).key;
+
+  const tempImportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-test-restore-eligibility-'));
+  try {
+    const entry = {
+      importedFrom: 'checkpoint-20260924T130000.json',
+      candidates: [
+        {
+          key: firstKey,
+          passes: 1,
+          deferred: 1,
+          attempts: 2,
+          resultState: 'PASS',
+          failures: [{ ts: '2026-09-24T12:00:00Z', status: 'FAIL', reason: 'failed probe' }],
+          evidence: [
+            { ts: '2026-09-24T12:00:00Z', status: 'DEFERRED', reason: 'deferred probe' },
+            { ts: '2026-09-24T13:00:00Z', status: 'PASS', reason: 'ok probe' },
+          ],
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(tempImportsDir, 'checkpoint-20260924T130000.json'),
+      JSON.stringify(entry),
+      'utf8'
+    );
+
+    const cat = readDiscoveryCatalogue({ importsDir: tempImportsDir });
+    const cand = cat.get(firstKey);
+    assert.ok(cand, 'candidate must exist in catalogue');
+    assert.strictEqual(cand.alive, true, 'a later-timestamp PASS must restore eligibility');
+    assert.strictEqual(cand.resultState, 'PASS', 'resultState must be PASS');
+  } finally {
+    try {
+      fs.rmSync(tempImportsDir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+});
+
+test('the same set of events in several orders gives the same eligibility', async () => {
+  const catFile = path.resolve(__dirname, '..', 'data', 'discovery', 'catalogue.jsonl');
+  const rawLines = fs
+    .readFileSync(catFile, 'utf8')
+    .split(/\r?\n/)
+    .filter((l) => l.trim().length > 0);
+  const firstKey = JSON.parse(rawLines[0]).key;
+
+  const tempDir1 = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-order1-'));
+  const tempDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-order2-'));
+  try {
+    const evPass = {
+      ts: '2026-09-24T12:00:00Z',
+      status: 'PASS',
+      producer: 'prodB',
+      source: 'prodB',
+      sequence: 9,
+    };
+    const evDef = {
+      ts: '2026-09-24T12:00:00Z',
+      status: 'DEFERRED',
+      producer: 'prodA',
+      source: 'prodA',
+      sequence: 1,
+    };
+
+    const entryOrder1 = {
+      importedFrom: 'checkpoint-order1.json',
+      candidates: [
+        {
+          key: firstKey,
+          passes: 1,
+          deferred: 1,
+          attempts: 2,
+          resultState: 'PASS',
+          evidence: [evPass, evDef],
+        },
+      ],
+    };
+    const entryOrder2 = {
+      importedFrom: 'checkpoint-order2.json',
+      candidates: [
+        {
+          key: firstKey,
+          passes: 1,
+          deferred: 1,
+          attempts: 2,
+          resultState: 'PASS',
+          evidence: [evDef, evPass],
+        },
+      ],
+    };
+
+    fs.writeFileSync(
+      path.join(tempDir1, 'checkpoint-20260924T120000.json'),
+      JSON.stringify(entryOrder1),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tempDir2, 'checkpoint-20260924T120000.json'),
+      JSON.stringify(entryOrder2),
+      'utf8'
+    );
+
+    const cat1 = readDiscoveryCatalogue({ importsDir: tempDir1 });
+    const cat2 = readDiscoveryCatalogue({ importsDir: tempDir2 });
+
+    const cand1 = cat1.get(firstKey);
+    const cand2 = cat2.get(firstKey);
+
+    assert.strictEqual(
+      cand1.resultState,
+      cand2.resultState,
+      'resultState must be identical regardless of input order'
+    );
+    assert.strictEqual(
+      cand1.alive,
+      cand2.alive,
+      'alive eligibility must be identical regardless of input order'
+    );
+    assert.strictEqual(
+      cand1.alive,
+      false,
+      'unproven cross-producer order must fail closed (not alive)'
+    );
+    assert.strictEqual(cand1.resultState, 'DEFERRED', 'fail-closed status must be DEFERRED');
+  } finally {
+    try {
+      fs.rmSync(tempDir1, { recursive: true, force: true });
+      fs.rmSync(tempDir2, { recursive: true, force: true });
+    } catch (_) {}
+  }
+});

@@ -88,6 +88,43 @@ function statusRank(s) {
  * Captures all distinguishing attributes: timestamp, status, reason, errorClass,
  * httpStatus, latencyMs, exitCode, source, route, probe, and identification fields.
  */
+function getProducer(e) {
+  if (!e || typeof e !== 'object') return '';
+  return String(e.producer || e.source || e.sourceId || e.runId || '').trim();
+}
+
+/**
+ * Returns true only if event a is provably newer than event b.
+ * - timestamp is the primary time axis;
+ * - sequence is comparable ONLY within the same producer;
+ * - otherwise, order cannot be proven.
+ */
+function isProvablyNewer(a, b) {
+  if (!a || !b) return false;
+  const ta = a.ts || a.timestamp || '';
+  const tb = b.ts || b.timestamp || '';
+  if (ta > tb) return true;
+  if (ta < tb) return false;
+
+  const prodA = getProducer(a);
+  const prodB = getProducer(b);
+  if (!prodA || !prodB || prodA !== prodB) {
+    return false;
+  }
+
+  const hasSeqA = a.sequence !== undefined || a.seq !== undefined;
+  const hasSeqB = b.sequence !== undefined || b.seq !== undefined;
+  if (!hasSeqA || !hasSeqB) return false;
+  const seqA = Number(a.sequence !== undefined ? a.sequence : a.seq);
+  const seqB = Number(b.sequence !== undefined ? b.sequence : b.seq);
+  return seqA > seqB;
+}
+
+/**
+ * Canonical evidence signature string for deduplication and total ordering.
+ * Captures all distinguishing attributes: timestamp, status, reason, errorClass,
+ * httpStatus, latencyMs, exitCode, producer, source, runId, route, probe, and identification fields.
+ */
 function canonicalEvidenceSignature(e) {
   if (!e || typeof e !== 'object') return String(e || '');
   return JSON.stringify({
@@ -98,7 +135,9 @@ function canonicalEvidenceSignature(e) {
     httpStatus: e.httpStatus !== undefined && e.httpStatus !== null ? e.httpStatus : '',
     latencyMs: e.latencyMs !== undefined && e.latencyMs !== null ? e.latencyMs : '',
     exitCode: e.exitCode !== undefined && e.exitCode !== null ? e.exitCode : '',
+    producer: e.producer || '',
     source: e.source || e.sourceId || '',
+    runId: e.runId || '',
     route: e.route || '',
     levelName: e.levelName || '',
     probeName: e.probeName || '',
@@ -111,12 +150,15 @@ function canonicalEvidenceSignature(e) {
 /**
  * TOTAL ordering comparator for evidence events.
  * Explicit precedence:
- * 1. Timestamp (ts) ascending
- * 2. Sequence (sequence/seq) ascending
- * 3. Event ID (eventId/id) ascending
- * 4. Source (source/sourceId) ascending
- * 5. Status rank (UNTESTED: 0 < PASS: 1 < DEFERRED: 2 < FAIL: 3)
- * 6. Canonical signature string comparison (deterministic fallback)
+ * 1. Timestamp (ts) ascending (primary time axis)
+ * 2. Sequence (sequence/seq) ascending ONLY within the same producer (never across producers)
+ * 3. Status rank fail-closed: UNTESTED: 0 < PASS: 1 < DEFERRED: 2 < FAIL: 3
+ *    (when PASS and FAIL or DEFERRED share an instant and it cannot be PROVEN which came later,
+ *     eligibility FAILS CLOSED - worse status sorts later so it becomes latest resultState)
+ * 4. Stable tie-breaks only (must never cause evidence to be lost or fail-open):
+ *    - Event ID (eventId/id) ascending
+ *    - Source (source/sourceId) ascending
+ *    - Canonical signature string comparison (deterministic fallback)
  */
 function compareEvidenceTotalOrder(a, b) {
   const ta = a.ts || a.timestamp || '';
@@ -124,9 +166,22 @@ function compareEvidenceTotalOrder(a, b) {
   const c = ta.localeCompare(tb);
   if (c !== 0) return c;
 
-  const seqA = Number(a.sequence !== undefined ? a.sequence : a.seq !== undefined ? a.seq : 0);
-  const seqB = Number(b.sequence !== undefined ? b.sequence : b.seq !== undefined ? b.seq : 0);
-  if (seqA !== seqB) return seqA - seqB;
+  const prodA = getProducer(a);
+  const prodB = getProducer(b);
+  const sameProducer = Boolean(prodA && prodB && prodA === prodB);
+
+  if (sameProducer) {
+    const hasSeqA = a.sequence !== undefined || a.seq !== undefined;
+    const hasSeqB = b.sequence !== undefined || b.seq !== undefined;
+    if (hasSeqA && hasSeqB) {
+      const seqA = Number(a.sequence !== undefined ? a.sequence : a.seq);
+      const seqB = Number(b.sequence !== undefined ? b.sequence : b.seq);
+      if (seqA !== seqB) return seqA - seqB;
+    }
+  }
+
+  const s = statusRank(a.status) - statusRank(b.status);
+  if (s !== 0) return s;
 
   const idA = String(a.eventId || a.id || '');
   const idB = String(b.eventId || b.id || '');
@@ -137,9 +192,6 @@ function compareEvidenceTotalOrder(a, b) {
   const srcB = String(b.source || b.sourceId || '');
   const srcCmp = srcA.localeCompare(srcB);
   if (srcCmp !== 0) return srcCmp;
-
-  const s = statusRank(a.status) - statusRank(b.status);
-  if (s !== 0) return s;
 
   return canonicalEvidenceSignature(a).localeCompare(canonicalEvidenceSignature(b));
 }
@@ -499,7 +551,45 @@ function readDiscoveryCatalogue(opts) {
       resultState = 'UNTESTED';
     }
 
-    const alive = Boolean(resultState === 'PASS' && passes > 0 && failures.length === 0);
+    let alive = false;
+    if (resultState === 'PASS' && passes > 0) {
+      const latestPass =
+        sortedEvidence.length > 0
+          ? sortedEvidence[sortedEvidence.length - 1]
+          : { ts: lastSeen || firstSeen || '', status: 'PASS' };
+
+      let allNegativeSuperseded = true;
+
+      for (const f of sortedFailures) {
+        if (!isProvablyNewer(latestPass, f)) {
+          allNegativeSuperseded = false;
+          break;
+        }
+      }
+
+      if (allNegativeSuperseded) {
+        for (const e of sortedEvidence) {
+          const s = String(e.status).toUpperCase();
+          if (s === 'FAIL' || s === 'DEFERRED') {
+            if (!isProvablyNewer(latestPass, e)) {
+              allNegativeSuperseded = false;
+              break;
+            }
+          }
+        }
+      }
+
+      if (allNegativeSuperseded && deferred > 0) {
+        const deferredInEvidence = sortedEvidence.filter(
+          (e) => String(e.status).toUpperCase() === 'DEFERRED'
+        ).length;
+        if (deferred > deferredInEvidence) {
+          allNegativeSuperseded = false;
+        }
+      }
+
+      alive = allNegativeSuperseded;
+    }
 
     return {
       passes,

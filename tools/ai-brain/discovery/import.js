@@ -234,6 +234,12 @@ async function importCheckpoint(filePath, opts) {
       reason,
       levelName: row.levelName,
     };
+    if (row.producer) evidence.producer = row.producer;
+    if (row.source || row.sourceId) evidence.source = row.source || row.sourceId;
+    if (row.runId) evidence.runId = row.runId;
+    if (row.eventId || row.id) evidence.eventId = row.eventId || row.id;
+    if (row.sequence !== undefined) evidence.sequence = row.sequence;
+    else if (row.seq !== undefined) evidence.sequence = row.seq;
     if (typeof row.latencyMs === 'number') evidence.latencyMs = row.latencyMs;
     if (errorClass) evidence.errorClass = errorClass;
     cand.evidence.push(evidence);
@@ -246,12 +252,19 @@ async function importCheckpoint(filePath, opts) {
     } else {
       const key = errorClass || 'unknown';
       failures[key] = (failures[key] || 0) + 1;
-      cand.failures.push({
+      const failEntry = {
         ts: row.timestamp,
         status,
         errorClass: key,
         reason,
-      });
+      };
+      if (row.producer) failEntry.producer = row.producer;
+      if (row.source || row.sourceId) failEntry.source = row.source || row.sourceId;
+      if (row.runId) failEntry.runId = row.runId;
+      if (row.eventId || row.id) failEntry.eventId = row.eventId || row.id;
+      if (row.sequence !== undefined) failEntry.sequence = row.sequence;
+      else if (row.seq !== undefined) failEntry.sequence = row.seq;
+      cand.failures.push(failEntry);
     }
   }
 
