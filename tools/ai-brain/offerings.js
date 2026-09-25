@@ -251,6 +251,8 @@ function expandOfferings(accounts, options) {
 function offeringHeadroom(offering, eventsByAccount, eventsByOffering, options) {
   const accountEvents = (eventsByAccount || {})[offering.accountId] || [];
   const modelEvents = (eventsByOffering || {})[offering.id] || [];
+  const accountReservations = ((options || {}).reservationsByAccount || {})[offering.accountId] || [];
+  const modelReservations = ((options || {}).reservationsByOffering || {})[offering.id] || [];
 
   const accountView = accountHeadroom(
     {
@@ -259,12 +261,12 @@ function offeringHeadroom(offering, eventsByAccount, eventsByOffering, options) 
       cooldownUntil: offering.cooldownUntil,
     },
     accountEvents,
-    options
+    Object.assign({}, options, { reservations: accountReservations })
   );
   const modelView = accountHeadroom(
     { id: offering.id, limits: offering.modelLimits, cooldownUntil: offering.cooldownUntil },
     modelEvents,
-    options
+    Object.assign({}, options, { reservations: modelReservations })
   );
 
   const severity = SEVERITY;

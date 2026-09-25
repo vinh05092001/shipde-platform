@@ -35,6 +35,13 @@ const {
 } = require('./offerings');
 const { rankByFitness, Difficulty } = require('./fitness');
 const { observeRefusal } = require('./ceiling');
+const {
+  withQuotaLock,
+  activeReservations,
+  pruneReservations,
+  recordReservation,
+} = require('./quota-store');
+const decisions = require('./decisions');
 
 const GOVERNED_DECISION_PATTERN = /^(?:HUMAN-DECISION-[A-Z0-9-]+|DEC-[0-9]{3,})$/;
 
@@ -242,7 +249,9 @@ function planDispatch(items, accounts, context) {
     maxImplementationAgents: effectiveMaxImpl,
   });
   const now = ctx.now || Date.now();
+  const lockOpts = { home: ctx.home, path: ctx.storePath || ctx.quotaFile, now };
 
+  return withQuotaLock(lockOpts, () => {
   // Dispatch is per model, not per account: one key exposes many models and
   // choosing "the account" says nothing about which will write the code.
   const offerings = expandOfferings(accounts);
@@ -259,6 +268,17 @@ function planDispatch(items, accounts, context) {
   // one after it.
   const cooldowns = coolRefusedOfferings(offerings, reported, ctx, now);
 
+  // What is already in flight, from the caller rather than inferred: the
+  // scheduler must never assume a slot is free because it cannot see the work.
+  const running = ctx.running || [];
+  const claims = ctx.claims || [];
+
+  const runningWorkItems = new Set(running.map((r) => r.workItemId).filter(Boolean));
+  const queuedWorkItems = new Set((items || []).map((i) => i.workItemId).filter(Boolean));
+  if (ctx.prune !== false) pruneReservations(now, runningWorkItems, lockOpts, queuedWorkItems);
+
+  const reservations = activeReservations(lockOpts);
+
   const headrooms = headroomForAll(
     offerings,
     ctx.eventsByAccount || {},
@@ -266,13 +286,21 @@ function planDispatch(items, accounts, context) {
     {
       now,
       reported,
+      reservationsByAccount: reservations.byAccount,
+      reservationsByOffering: reservations.byOffering,
     }
   );
 
-  // What is already in flight, from the caller rather than inferred: the
-  // scheduler must never assume a slot is free because it cannot see the work.
-  const running = ctx.running || [];
-  const claims = ctx.claims || [];
+  const decisionLog = decisions.readDecisionsDetailed({ dir: ctx.decisionDir, now }).records || [];
+  const failuresByItem = {};
+  for (const rec of decisionLog) {
+    if (rec.stage === 'failed' || rec.stage === 'refused') {
+      if (rec.workItemId && rec.chosen) {
+        failuresByItem[rec.workItemId] = failuresByItem[rec.workItemId] || new Set();
+        failuresByItem[rec.workItemId].add(rec.chosen);
+      }
+    }
+  }
 
   const busyWorkItems = new Set(running.map((r) => r.workItemId).filter(Boolean));
   const claimedBranches = new Map();
@@ -281,9 +309,20 @@ function planDispatch(items, accounts, context) {
   }
 
   const perAccountLoad = {};
+  const perModelLoad = {};
+  const perProviderLoad = {};
   for (const r of running) {
-    if (!r.accountId) continue;
-    perAccountLoad[r.accountId] = (perAccountLoad[r.accountId] || 0) + 1;
+    if (r.accountId) perAccountLoad[r.accountId] = (perAccountLoad[r.accountId] || 0) + 1;
+    if (r.model) perModelLoad[r.model] = (perModelLoad[r.model] || 0) + 1;
+    if (r.provider) perProviderLoad[r.provider] = (perProviderLoad[r.provider] || 0) + 1;
+  }
+
+  const recentUsage = {};
+  for (const [accId, evs] of Object.entries(ctx.eventsByAccount || {})) {
+    recentUsage[accId] = (evs || []).filter((e) => {
+      const at = typeof e.at === 'number' ? e.at : Date.parse(e.at);
+      return now - at < 60 * 60 * 1000;
+    }).length;
   }
 
   let implementationLoad = running.filter((r) => IMPLEMENTATION_ROLES.has(r.role)).length;
@@ -384,16 +423,32 @@ function planDispatch(items, accounts, context) {
     // never let an insufficient or nearly-drained model through.
     const strategy = item.strategy || role.strategy || Strategy.QUALITY_FIRST;
     const fitnessOpts = Object.assign(
-      { costWeight: strategy === Strategy.COST_FIRST ? 200 : 1, reviewing: isReview },
+      {
+        costWeight: strategy === Strategy.COST_FIRST ? 200 : 1,
+        reviewing: isReview,
+        providerLoad: perProviderLoad,
+        modelLoad: perModelLoad,
+        scopeLoad: perAccountLoad,
+        recentUsage,
+        maxConcurrentPerModel: limits.maxConcurrentPerModel,
+        maxConcurrentPerQuotaScope: limits.maxConcurrentPerQuotaScope,
+        recentUsagePenalty: limits.recentUsagePenalty,
+        explorationBudget: limits.explorationBudget,
+        providerDiversity: limits.providerDiversity,
+      },
       ctx.fitness
     );
+
+    const failedIds = failuresByItem[item.workItemId] || new Set();
 
     let withRoom = [];
     let chosenTier = null;
     let fitness = null;
     let fitnessRejected = [];
     for (const { tier, offerings: inTier } of laddered(eligible)) {
-      const free = inTier.filter((o) => (perAccountLoad[o.accountId] || 0) < limits.maxPerAccount);
+      const free = inTier.filter(
+        (o) => !failedIds.has(o.id) && (perAccountLoad[o.accountId] || 0) < limits.maxPerAccount
+      );
       const { ranked, rejected } = rankByFitness(
         free,
         difficulty,
@@ -424,12 +479,23 @@ function planDispatch(items, accounts, context) {
                 );
               })
               .join('; ')
-          : eligible.map((o) => o.id + ': đang bận').join('; ');
+          : eligible.map((o) => o.id + ': đang bận hoặc đã thử và thất bại').join('; ');
       deferred.push(waiting(item, 'NO_QUOTA_OR_BUSY', why));
       continue;
     }
 
     const chosen = withRoom[0];
+
+    if (!ctx.dryRun && item.workItemId && chosen.accountId && chosen.id) {
+      recordReservation(
+        item.workItemId,
+        item.role,
+        chosen.accountId,
+        chosen.id,
+        fitness.tokensPerTask,
+        lockOpts
+      );
+    }
 
     assignments.push({
       workItemId: item.workItemId,
@@ -461,6 +527,8 @@ function planDispatch(items, accounts, context) {
       if (item.branch) claimedBranches.set(item.branch, item.workItemId);
     }
     perAccountLoad[chosen.accountId] = (perAccountLoad[chosen.accountId] || 0) + 1;
+    perModelLoad[chosen.model] = (perModelLoad[chosen.model] || 0) + 1;
+    perProviderLoad[chosen.provider] = (perProviderLoad[chosen.provider] || 0) + 1;
     totalLoad += 1;
     if (isImplementation) implementationLoad += 1;
     if (isResearch) researchLoad += 1;
@@ -496,6 +564,7 @@ function planDispatch(items, accounts, context) {
     // read back is indistinguishable from a bug.
     cooldowns,
   };
+  });
 }
 
 module.exports = {

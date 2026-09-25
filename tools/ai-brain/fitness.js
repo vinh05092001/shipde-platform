@@ -573,18 +573,12 @@ function scoreOffering(offering, difficulty, headroom, history, options) {
   const comfortable = Number(opts.comfortableRunway) > 0 ? Number(opts.comfortableRunway) : 5;
   const overqualifiedPenalty =
     Number(opts.overqualifiedPenalty) >= 0 ? Number(opts.overqualifiedPenalty) : 12;
-  // Price still matters, it is simply not the first question. At the default
-  // weight a $15/M model gives up about as much as being one grade too strong;
-  // raising it makes price dominate, which is right for mechanical work.
   const costWeight = Number(opts.costWeight) >= 0 ? Number(opts.costWeight) : 1;
 
   if (!isDispatchable(headroom)) {
     return { usable: false, reason: headroom ? headroom.reason : 'không rõ hạn mức' };
   }
 
-  // A reviewer is judged on its review grade, and the strongest one available
-  // is wanted rather than reserved: a review that misses a defect costs more
-  // than the model that would have caught it.
   const reviewing = Boolean(opts.reviewing);
   const grade = reviewing ? reviewGradeOf(offering) : gradeOf(offering);
   if (grade < difficulty) {
@@ -596,6 +590,17 @@ function scoreOffering(offering, difficulty, headroom, history, options) {
         ', việc này cần ' +
         DIFFICULTY_NAMES[difficulty],
     };
+  }
+
+  const pLoad = (opts.providerLoad && opts.providerLoad[offering.provider]) || 0;
+  const mLoad = (opts.modelLoad && opts.modelLoad[offering.model]) || 0;
+  const sLoad = (opts.scopeLoad && opts.scopeLoad[offering.accountId]) || 0;
+
+  if (opts.maxConcurrentPerModel !== undefined && mLoad >= opts.maxConcurrentPerModel) {
+    return { usable: false, reason: 'đã đạt trần concurrent cho model' };
+  }
+  if (opts.maxConcurrentPerQuotaScope !== undefined && sLoad >= opts.maxConcurrentPerQuotaScope) {
+    return { usable: false, reason: 'đã đạt trần concurrent cho account scope' };
   }
 
   const tokensPerTask = estimateTokens(offering, difficulty, history);
@@ -614,18 +619,26 @@ function scoreOffering(offering, difficulty, headroom, history, options) {
     };
   }
 
-  // An unknown budget is usable but never preferred over a measured one: it
-  // sits at the comfortable mark rather than at the top of the scale.
+  if (runway === null && sLoad >= comfortable) {
+    return { usable: false, reason: 'không rõ hạn mức, đã đạt trần an toàn (' + comfortable + ')' };
+  }
+
   const runwayScore = runway === null ? comfortable : Math.min(runway, comfortable * 2);
-  // Reserving strength makes sense for authoring, where a sufficient model
-  // finishes the job. It is wrong for review, so the penalty inverts into a
-  // bonus there.
   const overqualified = grade - difficulty;
   const strengthTerm = reviewing
     ? overqualified * overqualifiedPenalty
     : -overqualified * overqualifiedPenalty;
   const c = offering.cost || {};
   const blended = Number(c.inputPerMillion || 0) * 0.8 + Number(c.outputPerMillion || 0) * 0.2;
+
+  const recent = (opts.recentUsage && opts.recentUsage[offering.accountId]) || 0;
+  const usagePenalty = recent * (opts.recentUsagePenalty !== undefined ? opts.recentUsagePenalty : 5);
+  const diversityPenalty = pLoad * (opts.providerDiversity !== undefined ? opts.providerDiversity : 10);
+
+  let explorationBonus = 0;
+  if (!offering.gradeRecord || !offering.gradeRecord.graded) {
+    explorationBonus = (opts.explorationBudget !== undefined ? opts.explorationBudget : 0) * 10;
+  }
 
   return {
     usable: true,
@@ -639,7 +652,10 @@ function scoreOffering(offering, difficulty, headroom, history, options) {
       runwayScore * 10 +
       strengthTerm -
       blended * costWeight +
-      Number(offering.preference || 0) * 100,
+      Number(offering.preference || 0) * 100 -
+      usagePenalty -
+      diversityPenalty +
+      explorationBonus,
     reason:
       runway === null ? 'chưa khai hạn mức token' : 'còn ~' + runway.toFixed(1) + ' lượt việc',
   };

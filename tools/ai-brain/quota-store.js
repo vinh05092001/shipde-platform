@@ -216,6 +216,97 @@ function usableReadings(currentIdentity, options) {
   return { reported, problems };
 }
 
+function withQuotaLock(options, fn) {
+  const file = storePath(options);
+  const lock = file + '.lock';
+  const parent = path.dirname(file);
+  if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
+
+  const maxRetries = 100;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      fs.mkdirSync(lock);
+      break;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      if (i === maxRetries - 1) throw new Error('Could not acquire quota lock');
+      const start = Date.now();
+      while (Date.now() - start < 50) {}
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.rmdirSync(lock); } catch (e) {}
+  }
+}
+
+function getReservations(options) {
+  const store = loadStore(options);
+  return store.reservations || {};
+}
+
+function saveReservations(reservations, options) {
+  const store = loadStore(options);
+  store.reservations = reservations;
+  fs.mkdirSync(path.dirname(storePath(options)), { recursive: true });
+  fs.writeFileSync(storePath(options), JSON.stringify(store, null, 2));
+}
+
+function activeReservations(options) {
+  const res = getReservations(options);
+  const byAccount = {};
+  const byOffering = {};
+  for (const r of Object.values(res)) {
+    byAccount[r.accountId] = byAccount[r.accountId] || [];
+    byAccount[r.accountId].push(r);
+    byOffering[r.offeringId] = byOffering[r.offeringId] || [];
+    byOffering[r.offeringId].push(r);
+  }
+  return { byAccount, byOffering };
+}
+
+function pruneReservations(now, runningWorkItems, options, queuedWorkItems) {
+  const res = getReservations(options);
+  let changed = false;
+  const running = runningWorkItems || new Set();
+  const queued = queuedWorkItems || new Set();
+  for (const [id, r] of Object.entries(res)) {
+    const at = typeof r.at === 'number' ? r.at : Date.parse(r.at);
+    const isExpired = !Number.isFinite(at) || (now - at > 2 * 60 * 1000) || (at > now + 60 * 1000);
+    const isQueued = queued.has(r.workItemId);
+    if (!running.has(r.workItemId) && (isExpired || isQueued)) {
+      delete res[id];
+      changed = true;
+    }
+  }
+  if (changed) saveReservations(res, options);
+}
+
+function releaseReservation(workItemId, options) {
+  const res = getReservations(options);
+  if (res[workItemId]) {
+    delete res[workItemId];
+    saveReservations(res, options);
+    return true;
+  }
+  return false;
+}
+
+function recordReservation(workItemId, role, accountId, offeringId, tokens, options) {
+  const res = getReservations(options);
+  res[workItemId] = {
+    workItemId,
+    role,
+    accountId,
+    offeringId,
+    tokens,
+    at: (options && options.now) || Date.now(),
+    cost: 0
+  };
+  saveReservations(res, options);
+}
+
 module.exports = {
   DEFAULT_MAX_AGE_MS,
   DEFAULT_FAILURE_MAX_AGE_MS,
@@ -226,4 +317,9 @@ module.exports = {
   identityToCompare,
   PROVIDER_IDENTITY,
   usableReadings,
+  withQuotaLock,
+  activeReservations,
+  pruneReservations,
+  releaseReservation,
+  recordReservation,
 };
