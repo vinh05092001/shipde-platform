@@ -34,9 +34,89 @@ const {
   loadHistory,
   buildQueueKey,
   parseQueueKey,
+} = require('../probe-runner');
+
+const Cause = {
+  UPSTREAM_CREDIT_EXHAUSTED: 'upstream_credit_exhausted',
+  UPSTREAM_MONTHLY_LIMIT: 'upstream_monthly_limit',
+  UPSTREAM_ENTITLEMENT: 'upstream_entitlement',
+  UPSTREAM_RATE_LIMIT: 'upstream_rate_limit',
+  UPSTREAM_CREDENTIAL: 'upstream_credential',
+  MODEL_UNSUPPORTED: 'model_unsupported',
+  ALIAS_MISMATCH: 'alias_mismatch',
+  ACCOUNT_QUOTA_EXHAUSTED: 'account_quota_exhausted',
+  GENUINE_CAPACITY: 'genuine_capacity',
+  ACCOUNT_AUTH_FAILED: 'account_auth_failed',
+  EXHAUSTION_HIDING: 'exhaustion_hiding',
+  UNKNOWN: 'unknown',
+};
+
+const Scope = {
+  MODEL: 'model',
+  UPSTREAM: 'upstream',
+  ACCOUNT: 'account',
+  ACCESS_PATH: 'access_path',
+  HARNESS: 'harness',
+  UNKNOWN: 'unknown',
+};
+
+const testClassifier = {
   Cause,
   Scope,
-} = require('../probe-runner');
+  classifyFailure(input) {
+    const { httpStatus, body = '', stderr = '' } = input || {};
+    const text = [String(body || ''), String(stderr || '')].filter(Boolean).join('\n');
+
+    // Extract innermost HTTP status if wrapped (e.g., "503 Service Unavailable: [402]: out of credit")
+    const innerMatch = text.match(/[\[(]\s*(401|402|403|429)\s*[\])]/);
+    const effectiveStatus =
+      httpStatus === 503 && innerMatch ? parseInt(innerMatch[1], 10) : httpStatus;
+
+    if (
+      effectiveStatus === 402 &&
+      /out of credit|credit.{0,20}exhaust|insufficient.*credit|provider.{0,20}credit/i.test(text)
+    ) {
+      return {
+        cause: Cause.UPSTREAM_CREDIT_EXHAUSTED,
+        scope: Scope.UPSTREAM,
+        cooldownMs: 86400000,
+        resetTime: null,
+      };
+    }
+
+    if (
+      effectiveStatus === 401 &&
+      /unauthorized|invalid.*token|authentication failed|invalid.*credential/i.test(text)
+    ) {
+      return {
+        cause: Cause.UPSTREAM_CREDENTIAL,
+        scope: Scope.UPSTREAM,
+        cooldownMs: 3600000,
+        resetTime: null,
+      };
+    }
+
+    if (
+      effectiveStatus === 404 ||
+      (effectiveStatus === 400 && /model.{0,20}not.{0,10}support/i.test(text)) ||
+      /model not found/i.test(text)
+    ) {
+      return {
+        cause: Cause.MODEL_UNSUPPORTED,
+        scope: Scope.MODEL,
+        cooldownMs: null,
+        resetTime: null,
+      };
+    }
+
+    return {
+      cause: Cause.UNKNOWN,
+      scope: Scope.UNKNOWN,
+      cooldownMs: 300000,
+      resetTime: null,
+    };
+  },
+};
 
 describe('9Router Probe Runner Suite', () => {
   let server;
@@ -155,6 +235,7 @@ describe('9Router Probe Runner Suite', () => {
       apiKey: 'test-token',
       catalogue: [{ id: modelId }],
       outPath,
+      classifier: testClassifier,
     });
 
     assert.equal(summary.probedCount, 1);
@@ -190,6 +271,7 @@ describe('9Router Probe Runner Suite', () => {
       apiKey: 'test-token',
       catalogue: [{ id: modelId }],
       outPath,
+      classifier: testClassifier,
     });
 
     assert.equal(summary.passedCount, 1);
@@ -224,6 +306,7 @@ describe('9Router Probe Runner Suite', () => {
       apiKey: 'test-token',
       catalogue: [{ id: modelId }],
       outPath,
+      classifier: testClassifier,
     });
 
     assert.equal(summary.failedCount, 1);
@@ -253,6 +336,7 @@ describe('9Router Probe Runner Suite', () => {
       apiKey: 'test-token',
       catalogue: [{ id: modelId }],
       outPath,
+      classifier: testClassifier,
     });
 
     assert.equal(summary.failedCount, 1);
@@ -282,6 +366,7 @@ describe('9Router Probe Runner Suite', () => {
       apiKey: 'test-token',
       catalogue: [{ id: modelId }],
       outPath,
+      classifier: testClassifier,
     });
 
     assert.equal(summary.failedCount, 1);
@@ -318,6 +403,7 @@ describe('9Router Probe Runner Suite', () => {
       apiKey: 'test-token',
       catalogue: [{ id: model1 }, { id: model2 }],
       outPath,
+      classifier: testClassifier,
     });
 
     // model1 fails with 404 (scope: MODEL), model2 is probed and succeeds
@@ -352,6 +438,7 @@ describe('9Router Probe Runner Suite', () => {
           apiKey: 'test-token',
           catalogue: [{ id: 'dead/model-1' }, { id: 'dead/model-2' }],
           outPath,
+          classifier: testClassifier,
         });
       },
       (err) => {
@@ -397,6 +484,7 @@ describe('9Router Probe Runner Suite', () => {
       catalogue: [{ id: m1 }, { id: m2 }, { id: m3 }],
       outPath,
       maxRequests: 2,
+      classifier: testClassifier,
     });
 
     assert.equal(summary1.probedCount, 2);
@@ -411,6 +499,7 @@ describe('9Router Probe Runner Suite', () => {
       apiKey: 'test-token',
       catalogue: [{ id: m1 }, { id: m2 }, { id: m3 }],
       outPath,
+      classifier: testClassifier,
     });
 
     assert.equal(summary2.alreadyCompleted, 2);
@@ -457,6 +546,7 @@ describe('9Router Probe Runner Suite', () => {
       apiKey: 'test-token',
       catalogue: [{ id: a1 }, { id: a2 }, { id: b1 }, { id: b2 }],
       outPath,
+      classifier: testClassifier,
     });
 
     assert.equal(summary.failedCount, 1); // a1
@@ -550,6 +640,7 @@ describe('9Router Probe Runner Suite', () => {
       catalogue: [{ id: modelId }],
       outPath,
       readTimeoutMs: 500,
+      classifier: testClassifier,
     });
 
     assert.equal(summary.failedCount, 1);
@@ -658,6 +749,7 @@ describe('9Router Probe Runner Suite', () => {
         { id: passedModel },
       ],
       outPath,
+      classifier: testClassifier,
     });
 
     // Only invalidModel and expiredDeferredModel should be probed
@@ -719,5 +811,30 @@ describe('9Router Probe Runner Suite', () => {
     pool.beginRequest();
     pool.recordOutcome({ isReadTimeout: true, latencyMs: 15000 });
     assert.equal(pool.currentConcurrency, 2);
+  });
+
+  it('15. Absent canonical classifier fails with clear message naming dependency when unpassed', async () => {
+    const outPath = makeTmpFile();
+    await assert.rejects(
+      async () => {
+        await runProbeBatch({
+          gatewayUrl,
+          apiKey: 'test-token',
+          catalogue: [{ id: 'test/model' }],
+          outPath,
+        });
+      },
+      (err) => {
+        assert.ok(
+          err.message.includes('failure-classifier.js'),
+          `Error should name failure-classifier.js: ${err.message}`
+        );
+        assert.ok(
+          err.message.includes('PR #144') || err.message.includes('brain-failure-classes'),
+          `Error should name PR #144 or branch: ${err.message}`
+        );
+        return true;
+      }
+    );
   });
 });

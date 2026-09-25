@@ -26,15 +26,39 @@ const {
   DEFAULT_CONNECT_TIMEOUT_MS,
   DEFAULT_READ_TIMEOUT_MS,
 } = require('./http-client');
-const { classifyFailure, Scope, Cause } = require('./failure-classifier');
 const { AdaptiveWorkerPool } = require('./pool');
 
-const HARD_CAUSES = new Set([
-  Cause.UPSTREAM_CREDIT_EXHAUSTED,
-  Cause.UPSTREAM_MONTHLY_LIMIT,
-  Cause.UPSTREAM_ENTITLEMENT,
-  Cause.UPSTREAM_CREDENTIAL,
-]);
+const CANONICAL_CLASSIFIER_PATH = path.resolve(__dirname, '..', 'failure-classifier.js');
+
+function resolveClassifier(options = {}) {
+  const custom = options.classifier || options.failureClassifier;
+  if (custom) {
+    const classifyFn = typeof custom === 'function' ? custom : custom.classifyFailure;
+    if (typeof classifyFn !== 'function') {
+      throw new Error(
+        'Injected classifier must be a function or an object with a classifyFailure method.'
+      );
+    }
+    return {
+      classifyFailure: classifyFn.bind(custom),
+      Cause: custom.Cause || {},
+      Scope: custom.Scope || {},
+    };
+  }
+
+  try {
+    return require(CANONICAL_CLASSIFIER_PATH);
+  } catch (err) {
+    if (err.code === 'MODULE_NOT_FOUND' || !fs.existsSync(CANONICAL_CLASSIFIER_PATH)) {
+      throw new Error(
+        `Missing required dependency: canonical failure classifier at '${CANONICAL_CLASSIFIER_PATH}'. ` +
+          `Provided by branch 'origin/feat/brain-failure-classes' (PR #144, commit c956913). ` +
+          `Ensure PR #144 is merged before running probe-runner, or inject a classifier parameter into runProbeBatch({ classifier }).`
+      );
+    }
+    throw err;
+  }
+}
 
 /**
  * Appends a single result record to the JSONL output file immediately.
@@ -86,6 +110,18 @@ function appendRecord(outPath, record) {
  */
 async function runProbeBatch(options = {}) {
   const startTime = Date.now();
+  const classifier = resolveClassifier(options);
+  const classifyFailure = classifier.classifyFailure;
+  const Scope = classifier.Scope || {};
+  const Cause = classifier.Cause || {};
+
+  const HARD_CAUSES = new Set([
+    Cause.UPSTREAM_CREDIT_EXHAUSTED || 'upstream_credit_exhausted',
+    Cause.UPSTREAM_MONTHLY_LIMIT || 'upstream_monthly_limit',
+    Cause.UPSTREAM_ENTITLEMENT || 'upstream_entitlement',
+    Cause.UPSTREAM_CREDENTIAL || 'upstream_credential',
+  ]);
+
   const gatewayUrl = options.gatewayUrl || 'http://127.0.0.1:20128';
   const apiKey = options.apiKey || process.env.NINEROUTER_API_KEY;
   const outPath =
@@ -320,7 +356,7 @@ async function runProbeBatch(options = {}) {
             outcome.httpStatus === 401 ||
             outcome.httpStatus === 402 ||
             outcome.httpStatus === 403;
-          const isProvenSharedScope = classification.scope === Scope.UPSTREAM;
+          const isProvenSharedScope = classification.scope === (Scope.UPSTREAM || 'upstream');
 
           if (isHardCause && isProvenSharedScope) {
             // Defer all remaining models in this proven shared scope
@@ -350,4 +386,6 @@ async function runProbeBatch(options = {}) {
 module.exports = {
   runProbeBatch,
   appendRecord,
+  resolveClassifier,
+  CANONICAL_CLASSIFIER_PATH,
 };
