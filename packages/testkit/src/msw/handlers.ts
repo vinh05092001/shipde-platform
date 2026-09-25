@@ -340,4 +340,61 @@ export const handlers = [
 
     return handleStateResponse(successResend, successResend);
   }),
+
+  // --- Session: List ---
+  http.get(`${BASE_API_URL}/api/v1/sessions`, async () => {
+    const successSessions = {
+      data: [
+        {
+          session_id: 'sess_001',
+          device_id: 'dev_browser_chrome',
+          device_model: 'Chrome 128',
+          user_agent: 'Mozilla/5.0',
+          ip_address: 'hashed_ip_001',
+          status: 'ACTIVE',
+          last_active_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+          created_at: new Date().toISOString(),
+          is_current: true,
+        },
+      ],
+      meta: { total: 1 },
+    };
+
+    return handleStateResponse(successSessions, { data: [], meta: { total: 0 } });
+  }),
+
+  // --- Session: Revoke ---
+  http.delete(`${BASE_API_URL}/api/v1/sessions/:sessionId`, async ({ params }) => {
+    const successRevoke = {
+      session_id: params.sessionId,
+      status: 'REVOKED',
+      message: 'Phiên đã được thu hồi',
+    };
+
+    return handleStateResponse(successRevoke, successRevoke);
+  }),
+
+  // --- Session: Revoke All ---
+  http.post(`${BASE_API_URL}/api/v1/sessions/revoke-all`, async () => {
+    const successRevokeAll = {
+      revoked_count: 2,
+      message: 'Đã thu hồi 2 phiên',
+    };
+
+    return handleStateResponse(successRevokeAll, {
+      revoked_count: 0,
+      message: 'Không có phiên nào cần thu hồi',
+    });
+  }),
+
+  // --- Session: Heartbeat ---
+  http.patch(`${BASE_API_URL}/api/v1/sessions/:sessionId/heartbeat`, async ({ params }) => {
+    const successHeartbeat = {
+      session_id: params.sessionId,
+      last_active_at: new Date().toISOString(),
+    };
+
+    return handleStateResponse(successHeartbeat, successHeartbeat);
+  }),
 ];

@@ -101,6 +101,13 @@ enum ClaimStatusEnum {
   CLOSED
 }
 
+enum SessionStatusEnum {
+  ACTIVE
+  REVOKED
+  EXPIRED
+  INACTIVE
+}
+
 // ----------------------------------------------------------------------------
 // 1. IAM & Multi-tenant Organization
 // ----------------------------------------------------------------------------
@@ -124,6 +131,7 @@ model Merchant {
   discrepancies     Discrepancy[]
   claims            Claim[]
   audit_logs        AuditLog[]
+  device_sessions   DeviceSession[]
 
   @@map("merchants")
 }
@@ -178,18 +186,28 @@ model VerificationToken {
 }
 
 model DeviceSession {
-  id                String            @id @default(uuid()) @db.Uuid
-  user_id           String            @db.Uuid
-  device_id         String            @db.VarChar(255)
-  device_model      String?           @db.VarChar(255)
-  fcm_token         String?           @db.Text
-  is_revoked        Boolean           @default(false)
-  created_at        DateTime          @default(now()) @db.Timestamptz
-  last_active_at    DateTime          @default(now()) @db.Timestamptz
+  id                 String            @id @default(uuid()) @db.Uuid
+  user_id            String            @db.Uuid
+  merchant_id        String            @db.Uuid
+  session_token_hash String            @unique @db.VarChar(512)
+  device_id          String            @db.VarChar(255)
+  device_model       String?           @db.VarChar(255)
+  user_agent         String?           @db.Text
+  ip_address         String?           @db.VarChar(64)
+  fcm_token          String?           @db.Text
+  status             SessionStatusEnum @default(ACTIVE)
+  last_active_at     DateTime          @default(now()) @db.Timestamptz
+  expires_at         DateTime          @db.Timestamptz
+  revoked_at         DateTime?         @db.Timestamptz
+  revoked_by         String?           @db.VarChar(255)
+  revoke_reason      String?           @db.VarChar(255)
+  created_at         DateTime          @default(now()) @db.Timestamptz
 
-  user              User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  user               User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  merchant           Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
 
-  @@index([user_id, is_revoked])
+  @@index([merchant_id, user_id, status])
+  @@index([user_id, status])
   @@map("device_sessions")
 }
 
