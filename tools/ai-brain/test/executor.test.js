@@ -43,8 +43,8 @@ function plan(assignments, maxImplementation) {
 function fakeRun(responses) {
   const calls = [];
   let i = 0;
-  const run = (adapter, args) => {
-    calls.push({ command: adapter.command, args });
+  const run = (adapter, args, opts) => {
+    calls.push({ command: adapter.command, args, opts });
     const next = responses[Math.min(i, responses.length - 1)];
     i += 1;
     if (typeof next === 'function') return next();
@@ -343,6 +343,98 @@ describe('executePlan — recovery after an interruption', () => {
     assert.equal(result.records[0].outcome, Outcome.REFUSED);
     assert.match(result.records[0].detail, /WRITER_OPEN_ELSEWHERE/);
     assert.equal(run.calls.length, 0);
+  });
+
+  test('a hermes writer resumes after a live probe, never a blind send', () => {
+    const dir = tempDir();
+    recordDecision(
+      {
+        stage: Stage.LAUNCHED,
+        workItemId: 'TASK-AI-50',
+        role: 'author.foundation',
+        harness: 'hermes',
+        sessionId: 'dir:C:/w',
+        pid: 4242,
+        branch: 'feat/task-ai-50-x',
+      },
+      { dir }
+    );
+
+    const run = fakeRun([
+      // The probe: the hermes CLI answers, which is what a resume needs.
+      {
+        exitCode: 0,
+        stdout: 'Title  Workspace  Last Active  ID\nRow  shipde  now  ' + 'x'.repeat(12) + '\n',
+        stderr: '',
+      },
+      // The resume: a detached start continuing that workspace's session.
+      { exitCode: 0, stdout: '{"started":true,"pid":4242}', stderr: '' },
+    ]);
+    const result = executePlan(
+      plan([
+        assignment({
+          workItemId: 'TASK-AI-50',
+          branch: 'feat/task-ai-50-x',
+          harness: 'hermes',
+          provider: 'hermes',
+          model: 'big',
+          contextWindow: 200000,
+        }),
+      ]),
+      { registry, run, dryRun: false, decisionDir: dir, cwd: 'C:/w' }
+    );
+
+    assert.equal(result.records[0].outcome, Outcome.RESUMED);
+    assert.equal(run.calls.length, 2);
+    assert.equal(run.calls[0].command, 'hermes');
+    assert.deepEqual(run.calls[0].args, ['sessions', 'list']);
+    // The probe must run to completion even though the adapter is detached;
+    // without sync: true the probe would be handed a pid nobody reads.
+    assert.equal(run.calls[0].opts.sync, true);
+    assert.equal(run.calls[1].args[0], '--resume');
+    assert.equal(run.calls[1].args[1], 'latest');
+    // The handle is the workspace and the pid stays with the record, so an
+    // interrupted run can stop this process by pid. Resuming does not create a
+    // branch: the workspace's session already holds the writer's history.
+    assert.equal(result.records[0].sessionId, 'dir:C:/w');
+    assert.equal(result.records[0].pid, 4242);
+    assert.ok(!run.calls[1].args.includes('--new-branch'));
+  });
+
+  test('a hermes probe that fails refuses, and does not guess', () => {
+    const dir = tempDir();
+    recordDecision(
+      {
+        stage: Stage.LAUNCHED,
+        workItemId: 'TASK-AI-50',
+        role: 'author.foundation',
+        harness: 'hermes',
+        sessionId: 'dir:C:/w',
+        pid: 4242,
+        branch: 'feat/task-ai-50-x',
+      },
+      { dir }
+    );
+
+    const run = fakeRun([{ exitCode: 1, stdout: '', stderr: 'hermes unreachable' }]);
+    const result = executePlan(
+      plan([
+        assignment({
+          workItemId: 'TASK-AI-50',
+          branch: 'feat/task-ai-50-x',
+          harness: 'hermes',
+          provider: 'hermes',
+          model: 'big',
+          contextWindow: 200000,
+        }),
+      ]),
+      { registry, run, dryRun: false, decisionDir: dir, cwd: 'C:/w' }
+    );
+
+    assert.equal(result.records[0].outcome, Outcome.REFUSED);
+    assert.match(result.records[0].detail, /SESSION_STATE_UNKNOWN/);
+    // Only the probe ran; the resume was never attempted.
+    assert.equal(run.calls.length, 1);
   });
 });
 

@@ -96,10 +96,17 @@
       "kind": "harness",
       "servesModels": false,
       "harness": "hermes",
-      "credential": { "type": "api-key", "env": "HERMES_MODEL_ENDPOINT" },
+      "credential": {
+        "type": "api-key",
+        "env": "NINEROUTER_API_KEY",
+        "store": "hermes-home/.env"
+      },
       "verify": { "method": "version-command", "command": "hermes --version" },
-      "modelPool": "registry",
-      "comment": "Planning harness with tool use and subagents. Its reasoning model is resolved per task from the registry, never pinned."
+      "modelPool": "registry via 9router",
+      "minContext": 32000,
+      "comment": "Planning harness installed 2026-09-23 and pointed at 9Router, so its reasoning model is resolved per task from the registry and passed as -m; nothing is pinned. Its durable handle is the workspace directory (it resumes with --resume latest --in). Gap 3: each assignment is ONE -z process - dispatch passes no toolset or subagent flags, and any fan-out Hermes does stays inside that one process, so the implementation ceiling counts processes; Paseo spawns separate workers. Gap 4: models below minContext (32000 tokens) are refused before launch.",
+      "installedVersion": "0.21.4",
+      "config": "%LOCALAPPDATA%/hermes/config.yaml"
     },
     {
       "id": "tencent",
@@ -165,11 +172,16 @@
       "kind": "decision-service",
       "servesModels": false,
       "endpoint": "https://api.typesafe.ai/v1/systemone",
-      "credential": { "type": "api-key", "env": "TYPESAFE_API_KEY", "store": "~/.typesafe-key" },
+      "credential": {
+        "type": "api-key",
+        "env": "TYPESAFE_API_KEY",
+        "store": "~/.typesafe-key"
+      },
       "verify": { "method": "closed-question" },
       "mayWriteCode": false,
       "minConfidence": 0.7,
-      "comment": "Closed, checkable questions only — classify a task, filter lanes. Below minConfidence the answer is discarded and a reasoning model decides."
+      "comment": "Closed, checkable questions only — classify a Work Item, pick among probed lanes, name a CI failure, judge a quiet session. The module has no free-text mode, so it cannot be asked to write code or to call a Work Item done. Below minConfidence the answer is discarded and a reasoning model decides; an unreachable Jev is undecided, never a guess. Replaces .worktrees/logs/jev.py which is now a shim (TASK-AI-50 gap 5).",
+      "module": "tools/ai-brain/jev.js"
     }
   ],
   "dispatch": {

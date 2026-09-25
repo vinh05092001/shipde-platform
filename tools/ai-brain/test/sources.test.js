@@ -153,6 +153,18 @@ describe('harness adapters', () => {
   test('cline has no resume, which is why it cannot hold an interrupted writer', () => {
     assert.equal(getHarness('cline').resume, null);
   });
+
+  test('hermes is registered, detached, and listed in the harness table', () => {
+    // Gap 3 / Gap 8: Hermes must be reachable from the registry table alone —
+    // no harness name hard-coded in dispatch code. The source entry in
+    // sources.json carries harness:"hermes" and the dispatch table carries the
+    // provider row. Nothing in executor.js or scheduler.js names hermes.
+    const h = getHarness('hermes');
+    assert.ok(h, 'hermes must be in the HARNESSES table');
+    assert.equal(h.id, 'hermes');
+    assert.equal(h.detached, true, 'hermes runs detached so the dispatcher is not blocked');
+    assert.ok(listHarnesses().includes('hermes'));
+  });
 });
 
 describe('parseLastJson', () => {

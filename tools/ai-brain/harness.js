@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Ship Dễ — Harness adapters (TASK-AI-49)
+ * Ship Dễ — Harness adapters (TASK-AI-49, extended by TASK-AI-50)
  *
  * The executor used to build one argument vector: `ao spawn …`. AO was retired
  * on 2026-09-22 because its controller held idle processes whose RAM was the
@@ -25,7 +25,7 @@
  * sources.json. Nothing downstream may branch on a harness name.
  */
 
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -101,7 +101,150 @@ const cline = {
   },
 };
 
-const HARNESSES = Object.freeze({ paseo, cline });
+/**
+ * Hermes Agent (TASK-AI-50): a planning harness with tool use and subagents.
+ *
+ * Two things make it different from Paseo and both are handled here rather
+ * than pushed onto the caller.
+ *
+ * It has no `--background`. `-z` runs the whole task and prints only the final
+ * text, so the executor would sit holding a child process for the length of a
+ * Work Item. The adapter is marked `detached`, and `runHarness` starts it
+ * without waiting.
+ *
+ * It has no session id on stdout either — `-z` suppresses it deliberately. The
+ * durable handle is the working directory: `--resume latest --in <dir>` picks
+ * up the most recent session for that workspace with its history intact
+ * (verified 2026-09-23: a number stored in one run was recalled in the next).
+ * So the handle this adapter writes into the decision log is the directory,
+ * which is what a later resume actually needs.
+ *
+ * The reasoning model is never pinned. `~/AppData/Local/hermes/config.yaml`
+ * points Hermes at 9Router, and the model for each task arrives as `-m`, so
+ * the pool is whatever the registry and the qualification probe currently
+ * allow.
+ *
+ * Gap 1 (TASK-AI-50): Hermes runs detached. It has inspect, stop, and a
+ * clearly owned process — the pid from the detached spawn is the handle, and
+ * stop kills the whole tree so no child process is left behind.
+ *
+ * Gap 2: The adapter holds the pid; the executor stores it in the record so
+ * the operator can stop it. Hermes has no daemon management API, so we wrap it
+ * in an adapter that holds the PID and cleans up. Never fire-and-forget.
+ *
+ * Gap 3: Hermes internal subagents are not part of dispatch. `-z` is a single
+ * agent that may fan out inside its own process, but dispatch never tells it
+ * to; the launch takes no toolset/subagent flags. One assignment is one Hermes
+ * process, and the implementation ceiling counts processes.
+ */
+const hermes = {
+  id: 'hermes',
+  command: 'hermes',
+  detached: true,
+  launch(job) {
+    const args = [];
+    if (job.model) args.push('-m', job.model);
+    if (job.cwd) args.push('--in', job.cwd);
+    // Headless: nothing is present to answer an approval or a hook prompt, and
+    // an unanswered prompt hangs the run to its timeout.
+    args.push('--yolo', '--accept-hooks');
+    if (job.reasoning) args.push('--reasoning', job.reasoning);
+    if (job.usageFile) args.push('--usage-file', job.usageFile);
+    args.push('-z', job.prompt);
+    return args;
+  },
+  resume(sessionId, prompt, job) {
+    const dir = handleToDir(sessionId) || (job && job.cwd);
+    const args = ['--resume', 'latest'];
+    if (dir) args.push('--in', dir);
+    if (job && job.model) args.push('-m', job.model);
+    args.push('--yolo', '--accept-hooks', '-z', prompt);
+    return args;
+  },
+  /**
+   * Stopping a Hermes run means stopping the process and its children, because
+   * the handle is a workspace rather than a session the daemon can interrupt.
+   * The pid comes from the launch record, so a caller that never kept it cannot
+   * stop the run — which is the honest limitation, not something to paper over
+   * with a command that does nothing.
+   *
+   * `tree: true` asks the operator to kill the whole tree (`taskkill /T`):
+   * the pid from the detached spawn is the node shim, and Hermes spawns
+   * children of its own. Killing only the parent would orphan them (Windows
+   * does not reap grandchildren), which is exactly the trash a cleanup step
+   * exists to prevent.
+   */
+  stop(sessionId, job) {
+    const pid = job && job.pid;
+    if (!pid) return null;
+    return { kill: Number(pid), tree: true };
+  },
+  /**
+   * The executor's process-life probe, as an argv the runner can execute.
+   *
+   * This is not the Paseo inspect shape (which asks a daemon about one named
+   * session). Hermes stores sessions per workspace and exposes no daemon
+   * management API, so the probe asks the CLI itself: if `hermes sessions
+   * list` answers exit 0 with output, the process that would resume on
+   * `--resume latest --in <dir>` answers too, and resuming is a safe attempt.
+   * Any other exit is "unknown", never a guess.
+   */
+  inspect(sessionId) {
+    return ['sessions', 'list'];
+  },
+  sessionIdFrom(parsed, job) {
+    if (job && job.cwd) return DIR_HANDLE + job.cwd;
+    return pickId(parsed);
+  },
+};
+
+/** Marks a handle that is a workspace rather than a provider-issued id. */
+const DIR_HANDLE = 'dir:';
+
+function handleToDir(handle) {
+  const s = String(handle || '');
+  return s.startsWith(DIR_HANDLE) ? s.slice(DIR_HANDLE.length) : null;
+}
+
+/**
+ * The smallest context window a harness can be given a model for.
+ *
+ * Hermes loads its own tools, rules and memory before the task even starts, so
+ * a small model answers "this conversation has grown too large" and the run is
+ * lost without producing anything (observed 2026-09-23 with an 8k model). The
+ * number is the harness's floor, not a model's quality: a model below it is
+ * refused for this harness and may still be perfectly good for another.
+ *
+ * Paseo and Cline pass the prompt through to whatever the provider accepts, so
+ * they state no floor.
+ *
+ * Gap 4 (TASK-AI-50): enforce a minimum context before a model is chosen for
+ * Hermes. Small-context models were seen refusing outright on this machine.
+ */
+const MIN_CONTEXT = Object.freeze({ hermes: 32000 });
+
+/**
+ * Why this harness cannot take this model, or null when it can.
+ * An unknown context window is not a refusal: the registry does not always
+ * record one, and refusing on a missing field would ground a working model.
+ */
+function contextRefusal(harnessName, contextWindow) {
+  const floor = MIN_CONTEXT[String(harnessName || '').toLowerCase()];
+  if (!floor) return null;
+  const window = Number(contextWindow);
+  if (!Number.isFinite(window) || window <= 0) return null;
+  if (window >= floor) return null;
+  return (
+    'CONTEXT_TOO_SMALL: ' +
+    harnessName +
+    ' needs at least ' +
+    floor +
+    ' tokens of context and this model has ' +
+    window
+  );
+}
+
+const HARNESSES = Object.freeze({ paseo, cline, hermes });
 
 function pickId(obj) {
   if (!obj || typeof obj !== 'object') return null;
@@ -176,11 +319,54 @@ function executableFor(command, options) {
   return { file: command, prefixArgs: [] };
 }
 
-/** Runs an adapter's argv with no shell, and reports what came back. */
+/**
+ * Runs an adapter's argv with no shell, and reports what came back.
+ *
+ * A `detached` adapter is started and not waited for. That is not a
+ * convenience: a harness with no background mode would otherwise hold the
+ * dispatching process for the length of a Work Item, and the second assignment
+ * in the plan would not start until the first one finished — which is the
+ * parallelism the ceiling exists to govern, lost to an implementation detail.
+ * The caller gets exit 0 and the handle, and the session's own logs are the
+ * record of what happened after that.
+ *
+ * A probe must never be fire-and-forgot. The executor's resume path re-runs
+ * the adapter's `inspect` argv in-process, so a detached adapter passes
+ * `sync: true` there and the probe runs to completion instead of being handed
+ * a pid nobody reads.
+ *
+ * Gap 1 (TASK-AI-50): The pid is returned so the executor can store it and
+ * the operator can stop the process. Never fire-and-forget.
+ */
 function runHarness(adapter, args, options) {
   const opts = options || {};
   const exe = executableFor(adapter.command, opts);
-  const res = spawnSync(exe.file, exe.prefixArgs.concat(args), {
+
+  if (adapter.detached && !opts.sync) {
+    const spawnFn = opts.spawn || spawn;
+    let child;
+    try {
+      child = spawnFn(exe.file, exe.prefixArgs.concat(args), {
+        windowsHide: true,
+        shell: false,
+        detached: true,
+        stdio: 'ignore',
+      });
+    } catch (err) {
+      return { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
+    }
+    if (child && typeof child.unref === 'function') child.unref();
+    // The executor reads a JSON object from stdout; a detached start has none,
+    // so the handle the adapter already knows is reported in that shape.
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({ started: true, pid: child && child.pid }),
+      stderr: '',
+    };
+  }
+
+  const syncFn = opts.spawnSync || spawnSync;
+  const res = syncFn(exe.file, exe.prefixArgs.concat(args), {
     encoding: 'utf8',
     timeout: opts.timeoutMs || 120000,
     windowsHide: true,
@@ -242,10 +428,14 @@ function parseLastJson(text) {
 module.exports = {
   HARNESSES,
   RETIRED,
+  DIR_HANDLE,
+  MIN_CONTEXT,
   getHarness,
   listHarnesses,
   runHarness,
   executableFor,
   parseLastJson,
   pickId,
+  handleToDir,
+  contextRefusal,
 };

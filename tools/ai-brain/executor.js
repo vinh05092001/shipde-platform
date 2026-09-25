@@ -32,7 +32,7 @@
 
 const { REVIEW_ROLES, IMPLEMENTATION_ROLES } = require('./scheduler');
 const { offeringId: toOfferingId } = require('./offerings');
-const { getHarness, runHarness, parseLastJson } = require('./harness');
+const { getHarness, runHarness, parseLastJson, contextRefusal } = require('./harness');
 const { loadSources, dispatchRoute, qualifyModel } = require('./sources');
 const decisions = require('./decisions');
 
@@ -232,6 +232,17 @@ function executePlan(plan, options) {
     }
     record.harness = adapter.id;
 
+    // Gap 4 (TASK-AI-50): enforce minimum context window for harnesses that
+    // need room to load their own tools before seeing the task. A model below
+    // the floor cannot be used for this harness even if it is perfectly good
+    // for another. The check is before any writer tracking so a refused
+    // assignment does not block a correctly-sized model on the same item.
+    const ctxBlock = contextRefusal(adapter.id, a.contextWindow);
+    if (ctxBlock) {
+      refuse(ctxBlock);
+      continue;
+    }
+
     const isReview = REVIEW_ROLES.has(a.role);
     const existing = isReview ? null : openByItem.get(a.workItemId);
 
@@ -286,10 +297,17 @@ function executePlan(plan, options) {
     if (resuming && adapter.inspect && !dryRun) {
       const probe = adapter.inspect(existing.sessionId);
       let probeRes;
-      try {
-        probeRes = run(adapter, probe.slice(), opts);
-      } catch (err) {
-        probeRes = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
+      if (!Array.isArray(probe)) {
+        probeRes = { exitCode: -1, stdout: '', stderr: 'adapter.inspect did not return an argv' };
+      } else {
+        try {
+          // A probe is an in-process question, not a session: it must run to
+          // completion even for a detached adapter, which is what `sync: true`
+          // tells the runner.
+          probeRes = run(adapter, probe.slice(), Object.assign({}, opts, { sync: true }));
+        } catch (err) {
+          probeRes = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
+        }
       }
       const verdict = inspectVerdict(probeRes);
       if (verdict === 'gone') {
@@ -315,18 +333,22 @@ function executePlan(plan, options) {
       continue;
     }
 
+    // The job object is used by both launch and sessionIdFrom — Hermes needs
+    // the workspace directory in both places because it uses dir: as its handle.
+    const job = {
+      provider: route.provider,
+      model: route.model,
+      prompt: promptFor(a),
+      branch: isReview ? null : a.branch,
+      base: opts.base || 'main',
+      cwd: opts.cwd,
+      title: workerName(a.workItemId),
+      labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
+    };
+
     record.args = resuming
-      ? adapter.resume(existing.sessionId, resumePrompt(a))
-      : adapter.launch({
-          provider: route.provider,
-          model: route.model,
-          prompt: promptFor(a),
-          branch: isReview ? null : a.branch,
-          base: opts.base || 'main',
-          cwd: opts.cwd,
-          title: workerName(a.workItemId),
-          labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
-        });
+      ? adapter.resume(existing.sessionId, resumePrompt(a), job)
+      : adapter.launch(job);
 
     if (dryRun) {
       record.outcome = Outcome.DRY_RUN;
@@ -389,7 +411,7 @@ function executePlan(plan, options) {
       fail('HARNESS_INVALID_JSON');
       continue;
     }
-    const id = resuming ? existing.sessionId : adapter.sessionIdFrom(parsed);
+    const id = resuming ? existing.sessionId : adapter.sessionIdFrom(parsed, job);
     if (!id) {
       // No id means no way to find this session again, which makes it
       // unstoppable and unresumable. Reported as failed so a human looks.
@@ -399,6 +421,10 @@ function executePlan(plan, options) {
 
     record.outcome = resuming ? Outcome.RESUMED : Outcome.LAUNCHED;
     record.sessionId = id;
+    // Gap 1/2 (TASK-AI-50): A detached harness reports its pid and nothing
+    // else can find it again; without this the operator's only way to stop the
+    // run is Task Manager.
+    if (parsed && parsed.pid) record.pid = parsed.pid;
     decisions.recordDecision(
       {
         stage: resuming ? decisions.Stage.RESUMED : decisions.Stage.LAUNCHED,
@@ -407,6 +433,7 @@ function executePlan(plan, options) {
         chosen: record.offeringId,
         harness: adapter.id,
         sessionId: id,
+        pid: (parsed && parsed.pid) || null,
         branch: a.branch,
       },
       logOpts
