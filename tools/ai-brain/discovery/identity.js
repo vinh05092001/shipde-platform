@@ -80,7 +80,28 @@ function parseCandidateKey(key) {
       modelId: parts[5],
     };
   }
+  if (parts.length === 4) {
+    return {
+      harness: parts[0],
+      accessPath: parts[1],
+      gateway: parts[2],
+      upstream: '',
+      account: '',
+      quotaScope: '',
+      modelId: parts[3],
+    };
+  }
   return null;
+}
+
+/**
+ * Normalise any candidate key (7-part, legacy 6-part, or legacy 4-part) to canonical 7-part format.
+ */
+function normalizeCandidateKey(key) {
+  if (typeof key !== 'string') return null;
+  const parsed = parseCandidateKey(key);
+  if (!parsed) return key;
+  return candidateKey(parsed);
 }
 
 /**
@@ -139,6 +160,7 @@ module.exports = {
   GATEWAY_PREFIX_SEPARATOR,
   candidateKey,
   parseCandidateKey,
+  normalizeCandidateKey,
   registryPrefixes,
   modelBase,
   DATE_SUFFIX,

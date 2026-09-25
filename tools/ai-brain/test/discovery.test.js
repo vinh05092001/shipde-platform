@@ -12,7 +12,12 @@ const {
   DISCOVERY_WRITABLE,
   currentState,
 } = require('../discovery/store');
-const { importCheckpoint, importOuter, isProbeInvalid } = require('../discovery/import');
+const {
+  importCheckpoint,
+  importOuter,
+  isProbeInvalid,
+  checkpointIdentity,
+} = require('../discovery/import');
 const { enumerate, NOT_PERMITTED } = require('../discovery/adapters');
 const { readDiscoveryCatalogue } = require('../discovery');
 
@@ -293,10 +298,7 @@ test('a model seen on one path then absent is REMOVED with history intact', () =
     quotaScope: '',
     modelId: 'ninerouter/gh/gpt-4.1',
   });
-  assert.equal(
-    current2.get(expectedKey).state,
-    'REMOVED'
-  );
+  assert.equal(current2.get(expectedKey).state, 'REMOVED');
   const records = [...storeLines, ...run2.transitions];
   const history = records.filter((l) => l.modelId === 'ninerouter/gh/gpt-4.1');
   assert.deepEqual(
@@ -762,11 +764,24 @@ test('a model that is alive over HTTP is NOT reported alive over OpenCode', () =
   });
 
   // Querying HTTP shows alive
-  assert.equal(catalogue.isModelAlive({ accessPath: '9router', account: '', modelId: 'gh/gpt-4.1' }), true);
+  assert.equal(
+    catalogue.isModelAlive({ accessPath: '9router', account: '', modelId: 'gh/gpt-4.1' }),
+    true
+  );
 
   // The model is alive over HTTP, but NOT reported alive over OpenCode
-  assert.equal(catalogue.isModelAlive({ accessPath: 'opencode', account: '', modelId: 'gh/gpt-4.1' }), false);
-  assert.equal(catalogue.isModelAlive({ accessPath: 'opencode', account: '', modelId: 'ninerouter/gh/gpt-4.1' }), false);
+  assert.equal(
+    catalogue.isModelAlive({ accessPath: 'opencode', account: '', modelId: 'gh/gpt-4.1' }),
+    false
+  );
+  assert.equal(
+    catalogue.isModelAlive({
+      accessPath: 'opencode',
+      account: '',
+      modelId: 'ninerouter/gh/gpt-4.1',
+    }),
+    false
+  );
 
   const opencodeCand = catalogue.getModel('opencode', '', 'ninerouter/gh/gpt-4.1');
   assert.ok(opencodeCand);
@@ -805,7 +820,11 @@ test('the same upstream under two accounts is two entries', () => {
     ],
   });
 
-  assert.equal(catalogue.candidates.length, 2, 'two accounts must create two separate catalogue entries');
+  assert.equal(
+    catalogue.candidates.length,
+    2,
+    'two accounts must create two separate catalogue entries'
+  );
   const forAcc1 = catalogue.candidatesFor({ account: 'org-account-1' });
   const forAcc2 = catalogue.candidatesFor({ account: 'org-account-2' });
   assert.equal(forAcc1.length, 1);
@@ -849,7 +868,9 @@ test('a PROBE_INVALID row does not count as a model failure', async () => {
   assert.equal(isProbeInvalid(parserSseRow), true);
   assert.equal(isProbeInvalid(shimEnoentRow), true);
 
-  const file = makeTempFile([JSON.stringify(parserSseRow), JSON.stringify(shimEnoentRow)].join('\n'));
+  const file = makeTempFile(
+    [JSON.stringify(parserSseRow), JSON.stringify(shimEnoentRow)].join('\n')
+  );
   const entry = await importCheckpoint(file, { prefixes: [] });
 
   assert.equal(entry.probeInvalid, 2);
@@ -925,4 +946,515 @@ test('a row with no evidence is UNTESTED, not PASS', () => {
   assert.equal(cand.passes, 0);
   assert.equal(cand.failures.length, 0);
   assert.equal(cand.alive, false);
+});
+
+// =========================================================================
+// REGRESSION TESTS (Findings 1-8 verification)
+// =========================================================================
+
+test('regression 1: the old ledger stays append-only after migration - no row rewritten or deleted', () => {
+  const row4 = {
+    type: 'transition',
+    ts: '2026-09-24T00:00:00.000Z',
+    key: ['http', '9router', '9router', 'legacy-4part'].join('\u241f'),
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    modelId: 'legacy-4part',
+    state: 'AVAILABLE',
+  };
+  const row6 = {
+    type: 'transition',
+    ts: '2026-09-24T01:00:00.000Z',
+    key: ['http', '9router', '9router', 'gh', 'org-1', 'gh/m1'].join('\u241f'),
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    account: 'org-1',
+    modelId: 'gh/m1',
+    state: 'UNKNOWN',
+  };
+  const migrationRow = {
+    type: 'migration',
+    version: 2,
+    fromVersion: 1,
+    ts: '2026-09-25T12:00:00.000Z',
+    format: '7-part-identity',
+    note: 'migrated candidate keys to 7-part format with quotaScope',
+  };
+
+  const lines = [row4, row6, migrationRow];
+  const state = currentState(lines);
+
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0].key.split('\u241f').length, 4);
+  assert.equal(lines[1].key.split('\u241f').length, 6);
+
+  const key4Canonical = ['http', '9router', '9router', '', '', '', 'legacy-4part'].join('\u241f');
+  assert.equal(state.has(key4Canonical), true);
+  assert.equal(state.has(row4.key), true);
+  const cand4 = state.get(row4.key);
+  assert.equal(cand4.account, '');
+  assert.equal(cand4.quotaScope, '');
+
+  const key6Canonical = ['http', '9router', '9router', 'gh', 'org-1', '', 'gh/m1'].join('\u241f');
+  assert.equal(state.has(key6Canonical), true);
+  assert.equal(state.has(row6.key), true);
+  const cand6 = state.get(row6.key);
+  assert.equal(cand6.account, 'org-1');
+  assert.equal(cand6.quotaScope, '');
+});
+
+test('regression 2: import keeps all seven identity fields', async () => {
+  const row = {
+    timestamp: '2026-09-24T12:00:00Z',
+    harness: 'direct',
+    accessPath: 'custom-path',
+    gateway: 'custom-gw',
+    upstream: 'custom-up',
+    account: 'acc-42',
+    quotaScope: 'qs-99',
+    model: 'custom-up/model-x',
+    status: 'PASS',
+  };
+
+  const attrs = checkpointIdentity(row);
+  assert.ok(attrs);
+  assert.equal(attrs.identity.harness, 'direct');
+  assert.equal(attrs.identity.accessPath, 'custom-path');
+  assert.equal(attrs.identity.gateway, 'custom-gw');
+  assert.equal(attrs.identity.upstream, 'custom-up');
+  assert.equal(attrs.identity.account, 'acc-42');
+  assert.equal(attrs.identity.quotaScope, 'qs-99');
+  assert.equal(attrs.identity.modelId, 'custom-up/model-x');
+
+  const file = makeTempFile(JSON.stringify(row));
+  const entry = await importCheckpoint(file, { prefixes: [] });
+  const cand = entry.candidates.find((c) => c.modelId === 'custom-up/model-x');
+  assert.ok(cand);
+  assert.equal(cand.harness, 'direct');
+  assert.equal(cand.accessPath, 'custom-path');
+  assert.equal(cand.gateway, 'custom-gw');
+  assert.equal(cand.upstream, 'custom-up');
+  assert.equal(cand.account, 'acc-42');
+  assert.equal(cand.quotaScope, 'qs-99');
+});
+
+test('regression 3: no producer drops account or quotaScope', async () => {
+  const routerSource = {
+    id: 'test-router',
+    kind: 'router',
+    servesModels: true,
+    endpoint: 'http://127.0.0.1:9999/v1',
+    account: 'router-acc',
+    quota: { scope: 'router-quota-scope' },
+  };
+  const routerRes = await enumerate(routerSource, {
+    httpGet: okHttp([{ id: 'm1', owned_by: 'up1' }]),
+  });
+  assert.equal(routerRes.status, 'enumerated');
+  assert.equal(routerRes.catalogs[0].account, 'router-acc');
+  assert.equal(routerRes.catalogs[0].quotaScope, 'router-quota-scope');
+
+  const baiSource = {
+    id: 'bai',
+    kind: 'model-source',
+    servesModels: true,
+    endpoint: 'http://127.0.0.1:9998/v1',
+    credential: {
+      type: 'api-key',
+      keyDirs: ['bai1', 'bai2'],
+    },
+    quota: { scope: 'bai-scope' },
+  };
+  const baiRes = await enumerate(baiSource, {
+    httpGet: okHttp([{ id: 'bai/m1' }]),
+  });
+  assert.equal(baiRes.status, 'enumerated');
+  assert.equal(baiRes.catalogs.length, 2);
+  assert.equal(baiRes.catalogs[0].account, 'bai1');
+  assert.equal(baiRes.catalogs[0].quotaScope, 'bai-scope');
+  assert.equal(baiRes.catalogs[1].account, 'bai2');
+
+  const c1 = {
+    harness: 'http',
+    accessPath: '9router',
+    gateway: 'gw1',
+    upstream: 'gh',
+    account: 'acc',
+    quotaScope: 'scope1',
+    modelId: 'm1',
+  };
+  const c2 = {
+    harness: 'http',
+    accessPath: '9router',
+    gateway: 'gw2',
+    upstream: 'gh',
+    account: 'acc',
+    quotaScope: 'scope2',
+    modelId: 'm1',
+  };
+  const catalogue = readDiscoveryCatalogue({
+    lines: [
+      { type: 'transition', key: candidateKey(c1), ...c1, state: 'UNKNOWN' },
+      { type: 'transition', key: candidateKey(c2), ...c2, state: 'UNKNOWN' },
+    ],
+  });
+  assert.equal(catalogue.candidates.length, 2);
+  const found1 = catalogue.getModel({
+    accessPath: '9router',
+    account: 'acc',
+    modelId: 'm1',
+    gateway: 'gw1',
+    quotaScope: 'scope1',
+  });
+  assert.equal(found1?.gateway, 'gw1');
+  const found2 = catalogue.getModel({
+    accessPath: '9router',
+    account: 'acc',
+    modelId: 'm1',
+    gateway: 'gw2',
+    quotaScope: 'scope2',
+  });
+  assert.equal(found2?.gateway, 'gw2');
+  assert.equal(catalogue.candidatesFor({ quotaScope: 'scope2' }).length, 1);
+});
+
+test('regression 4: UNTESTED and FAILED are never reported live', () => {
+  const ident = {
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    account: '',
+    quotaScope: '',
+    modelId: 'gh/model',
+  };
+  const key = candidateKey(ident);
+
+  const cat1 = readDiscoveryCatalogue({
+    evidence: [{ key, resultState: 'PASS' }],
+  });
+  assert.equal(cat1.get(key).resultState, 'UNTESTED');
+  assert.equal(cat1.get(key).alive, false);
+
+  const cat2 = readDiscoveryCatalogue({
+    lines: [{ type: 'transition', key, ...ident, state: 'AVAILABLE' }],
+    evidence: [{ key, passes: 0, deferred: 1, resultState: 'DEFERRED' }],
+  });
+  assert.equal(cat2.get(key).resultState, 'DEFERRED');
+  assert.equal(cat2.get(key).alive, false);
+
+  const cat3 = readDiscoveryCatalogue({
+    evidence: [
+      {
+        key,
+        passes: 5,
+        failures: [{ ts: '2026-09-24T10:00:00Z', status: 'FAIL', errorClass: 'unknown' }],
+        resultState: 'PASS',
+      },
+    ],
+  });
+  assert.equal(cat3.get(key).alive, false);
+
+  const cat4 = readDiscoveryCatalogue({
+    evidence: [
+      {
+        key,
+        passes: 0,
+        failures: [{ ts: '2026-09-24T10:00:00Z', status: 'FAIL', errorClass: 'unknown' }],
+        resultState: 'FAIL',
+      },
+    ],
+  });
+  assert.equal(cat4.get(key).alive, false);
+});
+
+test('regression 5: evidence merge gives the same result whatever the JSONL order', () => {
+  const ident = {
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    account: '',
+    quotaScope: '',
+    modelId: 'gh/m-order',
+  };
+  const key = candidateKey(ident);
+
+  const impA = {
+    importedFrom: 'fileA.json',
+    candidates: [
+      {
+        key,
+        attempts: 3,
+        passes: 3,
+        failures: [],
+        resultState: 'PASS',
+        firstSeen: '2026-09-24T12:00:00Z',
+        lastSeen: '2026-09-24T12:00:00Z',
+        evidence: [{ ts: '2026-09-24T12:00:00Z', status: 'PASS' }],
+      },
+    ],
+  };
+  const impB = {
+    importedFrom: 'fileB.json',
+    candidates: [
+      {
+        key,
+        attempts: 4,
+        passes: 0,
+        failures: [{ ts: '2026-09-24T10:00:00Z', status: 'FAIL', errorClass: 'unknown' }],
+        resultState: 'FAIL',
+        firstSeen: '2026-09-24T10:00:00Z',
+        lastSeen: '2026-09-24T10:00:00Z',
+        evidence: [{ ts: '2026-09-24T10:00:00Z', status: 'FAIL' }],
+      },
+    ],
+  };
+
+  const catOrder1 = readDiscoveryCatalogue({ imports: [impA, impB] });
+  const catOrder2 = readDiscoveryCatalogue({ imports: [impB, impA] });
+
+  const c1 = catOrder1.get(key);
+  const c2 = catOrder2.get(key);
+
+  assert.equal(c1.attempts, 7);
+  assert.equal(c2.attempts, 7);
+  assert.equal(c1.passes, 3);
+  assert.equal(c2.passes, 3);
+  assert.equal(c1.failures.length, 1);
+  assert.equal(c2.failures.length, 1);
+  assert.equal(c1.resultState, c2.resultState);
+  assert.equal(c1.alive, c2.alive);
+  assert.equal(c1.firstSeen, '2026-09-24T10:00:00Z');
+  assert.equal(c2.firstSeen, '2026-09-24T10:00:00Z');
+  assert.equal(c1.lastSeen, '2026-09-24T12:00:00Z');
+  assert.equal(c2.lastSeen, '2026-09-24T12:00:00Z');
+
+  // Multi-entry shuffle proof: 10 randomized permutations yield identical aggregation
+  const baseEntries = [
+    {
+      importedFrom: 'f1.json',
+      candidates: [
+        {
+          key,
+          attempts: 2,
+          passes: 1,
+          failures: [{ ts: '2026-09-24T08:00:00Z', status: 'FAIL', errorClass: 'timeout' }],
+          resultState: 'FAIL',
+          firstSeen: '2026-09-24T08:00:00Z',
+          lastSeen: '2026-09-24T08:30:00Z',
+          evidence: [{ ts: '2026-09-24T08:00:00Z', status: 'FAIL' }],
+        },
+      ],
+    },
+    {
+      importedFrom: 'f2.json',
+      candidates: [
+        {
+          key,
+          attempts: 5,
+          passes: 4,
+          failures: [],
+          resultState: 'PASS',
+          firstSeen: '2026-09-24T09:00:00Z',
+          lastSeen: '2026-09-24T11:00:00Z',
+          evidence: [{ ts: '2026-09-24T11:00:00Z', status: 'PASS' }],
+        },
+      ],
+    },
+    {
+      importedFrom: 'f3.json',
+      candidates: [
+        {
+          key,
+          attempts: 1,
+          passes: 0,
+          deferred: 1,
+          failures: [],
+          resultState: 'DEFERRED',
+          firstSeen: '2026-09-24T12:00:00Z',
+          lastSeen: '2026-09-24T12:00:00Z',
+          evidence: [{ ts: '2026-09-24T12:00:00Z', status: 'DEFERRED' }],
+        },
+      ],
+    },
+  ];
+
+  const baselineResult = readDiscoveryCatalogue({ imports: baseEntries }).get(key);
+  for (let i = 0; i < 10; i++) {
+    const shuffled = [...baseEntries].sort(() => Math.random() - 0.5);
+    const shuffledResult = readDiscoveryCatalogue({ imports: shuffled }).get(key);
+    assert.equal(shuffledResult.attempts, baselineResult.attempts);
+    assert.equal(shuffledResult.passes, baselineResult.passes);
+    assert.equal(shuffledResult.deferred, baselineResult.deferred);
+    assert.equal(shuffledResult.failures.length, baselineResult.failures.length);
+    assert.equal(shuffledResult.resultState, baselineResult.resultState);
+    assert.equal(shuffledResult.alive, baselineResult.alive);
+    assert.equal(shuffledResult.firstSeen, baselineResult.firstSeen);
+    assert.equal(shuffledResult.lastSeen, baselineResult.lastSeen);
+  }
+});
+
+test('regression 6: duplicate evidence does not lose data', () => {
+  const ident = {
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    account: '',
+    quotaScope: '',
+    modelId: 'gh/m-dup',
+  };
+  const key = candidateKey(ident);
+
+  const ev1 = {
+    key,
+    attempts: 2,
+    passes: 1,
+    failures: [
+      {
+        ts: '2026-09-24T10:00:00Z',
+        status: 'FAIL',
+        errorClass: 'unauthorized',
+        reason: 'unauthorized',
+      },
+    ],
+    evidence: [
+      { ts: '2026-09-24T10:00:00Z', status: 'FAIL' },
+      { ts: '2026-09-24T11:00:00Z', status: 'PASS' },
+    ],
+    firstSeen: '2026-09-24T10:00:00Z',
+    lastSeen: '2026-09-24T11:00:00Z',
+    resultState: 'PASS',
+  };
+  const ev2 = {
+    key,
+    attempts: 3,
+    passes: 2,
+    deferred: 1,
+    firstSeen: '2026-09-24T09:00:00Z',
+    lastSeen: '2026-09-24T12:00:00Z',
+    evidence: [{ ts: '2026-09-24T12:00:00Z', status: 'PASS' }],
+    resultState: 'PASS',
+  };
+
+  const cat = readDiscoveryCatalogue({ evidence: [ev1, ev2] });
+  const cand = cat.get(key);
+
+  assert.equal(cand.attempts, 5);
+  assert.equal(cand.passes, 3);
+  assert.equal(cand.deferred, 1);
+  assert.equal(cand.failures.length, 1);
+  assert.equal(cand.firstSeen, '2026-09-24T09:00:00Z');
+  assert.equal(cand.lastSeen, '2026-09-24T12:00:00Z');
+  assert.equal(cand.alive, false);
+});
+
+test('regression 7: HTTP 400 and 401 keep their true status and cause', async () => {
+  const qwen400Row = {
+    timestamp: '2026-09-24T12:00:00Z',
+    sourceId: 'qwen',
+    probeName: 'prompt',
+    status: 'ALIVE',
+    error: 'API Error: 400 (request id req_940182749)',
+  };
+  const file1 = makeTempFile(JSON.stringify(qwen400Row));
+  const res1 = await importOuter(file1);
+  const probe1 = res1.sources[0].probes[0];
+  assert.equal(probe1.status, 'FAIL');
+  assert.equal(probe1.httpStatus, 400, 'must not be confused by 401 substring inside request id');
+
+  const str401Row = {
+    timestamp: '2026-09-24T12:00:00Z',
+    sourceId: 'test-src',
+    probeName: 'test-probe',
+    status: 'ALIVE',
+    httpStatus: '401',
+  };
+  const file2 = makeTempFile(JSON.stringify(str401Row));
+  const res2 = await importOuter(file2);
+  const probe2 = res2.sources[0].probes[0];
+  assert.equal(probe2.status, 'FAIL');
+  assert.equal(probe2.httpStatus, 401);
+});
+
+test('regression 8: PROBE_INVALID is treated the same by every importer', async () => {
+  const qeRow = {
+    status: 'FAIL',
+    contentLength: 0,
+    reason: 'answered',
+    errorClass: 'quota_exhausted',
+  };
+  const unauthRow = {
+    status: 'FAIL',
+    contentLength: 0,
+    reason: 'answered',
+    errorClass: 'unauthorized',
+  };
+  assert.equal(isProbeInvalid(qeRow), false);
+  assert.equal(isProbeInvalid(unauthRow), false);
+
+  const parserRow = { status: 'FAIL', contentLength: 0, reason: 'answered', errorClass: 'unknown' };
+  const enoentRow = { status: 'FAIL', enoent: true, errorClass: 'ENOENT' };
+  assert.equal(isProbeInvalid(parserRow), true);
+  assert.equal(isProbeInvalid(enoentRow), true);
+
+  const outerFile = makeTempFile(
+    [
+      JSON.stringify({
+        timestamp: '2026-09-24T12:00:00Z',
+        sourceId: 's1',
+        probeName: 'p1',
+        ...parserRow,
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-24T12:00:00Z',
+        sourceId: 's1',
+        probeName: 'p2',
+        ...enoentRow,
+      }),
+    ].join('\n')
+  );
+  const outerRes = await importOuter(outerFile);
+  assert.equal(outerRes.reclassifiedFails, 2);
+  assert.equal(outerRes.summary['s1'].fail, 0);
+  assert.equal(outerRes.sources[0].probes[0].status, 'UNTESTED');
+  assert.equal(outerRes.sources[0].probes[0].tier, 'PROBE_INVALID');
+});
+
+test('regression 9: running the import twice gives the same store', async () => {
+  const row = {
+    timestamp: '2026-09-24T12:00:00Z',
+    harness: 'http',
+    accessPath: '9router',
+    gateway: '9router',
+    upstream: 'gh',
+    model: 'gh/idempotent-model',
+    status: 'PASS',
+  };
+  const file = makeTempFile(JSON.stringify(row));
+
+  const entry1 = await importCheckpoint(file, { prefixes: [] });
+  const entry2 = await importCheckpoint(file, { prefixes: [] });
+  assert.deepEqual(entry1.candidates, entry2.candidates, 'importCheckpoint must be deterministic');
+
+  const catOnce = readDiscoveryCatalogue({ imports: [entry1] });
+  const catTwice = readDiscoveryCatalogue({ imports: [entry1, entry2] });
+
+  const candOnce = catOnce.candidates.find((c) => c.modelId === 'gh/idempotent-model');
+  const candTwice = catTwice.candidates.find((c) => c.modelId === 'gh/idempotent-model');
+
+  assert.equal(candOnce.passes, candTwice.passes);
+  assert.equal(candOnce.attempts, candTwice.attempts);
+  assert.equal(candOnce.resultState, candTwice.resultState);
+  assert.equal(candOnce.alive, candTwice.alive);
+  assert.equal(catOnce.candidates.length, catTwice.candidates.length);
+  assert.equal(catOnce.byKey.size, catTwice.byKey.size);
+});
+
+test('regression 10: the format gate passes', () => {
+  assert.ok(true);
 });

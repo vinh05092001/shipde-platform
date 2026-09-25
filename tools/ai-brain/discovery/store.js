@@ -17,6 +17,7 @@
  */
 
 const fs = require('fs');
+const { candidateKey, parseCandidateKey, normalizeCandidateKey } = require('./identity');
 
 const STATES = [
   'UNKNOWN',
@@ -36,11 +37,40 @@ function stateLabel(state) {
   return s;
 }
 
+class StateMap extends Map {
+  get(key) {
+    if (super.has(key)) return super.get(key);
+    const norm = normalizeCandidateKey(key);
+    if (norm && super.has(norm)) return super.get(norm);
+    return undefined;
+  }
+  has(key) {
+    if (super.has(key)) return true;
+    const norm = normalizeCandidateKey(key);
+    if (norm && super.has(norm)) return true;
+    return false;
+  }
+}
+
 function currentState(lines) {
-  const current = new Map();
+  const current = new StateMap();
   for (const line of lines) {
-    if (!line || !line.key) continue;
-    current.set(line.key, line);
+    if (!line || !line.key || line.type === 'migration') continue;
+    const normKey = normalizeCandidateKey(line.key);
+    const parsed = parseCandidateKey(line.key);
+    const rec = {
+      ...line,
+      key: normKey,
+      harness: line.harness || (parsed && parsed.harness) || 'http',
+      accessPath: line.accessPath || (parsed && parsed.accessPath) || '9router',
+      gateway: line.gateway || (parsed && parsed.gateway) || '',
+      upstream: line.upstream || (parsed && parsed.upstream) || '',
+      account: line.account !== undefined ? line.account : (parsed && parsed.account) || '',
+      quotaScope:
+        line.quotaScope !== undefined ? line.quotaScope : (parsed && parsed.quotaScope) || '',
+      modelId: line.modelId || (parsed && parsed.modelId) || '',
+    };
+    current.set(normKey, rec);
   }
   return current;
 }

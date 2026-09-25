@@ -74,8 +74,10 @@ const DEFAULT_DATA_DIR = path.join(__dirname, '..', 'data', 'discovery');
  * Normalise a candidate record to ensure full 7-part identity.
  */
 function normalizeCandidateIdentity(cand) {
-  const account = cand.account === null || cand.account === undefined ? '' : String(cand.account).trim();
-  const quotaScope = cand.quotaScope === null || cand.quotaScope === undefined ? '' : String(cand.quotaScope).trim();
+  const account =
+    cand.account === null || cand.account === undefined ? '' : String(cand.account).trim();
+  const quotaScope =
+    cand.quotaScope === null || cand.quotaScope === undefined ? '' : String(cand.quotaScope).trim();
   const harness = cand.harness || 'http';
   const accessPath = cand.accessPath || '9router';
   const gateway = cand.gateway || '';
@@ -118,7 +120,9 @@ function readDiscoveryCatalogue(opts) {
   const importsDir = o.importsDir || path.join(dataDir, 'imports');
 
   // 1. Load catalogue lines (from memory or file)
-  const isFixtureMode = Boolean(Array.isArray(o.lines) || Array.isArray(o.imports) || Array.isArray(o.evidence));
+  const isFixtureMode = Boolean(
+    Array.isArray(o.lines) || Array.isArray(o.imports) || Array.isArray(o.evidence)
+  );
   let rawLines = [];
   if (Array.isArray(o.lines)) {
     rawLines = o.lines;
@@ -138,7 +142,8 @@ function readDiscoveryCatalogue(opts) {
       gateway: raw.gateway || (parsedKey && parsedKey.gateway) || '',
       upstream: raw.upstream || (parsedKey && parsedKey.upstream) || '',
       account: raw.account !== undefined ? raw.account : (parsedKey && parsedKey.account) || '',
-      quotaScope: raw.quotaScope !== undefined ? raw.quotaScope : (parsedKey && parsedKey.quotaScope) || '',
+      quotaScope:
+        raw.quotaScope !== undefined ? raw.quotaScope : (parsedKey && parsedKey.quotaScope) || '',
       modelId: raw.modelId || (parsedKey && parsedKey.modelId) || '',
     };
     normalizedLines.push(normalizeCandidateIdentity(cand));
@@ -157,7 +162,8 @@ function readDiscoveryCatalogue(opts) {
     const gateway = c.gateway || (parsedKey && parsedKey.gateway) || '';
     const upstream = c.upstream || (parsedKey && parsedKey.upstream) || '';
     const account = c.account !== undefined ? c.account : (parsedKey && parsedKey.account) || '';
-    const quotaScope = c.quotaScope !== undefined ? c.quotaScope : (parsedKey && parsedKey.quotaScope) || '';
+    const quotaScope =
+      c.quotaScope !== undefined ? c.quotaScope : (parsedKey && parsedKey.quotaScope) || '';
     const modelId = c.modelId || (parsedKey && parsedKey.modelId) || '';
 
     const key =
@@ -166,6 +172,14 @@ function readDiscoveryCatalogue(opts) {
         : candidateKey({ harness, accessPath, gateway, upstream, account, quotaScope, modelId });
 
     const existing = evidenceByKey.get(key);
+    const cAttempts =
+      c.attempts !== undefined
+        ? c.attempts
+        : (c.passes || 0) +
+          (Array.isArray(c.failures) ? c.failures.length : 0) +
+          (c.deferred || 0) +
+          (c.probeInvalid || 0);
+
     if (!existing) {
       evidenceByKey.set(key, {
         ...c,
@@ -177,19 +191,77 @@ function readDiscoveryCatalogue(opts) {
         quotaScope,
         modelId,
         key,
+        passes: c.passes || 0,
+        deferred: c.deferred || 0,
+        probeInvalid: c.probeInvalid || 0,
+        attempts: cAttempts,
+        failures: Array.isArray(c.failures) ? [...c.failures] : [],
+        evidence: Array.isArray(c.evidence) ? [...c.evidence] : [],
+        firstSeen: c.firstSeen || null,
+        lastSeen: c.lastSeen || null,
+        _snapshots: [
+          {
+            passes: c.passes || 0,
+            failures: Array.isArray(c.failures) ? [...c.failures] : [],
+            deferred: c.deferred || 0,
+            resultState: c.resultState,
+            firstSeen: c.firstSeen,
+            lastSeen: c.lastSeen,
+            evidence: Array.isArray(c.evidence) ? [...c.evidence] : [],
+          },
+        ],
       });
     } else {
       existing.passes = (existing.passes || 0) + (c.passes || 0);
+      existing.deferred = (existing.deferred || 0) + (c.deferred || 0);
       existing.probeInvalid = (existing.probeInvalid || 0) + (c.probeInvalid || 0);
+      existing.attempts = (existing.attempts || 0) + cAttempts;
+
+      if (c.firstSeen) {
+        if (!existing.firstSeen || c.firstSeen < existing.firstSeen)
+          existing.firstSeen = c.firstSeen;
+      }
+      if (c.lastSeen) {
+        if (!existing.lastSeen || c.lastSeen > existing.lastSeen) existing.lastSeen = c.lastSeen;
+      }
+
       if (Array.isArray(c.failures)) {
-        existing.failures = (existing.failures || []).concat(c.failures);
+        const seenFailures = new Set(
+          existing.failures.map(
+            (f) => `${f.ts || ''}::${f.status || ''}::${f.errorClass || ''}::${f.reason || ''}`
+          )
+        );
+        for (const f of c.failures) {
+          const sig = `${f.ts || ''}::${f.status || ''}::${f.errorClass || ''}::${f.reason || ''}`;
+          if (!seenFailures.has(sig)) {
+            seenFailures.add(sig);
+            existing.failures.push(f);
+          }
+        }
       }
+
       if (Array.isArray(c.evidence)) {
-        existing.evidence = (existing.evidence || []).concat(c.evidence);
+        const seenEvidence = new Set(
+          existing.evidence.map((e) => `${e.ts || ''}::${e.status || ''}::${e.reason || ''}`)
+        );
+        for (const e of c.evidence) {
+          const sig = `${e.ts || ''}::${e.status || ''}::${e.reason || ''}`;
+          if (!seenEvidence.has(sig)) {
+            seenEvidence.add(sig);
+            existing.evidence.push(e);
+          }
+        }
       }
-      if (c.resultState && c.resultState !== 'UNTESTED') {
-        existing.resultState = c.resultState;
-      }
+
+      existing._snapshots.push({
+        passes: c.passes || 0,
+        failures: Array.isArray(c.failures) ? [...c.failures] : [],
+        deferred: c.deferred || 0,
+        resultState: c.resultState,
+        firstSeen: c.firstSeen,
+        lastSeen: c.lastSeen,
+        evidence: Array.isArray(c.evidence) ? [...c.evidence] : [],
+      });
     }
   }
 
@@ -199,22 +271,31 @@ function readDiscoveryCatalogue(opts) {
     }
   }
 
+  const seenImportSources = new Set();
   if (Array.isArray(o.imports)) {
     for (const entry of o.imports) {
       if (entry && Array.isArray(entry.candidates)) {
+        if (entry.importedFrom) {
+          if (seenImportSources.has(entry.importedFrom)) continue;
+          seenImportSources.add(entry.importedFrom);
+        }
         for (const c of entry.candidates) ingestCandidateEvidence(c);
       }
     }
   } else if (!isFixtureMode && fs.existsSync(importsDir)) {
     try {
       const files = fs.readdirSync(importsDir).filter((f) => f.endsWith('.json'));
-      // Sort newest first
-      files.sort().reverse();
+      // Sort deterministic
+      files.sort();
       for (const file of files) {
         if (!file.startsWith('checkpoint-')) continue;
         try {
           const entry = JSON.parse(fs.readFileSync(path.join(importsDir, file), 'utf8'));
           if (entry && Array.isArray(entry.candidates)) {
+            if (entry.importedFrom) {
+              if (seenImportSources.has(entry.importedFrom)) continue;
+              seenImportSources.add(entry.importedFrom);
+            }
             for (const c of entry.candidates) ingestCandidateEvidence(c);
           }
         } catch (_) {
@@ -226,44 +307,117 @@ function readDiscoveryCatalogue(opts) {
     }
   }
 
+  function resolveState(ev, ledgerRec) {
+    let passes = 0;
+    let failures = [];
+    let deferred = 0;
+    let probeInvalid = 0;
+    let evidenceList = [];
+    let firstSeen = (ledgerRec && ledgerRec.ts) || null;
+    let lastSeen = (ledgerRec && ledgerRec.ts) || null;
+    let attempts = 0;
+
+    if (ev) {
+      passes = ev.passes || 0;
+      failures = Array.isArray(ev.failures) ? ev.failures : [];
+      deferred = ev.deferred || 0;
+      probeInvalid = ev.probeInvalid || 0;
+      evidenceList = Array.isArray(ev.evidence) ? ev.evidence : [];
+      firstSeen = ev.firstSeen || firstSeen;
+      lastSeen = ev.lastSeen || lastSeen;
+      attempts =
+        ev.attempts !== undefined
+          ? ev.attempts
+          : passes + failures.length + deferred + probeInvalid;
+    }
+
+    const sortedEvidence = [...evidenceList]
+      .filter((e) => e && e.status)
+      .sort((a, b) => {
+        const ta = a.ts || '';
+        const tb = b.ts || '';
+        return ta.localeCompare(tb);
+      });
+
+    let resultState = 'UNTESTED';
+
+    if (sortedEvidence.length > 0) {
+      const latest = sortedEvidence[sortedEvidence.length - 1];
+      const s = String(latest.status).toUpperCase();
+      if (s === 'PASS') {
+        resultState = passes > 0 ? 'PASS' : 'UNTESTED';
+      } else if (s === 'FAIL') {
+        resultState = 'FAIL';
+      } else if (s === 'DEFERRED') {
+        resultState = 'DEFERRED';
+      }
+    } else if (ev && Array.isArray(ev._snapshots) && ev._snapshots.length > 0) {
+      const validSnapshots = ev._snapshots.filter(
+        (s) => s && s.resultState && s.resultState !== 'UNTESTED'
+      );
+      if (validSnapshots.length > 0) {
+        validSnapshots.sort((a, b) => {
+          const ta = a.lastSeen || a.firstSeen || '';
+          const tb = b.lastSeen || b.firstSeen || '';
+          return ta.localeCompare(tb);
+        });
+        const latestSnap = validSnapshots[validSnapshots.length - 1];
+        const s = String(latestSnap.resultState).toUpperCase();
+        if ((s === 'PASS' || s === 'ALIVE') && passes > 0) {
+          resultState = 'PASS';
+        } else if (s === 'FAIL') {
+          resultState = 'FAIL';
+        } else if (s === 'DEFERRED') {
+          resultState = 'DEFERRED';
+        } else {
+          resultState = 'UNTESTED';
+        }
+      } else if (failures.length > 0) {
+        resultState = 'FAIL';
+      } else if (passes > 0) {
+        resultState = 'PASS';
+      } else if (deferred > 0) {
+        resultState = 'DEFERRED';
+      }
+    } else if (failures.length > 0) {
+      resultState = 'FAIL';
+    } else if (passes > 0) {
+      resultState = 'PASS';
+    } else if (deferred > 0) {
+      resultState = 'DEFERRED';
+    }
+
+    if (!['PASS', 'FAIL', 'DEFERRED', 'UNTESTED'].includes(resultState)) {
+      resultState = 'UNTESTED';
+    }
+
+    if (passes === 0 && resultState === 'PASS') {
+      resultState = 'UNTESTED';
+    }
+
+    const alive = Boolean(resultState === 'PASS' && passes > 0 && failures.length === 0);
+
+    return {
+      passes,
+      failures,
+      deferred,
+      probeInvalid,
+      evidence: evidenceList,
+      firstSeen,
+      lastSeen,
+      attempts,
+      resultState,
+      alive,
+    };
+  }
+
   // 3. Assemble complete candidates list
   const candidatesMap = new Map();
 
   // Add ledger candidates
   for (const [key, ledgerRec] of currentFromLedger) {
     const ev = evidenceByKey.get(key);
-    let passes = 0;
-    let failures = [];
-    let probeInvalid = 0;
-    let evidenceList = [];
-    let resultState = 'UNTESTED';
-    let firstSeen = ledgerRec.ts || null;
-    let lastSeen = ledgerRec.ts || null;
-    let attempts = 0;
-
-    if (ev) {
-      passes = ev.passes || 0;
-      failures = ev.failures || [];
-      probeInvalid = ev.probeInvalid || 0;
-      evidenceList = ev.evidence || [];
-      firstSeen = ev.firstSeen || firstSeen;
-      lastSeen = ev.lastSeen || lastSeen;
-      attempts = ev.attempts || passes + failures.length + probeInvalid;
-
-      if (ev.resultState) {
-        resultState = ev.resultState;
-      } else if (passes > 0) {
-        resultState = 'PASS';
-      } else if (failures.length > 0) {
-        resultState = 'FAIL';
-      } else if (ev.deferred > 0) {
-        resultState = 'DEFERRED';
-      } else {
-        resultState = 'UNTESTED';
-      }
-    }
-
-    const alive = (resultState === 'PASS' || ledgerRec.state === 'AVAILABLE') && resultState !== 'FAIL' && resultState !== 'UNTESTED';
+    const resolved = resolveState(ev, ledgerRec);
 
     const candidate = {
       key,
@@ -277,16 +431,17 @@ function readDiscoveryCatalogue(opts) {
       base: ledgerRec.base || modelBase(ledgerRec.modelId),
       sourceIds: ledgerRec.sourceIds || [],
       state: ledgerRec.state || 'UNKNOWN',
-      resultState,
-      alive,
-      isAlive: () => alive,
-      passes,
-      failures,
-      probeInvalid,
-      evidence: evidenceList,
-      firstSeen,
-      lastSeen,
-      attempts,
+      resultState: resolved.resultState,
+      alive: resolved.alive,
+      isAlive: () => resolved.alive,
+      passes: resolved.passes,
+      failures: resolved.failures,
+      deferred: resolved.deferred,
+      probeInvalid: resolved.probeInvalid,
+      evidence: resolved.evidence,
+      firstSeen: resolved.firstSeen,
+      lastSeen: resolved.lastSeen,
+      attempts: resolved.attempts,
     };
     candidatesMap.set(key, candidate);
   }
@@ -294,18 +449,7 @@ function readDiscoveryCatalogue(opts) {
   // Also include candidates from imported evidence that had no prior ledger line
   for (const [key, ev] of evidenceByKey) {
     if (candidatesMap.has(key)) continue;
-    const passes = ev.passes || 0;
-    const failures = ev.failures || [];
-    const probeInvalid = ev.probeInvalid || 0;
-    const evidenceList = ev.evidence || [];
-    let resultState = ev.resultState || 'UNTESTED';
-    if (!ev.resultState) {
-      if (passes > 0) resultState = 'PASS';
-      else if (failures.length > 0) resultState = 'FAIL';
-      else if (ev.deferred > 0) resultState = 'DEFERRED';
-      else resultState = 'UNTESTED';
-    }
-    const alive = resultState === 'PASS';
+    const resolved = resolveState(ev, null);
 
     const candidate = {
       key,
@@ -319,16 +463,17 @@ function readDiscoveryCatalogue(opts) {
       base: ev.base || modelBase(ev.modelId),
       sourceIds: ev.sourceIds || [],
       state: 'UNKNOWN',
-      resultState,
-      alive,
-      isAlive: () => alive,
-      passes,
-      failures,
-      probeInvalid,
-      evidence: evidenceList,
-      firstSeen: ev.firstSeen || null,
-      lastSeen: ev.lastSeen || null,
-      attempts: ev.attempts || passes + failures.length + probeInvalid,
+      resultState: resolved.resultState,
+      alive: resolved.alive,
+      isAlive: () => resolved.alive,
+      passes: resolved.passes,
+      failures: resolved.failures,
+      deferred: resolved.deferred,
+      probeInvalid: resolved.probeInvalid,
+      evidence: resolved.evidence,
+      firstSeen: resolved.firstSeen,
+      lastSeen: resolved.lastSeen,
+      attempts: resolved.attempts,
     };
     candidatesMap.set(key, candidate);
   }
@@ -363,26 +508,53 @@ function readDiscoveryCatalogue(opts) {
   }
 
   // Helper find/query methods
-  function getModel(accessPath, account, modelId) {
-    if (!accessPath || modelId === undefined || modelId === null) return undefined;
-    const targetAccount = account === null || account === undefined ? '' : String(account).trim();
-    const targetId = String(modelId).trim();
-    const group = byPathAndAccount.get(`${accessPath}::${targetAccount}`) || [];
-    return group.find((c) => c.modelId === targetId);
+  function getModel(accessPathOrQuery, account, modelId, gatewayOrOpts, upstream, quotaScope) {
+    let q = {};
+    if (accessPathOrQuery && typeof accessPathOrQuery === 'object') {
+      q = accessPathOrQuery;
+    } else {
+      q = {
+        accessPath: accessPathOrQuery,
+        account,
+        modelId,
+      };
+      if (gatewayOrOpts && typeof gatewayOrOpts === 'object') {
+        Object.assign(q, gatewayOrOpts);
+      } else {
+        if (gatewayOrOpts !== undefined) q.gateway = gatewayOrOpts;
+        if (upstream !== undefined) q.upstream = upstream;
+        if (quotaScope !== undefined) q.quotaScope = quotaScope;
+      }
+    }
+    if (!q.accessPath || q.modelId === undefined || q.modelId === null) return undefined;
+    const targetAccount =
+      q.account === null || q.account === undefined ? '' : String(q.account).trim();
+    const targetId = String(q.modelId).trim();
+    const group = byPathAndAccount.get(`${q.accessPath}::${targetAccount}`) || [];
+    return group.find((c) => {
+      if (c.modelId !== targetId) return false;
+      if (q.gateway !== undefined && c.gateway !== q.gateway) return false;
+      if (q.upstream !== undefined && c.upstream !== q.upstream) return false;
+      if (q.quotaScope !== undefined && c.quotaScope !== q.quotaScope) return false;
+      if (q.harness !== undefined && c.harness !== q.harness) return false;
+      return true;
+    });
   }
 
-  function hasModel(accessPath, account, modelId) {
-    return Boolean(getModel(accessPath, account, modelId));
+  function hasModel(accessPathOrQuery, account, modelId, gatewayOrOpts, upstream, quotaScope) {
+    return Boolean(
+      getModel(accessPathOrQuery, account, modelId, gatewayOrOpts, upstream, quotaScope)
+    );
   }
 
   function isModelPresent(query) {
     if (!query) return false;
-    return hasModel(query.accessPath, query.account, query.modelId);
+    return Boolean(getModel(query));
   }
 
   function isModelAlive(query) {
     if (!query) return false;
-    const cand = getModel(query.accessPath, query.account, query.modelId);
+    const cand = getModel(query);
     return Boolean(cand && cand.alive);
   }
 
@@ -391,8 +563,11 @@ function readDiscoveryCatalogue(opts) {
     return allCandidates.filter((c) => {
       if (q.accessPath && c.accessPath !== q.accessPath) return false;
       if (q.account !== undefined && c.account !== q.account) return false;
+      if (q.quotaScope !== undefined && c.quotaScope !== q.quotaScope) return false;
+      if (q.gateway && c.gateway !== q.gateway) return false;
       if (q.upstream && c.upstream !== q.upstream) return false;
       if (q.harness && c.harness !== q.harness) return false;
+      if (q.modelId && c.modelId !== q.modelId) return false;
       if (q.resultState && c.resultState !== q.resultState) return false;
       if (q.alive !== undefined && c.alive !== q.alive) return false;
       return true;

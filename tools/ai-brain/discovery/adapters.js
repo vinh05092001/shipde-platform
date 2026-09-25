@@ -125,7 +125,8 @@ function routerAdapter() {
     });
     if (!res.ok || !res.parsed || !Array.isArray(res.parsed.data)) {
       const isUnavailable =
-        !res.ok && (res.status === 0 || (res.error && /abort|timeout|refused|reset|fetch/i.test(res.error)));
+        !res.ok &&
+        (res.status === 0 || (res.error && /abort|timeout|refused|reset|fetch/i.test(res.error)));
       return {
         status: isUnavailable ? 'unavailable' : 'error',
         reason: isUnavailable
@@ -139,6 +140,8 @@ function routerAdapter() {
     }
     const groups = groupByOwner(res.parsed.data, source.id);
     const catalogs = [];
+    const routerAccount = source.account || (source.credential && source.credential.account) || '';
+    const routerQuotaScope = (source.quota && source.quota.scope) || source.quotaScope || '';
     for (const [upstream, ids] of groups) {
       catalogs.push(
         catalog({
@@ -146,6 +149,8 @@ function routerAdapter() {
           gateway: source.id,
           accessPath: source.id,
           harness: 'http',
+          account: routerAccount,
+          quotaScope: routerQuotaScope,
           models: ids,
         })
       );
@@ -173,10 +178,29 @@ function modelSourceAdapter() {
       }
       const groups = groupByOwner(res.parsed.data, source.id);
       const catalogs = [];
-      for (const [upstream, ids] of groups) {
-        catalogs.push(
-          catalog({ upstream, gateway: '', accessPath: source.id, harness: 'http', models: ids })
-        );
+      const keyDirs =
+        source.credential && Array.isArray(source.credential.keyDirs)
+          ? source.credential.keyDirs
+          : null;
+      const accounts =
+        keyDirs && keyDirs.length > 0
+          ? keyDirs
+          : [source.account || (source.credential && source.credential.account) || ''];
+      const quotaScope = (source.quota && source.quota.scope) || source.quotaScope || '';
+      for (const acc of accounts) {
+        for (const [upstream, ids] of groups) {
+          catalogs.push(
+            catalog({
+              upstream,
+              gateway: '',
+              accessPath: source.id,
+              harness: 'http',
+              account: acc,
+              quotaScope,
+              models: ids,
+            })
+          );
+        }
       }
       return { status: 'enumerated', reason: null, catalogs, requests: [res.request] };
     }
@@ -201,6 +225,16 @@ function modelSourceAdapter() {
               gateway: via,
               accessPath: via,
               harness: 'http',
+              account:
+                source.account ||
+                (source.credential && source.credential.account) ||
+                (matched && matched.account) ||
+                '',
+              quotaScope:
+                (source.quota && source.quota.scope) ||
+                source.quotaScope ||
+                (matched && matched.quotaScope) ||
+                '',
               models: matched.models,
             }),
           ],
@@ -301,6 +335,9 @@ function orchestratorAdapter() {
           if (!routeGroups.has(segment)) routeGroups.set(segment, []);
           routeGroups.get(segment).push(cleaned);
         }
+        const orchAccount =
+          source.account || (source.credential && source.credential.account) || '';
+        const orchQuotaScope = (source.quota && source.quota.scope) || source.quotaScope || '';
         for (const [upstream, groupIds] of routeGroups) {
           catalogs.push(
             catalog({
@@ -308,6 +345,8 @@ function orchestratorAdapter() {
               gateway: provider,
               accessPath: 'paseo',
               harness: 'paseo',
+              account: orchAccount,
+              quotaScope: orchQuotaScope,
               models: groupIds,
             })
           );

@@ -27,60 +27,116 @@ const { candidateKey, modelBase } = require('./identity');
 const trimId = (id) =>
   id === null || id === undefined ? null : String(id).trim().replace(/\r$/, '');
 
+const REAL_FAILURE_CLASSES = new Set([
+  'quota_exhausted',
+  'unauthorized',
+  'rate_limited',
+  'invalid_request',
+  'server_error',
+  'overloaded',
+  'forbidden',
+  'not_found',
+  'payment_required',
+]);
+
+function parseHttpStatus(rawStatus, errorText, reasonText) {
+  if (rawStatus !== undefined && rawStatus !== null && rawStatus !== '') {
+    const num = Number(rawStatus);
+    if (!Number.isNaN(num) && num >= 100 && num <= 599) {
+      return num;
+    }
+  }
+
+  const texts = [errorText, reasonText].filter((t) => typeof t === 'string' && t.trim() !== '');
+  for (const text of texts) {
+    const m =
+      text.match(/\b(?:http|status(?:code)?|api error|error code)[:\s]+(\d{3})\b/i) ||
+      text.match(/\[(\d{3})\]/);
+    if (m) {
+      const code = Number(m[1]);
+      if (code >= 100 && code <= 599) return code;
+    }
+  }
+
+  return undefined;
+}
+
 function isProbeInvalid(row) {
   if (!row) return false;
-  // 1. Client empty-response / parser failure on SSE
-  if (
-    row.status === 'FAIL' &&
-    row.contentLength === 0 &&
-    (row.reason === 'answered' || (row.reason && /empty content|sse|parser/i.test(row.reason)))
-  ) {
+  if (row.status !== 'FAIL') return false;
+
+  const errClass = String(row.errorClass || '')
+    .toLowerCase()
+    .trim();
+  if (REAL_FAILURE_CLASSES.has(errClass)) {
+    return false;
+  }
+
+  if (row.probeInvalid === true || errClass === 'probe_invalid') {
     return true;
   }
-  if (
-    row.status === 'FAIL' &&
-    row.error &&
-    /empty content|sse|parser/i.test(String(row.error)) &&
-    (row.contentLength === 0 || row.contentLength === undefined)
-  ) {
-    return true;
-  }
-  // 2. ENOENT from spawning an npm .cmd shim without a shell
+
+  // 1. Client-side ENOENT shim spawn error
   if (
     row.enoent === true ||
-    (row.errorClass && /ENOENT/i.test(String(row.errorClass))) ||
-    (row.reason && /ENOENT/i.test(String(row.reason))) ||
-    (row.error && /ENOENT/i.test(String(row.error))) ||
-    (row.reason && /\.cmd\b/i.test(String(row.reason)) && /spawn|shell|enoent/i.test(String(row.reason))) ||
-    (row.error && /\.cmd\b/i.test(String(row.error)) && /spawn|shell|enoent/i.test(String(row.error))) ||
-    (row.classification && (row.classification.class === 'enoent' || /enoent/i.test(String(row.classification.innerCause || ''))))
+    errClass === 'enoent' ||
+    (typeof row.reason === 'string' && /spawn.*enoent|\benoent\b.*\.cmd/i.test(row.reason)) ||
+    (typeof row.error === 'string' && /spawn.*enoent|\benoent\b.*\.cmd/i.test(row.error)) ||
+    (row.classification &&
+      (row.classification.class === 'enoent' ||
+        /enoent/i.test(String(row.classification.innerCause || ''))))
   ) {
     return true;
   }
+
+  // 2. Client empty-response / client parser bug on SSE with unknown errorClass
+  const isUnknownErr = !errClass || errClass === 'unknown' || errClass === 'parser_error';
+  if (isUnknownErr) {
+    if (row.contentLength === 0 && row.reason === 'answered') {
+      return true;
+    }
+    const r = typeof row.reason === 'string' ? row.reason : '';
+    const e = typeof row.error === 'string' ? row.error : '';
+    if (
+      (/empty content|client.*parser|parser.*empty|sse.*empty/i.test(r) ||
+        /empty content|client.*parser|parser.*empty|sse.*empty/i.test(e)) &&
+      (row.contentLength === 0 || row.contentLength === undefined)
+    ) {
+      return true;
+    }
+  }
+
   return false;
 }
 
 function checkpointIdentity(row) {
   const id =
-    row.harness === 'http' ? row.modelIdHttp || row.model : row.modelIdOpenCode || row.model;
+    row.modelId ||
+    (row.harness === 'http' ? row.modelIdHttp || row.model : row.modelIdOpenCode || row.model);
   const modelId = trimId(id);
   if (!modelId) return null;
-  const harness = row.harness === 'paseo' ? 'paseo' : 'http';
+
+  const harness = trimId(row.harness) || (row.accessPath === 'opencode' ? 'paseo' : 'http');
   const opencodePath = row.accessPath === 'opencode';
-  // The paseo path names ids with their own route prefix (`agentrouter/…`,
-  // `ninerouter/…`); upstream follows the id (same rule as the live paseo
-  // adapter), not the row's loose label, so import and live agree.
-  const upstream = opencodePath
-    ? modelId.indexOf('/') === -1
-      ? 'opencode'
-      : modelId.slice(0, modelId.indexOf('/'))
-    : trimId(row.upstreamOrAccount) || '9router';
-  const gateway = opencodePath ? 'opencode' : '9router';
+
+  const accessPath = trimId(row.accessPath) || (harness === 'paseo' ? 'opencode' : '9router');
+
+  const gateway = trimId(row.gateway) || (accessPath === 'opencode' ? 'opencode' : '9router');
+
+  const upstream =
+    trimId(row.upstream) ||
+    (accessPath === 'opencode'
+      ? modelId.indexOf('/') === -1
+        ? 'opencode'
+        : modelId.slice(0, modelId.indexOf('/'))
+      : trimId(row.upstreamOrAccount) || '9router');
+
   const account = trimId(row.account) || '';
   const quotaScope = trimId(row.quotaScope) || '';
+
   const identity = {
     harness,
-    accessPath: opencodePath ? 'opencode' : '9router',
+    accessPath,
     gateway,
     upstream,
     account,
@@ -162,14 +218,9 @@ async function importCheckpoint(filePath, opts) {
 
     // A row whose status says ALIVE while its HTTP status is 401 or 400 is wrong;
     // import it as a failure with the real status
-    const is401 =
-      row.httpStatus === 401 ||
-      (typeof row.error === 'string' && /401/.test(row.error)) ||
-      (typeof row.reason === 'string' && (/\[401\]/.test(row.reason) || /\b401\b/.test(row.reason)));
-    const is400 =
-      row.httpStatus === 400 ||
-      (typeof row.error === 'string' && (/400/.test(row.error) || /API Error: 400/.test(row.error))) ||
-      (typeof row.reason === 'string' && (/\[400\]/.test(row.reason) || /\b400\b/.test(row.reason)));
+    const httpCode = parseHttpStatus(row.httpStatus, row.error, row.reason);
+    const is401 = httpCode === 401;
+    const is400 = httpCode === 400;
 
     if ((status === 'ALIVE' || status === 'PASS') && (is401 || is400)) {
       status = 'FAIL';
@@ -206,8 +257,8 @@ async function importCheckpoint(filePath, opts) {
 
   const candidateList = [...candidates.values()].map((c) => {
     let resultState = 'UNTESTED';
-    if (c.passes > 0) resultState = 'PASS';
-    else if (c.failures.length > 0) resultState = 'FAIL';
+    if (c.failures.length > 0) resultState = 'FAIL';
+    else if (c.passes > 0) resultState = 'PASS';
     else if (c.deferred > 0) resultState = 'DEFERRED';
     return {
       ...c,
@@ -266,16 +317,45 @@ async function importOuter(filePath, opts) {
     let httpStatus = row.httpStatus;
     let error = row.error && typeof row.error === 'string' ? row.error.slice(0, 1000) : row.error;
 
-    // Rule: a row whose status says ALIVE while its HTTP status is 401 or 400 is wrong; import it as a failure with the real status;
-    const has401 = httpStatus === 401 || (typeof error === 'string' && /401/.test(error));
-    const has400 = httpStatus === 400 || (typeof error === 'string' && (/400/.test(error) || /API Error: 400/.test(error)));
+    if (isProbeInvalid(row)) {
+      status = 'UNTESTED';
+      tier = 'PROBE_INVALID';
+      reclassifiedFails++;
+      rec.probes.push({
+        probeName: row.probeName,
+        status,
+        tier,
+        probeInvalid: true,
+        latencyMs: row.latencyMs,
+        httpStatus: row.httpStatus,
+        exitCode: row.exitCode,
+        error,
+        classification: row.classification,
+        responseShape: row.responseShape,
+        authRequired: row.authRequired,
+        authHeader: row.invocation && row.invocation.authHeader,
+        invocationUrl:
+          row.invocation && row.invocation.url
+            ? String(row.invocation.url).slice(0, 2000)
+            : undefined,
+        sharedUpstream: row.sharedUpstream,
+        evidenceLevel: row.evidenceLevel,
+      });
+      continue;
+    }
 
-    if (status === 'ALIVE' && (has401 || has400 || (row.exitCode !== undefined && row.exitCode !== 0))) {
+    // Rule: a row whose status says ALIVE while its HTTP status is 401 or 400 is wrong; import it as a failure with the real status;
+    const httpCode = parseHttpStatus(httpStatus, error, row.reason);
+    const has401 = httpCode === 401;
+    const has400 = httpCode === 400;
+
+    if (
+      (status === 'ALIVE' || status === 'PASS') &&
+      (has401 || has400 || (row.exitCode !== undefined && row.exitCode !== 0))
+    ) {
       status = 'FAIL';
       tier = 'FAIL';
-      if (!httpStatus) {
-        httpStatus = has401 ? 401 : 400;
-      }
+      httpStatus = httpCode || (has401 ? 401 : 400);
       reclassifiedFails++;
     } else if (status === 'ALIVE') {
       // Keep exactly PASS, FAIL, DEFERRED, UNTESTED as the result states
@@ -343,4 +423,11 @@ async function importOuter(filePath, opts) {
   };
 }
 
-module.exports = { importCheckpoint, importOuter, isProbeInvalid, checkpointIdentity, trimId };
+module.exports = {
+  importCheckpoint,
+  importOuter,
+  isProbeInvalid,
+  checkpointIdentity,
+  trimId,
+  parseHttpStatus,
+};
