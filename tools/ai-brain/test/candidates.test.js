@@ -15,6 +15,9 @@
  * the live catalogue, the test fails with MODEL_NOT_IN_CATALOG — that is the
  * signal to refresh the snapshot, not to ignore the mismatch.
  *
+ * SEVEN-FIX CONTRACT — one test per verified defect, each written to fail on
+ * the previous commit and pass after the fix.
+ *
  * Every test is deterministic — no network calls, all I/O mocked through
  * temp directories.
  */
@@ -135,12 +138,15 @@ describe('candidate generation', () => {
     assert.ok(upstreams.has('test-b'), 'has test-b upstream');
     assert.ok(upstreams.has('test-c'), 'has test-c upstream');
 
-    // Every candidate has the four-part identity.
+    // Every candidate has the seven-part identity.
     for (const c of result) {
       assert.ok(c.harness, 'has harness');
       assert.ok(c.accessPath, 'has accessPath');
       assert.ok(c.upstream, 'has upstream');
       assert.ok(c.modelId, 'has modelId');
+      assert.ok(c.accountId !== undefined, 'has accountId');
+      assert.ok(c.quotaScope !== undefined, 'has quotaScope');
+      assert.ok(c.gateway !== undefined, 'has gateway');
     }
   });
 
@@ -175,8 +181,8 @@ describe('candidate generation', () => {
     assert.ok(ocCandidate, 'OpenCode candidate exists');
     // They are different candidates.
     assert.notEqual(
-      evidence.candidateKey(httpCandidate),
-      evidence.candidateKey(ocCandidate),
+      candidates.candidateKey(httpCandidate),
+      candidates.candidateKey(ocCandidate),
       'HTTP and OpenCode are distinct candidates'
     );
   });
@@ -199,14 +205,16 @@ describe('candidate generation', () => {
     assert.equal(fromEvidence[0].modelId, 'test-ev/invented-recovered');
   });
 
-  test('mergeCandidates deduplicates by four-part key', () => {
+  test('mergeCandidates deduplicates by seven-part key', () => {
     const a = [{ harness: 'paseo', accessPath: 'http', upstream: 'test-up', modelId: 'test-up/invented-a' }];
     const b = [
       { harness: 'paseo', accessPath: 'http', upstream: 'test-up', modelId: 'test-up/invented-a' },
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-up', accountId: 'acc-x', quotaScope: 'acc-x', modelId: 'test-up/invented-a' },
       { harness: 'paseo', accessPath: 'http', upstream: 'test-up2', modelId: 'test-up2/invented-b' },
     ];
     const merged = candidates.mergeCandidates(a, b);
-    assert.equal(merged.length, 2);
+    // The shared arc and the account-bound arc for the same model are distinct.
+    assert.equal(merged.length, 3);
   });
 
   test('adding a source through data only (no code change) produces candidates', () => {
@@ -230,6 +238,7 @@ describe('candidate generation', () => {
           label: '9Router',
           kind: 'router',
           servesModels: true,
+          harness: 'paseo',
           endpoint: 'http://127.0.0.1:20128/v1',
           credential: { type: 'api-key', env: 'NINEROUTER_API_KEY' },
           verify: { method: 'models-list', path: '/models' },
@@ -247,6 +256,8 @@ describe('candidate generation', () => {
     const np = result.find((c) => c.upstream === 'np' && c.modelId === 'np/invented-new-model');
     assert.ok(np, 'new data-only source produced a candidate');
     assert.equal(np.source, 'newprovider');
+    assert.equal(np.harness, 'paseo', 'harness also comes from data');
+    assert.equal(np.accessPath, 'http://127.0.0.1:20128/v1', 'accessPath also comes from data');
   });
 
   // F2: model-source accessPath resolves to router endpoint, not source id
@@ -275,12 +286,14 @@ describe('candidate generation', () => {
 describe('ranking', () => {
   test('ranks candidates and selects winner with stated reason', () => {
     const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-alpha',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', accountId: '*', quotaScope: 'test-a', gateway: '',
+        modelId: 'test-a/invented-alpha',
         source: '9router', status: 'passed', evidence: [{ level: 3, status: 'passed' }],
-        blocked: false, sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-b', modelId: 'test-b/invented-beta',
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-b', accountId: '*', quotaScope: 'test-b', gateway: '',
+        modelId: 'test-b/invented-beta',
         source: '9router', status: 'unknown', evidence: [],
-        blocked: false, sharedQuota: 'unknown' },
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
@@ -299,15 +312,18 @@ describe('ranking', () => {
 
   test('rejects blocked upstream, scoped to that upstream only', () => {
     const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-blocked', modelId: 'test-blocked/invented-model',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-blocked', accountId: '*', quotaScope: 'test-blocked', gateway: '',
+        modelId: 'test-blocked/invented-model',
         source: '9router', status: 'failed', evidence: [],
         blocked: true, blockReason: 'HTTP 402', blockScope: 'upstream', sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-alpha',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', accountId: '*', quotaScope: 'test-a', gateway: '',
+        modelId: 'test-a/invented-alpha',
         source: '9router', status: 'passed', evidence: [{ level: 2, status: 'passed' }],
-        blocked: false, sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-c', modelId: 'test-c/invented-gamma',
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-c', accountId: '*', quotaScope: 'test-c', gateway: '',
+        modelId: 'test-c/invented-gamma',
         source: '9router', status: 'unknown', evidence: [],
-        blocked: false, sharedQuota: 'unknown' },
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
@@ -330,7 +346,8 @@ describe('ranking', () => {
   test('rejects candidate with absent credential', () => {
     const registry = sourcesApi.loadSources();
     const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'bai', modelId: 'bai/invented-model',
+      { harness: 'paseo', accessPath: 'http', upstream: 'bai', accountId: '*', quotaScope: 'bai', gateway: '',
+        modelId: 'bai/invented-model',
         source: 'bai', status: 'unknown', evidence: [],
         blocked: false, sharedQuota: 'unknown' },
     ];
@@ -355,29 +372,39 @@ describe('ranking', () => {
     assert.match(decision.reason, /REFUSED/);
   });
 
-  test('spreads load across providers', () => {
-    // Two candidates from the same upstream, one from a different one.
+  test('spreads load across providers using current sessions and reservations', () => {
+    // Two candidates from the same upstream, one from a different one.  The
+    // candidate set size no longer matters — only the live load does.
     const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-model-1',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', accountId: '*', quotaScope: 'test-a', gateway: '',
+        modelId: 'test-a/invented-model-1',
         source: '9router', status: 'passed', evidence: [{ level: 2, status: 'passed' }],
-        blocked: false, sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-model-2',
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', accountId: '*', quotaScope: 'test-a', gateway: '',
+        modelId: 'test-a/invented-model-2',
         source: '9router', status: 'passed', evidence: [{ level: 2, status: 'passed' }],
-        blocked: false, sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-b', modelId: 'test-b/invented-model-3',
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-b', accountId: '*', quotaScope: 'test-b', gateway: '',
+        modelId: 'test-b/invented-model-3',
         source: '9router', status: 'passed', evidence: [{ level: 2, status: 'passed' }],
-        blocked: false, sharedQuota: 'unknown' },
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
       workItemId: 'TASK-TEST-05', role: 'author.foundation', dryRun: true,
+      load: [
+        { upstream: 'test-a', quotaScope: 'test-a', accountId: '*' },
+        { upstream: 'test-a', quotaScope: 'test-a', accountId: '*' },
+      ],
     });
 
-    // test-b has better spread score (only 1 from that upstream) vs test-a (2).
+    // test-b has better spread score (no active session) vs test-a (2 active).
     const bScore = decision.candidates.find((c) => c.upstream === 'test-b');
     const aScore = decision.candidates.find((c) => c.upstream === 'test-a');
     assert.ok(bScore, 'test-b candidate present');
     assert.ok(aScore, 'test-a candidate present');
+    assert.equal(aScore.scoreBreakdown.spread, 50, 'two active sessions on test-a → 50');
+    assert.equal(bScore.scoreBreakdown.spread, 100, 'no active session on test-b → 100');
     assert.ok(
       bScore.scoreBreakdown.spread > aScore.scoreBreakdown.spread,
       'test-b has better spread score than test-a'
@@ -387,9 +414,10 @@ describe('ranking', () => {
   test('records decision through decisions.js', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dec-'));
     const testCandidates = [
-      { harness: 'agy', accessPath: 'cli', upstream: 'agy-local', modelId: '*',
+      { harness: 'agy', accessPath: 'cli', upstream: 'agy-local', accountId: '*', quotaScope: 'agy-local', gateway: '',
+        modelId: 'invented-cli-model',
         source: 'agy-local', status: 'passed', evidence: [{ level: 2, status: 'passed' }],
-        blocked: false, sharedQuota: 'unknown' },
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
     ];
 
     ranking.rankAndRecord(testCandidates, {
@@ -415,12 +443,14 @@ describe('ranking', () => {
     ]);
 
     const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: 'test-a/invented-alpha',
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', accountId: '*', quotaScope: 'test-a', gateway: '',
+        modelId: 'test-a/invented-alpha',
         source: '9router', status: 'passed', evidence: [{ level: 3, status: 'passed' }],
-        blocked: false, sharedQuota: 'unknown' },
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-gone', modelId: 'test-gone/invented-removed',
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
+      { harness: 'paseo', accessPath: 'http', upstream: 'test-gone', accountId: '*', quotaScope: 'test-gone', gateway: '',
+        modelId: 'test-gone/invented-removed',
         source: '9router', status: 'passed', evidence: [{ level: 3, status: 'passed' }],
-        blocked: false, sharedQuota: 'unknown' },
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
@@ -439,17 +469,20 @@ describe('ranking', () => {
     assert.ok(decision.chosen.includes('test-a/invented-alpha'), 'winner is the model in catalogue');
   });
 
-  // F1: wildcard and CLI candidates are exempt from catalogue validation
-  test('wildcard and CLI candidates are exempt from catalogue validation', () => {
+  // CLI candidates are exempt from catalogue validation (no enumerable
+  // catalogue for a cli path), and a resolved wildcard becomes concrete.
+  test('cli candidates are exempt from catalogue validation; resolved wildcard is concrete', () => {
     const catalogueSet = ranking.buildCatalogueSet(['test-a/invented-alpha']);
 
     const testCandidates = [
-      { harness: 'agy', accessPath: 'cli', upstream: 'agy-local', modelId: '*',
+      { harness: 'agy', accessPath: 'cli', upstream: 'agy-local', accountId: '*', quotaScope: 'agy-local', gateway: '',
+        modelId: '*', resolvedModel: 'invented-cli-model',
         source: 'agy-local', status: 'unknown', evidence: [],
-        blocked: false, sharedQuota: 'unknown' },
-      { harness: 'opencode', accessPath: 'cli', upstream: 'test-oc', modelId: 'test-oc/invented-cli',
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
+      { harness: 'opencode', accessPath: 'cli', upstream: 'test-oc', accountId: '*', quotaScope: 'test-oc', gateway: '',
+        modelId: 'test-oc/invented-cli',
         source: 'oc', status: 'unknown', evidence: [],
-        blocked: false, sharedQuota: 'unknown' },
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
@@ -457,12 +490,14 @@ describe('ranking', () => {
       cataloguesByPath: { 'http': catalogueSet },
     });
 
-    // Neither should be rejected — wildcards and CLI are exempt.
-    assert.equal(decision.rejected.length, 0, 'no rejections for exempt candidates');
+    // Neither should be rejected — CLI has no enumerable catalogue.
+    assert.equal(decision.rejected.length, 0, 'no rejections for cli candidates');
     assert.equal(decision.candidates.length, 2, 'both candidates are eligible');
+    const agy = decision.candidates.find((c) => c.harness === 'agy');
+    assert.equal(agy.modelId, 'invented-cli-model', 'resolved wildcard became the concrete model');
   });
 
-  // NEW TESTS FOR PER-PATH CATALOGUE VALIDATION
+  // PER-PATH CATALOGUE VALIDATION
   test('validates candidate against its own access path catalogue', () => {
     // two catalogues, one per access path, with different contents
     const cataloguesByPath = {
@@ -541,8 +576,10 @@ describe('ranking', () => {
       'http': ranking.buildCatalogueSet(['test-a/invented-alpha'])
     };
     const testCandidates = [
-      { harness: 'agy', accessPath: 'cli', upstream: 'agy-local', modelId: 'specific-model',
-        source: 'agy-local', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' }
+      { harness: 'agy', accessPath: 'cli', upstream: 'agy-local', accountId: '*', quotaScope: 'agy-local', gateway: '',
+        modelId: 'invented-cli-model',
+        source: 'agy-local', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown',
+        qualifiedRoles: ['author.foundation'] }
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
@@ -555,26 +592,6 @@ describe('ranking', () => {
     assert.equal(cliCandidate.headroom, 'unknown', 'cli candidate status marked as unknown due to missing catalogue');
   });
 
-  test('wildcard model bypasses catalogue check and is marked unknown', () => {
-    const cataloguesByPath = {
-      'http': ranking.buildCatalogueSet(['test-a/invented-alpha'])
-    };
-    const testCandidates = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-a', modelId: '*',
-        source: '9router', status: 'passed', evidence: [], blocked: false, sharedQuota: 'unknown' }
-    ];
-
-    const decision = ranking.rankAndRecord(testCandidates, {
-      workItemId: 'TASK-TEST-WILDCARD', role: 'author.foundation', dryRun: true,
-      cataloguesByPath,
-    });
-
-    assert.equal(decision.rejected.length, 0, 'wildcard candidate is not rejected');
-    const wildcardCandidate = decision.candidates[0];
-    assert.equal(wildcardCandidate.headroom, 'unknown', 'wildcard status marked as unknown');
-  });
-
-  // F1: buildCatalogueSet strips trailing CR from Windows command output
   test('buildCatalogueSet strips trailing CR from Windows command output', () => {
     const set = ranking.buildCatalogueSet([
       "test-a/model-one\r",
@@ -586,6 +603,160 @@ describe('ranking', () => {
     assert.ok(set.has('test-b/model-two'), 'CR-stripped id found');
     assert.ok(set.has('test-c/model-three'), 'plain id found');
     assert.ok(!set.has("test-a/model-one\r"), 'CR-suffixed id not stored');
+  });
+});
+
+// ── Seven-Fix Contract (one per verified defect) ─────────────────────
+
+describe('acceptance: seven-fix contract', () => {
+  // D1: candidate identity must include gateway + account + quotaScope.
+  test('T1 two accounts on the same upstream are distinct candidates', () => {
+    const registry = sourcesApi.loadSources();
+    const result = candidates.generateCandidates({
+      registry,
+      catalogue: ['gh/invented-model'],
+      accounts: [
+        { id: 'acc-a', sourceId: '9router' },
+        { id: 'acc-b', sourceId: '9router' },
+      ],
+    });
+
+    const gh = result.filter((c) => c.source === '9router' && c.upstream === 'gh');
+    assert.equal(gh.length, 2, 'one candidate per bound account');
+    assert.notEqual(candidates.candidateKey(gh[0]), candidates.candidateKey(gh[1]));
+    assert.notEqual(gh[0].accountId, gh[1].accountId, 'accountId differs');
+    assert.equal(gh[0].quotaScope, gh[0].accountId, 'quotaScope is the account');
+  });
+
+  // D2: harness + accessPath must come from the registry, not from code.
+  test('T2 harness and accessPath are read from the registry, not hard-coded', () => {
+    const customRegistry = {
+      version: 2,
+      sources: [
+        {
+          id: 'weird', label: 'Weird Gateway', kind: 'router', servesModels: true,
+          harness: 'maverick', endpoint: 'http://odd.example:7777/v1',
+        },
+      ],
+    };
+    const result = candidates.generateCandidates({
+      registry: customRegistry,
+      catalogue: ['wz/invented-z'],
+    });
+    const c = result.find((x) => x.upstream === 'wz');
+    assert.ok(c, 'candidate produced against an unusual registry');
+    assert.equal(c.harness, 'maverick', 'harness read from the registry, not paseo');
+    assert.equal(c.accessPath, 'http://odd.example:7777/v1', 'accessPath read from the registry');
+  });
+
+  // D3: an unresolved wildcard is a named rejection, never a pass-through.
+  test('T3 unresolved wildcard is rejected with a named cause', () => {
+    const decision = ranking.rankAndRecord([
+      { harness: 'agy', accessPath: 'cli', upstream: 'agy-local', accountId: '*', quotaScope: 'agy-local', gateway: '',
+        modelId: '*', source: 'agy-local', status: 'unknown', evidence: [],
+        blocked: false, sharedQuota: 'unknown' },
+    ], {
+      workItemId: 'TASK-7FIX-03', role: 'author.foundation', dryRun: true,
+    });
+
+    const rejection = decision.rejected.find((r) => r.reason === 'WILDCARD_UNRESOLVED');
+    assert.ok(rejection, 'unresolved wildcard is rejected with WILDCARD_UNRESOLVED');
+    assert.equal(decision.chosen, null, 'nothing is selected when only a wildcard is offered');
+  });
+
+  // D4: headroom must come from real quota readings, never unlimited.
+  test('T4 headroom score reads real quota readings, missing quota is fifty-less unknown', () => {
+    const mk = (upstream, quotaScope) => ({
+      harness: 'paseo', accessPath: 'http', upstream, accountId: '*', quotaScope, gateway: '',
+      modelId: upstream + '/invented-m', source: '9router', blocked: false,
+      evidence: [], status: 'unknown',
+    });
+    const open = mk('test-open', 'q-open');
+    const tight = mk('test-tight', 'q-tight');
+    const exh = mk('test-exh', 'q-exh');
+    const mystery = mk('test-mystery', 'q-mystery');
+    const none = mk('test-none', 'q-none');
+
+    const scores = [
+      ranking.headroomScore(open, { headrooms: { 'q-open': 'open' } }),
+      ranking.headroomScore(tight, { headrooms: { 'q-tight': 'tight' } }),
+      ranking.headroomScore(exh, { headrooms: { 'q-exh': 'exhausted' } }),
+      ranking.headroomScore(mystery, { headrooms: { 'q-mystery': 'mystery' } }),
+      ranking.headroomScore(none, { headrooms: {} }),
+    ];
+    assert.deepEqual(scores, [90, 40, 0, 30, 30], 'open→90, tight→40, exhausted→0, unknown→30, never unlimited');
+    assert.equal(open.headroomStatus, 'open');
+    assert.equal(none.headroomStatus, 'unknown');
+  });
+
+  // D5: cost must come from real data; unknown cost is excluded, never 50.
+  test('T5 unknown cost is excluded from the total; known cost drives the cheap pick', () => {
+    const mk = (upstream, cost) => ({
+      harness: 'paseo', accessPath: 'http', upstream, accountId: '*', quotaScope: upstream, gateway: '',
+      modelId: upstream + '/invented-m', source: '9router', blocked: false,
+      evidence: [{ level: 3, status: 'passed' }], status: 'passed', cost,
+    });
+    const zero = mk('test-zero', 0);
+    const cheap = mk('test-cheap', 500);
+    const pricey = mk('test-pricey', 1000000);
+    const unknown = mk('test-unknown', undefined);
+
+    const sz = ranking.scoreCandidate(zero, [], 'author.foundation', {});
+    const sc = ranking.scoreCandidate(cheap, [], 'author.foundation', {});
+    const sp = ranking.scoreCandidate(pricey, [], 'author.foundation', {});
+    const su = ranking.scoreCandidate(unknown, [], 'author.foundation', {});
+
+    assert.equal(sz.breakdown.cost, 100, 'free is the best cost score');
+    assert.ok(sc.breakdown.cost > sp.breakdown.cost, 'cheap outscores pricey');
+    assert.equal(su.breakdown.cost, null, 'unknown cost is excluded, never 50');
+  });
+
+  // D6: spread must count current sessions + reservations, not candidate-set size.
+  test('T6 spread counts active load and reservations, not the candidate set', () => {
+    const a = { harness: 'paseo', accessPath: 'http', upstream: 'test-a', accountId: '*', quotaScope: 'test-a', gateway: '',
+      modelId: 'test-a/invented-m1', source: '9router', blocked: false, status: 'passed', evidence: [] };
+    const b = { ...a, upstream: 'test-b', quotaScope: 'test-b', modelId: 'test-b/invented-m2' };
+
+    assert.equal(ranking.spreadPenalty(a, {}), 100, 'no load → full spread, regardless of candidate-set size');
+    assert.equal(ranking.spreadPenalty(b, {}), 100);
+
+    const ctxLoad = {
+      load: [
+        { upstream: 'test-a', quotaScope: 'test-a' },
+        { upstream: 'test-a', quotaScope: 'test-a' },
+      ],
+      reservations: [],
+    };
+    assert.equal(ranking.spreadPenalty(a, ctxLoad), 50, 'two active sessions on test-a → 50');
+    assert.equal(ranking.spreadPenalty(b, ctxLoad), 100, 'no active session on test-b → 100');
+
+    const ctxRes = {
+      load: [],
+      reservations: [{ offeringId: candidates.candidateKey(a) }],
+    };
+    assert.equal(ranking.spreadPenalty(a, ctxRes), 70, 'an outstanding reservation on the candidate → 70');
+  });
+
+  // D7: unproven capability is never neutral — only selectable inside an
+  // explicit exploration budget.
+  test('T7 unproven capability is refused unless an exploration budget allows it', () => {
+    const unproven = {
+      harness: 'paseo', accessPath: 'http', upstream: 'test-a', accountId: '*', quotaScope: 'test-a', gateway: '',
+      modelId: 'test-a/invented-m', source: '9router', blocked: false,
+      evidence: [], status: 'unknown',
+    };
+    const gate = { workItemId: 'TASK-7FIX-07', role: 'author.foundation', kind: 'author.foundation', dryRun: true };
+
+    const refused = ranking.rankAndRecord([unproven], gate);
+    assert.equal(refused.chosen, null, 'unproven cannot be picked outside a budget');
+    const rejection = refused.rejected.find((r) => r.reason === 'EXPLORATION_BUDGET_EXHAUSTED');
+    assert.ok(rejection, 'refusal names the exploration budget gate');
+
+    const allowed = ranking.rankAndRecord([unproven], { ...gate, explorationBudget: 1, priorUntested: 0 });
+    assert.ok(allowed.chosen, 'with an explicit budget an unproven pick is permitted');
+
+    const proven = ranking.rankAndRecord([{ ...unproven, qualifiedRoles: ['author.foundation'] }], gate);
+    assert.ok(proven.chosen, 'a proven capability needs no exploration budget');
   });
 });
 
@@ -623,7 +794,7 @@ describe('acceptance: full ranking run', () => {
         },
         {
           harness: 'agy', accessPath: 'cli', upstream: 'agy-local',
-          model: '*',
+          model: 'invented-cli-model',
           evidence: [{ level: 2, status: 'passed', source: 'CLI session' }],
         },
       ],
@@ -639,8 +810,11 @@ describe('acceptance: full ranking run', () => {
     };
     evidence.saveEvidence(dir, evData);
 
-    // Generate candidates.
-    const fromCatalogue = candidates.generateCandidates({ registry, catalogue });
+    // Generate candidates — one agy account binds a concrete CLI model.
+    const fromCatalogue = candidates.generateCandidates({
+      registry, catalogue,
+      accounts: [{ id: 'agy-main', sourceId: 'agy-local', models: ['invented-cli-model'] }],
+    });
     const fromEvidence = candidates.candidatesFromEvidence(evData);
     const merged = candidates.mergeCandidates(fromCatalogue, fromEvidence);
     const annotated = candidates.annotateCandidates(merged, evData);
@@ -652,6 +826,7 @@ describe('acceptance: full ranking run', () => {
       registry,
       evidenceData: evData,
       dryRun: true,
+      explorationBudget: 1,
       credentialOpts: {
         env: { NINEROUTER_API_KEY: 'present' },
       },
@@ -728,6 +903,7 @@ describe('acceptance: data-only source addition', () => {
           label: '9Router',
           kind: 'router',
           servesModels: true,
+          harness: 'paseo',
           endpoint: 'http://127.0.0.1:20128/v1',
           credential: { type: 'api-key', env: 'NINEROUTER_API_KEY' },
           verify: { method: 'models-list' },
@@ -787,6 +963,7 @@ describe('acceptance: unassigned work item', () => {
       role: 'author.foundation',
       registry,
       evidenceData: evData,
+      explorationBudget: 1,
       decisionOpts: { dir: path.join(dir, 'decisions'), now: Date.now() },
       credentialOpts: { env: { NINEROUTER_API_KEY: 'present' } },
     });
@@ -832,6 +1009,7 @@ describe('acceptance: unassigned work item', () => {
       role: 'author.foundation',
       registry,
       evidenceData: evData2,
+      explorationBudget: 1,
       decisionOpts: { dir: path.join(dir, 'decisions'), now: Date.now() },
       credentialOpts: { env: { NINEROUTER_API_KEY: 'present' } },
     });
@@ -910,6 +1088,7 @@ describe('integration: catalogue snapshot validation', () => {
       registry,
       evidenceData: evData,
       dryRun: true,
+      explorationBudget: 1,
       cataloguesByPath: { 'http://127.0.0.1:20128/v1': catalogueSet },
       credentialOpts: { env: { NINEROUTER_API_KEY: 'present' } },
     });
@@ -949,10 +1128,10 @@ describe('integration: catalogue snapshot validation', () => {
       { harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'ag',
         modelId: staleId, source: '9router', status: 'passed',
         evidence: [{ level: 3, status: 'passed' }],
-        blocked: false, sharedQuota: 'unknown' },
+        blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
       { harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1', upstream: 'ag',
         modelId: 'ag/gemini-3.8-flash-high', source: '9router', status: 'unknown',
-        evidence: [], blocked: false, sharedQuota: 'unknown' },
+        evidence: [], blocked: false, sharedQuota: 'unknown', qualifiedRoles: ['author.foundation'] },
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
