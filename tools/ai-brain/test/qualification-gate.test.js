@@ -494,3 +494,150 @@ describe('applyGrant', () => {
     assert.deepStrictEqual(updated.cost, { inputPerMillion: 0 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fix (d): evaluateGrant defaults to RESULT_PATH when deps.file is absent
+// ---------------------------------------------------------------------------
+
+describe('evaluateGrant missing-file default', () => {
+  test('evaluateGrant does not throw when deps.file is undefined', () => {
+    // Before the fix, d.file was used without a default, so loadResults
+    // received undefined and threw RESULT_UNREADABLE. The fix applies the
+    // same default as qualification.js:385.
+    const now = Date.now();
+    const r = evaluateGrant({
+      accountId: 'acc-1',
+      model: 'claude-code',
+      roleId: 'author.lowrisk',
+      deps: {
+        // file is deliberately absent — this is the bug scenario
+        loadResults: () => ({}),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    // The probe record is missing because loadResults returned {}, not because
+    // it threw. This is RESULT_MISSING, not RESULT_CORRUPT.
+    assert.strictEqual(r.status, RESULT_MISSING);
+    assert.ok(r.reason.includes('run probe first'));
+  });
+
+  test('evaluateGrant uses the explicit deps.file when provided', () => {
+    const now = Date.now();
+    let fileUsed = null;
+    evaluateGrant({
+      accountId: 'acc-1',
+      model: 'claude-code',
+      roleId: 'author.lowrisk',
+      deps: {
+        file: '/explicit/path.json',
+        loadResults: (f) => {
+          fileUsed = f;
+          return {};
+        },
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(fileUsed, '/explicit/path.json');
+  });
+});
+
+describe('evaluateGrant false-pass refusal vs real-pass admission (Finding 1)', () => {
+  const now = Date.now();
+
+  test('real cli pass qualifies for role', () => {
+    const record = {
+      accountId: 'agy-native-a',
+      model: 'gemini-3.8-flash-high',
+      instant: now - 1000,
+      outcome: 'pass',
+      latencyMs: 120,
+      reason: 'answered',
+    };
+    const key = 'agy-native-a@gemini-3.8-flash-high';
+    const r = evaluateGrant({
+      accountId: 'agy-native-a',
+      model: 'gemini-3.8-flash-high',
+      roleId: 'author.lowrisk',
+      deps: {
+        loadResults: () => ({ [key]: record }),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(r.status, QUALIFIED);
+    assert.strictEqual(r.entry.roleId, 'author.lowrisk');
+  });
+
+  test('real docker-compose pass qualifies for role', () => {
+    const record = {
+      accountId: 'agy-docker-b',
+      model: 'gemini-3.8-flash-high',
+      instant: now - 1000,
+      outcome: 'pass',
+      latencyMs: 200,
+      reason: 'answered',
+    };
+    const key = 'agy-docker-b@gemini-3.8-flash-high';
+    const r = evaluateGrant({
+      accountId: 'agy-docker-b',
+      model: 'gemini-3.8-flash-high',
+      roleId: 'author.lowrisk',
+      deps: {
+        loadResults: () => ({ [key]: record }),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(r.status, QUALIFIED);
+    assert.strictEqual(r.entry.roleId, 'author.lowrisk');
+  });
+
+  test('real openai-compatible pass with verified HTTP 200 qualifies for role', () => {
+    const record = {
+      accountId: 'ninerouter',
+      model: 'cc/claude-haiku-4-5-20251001',
+      instant: now - 1000,
+      outcome: 'pass',
+      latencyMs: 300,
+      reason: 'answered (HTTP 200)',
+    };
+    const key = 'ninerouter@cc/claude-haiku-4-5-20251001';
+    const r = evaluateGrant({
+      accountId: 'ninerouter',
+      model: 'cc/claude-haiku-4-5-20251001',
+      roleId: 'author.lowrisk',
+      deps: {
+        loadResults: () => ({ [key]: record }),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(r.status, QUALIFIED);
+  });
+
+  test('unverified openai-compatible false pass is refused qualification', () => {
+    const record = {
+      accountId: 'ninerouter',
+      model: 'cc/claude-haiku-4-5-20251001',
+      instant: now - 1000,
+      outcome: 'pass',
+      latencyMs: 50,
+      reason: 'answered', // Lacks HTTP status
+    };
+    const key = 'ninerouter@cc/claude-haiku-4-5-20251001';
+    const r = evaluateGrant({
+      accountId: 'ninerouter',
+      model: 'cc/claude-haiku-4-5-20251001',
+      roleId: 'author.lowrisk',
+      deps: {
+        loadResults: () => ({ [key]: record }),
+        now: () => now,
+        roles: ['author.lowrisk'],
+      },
+    });
+    assert.strictEqual(r.status, NOT_QUALIFIED);
+    assert.ok(r.reason.includes('lacks verified HTTP status'));
+  });
+});

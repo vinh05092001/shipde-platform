@@ -219,3 +219,116 @@ describe('Reading the Claude Code subscription limits', () => {
     assert.match(r.reason, /không chạy/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// oc provider reader (9Router / OpenAI-compatible gateway)
+// ---------------------------------------------------------------------------
+const { SUPPORTED_PROVIDERS } = require('../refresh-quota');
+
+describe('oc provider is now a supported provider', () => {
+  test('SUPPORTED_PROVIDERS includes oc', () => {
+    assert.ok(SUPPORTED_PROVIDERS.has('oc'));
+  });
+
+  test('a provider not in READERS is still unsupported', () => {
+    assert.ok(!SUPPORTED_PROVIDERS.has('telepathy'));
+    assert.ok(!SUPPORTED_PROVIDERS.has('9router'));
+  });
+});
+
+describe('Reading the oc (OpenAI-compatible) quota', () => {
+  test('a reachable gateway is recorded as available with a model count', () => {
+    const p = tmpStore();
+    const fakeModels = { object: 'list', data: [{ id: 'model-a' }, { id: 'model-b' }] };
+    const r = refreshAccount(
+      {
+        id: 'ninerouter',
+        provider: 'oc',
+        launch: { kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:20128/v1' },
+      },
+      {
+        path: p,
+        identity: ME,
+        execSync: () => JSON.stringify(fakeModels),
+      }
+    );
+    assert.equal(r.ok, true);
+    assert.equal(r.rows, 1);
+    const stored = loadStore({ path: p }).accounts.ninerouter;
+    assert.equal(stored.available, true);
+    assert.equal(stored.rows[0].window, 'on-demand');
+    assert.equal(stored.rows[0].modelCount, 2);
+    assert.equal(stored.rows[0].family, 'gateway');
+  });
+
+  test('an unreachable gateway is recorded as unavailable with a reason', () => {
+    const p = tmpStore();
+    const r = refreshAccount(
+      {
+        id: 'ninerouter',
+        provider: 'oc',
+        launch: { kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:20128/v1' },
+      },
+      {
+        path: p,
+        identity: ME,
+        execSync: () => {
+          throw new Error('Connection refused');
+        },
+      }
+    );
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /gateway unreachable/);
+    const stored = loadStore({ path: p }).accounts.ninerouter;
+    assert.equal(stored.available, false);
+  });
+
+  test('the oc reader uses the account id as identity when no email is declared', () => {
+    const p = tmpStore();
+    refreshAccount(
+      {
+        id: 'ninerouter',
+        provider: 'oc',
+        launch: { kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:20128/v1' },
+      },
+      {
+        path: p,
+        identity: ME,
+        execSync: () => JSON.stringify({ data: [] }),
+      }
+    );
+    const stored = loadStore({ path: p }).accounts.ninerouter;
+    assert.equal(stored.account.email, 'ninerouter');
+    assert.equal(stored.account.source, 'account-id');
+  });
+
+  test('the oc reader uses a declared email when present', () => {
+    const p = tmpStore();
+    refreshAccount(
+      {
+        id: 'ninerouter',
+        provider: 'oc',
+        email: 'router@example.com',
+        launch: { kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:20128/v1' },
+      },
+      {
+        path: p,
+        identity: ME,
+        execSync: () => JSON.stringify({ data: [] }),
+      }
+    );
+    const stored = loadStore({ path: p }).accounts.ninerouter;
+    assert.equal(stored.account.email, 'router@example.com');
+    assert.equal(stored.account.source, 'declared');
+  });
+
+  test('a provider absent from READERS is still skipped, not probed', () => {
+    let called = false;
+    const r = refreshAccount(
+      { id: 'phantom', provider: 'telepathy' },
+      { path: tmpStore(), identity: ME, readQuota: () => ((called = true), OK) }
+    );
+    assert.equal(r.skipped, true);
+    assert.equal(called, false);
+  });
+});

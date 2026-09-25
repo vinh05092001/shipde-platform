@@ -74,6 +74,58 @@ const READERS = {
       return claudeUsage.asQuotaReading(usage, identity);
     },
   },
+  /**
+   * OpenAI-compatible gateways (9Router, etc).
+   *
+   * There is no percentage-remaining concept: the provider is pay-per-call,
+   * so the only question a quota refresh can answer is "is the gateway alive
+   * and does it list any models?"  The reader hits /v1/models synchronously
+   * and reports a single row with window 'on-demand'.
+   *
+   * The identity is always the account's own label — there is no host login
+   * to stamp, and the gateway's credential lives inside the router, not here.
+   */
+  oc: {
+    read: (account, opts) => {
+      const identity = account.email
+        ? { known: true, email: account.email, source: 'declared' }
+        : { known: true, email: account.id, source: 'account-id' };
+      const baseUrl = (account.launch && account.launch.baseUrl) || '';
+      const url = String(baseUrl).replace(/\/+$/, '') + '/models';
+      try {
+        const out = (opts.execSync || execFileSync)(
+          'curl',
+          ['-sS', '--max-time', '10', url],
+          { encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+        const parsed = JSON.parse(out);
+        const modelCount =
+          parsed && Array.isArray(parsed.data) ? parsed.data.length : 0;
+        return {
+          available: true,
+          rows: [
+            {
+              family: 'gateway',
+              window: 'on-demand',
+              remainingPercent: 100,
+              disabled: false,
+              modelCount,
+            },
+          ],
+          account: identity,
+          observedAt: new Date().toISOString(),
+        };
+      } catch (e) {
+        return {
+          available: false,
+          reason: 'gateway unreachable: ' + String(e.message || e).slice(0, 120),
+          rows: [],
+          account: identity,
+          observedAt: new Date().toISOString(),
+        };
+      }
+    },
+  },
 };
 
 const SUPPORTED_PROVIDERS = new Set(Object.keys(READERS));
