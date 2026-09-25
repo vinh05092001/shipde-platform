@@ -158,6 +158,9 @@ describe('Ceiling governance: dispatch planning enforcement', () => {
       {
         limits: { maxImplementationAgents: 3, maxPerAccount: 1 },
         governedDecision: 'DEC-017',
+        // TASK-AI-49: memory is the second ceiling. Stated here so this test
+        // measures the governance rule rather than whatever the host has free.
+        resources: { freeMb: 8192 },
         now: NOW,
       }
     );
@@ -166,6 +169,62 @@ describe('Ceiling governance: dispatch planning enforcement', () => {
     assert.strictEqual(plan.utilisation.maxImplementation, 3);
     assert.strictEqual(plan.utilisation.governedDecision, 'DEC-017');
     assert.strictEqual(plan.utilisation.ceilingGoverned, true);
+  });
+
+  test('a caller that does not ask about memory is not measured', () => {
+    // The plan must not change because something else on the machine started
+    // using RAM: an unattended dispatch opts in, a test states its own figure.
+    const plan = planDispatch([item({ workItemId: 'ITEM-1', branch: 'feat/1' })], pool, {
+      limits: { maxImplementationAgents: 1 },
+      now: NOW,
+    });
+    assert.strictEqual(plan.assignments.length, 1);
+    assert.strictEqual(plan.utilisation.ramLimited, false);
+    assert.strictEqual(plan.utilisation.resources.limiting, 'not consulted');
+  });
+
+  test('measured memory lowers a governed ceiling, and the plan says which limit bound', () => {
+    // TASK-AI-49: a human may authorise three agents; the machine still has to
+    // hold them. 2.4 GB free leaves room for one worker after the 2 GB the
+    // daemons and the editor need, so two items wait rather than swap.
+    const plan = planDispatch(
+      [
+        item({ workItemId: 'ITEM-1', branch: 'feat/1' }),
+        item({ workItemId: 'ITEM-2', branch: 'feat/2' }),
+        item({ workItemId: 'ITEM-3', branch: 'feat/3' }),
+      ],
+      pool,
+      {
+        limits: { maxImplementationAgents: 3, maxPerAccount: 1 },
+        governedDecision: 'DEC-017',
+        resources: { freeMb: 2400 },
+        now: NOW,
+      }
+    );
+    assert.strictEqual(plan.assignments.length, 1);
+    assert.strictEqual(plan.utilisation.maxImplementation, 1);
+    assert.strictEqual(plan.utilisation.ramLimited, true);
+    assert.strictEqual(plan.utilisation.ceilingGoverned, true);
+    assert.strictEqual(plan.utilisation.resources.freeMb, 2400);
+    assert.strictEqual(plan.deferred[0].reason, 'IMPLEMENTATION_LIMIT');
+  });
+
+  test('spare memory is not authorisation: an ungoverned ceiling stays at one', () => {
+    const plan = planDispatch(
+      [
+        item({ workItemId: 'ITEM-1', branch: 'feat/1' }),
+        item({ workItemId: 'ITEM-2', branch: 'feat/2' }),
+      ],
+      pool,
+      {
+        limits: { maxImplementationAgents: 3, maxPerAccount: 1 },
+        resources: { freeMb: 64000 },
+        now: NOW,
+      }
+    );
+    assert.strictEqual(plan.assignments.length, 1);
+    assert.strictEqual(plan.utilisation.ceilingGoverned, false);
+    assert.strictEqual(plan.utilisation.ramLimited, false);
   });
 
   test('single-writer invariant holds permanently even when governed decision raises implementation ceiling', () => {

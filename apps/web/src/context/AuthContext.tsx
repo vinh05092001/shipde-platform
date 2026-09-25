@@ -20,6 +20,8 @@ interface AuthContextType {
   user: User | null;
   merchant: Merchant | null;
   isAuthenticated: boolean;
+  /** True only during the single localStorage restore tick. Screens return null while this is set. */
+  isHydrating: boolean;
   token: string | null;
   login: (
     emailOrPhone: string,
@@ -147,28 +149,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [isHydrating, setIsHydrating] = useState(true);
 
   // Restore a persisted session when present. No fabricated default session:
   // FEAT-AUTH-03 (CD-10) removes the prototype's mock auto-login.
+  // isHydrating starts true and resolves false in finally, so a signed-out
+  // visitor never sits on a loading skeleton (BRAIN.md rule 4).
   useEffect(() => {
-    const savedUser = localStorage.getItem('shipde_user');
-    const savedMerchant = localStorage.getItem('shipde_merchant');
-    const savedToken = localStorage.getItem('shipde_token');
+    Promise.resolve().then(() => {
+      try {
+        const savedUser = localStorage.getItem('shipde_user');
+        const savedMerchant = localStorage.getItem('shipde_merchant');
+        const savedToken = localStorage.getItem('shipde_token');
 
-    if (!savedUser || !savedMerchant || !savedToken) {
-      return;
-    }
-
-    try {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- persisted session hydration
-      setUser(mapUser(JSON.parse(savedUser)));
-      setMerchant(mapMerchant(JSON.parse(savedMerchant)));
-      setToken(savedToken);
-    } catch {
-      localStorage.removeItem('shipde_user');
-      localStorage.removeItem('shipde_merchant');
-      localStorage.removeItem('shipde_token');
-    }
+        if (savedUser && savedMerchant && savedToken) {
+          setUser(mapUser(JSON.parse(savedUser)));
+          setMerchant(mapMerchant(JSON.parse(savedMerchant)));
+          setToken(savedToken);
+        }
+      } catch {
+        localStorage.removeItem('shipde_user');
+        localStorage.removeItem('shipde_merchant');
+        localStorage.removeItem('shipde_token');
+      } finally {
+        setIsHydrating(false);
+      }
+    });
   }, []);
 
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -465,6 +471,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         merchant,
         isAuthenticated: !!user && !!token,
+        isHydrating,
         token,
         login,
         requestLoginOtp,
