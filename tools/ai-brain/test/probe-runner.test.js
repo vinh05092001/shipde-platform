@@ -68,20 +68,9 @@ const testClassifier = {
     const text = [String(body || ''), String(stderr || '')].filter(Boolean).join('\n');
 
     // Extract innermost HTTP status if wrapped (e.g., "[402]: ..." or "503: [402]: ...")
-    const innerMatch = text.match(/[\[(]\s*(400|401|402|403|410|429)\s*[\])]/);
-    const effectiveStatus = innerMatch ? parseInt(innerMatch[1], 10) : httpStatus;
-
-    if (
-      (effectiveStatus === 402 || effectiveStatus === 429) &&
-      /out of credit|credit.{0,20}exhaust|insufficient.*credit|provider.{0,20}credit/i.test(text)
-    ) {
-      return {
-        cause: Cause.UPSTREAM_CREDIT_EXHAUSTED,
-        scope: Scope.UPSTREAM,
-        cooldownMs: 86400000,
-        resetTime: null,
-      };
-    }
+    const innerMatch = text.match(/[\[(]\s*(401|402|403|429)\s*[\])]/);
+    const effectiveStatus =
+      httpStatus === 503 && innerMatch ? parseInt(innerMatch[1], 10) : httpStatus;
 
     if (
       effectiveStatus === 401 &&
@@ -96,10 +85,8 @@ const testClassifier = {
     }
 
     if (
-      effectiveStatus === 403 &&
-      /unauthorized|not licensed|entitlement|forbidden|access.*disabled|model access.*disabled/i.test(
-        text
-      )
+      effectiveStatus === 400 &&
+      /arrearage|invalid.subscription|account.*standing|overdue|payment/i.test(text)
     ) {
       return {
         cause: Cause.UPSTREAM_ENTITLEMENT,
@@ -110,13 +97,25 @@ const testClassifier = {
     }
 
     if (
-      effectiveStatus === 400 &&
-      /arrearage|invalid.subscription|account.*standing|overdue|payment/i.test(text)
+      effectiveStatus === 403 &&
+      /unauthorized|not licensed|entitlement|forbidden|access.*disabled/i.test(text)
     ) {
       return {
         cause: Cause.UPSTREAM_ENTITLEMENT,
         scope: Scope.UPSTREAM,
         cooldownMs: null,
+        resetTime: null,
+      };
+    }
+
+    if (
+      (effectiveStatus === 402 || effectiveStatus === 429) &&
+      /out of credit|credit.{0,20}exhaust|insufficient.*credit|provider.{0,20}credit/i.test(text)
+    ) {
+      return {
+        cause: Cause.UPSTREAM_CREDIT_EXHAUSTED,
+        scope: Scope.UPSTREAM,
+        cooldownMs: 86400000,
         resetTime: null,
       };
     }
@@ -1193,6 +1192,109 @@ describe('9Router Probe Runner Suite', () => {
     assert.ok(Array.isArray(row.toolCalls));
     assert.equal(row.toolCalls.length, 1);
     assert.ok(row.toolCalls.includes('grep_search'));
+  });
+
+  it('24. Reasoning model emits content with 128 token budget (not PROBE_INVALID)', async () => {
+    const modelId = 'test-reasoning/model-passes';
+    customRoutes.set(modelId, (req, res, parsed) => {
+      // Verify the request uses max_tokens=128 (the larger budget)
+      assert.equal(parsed.max_tokens, 128);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'stop',
+              message: {
+                content: 'Reasoning complete: the answer is 42',
+                reasoning_content: 'Internal reasoning trace...',
+              },
+            },
+          ],
+        })
+      );
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.passedCount, 1);
+    assert.equal(summary.failedCount, 0);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-reasoning', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'PASS');
+    assert.ok(row.content.includes('Reasoning complete'));
+    assert.ok(row.content.includes('Internal reasoning'));
+    assert.notEqual(row.finishReason, 'length');
+    assert.notEqual(row.finishReason, 'max_tokens');
+  });
+
+  it('25. Model rejects max_tokens, retries once with max_completion_tokens and passes', async () => {
+    const modelId = 'test-max-tokens-rejection/model-retry';
+    let requestCount = 0;
+
+    customRoutes.set(modelId, (req, res, parsed) => {
+      requestCount++;
+      const hasMaxTokens = 'max_tokens' in parsed;
+      const hasMaxCompletionTokens = 'max_completion_tokens' in parsed;
+
+      if (requestCount === 1 && hasMaxTokens && !hasMaxCompletionTokens) {
+        // First request with max_tokens: model rejects it
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: 'Invalid max_tokens: this model does not support max_tokens, use max_completion_tokens',
+              type: 'invalid_request_error',
+            },
+          })
+        );
+      } else if (requestCount === 2 && hasMaxCompletionTokens) {
+        // Retry with max_completion_tokens: succeeds
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { content: 'Success with max_completion_tokens' } }],
+          })
+        );
+      } else {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unexpected request' } }));
+      }
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    // Should have made 2 requests, second one passes
+    assert.equal(summary.passedCount, 1);
+    assert.equal(summary.failedCount, 0);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-max-tokens-rejection', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'PASS');
+    assert.equal(row.content, 'Success with max_completion_tokens');
+    // The final result should not have failedBothTokenFormats since retry succeeded
+    assert.equal(row.failedBothTokenFormats, undefined);
   });
 
   it('15. Absent canonical classifier fails with clear message naming dependency when unpassed', async () => {
