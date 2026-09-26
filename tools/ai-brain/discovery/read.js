@@ -66,7 +66,7 @@
 const fs = require('fs');
 const path = require('path');
 const { candidateKey, parseCandidateKey, modelBase } = require('./identity');
-const { readCatalogue, currentState } = require('./store');
+const { readCatalogue, currentState, StateMap } = require('./store');
 
 const DEFAULT_DATA_DIR = path.join(__dirname, '..', 'data', 'discovery');
 
@@ -278,6 +278,10 @@ function readDiscoveryCatalogue(opts) {
   const normalizedLines = [];
   for (const raw of rawLines) {
     if (!raw || raw.malformed) continue;
+    if (raw.type === 'migration' || raw.schema === 'shipde/discovery-migration') {
+      normalizedLines.push(raw);
+      continue;
+    }
     const parsedKey = parseCandidateKey(raw.key);
     const cand = {
       ...raw,
@@ -296,7 +300,7 @@ function readDiscoveryCatalogue(opts) {
   const currentFromLedger = currentState(normalizedLines);
 
   // 2. Load Evidence (from memory or imports directory)
-  const evidenceByKey = new Map();
+  const evidenceByKey = new StateMap();
 
   function ingestCandidateEvidence(c) {
     if (!c) return;
@@ -606,7 +610,7 @@ function readDiscoveryCatalogue(opts) {
   }
 
   // 3. Assemble complete candidates list
-  const candidatesMap = new Map();
+  const candidatesMap = new StateMap();
 
   // Add ledger candidates
   for (const [key, ledgerRec] of currentFromLedger) {
@@ -673,7 +677,7 @@ function readDiscoveryCatalogue(opts) {
   }
 
   // 4. Index candidates per access path and per account
-  const byKey = new Map();
+  const byKey = new StateMap();
   const byAccessPath = new Map();
   const byAccount = new Map();
   const byPathAndAccount = new Map();
