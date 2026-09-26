@@ -851,64 +851,27 @@ describe('9Router Probe Runner Suite', () => {
 
   it('15. Absent canonical classifier fails with clear message naming dependency when unpassed', async () => {
     const outPath = makeTmpFile();
-    const classifierPath = require('../probe-runner').CANONICAL_CLASSIFIER_PATH;
-    let classifierExisted = false;
-    let backupPath = null;
-
-    // Temporarily remove canonical classifier to test missing dependency error
-    if (fs.existsSync(classifierPath)) {
-      classifierExisted = true;
-      backupPath = classifierPath + '.bak';
-      fs.renameSync(classifierPath, backupPath);
-    }
-
-    // Clear require cache so the missing file is detected
-    if (require.cache[classifierPath]) {
-      delete require.cache[classifierPath];
-    }
-    // Also clear the runner module cache since it may have cached the classifier
-    const runnerPath = require.resolve('../probe-runner');
-    if (require.cache[runnerPath]) {
-      delete require.cache[runnerPath];
-    }
-    // Re-require to get fresh module
-    const { runProbeBatch: freshRunProbeBatch } = require('../probe-runner');
-
-    try {
-      await assert.rejects(
-        async () => {
-          await freshRunProbeBatch({
-            gatewayUrl,
-            apiKey: 'test-token',
-            catalogue: [{ id: 'test/model' }],
-            outPath,
-          });
-        },
-        (err) => {
-          assert.ok(
-            err.message.includes('failure-classifier.js'),
-            `Error should name failure-classifier.js: ${err.message}`
-          );
-          assert.ok(
-            err.message.includes('PR #144') || err.message.includes('brain-failure-classes'),
-            `Error should name PR #144 or branch: ${err.message}`
-          );
-          return true;
-        }
-      );
-    } finally {
-      // Restore canonical classifier
-      if (classifierExisted && backupPath && fs.existsSync(backupPath)) {
-        fs.renameSync(backupPath, classifierPath);
+    await assert.rejects(
+      async () => {
+        await runProbeBatch({
+          gatewayUrl,
+          apiKey: 'test-token',
+          catalogue: [{ id: 'test/model' }],
+          outPath,
+        });
+      },
+      (err) => {
+        assert.ok(
+          err.message.includes('failure-classifier.js'),
+          `Error should name failure-classifier.js: ${err.message}`
+        );
+        assert.ok(
+          err.message.includes('PR #144') || err.message.includes('brain-failure-classes'),
+          `Error should name PR #144 or branch: ${err.message}`
+        );
+        return true;
       }
-      // Clear cache again so subsequent tests get the classifier
-      if (require.cache[classifierPath]) {
-        delete require.cache[classifierPath];
-      }
-      if (require.cache[runnerPath]) {
-        delete require.cache[runnerPath];
-      }
-    }
+    );
   });
 
   it('17. HTTP 200 with tool_calls only records PASS with responseKind=tool_calls', async () => {
@@ -989,7 +952,7 @@ describe('9Router Probe Runner Suite', () => {
     });
 
     assert.equal(summary.passedCount, 0);
-    assert.equal(summary.failedCount, 1); // PROBE_INVALID counts as failed for budget
+    assert.equal(summary.failedCount, 1);
 
     const history = loadHistory(outPath);
     const key = buildQueueKey({ upstream: 'test-reasoning', modelId });
@@ -1037,7 +1000,6 @@ describe('9Router Probe Runner Suite', () => {
     assert.ok(row);
     assert.equal(row.status, 'FAIL');
     assert.equal(row.httpStatus, 400);
-    // Classifier should see inner 400 with Arrearage -> upstream_entitlement
     assert.equal(row.cause, Cause.UPSTREAM_ENTITLEMENT);
     assert.equal(row.scope, Scope.UPSTREAM);
     assert.equal(row.verified, undefined);
@@ -1068,7 +1030,6 @@ describe('9Router Probe Runner Suite', () => {
     assert.ok(row);
     assert.equal(row.status, 'FAIL');
     assert.equal(row.httpStatus, 503);
-    // Classifier should see inner 403 -> upstream_entitlement
     assert.equal(row.cause, Cause.UPSTREAM_ENTITLEMENT);
     assert.equal(row.scope, Scope.UPSTREAM);
     assert.equal(row.verified, undefined);
@@ -1106,8 +1067,6 @@ describe('9Router Probe Runner Suite', () => {
     assert.ok(row);
     assert.equal(row.status, 'FAIL');
     assert.equal(row.httpStatus, 503);
-    // Classifier should see inner 429 -> upstream_credit_exhausted (or rate_limit)
-    // Our test classifier matches 429 with credit exhausted -> upstream_credit_exhausted
     assert.equal(row.cause, Cause.UPSTREAM_CREDIT_EXHAUSTED);
     assert.equal(row.scope, Scope.UPSTREAM);
     assert.equal(row.verified, undefined);
@@ -1137,7 +1096,7 @@ describe('9Router Probe Runner Suite', () => {
     });
 
     assert.equal(summary.passedCount, 0);
-    assert.equal(summary.failedCount, 0); // UNSUPPORTED_BY_PROBE not counted as failed
+    assert.equal(summary.failedCount, 0);
 
     const history = loadHistory(outPath);
     const key = buildQueueKey({ upstream: 'test-decisions', modelId });
@@ -1259,7 +1218,6 @@ describe('9Router Probe Runner Suite', () => {
   it('26. Reasoning model emits content with 128 token budget (not PROBE_INVALID)', async () => {
     const modelId = 'test-reasoning/model-passes';
     customRoutes.set(modelId, (req, res, parsed) => {
-      // Verify the request uses max_tokens=128 (the larger budget)
       assert.equal(parsed.max_tokens, 128);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
@@ -1311,7 +1269,6 @@ describe('9Router Probe Runner Suite', () => {
       const hasMaxCompletionTokens = 'max_completion_tokens' in parsed;
 
       if (requestCount === 1 && hasMaxTokens && !hasMaxCompletionTokens) {
-        // First request with max_tokens: model rejects it
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -1323,7 +1280,6 @@ describe('9Router Probe Runner Suite', () => {
           })
         );
       } else if (requestCount === 2 && hasMaxCompletionTokens) {
-        // Retry with max_completion_tokens: succeeds
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -1345,7 +1301,6 @@ describe('9Router Probe Runner Suite', () => {
       classifier: testClassifier,
     });
 
-    // Should have made 2 requests, second one passes
     assert.equal(summary.passedCount, 1);
     assert.equal(summary.failedCount, 0);
 
@@ -1356,7 +1311,6 @@ describe('9Router Probe Runner Suite', () => {
     assert.ok(row);
     assert.equal(row.status, 'PASS');
     assert.equal(row.content, 'Success with max_completion_tokens');
-    // The final result should not have failedBothTokenFormats since retry succeeded
     assert.equal(row.failedBothTokenFormats, undefined);
   });
 });
