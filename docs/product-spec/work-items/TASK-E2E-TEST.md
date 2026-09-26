@@ -14,7 +14,7 @@
 | Allowed paths | `docs/product-spec/work-items/TASK-E2E-TEST.md`, `tests/e2e/e2e-test-note.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-e2e-test` |
-| Pull Request | `Pending` |
+| Pull Request | `https://github.com/vinh05092001/shipde-platform/pull/145` |
 
 ## Business outcome
 
