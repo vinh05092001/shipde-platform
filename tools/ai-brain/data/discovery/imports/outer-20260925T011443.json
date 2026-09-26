@@ -1,0 +1,1114 @@
+{
+  "evidenceKind": "outer-import",
+  "importedAt": "2026-09-25T01:14:43.342Z",
+  "importedFrom": "outer.jsonl",
+  "totalRows": 56,
+  "reclassifiedFails": 1,
+  "sources": [
+    {
+      "sourceId": "bai",
+      "probes": [
+        {
+          "probeName": "balance",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 251,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/balance",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "balance-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 75,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/balance",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-balance-1",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 307,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/balance",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-balance-1",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 353,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/balance",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-balance-1",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 283,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/balance",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-balance-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 187,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/balance",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-balance-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 171,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/balance",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-balance-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 170,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/balance",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-completion-1",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 1383,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-completion-1",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 2422,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-completion-1",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 1270,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-completion-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 1243,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-completion-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 1428,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-completion-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 2400,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-models-1",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 73,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-models-1",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 79,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-models-1",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 73,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-models-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 166,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-models-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 169,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "cert-models-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 165,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "completion-deepseek",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 1178,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "completion-deepseek-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 1113,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "models",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 66,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "models-2",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 67,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "BAI_API_KEY",
+          "invocationUrl": "https://api.b.ai/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        }
+      ]
+    },
+    {
+      "sourceId": "xkiro",
+      "probes": [
+        {
+          "probeName": "completion",
+          "status": "FAIL",
+          "tier": "FAIL",
+          "latencyMs": 1983,
+          "httpStatus": 503,
+          "error": "HTTP 503: [kiro/auto] [402]: {\\",
+          "classification": {
+            "class": "unknown",
+            "innerCause": "[kiro/auto] [402]: {\\",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "NINEROUTER_API_KEY",
+          "invocationUrl": "http://127.0.0.1:20128/v1/chat/completions",
+          "sharedUpstream": {
+            "via": "9router",
+            "alias": "kr",
+            "note": "Reached via 9Router with routerAlias kr"
+          },
+          "evidenceLevel": 0
+        },
+        {
+          "probeName": "completion",
+          "status": "FAIL",
+          "tier": "FAIL",
+          "latencyMs": 3393,
+          "httpStatus": 503,
+          "error": "HTTP 503: [kiro/auto] [402]: {\\",
+          "classification": {
+            "class": "quota_exhausted",
+            "innerCause": "[kiro/auto] [402]: {\\",
+            "matched": "/\\b402\\b/i"
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "NINEROUTER_API_KEY",
+          "invocationUrl": "http://127.0.0.1:20128/v1/chat/completions",
+          "sharedUpstream": {
+            "via": "9router",
+            "alias": "kr",
+            "note": "Reached via 9Router with routerAlias kr"
+          },
+          "evidenceLevel": 0
+        },
+        {
+          "probeName": "models",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 13515,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "NINEROUTER_API_KEY",
+          "invocationUrl": "http://127.0.0.1:20128/v1/models",
+          "sharedUpstream": {
+            "via": "9router",
+            "alias": "kr",
+            "note": "Reached via 9Router with routerAlias kr"
+          },
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "models",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 8196,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "NINEROUTER_API_KEY",
+          "invocationUrl": "http://127.0.0.1:20128/v1/models",
+          "sharedUpstream": {
+            "via": "9router",
+            "alias": "kr",
+            "note": "Reached via 9Router with routerAlias kr"
+          },
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "untested",
+          "status": "UNTESTED",
+          "tier": "UNTESTED",
+          "sharedUpstream": {
+            "via": "9router",
+            "alias": "kr",
+            "note": "Reached via 9Router with routerAlias kr"
+          },
+          "evidenceLevel": 0
+        }
+      ]
+    },
+    {
+      "sourceId": "tencent",
+      "probes": [
+        {
+          "probeName": "completion",
+          "status": "FAIL",
+          "tier": "FAIL",
+          "latencyMs": 62,
+          "httpStatus": 402,
+          "error": "HTTP 402: The account associated with the API Key is in arrears and the accessed service ID has been isolated. Please top up the account and re-enable the service in the console.",
+          "classification": {
+            "class": "invalid_config",
+            "innerCause": "The account associated with the API Key is in arrears and the accessed service ID has been isolated. Please top up the account and re-enable the service in the console.",
+            "matched": "/service.id/i"
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "TENCENT_TOKENHUB_API_KEY",
+          "invocationUrl": "https://tokenhub-intl.tencentcloudmaas.com/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 0
+        },
+        {
+          "probeName": "completion",
+          "status": "FAIL",
+          "tier": "FAIL",
+          "latencyMs": 50,
+          "httpStatus": 402,
+          "error": "HTTP 402: The account associated with the API Key is in arrears and the accessed service ID has been isolated. Please top up the account and re-enable the service in the console.",
+          "classification": {
+            "class": "quota_exhausted",
+            "innerCause": "The account associated with the API Key is in arrears and the accessed service ID has been isolated. Please top up the account and re-enable the service in the console.",
+            "matched": "/arrears/i"
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "TENCENT_TOKENHUB_API_KEY",
+          "invocationUrl": "https://tokenhub-intl.tencentcloudmaas.com/v1/chat/completions",
+          "sharedUpstream": null,
+          "evidenceLevel": 0
+        },
+        {
+          "probeName": "models",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 686,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "TENCENT_TOKENHUB_API_KEY",
+          "invocationUrl": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "models",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 708,
+          "httpStatus": 200,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "json",
+          "authRequired": true,
+          "authHeader": "TENCENT_TOKENHUB_API_KEY",
+          "invocationUrl": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "untested",
+          "status": "UNTESTED",
+          "tier": "UNTESTED",
+          "sharedUpstream": null,
+          "evidenceLevel": 0
+        }
+      ]
+    },
+    {
+      "sourceId": "qwen",
+      "probes": [
+        {
+          "probeName": "help",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 163,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "authHeader": "none",
+          "invocationUrl": "undefinedundefined",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "help",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 121,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "text",
+          "authHeader": "~/.qwen",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "prompt",
+          "status": "FAIL",
+          "tier": "FAIL",
+          "latencyMs": 4352,
+          "httpStatus": 401,
+          "exitCode": 1,
+          "error": "[API Error: 400 credit insufficient balance: balance=519 required=2256 (request id: 20260924123736301540134c955d568BfJwlTi6)]\n",
+          "classification": {
+            "class": "quota_exhausted",
+            "innerCause": "[API Error: 400 credit insufficient balance: balance=519 required=2256 (request id: 20260924123736301540134c955d568BfJwlTi6)]",
+            "matched": "/insufficient.balance/i"
+          },
+          "authHeader": "none",
+          "invocationUrl": "undefinedundefined",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "prompt",
+          "status": "FAIL",
+          "tier": "FAIL",
+          "latencyMs": 4330,
+          "exitCode": 1,
+          "error": "[API Error: 400 credit insufficient balance: balance=519 required=2254 (request id: 20260924152905482964132c955d568rSImvSIz)]\n",
+          "classification": {
+            "class": "quota_exhausted",
+            "innerCause": "[API Error: 400 credit insufficient balance: balance=519 required=2254 (request id: 20260924152905482964132c955d568rSImvSIz)]",
+            "matched": "/insufficient.balance/i"
+          },
+          "responseShape": "text",
+          "authHeader": "~/.qwen",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 0
+        },
+        {
+          "probeName": "version",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 107,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "authHeader": "none",
+          "invocationUrl": "undefinedundefined",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "version",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 81,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "text",
+          "authHeader": "~/.qwen",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        }
+      ]
+    },
+    {
+      "sourceId": "dsh",
+      "probes": [
+        {
+          "probeName": "headless",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 6526,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "authHeader": "none",
+          "invocationUrl": "undefinedundefined",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "headless",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 14643,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "text",
+          "authHeader": "none",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "version",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 126,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "authHeader": "none",
+          "invocationUrl": "undefinedundefined",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "version",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 105,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "text",
+          "authHeader": "none",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        }
+      ]
+    },
+    {
+      "sourceId": "hermes",
+      "probes": [
+        {
+          "probeName": "headless",
+          "status": "FAIL",
+          "tier": "FAIL",
+          "latencyMs": 11118,
+          "exitCode": 1,
+          "error": "\r\nsession_id: 20260924_222927_7f474a\r\n",
+          "classification": {
+            "class": "unknown",
+            "innerCause": "20260924_222927_7f474a",
+            "matched": null
+          },
+          "responseShape": "text",
+          "authHeader": "none",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 0
+        },
+        {
+          "probeName": "untested",
+          "status": "UNTESTED",
+          "tier": "UNTESTED",
+          "sharedUpstream": null,
+          "evidenceLevel": 0
+        },
+        {
+          "probeName": "version",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 562,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "text",
+          "authHeader": "none",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        }
+      ]
+    },
+    {
+      "sourceId": "autoclaw",
+      "probes": [
+        {
+          "probeName": "bounded-task",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 14167,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "authHeader": "none",
+          "invocationUrl": "undefinedundefined",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "bounded-task",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 14348,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "text",
+          "authHeader": "~/.openclaw",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "version",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 113,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "authHeader": "none",
+          "invocationUrl": "undefinedundefined",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        },
+        {
+          "probeName": "version",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 77,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "text",
+          "authHeader": "~/.openclaw",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        }
+      ]
+    },
+    {
+      "sourceId": "cline",
+      "probes": [
+        {
+          "probeName": "known-failure",
+          "status": "FAIL",
+          "tier": "FAIL",
+          "classification": {
+            "class": "quota_exhausted",
+            "innerCause": "Both models tried today failed: \"Insufficient balance $0.00\" and \"Free model promotion ended\"",
+            "matched": "/insufficient.balance/i"
+          },
+          "evidenceLevel": 2
+        },
+        {
+          "probeName": "known-failure",
+          "status": "FAIL",
+          "tier": "FAIL",
+          "classification": {
+            "class": "quota_exhausted",
+            "innerCause": "Both models tried today failed: \"Insufficient balance $0.00\" and \"Free model promotion ended\"",
+            "matched": "/insufficient.balance/i"
+          },
+          "evidenceLevel": 2
+        },
+        {
+          "probeName": "version",
+          "status": "PASS",
+          "tier": "ALIVE",
+          "latencyMs": 1883,
+          "exitCode": 0,
+          "error": null,
+          "classification": {
+            "class": "success",
+            "innerCause": "",
+            "matched": null
+          },
+          "responseShape": "text",
+          "authHeader": "~/.cline-*/data",
+          "invocationUrl": "none",
+          "sharedUpstream": null,
+          "evidenceLevel": 1
+        }
+      ]
+    },
+    {
+      "sourceId": "agy-pool",
+      "probes": [
+        {
+          "probeName": "untested",
+          "status": "UNTESTED",
+          "tier": "UNTESTED",
+          "sharedUpstream": null,
+          "evidenceLevel": 0
+        },
+        {
+          "probeName": "untested",
+          "status": "UNTESTED",
+          "tier": "UNTESTED",
+          "sharedUpstream": null,
+          "evidenceLevel": 0
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "bai": {
+      "pass": 24,
+      "fail": 0,
+      "deferred": 0,
+      "untested": 0,
+      "alive": 24,
+      "probes": 24
+    },
+    "xkiro": {
+      "pass": 2,
+      "fail": 2,
+      "deferred": 0,
+      "untested": 1,
+      "alive": 2,
+      "probes": 5
+    },
+    "tencent": {
+      "pass": 2,
+      "fail": 2,
+      "deferred": 0,
+      "untested": 1,
+      "alive": 2,
+      "probes": 5
+    },
+    "qwen": {
+      "pass": 4,
+      "fail": 2,
+      "deferred": 0,
+      "untested": 0,
+      "alive": 4,
+      "probes": 6
+    },
+    "dsh": {
+      "pass": 4,
+      "fail": 0,
+      "deferred": 0,
+      "untested": 0,
+      "alive": 4,
+      "probes": 4
+    },
+    "hermes": {
+      "pass": 1,
+      "fail": 1,
+      "deferred": 0,
+      "untested": 1,
+      "alive": 1,
+      "probes": 3
+    },
+    "autoclaw": {
+      "pass": 4,
+      "fail": 0,
+      "deferred": 0,
+      "untested": 0,
+      "alive": 4,
+      "probes": 4
+    },
+    "cline": {
+      "pass": 1,
+      "fail": 2,
+      "deferred": 0,
+      "untested": 0,
+      "alive": 1,
+      "probes": 3
+    },
+    "agy-pool": {
+      "pass": 0,
+      "fail": 0,
+      "deferred": 0,
+      "untested": 2,
+      "alive": 0,
+      "probes": 2
+    }
+  },
+  "perSourceTotal": 9
+}
