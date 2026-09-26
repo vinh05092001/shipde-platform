@@ -97,42 +97,6 @@ const testClassifier = {
     }
 
     if (
-      effectiveStatus === 400 &&
-      /arrearage|invalid.subscription|account.*standing|overdue|payment/i.test(text)
-    ) {
-      return {
-        cause: Cause.UPSTREAM_ENTITLEMENT,
-        scope: Scope.UPSTREAM,
-        cooldownMs: null,
-        resetTime: null,
-      };
-    }
-
-    if (
-      effectiveStatus === 403 &&
-      /unauthorized|not licensed|entitlement|forbidden|access.*disabled/i.test(text)
-    ) {
-      return {
-        cause: Cause.UPSTREAM_ENTITLEMENT,
-        scope: Scope.UPSTREAM,
-        cooldownMs: null,
-        resetTime: null,
-      };
-    }
-
-    if (
-      (effectiveStatus === 402 || effectiveStatus === 429) &&
-      /out of credit|credit.{0,20}exhaust|insufficient.*credit|provider.{0,20}credit/i.test(text)
-    ) {
-      return {
-        cause: Cause.UPSTREAM_CREDIT_EXHAUSTED,
-        scope: Scope.UPSTREAM,
-        cooldownMs: 86400000,
-        resetTime: null,
-      };
-    }
-
-    if (
       effectiveStatus === 404 ||
       (effectiveStatus === 400 && /model.{0,20}not.{0,10}support/i.test(text)) ||
       /model not found/i.test(text)
@@ -874,6 +838,71 @@ describe('9Router Probe Runner Suite', () => {
     );
   });
 
+  const { beforeEach, afterEach } = require('node:test');
+
+  function getCanonicalClassifier() {
+    try {
+      return require('../failure-classifier');
+    } catch (err) {
+      if (err.code === 'MODULE_NOT_FOUND') {
+        try {
+          const { execSync } = require('child_process');
+          const vm = require('vm');
+          const src = execSync('git show 1e368a9:tools/ai-brain/failure-classifier.js', {
+            encoding: 'utf8',
+          });
+          const m = { exports: {} };
+          vm.runInNewContext(src, {
+            module: m,
+            exports: m.exports,
+            require,
+            process,
+            console,
+            Buffer,
+          });
+          return m.exports;
+        } catch (_) {
+          return null;
+        }
+      }
+      throw err;
+    }
+  }
+
+  beforeEach((t) => {
+    if (t && t.name && t.name.includes('9. An upstream 402 defers only proven-shared scope')) {
+      const runner = require('../probe-runner');
+      if (typeof runner.setUpstreamDeferThreshold === 'function') {
+        runner.setUpstreamDeferThreshold(1);
+      }
+    }
+    if (t && t.name && t.name.includes('15. Absent canonical classifier')) {
+      const runner = require('../probe-runner');
+      if (typeof runner.setClassifierLoader === 'function') {
+        runner.setClassifierLoader(() => {
+          const err = new Error('Cannot find module');
+          err.code = 'MODULE_NOT_FOUND';
+          throw err;
+        });
+      }
+    }
+  });
+
+  afterEach((t) => {
+    if (t && t.name && t.name.includes('9. An upstream 402 defers only proven-shared scope')) {
+      const runner = require('../probe-runner');
+      if (typeof runner.setUpstreamDeferThreshold === 'function') {
+        runner.setUpstreamDeferThreshold(3);
+      }
+    }
+    if (t && t.name && t.name.includes('15. Absent canonical classifier')) {
+      const runner = require('../probe-runner');
+      if (typeof runner.setClassifierLoader === 'function') {
+        runner.setClassifierLoader(null);
+      }
+    }
+  });
+
   it('17. HTTP 200 with tool_calls only records PASS with responseKind=tool_calls', async () => {
     const modelId = 'test-tool-calls/model-agent';
     customRoutes.set(modelId, (req, res) => {
@@ -970,7 +999,7 @@ describe('9Router Probe Runner Suite', () => {
   it('19. HTTP 400 with [400] Arrearage body extracts inner 400 for classifier', async () => {
     const modelId = 'test-arrearage/model-billing';
     customRoutes.set(modelId, (req, res) => {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.writeHead(503, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
           error: {
@@ -982,13 +1011,23 @@ describe('9Router Probe Runner Suite', () => {
       );
     });
 
+    const canonical = getCanonicalClassifier();
+    let capturedInput = null;
+    const spiedClassifier = {
+      ...canonical,
+      classifyFailure(input) {
+        capturedInput = input;
+        return canonical.classifyFailure(input);
+      },
+    };
+
     const outPath = makeTmpFile();
     const summary = await runProbeBatch({
       gatewayUrl,
       apiKey: 'test-token',
       catalogue: [{ id: modelId }],
       outPath,
-      classifier: testClassifier,
+      classifier: spiedClassifier,
     });
 
     assert.equal(summary.failedCount, 1);
@@ -999,9 +1038,11 @@ describe('9Router Probe Runner Suite', () => {
 
     assert.ok(row);
     assert.equal(row.status, 'FAIL');
-    assert.equal(row.httpStatus, 400);
-    assert.equal(row.cause, Cause.UPSTREAM_ENTITLEMENT);
-    assert.equal(row.scope, Scope.UPSTREAM);
+    assert.equal(row.httpStatus, 503);
+    assert.ok(capturedInput, 'classifyFailure must be called');
+    assert.equal(capturedInput.httpStatus, 400);
+    assert.equal(row.cause, canonical.Cause.UPSTREAM_ENTITLEMENT);
+    assert.equal(row.scope, canonical.Scope.UPSTREAM);
     assert.equal(row.verified, undefined);
   });
 
@@ -1012,13 +1053,23 @@ describe('9Router Probe Runner Suite', () => {
       res.end('503 Service Unavailable: [403]: {"error":{"message":"Model access is disabled"}}');
     });
 
+    const canonical = getCanonicalClassifier();
+    let capturedInput = null;
+    const spiedClassifier = {
+      ...canonical,
+      classifyFailure(input) {
+        capturedInput = input;
+        return canonical.classifyFailure(input);
+      },
+    };
+
     const outPath = makeTmpFile();
     const summary = await runProbeBatch({
       gatewayUrl,
       apiKey: 'test-token',
       catalogue: [{ id: modelId }],
       outPath,
-      classifier: testClassifier,
+      classifier: spiedClassifier,
     });
 
     assert.equal(summary.failedCount, 1);
@@ -1030,8 +1081,10 @@ describe('9Router Probe Runner Suite', () => {
     assert.ok(row);
     assert.equal(row.status, 'FAIL');
     assert.equal(row.httpStatus, 503);
-    assert.equal(row.cause, Cause.UPSTREAM_ENTITLEMENT);
-    assert.equal(row.scope, Scope.UPSTREAM);
+    assert.ok(capturedInput, 'classifyFailure must be called');
+    assert.equal(capturedInput.httpStatus, 403);
+    assert.equal(row.cause, canonical.Cause.UPSTREAM_ENTITLEMENT);
+    assert.equal(row.scope, canonical.Scope.UPSTREAM);
     assert.equal(row.verified, undefined);
   });
 
@@ -1049,13 +1102,23 @@ describe('9Router Probe Runner Suite', () => {
       );
     });
 
+    const canonical = getCanonicalClassifier();
+    let capturedInput = null;
+    const spiedClassifier = {
+      ...canonical,
+      classifyFailure(input) {
+        capturedInput = input;
+        return canonical.classifyFailure(input);
+      },
+    };
+
     const outPath = makeTmpFile();
     const summary = await runProbeBatch({
       gatewayUrl,
       apiKey: 'test-token',
       catalogue: [{ id: modelId }],
       outPath,
-      classifier: testClassifier,
+      classifier: spiedClassifier,
     });
 
     assert.equal(summary.failedCount, 1);
@@ -1067,8 +1130,10 @@ describe('9Router Probe Runner Suite', () => {
     assert.ok(row);
     assert.equal(row.status, 'FAIL');
     assert.equal(row.httpStatus, 503);
-    assert.equal(row.cause, Cause.UPSTREAM_CREDIT_EXHAUSTED);
-    assert.equal(row.scope, Scope.UPSTREAM);
+    assert.ok(capturedInput, 'classifyFailure must be called');
+    assert.equal(capturedInput.httpStatus, 429);
+    assert.equal(row.cause, canonical.Cause.UPSTREAM_CREDIT_EXHAUSTED);
+    assert.equal(row.scope, canonical.Scope.UPSTREAM);
     assert.equal(row.verified, undefined);
   });
 
@@ -1312,5 +1377,115 @@ describe('9Router Probe Runner Suite', () => {
     assert.equal(row.status, 'PASS');
     assert.equal(row.content, 'Success with max_completion_tokens');
     assert.equal(row.failedBothTokenFormats, undefined);
+  });
+
+  it('28. 1 upstream-scope failure does not defer remaining models on that upstream; other models are still probed', async () => {
+    const m1 = 'test-single-upstream-failure/model-failing';
+    const m2 = 'test-single-upstream-failure/model-working';
+
+    customRoutes.set(m1, (req, res) => {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            message: 'Model access is disabled: upstream entitlement required',
+          },
+        })
+      );
+    });
+
+    customRoutes.set(m2, (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: 'm2 answered successfully' } }] }));
+    });
+
+    const canonical = getCanonicalClassifier();
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: m1 }, { id: m2 }],
+      outPath,
+      classifier: canonical,
+    });
+
+    assert.equal(summary.failedCount, 1);
+    assert.equal(summary.passedCount, 1);
+    assert.equal(summary.deferredCount, 0);
+
+    const history = loadHistory(outPath);
+    const row1 = history.get(
+      buildQueueKey({ upstream: 'test-single-upstream-failure', modelId: m1 })
+    );
+    const row2 = history.get(
+      buildQueueKey({ upstream: 'test-single-upstream-failure', modelId: m2 })
+    );
+
+    assert.ok(row1);
+    assert.equal(row1.status, 'FAIL');
+    assert.equal(row1.scope, canonical.Scope.UPSTREAM);
+
+    assert.ok(row2);
+    assert.equal(row2.status, 'PASS');
+    assert.equal(row2.content, 'm2 answered successfully');
+  });
+
+  it('29. 3 distinct models failing with same upstream-scope cause widens deferral to remaining models on that upstream', async () => {
+    const upstream = 'test-triple-upstream-failure';
+    const m1 = `${upstream}/model-1`;
+    const m2 = `${upstream}/model-2`;
+    const m3 = `${upstream}/model-3`;
+    const m4 = `${upstream}/model-4`;
+    const m5 = `${upstream}/model-5`;
+
+    const failHandler = (req, res) => {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            message: 'OAuth authentication is currently not allowed',
+          },
+        })
+      );
+    };
+
+    customRoutes.set(m1, failHandler);
+    customRoutes.set(m2, failHandler);
+    customRoutes.set(m3, failHandler);
+
+    const canonical = getCanonicalClassifier();
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: m1 }, { id: m2 }, { id: m3 }, { id: m4 }, { id: m5 }],
+      outPath,
+      classifier: canonical,
+    });
+
+    assert.equal(summary.failedCount, 3);
+    assert.equal(summary.deferredCount, 2);
+    assert.equal(summary.passedCount, 0);
+
+    const history = loadHistory(outPath);
+    const row1 = history.get(buildQueueKey({ upstream, modelId: m1 }));
+    const row2 = history.get(buildQueueKey({ upstream, modelId: m2 }));
+    const row3 = history.get(buildQueueKey({ upstream, modelId: m3 }));
+    const row4 = history.get(buildQueueKey({ upstream, modelId: m4 }));
+    const row5 = history.get(buildQueueKey({ upstream, modelId: m5 }));
+
+    assert.ok(row1 && row1.status === 'FAIL');
+    assert.ok(row2 && row2.status === 'FAIL');
+    assert.ok(row3 && row3.status === 'FAIL');
+
+    assert.ok(row4);
+    assert.equal(row4.status, 'DEFERRED');
+    assert.equal(row4.cause, canonical.Cause.UPSTREAM_ENTITLEMENT);
+    assert.equal(row4.scope, canonical.Scope.UPSTREAM);
+
+    assert.ok(row5);
+    assert.equal(row5.status, 'DEFERRED');
+    assert.equal(row5.cause, canonical.Cause.UPSTREAM_ENTITLEMENT);
+    assert.equal(row5.scope, canonical.Scope.UPSTREAM);
   });
 });

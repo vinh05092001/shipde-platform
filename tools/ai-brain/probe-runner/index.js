@@ -5,7 +5,13 @@
  */
 
 const path = require('path');
-const { runProbeBatch, appendRecord } = require('./runner');
+const {
+  runProbeBatch,
+  appendRecord,
+  setClassifierLoader,
+  setUpstreamDeferThreshold,
+  UPSTREAM_DEFER_THRESHOLD,
+} = require('./runner');
 const { runPreflight } = require('./preflight');
 const {
   buildQueueKey,
@@ -55,5 +61,8 @@ module.exports = {
   DEFAULT_READ_TIMEOUT_MS,
   AdaptiveWorkerPool,
   CANONICAL_CLASSIFIER_PATH,
+  setClassifierLoader,
+  setUpstreamDeferThreshold,
+  UPSTREAM_DEFER_THRESHOLD,
   ...(canonicalClassifier || {}),
 };

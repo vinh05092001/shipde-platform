@@ -146,16 +146,29 @@ function parseResponseContent(bodyText) {
 function extractInnerError(bodyText) {
   if (!bodyText || typeof bodyText !== 'string') return null;
 
-  // Pattern: [402]: {...} or [403]: {...} etc.
-  const bracketMatch = bodyText.match(/[\[(]\s*(401|402|403|404|410|429)\s*[\])]\s*:\s*(\{.+\})/);
+  let text = bodyText;
+  try {
+    const parsed = JSON.parse(bodyText);
+    if (parsed && parsed.error && typeof parsed.error.message === 'string') {
+      text = parsed.error.message;
+    } else if (parsed && typeof parsed.message === 'string') {
+      text = parsed.message;
+    }
+  } catch (_) {}
+
+  // Pattern: [400]: {...} or [402]: {...} etc.
+  const bracketMatch = text.match(/[\[(]\s*(400|401|402|403|404|410|429)\s*[\])]\s*:\s*(\{.*\})/s);
   if (bracketMatch) {
     const innerStatus = parseInt(bracketMatch[1], 10);
     let innerMessage = '';
     let innerCode = '';
     try {
       const innerJson = JSON.parse(bracketMatch[2]);
-      innerMessage = innerJson.error?.message || innerJson.error || JSON.stringify(innerJson);
-      innerCode = innerJson.error?.code || '';
+      innerMessage =
+        (typeof innerJson.error === 'object' ? innerJson.error?.message : innerJson.error) ||
+        innerJson.message ||
+        bracketMatch[2];
+      innerCode = innerJson.error?.code || innerJson.code || '';
     } catch (e) {
       innerMessage = bracketMatch[2];
     }
@@ -163,10 +176,17 @@ function extractInnerError(bodyText) {
   }
 
   // Pattern: "503 Service Unavailable: [402]: out of credit"
-  const plainMatch = bodyText.match(/[\[(]\s*(401|402|403|404|410|429)\s*[\])]\s*:\s*([^\n\{]+)/);
+  const plainMatch = text.match(/[\[(]\s*(400|401|402|403|404|410|429)\s*[\])]\s*:\s*([^\n\{]+)/);
   if (plainMatch) {
     const innerStatus = parseInt(plainMatch[1], 10);
     return { innerStatus, innerMessage: plainMatch[2].trim(), innerCode: '' };
+  }
+
+  // Bracketed status without colon: e.g. [400]
+  const simpleMatch = text.match(/[\[(]\s*(400|401|402|403|404|410|429)\s*[\])]/);
+  if (simpleMatch) {
+    const innerStatus = parseInt(simpleMatch[1], 10);
+    return { innerStatus, innerMessage: text.trim(), innerCode: '' };
   }
 
   return null;

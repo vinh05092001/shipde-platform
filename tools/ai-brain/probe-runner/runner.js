@@ -30,6 +30,16 @@ const { AdaptiveWorkerPool } = require('./pool');
 
 const CANONICAL_CLASSIFIER_PATH = path.resolve(__dirname, '..', 'failure-classifier.js');
 
+let _customClassifierLoader = null;
+function setClassifierLoader(fn) {
+  _customClassifierLoader = fn;
+}
+
+let _defaultUpstreamDeferThreshold = 3;
+function setUpstreamDeferThreshold(val) {
+  _defaultUpstreamDeferThreshold = val;
+}
+
 function resolveClassifier(options = {}) {
   const custom = options.classifier || options.failureClassifier;
   if (custom) {
@@ -47,6 +57,9 @@ function resolveClassifier(options = {}) {
   }
 
   try {
+    if (typeof _customClassifierLoader === 'function') {
+      return _customClassifierLoader(CANONICAL_CLASSIFIER_PATH);
+    }
     return require(CANONICAL_CLASSIFIER_PATH);
   } catch (err) {
     if (err.code === 'MODULE_NOT_FOUND' || !fs.existsSync(CANONICAL_CLASSIFIER_PATH)) {
@@ -196,6 +209,13 @@ async function runProbeBatch(options = {}) {
   // Upstreams that failed with proven hard cause and are deferred
   const deferredUpstreams = new Set();
 
+  const deferThreshold =
+    typeof options.upstreamDeferThreshold === 'number'
+      ? options.upstreamDeferThreshold
+      : _defaultUpstreamDeferThreshold;
+
+  const upstreamFailuresByCause = new Map();
+
   function markRemainingAsDeferred(upstream, classification) {
     const remaining = remainingByUpstream.get(upstream) || [];
     for (const item of remaining) {
@@ -226,6 +246,37 @@ async function runProbeBatch(options = {}) {
       history.set(item.key, deferredRow);
     }
     remainingByUpstream.set(upstream, []);
+
+    for (let i = activeQueue.length - 1; i >= 0; i--) {
+      if (activeQueue[i].upstream === upstream) {
+        const item = activeQueue.splice(i, 1)[0];
+        const deferredRow = {
+          key: item.key,
+          harness: item.harness,
+          accessPath: item.accessPath,
+          gateway: item.gateway,
+          upstream: item.upstream,
+          account: item.account,
+          quotaScope: item.quotaScope,
+          modelId: item.modelId,
+          status: 'DEFERRED',
+          ts: new Date().toISOString(),
+          latencyMs: null,
+          cause: classification.cause,
+          scope: classification.scope,
+          cooldownMs: classification.cooldownMs,
+          cooldownExpiresAt: classification.resetTime
+            ? new Date(classification.resetTime).toISOString()
+            : classification.cooldownMs
+              ? new Date(Date.now() + classification.cooldownMs).toISOString()
+              : null,
+          reason: `Deferred due to upstream failure: ${classification.cause}`,
+        };
+        appendRecord(outPath, deferredRow);
+        summary.deferredCount++;
+        history.set(item.key, deferredRow);
+      }
+    }
   }
 
   return new Promise((resolve) => {
@@ -245,6 +296,9 @@ async function runProbeBatch(options = {}) {
         pool.canStartNewRequest()
       ) {
         const item = activeQueue.shift();
+        if (deferredUpstreams.has(item.upstream)) {
+          continue;
+        }
         executeTask(item);
       }
       maybeDone();
@@ -394,8 +448,10 @@ async function runProbeBatch(options = {}) {
       } else {
         // Model failed with a real error
         const classification = classifyFailure({
-          httpStatus: outcome.httpStatus,
-          body: outcome.body || outcome.error || '',
+          httpStatus: outcome.innerError?.innerStatus ?? outcome.httpStatus,
+          body: outcome.innerError?.innerMessage
+            ? `${outcome.innerError.innerMessage}\n${outcome.body || outcome.error || ''}`
+            : outcome.body || outcome.error || '',
           stderr: outcome.error || '',
         });
 
@@ -431,23 +487,33 @@ async function runProbeBatch(options = {}) {
         summary.failedCount++;
         history.set(item.key, failRow);
 
-        // Check if this was a representative model failing
-        if (isRepresentative) {
-          const isHardCause =
-            HARD_CAUSES.has(classification.cause) ||
-            outcome.httpStatus === 401 ||
-            outcome.httpStatus === 402 ||
-            outcome.httpStatus === 403;
-          const isProvenSharedScope = classification.scope === (Scope.UPSTREAM || 'upstream');
+        const isUpstreamScope = classification.scope === (Scope.UPSTREAM || 'upstream');
+        let shouldDeferUpstream = false;
 
-          if (isHardCause && isProvenSharedScope) {
-            // Defer all remaining models in this proven shared scope
-            deferredUpstreams.add(upstream);
-            markRemainingAsDeferred(upstream, classification);
-          } else {
-            // Not a proven shared hard cause (e.g. 404 one model only, empty content, etc.)
-            // Only this failing model failed!
-            // Try promoting the next candidate from this upstream as representative
+        if (isUpstreamScope) {
+          if (!upstreamFailuresByCause.has(upstream)) {
+            upstreamFailuresByCause.set(upstream, new Map());
+          }
+          const causeMap = upstreamFailuresByCause.get(upstream);
+          if (!causeMap.has(classification.cause)) {
+            causeMap.set(classification.cause, new Set());
+          }
+          const failedModels = causeMap.get(classification.cause);
+          failedModels.add(item.modelId);
+
+          if (failedModels.size >= deferThreshold) {
+            shouldDeferUpstream = true;
+          }
+        }
+
+        if (shouldDeferUpstream) {
+          // Defer all remaining models in this proven shared scope
+          deferredUpstreams.add(upstream);
+          markRemainingAsDeferred(upstream, classification);
+        } else {
+          // If this upstream has not expanded yet (representative probe phase),
+          // keep probing the others by promoting the next candidate!
+          if (!expandedUpstreams.has(upstream) && !deferredUpstreams.has(upstream)) {
             const remaining = remainingByUpstream.get(upstream) || [];
             if (remaining.length > 0) {
               const nextRep = remaining.shift();
@@ -470,4 +536,7 @@ module.exports = {
   appendRecord,
   resolveClassifier,
   CANONICAL_CLASSIFIER_PATH,
+  setClassifierLoader,
+  setUpstreamDeferThreshold,
+  UPSTREAM_DEFER_THRESHOLD: 3,
 };
