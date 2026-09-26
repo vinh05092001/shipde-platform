@@ -1,101 +1,223 @@
 'use strict';
 /**
- * Small helper invoked by the hermes harness `inspect` probe.
- * It receives a session identifier (the workspace directory) as its first
- * argument, reads the previous progress snapshot from a temporary file, then
- * gathers the current signals and emits a JSON object.
+ * Progress probe helper (TASK-AI-50 slice C1).
  *
- * The snapshot format matches what `executor.js` expects:
- *   {
- *     progress: 'alive'|'stalled'|'unknown',
- *     error: <string|undefined>,
- *     diffChanged: <bool>,
- *     commitChanged: <bool>,
- *     testRan: <bool>,
- *     checkpointWritten: <bool>,
- *     logGrew: <bool>
- *   }
+ * Gathers progress signals from a workspace directory:
+ *   1. Worktree diff vs HEAD (git diff / status)
+ *   2. Commit changed (git rev-parse HEAD vs stored headSha)
+ *   3. Test ran (testResult.json mtime or flags)
+ *   4. Checkpoint written (.checkpoint mtime)
+ *   5. Log grew (writer.log size)
+ *   6. Last error (.lastError)
+ *
+ * Can be called as a module function `probeProgress(sessionOrDir, options)`
+ * or invoked as a standalone CLI (`node progressProbe.js <session>`).
  */
+
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { assessProgress } = require('./progress');
+const { spawnSync } = require('child_process');
+const { evaluateProgress, DEFAULT_WINDOW_MS } = require('./progress');
 
-function readPrev(tmpPath) {
-  try { return JSON.parse(fs.readFileSync(tmpPath, 'utf8')); } catch (_) { return null; }
+function getTmpPath(workspace) {
+  const safeName = String(workspace || '').replace(/[\/\\:]/g, '_');
+  return path.join(os.tmpdir(), 'shipde_progress_' + safeName + '.json');
 }
 
-function gatherSignals(workspace) {
-  // 1. Diff vs HEAD – simple git diff --quiet; if non‑zero there is change.
-  let diffChanged = false;
-  try { const res = require('child_process').spawnSync('git', ['diff', '--quiet'], { cwd: workspace });
-    diffChanged = res.status !== 0;
-  } catch (_) {}
-
-  // 2. Commit changed – compare HEAD SHA now with a stored one.
-  let commitChanged = false;
-  const commitFile = path.join(workspace, '.lastCommit');
+function readPrev(tmpPath) {
   try {
-    const current = require('child_process').execSync('git rev-parse HEAD', { cwd: workspace }).toString().trim();
-    const prev = fs.readFileSync(commitFile, 'utf8').trim();
-    commitChanged = current !== prev;
-    fs.writeFileSync(commitFile, current);
+    return JSON.parse(fs.readFileSync(tmpPath, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function gatherSignals(workspace, prev) {
+  const dirExists = fs.existsSync(workspace);
+  if (!dirExists) {
+    return {
+      measurable: false,
+      diffChanged: false,
+      commitChanged: false,
+      testRan: false,
+      checkpointWritten: false,
+      logGrew: false,
+      error: undefined,
+    };
+  }
+
+  let measurable = false;
+
+  // 1. Diff vs HEAD: git status --porcelain
+  let diffChanged = false;
+  try {
+    const res = spawnSync('git', ['status', '--porcelain'], {
+      cwd: workspace,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5000,
+    });
+    if (res.status === 0) {
+      measurable = true;
+      diffChanged = Boolean(res.stdout && res.stdout.trim().length > 0);
+    }
   } catch (_) {}
 
-  // 3. Test ran – look for a recent test result file (placeholder).
+  // 2. Commit changed: git rev-parse HEAD
+  let commitChanged = false;
+  let headSha = null;
+  try {
+    const res = spawnSync('git', ['rev-parse', 'HEAD'], {
+      cwd: workspace,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5000,
+    });
+    if (res.status === 0 && res.stdout) {
+      headSha = res.stdout.trim();
+      measurable = true;
+      if (prev && prev.headSha) {
+        commitChanged = headSha !== prev.headSha;
+      }
+    }
+  } catch (_) {}
+
+  // 3. Test ran: testResult.json
   let testRan = false;
+  let testMtime = null;
   const testFile = path.join(workspace, 'testResult.json');
-  if (fs.existsSync(testFile)) {
-    try { const data = JSON.parse(fs.readFileSync(testFile, 'utf8'));
-      testRan = !!data.ran;
-    } catch (_) {}
-  }
+  try {
+    if (fs.existsSync(testFile)) {
+      measurable = true;
+      testMtime = fs.statSync(testFile).mtimeMs;
+      if (prev && prev.testMtime !== undefined) {
+        testRan = testMtime > prev.testMtime;
+      } else {
+        const data = JSON.parse(fs.readFileSync(testFile, 'utf8'));
+        testRan = Boolean(data && data.ran);
+      }
+    }
+  } catch (_) {}
 
-  // 4. Checkpoint written – a timestamp file updated by the writer (placeholder).
+  // 4. Checkpoint written: .checkpoint
   let checkpointWritten = false;
+  let checkpointMtime = null;
   const cpFile = path.join(workspace, '.checkpoint');
-  if (fs.existsSync(cpFile)) {
-    try { const mtime = fs.statSync(cpFile).mtimeMs;
-      const prevM = parseFloat(fs.readFileSync(cpFile + '.prev', 'utf8')) || 0;
-      checkpointWritten = mtime > prevM;
-      fs.writeFileSync(cpFile + '.prev', String(mtime));
-    } catch (_) {}
-  }
+  try {
+    if (fs.existsSync(cpFile)) {
+      measurable = true;
+      checkpointMtime = fs.statSync(cpFile).mtimeMs;
+      if (prev && prev.checkpointMtime !== undefined) {
+        checkpointWritten = checkpointMtime > prev.checkpointMtime;
+      }
+    }
+  } catch (_) {}
 
-  // 5. Log grew – count lines in the writer log.
+  // 5. Log grew: writer.log
   let logGrew = false;
+  let logSize = null;
   const logFile = path.join(workspace, 'writer.log');
-  const sizeFile = path.join(workspace, '.logSize');
-  if (fs.existsSync(logFile)) {
-    try {
-      const cur = fs.statSync(logFile).size;
-      const prev = parseInt(fs.readFileSync(sizeFile, 'utf8'), 10) || 0;
-      logGrew = cur > prev;
-      fs.writeFileSync(sizeFile, String(cur));
-    } catch (_) {}
-  }
+  try {
+    if (fs.existsSync(logFile)) {
+      measurable = true;
+      logSize = fs.statSync(logFile).size;
+      if (prev && prev.logSize !== undefined) {
+        logGrew = logSize > prev.logSize;
+      }
+    }
+  } catch (_) {}
 
-  // 6. Last error – read from a file the executor writes when refusing.
+  // 6. Last error: .lastError
   let error = undefined;
   const errFile = path.join(workspace, '.lastError');
-  if (fs.existsSync(errFile)) {
-    try { error = fs.readFileSync(errFile, 'utf8').trim(); } catch (_) {}
+  try {
+    if (fs.existsSync(errFile)) {
+      measurable = true;
+      error = fs.readFileSync(errFile, 'utf8').trim() || undefined;
+    }
+  } catch (_) {}
+
+  return {
+    measurable,
+    diffChanged,
+    commitChanged,
+    testRan,
+    checkpointWritten,
+    logGrew,
+    error,
+    headSha,
+    testMtime,
+    checkpointMtime,
+    logSize,
+  };
+}
+
+/**
+ * Probes progress for a session or workspace directory.
+ *
+ * @param {string} sessionOrDir - Session id (e.g. 'dir:C:/w') or directory path.
+ * @param {Object} [options] - Options (now, windowMs, prev, signals, persist, storePath).
+ * @returns {Object} Progress snapshot with progress verdict and cause.
+ */
+function probeProgress(sessionOrDir, options) {
+  const opts = options || {};
+  const session = String(sessionOrDir || '');
+  const workspace = session.startsWith('dir:') ? session.slice(4) : session;
+  const tmpPath = opts.storePath || getTmpPath(workspace);
+  const prev = opts.prev !== undefined ? opts.prev : readPrev(tmpPath);
+
+  const signals = opts.signals ? Object.assign({}, opts.signals) : gatherSignals(workspace, prev);
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const windowMs = Number.isFinite(opts.windowMs) ? opts.windowMs : DEFAULT_WINDOW_MS;
+
+  const curr = {
+    timestamp: now,
+    windowMs,
+    diffChanged: signals.diffChanged,
+    commitChanged: signals.commitChanged,
+    testRan: signals.testRan,
+    checkpointWritten: signals.checkpointWritten,
+    logGrew: signals.logGrew,
+    error: signals.error,
+    headSha: signals.headSha,
+    testMtime: signals.testMtime,
+    checkpointMtime: signals.checkpointMtime,
+    logSize: signals.logSize,
+    measurable: signals.measurable,
+  };
+
+  const evalRes = evaluateProgress(prev, curr, { now, windowMs });
+  const verdictLower = evalRes.verdict.toLowerCase();
+
+  const out = {
+    ...curr,
+    progress: verdictLower,
+    verdict: evalRes.verdict,
+    cause: evalRes.cause,
+    lastProgressAt: evalRes.lastProgressAt,
+  };
+
+  if (opts.persist !== false) {
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(out), 'utf8');
+    } catch (_) {}
   }
 
-  return { diffChanged, commitChanged, testRan, checkpointWritten, logGrew, error };
+  return out;
 }
 
 function main() {
   const session = process.argv[2] || '';
-  const workspace = session.replace(/^dir:/, '');
-  const tmpPath = path.join(os.tmpdir(), 'progress_' + workspace.replace(/[\/]/g, '_') + '.json');
-  const prev = readPrev(tmpPath);
-  const curr = gatherSignals(workspace);
-  const verdict = assessProgress(prev, curr);
-  const out = { ...curr, progress: verdict };
-  // persist for next call
-  try { fs.writeFileSync(tmpPath, JSON.stringify(out), 'utf8'); } catch (_) {}
+  const out = probeProgress(session);
   console.log(JSON.stringify(out));
 }
 
 if (require.main === module) main();
+
+module.exports = {
+  gatherSignals,
+  probeProgress,
+  readPrev,
+  getTmpPath,
+};

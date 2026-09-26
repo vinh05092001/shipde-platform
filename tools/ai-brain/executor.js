@@ -34,6 +34,8 @@ const { REVIEW_ROLES, IMPLEMENTATION_ROLES } = require('./scheduler');
 const { offeringId: toOfferingId } = require('./offerings');
 const { getHarness, runHarness, parseLastJson, contextRefusal } = require('./harness');
 const { loadSources, dispatchRoute, qualifyModel } = require('./sources');
+const { assessProgress, evaluateProgress, DEFAULT_WINDOW_MS } = require('./progress');
+const { probeProgress } = require('./progressProbe');
 const decisions = require('./decisions');
 
 const Outcome = Object.freeze({
@@ -123,7 +125,7 @@ function detailOf(reason, res) {
 function inspectVerdict(res) {
   if (!res) return 'unknown';
   const stdout = String(res.stdout || '');
-  // Try to parse JSON if present – progress signals are encoded here.
+  // Try to parse JSON if present – progress signals or adapter output are encoded here.
   try {
     const parsed = JSON.parse(stdout);
     if (parsed && typeof parsed === 'object') {
@@ -135,6 +137,19 @@ function inspectVerdict(res) {
       ) {
         return 'gone';
       }
+      // Explicit progress verdicts can be provided.
+      const prog = String(parsed.progress || parsed.verdict || '').toLowerCase();
+      if (prog === 'stalled') {
+        if (typeof res === 'object') {
+          res.cause =
+            parsed.cause ||
+            (typeof parsed.error === 'string'
+              ? parsed.error
+              : parsed.error && parsed.error.message);
+        }
+        return 'stalled';
+      }
+      if (prog === 'unknown') return 'unknown';
       // Forward‑motion flags indicate the session is alive.
       const forwardFlags = [
         'diffChanged',
@@ -147,11 +162,10 @@ function inspectVerdict(res) {
         if (parsed[f]) return 'alive';
       }
       // If the JSON has any other keys (e.g., a session record), treat as alive.
-      const otherKeys = Object.keys(parsed).filter((k) => !['progress', 'error'].includes(k));
+      const otherKeys = Object.keys(parsed).filter(
+        (k) => !['progress', 'verdict', 'error', 'cause'].includes(k)
+      );
       if (otherKeys.length > 0) return 'alive';
-      // Explicit progress verdicts can be provided.
-      if (parsed.progress === 'stalled') return 'stalled';
-      if (parsed.progress === 'unknown') return 'unknown';
       // No forward signal and no other data – unknown.
       return 'unknown';
     }
@@ -345,33 +359,46 @@ function executePlan(plan, options) {
           probeRes = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
         }
       }
-        const progressSnap = (() => {
-          try {
-            return JSON.parse(probeRes.stdout || '{}');
-          } catch (_) {
-            return {};
+      let verdict = inspectVerdict(probeRes);
+      let stalledCause = (probeRes && (probeRes.cause || probeRes.error)) || null;
+
+      // When the process probe answers alive, check progress signals alongside inspect
+      if (verdict === 'alive') {
+        const probeFn =
+          typeof opts.progressProbe === 'function'
+            ? opts.progressProbe
+            : typeof opts.checkProgress === 'function'
+              ? opts.checkProgress
+              : null;
+        if (probeFn) {
+          const progRes = probeFn(existing.sessionId, opts);
+          const progVerdict =
+            progRes && String(progRes.progress || progRes.verdict || '').toLowerCase();
+          if (progVerdict === 'stalled') {
+            verdict = 'stalled';
+            stalledCause = progRes.cause || progRes.error || 'session stalled';
+          } else if (progVerdict === 'unknown' && progRes && progRes.unmeasurable) {
+            verdict = 'unknown';
           }
-        })();
-        const verdict = inspectVerdict({
-          exitCode: probeRes.exitCode,
-          stdout: JSON.stringify({
-            progress: progressSnap.progress,
-            error: progressSnap.error,
-            // include other snapshot fields if present
-            ...progressSnap,
-          }),
-          stderr: probeRes.stderr,
-        });
-        if (verdict === 'gone') {
-          sessionGone = true;
-        } else if (verdict === 'stalled' || verdict === 'unknown') {
-          const cause = progressSnap.error || 'unknown';
-          const detailMsg = verdict === 'stalled'
-            ? `WRITER_SESSION_STALLED: ${cause}`
-            : `SESSION_STATE_UNKNOWN: ${cause}`;
-          refuse(detailMsg);
-          continue;
         }
+      }
+
+      if (verdict === 'gone') {
+        sessionGone = true;
+      } else if (verdict === 'stalled') {
+        const cause = stalledCause || 'session made no progress across window';
+        refuse('WRITER_SESSION_STALLED: ' + cause);
+        continue;
+      } else if (verdict === 'unknown') {
+        refuse(
+          'SESSION_STATE_UNKNOWN: probe of session ' +
+            existing.sessionId +
+            ' failed (exit ' +
+            probeRes.exitCode +
+            '); release the claim by hand with dispatch --close if it is truly gone'
+        );
+        continue;
+      }
     }
 
     if (resuming && sessionGone) {
@@ -512,4 +539,8 @@ module.exports = {
   resumePrompt,
   inspectVerdict,
   Outcome,
+  assessProgress,
+  evaluateProgress,
+  DEFAULT_WINDOW_MS,
+  probeProgress,
 };

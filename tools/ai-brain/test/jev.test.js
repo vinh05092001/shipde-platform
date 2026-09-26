@@ -332,7 +332,7 @@ describe('hermes harness', () => {
     // exit 0 with output means the CLI that would resume the session answers.
     const probe = hermes.inspect('dir:C:/w');
     assert.ok(Array.isArray(probe), 'inspect must return argv the runner can execute');
-    assert.equal(probe[0], 'node');
+    assert.equal(probe[0], 'sessions');
   });
 
   test('a probe runs to completion for a detached adapter when sync is set', () => {
