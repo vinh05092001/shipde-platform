@@ -578,134 +578,560 @@ function quotaCommand(args) {
   console.log('');
 }
 
-/**
- * Plans with planDispatch and hands the plan to the executor (TASK-AI-24).
- * Dry run unless --execute is given; the plan comes from --plan <file> or is
- * built from READY_FOR_AUTHOR register rows and the account registry.
- */
-function dispatchCommand(args) {
-  const fs = require('fs');
-  const { executePlan } = require('./executor');
-  const rootDir = args.root || process.cwd();
-  const execute = args.execute === true;
+function assembleCandidates(discoveryCat, offerings, registry, accounts, injectedCandidates) {
+  if (Array.isArray(injectedCandidates)) {
+    return injectedCandidates.map((c) => Object.assign({}, c));
+  }
 
-  // Releasing a claim is its own operation, not a side effect of planning: a
-  // session that was stopped, or that died with its daemon, otherwise reads as
-  // an open writer for ever and its work item can never be picked up again.
+  const candidatesApi = require('./candidates');
+  const sourcesApi = require('./sources');
+
+  const offeringMap = new Map();
+  for (const off of offerings || []) {
+    const k1 = `${off.accountId || '*'}::${off.model}`;
+    offeringMap.set(k1, off);
+    if (!offeringMap.has(off.model)) {
+      offeringMap.set(off.model, off);
+    }
+  }
+
+  const result = [];
+  const seenKeys = new Set();
+
+  // 1. Discovery candidates
+  const discCands = (discoveryCat && discoveryCat.candidates) || [];
+  for (const dc of discCands) {
+    const accountId = dc.accountId || dc.account || '*';
+    const modelId = dc.modelId || dc.model;
+    const c = {
+      ...dc,
+      accountId,
+      quotaScope: dc.quotaScope || (accountId !== '*' ? accountId : dc.upstream || ''),
+      modelId,
+    };
+    const off = offeringMap.get(`${accountId}::${modelId}`) || offeringMap.get(modelId);
+    if (off) {
+      if (c.qualifiedRoles === undefined && off.qualifiedRoles !== undefined) {
+        c.qualifiedRoles = off.qualifiedRoles;
+      }
+      if (c.cost === undefined && off.cost !== undefined) c.cost = off.cost;
+      if (c.tier === undefined && off.tier !== undefined) c.tier = off.tier;
+      if (c.quality === undefined && off.quality !== undefined) c.quality = off.quality;
+      if (c.capabilities === undefined && off.capabilities !== undefined) {
+        c.capabilities = off.capabilities;
+      }
+    }
+    const key = candidatesApi.candidateKey(c);
+    c.key = key;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      result.push(c);
+    }
+  }
+
+  // 2. Offerings candidates
+  for (const off of offerings || []) {
+    const route = sourcesApi.dispatchRoute(off.provider, registry);
+    const source =
+      registry &&
+      registry.sources &&
+      registry.sources.find((s) => s.id === off.provider || s.id === off.accountId);
+    const harness =
+      off.harness || (route && route.harness) || (source && source.harness) || 'paseo';
+    let accessPath = off.accessPath || (source && (source.accessPath || source.endpoint));
+    if (!accessPath) {
+      accessPath = route && route.harness === 'paseo' ? 'http://127.0.0.1:20128/v1' : 'cli';
+    }
+    const gateway =
+      off.gateway ||
+      (source && source.reachedVia) ||
+      (source && source.kind === 'router' ? source.id : '9router');
+    const parsed = candidatesApi.parsePrefix(off.model);
+    const upstream =
+      off.upstream || (parsed && parsed.upstream) || off.provider || (source && source.id) || '';
+    const accountId = off.accountId || '*';
+    const quotaScope = off.quotaScope || (accountId !== '*' ? accountId : upstream);
+    const modelId = off.model;
+
+    const c = {
+      harness,
+      accessPath,
+      gateway,
+      upstream,
+      accountId,
+      quotaScope,
+      modelId,
+      qualifiedRoles: off.qualifiedRoles,
+      cost: off.cost,
+      capabilities: off.capabilities,
+      tier: off.tier,
+      quality: off.quality,
+      source: off.provider,
+    };
+    const key = candidatesApi.candidateKey(c);
+    c.key = key;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      result.push(c);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Master-queue item 5: dispatch wiring.
+ * Chooses candidate through the brain (discovery + offerings, evidence/cooldowns,
+ * quota/reservations/load, ranked by ranking.js).
+ */
+function dispatchCommand(args, deps = {}) {
+  const fs = require('fs');
+  const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
+  const execute = args.execute === true;
+  const dryRunFlag = Boolean(args['dry-run'] || args.dryRun);
+  const log = deps.log || console.log;
+  const error = deps.error || console.error;
+  const exit = deps.exit || process.exit;
+
+  // Releasing a claim is its own operation:
   const close = args.close || args.complete || args.fail;
   if (typeof close === 'string') {
     const decisions = require('./decisions');
     const outcome = args.fail ? 'failed' : 'completed';
     const released = decisions.closeWriter(close, outcome, {
-      dir: args['decision-dir'] || undefined,
+      dir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
       detail: typeof args.detail === 'string' ? args.detail : null,
     });
     if (!released) {
-      console.log('No open writer for ' + close + '; nothing to release.');
-      return;
+      log('No open writer for ' + close + '; nothing to release.');
+      return { exitCode: 0, released: false };
     }
-    console.log(
+    log(
       'Released ' + close + ' (' + outcome + ', session ' + (released.sessionId || 'unknown') + ')'
     );
-    return;
-  }
-  if (execute && (args['dry-run'] || args.dryRun)) {
-    console.error('Dispatch refused: --execute and --dry-run are exclusive.');
-    process.exit(2);
+    return { exitCode: 0, released: true };
   }
 
-  let plan;
+  if (execute && dryRunFlag) {
+    error('Dispatch refused: --execute and --dry-run are exclusive.');
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  const isDryRun = dryRunFlag || !execute;
+
+  // Pre-computed plan file fallback
   if (typeof args.plan === 'string') {
-    plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+    const { executePlan } = require('./executor');
+    const plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+    const result = executePlan(plan, {
+      dryRun: isDryRun,
+      project: args.project || 'shipde-platform',
+      cwd: args.cwd || (deps && deps.cwd) || undefined,
+      base: args.base || (deps && deps.base) || undefined,
+      decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
+      run: deps && deps.run,
+    });
+    const s = result.summary;
+    if (args.json) {
+      log(JSON.stringify({ plan, result }, null, 2));
+      exit(s.failed > 0 ? 1 : 0);
+      return { exitCode: s.failed > 0 ? 1 : 0, plan, result };
+    }
+    if (result.dryRun) {
+      log('Dispatch dry run: ' + (plan.assignments || []).length + ' planned, 0 launched');
+      exit(0);
+      return { exitCode: 0, result };
+    }
+    exit(s.failed > 0 ? 1 : 0);
+    return { exitCode: s.failed > 0 ? 1 : 0, result };
+  }
+
+  // Work items resolution
+  let items = [];
+  const targetItemId = args.item || args['work-item'] || (deps && deps.workItemId);
+  if (deps && deps.items) {
+    items = deps.items;
+  } else if (targetItemId) {
+    items = [
+      {
+        workItemId: targetItemId,
+        role: args.role || (deps && deps.role) || 'author.foundation',
+        branch:
+          args.branch || (deps && deps.branch) || 'feat/' + String(targetItemId).toLowerCase(),
+        riskDomains: [],
+        priority: 0,
+      },
+    ];
   } else {
-    const { planDispatch } = require('./scheduler');
-    const { listAccounts } = require('./accounts');
     const csvPath =
       args.csv ||
       path.join(
         rootDir,
-        'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+        'docs',
+        'product-spec',
+        'docs',
+        '10-ai-collaboration',
+        'FEATURE-DELIVERY-REGISTER.csv'
       );
     if (!fs.existsSync(csvPath)) {
-      console.error('SOURCE_MISSING: ' + csvPath);
-      process.exit(2);
+      if (args.csv) {
+        error('SOURCE_MISSING: ' + csvPath);
+        exit(2);
+        return { exitCode: 2 };
+      }
+      items = [];
+    } else {
+      const register = loadRegister(csvPath, null, rootDir);
+      items = ((register.data && register.data.items) || [])
+        .filter((row) => row.status === 'READY_FOR_AUTHOR')
+        .map((row) => ({
+          workItemId: row.work_item_id,
+          role: 'author.foundation',
+          branch: row.branch || null,
+          riskDomains: [],
+          priority: 0,
+        }));
     }
-    const register = loadRegister(csvPath, null, rootDir);
-    const items = ((register.data && register.data.items) || [])
-      .filter((row) => row.status === 'READY_FOR_AUTHOR')
-      .map((row) => ({
-        workItemId: row.work_item_id,
-        role: 'author.foundation',
-        branch: row.branch || null,
-        riskDomains: [],
-        priority: 0,
-      }));
-    // TASK-AI-49: the machine's free memory is the second ceiling, and the
-    // planner needs it stated rather than assumed. Omitting --free-mb lets it
-    // read the host, which is the right default for an unattended run.
-    const resources = {};
-    if (args['free-mb'] !== undefined) resources.freeMb = Number(args['free-mb']);
-    if (args['per-agent-mb'] !== undefined) resources.perAgentMb = Number(args['per-agent-mb']);
-    plan = planDispatch(items, listAccounts() || [], {
-      resources,
-      governedDecision: args['governed-decision'] || args.governedDecision || null,
-      limits: args['max-impl'] ? { maxImplementationAgents: Number(args['max-impl']) } : undefined,
-    });
   }
 
-  const result = executePlan(plan, {
-    dryRun: !execute,
-    project: args.project || 'shipde-platform',
-    cwd: args.cwd || undefined,
-    base: args.base || undefined,
-    decisionDir: args['decision-dir'] || undefined,
-  });
-  const deferred = plan.deferred || [];
-  const planned = (plan.assignments || []).length;
+  if (items.length === 0 && !deps.candidates && !args.item) {
+    log('Dispatch: 0 assignments (0 deferred)');
+    exit(0);
+    return { exitCode: 0, dispatched: 0 };
+  }
 
-  if (args.json) {
-    console.log(JSON.stringify({ plan, result }, null, 2));
-    process.exit(result.summary.failed > 0 ? 1 : 0);
-  } else {
-    if (planned === 0) {
-      console.log('Dispatch: 0 assignments (' + deferred.length + ' deferred)');
-      for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
-      process.exit(0);
+  const item = items[0] || {
+    workItemId: targetItemId || 'TASK-DISPATCH',
+    role: args.role || (deps && deps.role) || 'author.foundation',
+    branch: args.branch || (deps && deps.branch) || 'feat/dispatch-work',
+  };
+
+  const sourcesApi = require('./sources');
+  const evidence = require('./evidence');
+  const ranking = require('./ranking');
+  const candidatesApi = require('./candidates');
+  const quotaStore = require('./quota-store');
+  const { expandOfferings } = require('./offerings');
+  const { listAccounts } = require('./accounts');
+  const { readDiscoveryCatalogue } = require('./discovery/read');
+  const { getHarness, runHarness } = require('./harness');
+  const { workerName, defaultPrompt } = require('./executor');
+
+  const registry = (deps && deps.registry) || sourcesApi.loadSources();
+  const evidenceDir =
+    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+  const decisionDir = (deps && deps.decisionDir) || args['decision-dir'] || undefined;
+
+  // 1. Candidates from discovery + offerings
+  let discCat = deps && deps.discoveryCatalogue;
+  if (!discCat && (!deps || !deps.candidates)) {
+    const discDir =
+      (deps && deps.discoveryDataDir) ||
+      args['discovery-dir'] ||
+      path.join(__dirname, 'data', 'discovery');
+    try {
+      discCat = readDiscoveryCatalogue({ dataDir: discDir });
+    } catch {
+      discCat = { candidates: [] };
     }
-    for (const r of result.records) {
-      console.log(
-        '  ' +
-          r.outcome +
-          '  ' +
-          r.workItemId +
-          '  ' +
-          r.role +
-          '  ' +
-          (r.offeringId || '-') +
-          (r.sessionId ? '  session ' + r.sessionId : '') +
-          (r.detail ? '  ' + r.detail : '')
-      );
-      if (r.args) console.log('    args ' + JSON.stringify(r.args));
+  }
+
+  const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
+  let offs = deps && deps.offerings;
+  if (!offs && (!deps || !deps.candidates)) {
+    try {
+      offs = expandOfferings(accounts);
+    } catch {
+      offs = [];
     }
-    for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
   }
-  const s = result.summary;
-  if (result.dryRun) {
-    console.log('Dispatch dry run: ' + planned + ' planned, 0 launched');
-    process.exit(0);
-  }
-  console.log(
-    'Dispatch executed: ' +
-      s.launched +
-      ' launched, ' +
-      (s.resumed || 0) +
-      ' resumed, ' +
-      s.refused +
-      ' refused, ' +
-      s.failed +
-      ' failed'
+
+  const candidateList = assembleCandidates(
+    discCat,
+    offs,
+    registry,
+    accounts,
+    deps && deps.candidates
   );
-  process.exit(s.failed > 0 ? 1 : 0);
+
+  // Filter by explicit pins (--model, --account, --harness)
+  const pinModel = args.model || (deps && deps.model);
+  const pinAccount = args.account || (deps && deps.account);
+  const pinHarness = args.harness || (deps && deps.harness);
+  const isPinned = Boolean(pinModel || pinAccount || pinHarness);
+
+  let eligibleCandidates = candidateList.slice();
+  if (isPinned) {
+    if (pinModel) {
+      eligibleCandidates = eligibleCandidates.filter(
+        (c) => c.modelId === pinModel || c.model === pinModel || c.base === pinModel
+      );
+    }
+    if (pinAccount) {
+      eligibleCandidates = eligibleCandidates.filter(
+        (c) => c.accountId === pinAccount || c.account === pinAccount
+      );
+    }
+    if (pinHarness) {
+      eligibleCandidates = eligibleCandidates.filter((c) => c.harness === pinHarness);
+    }
+  }
+
+  // Handle dry-run
+  if (isDryRun) {
+    const now = (deps && deps.now) || Date.now();
+    const evidenceData = evidence.loadEvidence(evidenceDir);
+    const annotated = candidatesApi.annotateCandidates(
+      eligibleCandidates.map((c) => Object.assign({}, c)),
+      evidenceData,
+      { now }
+    );
+    const rankingContext = {
+      workItemId: item.workItemId,
+      role: item.role,
+      kind: item.role,
+      registry,
+      evidenceData,
+      decisionOpts: { dir: decisionDir, now },
+      dryRun: true,
+      headrooms: deps && deps.headrooms,
+      load: deps && deps.load,
+      reservations: deps && deps.reservations,
+      explorationBudget:
+        args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 1,
+      home: deps && deps.home,
+      storePath: deps && deps.storePath,
+      accounts,
+      now,
+    };
+    const decision = ranking.rankAndRecord(annotated, rankingContext);
+
+    if (isPinned) {
+      log('PINNED');
+    }
+
+    if (!decision.chosen) {
+      log('No eligible candidate for ' + item.workItemId);
+      for (const rej of decision.rejected) {
+        log(
+          '  EXCLUDED ' +
+            rej.offeringId +
+            ' — ' +
+            rej.reason +
+            (rej.scope ? ' [' + rej.scope + ']' : '')
+        );
+      }
+      exit(1);
+      return { exitCode: 1, decision, dryRun: true };
+    }
+
+    log('Ranked candidates for ' + item.workItemId + ':');
+    for (let i = 0; i < decision.candidates.length; i++) {
+      const c = decision.candidates[i];
+      log('  ' + (i + 1) + '. ' + c.offeringId + ' (score: ' + c.score + ')');
+    }
+    log('Chosen: ' + decision.chosen);
+    exit(0);
+    return { exitCode: 0, decision, dryRun: true };
+  }
+
+  // Execution with retry/fallback
+  const maxAttempts = Number(
+    args['max-attempts'] || args.maxAttempts || (deps && deps.maxAttempts) || 3
+  );
+  const failedCandidates = new Set();
+  let attempt = 0;
+  let lastDecision = null;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const now = (deps && deps.now) || Date.now();
+    const evidenceData = evidence.loadEvidence(evidenceDir);
+
+    const annotated = candidatesApi.annotateCandidates(
+      eligibleCandidates.map((c) => Object.assign({}, c)),
+      evidenceData,
+      { now }
+    );
+
+    // Never retry a candidate that just failed in this run
+    for (const c of annotated) {
+      const key = candidatesApi.candidateKey(c);
+      if (failedCandidates.has(key)) {
+        c.blocked = true;
+        c.blockReason = 'candidate failed in current dispatch run';
+        c.blockScope = 'candidate';
+      }
+    }
+
+    const rankingContext = {
+      workItemId: item.workItemId,
+      role: item.role,
+      kind: item.role,
+      registry,
+      evidenceData,
+      decisionOpts: { dir: decisionDir, now },
+      dryRun: false,
+      headrooms: deps && deps.headrooms,
+      load: deps && deps.load,
+      reservations: deps && deps.reservations,
+      explorationBudget:
+        args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 1,
+      home: deps && deps.home,
+      storePath: deps && deps.storePath,
+      accounts,
+      now,
+    };
+
+    const decision = ranking.rankAndRecord(annotated, rankingContext);
+    lastDecision = decision;
+
+    if (!decision.chosen) {
+      log(
+        'No eligible candidate for ' +
+          item.workItemId +
+          ' (attempt ' +
+          attempt +
+          '/' +
+          maxAttempts +
+          ')'
+      );
+      for (const rej of decision.rejected) {
+        log(
+          '  EXCLUDED ' +
+            rej.offeringId +
+            ' — ' +
+            rej.reason +
+            (rej.scope ? ' [' + rej.scope + ']' : '')
+        );
+      }
+      exit(1);
+      return { exitCode: 1, decision, attempts: attempt };
+    }
+
+    const chosenKey = decision.chosen;
+    const chosenCandidate = annotated.find((c) => candidatesApi.candidateKey(c) === chosenKey) || {
+      offeringId: chosenKey,
+      harness: decision.harness,
+    };
+
+    if (isPinned) {
+      log('PINNED');
+    }
+    log(
+      'Dispatching ' +
+        item.workItemId +
+        ' to ' +
+        chosenKey +
+        ' (attempt ' +
+        attempt +
+        '/' +
+        maxAttempts +
+        ')'
+    );
+
+    const reservationOpts = {
+      home: deps && deps.home,
+      storePath: deps && deps.storePath,
+      now,
+    };
+
+    quotaStore.recordReservation(
+      item.workItemId,
+      item.role,
+      chosenCandidate.accountId || '*',
+      chosenKey,
+      100000,
+      reservationOpts
+    );
+
+    let launchRes;
+    let thrownError = null;
+    try {
+      const launcher = (deps && deps.run) || runHarness;
+      const harnessName = chosenCandidate.harness || decision.harness || 'paseo';
+      const adapter = getHarness(harnessName);
+      const route = sourcesApi.dispatchRoute(
+        chosenCandidate.source || chosenCandidate.upstream || chosenCandidate.gateway,
+        registry
+      );
+      const launchArgs = adapter.launch({
+        provider: (route && route.provider) || chosenCandidate.source || chosenCandidate.upstream,
+        model: sourcesApi.qualifyModel(chosenCandidate.modelId, route),
+        prompt: defaultPrompt(item),
+        branch: item.branch,
+        base: args.base || (deps && deps.base) || 'main',
+        cwd: args.cwd || (deps && deps.cwd) || rootDir,
+        title: workerName(item.workItemId),
+        labels: {
+          workItem: item.workItemId,
+          role: item.role,
+          project: args.project || 'shipde-platform',
+        },
+      });
+
+      try {
+        launchRes = launcher(adapter, launchArgs, { cwd: args.cwd || rootDir });
+      } catch (err) {
+        thrownError = err;
+        launchRes = {
+          exitCode: err.exitCode !== undefined ? err.exitCode : -1,
+          stdout: '',
+          stderr: err.stderr || err.message || String(err),
+          error: err,
+        };
+      }
+    } finally {
+      quotaStore.releaseReservation(item.workItemId, reservationOpts);
+    }
+
+    if (deps && deps.rethrow && thrownError) {
+      throw thrownError;
+    }
+
+    const isFailure =
+      thrownError !== null ||
+      !launchRes ||
+      launchRes.exitCode !== 0 ||
+      (typeof launchRes.httpStatus === 'number' && launchRes.httpStatus >= 400);
+
+    if (!isFailure) {
+      evidence.recordOutcome(evidenceDir, chosenCandidate, {
+        status: 'passed',
+        level: evidence.Level.OUTCOME,
+        exitCode: 0,
+        source: 'dispatch',
+      });
+      log('Dispatch succeeded on ' + chosenKey);
+      exit(0);
+      return { exitCode: 0, chosen: chosenKey, result: launchRes, attempts: attempt };
+    } else {
+      evidence.recordOutcome(evidenceDir, chosenCandidate, {
+        status: 'failed',
+        level: evidence.Level.OUTCOME,
+        exitCode: launchRes ? launchRes.exitCode : -1,
+        httpStatus: launchRes ? launchRes.httpStatus : undefined,
+        body: launchRes
+          ? launchRes.body || launchRes.stderr || launchRes.stdout
+          : thrownError && thrownError.message,
+        stderr: launchRes ? launchRes.stderr : thrownError && thrownError.message,
+        cause: launchRes ? launchRes.body || launchRes.stderr : thrownError && thrownError.message,
+        error: thrownError ? thrownError.message || String(thrownError) : undefined,
+        source: 'dispatch',
+      });
+      failedCandidates.add(chosenKey);
+      log(
+        'Candidate failed: ' +
+          chosenKey +
+          (launchRes && launchRes.stderr ? ' — ' + launchRes.stderr : '')
+      );
+    }
+  }
+
+  log('Max dispatch attempts (' + maxAttempts + ') reached without success.');
+  exit(1);
+  return { exitCode: 1, decision: lastDecision, attempts: attempt };
 }
 
 const SHADOW_FLAGS = new Set(['project', 'compare', 'json', 'dry-run', 'dryRun']);
@@ -863,4 +1289,12 @@ function main() {
   process.exit(2);
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  dispatchCommand,
+  parseArgs,
+  main,
+};

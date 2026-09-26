@@ -320,6 +320,7 @@ module.exports = {
   PROVIDER_IDENTITY,
   usableReadings,
   withQuotaLock,
+  getReservations,
   activeReservations,
   pruneReservations,
   releaseReservation,
