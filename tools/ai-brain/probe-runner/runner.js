@@ -71,7 +71,14 @@ function appendRecord(outPath, record) {
   }
 
   // Enforce invariant: status must be one of PASS, FAIL, DEFERRED, UNTESTED, PROBE_INVALID, UNSUPPORTED_BY_PROBE
-  const validStatuses = new Set(['PASS', 'FAIL', 'DEFERRED', 'UNTESTED', 'PROBE_INVALID', 'UNSUPPORTED_BY_PROBE']);
+  const validStatuses = new Set([
+    'PASS',
+    'FAIL',
+    'DEFERRED',
+    'UNTESTED',
+    'PROBE_INVALID',
+    'UNSUPPORTED_BY_PROBE',
+  ]);
   if (!validStatuses.has(record.status)) {
     throw new Error(
       `INVALID_STATUS: \`${record.status}\` is not permitted. Must be PASS, FAIL, DEFERRED, UNTESTED, PROBE_INVALID, UNSUPPORTED_BY_PROBE.`

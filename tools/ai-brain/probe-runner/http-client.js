@@ -181,7 +181,10 @@ function detectUnsupportedModelType(bodyText, httpStatus) {
   const text = bodyText.toLowerCase();
 
   // Decisions models
-  if (text.includes('decisions model') && text.includes('cannot be used with the chat/completions')) {
+  if (
+    text.includes('decisions model') &&
+    text.includes('cannot be used with the chat/completions')
+  ) {
     return 'decisions_endpoint_required';
   }
   if (text.includes('decisions') && text.includes('endpoint')) {
@@ -189,18 +192,30 @@ function detectUnsupportedModelType(bodyText, httpStatus) {
   }
 
   // Embeddings models
-  if (text.includes('embedding') && (text.includes('not supported') || text.includes('wrong endpoint') || text.includes('use /embeddings'))) {
+  if (
+    text.includes('embedding') &&
+    (text.includes('not supported') ||
+      text.includes('wrong endpoint') ||
+      text.includes('use /embeddings'))
+  ) {
     return 'embeddings_endpoint_required';
   }
 
   // Image generation models
-  if (text.includes('image') && (text.includes('not supported') || text.includes('wrong endpoint') || text.includes('use /images'))) {
+  if (
+    text.includes('image') &&
+    (text.includes('not supported') ||
+      text.includes('wrong endpoint') ||
+      text.includes('use /images'))
+  ) {
     return 'images_endpoint_required';
   }
 
   // Audio/transcription models
-  if ((text.includes('audio') || text.includes('transcription') || text.includes('tts')) &&
-      (text.includes('not supported') || text.includes('wrong endpoint'))) {
+  if (
+    (text.includes('audio') || text.includes('transcription') || text.includes('tts')) &&
+    (text.includes('not supported') || text.includes('wrong endpoint'))
+  ) {
     return 'audio_endpoint_required';
   }
 
@@ -333,7 +348,8 @@ async function probeModelRequest(opts) {
           const httpStatus = res.statusCode;
 
           if (httpStatus === 200) {
-            const { content, reasoningContent, toolCalls, finishReason } = parseResponseContent(body);
+            const { content, reasoningContent, toolCalls, finishReason } =
+              parseResponseContent(body);
             const textContent = content.trim();
             const fullContent = (content + reasoningContent).trim();
             const hasToolCalls = toolCalls.length > 0;
@@ -517,7 +533,9 @@ async function probeModelRequest(opts) {
     result &&
     !result.ok &&
     result.body &&
-    /invalid(\s|_)max_tokens|max_tokens.*(not supported|unsupported|unrecognized|unknown)/i.test(result.body);
+    /invalid(\s|_)max_tokens|max_tokens.*(not supported|unsupported|unrecognized|unknown)/i.test(
+      result.body
+    );
   if (modelRejectsToken) {
     // swap param
     delete params.max_tokens;

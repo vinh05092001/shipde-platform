@@ -97,7 +97,9 @@ const testClassifier = {
 
     if (
       effectiveStatus === 403 &&
-      /unauthorized|not licensed|entitlement|forbidden|access.*disabled|model access.*disabled/i.test(text)
+      /unauthorized|not licensed|entitlement|forbidden|access.*disabled|model access.*disabled/i.test(
+        text
+      )
     ) {
       return {
         cause: Cause.UPSTREAM_ENTITLEMENT,
@@ -948,7 +950,8 @@ describe('9Router Probe Runner Suite', () => {
       res.end(
         JSON.stringify({
           error: {
-            message: '[400]: {"error":{"message":"Access denied, please make sure your account is in good standing...","type":"Arrearage"}}',
+            message:
+              '[400]: {"error":{"message":"Access denied, please make sure your account is in good standing...","type":"Arrearage"}}',
             type: 'invalid_request_error',
           },
         })
@@ -1017,7 +1020,8 @@ describe('9Router Probe Runner Suite', () => {
       res.end(
         JSON.stringify({
           error: {
-            message: '[codebuddy-intl/glm-5.2] [429]: {"error":{"data":{"code":14018,"msg":"Credits exhausted..."}}}',
+            message:
+              '[codebuddy-intl/glm-5.2] [429]: {"error":{"data":{"code":14018,"msg":"Credits exhausted..."}}}',
           },
         })
       );
@@ -1055,7 +1059,8 @@ describe('9Router Probe Runner Suite', () => {
       res.end(
         JSON.stringify({
           error: {
-            message: '[400]: {"error":{"message":"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint..."}}',
+            message:
+              '[400]: {"error":{"message":"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint..."}}',
           },
         })
       );
@@ -1160,7 +1165,9 @@ describe('9Router Probe Runner Suite', () => {
     const modelId = 'test-sse-tool-calls/model-stream-agent';
     customRoutes.set(modelId, (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.write('data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"grep_search"}}]}}]}\n\n');
+      res.write(
+        'data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"grep_search"}}]}}]}\n\n'
+      );
       res.write('data: [DONE]\n\n');
       res.end();
     });
@@ -1190,26 +1197,63 @@ describe('9Router Probe Runner Suite', () => {
 
   it('15. Absent canonical classifier fails with clear message naming dependency when unpassed', async () => {
     const outPath = makeTmpFile();
-    await assert.rejects(
-      async () => {
-        await runProbeBatch({
-          gatewayUrl,
-          apiKey: 'test-token',
-          catalogue: [{ id: 'test/model' }],
-          outPath,
-        });
-      },
-      (err) => {
-        assert.ok(
-          err.message.includes('failure-classifier.js'),
-          `Error should name failure-classifier.js: ${err.message}`
-        );
-        assert.ok(
-          err.message.includes('PR #144') || err.message.includes('brain-failure-classes'),
-          `Error should name PR #144 or branch: ${err.message}`
-        );
-        return true;
+    const classifierPath = require('../probe-runner').CANONICAL_CLASSIFIER_PATH;
+    let classifierExisted = false;
+    let backupPath = null;
+
+    // Temporarily remove canonical classifier to test missing dependency error
+    if (fs.existsSync(classifierPath)) {
+      classifierExisted = true;
+      backupPath = classifierPath + '.bak';
+      fs.renameSync(classifierPath, backupPath);
+    }
+
+    // Clear require cache so the missing file is detected
+    if (require.cache[classifierPath]) {
+      delete require.cache[classifierPath];
+    }
+    // Also clear the runner module cache since it may have cached the classifier
+    const runnerPath = require.resolve('../probe-runner');
+    if (require.cache[runnerPath]) {
+      delete require.cache[runnerPath];
+    }
+    // Re-require to get fresh module
+    const { runProbeBatch: freshRunProbeBatch } = require('../probe-runner');
+
+    try {
+      await assert.rejects(
+        async () => {
+          await freshRunProbeBatch({
+            gatewayUrl,
+            apiKey: 'test-token',
+            catalogue: [{ id: 'test/model' }],
+            outPath,
+          });
+        },
+        (err) => {
+          assert.ok(
+            err.message.includes('failure-classifier.js'),
+            `Error should name failure-classifier.js: ${err.message}`
+          );
+          assert.ok(
+            err.message.includes('PR #144') || err.message.includes('brain-failure-classes'),
+            `Error should name PR #144 or branch: ${err.message}`
+          );
+          return true;
+        }
+      );
+    } finally {
+      // Restore canonical classifier
+      if (classifierExisted && backupPath && fs.existsSync(backupPath)) {
+        fs.renameSync(backupPath, classifierPath);
       }
-    );
+      // Clear cache again so subsequent tests get the classifier
+      if (require.cache[classifierPath]) {
+        delete require.cache[classifierPath];
+      }
+      if (require.cache[runnerPath]) {
+        delete require.cache[runnerPath];
+      }
+    }
   });
 });
