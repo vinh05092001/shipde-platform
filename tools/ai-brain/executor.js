@@ -345,19 +345,33 @@ function executePlan(plan, options) {
           probeRes = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
         }
       }
-      const verdict = inspectVerdict(probeRes);
-      if (verdict === 'gone') {
-        sessionGone = true;
-      } else if (verdict === 'stalled' || verdict === 'unknown') {
-        refuse(
-          'SESSION_STATE_UNKNOWN: probe of session ' +
-            existing.sessionId +
-            ' failed (exit ' +
-            probeRes.exitCode +
-            '); release the claim by hand with dispatch --close if it is truly gone'
-        );
-        continue;
-      }
+        const progressSnap = (() => {
+          try {
+            return JSON.parse(probeRes.stdout || '{}');
+          } catch (_) {
+            return {};
+          }
+        })();
+        const verdict = inspectVerdict({
+          exitCode: probeRes.exitCode,
+          stdout: JSON.stringify({
+            progress: progressSnap.progress,
+            error: progressSnap.error,
+            // include other snapshot fields if present
+            ...progressSnap,
+          }),
+          stderr: probeRes.stderr,
+        });
+        if (verdict === 'gone') {
+          sessionGone = true;
+        } else if (verdict === 'stalled' || verdict === 'unknown') {
+          const cause = progressSnap.error || 'unknown';
+          const detailMsg = verdict === 'stalled'
+            ? `WRITER_SESSION_STALLED: ${cause}`
+            : `SESSION_STATE_UNKNOWN: ${cause}`;
+          refuse(detailMsg);
+          continue;
+        }
     }
 
     if (resuming && sessionGone) {

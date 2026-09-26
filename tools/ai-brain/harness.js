@@ -72,9 +72,11 @@ const paseo = {
   stop(sessionId) {
     return ['stop', String(sessionId)];
   },
-  inspect(sessionId) {
-    return ['inspect', String(sessionId), '--json'];
-  },
+    inspect(sessionId) {
+      // Return a probe that emits a progress snapshot JSON for the session.
+      const script = require('path').join(__dirname, 'progressProbe.js');
+      return ['node', script, String(sessionId)];
+    },
   sessionIdFrom(parsed) {
     return pickId(parsed) || pickId(parsed && parsed.agent) || pickId(parsed && parsed.data);
   },
@@ -189,8 +191,10 @@ const hermes = {
    * `--resume latest --in <dir>` answers too, and resuming is a safe attempt.
    * Any other exit is "unknown", never a guess.
    */
-  inspect(sessionId) {
-    return ['sessions', 'list'];
+   inspect(sessionId) {
+    // Return a probe that emits progress snapshot JSON for the session.
+    // The executor will parse this JSON to decide ALIVE/UNKNOWN/STALLED.
+    return ['progress'];
   },
   sessionIdFrom(parsed, job) {
     if (job && job.cwd) return DIR_HANDLE + job.cwd;
