@@ -70,11 +70,11 @@ function appendRecord(outPath, record) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  // Enforce invariant: status must be one of PASS, FAIL, DEFERRED, UNTESTED
-  const validStatuses = new Set(['PASS', 'FAIL', 'DEFERRED', 'UNTESTED']);
+  // Enforce invariant: status must be one of PASS, FAIL, DEFERRED, UNTESTED, PROBE_INVALID, UNSUPPORTED_BY_PROBE
+  const validStatuses = new Set(['PASS', 'FAIL', 'DEFERRED', 'UNTESTED', 'PROBE_INVALID', 'UNSUPPORTED_BY_PROBE']);
   if (!validStatuses.has(record.status)) {
     throw new Error(
-      `INVALID_STATUS: \`${record.status}\` is not permitted. Must be PASS, FAIL, DEFERRED, UNTESTED.`
+      `INVALID_STATUS: \`${record.status}\` is not permitted. Must be PASS, FAIL, DEFERRED, UNTESTED, PROBE_INVALID, UNSUPPORTED_BY_PROBE.`
     );
   }
 
@@ -274,7 +274,7 @@ async function runProbeBatch(options = {}) {
       const isRepresentative = !expandedUpstreams.has(upstream) && !deferredUpstreams.has(upstream);
 
       if (outcome.ok && outcome.status === 'PASS') {
-        // Model answered with content!
+        // Model answered with content or tool_calls!
         const passRow = {
           key: item.key,
           harness: item.harness,
@@ -294,6 +294,9 @@ async function runProbeBatch(options = {}) {
           cooldownExpiresAt: null,
           reason: null,
           content: outcome.content ? outcome.content.slice(0, 200) : '',
+          responseKind: outcome.responseKind || 'text',
+          toolCalls: outcome.toolCalls,
+          finishReason: outcome.finishReason,
         };
 
         appendRecord(outPath, passRow);
@@ -309,8 +312,80 @@ async function runProbeBatch(options = {}) {
             activeQueue.push(rem);
           }
         }
+      } else if (outcome.status === 'PROBE_INVALID') {
+        // Probe configuration issue (e.g., token budget too small) - record for retry
+        const probeInvalidRow = {
+          key: item.key,
+          harness: item.harness,
+          accessPath: item.accessPath,
+          gateway: item.gateway,
+          upstream: item.upstream,
+          account: item.account,
+          quotaScope: item.quotaScope,
+          modelId: item.modelId,
+          status: 'PROBE_INVALID',
+          ts: new Date().toISOString(),
+          latencyMs: outcome.latencyMs,
+          httpStatus: outcome.httpStatus,
+          cause: null,
+          scope: null,
+          cooldownMs: 5 * 60 * 1000, // 5 min cooldown before retry
+          cooldownExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+          reason: outcome.reason,
+          finishReason: outcome.finishReason,
+          probeInvalid: true,
+        };
+
+        appendRecord(outPath, probeInvalidRow);
+        summary.failedCount++; // Count as failed for budget but retryable
+        history.set(item.key, probeInvalidRow);
+
+        // Don't expand or defer on PROBE_INVALID - just this model needs retry
+        if (isRepresentative) {
+          const remaining = remainingByUpstream.get(upstream) || [];
+          if (remaining.length > 0) {
+            const nextRep = remaining.shift();
+            remainingByUpstream.set(upstream, remaining);
+            activeQueue.push(nextRep);
+          }
+        }
+      } else if (outcome.status === 'UNSUPPORTED_BY_PROBE') {
+        // Model type not supported by chat/completions probe (decisions, embeddings, image, audio)
+        const unsupportedRow = {
+          key: item.key,
+          harness: item.harness,
+          accessPath: item.accessPath,
+          gateway: item.gateway,
+          upstream: item.upstream,
+          account: item.account,
+          quotaScope: item.quotaScope,
+          modelId: item.modelId,
+          status: 'UNSUPPORTED_BY_PROBE',
+          ts: new Date().toISOString(),
+          latencyMs: outcome.latencyMs,
+          httpStatus: outcome.httpStatus,
+          cause: 'unsupported_by_probe',
+          scope: 'model',
+          cooldownMs: null,
+          cooldownExpiresAt: null,
+          reason: outcome.reason,
+        };
+
+        appendRecord(outPath, unsupportedRow);
+        // Not counted as failed - it's a known limitation
+        history.set(item.key, unsupportedRow);
+
+        // Don't expand or defer on UNSUPPORTED_BY_PROBE
+        if (isRepresentative) {
+          const remaining = remainingByUpstream.get(upstream) || [];
+          if (remaining.length > 0) {
+            const nextRep = remaining.shift();
+            remainingByUpstream.set(upstream, remaining);
+            activeQueue.push(nextRep);
+          }
+        }
       } else {
-        // Model failed
+        // Model failed with a real error
         const classification = classifyFailure({
           httpStatus: outcome.httpStatus,
           body: outcome.body || outcome.error || '',
