@@ -34,7 +34,7 @@ const path = require('path');
  * The real entry point behind a Windows npm shim, or null.
  *
  * @param shimPath absolute path to the .cmd or .ps1
- * @param read     injectable file reader (tests)
+ * @param io       injectable file reader / options (platform, readFile, fileExists)
  */
 function unwrapShim(shimPath, io) {
   const opts = io || {};
@@ -45,7 +45,8 @@ function unwrapShim(shimPath, io) {
   } catch (e) {
     return null;
   }
-  const dir = path.dirname(shimPath);
+  const p = opts.platform ? (opts.platform === 'win32' ? path.win32 : path.posix) : path.win32;
+  const dir = p.dirname(shimPath);
 
   // Match every node_modules\... / node_modules/... reference and keep the
   // one that actually exists and is not a bare "node". Group handling is
@@ -58,10 +59,10 @@ function unwrapShim(shimPath, io) {
     if (!m[0]) continue;
     candidates.add(m[0].replace(/^["\\/]/, ''));
   }
-  const fileExists = opts.fileExists || ((p) => fs.existsSync(p));
+  const fileExists = opts.fileExists || ((targetPath) => fs.existsSync(targetPath));
   for (const rel of candidates) {
     if (/[\\/]node(\.exe)?$/i.test(rel)) continue;
-    const target = path.join(dir, rel);
+    const target = p.join(dir, rel);
     if (fileExists(target)) return target;
   }
   return null;
@@ -82,20 +83,21 @@ function resolveCommand(command, opts) {
 
   if (platform !== 'win32') return { file: command, args: [], kind: 'direct' };
 
-  const dirs = (o.path || process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const p = path.win32;
+  const dirs = (o.path || process.env.PATH || '').split(p.delimiter).filter(Boolean);
   for (const dir of dirs) {
-    const base = path.join(dir, command);
+    const base = p.join(dir, command);
     const exe = base + '.exe';
     if (exists(exe, o)) return { file: exe, args: [], kind: 'exe' };
     const cmd = base + '.cmd';
     if (exists(cmd, o)) {
-      const target = unwrapShim(cmd, o);
+      const target = unwrapShim(cmd, { platform, ...o });
       if (target) return targetFor(target, nodePath);
       return { file: cmd, args: [], kind: 'shim-unreadable' };
     }
     const ps1 = base + '.ps1';
     if (exists(ps1, o)) {
-      const target = unwrapShim(ps1, o);
+      const target = unwrapShim(ps1, { platform, ...o });
       if (target) return targetFor(target, nodePath);
       return { file: ps1, args: [], kind: 'shim-unreadable' };
     }

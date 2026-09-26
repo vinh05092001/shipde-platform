@@ -110,3 +110,32 @@ test('runCommand honors an injectable spawn and reports outputs in order', async
   assert.equal(out.exitCode, 0);
   assert.equal(out.stdout, 'hello');
 });
+
+test('unwrapShim uses the platform passed in and never process.platform', () => {
+  // Win32 platform: uses backslashes and path.win32
+  const ioWin = fakeIo({
+    'C:/npm/node_modules/tool/cli.js': '// tool',
+    'C:/npm/tool.cmd': '"%_prog%" "%dp0%\\node_modules\\tool\\cli.js" %*',
+  });
+  const winTarget = unwrapShim('C:\\npm\\tool.cmd', { platform: 'win32', ...ioWin });
+  assert.equal(winTarget.replace(/\\/g, '/'), 'C:/npm/node_modules/tool/cli.js');
+
+  // Linux platform: uses forward slashes and path.posix
+  const ioPosix = fakeIo({
+    '/usr/local/bin/node_modules/tool/cli.js': '// tool',
+    '/usr/local/bin/tool': 'node_modules/tool/cli.js',
+  });
+  const posixTarget = unwrapShim('/usr/local/bin/tool', { platform: 'linux', ...ioPosix });
+  assert.equal(posixTarget, '/usr/local/bin/node_modules/tool/cli.js');
+});
+
+test('resolveCommand with platform: win32 uses semicolon path.win32.delimiter and does not split on drive letter colons', () => {
+  const io = fakeIo({
+    'D:/other/bin/runner.exe': Buffer.alloc(0),
+  });
+  // PATH containing Windows drive letters and semicolons
+  const winPath = 'C:\\Users\\me\\bin;D:\\other\\bin';
+  const out = resolveCommand('runner', { platform: 'win32', path: winPath, ...io });
+  assert.equal(out.kind, 'exe');
+  assert.equal(out.file.replace(/\\/g, '/'), 'D:/other/bin/runner.exe');
+});
