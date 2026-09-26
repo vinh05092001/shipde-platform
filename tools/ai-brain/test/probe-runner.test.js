@@ -67,10 +67,22 @@ const testClassifier = {
     const { httpStatus, body = '', stderr = '' } = input || {};
     const text = [String(body || ''), String(stderr || '')].filter(Boolean).join('\n');
 
-    // Extract innermost HTTP status if wrapped (e.g., "[402]: ..." or "503: [402]: ...")
+    // Extract innermost HTTP status if wrapped (e.g., "503 Service Unavailable: [402]: out of credit")
     const innerMatch = text.match(/[\[(]\s*(401|402|403|429)\s*[\])]/);
     const effectiveStatus =
       httpStatus === 503 && innerMatch ? parseInt(innerMatch[1], 10) : httpStatus;
+
+    if (
+      effectiveStatus === 402 &&
+      /out of credit|credit.{0,20}exhaust|insufficient.*credit|provider.{0,20}credit/i.test(text)
+    ) {
+      return {
+        cause: Cause.UPSTREAM_CREDIT_EXHAUSTED,
+        scope: Scope.UPSTREAM,
+        cooldownMs: 86400000,
+        resetTime: null,
+      };
+    }
 
     if (
       effectiveStatus === 401 &&
@@ -129,18 +141,6 @@ const testClassifier = {
         cause: Cause.MODEL_UNSUPPORTED,
         scope: Scope.MODEL,
         cooldownMs: null,
-        resetTime: null,
-      };
-    }
-
-    if (
-      effectiveStatus === 429 &&
-      /rate.?limit|too many requests|user_global_rate_limited/i.test(text)
-    ) {
-      return {
-        cause: Cause.UPSTREAM_RATE_LIMIT,
-        scope: Scope.UPSTREAM,
-        cooldownMs: 300000,
         resetTime: null,
       };
     }
@@ -849,454 +849,6 @@ describe('9Router Probe Runner Suite', () => {
     assert.equal(pool.currentConcurrency, 2);
   });
 
-  it('15. HTTP 200 with tool_calls only records PASS with responseKind=tool_calls', async () => {
-    const modelId = 'test-tool-calls/model-agent';
-    customRoutes.set(modelId, (req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          choices: [
-            {
-              finish_reason: 'tool_calls',
-              message: {
-                content: '',
-                tool_calls: [
-                  { function: { name: 'grep_search', arguments: '{}' } },
-                  { function: { name: 'run_in_terminal', arguments: '{}' } },
-                ],
-              },
-            },
-          ],
-        })
-      );
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.passedCount, 1);
-    assert.equal(summary.failedCount, 0);
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-tool-calls', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'PASS');
-    assert.equal(row.httpStatus, 200);
-    assert.equal(row.responseKind, 'tool_calls');
-    assert.ok(Array.isArray(row.toolCalls));
-    assert.equal(row.toolCalls.length, 2);
-    assert.ok(row.toolCalls.includes('grep_search'));
-    assert.ok(row.toolCalls.includes('run_in_terminal'));
-    assert.equal(row.verified, undefined);
-  });
-
-  it('16. Length-truncated empty response (finish_reason=length) returns PROBE_INVALID', async () => {
-    const modelId = 'test-reasoning/model-truncated';
-    customRoutes.set(modelId, (req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          choices: [
-            {
-              finish_reason: 'length',
-              message: {
-                content: '',
-                reasoning_content: 'Long reasoning trace that consumed all tokens...',
-              },
-            },
-          ],
-        })
-      );
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.passedCount, 0);
-    assert.equal(summary.failedCount, 1); // PROBE_INVALID counts as failed for budget
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-reasoning', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'PROBE_INVALID');
-    assert.equal(row.httpStatus, 200);
-    assert.equal(row.finishReason, 'length');
-    assert.ok(row.probeInvalid === true);
-    assert.ok(row.cooldownMs > 0);
-    assert.equal(row.verified, undefined);
-  });
-
-  it('17. HTTP 400 with [400] Arrearage body extracts inner 400 for classifier', async () => {
-    const modelId = 'test-arrearage/model-billing';
-    customRoutes.set(modelId, (req, res) => {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          error: {
-            message:
-              '[400]: {"error":{"message":"Access denied, please make sure your account is in good standing...","type":"Arrearage"}}',
-            type: 'invalid_request_error',
-          },
-        })
-      );
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.failedCount, 1);
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-arrearage', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'FAIL');
-    assert.equal(row.httpStatus, 400);
-    // Classifier should see inner 400 with Arrearage -> upstream_entitlement
-    assert.equal(row.cause, Cause.UPSTREAM_ENTITLEMENT);
-    assert.equal(row.scope, Scope.UPSTREAM);
-    assert.equal(row.verified, undefined);
-  });
-
-  it('18. HTTP 503 with nested [403] body extracts inner 403 for classifier', async () => {
-    const modelId = 'test-nested-403/model-entitlement';
-    customRoutes.set(modelId, (req, res) => {
-      res.writeHead(503, { 'Content-Type': 'text/plain' });
-      res.end('503 Service Unavailable: [403]: {"error":{"message":"Model access is disabled"}}');
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.failedCount, 1);
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-nested-403', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'FAIL');
-    assert.equal(row.httpStatus, 503);
-    // Classifier should see inner 403 -> upstream_entitlement
-    assert.equal(row.cause, Cause.UPSTREAM_ENTITLEMENT);
-    assert.equal(row.scope, Scope.UPSTREAM);
-    assert.equal(row.verified, undefined);
-  });
-
-  it('19. HTTP 503 with [402] credit exhausted body extracts inner 402 for classifier', async () => {
-    const modelId = 'test-nested-402/model-credit';
-    customRoutes.set(modelId, (req, res) => {
-      res.writeHead(503, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          error: {
-            message:
-              '[codebuddy-intl/glm-5.2] [429]: {"error":{"data":{"code":14018,"msg":"Credits exhausted..."}}}',
-          },
-        })
-      );
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.failedCount, 1);
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-nested-402', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'FAIL');
-    assert.equal(row.httpStatus, 503);
-    // Classifier should see inner 429 -> upstream_credit_exhausted (or rate_limit)
-    // Our test classifier matches 429 with credit exhausted -> upstream_credit_exhausted
-    assert.equal(row.cause, Cause.UPSTREAM_CREDIT_EXHAUSTED);
-    assert.equal(row.scope, Scope.UPSTREAM);
-    assert.equal(row.verified, undefined);
-  });
-
-  it('20. Decisions model returns UNSUPPORTED_BY_PROBE', async () => {
-    const modelId = 'test-decisions/model-jev';
-    customRoutes.set(modelId, (req, res) => {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          error: {
-            message:
-              '[400]: {"error":{"message":"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint..."}}',
-          },
-        })
-      );
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.passedCount, 0);
-    assert.equal(summary.failedCount, 0); // UNSUPPORTED_BY_PROBE not counted as failed
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-decisions', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'UNSUPPORTED_BY_PROBE');
-    assert.equal(row.httpStatus, 400);
-    assert.equal(row.cause, 'unsupported_by_probe');
-    assert.equal(row.scope, 'model');
-    assert.equal(row.cooldownMs, null);
-    assert.equal(row.cooldownExpiresAt, null);
-    assert.ok(row.reason.includes('decisions_endpoint_required'));
-    assert.equal(row.verified, undefined);
-  });
-
-  it('21. Embeddings model returns UNSUPPORTED_BY_PROBE', async () => {
-    const modelId = 'test-embeddings/model-embed';
-    customRoutes.set(modelId, (req, res) => {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          error: {
-            message: 'This is an embeddings model, use /embeddings endpoint instead',
-          },
-        })
-      );
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.passedCount, 0);
-    assert.equal(summary.failedCount, 0);
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-embeddings', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'UNSUPPORTED_BY_PROBE');
-    assert.ok(row.reason.includes('embeddings_endpoint_required'));
-  });
-
-  it('22. Image generation model returns UNSUPPORTED_BY_PROBE', async () => {
-    const modelId = 'test-image/model-dalle';
-    customRoutes.set(modelId, (req, res) => {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          error: {
-            message: 'This is an image generation model, use /images/generations endpoint',
-          },
-        })
-      );
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.passedCount, 0);
-    assert.equal(summary.failedCount, 0);
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-image', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'UNSUPPORTED_BY_PROBE');
-    assert.ok(row.reason.includes('images_endpoint_required'));
-  });
-
-  it('23. SSE stream with tool_calls in delta records PASS with responseKind=tool_calls', async () => {
-    const modelId = 'test-sse-tool-calls/model-stream-agent';
-    customRoutes.set(modelId, (req, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.write(
-        'data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"grep_search"}}]}}]}\n\n'
-      );
-      res.write('data: [DONE]\n\n');
-      res.end();
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.passedCount, 1);
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-sse-tool-calls', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'PASS');
-    assert.equal(row.responseKind, 'tool_calls');
-    assert.ok(Array.isArray(row.toolCalls));
-    assert.equal(row.toolCalls.length, 1);
-    assert.ok(row.toolCalls.includes('grep_search'));
-  });
-
-  it('24. Reasoning model emits content with 128 token budget (not PROBE_INVALID)', async () => {
-    const modelId = 'test-reasoning/model-passes';
-    customRoutes.set(modelId, (req, res, parsed) => {
-      // Verify the request uses max_tokens=128 (the larger budget)
-      assert.equal(parsed.max_tokens, 128);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          choices: [
-            {
-              finish_reason: 'stop',
-              message: {
-                content: 'Reasoning complete: the answer is 42',
-                reasoning_content: 'Internal reasoning trace...',
-              },
-            },
-          ],
-        })
-      );
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    assert.equal(summary.passedCount, 1);
-    assert.equal(summary.failedCount, 0);
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-reasoning', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'PASS');
-    assert.ok(row.content.includes('Reasoning complete'));
-    assert.ok(row.content.includes('Internal reasoning'));
-    assert.notEqual(row.finishReason, 'length');
-    assert.notEqual(row.finishReason, 'max_tokens');
-  });
-
-  it('25. Model rejects max_tokens, retries once with max_completion_tokens and passes', async () => {
-    const modelId = 'test-max-tokens-rejection/model-retry';
-    let requestCount = 0;
-
-    customRoutes.set(modelId, (req, res, parsed) => {
-      requestCount++;
-      const hasMaxTokens = 'max_tokens' in parsed;
-      const hasMaxCompletionTokens = 'max_completion_tokens' in parsed;
-
-      if (requestCount === 1 && hasMaxTokens && !hasMaxCompletionTokens) {
-        // First request with max_tokens: model rejects it
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            error: {
-              message: 'Invalid max_tokens: this model does not support max_tokens, use max_completion_tokens',
-              type: 'invalid_request_error',
-            },
-          })
-        );
-      } else if (requestCount === 2 && hasMaxCompletionTokens) {
-        // Retry with max_completion_tokens: succeeds
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            choices: [{ message: { content: 'Success with max_completion_tokens' } }],
-          })
-        );
-      } else {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'Unexpected request' } }));
-      }
-    });
-
-    const outPath = makeTmpFile();
-    const summary = await runProbeBatch({
-      gatewayUrl,
-      apiKey: 'test-token',
-      catalogue: [{ id: modelId }],
-      outPath,
-      classifier: testClassifier,
-    });
-
-    // Should have made 2 requests, second one passes
-    assert.equal(summary.passedCount, 1);
-    assert.equal(summary.failedCount, 0);
-
-    const history = loadHistory(outPath);
-    const key = buildQueueKey({ upstream: 'test-max-tokens-rejection', modelId });
-    const row = history.get(key);
-
-    assert.ok(row);
-    assert.equal(row.status, 'PASS');
-    assert.equal(row.content, 'Success with max_completion_tokens');
-    // The final result should not have failedBothTokenFormats since retry succeeded
-    assert.equal(row.failedBothTokenFormats, undefined);
-  });
-
   it('15. Absent canonical classifier fails with clear message naming dependency when unpassed', async () => {
     const outPath = makeTmpFile();
     const classifierPath = require('../probe-runner').CANONICAL_CLASSIFIER_PATH;
@@ -1357,5 +909,454 @@ describe('9Router Probe Runner Suite', () => {
         delete require.cache[runnerPath];
       }
     }
+  });
+
+  it('17. HTTP 200 with tool_calls only records PASS with responseKind=tool_calls', async () => {
+    const modelId = 'test-tool-calls/model-agent';
+    customRoutes.set(modelId, (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'tool_calls',
+              message: {
+                content: '',
+                tool_calls: [
+                  { function: { name: 'grep_search', arguments: '{}' } },
+                  { function: { name: 'run_in_terminal', arguments: '{}' } },
+                ],
+              },
+            },
+          ],
+        })
+      );
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.passedCount, 1);
+    assert.equal(summary.failedCount, 0);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-tool-calls', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'PASS');
+    assert.equal(row.httpStatus, 200);
+    assert.equal(row.responseKind, 'tool_calls');
+    assert.ok(Array.isArray(row.toolCalls));
+    assert.equal(row.toolCalls.length, 2);
+    assert.ok(row.toolCalls.includes('grep_search'));
+    assert.ok(row.toolCalls.includes('run_in_terminal'));
+    assert.equal(row.verified, undefined);
+  });
+
+  it('18. Length-truncated empty response (finish_reason=length) returns PROBE_INVALID', async () => {
+    const modelId = 'test-reasoning/model-truncated';
+    customRoutes.set(modelId, (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'length',
+              message: {
+                content: '',
+                reasoning_content: 'Long reasoning trace that consumed all tokens...',
+              },
+            },
+          ],
+        })
+      );
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.passedCount, 0);
+    assert.equal(summary.failedCount, 1); // PROBE_INVALID counts as failed for budget
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-reasoning', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'PROBE_INVALID');
+    assert.equal(row.httpStatus, 200);
+    assert.equal(row.finishReason, 'length');
+    assert.ok(row.probeInvalid === true);
+    assert.ok(row.cooldownMs > 0);
+    assert.equal(row.verified, undefined);
+  });
+
+  it('19. HTTP 400 with [400] Arrearage body extracts inner 400 for classifier', async () => {
+    const modelId = 'test-arrearage/model-billing';
+    customRoutes.set(modelId, (req, res) => {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            message:
+              '[400]: {"error":{"message":"Access denied, please make sure your account is in good standing...","type":"Arrearage"}}',
+            type: 'invalid_request_error',
+          },
+        })
+      );
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.failedCount, 1);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-arrearage', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'FAIL');
+    assert.equal(row.httpStatus, 400);
+    // Classifier should see inner 400 with Arrearage -> upstream_entitlement
+    assert.equal(row.cause, Cause.UPSTREAM_ENTITLEMENT);
+    assert.equal(row.scope, Scope.UPSTREAM);
+    assert.equal(row.verified, undefined);
+  });
+
+  it('20. HTTP 503 with nested [403] body extracts inner 403 for classifier', async () => {
+    const modelId = 'test-nested-403/model-entitlement';
+    customRoutes.set(modelId, (req, res) => {
+      res.writeHead(503, { 'Content-Type': 'text/plain' });
+      res.end('503 Service Unavailable: [403]: {"error":{"message":"Model access is disabled"}}');
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.failedCount, 1);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-nested-403', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'FAIL');
+    assert.equal(row.httpStatus, 503);
+    // Classifier should see inner 403 -> upstream_entitlement
+    assert.equal(row.cause, Cause.UPSTREAM_ENTITLEMENT);
+    assert.equal(row.scope, Scope.UPSTREAM);
+    assert.equal(row.verified, undefined);
+  });
+
+  it('21. HTTP 503 with [402] credit exhausted body extracts inner 402 for classifier', async () => {
+    const modelId = 'test-nested-402/model-credit';
+    customRoutes.set(modelId, (req, res) => {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            message:
+              '[codebuddy-intl/glm-5.2] [429]: {"error":{"data":{"code":14018,"msg":"Credits exhausted..."}}}',
+          },
+        })
+      );
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.failedCount, 1);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-nested-402', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'FAIL');
+    assert.equal(row.httpStatus, 503);
+    // Classifier should see inner 429 -> upstream_credit_exhausted (or rate_limit)
+    // Our test classifier matches 429 with credit exhausted -> upstream_credit_exhausted
+    assert.equal(row.cause, Cause.UPSTREAM_CREDIT_EXHAUSTED);
+    assert.equal(row.scope, Scope.UPSTREAM);
+    assert.equal(row.verified, undefined);
+  });
+
+  it('22. Decisions model returns UNSUPPORTED_BY_PROBE', async () => {
+    const modelId = 'test-decisions/model-jev';
+    customRoutes.set(modelId, (req, res) => {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            message:
+              '[400]: {"error":{"message":"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint..."}}',
+          },
+        })
+      );
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.passedCount, 0);
+    assert.equal(summary.failedCount, 0); // UNSUPPORTED_BY_PROBE not counted as failed
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-decisions', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'UNSUPPORTED_BY_PROBE');
+    assert.equal(row.httpStatus, 400);
+    assert.equal(row.cause, 'unsupported_by_probe');
+    assert.equal(row.scope, 'model');
+    assert.equal(row.cooldownMs, null);
+    assert.equal(row.cooldownExpiresAt, null);
+    assert.ok(row.reason.includes('decisions_endpoint_required'));
+    assert.equal(row.verified, undefined);
+  });
+
+  it('23. Embeddings model returns UNSUPPORTED_BY_PROBE', async () => {
+    const modelId = 'test-embeddings/model-embed';
+    customRoutes.set(modelId, (req, res) => {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            message: 'This is an embeddings model, use /embeddings endpoint instead',
+          },
+        })
+      );
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.passedCount, 0);
+    assert.equal(summary.failedCount, 0);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-embeddings', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'UNSUPPORTED_BY_PROBE');
+    assert.ok(row.reason.includes('embeddings_endpoint_required'));
+  });
+
+  it('24. Image generation model returns UNSUPPORTED_BY_PROBE', async () => {
+    const modelId = 'test-image/model-dalle';
+    customRoutes.set(modelId, (req, res) => {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            message: 'This is an image generation model, use /images/generations endpoint',
+          },
+        })
+      );
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.passedCount, 0);
+    assert.equal(summary.failedCount, 0);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-image', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'UNSUPPORTED_BY_PROBE');
+    assert.ok(row.reason.includes('images_endpoint_required'));
+  });
+
+  it('25. SSE stream with tool_calls in delta records PASS with responseKind=tool_calls', async () => {
+    const modelId = 'test-sse-tool-calls/model-stream-agent';
+    customRoutes.set(modelId, (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(
+        'data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"grep_search"}}]}}]}\n\n'
+      );
+      res.write('data: [DONE]\n\n');
+      res.end();
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.passedCount, 1);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-sse-tool-calls', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'PASS');
+    assert.equal(row.responseKind, 'tool_calls');
+    assert.ok(Array.isArray(row.toolCalls));
+    assert.equal(row.toolCalls.length, 1);
+    assert.ok(row.toolCalls.includes('grep_search'));
+  });
+
+  it('26. Reasoning model emits content with 128 token budget (not PROBE_INVALID)', async () => {
+    const modelId = 'test-reasoning/model-passes';
+    customRoutes.set(modelId, (req, res, parsed) => {
+      // Verify the request uses max_tokens=128 (the larger budget)
+      assert.equal(parsed.max_tokens, 128);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'stop',
+              message: {
+                content: 'Reasoning complete: the answer is 42',
+                reasoning_content: 'Internal reasoning trace...',
+              },
+            },
+          ],
+        })
+      );
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    assert.equal(summary.passedCount, 1);
+    assert.equal(summary.failedCount, 0);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-reasoning', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'PASS');
+    assert.ok(row.content.includes('Reasoning complete'));
+    assert.ok(row.content.includes('Internal reasoning'));
+    assert.notEqual(row.finishReason, 'length');
+    assert.notEqual(row.finishReason, 'max_tokens');
+  });
+
+  it('27. Model rejects max_tokens, retries once with max_completion_tokens and passes', async () => {
+    const modelId = 'test-max-tokens-rejection/model-retry';
+    let requestCount = 0;
+
+    customRoutes.set(modelId, (req, res, parsed) => {
+      requestCount++;
+      const hasMaxTokens = 'max_tokens' in parsed;
+      const hasMaxCompletionTokens = 'max_completion_tokens' in parsed;
+
+      if (requestCount === 1 && hasMaxTokens && !hasMaxCompletionTokens) {
+        // First request with max_tokens: model rejects it
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: {
+              message:
+                'Invalid max_tokens: this model does not support max_tokens, use max_completion_tokens',
+              type: 'invalid_request_error',
+            },
+          })
+        );
+      } else if (requestCount === 2 && hasMaxCompletionTokens) {
+        // Retry with max_completion_tokens: succeeds
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { content: 'Success with max_completion_tokens' } }],
+          })
+        );
+      } else {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unexpected request' } }));
+      }
+    });
+
+    const outPath = makeTmpFile();
+    const summary = await runProbeBatch({
+      gatewayUrl,
+      apiKey: 'test-token',
+      catalogue: [{ id: modelId }],
+      outPath,
+      classifier: testClassifier,
+    });
+
+    // Should have made 2 requests, second one passes
+    assert.equal(summary.passedCount, 1);
+    assert.equal(summary.failedCount, 0);
+
+    const history = loadHistory(outPath);
+    const key = buildQueueKey({ upstream: 'test-max-tokens-rejection', modelId });
+    const row = history.get(key);
+
+    assert.ok(row);
+    assert.equal(row.status, 'PASS');
+    assert.equal(row.content, 'Success with max_completion_tokens');
+    // The final result should not have failedBothTokenFormats since retry succeeded
+    assert.equal(row.failedBothTokenFormats, undefined);
   });
 });
