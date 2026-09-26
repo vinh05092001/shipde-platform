@@ -413,6 +413,142 @@ async function classifyJob(transcriptTail, options) {
   };
 }
 
+// ---------------------------------------------------------------- candidate filter (C2)
+
+/**
+ * Pure candidate filter for dispatch offering candidates (TASK-AI-50 C2).
+ * Evaluates attached facts (evidence, cooldown, quota, model, access, gateway)
+ * and returns for every candidate an ELIGIBLE, EXCLUDED, or UNDECIDED verdict
+ * with a machine-readable reason code and the evidence ID used.
+ *
+ * Deterministic: pure function, no network, no model calls.
+ * Count in == count out; no candidate disappears silently.
+ *
+ * @param {Array<object>} candidates List of candidate objects with 7-part identity + facts
+ * @param {object} [options] Optional configuration (e.g. { now })
+ * @returns {Array<{ status: 'ELIGIBLE'|'EXCLUDED'|'UNDECIDED', reason: string, evidenceId: string|null }>}
+ */
+function filterCandidates(candidates, options) {
+  if (!Array.isArray(candidates)) {
+    throw new Error('filterCandidates expects an array');
+  }
+  const opts = options || {};
+  const now = typeof opts.now === 'number' ? opts.now : Date.now();
+
+  return candidates.map((c) => {
+    if (!c || typeof c !== 'object') {
+      return { status: 'EXCLUDED', reason: 'NO_EVIDENCE', evidenceId: null };
+    }
+
+    const ev = c.evidence;
+    const evId =
+      (ev && typeof ev === 'object' && ev.id !== undefined && ev.id !== null
+        ? String(ev.id)
+        : null) ||
+      (typeof c.evidenceId === 'string' ? c.evidenceId : null) ||
+      (typeof ev === 'string' ? ev : null);
+
+    if (!ev && !c.evidenceId) {
+      return { status: 'EXCLUDED', reason: 'NO_EVIDENCE', evidenceId: null };
+    }
+
+    const hasConflict =
+      Boolean(c.conflict) ||
+      Boolean(c.insufficientEvidence) ||
+      Boolean(
+        ev &&
+        typeof ev === 'object' &&
+        (ev.conflict ||
+          ev.conflicting ||
+          ev.status === 'conflict' ||
+          ev.status === 'insufficient' ||
+          ev.insufficient ||
+          ev.undecided)
+      );
+    if (hasConflict) {
+      return { status: 'UNDECIDED', reason: 'INSUFFICIENT_EVIDENCE', evidenceId: evId };
+    }
+
+    const isCooldownActive =
+      Boolean(c.cooldownActive) ||
+      c.cooldown === true ||
+      Boolean(
+        c.cooldown &&
+        typeof c.cooldown === 'object' &&
+        (c.cooldown.active || (c.cooldown.until && Date.parse(c.cooldown.until) > now))
+      ) ||
+      Boolean(c.cooldownUntil && Date.parse(c.cooldownUntil) > now);
+    if (isCooldownActive) {
+      return { status: 'EXCLUDED', reason: 'COOLDOWN_ACTIVE', evidenceId: evId };
+    }
+
+    const isGatewayDown =
+      Boolean(c.gatewayDown) ||
+      c.gatewayStatus === 'down' ||
+      Boolean(
+        c.gateway &&
+        typeof c.gateway === 'object' &&
+        (c.gateway.down || c.gateway.status === 'down')
+      );
+    if (isGatewayDown) {
+      return { status: 'EXCLUDED', reason: 'GATEWAY_DOWN', evidenceId: evId };
+    }
+
+    const isAccessDenied =
+      Boolean(c.accessDenied) ||
+      c.access === 'denied' ||
+      c.accessStatus === 'denied' ||
+      Boolean(c.access && typeof c.access === 'object' && c.access.denied);
+    if (isAccessDenied) {
+      return { status: 'EXCLUDED', reason: 'ACCESS_DENIED', evidenceId: evId };
+    }
+
+    const isStalledRecently =
+      Boolean(c.stalled) ||
+      Boolean(c.stalledRecently) ||
+      c.stall === true ||
+      Boolean(c.stall && typeof c.stall === 'object' && (c.stall.recent || c.stall.stalled));
+    if (isStalledRecently) {
+      return { status: 'EXCLUDED', reason: 'STALLED_RECENTLY', evidenceId: evId };
+    }
+
+    const isModelNotFound =
+      !c.modelId ||
+      (typeof c.modelId === 'string' && c.modelId.trim() === '') ||
+      Boolean(c.modelNotFound) ||
+      c.model === null;
+    if (isModelNotFound) {
+      return { status: 'EXCLUDED', reason: 'MODEL_NOT_FOUND', evidenceId: evId };
+    }
+
+    const isQuotaExhausted =
+      Boolean(c.quotaExhausted) ||
+      Boolean(
+        c.quota &&
+        typeof c.quota === 'object' &&
+        (c.quota.exhausted || c.quota.status === 'exhausted')
+      ) ||
+      c.quota === 'exhausted';
+    if (isQuotaExhausted) {
+      return { status: 'EXCLUDED', reason: 'QUOTA_EXHAUSTED', evidenceId: evId };
+    }
+
+    const isQuotaUnknown =
+      Boolean(c.quotaUnknown) ||
+      Boolean(
+        c.quota &&
+        typeof c.quota === 'object' &&
+        (c.quota.unknown || c.quota.rankLow || c.quota.status === 'unknown')
+      ) ||
+      c.quota === 'unknown';
+    if (isQuotaUnknown) {
+      return { status: 'EXCLUDED', reason: 'QUOTA_UNKNOWN_RANKED_LOW', evidenceId: evId };
+    }
+
+    return { status: 'ELIGIBLE', reason: 'ELIGIBLE', evidenceId: evId };
+  });
+}
+
 module.exports = {
   Outcome,
   ENDPOINT,
@@ -424,4 +560,5 @@ module.exports = {
   pickLane,
   classifyFailure,
   classifyJob,
+  filterCandidates,
 };
