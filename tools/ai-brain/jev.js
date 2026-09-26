@@ -41,6 +41,7 @@ const os = require('os');
 const path = require('path');
 
 const capabilities = require('./capabilities');
+const { escalateUndecided, DEFAULT_MAX_ESCALATIONS } = require('./escalation');
 
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const MODEL = 'jev-latest';
@@ -435,9 +436,15 @@ function filterCandidates(candidates, options) {
   const opts = options || {};
   const now = typeof opts.now === 'number' ? opts.now : Date.now();
 
-  return candidates.map((c) => {
+  const results = candidates.map((c) => {
     if (!c || typeof c !== 'object') {
-      return { status: 'EXCLUDED', reason: 'NO_EVIDENCE', evidenceId: null };
+      return {
+        status: 'EXCLUDED',
+        reason: 'NO_EVIDENCE',
+        evidenceId: null,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
     const ev = c.evidence;
@@ -449,7 +456,13 @@ function filterCandidates(candidates, options) {
       (typeof ev === 'string' ? ev : null);
 
     if (!ev && !c.evidenceId) {
-      return { status: 'EXCLUDED', reason: 'NO_EVIDENCE', evidenceId: null };
+      return {
+        status: 'EXCLUDED',
+        reason: 'NO_EVIDENCE',
+        evidenceId: null,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
     const hasConflict =
@@ -466,7 +479,13 @@ function filterCandidates(candidates, options) {
           ev.undecided)
       );
     if (hasConflict) {
-      return { status: 'UNDECIDED', reason: 'INSUFFICIENT_EVIDENCE', evidenceId: evId };
+      return {
+        status: 'UNDECIDED',
+        reason: 'INSUFFICIENT_EVIDENCE',
+        evidenceId: evId,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
     const isCooldownActive =
@@ -479,7 +498,13 @@ function filterCandidates(candidates, options) {
       ) ||
       Boolean(c.cooldownUntil && Date.parse(c.cooldownUntil) > now);
     if (isCooldownActive) {
-      return { status: 'EXCLUDED', reason: 'COOLDOWN_ACTIVE', evidenceId: evId };
+      return {
+        status: 'EXCLUDED',
+        reason: 'COOLDOWN_ACTIVE',
+        evidenceId: evId,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
     const isGatewayDown =
@@ -491,7 +516,13 @@ function filterCandidates(candidates, options) {
         (c.gateway.down || c.gateway.status === 'down')
       );
     if (isGatewayDown) {
-      return { status: 'EXCLUDED', reason: 'GATEWAY_DOWN', evidenceId: evId };
+      return {
+        status: 'EXCLUDED',
+        reason: 'GATEWAY_DOWN',
+        evidenceId: evId,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
     const isAccessDenied =
@@ -500,7 +531,13 @@ function filterCandidates(candidates, options) {
       c.accessStatus === 'denied' ||
       Boolean(c.access && typeof c.access === 'object' && c.access.denied);
     if (isAccessDenied) {
-      return { status: 'EXCLUDED', reason: 'ACCESS_DENIED', evidenceId: evId };
+      return {
+        status: 'EXCLUDED',
+        reason: 'ACCESS_DENIED',
+        evidenceId: evId,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
     const isStalledRecently =
@@ -509,7 +546,13 @@ function filterCandidates(candidates, options) {
       c.stall === true ||
       Boolean(c.stall && typeof c.stall === 'object' && (c.stall.recent || c.stall.stalled));
     if (isStalledRecently) {
-      return { status: 'EXCLUDED', reason: 'STALLED_RECENTLY', evidenceId: evId };
+      return {
+        status: 'EXCLUDED',
+        reason: 'STALLED_RECENTLY',
+        evidenceId: evId,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
     const isModelNotFound =
@@ -518,7 +561,13 @@ function filterCandidates(candidates, options) {
       Boolean(c.modelNotFound) ||
       c.model === null;
     if (isModelNotFound) {
-      return { status: 'EXCLUDED', reason: 'MODEL_NOT_FOUND', evidenceId: evId };
+      return {
+        status: 'EXCLUDED',
+        reason: 'MODEL_NOT_FOUND',
+        evidenceId: evId,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
     const isQuotaExhausted =
@@ -530,7 +579,13 @@ function filterCandidates(candidates, options) {
       ) ||
       c.quota === 'exhausted';
     if (isQuotaExhausted) {
-      return { status: 'EXCLUDED', reason: 'QUOTA_EXHAUSTED', evidenceId: evId };
+      return {
+        status: 'EXCLUDED',
+        reason: 'QUOTA_EXHAUSTED',
+        evidenceId: evId,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
     const isQuotaUnknown =
@@ -542,17 +597,36 @@ function filterCandidates(candidates, options) {
       ) ||
       c.quota === 'unknown';
     if (isQuotaUnknown) {
-      return { status: 'EXCLUDED', reason: 'QUOTA_UNKNOWN_RANKED_LOW', evidenceId: evId };
+      return {
+        status: 'EXCLUDED',
+        reason: 'QUOTA_UNKNOWN_RANKED_LOW',
+        evidenceId: evId,
+        decidedBy: 'jev',
+        candidate: c,
+      };
     }
 
-    return { status: 'ELIGIBLE', reason: 'ELIGIBLE', evidenceId: evId };
+    return {
+      status: 'ELIGIBLE',
+      reason: 'ELIGIBLE',
+      evidenceId: evId,
+      decidedBy: 'jev',
+      candidate: c,
+    };
   });
+
+  if (opts.controller) {
+    return escalateUndecided(results, opts);
+  }
+
+  return results;
 }
 
 module.exports = {
   Outcome,
   ENDPOINT,
   DEFAULT_MIN_CONFIDENCE,
+  DEFAULT_MAX_ESCALATIONS,
   loadKey,
   validateQuestions,
   ask,
@@ -561,4 +635,5 @@ module.exports = {
   classifyFailure,
   classifyJob,
   filterCandidates,
+  escalateUndecided,
 };
