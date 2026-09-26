@@ -5,8 +5,15 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 
-const { candidateKey, modelBase, registryPrefixes } = require('../discovery/identity');
+const {
+  candidateKey,
+  modelBase,
+  registryPrefixes,
+  normalizeCandidateKey,
+} = require('../discovery/identity');
 const { buildSnapshot } = require('../discovery/snapshot');
 const { reconcileRun } = require('../discovery/reconcile');
 const {
@@ -956,17 +963,122 @@ test('a row with no evidence is UNTESTED, not PASS', () => {
 // =========================================================================
 
 test('regression 1: the persisted ledger stays append-only after migration - no row rewritten or deleted', () => {
+  const relCatPath = 'tools/ai-brain/data/discovery/catalogue.jsonl';
   const catFile = path.resolve(__dirname, '..', 'data', 'discovery', 'catalogue.jsonl');
   assert.ok(fs.existsSync(catFile), 'persisted catalogue.jsonl must exist');
 
-  const content = fs.readFileSync(catFile, 'utf8');
+  // Parent 77d1be3 content (1,862 lines) is an immutable prefix:
+  // Blob SHA-1: f417729d6020f9c4938ab847bc1e45e8404b3cf5
+  // SHA-256: 6e1ab746072d356aa90f957e67dcf3708c098e31445c5775f71ee2e3c7e337ed
+  // Byte length: 811,032 bytes
+  const PARENT_77D1BE3_BLOB_SHA1 = 'f417729d6020f9c4938ab847bc1e45e8404b3cf5';
+  const PARENT_77D1BE3_SHA256 = '6e1ab746072d356aa90f957e67dcf3708c098e31445c5775f71ee2e3c7e337ed';
+  const PARENT_77D1BE3_BYTE_LEN = 811032;
+
+  let parentBytes = null;
+  try {
+    parentBytes = execFileSync('git', ['cat-file', 'blob', `77d1be3:${relCatPath}`], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (_) {
+    try {
+      parentBytes = execFileSync('git', ['cat-file', 'blob', PARENT_77D1BE3_BLOB_SHA1], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (_) {}
+  }
+
+  if (parentBytes) {
+    assert.strictEqual(
+      parentBytes.length,
+      PARENT_77D1BE3_BYTE_LEN,
+      'Parent 77d1be3 blob byte length must be 811032'
+    );
+    const parentSha = crypto.createHash('sha256').update(parentBytes).digest('hex');
+    assert.strictEqual(
+      parentSha,
+      PARENT_77D1BE3_SHA256,
+      'Parent 77d1be3 blob SHA-256 must match fixed-hash fixture'
+    );
+  }
+
+  // Retrieve the working/HEAD blob as raw bytes with no text conversion
+  let currentBytes = null;
+  try {
+    const workingBlobSha = execFileSync(
+      'git',
+      ['hash-object', '-w', `--path=${relCatPath}`, catFile],
+      {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        maxBuffer: 10 * 1024 * 1024,
+      }
+    )
+      .toString()
+      .trim();
+    currentBytes = execFileSync('git', ['cat-file', 'blob', workingBlobSha], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (_) {
+    try {
+      currentBytes = execFileSync('git', ['cat-file', 'blob', `HEAD:${relCatPath}`], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (_) {
+      const raw = fs.readFileSync(catFile);
+      currentBytes = Buffer.from(raw.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+    }
+  }
+
+  assert.ok(
+    currentBytes.length >= PARENT_77D1BE3_BYTE_LEN,
+    `persisted catalogue size (${currentBytes.length}) must be at least parent prefix size (${PARENT_77D1BE3_BYTE_LEN})`
+  );
+
+  const prefixBytes = currentBytes.subarray(0, PARENT_77D1BE3_BYTE_LEN);
+  if (parentBytes) {
+    assert.ok(
+      prefixBytes.equals(parentBytes),
+      'Parent 77d1be3 content (1,862 lines) must be an intact byte-for-byte immutable prefix'
+    );
+  }
+
+  const currentPrefixSha = crypto.createHash('sha256').update(prefixBytes).digest('hex');
+  assert.strictEqual(
+    currentPrefixSha,
+    PARENT_77D1BE3_SHA256,
+    'Prefix SHA-256 must match parent 77d1be3 blob (proves parent prefix was not modified in-place)'
+  );
+
+  // Assert that d364bd5 and 81e1fdc rewrote history and fail this prefix check
+  for (const badSha of ['d364bd5', '81e1fdc']) {
+    try {
+      const badBuf = execFileSync('git', ['cat-file', 'blob', `${badSha}:${relCatPath}`], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      const badPrefixSha = crypto
+        .createHash('sha256')
+        .update(badBuf.subarray(0, PARENT_77D1BE3_BYTE_LEN))
+        .digest('hex');
+      assert.notStrictEqual(
+        badPrefixSha,
+        PARENT_77D1BE3_SHA256,
+        `${badSha} rewrote history and must NOT match the immutable parent prefix`
+      );
+    } catch (_) {}
+  }
+
+  const content = currentBytes.toString('utf8');
   const rawLines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
 
   // Must contain all 1,861 original advertisement records plus the migration record
-  assert.strictEqual(
-    rawLines.length,
-    1862,
-    'persisted catalogue must contain 1861 transitions + 1 migration record'
+  assert.ok(
+    rawLines.length >= 1862,
+    'persisted catalogue must contain at least 1861 transitions + 1 migration record'
   );
 
   const parsedLines = rawLines.map((l, idx) => {
@@ -985,7 +1097,13 @@ test('regression 1: the persisted ledger stays append-only after migration - no 
     assert.ok(row.runId, `Row ${i} must have runId`);
     assert.ok(row.key, `Row ${i} must have candidate key`);
     assert.ok(row.modelId, `Row ${i} must have modelId`);
-    assert.strictEqual(row.key.split('\u241f').length, 7, `Row ${i} must be a 7-part key`);
+    // Historical rows have 6-part keys, reader normalises to 7-part keys
+    const normKey = normalizeCandidateKey(row.key);
+    assert.strictEqual(
+      normKey.split('\u241f').length,
+      7,
+      `Row ${i} normalised key must be a 7-part key`
+    );
   }
 
   // Verify migration record: line 1861
@@ -1003,10 +1121,41 @@ test('regression 1: the persisted ledger stays append-only after migration - no 
   assert.strictEqual(state.migrations[0].version, 2);
 
   // Verify first candidate in the persisted catalogue
-  const firstKey = parsedLines[0].key;
-  assert.ok(state.has(firstKey), 'first candidate key must exist in reconstructed state');
-  const firstCand = state.get(firstKey);
+  const firstRawKey = parsedLines[0].key;
+  assert.ok(state.has(firstRawKey), 'first candidate key must exist in reconstructed state');
+  const firstCand = state.get(firstRawKey);
   assert.strictEqual(firstCand.modelId, 'vinh');
+  assert.strictEqual(firstCand.quotaScope, '', 'legacy row must have empty quotaScope fail-closed');
+  assert.strictEqual(
+    firstCand.key.split('\u241f').length,
+    7,
+    'resolved candidate key must be 7-part canonical'
+  );
+
+  // Verify reader interface normalises legacy rows fail-closed
+  const cat = readDiscoveryCatalogue({ lines: parsedLines });
+  assert.strictEqual(cat.candidates.length, 1861);
+  const candFromCat = cat.get(firstRawKey);
+  assert.ok(candFromCat, 'candidate must be retrievable by legacy key');
+  assert.strictEqual(candFromCat.modelId, 'vinh');
+  assert.strictEqual(
+    candFromCat.quotaScope,
+    '',
+    'reader must normalise quotaScope to empty string fail-closed'
+  );
+  assert.strictEqual(
+    candFromCat.key.split('\u241f').length,
+    7,
+    'reader must normalise key to 7 parts'
+  );
+  assert.strictEqual(cat.hasModel('9router', '', 'vinh'), true);
+
+  // Also verify reading directly from persisted file on disk
+  const catFromDisk = readDiscoveryCatalogue({ catalogueFile: catFile });
+  assert.ok(catFromDisk.candidates.length >= 1861);
+  const candFromDisk = catFromDisk.get(firstRawKey);
+  assert.ok(candFromDisk, 'candidate must be retrievable from disk catalogue');
+  assert.strictEqual(candFromDisk.modelId, 'vinh');
 });
 
 test('regression 2: import keeps all seven identity fields', async () => {

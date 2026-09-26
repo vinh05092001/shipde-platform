@@ -116,4 +116,5 @@ module.exports = {
   currentState,
   readCatalogue,
   appendLine,
+  StateMap,
 };
