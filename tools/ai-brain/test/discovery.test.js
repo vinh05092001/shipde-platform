@@ -963,6 +963,7 @@ test('a row with no evidence is UNTESTED, not PASS', () => {
 // =========================================================================
 
 test('regression 1: the persisted ledger stays append-only after migration - no row rewritten or deleted', () => {
+  const relCatPath = 'tools/ai-brain/data/discovery/catalogue.jsonl';
   const catFile = path.resolve(__dirname, '..', 'data', 'discovery', 'catalogue.jsonl');
   assert.ok(fs.existsSync(catFile), 'persisted catalogue.jsonl must exist');
 
@@ -976,18 +977,16 @@ test('regression 1: the persisted ledger stays append-only after migration - no 
 
   let parentBytes = null;
   try {
-    parentBytes = execFileSync('git', ['cat-file', '-p', PARENT_77D1BE3_BLOB_SHA1], {
+    parentBytes = execFileSync('git', ['cat-file', 'blob', `77d1be3:${relCatPath}`], {
+      stdio: ['pipe', 'pipe', 'ignore'],
       maxBuffer: 10 * 1024 * 1024,
     });
   } catch (_) {
     try {
-      parentBytes = execFileSync(
-        'git',
-        ['show', '77d1be3:tools/ai-brain/data/discovery/catalogue.jsonl'],
-        {
-          maxBuffer: 10 * 1024 * 1024,
-        }
-      );
+      parentBytes = execFileSync('git', ['cat-file', 'blob', PARENT_77D1BE3_BLOB_SHA1], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        maxBuffer: 10 * 1024 * 1024,
+      });
     } catch (_) {}
   }
 
@@ -1005,7 +1004,35 @@ test('regression 1: the persisted ledger stays append-only after migration - no 
     );
   }
 
-  const currentBytes = fs.readFileSync(catFile);
+  // Retrieve the working/HEAD blob as raw bytes with no text conversion
+  let currentBytes = null;
+  try {
+    const workingBlobSha = execFileSync(
+      'git',
+      ['hash-object', '-w', `--path=${relCatPath}`, catFile],
+      {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        maxBuffer: 10 * 1024 * 1024,
+      }
+    )
+      .toString()
+      .trim();
+    currentBytes = execFileSync('git', ['cat-file', 'blob', workingBlobSha], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (_) {
+    try {
+      currentBytes = execFileSync('git', ['cat-file', 'blob', `HEAD:${relCatPath}`], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (_) {
+      const raw = fs.readFileSync(catFile);
+      currentBytes = Buffer.from(raw.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+    }
+  }
+
   assert.ok(
     currentBytes.length >= PARENT_77D1BE3_BYTE_LEN,
     `persisted catalogue size (${currentBytes.length}) must be at least parent prefix size (${PARENT_77D1BE3_BYTE_LEN})`
@@ -1029,13 +1056,10 @@ test('regression 1: the persisted ledger stays append-only after migration - no 
   // Assert that d364bd5 and 81e1fdc rewrote history and fail this prefix check
   for (const badSha of ['d364bd5', '81e1fdc']) {
     try {
-      const badBuf = execFileSync(
-        'git',
-        ['show', `${badSha}:tools/ai-brain/data/discovery/catalogue.jsonl`],
-        {
-          maxBuffer: 10 * 1024 * 1024,
-        }
-      );
+      const badBuf = execFileSync('git', ['cat-file', 'blob', `${badSha}:${relCatPath}`], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        maxBuffer: 10 * 1024 * 1024,
+      });
       const badPrefixSha = crypto
         .createHash('sha256')
         .update(badBuf.subarray(0, PARENT_77D1BE3_BYTE_LEN))
