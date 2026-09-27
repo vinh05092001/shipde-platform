@@ -349,8 +349,14 @@ function classifyFailure(input) {
     };
   }
 
-  // Case 12: HTTP 000 or connection failure means gateway or access path failure
-  if (effectiveStatus === 0 || /ECONNREFUSED|ENOTFOUND|gateway unreachable/i.test(text)) {
+  // Case 12: HTTP 000 or process failure means gateway or access path failure
+  if (
+    httpStatus === 0 ||
+    (exitCode !== 0 &&
+      exitCode !== undefined &&
+      httpStatus === undefined &&
+      /ECONNREFUSED|ENOTFOUND|gateway unreachable/i.test(text))
+  ) {
     return {
       cause: Cause.UNKNOWN,
       scope: Scope.GATEWAY,
