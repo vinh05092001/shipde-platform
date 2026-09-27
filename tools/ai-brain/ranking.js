@@ -570,6 +570,26 @@ function rankAndRecord(candidates, context) {
       continue;
     }
 
+    if (!c.accountId || c.accountId === '*') {
+      const s =
+        ctx.registry &&
+        ctx.registry.sources &&
+        ctx.registry.sources.find((src) => src.id === c.source || src.id === c.upstream);
+      if (s) {
+        c.accountId = s.id;
+      } else if (ctx.registry) {
+        rejected.push({
+          offeringId: sevenWayKey(c),
+          reason: 'WILDCARD_ACCOUNT',
+          scope: 'account',
+          upstream: c.upstream,
+          modelId: c.modelId,
+          accountId: '*',
+        });
+        continue;
+      }
+    }
+
     eligible.push(c);
   }
 
