@@ -6,15 +6,15 @@
 |---|---|
 | Work Item ID | `TASK-AI-58` |
 | Feature ID | `N/A` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | `183` |
 | Dependencies | `` |
 | Assigned author | `GEMINI` |
 | Risk | `HIGH` |
-| Allowed paths | `tools/ai-brain/test/mvp-contract-18.test.js`, `tools/ai-brain/test/mvp-controller.test.js`, `tools/ai-brain/test/mvp-controller-fallback.test.js`, `tools/ai-brain/test/mvp-repair.test.js` |
+| Allowed paths | `tools/ai-brain/candidates.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/decisions.js`, `tools/ai-brain/discovery/identity.js`, `tools/ai-brain/discovery/read.js`, `tools/ai-brain/discovery/store.js`, `tools/ai-brain/evidence.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/fitness.js`, `tools/ai-brain/offerings.js`, `tools/ai-brain/quota-store.js`, `tools/ai-brain/quota.js`, `tools/ai-brain/ranking.js`, `tools/ai-brain/scheduler.js`, `tools/ai-brain/sources.json`, `tools/ai-brain/test/candidates.test.js`, `tools/ai-brain/test/classifier-outcome.test.js`, `tools/ai-brain/test/dispatch-wiring.test.js`, `tools/ai-brain/test/failure-classifier.test.js`, `tools/ai-brain/test/mvp-contract-18.test.js`, `tools/ai-brain/test/mvp-controller-fallback.test.js`, `tools/ai-brain/test/mvp-controller.test.js`, `tools/ai-brain/test/mvp-repair.test.js`, `tools/ai-brain/test/scheduler.test.js` (scope correction requested by the operator) |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/brain-mvp-controller` |
-| Pull Request | `` |
+| Pull Request | `#149` |
 
 ## Business outcome
 
