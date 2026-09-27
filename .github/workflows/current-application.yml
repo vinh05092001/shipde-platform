@@ -159,6 +159,9 @@ jobs:
             exit 1
           fi
           echo "Success: apps/web/.next build output remains intact and untouched after secret scan."
+      - name: Dump MinIO logs on failure
+        if: failure()
+        run: docker compose -f infra/docker/compose.yml logs --no-color minio minio-init
       - name: Teardown Local Infrastructure
         if: always()
         run: pnpm infra:down
