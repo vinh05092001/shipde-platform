@@ -34,7 +34,7 @@ const { enumerate } = require('./discovery/adapters');
 const { reconcileRun } = require('./discovery/reconcile');
 const { readCatalogue, appendLine, STATES } = require('./discovery/store');
 const { importCheckpoint, importOuter } = require('./discovery/import');
-const { ADAPTERS, NOT_PERMITTED, RECALL, recall } = require('./discovery/adapters');
+const { ADAPTERS, RECALL, recall, permissionRefusal } = require('./discovery/adapters');
 const { readDiscoveryCatalogue } = require('./discovery/read');
 
 function loadRegistry() {
@@ -218,9 +218,10 @@ function cmdAdapters(flags) {
   const rows = (registry.sources || []).map((s) => {
     const kind = s && s.kind;
     const adapter = ADAPTERS[kind] ? 'yes' : 'none';
+    const refused = permissionRefusal(s);
     let plan = '';
     if (recall(s.id)) plan = `>< recalled: ${recall(s.id)}`;
-    else if (NOT_PERMITTED[s.id]) plan = `x  not permitted: ${NOT_PERMITTED[s.id]}`;
+    else if (refused) plan = `x  not permitted: ${refused}`;
     else if (!adapter) plan = '?  unknown kind, no adapter';
     else if (kind === 'router')
       plan = `GET ${(s.endpoint || '') + ((s.verify && s.verify.path) || '/models')}`;
@@ -231,7 +232,12 @@ function cmdAdapters(flags) {
           ? `mapped via ${s.reachedVia}@${s.routerAlias}`
           : 'unknown — no endpoint, no route';
     else if (kind === 'agent-cli')
-      plan = s.servesModels === false ? 'no-models (harness)' : 'presence only; unknown catalogue';
+      plan =
+        s.modelDiscovery && s.modelDiscovery.method === 'codex-cli-active-model'
+          ? 'codex CLI version/login/model'
+          : s.servesModels === false
+            ? 'no-models (harness)'
+            : 'presence only; unknown catalogue';
     else if (kind === 'orchestrator') plan = 'provider models listing via dispatch providers';
     else if (kind === 'harness') plan = 'no-models (per-task resolution)';
     else if (kind === 'decision-service') plan = 'no-models (decision only)';
@@ -239,9 +245,8 @@ function cmdAdapters(flags) {
   });
   return {
     matrix: rows,
-    notPermitted: NOT_PERMITTED,
     recall: RECALL,
-    note: 'matrices are constant maps for operator policy; source enumeration itself stays data-driven',
+    note: 'operator permission lives in sources.json; source enumeration stays data-driven',
   };
 }
 

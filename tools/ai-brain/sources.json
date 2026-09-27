@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-09-23",
+  "updatedAt": "2026-09-27",
   "note": "Adding a source is an entry here plus a qualification probe. Nothing in the dispatch path may branch on a source id.",
   "sources": [
     {
@@ -8,6 +8,11 @@
       "label": "9Router",
       "kind": "router",
       "servesModels": true,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "endpoint": "http://127.0.0.1:20128/v1",
       "credential": {
         "type": "api-key",
@@ -23,6 +28,11 @@
       "label": "xKiro",
       "kind": "model-source",
       "servesModels": true,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "reachedVia": "9router",
       "routerAlias": "kr",
       "credential": { "type": "oauth", "store": "9router:providerConnections" },
@@ -34,6 +44,11 @@
       "label": "B.AI",
       "kind": "model-source",
       "servesModels": true,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "credential": {
         "type": "api-key",
         "env": "BAI_API_KEY",
@@ -46,6 +61,11 @@
       "label": "agy (local)",
       "kind": "agent-cli",
       "servesModels": true,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "harness": "agy",
       "credential": {
         "type": "oauth",
@@ -65,6 +85,11 @@
       "label": "Cline",
       "kind": "agent-cli",
       "servesModels": false,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "harness": "cline",
       "credential": { "type": "account", "store": "~/.cline-*/data" },
       "verify": { "method": "version-command", "command": "cline version" },
@@ -75,6 +100,11 @@
       "label": "AutoClaw",
       "kind": "agent-cli",
       "servesModels": false,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "harness": "autoclaw",
       "credential": { "type": "account", "store": "~/.openclaw" },
       "verify": { "method": "version-command", "command": "openclaw --version" }
@@ -84,6 +114,11 @@
       "label": "Paseo",
       "kind": "orchestrator",
       "servesModels": false,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "harness": "paseo",
       "endpoint": "http://127.0.0.1:6767",
       "credential": { "type": "none" },
@@ -95,6 +130,11 @@
       "label": "Hermes Agent",
       "kind": "harness",
       "servesModels": false,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "harness": "hermes",
       "credential": { "type": "api-key", "env": "HERMES_MODEL_ENDPOINT" },
       "verify": { "method": "version-command", "command": "hermes --version" },
@@ -106,6 +146,11 @@
       "label": "Tencent",
       "kind": "model-source",
       "servesModels": true,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "endpoint": "https://tokenhub-intl.tencentcloudmaas.com/v1",
       "credential": { "type": "api-key", "env": "TENCENT_TOKENHUB_API_KEY" },
       "verify": { "method": "completion" }
@@ -115,6 +160,11 @@
       "label": "Requesty",
       "kind": "router",
       "servesModels": true,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "endpoint": "https://router.requesty.ai/v1",
       "credential": { "type": "api-key", "env": "REQUESTY_API_KEY" },
       "verify": { "method": "completion" }
@@ -124,6 +174,11 @@
       "label": "TokenHarbor",
       "kind": "router",
       "servesModels": true,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "endpoint": "https://tokenharbor.ai/v1",
       "credential": { "type": "api-key", "env": "TOKENHARBOR_API_KEY" },
       "verify": { "method": "completion" },
@@ -133,17 +188,35 @@
       "id": "codex",
       "label": "Codex",
       "kind": "agent-cli",
-      "servesModels": false,
+      "servesModels": true,
       "harness": "codex",
+      "accessPath": "cli",
+      "gateway": "",
+      "upstream": "openai",
+      "permission": {
+        "status": "permitted",
+        "decisionId": "HUMAN-DECISION-CODEX-CLI-REENABLED-2026-09-27",
+        "date": "2026-09-27",
+        "reason": "Codex CLI works again and is permitted as coding and review agent; the earlier ban is revoked."
+      },
       "credential": { "type": "account", "store": "~/.codex" },
       "verify": { "method": "version-command", "command": "codex --version" },
-      "quota": { "unit": "session", "window": "5h" }
+      "modelDiscovery": {
+        "method": "codex-cli-active-model",
+        "configPath": "~/.codex/config.toml"
+      },
+      "quota": { "unit": "session", "window": "5h", "scope": "account/session" }
     },
     {
       "id": "qwen",
       "label": "Qwen",
       "kind": "agent-cli",
       "servesModels": true,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "harness": "qwen",
       "credential": { "type": "account", "store": "~/.qwen" },
       "verify": { "method": "version-command", "command": "qwen --version" }
@@ -153,6 +226,11 @@
       "label": "OpenCode",
       "kind": "agent-cli",
       "servesModels": false,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "harness": "opencode",
       "reachedVia": "9router",
       "credential": { "type": "none" },
@@ -164,6 +242,11 @@
       "label": "Jev",
       "kind": "decision-service",
       "servesModels": false,
+      "permission": {
+        "status": "permitted",
+        "decisionId": "REGISTRY-SOURCE-BASELINE-2026-09-23",
+        "date": "2026-09-23"
+      },
       "endpoint": "https://api.typesafe.ai/v1/systemone",
       "credential": { "type": "api-key", "env": "TYPESAFE_API_KEY", "store": "~/.typesafe-key" },
       "verify": { "method": "closed-question" },

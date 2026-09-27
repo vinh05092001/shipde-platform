@@ -28,7 +28,7 @@ const {
   isProbeInvalid,
   checkpointIdentity,
 } = require('../discovery/import');
-const { enumerate, NOT_PERMITTED } = require('../discovery/adapters');
+const { enumerate } = require('../discovery/adapters');
 const { readDiscoveryCatalogue } = require('../discovery');
 
 function registryOnly(registry) {
@@ -79,7 +79,21 @@ function makeRegistry() {
         endpoint: 'https://tokenhub.example/v1',
         verify: { method: 'completion' },
       },
-      { id: 'codex', kind: 'agent-cli', servesModels: false },
+      {
+        id: 'codex',
+        kind: 'agent-cli',
+        servesModels: true,
+        harness: 'codex',
+        accessPath: 'cli',
+        upstream: 'openai',
+        modelDiscovery: { method: 'codex-cli-active-model', configPath: '~/.codex/config.toml' },
+        permission: {
+          status: 'permitted',
+          decisionId: 'HUMAN-DECISION-CODEX-CLI-REENABLED-2026-09-27',
+          date: '2026-09-27',
+        },
+        quota: { scope: 'account/session' },
+      },
       { id: 'cline', kind: 'agent-cli', servesModels: false },
       { id: 'paseo', kind: 'orchestrator', servesModels: false, harness: 'paseo' },
       { id: 'hermes', kind: 'harness', servesModels: false },
@@ -523,10 +537,21 @@ test('reachedVia model-source maps through gateway alias and its candidates coll
   assert.equal(res.catalogs[0].models.length, 2);
 });
 
-test('codex agent-cli is not-permitted and nothing is invoked for it', async () => {
-  const codex = makeRegistry().sources.find((s) => s.id === 'codex');
+test('registry-disabled agent-cli is refused with the decision named', async () => {
+  const blocked = {
+    id: 'blocked-cli',
+    kind: 'agent-cli',
+    servesModels: true,
+    harness: 'blocked',
+    modelDiscovery: { method: 'codex-cli-active-model' },
+    permission: {
+      status: 'not-permitted',
+      decisionId: 'HUMAN-DECISION-TEST-DENY-2026-09-27',
+      date: '2026-09-27',
+    },
+  };
   let spawned = 0;
-  const res = await enumerate(codex, {
+  const res = await enumerate(blocked, {
     runCommand: async () => {
       spawned += 1;
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -534,8 +559,61 @@ test('codex agent-cli is not-permitted and nothing is invoked for it', async () 
     resolveCommand: () => ({ found: true }),
   });
   assert.equal(res.status, 'not-permitted');
-  assert.match(res.reason, /banned/);
+  assert.match(res.reason, /HUMAN-DECISION-TEST-DENY-2026-09-27/);
   assert.equal(spawned, 0);
+});
+
+test('registry-permitted codex CLI reports the active account and model candidate', async () => {
+  const codex = makeRegistry().sources.find((s) => s.id === 'codex');
+  const calls = [];
+  const res = await enumerate(codex, {
+    os: { homedir: () => 'C:/Users/test' },
+    readFile: (file) => {
+      assert.match(file.replace(/\\/g, '/'), /C:\/Users\/test\/\.codex\/config\.toml$/);
+      return 'model = "gpt-5-codex"\n';
+    },
+    runCommand: async (file, args) => {
+      calls.push([file, args]);
+      if (args.join(' ') === '--version') return { exitCode: 0, stdout: 'codex 0.200.0\n' };
+      if (args.join(' ') === 'login status')
+        return { exitCode: 0, stdout: 'Logged in as codex-test-account\n' };
+      return { exitCode: 1, stdout: '', stderr: 'unexpected' };
+    },
+  });
+
+  assert.equal(res.status, 'enumerated');
+  assert.deepEqual(
+    calls.map((c) => c[1].join(' ')),
+    ['--version', 'login status']
+  );
+  assert.equal(res.catalogs.length, 1);
+  assert.equal(res.catalogs[0].harness, 'codex');
+  assert.equal(res.catalogs[0].accessPath, 'cli');
+  assert.equal(res.catalogs[0].gateway, '');
+  assert.equal(res.catalogs[0].upstream, 'openai');
+  assert.equal(res.catalogs[0].account, 'codex-test-account');
+  assert.equal(res.catalogs[0].quotaScope, 'codex-test-account/session');
+  assert.deepEqual(res.catalogs[0].models, ['gpt-5-codex']);
+});
+
+test('registry-permitted codex CLI with unreadable model is untested, never a candidate', async () => {
+  const codex = makeRegistry().sources.find((s) => s.id === 'codex');
+  const res = await enumerate(codex, {
+    os: { homedir: () => 'C:/Users/test' },
+    readFile: () => {
+      throw new Error('missing config');
+    },
+    runCommand: async (file, args) => {
+      if (args.join(' ') === '--version') return { exitCode: 0, stdout: 'codex 0.200.0\n' };
+      if (args.join(' ') === 'login status')
+        return { exitCode: 0, stdout: 'Logged in as codex-test-account\n' };
+      return { exitCode: 1, stdout: '', stderr: 'unexpected' };
+    },
+  });
+
+  assert.equal(res.status, 'untested');
+  assert.match(res.reason, /model/);
+  assert.deepEqual(res.catalogs, []);
 });
 
 test('agent-cli servesModels:false resolves to no-models without enumeration', async () => {
@@ -580,11 +658,23 @@ test('hermes and jev expose no catalogue', async () => {
   );
 });
 
-test('orchestrator lists dispatch providers but skips the banned codex provider', async () => {
+test('orchestrator lists dispatch providers and only skips registry-denied providers', async () => {
   const paseo = makeRegistry().sources.find((s) => s.id === 'paseo');
   const calls = [];
+  const registry = makeRegistry();
+  registry.sources.push({
+    id: 'blocked-provider',
+    kind: 'agent-cli',
+    servesModels: true,
+    permission: {
+      status: 'disabled',
+      decisionId: 'HUMAN-DECISION-BLOCKED-PROVIDER-2026-09-27',
+      date: '2026-09-27',
+    },
+  });
+  registry.dispatch.providers.blocked = { harness: 'paseo', provider: 'blocked-provider' };
   const res = await enumerate(paseo, {
-    registry: makeRegistry(),
+    registry,
     runCommand: async (file, args) => {
       const provider = args[2];
       calls.push(provider);
@@ -595,14 +685,22 @@ test('orchestrator lists dispatch providers but skips the banned codex provider'
           exitCode: 0,
           stdout: JSON.stringify([{ id: 'ninerouter/gh/gpt-4.1' }, { id: 'requesty/gpt-5.5' }]),
         };
+      if (provider === 'codex')
+        return { exitCode: 0, stdout: JSON.stringify([{ id: 'gpt-5-codex' }]) };
       return { exitCode: 1, stdout: '', stderr: 'missing' };
     },
   });
-  assert.equal(calls.includes('codex'), false, 'codex provider is never invoked');
+  assert.equal(calls.includes('codex'), true, 'permitted codex provider is invoked');
+  assert.equal(calls.includes('blocked-provider'), false, 'registry-denied provider is skipped');
+  assert.ok(
+    res.notes.some((n) => n.includes('HUMAN-DECISION-BLOCKED-PROVIDER-2026-09-27')),
+    'skip note names the decision'
+  );
   const runners = res.catalogs;
   assert.ok(runners.some((c) => c.upstream === 'claude'));
   assert.ok(runners.some((c) => c.upstream === 'ninerouter'));
   assert.ok(runners.some((c) => c.upstream === 'requesty'));
+  assert.ok(runners.some((c) => c.gateway === 'codex' && c.models.includes('gpt-5-codex')));
   assert.equal(
     runners.every((c) => c.harness === 'paseo'),
     true
@@ -703,7 +801,6 @@ test('store appends and reads catalogue, last line per key wins', () => {
 
 test('discovery may only write UNKNOWN and REMOVED', () => {
   assert.deepEqual([...DISCOVERY_WRITABLE].sort(), ['REMOVED', 'UNKNOWN']);
-  assert.ok(NOT_PERMITTED.codex);
 });
 
 // ---------- Controller Read Contract & Old Scan Import (W2 Flow B) ----------

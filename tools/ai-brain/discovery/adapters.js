@@ -43,11 +43,6 @@ const path = require('path');
 
 const DEFAULT_MODELS_PATH = '/models';
 
-const NOT_PERMITTED = {
-  codex:
-    'the operator has banned the codex CLI for plan/review-only slots; its models are never enumerated',
-};
-
 const RECALL = {
   ao: 'retired 2026-09-22, replaced by paseo',
   'agy-docker': 'retired 2026-09-22, native agy pool replaced it',
@@ -105,6 +100,137 @@ function groupByOwner(data, fallbackUpstream) {
 
 function joinUrl(root, suffix) {
   return String(root).replace(/\/$/, '') + String(suffix);
+}
+
+function permissionRefusal(source) {
+  const permission = (source && source.permission) || {};
+  const status = String(permission.status || 'permitted').toLowerCase();
+  if (!['disabled', 'not-permitted', 'denied'].includes(status)) return null;
+  const decision = permission.decisionId || permission.decision || 'registry decision';
+  const date = permission.date ? ` on ${permission.date}` : '';
+  const reason = permission.reason ? `: ${permission.reason}` : '';
+  return `${status}: refused by ${decision}${date}${reason}`;
+}
+
+function parseTomlStringValue(text, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^\\s*${escaped}\\s*=\\s*["']([^"']+)["']\\s*(?:#.*)?$`, 'm');
+  const match = String(text || '').match(re);
+  return match && match[1] ? match[1].trim() : '';
+}
+
+function parseLoginIdentity(text) {
+  const raw = String(text || '');
+  const patterns = [
+    /logged\s+in\s+as\s+([^\s,;]+)/i,
+    /signed\s+in\s+as\s+([^\s,;]+)/i,
+    /account\s*[:=]\s*([^\s,;]+)/i,
+    /user\s*[:=]\s*([^\s,;]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (match && match[1]) return match[1].trim();
+  }
+  return '';
+}
+
+function parseReportedModel(text) {
+  const raw = String(text || '');
+  const patterns = [/model\s*[:=]\s*([^\s,;]+)/i, /default\s+model\s*[:=]\s*([^\s,;]+)/i];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (match && match[1]) return match[1].replace(/^["']|["']$/g, '').trim();
+  }
+  return '';
+}
+
+function isUnsafeModelId(modelId) {
+  const id = String(modelId || '').trim();
+  return id === '' || id === '*' || /\*/.test(id) || /^auto$/i.test(id) || /^default$/i.test(id);
+}
+
+async function enumerateCodexActiveModel(source, ctx) {
+  const harness = source.harness || source.id;
+  const version = await ctx.runCommand(harness, ['--version'], { timeoutMs: 30000 });
+  if (version.enoent || version.exitCode !== 0) {
+    return {
+      status: 'unavailable',
+      reason: version.enoent
+        ? 'codex CLI is not on PATH'
+        : `codex --version failed with exit ${version.exitCode}`,
+      catalogs: [],
+      requests: [{ url: `${harness} --version`, exitCode: version.exitCode }],
+    };
+  }
+
+  const login = await ctx.runCommand(harness, ['login', 'status'], { timeoutMs: 30000 });
+  if (login.enoent || login.exitCode !== 0) {
+    return {
+      status: 'untested',
+      reason: login.enoent
+        ? 'codex login status could not run'
+        : `codex login status failed with exit ${login.exitCode}`,
+      catalogs: [],
+      requests: [
+        { url: `${harness} --version`, exitCode: version.exitCode },
+        { url: `${harness} login status`, exitCode: login.exitCode },
+      ],
+    };
+  }
+
+  const account = parseLoginIdentity(`${login.stdout || ''}\n${login.stderr || ''}`);
+  let modelId = parseReportedModel(`${login.stdout || ''}\n${login.stderr || ''}`);
+  if (!modelId) {
+    const home = (ctx.os && ctx.os.homedir && ctx.os.homedir()) || require('os').homedir();
+    let configPath =
+      (source.modelDiscovery && source.modelDiscovery.configPath) ||
+      path.join(home, '.codex', 'config.toml');
+    if (String(configPath).startsWith('~/'))
+      configPath = path.join(home, String(configPath).slice(2));
+    const readFile = ctx.readFile || ((file) => require('fs').readFileSync(file, 'utf8'));
+    try {
+      modelId = parseTomlStringValue(readFile(configPath), 'model');
+    } catch (_) {
+      modelId = '';
+    }
+  }
+
+  if (!account || isUnsafeModelId(modelId)) {
+    return {
+      status: 'untested',
+      reason: !account
+        ? 'codex login identity could not be read from login status'
+        : 'codex model could not be read as an explicit safe model id',
+      catalogs: [],
+      requests: [
+        { url: `${harness} --version`, exitCode: version.exitCode },
+        { url: `${harness} login status`, exitCode: login.exitCode },
+      ],
+    };
+  }
+
+  return {
+    status: 'enumerated',
+    reason: null,
+    catalogs: [
+      catalog({
+        upstream: source.upstream || 'openai',
+        gateway: source.gateway || '',
+        accessPath: source.accessPath || 'cli',
+        harness,
+        account,
+        quotaScope:
+          source.quota && source.quota.scope === 'account/session'
+            ? `${account}/session`
+            : (source.quota && source.quota.scope) || source.quotaScope || account,
+        models: [modelId],
+      }),
+    ],
+    requests: [
+      { url: `${harness} --version`, exitCode: version.exitCode },
+      { url: `${harness} login status`, exitCode: login.exitCode },
+    ],
+  };
 }
 
 function routerAdapter() {
@@ -257,9 +383,12 @@ function modelSourceAdapter() {
 
 function agentCliAdapter() {
   return async function enumerateAgentCli(source, ctx) {
-    const banned = NOT_PERMITTED[source.id];
-    if (banned) {
-      return { status: 'not-permitted', reason: banned, catalogs: [] };
+    const refused = permissionRefusal(source);
+    if (refused) {
+      return { status: 'not-permitted', reason: refused, catalogs: [] };
+    }
+    if (source.modelDiscovery && source.modelDiscovery.method === 'codex-cli-active-model') {
+      return enumerateCodexActiveModel(source, ctx);
     }
     if (source.servesModels === false) {
       return {
@@ -301,9 +430,13 @@ function orchestratorAdapter() {
     const catalogs = [];
     const requests = [];
     const notes = [];
+    const sourcesById = new Map(
+      ((ctx.registry || {}).sources || []).filter((s) => s && s.id).map((s) => [s.id, s])
+    );
     for (const provider of [...providers.keys()]) {
-      if (NOT_PERMITTED[provider]) {
-        notes.push(`{provider}:${provider} skipped — ${NOT_PERMITTED[provider]}`);
+      const refused = permissionRefusal(sourcesById.get(provider) || { id: provider });
+      if (refused) {
+        notes.push(`{provider}:${provider} skipped — ${refused}`);
         continue;
       }
       const res = await ctx.runCommand('paseo', ['provider', 'models', provider, '--json'], {
@@ -433,11 +566,14 @@ async function enumerate(source, ctx) {
 
 module.exports = {
   ADAPTERS,
-  NOT_PERMITTED,
   RECALL,
   catalog,
   groupByOwner,
   enumerate,
   recall,
   joinUrl,
+  permissionRefusal,
+  parseLoginIdentity,
+  parseReportedModel,
+  parseTomlStringValue,
 };
