@@ -259,7 +259,7 @@ describe('evidence store', () => {
     assert.equal(evidence.getEvidence(data, candB).length, 0);
     assert.equal(evidence.candidateStatus(data, candB), 'unknown');
     candB.evidence = evidence.getEvidence(data, candB);
-    assert.equal(ranking.evidenceScore(candB), 30);
+    assert.equal(ranking.evidenceScore(candB), 0);
   });
 
   test('cross-account: success on one account is not inherited as verified by another', () => {
@@ -299,7 +299,7 @@ describe('evidence store', () => {
     assert.equal(evidence.getEvidence(data, candB).length, 0);
     assert.equal(evidence.candidateStatus(data, candB), 'unknown');
     candB.evidence = evidence.getEvidence(data, candB);
-    assert.equal(ranking.evidenceScore(candB), 30);
+    assert.equal(ranking.evidenceScore(candB), 0);
   });
 
   test('migration: legacy 4-field evidence is migrated fail-closed as unverified history', () => {
@@ -2004,6 +2004,7 @@ describe('chooser quota, cooldown, reservations and load (item 3)', () => {
           workItemId: 'TASK-HELD-01',
           accountId: 'acc-res',
           quotaScope: 'acc-res',
+          offeringId: 'paseo::http://127.0.0.1:20128/v1::9router::gh::acc-res::acc-res::gh/gpt-4o',
           at: Date.now(),
         },
       ],

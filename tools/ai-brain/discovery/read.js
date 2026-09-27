@@ -523,9 +523,7 @@ function readDiscoveryCatalogue(opts) {
         });
         const latestSnap = validSnapshots[validSnapshots.length - 1];
         const s = String(latestSnap.resultState).toUpperCase();
-        if ((s === 'PASS' || s === 'ALIVE') && passes > 0) {
-          resultState = 'PASS';
-        } else if (s === 'FAIL') {
+        if (s === 'FAIL') {
           resultState = 'FAIL';
         } else if (s === 'DEFERRED') {
           resultState = 'DEFERRED';
@@ -534,15 +532,11 @@ function readDiscoveryCatalogue(opts) {
         }
       } else if (failures.length > 0) {
         resultState = 'FAIL';
-      } else if (passes > 0) {
-        resultState = 'PASS';
       } else if (deferred > 0) {
         resultState = 'DEFERRED';
       }
     } else if (failures.length > 0) {
       resultState = 'FAIL';
-    } else if (passes > 0) {
-      resultState = 'PASS';
     } else if (deferred > 0) {
       resultState = 'DEFERRED';
     }

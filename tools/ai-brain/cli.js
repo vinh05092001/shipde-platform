@@ -1317,14 +1317,22 @@ function dispatchCommand(args, deps = {}) {
   }
 
   // Execution with retry/fallback
+  const checkpointFile =
+    args['decision-log'] && typeof args['decision-log'] === 'string'
+      ? path.resolve(rootDir, args['decision-log'])
+      : deps && deps.decisionLogFile;
+  const checkpoint = readCheckpoint(checkpointFile);
+  const failedKeys = new Set((checkpoint && checkpoint.failedCandidates) || []);
+
   const maxAttempts = Number(
     args['max-attempts'] || args.maxAttempts || (deps && deps.maxAttempts) || 3
   );
-  const failedCandidates = new Set();
   let attempt = 0;
   let lastDecision = null;
   const decisionsStore = require('./decisions');
+  const failureClassifier = require('./failure-classifier');
   const nowForWriter = (deps && deps.now) || Date.now();
+
   const activeWriter = decisionsStore.writerFor(item.workItemId, {
     dir: decisionDir,
     now: nowForWriter,
@@ -1335,86 +1343,134 @@ function dispatchCommand(args, deps = {}) {
     return { exitCode: 1 };
   }
 
+  let finalChosenCandidate = null;
+  let finalChosenKey = null;
+  let launchRes = null;
+  let failedAttempts = [];
+
+  if (checkpoint && checkpoint.chosen) {
+    finalChosenKey = checkpoint.chosen;
+    finalChosenCandidate = {
+      offeringId: finalChosenKey,
+      harness: checkpoint.harness,
+      source: checkpoint.source,
+      upstream: checkpoint.upstream,
+      gateway: checkpoint.gateway,
+      modelId: checkpoint.modelId,
+    };
+    log('Resuming checkpointed decision for ' + finalChosenKey);
+  }
+
   while (attempt < maxAttempts) {
     attempt += 1;
     const now = (deps && deps.now) || Date.now();
-    const evidenceData = evidence.loadEvidence(evidenceDir);
 
-    const annotated = candidatesApi.annotateCandidates(
-      eligibleCandidates.map((c) => Object.assign({}, c)),
-      evidenceData,
-      { now }
-    );
-
-    // Never retry a candidate that just failed in this run
-    for (const c of annotated) {
-      const key = candidatesApi.candidateKey(c);
-      if (failedCandidates.has(key)) {
-        c.blocked = true;
-        c.blockReason = 'candidate failed in current dispatch run';
-        c.blockScope = 'candidate';
-      }
-    }
-
-    const rankingContext = {
-      workItemId: item.workItemId,
-      role: item.role,
-      kind: item.role,
-      registry,
-      evidenceData,
-      decisionOpts: { dir: decisionDir, now },
-      dryRun: false,
-      headrooms: deps && deps.headrooms,
-      load: deps && deps.load,
-      reservations: deps && deps.reservations,
-      explorationBudget:
-        args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 1,
-      home: deps && deps.home,
-      storePath: deps && deps.storePath,
-      accounts,
-      now,
-    };
-
-    const decision = ranking.rankAndRecord(annotated, rankingContext);
-    lastDecision = decision;
-
-    if (!decision.chosen) {
-      log(
-        'No eligible candidate for ' +
-          item.workItemId +
-          ' (attempt ' +
-          attempt +
-          '/' +
-          maxAttempts +
-          ')'
+    if (!finalChosenKey) {
+      const evidenceData = evidence.loadEvidence(evidenceDir);
+      const annotated = candidatesApi.annotateCandidates(
+        eligibleCandidates.map((c) => Object.assign({}, c)),
+        evidenceData,
+        { now }
       );
-      for (const rej of decision.rejected) {
-        log(
-          '  EXCLUDED ' +
-            rej.offeringId +
-            ' — ' +
-            rej.reason +
-            (rej.scope ? ' [' + rej.scope + ']' : '')
-        );
+
+      for (const c of annotated) {
+        const key = candidatesApi.candidateKey(c);
+        if (failedKeys.has(key)) {
+          c.blocked = true;
+          c.blockReason = 'candidate failed in current dispatch run';
+          c.blockScope = 'candidate';
+          continue;
+        }
+        for (const f of failedAttempts) {
+          if (f.key === key) {
+            c.blocked = true;
+            c.blockReason = 'candidate failed in current dispatch run';
+            c.blockScope = 'candidate';
+            break;
+          }
+          if (
+            f.classification &&
+            f.classification.scope !== 'candidate' &&
+            f.classification.scope !== 'model' &&
+            sameFailureDomain(c, f.candidate, f.classification)
+          ) {
+            c.blocked = true;
+            c.blockReason = 'avoiding failure domain of previous attempt';
+            c.blockScope = f.classification.scope || 'unknown';
+            break;
+          }
+        }
       }
-      exit(1);
-      return { exitCode: 1, decision, attempts: attempt };
+
+      const rankingContext = {
+        workItemId: item.workItemId,
+        role: item.role,
+        kind: item.role,
+        registry,
+        evidenceData,
+        decisionOpts: { dir: decisionDir, now },
+        dryRun: false,
+        headrooms: deps && deps.headrooms,
+        load: deps && deps.load,
+        reservations: deps && deps.reservations,
+        explorationBudget:
+          args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 1,
+        home: deps && deps.home,
+        storePath: deps && deps.storePath,
+        accounts,
+        now,
+      };
+
+      const decision = ranking.rankAndRecord(annotated, rankingContext);
+      lastDecision = decision;
+
+      if (!decision.chosen) {
+        log(
+          'No eligible candidate for ' +
+            item.workItemId +
+            ' (attempt ' +
+            attempt +
+            '/' +
+            maxAttempts +
+            ')'
+        );
+        for (const rej of decision.rejected) {
+          log(
+            '  EXCLUDED ' +
+              rej.offeringId +
+              ' — ' +
+              rej.reason +
+              (rej.scope ? ' [' + rej.scope + ']' : '')
+          );
+        }
+        exit(1);
+        return { exitCode: 1, decision, attempts: attempt };
+      }
+
+      finalChosenKey = decision.chosen;
+      finalChosenCandidate = annotated.find(
+        (c) => candidatesApi.candidateKey(c) === finalChosenKey
+      ) || {
+        offeringId: finalChosenKey,
+        harness: decision.harness,
+      };
+
+      const finalDecisionLog = {
+        decision: decision,
+        fallback: {},
+        quotaState: annotated.map((c) => quotaSnapshot(c)),
+        headrooms: deps && deps.headrooms,
+        resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+      };
+      if (checkpointFile) writeJsonFile(checkpointFile, buildDryRunLog(finalDecisionLog));
     }
 
-    const chosenKey = decision.chosen;
-    const chosenCandidate = annotated.find((c) => candidatesApi.candidateKey(c) === chosenKey) || {
-      offeringId: chosenKey,
-      harness: decision.harness,
-    };
-
-    if (isPinned) {
-      log('PINNED');
-    }
+    if (isPinned) log('PINNED');
     log(
       'Dispatching ' +
         item.workItemId +
         ' to ' +
-        chosenKey +
+        finalChosenKey +
         ' (attempt ' +
         attempt +
         '/' +
@@ -1422,59 +1478,75 @@ function dispatchCommand(args, deps = {}) {
         ')'
     );
 
-    const reservationOpts = {
-      home: deps && deps.home,
-      storePath: deps && deps.storePath,
-      now,
-    };
-
+    const reservationOpts = { home: deps && deps.home, storePath: deps && deps.storePath, now };
     quotaStore.recordReservation(
       item.workItemId,
       item.role,
-      chosenCandidate.accountId || '*',
-      chosenKey,
+      finalChosenCandidate.accountId || '*',
+      finalChosenKey,
       100000,
       reservationOpts
     );
 
-    let launchRes;
     let thrownError = null;
-    try {
-      const launcher = (deps && deps.run) || runHarness;
-      const harnessName = chosenCandidate.harness || decision.harness || 'paseo';
-      const adapter = getHarness(harnessName);
-      const route = sourcesApi.dispatchRoute(
-        chosenCandidate.source || chosenCandidate.upstream || chosenCandidate.gateway,
-        registry
-      );
-      const launchArgs = adapter.launch({
-        provider: (route && route.provider) || chosenCandidate.source || chosenCandidate.upstream,
-        model: sourcesApi.qualifyModel(chosenCandidate.modelId, route),
-        prompt: defaultPrompt(item),
-        branch: item.branch,
-        base: args.base || (deps && deps.base) || 'main',
-        cwd: args.cwd || (deps && deps.cwd) || rootDir,
-        title: workerName(item.workItemId),
-        labels: {
-          workItem: item.workItemId,
-          role: item.role,
-          project: args.project || 'shipde-platform',
-        },
-      });
+    const launcher = (deps && deps.run) || runHarness;
+    const harnessName =
+      finalChosenCandidate.harness || (lastDecision && lastDecision.harness) || 'paseo';
+    const adapter = getHarness(harnessName);
+    const route = sourcesApi.dispatchRoute(
+      finalChosenCandidate.source || finalChosenCandidate.upstream || finalChosenCandidate.gateway,
+      registry
+    );
 
-      try {
-        launchRes = launcher(adapter, launchArgs, { cwd: args.cwd || rootDir });
-      } catch (err) {
-        thrownError = err;
-        launchRes = {
-          exitCode: err.exitCode !== undefined ? err.exitCode : -1,
-          stdout: '',
-          stderr: err.stderr || err.message || String(err),
-          error: err,
-        };
-      }
-    } finally {
-      quotaStore.releaseReservation(item.workItemId, reservationOpts);
+    const launchArgs = adapter.launch({
+      provider:
+        (route && route.provider) || finalChosenCandidate.source || finalChosenCandidate.upstream,
+      model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
+      prompt: defaultPrompt(item),
+      branch: item.branch,
+      base: args.base || (deps && deps.base) || 'main',
+      cwd: args.cwd || (deps && deps.cwd) || rootDir,
+      title: workerName(item.workItemId),
+      labels: {
+        workItem: item.workItemId,
+        role: item.role,
+        project: args.project || 'shipde-platform',
+      },
+    });
+
+    try {
+      decisionsStore.recordDecision(
+        {
+          stage:
+            checkpoint && checkpoint.chosen
+              ? decisionsStore.Stage.RESUMED
+              : decisionsStore.Stage.LAUNCHED,
+          workItemId: item.workItemId,
+          role: item.role,
+          chosen: finalChosenKey,
+          harness: harnessName,
+          branch: item.branch,
+          sessionId: process.pid,
+          worktree: args.cwd || rootDir,
+        },
+        { dir: decisionDir, now }
+      );
+    } catch (err) {
+      log('Failed to append LAUNCHED to decision log');
+      exit(1);
+      return { exitCode: 1, error: err };
+    }
+
+    try {
+      launchRes = launcher(adapter, launchArgs, { cwd: args.cwd || rootDir });
+    } catch (err) {
+      thrownError = err;
+      launchRes = {
+        exitCode: err.exitCode !== undefined ? err.exitCode : -1,
+        stdout: '',
+        stderr: err.stderr || err.message || String(err),
+        error: err,
+      };
     }
 
     if (deps && deps.rethrow && thrownError) {
@@ -1487,18 +1559,36 @@ function dispatchCommand(args, deps = {}) {
       launchRes.exitCode !== 0 ||
       (typeof launchRes.httpStatus === 'number' && launchRes.httpStatus >= 400);
 
+    try {
+      decisionsStore.recordDecision(
+        {
+          stage: isFailure ? decisionsStore.Stage.FAILED : decisionsStore.Stage.COMPLETED,
+          workItemId: item.workItemId,
+          role: item.role,
+          chosen: finalChosenKey,
+          harness: harnessName,
+          branch: item.branch,
+          sessionId: process.pid,
+          worktree: args.cwd || rootDir,
+          outcome: isFailure ? 'failed' : 'passed',
+        },
+        { dir: decisionDir, now }
+      );
+    } catch (err) {}
+    quotaStore.releaseReservation(item.workItemId, finalChosenKey, reservationOpts);
+
     if (!isFailure) {
-      evidence.recordOutcome(evidenceDir, chosenCandidate, {
+      evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
         status: 'passed',
         level: evidence.Level.OUTCOME,
         exitCode: 0,
         source: 'dispatch',
       });
-      log('Dispatch succeeded on ' + chosenKey);
+      log('Dispatch succeeded on ' + finalChosenKey);
       exit(0);
-      return { exitCode: 0, chosen: chosenKey, result: launchRes, attempts: attempt };
+      return { exitCode: 0, chosen: finalChosenKey, result: launchRes, attempts: attempt };
     } else {
-      evidence.recordOutcome(evidenceDir, chosenCandidate, {
+      evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
         status: 'failed',
         level: evidence.Level.OUTCOME,
         exitCode: launchRes ? launchRes.exitCode : -1,
@@ -1511,12 +1601,29 @@ function dispatchCommand(args, deps = {}) {
         error: thrownError ? thrownError.message || String(thrownError) : undefined,
         source: 'dispatch',
       });
-      failedCandidates.add(chosenKey);
-      log(
-        'Candidate failed: ' +
-          chosenKey +
-          (launchRes && launchRes.stderr ? ' — ' + launchRes.stderr : '')
-      );
+      const rawFail = {
+        httpStatus: launchRes ? launchRes.httpStatus : undefined,
+        body: launchRes
+          ? launchRes.body || launchRes.stderr || launchRes.stdout
+          : thrownError && thrownError.message,
+        stderr: launchRes ? launchRes.stderr : thrownError && thrownError.message,
+      };
+      const classification = failureClassifier.classifyFailure({
+        exitCode: launchRes ? launchRes.exitCode : -1,
+        httpStatus: rawFail.httpStatus,
+        body: rawFail.body,
+        stderr: rawFail.stderr,
+        accountId: finalChosenCandidate.accountId,
+      });
+      failedAttempts.push({
+        key: finalChosenKey,
+        candidate: finalChosenCandidate,
+        classification: classification,
+      });
+      const scrubbedStderr = decisionsStore.scrubText(rawFail.stderr);
+      log('Candidate failed: ' + finalChosenKey + (scrubbedStderr ? ' — ' + scrubbedStderr : ''));
+      finalChosenKey = null; // force re-ranking
+      finalChosenCandidate = null;
     }
   }
 

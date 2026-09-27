@@ -248,7 +248,8 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       let reservedDuringLaunch = false;
       const runSuccess = () => {
         const reservations = quotaStore.getReservations({ home });
-        if (reservations['TASK-RES-SUCCESS']) reservedDuringLaunch = true;
+        if (Object.keys(reservations).some((k) => k.startsWith('TASK-RES-SUCCESS::')))
+          reservedDuringLaunch = true;
         return { exitCode: 0, stdout: '{"id":"sess-res-1"}' };
       };
 
@@ -267,7 +268,9 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       assert.equal(reservedDuringLaunch, true, 'reservation must be held during launch');
       const afterSuccess = quotaStore.getReservations({ home });
       assert.equal(
-        afterSuccess['TASK-RES-SUCCESS'],
+        Object.keys(afterSuccess).find((k) => k.startsWith('TASK-RES-SUCCESS::'))
+          ? 'held'
+          : undefined,
         undefined,
         'reservation must be released after success'
       );
@@ -279,7 +282,8 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       let reservedDuringLaunch = false;
       const runFailure = () => {
         const reservations = quotaStore.getReservations({ home });
-        if (reservations['TASK-RES-FAIL']) reservedDuringLaunch = true;
+        if (Object.keys(reservations).some((k) => k.startsWith('TASK-RES-FAIL::')))
+          reservedDuringLaunch = true;
         return { exitCode: 1, stderr: 'process error' };
       };
 
@@ -299,7 +303,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       assert.equal(reservedDuringLaunch, true, 'reservation must be held during launch');
       const afterFail = quotaStore.getReservations({ home });
       assert.equal(
-        afterFail['TASK-RES-FAIL'],
+        Object.keys(afterFail).find((k) => k.startsWith('TASK-RES-FAIL::')) ? 'held' : undefined,
         undefined,
         'reservation must be released after failure'
       );
@@ -311,7 +315,8 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       let reservedDuringLaunch = false;
       const runThrow = () => {
         const reservations = quotaStore.getReservations({ home });
-        if (reservations['TASK-RES-THROW']) reservedDuringLaunch = true;
+        if (Object.keys(reservations).some((k) => k.startsWith('TASK-RES-THROW::')))
+          reservedDuringLaunch = true;
         throw new Error('launcher crashed');
       };
 
@@ -331,7 +336,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       assert.equal(reservedDuringLaunch, true, 'reservation must be held during launch');
       const afterThrow = quotaStore.getReservations({ home });
       assert.equal(
-        afterThrow['TASK-RES-THROW'],
+        Object.keys(afterThrow).find((k) => k.startsWith('TASK-RES-THROW::')) ? 'held' : undefined,
         undefined,
         'reservation must be released after thrown error'
       );

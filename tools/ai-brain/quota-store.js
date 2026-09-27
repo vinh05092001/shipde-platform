@@ -217,9 +217,11 @@ function usableReadings(currentIdentity, options) {
 }
 
 function withQuotaLock(options, fn) {
+  if (global.__quotaLocked) return fn();
   const file = storePath(options);
   const lock = file + '.lock';
   const parent = path.dirname(file);
+  const fs = require('fs');
   if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
 
   const maxRetries = 100;
@@ -234,9 +236,11 @@ function withQuotaLock(options, fn) {
       while (Date.now() - start < 50) {}
     }
   }
+  global.__quotaLocked = true;
   try {
     return fn();
   } finally {
+    global.__quotaLocked = false;
     try {
       fs.rmdirSync(lock);
     } catch (e) {}
@@ -285,28 +289,37 @@ function pruneReservations(now, runningWorkItems, options, queuedWorkItems) {
   if (changed) saveReservations(res, options);
 }
 
-function releaseReservation(workItemId, options) {
-  const res = getReservations(options);
-  if (res[workItemId]) {
-    delete res[workItemId];
-    saveReservations(res, options);
-    return true;
-  }
-  return false;
+function releaseReservation(workItemId, offeringId, options) {
+  withQuotaLock(options, () => {
+    const res = getReservations(options);
+    let changed = false;
+    const prefix = workItemId + '::';
+    console.log('Release checking:', prefix, offeringId, Object.keys(res));
+    for (const key of Object.keys(res)) {
+      if (key === prefix + offeringId || (!offeringId && key.startsWith(prefix))) {
+        delete res[key];
+        changed = true;
+      }
+    }
+    if (changed) saveReservations(res, options);
+  });
 }
 
 function recordReservation(workItemId, role, accountId, offeringId, tokens, options) {
-  const res = getReservations(options);
-  res[workItemId] = {
-    workItemId,
-    role,
-    accountId,
-    offeringId,
-    tokens,
-    at: (options && options.now) || Date.now(),
-    cost: 0,
-  };
-  saveReservations(res, options);
+  withQuotaLock(options, () => {
+    const res = getReservations(options);
+    const key = workItemId + '::' + offeringId;
+    res[key] = {
+      workItemId,
+      role,
+      accountId,
+      offeringId,
+      tokens,
+      at: (options && options.now) || Date.now(),
+      cost: 0,
+    };
+    saveReservations(res, options);
+  });
 }
 
 module.exports = {

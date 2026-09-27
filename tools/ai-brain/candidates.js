@@ -43,26 +43,7 @@ function parsePrefix(modelId) {
   return { upstream: modelId.slice(0, idx), model: modelId.slice(idx + 1) };
 }
 
-/**
- * Canonical seven-part identity for a candidate:
- *   harness :: accessPath :: gateway :: upstream :: accountId :: quotaScope :: modelId
- *
- * This is the ONE identity everywhere: evidence, cooldowns, aliases, shared quota,
- * decision log, deduplication, and catalogue lookup.
- */
-function candidateKey(c) {
-  if (!c) return '';
-  if (typeof c === 'string') return c;
-  return [
-    c.harness || '',
-    c.accessPath || '',
-    c.gateway || '',
-    c.upstream || '',
-    c.accountId || '*',
-    c.quotaScope || '',
-    c.modelId || c.model || '',
-  ].join('::');
-}
+const { candidateKey } = require('./discovery/identity');
 
 /**
  * The harness a source reaches its models through. A router or agent-cli

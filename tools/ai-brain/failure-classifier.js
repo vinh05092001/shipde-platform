@@ -156,17 +156,20 @@ function classifyFailure(input) {
   ]
     .filter(Boolean)
     .join('\n');
+  const { scrubText } = require('./decisions');
   const evidence = {
     exitCode,
     httpStatus,
-    body: String(
-      body ||
-        input?.cause ||
-        (typeof input?.error === 'string' ? input.error : '') ||
-        input?.message ||
-        ''
+    body: scrubText(
+      String(
+        body ||
+          input?.cause ||
+          (typeof input?.error === 'string' ? input.error : '') ||
+          input?.message ||
+          ''
+      )
     ).slice(0, 500),
-    stderr: String(stderr || '').slice(0, 500),
+    stderr: scrubText(String(stderr || '')).slice(0, 500),
   };
   if (evidence.httpStatus === undefined || evidence.httpStatus === null) {
     delete evidence.httpStatus;
@@ -197,7 +200,7 @@ function classifyFailure(input) {
   }
 
   // Case 1: upstream credit exhausted (402 with "out of credit" / provider credit, or generic 402)
-  if (effectiveStatus === 402) {
+  if (effectiveStatus === 402 || effectiveStatus === 504) {
     const resetMs = parseResetTime(text);
     return {
       cause: Cause.UPSTREAM_CREDIT_EXHAUSTED,
@@ -349,13 +352,10 @@ function classifyFailure(input) {
     };
   }
 
-  // Case 12: HTTP 000 or process failure means gateway or access path failure
+  // Case 12: HTTP process failure means gateway or access path failure
   if (
-    httpStatus === 0 ||
-    (exitCode !== 0 &&
-      exitCode !== undefined &&
-      httpStatus === undefined &&
-      /ECONNREFUSED|ENOTFOUND|gateway unreachable/i.test(text))
+    (exitCode !== 0 || httpStatus === 0) &&
+    /ECONNREFUSED|ENOTFOUND|gateway unreachable/i.test(text)
   ) {
     return {
       cause: Cause.UNKNOWN,

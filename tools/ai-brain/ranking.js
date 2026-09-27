@@ -48,7 +48,7 @@ const WEIGHTS = {
 /** Map evidence status to a sub-score. */
 function evidenceScore(candidate) {
   const ev = candidate.evidence || [];
-  if (ev.length === 0) return 30; // unknown → mid-range, not zero
+  if (ev.length === 0) return 0; // untested stays unscored
   let best = 0;
   for (const e of ev) {
     if (e.status === 'passed') {
@@ -118,22 +118,6 @@ function reservationsForCandidate(candidate, reservations) {
   const out = [];
   for (const r of reservations || []) {
     if (r.offeringId && r.offeringId === key) {
-      out.push(r);
-    } else if (
-      r.accountId &&
-      candidate.accountId &&
-      r.accountId !== '*' &&
-      r.accountId === candidate.accountId
-    ) {
-      out.push(r);
-    } else if (r.quotaScope && candidate.quotaScope && r.quotaScope === candidate.quotaScope) {
-      out.push(r);
-    } else if (
-      r.modelId &&
-      r.modelId === candidate.modelId &&
-      r.upstream &&
-      r.upstream === candidate.upstream
-    ) {
       out.push(r);
     }
   }
@@ -611,25 +595,27 @@ function rankAndRecord(candidates, context) {
   // Unproven capability (qualifiedRoles absent) only gets selected inside an
   // explicit budget. Each prior unproven selection (priorUntested) counts
   // against it. Proving is the escape hatch, not the default.
-  let winner = eligible.length > 0 ? eligible[0] : null;
-  if (winner) {
+  let winner = null;
+  for (const cand of eligible) {
     const proven =
-      Array.isArray(winner.qualifiedRoles) &&
-      winner.qualifiedRoles.some((r) => r === kind || r === '*');
+      Array.isArray(cand.qualifiedRoles) &&
+      cand.qualifiedRoles.some((r) => r === kind || r === '*');
     if (!proven) {
       const prior = Number.isFinite(Number(ctx.priorUntested)) ? Number(ctx.priorUntested) : 0;
       if (prior + 1 > explorationBudget) {
-        winner = null;
         rejected.push({
-          offeringId: sevenWayKey(eligible[0]),
+          offeringId: sevenWayKey(cand),
           reason: 'EXPLORATION_BUDGET_EXHAUSTED',
           scope: 'capability',
-          upstream: eligible[0].upstream,
-          modelId: eligible[0].modelId,
-          accountId: eligible[0].accountId || '*',
+          upstream: cand.upstream,
+          modelId: cand.modelId,
+          accountId: cand.accountId || '*',
         });
+        continue;
       }
     }
+    winner = cand;
+    break;
   }
 
   const chosen = winner ? sevenWayKey(winner) : null;

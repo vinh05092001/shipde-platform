@@ -29,7 +29,7 @@
  * that could leak a secret would make the whole store radioactive.
  */
 
-const GATEWAY_PREFIX_SEPARATOR = '\u241f'; // U+241F SYMBOL FOR UNIT SEPARATOR
+const GATEWAY_PREFIX_SEPARATOR = '::';
 
 /**
  * A composite, stable, human-readable key for one candidate.
@@ -45,9 +45,9 @@ function candidateKey(identity) {
     i.accessPath || '',
     i.gateway || '',
     i.upstream || '',
-    i.account || '',
+    i.account !== undefined ? i.account : i.accountId || '*',
     i.quotaScope || '',
-    i.modelId || '',
+    i.modelId || i.model || '',
   ].join(GATEWAY_PREFIX_SEPARATOR);
 }
 
@@ -57,7 +57,7 @@ function candidateKey(identity) {
  */
 function parseCandidateKey(key) {
   if (typeof key !== 'string') return null;
-  const parts = key.split(GATEWAY_PREFIX_SEPARATOR);
+  const parts = key.includes('::') ? key.split('::') : key.split('\u241f');
   if (parts.length === 7) {
     return {
       harness: parts[0],

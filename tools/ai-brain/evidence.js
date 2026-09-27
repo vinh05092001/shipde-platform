@@ -21,6 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 const { classifyFailure, Scope, Cause, DEFAULT_COOLDOWNS } = require('./failure-classifier');
+const { scrubText } = require('./decisions');
 
 const SCHEMA_VERSION = 2;
 
@@ -92,20 +93,7 @@ function saveEvidence(dir, data) {
   fs.writeFileSync(evidencePath(dir), JSON.stringify(data, null, 2) + '\n', 'utf8');
 }
 
-/** Canonical seven-part identity for a candidate. */
-function candidateKey(c) {
-  if (!c) return '';
-  if (typeof c === 'string') return c;
-  return [
-    c.harness || '',
-    c.accessPath || '',
-    c.gateway || '',
-    c.upstream || '',
-    c.accountId || '*',
-    c.quotaScope || '',
-    c.modelId || c.model || '',
-  ].join('::');
-}
+const { candidateKey } = require('./discovery/identity');
 
 function findCombo(data, c) {
   if (!data || !data.combinations || !c) return null;
@@ -163,7 +151,7 @@ function recordProbe(dir, candidate, item) {
         (typeof item.error === 'string' ? item.error : '') ||
         item.message ||
         '',
-      stderr: item.stderr || '',
+      stderr: scrubText(item.stderr || ''),
       accountId: candidate.accountId,
     });
 

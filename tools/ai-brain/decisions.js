@@ -220,27 +220,54 @@ function openWritersDetailed(options) {
         harness: r.harness || null,
         branch: r.branch || null,
         chosen: r.chosen || null,
+        worktree: r.worktree || null,
         since: r.at,
+        area: r.area || null,
       });
     } else if (r.stage === Stage.COMPLETED || r.stage === Stage.FAILED) {
       state.delete(r.workItemId);
     }
   }
-  // A 4-hour default TTL allows enough time for an agent to perform long-running tasks,
-  // while ensuring a crashed process eventually releases its claim.
+
   const ttlMs = (options && options.ttlMs) || 4 * 60 * 60 * 1000;
   const now = (options && options.now) || Date.now();
+  const fs = require('fs');
 
   const activeWriters = [];
   for (const w of state.values()) {
-    const elapsed = now - new Date(w.since).getTime();
+    let lastActivity = new Date(w.since).getTime();
+    if (w.worktree) {
+      try {
+        const stats = fs.statSync(w.worktree);
+        if (stats.mtimeMs > lastActivity) {
+          lastActivity = stats.mtimeMs;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    const elapsed = now - lastActivity;
     if (elapsed <= ttlMs) {
       activeWriters.push(w);
     }
   }
 
+  // exclude a second writer on the same branch/area.
+  const filtered = [];
+  const seenBranches = new Set();
+  const seenAreas = new Set();
+  for (const w of activeWriters.sort(
+    (a, b) => new Date(b.since).getTime() - new Date(a.since).getTime()
+  )) {
+    if (w.branch && seenBranches.has(w.branch)) continue;
+    if (w.area && seenAreas.has(w.area)) continue;
+    if (w.branch) seenBranches.add(w.branch);
+    if (w.area) seenAreas.add(w.area);
+    filtered.push(w);
+  }
+
   return {
-    writers: activeWriters,
+    writers: filtered,
     readable: detail.readable,
     damaged: detail.damaged,
   };
@@ -282,6 +309,14 @@ function closeWriter(workItemId, outcome, options) {
   );
 }
 
+function scrubText(text) {
+  if (typeof text !== 'string') return text;
+  return text.replace(
+    /(sk-[a-zA-Z0-9_-]+|gh[a-zA-Z]_[a-zA-Z0-9_-]+|Bearer\s+[^\s]+|Basic\s+[^\s]+)/g,
+    '[REDACTED_SECRET]'
+  );
+}
+
 module.exports = {
   Stage,
   DEFAULT_DIR,
@@ -294,4 +329,5 @@ module.exports = {
   writerFor,
   closeWriter,
   scrub,
+  scrubText,
 };
