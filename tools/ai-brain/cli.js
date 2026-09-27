@@ -1240,6 +1240,7 @@ function dispatchCommand(args, deps = {}) {
       }
     }
 
+    const finalChoice = fallback && fallback.chosen ? fallback.chosen : decision.chosen;
     const nextCheckpoint = checkpointFile
       ? {
           schemaVersion: 1,
@@ -1247,7 +1248,8 @@ function dispatchCommand(args, deps = {}) {
           step: fallback && fallback.chosen ? 'fallback_selected' : 'ranked',
           updatedAt: new Date(now).toISOString(),
           failedCandidates: Array.from(failedKeys),
-          selectedCandidate: decision.chosen,
+          selectedCandidate: finalChoice,
+          firstChoice: decision.chosen,
           fallbackCandidate: fallback && fallback.chosen,
           decisionLog: decisionLogFile || null,
         }
