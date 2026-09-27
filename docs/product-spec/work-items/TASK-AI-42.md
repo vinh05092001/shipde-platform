@@ -168,3 +168,15 @@ python3 docs/product-spec/scripts/validate_docs.py
 
 - `docs/product-spec/scripts/validate_pr_contract.py` requires the literal marker `Review status: READY_FOR_CODEX` in every PR body, while this Work Item's lifecycle forbids claiming that stage before the reconciler/controller writes the register transitions. The PR body therefore quotes that marker as a contract-gate requirement only and states the actual review state alongside it. Amending the validator to accept an evidence-backed alternative marker is controller/tooling work outside this Work Item's allowed paths.
 - Register row 175 still reads `BLOCKED_DEPENDENCY`, so `node tools/ai-brain/cli.js reconcile` keeps reporting `BLOCK_NO_LONGER_TRUE` (severity `warn`) until the controller advances the stage. The Control table keeps the register's value by design, per the status transition ledger above.
+
+## Ceiling raised on 2026-09-23
+
+The ceiling this Work Item fixed at one (DEC-017) was raised to three by
+`HUMAN-DECISION-CONCURRENCY-CEILING-2026-09-22`, recorded in
+`BASELINE-AND-DECISIONS.md` by this Pull Request. The operator asked for feature Work
+Items to run in parallel overnight, so the decision is written down rather than the
+ceiling being exceeded silently.
+
+Only new implementation Work Items count towards the ceiling. Repairing an open Pull
+Request and planning or documentation runs do not, and one Work Item per branch and per
+Pull Request still holds.
