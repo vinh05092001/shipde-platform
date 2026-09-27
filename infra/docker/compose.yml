@@ -37,7 +37,7 @@ services:
       start_period: 3s
 
   minio:
-    image: quay.io/minio/aistor/minio:RELEASE.2025-02-14T20-23-33Z
+    image: quay.io/minio/aistor/minio:RELEASE.2026-09-19T17-05-25Z
     container_name: shipde-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -58,7 +58,7 @@ services:
       start_period: 5s
 
   minio-init:
-    image: quay.io/minio/aistor/mc:RELEASE.2025-08-21T03-14-05Z
+    image: quay.io/minio/aistor/mc:RELEASE.2026-09-19T15-24-59Z
     container_name: shipde-minio-init
     depends_on:
       minio:
