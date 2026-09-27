@@ -203,7 +203,8 @@ describe('Case 6: model not supported', () => {
 
 describe('Case 7: alias mismatch (access path issue)', () => {
   const input = {
-    stderr: 'Paseo/OpenCode: Model not found: ninerouter/gh/gpt-4.1-2025-04-14. Did you mean: gh/gpt-4.1, groq/openai/gpt-oss-120b?',
+    stderr:
+      'Paseo/OpenCode: Model not found: ninerouter/gh/gpt-4.1-2025-04-14. Did you mean: gh/gpt-4.1, groq/openai/gpt-oss-120b?',
   };
   const result = classifyFailure(input);
 

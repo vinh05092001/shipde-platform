@@ -1319,7 +1319,10 @@ function dispatchCommand(args, deps = {}) {
   let lastDecision = null;
   const decisionsStore = require('./decisions');
   const nowForWriter = (deps && deps.now) || Date.now();
-  const activeWriter = decisionsStore.writerFor(item.workItemId, { dir: decisionDir, now: nowForWriter });
+  const activeWriter = decisionsStore.writerFor(item.workItemId, {
+    dir: decisionDir,
+    now: nowForWriter,
+  });
   if (activeWriter) {
     log(`Work item ${item.workItemId} is already claimed by session ${activeWriter.sessionId}`);
     exit(1);
