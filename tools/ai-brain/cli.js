@@ -743,7 +743,7 @@ function sameFailureDomain(candidate, failed, classification) {
     Boolean(left && right && left !== '*' && right !== '*' && left === right);
   const scope = classification.scope || 'unknown';
   if (scope === 'upstream') {
-    return candidate.upstream && candidate.upstream === failed.upstream;
+    return candidate.upstream === failed.upstream && candidate.quotaScope === failed.quotaScope;
   }
   if (scope === 'candidate' || scope === 'model') {
     return (candidate.modelId || candidate.model) === (failed.modelId || failed.model);
@@ -1243,6 +1243,12 @@ function dispatchCommand(args, deps = {}) {
       }
     }
 
+    // firstChoice must stay the ORIGINAL first choice across resume.
+    const originalFirstChoice =
+      resumed && checkpoint && checkpoint.firstChoice
+        ? checkpoint.firstChoice
+        : decision.firstChoice || decision.chosen;
+
     const finalChoice = fallback && fallback.chosen ? fallback.chosen : decision.chosen;
     const nextCheckpoint = checkpointFile
       ? {
@@ -1252,7 +1258,7 @@ function dispatchCommand(args, deps = {}) {
           updatedAt: new Date(now).toISOString(),
           failedCandidates: Array.from(failedKeys),
           selectedCandidate: finalChoice,
-          firstChoice: decision.chosen,
+          firstChoice: originalFirstChoice,
           fallbackCandidate: fallback && fallback.chosen,
           decisionLog: decisionLogFile || null,
         }
@@ -1270,7 +1276,7 @@ function dispatchCommand(args, deps = {}) {
           resumed,
           annotated,
           decision,
-          firstChoice: decision.chosen,
+          firstChoice: originalFirstChoice,
           simulatedFailure,
           fallback,
           checkpoint: nextCheckpoint
