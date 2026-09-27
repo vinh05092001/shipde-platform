@@ -742,6 +742,9 @@ function sameFailureDomain(candidate, failed, classification) {
   const sameConcrete = (left, right) =>
     Boolean(left && right && left !== '*' && right !== '*' && left === right);
   const scope = classification.scope || 'unknown';
+  if (scope === 'upstream') {
+    return candidate.upstream && candidate.upstream === failed.upstream;
+  }
   if (scope === 'candidate' || scope === 'model') {
     return (candidate.modelId || candidate.model) === (failed.modelId || failed.model);
   }
@@ -1314,6 +1317,14 @@ function dispatchCommand(args, deps = {}) {
   const failedCandidates = new Set();
   let attempt = 0;
   let lastDecision = null;
+  const decisionsStore = require('./decisions');
+  const nowForWriter = (deps && deps.now) || Date.now();
+  const activeWriter = decisionsStore.writerFor(item.workItemId, { dir: decisionDir, now: nowForWriter });
+  if (activeWriter) {
+    log(`Work item ${item.workItemId} is already claimed by session ${activeWriter.sessionId}`);
+    exit(1);
+    return { exitCode: 1 };
+  }
 
   while (attempt < maxAttempts) {
     attempt += 1;
