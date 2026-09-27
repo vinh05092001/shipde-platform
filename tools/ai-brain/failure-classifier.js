@@ -349,6 +349,18 @@ function classifyFailure(input) {
     };
   }
 
+  // Case 12: HTTP 000 or connection failure means gateway or access path failure
+  if (effectiveStatus === 0 || /ECONNREFUSED|ENOTFOUND|gateway unreachable/i.test(text)) {
+    return {
+      cause: Cause.UNKNOWN,
+      scope: Scope.GATEWAY,
+      cooldownMs: DEFAULT_COOLDOWNS[Cause.UNKNOWN],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: null,
+    };
+  }
+
   // Unknown cause — scope UNKNOWN means no fault location can be inferred.
   // Callers must apply the 5-minute cooldown to the (upstream, model)
   // combination that produced the signal, not to the harness globally.
