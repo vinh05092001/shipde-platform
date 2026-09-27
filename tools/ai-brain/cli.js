@@ -785,6 +785,15 @@ function applyDryRunBlocks(candidates, failedKeys, failedCandidate, classificati
 function buildDryRunLog(parts) {
   const decision = parts.decision || {};
   const fallback = parts.fallback || {};
+  const finalChoice = fallback.chosen || decision.chosen || null;
+  const firstChoice = parts.firstChoice || decision.chosen || null;
+  const rejected = new Map();
+  for (const r of decision.rejected || []) {
+    rejected.set(r.offeringId, r);
+  }
+  for (const r of (fallback.decision && fallback.decision.rejected) || []) {
+    rejected.set(r.offeringId, r);
+  }
   const candidates = (parts.annotated || []).map((c) => {
     const key = parts.candidatesApi.candidateKey(c);
     return Object.assign(sevenFields(c), {
@@ -793,6 +802,14 @@ function buildDryRunLog(parts) {
       score: c.score,
     });
   });
+  for (const c of candidates) {
+    if (c.offeringId === finalChoice || rejected.has(c.offeringId)) continue;
+    rejected.set(c.offeringId, {
+      offeringId: c.offeringId,
+      reason: 'NOT_SELECTED',
+      scope: 'candidate',
+    });
+  }
   return {
     schemaVersion: 1,
     mode: 'dry-run',
@@ -812,13 +829,23 @@ function buildDryRunLog(parts) {
       'checkpoint resume',
     ],
     candidates,
-    excludedCandidates: (decision.rejected || []).map((r) => ({
+    excluded: Array.from(rejected.values()).map((r) => ({
       offeringId: r.offeringId,
+      candidateKey: r.offeringId,
       reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
       reason: r.reason || 'UNKNOWN',
       scope: r.scope || null,
     })),
-    selectedCandidate: decision.chosen,
+    excludedCandidates: Array.from(rejected.values()).map((r) => ({
+      offeringId: r.offeringId,
+      candidateKey: r.offeringId,
+      reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+      reason: r.reason || 'UNKNOWN',
+      scope: r.scope || null,
+    })),
+    selected: finalChoice,
+    selectedCandidate: finalChoice,
+    firstChoice,
     quotaState: candidates.map((c) => quotaSnapshot(c)),
     ranking: {
       reason: decision.reason,
@@ -834,7 +861,9 @@ function buildDryRunLog(parts) {
       executeTouched: false,
     },
     simulatedFailure: parts.simulatedFailure || null,
+    failure: parts.simulatedFailure || null,
     fallback: {
+      candidateKey: fallback.chosen || null,
       chosen: fallback.chosen || null,
       reason: fallback.reason || null,
       preferredDifferentFailureDomain: Boolean(fallback.preferredDifferentFailureDomain),
@@ -1211,19 +1240,18 @@ function dispatchCommand(args, deps = {}) {
       }
     }
 
-    const nextCheckpoint =
-      checkpointFile && simulateFailure
-        ? {
-            schemaVersion: 1,
-            workItemId: item.workItemId,
-            step: fallback && fallback.chosen ? 'fallback_selected' : 'ranked',
-            updatedAt: new Date(now).toISOString(),
-            failedCandidates: Array.from(failedKeys),
-            selectedCandidate: decision.chosen,
-            fallbackCandidate: fallback && fallback.chosen,
-            decisionLog: decisionLogFile || null,
-          }
-        : null;
+    const nextCheckpoint = checkpointFile
+      ? {
+          schemaVersion: 1,
+          workItemId: item.workItemId,
+          step: fallback && fallback.chosen ? 'fallback_selected' : 'ranked',
+          updatedAt: new Date(now).toISOString(),
+          failedCandidates: Array.from(failedKeys),
+          selectedCandidate: decision.chosen,
+          fallbackCandidate: fallback && fallback.chosen,
+          decisionLog: decisionLogFile || null,
+        }
+      : null;
     if (nextCheckpoint) {
       writeJsonFile(checkpointFile, nextCheckpoint);
     }
@@ -1237,6 +1265,7 @@ function dispatchCommand(args, deps = {}) {
           resumed,
           annotated,
           decision,
+          firstChoice: decision.chosen,
           simulatedFailure,
           fallback,
           checkpoint: nextCheckpoint
