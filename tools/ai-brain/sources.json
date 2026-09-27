@@ -8,6 +8,7 @@
       "label": "9Router",
       "kind": "router",
       "servesModels": true,
+      "harness": "paseo",
       "endpoint": "http://127.0.0.1:20128/v1",
       "credential": {
         "type": "api-key",
@@ -47,6 +48,7 @@
       "kind": "agent-cli",
       "servesModels": true,
       "harness": "agy",
+      "accessPath": "cli",
       "credential": {
         "type": "oauth",
         "store": "windows-credential-manager:gemini:antigravity",
@@ -66,6 +68,7 @@
       "kind": "agent-cli",
       "servesModels": false,
       "harness": "cline",
+      "accessPath": "cli",
       "credential": { "type": "account", "store": "~/.cline-*/data" },
       "verify": { "method": "version-command", "command": "cline version" },
       "comment": "A harness. It brings no models of its own: every model it runs arrives through 9Router or a configured endpoint."
@@ -76,6 +79,7 @@
       "kind": "agent-cli",
       "servesModels": false,
       "harness": "autoclaw",
+      "accessPath": "cli",
       "credential": { "type": "account", "store": "~/.openclaw" },
       "verify": { "method": "version-command", "command": "openclaw --version" }
     },
@@ -115,6 +119,7 @@
       "label": "Requesty",
       "kind": "router",
       "servesModels": true,
+      "harness": "paseo",
       "endpoint": "https://router.requesty.ai/v1",
       "credential": { "type": "api-key", "env": "REQUESTY_API_KEY" },
       "verify": { "method": "completion" }
@@ -124,6 +129,7 @@
       "label": "TokenHarbor",
       "kind": "router",
       "servesModels": true,
+      "harness": "paseo",
       "endpoint": "https://tokenharbor.ai/v1",
       "credential": { "type": "api-key", "env": "TOKENHARBOR_API_KEY" },
       "verify": { "method": "completion" },
@@ -135,6 +141,7 @@
       "kind": "agent-cli",
       "servesModels": false,
       "harness": "codex",
+      "accessPath": "cli",
       "credential": { "type": "account", "store": "~/.codex" },
       "verify": { "method": "version-command", "command": "codex --version" },
       "quota": { "unit": "session", "window": "5h" }
@@ -145,6 +152,7 @@
       "kind": "agent-cli",
       "servesModels": true,
       "harness": "qwen",
+      "accessPath": "cli",
       "credential": { "type": "account", "store": "~/.qwen" },
       "verify": { "method": "version-command", "command": "qwen --version" }
     },
@@ -154,6 +162,7 @@
       "kind": "agent-cli",
       "servesModels": false,
       "harness": "opencode",
+      "accessPath": "cli",
       "reachedVia": "9router",
       "credential": { "type": "none" },
       "verify": { "method": "version-command", "command": "opencode --version" },
