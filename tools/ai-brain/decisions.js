@@ -226,8 +226,21 @@ function openWritersDetailed(options) {
       state.delete(r.workItemId);
     }
   }
+  // A 4-hour default TTL allows enough time for an agent to perform long-running tasks,
+  // while ensuring a crashed process eventually releases its claim.
+  const ttlMs = (options && options.ttlMs) || 4 * 60 * 60 * 1000;
+  const now = (options && options.now) || Date.now();
+
+  const activeWriters = [];
+  for (const w of state.values()) {
+    const elapsed = now - new Date(w.since).getTime();
+    if (elapsed <= ttlMs) {
+      activeWriters.push(w);
+    }
+  }
+
   return {
-    writers: Array.from(state.values()),
+    writers: activeWriters,
     readable: detail.readable,
     damaged: detail.damaged,
   };
@@ -235,7 +248,11 @@ function openWritersDetailed(options) {
 
 /** The open writer for this work item, or null when it is free to claim. */
 function writerFor(workItemId, options) {
-  return openWriters(options).find((w) => w.workItemId === workItemId) || null;
+  const detail = openWritersDetailed(options);
+  if (!detail.readable) {
+    throw new Error(`Cannot determine writer for ${workItemId}: decision log is unreadable`);
+  }
+  return detail.writers.find((w) => w.workItemId === workItemId) || null;
 }
 
 /**
