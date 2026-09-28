@@ -7,8 +7,11 @@
  *       Enumerate every registry source, diff against the evidence store and
  *       append state transitions; write one snapshot per run.
  *
- *   node tools/ai-brain/discovery.js import checkpoint|outer [--json]
+ *   node tools/ai-brain/discovery.js import checkpoint|outer|probe-pass [--json]
  *       Carry one historical log forward as dated evidence (never live state).
+ *       `probe-pass` imports the secret-free direct-HTTP probe result and the
+ *       recorded HARNESS_PASS observations with honest, never-promoted proof
+ *       levels (TASK-AI-62).
  *
  *   node tools/ai-brain/discovery.js status [--json]
  *       Print the last written state per candidate and per-state counts.
@@ -34,6 +37,7 @@ const { enumerate } = require('./discovery/adapters');
 const { reconcileRun } = require('./discovery/reconcile');
 const { readCatalogue, appendLine, STATES } = require('./discovery/store');
 const { importCheckpoint, importOuter } = require('./discovery/import');
+const { importProbePass } = require('./discovery/probe-import');
 const { ADAPTERS, NOT_PERMITTED, RECALL, recall } = require('./discovery/adapters');
 const { readDiscoveryCatalogue } = require('./discovery/read');
 
@@ -141,8 +145,11 @@ async function cmdImport(which, flags) {
     path.join(
       path.dirname(path.dirname(path.dirname(ROOT))),
       'logs',
-      'catalogue',
-      which === 'outer' ? 'outer.jsonl' : 'checkpoint.jsonl'
+      which === 'outer'
+        ? 'catalogue/outer.jsonl'
+        : which === 'probe-pass'
+          ? 'night/probe_pass.json'
+          : 'catalogue/checkpoint.jsonl'
     );
   const now = new Date().toISOString();
   const stamp = String(now).replace(/[-:]/g, '').slice(0, 15);
@@ -157,6 +164,30 @@ async function cmdImport(which, flags) {
       outFile: outFile.replace(/\\/g, '/'),
       summary: entry.summary,
       totalRows: entry.totalRows,
+    };
+  }
+
+  if (which === 'probe-pass') {
+    const harnessFile =
+      flags['harness-file'] || path.join(ROOT, 'data', 'discovery', 'probe-harness-passes.json');
+    let harnessPasses = [];
+    try {
+      harnessPasses = JSON.parse(fs.readFileSync(harnessFile, 'utf8'));
+    } catch (_) {
+      harnessPasses = [];
+    }
+    const entry = importProbePass(sourceFile, { registry, prefixes, now, harnessPasses });
+    const outFile = path.join(outDir, `probe-pass-${stamp}.json`);
+    fs.writeFileSync(outFile, JSON.stringify(entry, null, 2) + '\n', 'utf8');
+    return {
+      kind: 'probe-pass',
+      file: sourceFile.replace(/\\/g, '/'),
+      outFile: outFile.replace(/\\/g, '/'),
+      candidateCount: entry.candidateCount,
+      apiPass: entry.apiPass,
+      harnessPass: entry.harnessPass,
+      deferred: entry.deferred,
+      summary: entry.summary,
     };
   }
 
@@ -267,8 +298,15 @@ async function main(argv) {
 
   if (cmd === 'run') return print(await cmdRun(flags), flags);
   if (cmd === 'import') {
-    const which = args[0] === 'outer' ? 'outer' : args[0] === 'checkpoint' ? 'checkpoint' : null;
-    if (!which) throw new Error('import requires <checkpoint|outer>');
+    const which =
+      args[0] === 'outer'
+        ? 'outer'
+        : args[0] === 'checkpoint'
+          ? 'checkpoint'
+          : args[0] === 'probe-pass'
+            ? 'probe-pass'
+            : null;
+    if (!which) throw new Error('import requires <checkpoint|outer|probe-pass>');
     return print(await cmdImport(which, flags), flags);
   }
   if (cmd === 'status') return print(cmdStatus(flags), flags);

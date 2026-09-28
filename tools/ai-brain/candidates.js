@@ -113,6 +113,7 @@ function generateCandidates(opts) {
 
   for (const source of registry.sources) {
     if (sourcesApi.isRetired(source.id, registry)) continue;
+    if (sourcesApi.isDeferred(source.id, registry)) continue;
     const bound = accountsFor(accounts, source.id);
     const sharedArc = bound.length === 0;
 

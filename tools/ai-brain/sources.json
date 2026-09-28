@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-09-23",
+  "updatedAt": "2026-09-28",
   "note": "Adding a source is an entry here plus a qualification probe. Nothing in the dispatch path may branch on a source id.",
   "sources": [
     {
@@ -179,6 +179,63 @@
       "mayWriteCode": false,
       "minConfidence": 0.7,
       "comment": "Closed, checkable questions only — classify a task, filter lanes. Below minConfidence the answer is discarded and a reasoning model decides."
+    },
+    {
+      "id": "cohere",
+      "label": "Cohere",
+      "kind": "model-source",
+      "servesModels": true,
+      "endpoint": "https://api.cohere.ai/compatibility/v1",
+      "credential": { "type": "api-key", "env": "COHERE_API_KEY" },
+      "verify": { "method": "completion" }
+    },
+    {
+      "id": "baseten",
+      "label": "Baseten",
+      "kind": "model-source",
+      "servesModels": true,
+      "endpoint": "https://inference.baseten.co/v1",
+      "credential": { "type": "api-key", "env": "BASETEN_API_KEY" },
+      "verify": { "method": "completion" }
+    },
+    {
+      "id": "inception",
+      "label": "Inception Labs",
+      "kind": "model-source",
+      "servesModels": true,
+      "endpoint": "https://api.inceptionlabs.ai/v1",
+      "credential": { "type": "api-key", "env": "INCEPTION_API_KEY" },
+      "verify": { "method": "completion" }
+    },
+    {
+      "id": "regolo",
+      "label": "Regolo",
+      "kind": "model-source",
+      "servesModels": true,
+      "endpoint": "https://api.regolo.ai/v1",
+      "credential": { "type": "api-key", "env": "REGOLO_API_KEY" },
+      "verify": { "method": "completion" }
+    },
+    {
+      "id": "amd-radeon",
+      "label": "AMD Radeon Cloud",
+      "kind": "model-source",
+      "servesModels": true,
+      "endpoint": "https://developer.amd.com.cn/radeon/api/v1",
+      "credential": { "type": "api-key", "env": "AMD_RADEON_API_KEY" },
+      "verify": { "method": "completion" }
+    },
+    {
+      "id": "dahl",
+      "label": "Dahl Inference",
+      "kind": "model-source",
+      "servesModels": true,
+      "endpoint": "https://inference.dahl.global/v1",
+      "credential": { "type": "api-key", "env": "DAHL_API_KEY" },
+      "verify": { "method": "completion" },
+      "disposition": "deferred",
+      "dispositionReason": "COMPROMISED_CREDENTIAL",
+      "comment": "Credential is compromised; recorded for audit but never dispatched to."
     }
   ],
   "dispatch": {

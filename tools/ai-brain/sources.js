@@ -96,6 +96,21 @@ function isRetired(id, registry) {
 }
 
 /**
+ * Whether a source is recorded but deferred (e.g. a compromised credential).
+ * A deferred source is kept in the registry for audit but must never produce a
+ * candidate. Returns the disposition reason, or null when the source is active.
+ */
+function isDeferred(id, registry) {
+  const source = getSource(id, registry);
+  if (!source) return null;
+  const disposition = source.disposition;
+  if (disposition === 'deferred' || disposition === 'compromised-credential') {
+    return source.dispositionReason || disposition;
+  }
+  return null;
+}
+
+/**
  * Why a source may not be dispatched to, or null when it may.
  *
  * Retirement is checked first and separately: AO was removed because its idle
@@ -107,6 +122,8 @@ function refuseReason(id, registry) {
     const entry = (registry.retired || []).find((r) => r.id === String(id));
     return 'RETIRED: ' + (entry && entry.reason ? entry.reason : String(id));
   }
+  const deferred = isDeferred(id, registry);
+  if (deferred) return 'DEFERRED: ' + deferred;
   const source = getSource(id, registry);
   if (!source) return 'UNKNOWN_SOURCE: ' + String(id);
   return null;
@@ -243,6 +260,7 @@ module.exports = {
   loadSources,
   getSource,
   isRetired,
+  isDeferred,
   refuseReason,
   capacitySources,
   harnessSources,
