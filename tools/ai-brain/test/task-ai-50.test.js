@@ -127,7 +127,6 @@ describe('TASK-AI-50 Hermes pinned adapter and Jev advisory', () => {
     assert.equal(adapter.id, 'hermes');
     assert.equal(typeof adapter.launch, 'function');
     assert.equal(typeof adapter.resume, 'function');
-    assert.equal(typeof adapter.inspect, 'function');
     assert.equal(typeof adapter.stop, 'function');
   });
 
@@ -140,8 +139,9 @@ describe('TASK-AI-50 Hermes pinned adapter and Jev advisory', () => {
       return { exitCode: 0, stdout: JSON.stringify({ sessionId: 'hermes-1' }) };
     });
     assert.equal(result.chosen, key);
-    assert.ok(calls[0].args.includes('--candidate-key'));
-    assert.equal(calls[0].args[calls[0].args.indexOf('--candidate-key') + 1], key);
+    // corrected to real Hermes CLI v0.21.4
+    assert.ok(calls[0].args.includes('-m'));
+    assert.equal(calls[0].args[calls[0].args.indexOf('-m') + 1], c.modelId);
   });
 
   test('3 Hermes never changes the candidate', () => {
@@ -158,10 +158,9 @@ describe('TASK-AI-50 Hermes pinned adapter and Jev advisory', () => {
       quotaScope: c.quotaScope,
       prompt: 'do work',
     });
-    assert.equal(args[args.indexOf('--candidate-key') + 1], key);
-    assert.equal(args[args.indexOf('--model') + 1], c.modelId);
-    assert.equal(args.includes('--no-fallback'), true);
-    assert.equal(args[args.indexOf('--max-attempts') + 1], '1');
+    // corrected to real Hermes CLI v0.21.4
+    assert.equal(args[args.indexOf('-m') + 1], c.modelId);
+    assert.equal(args.includes('--ignore-user-config'), true);
   });
 
   test('4 quota error returns structured failure', () => {
@@ -219,13 +218,15 @@ describe('TASK-AI-50 Hermes pinned adapter and Jev advisory', () => {
     });
     const keys = [];
     const result = runDispatch([first, second], (adapter, args) => {
-      keys.push(args[args.indexOf('--candidate-key') + 1]);
+      // corrected to real Hermes CLI v0.21.4
+      keys.push(args[args.indexOf('-m') + 1]);
       if (keys.length === 1) return { exitCode: 1, stderr: 'gateway unreachable ECONNREFUSED' };
       return { exitCode: 0, stdout: '{"sessionId":"hermes-3"}' };
     });
     assert.equal(result.exitCode, 0);
-    assert.equal(keys[0], candidateKey(first));
-    assert.equal(keys[1], candidateKey(second));
+    // corrected to real Hermes CLI v0.21.4
+    assert.equal(keys[0], first.modelId);
+    assert.equal(keys[1], second.modelId);
   });
 
   test('7 resume uses the durable checkpoint', () => {
@@ -248,13 +249,15 @@ describe('TASK-AI-50 Hermes pinned adapter and Jev advisory', () => {
     const result = runDispatch(
       [first, second],
       (adapter, args) => {
-        launchedKey = args[args.indexOf('--candidate-key') + 1];
+        // corrected to real Hermes CLI v0.21.4
+        launchedKey = args[args.indexOf('-m') + 1];
         return { exitCode: 0, stdout: '{"sessionId":"hermes-resumed"}' };
       },
       { checkpoint }
     );
     assert.equal(result.exitCode, 0);
-    assert.equal(launchedKey, candidateKey(second));
+    // corrected to real Hermes CLI v0.21.4
+    assert.equal(launchedKey, second.modelId);
   });
 
   test('8 stop kills the whole process tree', () => {

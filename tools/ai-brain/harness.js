@@ -114,49 +114,21 @@ const hermes = {
         throw new Error('HERMES_SUBAGENT_REQUIRES_CONTROLLER_ASSIGNMENT');
       }
     }
-    const args = [
-      'run',
-      '--candidate-key',
-      j.candidateKey,
-      '--model',
-      j.model,
-      '--no-fallback',
-      '--max-attempts',
-      String(Number.isFinite(Number(j.maxAttempts)) ? Number(j.maxAttempts) : 1),
-      '--json',
-    ];
+    const args = ['-m', j.model, '--ignore-user-config'];
     if (j.provider) args.push('--provider', j.provider);
-    if (j.accountId) args.push('--account', j.accountId);
-    if (j.gateway) args.push('--gateway', j.gateway);
-    if (j.upstream) args.push('--upstream', j.upstream);
-    if (j.quotaScope) args.push('--quota-scope', j.quotaScope);
-    if (j.cwd) args.push('--cwd', j.cwd);
-    if (j.branch) args.push('--branch', j.branch);
-    if (j.checkpoint) args.push('--checkpoint', j.checkpoint);
-    args.push('--', j.prompt || '');
+    if (j.cwd) args.push('--in', j.cwd);
+    args.push('-z', j.prompt || '');
     return args;
   },
   resume(sessionId, prompt, job) {
     const j = job || {};
     if (!j.candidateKey) throw new Error('HERMES_REQUIRES_PINNED_CANDIDATE');
-    const args = [
-      'resume',
-      String(sessionId),
-      '--candidate-key',
-      j.candidateKey,
-      '--no-fallback',
-      '--max-attempts',
-      String(Number.isFinite(Number(j.maxAttempts)) ? Number(j.maxAttempts) : 1),
-      '--json',
-    ];
-    if (j.model) args.push('--model', j.model);
-    if (j.cwd) args.push('--cwd', j.cwd);
-    if (j.checkpoint) args.push('--checkpoint', j.checkpoint);
-    args.push('--', prompt || '');
+    const args = ['--resume', String(sessionId), '--ignore-user-config'];
+    if (j.model) args.push('-m', j.model);
+    if (j.provider) args.push('--provider', j.provider);
+    if (j.cwd) args.push('--in', j.cwd);
+    args.push('-z', prompt || '');
     return args;
-  },
-  inspect(sessionId) {
-    return ['inspect', String(sessionId), '--json'];
   },
   stop(sessionId, job) {
     const pid = job && job.pid ? Number(job.pid) : Number(sessionId);
@@ -309,9 +281,14 @@ function executableFor(command, options) {
   const readFile = opts.readFile || ((p) => fs.readFileSync(p, 'utf8'));
   if (platform !== 'win32') return { file: command, prefixArgs: [] };
 
-  const dirs = (opts.path || process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  // The path module must follow the injected platform, not the host: on Linux
+  // the posix delimiter is ':' (which splits "C:\bin" on the drive colon) and
+  // join() emits forward slashes, so a win32 test — or any caller that pins
+  // platform — must resolve with path.win32 to see the real shim layout.
+  const p = path.win32;
+  const dirs = (opts.path || process.env.PATH || '').split(p.delimiter).filter(Boolean);
   for (const dir of dirs) {
-    const shim = path.join(dir, command + '.cmd');
+    const shim = p.join(dir, command + '.cmd');
     if (!exists(shim)) continue;
     let target = null;
     try {
@@ -319,7 +296,7 @@ function executableFor(command, options) {
       // lines earlier, and matching that one resolves to a file which is not
       // there, so the unwrap fell back to the .cmd that cannot be spawned.
       const match = /"%dp0%\\(node_modules\\[^"]+)"/.exec(readFile(shim));
-      if (match) target = path.join(dir, match[1]);
+      if (match) target = p.join(dir, match[1]);
     } catch (_) {
       target = null;
     }
