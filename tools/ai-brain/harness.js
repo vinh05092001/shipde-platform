@@ -101,6 +101,24 @@ const cline = {
   },
 };
 
+/**
+ * Hermes v0.21.4 one-shot handle contract, settled against the real binary on
+ * 2026-09-29 (evidence: logs/night/hermes-durable-evidence.txt):
+ *
+ * `-z` prints ONLY the final response text to stdout — the CLI documents "no
+ * session_id line" and neither a successful nor a failed run emitted any id
+ * on stdout or stderr. The durable handle is the `session_id` field of the
+ * `--usage-file` JSON report: present on a successful run, null on a failed
+ * one (the report is written either way). `hermes --resume <id> -z …` was
+ * verified to continue that exact session — the resumed run's report carried
+ * the same session_id and the exported history holds both turns.
+ *
+ * Consequences: a launch without `--usage-file` can never yield a handle, so
+ * the caller supplies the report path; a report whose session_id is null must
+ * stay a hard HARNESS_NO_SESSION_ID downstream, never a guessed value; and
+ * post-hoc `sessions list` / "latest" lookups are a human, workspace-scoped,
+ * racy channel that this adapter does not use.
+ */
 const hermes = {
   id: 'hermes',
   command: 'hermes',
@@ -117,6 +135,8 @@ const hermes = {
     const args = ['-m', j.model, '--ignore-user-config'];
     if (j.provider) args.push('--provider', j.provider);
     if (j.cwd) args.push('--in', j.cwd);
+    // The only channel on which a one-shot run emits its durable session id.
+    if (j.usageFile) args.push('--usage-file', j.usageFile);
     args.push('-z', j.prompt || '');
     return args;
   },
@@ -135,12 +155,13 @@ const hermes = {
     return Number.isFinite(pid) && pid > 0 ? { killTree: pid } : null;
   },
   sessionIdFrom(parsed) {
-    return (
-      pickId(parsed) ||
-      pickId(parsed && parsed.handle) ||
-      pickId(parsed && parsed.session) ||
-      (parsed && parsed.pid ? String(parsed.pid) : null)
-    );
+    // Parses exactly what the real CLI emits: the `session_id` field of the
+    // --usage-file JSON (logs/night/hermes-durable-evidence.txt). A failed
+    // run writes the report with "session_id": null, and null stays null — a
+    // missing handle is HARNESS_NO_SESSION_ID, never a value guessed from
+    // fields the CLI does not emit (handle/session/pid guesses removed).
+    const v = parsed && parsed.session_id;
+    return v !== undefined && v !== null && String(v).trim() !== '' ? String(v) : null;
   },
   progressFromInspect(parsed, options) {
     return progressVerdict(parsed, options);
