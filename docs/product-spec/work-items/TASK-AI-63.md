@@ -1,0 +1,31 @@
+# TASK-AI-63 - Hermes CLI contract
+
+## Control
+
+| Field           | Value                                                                                                                                                                                                                                                                                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Work Item ID    | `TASK-AI-63`                                                                                                                                                                                                                                                                                                                                                    |
+| Feature ID      | `N/A`                                                                                                                                                                                                                                                                                                                                                           |
+| Status          | `READY_FOR_CODEX`                                                                                                                                                                                                                                                                                                                                               |
+| Delivery order  | `189`                                                                                                                                                                                                                                                                                                                                                           |
+| Dependencies    | `TASK-AI-50`                                                                                                                                                                                                                                                                                                                                                    |
+| Assigned author | `GEMINI`                                                                                                                                                                                                                                                                                                                                                        |
+| Risk            | `MEDIUM`                                                                                                                                                                                                                                                                                                                                                        |
+| Allowed paths   | `tools/ai-brain/harness.js`, `tools/ai-brain/test/task-ai-50.test.js`, `tools/ai-brain/test/task-ai-63.test.js`, `docs/product-spec/work-items/TASK-AI-63.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Reviewer        | `Codex - fresh independent task`                                                                                                                                                                                                                                                                                                                                |
+| Branch          | `fix/task-ai-63-hermes-cli-contract`                                                                                                                                                                                                                                                                                                                               |
+| Pull Request    | `Pending`                                                                                                                                                                                                                                                                                                                                                       |
+
+## Business outcome
+
+The Hermes adapter on main currently builds an argv that the real Hermes CLI does not actually have (such as the `run` subcommand, `--candidate-key`, `--no-fallback`, and `--max-attempts`). The adapter must only emit valid options per `hermes --help` from Hermes v0.21.4. This ensures that the adapter successfully calls the CLI without failing due to unrecognized commands or flags.
+
+## Implementation details
+
+- Read `logs/night/hermes-help.txt` as evidence of real Hermes v0.21.4 CLI capabilities.
+- Ensure the Hermes adapter emits valid options: pinned model via `-m`, provider via `--provider`, cwd via `--in`, prompt via `-z`, resume via `--resume SESSION`.
+- Keep `candidateKey` and the no-fallback policy logic on the controller/wrapper side (not pushed into argv).
+- Ensure Hermes cannot use its own fallback chain by passing `--ignore-user-config`.
+- Spawn Windows npm shim without a shell (no injection).
+- Write `task-ai-63.test.js` to assert the adapter emits only known options based on the help text, and test resume/stop correctly.
+- Update existing `TASK-AI-50` assertions only where they encoded the fake argv, marking them with "corrected to real Hermes CLI v0.21.4".

@@ -114,45 +114,20 @@ const hermes = {
         throw new Error('HERMES_SUBAGENT_REQUIRES_CONTROLLER_ASSIGNMENT');
       }
     }
-    const args = [
-      'run',
-      '--candidate-key',
-      j.candidateKey,
-      '--model',
-      j.model,
-      '--no-fallback',
-      '--max-attempts',
-      String(Number.isFinite(Number(j.maxAttempts)) ? Number(j.maxAttempts) : 1),
-      '--json',
-    ];
+    const args = ['-m', j.model, '--ignore-user-config'];
     if (j.provider) args.push('--provider', j.provider);
-    if (j.accountId) args.push('--account', j.accountId);
-    if (j.gateway) args.push('--gateway', j.gateway);
-    if (j.upstream) args.push('--upstream', j.upstream);
-    if (j.quotaScope) args.push('--quota-scope', j.quotaScope);
-    if (j.cwd) args.push('--cwd', j.cwd);
-    if (j.branch) args.push('--branch', j.branch);
-    if (j.checkpoint) args.push('--checkpoint', j.checkpoint);
-    args.push('--', j.prompt || '');
+    if (j.cwd) args.push('--in', j.cwd);
+    args.push('-z', j.prompt || '');
     return args;
   },
   resume(sessionId, prompt, job) {
     const j = job || {};
     if (!j.candidateKey) throw new Error('HERMES_REQUIRES_PINNED_CANDIDATE');
-    const args = [
-      'resume',
-      String(sessionId),
-      '--candidate-key',
-      j.candidateKey,
-      '--no-fallback',
-      '--max-attempts',
-      String(Number.isFinite(Number(j.maxAttempts)) ? Number(j.maxAttempts) : 1),
-      '--json',
-    ];
-    if (j.model) args.push('--model', j.model);
-    if (j.cwd) args.push('--cwd', j.cwd);
-    if (j.checkpoint) args.push('--checkpoint', j.checkpoint);
-    args.push('--', prompt || '');
+    const args = ['--resume', String(sessionId), '--ignore-user-config'];
+    if (j.model) args.push('-m', j.model);
+    if (j.provider) args.push('--provider', j.provider);
+    if (j.cwd) args.push('--in', j.cwd);
+    args.push('-z', prompt || '');
     return args;
   },
   inspect(sessionId) {
