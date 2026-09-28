@@ -130,9 +130,6 @@ const hermes = {
     args.push('-z', prompt || '');
     return args;
   },
-  inspect(sessionId) {
-    return ['inspect', String(sessionId), '--json'];
-  },
   stop(sessionId, job) {
     const pid = job && job.pid ? Number(job.pid) : Number(sessionId);
     return Number.isFinite(pid) && pid > 0 ? { killTree: pid } : null;

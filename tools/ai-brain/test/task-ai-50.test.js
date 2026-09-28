@@ -127,7 +127,6 @@ describe('TASK-AI-50 Hermes pinned adapter and Jev advisory', () => {
     assert.equal(adapter.id, 'hermes');
     assert.equal(typeof adapter.launch, 'function');
     assert.equal(typeof adapter.resume, 'function');
-    assert.equal(typeof adapter.inspect, 'function');
     assert.equal(typeof adapter.stop, 'function');
   });
 

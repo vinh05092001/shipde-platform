@@ -7,13 +7,8 @@ const path = require('node:path');
 const { getHarness, executableFor, runHarness } = require('../harness');
 
 describe('TASK-AI-63 Hermes CLI contract', () => {
-  const helpPath = path.resolve(__dirname, '../../../../../.worktrees/logs/night/hermes-help.txt');
-
   test('1 adapter emits only documented options', () => {
-    // Note: Adjusting helpPath since it is outside the worktree.
-    // __dirname is C:/Users/gumac/AI/shipde-platform/.worktrees/ai63/tools/ai-brain/test
-    // logs/night/hermes-help.txt is C:/Users/gumac/AI/shipde-platform/.worktrees/logs/night/hermes-help.txt
-    const correctHelpPath = path.resolve(__dirname, '../../../../logs/night/hermes-help.txt');
+    const correctHelpPath = path.join(__dirname, 'fixtures/hermes-help-v0.21.4.txt');
     const helpText = fs.readFileSync(correctHelpPath, 'utf8');
     const helpOptions = new Set();
     const regex = /(?:^|\s)(-[a-zA-Z]|--[a-zA-Z0-9-]+)/gm;
@@ -57,6 +52,16 @@ describe('TASK-AI-63 Hermes CLI contract', () => {
           'resume',
           "The 'resume' positional subcommand is for 'hermes pause', use --resume"
         );
+      }
+    }
+
+    if (adapter.inspect) {
+      const inspectArgs = adapter.inspect('session-123');
+      for (let i = 0; i < inspectArgs.length; i++) {
+        const arg = inspectArgs[i];
+        if (arg.startsWith('-')) {
+          assert.ok(helpOptions.has(arg), `Option ${arg} must exist in hermes-help.txt`);
+        }
       }
     }
   });

@@ -25,7 +25,8 @@ The Hermes adapter on main currently builds an argv that the real Hermes CLI doe
 - Read `logs/night/hermes-help.txt` as evidence of real Hermes v0.21.4 CLI capabilities.
 - Ensure the Hermes adapter emits valid options: pinned model via `-m`, provider via `--provider`, cwd via `--in`, prompt via `-z`, resume via `--resume SESSION`.
 - Keep `candidateKey` and the no-fallback policy logic on the controller/wrapper side (not pushed into argv).
-- Ensure Hermes cannot use its own fallback chain by passing `--ignore-user-config`.
+- Ensure Hermes drops the configured fallback chain by passing `--ignore-user-config`. Note residual risk: built-in defaults or environment variable fallbacks (like `HERMES_INFERENCE_MODEL`) are not excludable based on the CLI help evidence, so some internal fallback logic may remain active.
 - Spawn Windows npm shim without a shell (no injection).
 - Write `task-ai-63.test.js` to assert the adapter emits only known options based on the help text, and test resume/stop correctly.
 - Update existing `TASK-AI-50` assertions only where they encoded the fake argv, marking them with "corrected to real Hermes CLI v0.21.4".
+- *Known Gap*: Under `-z`, real Hermes v0.21.4 prints only the final response text with no session ID line. Because `executor.js` requires parsing a durable session ID from stdout, a real launch will fail `HARNESS_NO_SESSION_ID` and cannot currently yield a resume handle. This gap (no `--usage-file`, no `hermes sessions list` discovery) is a known limitation.
