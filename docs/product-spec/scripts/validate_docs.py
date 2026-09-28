@@ -147,7 +147,7 @@ def main() -> int:
         for row in register_rows
         if row.get("work_item_id", "").startswith("TASK-FOUND-")
     }
-    expected_foundation = {f"TASK-FOUND-{index:02d}" for index in range(1, 6)}
+    expected_foundation = {f"TASK-FOUND-{index:02d}" for index in range(1, 7)}
     if foundation_items != expected_foundation:
         errors.append(
             "foundation-register-mismatch: "
