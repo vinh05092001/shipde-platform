@@ -578,134 +578,1119 @@ function quotaCommand(args) {
   console.log('');
 }
 
-/**
- * Plans with planDispatch and hands the plan to the executor (TASK-AI-24).
- * Dry run unless --execute is given; the plan comes from --plan <file> or is
- * built from READY_FOR_AUTHOR register rows and the account registry.
- */
-function dispatchCommand(args) {
-  const fs = require('fs');
-  const { executePlan } = require('./executor');
-  const rootDir = args.root || process.cwd();
-  const execute = args.execute === true;
+function assembleCandidates(discoveryCat, offerings, registry, accounts, injectedCandidates) {
+  if (Array.isArray(injectedCandidates)) {
+    return injectedCandidates.map((c) => Object.assign({}, c));
+  }
 
-  // Releasing a claim is its own operation, not a side effect of planning: a
-  // session that was stopped, or that died with its daemon, otherwise reads as
-  // an open writer for ever and its work item can never be picked up again.
+  const candidatesApi = require('./candidates');
+  const sourcesApi = require('./sources');
+
+  const offeringMap = new Map();
+  for (const off of offerings || []) {
+    const k1 = `${off.accountId || '*'}::${off.model}`;
+    offeringMap.set(k1, off);
+    if (!offeringMap.has(off.model)) {
+      offeringMap.set(off.model, off);
+    }
+  }
+
+  const result = [];
+  const seenKeys = new Set();
+
+  // 1. Discovery candidates
+  const discCands = (discoveryCat && discoveryCat.candidates) || [];
+  for (const dc of discCands) {
+    const accountId = dc.accountId || dc.account || '*';
+    const modelId = dc.modelId || dc.model;
+    const c = {
+      ...dc,
+      accountId,
+      quotaScope: dc.quotaScope || (accountId !== '*' ? accountId : dc.upstream || ''),
+      modelId,
+    };
+    const off = offeringMap.get(`${accountId}::${modelId}`) || offeringMap.get(modelId);
+    if (off) {
+      if (c.qualifiedRoles === undefined && off.qualifiedRoles !== undefined) {
+        c.qualifiedRoles = off.qualifiedRoles;
+      }
+      if (c.cost === undefined && off.cost !== undefined) c.cost = off.cost;
+      if (c.tier === undefined && off.tier !== undefined) c.tier = off.tier;
+      if (c.quality === undefined && off.quality !== undefined) c.quality = off.quality;
+      if (c.capabilities === undefined && off.capabilities !== undefined) {
+        c.capabilities = off.capabilities;
+      }
+    }
+    const key = candidatesApi.candidateKey(c);
+    c.key = key;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      result.push(c);
+    }
+  }
+
+  // 2. Offerings candidates
+  for (const off of offerings || []) {
+    const route = sourcesApi.dispatchRoute(off.provider, registry);
+    const source =
+      registry &&
+      registry.sources &&
+      registry.sources.find((s) => s.id === off.provider || s.id === off.accountId);
+    const harness =
+      off.harness || (route && route.harness) || (source && source.harness) || 'paseo';
+    let accessPath = off.accessPath || (source && (source.accessPath || source.endpoint));
+    if (!accessPath) {
+      accessPath = route && route.harness === 'paseo' ? 'http://127.0.0.1:20128/v1' : 'cli';
+    }
+    const gateway =
+      off.gateway ||
+      (source && source.reachedVia) ||
+      (source && source.kind === 'router' ? source.id : '9router');
+    const parsed = candidatesApi.parsePrefix(off.model);
+    const upstream =
+      off.upstream || (parsed && parsed.upstream) || off.provider || (source && source.id) || '';
+    const accountId = off.accountId || '*';
+    const quotaScope = off.quotaScope || (accountId !== '*' ? accountId : upstream);
+    const modelId = off.model;
+
+    const c = {
+      harness,
+      accessPath,
+      gateway,
+      upstream,
+      accountId,
+      quotaScope,
+      modelId,
+      qualifiedRoles: off.qualifiedRoles,
+      cost: off.cost,
+      capabilities: off.capabilities,
+      tier: off.tier,
+      quality: off.quality,
+      source: off.provider,
+    };
+    const key = candidatesApi.candidateKey(c);
+    c.key = key;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      result.push(c);
+    }
+  }
+
+  return result;
+}
+
+function readCheckpoint(file) {
+  const fs = require('fs');
+  if (!file || !fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function writeJsonFile(file, value) {
+  const fs = require('fs');
+  const path = require('path');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+function sevenFields(candidate) {
+  return {
+    harness: candidate.harness || '',
+    accessPath: candidate.accessPath || '',
+    gateway: candidate.gateway || '',
+    upstream: candidate.upstream || '',
+    accountId: candidate.accountId || '*',
+    quotaScope: candidate.quotaScope || '',
+    modelId: candidate.modelId || candidate.model || '',
+  };
+}
+
+function quotaSnapshot(candidate) {
+  const key = candidate.offeringId || candidate.key || '';
+  return {
+    offeringId: key,
+    headroom: candidate.headroom || candidate.headroomStatus || 'unknown',
+    reason: candidate.headroomReason || null,
+    reservations: Number(candidate.reservationsHeld || 0),
+  };
+}
+
+function candidateFromDecision(decision, key) {
+  return (decision.candidates || []).find((c) => c.offeringId === key) || null;
+}
+
+function simulatedFailureFor(candidate) {
+  const c = candidate || {};
+  return {
+    exitCode: 1,
+    httpStatus: 503,
+    body:
+      'HTTP 503 from gateway: [402]: upstream ' +
+      (c.upstream || 'unknown') +
+      ' budget exhausted; reset after 1h 00m',
+    stderr:
+      'HTTP 503 from gateway: [402]: upstream ' +
+      (c.upstream || 'unknown') +
+      ' budget exhausted; reset after 1h 00m',
+    accountId: c.accountId || '*',
+  };
+}
+
+function sameFailureDomain(candidate, failed, classification) {
+  if (!candidate || !failed || !classification) return false;
+  const sameConcrete = (left, right) =>
+    Boolean(left && right && left !== '*' && right !== '*' && left === right);
+  const scope = classification.scope || 'unknown';
+  if (scope === 'upstream') {
+    return candidate.upstream === failed.upstream;
+  }
+  if (scope === 'candidate' || scope === 'model') {
+    return (candidate.modelId || candidate.model) === (failed.modelId || failed.model);
+  }
+  if (scope === 'account') {
+    return sameConcrete(candidate.accountId, failed.accountId);
+  }
+  if (scope === 'gateway') {
+    return candidate.gateway && candidate.gateway === failed.gateway;
+  }
+  if (scope === 'access_path') {
+    return candidate.accessPath && candidate.accessPath === failed.accessPath;
+  }
+  if (scope === 'harness') {
+    return candidate.harness && candidate.harness === failed.harness;
+  }
+  return (
+    (candidate.upstream && candidate.upstream === failed.upstream) ||
+    sameConcrete(candidate.accountId, failed.accountId) ||
+    (candidate.gateway && candidate.gateway === failed.gateway)
+  );
+}
+
+function applyDryRunBlocks(candidates, failedKeys, failedCandidate, classification, avoidDomain) {
+  const candidatesApi = require('./candidates');
+  for (const c of candidates) {
+    const key = candidatesApi.candidateKey(c);
+    if (failedKeys.has(key)) {
+      c.blocked = true;
+      c.blockReason = 'SIMULATED_CANDIDATE_FAILED';
+      c.blockScope = 'candidate';
+      continue;
+    }
+    if (avoidDomain && sameFailureDomain(c, failedCandidate, classification)) {
+      c.blocked = true;
+      c.blockReason = 'SIMULATED_FAILURE_DOMAIN_AVOIDED';
+      c.blockScope = classification.scope || 'unknown';
+    }
+  }
+}
+
+function buildDryRunLog(parts) {
+  const decision = parts.decision || {};
+  const fallback = parts.fallback || {};
+  const finalChoice = fallback.chosen || decision.chosen || null;
+  const firstChoice = parts.firstChoice || decision.chosen || null;
+  const rejected = new Map();
+  for (const r of decision.rejected || []) {
+    rejected.set(r.offeringId, r);
+  }
+  for (const r of (fallback.decision && fallback.decision.rejected) || []) {
+    rejected.set(r.offeringId, r);
+  }
+  const candidates = (parts.annotated || []).map((c) => {
+    const key = parts.candidatesApi.candidateKey(c);
+    return Object.assign(sevenFields(c), {
+      offeringId: key,
+      status: c.status === 'passed' ? 'PASS' : c.status || 'unknown',
+      score: c.score,
+    });
+  });
+  for (const c of candidates) {
+    if (c.offeringId === finalChoice || rejected.has(c.offeringId)) continue;
+    rejected.set(c.offeringId, {
+      offeringId: c.offeringId,
+      reason: 'NOT_SELECTED',
+      scope: 'candidate',
+    });
+  }
+  return {
+    schemaVersion: 1,
+    mode: 'dry-run',
+    workItemId: parts.item.workItemId,
+    generatedAt: new Date(parts.now).toISOString(),
+    resumed: Boolean(parts.resumed),
+    stages: [
+      'discovery',
+      '7-field candidates',
+      'quota/fairness',
+      'failure classifier',
+      'ranking',
+      'decision',
+      'dry-run dispatch',
+      'simulated first-source failure',
+      'fallback',
+      'checkpoint resume',
+    ],
+    candidates,
+    excluded: Array.from(rejected.values()).map((r) => ({
+      offeringId: r.offeringId,
+      candidateKey: r.offeringId,
+      reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+      reason: r.reason || 'UNKNOWN',
+      scope: r.scope || null,
+    })),
+    excludedCandidates: Array.from(rejected.values()).map((r) => ({
+      offeringId: r.offeringId,
+      candidateKey: r.offeringId,
+      reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+      reason: r.reason || 'UNKNOWN',
+      scope: r.scope || null,
+    })),
+    selected: finalChoice,
+    selectedCandidate: finalChoice,
+    firstChoice,
+    quotaState: candidates.map((c) => quotaSnapshot(c)),
+    ranking: {
+      reason: decision.reason,
+      ordered: (decision.candidates || []).map((c) => ({
+        offeringId: c.offeringId,
+        score: c.score,
+        headroom: c.headroom || 'unknown',
+      })),
+    },
+    dryRunDispatch: {
+      launched: false,
+      networkTouched: false,
+      executeTouched: false,
+    },
+    simulatedFailure: parts.simulatedFailure || null,
+    failure: parts.simulatedFailure || null,
+    fallback: {
+      candidateKey: fallback.chosen || null,
+      chosen: fallback.chosen || null,
+      reason: fallback.reason || null,
+      preferredDifferentFailureDomain: Boolean(fallback.preferredDifferentFailureDomain),
+      decision: fallback.decision || null,
+    },
+    checkpoint: parts.checkpoint || null,
+  };
+}
+
+/**
+ * Master-queue item 5: dispatch wiring.
+ * Chooses candidate through the brain (discovery + offerings, evidence/cooldowns,
+ * quota/reservations/load, ranked by ranking.js).
+ */
+function dispatchCommand(args, deps = {}) {
+  const fs = require('fs');
+  const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
+  const execute = args.execute === true;
+  const dryRunFlag = Boolean(args['dry-run'] || args.dryRun);
+  const log = deps.log || console.log;
+  const error = deps.error || console.error;
+  const exit = deps.exit || process.exit;
+
+  // Releasing a claim is its own operation:
   const close = args.close || args.complete || args.fail;
   if (typeof close === 'string') {
     const decisions = require('./decisions');
     const outcome = args.fail ? 'failed' : 'completed';
     const released = decisions.closeWriter(close, outcome, {
-      dir: args['decision-dir'] || undefined,
+      dir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
       detail: typeof args.detail === 'string' ? args.detail : null,
     });
     if (!released) {
-      console.log('No open writer for ' + close + '; nothing to release.');
-      return;
+      log('No open writer for ' + close + '; nothing to release.');
+      return { exitCode: 0, released: false };
     }
-    console.log(
+    log(
       'Released ' + close + ' (' + outcome + ', session ' + (released.sessionId || 'unknown') + ')'
     );
-    return;
-  }
-  if (execute && (args['dry-run'] || args.dryRun)) {
-    console.error('Dispatch refused: --execute and --dry-run are exclusive.');
-    process.exit(2);
+    return { exitCode: 0, released: true };
   }
 
-  let plan;
+  if (execute && dryRunFlag) {
+    error('Dispatch refused: --execute and --dry-run are exclusive.');
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  const isDryRun = dryRunFlag || !execute;
+
+  // Pre-computed plan file fallback
   if (typeof args.plan === 'string') {
-    plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+    const { executePlan } = require('./executor');
+    const plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+    const result = executePlan(plan, {
+      dryRun: isDryRun,
+      project: args.project || 'shipde-platform',
+      cwd: args.cwd || (deps && deps.cwd) || undefined,
+      base: args.base || (deps && deps.base) || undefined,
+      decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
+      run: deps && deps.run,
+    });
+    const s = result.summary;
+    if (args.json) {
+      log(JSON.stringify({ plan, result }, null, 2));
+      exit(s.failed > 0 ? 1 : 0);
+      return { exitCode: s.failed > 0 ? 1 : 0, plan, result };
+    }
+    if (result.dryRun) {
+      log('Dispatch dry run: ' + (plan.assignments || []).length + ' planned, 0 launched');
+      exit(0);
+      return { exitCode: 0, result };
+    }
+    exit(s.failed > 0 ? 1 : 0);
+    return { exitCode: s.failed > 0 ? 1 : 0, result };
+  }
+
+  // Work items resolution
+  let items = [];
+  const targetItemId = args.item || args['work-item'] || (deps && deps.workItemId);
+  if (deps && deps.items) {
+    items = deps.items;
+  } else if (targetItemId) {
+    items = [
+      {
+        workItemId: targetItemId,
+        role: args.role || (deps && deps.role) || 'author.foundation',
+        branch:
+          args.branch || (deps && deps.branch) || 'feat/' + String(targetItemId).toLowerCase(),
+        riskDomains: [],
+        priority: 0,
+      },
+    ];
   } else {
-    const { planDispatch } = require('./scheduler');
-    const { listAccounts } = require('./accounts');
     const csvPath =
       args.csv ||
       path.join(
         rootDir,
-        'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+        'docs',
+        'product-spec',
+        'docs',
+        '10-ai-collaboration',
+        'FEATURE-DELIVERY-REGISTER.csv'
       );
     if (!fs.existsSync(csvPath)) {
-      console.error('SOURCE_MISSING: ' + csvPath);
-      process.exit(2);
+      if (args.csv) {
+        error('SOURCE_MISSING: ' + csvPath);
+        exit(2);
+        return { exitCode: 2 };
+      }
+      items = [];
+    } else {
+      const register = loadRegister(csvPath, null, rootDir);
+      items = ((register.data && register.data.items) || [])
+        .filter((row) => row.status === 'READY_FOR_AUTHOR')
+        .map((row) => ({
+          workItemId: row.work_item_id,
+          role: 'author.foundation',
+          branch: row.branch || null,
+          riskDomains: [],
+          priority: 0,
+        }));
     }
-    const register = loadRegister(csvPath, null, rootDir);
-    const items = ((register.data && register.data.items) || [])
-      .filter((row) => row.status === 'READY_FOR_AUTHOR')
-      .map((row) => ({
-        workItemId: row.work_item_id,
-        role: 'author.foundation',
-        branch: row.branch || null,
-        riskDomains: [],
-        priority: 0,
-      }));
-    // TASK-AI-49: the machine's free memory is the second ceiling, and the
-    // planner needs it stated rather than assumed. Omitting --free-mb lets it
-    // read the host, which is the right default for an unattended run.
-    const resources = {};
-    if (args['free-mb'] !== undefined) resources.freeMb = Number(args['free-mb']);
-    if (args['per-agent-mb'] !== undefined) resources.perAgentMb = Number(args['per-agent-mb']);
-    plan = planDispatch(items, listAccounts() || [], {
-      resources,
-      governedDecision: args['governed-decision'] || args.governedDecision || null,
-      limits: args['max-impl'] ? { maxImplementationAgents: Number(args['max-impl']) } : undefined,
-    });
   }
 
-  const result = executePlan(plan, {
-    dryRun: !execute,
-    project: args.project || 'shipde-platform',
-    cwd: args.cwd || undefined,
-    base: args.base || undefined,
-    decisionDir: args['decision-dir'] || undefined,
-  });
-  const deferred = plan.deferred || [];
-  const planned = (plan.assignments || []).length;
+  if (items.length === 0 && !deps.candidates && !args.item) {
+    log('Dispatch: 0 assignments (0 deferred)');
+    exit(0);
+    return { exitCode: 0, dispatched: 0 };
+  }
 
-  if (args.json) {
-    console.log(JSON.stringify({ plan, result }, null, 2));
-    process.exit(result.summary.failed > 0 ? 1 : 0);
-  } else {
-    if (planned === 0) {
-      console.log('Dispatch: 0 assignments (' + deferred.length + ' deferred)');
-      for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
-      process.exit(0);
+  const item = items[0] || {
+    workItemId: targetItemId || 'TASK-DISPATCH',
+    role: args.role || (deps && deps.role) || 'author.foundation',
+    branch: args.branch || (deps && deps.branch) || 'feat/dispatch-work',
+  };
+
+  const sourcesApi = require('./sources');
+  const evidence = require('./evidence');
+  const ranking = require('./ranking');
+  const candidatesApi = require('./candidates');
+  const quotaStore = require('./quota-store');
+  const { expandOfferings } = require('./offerings');
+  const { listAccounts } = require('./accounts');
+  const { readDiscoveryCatalogue } = require('./discovery/read');
+  const { getHarness, runHarness } = require('./harness');
+  const { workerName, defaultPrompt } = require('./executor');
+
+  const registry = (deps && deps.registry) || sourcesApi.loadSources();
+  const evidenceDir =
+    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+  const decisionDir = (deps && deps.decisionDir) || args['decision-dir'] || undefined;
+
+  // 1. Candidates from discovery + offerings
+  let discCat = deps && deps.discoveryCatalogue;
+  if (!discCat && (!deps || !deps.candidates)) {
+    const discDir =
+      (deps && deps.discoveryDataDir) ||
+      args['discovery-dir'] ||
+      path.join(__dirname, 'data', 'discovery');
+    try {
+      discCat = readDiscoveryCatalogue({ dataDir: discDir });
+    } catch {
+      discCat = { candidates: [] };
     }
-    for (const r of result.records) {
-      console.log(
-        '  ' +
-          r.outcome +
-          '  ' +
-          r.workItemId +
-          '  ' +
-          r.role +
-          '  ' +
-          (r.offeringId || '-') +
-          (r.sessionId ? '  session ' + r.sessionId : '') +
-          (r.detail ? '  ' + r.detail : '')
-      );
-      if (r.args) console.log('    args ' + JSON.stringify(r.args));
+  }
+
+  const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
+  let offs = deps && deps.offerings;
+  if (!offs && (!deps || !deps.candidates)) {
+    try {
+      offs = expandOfferings(accounts);
+    } catch {
+      offs = [];
     }
-    for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
   }
-  const s = result.summary;
-  if (result.dryRun) {
-    console.log('Dispatch dry run: ' + planned + ' planned, 0 launched');
-    process.exit(0);
-  }
-  console.log(
-    'Dispatch executed: ' +
-      s.launched +
-      ' launched, ' +
-      (s.resumed || 0) +
-      ' resumed, ' +
-      s.refused +
-      ' refused, ' +
-      s.failed +
-      ' failed'
+
+  const candidateList = assembleCandidates(
+    discCat,
+    offs,
+    registry,
+    accounts,
+    deps && deps.candidates
   );
-  process.exit(s.failed > 0 ? 1 : 0);
+
+  // Filter by explicit pins (--model, --account, --harness)
+  const pinModel = args.model || (deps && deps.model);
+  const pinAccount = args.account || (deps && deps.account);
+  const pinHarness = args.harness || (deps && deps.harness);
+  const isPinned = Boolean(pinModel || pinAccount || pinHarness);
+
+  let eligibleCandidates = candidateList.slice();
+  if (isPinned) {
+    if (pinModel) {
+      eligibleCandidates = eligibleCandidates.filter(
+        (c) => c.modelId === pinModel || c.model === pinModel || c.base === pinModel
+      );
+    }
+    if (pinAccount) {
+      eligibleCandidates = eligibleCandidates.filter(
+        (c) => c.accountId === pinAccount || c.account === pinAccount
+      );
+    }
+    if (pinHarness) {
+      eligibleCandidates = eligibleCandidates.filter((c) => c.harness === pinHarness);
+    }
+  }
+
+  // Handle dry-run
+  if (isDryRun) {
+    const now = (deps && deps.now) || Date.now();
+    const checkpointFile =
+      typeof args.checkpoint === 'string'
+        ? path.resolve(rootDir, args.checkpoint)
+        : deps && deps.checkpointFile;
+    const decisionLogFile =
+      typeof args['decision-log'] === 'string'
+        ? path.resolve(rootDir, args['decision-log'])
+        : deps && deps.decisionLogFile;
+    const checkpoint = readCheckpoint(checkpointFile);
+    const failedKeys = new Set((checkpoint && checkpoint.failedCandidates) || []);
+    const resumed =
+      Boolean(checkpoint && checkpoint.workItemId === item.workItemId && checkpoint.step) ||
+      Boolean(failedKeys.size);
+    const evidenceData = evidence.loadEvidence(evidenceDir);
+    const annotated = candidatesApi.annotateCandidates(
+      eligibleCandidates.map((c) => Object.assign({}, c)),
+      evidenceData,
+      { now }
+    );
+
+    for (const c of annotated) {
+      const key = candidatesApi.candidateKey(c);
+      if (failedKeys.has(key)) {
+        c.blocked = true;
+        c.blockReason = 'checkpoint resume skipped previously failed candidate';
+        c.blockScope = 'candidate';
+      }
+    }
+
+    const rankingContext = {
+      workItemId: item.workItemId,
+      role: item.role,
+      kind: item.role,
+      registry,
+      evidenceData,
+      decisionOpts: { dir: decisionDir, now },
+      dryRun: true,
+      headrooms: deps && deps.headrooms,
+      load: deps && deps.load,
+      reservations: deps && deps.reservations,
+      explorationBudget:
+        args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 1,
+      home: deps && deps.home,
+      storePath: deps && deps.storePath,
+      accounts,
+      now,
+    };
+    const decision = ranking.rankAndRecord(annotated, rankingContext);
+    if (
+      resumed &&
+      checkpoint &&
+      checkpoint.step === 'fallback_selected' &&
+      checkpoint.fallbackCandidate &&
+      annotated.some((c) => candidatesApi.candidateKey(c) === checkpoint.fallbackCandidate)
+    ) {
+      const resumedCandidate = annotated.find(
+        (c) => candidatesApi.candidateKey(c) === checkpoint.fallbackCandidate
+      );
+      decision.chosen = checkpoint.fallbackCandidate;
+      decision.harness = resumedCandidate ? resumedCandidate.harness : decision.harness;
+      decision.reason = 'RESUMED_CHECKPOINT_FALLBACK: continuing saved fallback candidate';
+    }
+    for (const c of annotated) {
+      const ranked = candidateFromDecision(decision, candidatesApi.candidateKey(c));
+      if (ranked) {
+        c.score = ranked.score;
+        c.headroomStatus = ranked.headroom;
+      }
+    }
+
+    if (isPinned) {
+      log('PINNED');
+    }
+
+    if (!decision.chosen) {
+      log('No eligible candidate for ' + item.workItemId);
+      for (const rej of decision.rejected) {
+        log(
+          '  EXCLUDED ' +
+            rej.offeringId +
+            ' — ' +
+            rej.reason +
+            (rej.scope ? ' [' + rej.scope + ']' : '')
+        );
+      }
+      exit(1);
+      return { exitCode: 1, decision, dryRun: true };
+    }
+
+    const simulateFailure = args['simulate-failure'] || (deps && deps.simulateFailure);
+    let simulatedFailure = null;
+    let fallback = null;
+    if (simulateFailure && simulateFailure !== false) {
+      const chosenCandidate =
+        annotated.find((c) => candidatesApi.candidateKey(c) === decision.chosen) ||
+        candidateFromDecision(decision, decision.chosen);
+      const shouldFail =
+        simulateFailure === true ||
+        simulateFailure === 'first' ||
+        simulateFailure === decision.chosen ||
+        (chosenCandidate && simulateFailure === candidatesApi.candidateKey(chosenCandidate));
+
+      if (shouldFail && chosenCandidate && !resumed && !failedKeys.has(decision.chosen)) {
+        const { classifyFailure } = require('./failure-classifier');
+        const failureInput = (deps && deps.failureInput) || simulatedFailureFor(chosenCandidate);
+        const classification = classifyFailure(failureInput);
+        failedKeys.add(decision.chosen);
+        simulatedFailure = {
+          candidate: decision.chosen,
+          failure: failureInput,
+          innermostCause: classification.cause,
+          classifierScope: classification.scope,
+          cooldownMs: classification.cooldownMs,
+        };
+
+        const fallbackAnnotated = candidatesApi.annotateCandidates(
+          eligibleCandidates.map((c) => Object.assign({}, c)),
+          evidenceData,
+          { now }
+        );
+        applyDryRunBlocks(
+          fallbackAnnotated,
+          failedKeys,
+          chosenCandidate,
+          classification,
+          classification.scope !== 'candidate' && classification.scope !== 'model'
+        );
+        let fallbackDecision = ranking.rankAndRecord(
+          fallbackAnnotated,
+          Object.assign({}, rankingContext, { dryRun: true })
+        );
+        let preferredDifferentFailureDomain = true;
+        if (!fallbackDecision.chosen) {
+          const exactOnlyAnnotated = candidatesApi.annotateCandidates(
+            eligibleCandidates.map((c) => Object.assign({}, c)),
+            evidenceData,
+            { now }
+          );
+          applyDryRunBlocks(exactOnlyAnnotated, failedKeys, chosenCandidate, classification, false);
+          fallbackDecision = ranking.rankAndRecord(
+            exactOnlyAnnotated,
+            Object.assign({}, rankingContext, { dryRun: true })
+          );
+          preferredDifferentFailureDomain = false;
+        }
+        fallback = {
+          chosen: fallbackDecision.chosen,
+          reason: fallbackDecision.chosen
+            ? preferredDifferentFailureDomain
+              ? 'selected highest-ranked candidate outside the simulated failure domain'
+              : 'no different failure domain remained; selected highest-ranked non-failed candidate'
+            : 'no fallback candidate qualifies',
+          preferredDifferentFailureDomain,
+          decision: fallbackDecision,
+        };
+      } else if (resumed) {
+        fallback = {
+          chosen: decision.chosen,
+          reason: 'checkpoint resume continued after prior simulated failure without retrying it',
+          preferredDifferentFailureDomain: false,
+          decision,
+        };
+      }
+    }
+
+    // firstChoice must stay the ORIGINAL first choice across resume.
+    const originalFirstChoice =
+      resumed && checkpoint && checkpoint.firstChoice
+        ? checkpoint.firstChoice
+        : decision.firstChoice || decision.chosen;
+
+    const finalChoice = fallback && fallback.chosen ? fallback.chosen : decision.chosen;
+    const nextCheckpoint = checkpointFile
+      ? {
+          schemaVersion: 1,
+          workItemId: item.workItemId,
+          step: fallback && fallback.chosen ? 'fallback_selected' : 'ranked',
+          updatedAt: new Date(now).toISOString(),
+          failedCandidates: Array.from(failedKeys),
+          selectedCandidate: finalChoice,
+          firstChoice: originalFirstChoice,
+          fallbackCandidate: fallback && fallback.chosen,
+          decisionLog: decisionLogFile || null,
+        }
+      : null;
+    if (nextCheckpoint) {
+      writeJsonFile(checkpointFile, nextCheckpoint);
+    }
+
+    if (decisionLogFile) {
+      writeJsonFile(
+        decisionLogFile,
+        buildDryRunLog({
+          item,
+          now,
+          resumed,
+          annotated,
+          decision,
+          firstChoice: originalFirstChoice,
+          simulatedFailure,
+          fallback,
+          checkpoint: nextCheckpoint
+            ? {
+                path: checkpointFile,
+                step: nextCheckpoint.step,
+                failedCandidates: nextCheckpoint.failedCandidates,
+              }
+            : checkpointFile
+              ? { path: checkpointFile, loaded: Boolean(checkpoint) }
+              : null,
+          candidatesApi,
+        })
+      );
+    }
+
+    log('Ranked candidates for ' + item.workItemId + ':');
+    for (let i = 0; i < decision.candidates.length; i++) {
+      const c = decision.candidates[i];
+      log('  ' + (i + 1) + '. ' + c.offeringId + ' (score: ' + c.score + ')');
+    }
+    log('Chosen: ' + decision.chosen);
+    if (fallback && fallback.chosen) {
+      log('Fallback: ' + fallback.chosen);
+    }
+    if (checkpointFile) {
+      log('Checkpoint: ' + checkpointFile);
+    }
+    exit(0);
+    return {
+      exitCode: 0,
+      decision,
+      fallback,
+      simulatedFailure,
+      checkpoint: nextCheckpoint,
+      dryRun: true,
+    };
+  }
+
+  // Execution with retry/fallback
+  const checkpointFile =
+    args['checkpoint'] && typeof args['checkpoint'] === 'string'
+      ? path.resolve(rootDir, args['checkpoint'])
+      : deps && deps.checkpointFile;
+  const checkpoint = readCheckpoint(checkpointFile);
+  const failedKeys = new Set((checkpoint && checkpoint.failedCandidates) || []);
+
+  const maxAttempts = Number(
+    args['max-attempts'] || args.maxAttempts || (deps && deps.maxAttempts) || 3
+  );
+  let attempt = 0;
+  let lastDecision = null;
+  const decisionsStore = require('./decisions');
+  const failureClassifier = require('./failure-classifier');
+  const nowForWriter = (deps && deps.now) || Date.now();
+
+  if (checkpoint && checkpoint.dryRunDispatch && checkpoint.dryRunDispatch.executeTouched) {
+    log(`Work item ${item.workItemId} already executed according to checkpoint`);
+    return { exitCode: 0 };
+  }
+
+  const activeWriter = decisionsStore.writerFor(item.workItemId, {
+    dir: decisionDir,
+    now: nowForWriter,
+  });
+  if (activeWriter) {
+    log(`Work item ${item.workItemId} is already claimed by session ${activeWriter.sessionId}`);
+    exit(1);
+    return { exitCode: 1 };
+  }
+
+  let finalChosenCandidate = null;
+  let finalChosenKey = null;
+  let launchRes = null;
+  let failedAttempts = [];
+
+  if (checkpoint && checkpoint.chosen) {
+    finalChosenKey = checkpoint.chosen;
+    finalChosenCandidate = {
+      offeringId: finalChosenKey,
+      harness: checkpoint.harness,
+      source: checkpoint.source,
+      upstream: checkpoint.upstream,
+      gateway: checkpoint.gateway,
+      modelId: checkpoint.modelId,
+    };
+    log('Resuming checkpointed decision for ' + finalChosenKey);
+  }
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const now = (deps && deps.now) || Date.now();
+
+    if (!finalChosenKey) {
+      const evidenceData = evidence.loadEvidence(evidenceDir);
+      const annotated = candidatesApi.annotateCandidates(
+        eligibleCandidates.map((c) => Object.assign({}, c)),
+        evidenceData,
+        { now }
+      );
+
+      for (const c of annotated) {
+        const key = candidatesApi.candidateKey(c);
+        if (failedKeys.has(key)) {
+          c.blocked = true;
+          c.blockReason = 'candidate failed in current dispatch run';
+          c.blockScope = 'candidate';
+          continue;
+        }
+        for (const f of failedAttempts) {
+          if (f.key === key) {
+            c.blocked = true;
+            c.blockReason = 'candidate failed in current dispatch run';
+            c.blockScope = 'candidate';
+            break;
+          }
+          if (
+            f.classification &&
+            f.classification.scope !== 'candidate' &&
+            f.classification.scope !== 'model' &&
+            sameFailureDomain(c, f.candidate, f.classification)
+          ) {
+            c.blocked = true;
+            c.blockReason = 'avoiding failure domain of previous attempt';
+            c.blockScope = f.classification.scope || 'unknown';
+            break;
+          }
+        }
+      }
+
+      const rankingContext = {
+        workItemId: item.workItemId,
+        role: item.role,
+        kind: item.role,
+        registry,
+        evidenceData,
+        decisionOpts: { dir: decisionDir, now },
+        dryRun: false,
+        headrooms: deps && deps.headrooms,
+        load: deps && deps.load,
+        reservations: deps && deps.reservations,
+        explorationBudget:
+          args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 1,
+        home: deps && deps.home,
+        storePath: deps && deps.storePath,
+        accounts,
+        now,
+      };
+
+      const decision = ranking.rankAndRecord(annotated, rankingContext);
+      lastDecision = decision;
+
+      if (!decision.chosen) {
+        log(
+          'No eligible candidate for ' +
+            item.workItemId +
+            ' (attempt ' +
+            attempt +
+            '/' +
+            maxAttempts +
+            ')'
+        );
+        for (const rej of decision.rejected) {
+          log(
+            '  EXCLUDED ' +
+              rej.offeringId +
+              ' — ' +
+              rej.reason +
+              (rej.scope ? ' [' + rej.scope + ']' : '')
+          );
+        }
+        exit(1);
+        return { exitCode: 1, decision, attempts: attempt };
+      }
+
+      finalChosenKey = decision.chosen;
+      finalChosenCandidate = annotated.find(
+        (c) => candidatesApi.candidateKey(c) === finalChosenKey
+      ) || {
+        offeringId: finalChosenKey,
+        harness: decision.harness,
+      };
+
+      const finalDecisionLog = {
+        decision: decision,
+        fallback: {},
+        quotaState: annotated.map((c) => quotaSnapshot(c)),
+        headrooms: deps && deps.headrooms,
+        resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+      };
+      if (checkpointFile) writeJsonFile(checkpointFile, buildDryRunLog(finalDecisionLog));
+    }
+
+    if (isPinned) log('PINNED');
+    log(
+      'Dispatching ' +
+        item.workItemId +
+        ' to ' +
+        finalChosenKey +
+        ' (attempt ' +
+        attempt +
+        '/' +
+        maxAttempts +
+        ')'
+    );
+
+    const reservationOpts = { home: deps && deps.home, storePath: deps && deps.storePath, now };
+    quotaStore.recordReservation(
+      item.workItemId,
+      item.role,
+      finalChosenCandidate.accountId || '*',
+      finalChosenKey,
+      100000,
+      reservationOpts
+    );
+
+    let thrownError = null;
+    let isFailure = true;
+    try {
+      const launcher = (deps && deps.run) || runHarness;
+      const harnessName =
+        finalChosenCandidate.harness || (lastDecision && lastDecision.harness) || 'paseo';
+      const adapter = getHarness(harnessName);
+      const route = sourcesApi.dispatchRoute(
+        finalChosenCandidate.source ||
+          finalChosenCandidate.upstream ||
+          finalChosenCandidate.gateway,
+        registry
+      );
+
+      const launchArgs = adapter.launch({
+        provider:
+          (route && route.provider) || finalChosenCandidate.source || finalChosenCandidate.upstream,
+        model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
+        prompt: defaultPrompt(item),
+        branch: item.branch,
+        base: args.base || (deps && deps.base) || 'main',
+        cwd: args.cwd || (deps && deps.cwd) || rootDir,
+        title: workerName(item.workItemId),
+        labels: {
+          workItem: item.workItemId,
+          role: item.role,
+          project: args.project || 'shipde-platform',
+        },
+      });
+
+      try {
+        decisionsStore.recordDecision(
+          {
+            stage:
+              checkpoint && checkpoint.chosen
+                ? decisionsStore.Stage.RESUMED
+                : decisionsStore.Stage.LAUNCHED,
+            workItemId: item.workItemId,
+            role: item.role,
+            chosen: finalChosenKey,
+            harness: harnessName,
+            branch: item.branch,
+            sessionId: process.pid,
+            worktree: args.cwd || rootDir,
+            area: item.area,
+            firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
+            selected: finalChosenKey,
+            excluded: lastDecision
+              ? (lastDecision.rejected || []).map((r) => ({
+                  candidateKey: r.offeringId,
+                  reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+                  reason: r.reason,
+                }))
+              : [],
+            quota:
+              lastDecision && lastDecision.candidates
+                ? lastDecision.candidates.map((c) => ({
+                    candidateKey: c.offeringId,
+                    score: c.score,
+                    headroom: c.headroom,
+                  }))
+                : [],
+            resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+            checkpoint: checkpointFile,
+          },
+          { dir: decisionDir, now }
+        );
+      } catch (err) {
+        log('Failed to append LAUNCHED to decision log');
+        exit(1);
+        return { exitCode: 1, error: err };
+      }
+
+      try {
+        launchRes = launcher(adapter, launchArgs, { cwd: args.cwd || rootDir });
+      } catch (err) {
+        thrownError = err;
+        launchRes = {
+          exitCode: err.exitCode !== undefined ? err.exitCode : -1,
+          stdout: '',
+          stderr: err.stderr || err.message || String(err),
+          error: err,
+        };
+      }
+
+      if (deps && deps.rethrow && thrownError) {
+        throw thrownError;
+      }
+
+      isFailure =
+        thrownError !== null ||
+        !launchRes ||
+        launchRes.exitCode !== 0 ||
+        (typeof launchRes.httpStatus === 'number' && launchRes.httpStatus >= 400);
+
+      try {
+        decisionsStore.recordDecision(
+          {
+            stage: isFailure ? decisionsStore.Stage.FAILED : decisionsStore.Stage.COMPLETED,
+            workItemId: item.workItemId,
+            role: item.role,
+            chosen: finalChosenKey,
+            harness: harnessName,
+            branch: item.branch,
+            sessionId: process.pid,
+            worktree: args.cwd || rootDir,
+            area: item.area,
+            outcome: isFailure ? 'failed' : 'passed',
+            firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
+            selected: finalChosenKey,
+            excluded: lastDecision
+              ? (lastDecision.rejected || []).map((r) => ({
+                  candidateKey: r.offeringId,
+                  reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+                  reason: r.reason,
+                }))
+              : [],
+            quota:
+              lastDecision && lastDecision.candidates
+                ? lastDecision.candidates.map((c) => ({
+                    candidateKey: c.offeringId,
+                    score: c.score,
+                    headroom: c.headroom,
+                  }))
+                : [],
+            resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+            checkpoint: checkpointFile,
+          },
+          { dir: decisionDir, now }
+        );
+      } catch (err) {}
+    } finally {
+      quotaStore.releaseReservation(item.workItemId, finalChosenKey, reservationOpts);
+    }
+
+    if (checkpointFile && finalDecisionLog) {
+      const finalLogData = buildDryRunLog(finalDecisionLog);
+      finalLogData.dryRunDispatch.executeTouched = true;
+      finalLogData.dryRunDispatch.launched = true;
+      finalLogData.outcome = isFailure ? 'failed' : 'passed';
+      try {
+        writeJsonFile(checkpointFile, finalLogData);
+      } catch (err) {}
+    }
+
+    if (!isFailure) {
+      evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
+        status: 'passed',
+        level: evidence.Level.OUTCOME,
+        exitCode: 0,
+        source: 'dispatch',
+      });
+      log('Dispatch succeeded on ' + finalChosenKey);
+      exit(0);
+      return { exitCode: 0, chosen: finalChosenKey, result: launchRes, attempts: attempt };
+    } else {
+      evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
+        status: 'failed',
+        level: evidence.Level.OUTCOME,
+        exitCode: launchRes ? launchRes.exitCode : -1,
+        httpStatus: launchRes ? launchRes.httpStatus : undefined,
+        body: launchRes
+          ? launchRes.body || launchRes.stderr || launchRes.stdout
+          : thrownError && thrownError.message,
+        stderr: launchRes ? launchRes.stderr : thrownError && thrownError.message,
+        cause: launchRes ? launchRes.body || launchRes.stderr : thrownError && thrownError.message,
+        error: thrownError ? thrownError.message || String(thrownError) : undefined,
+        source: 'dispatch',
+      });
+      const rawFail = {
+        httpStatus: launchRes ? launchRes.httpStatus : undefined,
+        body: launchRes
+          ? launchRes.body || launchRes.stderr || launchRes.stdout
+          : thrownError && thrownError.message,
+        stderr: launchRes ? launchRes.stderr : thrownError && thrownError.message,
+      };
+      const classification = failureClassifier.classifyFailure({
+        exitCode: launchRes ? launchRes.exitCode : -1,
+        httpStatus: rawFail.httpStatus,
+        body: rawFail.body,
+        stderr: rawFail.stderr,
+        accountId: finalChosenCandidate.accountId,
+      });
+      failedAttempts.push({
+        key: finalChosenKey,
+        candidate: finalChosenCandidate,
+        classification: classification,
+      });
+      const scrubbedStderr = decisionsStore.scrubText(rawFail.stderr);
+      log('Candidate failed: ' + finalChosenKey + (scrubbedStderr ? ' — ' + scrubbedStderr : ''));
+      finalChosenKey = null; // force re-ranking
+      finalChosenCandidate = null;
+    }
+  }
+
+  log('Max dispatch attempts (' + maxAttempts + ') reached without success.');
+  exit(1);
+  return { exitCode: 1, decision: lastDecision, attempts: attempt };
 }
 
 const SHADOW_FLAGS = new Set(['project', 'compare', 'json', 'dry-run', 'dryRun']);
@@ -863,4 +1848,12 @@ function main() {
   process.exit(2);
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  dispatchCommand,
+  parseArgs,
+  main,
+};
