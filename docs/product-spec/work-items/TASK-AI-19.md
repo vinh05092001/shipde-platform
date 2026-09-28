@@ -557,3 +557,18 @@ Same command and evidence bar as the sixth batch, one evidence file per pull req
 | TASK-AI-60 | #154 | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named (agy Gemini 3.1 Pro on the exact merged head) |
 
 Codex was out of quota (until 2026-10-04), so no row claims a Codex PASS. On #154 an earlier `contract` run failed on PR-body placeholders; the body was corrected and the re-run on the same head succeeded before merge.
+
+## Executed run: 2026-09-29, eighth batch
+
+Same command and evidence bar as the sixth batch, one evidence file per pull request.
+Each reviewed commit was cross-checked against line 1 of `.worktrees/logs/reviews/<sha>.md` in the main checkout, verdict `PASS`.
+
+| Work Item | Pull Request | Merge commit | Transition | Verdict recorded |
+| --- | --- | --- | --- | --- |
+| TASK-AI-49 | #136 | `cc2bde528a838d42bcdd4c6bec496266942adaeb` | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named (opencode/baseten/moonshotai/Kimi-K3 on the exact merged head `5cbbac08`) |
+| TASK-AI-62 | #156 | `bce26b088f3ca9e69e96d2d29078f99a61048401` | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named (opencode/baseten/moonshotai/Kimi-K3 on the exact merged head `267dad25`) |
+| TASK-AI-63 | #157 | `7fb64343c1e26c410a6c0df4f69be911b98248a5` | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named (opencode/baseten/moonshotai/Kimi-K3 on the exact merged head `25d3fe38`) |
+
+TASK-AI-49 closes the gap the sixth batch recorded: its durable review file now names
+the reviewer, so the `FALLBACK_PASS` claim no longer names nobody. Codex remained out
+of quota (until 2026-10-04), so no row claims a Codex PASS.
