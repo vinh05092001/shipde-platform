@@ -294,7 +294,6 @@ function releaseReservation(workItemId, offeringId, options) {
     const res = getReservations(options);
     let changed = false;
     const prefix = workItemId + '::';
-    console.log('Release checking:', prefix, offeringId, Object.keys(res));
     for (const key of Object.keys(res)) {
       if (key === prefix + offeringId || (!offeringId && key.startsWith(prefix))) {
         delete res[key];

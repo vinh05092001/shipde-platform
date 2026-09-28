@@ -785,6 +785,27 @@ function applyDryRunBlocks(candidates, failedKeys, failedCandidate, classificati
   }
 }
 
+function candidateContextWindow(candidate) {
+  const caps = candidate && candidate.capabilities;
+  return (
+    candidate &&
+    (candidate.contextWindow ||
+      candidate.context_window ||
+      (caps && (caps.contextWindow || caps.context_window || caps.contextTokens)))
+  );
+}
+
+function applyHarnessVerification(candidates) {
+  const { contextRefusal } = require('./harness');
+  for (const c of candidates || []) {
+    const reason = contextRefusal(c.harness, candidateContextWindow(c));
+    if (!reason) continue;
+    c.blocked = true;
+    c.blockReason = reason;
+    c.blockScope = 'model';
+  }
+}
+
 function buildDryRunLog(parts) {
   const decision = parts.decision || {};
   const fallback = parts.fallback || {};
@@ -1012,7 +1033,7 @@ function dispatchCommand(args, deps = {}) {
   const { expandOfferings } = require('./offerings');
   const { listAccounts } = require('./accounts');
   const { readDiscoveryCatalogue } = require('./discovery/read');
-  const { getHarness, runHarness } = require('./harness');
+  const { getHarness, runHarness, parseLastJson, structuredOutcome } = require('./harness');
   const { workerName, defaultPrompt } = require('./executor');
 
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
@@ -1097,6 +1118,7 @@ function dispatchCommand(args, deps = {}) {
       evidenceData,
       { now }
     );
+    applyHarnessVerification(annotated);
 
     for (const c of annotated) {
       const key = candidatesApi.candidateKey(c);
@@ -1352,16 +1374,25 @@ function dispatchCommand(args, deps = {}) {
   let finalChosenKey = null;
   let launchRes = null;
   let failedAttempts = [];
+  let finalDecisionLog = null;
 
-  if (checkpoint && checkpoint.chosen) {
-    finalChosenKey = checkpoint.chosen;
+  if (
+    checkpoint &&
+    (checkpoint.chosen || checkpoint.selectedCandidate || checkpoint.candidateKey)
+  ) {
+    finalChosenKey = checkpoint.chosen || checkpoint.selectedCandidate || checkpoint.candidateKey;
+    const parsedCheckpoint =
+      require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
     finalChosenCandidate = {
       offeringId: finalChosenKey,
-      harness: checkpoint.harness,
+      harness: checkpoint.harness || parsedCheckpoint.harness,
       source: checkpoint.source,
-      upstream: checkpoint.upstream,
-      gateway: checkpoint.gateway,
-      modelId: checkpoint.modelId,
+      accessPath: checkpoint.accessPath || parsedCheckpoint.accessPath,
+      upstream: checkpoint.upstream || parsedCheckpoint.upstream,
+      gateway: checkpoint.gateway || parsedCheckpoint.gateway,
+      accountId: checkpoint.accountId || parsedCheckpoint.account,
+      quotaScope: checkpoint.quotaScope || parsedCheckpoint.quotaScope,
+      modelId: checkpoint.modelId || parsedCheckpoint.modelId,
     };
     log('Resuming checkpointed decision for ' + finalChosenKey);
   }
@@ -1377,6 +1408,7 @@ function dispatchCommand(args, deps = {}) {
         evidenceData,
         { now }
       );
+      applyHarnessVerification(annotated);
 
       for (const c of annotated) {
         const key = candidatesApi.candidateKey(c);
@@ -1460,12 +1492,16 @@ function dispatchCommand(args, deps = {}) {
         harness: decision.harness,
       };
 
-      const finalDecisionLog = {
+      finalDecisionLog = {
+        item,
+        now,
+        annotated,
         decision: decision,
         fallback: {},
         quotaState: annotated.map((c) => quotaSnapshot(c)),
         headrooms: deps && deps.headrooms,
         resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+        candidatesApi,
       };
       if (checkpointFile) writeJsonFile(checkpointFile, buildDryRunLog(finalDecisionLog));
     }
@@ -1506,15 +1542,26 @@ function dispatchCommand(args, deps = {}) {
           finalChosenCandidate.gateway,
         registry
       );
+      const candidateKey = candidatesApi.candidateKey(finalChosenCandidate);
+      if (candidateKey !== finalChosenKey) {
+        throw new Error('CANDIDATE_KEY_CHANGED_BEFORE_LAUNCH');
+      }
 
       const launchArgs = adapter.launch({
+        candidateKey: finalChosenKey,
         provider:
           (route && route.provider) || finalChosenCandidate.source || finalChosenCandidate.upstream,
         model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
+        accountId: finalChosenCandidate.accountId,
+        gateway: finalChosenCandidate.gateway || '',
+        upstream: finalChosenCandidate.upstream,
+        quotaScope: finalChosenCandidate.quotaScope,
         prompt: defaultPrompt(item),
         branch: item.branch,
         base: args.base || (deps && deps.base) || 'main',
         cwd: args.cwd || (deps && deps.cwd) || rootDir,
+        checkpoint: checkpointFile,
+        maxAttempts: 1,
         title: workerName(item.workItemId),
         labels: {
           workItem: item.workItemId,
@@ -1587,6 +1634,15 @@ function dispatchCommand(args, deps = {}) {
         !launchRes ||
         launchRes.exitCode !== 0 ||
         (typeof launchRes.httpStatus === 'number' && launchRes.httpStatus >= 400);
+
+      const parsed = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
+      if (
+        parsed &&
+        parsed.status &&
+        /fail|error|refus|stalled|timeout/i.test(String(parsed.status))
+      ) {
+        isFailure = true;
+      }
 
       try {
         decisionsStore.recordDecision(
@@ -1676,10 +1732,20 @@ function dispatchCommand(args, deps = {}) {
         stderr: rawFail.stderr,
         accountId: finalChosenCandidate.accountId,
       });
+      const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
+      const outcome =
+        parsedOutcome && parsedOutcome.candidateKey
+          ? parsedOutcome
+          : structuredOutcome(finalChosenKey, launchRes, classification, {
+              status: 'failed',
+              checkpoint: checkpointFile,
+              reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+            });
       failedAttempts.push({
         key: finalChosenKey,
         candidate: finalChosenCandidate,
         classification: classification,
+        outcome,
       });
       const scrubbedStderr = decisionsStore.scrubText(rawFail.stderr);
       log('Candidate failed: ' + finalChosenKey + (scrubbedStderr ? ' — ' + scrubbedStderr : ''));
@@ -1690,7 +1756,7 @@ function dispatchCommand(args, deps = {}) {
 
   log('Max dispatch attempts (' + maxAttempts + ') reached without success.');
   exit(1);
-  return { exitCode: 1, decision: lastDecision, attempts: attempt };
+  return { exitCode: 1, decision: lastDecision, attempts: attempt, failedAttempts };
 }
 
 const SHADOW_FLAGS = new Set(['project', 'compare', 'json', 'dry-run', 'dryRun']);
