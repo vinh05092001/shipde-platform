@@ -101,7 +101,164 @@ const cline = {
   },
 };
 
-const HARNESSES = Object.freeze({ paseo, cline });
+const hermes = {
+  id: 'hermes',
+  command: 'hermes',
+  launch(job) {
+    const j = job || {};
+    if (!j.candidateKey) throw new Error('HERMES_REQUIRES_PINNED_CANDIDATE');
+    if (!j.model) throw new Error('HERMES_REQUIRES_PINNED_MODEL');
+    if (Array.isArray(j.subagents) && j.subagents.length > 0) {
+      const accounted = Array.isArray(j.accountedSubagents) ? j.accountedSubagents : [];
+      if (accounted.length < j.subagents.length) {
+        throw new Error('HERMES_SUBAGENT_REQUIRES_CONTROLLER_ASSIGNMENT');
+      }
+    }
+    const args = [
+      'run',
+      '--candidate-key',
+      j.candidateKey,
+      '--model',
+      j.model,
+      '--no-fallback',
+      '--max-attempts',
+      String(Number.isFinite(Number(j.maxAttempts)) ? Number(j.maxAttempts) : 1),
+      '--json',
+    ];
+    if (j.provider) args.push('--provider', j.provider);
+    if (j.accountId) args.push('--account', j.accountId);
+    if (j.gateway) args.push('--gateway', j.gateway);
+    if (j.upstream) args.push('--upstream', j.upstream);
+    if (j.quotaScope) args.push('--quota-scope', j.quotaScope);
+    if (j.cwd) args.push('--cwd', j.cwd);
+    if (j.branch) args.push('--branch', j.branch);
+    if (j.checkpoint) args.push('--checkpoint', j.checkpoint);
+    args.push('--', j.prompt || '');
+    return args;
+  },
+  resume(sessionId, prompt, job) {
+    const j = job || {};
+    if (!j.candidateKey) throw new Error('HERMES_REQUIRES_PINNED_CANDIDATE');
+    const args = [
+      'resume',
+      String(sessionId),
+      '--candidate-key',
+      j.candidateKey,
+      '--no-fallback',
+      '--max-attempts',
+      String(Number.isFinite(Number(j.maxAttempts)) ? Number(j.maxAttempts) : 1),
+      '--json',
+    ];
+    if (j.model) args.push('--model', j.model);
+    if (j.cwd) args.push('--cwd', j.cwd);
+    if (j.checkpoint) args.push('--checkpoint', j.checkpoint);
+    args.push('--', prompt || '');
+    return args;
+  },
+  inspect(sessionId) {
+    return ['inspect', String(sessionId), '--json'];
+  },
+  stop(sessionId, job) {
+    const pid = job && job.pid ? Number(job.pid) : Number(sessionId);
+    return Number.isFinite(pid) && pid > 0 ? { killTree: pid } : null;
+  },
+  sessionIdFrom(parsed) {
+    return (
+      pickId(parsed) ||
+      pickId(parsed && parsed.handle) ||
+      pickId(parsed && parsed.session) ||
+      (parsed && parsed.pid ? String(parsed.pid) : null)
+    );
+  },
+  progressFromInspect(parsed, options) {
+    return progressVerdict(parsed, options);
+  },
+};
+
+const MIN_CONTEXT = Object.freeze({ hermes: 32000 });
+
+function contextRefusal(harnessName, contextWindow) {
+  const floor = MIN_CONTEXT[String(harnessName || '').toLowerCase()];
+  if (!floor) return null;
+  const window = Number(contextWindow);
+  if (!Number.isFinite(window) || window <= 0) {
+    return 'CONTEXT_WINDOW_UNVERIFIED: ' + harnessName + ' requires verified context >= ' + floor;
+  }
+  if (window >= floor) return null;
+  return 'CONTEXT_TOO_SMALL: ' + harnessName + ' requires context >= ' + floor + ', got ' + window;
+}
+
+const ProgressStatus = Object.freeze({
+  RUNNING_WITH_PROGRESS: 'RUNNING_WITH_PROGRESS',
+  STALLED: 'STALLED',
+  UNKNOWN: 'UNKNOWN',
+});
+
+function progressVerdict(parsed, options) {
+  const opts = options || {};
+  const stallMs = Number.isFinite(Number(opts.stallMs)) ? Number(opts.stallMs) : 15 * 60 * 1000;
+  const now = Number.isFinite(Number(opts.now)) ? Number(opts.now) : Date.now();
+  const p = parsed && typeof parsed === 'object' ? parsed : {};
+  const progress = p.progress && typeof p.progress === 'object' ? p.progress : p;
+  const markers = [
+    progress.diffBytes,
+    progress.diffSize,
+    progress.commits,
+    progress.tests,
+    progress.logBytes,
+    progress.toolCalls,
+    progress.toolActivity,
+  ];
+  const hasMetricProgress = markers.some((v) => Number(v) > 0);
+  const lastProgressAt =
+    Date.parse(progress.lastProgressAt || p.lastProgressAt || progress.updatedAt || '') || null;
+
+  if (hasMetricProgress) {
+    if (!lastProgressAt || now - lastProgressAt <= stallMs) {
+      return {
+        status: ProgressStatus.RUNNING_WITH_PROGRESS,
+        lastProgressAt: lastProgressAt ? new Date(lastProgressAt).toISOString() : null,
+      };
+    }
+    return {
+      status: ProgressStatus.STALLED,
+      lastProgressAt: new Date(lastProgressAt).toISOString(),
+      reason: 'NO_RECENT_PROGRESS',
+    };
+  }
+
+  const startedAt = Date.parse(p.startedAt || progress.startedAt || '') || null;
+  if (startedAt && now - startedAt > stallMs) {
+    return {
+      status: ProgressStatus.STALLED,
+      lastProgressAt: null,
+      reason: 'RUNNING_WITHOUT_PROGRESS',
+    };
+  }
+  return { status: ProgressStatus.UNKNOWN, lastProgressAt: null };
+}
+
+function structuredOutcome(candidateKey, res, classification, extra) {
+  const out = extra || {};
+  const status = out.status || (res && res.exitCode === 0 ? 'completed' : 'failed');
+  return {
+    candidateKey,
+    status,
+    errorClass: out.errorClass || (classification && classification.cause) || null,
+    failureScope: out.failureScope || (classification && classification.scope) || null,
+    retryable:
+      out.retryable !== undefined
+        ? Boolean(out.retryable)
+        : Boolean(classification && classification.cooldownMs !== null),
+    cooldownUntil: out.cooldownUntil || null,
+    checkpoint: out.checkpoint || null,
+    artifacts: out.artifacts || [],
+    lastProgressAt: out.lastProgressAt || null,
+    reason: out.reason || (res && (res.stderr || res.body || res.stdout)) || null,
+  };
+}
+
+const HARNESSES = Object.freeze({ paseo, cline, hermes });
 
 function pickId(obj) {
   if (!obj || typeof obj !== 'object') return null;
@@ -179,6 +336,10 @@ function executableFor(command, options) {
 /** Runs an adapter's argv with no shell, and reports what came back. */
 function runHarness(adapter, args, options) {
   const opts = options || {};
+  if (args && !Array.isArray(args) && args.killTree) {
+    const killTree = opts.killTree || defaultKillTree;
+    return killTree(args.killTree, opts);
+  }
   const exe = executableFor(adapter.command, opts);
   const res = spawnSync(exe.file, exe.prefixArgs.concat(args), {
     encoding: 'utf8',
@@ -186,6 +347,25 @@ function runHarness(adapter, args, options) {
     windowsHide: true,
     shell: false,
     maxBuffer: 8 * 1024 * 1024,
+  });
+  return {
+    exitCode: res.status === null ? -1 : res.status,
+    stdout: res.stdout || '',
+    stderr: res.stderr || '',
+  };
+}
+
+function defaultKillTree(pid, opts) {
+  const platform = (opts && opts.platform) || process.platform;
+  const command =
+    platform === 'win32'
+      ? { file: 'taskkill', args: ['/PID', String(pid), '/T', '/F'] }
+      : { file: 'pkill', args: ['-TERM', '-P', String(pid)] };
+  const res = spawnSync(command.file, command.args, {
+    encoding: 'utf8',
+    timeout: (opts && opts.timeoutMs) || 30000,
+    windowsHide: true,
+    shell: false,
   });
   return {
     exitCode: res.status === null ? -1 : res.status,
@@ -246,6 +426,11 @@ module.exports = {
   listHarnesses,
   runHarness,
   executableFor,
+  MIN_CONTEXT,
+  contextRefusal,
+  ProgressStatus,
+  progressVerdict,
+  structuredOutcome,
   parseLastJson,
   pickId,
 };
