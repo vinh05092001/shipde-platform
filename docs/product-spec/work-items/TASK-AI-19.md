@@ -545,3 +545,15 @@ Each evidence file was built from GitHub merge facts (exact head, merge commit r
 | TASK-AI-22 | - | BLOCKED_DEPENDENCY -> BACKLOG | all dependencies merged |
 
 Not reconciled: TASK-AI-49 (#136). Its durable review file does not name the reviewer, so a FALLBACK_PASS claim would name nobody; the row stays READY_FOR_CODEX until a named review exists.
+
+## Executed run: 2026-09-28, seventh batch
+
+Same command and evidence bar as the sixth batch, one evidence file per pull request.
+
+| Work Item | Pull Request | Transition | Verdict recorded |
+| --- | --- | --- | --- |
+| TASK-AI-50 | #153 | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named (agy Gemini 3.1 Pro on the exact merged head) |
+| TASK-AI-59 | #151 | BACKLOG -> MERGED | FALLBACK_PASS, reviewer named (agy Gemini 3.1 Pro on the exact merged head) |
+| TASK-AI-60 | #154 | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named (agy Gemini 3.1 Pro on the exact merged head) |
+
+Codex was out of quota (until 2026-10-04), so no row claims a Codex PASS. On #154 an earlier `contract` run failed on PR-body placeholders; the body was corrected and the re-run on the same head succeeded before merge.
