@@ -281,9 +281,14 @@ function executableFor(command, options) {
   const readFile = opts.readFile || ((p) => fs.readFileSync(p, 'utf8'));
   if (platform !== 'win32') return { file: command, prefixArgs: [] };
 
-  const dirs = (opts.path || process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  // The path module must follow the injected platform, not the host: on Linux
+  // the posix delimiter is ':' (which splits "C:\bin" on the drive colon) and
+  // join() emits forward slashes, so a win32 test — or any caller that pins
+  // platform — must resolve with path.win32 to see the real shim layout.
+  const p = path.win32;
+  const dirs = (opts.path || process.env.PATH || '').split(p.delimiter).filter(Boolean);
   for (const dir of dirs) {
-    const shim = path.join(dir, command + '.cmd');
+    const shim = p.join(dir, command + '.cmd');
     if (!exists(shim)) continue;
     let target = null;
     try {
@@ -291,7 +296,7 @@ function executableFor(command, options) {
       // lines earlier, and matching that one resolves to a file which is not
       // there, so the unwrap fell back to the .cmd that cannot be spawned.
       const match = /"%dp0%\\(node_modules\\[^"]+)"/.exec(readFile(shim));
-      if (match) target = path.join(dir, match[1]);
+      if (match) target = p.join(dir, match[1]);
     } catch (_) {
       target = null;
     }
