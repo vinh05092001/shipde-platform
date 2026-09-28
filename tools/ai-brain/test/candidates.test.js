@@ -155,7 +155,7 @@ describe('evidence store', () => {
       harness: 'paseo',
       accessPath: 'http',
       accountId: '9router', // corrected to contract 6.3 per final review
-        upstream: 'test-up',
+      upstream: 'test-up',
       modelId: 'test-up/invented-model',
     });
     assert.equal(key, 'paseo::http::::test-up::9router::::test-up/invented-model');
@@ -469,7 +469,7 @@ describe('candidate generation', () => {
           harness: 'paseo',
           accessPath: 'http',
           accountId: '9router', // corrected to contract 6.3 per final review
-        upstream: 'test-ev',
+          upstream: 'test-ev',
           model: 'test-ev/invented-recovered',
           source: 'test-ev',
           evidence: [{ level: 1, status: 'failed', httpStatus: 403 }],
@@ -486,12 +486,22 @@ describe('candidate generation', () => {
 
   test('mergeCandidates deduplicates by seven-part key', () => {
     const a = [
-      { harness: 'paseo', accessPath: 'http', accountId: '9router', // corrected to contract 6.3 per final review
-        upstream: 'test-up', modelId: 'test-up/invented-a' },
+      {
+        harness: 'paseo',
+        accessPath: 'http',
+        accountId: '9router', // corrected to contract 6.3 per final review
+        upstream: 'test-up',
+        modelId: 'test-up/invented-a',
+      },
     ];
     const b = [
-      { harness: 'paseo', accessPath: 'http', accountId: '9router', // corrected to contract 6.3 per final review
-        upstream: 'test-up', modelId: 'test-up/invented-a' },
+      {
+        harness: 'paseo',
+        accessPath: 'http',
+        accountId: '9router', // corrected to contract 6.3 per final review
+        upstream: 'test-up',
+        modelId: 'test-up/invented-a',
+      },
       {
         harness: 'paseo',
         accessPath: 'http',
@@ -1432,7 +1442,7 @@ describe('acceptance: full ranking run', () => {
           harness: 'paseo',
           accessPath: 'http://127.0.0.1:20128/v1',
           accountId: '9router', // corrected to contract 6.3 per final review
-        upstream: 'test-blocked',
+          upstream: 'test-blocked',
           model: 'test-blocked/invented-model',
           evidence: [
             {
@@ -1456,7 +1466,7 @@ describe('acceptance: full ranking run', () => {
           harness: 'agy',
           accessPath: 'cli',
           accountId: '9router', // corrected to contract 6.3 per final review
-        upstream: 'agy-local',
+          upstream: 'agy-local',
           model: 'invented-cli-model',
           evidence: [{ level: 2, status: 'passed', source: 'CLI session' }],
         },
@@ -1489,7 +1499,7 @@ describe('acceptance: full ranking run', () => {
       catalogue,
       accounts: [
         { id: 'agy-main', sourceId: 'agy-local', models: ['invented-cli-model'] },
-        { id: 'acc-router', sourceId: '9router' }
+        { id: 'acc-router', sourceId: '9router' },
       ],
     });
     const fromEvidence = candidates.candidatesFromEvidence(evData);

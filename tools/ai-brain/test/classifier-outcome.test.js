@@ -157,7 +157,11 @@ describe('failure classifier outcome path', () => {
     // candA is blocked on that access path
     const blockA = evidence.isCandidateBlocked(data, candA);
     assert.equal(blockA.blocked, true, 'candA must be excluded');
-    assert.equal(blockA.scope, 'model', 'scope must be model - corrected to contract 6.4 per final review fdd95a5be1007af230f3b5d315c4353d6c26a856-codex');
+    assert.equal(
+      blockA.scope,
+      'model',
+      'scope must be model - corrected to contract 6.4 per final review fdd95a5be1007af230f3b5d315c4353d6c26a856-codex'
+    );
 
     // candB on the same access path with a different model is NOT blocked
     const blockB = evidence.isCandidateBlocked(data, candB);
