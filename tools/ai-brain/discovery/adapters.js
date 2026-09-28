@@ -411,9 +411,30 @@ function recall(sourceId) {
  * @param ctx    { httpGet, runCommand, resolveCommand, lookupRoute, registry }
  * @returns adapter result (never throws; resolution failures are results)
  */
+const DEFERRED_DISPOSITIONS = new Set(['deferred', 'compromised-credential']);
+
+/**
+ * A source recorded with a deferred disposition (e.g. a compromised
+ * credential) is never enumerated: even a catalogue listing would use the
+ * credential. It is recorded in the evidence store as DEFERRED only.
+ */
+function deferredReason(source) {
+  const disposition = source && source.disposition;
+  if (!DEFERRED_DISPOSITIONS.has(disposition)) return null;
+  return (
+    'source deferred (' +
+    (source.dispositionReason || disposition) +
+    '): recorded for audit, never dispatched to or enumerated'
+  );
+}
+
 async function enumerate(source, ctx) {
   if (recall(source.id)) {
     return { status: 'recalled', reason: recall(source.id), catalogs: [], presence: null };
+  }
+  const deferred = deferredReason(source);
+  if (deferred) {
+    return { status: 'deferred', reason: deferred, catalogs: [], presence: null };
   }
   const kind = adapterKind(source);
   if (!kind) {
@@ -439,5 +460,6 @@ module.exports = {
   groupByOwner,
   enumerate,
   recall,
+  deferredReason,
   joinUrl,
 };

@@ -83,6 +83,19 @@ function statusRank(s) {
   return STATUS_RANK[norm] !== undefined ? STATUS_RANK[norm] : -1;
 }
 
+const PROOF_RANK = { API_PASS: 1, HARNESS_PASS: 2, WORK_ITEM_PASS: 3 };
+
+/** The strongest honest proof level across evidence items, or null. */
+function strongestProofLevel(evidenceItems) {
+  let best = null;
+  for (const e of evidenceItems || []) {
+    const l = e && e.proofLevel;
+    if (!l || PROOF_RANK[l] === undefined) continue;
+    if (best === null || PROOF_RANK[l] > PROOF_RANK[best]) best = l;
+  }
+  return best;
+}
+
 /**
  * Canonical evidence signature string for deduplication and total ordering.
  * Captures all distinguishing attributes: timestamp, status, reason, errorClass,
@@ -441,7 +454,7 @@ function readDiscoveryCatalogue(opts) {
       // Sort deterministic
       files.sort();
       for (const file of files) {
-        if (!file.startsWith('checkpoint-')) continue;
+        if (!file.startsWith('checkpoint-') && !file.startsWith('probe-pass-')) continue;
         try {
           const entry = JSON.parse(fs.readFileSync(path.join(importsDir, file), 'utf8'));
           if (entry && Array.isArray(entry.candidates)) {
@@ -595,6 +608,7 @@ function readDiscoveryCatalogue(opts) {
       deferred,
       probeInvalid,
       evidence: sortedEvidence,
+      proofLevel: strongestProofLevel(sortedEvidence),
       firstSeen,
       lastSeen,
       attempts,
@@ -631,6 +645,7 @@ function readDiscoveryCatalogue(opts) {
       deferred: resolved.deferred,
       probeInvalid: resolved.probeInvalid,
       evidence: resolved.evidence,
+      proofLevel: resolved.proofLevel,
       firstSeen: resolved.firstSeen,
       lastSeen: resolved.lastSeen,
       attempts: resolved.attempts,
@@ -663,6 +678,7 @@ function readDiscoveryCatalogue(opts) {
       deferred: resolved.deferred,
       probeInvalid: resolved.probeInvalid,
       evidence: resolved.evidence,
+      proofLevel: resolved.proofLevel,
       firstSeen: resolved.firstSeen,
       lastSeen: resolved.lastSeen,
       attempts: resolved.attempts,

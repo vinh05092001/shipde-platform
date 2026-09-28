@@ -29,6 +29,58 @@ const SCHEMA_VERSION = 2;
 const Level = { API: 1, HARNESS: 2, OUTCOME: 3 };
 const Status = { PASSED: 'passed', FAILED: 'failed', UNKNOWN: 'unknown' };
 
+/**
+ * Honest proof levels (TASK-AI-62). A proof level names exactly what was
+ * observed, and the ladder is one-way: API_PASS (a direct HTTP nonce) is never
+ * HARNESS_PASS (a nonce returned through OpenCode/Paseo), and neither is
+ * WORK_ITEM_PASS (real work plus independent review). Nothing may promote a
+ * lower level to a higher one on its own.
+ */
+const ProofLevel = {
+  API_PASS: 'API_PASS',
+  HARNESS_PASS: 'HARNESS_PASS',
+  WORK_ITEM_PASS: 'WORK_ITEM_PASS',
+};
+
+const ProofRank = {
+  [ProofLevel.API_PASS]: 1,
+  [ProofLevel.HARNESS_PASS]: 2,
+  [ProofLevel.WORK_ITEM_PASS]: 3,
+};
+
+/** Map a numeric evidence Level to its honest proof level. */
+function proofLevelFromLevel(level) {
+  if (level === Level.OUTCOME) return ProofLevel.WORK_ITEM_PASS;
+  if (level === Level.HARNESS) return ProofLevel.HARNESS_PASS;
+  return ProofLevel.API_PASS;
+}
+
+/**
+ * The strongest proof level present across a set of evidence items, or null
+ * when there is no evidence. API_PASS is the floor; it never reads as a higher
+ * level.
+ */
+function proofLevelOf(evidenceItems) {
+  let best = null;
+  for (const e of evidenceItems || []) {
+    const level = e && e.proofLevel;
+    if (!level) continue;
+    if (best === null || ProofRank[level] > ProofRank[best]) best = level;
+  }
+  return best;
+}
+
+/**
+ * A candidate is harness-proven only when some evidence item carries
+ * HARNESS_PASS or WORK_ITEM_PASS. API_PASS (direct HTTP nonce) is deliberately
+ * NOT harness-proven: a nonce over direct HTTP proves the vendor answered, not
+ * that the harness route works.
+ */
+function isHarnessProven(evidenceItems) {
+  const level = proofLevelOf(evidenceItems);
+  return level === ProofLevel.HARNESS_PASS || level === ProofLevel.WORK_ITEM_PASS;
+}
+
 const BLOCK_CODES = new Set([401, 402, 403, 404, 429, 503]);
 const BLOCK_TTL_MS = 24 * 3600_000; // 24 hours default fallback
 
@@ -131,6 +183,11 @@ function recordProbe(dir, candidate, item) {
   }
   if (item.exitCode !== undefined && item.exitCode !== null) {
     evItem.exitCode = item.exitCode;
+  }
+  // A numeric level carries its honest proof level; a caller may still name
+  // the proof level directly and that wins.
+  if (!evItem.proofLevel && evItem.level !== undefined) {
+    evItem.proofLevel = proofLevelFromLevel(evItem.level);
   }
   if (evItem.body) evItem.body = scrubText(evItem.body);
   if (evItem.stderr) evItem.stderr = scrubText(evItem.stderr);
@@ -498,6 +555,11 @@ function sharedQuotaStatus(data, pathA, pathB) {
 module.exports = {
   SCHEMA_VERSION,
   Level,
+  ProofLevel,
+  ProofRank,
+  proofLevelFromLevel,
+  proofLevelOf,
+  isHarnessProven,
   Status,
   BLOCK_CODES,
   BLOCK_TTL_MS,

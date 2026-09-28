@@ -1,0 +1,13 @@
+[
+  {
+    "sourceId": "baseten",
+    "modelId": "zai-org/GLM-5.3",
+    "opencodeAlias": "baseten/zai-org/GLM-5.3",
+    "harness": "paseo",
+    "accessPath": "opencode",
+    "gateway": "opencode",
+    "upstream": "baseten",
+    "nonce": "HARNESS-OK-8K2",
+    "timestamp": "2026-09-28T00:00:00.000Z"
+  }
+]
