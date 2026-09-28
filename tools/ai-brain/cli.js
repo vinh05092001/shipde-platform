@@ -1907,6 +1907,97 @@ function main() {
     process.exit(runSerenaCli(process.argv.slice(3)));
   }
 
+  // orchestrate (TASK-AI-60): dry-run autonomous loop, goal -> plan -> prompts ->
+  // Controller selection -> simulated fallback -> checkpoint/resume -> simulated
+  // tests/review/repair -> reconciliation, writing the log to --out.
+  if (command === 'orchestrate') {
+    const { runOrchestration } = require('./orchestrate');
+    const { generateCandidates } = require('./candidates');
+    const sourcesApi = require('./sources');
+    let goal = typeof args.goal === 'string' ? args.goal : null;
+    if (!goal) {
+      console.error('orchestrate requires --goal <text|file>');
+      process.exit(2);
+    }
+    if (require('fs').existsSync(goal)) goal = require('fs').readFileSync(goal, 'utf8');
+    const out = typeof args.out === 'string' ? args.out : null;
+    const registry = sourcesApi.loadSources();
+    const candidates = generateCandidates({
+      registry,
+      catalogue: [],
+      accounts: [],
+      openCodeIds: [],
+    });
+    // Dry-run demo: two synthetic candidates in different failure domains so the
+    // simulated first-candidate failure can fall back even with no live catalogue.
+    candidates.push(
+      {
+        harness: 'hermes',
+        accessPath: 'cli-a',
+        gateway: 'gw-a',
+        upstream: 'up-a',
+        accountId: 'acct-a',
+        quotaScope: 'acct-a',
+        modelId: 'demo/a',
+        source: 'gw-a',
+        kind: 'router',
+        qualifiedRoles: ['author.foundation'],
+        capabilities: { contextWindow: 64000 },
+        cost: 1,
+      },
+      {
+        harness: 'hermes',
+        accessPath: 'cli-b',
+        gateway: 'gw-b',
+        upstream: 'up-b',
+        accountId: 'acct-b',
+        quotaScope: 'acct-b',
+        modelId: 'demo/b',
+        source: 'gw-b',
+        kind: 'router',
+        qualifiedRoles: ['author.foundation'],
+        capabilities: { contextWindow: 64000 },
+        cost: 2,
+      }
+    );
+    let first = true;
+    const result = runOrchestration(goal, {
+      specs: [
+        {
+          id: 'DRY-RUN-GOAL',
+          role: 'author.foundation',
+          files: [],
+          dependencies: [],
+          acceptanceCriteria: ['dry-run completes'],
+        },
+      ],
+      candidates: candidates,
+      registry: registry,
+      run: function () {
+        if (first) {
+          first = false;
+          return { exitCode: 3, stderr: 'usage limit reached' };
+        }
+        return { exitCode: 0, stdout: '{"sessionId":"dry-sim"}' };
+      },
+      tests: function () {
+        return { pass: true };
+      },
+      reviewer: function () {
+        return { pass: true, findings: [] };
+      },
+      repairer: function () {
+        return { sha: 'head' };
+      },
+      sha: 'head',
+      out: out,
+      now: Date.now(),
+    });
+    console.log(JSON.stringify({ goal: goal, reconciliation: result.reconciliation }, null, 2));
+    if (out) console.log('Wrote dry-run log to ' + out);
+    process.exit(0);
+  }
+
   console.error('Lệnh không rõ: ' + command);
   console.error(
     'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify | serena'
