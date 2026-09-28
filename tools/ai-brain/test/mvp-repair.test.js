@@ -82,8 +82,8 @@ test('F3: sameFailureDomain excludes based on quotaScope for upstream failures',
     );
     assert.equal(
       sameFailureDomain(cand2, failed, { scope: 'upstream' }),
-      false,
-      'Different quotaScope on same upstream should not match'
+      true,
+      'Different quotaScope on same upstream should match - corrected to contract 6.4 per final review fdd95a5be1007af230f3b5d315c4353d6c26a856-codex'
     );
     assert.equal(
       sameFailureDomain(cand3, failed, { scope: 'upstream' }),

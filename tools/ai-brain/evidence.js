@@ -125,7 +125,6 @@ function recordProbe(dir, candidate, item) {
     data.combinations.push(combo);
   }
 
-  // A failure with no HTTP response carries no httpStatus; a process exit is recorded as a process exit
   const evItem = Object.assign({ ts: new Date().toISOString() }, item);
   if (evItem.httpStatus === undefined || evItem.httpStatus === null) {
     delete evItem.httpStatus;
@@ -133,6 +132,10 @@ function recordProbe(dir, candidate, item) {
   if (item.exitCode !== undefined && item.exitCode !== null) {
     evItem.exitCode = item.exitCode;
   }
+  if (evItem.body) evItem.body = scrubText(evItem.body);
+  if (evItem.stderr) evItem.stderr = scrubText(evItem.stderr);
+  if (evItem.cause) evItem.cause = scrubText(evItem.cause);
+  if (typeof evItem.error === 'string') evItem.error = scrubText(evItem.error);
   combo.evidence.push(evItem);
 
   const isFailure =
@@ -284,12 +287,7 @@ function isCandidateBlocked(data, candidate, opts) {
       if (cd.scope === Scope.ACCOUNT || cd.scope === 'account') {
         const cdAccount = cd.accountId || key.split('::')[4];
         const cdUpstream = cd.upstream || key.split('::')[3];
-        if (
-          candObj.accountId &&
-          candObj.accountId !== '*' &&
-          candObj.accountId === cdAccount &&
-          candObj.upstream === cdUpstream
-        ) {
+        if (candObj.accountId && candObj.accountId !== '*' && candObj.accountId === cdAccount) {
           return {
             blocked: true,
             reason: cd.blockReason,

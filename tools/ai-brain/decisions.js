@@ -237,13 +237,20 @@ function openWritersDetailed(options) {
   for (const w of state.values()) {
     let lastActivity = new Date(w.since).getTime();
     if (w.worktree) {
-      try {
-        const stats = fs.statSync(w.worktree);
-        if (stats.mtimeMs > lastActivity) {
-          lastActivity = stats.mtimeMs;
+      const pathsToCheck = [
+        path.join(w.worktree, '.git', 'index'),
+        path.join(w.worktree, 'logs'),
+        path.join(w.worktree, '.shipde', 'heartbeat'),
+      ];
+      for (const p of pathsToCheck) {
+        try {
+          const stats = fs.statSync(p);
+          if (stats.mtimeMs > lastActivity) {
+            lastActivity = stats.mtimeMs;
+          }
+        } catch (e) {
+          // ignore
         }
-      } catch (e) {
-        // ignore
       }
     }
     const elapsed = now - lastActivity;

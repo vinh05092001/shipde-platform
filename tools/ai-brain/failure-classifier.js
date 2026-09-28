@@ -290,7 +290,7 @@ function classifyFailure(input) {
   ) {
     return {
       cause: Cause.ALIAS_MISMATCH,
-      scope: Scope.ACCESS_PATH,
+      scope: Scope.MODEL,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.ALIAS_MISMATCH],
       humanAction: HumanAction.NONE,
       evidence,
@@ -354,8 +354,8 @@ function classifyFailure(input) {
 
   // Case 12: HTTP process failure means gateway or access path failure
   if (
-    (exitCode !== 0 || httpStatus === 0) &&
-    /ECONNREFUSED|ENOTFOUND|gateway unreachable/i.test(text)
+    httpStatus === 0 ||
+    (exitCode !== 0 && /ECONNREFUSED|ENOTFOUND|gateway unreachable/i.test(text))
   ) {
     return {
       cause: Cause.UNKNOWN,

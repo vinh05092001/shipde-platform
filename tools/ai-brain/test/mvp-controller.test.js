@@ -141,7 +141,7 @@ describe('MVP Controller Contract (tools/ai-brain/cli.js dispatch)', () => {
       const accessPath = c.accessPath || '9router';
       const gateway = c.gateway || '9router';
       const upstream = c.upstream || 'gh';
-      const account = c.account || c.accountId || '*';
+      const account = c.account || c.accountId || 'acc-default'; // corrected to contract 6.3 per final review fdd95a5be1007af230f3b5d315c4353d6c26a856-codex
       const quotaScope = c.quotaScope || (account !== '*' ? account : upstream);
       const modelId = c.modelId || 'gh/gpt-4o';
       const key = [harness, accessPath, gateway, upstream, account, quotaScope, modelId].join(

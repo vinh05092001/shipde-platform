@@ -157,7 +157,7 @@ describe('failure classifier outcome path', () => {
     // candA is blocked on that access path
     const blockA = evidence.isCandidateBlocked(data, candA);
     assert.equal(blockA.blocked, true, 'candA must be excluded');
-    assert.equal(blockA.scope, 'access_path', 'scope must be access_path');
+    assert.equal(blockA.scope, 'model', 'scope must be model - corrected to contract 6.4 per final review fdd95a5be1007af230f3b5d315c4353d6c26a856-codex');
 
     // candB on the same access path with a different model is NOT blocked
     const blockB = evidence.isCandidateBlocked(data, candB);
@@ -167,12 +167,12 @@ describe('failure classifier outcome path', () => {
       'candB (different model on same access path) must remain eligible'
     );
 
-    // candC on a different access path with the same model is NOT blocked
+    // candC on a different access path with the same model IS blocked
     const blockC = evidence.isCandidateBlocked(data, candC);
     assert.equal(
       blockC.blocked,
-      false,
-      'candC (same model on different access path) must remain eligible'
+      true,
+      'candC (same model on different access path) must be excluded due to model scope'
     );
 
     // Upstream gh is NOT blocked

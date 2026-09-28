@@ -743,7 +743,7 @@ function sameFailureDomain(candidate, failed, classification) {
     Boolean(left && right && left !== '*' && right !== '*' && left === right);
   const scope = classification.scope || 'unknown';
   if (scope === 'upstream') {
-    return candidate.upstream === failed.upstream && candidate.quotaScope === failed.quotaScope;
+    return candidate.upstream === failed.upstream;
   }
   if (scope === 'candidate' || scope === 'model') {
     return (candidate.modelId || candidate.model) === (failed.modelId || failed.model);
@@ -1318,9 +1318,9 @@ function dispatchCommand(args, deps = {}) {
 
   // Execution with retry/fallback
   const checkpointFile =
-    args['decision-log'] && typeof args['decision-log'] === 'string'
-      ? path.resolve(rootDir, args['decision-log'])
-      : deps && deps.decisionLogFile;
+    args['checkpoint'] && typeof args['checkpoint'] === 'string'
+      ? path.resolve(rootDir, args['checkpoint'])
+      : deps && deps.checkpointFile;
   const checkpoint = readCheckpoint(checkpointFile);
   const failedKeys = new Set((checkpoint && checkpoint.failedCandidates) || []);
 
@@ -1332,6 +1332,11 @@ function dispatchCommand(args, deps = {}) {
   const decisionsStore = require('./decisions');
   const failureClassifier = require('./failure-classifier');
   const nowForWriter = (deps && deps.now) || Date.now();
+
+  if (checkpoint && checkpoint.dryRunDispatch && checkpoint.dryRunDispatch.executeTouched) {
+    log(`Work item ${item.workItemId} already executed according to checkpoint`);
+    return { exitCode: 0 };
+  }
 
   const activeWriter = decisionsStore.writerFor(item.workItemId, {
     dir: decisionDir,
@@ -1489,93 +1494,149 @@ function dispatchCommand(args, deps = {}) {
     );
 
     let thrownError = null;
-    const launcher = (deps && deps.run) || runHarness;
-    const harnessName =
-      finalChosenCandidate.harness || (lastDecision && lastDecision.harness) || 'paseo';
-    const adapter = getHarness(harnessName);
-    const route = sourcesApi.dispatchRoute(
-      finalChosenCandidate.source || finalChosenCandidate.upstream || finalChosenCandidate.gateway,
-      registry
-    );
-
-    const launchArgs = adapter.launch({
-      provider:
-        (route && route.provider) || finalChosenCandidate.source || finalChosenCandidate.upstream,
-      model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
-      prompt: defaultPrompt(item),
-      branch: item.branch,
-      base: args.base || (deps && deps.base) || 'main',
-      cwd: args.cwd || (deps && deps.cwd) || rootDir,
-      title: workerName(item.workItemId),
-      labels: {
-        workItem: item.workItemId,
-        role: item.role,
-        project: args.project || 'shipde-platform',
-      },
-    });
-
+    let isFailure = true;
     try {
-      decisionsStore.recordDecision(
-        {
-          stage:
-            checkpoint && checkpoint.chosen
-              ? decisionsStore.Stage.RESUMED
-              : decisionsStore.Stage.LAUNCHED,
-          workItemId: item.workItemId,
-          role: item.role,
-          chosen: finalChosenKey,
-          harness: harnessName,
-          branch: item.branch,
-          sessionId: process.pid,
-          worktree: args.cwd || rootDir,
-        },
-        { dir: decisionDir, now }
+      const launcher = (deps && deps.run) || runHarness;
+      const harnessName =
+        finalChosenCandidate.harness || (lastDecision && lastDecision.harness) || 'paseo';
+      const adapter = getHarness(harnessName);
+      const route = sourcesApi.dispatchRoute(
+        finalChosenCandidate.source ||
+          finalChosenCandidate.upstream ||
+          finalChosenCandidate.gateway,
+        registry
       );
-    } catch (err) {
-      log('Failed to append LAUNCHED to decision log');
-      exit(1);
-      return { exitCode: 1, error: err };
-    }
 
-    try {
-      launchRes = launcher(adapter, launchArgs, { cwd: args.cwd || rootDir });
-    } catch (err) {
-      thrownError = err;
-      launchRes = {
-        exitCode: err.exitCode !== undefined ? err.exitCode : -1,
-        stdout: '',
-        stderr: err.stderr || err.message || String(err),
-        error: err,
-      };
-    }
-
-    if (deps && deps.rethrow && thrownError) {
-      throw thrownError;
-    }
-
-    const isFailure =
-      thrownError !== null ||
-      !launchRes ||
-      launchRes.exitCode !== 0 ||
-      (typeof launchRes.httpStatus === 'number' && launchRes.httpStatus >= 400);
-
-    try {
-      decisionsStore.recordDecision(
-        {
-          stage: isFailure ? decisionsStore.Stage.FAILED : decisionsStore.Stage.COMPLETED,
-          workItemId: item.workItemId,
+      const launchArgs = adapter.launch({
+        provider:
+          (route && route.provider) || finalChosenCandidate.source || finalChosenCandidate.upstream,
+        model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
+        prompt: defaultPrompt(item),
+        branch: item.branch,
+        base: args.base || (deps && deps.base) || 'main',
+        cwd: args.cwd || (deps && deps.cwd) || rootDir,
+        title: workerName(item.workItemId),
+        labels: {
+          workItem: item.workItemId,
           role: item.role,
-          chosen: finalChosenKey,
-          harness: harnessName,
-          branch: item.branch,
-          sessionId: process.pid,
-          worktree: args.cwd || rootDir,
-          outcome: isFailure ? 'failed' : 'passed',
+          project: args.project || 'shipde-platform',
         },
-        { dir: decisionDir, now }
-      );
-    } catch (err) {}
-    quotaStore.releaseReservation(item.workItemId, finalChosenKey, reservationOpts);
+      });
+
+      try {
+        decisionsStore.recordDecision(
+          {
+            stage:
+              checkpoint && checkpoint.chosen
+                ? decisionsStore.Stage.RESUMED
+                : decisionsStore.Stage.LAUNCHED,
+            workItemId: item.workItemId,
+            role: item.role,
+            chosen: finalChosenKey,
+            harness: harnessName,
+            branch: item.branch,
+            sessionId: process.pid,
+            worktree: args.cwd || rootDir,
+            area: item.area,
+            firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
+            selected: finalChosenKey,
+            excluded: lastDecision
+              ? (lastDecision.rejected || []).map((r) => ({
+                  candidateKey: r.offeringId,
+                  reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+                  reason: r.reason,
+                }))
+              : [],
+            quota:
+              lastDecision && lastDecision.candidates
+                ? lastDecision.candidates.map((c) => ({
+                    candidateKey: c.offeringId,
+                    score: c.score,
+                    headroom: c.headroom,
+                  }))
+                : [],
+            resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+            checkpoint: checkpointFile,
+          },
+          { dir: decisionDir, now }
+        );
+      } catch (err) {
+        log('Failed to append LAUNCHED to decision log');
+        exit(1);
+        return { exitCode: 1, error: err };
+      }
+
+      try {
+        launchRes = launcher(adapter, launchArgs, { cwd: args.cwd || rootDir });
+      } catch (err) {
+        thrownError = err;
+        launchRes = {
+          exitCode: err.exitCode !== undefined ? err.exitCode : -1,
+          stdout: '',
+          stderr: err.stderr || err.message || String(err),
+          error: err,
+        };
+      }
+
+      if (deps && deps.rethrow && thrownError) {
+        throw thrownError;
+      }
+
+      isFailure =
+        thrownError !== null ||
+        !launchRes ||
+        launchRes.exitCode !== 0 ||
+        (typeof launchRes.httpStatus === 'number' && launchRes.httpStatus >= 400);
+
+      try {
+        decisionsStore.recordDecision(
+          {
+            stage: isFailure ? decisionsStore.Stage.FAILED : decisionsStore.Stage.COMPLETED,
+            workItemId: item.workItemId,
+            role: item.role,
+            chosen: finalChosenKey,
+            harness: harnessName,
+            branch: item.branch,
+            sessionId: process.pid,
+            worktree: args.cwd || rootDir,
+            area: item.area,
+            outcome: isFailure ? 'failed' : 'passed',
+            firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
+            selected: finalChosenKey,
+            excluded: lastDecision
+              ? (lastDecision.rejected || []).map((r) => ({
+                  candidateKey: r.offeringId,
+                  reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+                  reason: r.reason,
+                }))
+              : [],
+            quota:
+              lastDecision && lastDecision.candidates
+                ? lastDecision.candidates.map((c) => ({
+                    candidateKey: c.offeringId,
+                    score: c.score,
+                    headroom: c.headroom,
+                  }))
+                : [],
+            resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+            checkpoint: checkpointFile,
+          },
+          { dir: decisionDir, now }
+        );
+      } catch (err) {}
+    } finally {
+      quotaStore.releaseReservation(item.workItemId, finalChosenKey, reservationOpts);
+    }
+
+    if (checkpointFile && finalDecisionLog) {
+      const finalLogData = buildDryRunLog(finalDecisionLog);
+      finalLogData.dryRunDispatch.executeTouched = true;
+      finalLogData.dryRunDispatch.launched = true;
+      finalLogData.outcome = isFailure ? 'failed' : 'passed';
+      try {
+        writeJsonFile(checkpointFile, finalLogData);
+      } catch (err) {}
+    }
 
     if (!isFailure) {
       evidence.recordOutcome(evidenceDir, finalChosenCandidate, {

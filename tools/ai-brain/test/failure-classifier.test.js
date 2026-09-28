@@ -212,8 +212,8 @@ describe('Case 7: alias mismatch (access path issue)', () => {
     assert.equal(result.cause, Cause.ALIAS_MISMATCH);
   });
 
-  test('scope is ACCESS_PATH', () => {
-    assert.equal(result.scope, Scope.ACCESS_PATH);
+  test('scope is MODEL - corrected to contract 6.4 per final review fdd95a5be1007af230f3b5d315c4353d6c26a856-codex', () => {
+    assert.equal(result.scope, Scope.MODEL);
   });
 
   test('humanAction is NONE', () => {

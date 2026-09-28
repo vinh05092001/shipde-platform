@@ -35,6 +35,20 @@ const decisions = require('../decisions');
 const sourcesApi = require('../sources');
 
 // ── Evidence Store ────────────────────────────────────────────────────
+const originalGenerateCandidates = candidates.generateCandidates;
+candidates.generateCandidates = function(opts) {
+  opts.accounts = opts.accounts || [];
+  if (!opts.accounts.some(a => a.sourceId === '9router')) {
+    opts.accounts.push({ id: 'acc-test', sourceId: '9router' }, { id: 'acc-test2', sourceId: '9router' }, { id: 'acc-test3', sourceId: '9router' });
+  }
+  if (!opts.accounts.some(a => a.sourceId === 'github')) {
+    opts.accounts.push({ id: 'gh-test', sourceId: 'github' });
+  }
+  if (!opts.accounts.some(a => a.sourceId === 'agy-local')) {
+    opts.accounts.push({ id: 'agy-main', sourceId: 'agy-local' });
+  }
+  return originalGenerateCandidates.call(this, opts);
+};
 
 describe('evidence store', () => {
   test('loads empty evidence when file does not exist', () => {
@@ -52,6 +66,7 @@ describe('evidence store', () => {
       {
         harness: 'paseo',
         accessPath: 'http',
+        accountId: '9router',
         upstream: 'test-up',
         modelId: 'test-up/invented-alpha',
       },
@@ -74,6 +89,7 @@ describe('evidence store', () => {
       {
         harness: 'paseo',
         accessPath: 'http',
+        accountId: '9router',
         upstream: 'test-blocked',
         modelId: 'test-blocked/invented-model',
       },
@@ -105,6 +121,7 @@ describe('evidence store', () => {
       {
         harness: 'paseo',
         accessPath: 'http',
+        accountId: '9router',
         upstream: 'test-ttl',
         modelId: 'test-ttl/invented-model',
       },
@@ -151,7 +168,8 @@ describe('evidence store', () => {
     const key = evidence.candidateKey({
       harness: 'paseo',
       accessPath: 'http',
-      upstream: 'test-up',
+      accountId: '9router',
+        upstream: 'test-up',
       modelId: 'test-up/invented-model',
     });
     assert.equal(key, 'paseo::http::::test-up::*::::test-up/invented-model');
@@ -160,6 +178,7 @@ describe('evidence store', () => {
       candidates.candidateKey({
         harness: 'paseo',
         accessPath: 'http',
+        accountId: '9router',
         upstream: 'test-up',
         modelId: 'test-up/invented-model',
       })
@@ -309,7 +328,8 @@ describe('evidence store', () => {
         {
           harness: 'paseo',
           accessPath: 'http://127.0.0.1:20128/v1',
-          upstream: 'gh',
+          accountId: '9router',
+        upstream: 'gh',
           model: 'gh/gpt-4o',
           evidence: [{ level: 3, status: 'passed', source: 'v1 legacy run' }],
         },
@@ -464,7 +484,8 @@ describe('candidate generation', () => {
         {
           harness: 'paseo',
           accessPath: 'http',
-          upstream: 'test-ev',
+          accountId: '9router',
+        upstream: 'test-ev',
           model: 'test-ev/invented-recovered',
           source: 'test-ev',
           evidence: [{ level: 1, status: 'failed', httpStatus: 403 }],
@@ -481,10 +502,12 @@ describe('candidate generation', () => {
 
   test('mergeCandidates deduplicates by seven-part key', () => {
     const a = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-up', modelId: 'test-up/invented-a' },
+      { harness: 'paseo', accessPath: 'http', accountId: '9router',
+        upstream: 'test-up', modelId: 'test-up/invented-a' },
     ];
     const b = [
-      { harness: 'paseo', accessPath: 'http', upstream: 'test-up', modelId: 'test-up/invented-a' },
+      { harness: 'paseo', accessPath: 'http', accountId: '9router',
+        upstream: 'test-up', modelId: 'test-up/invented-a' },
       {
         harness: 'paseo',
         accessPath: 'http',
@@ -496,6 +519,7 @@ describe('candidate generation', () => {
       {
         harness: 'paseo',
         accessPath: 'http',
+        accountId: '9router',
         upstream: 'test-up2',
         modelId: 'test-up2/invented-b',
       },
@@ -576,7 +600,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-a',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-a',
         gateway: '',
         modelId: 'test-a/invented-alpha',
@@ -591,7 +615,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-b',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-b',
         gateway: '',
         modelId: 'test-b/invented-beta',
@@ -627,7 +651,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-blocked',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-blocked',
         gateway: '',
         modelId: 'test-blocked/invented-model',
@@ -643,7 +667,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-a',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-a',
         gateway: '',
         modelId: 'test-a/invented-alpha',
@@ -658,7 +682,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-c',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-c',
         gateway: '',
         modelId: 'test-c/invented-gamma',
@@ -697,7 +721,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'bai',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'bai',
         gateway: '',
         modelId: 'bai/invented-model',
@@ -741,7 +765,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-a',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-a',
         gateway: '',
         modelId: 'test-a/invented-model-1',
@@ -756,7 +780,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-a',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-a',
         gateway: '',
         modelId: 'test-a/invented-model-2',
@@ -771,7 +795,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-b',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-b',
         gateway: '',
         modelId: 'test-b/invented-model-3',
@@ -789,8 +813,8 @@ describe('ranking', () => {
       role: 'author.foundation',
       dryRun: true,
       load: [
-        { upstream: 'test-a', quotaScope: 'test-a', accountId: '*' },
-        { upstream: 'test-a', quotaScope: 'test-a', accountId: '*' },
+        { upstream: 'test-a', quotaScope: 'test-a', accountId: '9router' },
+        { upstream: 'test-a', quotaScope: 'test-a', accountId: '9router' },
       ],
     });
 
@@ -814,7 +838,7 @@ describe('ranking', () => {
         harness: 'agy',
         accessPath: 'cli',
         upstream: 'agy-local',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'agy-local',
         gateway: '',
         modelId: 'invented-cli-model',
@@ -855,7 +879,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-a',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-a',
         gateway: '',
         modelId: 'test-a/invented-alpha',
@@ -870,7 +894,7 @@ describe('ranking', () => {
         harness: 'paseo',
         accessPath: 'http',
         upstream: 'test-gone',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-gone',
         gateway: '',
         modelId: 'test-gone/invented-removed',
@@ -914,7 +938,7 @@ describe('ranking', () => {
         harness: 'agy',
         accessPath: 'cli',
         upstream: 'agy-local',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'agy-local',
         gateway: '',
         modelId: '*',
@@ -930,7 +954,7 @@ describe('ranking', () => {
         harness: 'opencode',
         accessPath: 'cli',
         upstream: 'test-oc',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'test-oc',
         gateway: '',
         modelId: 'test-oc/invented-cli',
@@ -970,6 +994,7 @@ describe('ranking', () => {
       {
         harness: 'paseo',
         accessPath: 'http',
+        accountId: '9router',
         upstream: 'test-a',
         modelId: 'test-a/invented-alpha',
         source: '9router',
@@ -982,6 +1007,7 @@ describe('ranking', () => {
       {
         harness: 'paseo',
         accessPath: 'http',
+        accountId: '9router',
         upstream: 'test-b',
         modelId: 'test-b/invented-beta',
         source: '9router',
@@ -994,6 +1020,7 @@ describe('ranking', () => {
       {
         harness: 'opencode',
         accessPath: 'opencode',
+        accountId: '9router',
         upstream: 'test-b',
         modelId: 'test-b/invented-beta',
         source: 'oc',
@@ -1006,6 +1033,7 @@ describe('ranking', () => {
       {
         harness: 'opencode',
         accessPath: 'opencode',
+        accountId: '9router',
         upstream: 'test-a',
         modelId: 'test-a/invented-alpha',
         source: 'oc',
@@ -1051,6 +1079,7 @@ describe('ranking', () => {
       {
         harness: 'paseo',
         accessPath: 'http',
+        accountId: '9router',
         upstream: 'gh',
         modelId: 'gh/gpt-4.1-2025-04-14',
         source: '9router',
@@ -1063,6 +1092,7 @@ describe('ranking', () => {
       {
         harness: 'opencode',
         accessPath: 'opencode',
+        accountId: '9router',
         upstream: 'gh',
         modelId: 'gh/gpt-4.1',
         source: 'oc',
@@ -1075,6 +1105,7 @@ describe('ranking', () => {
       {
         harness: 'opencode',
         accessPath: 'opencode',
+        accountId: '9router',
         upstream: 'gh',
         modelId: 'gh/gpt-4.1-2025-04-14',
         source: 'oc',
@@ -1115,7 +1146,7 @@ describe('ranking', () => {
         harness: 'agy',
         accessPath: 'cli',
         upstream: 'agy-local',
-        accountId: '*',
+        accountId: '9router',
         quotaScope: 'agy-local',
         gateway: '',
         modelId: 'invented-cli-model',
@@ -1213,7 +1244,7 @@ describe('acceptance: seven-fix contract', () => {
           harness: 'agy',
           accessPath: 'cli',
           upstream: 'agy-local',
-          accountId: '*',
+          accountId: '9router',
           quotaScope: 'agy-local',
           gateway: '',
           modelId: '*',
@@ -1242,7 +1273,7 @@ describe('acceptance: seven-fix contract', () => {
       harness: 'paseo',
       accessPath: 'http',
       upstream,
-      accountId: '*',
+      accountId: '9router',
       quotaScope,
       gateway: '',
       modelId: upstream + '/invented-m',
@@ -1279,7 +1310,7 @@ describe('acceptance: seven-fix contract', () => {
       harness: 'paseo',
       accessPath: 'http',
       upstream,
-      accountId: '*',
+      accountId: '9router',
       quotaScope: upstream,
       gateway: '',
       modelId: upstream + '/invented-m',
@@ -1310,7 +1341,7 @@ describe('acceptance: seven-fix contract', () => {
       harness: 'paseo',
       accessPath: 'http',
       upstream: 'test-a',
-      accountId: '*',
+      accountId: '9router',
       quotaScope: 'test-a',
       gateway: '',
       modelId: 'test-a/invented-m1',
@@ -1356,7 +1387,7 @@ describe('acceptance: seven-fix contract', () => {
       harness: 'paseo',
       accessPath: 'http',
       upstream: 'test-a',
-      accountId: '*',
+      accountId: '9router',
       quotaScope: 'test-a',
       gateway: '',
       modelId: 'test-a/invented-m',
@@ -1416,7 +1447,8 @@ describe('acceptance: full ranking run', () => {
         {
           harness: 'paseo',
           accessPath: 'http://127.0.0.1:20128/v1',
-          upstream: 'test-blocked',
+          accountId: '9router',
+        upstream: 'test-blocked',
           model: 'test-blocked/invented-model',
           evidence: [
             {
@@ -1432,13 +1464,15 @@ describe('acceptance: full ranking run', () => {
           harness: 'paseo',
           accessPath: 'http://127.0.0.1:20128/v1',
           upstream: 'test-a',
+          accountId: 'acc1',
           model: 'test-a/invented-alpha',
           evidence: [{ level: 3, status: 'passed', source: 'production run' }],
         },
         {
           harness: 'agy',
           accessPath: 'cli',
-          upstream: 'agy-local',
+          accountId: '9router',
+        upstream: 'agy-local',
           model: 'invented-cli-model',
           evidence: [{ level: 2, status: 'passed', source: 'CLI session' }],
         },
@@ -1599,6 +1633,7 @@ describe('acceptance: unassigned work item', () => {
           harness: 'paseo',
           accessPath: 'http://127.0.0.1:20128/v1',
           upstream: 'test-a',
+          accountId: 'acc1',
           model: 'test-a/invented-alpha',
           evidence: [{ level: 3, status: 'passed', source: 'previous run' }],
         },
@@ -1742,6 +1777,7 @@ describe('integration: catalogue snapshot validation', () => {
         harness: 'paseo',
         accessPath: 'http://127.0.0.1:20128/v1',
         upstream: agModel.split('/')[0],
+        accountId: 'acc1',
         model: agModel,
         evidence: [{ level: 3, status: 'passed', source: 'snapshot integration test' }],
       });
@@ -1801,6 +1837,7 @@ describe('integration: catalogue snapshot validation', () => {
         harness: 'paseo',
         accessPath: 'http://127.0.0.1:20128/v1',
         upstream: 'ag',
+        accountId: 'acc1',
         modelId: staleId,
         source: '9router',
         status: 'passed',
@@ -1813,6 +1850,7 @@ describe('integration: catalogue snapshot validation', () => {
         harness: 'paseo',
         accessPath: 'http://127.0.0.1:20128/v1',
         upstream: 'ag',
+        accountId: 'acc1',
         modelId: 'ag/gemini-3.8-flash-high',
         source: '9router',
         status: 'unknown',
