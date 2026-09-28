@@ -529,3 +529,19 @@ Corrections applied vs. original PR #117:
 - TASK-AI-22: excluded from `MERGED` (verdict `CHANGES_REQUIRED`)
 - Dependent unblocking follows `AI-19-R03` strictly to `BACKLOG`; no bulk promotion to `READY_FOR_AUTHOR`
 - TASK-AI-46 row preserved (not deleted)
+
+## Executed run: 2026-09-28, sixth batch
+
+Command, once per pull request: `node tools/ai-brain/cli.js reconcile --write --merge-evidence <file>`.
+Each evidence file was built from GitHub merge facts (exact head, merge commit reachable on `origin/main`, CI SUCCESS on the head, zero unresolved threads).
+
+| Work Item | Pull Request | Transition | Verdict recorded |
+| --- | --- | --- | --- |
+| TASK-AI-58 | #149 | READY_FOR_CODEX -> MERGED | PASS (Codex review on exact head) |
+| TASK-AI-56 | #147 | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named |
+| TASK-AI-55 | #140 | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named |
+| TASK-FOUND-05 | #148 | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named |
+| TASK-FOUND-06 | #150 | READY_FOR_CODEX -> MERGED | PASS (Codex review on exact head) |
+| TASK-AI-22 | - | BLOCKED_DEPENDENCY -> BACKLOG | all dependencies merged |
+
+Not reconciled: TASK-AI-49 (#136). Its durable review file does not name the reviewer, so a FALLBACK_PASS claim would name nobody; the row stays READY_FOR_CODEX until a named review exists.
