@@ -61,11 +61,12 @@ const whatIfSkip =
     ? {}
     : { skip: 'WhatIf provisioning snapshot requires Windows PowerShell + Windows cmdlets' };
 
-// Test-only seam preamble. The generated verifier reads HKLM and Get-Acl only
-// when $ShipDeBoundaryTestInput is unset. Tests set that variable (never a
-// script parameter, never worker input) so the same parser runs under pwsh on
-// Linux, where the HKLM provider and Windows SID translation are absent.
-function boundaryTestPreamble(ruleEntries, fwProfilesOn, aces) {
+// Test-only script variant. Production buildBoundaryVerifyScript is left
+// unchanged (registry Get-ItemProperty and Get-Acl). Tests substitute those
+// calls with fixed literals so the same parser runs under pwsh on Linux,
+// where the HKLM provider and Windows SID translation are absent. Nothing is
+// read from a variable the production script could also see.
+function boundaryTestScript(productionScript, ruleEntries, fwProfilesOn, aces) {
   // Single-quoted here-strings: a rule value contains the SDDL ';' sequence,
   // which a single-quoted literal would treat as a statement separator.
   const q = (value) => "'" + String(value).replace(/'/g, "''") + "'";
@@ -99,21 +100,29 @@ function boundaryTestPreamble(ruleEntries, fwProfilesOn, aces) {
       );
     })
     .join('');
-  return (
-    // A plain array: Windows PowerShell 5.1 throws "Argument types do not
-    // match" when @() unrolls a generic List[object].
-    '$aces = @(); ' +
-    aceStmts +
-    '$ShipDeBoundaryTestInput = @{ Rules = ' +
-    rules +
-    '; Profiles = @{ DomainProfile = ' +
-    profile +
-    '; StandardProfile = ' +
-    profile +
-    '; PublicProfile = ' +
-    profile +
-    ' }; Aces = $aces }; '
-  );
+  // A plain array: Windows PowerShell 5.1 throws "Argument types do not
+  // match" when @() unrolls a generic List[object].
+  const acl = '$aces = @(); ' + aceStmts + '$acl = [pscustomobject]@{ Access = $aces }; ';
+  const replacements = [
+    [
+      '  $val = Get-ItemProperty -Path "$profilePath\\$p" -Name EnableFirewall -ErrorAction SilentlyContinue; ',
+      '  $val = ' + profile + '; ',
+    ],
+    [
+      'if (Test-Path $fwRulesPath) { $raw = @(); try { $raw = Get-Item -Path $fwRulesPath -ErrorAction Stop | Get-ItemProperty -ErrorAction Stop } catch {}; ',
+      'if ($true) { $raw = ' + rules + '; ',
+    ],
+    ['$acl = Get-Acl $env:USERPROFILE; ', acl],
+  ];
+  let script = productionScript;
+  for (const [needle, replacement] of replacements) {
+    const at = script.indexOf(needle);
+    if (at < 0 || script.indexOf(needle, at + needle.length) !== -1) {
+      throw new Error('boundary test variant could not uniquely replace a production read');
+    }
+    script = script.slice(0, at) + replacement + script.slice(at + needle.length);
+  }
+  return script;
 }
 
 function makeTempRepo() {
@@ -507,10 +516,8 @@ test('launcher default boundary verifier checks every expected firewall rule (P5
   assert.ok(src.includes('FirewallRules'), 'reads firewall rules from registry');
   assert.ok(src.includes('EnableFirewall'), 'checks firewall profiles are enabled');
   assert.ok(src.includes('Get-Acl $env:USERPROFILE'), 'checks operator profile ACL');
-  assert.ok(
-    src.includes('$ShipDeBoundaryTestInput'),
-    'test-only seam is present and unused unless the caller set it'
-  );
+  assert.ok(!src.includes('ShipDeBoundaryTestInput'), 'production script has no test-input seam');
+  assert.ok(!/TestInput/.test(src), 'production script accepts no test-input variable');
   assert.ok(
     src.includes('Get-ItemProperty'),
     'production path still reads firewall profiles from the registry'
@@ -612,21 +619,18 @@ test(
     };
 
     const runWithRegistry = (ruleEntries, fwProfilesOn, aceType) => {
-      // Injected through the test-only seam, not by shadowing Get-ItemProperty
-      // / Get-Acl. On Linux pwsh there is no HKLM: drive, so Test-Path is
-      // false before any function mock runs, and Windows SID translation is
-      // unavailable. The seam feeds the same rule strings, profile states and
-      // ACE list into the production parser.
-      const mockScript =
-        boundaryTestPreamble(ruleEntries, fwProfilesOn, [
-          {
-            identity: sid,
-            type: aceType,
-            rights: 2032127,
-            flags: 3,
-            translatedSid: sid,
-          },
-        ]) + script;
+      // Test-only variant: the production script's Get-ItemProperty / Get-Acl
+      // reads are replaced with these literals. On Linux pwsh there is no
+      // HKLM: drive and Windows SID translation is unavailable.
+      const mockScript = boundaryTestScript(script, ruleEntries, fwProfilesOn, [
+        {
+          identity: sid,
+          type: aceType,
+          rights: 2032127,
+          flags: 3,
+          translatedSid: sid,
+        },
+      ]);
       const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
         encoding: 'utf8',
         windowsHide: true,
@@ -795,16 +799,15 @@ test('boundary verifier reads firewall rules from registry non-elevated (P5/Q3)'
   };
 
   const runWithRegistry = (ruleEntries, fwProfilesOn, aceType) => {
-    const mockScript =
-      boundaryTestPreamble(ruleEntries, fwProfilesOn, [
-        {
-          identity: sid,
-          type: aceType,
-          rights: 2032127,
-          flags: 3,
-          translatedSid: sid,
-        },
-      ]) + script;
+    const mockScript = boundaryTestScript(script, ruleEntries, fwProfilesOn, [
+      {
+        identity: sid,
+        type: aceType,
+        rights: 2032127,
+        flags: 3,
+        translatedSid: sid,
+      },
+    ]);
     const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
       encoding: 'utf8',
       windowsHide: true,
@@ -921,20 +924,20 @@ test(
       value: ruleValue('ShipDe-Worker-ShipDeWorker-' + n, p),
     }));
 
-    // ACE injected through the test-only seam: an NTAccount value (not a SID)
-    // whose Translate() resolves to an arbitrary SID the test controls.
-    // translatedSid = null simulates an untranslatable account (Translate throws).
+    // ACE injected by replacing Get-Acl in a test-only script variant: an
+    // NTAccount value (not a SID) whose Translate() resolves to an arbitrary
+    // SID the test controls. translatedSid = null simulates an untranslatable
+    // account (Translate throws).
     const runWithAce = (ace, translatedSid) => {
-      const mockScript =
-        boundaryTestPreamble(allRulesOk, true, [
-          {
-            identity: ace.identity,
-            type: ace.type,
-            rights: ace.rights,
-            flags: ace.flags,
-            translatedSid: translatedSid,
-          },
-        ]) + script;
+      const mockScript = boundaryTestScript(script, allRulesOk, true, [
+        {
+          identity: ace.identity,
+          type: ace.type,
+          rights: ace.rights,
+          flags: ace.flags,
+          translatedSid: translatedSid,
+        },
+      ]);
       const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
         encoding: 'utf8',
         windowsHide: true,
