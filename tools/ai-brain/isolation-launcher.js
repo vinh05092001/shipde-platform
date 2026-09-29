@@ -89,6 +89,13 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
     '$pf = $r | Get-NetFirewallPortFilter; ' +
     'if (-not $pf -or $pf.Protocol -ne $e.p) { continue }; ' +
     '}; ' +
+    // The rules are created with -LocalUser as an SDDL string and
+    // Get-NetFirewallSecurityFilter reports LocalUser back as SDDL, so verify
+    // each rule is still scoped to the worker user's SDDL.
+    '$sf = $r | Get-NetFirewallSecurityFilter; ' +
+    "if (-not $sf -or $sf.LocalUser -ne 'D:(A;;CC;;;" +
+    safeSid +
+    ")') { continue }; " +
     '$ok = $true; break; ' +
     '}; ' +
     'if (-not $ok) { $missing += $e.n }; ' +

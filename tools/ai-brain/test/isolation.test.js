@@ -419,8 +419,58 @@ test('launcher default boundary verifier checks every expected firewall rule (P5
   }
   assert.ok(src.includes("$r.Direction -ne 'Outbound'"), 'each rule must be Outbound');
   assert.ok(src.includes("$r.Action -ne 'Block'"), 'each rule must be Block');
+  assert.ok(src.includes('Get-NetFirewallSecurityFilter'), 'checks rule LocalUser SDDL scope');
+  assert.ok(src.includes('D:(A;;CC;;;'), 'must compare against the worker SDDL string');
   assert.ok(!src.includes('$rules.Count -ge 1'), 'a partial rule set must not verify');
   assert.ok(src.includes('$missing.Count -eq 0'), 'the gate must be zero missing rules');
+});
+
+test('Set-WorkerFirewall passes -LocalUser as an SDDL string and fails closed without the user', () => {
+  const src = fs.readFileSync(path.join(scriptsDir, 'Set-WorkerFirewall.ps1'), 'utf8');
+
+  // The SDDL string is built once from the resolved SID.
+  assert.ok(
+    src.includes('$LocalUserSddl = "D:(A;;CC;;;$Sid)"'),
+    'SDDL string must be built once from the resolved SID'
+  );
+
+  // Every -LocalUser argument is the SDDL variable — never a bare SID and
+  // never the username (New-NetFirewallRule rejects both with 0x80070057).
+  const localUserArgs = src.match(/-LocalUser\s+\$\S+/g) || [];
+  assert.ok(localUserArgs.length > 0, 'expected -LocalUser arguments in Set-WorkerFirewall.ps1');
+  for (const arg of localUserArgs) {
+    assert.strictEqual(
+      arg,
+      '-LocalUser $LocalUserSddl',
+      'every -LocalUser must be $LocalUserSddl, got: ' + arg
+    );
+  }
+  assert.ok(!src.includes('-LocalUser $Sid'), 'must not pass a bare SID to -LocalUser');
+  assert.ok(
+    !src.match(/-LocalUser \$Username/),
+    'must not pass the username to -LocalUser (0x80070057)'
+  );
+
+  // The username fallback is gone: a missing user is a hard failure before
+  // any rule is created, not a warning that continues with a bogus value.
+  assert.ok(!src.includes('$Sid = $Username'), 'username fallback for the SID must be gone');
+  assert.match(
+    src,
+    /if \(-not \$User\) \{\s*\r?\n\s*Write-Error "User \$Username does not exist/,
+    'missing user must fail closed with Write-Error'
+  );
+
+  // Idempotency: existing ShipDe-Worker-<user>-* rules are removed before
+  // creation so a partial previous run cannot leave stale allow rules.
+  assert.match(
+    src,
+    /Get-NetFirewallRule -DisplayName "\$RulePrefix\*"[^|]*\|\s*Remove-NetFirewallRule/,
+    'must clean up existing prefixed rules before creating new ones'
+  );
+  assert.ok(
+    src.indexOf('| Remove-NetFirewallRule') < src.indexOf('New-NetFirewallRule -DisplayName'),
+    'cleanup must run before the first New-NetFirewallRule'
+  );
 });
 
 test(
@@ -473,7 +523,7 @@ test(
       },
     };
 
-    const runWith = (ruleBook, aceType) => {
+    const runWith = (ruleBook, aceType, sddl) => {
       const entries = Object.keys(ruleBook)
         .map(
           (name) =>
@@ -499,6 +549,11 @@ test(
         '  }\n' +
         '}\n' +
         'function Get-NetFirewallPortFilter { process { [pscustomobject]@{ Protocol = $_.Protocol } } }\n' +
+        // Get-NetFirewallSecurityFilter reports LocalUser as the SDDL string
+        // the rule was created with (Set-WorkerFirewall.ps1 -LocalUser).
+        "function Get-NetFirewallSecurityFilter { process { [pscustomobject]@{ LocalUser = '" +
+        (sddl === undefined ? 'D:(A;;CC;;;' + sid + ')' : sddl) +
+        "' } } }\n" +
         "function Get-Acl { param($path) [pscustomobject]@{ Access = @([pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = '" +
         sid +
         "' }; AccessControlType = '" +
@@ -543,6 +598,13 @@ test(
 
     // Full rule set but no Deny ACE on the operator profile: rejected.
     assert.ok(runWith(fullBook, 'Allow') !== 'OK');
+
+    // Full rule set but rules scoped to another user's SDDL: rejected. The
+    // verifier must check LocalUser (as SDDL), not just name/direction/action.
+    assert.strictEqual(
+      runWith(fullBook, 'Deny', 'D:(A;;CC;;;S-1-5-21-SOMEONEELSE)'),
+      'MISSING:Block-TCP-IPv4,Block-TCP-IPv6-1,Block-TCP-IPv6-2,Block-TCP-Ports,Block-UDP,Block-ICMPv4,Block-ICMPv6,Block-SSH'
+    );
   }
 );
 
