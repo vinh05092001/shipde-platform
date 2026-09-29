@@ -944,6 +944,7 @@ function dispatchCommand(args, deps = {}) {
     const plan = readJsonOrExit(path.resolve(args.plan), 'plan');
     const result = executePlan(plan, {
       dryRun: isDryRun,
+      isolatedWorker: args['isolated-worker'] || false,
       project: args.project || 'shipde-platform',
       cwd: args.cwd || (deps && deps.cwd) || undefined,
       base: args.base || (deps && deps.base) || undefined,
@@ -1532,7 +1533,10 @@ function dispatchCommand(args, deps = {}) {
     let thrownError = null;
     let isFailure = true;
     try {
-      const launcher = (deps && deps.run) || runHarness;
+      let launcher = (deps && deps.run) || runHarness;
+      if (args['isolated-worker'] && !(deps && deps.run)) {
+        launcher = require('./isolation-launcher').getIsolatedLauncher();
+      }
       const harnessName =
         finalChosenCandidate.harness || (lastDecision && lastDecision.harness) || 'paseo';
       const adapter = getHarness(harnessName);
