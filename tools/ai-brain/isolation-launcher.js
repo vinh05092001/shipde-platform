@@ -71,7 +71,19 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
   const expectedList = rules
     .map((r) => "@{ n = '" + r.suffix + "'; p = '" + r.protocol + "' }")
     .join(', ');
+  // P5/Q3: read firewall rules from registry (non-elevated) instead of CIM.
+  // Registry values contain LUAuth=SDDL which CIM requires elevation to read.
+  // Firewall profiles must be enabled; fail closed if any profile has EnableFirewall=0.
   return (
+    "$fwRulesPath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules'; " +
+    "$profilePath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy'; " +
+    "$profiles = @('DomainProfile', 'StandardProfile', 'PublicProfile'); " +
+    '$fwOn = $true; ' +
+    'foreach ($p in $profiles) { ' +
+    '  $val = Get-ItemProperty -Path "$profilePath\\$p" -Name EnableFirewall -ErrorAction SilentlyContinue; ' +
+    '  if (-not $val -or $val.EnableFirewall -ne 1) { $fwOn = $false; break; } ' +
+    '}; ' +
+    "if (-not $fwOn) { 'FW_OFF' } else { " +
     "$prefix = 'ShipDe-Worker-" +
     safeUsername +
     "'; " +
@@ -79,32 +91,37 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
     expectedList +
     '); ' +
     '$missing = @(); ' +
+    'if (Test-Path $fwRulesPath) { ' +
+    '$raw = @(); try { $raw = Get-Item -Path $fwRulesPath -ErrorAction Stop | Get-ItemProperty -ErrorAction Stop } catch {}; ' +
     'foreach ($e in $expected) { ' +
-    "$rules = @(Get-NetFirewallRule -DisplayName ($prefix + '-' + $e.n) -ErrorAction SilentlyContinue); " +
-    '$ok = $false; ' +
-    'foreach ($r in $rules) { ' +
-    "if ($r.Direction -ne 'Outbound') { continue }; " +
-    "if ($r.Action -ne 'Block') { continue }; " +
-    'if ($e.p) { ' +
-    '$pf = $r | Get-NetFirewallPortFilter; ' +
-    'if (-not $pf -or $pf.Protocol -ne $e.p) { continue }; ' +
-    '}; ' +
-    // The rules are created with -LocalUser as an SDDL string and
-    // Get-NetFirewallSecurityFilter reports LocalUser back as SDDL, so verify
-    // each rule is still scoped to the worker user's SDDL.
-    '$sf = $r | Get-NetFirewallSecurityFilter; ' +
-    "if (-not $sf -or $sf.LocalUser -ne 'D:(A;;CC;;;" +
+    '$ruleName = $prefix + "-" + $e.n; ' +
+    '$found = $false; ' +
+    'foreach ($propName in $raw.PSObject.Properties.Name) { ' +
+    '$val = $raw.$propName; ' +
+    'if ([string]::IsNullOrEmpty($val)) { continue }; ' +
+    "if ($val -notlike ('*Name=' + $ruleName + '|*') -and $val -notlike ('*Name=' + $ruleName)) { continue }; " +
+    "if ($val -notlike '*Active=TRUE*') { continue }; " +
+    "if ($val -notlike '*Dir=Out*') { continue }; " +
+    "if ($val -notlike '*Action=Block*') { continue }; " +
+    'if ($e.p -eq "TCP") { if ($val -notlike "*Protocol=6*") { continue } } ' +
+    'elseif ($e.p -eq "UDP") { if ($val -notlike "*Protocol=17*") { continue } } ' +
+    'elseif ($e.p -eq "ICMPv4") { if ($val -notlike "*Protocol=1*") { continue } } ' +
+    'elseif ($e.p -eq "ICMPv6") { if ($val -notlike "*Protocol=58*") { continue } } ' +
+    "$expectedLuAuth = 'D:(A;;CC;;;" +
     safeSid +
-    ")') { continue }; " +
-    '$ok = $true; break; ' +
+    ")'; " +
+    "if ($val -notlike ('*LUAuth=' + $expectedLuAuth + '|*') -and $val -notlike ('*LUAuth=' + $expectedLuAuth)) { continue }; " +
+    '$found = $true; break; ' +
     '}; ' +
-    'if (-not $ok) { $missing += $e.n }; ' +
+    'if (-not $found) { $missing += $e.n }; ' +
     '}; ' +
+    '} else { $missing = $expected.n }; ' +
     '$acl = Get-Acl $env:USERPROFILE; ' +
     "$deny = @($acl.Access | Where-Object { ($_.IdentityReference.Value -match [regex]::Escape('" +
     safeSid +
     "')) -and ($_.AccessControlType -eq 'Deny') }); " +
-    "if ($missing.Count -eq 0 -and $deny.Count -ge 1) { 'OK' } else { 'MISSING:' + ($missing -join ',') }"
+    "if ($missing.Count -eq 0 -and $deny.Count -ge 1) { 'OK' } else { 'MISSING:' + ($missing -join ',') }" +
+    '}'
   );
 }
 
@@ -152,7 +169,10 @@ function getIsolatedLauncher() {
     if (Date.now() - stat.mtimeMs > 24 * 60 * 60 * 1000) {
       throw new Error('ISOLATION_VERDICT_STALE: ' + verdictPath + ' is older than 24h');
     }
-    const verdictData = JSON.parse(fs.readFileSync(verdictPath, 'utf8'));
+    const verdictText = fs.readFileSync(verdictPath, 'utf8');
+    const verdictData = JSON.parse(
+      verdictText.charCodeAt(0) === 0xfeff ? verdictText.slice(1) : verdictText
+    );
     if (verdictData.verdict !== 'CLOSED') {
       throw new Error('ISOLATION_VERDICT_NOT_CLOSED: Last verdict was ' + verdictData.verdict);
     }

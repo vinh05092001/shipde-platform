@@ -146,7 +146,12 @@ function publish(options) {
   const regPath =
     registryPath || path.join(process.env.LOCALAPPDATA || 'C:\\temp', 'ShipDe', 'approvals.json');
   if (fs.existsSync(regPath)) {
-    const registry = JSON.parse(fs.readFileSync(regPath, 'utf8'));
+    const registryText = fs.readFileSync(regPath, 'utf8');
+    // Operators' files may be saved by PowerShell tooling with a UTF-8 BOM;
+    // JSON.parse rejects it, so strip the BOM (written by this tool itself).
+    const registry = JSON.parse(
+      registryText.charCodeAt(0) === 0xfeff ? registryText.slice(1) : registryText
+    );
     if (registry[approvalId] !== 'APPROVED') {
       throw new Error('PUBLISH_REFUSED: approvalId not registered or not APPROVED');
     }

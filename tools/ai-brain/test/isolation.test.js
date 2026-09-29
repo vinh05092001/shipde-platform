@@ -97,6 +97,9 @@ test('publisher refusal cases', () => {
           verdict: 'PASS',
           testMode: true,
           remoteUrl: trustedUrl,
+          // Never touch the operator's real %LOCALAPPDATA% registry: inject a
+          // per-test path under the temp repo (absent file must not read it).
+          registryPath: path.join(repo.dir, 'approvals.json'),
         },
         extra
       )
@@ -160,6 +163,7 @@ test('publisher takes the push destination only from trusted controller input (P
           expiry: Date.now() + 60000,
           verdict: 'PASS',
           testMode: true,
+          registryPath: path.join(repo.dir, 'approvals.json'),
         },
         extra
       )
@@ -238,6 +242,32 @@ test('publisher validates the approval registry and keeps no argv fallback (P2)'
   fs.rmSync(repo.dir, { recursive: true, force: true });
 });
 
+// The operator's real registry is written by PowerShell tooling, which emits a
+// UTF-8 BOM. A BOM must never turn a valid approval into a publisher crash
+// (SyntaxError) — the format check is JSON's own, not byte-order trivia.
+test('publisher accepts an approval registry saved with a UTF-8 BOM (operator E2E)', () => {
+  const repo = makeTempRepo();
+  const regDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-registry-'));
+  const regPath = path.join(regDir, 'approvals.json');
+  fs.writeFileSync(regPath, '\uFEFF' + JSON.stringify({ AP1: 'APPROVED' }), 'utf8');
+
+  const res = publish({
+    cwd: repo.dir,
+    reviewedSha: repo.sha,
+    approvalId: 'AP1',
+    expiry: Date.now() + 60000,
+    verdict: 'PASS',
+    testMode: true,
+    registryPath: regPath,
+    remoteUrl: 'https://github.com/vinh05092001/shipde-platform.git',
+    branch: 'main',
+  });
+  assert.strictEqual(res.status, 'published');
+
+  fs.rmSync(regDir, { recursive: true, force: true });
+  fs.rmSync(repo.dir, { recursive: true, force: true });
+});
+
 test('publisher never reads git config or argv (P1/P2 static)', () => {
   const src = fs.readFileSync(path.join(__dirname, '../publisher.js'), 'utf8');
   assert.ok(!src.includes('remote.origin.url'), 'must not read remote.origin.url from the tree');
@@ -286,6 +316,18 @@ test('isolated launcher refuses without fresh CLOSED verdict', () => {
   );
 
   // Clean up
+  if (fs.existsSync(verdictPath)) fs.unlinkSync(verdictPath);
+});
+
+// A verdict file written by PowerShell tooling may carry a UTF-8 BOM; the
+// launcher must reach the attestation checks, not die in JSON.parse.
+test('isolated launcher parses a verdict saved with a UTF-8 BOM', () => {
+  const launcher = getIsolatedLauncher();
+  fs.writeFileSync(verdictPath, '\uFEFF' + JSON.stringify({ verdict: 'OPEN' }));
+  assert.throws(
+    () => launcher({ command: 'echo' }, [], { verdictPath }),
+    /ISOLATION_VERDICT_NOT_CLOSED/
+  );
   if (fs.existsSync(verdictPath)) fs.unlinkSync(verdictPath);
 });
 
@@ -406,23 +448,26 @@ test('isolated launcher validates every attestation field and the live boundary 
 
 test('launcher default boundary verifier checks every expected firewall rule (P5/Q3)', () => {
   const src = buildBoundaryVerifyScript('S-1-5-21-X', 'ShipDeWorker');
-  assert.ok(src.includes('Get-NetFirewallRule'), 'checks worker firewall rules');
+  // P5: reads firewall rules from registry non-elevated
+  assert.ok(src.includes('FirewallRules'), 'reads firewall rules from registry');
+  assert.ok(src.includes('EnableFirewall'), 'checks firewall profiles are enabled');
   assert.ok(src.includes('Get-Acl'), 'checks operator profile ACL');
   assert.ok(src.includes('Deny'), 'requires the Deny ACE');
   assert.ok(src.includes('ShipDe-Worker-'), 'scoped to the worker rule prefix');
   // Q3: every deterministically-created rule is verified by exact name, with
-  // direction, action and protocol; the gate is "nothing missing", never
+  // Active, Dir, Action and LUAuth (SDDL); the gate is "nothing missing", never
   // "at least one rule exists".
   for (const rule of EXPECTED_FIREWALL_RULES) {
     assert.ok(src.includes(rule.suffix), 'must verify rule ' + rule.suffix);
-    assert.ok(src.includes("'" + rule.protocol + "'"), 'must check protocol ' + rule.protocol);
   }
-  assert.ok(src.includes("$r.Direction -ne 'Outbound'"), 'each rule must be Outbound');
-  assert.ok(src.includes("$r.Action -ne 'Block'"), 'each rule must be Block');
-  assert.ok(src.includes('Get-NetFirewallSecurityFilter'), 'checks rule LocalUser SDDL scope');
+  assert.ok(src.includes('Active=TRUE'), 'each rule must be Active=TRUE');
+  assert.ok(src.includes('Dir=Out'), 'each rule must be Dir=Out');
+  assert.ok(src.includes('Action=Block'), 'each rule must be Block');
+  assert.ok(src.includes('LUAuth='), 'must check LUAuth SDDL scope');
   assert.ok(src.includes('D:(A;;CC;;;'), 'must compare against the worker SDDL string');
   assert.ok(!src.includes('$rules.Count -ge 1'), 'a partial rule set must not verify');
   assert.ok(src.includes('$missing.Count -eq 0'), 'the gate must be zero missing rules');
+  assert.ok(src.includes('FW_OFF'), 'must fail closed when firewall is off');
 });
 
 test('Set-WorkerFirewall passes -LocalUser as an SDDL string and fails closed without the user', () => {
@@ -480,133 +525,286 @@ test(
     const sid = 'S-1-5-21-BOUNDARYTEST';
     const script = buildBoundaryVerifyScript(sid, 'ShipDeWorker');
 
-    const fullBook = {
-      'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4': {
-        Direction: 'Outbound',
-        Action: 'Block',
-        Protocol: 'TCP',
-      },
-      'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-1': {
-        Direction: 'Outbound',
-        Action: 'Block',
-        Protocol: 'TCP',
-      },
-      'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-2': {
-        Direction: 'Outbound',
-        Action: 'Block',
-        Protocol: 'TCP',
-      },
-      'ShipDe-Worker-ShipDeWorker-Block-TCP-Ports': {
-        Direction: 'Outbound',
-        Action: 'Block',
-        Protocol: 'TCP',
-      },
-      'ShipDe-Worker-ShipDeWorker-Block-UDP': {
-        Direction: 'Outbound',
-        Action: 'Block',
-        Protocol: 'UDP',
-      },
-      'ShipDe-Worker-ShipDeWorker-Block-ICMPv4': {
-        Direction: 'Outbound',
-        Action: 'Block',
-        Protocol: 'ICMPv4',
-      },
-      'ShipDe-Worker-ShipDeWorker-Block-ICMPv6': {
-        Direction: 'Outbound',
-        Action: 'Block',
-        Protocol: 'ICMPv6',
-      },
-      'ShipDe-Worker-ShipDeWorker-Block-SSH': {
-        Direction: 'Outbound',
-        Action: 'Block',
-        Protocol: 'TCP',
-      },
+    // Registry-style rule value: v2.30|Action=Block|Active=TRUE|Dir=Out|Protocol=6|...|Name=...|LUAuth=...
+    const ruleValue = (name, protocolNum, active = 'TRUE', dir = 'Out', luAuth) => {
+      return (
+        'v2.30|Action=Block|Active=' +
+        active +
+        '|Dir=' +
+        dir +
+        '|Protocol=' +
+        protocolNum +
+        '|RA4=Any|RA6=Any|Edge=NO|Profile=Any|Platform=2:6:7|Name=' +
+        name +
+        '|LUAuth=' +
+        (luAuth || 'D:(A;;CC;;;' + sid + ')') +
+        '|'
+      );
     };
 
-    const runWith = (ruleBook, aceType, sddl) => {
-      const entries = Object.keys(ruleBook)
-        .map(
-          (name) =>
-            "'" +
-            name +
-            "' = @{ Direction = '" +
-            ruleBook[name].Direction +
-            "'; Action = '" +
-            ruleBook[name].Action +
-            "'; Protocol = '" +
-            ruleBook[name].Protocol +
-            "' }"
-        )
-        .join('; ');
+    const runWithRegistry = (ruleEntries, fwProfilesOn, aceType) => {
+      // Get-ItemProperty is mocked to return the pre-built registry object for
+      // the FirewallRules read (pipeline from Get-Item, so -Name is unbound)
+      // and EnableFirewall for the per-profile reads. Get-Acl is a plain
+      // object literal — brace counts checked — not a hashtable-returning
+      // function body wrapper.
       const mockScript =
-        '$ruleBook = @{ ' +
-        entries +
-        ' }\n' +
-        'function Get-NetFirewallRule {\n' +
-        '  param([string]$DisplayName, $ErrorAction)\n' +
-        '  if ($ruleBook.ContainsKey($DisplayName)) {\n' +
-        '    [pscustomobject]@{ DisplayName = $DisplayName; Direction = $ruleBook[$DisplayName].Direction; Action = $ruleBook[$DisplayName].Action; Protocol = $ruleBook[$DisplayName].Protocol }\n' +
-        '  }\n' +
-        '}\n' +
-        'function Get-NetFirewallPortFilter { process { [pscustomobject]@{ Protocol = $_.Protocol } } }\n' +
-        // Get-NetFirewallSecurityFilter reports LocalUser as the SDDL string
-        // the rule was created with (Set-WorkerFirewall.ps1 -LocalUser).
-        "function Get-NetFirewallSecurityFilter { process { [pscustomobject]@{ LocalUser = '" +
-        (sddl === undefined ? 'D:(A;;CC;;;' + sid + ')' : sddl) +
-        "' } } }\n" +
-        "function Get-Acl { param($path) [pscustomobject]@{ Access = @([pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = '" +
+        '$rawObject = [pscustomobject]@{}; ' +
+        ruleEntries
+          .map(
+            (e) =>
+              '$rawObject | Add-Member -NotePropertyName "' +
+              e.name +
+              '" -NotePropertyValue "' +
+              e.value.replace(/"/g, '`"') +
+              '"'
+          )
+          .join('; ') +
+        '; ' +
+        'function Get-ItemProperty { param($Path, $Name, $ErrorAction); if ($Name -eq "EnableFirewall") { return @{ EnableFirewall = ' +
+        (fwProfilesOn ? '1' : '0') +
+        ' } } return $rawObject }; ' +
+        'function Get-Item { param($Path, $ErrorAction); return [pscustomobject]@{ status = "OK" } }; ' +
+        'function Get-Acl { param($path); $identity = [pscustomobject]@{ Value = "' +
         sid +
-        "' }; AccessControlType = '" +
+        '" }; $access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
         aceType +
-        "' }) } }\n" +
+        '" }; return [pscustomobject]@{ Access = @($access) } }; ' +
         script;
       const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
         encoding: 'utf8',
         windowsHide: true,
       });
-      assert.strictEqual(res.status, 0, 'mocked verifier failed: ' + res.stderr);
+      assert.strictEqual(res.status, 0, 'mocked registry verifier failed: ' + res.stderr);
       return (res.stdout || '').trim();
     };
 
+    const allRulesOk = [
+      {
+        name: 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4',
+        value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4', '6'),
+      },
+      {
+        name: 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-1',
+        value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-1', '6'),
+      },
+      {
+        name: 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-2',
+        value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-2', '6'),
+      },
+      {
+        name: 'ShipDe-Worker-ShipDeWorker-Block-TCP-Ports',
+        value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-Ports', '6'),
+      },
+      {
+        name: 'ShipDe-Worker-ShipDeWorker-Block-UDP',
+        value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-UDP', '17'),
+      },
+      {
+        name: 'ShipDe-Worker-ShipDeWorker-Block-ICMPv4',
+        value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-ICMPv4', '1'),
+      },
+      {
+        name: 'ShipDe-Worker-ShipDeWorker-Block-ICMPv6',
+        value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-ICMPv6', '58'),
+      },
+      {
+        name: 'ShipDe-Worker-ShipDeWorker-Block-SSH',
+        value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-SSH', '6'),
+      },
+    ];
+
     // Full deterministic rule set + Deny ACE: OK.
-    assert.strictEqual(runWith(fullBook, 'Deny'), 'OK');
+    assert.strictEqual(runWithRegistry(allRulesOk, true, 'Deny'), 'OK');
 
     // Partial set (Block-UDP removed): MISSING must name the absent rule.
-    const partialBook = Object.assign({}, fullBook);
-    delete partialBook['ShipDe-Worker-ShipDeWorker-Block-UDP'];
-    assert.strictEqual(runWith(partialBook, 'Deny'), 'MISSING:Block-UDP');
+    const partialBook = allRulesOk.filter((r) => r.name !== 'ShipDe-Worker-ShipDeWorker-Block-UDP');
+    assert.strictEqual(runWithRegistry(partialBook, true, 'Deny'), 'MISSING:Block-UDP');
 
-    // All rules present but one has the wrong direction: still rejected.
-    const inboundBook = Object.assign({}, fullBook, {
-      'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4': {
-        Direction: 'Inbound',
-        Action: 'Block',
-        Protocol: 'TCP',
-      },
-    });
-    assert.strictEqual(runWith(inboundBook, 'Deny'), 'MISSING:Block-TCP-IPv4');
+    // All rules present but one has Active=FALSE (disabled): still rejected.
+    const disabledBook = allRulesOk.map((r) =>
+      r.name === 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4'
+        ? {
+            name: r.name,
+            value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4', '6', 'FALSE'),
+          }
+        : r
+    );
+    assert.strictEqual(runWithRegistry(disabledBook, true, 'Deny'), 'MISSING:Block-TCP-IPv4');
 
-    // All rules present but one has the wrong protocol: still rejected.
-    const protoBook = Object.assign({}, fullBook, {
-      'ShipDe-Worker-ShipDeWorker-Block-UDP': {
-        Direction: 'Outbound',
-        Action: 'Block',
-        Protocol: 'TCP',
-      },
-    });
-    assert.strictEqual(runWith(protoBook, 'Deny'), 'MISSING:Block-UDP');
+    // All rules present but one has wrong direction (Inbound instead of Out): still rejected.
+    const inboundBook = allRulesOk.map((r) =>
+      r.name === 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4'
+        ? {
+            name: r.name,
+            value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4', '6', 'TRUE', 'In'),
+          }
+        : r
+    );
+    assert.strictEqual(runWithRegistry(inboundBook, true, 'Deny'), 'MISSING:Block-TCP-IPv4');
+
+    // All rules present but one has wrong protocol: still rejected.
+    const protoBook = allRulesOk.map((r) =>
+      r.name === 'ShipDe-Worker-ShipDeWorker-Block-UDP'
+        ? { name: r.name, value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-UDP', '6') } // TCP instead of UDP
+        : r
+    );
+    assert.strictEqual(runWithRegistry(protoBook, true, 'Deny'), 'MISSING:Block-UDP');
 
     // Full rule set but no Deny ACE on the operator profile: rejected.
-    assert.ok(runWith(fullBook, 'Allow') !== 'OK');
+    assert.ok(runWithRegistry(allRulesOk, true, 'Allow') !== 'OK');
 
     // Full rule set but rules scoped to another user's SDDL: rejected. The
-    // verifier must check LocalUser (as SDDL), not just name/direction/action.
+    // verifier must check LUAuth (as SDDL), not just name/direction/action.
+    const wrongSidBook = allRulesOk.map((r) => ({
+      name: r.name,
+      value: ruleValue(
+        r.name.replace('ShipDe-Worker-ShipDeWorker-', ''),
+        r.value.match(/Protocol=(\d+)/)[1],
+        'TRUE',
+        'Out',
+        'D:(A;;CC;;;S-1-5-21-SOMEONEELSE)'
+      ),
+    }));
     assert.strictEqual(
-      runWith(fullBook, 'Deny', 'D:(A;;CC;;;S-1-5-21-SOMEONEELSE)'),
+      runWithRegistry(wrongSidBook, true, 'Deny'),
       'MISSING:Block-TCP-IPv4,Block-TCP-IPv6-1,Block-TCP-IPv6-2,Block-TCP-Ports,Block-UDP,Block-ICMPv4,Block-ICMPv6,Block-SSH'
     );
+
+    // Firewall profile OFF: must fail closed.
+    assert.strictEqual(runWithRegistry(allRulesOk, false, 'Deny'), 'FW_OFF');
   }
 );
+
+test('boundary verifier reads firewall rules from registry non-elevated (P5/Q3)', psSkip, () => {
+  const sid = 'S-1-5-21-FAKEWORKERSID-1017';
+  const script = buildBoundaryVerifyScript(sid, 'ShipDeWorker');
+
+  // Registry-style rule value format: v2.30|Action=Block|Active=TRUE|Dir=Out|Protocol=6|...|Name=...|LUAuth=...
+  const ruleValue = (name, protocolNum, active = 'TRUE', luAuth) => {
+    return (
+      'v2.30|Action=Block|Active=' +
+      active +
+      '|Dir=Out|Protocol=' +
+      protocolNum +
+      '|RA4=Any|RA6=Any|Edge=NO|Profile=Any|Platform=2:6:7|' +
+      'Name=' +
+      name +
+      '|LUAuth=' +
+      (luAuth || 'D:(A;;CC;;;' + sid + ')') +
+      '|'
+    );
+  };
+
+  const runWithRegistry = (ruleEntries, fwProfilesOn, aceType) => {
+    const mockScript =
+      '$rawObject = [pscustomobject]@{}; ' +
+      ruleEntries
+        .map(
+          (e) =>
+            '$rawObject | Add-Member -NotePropertyName "' +
+            e.name +
+            '" -NotePropertyValue "' +
+            e.value.replace(/"/g, '`"') +
+            '"'
+        )
+        .join('; ') +
+      '; ' +
+      'function Get-ItemProperty { param($Path, $Name, $ErrorAction); if ($Name -eq "EnableFirewall") { return @{ EnableFirewall = ' +
+      (fwProfilesOn ? '1' : '0') +
+      ' } } return $rawObject }; ' +
+      'function Get-Item { param($Path, $ErrorAction); return [pscustomobject]@{ status = "OK" } }; ' +
+      'function Get-Acl { param($path); $identity = [pscustomobject]@{ Value = "' +
+      sid +
+      '" }; $access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
+      aceType +
+      '" }; return [pscustomobject]@{ Access = @($access) } }; ' +
+      script;
+    const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    assert.strictEqual(res.status, 0, 'mocked registry verifier failed: ' + res.stderr);
+    return (res.stdout || '').trim();
+  };
+
+  const allRulesOk = [
+    {
+      name: 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4',
+      value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4', '6'),
+    },
+    {
+      name: 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-1',
+      value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-1', '6'),
+    },
+    {
+      name: 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-2',
+      value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-2', '6'),
+    },
+    {
+      name: 'ShipDe-Worker-ShipDeWorker-Block-TCP-Ports',
+      value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-Ports', '6'),
+    },
+    {
+      name: 'ShipDe-Worker-ShipDeWorker-Block-UDP',
+      value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-UDP', '17'),
+    },
+    {
+      name: 'ShipDe-Worker-ShipDeWorker-Block-ICMPv4',
+      value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-ICMPv4', '1'),
+    },
+    {
+      name: 'ShipDe-Worker-ShipDeWorker-Block-ICMPv6',
+      value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-ICMPv6', '58'),
+    },
+    {
+      name: 'ShipDe-Worker-ShipDeWorker-Block-SSH',
+      value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-SSH', '6'),
+    },
+  ];
+
+  // All rules OK + firewall on + Deny ACE: OK.
+  assert.strictEqual(runWithRegistry(allRulesOk, true, 'Deny'), 'OK');
+
+  // One rule missing: MISSING must name the absent rule.
+  const partialRules = allRulesOk.filter((r) => r.name !== 'ShipDe-Worker-ShipDeWorker-Block-UDP');
+  assert.strictEqual(runWithRegistry(partialRules, true, 'Deny'), 'MISSING:Block-UDP');
+
+  // Wrong SID in LUAuth: all rules fail the LUAuth check.
+  const wrongSidRules = allRulesOk.map((r) => ({
+    name: r.name,
+    value: ruleValue(
+      r.name.replace('ShipDe-Worker-ShipDeWorker-', ''),
+      r.value.match(/Protocol=(\d+)/)[1],
+      'TRUE',
+      'D:(A;;CC;;;S-1-5-21-WRONG)'
+    ),
+  }));
+  assert.strictEqual(
+    runWithRegistry(wrongSidRules, true, 'Deny'),
+    'MISSING:Block-TCP-IPv4,Block-TCP-IPv6-1,Block-TCP-IPv6-2,Block-TCP-Ports,Block-UDP,Block-ICMPv4,Block-ICMPv6,Block-SSH'
+  );
+
+  // Rule disabled (Active=FALSE): treated as missing.
+  const disabledRules = allRulesOk.map((r) => ({
+    name: r.name,
+    value: ruleValue(
+      r.name.replace('ShipDe-Worker-ShipDeWorker-', ''),
+      r.value.match(/Protocol=(\d+)/)[1],
+      'FALSE'
+    ),
+  }));
+  assert.strictEqual(
+    runWithRegistry(disabledRules, true, 'Deny'),
+    'MISSING:Block-TCP-IPv4,Block-TCP-IPv6-1,Block-TCP-IPv6-2,Block-TCP-Ports,Block-UDP,Block-ICMPv4,Block-ICMPv6,Block-SSH'
+  );
+
+  // Firewall profile OFF: must fail closed with FW_OFF.
+  assert.strictEqual(runWithRegistry(allRulesOk, false, 'Deny'), 'FW_OFF');
+
+  // No Deny ACE on operator profile: rejected.
+  assert.ok(runWithRegistry(allRulesOk, true, 'Allow') !== 'OK');
+});
 
 test('launcher bounds the worker wait with a timeout and kills on expiry (P6)', () => {
   const src = getIsolatedLauncher().toString();
