@@ -117,9 +117,16 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
     '}; ' +
     '} else { $missing = $expected.n }; ' +
     '$acl = Get-Acl $env:USERPROFILE; ' +
-    "$deny = @($acl.Access | Where-Object { ($_.IdentityReference.Value -match [regex]::Escape('" +
+    '$deny = @($acl.Access | Where-Object { ' +
+    '$ace = $_; ' +
+    '$sidOk = $false; ' +
+    "try { $sidOk = ($ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq '" +
     safeSid +
-    "')) -and ($_.AccessControlType -eq 'Deny') }); " +
+    "') } catch { $sidOk = $false }; " +
+    '$r = 0; try { $r = [int]$ace.FileSystemRights } catch {}; ' +
+    '$rightsOk = ((($r -band 2032127) -eq 2032127) -or ((($r -band 1) -ne 0) -and (($r -band 2) -ne 0))); ' +
+    '$flagsOk = (([int]$ace.InheritanceFlags -band 3) -eq 3); ' +
+    "($sidOk -and ($ace.AccessControlType -eq 'Deny') -and $rightsOk -and $flagsOk) }); " +
     "if ($missing.Count -eq 0 -and $deny.Count -ge 1) { 'OK' } else { 'MISSING:' + ($missing -join ',') }" +
     '}'
   );

@@ -567,9 +567,11 @@ test(
         'function Get-Item { param($Path, $ErrorAction); return [pscustomobject]@{ status = "OK" } }; ' +
         'function Get-Acl { param($path); $identity = [pscustomobject]@{ Value = "' +
         sid +
-        '" }; $access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
+        '" }; $identity | Add-Member -MemberType ScriptMethod -Name Translate -Force -Value { param($t); [pscustomobject]@{ Value = "' +
+        sid +
+        '" } }; $access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
         aceType +
-        '" }; return [pscustomobject]@{ Access = @($access) } }; ' +
+        '"; FileSystemRights = 2032127; InheritanceFlags = 3 }; return [pscustomobject]@{ Access = @($access) } }; ' +
         script;
       const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
         encoding: 'utf8',
@@ -716,9 +718,11 @@ test('boundary verifier reads firewall rules from registry non-elevated (P5/Q3)'
       'function Get-Item { param($Path, $ErrorAction); return [pscustomobject]@{ status = "OK" } }; ' +
       'function Get-Acl { param($path); $identity = [pscustomobject]@{ Value = "' +
       sid +
-      '" }; $access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
+      '" }; $identity | Add-Member -MemberType ScriptMethod -Name Translate -Force -Value { param($t); [pscustomobject]@{ Value = "' +
+      sid +
+      '" } }; $access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
       aceType +
-      '" }; return [pscustomobject]@{ Access = @($access) } }; ' +
+      '"; FileSystemRights = 2032127; InheritanceFlags = 3 }; return [pscustomobject]@{ Access = @($access) } }; ' +
       script;
     const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
       encoding: 'utf8',
@@ -806,6 +810,168 @@ test('boundary verifier reads firewall rules from registry non-elevated (P5/Q3)'
   assert.ok(runWithRegistry(allRulesOk, true, 'Allow') !== 'OK');
 });
 
+test(
+  'Deny ACE must match by translated SID, exact equality, type and rights (NTAccount)',
+  psSkip,
+  () => {
+    const sid = 'S-1-5-21-FAKEWORKERSID-1017';
+    const script = buildBoundaryVerifyScript(sid, 'ShipDeWorker');
+
+    // Registry-style rule value: all eight worker rules present and healthy.
+    const ruleValue = (name, protocolNum) =>
+      'v2.30|Action=Block|Active=TRUE|Dir=Out|Protocol=' +
+      protocolNum +
+      '|RA4=Any|RA6=Any|Edge=NO|Profile=Any|Platform=2:6:7|Name=' +
+      name +
+      '|LUAuth=D:(A;;CC;;;' +
+      sid +
+      ')|';
+    const allRulesOk = [
+      ['Block-TCP-IPv4', '6'],
+      ['Block-TCP-IPv6-1', '6'],
+      ['Block-TCP-IPv6-2', '6'],
+      ['Block-TCP-Ports', '6'],
+      ['Block-UDP', '17'],
+      ['Block-ICMPv4', '1'],
+      ['Block-ICMPv6', '58'],
+      ['Block-SSH', '6'],
+    ].map(([n, p]) => ({
+      name: 'ShipDe-Worker-ShipDeWorker-' + n,
+      value: ruleValue('ShipDe-Worker-ShipDeWorker-' + n, p),
+    }));
+
+    // ACE-like mocked Get-Acl: an NTAccount value (not a SID) whose Translate()
+    // resolves to an arbitrary SID the test controls. translatedSid = null
+    // simulates an untranslatable account (Translate throws).
+    const runWithAce = (ace, translatedSid) => {
+      const translateBody =
+        translatedSid === null
+          ? '{ param($t); throw "untranslatable" }'
+          : "{ param($t); [pscustomobject]@{ Value = '" + translatedSid + "' } }";
+      const mockScript =
+        '$rawObject = [pscustomobject]@{}; ' +
+        allRulesOk
+          .map(
+            (e) =>
+              '$rawObject | Add-Member -NotePropertyName "' +
+              e.name +
+              '" -NotePropertyValue "' +
+              e.value.replace(/"/g, '`"') +
+              '"'
+          )
+          .join('; ') +
+        '; ' +
+        'function Get-ItemProperty { param($Path, $Name, $ErrorAction); if ($Name -eq "EnableFirewall") { return @{ EnableFirewall = 1 } } return $rawObject }; ' +
+        'function Get-Item { param($Path, $ErrorAction); return [pscustomobject]@{ status = "OK" } }; ' +
+        'function Get-Acl { param($path); ' +
+        '$identity = [pscustomobject]@{ Value = "' +
+        ace.identity +
+        '" }; ' +
+        '$identity | Add-Member -MemberType ScriptMethod -Name Translate -Force -Value ' +
+        translateBody +
+        '; ' +
+        '$access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
+        ace.type +
+        '"; FileSystemRights = ' +
+        ace.rights +
+        '; InheritanceFlags = ' +
+        ace.flags +
+        ' }; ' +
+        'return [pscustomobject]@{ Access = @($access) } }; ' +
+        script;
+      const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      assert.strictEqual(res.status, 0, 'mocked ACL verifier failed: ' + res.stderr);
+      return (res.stdout || '').trim();
+    };
+
+    // Deny ACE presented as an NTAccount name whose SID equals the worker SID: OK.
+    assert.strictEqual(
+      runWithAce(
+        {
+          identity: 'DESKTOP-VI13KA6\\ShipDeWorker',
+          type: 'Deny',
+          rights: 2032127,
+          flags: 3,
+        },
+        sid
+      ),
+      'OK'
+    );
+
+    // At least Read+Write rights also count (not only FullControl).
+    assert.strictEqual(
+      runWithAce(
+        {
+          identity: 'DESKTOP-VI13KA6\\ShipDeWorker',
+          type: 'Deny',
+          rights: 3,
+          flags: 3,
+        },
+        sid
+      ),
+      'OK'
+    );
+
+    // A different SID that merely CONTAINS the worker SID as a prefix: must NOT match.
+    assert.notStrictEqual(
+      runWithAce(
+        {
+          identity: 'DESKTOP-VI13KA6\\ShipDeWorker',
+          type: 'Deny',
+          rights: 2032127,
+          flags: 3,
+        },
+        sid + '-99'
+      ),
+      'OK'
+    );
+
+    // Untranslatable identity (Translate throws): does NOT count as a match.
+    assert.notStrictEqual(
+      runWithAce(
+        {
+          identity: 'DESKTOP-VI13KA6\\ShipDeWorker',
+          type: 'Deny',
+          rights: 2032127,
+          flags: 3,
+        },
+        null
+      ),
+      'OK'
+    );
+
+    // Allow ACE with a matching SID: does NOT count.
+    assert.notStrictEqual(
+      runWithAce(
+        {
+          identity: 'DESKTOP-VI13KA6\\ShipDeWorker',
+          type: 'Allow',
+          rights: 2032127,
+          flags: 3,
+        },
+        sid
+      ),
+      'OK'
+    );
+
+    // Deny ACE without full container+object inheritance: does NOT count.
+    assert.notStrictEqual(
+      runWithAce(
+        {
+          identity: 'DESKTOP-VI13KA6\\ShipDeWorker',
+          type: 'Deny',
+          rights: 2032127,
+          flags: 1,
+        },
+        sid
+      ),
+      'OK'
+    );
+  }
+);
 test('launcher bounds the worker wait with a timeout and kills on expiry (P6)', () => {
   const src = getIsolatedLauncher().toString();
   assert.match(src, /WaitForExit\(\$timeoutMs\)/);
