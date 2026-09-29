@@ -203,8 +203,9 @@ try {
 }
 
 # Check for lingering processes
-# Tolerate processes that vanish between enumeration and GetOwner call
+# Fail-closed: a live process with unknown owner is treated as a possible worker
 $lingering = @()
+$enumerationFailed = $false
 try {
     $processes = Get-CimInstance Win32_Process
     foreach ($proc in $processes) {
@@ -213,17 +214,25 @@ try {
             if ($owner.User -eq $Username) {
                 $lingering += $proc
             }
-        } catch [Microsoft.Management.Infrastructure.CimException] {
-            # Process exited before GetOwner could complete - skip silently
-            continue
         } catch {
-            # Other errors: log but continue checking other processes
-            Write-Log "Skip process $($proc.ProcessId): $($_.Exception.Message)"
-            continue
+            # GetOwner failed - re-check if process still exists
+            $stillExists = Get-Process -Id $proc.ProcessId -ErrorAction SilentlyContinue
+            if ($null -eq $stillExists) {
+                # Process vanished between enumeration and GetOwner - skip it
+                continue
+            } else {
+                # Process still exists but owner is unknown - treat as possible worker
+                Write-Log "Unknown owner for live process PID $($proc.ProcessId) - treating as possible worker"
+                $lingering += $proc
+            }
         }
     }
 } catch {
     Write-Log "Error enumerating processes: $($_.Exception.Message)"
+    $enumerationFailed = $true
+}
+
+if ($enumerationFailed) {
     $Verdict = "PARTIAL"
 }
 

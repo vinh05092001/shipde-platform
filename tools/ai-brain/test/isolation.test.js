@@ -998,7 +998,7 @@ test('launcher writes and reads the launch result outside the worker-writable ro
   assert.match(launcherStr, /existsSync\(launchResultPath\)/);
 });
 
-test('Test-WorkerIsolation guards GetOwner call against vanished processes (race condition fix)', () => {
+test('Test-WorkerIsolation guards GetOwner call with fail-closed existence re-check (race condition fix)', () => {
   const script = fs.readFileSync(path.join(scriptsDir, 'Test-WorkerIsolation.ps1'), 'utf8');
 
   // The GetOwner call must be inside a try/catch to handle processes that exit
@@ -1015,16 +1015,36 @@ test('Test-WorkerIsolation guards GetOwner call against vanished processes (race
     'GetOwner must use -ErrorAction Stop for catchable exception'
   );
 
-  // Static: there is a catch block for CimException handling vanished processes
+  // Static: the catch block re-checks existence with Get-Process
   assert.ok(
-    script.includes('Microsoft.Management.Infrastructure.CimException'),
-    'must catch CimException for vanished process handles'
+    script.includes('Get-Process -Id $proc.ProcessId -ErrorAction SilentlyContinue'),
+    'catch block must re-check process existence with Get-Process'
   );
 
-  // Static: the catch block continues to the next process, not failing the whole check
+  // Static: the catch block checks if the process still exists ($null -eq $stillExists or similar)
   assert.ok(
-    script.match(/catch\s*\{[^}]*continue[^}]*\}/),
-    'catch block must continue to skip vanished processes'
+    script.match(/\$null\s*-eq\s+\$stillExists/) || script.match(/\$stillExists\s*-eq\s+\$null/),
+    'catch block must check if Get-Process returned null (process vanished)'
+  );
+
+  // Static: a vanished process is skipped (continue)
+  assert.ok(
+    script.match(/if\s*\(\s*\$null\s*-eq\s+\$stillExists\s*\)\s*\{[^}]*continue[^}]*\}/s) ||
+      script.match(/if\s*\(\s*\$stillExists\s*-eq\s+\$null\s*\)\s*\{[^}]*continue[^}]*\}/s),
+    'vanished process must be skipped with continue'
+  );
+
+  // Static: a live process with unknown owner is treated as possible worker (added to $lingering)
+  assert.ok(
+    script.match(/\}\s*else\s*\{[^}]*\$lingering\s*\+=\s*\$proc[^}]*\}/s) ||
+      script.match(/\}\s*else\s*\{[^}]*\$lingering\s*\+=\s+\$proc[^}]*\}/s),
+    'live process with unknown owner must be added to $lingering (fail-closed)'
+  );
+
+  // Static: the script logs when a live process has unknown owner
+  assert.ok(
+    script.includes('Unknown owner') && script.includes('treating as possible worker'),
+    'must log when treating unknown-owner live process as possible worker'
   );
 
   // Static: the script does NOT use the vulnerable pattern of piping directly
@@ -1034,5 +1054,11 @@ test('Test-WorkerIsolation guards GetOwner call against vanished processes (race
       /Get-CimInstance\s+Win32_Process\s*\|\s*Where-Object\s*\{[^}]*Invoke-CimMethod[^}]*\}/
     ),
     'must not use vulnerable pipe pattern that races on process exit'
+  );
+
+  // Static: enumeration failure sets verdict to PARTIAL (fail-closed)
+  assert.ok(
+    script.includes('$enumerationFailed') && script.includes('$Verdict = "PARTIAL"'),
+    'enumeration failure must set verdict to PARTIAL'
   );
 });
