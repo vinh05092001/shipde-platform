@@ -203,8 +203,28 @@ try {
 }
 
 # Check for lingering processes
-$lingering = Get-CimInstance Win32_Process | Where-Object {
-    (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $Username
+# Tolerate processes that vanish between enumeration and GetOwner call
+$lingering = @()
+try {
+    $processes = Get-CimInstance Win32_Process
+    foreach ($proc in $processes) {
+        try {
+            $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction Stop
+            if ($owner.User -eq $Username) {
+                $lingering += $proc
+            }
+        } catch [Microsoft.Management.Infrastructure.CimException] {
+            # Process exited before GetOwner could complete - skip silently
+            continue
+        } catch {
+            # Other errors: log but continue checking other processes
+            Write-Log "Skip process $($proc.ProcessId): $($_.Exception.Message)"
+            continue
+        }
+    }
+} catch {
+    Write-Log "Error enumerating processes: $($_.Exception.Message)"
+    $Verdict = "PARTIAL"
 }
 
 if ($lingering) {

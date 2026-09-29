@@ -997,3 +997,42 @@ test('launcher writes and reads the launch result outside the worker-writable ro
   assert.match(launcherStr, /Out-File "\$\{launchResultPath\}"/);
   assert.match(launcherStr, /existsSync\(launchResultPath\)/);
 });
+
+test('Test-WorkerIsolation guards GetOwner call against vanished processes (race condition fix)', () => {
+  const script = fs.readFileSync(path.join(scriptsDir, 'Test-WorkerIsolation.ps1'), 'utf8');
+
+  // The GetOwner call must be inside a try/catch to handle processes that exit
+  // between enumeration and the GetOwner invocation (HRESULT 0x80041002).
+  assert.ok(
+    script.includes('Invoke-CimMethod') && script.includes('GetOwner'),
+    'script must call Invoke-CimMethod GetOwner'
+  );
+
+  // Static: the GetOwner call is wrapped with -ErrorAction Stop and caught
+  assert.match(
+    script,
+    /Invoke-CimMethod\s+-InputObject\s+\$proc\s+-MethodName\s+GetOwner\s+-ErrorAction\s+Stop/,
+    'GetOwner must use -ErrorAction Stop for catchable exception'
+  );
+
+  // Static: there is a catch block for CimException handling vanished processes
+  assert.ok(
+    script.includes('Microsoft.Management.Infrastructure.CimException'),
+    'must catch CimException for vanished process handles'
+  );
+
+  // Static: the catch block continues to the next process, not failing the whole check
+  assert.ok(
+    script.match(/catch\s*\{[^}]*continue[^}]*\}/),
+    'catch block must continue to skip vanished processes'
+  );
+
+  // Static: the script does NOT use the vulnerable pattern of piping directly
+  // to Where-Object with GetOwner (the original race condition)
+  assert.ok(
+    !script.match(
+      /Get-CimInstance\s+Win32_Process\s*\|\s*Where-Object\s*\{[^}]*Invoke-CimMethod[^}]*\}/
+    ),
+    'must not use vulnerable pipe pattern that races on process exit'
+  );
+});
