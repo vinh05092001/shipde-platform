@@ -22,9 +22,44 @@ const {
 } = require('../isolation-launcher');
 
 const scriptsDir = path.join(__dirname, '../../../scripts/ai/isolation');
-const LOCALAPPDATA = process.env.LOCALAPPDATA || 'C:\\temp';
-const shipDeDir = path.join(LOCALAPPDATA, 'ShipDe');
-const verdictPath = path.join(shipDeDir, 'isolation-verdict.json');
+
+// Portable, per-run verdict directory: the test writes the verdict here and
+// injects this path into the launcher so the code reads it on every OS. The
+// production default (LOCALAPPDATA\ShipDe on Windows) is untouched in the
+// launcher; this only overrides it for the test.
+const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+
+// Tests that execute PowerShell (parser checks, -WhatIf, secedit filter,
+// mocked verifier) run only where a PowerShell binary exists: powershell.exe
+// on win32, or pwsh on PATH. Otherwise they skip with a clear reason. The
+// tests are not deleted — they still fully run on Windows and on any host with
+// pwsh available.
+function detectPowerShell() {
+  if (process.platform === 'win32') {
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', 'exit 0'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (r.status === 0) return 'powershell.exe';
+  }
+  const r = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (r.status === 0) return 'pwsh';
+  return null;
+}
+const POWERSHELL_EXE = detectPowerShell();
+const psSkip = POWERSHELL_EXE
+  ? {}
+  : { skip: 'PowerShell binary not available (powershell.exe on win32 or pwsh on PATH)' };
+// The -WhatIf provisioning snapshot runs the real worker scripts, which call
+// Windows-only cmdlets (Get-LocalUser, secedit, NetFirewall); it needs win32.
+const whatIfSkip =
+  process.platform === 'win32' && POWERSHELL_EXE
+    ? {}
+    : { skip: 'WhatIf provisioning snapshot requires Windows PowerShell + Windows cmdlets' };
 
 function makeTempRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-worker-tree-'));
@@ -42,7 +77,6 @@ function makeTempRepo() {
 }
 
 function writeVerdict(obj) {
-  fs.mkdirSync(shipDeDir, { recursive: true });
   fs.writeFileSync(verdictPath, JSON.stringify(obj));
 }
 
@@ -229,19 +263,27 @@ test('isolated launcher refuses without fresh CLOSED verdict', () => {
   const launcher = getIsolatedLauncher();
 
   // Case 1: missing verdict
-  fs.mkdirSync(shipDeDir, { recursive: true });
   if (fs.existsSync(verdictPath)) fs.unlinkSync(verdictPath);
-  assert.throws(() => launcher({ command: 'echo' }, [], {}), /ISOLATION_VERDICT_MISSING/);
+  assert.throws(
+    () => launcher({ command: 'echo' }, [], { verdictPath }),
+    /ISOLATION_VERDICT_MISSING/
+  );
 
   // Case 2: not CLOSED
   writeVerdict({ verdict: 'OPEN' });
-  assert.throws(() => launcher({ command: 'echo' }, [], {}), /ISOLATION_VERDICT_NOT_CLOSED/);
+  assert.throws(
+    () => launcher({ command: 'echo' }, [], { verdictPath }),
+    /ISOLATION_VERDICT_NOT_CLOSED/
+  );
 
   // Case 3: stale verdict (mtime older than 24h)
   const staleTime = new Date(Date.now() - 25 * 60 * 60 * 1000);
   writeVerdict({ verdict: 'CLOSED' });
   fs.utimesSync(verdictPath, staleTime, staleTime);
-  assert.throws(() => launcher({ command: 'echo' }, [], {}), /ISOLATION_VERDICT_STALE/);
+  assert.throws(
+    () => launcher({ command: 'echo' }, [], { verdictPath }),
+    /ISOLATION_VERDICT_STALE/
+  );
 
   // Clean up
   if (fs.existsSync(verdictPath)) fs.unlinkSync(verdictPath);
@@ -263,6 +305,7 @@ test('isolated launcher validates every attestation field and the live boundary 
     cwd: tmpCwd,
     getWorkerSid: () => fakeSid,
     verifyBoundary: () => true,
+    verdictPath,
   });
   const launch = (opts) => launcher({ command: 'echo' }, [], opts);
 
@@ -341,7 +384,13 @@ test('isolated launcher validates every attestation field and the live boundary 
   // boundary absent right now: refuse even with a fully valid verdict
   writeVerdict(validVerdict());
   assert.throws(
-    () => launch({ cwd: tmpCwd, getWorkerSid: () => fakeSid, verifyBoundary: () => false }),
+    () =>
+      launch({
+        cwd: tmpCwd,
+        getWorkerSid: () => fakeSid,
+        verifyBoundary: () => false,
+        verdictPath,
+      }),
     /ISOLATION_BOUNDARY_MISSING/
   );
 
@@ -374,124 +423,128 @@ test('launcher default boundary verifier checks every expected firewall rule (P5
   assert.ok(src.includes('$missing.Count -eq 0'), 'the gate must be zero missing rules');
 });
 
-test('boundary verifier rejects a partial or wrong-direction firewall rule set (Q3)', () => {
-  const sid = 'S-1-5-21-BOUNDARYTEST';
-  const script = buildBoundaryVerifyScript(sid, 'ShipDeWorker');
+test(
+  'boundary verifier rejects a partial or wrong-direction firewall rule set (Q3)',
+  psSkip,
+  () => {
+    const sid = 'S-1-5-21-BOUNDARYTEST';
+    const script = buildBoundaryVerifyScript(sid, 'ShipDeWorker');
 
-  const fullBook = {
-    'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4': {
-      Direction: 'Outbound',
-      Action: 'Block',
-      Protocol: 'TCP',
-    },
-    'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-1': {
-      Direction: 'Outbound',
-      Action: 'Block',
-      Protocol: 'TCP',
-    },
-    'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-2': {
-      Direction: 'Outbound',
-      Action: 'Block',
-      Protocol: 'TCP',
-    },
-    'ShipDe-Worker-ShipDeWorker-Block-TCP-Ports': {
-      Direction: 'Outbound',
-      Action: 'Block',
-      Protocol: 'TCP',
-    },
-    'ShipDe-Worker-ShipDeWorker-Block-UDP': {
-      Direction: 'Outbound',
-      Action: 'Block',
-      Protocol: 'UDP',
-    },
-    'ShipDe-Worker-ShipDeWorker-Block-ICMPv4': {
-      Direction: 'Outbound',
-      Action: 'Block',
-      Protocol: 'ICMPv4',
-    },
-    'ShipDe-Worker-ShipDeWorker-Block-ICMPv6': {
-      Direction: 'Outbound',
-      Action: 'Block',
-      Protocol: 'ICMPv6',
-    },
-    'ShipDe-Worker-ShipDeWorker-Block-SSH': {
-      Direction: 'Outbound',
-      Action: 'Block',
-      Protocol: 'TCP',
-    },
-  };
+    const fullBook = {
+      'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4': {
+        Direction: 'Outbound',
+        Action: 'Block',
+        Protocol: 'TCP',
+      },
+      'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-1': {
+        Direction: 'Outbound',
+        Action: 'Block',
+        Protocol: 'TCP',
+      },
+      'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv6-2': {
+        Direction: 'Outbound',
+        Action: 'Block',
+        Protocol: 'TCP',
+      },
+      'ShipDe-Worker-ShipDeWorker-Block-TCP-Ports': {
+        Direction: 'Outbound',
+        Action: 'Block',
+        Protocol: 'TCP',
+      },
+      'ShipDe-Worker-ShipDeWorker-Block-UDP': {
+        Direction: 'Outbound',
+        Action: 'Block',
+        Protocol: 'UDP',
+      },
+      'ShipDe-Worker-ShipDeWorker-Block-ICMPv4': {
+        Direction: 'Outbound',
+        Action: 'Block',
+        Protocol: 'ICMPv4',
+      },
+      'ShipDe-Worker-ShipDeWorker-Block-ICMPv6': {
+        Direction: 'Outbound',
+        Action: 'Block',
+        Protocol: 'ICMPv6',
+      },
+      'ShipDe-Worker-ShipDeWorker-Block-SSH': {
+        Direction: 'Outbound',
+        Action: 'Block',
+        Protocol: 'TCP',
+      },
+    };
 
-  const runWith = (ruleBook, aceType) => {
-    const entries = Object.keys(ruleBook)
-      .map(
-        (name) =>
-          "'" +
-          name +
-          "' = @{ Direction = '" +
-          ruleBook[name].Direction +
-          "'; Action = '" +
-          ruleBook[name].Action +
-          "'; Protocol = '" +
-          ruleBook[name].Protocol +
-          "' }"
-      )
-      .join('; ');
-    const mockScript =
-      '$ruleBook = @{ ' +
-      entries +
-      ' }\n' +
-      'function Get-NetFirewallRule {\n' +
-      '  param([string]$DisplayName, $ErrorAction)\n' +
-      '  if ($ruleBook.ContainsKey($DisplayName)) {\n' +
-      '    [pscustomobject]@{ DisplayName = $DisplayName; Direction = $ruleBook[$DisplayName].Direction; Action = $ruleBook[$DisplayName].Action; Protocol = $ruleBook[$DisplayName].Protocol }\n' +
-      '  }\n' +
-      '}\n' +
-      'function Get-NetFirewallPortFilter { process { [pscustomobject]@{ Protocol = $_.Protocol } } }\n' +
-      "function Get-Acl { param($path) [pscustomobject]@{ Access = @([pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = '" +
-      sid +
-      "' }; AccessControlType = '" +
-      aceType +
-      "' }) } }\n" +
-      script;
-    const res = spawnSync('powershell.exe', ['-NoProfile', '-Command', mockScript], {
-      encoding: 'utf8',
-      windowsHide: true,
+    const runWith = (ruleBook, aceType) => {
+      const entries = Object.keys(ruleBook)
+        .map(
+          (name) =>
+            "'" +
+            name +
+            "' = @{ Direction = '" +
+            ruleBook[name].Direction +
+            "'; Action = '" +
+            ruleBook[name].Action +
+            "'; Protocol = '" +
+            ruleBook[name].Protocol +
+            "' }"
+        )
+        .join('; ');
+      const mockScript =
+        '$ruleBook = @{ ' +
+        entries +
+        ' }\n' +
+        'function Get-NetFirewallRule {\n' +
+        '  param([string]$DisplayName, $ErrorAction)\n' +
+        '  if ($ruleBook.ContainsKey($DisplayName)) {\n' +
+        '    [pscustomobject]@{ DisplayName = $DisplayName; Direction = $ruleBook[$DisplayName].Direction; Action = $ruleBook[$DisplayName].Action; Protocol = $ruleBook[$DisplayName].Protocol }\n' +
+        '  }\n' +
+        '}\n' +
+        'function Get-NetFirewallPortFilter { process { [pscustomobject]@{ Protocol = $_.Protocol } } }\n' +
+        "function Get-Acl { param($path) [pscustomobject]@{ Access = @([pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = '" +
+        sid +
+        "' }; AccessControlType = '" +
+        aceType +
+        "' }) } }\n" +
+        script;
+      const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      assert.strictEqual(res.status, 0, 'mocked verifier failed: ' + res.stderr);
+      return (res.stdout || '').trim();
+    };
+
+    // Full deterministic rule set + Deny ACE: OK.
+    assert.strictEqual(runWith(fullBook, 'Deny'), 'OK');
+
+    // Partial set (Block-UDP removed): MISSING must name the absent rule.
+    const partialBook = Object.assign({}, fullBook);
+    delete partialBook['ShipDe-Worker-ShipDeWorker-Block-UDP'];
+    assert.strictEqual(runWith(partialBook, 'Deny'), 'MISSING:Block-UDP');
+
+    // All rules present but one has the wrong direction: still rejected.
+    const inboundBook = Object.assign({}, fullBook, {
+      'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4': {
+        Direction: 'Inbound',
+        Action: 'Block',
+        Protocol: 'TCP',
+      },
     });
-    assert.strictEqual(res.status, 0, 'mocked verifier failed: ' + res.stderr);
-    return (res.stdout || '').trim();
-  };
+    assert.strictEqual(runWith(inboundBook, 'Deny'), 'MISSING:Block-TCP-IPv4');
 
-  // Full deterministic rule set + Deny ACE: OK.
-  assert.strictEqual(runWith(fullBook, 'Deny'), 'OK');
+    // All rules present but one has the wrong protocol: still rejected.
+    const protoBook = Object.assign({}, fullBook, {
+      'ShipDe-Worker-ShipDeWorker-Block-UDP': {
+        Direction: 'Outbound',
+        Action: 'Block',
+        Protocol: 'TCP',
+      },
+    });
+    assert.strictEqual(runWith(protoBook, 'Deny'), 'MISSING:Block-UDP');
 
-  // Partial set (Block-UDP removed): MISSING must name the absent rule.
-  const partialBook = Object.assign({}, fullBook);
-  delete partialBook['ShipDe-Worker-ShipDeWorker-Block-UDP'];
-  assert.strictEqual(runWith(partialBook, 'Deny'), 'MISSING:Block-UDP');
-
-  // All rules present but one has the wrong direction: still rejected.
-  const inboundBook = Object.assign({}, fullBook, {
-    'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4': {
-      Direction: 'Inbound',
-      Action: 'Block',
-      Protocol: 'TCP',
-    },
-  });
-  assert.strictEqual(runWith(inboundBook, 'Deny'), 'MISSING:Block-TCP-IPv4');
-
-  // All rules present but one has the wrong protocol: still rejected.
-  const protoBook = Object.assign({}, fullBook, {
-    'ShipDe-Worker-ShipDeWorker-Block-UDP': {
-      Direction: 'Outbound',
-      Action: 'Block',
-      Protocol: 'TCP',
-    },
-  });
-  assert.strictEqual(runWith(protoBook, 'Deny'), 'MISSING:Block-UDP');
-
-  // Full rule set but no Deny ACE on the operator profile: rejected.
-  assert.ok(runWith(fullBook, 'Allow') !== 'OK');
-});
+    // Full rule set but no Deny ACE on the operator profile: rejected.
+    assert.ok(runWith(fullBook, 'Allow') !== 'OK');
+  }
+);
 
 test('launcher bounds the worker wait with a timeout and kills on expiry (P6)', () => {
   const src = getIsolatedLauncher().toString();
@@ -501,63 +554,67 @@ test('launcher bounds the worker wait with a timeout and kills on expiry (P6)', 
   assert.match(src, /workerTimeoutMs/);
 });
 
-test('secedit deny-logon provisioning and revert match by SID with asterisk prefixes (P3)', () => {
-  const extractFn = (file, name) => {
-    const src = fs.readFileSync(path.join(scriptsDir, file), 'utf8');
-    const re = new RegExp('# ' + name + '-begin[^\\n]*\\r?\\n([\\s\\S]*?)# ' + name + '-end');
-    const m = re.exec(src);
-    assert.ok(m, name + ' extraction marker missing in ' + file);
-    return m[1];
-  };
-  const remaining = extractFn('Remove-WorkerIsolation.ps1', 'Get-RemainingDenyRdpTokens');
-  const hasToken = extractFn('New-WorkerUser.ps1', 'Test-HasDenyRdpToken');
+test(
+  'secedit deny-logon provisioning and revert match by SID with asterisk prefixes (P3)',
+  psSkip,
+  () => {
+    const extractFn = (file, name) => {
+      const src = fs.readFileSync(path.join(scriptsDir, file), 'utf8');
+      const re = new RegExp('# ' + name + '-begin[^\\n]*\\r?\\n([\\s\\S]*?)# ' + name + '-end');
+      const m = re.exec(src);
+      assert.ok(m, name + ' extraction marker missing in ' + file);
+      return m[1];
+    };
+    const remaining = extractFn('Remove-WorkerIsolation.ps1', 'Get-RemainingDenyRdpTokens');
+    const hasToken = extractFn('New-WorkerUser.ps1', 'Test-HasDenyRdpToken');
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-secedit-'));
-  const tmpPs1 = path.join(tmp, 'check.ps1');
-  fs.writeFileSync(
-    tmpPs1,
-    [
-      remaining,
-      hasToken,
-      "$rem = Get-RemainingDenyRdpTokens -ExistingValue '*S-1-5-21-A, ShipDeWorker,*S-1-5-21-B' -Sid 'S-1-5-21-A' -Username 'ShipDeWorker'",
-      "$hasTrue = Test-HasDenyRdpToken -ExistingValue '*s-1-5-21-a,ShipDeWorker' -Sid 'S-1-5-21-A' -Username 'ShipDeWorker'",
-      "$hasFalse = Test-HasDenyRdpToken -ExistingValue '*S-1-5-21-B' -Sid 'S-1-5-21-A' -Username 'ShipDeWorker'",
-      "$empty = Get-RemainingDenyRdpTokens -ExistingValue 'ShipDeWorker' -Sid '' -Username 'ShipDeWorker'",
-      '@{',
-      '  remaining = (@($rem) -join "|")',
-      '  hasTrue = [bool]$hasTrue',
-      '  hasFalse = [bool]$hasFalse',
-      '  emptyCount = @($empty).Count',
-      '} | ConvertTo-Json',
-      '',
-    ].join('\n'),
-    'utf8'
-  );
-  const res = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmpPs1],
-    { encoding: 'utf8', windowsHide: true }
-  );
-  assert.strictEqual(res.status, 0, 'secedit filter script failed: ' + res.stderr);
-  const out = JSON.parse(res.stdout);
-  // The asterisk-prefixed worker SID is matched and removed; other SIDs survive.
-  assert.strictEqual(out.remaining, '*S-1-5-21-B');
-  // Re-provisioning detects an existing SID entry (case-insensitive, '*' stripped).
-  assert.strictEqual(out.hasTrue, true);
-  assert.strictEqual(out.hasFalse, false);
-  // Removing the only entry empties the right instead of dropping the line.
-  assert.strictEqual(out.emptyCount, 0);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-secedit-'));
+    const tmpPs1 = path.join(tmp, 'check.ps1');
+    fs.writeFileSync(
+      tmpPs1,
+      [
+        remaining,
+        hasToken,
+        "$rem = Get-RemainingDenyRdpTokens -ExistingValue '*S-1-5-21-A, ShipDeWorker,*S-1-5-21-B' -Sid 'S-1-5-21-A' -Username 'ShipDeWorker'",
+        "$hasTrue = Test-HasDenyRdpToken -ExistingValue '*s-1-5-21-a,ShipDeWorker' -Sid 'S-1-5-21-A' -Username 'ShipDeWorker'",
+        "$hasFalse = Test-HasDenyRdpToken -ExistingValue '*S-1-5-21-B' -Sid 'S-1-5-21-A' -Username 'ShipDeWorker'",
+        "$empty = Get-RemainingDenyRdpTokens -ExistingValue 'ShipDeWorker' -Sid '' -Username 'ShipDeWorker'",
+        '@{',
+        '  remaining = (@($rem) -join "|")',
+        '  hasTrue = [bool]$hasTrue',
+        '  hasFalse = [bool]$hasFalse',
+        '  emptyCount = @($empty).Count',
+        '} | ConvertTo-Json',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+    const res = spawnSync(
+      POWERSHELL_EXE,
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmpPs1],
+      { encoding: 'utf8', windowsHide: true }
+    );
+    assert.strictEqual(res.status, 0, 'secedit filter script failed: ' + res.stderr);
+    const out = JSON.parse(res.stdout);
+    // The asterisk-prefixed worker SID is matched and removed; other SIDs survive.
+    assert.strictEqual(out.remaining, '*S-1-5-21-B');
+    // Re-provisioning detects an existing SID entry (case-insensitive, '*' stripped).
+    assert.strictEqual(out.hasTrue, true);
+    assert.strictEqual(out.hasFalse, false);
+    // Removing the only entry empties the right instead of dropping the line.
+    assert.strictEqual(out.emptyCount, 0);
 
-  // Fail-closed and empty-clear statics on both scripts.
-  const removeSrc = fs.readFileSync(path.join(scriptsDir, 'Remove-WorkerIsolation.ps1'), 'utf8');
-  assert.match(removeSrc, /SeDenyRemoteInteractiveLogonRight = "/);
-  assert.match(removeSrc, /LASTEXITCODE -ne 0/);
-  const newSrc = fs.readFileSync(path.join(scriptsDir, 'New-WorkerUser.ps1'), 'utf8');
-  assert.match(newSrc, /\*\$UserSid/);
-  assert.match(newSrc, /LASTEXITCODE -ne 0/);
+    // Fail-closed and empty-clear statics on both scripts.
+    const removeSrc = fs.readFileSync(path.join(scriptsDir, 'Remove-WorkerIsolation.ps1'), 'utf8');
+    assert.match(removeSrc, /SeDenyRemoteInteractiveLogonRight = "/);
+    assert.match(removeSrc, /LASTEXITCODE -ne 0/);
+    const newSrc = fs.readFileSync(path.join(scriptsDir, 'New-WorkerUser.ps1'), 'utf8');
+    assert.match(newSrc, /\*\$UserSid/);
+    assert.match(newSrc, /LASTEXITCODE -ne 0/);
 
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+);
 
 test('isolated launcher credentials never appear in plain env dumps', () => {
   const launcherStr = getIsolatedLauncher().toString();
@@ -572,13 +629,13 @@ test('isolated launcher credentials never appear in plain env dumps', () => {
   assert.ok(launcherStr.includes('$psi.EnvironmentVariables.Clear()'), 'Env inheritance blocked');
 });
 
-test('PowerShell parser check on scripts', () => {
+test('PowerShell parser check on scripts', psSkip, () => {
   const scripts = fs.readdirSync(scriptsDir).filter((f) => f.endsWith('.ps1'));
 
   for (const script of scripts) {
     const fullPath = path.join(scriptsDir, script);
     const res = spawnSync(
-      'powershell.exe',
+      POWERSHELL_EXE,
       [
         '-NoProfile',
         '-ExecutionPolicy',
@@ -601,24 +658,24 @@ test('PowerShell parser check on scripts', () => {
   }
 });
 
-test('PowerShell WhatIf runs without changes', () => {
+test('PowerShell WhatIf runs without changes', whatIfSkip, () => {
   const scripts = fs.readdirSync(scriptsDir).filter((f) => f.endsWith('.ps1'));
 
   for (const script of scripts) {
     const fullPath = path.join(scriptsDir, script);
 
     // F11: State snapshot before
-    const usersBefore = spawnSync('powershell.exe', ['-c', '(Get-LocalUser).Name'], {
+    const usersBefore = spawnSync(POWERSHELL_EXE, ['-c', '(Get-LocalUser).Name'], {
       encoding: 'utf8',
       windowsHide: true,
     }).stdout;
-    const rulesBefore = spawnSync('powershell.exe', ['-c', '(Get-NetFirewallRule).Name'], {
+    const rulesBefore = spawnSync(POWERSHELL_EXE, ['-c', '(Get-NetFirewallRule).Name'], {
       encoding: 'utf8',
       windowsHide: true,
     }).stdout;
 
     const res = spawnSync(
-      'powershell.exe',
+      POWERSHELL_EXE,
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', fullPath, '-WhatIf'],
       { encoding: 'utf8', windowsHide: true }
     );
@@ -626,11 +683,11 @@ test('PowerShell WhatIf runs without changes', () => {
     assert.strictEqual(res.status, 0, `${script} -WhatIf should exit 0. Errors: ${res.stderr}`);
 
     // F11: State snapshot after
-    const usersAfter = spawnSync('powershell.exe', ['-c', '(Get-LocalUser).Name'], {
+    const usersAfter = spawnSync(POWERSHELL_EXE, ['-c', '(Get-LocalUser).Name'], {
       encoding: 'utf8',
       windowsHide: true,
     }).stdout;
-    const rulesAfter = spawnSync('powershell.exe', ['-c', '(Get-NetFirewallRule).Name'], {
+    const rulesAfter = spawnSync(POWERSHELL_EXE, ['-c', '(Get-NetFirewallRule).Name'], {
       encoding: 'utf8',
       windowsHide: true,
     }).stdout;
@@ -644,26 +701,29 @@ test('PowerShell WhatIf runs without changes', () => {
   }
 });
 
-test('deny-RDP secedit ensure runs on every invocation, outside the user-existence branches (Q1)', () => {
-  const file = path.join(scriptsDir, 'New-WorkerUser.ps1');
-  const newSrc = fs.readFileSync(file, 'utf8');
+test(
+  'deny-RDP secedit ensure runs on every invocation, outside the user-existence branches (Q1)',
+  psSkip,
+  () => {
+    const file = path.join(scriptsDir, 'New-WorkerUser.ps1');
+    const newSrc = fs.readFileSync(file, 'utf8');
 
-  // Static: the ensure is guarded by $UserSid (resolved in BOTH the
-  // existing-user and the creation branch), not by user creation.
-  assert.match(newSrc, /if \(\$UserSid\)/);
+    // Static: the ensure is guarded by $UserSid (resolved in BOTH the
+    // existing-user and the creation branch), not by user creation.
+    assert.match(newSrc, /if \(\$UserSid\)/);
 
-  // Structural, via the PowerShell AST: every secedit call must be OUTSIDE
-  // the `if ($User)` user-existence statement. If the ensure were nested in
-  // the creation branch (the Q1 bug), the secedit calls would have the
-  // `if ($User)` statement among their ancestors.
-  const res = spawnSync(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      `
+    // Structural, via the PowerShell AST: every secedit call must be OUTSIDE
+    // the `if ($User)` user-existence statement. If the ensure were nested in
+    // the creation branch (the Q1 bug), the secedit calls would have the
+    // `if ($User)` statement among their ancestors.
+    const res = spawnSync(
+      POWERSHELL_EXE,
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `
       $errs = $null
       $ast = [System.Management.Automation.Language.Parser]::ParseFile("${file}", [ref]$null, [ref]$errs)
       if ($errs.Count -gt 0) { $errs | ForEach-Object { Write-Error $_.Message }; exit 1 }
@@ -681,66 +741,71 @@ test('deny-RDP secedit ensure runs on every invocation, outside the user-existen
       }
       @{ count = $seceditCalls.Count; anyInsideUserBranch = [bool]$anyInsideUserBranch } | ConvertTo-Json
       `,
-    ],
-    { encoding: 'utf8', windowsHide: true }
-  );
-  assert.strictEqual(res.status, 0, 'AST check failed: ' + res.stderr);
-  const out = JSON.parse(res.stdout);
-  // secedit /export and secedit /configure both live in the hoisted block.
-  assert.strictEqual(out.count, 2);
-  // Neither is nested inside `if ($User)` — the ensure covers re-provisioning.
-  assert.strictEqual(out.anyInsideUserBranch, false);
-});
+      ],
+      { encoding: 'utf8', windowsHide: true }
+    );
+    assert.strictEqual(res.status, 0, 'AST check failed: ' + res.stderr);
+    const out = JSON.parse(res.stdout);
+    // secedit /export and secedit /configure both live in the hoisted block.
+    assert.strictEqual(out.count, 2);
+    // Neither is nested inside `if ($User)` — the ensure covers re-provisioning.
+    assert.strictEqual(out.anyInsideUserBranch, false);
+  }
+);
 
-test('Get-UpdatedDenyRdpValue appends without a leading comma on an empty exported right (Q2)', () => {
-  const extractFn = (name) => {
-    const src = fs.readFileSync(path.join(scriptsDir, 'New-WorkerUser.ps1'), 'utf8');
-    const re = new RegExp('# ' + name + '-begin[^\\n]*\\r?\\n([\\s\\S]*?)# ' + name + '-end');
-    const m = re.exec(src);
-    assert.ok(m, name + ' extraction marker missing in New-WorkerUser.ps1');
-    return m[1];
-  };
+test(
+  'Get-UpdatedDenyRdpValue appends without a leading comma on an empty exported right (Q2)',
+  psSkip,
+  () => {
+    const extractFn = (name) => {
+      const src = fs.readFileSync(path.join(scriptsDir, 'New-WorkerUser.ps1'), 'utf8');
+      const re = new RegExp('# ' + name + '-begin[^\\n]*\\r?\\n([\\s\\S]*?)# ' + name + '-end');
+      const m = re.exec(src);
+      assert.ok(m, name + ' extraction marker missing in New-WorkerUser.ps1');
+      return m[1];
+    };
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-q2-'));
-  const tmpPs1 = path.join(tmp, 'check.ps1');
-  fs.writeFileSync(
-    tmpPs1,
-    [
-      extractFn('Test-HasDenyRdpToken'),
-      extractFn('Get-UpdatedDenyRdpValue'),
-      "$empty = Get-UpdatedDenyRdpValue -ExistingValue '' -Sid 'S-1-5-21-W' -Username 'ShipDeWorker'",
-      "$nonEmpty = Get-UpdatedDenyRdpValue -ExistingValue '*S-1-5-21-A' -Sid 'S-1-5-21-W' -Username 'ShipDeWorker'",
-      "$present = Get-UpdatedDenyRdpValue -ExistingValue '*S-1-5-21-W' -Sid 'S-1-5-21-W' -Username 'ShipDeWorker'",
-      "$presentByName = Get-UpdatedDenyRdpValue -ExistingValue 'ShipDeWorker' -Sid 'S-1-5-21-W' -Username 'ShipDeWorker'",
-      '@{',
-      '  empty = [string]$empty',
-      '  nonEmpty = [string]$nonEmpty',
-      '  present = ($null -eq $present)',
-      '  presentByName = ($null -eq $presentByName)',
-      '} | ConvertTo-Json',
-      '',
-    ].join('\n'),
-    'utf8'
-  );
-  const res = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmpPs1],
-    { encoding: 'utf8', windowsHide: true }
-  );
-  assert.strictEqual(res.status, 0, 'Q2 check script failed: ' + res.stderr);
-  const out = JSON.parse(res.stdout);
-  // Empty exported right: appended as '*SID' with NO leading comma.
-  assert.strictEqual(out.empty, '*S-1-5-21-W');
-  assert.ok(!out.empty.startsWith(','), 'no leading comma on empty exported right');
-  // Non-empty exported right: appended after the existing value.
-  assert.strictEqual(out.nonEmpty, '*S-1-5-21-A,*S-1-5-21-W');
-  // Idempotency: already-present token (by SID or name) returns null so the
-  // caller skips secedit /configure entirely.
-  assert.strictEqual(out.present, true);
-  assert.strictEqual(out.presentByName, true);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-q2-'));
+    const tmpPs1 = path.join(tmp, 'check.ps1');
+    fs.writeFileSync(
+      tmpPs1,
+      [
+        extractFn('Test-HasDenyRdpToken'),
+        extractFn('Get-UpdatedDenyRdpValue'),
+        "$empty = Get-UpdatedDenyRdpValue -ExistingValue '' -Sid 'S-1-5-21-W' -Username 'ShipDeWorker'",
+        "$nonEmpty = Get-UpdatedDenyRdpValue -ExistingValue '*S-1-5-21-A' -Sid 'S-1-5-21-W' -Username 'ShipDeWorker'",
+        "$present = Get-UpdatedDenyRdpValue -ExistingValue '*S-1-5-21-W' -Sid 'S-1-5-21-W' -Username 'ShipDeWorker'",
+        "$presentByName = Get-UpdatedDenyRdpValue -ExistingValue 'ShipDeWorker' -Sid 'S-1-5-21-W' -Username 'ShipDeWorker'",
+        '@{',
+        '  empty = [string]$empty',
+        '  nonEmpty = [string]$nonEmpty',
+        '  present = ($null -eq $present)',
+        '  presentByName = ($null -eq $presentByName)',
+        '} | ConvertTo-Json',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+    const res = spawnSync(
+      POWERSHELL_EXE,
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmpPs1],
+      { encoding: 'utf8', windowsHide: true }
+    );
+    assert.strictEqual(res.status, 0, 'Q2 check script failed: ' + res.stderr);
+    const out = JSON.parse(res.stdout);
+    // Empty exported right: appended as '*SID' with NO leading comma.
+    assert.strictEqual(out.empty, '*S-1-5-21-W');
+    assert.ok(!out.empty.startsWith(','), 'no leading comma on empty exported right');
+    // Non-empty exported right: appended after the existing value.
+    assert.strictEqual(out.nonEmpty, '*S-1-5-21-A,*S-1-5-21-W');
+    // Idempotency: already-present token (by SID or name) returns null so the
+    // caller skips secedit /configure entirely.
+    assert.strictEqual(out.present, true);
+    assert.strictEqual(out.presentByName, true);
 
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+);
 
 test('publisher object transfer never executes a hostile uploadpack.packObjectsHook planted in the worker tree (Q4)', () => {
   const repo = makeTempRepo();

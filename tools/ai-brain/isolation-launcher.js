@@ -130,11 +130,14 @@ function getIsolatedLauncher() {
     }
     const opts = options || {};
 
-    const verdictPath = path.join(
-      process.env.LOCALAPPDATA || '',
-      'ShipDe',
-      'isolation-verdict.json'
-    );
+    // The verdict path is injectable so tests can write the verdict where the
+    // code reads it on every OS. The production default is unchanged on Windows
+    // (LOCALAPPDATA\ShipDe\isolation-verdict.json); LOCALAPPDATA is unset on
+    // non-Windows, so production there resolves to a relative path, exactly as
+    // before this opt was added.
+    const verdictPath =
+      opts.verdictPath ||
+      path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
     if (!fs.existsSync(verdictPath)) {
       throw new Error('ISOLATION_VERDICT_MISSING: Cannot find ' + verdictPath);
     }
