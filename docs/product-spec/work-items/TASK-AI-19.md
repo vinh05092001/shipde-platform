@@ -572,3 +572,16 @@ Each reviewed commit was cross-checked against line 1 of `.worktrees/logs/review
 TASK-AI-49 closes the gap the sixth batch recorded: its durable review file now names
 the reviewer, so the `FALLBACK_PASS` claim no longer names nobody. Codex remained out
 of quota (until 2026-10-04), so no row claims a Codex PASS.
+
+## Executed run: 2026-09-29, ninth batch
+
+Same command and evidence bar as the sixth batch, one evidence file per pull request.
+The reviewed commit was cross-checked against lines 1-2 of `.worktrees/logs/reviews/2c8f24da2f9c140984b7ca231c86d5d15868ec7b.md` in the main checkout, verdict `PASS`.
+
+| Work Item | Pull Request | Merge commit | Transition | Verdict recorded |
+| --- | --- | --- | --- | --- |
+| TASK-AI-61 | #160 | `4bc0ed2ce21131f94e76a9f675b7b4ed36774a38` | READY_FOR_CODEX -> MERGED | FALLBACK_PASS, reviewer named (opencode/scaleway/qwen3.5-397b-a17b on the exact merged head `2c8f24da`) |
+
+Codex remained out of quota (until 2026-10-04), so no row claims a Codex PASS.
+Isolation for live E2E remains PARTIAL; the live E2E eligibility gate stays
+BLOCKED_ADMIN_APPLY.
