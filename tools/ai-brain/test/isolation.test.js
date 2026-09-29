@@ -460,10 +460,16 @@ test('launcher default boundary verifier checks every expected firewall rule (P5
   for (const rule of EXPECTED_FIREWALL_RULES) {
     assert.ok(src.includes(rule.suffix), 'must verify rule ' + rule.suffix);
   }
-  assert.ok(src.includes('Active=TRUE'), 'each rule must be Active=TRUE');
-  assert.ok(src.includes('Dir=Out'), 'each rule must be Dir=Out');
-  assert.ok(src.includes('Action=Block'), 'each rule must be Block');
-  assert.ok(src.includes('LUAuth='), 'must check LUAuth SDDL scope');
+  assert.ok(src.includes('$fields["Active"] -cne "TRUE"'), 'each rule must be Active=TRUE');
+  assert.ok(src.includes('$fields["Dir"] -cne "Out"'), 'each rule must be Dir=Out');
+  assert.ok(src.includes('$fields["Action"] -cne "Block"'), 'each rule must be Block');
+  assert.ok(src.includes('$fields["LUAuth"]'), 'must check LUAuth SDDL scope');
+  assert.ok(src.includes('$fields["Name"] -cne $ruleName'), 'name match is exact field equality');
+  assert.ok(
+    src.includes('$fields["Protocol"] -cne $wantProto'),
+    'protocol match is exact field equality'
+  );
+  assert.ok(!src.includes('-notlike'), 'must not substring-match registry values');
   assert.ok(src.includes('D:(A;;CC;;;'), 'must compare against the worker SDDL string');
   assert.ok(!src.includes('$rules.Count -ge 1'), 'a partial rule set must not verify');
   assert.ok(src.includes('$missing.Count -eq 0'), 'the gate must be zero missing rules');
@@ -652,6 +658,48 @@ test(
         : r
     );
     assert.strictEqual(runWithRegistry(protoBook, true, 'Deny'), 'MISSING:Block-UDP');
+
+    // Protocol is exact field equality, not a substring: Protocol=17 (UDP) must
+    // not satisfy ICMPv4 (1), and Protocol=60 must not satisfy TCP (6).
+    const icmpAsUdp = allRulesOk.map((r) =>
+      r.name === 'ShipDe-Worker-ShipDeWorker-Block-ICMPv4'
+        ? { name: r.name, value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-ICMPv4', '17') }
+        : r
+    );
+    assert.strictEqual(runWithRegistry(icmpAsUdp, true, 'Deny'), 'MISSING:Block-ICMPv4');
+
+    const tcpAs60 = allRulesOk.map((r) =>
+      r.name === 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4'
+        ? { name: r.name, value: ruleValue('ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4', '60') }
+        : r
+    );
+    assert.strictEqual(runWithRegistry(tcpAs60, true, 'Deny'), 'MISSING:Block-TCP-IPv4');
+
+    // Name match is the parsed Name field only. A value whose Name merely
+    // contains the expected name, or that embeds Name=<expected> as a token
+    // outside the Name field, must not match.
+    const containedName = allRulesOk.map((r) =>
+      r.name === 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4'
+        ? {
+            name: r.name,
+            value: ruleValue('Fake-ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4-Copy', '6'),
+          }
+        : r
+    );
+    assert.strictEqual(runWithRegistry(containedName, true, 'Deny'), 'MISSING:Block-TCP-IPv4');
+
+    const embeddedNameToken = allRulesOk.map((r) =>
+      r.name === 'ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4'
+        ? {
+            name: r.name,
+            value:
+              'v2.30|Action=Block|Active=TRUE|Dir=Out|Protocol=6|Name=evil|Name=ShipDe-Worker-ShipDeWorker-Block-TCP-IPv4|LUAuth=D:(A;;CC;;;' +
+              sid +
+              ')|',
+          }
+        : r
+    );
+    assert.strictEqual(runWithRegistry(embeddedNameToken, true, 'Deny'), 'MISSING:Block-TCP-IPv4');
 
     // Full rule set but no Deny ACE on the operator profile: rejected.
     assert.ok(runWithRegistry(allRulesOk, true, 'Allow') !== 'OK');

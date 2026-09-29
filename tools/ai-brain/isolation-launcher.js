@@ -97,20 +97,29 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
     '$ruleName = $prefix + "-" + $e.n; ' +
     '$found = $false; ' +
     'foreach ($propName in $raw.PSObject.Properties.Name) { ' +
-    '$val = $raw.$propName; ' +
+    '$val = [string]$raw.$propName; ' +
     'if ([string]::IsNullOrEmpty($val)) { continue }; ' +
-    "if ($val -notlike ('*Name=' + $ruleName + '|*') -and $val -notlike ('*Name=' + $ruleName)) { continue }; " +
-    "if ($val -notlike '*Active=TRUE*') { continue }; " +
-    "if ($val -notlike '*Dir=Out*') { continue }; " +
-    "if ($val -notlike '*Action=Block*') { continue }; " +
-    'if ($e.p -eq "TCP") { if ($val -notlike "*Protocol=6*") { continue } } ' +
-    'elseif ($e.p -eq "UDP") { if ($val -notlike "*Protocol=17*") { continue } } ' +
-    'elseif ($e.p -eq "ICMPv4") { if ($val -notlike "*Protocol=1*") { continue } } ' +
-    'elseif ($e.p -eq "ICMPv6") { if ($val -notlike "*Protocol=58*") { continue } } ' +
+    '$fields = @{}; ' +
+    'foreach ($part in ($val -split "\\|")) { ' +
+    '  $eq = $part.IndexOf("="); ' +
+    '  if ($eq -lt 1) { continue }; ' +
+    '  $k = $part.Substring(0, $eq); ' +
+    '  if (-not $fields.ContainsKey($k)) { $fields[$k] = $part.Substring($eq + 1) }; ' +
+    '}; ' +
+    'if ($fields["Name"] -cne $ruleName) { continue }; ' +
+    'if ($fields["Active"] -cne "TRUE") { continue }; ' +
+    'if ($fields["Dir"] -cne "Out") { continue }; ' +
+    'if ($fields["Action"] -cne "Block") { continue }; ' +
+    '$wantProto = $null; ' +
+    'if ($e.p -eq "TCP") { $wantProto = "6" } ' +
+    'elseif ($e.p -eq "UDP") { $wantProto = "17" } ' +
+    'elseif ($e.p -eq "ICMPv4") { $wantProto = "1" } ' +
+    'elseif ($e.p -eq "ICMPv6") { $wantProto = "58" }; ' +
+    'if ($null -eq $wantProto -or $fields["Protocol"] -cne $wantProto) { continue }; ' +
     "$expectedLuAuth = 'D:(A;;CC;;;" +
     safeSid +
     ")'; " +
-    "if ($val -notlike ('*LUAuth=' + $expectedLuAuth + '|*') -and $val -notlike ('*LUAuth=' + $expectedLuAuth)) { continue }; " +
+    'if ($fields["LUAuth"] -cne $expectedLuAuth) { continue }; ' +
     '$found = $true; break; ' +
     '}; ' +
     'if (-not $found) { $missing += $e.n }; ' +
