@@ -163,6 +163,7 @@ if (-not $process.WaitForExit(30000)) {
 Write-Log "Worker process exited with code $($process.ExitCode)"
 
 $Verdict = "OPEN"
+$results = $null
 if (Test-Path $TestResultPath) {
     $results = Get-Content $TestResultPath | ConvertFrom-Json
 
@@ -209,6 +210,11 @@ $enumerationFailed = $false
 try {
     $processes = Get-CimInstance Win32_Process
     foreach ($proc in $processes) {
+        # PID 0 (System Idle Process) and PID 4 (System) are kernel pseudo-processes
+        # that can never belong to the worker user; exclude them before GetOwner
+        if ($proc.ProcessId -eq 0 -or $proc.ProcessId -eq 4) {
+            continue
+        }
         try {
             $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction Stop
             if ($owner.User -eq $Username) {

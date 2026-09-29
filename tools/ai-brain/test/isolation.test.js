@@ -1057,8 +1057,42 @@ test('Test-WorkerIsolation guards GetOwner call with fail-closed existence re-ch
   );
 
   // Static: enumeration failure sets verdict to PARTIAL (fail-closed)
+  // Assert the actual wiring: the catch of the enumeration sets $enumerationFailed,
+  // and that flag leads to $Verdict = "PARTIAL" in the block right after
+  assert.match(
+    script,
+    /\$enumerationFailed\s*=\s*\$true[\s\S]*?if\s*\(\s*\$enumerationFailed\s*\)\s*\{\s*\$Verdict\s*=\s*"PARTIAL"\s*\}/,
+    'enumerationFailed must be set to $true and then checked to set $Verdict = "PARTIAL"'
+  );
+  // Static: "CLOSED" must never be assigned after the lingering block
+  const lingeringBlockIdx = script.indexOf('if ($lingering)');
+  const closedAfterLingering = script.indexOf('$Verdict = "CLOSED"', lingeringBlockIdx);
+  assert.strictEqual(
+    closedAfterLingering,
+    -1,
+    'CLOSED must never be assigned after the lingering process check'
+  );
+
+  // F2: PID 0 and 4 exclusion - verify exactly those two PIDs are excluded
+  assert.match(script, /\bProcessId\s*-eq\s*0\b/, 'must exclude PID 0 (System Idle Process)');
+  assert.match(script, /\bProcessId\s*-eq\s*4\b/, 'must exclude PID 4 (System)');
+  // Verify the exclusion comment mentions kernel pseudo-processes
   assert.ok(
-    script.includes('$enumerationFailed') && script.includes('$Verdict = "PARTIAL"'),
-    'enumeration failure must set verdict to PARTIAL'
+    script.includes('kernel pseudo-processes') ||
+      (script.includes('PID 0') && script.includes('PID 4')),
+    'must have a comment explaining why PID 0 and 4 are excluded'
+  );
+
+  // F3: $results must be initialized before use so missing result file cannot throw
+  // before the verdict JSON is written
+  assert.match(
+    script,
+    /\$results\s*=\s*\$null\s*\r?\n\s*if\s*\(Test-Path\s+\$TestResultPath\)/,
+    '$results must be initialized to $null before the Test-Path check'
+  );
+  // Verify $results is referenced in $Output (line ~277)
+  assert.ok(
+    script.includes('$Output') && script.includes('details = $results'),
+    '$results must be referenced in the $Output hashtable'
   );
 });
