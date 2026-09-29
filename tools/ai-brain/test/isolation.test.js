@@ -61,6 +61,61 @@ const whatIfSkip =
     ? {}
     : { skip: 'WhatIf provisioning snapshot requires Windows PowerShell + Windows cmdlets' };
 
+// Test-only seam preamble. The generated verifier reads HKLM and Get-Acl only
+// when $ShipDeBoundaryTestInput is unset. Tests set that variable (never a
+// script parameter, never worker input) so the same parser runs under pwsh on
+// Linux, where the HKLM provider and Windows SID translation are absent.
+function boundaryTestPreamble(ruleEntries, fwProfilesOn, aces) {
+  // Single-quoted here-strings: a rule value contains the SDDL ';' sequence,
+  // which a single-quoted literal would treat as a statement separator.
+  const q = (value) => "'" + String(value).replace(/'/g, "''") + "'";
+  const lit = (value) => "@'\n" + String(value).replace(/'@/g, "'@ ") + "\n'@";
+  // PSCustomObject, the same shape Get-ItemProperty returns. A hashtable's
+  // PSObject.Properties.Name lists dictionary members, not its keys, so the
+  // verifier would never see the rule names.
+  const rules =
+    '[pscustomobject]@{ ' +
+    ruleEntries.map((e) => lit(e.name) + ' = ' + lit(e.value)).join('; ') +
+    ' }';
+  const profile = fwProfilesOn ? '@{ EnableFirewall = 1 }' : '@{ EnableFirewall = 0 }';
+  const aceStmts = aces
+    .map((ace) => {
+      const translate =
+        ace.translatedSid === null
+          ? '{ param($t) throw "untranslatable" }'
+          : '{ param($t) [pscustomobject]@{ Value = ' + q(ace.translatedSid) + ' } }';
+      return (
+        '$identity = [pscustomobject]@{ Value = ' +
+        q(ace.identity) +
+        ' }; $identity | Add-Member -MemberType ScriptMethod -Name Translate -Force -Value ' +
+        translate +
+        '; $aces += [pscustomobject]@{ IdentityReference = $identity; AccessControlType = ' +
+        q(ace.type) +
+        '; FileSystemRights = ' +
+        Number(ace.rights) +
+        '; InheritanceFlags = ' +
+        Number(ace.flags) +
+        ' }; '
+      );
+    })
+    .join('');
+  return (
+    // A plain array: Windows PowerShell 5.1 throws "Argument types do not
+    // match" when @() unrolls a generic List[object].
+    '$aces = @(); ' +
+    aceStmts +
+    '$ShipDeBoundaryTestInput = @{ Rules = ' +
+    rules +
+    '; Profiles = @{ DomainProfile = ' +
+    profile +
+    '; StandardProfile = ' +
+    profile +
+    '; PublicProfile = ' +
+    profile +
+    ' }; Aces = $aces }; '
+  );
+}
+
 function makeTempRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-worker-tree-'));
   const git = (args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true });
@@ -451,7 +506,15 @@ test('launcher default boundary verifier checks every expected firewall rule (P5
   // P5: reads firewall rules from registry non-elevated
   assert.ok(src.includes('FirewallRules'), 'reads firewall rules from registry');
   assert.ok(src.includes('EnableFirewall'), 'checks firewall profiles are enabled');
-  assert.ok(src.includes('Get-Acl'), 'checks operator profile ACL');
+  assert.ok(src.includes('Get-Acl $env:USERPROFILE'), 'checks operator profile ACL');
+  assert.ok(
+    src.includes('$ShipDeBoundaryTestInput'),
+    'test-only seam is present and unused unless the caller set it'
+  );
+  assert.ok(
+    src.includes('Get-ItemProperty'),
+    'production path still reads firewall profiles from the registry'
+  );
   assert.ok(src.includes('Deny'), 'requires the Deny ACE');
   assert.ok(src.includes('ShipDe-Worker-'), 'scoped to the worker rule prefix');
   // Q3: every deterministically-created rule is verified by exact name, with
@@ -549,36 +612,21 @@ test(
     };
 
     const runWithRegistry = (ruleEntries, fwProfilesOn, aceType) => {
-      // Get-ItemProperty is mocked to return the pre-built registry object for
-      // the FirewallRules read (pipeline from Get-Item, so -Name is unbound)
-      // and EnableFirewall for the per-profile reads. Get-Acl is a plain
-      // object literal — brace counts checked — not a hashtable-returning
-      // function body wrapper.
+      // Injected through the test-only seam, not by shadowing Get-ItemProperty
+      // / Get-Acl. On Linux pwsh there is no HKLM: drive, so Test-Path is
+      // false before any function mock runs, and Windows SID translation is
+      // unavailable. The seam feeds the same rule strings, profile states and
+      // ACE list into the production parser.
       const mockScript =
-        '$rawObject = [pscustomobject]@{}; ' +
-        ruleEntries
-          .map(
-            (e) =>
-              '$rawObject | Add-Member -NotePropertyName "' +
-              e.name +
-              '" -NotePropertyValue "' +
-              e.value.replace(/"/g, '`"') +
-              '"'
-          )
-          .join('; ') +
-        '; ' +
-        'function Get-ItemProperty { param($Path, $Name, $ErrorAction); if ($Name -eq "EnableFirewall") { return @{ EnableFirewall = ' +
-        (fwProfilesOn ? '1' : '0') +
-        ' } } return $rawObject }; ' +
-        'function Get-Item { param($Path, $ErrorAction); return [pscustomobject]@{ status = "OK" } }; ' +
-        'function Get-Acl { param($path); $identity = [pscustomobject]@{ Value = "' +
-        sid +
-        '" }; $identity | Add-Member -MemberType ScriptMethod -Name Translate -Force -Value { param($t); [pscustomobject]@{ Value = "' +
-        sid +
-        '" } }; $access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
-        aceType +
-        '"; FileSystemRights = 2032127; InheritanceFlags = 3 }; return [pscustomobject]@{ Access = @($access) } }; ' +
-        script;
+        boundaryTestPreamble(ruleEntries, fwProfilesOn, [
+          {
+            identity: sid,
+            type: aceType,
+            rights: 2032127,
+            flags: 3,
+            translatedSid: sid,
+          },
+        ]) + script;
       const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
         encoding: 'utf8',
         windowsHide: true,
@@ -748,30 +796,15 @@ test('boundary verifier reads firewall rules from registry non-elevated (P5/Q3)'
 
   const runWithRegistry = (ruleEntries, fwProfilesOn, aceType) => {
     const mockScript =
-      '$rawObject = [pscustomobject]@{}; ' +
-      ruleEntries
-        .map(
-          (e) =>
-            '$rawObject | Add-Member -NotePropertyName "' +
-            e.name +
-            '" -NotePropertyValue "' +
-            e.value.replace(/"/g, '`"') +
-            '"'
-        )
-        .join('; ') +
-      '; ' +
-      'function Get-ItemProperty { param($Path, $Name, $ErrorAction); if ($Name -eq "EnableFirewall") { return @{ EnableFirewall = ' +
-      (fwProfilesOn ? '1' : '0') +
-      ' } } return $rawObject }; ' +
-      'function Get-Item { param($Path, $ErrorAction); return [pscustomobject]@{ status = "OK" } }; ' +
-      'function Get-Acl { param($path); $identity = [pscustomobject]@{ Value = "' +
-      sid +
-      '" }; $identity | Add-Member -MemberType ScriptMethod -Name Translate -Force -Value { param($t); [pscustomobject]@{ Value = "' +
-      sid +
-      '" } }; $access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
-      aceType +
-      '"; FileSystemRights = 2032127; InheritanceFlags = 3 }; return [pscustomobject]@{ Access = @($access) } }; ' +
-      script;
+      boundaryTestPreamble(ruleEntries, fwProfilesOn, [
+        {
+          identity: sid,
+          type: aceType,
+          rights: 2032127,
+          flags: 3,
+          translatedSid: sid,
+        },
+      ]) + script;
     const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
       encoding: 'utf8',
       windowsHide: true,
@@ -888,45 +921,20 @@ test(
       value: ruleValue('ShipDe-Worker-ShipDeWorker-' + n, p),
     }));
 
-    // ACE-like mocked Get-Acl: an NTAccount value (not a SID) whose Translate()
-    // resolves to an arbitrary SID the test controls. translatedSid = null
-    // simulates an untranslatable account (Translate throws).
+    // ACE injected through the test-only seam: an NTAccount value (not a SID)
+    // whose Translate() resolves to an arbitrary SID the test controls.
+    // translatedSid = null simulates an untranslatable account (Translate throws).
     const runWithAce = (ace, translatedSid) => {
-      const translateBody =
-        translatedSid === null
-          ? '{ param($t); throw "untranslatable" }'
-          : "{ param($t); [pscustomobject]@{ Value = '" + translatedSid + "' } }";
       const mockScript =
-        '$rawObject = [pscustomobject]@{}; ' +
-        allRulesOk
-          .map(
-            (e) =>
-              '$rawObject | Add-Member -NotePropertyName "' +
-              e.name +
-              '" -NotePropertyValue "' +
-              e.value.replace(/"/g, '`"') +
-              '"'
-          )
-          .join('; ') +
-        '; ' +
-        'function Get-ItemProperty { param($Path, $Name, $ErrorAction); if ($Name -eq "EnableFirewall") { return @{ EnableFirewall = 1 } } return $rawObject }; ' +
-        'function Get-Item { param($Path, $ErrorAction); return [pscustomobject]@{ status = "OK" } }; ' +
-        'function Get-Acl { param($path); ' +
-        '$identity = [pscustomobject]@{ Value = "' +
-        ace.identity +
-        '" }; ' +
-        '$identity | Add-Member -MemberType ScriptMethod -Name Translate -Force -Value ' +
-        translateBody +
-        '; ' +
-        '$access = [pscustomobject]@{ IdentityReference = $identity; AccessControlType = "' +
-        ace.type +
-        '"; FileSystemRights = ' +
-        ace.rights +
-        '; InheritanceFlags = ' +
-        ace.flags +
-        ' }; ' +
-        'return [pscustomobject]@{ Access = @($access) } }; ' +
-        script;
+        boundaryTestPreamble(allRulesOk, true, [
+          {
+            identity: ace.identity,
+            type: ace.type,
+            rights: ace.rights,
+            flags: ace.flags,
+            translatedSid: translatedSid,
+          },
+        ]) + script;
       const res = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-Command', mockScript], {
         encoding: 'utf8',
         windowsHide: true,

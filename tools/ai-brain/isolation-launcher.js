@@ -74,14 +74,28 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
   // P5/Q3: read firewall rules from registry (non-elevated) instead of CIM.
   // Registry values contain LUAuth=SDDL which CIM requires elevation to read.
   // Firewall profiles must be enabled; fail closed if any profile has EnableFirewall=0.
+  //
+  // Test-only seam: when the caller has already set $ShipDeBoundaryTestInput
+  // (a hashtable with Rules / Profiles / Aces), those values replace the
+  // HKLM Get-ItemProperty reads and the USERPROFILE Get-Acl read. Production
+  // never sets the variable, so the default path is the real registry and
+  // ACL. The variable is not a script parameter and is not read from worker
+  // input, argv, or the environment.
   return (
     "$fwRulesPath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules'; " +
     "$profilePath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy'; " +
     "$profiles = @('DomainProfile', 'StandardProfile', 'PublicProfile'); " +
     '$fwOn = $true; ' +
-    'foreach ($p in $profiles) { ' +
-    '  $val = Get-ItemProperty -Path "$profilePath\\$p" -Name EnableFirewall -ErrorAction SilentlyContinue; ' +
-    '  if (-not $val -or $val.EnableFirewall -ne 1) { $fwOn = $false; break; } ' +
+    'if ($null -ne $ShipDeBoundaryTestInput -and $null -ne $ShipDeBoundaryTestInput.Profiles) { ' +
+    '  foreach ($p in $profiles) { ' +
+    '    $val = $ShipDeBoundaryTestInput.Profiles[$p]; ' +
+    '    if ($null -eq $val -or $val.EnableFirewall -ne 1) { $fwOn = $false; break; } ' +
+    '  } ' +
+    '} else { ' +
+    '  foreach ($p in $profiles) { ' +
+    '    $val = Get-ItemProperty -Path "$profilePath\\$p" -Name EnableFirewall -ErrorAction SilentlyContinue; ' +
+    '    if (-not $val -or $val.EnableFirewall -ne 1) { $fwOn = $false; break; } ' +
+    '  } ' +
     '}; ' +
     "if (-not $fwOn) { 'FW_OFF' } else { " +
     "$prefix = 'ShipDe-Worker-" +
@@ -91,8 +105,14 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
     expectedList +
     '); ' +
     '$missing = @(); ' +
-    'if (Test-Path $fwRulesPath) { ' +
-    '$raw = @(); try { $raw = Get-Item -Path $fwRulesPath -ErrorAction Stop | Get-ItemProperty -ErrorAction Stop } catch {}; ' +
+    '$rulesPresent = $false; ' +
+    '$raw = @(); ' +
+    'if ($null -ne $ShipDeBoundaryTestInput -and $ShipDeBoundaryTestInput.ContainsKey("Rules")) { ' +
+    '$rulesPresent = $true; $raw = $ShipDeBoundaryTestInput.Rules; ' +
+    '} elseif (Test-Path $fwRulesPath) { ' +
+    '$rulesPresent = $true; try { $raw = Get-Item -Path $fwRulesPath -ErrorAction Stop | Get-ItemProperty -ErrorAction Stop } catch {}; ' +
+    '}; ' +
+    'if ($rulesPresent) { ' +
     'foreach ($e in $expected) { ' +
     '$ruleName = $prefix + "-" + $e.n; ' +
     '$found = $false; ' +
@@ -125,7 +145,11 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
     'if (-not $found) { $missing += $e.n }; ' +
     '}; ' +
     '} else { $missing = $expected.n }; ' +
+    'if ($null -ne $ShipDeBoundaryTestInput -and $null -ne $ShipDeBoundaryTestInput.Aces) { ' +
+    '$acl = [pscustomobject]@{ Access = @($ShipDeBoundaryTestInput.Aces) }; ' +
+    '} else { ' +
     '$acl = Get-Acl $env:USERPROFILE; ' +
+    '}; ' +
     '$deny = @($acl.Access | Where-Object { ' +
     '$ace = $_; ' +
     '$sidOk = $false; ' +
