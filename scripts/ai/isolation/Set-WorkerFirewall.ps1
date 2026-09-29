@@ -22,13 +22,16 @@ function Write-Log {
     Write-Host "[Set-WorkerFirewall] $Message"
 }
 
+# Fail closed: without the worker user we cannot build a valid SDDL, and a
+# username string is NOT accepted by -LocalUser (it requires an SDDL string).
 $User = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
 if (-not $User) {
-    Write-Warning "User $Username does not exist. Using username string, but SID resolution might fail."
-    $Sid = $Username
-} else {
-    $Sid = $User.SID.Value
+    Write-Error "User $Username does not exist. Run New-WorkerUser.ps1 first; refusing to continue."
 }
+$Sid = $User.SID.Value
+
+# New-NetFirewallRule -LocalUser requires an SDDL string, not a bare SID.
+$LocalUserSddl = "D:(A;;CC;;;$Sid)"
 
 $RulePrefix = "ShipDe-Worker-$Username"
 
@@ -89,25 +92,25 @@ if ($current -le 4294967295) {
 Write-Log "Setting outbound default-deny using inverted IP ranges for TCP..."
 if ($PSCmdlet.ShouldProcess("Firewall", "Create outbound Block TCP for $Username")) {
     # Block IPv4 ranges
-    New-NetFirewallRule -DisplayName "$RulePrefix-Block-TCP-IPv4" -Direction Outbound -Action Block -LocalUser $Sid -Protocol TCP -RemoteAddress $blockedRanges -Profile Any -ErrorAction Stop | Out-Null
+    New-NetFirewallRule -DisplayName "$RulePrefix-Block-TCP-IPv4" -Direction Outbound -Action Block -LocalUser $LocalUserSddl -Protocol TCP -RemoteAddress $blockedRanges -Profile Any -ErrorAction Stop | Out-Null
     # Block all IPv6 except localhost
-    New-NetFirewallRule -DisplayName "$RulePrefix-Block-TCP-IPv6-1" -Direction Outbound -Action Block -LocalUser $Sid -Protocol TCP -RemoteAddress "::-::0" -Profile Any -ErrorAction Stop | Out-Null
-    New-NetFirewallRule -DisplayName "$RulePrefix-Block-TCP-IPv6-2" -Direction Outbound -Action Block -LocalUser $Sid -Protocol TCP -RemoteAddress "::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" -Profile Any -ErrorAction Stop | Out-Null
+    New-NetFirewallRule -DisplayName "$RulePrefix-Block-TCP-IPv6-1" -Direction Outbound -Action Block -LocalUser $LocalUserSddl -Protocol TCP -RemoteAddress "::-::0" -Profile Any -ErrorAction Stop | Out-Null
+    New-NetFirewallRule -DisplayName "$RulePrefix-Block-TCP-IPv6-2" -Direction Outbound -Action Block -LocalUser $LocalUserSddl -Protocol TCP -RemoteAddress "::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" -Profile Any -ErrorAction Stop | Out-Null
     # Restrict allowed endpoints to port 443 by blocking all other TCP ports
-    New-NetFirewallRule -DisplayName "$RulePrefix-Block-TCP-Ports" -Direction Outbound -Action Block -LocalUser $Sid -Protocol TCP -RemotePort "0-442", "444-65535" -Profile Any -ErrorAction Stop | Out-Null
+    New-NetFirewallRule -DisplayName "$RulePrefix-Block-TCP-Ports" -Direction Outbound -Action Block -LocalUser $LocalUserSddl -Protocol TCP -RemotePort "0-442", "444-65535" -Profile Any -ErrorAction Stop | Out-Null
     Write-Log "Created TCP block rules."
 }
 
 Write-Log "Setting outbound UDP port block (blocking ALL UDP)..."
 if ($PSCmdlet.ShouldProcess("Firewall", "Create outbound Block UDP for $Username")) {
-    New-NetFirewallRule -DisplayName "$RulePrefix-Block-UDP" -Direction Outbound -Action Block -LocalUser $Sid -Protocol UDP -Profile Any -ErrorAction Stop | Out-Null
+    New-NetFirewallRule -DisplayName "$RulePrefix-Block-UDP" -Direction Outbound -Action Block -LocalUser $LocalUserSddl -Protocol UDP -Profile Any -ErrorAction Stop | Out-Null
     Write-Log "Created UDP block rules."
 }
 
 # Accepted residual: non-TCP/UDP protocols (e.g. ICMP) are unrestricted under default allow, but the worker is unprivileged and cannot use raw sockets anyway.
 if ($PSCmdlet.ShouldProcess("Firewall", "Create outbound Block ICMP for $Username")) {
-    New-NetFirewallRule -DisplayName "$RulePrefix-Block-ICMPv4" -Direction Outbound -Action Block -LocalUser $Sid -Protocol ICMPv4 -Profile Any -ErrorAction Stop | Out-Null
-    New-NetFirewallRule -DisplayName "$RulePrefix-Block-ICMPv6" -Direction Outbound -Action Block -LocalUser $Sid -Protocol ICMPv6 -Profile Any -ErrorAction Stop | Out-Null
+    New-NetFirewallRule -DisplayName "$RulePrefix-Block-ICMPv4" -Direction Outbound -Action Block -LocalUser $LocalUserSddl -Protocol ICMPv4 -Profile Any -ErrorAction Stop | Out-Null
+    New-NetFirewallRule -DisplayName "$RulePrefix-Block-ICMPv6" -Direction Outbound -Action Block -LocalUser $LocalUserSddl -Protocol ICMPv6 -Profile Any -ErrorAction Stop | Out-Null
 }
 
 Write-Log "Explicitly blocking GitHub and SSH..."
@@ -118,7 +121,7 @@ if ($PSCmdlet.ShouldProcess("Firewall", "Create block rules for GitHub and SSH p
         $allBlockIps = @($githubIps; $apiIps) | Select-Object -Unique
 
         if ($allBlockIps) {
-            New-NetFirewallRule -DisplayName "$RulePrefix-Block-GitHub-IPs" -Direction Outbound -Action Block -LocalUser $Sid -RemoteAddress $allBlockIps -Profile Any -ErrorAction Stop | Out-Null
+            New-NetFirewallRule -DisplayName "$RulePrefix-Block-GitHub-IPs" -Direction Outbound -Action Block -LocalUser $LocalUserSddl -RemoteAddress $allBlockIps -Profile Any -ErrorAction Stop | Out-Null
             Write-Log "Blocked GitHub IPs: $($allBlockIps -join ', ')"
         }
     } catch {
@@ -126,7 +129,7 @@ if ($PSCmdlet.ShouldProcess("Firewall", "Create block rules for GitHub and SSH p
     }
 
     # Block outbound port 22 globally for this user just to be sure
-    New-NetFirewallRule -DisplayName "$RulePrefix-Block-SSH" -Direction Outbound -Action Block -LocalUser $Sid -RemotePort 22 -Protocol TCP -Profile Any -ErrorAction Stop | Out-Null
+    New-NetFirewallRule -DisplayName "$RulePrefix-Block-SSH" -Direction Outbound -Action Block -LocalUser $LocalUserSddl -RemotePort 22 -Protocol TCP -Profile Any -ErrorAction Stop | Out-Null
     Write-Log "Blocked outbound SSH (port 22) for user."
 }
 

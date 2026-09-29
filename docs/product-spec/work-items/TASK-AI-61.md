@@ -76,6 +76,8 @@ These commands must be run in an elevated PowerShell session (Run as Administrat
 ```
 *Expected output*: Log entries showing created block and allow rules.
 
+> **Fix note (2026-09)**: `New-NetFirewallRule -LocalUser` requires an SDDL string, not a bare SID — the original script failed with `HRESULT 0x80070057` at rule creation. The script now builds `$LocalUserSddl = "D:(A;;CC;;;$Sid)"` once and passes it to every `-LocalUser`; it fails closed (no username fallback) when the worker user does not exist, removes any leftover `ShipDe-Worker-<user>-*` rules before creating (idempotent re-run), and the launcher's boundary verifier now also checks each rule's SDDL scope via `Get-NetFirewallSecurityFilter`.
+
 ### 4. Verify Isolation
 
 Run this from the worktree root the controller will launch jobs from — the verdict records the full worktree path and the launcher binds it, so two jobs sharing a directory leaf cannot share one attestation.
