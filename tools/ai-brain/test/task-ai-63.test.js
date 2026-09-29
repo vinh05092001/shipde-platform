@@ -23,6 +23,7 @@ describe('TASK-AI-63 Hermes CLI contract', () => {
       model: 'up-a/model',
       provider: 'up-a',
       cwd: '/tmp/worktree',
+      usageFile: '/tmp/worktree/hermes-usage.json',
       prompt: 'hello',
     });
 
@@ -106,5 +107,53 @@ describe('TASK-AI-63 Hermes CLI contract', () => {
     const exe = executableFor('hermes', opts);
     assert.equal(exe.file, 'C:\\node\\node.exe');
     assert.deepEqual(exe.prefixArgs, ['C:\\fake\\bin\\node_modules\\hermes\\bin\\hermes.js']);
+  });
+
+  test('5 launch emits --usage-file, the only channel carrying the durable id', () => {
+    // Evidence: logs/night/hermes-durable-evidence.txt — -z stdout is only the
+    // final response text ("no session_id line"); the session id is written to
+    // the --usage-file JSON report.
+    const adapter = getHarness('hermes');
+    const base = { candidateKey: 'mock-key', model: 'up-a/model', prompt: 'hello' };
+
+    const withReport = adapter.launch({ ...base, usageFile: '/tmp/usage.json' });
+    const idx = withReport.indexOf('--usage-file');
+    assert.ok(idx !== -1, 'launch must name the usage report when given a path');
+    assert.equal(withReport[idx + 1], '/tmp/usage.json');
+
+    const without = adapter.launch(base);
+    assert.equal(
+      without.includes('--usage-file'),
+      false,
+      'no report path, no flag: a launch without the channel must not pretend to have it'
+    );
+  });
+
+  test('6 sessionIdFrom parses exactly the captured usage-file session_id', () => {
+    // Fixture captured verbatim from a successful real run of
+    // `hermes -m vinh --safe-mode -z "reply OK" --usage-file …` on v0.21.4;
+    // `hermes --resume 20260929_063508_c80aeb -z …` then continued that exact
+    // session (evidence: logs/night/hermes-durable-evidence.txt).
+    const fixture = JSON.parse(
+      fs.readFileSync(path.join(__dirname, 'fixtures/hermes-usage-file-v0.21.4.json'), 'utf8')
+    );
+    const adapter = getHarness('hermes');
+    assert.equal(adapter.sessionIdFrom(fixture), '20260929_063508_c80aeb');
+  });
+
+  test('7 sessionIdFrom never invents a handle the CLI did not emit', () => {
+    const adapter = getHarness('hermes');
+    // A failed run writes the report with a null session_id; null must stay
+    // null so the executor fails HARNESS_NO_SESSION_ID instead of resuming a
+    // session that cannot be named.
+    assert.equal(adapter.sessionIdFrom({ session_id: null, failed: true }), null);
+    assert.equal(adapter.sessionIdFrom({}), null);
+    assert.equal(adapter.sessionIdFrom(null), null);
+    assert.equal(adapter.sessionIdFrom({ session_id: '   ' }), null);
+    // Removed guesses: none of these fields exist in any observed v0.21.4
+    // output, so they must not be parsed as a handle.
+    assert.equal(adapter.sessionIdFrom({ handle: { id: 'x' } }), null);
+    assert.equal(adapter.sessionIdFrom({ session: { id: 'x' } }), null);
+    assert.equal(adapter.sessionIdFrom({ pid: 1234 }), null);
   });
 });
