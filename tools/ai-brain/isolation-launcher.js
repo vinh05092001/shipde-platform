@@ -71,7 +71,19 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
   const expectedList = rules
     .map((r) => "@{ n = '" + r.suffix + "'; p = '" + r.protocol + "' }")
     .join(', ');
+  // P5/Q3: read firewall rules from registry (non-elevated) instead of CIM.
+  // Registry values contain LUAuth=SDDL which CIM requires elevation to read.
+  // Firewall profiles must be enabled; fail closed if any profile has EnableFirewall=0.
   return (
+    "$fwRulesPath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules'; " +
+    "$profilePath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy'; " +
+    "$profiles = @('DomainProfile', 'StandardProfile', 'PublicProfile'); " +
+    '$fwOn = $true; ' +
+    'foreach ($p in $profiles) { ' +
+    '  $val = Get-ItemProperty -Path "$profilePath\\$p" -Name EnableFirewall -ErrorAction SilentlyContinue; ' +
+    '  if (-not $val -or $val.EnableFirewall -ne 1) { $fwOn = $false; break; } ' +
+    '}; ' +
+    "if (-not $fwOn) { 'FW_OFF' } else { " +
     "$prefix = 'ShipDe-Worker-" +
     safeUsername +
     "'; " +
@@ -79,32 +91,53 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
     expectedList +
     '); ' +
     '$missing = @(); ' +
+    'if (Test-Path $fwRulesPath) { ' +
+    '$raw = @(); try { $raw = Get-Item -Path $fwRulesPath -ErrorAction Stop | Get-ItemProperty -ErrorAction Stop } catch {}; ' +
     'foreach ($e in $expected) { ' +
-    "$rules = @(Get-NetFirewallRule -DisplayName ($prefix + '-' + $e.n) -ErrorAction SilentlyContinue); " +
-    '$ok = $false; ' +
-    'foreach ($r in $rules) { ' +
-    "if ($r.Direction -ne 'Outbound') { continue }; " +
-    "if ($r.Action -ne 'Block') { continue }; " +
-    'if ($e.p) { ' +
-    '$pf = $r | Get-NetFirewallPortFilter; ' +
-    'if (-not $pf -or $pf.Protocol -ne $e.p) { continue }; ' +
+    '$ruleName = $prefix + "-" + $e.n; ' +
+    '$found = $false; ' +
+    'foreach ($propName in $raw.PSObject.Properties.Name) { ' +
+    '$val = [string]$raw.$propName; ' +
+    'if ([string]::IsNullOrEmpty($val)) { continue }; ' +
+    '$fields = @{}; ' +
+    'foreach ($part in ($val -split "\\|")) { ' +
+    '  $eq = $part.IndexOf("="); ' +
+    '  if ($eq -lt 1) { continue }; ' +
+    '  $k = $part.Substring(0, $eq); ' +
+    '  if (-not $fields.ContainsKey($k)) { $fields[$k] = $part.Substring($eq + 1) }; ' +
     '}; ' +
-    // The rules are created with -LocalUser as an SDDL string and
-    // Get-NetFirewallSecurityFilter reports LocalUser back as SDDL, so verify
-    // each rule is still scoped to the worker user's SDDL.
-    '$sf = $r | Get-NetFirewallSecurityFilter; ' +
-    "if (-not $sf -or $sf.LocalUser -ne 'D:(A;;CC;;;" +
+    'if ($fields["Name"] -cne $ruleName) { continue }; ' +
+    'if ($fields["Active"] -cne "TRUE") { continue }; ' +
+    'if ($fields["Dir"] -cne "Out") { continue }; ' +
+    'if ($fields["Action"] -cne "Block") { continue }; ' +
+    '$wantProto = $null; ' +
+    'if ($e.p -eq "TCP") { $wantProto = "6" } ' +
+    'elseif ($e.p -eq "UDP") { $wantProto = "17" } ' +
+    'elseif ($e.p -eq "ICMPv4") { $wantProto = "1" } ' +
+    'elseif ($e.p -eq "ICMPv6") { $wantProto = "58" }; ' +
+    'if ($null -eq $wantProto -or $fields["Protocol"] -cne $wantProto) { continue }; ' +
+    "$expectedLuAuth = 'D:(A;;CC;;;" +
     safeSid +
-    ")') { continue }; " +
-    '$ok = $true; break; ' +
+    ")'; " +
+    'if ($fields["LUAuth"] -cne $expectedLuAuth) { continue }; ' +
+    '$found = $true; break; ' +
     '}; ' +
-    'if (-not $ok) { $missing += $e.n }; ' +
+    'if (-not $found) { $missing += $e.n }; ' +
     '}; ' +
+    '} else { $missing = $expected.n }; ' +
     '$acl = Get-Acl $env:USERPROFILE; ' +
-    "$deny = @($acl.Access | Where-Object { ($_.IdentityReference.Value -match [regex]::Escape('" +
+    '$deny = @($acl.Access | Where-Object { ' +
+    '$ace = $_; ' +
+    '$sidOk = $false; ' +
+    "try { $sidOk = ($ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq '" +
     safeSid +
-    "')) -and ($_.AccessControlType -eq 'Deny') }); " +
-    "if ($missing.Count -eq 0 -and $deny.Count -ge 1) { 'OK' } else { 'MISSING:' + ($missing -join ',') }"
+    "') } catch { $sidOk = $false }; " +
+    '$r = 0; try { $r = [int]$ace.FileSystemRights } catch {}; ' +
+    '$rightsOk = ((($r -band 2032127) -eq 2032127) -or ((($r -band 1) -ne 0) -and (($r -band 2) -ne 0))); ' +
+    '$flagsOk = (([int]$ace.InheritanceFlags -band 3) -eq 3); ' +
+    "($sidOk -and ($ace.AccessControlType -eq 'Deny') -and $rightsOk -and $flagsOk) }); " +
+    "if ($missing.Count -eq 0 -and $deny.Count -ge 1) { 'OK' } else { 'MISSING:' + ($missing -join ',') }" +
+    '}'
   );
 }
 
@@ -152,7 +185,10 @@ function getIsolatedLauncher() {
     if (Date.now() - stat.mtimeMs > 24 * 60 * 60 * 1000) {
       throw new Error('ISOLATION_VERDICT_STALE: ' + verdictPath + ' is older than 24h');
     }
-    const verdictData = JSON.parse(fs.readFileSync(verdictPath, 'utf8'));
+    const verdictText = fs.readFileSync(verdictPath, 'utf8');
+    const verdictData = JSON.parse(
+      verdictText.charCodeAt(0) === 0xfeff ? verdictText.slice(1) : verdictText
+    );
     if (verdictData.verdict !== 'CLOSED') {
       throw new Error('ISOLATION_VERDICT_NOT_CLOSED: Last verdict was ' + verdictData.verdict);
     }
