@@ -92,6 +92,7 @@ Notes:
 - Interactive logon for `ShipDeWorker` is intentionally retained: the spawn mechanism (CreateProcessWithLogonW) requires it; remote/RDP logon is denied via `SeDenyRemoteInteractiveLogonRight`.
 - The worker process wait is bounded (default 30 minutes, override with `workerTimeoutMs`); a hung worker is killed, not waited on forever.
 - Isolation stays PARTIAL until an administrator applies this runbook on the host; code changes alone never make it CLOSED.
+- **Fix note (2026-09)**: `GetOwner` call tolerates processes that vanish between enumeration and invocation (HRESULT 0x80041002) — each process lookup is wrapped in try/catch with `-ErrorAction Stop`, skipped on failure, and lookup failure never counts as isolation evidence; if the owner of a still-running process cannot be determined, the check fails closed for that process.
 
 ### Rollback (if needed)
 

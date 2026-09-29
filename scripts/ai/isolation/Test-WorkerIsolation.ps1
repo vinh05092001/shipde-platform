@@ -163,6 +163,7 @@ if (-not $process.WaitForExit(30000)) {
 Write-Log "Worker process exited with code $($process.ExitCode)"
 
 $Verdict = "OPEN"
+$results = $null
 if (Test-Path $TestResultPath) {
     $results = Get-Content $TestResultPath | ConvertFrom-Json
 
@@ -203,8 +204,42 @@ try {
 }
 
 # Check for lingering processes
-$lingering = Get-CimInstance Win32_Process | Where-Object {
-    (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $Username
+# Fail-closed: a live process with unknown owner is treated as a possible worker
+$lingering = @()
+$enumerationFailed = $false
+try {
+    $processes = Get-CimInstance Win32_Process
+    foreach ($proc in $processes) {
+        # PID 0 (System Idle Process) and PID 4 (System) are kernel pseudo-processes
+        # that can never belong to the worker user; exclude them before GetOwner
+        if ($proc.ProcessId -eq 0 -or $proc.ProcessId -eq 4) {
+            continue
+        }
+        try {
+            $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction Stop
+            if ($owner.User -eq $Username) {
+                $lingering += $proc
+            }
+        } catch {
+            # GetOwner failed - re-check if process still exists
+            $stillExists = Get-Process -Id $proc.ProcessId -ErrorAction SilentlyContinue
+            if ($null -eq $stillExists) {
+                # Process vanished between enumeration and GetOwner - skip it
+                continue
+            } else {
+                # Process still exists but owner is unknown - treat as possible worker
+                Write-Log "Unknown owner for live process PID $($proc.ProcessId) - treating as possible worker"
+                $lingering += $proc
+            }
+        }
+    }
+} catch {
+    Write-Log "Error enumerating processes: $($_.Exception.Message)"
+    $enumerationFailed = $true
+}
+
+if ($enumerationFailed) {
+    $Verdict = "PARTIAL"
 }
 
 if ($lingering) {

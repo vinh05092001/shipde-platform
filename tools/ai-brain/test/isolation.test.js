@@ -997,3 +997,102 @@ test('launcher writes and reads the launch result outside the worker-writable ro
   assert.match(launcherStr, /Out-File "\$\{launchResultPath\}"/);
   assert.match(launcherStr, /existsSync\(launchResultPath\)/);
 });
+
+test('Test-WorkerIsolation guards GetOwner call with fail-closed existence re-check (race condition fix)', () => {
+  const script = fs.readFileSync(path.join(scriptsDir, 'Test-WorkerIsolation.ps1'), 'utf8');
+
+  // The GetOwner call must be inside a try/catch to handle processes that exit
+  // between enumeration and the GetOwner invocation (HRESULT 0x80041002).
+  assert.ok(
+    script.includes('Invoke-CimMethod') && script.includes('GetOwner'),
+    'script must call Invoke-CimMethod GetOwner'
+  );
+
+  // Static: the GetOwner call is wrapped with -ErrorAction Stop and caught
+  assert.match(
+    script,
+    /Invoke-CimMethod\s+-InputObject\s+\$proc\s+-MethodName\s+GetOwner\s+-ErrorAction\s+Stop/,
+    'GetOwner must use -ErrorAction Stop for catchable exception'
+  );
+
+  // Static: the catch block re-checks existence with Get-Process
+  assert.ok(
+    script.includes('Get-Process -Id $proc.ProcessId -ErrorAction SilentlyContinue'),
+    'catch block must re-check process existence with Get-Process'
+  );
+
+  // Static: the catch block checks if the process still exists ($null -eq $stillExists or similar)
+  assert.ok(
+    script.match(/\$null\s*-eq\s+\$stillExists/) || script.match(/\$stillExists\s*-eq\s+\$null/),
+    'catch block must check if Get-Process returned null (process vanished)'
+  );
+
+  // Static: a vanished process is skipped (continue)
+  assert.ok(
+    script.match(/if\s*\(\s*\$null\s*-eq\s+\$stillExists\s*\)\s*\{[^}]*continue[^}]*\}/s) ||
+      script.match(/if\s*\(\s*\$stillExists\s*-eq\s+\$null\s*\)\s*\{[^}]*continue[^}]*\}/s),
+    'vanished process must be skipped with continue'
+  );
+
+  // Static: a live process with unknown owner is treated as possible worker (added to $lingering)
+  assert.ok(
+    script.match(/\}\s*else\s*\{[^}]*\$lingering\s*\+=\s*\$proc[^}]*\}/s) ||
+      script.match(/\}\s*else\s*\{[^}]*\$lingering\s*\+=\s+\$proc[^}]*\}/s),
+    'live process with unknown owner must be added to $lingering (fail-closed)'
+  );
+
+  // Static: the script logs when a live process has unknown owner
+  assert.ok(
+    script.includes('Unknown owner') && script.includes('treating as possible worker'),
+    'must log when treating unknown-owner live process as possible worker'
+  );
+
+  // Static: the script does NOT use the vulnerable pattern of piping directly
+  // to Where-Object with GetOwner (the original race condition)
+  assert.ok(
+    !script.match(
+      /Get-CimInstance\s+Win32_Process\s*\|\s*Where-Object\s*\{[^}]*Invoke-CimMethod[^}]*\}/
+    ),
+    'must not use vulnerable pipe pattern that races on process exit'
+  );
+
+  // Static: enumeration failure sets verdict to PARTIAL (fail-closed)
+  // Assert the actual wiring: the catch of the enumeration sets $enumerationFailed,
+  // and that flag leads to $Verdict = "PARTIAL" in the block right after
+  assert.match(
+    script,
+    /\$enumerationFailed\s*=\s*\$true[\s\S]*?if\s*\(\s*\$enumerationFailed\s*\)\s*\{\s*\$Verdict\s*=\s*"PARTIAL"\s*\}/,
+    'enumerationFailed must be set to $true and then checked to set $Verdict = "PARTIAL"'
+  );
+  // Static: "CLOSED" must never be assigned after the lingering block
+  const lingeringBlockIdx = script.indexOf('if ($lingering)');
+  const closedAfterLingering = script.indexOf('$Verdict = "CLOSED"', lingeringBlockIdx);
+  assert.strictEqual(
+    closedAfterLingering,
+    -1,
+    'CLOSED must never be assigned after the lingering process check'
+  );
+
+  // F2: PID 0 and 4 exclusion - verify exactly those two PIDs are excluded
+  assert.match(script, /\bProcessId\s*-eq\s*0\b/, 'must exclude PID 0 (System Idle Process)');
+  assert.match(script, /\bProcessId\s*-eq\s*4\b/, 'must exclude PID 4 (System)');
+  // Verify the exclusion comment mentions kernel pseudo-processes
+  assert.ok(
+    script.includes('kernel pseudo-processes') ||
+      (script.includes('PID 0') && script.includes('PID 4')),
+    'must have a comment explaining why PID 0 and 4 are excluded'
+  );
+
+  // F3: $results must be initialized before use so missing result file cannot throw
+  // before the verdict JSON is written
+  assert.match(
+    script,
+    /\$results\s*=\s*\$null\s*\r?\n\s*if\s*\(Test-Path\s+\$TestResultPath\)/,
+    '$results must be initialized to $null before the Test-Path check'
+  );
+  // Verify $results is referenced in $Output (line ~277)
+  assert.ok(
+    script.includes('$Output') && script.includes('details = $results'),
+    '$results must be referenced in the $Output hashtable'
+  );
+});
