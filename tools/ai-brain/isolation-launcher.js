@@ -160,6 +160,91 @@ function defaultVerifyBoundary(sid, username) {
   return (res.stdout || '').trim() === 'OK';
 }
 
+/**
+ * Builds the host-side PowerShell script that starts the worker process.
+ * Pure: it only returns text, so tests can generate and parse the exact script
+ * a real launch would write without provisioning a worker or starting a
+ * process.
+ *
+ * Escaping contract: a backtick-escaped `$` is only valid INSIDE the
+ * double-quoted here-string that builds run-target.ps1, where it emits a
+ * literal `$env:HOME` for the worker. Outside a here-string `` `$false `` is
+ * the string "$false", not the boolean $false, and PowerShell then tries to
+ * run it as a command — which aborts the host script under
+ * `$ErrorActionPreference = "Stop"` before the worker is ever started.
+ */
+function buildWorkerLaunchScript(options) {
+  const credPath = options.credPath;
+  const workerRoot = options.workerRoot;
+  const workerUsername = options.workerUsername || WORKER_USERNAME;
+  const exeFile = options.exeFile;
+  const psArgs = options.psArgs;
+  const launchResultPath = options.launchResultPath;
+  const workerTimeoutMs = options.workerTimeoutMs;
+
+  return `
+$ErrorActionPreference = "Stop"
+$sec = Get-Content "${credPath}" | ConvertTo-SecureString
+$cred = New-Object System.Management.Automation.PSCredential("${workerUsername}", $sec)
+
+$nestedScript = "${workerRoot}\\run-target.ps1"
+@"
+\`$env:HOME = "${workerRoot}"
+\`$env:USERPROFILE = "${workerRoot}"
+\`$env:GH_CONFIG_DIR = "${workerRoot}\\.config\\gh"
+\`$env:GIT_CONFIG_GLOBAL = "${workerRoot}\\.gitconfig"
+\`$env:TEMP = "${workerRoot}\\temp"
+\`$env:TMP = "${workerRoot}\\temp"
+if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
+Set-Location -Path "${workerRoot}"
+& "${exeFile}" ${psArgs}
+"@ | Out-File $nestedScript -Encoding UTF8
+
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = "powershell.exe"
+$psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File \`"$nestedScript\`""
+$psi.UserName = "${workerUsername}"
+$psi.Password = $sec
+$psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
+$psi.WorkingDirectory = "${workerRoot}"
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+
+# Clear environment to avoid leaking operator tokens (F4)
+$psi.EnvironmentVariables.Clear()
+$allowed = @("PATH", "SystemRoot", "SystemDrive", "ALLUSERSPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "CommonProgramFiles(x86)", "PUBLIC")
+foreach ($key in $allowed) {
+    if ([Environment]::GetEnvironmentVariable($key)) {
+        $psi.EnvironmentVariables[$key] = [Environment]::GetEnvironmentVariable($key)
+    }
+}
+
+$process = [System.Diagnostics.Process]::Start($psi)
+$stdoutTask = $process.StandardOutput.ReadToEndAsync()
+$stderrTask = $process.StandardError.ReadToEndAsync()
+$timeoutMs = ${workerTimeoutMs}
+$timedOut = -not $process.WaitForExit($timeoutMs)
+if ($timedOut) {
+    $process.Kill()
+    $process.WaitForExit()
+}
+$stdout = $stdoutTask.Result
+$stderr = $stderrTask.Result
+if ($timedOut) {
+    $stderr += "[ISOLATION_LAUNCHER] worker timed out after $timeoutMs ms and was killed"
+}
+
+$output = @{
+    exitCode = $process.ExitCode
+    stdout = $stdout
+    stderr = $stderr
+    timedOut = $timedOut
+}
+$output | ConvertTo-Json -Depth 10 | Out-File "${launchResultPath}" -Encoding UTF8
+`;
+}
+
 function getIsolatedLauncher() {
   return function isolatedLauncher(adapter, args, options) {
     if (args && !Array.isArray(args)) {
@@ -294,67 +379,15 @@ function getIsolatedLauncher() {
         ? Number(opts.workerTimeoutMs)
         : DEFAULT_WORKER_TIMEOUT_MS;
 
-    const scriptContent = `
-$ErrorActionPreference = "Stop"
-$sec = Get-Content "${credPath}" | ConvertTo-SecureString
-$cred = New-Object System.Management.Automation.PSCredential("${WORKER_USERNAME}", $sec)
-
-$nestedScript = "${workerRoot}\\run-target.ps1"
-@"
-\`$env:HOME = "${workerRoot}"
-\`$env:USERPROFILE = "${workerRoot}"
-\`$env:GH_CONFIG_DIR = "${workerRoot}\\.config\\gh"
-\`$env:GIT_CONFIG_GLOBAL = "${workerRoot}\\.gitconfig"
-\`$env:TEMP = "${workerRoot}\\temp"
-\`$env:TMP = "${workerRoot}\\temp"
-if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
-Set-Location -Path "${workerRoot}"
-& "${exe.file}" ${psArgs}
-"@ | Out-File $nestedScript -Encoding UTF8
-
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = "powershell.exe"
-$psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File \`"$nestedScript\`""
-$psi.UserName = "${WORKER_USERNAME}"
-$psi.Password = $sec
-$psi.UseShellExecute = \`$false
-$psi.CreateNoWindow = \`$true
-$psi.WorkingDirectory = "${workerRoot}"
-$psi.RedirectStandardOutput = \`$true
-$psi.RedirectStandardError = \`$true
-
-# Clear environment to avoid leaking operator tokens (F4)
-$psi.EnvironmentVariables.Clear()
-$allowed = @("PATH", "SystemRoot", "SystemDrive", "ALLUSERSPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "CommonProgramFiles(x86)", "PUBLIC")
-foreach ($key in $allowed) {
-    if ([Environment]::GetEnvironmentVariable($key)) {
-        $psi.EnvironmentVariables[$key] = [Environment]::GetEnvironmentVariable($key)
-    }
-}
-
-$process = [System.Diagnostics.Process]::Start($psi)
-$stdoutTask = $process.StandardOutput.ReadToEndAsync()
-$stderrTask = $process.StandardError.ReadToEndAsync()
-$timeoutMs = ${workerTimeoutMs}
-$timedOut = -not $process.WaitForExit($timeoutMs)
-if ($timedOut) {
-    $process.Kill()
-    $process.WaitForExit()
-}
-$stdout = $stdoutTask.Result
-$stderr = $stderrTask.Result
-if ($timedOut) {
-    $stderr += "[ISOLATION_LAUNCHER] worker timed out after $timeoutMs ms and was killed"
-}
-
-$output = @{
-    exitCode = $process.ExitCode
-    stdout = $stdout
-    stderr = $stderr
-    timedOut = $timedOut
-}
-$output | ConvertTo-Json -Depth 10 | Out-File "${launchResultPath}" -Encoding UTF8
-`;
+    const scriptContent = buildWorkerLaunchScript({
+      credPath,
+      workerRoot,
+      workerUsername: WORKER_USERNAME,
+      exeFile: exe.file,
+      psArgs,
+      launchResultPath,
+      workerTimeoutMs,
+    });
 
     const tempScript = path.join(
       process.env.TEMP || 'C:\\temp',
@@ -405,6 +438,7 @@ module.exports = {
   getFolderHash,
   defaultVerifyBoundary,
   buildBoundaryVerifyScript,
+  buildWorkerLaunchScript,
   EXPECTED_FIREWALL_RULES,
   DEFAULT_WORKER_TIMEOUT_MS,
 };
