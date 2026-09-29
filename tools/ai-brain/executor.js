@@ -144,7 +144,10 @@ function executePlan(plan, options) {
   const dryRun = opts.dryRun !== false; // AI-24-R03
   const project = opts.project || 'shipde-platform';
   const promptFor = typeof opts.promptFor === 'function' ? opts.promptFor : defaultPrompt;
-  const run = typeof opts.run === 'function' ? opts.run : runHarness;
+  let run = typeof opts.run === 'function' ? opts.run : runHarness;
+  if (opts.isolatedWorker && typeof opts.run !== 'function') {
+    run = require('./isolation-launcher').getIsolatedLauncher();
+  }
   const now = opts.now || Date.now();
   const registry = opts.registry || loadSources();
   const logOpts = { dir: opts.decisionDir, now };
