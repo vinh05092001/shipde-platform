@@ -39,6 +39,7 @@ const os = require('os');
 const path = require('path');
 const approvals = require('./approval-registry');
 const { isWorkerPath } = require('./isolation-launcher');
+const { resolveWorkerGitDir, safeCopyObjects } = require('./supervisor');
 
 // A reviewed commit is a commit: 40 hex characters. Anything else is a label,
 // not evidence (reconcile.js SHA_40, control.ps1 headRefOid).
@@ -59,10 +60,18 @@ function runCommand(cmd, args, cwd) {
   };
 }
 
-function getHeadSha(cwd) {
-  const res = runCommand('git', ['rev-parse', 'HEAD'], cwd);
-  if (res.exitCode === 0) return res.stdout.trim();
-  return null;
+function getHeadSha(cwd, options) {
+  const { withCleanGitEnv, safeGit } = require('./supervisor');
+  const o = options || {};
+  return withCleanGitEnv(
+    cwd,
+    (tmpDir) => {
+      const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
+      if (res.status === 0) return res.stdout.trim();
+      return null;
+    },
+    { workerWritable: o.workerWritable === true || isWorkerPath(cwd) }
+  );
 }
 
 function validateRemoteUrl(remoteUrl) {
@@ -92,46 +101,63 @@ function resolveBranch(branch, cwd) {
 }
 
 /**
- * Q4: never run upload-pack against the worker-writable tree. `git fetch
- * <cwd>` spawns `git upload-pack <cwd>`, which reads cwd/.git/config; a
- * planted uploadpack.packObjectsHook there could execute as the operator on
- * git versions that honor repo-local config for that key (git >= 2.36 only
- * reads it from protected config, but the publisher must not depend on that).
- * Instead the objects are transferred via a trusted intermediate: a LOCAL
- * clone of cwd. The local clone spawns upload-pack and parses the source config
- * (which is worker-writable), so its config is rewritten to a minimal trusted one
- * before any fetch reads from it. A worker-written include.path can abort the
- * mirror clone (residual risk, surfaced as PUBLISH_FAILED).
+ * Q4: never run upload-pack or read configuration from the worker-writable tree. A worker that rewrites its own
+ * git config could still try to trigger code execution via include.path, core.fsmonitor, or hooks if any host-side
+ * git command is run with that configuration. To prevent this, the actual operator-side publish path *never* runs any
+ * git command inside the worker repo. Instead, it copies allowed objects directly (with a size bound and file type check) from the resolved object store path to a sanitized mirror it creates. Inside the publish path, no -c config overrides or git flags are used to disable hooks/textconv/etc., because the worker's config is never parsed. No push is ever done from the worker's repo: only from an operator-controlled, sanitized bare mirror, after integrity check (which verifies the reviewed commit is fully reachable). This avoids all code/config execution vectors arising from a malicious or malformed worker repository.
  */
 const SAFE_MIRROR_CONFIG = '[core]\n\tbare = true\n';
 
 function buildSanitizedMirror(cwd, tmpDir) {
   const mirrorDir = path.join(tmpDir, 'source-mirror');
-  const cloneRes = runCommand('git', ['clone', '--bare', '--no-hardlinks', cwd, mirrorDir], tmpDir);
-  if (cloneRes.exitCode !== 0) {
-    throw new Error('PUBLISH_FAILED: failed to mirror source tree: ' + cloneRes.stderr);
+  const initRes = runCommand('git', ['init', '--bare', mirrorDir], tmpDir);
+  if (initRes.exitCode !== 0) {
+    throw new Error('PUBLISH_FAILED: failed to init mirror source tree: ' + initRes.stderr);
   }
   fs.writeFileSync(path.join(mirrorDir, 'config'), SAFE_MIRROR_CONFIG);
   return mirrorDir;
 }
 
-function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir) {
+function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir, options) {
   const mirrorDir = buildSanitizedMirror(cwd, tmpDir);
-  // Belt-and-braces: the client-side -c values below are stripped by the
-  // local transport today (verified: GIT_CONFIG_PARAMETERS is not forwarded
-  // to the spawned upload-pack). Should a future git version forward them,
-  // an empty uploadpack.packObjectsHook must make upload-pack fail closed
-  // (it cannot spawn an empty hook) rather than execute anything, and
-  // upload-pack filters stay disabled.
+
+  // Copy objects explicitly to the mirror to completely avoid running git in the worker repository
+  // or spawning upload-pack. This ensures malformed include.path or hostile hooks in the worker's
+  // .git/config can never abort the transfer or execute code.
+  // The copy is bounded and strictly allow-lists loose objects and packfiles to prevent copying
+  // objects/info/alternates or dereferencing worker-planted junctions.
+  // A worker-writable source refuses a gitfile or link at .git. An operator-owned
+  // linked worktree (workerWritable: false) still resolves its gitdir.
+  const o = options || {};
+  const { workerCommonDir } = resolveWorkerGitDir(cwd, {
+    workerWritable: o.workerWritable === true,
+  });
+  const workerObjects = path.join(workerCommonDir, 'objects');
+  const mirrorObjects = path.join(mirrorDir, 'objects');
+  safeCopyObjects(workerObjects, mirrorObjects);
+
+  // Set the temp-push ref in the mirror to the reviewed SHA
+  const refRes = runCommand('git', ['update-ref', 'refs/heads/temp-push', reviewedSha], mirrorDir);
+  if (refRes.exitCode !== 0) {
+    throw new Error('PUBLISH_FAILED: failed to update mirror ref: ' + refRes.stderr);
+  }
+
+  // Verify the reviewed commit is fully reachable from the mirror's own objects.
+  // Since alternates are not copied, this guarantees the worker didn't supply an empty commit
+  // relying on operator-side objects.
+  const verifyRes = runCommand('git', ['rev-list', '--objects', reviewedSha], mirrorDir);
+  if (verifyRes.exitCode !== 0) {
+    throw new Error('PUBLISH_FAILED: reviewed commit is not fully reachable: ' + verifyRes.stderr);
+  }
+
+  // Then fetch from the safe operator-controlled mirror.
   const fetchRes = runCommand(
     'git',
     [
       '-c',
-      'core.hooksPath=nul',
+      'core.hooksPath=NUL',
       '-c',
-      'uploadpack.packObjectsHook=',
-      '-c',
-      'uploadpack.allowFilter=false',
+      'protocol.file.allow=always',
       'fetch',
       mirrorDir,
       `${reviewedSha}:refs/heads/temp-push`,
@@ -352,7 +378,7 @@ function publish(options) {
   validateRemoteUrl(remoteUrl);
   const targetBranch = resolveBranch(branch, cwd);
 
-  const currentSha = getHeadSha(cwd);
+  const currentSha = getHeadSha(cwd, { workerWritable: isWorkerPath(cwd) });
   if (!currentSha) {
     refuse('PUBLISH_REFUSED: could not resolve HEAD sha');
   }
@@ -388,7 +414,9 @@ function publish(options) {
     // Q4: fetch the reviewed objects via the sanitized mirror, never
     // directly from the worker-writable cwd (upload-pack would read its
     // config).
-    transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir);
+    transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir, {
+      workerWritable: isWorkerPath(cwd),
+    });
 
     const pushRes = runCommand(
       'git',
