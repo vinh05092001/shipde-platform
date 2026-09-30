@@ -260,7 +260,10 @@ async function assessTask(profile, opts) {
 
   const reasonCodes = [];
   if (jevDecided) reasonCodes.push('JEV_DECIDED');
-  else reasonCodes.push('JEV_UNDECIDED:' + String(result.reason || 'UNKNOWN'));
+  else
+    reasonCodes.push(
+      'JEV_UNDECIDED:' + String((result.jev && result.jev.reason) || result.reason || 'UNKNOWN')
+    );
   reasonCodes.push('WEIGHTS_' + chosenProfile + (jevDecided ? '' : '_CONTROLLER_FALLBACK'));
 
   const weights = WEIGHT_PROFILES[chosenProfile];
@@ -288,7 +291,7 @@ async function assessTask(profile, opts) {
     recommendedModelClass,
     confidence: jevDecided ? result.confidence : 0,
     reasonCodes,
-    reason: result.reason || null,
+    reason: (result.jev && result.jev.reason) || result.reason || null,
   };
 }
 
@@ -428,11 +431,20 @@ function scoreForProfile(candidate, assessment, ctx) {
     .filter((r) => r && r.workItemId !== ctx.taskId).length;
   const busyPenalty = busy * BUSY_PENALTY_PER_RESERVATION;
   const agePenalty = evidenceAgePenalty(candidate, ctx.now);
-  score = Math.max(0, score - busyPenalty - agePenalty);
+  const headroomPenalty =
+    candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
+  score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
 
   return {
     score,
-    breakdown: { latency, quality, cost, busyPenalty, evidenceAgePenalty: agePenalty },
+    breakdown: {
+      latency,
+      quality,
+      cost,
+      busyPenalty,
+      evidenceAgePenalty: agePenalty,
+      headroomPenalty,
+    },
     reservationsHeld: busy,
   };
 }
@@ -547,6 +559,22 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       }
     }
 
+    const evList = evidence.getEvidence(context.evidenceData, c);
+    if (evList && evList.length > 0) {
+      const last = evList[evList.length - 1];
+      if (
+        last.status === 'failed' &&
+        (last.cause === 'model_not_supported' ||
+          last.cause === '401' ||
+          last.cause === '402' ||
+          last.cause === '429-quota' ||
+          String(last.body).includes('model_not_supported'))
+      ) {
+        reject('EVIDENCE_BLOCKED:' + (last.cause || 'unknown'), 'candidate');
+        continue;
+      }
+    }
+
     const headroom = ranking.resolveCandidateHeadroom(c, context);
     c.headroomStatus = headroom.status;
     if (headroom.status === 'exhausted' || headroom.status === 'cooling') {
@@ -557,11 +585,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
-    const scored = scoreForProfile(
-      c,
-      assessment,
-      Object.assign({}, context, { taskId: profile.taskId, now })
-    );
+    if (!context._scoreContext)
+      context._scoreContext = Object.assign({}, context, { taskId: profile.taskId, now });
+    const scored = scoreForProfile(c, assessment, context._scoreContext);
     ranked.push(
       Object.assign({}, c, {
         candidateKey: key,
@@ -667,7 +693,7 @@ function reportDispatchOutcome(args, deps) {
 
   let outcome;
   try {
-    outcome = JSON.parse(fs.readFileSync(file, 'utf8'));
+    outcome = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\\uFEFF/, ''));
   } catch (err) {
     error('OUTCOME_UNREADABLE: ' + file + ' (' + err.message + ')');
     exit(2);
@@ -697,25 +723,35 @@ function reportDispatchOutcome(args, deps) {
     modelId: parsed.modelId,
   };
   const now = d.now || Date.now();
-  const failed = !['completed', 'passed', 'success'].includes(String(outcome.status).toLowerCase());
+  const passed = ['completed', 'passed', 'success'].includes(String(outcome.status).toLowerCase());
+  const failed = ['failed', 'error', 'aborted', 'refused'].includes(
+    String(outcome.status).toLowerCase()
+  );
+  const terminal = passed || failed;
   const stall = stallAssessment(outcome, now);
   const evidenceDir = d.evidenceDir || path.join(__dirname, 'data', 'evidence');
 
-  evidence.recordOutcome(evidenceDir, candidate, {
-    status: failed ? 'failed' : 'passed',
-    exitCode: failed ? 1 : 0,
-    body: typeof outcome.reason === 'string' ? outcome.reason : null,
-    stderr: typeof outcome.reason === 'string' ? outcome.reason : null,
-    cause: typeof outcome.errorClass === 'string' ? outcome.errorClass : null,
-    httpStatus: Number.isFinite(Number(outcome.httpStatus))
-      ? Number(outcome.httpStatus)
-      : undefined,
-    level: evidence.Level.OUTCOME,
-    source: 'report-outcome',
-  });
+  if (terminal) {
+    evidence.recordOutcome(evidenceDir, candidate, {
+      status: failed ? 'failed' : 'passed',
+      exitCode: failed ? 1 : 0,
+      body: typeof outcome.reason === 'string' ? outcome.reason : null,
+      stderr: typeof outcome.reason === 'string' ? outcome.reason : null,
+      cause: typeof outcome.errorClass === 'string' ? outcome.errorClass : null,
+      httpStatus: Number.isFinite(Number(outcome.httpStatus))
+        ? Number(outcome.httpStatus)
+        : undefined,
+      level: evidence.Level.API,
+      source: 'report-outcome',
+    });
+  }
 
   const recorded = {
-    stage: failed ? decisions.Stage.FAILED : decisions.Stage.COMPLETED,
+    stage: terminal
+      ? failed
+        ? decisions.Stage.FAILED
+        : decisions.Stage.COMPLETED
+      : decisions.Stage.RESUMED,
     workItemId: outcome.taskId || 'TASK-REPORT-OUTCOME',
     role: outcome.role || null,
     chosen: outcome.candidateKey,
@@ -760,7 +796,7 @@ async function runProfileDispatch(args, deps) {
 
   let rawProfile;
   try {
-    rawProfile = JSON.parse(fs.readFileSync(file, 'utf8'));
+    rawProfile = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\\uFEFF/, ''));
   } catch (err) {
     error('PROFILE_UNREADABLE: ' + file + ' (' + err.message + ')');
     exit(2);
@@ -872,7 +908,7 @@ async function runProfileDispatch(args, deps) {
       profile.role,
       (chosenCandidate && chosenCandidate.accountId) || '*',
       result.chosen,
-      Math.max(1, Math.round(Number(profile.expectedDuration))),
+      100000,
       { home: d.home, storePath: d.storePath, now }
     );
     reserved = true;

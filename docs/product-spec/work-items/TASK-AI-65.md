@@ -70,8 +70,7 @@ The smallest slice that closes the gap, reusing the existing modules (`ranking.j
    reservation under `--execute`.
 5. **Pinned execution contract**: the dispatch returns (and prints) the pinned
    `candidateKey`; the executor reports a structured failure outcome
-   `{candidateKey,status,errorClass,failureScope,retryable,cooldownUntil,checkpoint,artifacts,
-   lastProgressAt,reason}` through `dispatch --report-outcome`, which updates evidence and
+   `{candidateKey,status,errorClass,httpStatus,lastProgressAt,reason}` through `dispatch --report-outcome`, which updates evidence and
    cooldown through the existing `evidence.recordOutcome` (and its failure classification) before
    the next ranking round. Stall thresholds are constants with tests:
    `STALL_REQUEST_FINISH_MS = 7 min` (request finish) and

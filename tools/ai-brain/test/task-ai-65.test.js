@@ -99,6 +99,7 @@ async function runDispatch(p, candidates, dirs, over) {
       evidenceDir: dirs.evidence,
       decisionDir: dirs.decisions,
       home: dirs.home,
+      storePath: dirs.storePath,
       now: NOW,
       reservations: [],
       headrooms: {},
@@ -110,7 +111,10 @@ async function runDispatch(p, candidates, dirs, over) {
     },
     over || {}
   );
-  const result = await dispatchCommand({ profile: profileFile, 'dry-run': true }, deps);
+  const result = await dispatchCommand(
+    { profile: profileFile, 'dry-run': !deps.execute, execute: !!deps.execute },
+    deps
+  );
   return { result, lines, exitCode, deps, profileFile };
 }
 
@@ -370,6 +374,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
         evidenceDir: dirs.evidence,
         decisionDir: dirs.decisions,
         home: dirs.home,
+        storePath: dirs.storePath,
         now: NOW,
         log: (s) => reportLines.push(String(s)),
         error: (s) => reportLines.push('ERR ' + String(s)),
@@ -586,6 +591,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
         evidenceDir: dirs.evidence,
         decisionDir: dirs.decisions,
         home: dirs.home,
+        storePath: dirs.storePath,
         now: NOW,
         log: (s) => invalidLines.push(String(s)),
         error: (s) => invalidLines.push('ERR ' + String(s)),
@@ -622,6 +628,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
         evidenceDir: dirs.evidence,
         decisionDir: dirs.decisions,
         home: dirs.home,
+        storePath: dirs.storePath,
         now: NOW,
         log: (s) => goodLines.push(String(s)),
         error: (s) => goodLines.push('ERR ' + String(s)),
@@ -647,5 +654,102 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     assert.equal(entry.chosen, candidateKey(c));
     assert.equal(entry.outcome.errorClass, 'upstream_credit_exhausted');
     assert.equal(entry.stall.reselectRequired, true);
+  });
+  test('65-13: missing floors and penalties are asserted', async () => {
+    const dirs = {
+      root: tmpDir('65-root'),
+      evidence: tmpDir('65-evidence'),
+      decisions: tmpDir('65-decisions'),
+      home: tmpDir('65-home'),
+    };
+
+    // 1. PROOF_FLOOR_NOT_MET
+    const noProof = cand({ accountId: 'a', modelId: 'up/m1' });
+    const p1 = profile({ proofFloor: 'API_PASS' });
+    const r1 = await runDispatch(p1, [noProof], dirs);
+    assert.equal(r1.result.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
+
+    // 2. COST_CEILING_EXCEEDED
+    const highCost = cand({ accountId: 'a', modelId: 'up/m2', cost: 10000 });
+    const p2 = profile({ costCeiling: 100 });
+    const r2 = await runDispatch(p2, [highCost], dirs);
+    assert.equal(r2.result.rejected[0].reasonCode, 'COST_CEILING_EXCEEDED');
+
+    // 3. CAPABILITY_MISSING
+    const noCap = cand({
+      harness: 'openclaw',
+      accountId: 'a',
+      modelId: 'up/m3',
+      capabilities: ['text'],
+    });
+    const p3 = profile({ requiredCapabilities: ['image'] });
+    const r3 = await runDispatch(p3, [noCap], dirs);
+    assert.equal(r3.result.rejected[0].reasonCode, 'CAPABILITY_MISSING:image');
+
+    // 4. CONTEXT_SIZE_FLOOR_NOT_MET
+    const smallCtx = cand({
+      accountId: 'a',
+      modelId: 'up/m4',
+      capabilities: { contextWindow: 1000 },
+    });
+    const p4 = profile({ contextSize: 4000 });
+    const r4 = await runDispatch(p4, [smallCtx], dirs);
+    if (!r4.result.rejected[0]) console.log('r4 rejected:', r4.result.rejected);
+    assert.ok(r4.result.rejected[0].reasonCode.startsWith('CONTEXT_TOO_SMALL'));
+
+    // 5. WILDCARD_ACCOUNT
+    const wildcard = cand({ accountId: '*', modelId: 'up/m5' });
+    const p5 = profile({});
+    const r5 = await runDispatch(p5, [wildcard], dirs);
+    assert.equal(r5.result.rejected[0].reasonCode, 'WILDCARD_ACCOUNT');
+
+    // 6. CANDIDATE_BLOCKED on quota cooldown
+    const cooling = cand({ accountId: 'cooling', modelId: 'up/m6' });
+    const p6 = profile({});
+    const r6 = await runDispatch(p6, [cooling], dirs, {
+      headrooms: { cooling: { status: 'cooling', reason: 'COOLDOWN_ACTIVE' } },
+    });
+    assert.equal(r6.result.rejected[0].reasonCode, 'COOLDOWN_ACTIVE');
+
+    // 7. Evidence-age penalty
+    const oldEv = cand({ accountId: 'a', modelId: 'up/m7' });
+    const p7 = profile({});
+    seedPass(dirs.evidence, oldEv, 1);
+    const evData = JSON.parse(fs.readFileSync(path.join(dirs.evidence, 'evidence.json'), 'utf8'));
+    evData.combinations[0].evidence[0].ts = iso(NOW - 30 * 24 * 3600 * 1000);
+    fs.writeFileSync(path.join(dirs.evidence, 'evidence.json'), JSON.stringify(evData));
+    const r7 = await runDispatch(p7, [oldEv], dirs);
+    assert.ok(r7.result.top3[0].scoreBreakdown.evidenceAgePenalty > 0);
+  });
+
+  test('65-14: --execute reservation and latency-priority controller fallback', async () => {
+    const dirs = {
+      root: tmpDir('65-root'),
+      evidence: tmpDir('65-evidence'),
+      decisions: tmpDir('65-decisions'),
+      home: tmpDir('65-home'),
+      storePath: path.join(tmpDir('65-store'), 'quota.json'),
+    };
+    fs.mkdirSync(path.dirname(dirs.storePath), { recursive: true });
+    fs.writeFileSync(dirs.storePath, '{}');
+
+    const c = cand({ accountId: 'acct-exec', modelId: 'up/m1' });
+    const p = profile({ taskId: 'TASK-EXEC', role: 'writer', latencyPriority: 'high' });
+
+    const r = await runDispatch(p, [c], dirs, { execute: true });
+    assert.equal(r.exitCode, 0);
+
+    // Check reservation written
+    const store = JSON.parse(
+      fs.readFileSync(path.join(dirs.home, '.shipde', 'agy-quota.json'), 'utf8')
+    ).reservations;
+    assert.ok(Object.keys(store || {}).length > 0);
+    assert.equal(Object.values(store)[0].workItemId, 'TASK-EXEC');
+
+    // Latency-priority branch in controller fallback
+    const entry = decisionLines(dirs.decisions).find(
+      (e) => e.workItemId === 'TASK-EXEC' && e.stage === 'selected'
+    );
+    assert.equal(entry.jev.weights.latency, 55); // LATENCY_FIRST has latency 55
   });
 });
