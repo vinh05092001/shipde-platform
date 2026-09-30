@@ -63,7 +63,7 @@ function getHeadSha(cwd) {
   const { withCleanGitEnv, safeGit } = require('./supervisor');
   return withCleanGitEnv(cwd, (tmpDir) => {
     const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
-    if (res.exitCode === 0) return res.stdout.trim();
+    if (res.status === 0) return res.stdout.trim();
     return null;
   });
 }
