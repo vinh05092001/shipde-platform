@@ -17,6 +17,14 @@
 //      every process it starts, and reports success only when run-target.ps1
 //      itself wrote a nonce-bound completion marker carrying the payload's
 //      exit code.
+//
+//   C. the launcher provisions the worker root by cloning it AS THE OPERATOR,
+//      so .git inside it is operator-owned while the job runs as the worker,
+//      and git >= 2.35.2 refuses every command with "detected dubious
+//      ownership" (exit 128). The host script now writes a safe.directory
+//      entry for exactly that worker root into the worker's own git config
+//      (the GIT_CONFIG_GLOBAL file inside the worker root) before the job
+//      starts — never into the operator's ~/.gitconfig, never as '*'.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -50,6 +58,34 @@ const windowsSkip = POWERSHELL_EXE
 
 const POWERSHELL_EXE_PATH = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 
+// Defect C is a git behaviour, so the execution test must run the real git.
+// The absolute path is resolved here and passed to the payload: the host
+// scrubs the environment before starting the worker, and a test that silently
+// ran no git at all would prove nothing. Without git on this host the test
+// skips with a reason instead of passing vacuously.
+function resolveGitExe() {
+  if (process.platform !== 'win32') return null;
+  const r = spawnSync('where.exe', ['git'], { encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0) return null;
+  const first = String(r.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)[0];
+  return first && fs.existsSync(first) ? first : null;
+}
+const GIT_EXE = resolveGitExe();
+const gitSkip = GIT_EXE
+  ? {}
+  : {
+      skip: 'git.exe is not available on this Windows host (needed to prove safe.directory is honoured)',
+    };
+
+// Comparing git's forward-slash output with the backslash path the script was
+// built from needs one canonical form on both sides.
+function normalizePath(value) {
+  return path.normalize(String(value).replace(/\//g, '\\')).toLowerCase();
+}
+
 function parseLaunchResultFile(launchResultPath) {
   const text = fs.readFileSync(launchResultPath, 'utf8');
   return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
@@ -61,7 +97,7 @@ function parseLaunchResultFile(launchResultPath) {
  * 5.1 writes a UTF-8 BOM), plus everything needed to re-read it the way the
  * launcher does.
  */
-function runGeneratedHost({ targetLines, workerTimeoutMs }) {
+function runGeneratedHost({ targetLines, workerTimeoutMs, workerUsername }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-launch-host-'));
   const targetPath = path.join(dir, 'target.ps1');
   fs.writeFileSync(targetPath, targetLines.join('\r\n') + '\r\n', 'utf8');
@@ -71,7 +107,7 @@ function runGeneratedHost({ targetLines, workerTimeoutMs }) {
   const script = buildWorkerLaunchScript({
     credPath: path.join(dir, 'WorkerUser.cred'),
     workerRoot: dir,
-    workerUsername: 'ShipDeWorker',
+    workerUsername: workerUsername || 'ShipDeWorker',
     exeFile: POWERSHELL_EXE_PATH,
     psArgs:
       "'-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '" +
@@ -363,3 +399,303 @@ test('an unreadable or unproven launch result is a hard failure, never a green h
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// Defect C needs both PowerShell (to run the generated script) and git (to
+// prove git reads what it wrote), so the execution test skips if either is
+// missing — with a reason, never by passing vacuously.
+const gitHostSkip = windowsSkip.skip ? windowsSkip : gitSkip.skip ? gitSkip : {};
+
+const OPERATOR_GITCONFIG = path.join(os.homedir(), '.gitconfig');
+
+function readTextIfExists(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
+}
+
+/**
+ * The operator's own `git config --global --get-all safe.directory`, read
+ * before and after a launch so any write to the operator profile is a
+ * failure. Never writes: `--get-all` against a missing file exits 1 silently.
+ */
+function readOperatorSafeDirectory() {
+  if (!GIT_EXE) return { status: null, values: [] };
+  const res = spawnSync(GIT_EXE, ['config', '--global', '--get-all', 'safe.directory'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env },
+  });
+  return {
+    status: res.status,
+    values: String(res.stdout || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  };
+}
+
+test('the host script declares exactly the worker root safe in the worker-owned git config', () => {
+  // Static contract: no process runs here, so this holds on any host. It is
+  // what fails on origin/main — its generated script never mentions
+  // safe.directory at all, which is why every real job died with exit 128.
+  const workerRoot = path.join(os.tmpdir(), 'shipde-safe-static-worker-root');
+  const workerGitConfig = path.join(workerRoot, '.gitconfig');
+  const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
+  const script = buildWorkerLaunchScript({
+    credPath: path.join(workerRoot, 'WorkerUser.cred'),
+    workerRoot,
+    workerUsername: 'ShipDeWorker',
+    exeFile: POWERSHELL_EXE_PATH,
+    psArgs: "'-NoProfile'",
+    launchResultPath: path.join(workerRoot, 'launch-result.json'),
+    workerTimeoutMs: 60000,
+    completionNonce: '1'.repeat(32),
+    runAsCurrentUser: true,
+  });
+
+  assert.ok(
+    script.includes(`$workerGitConfigPath = "${workerGitConfig}"`),
+    'the host script must write the git config that run-target.ps1 points GIT_CONFIG_GLOBAL at — the file INSIDE the worker root'
+  );
+  assert.ok(
+    script.includes(`    directory = ${safeWorkerRootForGit}`),
+    'safe.directory must be the exact worker root path'
+  );
+  assert.ok(
+    script.includes(`\`$env:GIT_CONFIG_GLOBAL = "${workerGitConfig}"`),
+    'the job must read the very file the host wrote'
+  );
+
+  // Never a wildcard: one entry, this root.
+  const directoryLines = script.match(/directory\s*=\s*[^\r\n]*/g) || [];
+  assert.ok(directoryLines.length >= 1, 'the script must declare safe.directory at all');
+  for (const line of directoryLines) {
+    assert.ok(
+      !line.includes('*'),
+      'a wildcard safe.directory would grant trust to every repository on the host: ' + line
+    );
+    assert.ok(
+      line.includes(safeWorkerRootForGit),
+      'the safe.directory entry must name this worker root, got: ' + line
+    );
+  }
+
+  // Never the operator config: every .gitconfig reference in the generated
+  // script is the worker-owned file, and the host script never shells out to
+  // `git config`, which would resolve to the operator's global config.
+  const occurrences = (script.match(/\.gitconfig/g) || []).length;
+  const workerOccurrences = script.split(workerGitConfig).length - 1;
+  assert.strictEqual(
+    occurrences,
+    workerOccurrences,
+    'every .gitconfig in the script must be the worker-owned file under the worker root'
+  );
+  assert.ok(
+    !/git\s+config/i.test(script),
+    'the host script must not shell out to `git config`, which would write the operator profile'
+  );
+
+  // The entry must exist before the worker starts, not be left to the job.
+  const writeIndex = script.indexOf('[void][System.IO.File]::WriteAllText($workerGitConfigPath');
+  const startIndex = script.indexOf('$process = [System.Diagnostics.Process]::Start($psi)');
+  assert.ok(writeIndex > -1, 'the host script must write the worker git config');
+  assert.ok(
+    startIndex > -1 && writeIndex < startIndex,
+    'the worker git config must be written before the worker process starts'
+  );
+
+  fs.rmSync(workerRoot, { recursive: true, force: true });
+});
+
+test(
+  'the job resolves safe.directory to exactly the worker root from its own config, and the operator config is untouched',
+  gitHostSkip,
+  () => {
+    // Hermetic on purpose: reproducing dubious ownership needs a directory
+    // owned by another account, which cannot be created without changing the
+    // host, so this test never requires a commit under a foreign owner. What a
+    // temp dir can prove is the contract that fixes the defect — git, run
+    // inside the launch with GIT_CONFIG_GLOBAL pointing at the worker root,
+    // reports exactly that root, from exactly that file, while the operator's
+    // global config is byte-identical afterwards.
+    const operatorConfigBefore = readTextIfExists(OPERATOR_GITCONFIG);
+    const operatorSafeBefore = readOperatorSafeDirectory();
+
+    const { dir, hostRes, raw, readIt } = runGeneratedHost({
+      workerTimeoutMs: 60000,
+      targetLines: [
+        '$ErrorActionPreference = "Stop"',
+        `$gitExe = "${GIT_EXE}"`,
+        '$vals = @(& $gitExe config --global --get-all safe.directory)',
+        '$valsExit = $LASTEXITCODE',
+        'Write-Output ("SAFE_EXIT=" + $valsExit)',
+        'foreach ($v in $vals) { Write-Output ("SAFE_VALUE=" + $v) }',
+        '$orig = @(& $gitExe config --global --show-origin --get-all safe.directory)',
+        'Write-Output ("SAFE_ORIGIN_EXIT=" + $LASTEXITCODE)',
+        'foreach ($o in $orig) { Write-Output ("SAFE_ORIGIN=" + $o) }',
+        'exit 0',
+      ],
+    });
+
+    const operatorConfigAfter = readTextIfExists(OPERATOR_GITCONFIG);
+    const operatorSafeAfter = readOperatorSafeDirectory();
+    try {
+      assert.strictEqual(
+        hostRes.status,
+        0,
+        'host script failed: ' + String(hostRes.stderr || hostRes.stdout || '')
+      );
+      assert.ok(raw, 'the host must write a launch result before it reports anything');
+      assert.strictEqual(
+        raw.completed,
+        true,
+        'the probe job must have completed: ' + raw.failureReason
+      );
+      const reported = readIt();
+      assert.strictEqual(
+        reported.exitCode,
+        0,
+        'the probe job must run to its end, got ' + JSON.stringify(reported)
+      );
+      const stdout = String(reported.stdout || '');
+
+      assert.match(stdout, /SAFE_EXIT=0/, 'git must read the worker config; got ' + stdout);
+
+      const values = stdout
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('SAFE_VALUE='))
+        .map((line) => line.slice('SAFE_VALUE='.length));
+      assert.strictEqual(
+        values.length,
+        1,
+        'exactly one safe.directory entry, never a set of paths; got ' + JSON.stringify(values)
+      );
+      assert.ok(
+        !values.includes('*'),
+        'a wildcard safe.directory would trust every repository on the host: ' +
+          JSON.stringify(values)
+      );
+      assert.strictEqual(
+        normalizePath(values[0]),
+        normalizePath(dir),
+        'the job must see its own worker root as safe, got ' + JSON.stringify(values)
+      );
+
+      const origins = stdout
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('SAFE_ORIGIN='))
+        .map((line) => line.slice('SAFE_ORIGIN='.length));
+      assert.ok(origins.length >= 1, 'git must report where the entry came from; got ' + stdout);
+      const workerConfigNorm = normalizePath(path.join(dir, '.gitconfig'));
+      const operatorConfigNorm = normalizePath(OPERATOR_GITCONFIG);
+      for (const origin of origins) {
+        const norm = normalizePath(origin);
+        assert.ok(
+          norm.includes(workerConfigNorm),
+          'the entry must come from the worker-owned file ' +
+            workerConfigNorm +
+            ', got ' +
+            JSON.stringify(origin)
+        );
+        assert.ok(
+          !norm.includes(operatorConfigNorm),
+          'the operator global config must never be a source: ' + JSON.stringify(origin)
+        );
+      }
+
+      // The file itself, read from disk: exact path, no wildcard, no residue.
+      const workerConfigBody = fs.readFileSync(path.join(dir, '.gitconfig'), 'utf8');
+      assert.ok(
+        workerConfigBody.includes('[safe]'),
+        'the worker git config must hold a safe section, got ' + JSON.stringify(workerConfigBody)
+      );
+      assert.ok(
+        !workerConfigBody.includes('*'),
+        'the worker git config must not carry a wildcard: ' + JSON.stringify(workerConfigBody)
+      );
+      const directoryEntries = workerConfigBody
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('directory'));
+      const safeDirForGit = dir.replace(/\\/g, '/');
+      assert.deepStrictEqual(
+        directoryEntries,
+        [`directory = ${safeDirForGit}`],
+        'the worker git config must declare exactly this worker root'
+      );
+    } finally {
+      assert.strictEqual(
+        operatorConfigAfter,
+        operatorConfigBefore,
+        'the operator global git config file must not be written by the launch'
+      );
+      assert.deepStrictEqual(
+        operatorSafeAfter,
+        operatorSafeBefore,
+        'the operator safe.directory entries must be unchanged by the launch'
+      );
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+);
+test(
+  'the job cannot modify the protected global config (credential.helper, core.hooksPath, etc.)',
+  gitHostSkip,
+  () => {
+    const { dir, hostRes, raw, readIt } = runGeneratedHost({
+      workerTimeoutMs: 60000,
+      workerUsername: os.userInfo().username,
+      targetLines: [
+        '$ErrorActionPreference = "Continue"',
+        `$gitExe = "${GIT_EXE}"`,
+        // Remove DeleteSubdirectoriesAndFiles from parent directory to simulate real ShipDeWorker permissions
+        `$parentAcl = Get-Acl .`,
+        `$denyParentRule = New-Object System.Security.AccessControl.FileSystemAccessRule("${os.userInfo().username}", "DeleteSubdirectoriesAndFiles", "ContainerInherit,ObjectInherit", "None", "Deny")`,
+        `$parentAcl.AddAccessRule($denyParentRule)`,
+        `Set-Acl . $parentAcl`,
+        '& $gitExe config --global credential.helper evil',
+        'Write-Output ("CRED_EXIT=" + $LASTEXITCODE)',
+        'Get-Content .gitconfig | Write-Output',
+        '& $gitExe config --global core.hooksPath evil',
+        'Write-Output ("HOOKS_EXIT=" + $LASTEXITCODE)',
+        '& $gitExe config --global --add safe.directory C:/evil',
+        'Write-Output ("SAFE_EXIT=" + $LASTEXITCODE)',
+        'exit 0',
+      ],
+    });
+
+    try {
+      assert.strictEqual(
+        hostRes.status,
+        0,
+        'host script failed: ' + String(hostRes.stderr || hostRes.stdout || '')
+      );
+      const reported = readIt();
+      const stdout = String(reported.stdout || '');
+
+      assert.match(
+        stdout,
+        /CRED_EXIT=(?!0\b)\d+/,
+        'worker must not be able to write credential.helper; got ' + stdout
+      );
+      assert.match(
+        stdout,
+        /HOOKS_EXIT=(?!0\b)\d+/,
+        'worker must not be able to write core.hooksPath; got ' + stdout
+      );
+      assert.match(
+        stdout,
+        /SAFE_EXIT=(?!0\b)\d+/,
+        'worker must not be able to add safe.directory; got ' + stdout
+      );
+    } finally {
+      const workerConfig = path.join(dir, '.gitconfig');
+      if (fs.existsSync(workerConfig)) {
+        require('child_process').spawnSync('powershell.exe', [
+          '-NoProfile',
+          '-Command',
+          `$acl = Get-Acl "${workerConfig}"; $acl.SetAccessRuleProtection($false, $false); Set-Acl "${workerConfig}" $acl; $dirAcl = Get-Acl "${dir}"; foreach($rule in $dirAcl.Access) { if ($rule.AccessControlType -eq "Deny") { $dirAcl.RemoveAccessRule($rule) } }; Set-Acl "${dir}" $dirAcl`,
+        ]);
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+);

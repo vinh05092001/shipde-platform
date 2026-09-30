@@ -235,6 +235,8 @@ $cred = New-Object System.Management.Automation.PSCredential("${workerUsername}"
 $psi.Password = $sec
 `;
 
+  const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
+
   return `
 $ErrorActionPreference = "Stop"
 ${credentialLines}$nestedScript = "${workerRoot}\\run-target.ps1"
@@ -258,6 +260,30 @@ if (\`$null -eq \`$jobExit) { exit 1 }
 @{ nonce = "${completionNonce}"; exitCode = [int]\`$jobExit; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
 exit \`$jobExit
 "@ | Out-File $nestedScript -Encoding UTF8
+
+# Defect C (live E2E attempt 4): the clone that provisions this root runs as
+# the OPERATOR, so .git inside the worker root is operator-owned while the job
+# runs as the worker, and git >= 2.35.2 then refuses every command in it with
+# "detected dubious ownership" (exit 128) — no job can commit, status or
+# bundle. Git's own documented remedy is a safe.directory entry in protected
+# (global) config, and the worker's global config is exactly the
+# GIT_CONFIG_GLOBAL file inside the worker root that run-target.ps1 sets. The
+# file is rewritten on every launch, so the entry is this worker root — the
+# exact path, never a wildcard — and the operator's own global configuration
+# (the one git resolves when this host script runs as the operator) is never
+# written. The config is made read-only to the worker so the worker cannot
+# inject core.hooksPath, credential.helper, or widen safe.directory.
+$workerGitConfigPath = "${workerRoot}\\.gitconfig"
+$workerGitConfigBody = '[safe]' + [Environment]::NewLine + '    directory = ${safeWorkerRootForGit}' + [Environment]::NewLine
+if (-not (Test-Path -LiteralPath "${workerRoot}")) { New-Item -ItemType Directory -Path "${workerRoot}" | Out-Null }
+if (Test-Path -LiteralPath $workerGitConfigPath) { Remove-Item -LiteralPath $workerGitConfigPath -Force -ErrorAction SilentlyContinue }
+[void][System.IO.File]::WriteAllText($workerGitConfigPath, $workerGitConfigBody)
+
+$configAcl = Get-Acl $workerGitConfigPath
+$denyRule = New-Object System.Security.AccessControl.FileSystemAccessRule("${workerUsername}", "Write, AppendData, Delete", "None", "None", "Deny")
+$configAcl.AddAccessRule($denyRule)
+Set-Acl $workerGitConfigPath $configAcl
+
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = "powershell.exe"
