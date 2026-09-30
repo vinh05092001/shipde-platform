@@ -330,6 +330,105 @@ function generateCandidates(opts) {
 }
 
 /**
+ * The concrete accounts that reach a gateway, with the route each one uses.
+ *
+ * A registry account carries `provider`, not `sourceId`, and the provider is
+ * what `dispatchRoute` resolves. An account whose route lands on a gateway that
+ * actually serves models is a real credential on that gateway, so every model
+ * the gateway advertises is reachable through it — the same models the gateway
+ * hands out over HTTP, but reached the way this account reaches them.
+ *
+ * This is the seam TASK-AI-66 exists for. Before it, a candidate existed only
+ * if an operator had hand-written the model into `accounts.registry.json`. The
+ * gateway advertises hundreds of aliases (`ag`, `gcli`, `ocz`, `gh`, `cl`, …);
+ * the hand-written list held eight. Every alias left off that list was
+ * invisible to the Controller, so evidence recorded against its seven-part key
+ * could never be matched and its Work Item could never be routed again.
+ *
+ * Nothing here names a model, an alias or a provider. The route comes from the
+ * registry and the model list comes from the gateway's own advertised
+ * catalogue; a gateway that advertises nothing yields nothing, and a source
+ * that is retired or deferred is skipped rather than dispatched to.
+ *
+ * @param {object} opts
+ * @param {object} opts.registry – the source registry
+ * @param {object[]} opts.accounts – accounts with a concrete id
+ * @param {object[]} opts.catalogue – advertised rows (discovery catalogue shape)
+ * @returns {object[]} candidates on the concrete account's own route
+ */
+function gatewayAccountCandidates(opts) {
+  const o = opts || {};
+  const registry = o.registry;
+  const accounts = o.accounts || [];
+  const catalogue = o.catalogue || [];
+  if (!registry || catalogue.length === 0) return [];
+
+  const sourceById = new Map();
+  for (const s of registry.sources || []) sourceById.set(s.id, s);
+  const routes = (registry.dispatch && registry.dispatch.providers) || {};
+  const out = [];
+
+  for (const account of accounts) {
+    if (!account || !account.id || account.enabled === false) continue;
+    const route = routes[String(account.provider || '').toLowerCase()];
+    if (!route || !route.harness) continue;
+
+    // The account reaches a gateway when the source its provider names is a
+    // gateway itself, or when that source declares the gateway it rides.
+    const source = sourceById.get(account.provider);
+    if (!source || sourcesApi.isRetired(source.id, registry)) continue;
+    if (sourcesApi.isDeferred(source.id, registry)) continue;
+
+    const gateway = source.kind === sourcesApi.Kind.ROUTER ? source.id : source.reachedVia || null;
+    if (!gateway) continue;
+
+    const gatewaySource = sourceById.get(gateway);
+    if (!gatewaySource) continue;
+    if (sourcesApi.isRetired(gateway, registry) || sourcesApi.isDeferred(gateway, registry))
+      continue;
+    if (gatewaySource.servesModels === false) continue;
+
+    // The harness that actually launches the session is the one the route
+    // names; the access path is the CLI the provider is reached through.
+    // Both come from the registry, so a new gateway needs no branch here.
+    const harness = route.harness;
+    const accessPath = source.accessPath || route.provider || '';
+    if (!harness || !accessPath) continue;
+
+    for (const row of catalogue) {
+      if (!row || row.gateway !== gateway) continue;
+      const upstream = row.upstream || '';
+      const modelId = row.modelId || row.model || '';
+      // An alias is the prefix the model id itself carries. A row whose id
+      // does not begin with its own upstream names no reachable alias, and
+      // inventing one is exactly how a candidate that can never run is planned.
+      if (!upstream || !modelId.startsWith(upstream + '/')) continue;
+
+      out.push({
+        harness,
+        accessPath,
+        gateway,
+        upstream,
+        accountId: account.id,
+        quotaScope: account.id,
+        modelId,
+        source: gateway,
+        kind: gatewaySource.kind,
+        advertised: true,
+        // A gateway catalogue proves a route exists, never that the account may
+        // use it. Quality and cost stay undeclared until evidence supplies them,
+        // so an advertised model is never scored as if it were measured.
+        quality: undefined,
+        cost: undefined,
+        sharedQuota: 'unknown',
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Expand evidence-known combinations into candidates that the live catalogue
  * may have missed (e.g. models that were probed before but aren't currently
  * listed).
@@ -426,6 +525,7 @@ module.exports = {
   harnessOf,
   accessPathOf,
   generateCandidates,
+  gatewayAccountCandidates,
   candidatesFromEvidence,
   mergeCandidates,
   annotateCandidates,
