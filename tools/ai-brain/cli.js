@@ -7,6 +7,7 @@
  *   node tools/ai-brain/cli.js reconcile [--json] [--strict]
  *   node tools/ai-brain/cli.js prove --tests "<command>" [...]
  *   node tools/ai-brain/cli.js dispatch [--dry-run | --execute] [--plan <file>]
+ *                                       [--profile <file.json>] [--report-outcome <file.json>]
  *   node tools/ai-brain/cli.js shadow --project|--compare [--register <p>] [--shadow <p>] [--json] [--dry-run]
  *   node tools/ai-brain/cli.js probe --account <id> [--model <m>] [--json]
  *                                   [--file <p>] [--timeout <ms>] [--cache-window <ms>]
@@ -951,6 +952,47 @@ function buildDryRunLog(parts) {
 }
 
 /**
+ * TASK-AI-65: candidate assembly for a profile dispatch. The same assembly the
+ * item path uses (discovery catalogue + offerings + registry pins), so a
+ * profile-ranked candidate and an item-ranked candidate are the same kind of
+ * object with the same seven-part identity.
+ */
+function dispatchProfileCommand(args, deps) {
+  const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
+  const sourcesApi = require('./sources');
+  const { expandOfferings } = require('./offerings');
+  const { listAccounts } = require('./accounts');
+  const { readDiscoveryCatalogue } = require('./discovery/read');
+
+  let candidateList;
+  if (deps && Array.isArray(deps.candidates)) {
+    candidateList = deps.candidates.map((c) => Object.assign({}, c));
+  } else {
+    let discCat;
+    try {
+      discCat = readDiscoveryCatalogue({
+        dataDir: (deps && deps.discoveryDataDir) || path.join(__dirname, 'data', 'discovery'),
+      });
+    } catch {
+      discCat = { candidates: [] };
+    }
+    const accounts = listAccounts() || [];
+    let offs;
+    try {
+      offs = expandOfferings(accounts);
+    } catch {
+      offs = [];
+    }
+    candidateList = assembleCandidates(discCat, offs, sourcesApi.loadSources(), accounts, null);
+  }
+
+  return require('./routing').runProfileDispatch(
+    args,
+    Object.assign({}, deps, { candidates: candidateList, rootDir })
+  );
+}
+
+/**
  * Master-queue item 5: dispatch wiring.
  * Chooses candidate through the brain (discovery + offerings, evidence/cooldowns,
  * quota/reservations/load, ranked by ranking.js).
@@ -987,6 +1029,34 @@ function dispatchCommand(args, deps = {}) {
     error('Dispatch refused: --execute and --dry-run are exclusive.');
     exit(2);
     return { exitCode: 2 };
+  }
+
+  // TASK-AI-65: report a structured execution outcome for a pinned candidate.
+  // The evidence store and cooldowns are updated through routing.js before any
+  // next ranking round, so a failure is seen by the Controller, not just logged.
+  const reportOutcome = pick(args, 'report-outcome', 'reportOutcome');
+  if (typeof reportOutcome === 'string') {
+    const routing = require('./routing');
+    return routing.reportDispatchOutcome(args, {
+      log,
+      error,
+      exit,
+      rootDir,
+      evidenceDir:
+        (deps && deps.evidenceDir) ||
+        args['evidence-dir'] ||
+        path.join(__dirname, 'data', 'evidence'),
+      decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
+      now: deps && deps.now,
+    });
+  }
+
+  // TASK-AI-65: profile-driven live routing. The profile names the task, its
+  // floors and its constraints; JEV advises (never a model); the Controller
+  // ranks; rank 1 is pinned and, under --execute, reserved. Async, because the
+  // JEV advisory is.
+  if (typeof args.profile === 'string') {
+    return dispatchProfileCommand(args, deps);
   }
 
   const isDryRun = dryRunFlag || !execute;
@@ -1971,7 +2041,22 @@ function main() {
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
-  if (command === 'dispatch') return dispatchCommand(args);
+  if (command === 'dispatch') {
+    const result = dispatchCommand(args);
+    // The profile path (TASK-AI-65) is async: the JEV advisory returns a
+    // promise. An unhandled rejection would crash silently, so it is caught
+    // here and turned into a non-zero exit instead.
+    if (result && typeof result.then === 'function') {
+      result.then(
+        () => {},
+        (err) => {
+          console.error('Dispatch lỗi: ' + (err && err.message ? err.message : err));
+          process.exitCode = 1;
+        }
+      );
+    }
+    return;
+  }
   if (command === 'shadow') return shadowCommand(args);
   // account add | account limits | account secret (TASK-AI-29). The account
   // surface parses its own argv strictly, so a mistyped flag is refused
