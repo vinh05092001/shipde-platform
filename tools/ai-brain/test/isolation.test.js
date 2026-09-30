@@ -18,8 +18,16 @@ const {
   getFolderHash,
   defaultVerifyBoundary,
   buildBoundaryVerifyScript,
+  buildWorkerLaunchScript,
   EXPECTED_FIREWALL_RULES,
 } = require('../isolation-launcher');
+
+// The host PowerShell is emitted by buildWorkerLaunchScript, not by the
+// launcher body itself, so source-text assertions read both production
+// functions. Same production source as before, only relocated.
+function launcherSource() {
+  return getIsolatedLauncher().toString() + '\n' + buildWorkerLaunchScript.toString();
+}
 
 const scriptsDir = path.join(__dirname, '../../../scripts/ai/isolation');
 
@@ -1032,7 +1040,7 @@ test(
   }
 );
 test('launcher bounds the worker wait with a timeout and kills on expiry (P6)', () => {
-  const src = getIsolatedLauncher().toString();
+  const src = launcherSource();
   assert.match(src, /WaitForExit\(\$timeoutMs\)/);
   assert.match(src, /\.Kill\(\)/);
   assert.match(src, /timedOut/);
@@ -1102,7 +1110,7 @@ test(
 );
 
 test('isolated launcher credentials never appear in plain env dumps', () => {
-  const launcherStr = getIsolatedLauncher().toString();
+  const launcherStr = launcherSource();
   assert.ok(
     launcherStr.includes('Get-Content "${credPath}" | ConvertTo-SecureString'),
     'Uses secure string conversion from file'
@@ -1402,7 +1410,7 @@ test('launcher clones the worker root without hardlinks so the worker cannot mut
 });
 
 test('launcher writes and reads the launch result outside the worker-writable root (Q6)', () => {
-  const launcherStr = getIsolatedLauncher().toString();
+  const launcherStr = launcherSource();
   // The result file is no longer written into workerRoot...
   assert.ok(
     !launcherStr.includes('workerRoot}\\launch-result.json'),
@@ -1519,3 +1527,181 @@ test('Test-WorkerIsolation guards GetOwner call with fail-closed existence re-ch
     '$results must be referenced in the $Output hashtable'
   );
 });
+
+// The exact PowerShell a real launch writes, generated without provisioning a
+// worker, cloning anything or starting a process. The values are inert: this
+// text is only ever parsed, never executed as a launch.
+const LAUNCH_SCRIPT = buildWorkerLaunchScript({
+  credPath: 'C:\\Users\\operator\\AppData\\Local\\ShipDe\\WorkerUser.cred',
+  workerRoot: 'C:\\ShipDeWorker\\probe',
+  workerUsername: 'ShipDeWorker',
+  exeFile: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+  psArgs: "'-NoProfile', '-NonInteractive', '-EncodedCommand', 'QUJDRA=='",
+  launchResultPath: 'C:\\Users\\operator\\AppData\\Local\\ShipDe\\launch-results\\probe-0.json',
+  workerTimeoutMs: 600000,
+});
+
+// ProcessStartInfo flags that must be set from the boolean variables. A
+// backtick-escaped `$false` is the string "$false": PowerShell parses it, then
+// tries to run it as a command, and $ErrorActionPreference = "Stop" turns that
+// into a terminating error which kills the host script before
+// [System.Diagnostics.Process]::Start($psi) — the worker never starts.
+const BOOLEAN_PSI_FLAGS = {
+  UseShellExecute: 'false',
+  CreateNoWindow: 'true',
+  RedirectStandardOutput: 'true',
+  RedirectStandardError: 'true',
+};
+
+// A backtick-escaped `$` is legitimate only INSIDE the double-quoted
+// here-string that builds run-target.ps1, where it emits a literal
+// `$env:HOME`. This split keeps here-string bodies and everything else apart so
+// the escaping contract can be asserted on both sides.
+function splitHereStrings(script) {
+  const inside = [];
+  const outside = [];
+  let inHereString = false;
+  let opened = 0;
+  for (const line of script.split('\n')) {
+    const trimmed = line.trim();
+    if (!inHereString) {
+      if (trimmed.startsWith('@"')) {
+        inHereString = true;
+        opened += 1;
+      }
+      outside.push(line);
+      continue;
+    }
+    inside.push(line);
+    if (trimmed.startsWith('"@')) inHereString = false;
+  }
+  assert.strictEqual(inHereString, false, 'unterminated here-string in the generated script');
+  return { inside: inside.join('\n'), outside: outside.join('\n'), opened };
+}
+
+test('generated launch script has no backtick-escaped $ outside a here-string', () => {
+  const { inside, outside, opened } = splitHereStrings(LAUNCH_SCRIPT);
+
+  // Anti-vacuity: the split must find the here-string, and its escapes must
+  // still be there — they are the correct ones.
+  assert.ok(opened >= 1, 'expected at least one here-string in the generated script');
+  assert.match(
+    inside,
+    /`\$env:HOME = "C:\\ShipDeWorker\\probe"/,
+    'escaped $env:HOME must survive inside the here-string'
+  );
+
+  const offenders = outside.split('\n').filter((line) => line.indexOf('`$') !== -1);
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    'no line outside a here-string may contain a backtick-escaped $: ' + offenders.join(' | ')
+  );
+
+  for (const [prop, variable] of Object.entries(BOOLEAN_PSI_FLAGS)) {
+    assert.match(
+      LAUNCH_SCRIPT,
+      new RegExp('^\\$psi\\.' + prop + ' = \\$' + variable + '$', 'm'),
+      '$psi.' + prop + ' must be assigned the boolean variable $' + variable
+    );
+  }
+});
+
+test(
+  'generated launch script parses clean and its ProcessStartInfo flags are booleans, not strings',
+  psSkip,
+  () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-launch-script-'));
+    const scriptPath = path.join(tmp, 'isolated-launch.ps1');
+    fs.writeFileSync(scriptPath, LAUNCH_SCRIPT, 'utf8');
+
+    // Parses the generated script with the PowerShell AST parser and reports,
+    // per ProcessStartInfo flag, the node the right-hand side parses to and what
+    // that text evaluates to. Only the four boolean literals are ever
+    // evaluated, so no statement of the generated script can run.
+    const probePath = path.join(tmp, 'parse-probe.ps1');
+    fs.writeFileSync(
+      probePath,
+      [
+        'param([Parameter(Mandatory = $true)][string]$Path)',
+        '$ErrorActionPreference = "Stop"',
+        '$text = Get-Content -LiteralPath $Path -Raw',
+        '$errors = $null',
+        '$ast = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$errors)',
+        '$assignments = @{}',
+        'foreach ($t in @("' + Object.keys(BOOLEAN_PSI_FLAGS).join('", "') + '")) {',
+        '  $assignments[$t] = @{ count = 0; right = ""; nodeType = ""; variable = $null; evaluated = "" }',
+        '}',
+        '$ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true) | ForEach-Object {',
+        '  $left = $_.Left.Extent.Text',
+        '  foreach ($t in $assignments.Keys) {',
+        "    if ($left -ne ('$psi.' + $t)) { continue }",
+        '    $node = $_.Right',
+        '    while ($node -is [System.Management.Automation.Language.CommandExpressionAst]) { $node = $node.Expression }',
+        '    $variable = $null',
+        '    if ($node -is [System.Management.Automation.Language.VariableExpressionAst]) { $variable = $node.VariablePath.UserPath }',
+        '    $rhs = $_.Right.Extent.Text',
+        '    $evaluated = "NOT_EVALUATED"',
+        "    if (@('$false', '$true', '`$false', '`$true') -contains $rhs) {",
+        '      try { $evaluated = (Invoke-Expression $rhs).GetType().FullName } catch { $evaluated = "ERROR:" + $_.Exception.GetType().Name }',
+        '    }',
+        '    $slot = $assignments[$t]',
+        '    $slot.count = $slot.count + 1',
+        '    if ($slot.count -eq 1) {',
+        '      $slot.right = $rhs',
+        '      $slot.nodeType = $node.GetType().Name',
+        '      $slot.variable = $variable',
+        '      $slot.evaluated = $evaluated',
+        '    }',
+        '  }',
+        '}',
+        '@{ parseErrors = @($errors | ForEach-Object { $_.Message }); assignments = $assignments } | ConvertTo-Json -Depth 6',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+
+    const res = spawnSync(
+      POWERSHELL_EXE,
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', probePath, '-Path', scriptPath],
+      { encoding: 'utf8', windowsHide: true }
+    );
+    assert.strictEqual(res.status, 0, 'parse probe failed: ' + res.stderr + res.stdout);
+    const report = JSON.parse(res.stdout);
+
+    assert.deepStrictEqual(
+      report.parseErrors,
+      [],
+      'the generated launch script must parse without errors'
+    );
+
+    for (const [prop, variable] of Object.entries(BOOLEAN_PSI_FLAGS)) {
+      const flag = report.assignments[prop];
+      assert.ok(flag, '$psi.' + prop + ' must be assigned in the generated script');
+      assert.strictEqual(flag.count, 1, '$psi.' + prop + ' must be assigned exactly once');
+      assert.strictEqual(
+        flag.right,
+        '$' + variable,
+        '$psi.' +
+          prop +
+          ' must be assigned the bare variable $' +
+          variable +
+          ', not "' +
+          flag.right +
+          '"'
+      );
+      assert.strictEqual(
+        flag.variable,
+        variable,
+        '$psi.' + prop + ' must parse to the $' + variable + ' variable, not ' + flag.nodeType
+      );
+      assert.strictEqual(
+        flag.evaluated,
+        'System.Boolean',
+        '$psi.' + prop + ' right-hand side must be a Boolean, got ' + flag.evaluated
+      );
+    }
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+);
