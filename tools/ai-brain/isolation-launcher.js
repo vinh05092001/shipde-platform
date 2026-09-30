@@ -17,6 +17,16 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 /** The worker root for one job: the worker never sees the operator's leaf name. */
 function workerRootFor(hostCwd) {
   const jobName = path.basename(String(hostCwd || '')) || 'default';
+  if (
+    jobName === '.' ||
+    jobName === '..' ||
+    jobName.includes('/') ||
+    jobName.includes('\\') ||
+    jobName.includes('*') ||
+    jobName.includes('?')
+  ) {
+    throw new Error('Invalid job name in workerRootFor');
+  }
   return path.win32.join(WORKER_ROOT, jobName);
 }
 
@@ -235,6 +245,8 @@ $cred = New-Object System.Management.Automation.PSCredential("${workerUsername}"
 $psi.Password = $sec
 `;
 
+  const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
+
   return `
 $ErrorActionPreference = "Stop"
 ${credentialLines}$nestedScript = "${workerRoot}\\run-target.ps1"
@@ -247,7 +259,10 @@ $wrapperStartTime = Get-Date
 \`$env:HOME = "${workerRoot}"
 \`$env:USERPROFILE = "${workerRoot}"
 \`$env:GH_CONFIG_DIR = "${workerRoot}\\.config\\gh"
-\`$env:GIT_CONFIG_GLOBAL = "${workerRoot}\\.gitconfig"
+\`$env:GIT_CONFIG_GLOBAL = "NUL"
+\`$env:GIT_CONFIG_COUNT = "1"
+\`$env:GIT_CONFIG_KEY_0 = "safe.directory"
+\`$env:GIT_CONFIG_VALUE_0 = "${safeWorkerRootForGit}"
 \`$env:TEMP = "${workerRoot}\\temp"
 \`$env:TMP = "${workerRoot}\\temp"
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }

