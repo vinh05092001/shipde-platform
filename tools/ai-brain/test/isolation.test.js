@@ -1398,26 +1398,11 @@ test('publisher does not leak worker environment or execute worker config/hooks'
   fs.mkdirSync(cleanDir);
   spawnSync('git', ['init', '-q', '--bare', cleanDir], { encoding: 'utf8', windowsHide: true });
 
-  // 1. Verify object transfer with malformed include.path (residual risk: aborts the mirror clone)
-  assert.throws(
-    () => transferReviewedObjects(repo.dir, repo.sha, cleanDir, tmp),
-    /PUBLISH_FAILED: failed to mirror source tree/,
-    'worker-written include.path aborting the mirror clone must be surfaced as a bounded failure'
-  );
-
-  // 2. Remove the malformed include so the transfer can proceed and we can test the other hooks
-  fs.rmSync(evilCfgPath, { force: true });
-  g(['config', '--unset', 'include.path']);
-
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-evil2-'));
-  cleanDir = path.join(tmp, 'clean2.git');
-  fs.mkdirSync(cleanDir);
-  spawnSync('git', ['init', '-q', '--bare', cleanDir], { encoding: 'utf8', windowsHide: true });
-
+  // 1. Verify object transfer succeeds despite malformed include.path (residual risk eliminated in TASK-AI-64)
   transferReviewedObjects(repo.dir, repo.sha, cleanDir, tmp);
 
   // The reviewed objects arrived intact.
-  const shaRes = spawnSync('git', ['rev-parse', 'refs/heads/temp-push'], {
+  let shaRes = spawnSync('git', ['rev-parse', 'refs/heads/temp-push'], {
     cwd: cleanDir,
     encoding: 'utf8',
     windowsHide: true,
@@ -1427,6 +1412,9 @@ test('publisher does not leak worker environment or execute worker config/hooks'
 
   // No marker should be created - no hook or fsmonitor executed
   assert.strictEqual(fs.existsSync(marker), false, 'hostile hook/config executed');
+
+  // 2. We can skip removing the malformed include since it no longer aborts transfer,
+  // but we test the environment variables below anyway.
 
   // 3. Test publisher environment
   // The publisher runs in the operator process. The worker env (GIT_CONFIG_COUNT, etc)

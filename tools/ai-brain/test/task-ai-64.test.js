@@ -787,3 +787,337 @@ test('64-13 a gateway-scoped failure selects a candidate outside that failure do
     'the run continues and completes once the replacement succeeds'
   );
 });
+
+test('64-14 operator-side git commands do not execute worker core.fsmonitor and ignore malformed include.path', () => {
+  const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp-'));
+  const marker = path.join(tmpDir, 'marker-fsmonitor.txt');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  const g = (args, cwd = workerDir) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  g(['init']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  g(['commit', '--allow-empty', '-m', 'init']);
+  const sha = g(['rev-parse', 'HEAD']).stdout.trim();
+
+  g(['config', 'core.fsmonitor', `echo EXECUTED > "${marker}"`]);
+
+  // Malformed include.path
+  const malformedPath = path.join(tmpDir, 'malformed.config');
+  fs.writeFileSync(malformedPath, '[core');
+  g(['config', 'include.path', malformedPath]);
+
+  try {
+    // 1. supervisor path
+    const { progressFromWorkerRoot } = require('../supervisor');
+    progressFromWorkerRoot(workerDir, { baseSha: sha });
+    assert.strictEqual(fs.existsSync(marker), false, 'supervisor executed worker core.fsmonitor');
+
+    // 2. orchestrate path (via headShaOf)
+    const orchestrate = require('../orchestrate');
+    const resolvedSha = orchestrate.headShaOf(workerDir);
+    // It should not throw, hang, or crash, and since it ignores malformed config, it must successfully return the SHA
+    assert.strictEqual(
+      resolvedSha,
+      sha,
+      'headShaOf must survive malformed include.path and return the SHA'
+    );
+    assert.strictEqual(fs.existsSync(marker), false, 'orchestrate executed worker core.fsmonitor');
+
+    // 3. publisher path
+    const { transferReviewedObjects } = require('../publisher');
+    fs.mkdirSync(cleanDir);
+    g(['init', '--bare', cleanDir], cleanDir);
+    transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+
+    assert.strictEqual(fs.existsSync(marker), false, 'publisher executed worker core.fsmonitor');
+
+    const cloneHead = g(['rev-parse', 'refs/heads/temp-push'], cleanDir).stdout.trim();
+    assert.strictEqual(cloneHead, sha, 'Malformed include.path aborted the transfer');
+  } finally {
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-16 publisher resolves linked-worktree gitdir and transfers objects', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worktree-'));
+  const repoDir = path.join(tmpDir, 'repo');
+  const wtDir = path.join(tmpDir, 'wt');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  const g = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+
+  fs.mkdirSync(repoDir);
+  g(['init'], repoDir);
+  g(['config', 'user.email', 'test@example.com'], repoDir);
+  g(['config', 'user.name', 'Test'], repoDir);
+  g(['commit', '--allow-empty', '-m', 'init'], repoDir);
+
+  g(['worktree', 'add', wtDir], repoDir);
+
+  g(['commit', '--allow-empty', '-m', 'wt commit'], wtDir);
+  const sha = g(['rev-parse', 'HEAD'], wtDir).stdout.trim();
+
+  try {
+    fs.mkdirSync(cleanDir);
+    g(['init', '--bare', cleanDir], cleanDir);
+    const { transferReviewedObjects } = require('../publisher');
+
+    // This used to throw with "nonexistent object" because it couldn't find the objects dir
+    assert.doesNotThrow(() => {
+      transferReviewedObjects(wtDir, sha, cleanDir, tmpDir);
+    }, 'transferReviewedObjects must resolve objects dir for linked worktrees');
+
+    const cloneHead = g(['rev-parse', 'refs/heads/temp-push'], cleanDir).stdout.trim();
+    assert.strictEqual(
+      cloneHead,
+      sha,
+      'Publisher failed to transfer worktree objects to operator mirror'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-17 publisher copies allow-listed objects and ignores alternates', () => {
+  const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker4-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp4-'));
+  const otherRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-other-'));
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  const gOther = (args) =>
+    spawnSync('git', args, { cwd: otherRepo, encoding: 'utf8', windowsHide: true });
+  gOther(['init']);
+  gOther(['config', 'user.email', 'test@example.com']);
+  gOther(['config', 'user.name', 'Test']);
+  fs.writeFileSync(path.join(otherRepo, 'SECRET.txt'), 'TOP SECRET OPERATOR CONTENT');
+  gOther(['add', '.']);
+  gOther(['commit', '-m', 'init']);
+  const sha = gOther(['rev-parse', 'HEAD']).stdout.trim();
+
+  const gWorker = (args) =>
+    spawnSync('git', args, { cwd: workerDir, encoding: 'utf8', windowsHide: true });
+  gWorker(['init']);
+  fs.mkdirSync(path.join(workerDir, '.git', 'objects', 'info'), { recursive: true });
+  fs.writeFileSync(
+    path.join(workerDir, '.git', 'objects', 'info', 'alternates'),
+    path.join(otherRepo, '.git', 'objects').replace(/\\/g, '/')
+  );
+
+  try {
+    fs.mkdirSync(cleanDir);
+    gWorker(['init', '--bare', cleanDir], cleanDir);
+    const { transferReviewedObjects } = require('../publisher');
+
+    assert.throws(
+      () => {
+        transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+      },
+      /PUBLISH_FAILED:.*(fully reachable|update mirror ref)/i,
+      'Publisher must verify the reviewed commit is reachable from copied objects'
+    );
+  } finally {
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(otherRepo, { recursive: true, force: true });
+  }
+});
+
+test('64-18 operator-side git commands ignore .gitattributes and diff.external', () => {
+  const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker5-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp5-'));
+  const marker = path.join(tmpDir, 'marker-textconv.txt');
+
+  const g = (args) =>
+    spawnSync('git', args, { cwd: workerDir, encoding: 'utf8', windowsHide: true });
+  g(['init']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  fs.writeFileSync(path.join(workerDir, 'file.txt'), 'base');
+  g(['add', '.']);
+  g(['commit', '-m', 'init']);
+  const baseSha = g(['rev-parse', 'HEAD']).stdout.trim();
+
+  // Plant textconv
+  fs.writeFileSync(path.join(workerDir, '.gitattributes'), '* diff=pwn');
+  const batPath = path.join(workerDir, 'pwn.bat');
+  fs.writeFileSync(batPath, '@echo off\necho EXECUTED > "' + marker + '"\nexit 0');
+  g(['config', 'diff.pwn.textconv', batPath]);
+
+  fs.writeFileSync(path.join(workerDir, 'file.txt'), 'changed');
+
+  try {
+    const { progressFromWorkerRoot } = require('../supervisor');
+    const res = progressFromWorkerRoot(workerDir, { baseSha });
+
+    assert.strictEqual(fs.existsSync(marker), false, 'supervisor executed textconv');
+    assert.ok(res.diffBytes > 0, 'supervisor diffBytes is 0 (diff failed or was empty)');
+  } finally {
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+function foreignTree(dir) {
+  const g = (args, cwd = dir) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  fs.mkdirSync(dir, { recursive: true });
+  g(['init', '-b', 'main']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  fs.writeFileSync(path.join(dir, 'SECRET.txt'), 'FOREIGN\n');
+  g(['add', 'SECRET.txt']);
+  g(['commit', '-m', 'foreign']);
+  const sha = g(['rev-parse', 'HEAD']).stdout.trim();
+  const blob = g(['rev-parse', 'HEAD:SECRET.txt']).stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(sha) || !/^[0-9a-f]{40}$/.test(blob)) {
+    throw new Error('foreign tree was not created: ' + sha + ' ' + blob);
+  }
+  return { g, sha, blob };
+}
+
+function assertForeignAbsent(cleanDir, blob) {
+  const shown = spawnSync('git', ['cat-file', '-t', blob], {
+    cwd: cleanDir,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  assert.notStrictEqual(
+    shown.status,
+    0,
+    'foreign blob must not be present in the clean clone: ' + shown.stdout
+  );
+}
+
+test('64-19 publisher refuses gitfile pointing outside worker root', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n71-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  const otherRepo = path.join(tmpDir, 'other');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  fs.mkdirSync(workerDir);
+  const { sha, blob } = foreignTree(otherRepo);
+  fs.writeFileSync(path.join(workerDir, '.git'), 'gitdir: ' + path.join(otherRepo, '.git') + '\n');
+
+  try {
+    spawnSync('git', ['init', '--bare', cleanDir], { windowsHide: true });
+    const { transferReviewedObjects } = require('../publisher');
+    assert.throws(() => {
+      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir, { workerWritable: true });
+    }, /PUBLISH_FAILED/i);
+    assertForeignAbsent(cleanDir, blob);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-19b publisher refuses a gitfile plus a forged gitdir backlink', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n7b-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  const otherRepo = path.join(tmpDir, 'other');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  fs.mkdirSync(workerDir);
+  const { sha, blob } = foreignTree(otherRepo);
+  const foreignGit = path.join(otherRepo, '.git');
+  fs.writeFileSync(path.join(workerDir, '.git'), 'gitdir: ' + foreignGit + '\n');
+  fs.writeFileSync(path.join(foreignGit, 'gitdir'), path.join(workerDir, '.git') + '\n');
+
+  try {
+    spawnSync('git', ['init', '--bare', cleanDir], { windowsHide: true });
+    const { transferReviewedObjects } = require('../publisher');
+    assert.throws(() => {
+      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir, { workerWritable: true });
+    }, /PUBLISH_FAILED/i);
+    assertForeignAbsent(cleanDir, blob);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-20 publisher refuses object store link pointing outside', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n72-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  const otherRepo = path.join(tmpDir, 'other');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  fs.mkdirSync(workerDir);
+  const { sha, blob } = foreignTree(otherRepo);
+  const gWorker = (args) =>
+    spawnSync('git', args, { cwd: workerDir, encoding: 'utf8', windowsHide: true });
+
+  gWorker(['init', '-b', 'main']);
+  gWorker(['config', 'user.email', 'test@example.com']);
+  gWorker(['config', 'user.name', 'Test']);
+  fs.rmSync(path.join(workerDir, '.git', 'objects'), { recursive: true, force: true });
+  fs.symlinkSync(
+    path.join(otherRepo, '.git', 'objects'),
+    path.join(workerDir, '.git', 'objects'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  );
+
+  try {
+    spawnSync('git', ['init', '--bare', cleanDir], { windowsHide: true });
+    const { transferReviewedObjects } = require('../publisher');
+    assert.throws(() => {
+      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir, { workerWritable: true });
+    }, /PUBLISH_FAILED/i);
+    assertForeignAbsent(cleanDir, blob);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-21 supervisor refuses a linked foreign repository', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n73-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  const otherRepo = path.join(tmpDir, 'other');
+
+  fs.mkdirSync(workerDir);
+  const { sha, blob } = foreignTree(otherRepo);
+  const gWorker = (args) =>
+    spawnSync('git', args, { cwd: workerDir, encoding: 'utf8', windowsHide: true });
+
+  gWorker(['init', '-b', 'main']);
+  gWorker(['config', 'user.email', 'test@example.com']);
+  gWorker(['config', 'user.name', 'Test']);
+  fs.rmSync(path.join(workerDir, '.git'), { recursive: true, force: true });
+  fs.symlinkSync(
+    path.join(otherRepo, '.git'),
+    path.join(workerDir, '.git'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  );
+
+  try {
+    const { progressFromWorkerRoot } = require('../supervisor');
+    const res = progressFromWorkerRoot(workerDir);
+    assert.strictEqual(res.commits, 0, 'foreign commits must not be counted: ' + blob);
+    assert.notStrictEqual(sha, '', 'foreign commit must exist so the refusal is meaningful');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-22 supervisor survives file replacing object directory', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n8-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  fs.mkdirSync(workerDir);
+  const gWorker = (args) => spawnSync('git', args, { cwd: workerDir, windowsHide: true });
+  gWorker(['init']);
+
+  fs.rmSync(path.join(workerDir, '.git', 'objects'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(workerDir, '.git', 'objects'), 'just a file');
+
+  try {
+    const { progressFromWorkerRoot } = require('../supervisor');
+    assert.doesNotThrow(() => {
+      const res = progressFromWorkerRoot(workerDir);
+      assert.strictEqual(res.diffBytes, 0);
+    }, 'Must handle ENOTDIR / file gracefully without throwing');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
