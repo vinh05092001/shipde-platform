@@ -787,3 +787,133 @@ test('64-13 a gateway-scoped failure selects a candidate outside that failure do
     'the run continues and completes once the replacement succeeds'
   );
 });
+
+test('64-14 operator-side git commands do not execute worker core.fsmonitor and ignore malformed include.path', () => {
+  const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp-'));
+  const marker = path.join(tmpDir, 'marker-fsmonitor.txt');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  const g = (args, cwd = workerDir) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  g(['init']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  g(['commit', '--allow-empty', '-m', 'init']);
+  const sha = g(['rev-parse', 'HEAD']).stdout.trim();
+
+  g(['config', 'core.fsmonitor', `echo EXECUTED > "${marker}"`]);
+
+  // Malformed include.path
+  const malformedPath = path.join(tmpDir, 'malformed.config');
+  fs.writeFileSync(malformedPath, '[core');
+  g(['config', 'include.path', malformedPath]);
+
+  try {
+    // 1. supervisor path
+    const { progressFromWorkerRoot } = require('../supervisor');
+    progressFromWorkerRoot(workerDir, { baseSha: sha });
+    assert.strictEqual(fs.existsSync(marker), false, 'supervisor executed worker core.fsmonitor');
+
+    // 2. orchestrate path (via headShaOf which runs during resolveLauncher)
+    const orchestrate = require('../orchestrate');
+    const launcher = orchestrate.resolveLauncher({ run: () => {} }, null);
+    if (launcher) {
+      launcher({ cwd: workerDir, baseSha: sha, verdictPath: path.join(tmpDir, 'v.json') });
+    }
+    assert.strictEqual(fs.existsSync(marker), false, 'orchestrate executed worker core.fsmonitor');
+
+    // 3. publisher path
+    const { transferReviewedObjects } = require('../publisher');
+    fs.mkdirSync(cleanDir);
+    g(['init', '--bare', cleanDir], cleanDir);
+    transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+
+    assert.strictEqual(fs.existsSync(marker), false, 'publisher executed worker core.fsmonitor');
+
+    const cloneHead = g(['rev-parse', 'refs/heads/temp-push'], cleanDir).stdout.trim();
+    assert.strictEqual(cloneHead, sha, 'Malformed include.path aborted the transfer');
+  } finally {
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-15 worker hooks do not run during publish', () => {
+  const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker2-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp2-'));
+  const marker = path.join(tmpDir, 'marker-hook.txt');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  const g = (args, cwd = workerDir) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  g(['init']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  g(['commit', '--allow-empty', '-m', 'init']);
+  const sha = g(['rev-parse', 'HEAD']).stdout.trim();
+
+  // Create pre-push hook
+  const hookDir = path.join(workerDir, '.git', 'hooks');
+  fs.mkdirSync(hookDir, { recursive: true });
+  const prePushScript = `@echo off\necho EXECUTED > "${marker}"\nexit 0`;
+  fs.writeFileSync(path.join(hookDir, 'pre-push'), prePushScript);
+  fs.writeFileSync(path.join(hookDir, 'pre-push.bat'), prePushScript);
+  g(['config', 'core.hooksPath', hookDir]);
+
+  try {
+    fs.mkdirSync(cleanDir);
+    g(['init', '--bare', cleanDir], cleanDir);
+    const { transferReviewedObjects } = require('../publisher');
+    transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+
+    assert.strictEqual(
+      fs.existsSync(marker),
+      false,
+      'Worker pre-push hook executed during publish'
+    );
+  } finally {
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-16 worker-set remote URL cannot change push destination', async () => {
+  const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker3-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp3-'));
+  const hostileDir = path.join(tmpDir, 'hostile');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  const g = (args, cwd = workerDir) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  g(['init']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  g(['commit', '--allow-empty', '-m', 'init']);
+  const sha = g(['rev-parse', 'HEAD']).stdout.trim();
+
+  fs.mkdirSync(hostileDir);
+  g(['init', '--bare', hostileDir], hostileDir);
+  g(['config', 'remote.origin.url', hostileDir]);
+  g(['config', 'push.default', 'current']);
+
+  try {
+    fs.mkdirSync(cleanDir);
+    g(['init', '--bare', cleanDir], cleanDir);
+    const { transferReviewedObjects } = require('../publisher');
+    transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+
+    const hostileHeadRes = g(['rev-parse', 'refs/heads/temp-push'], hostileDir);
+    assert.notStrictEqual(
+      hostileHeadRes.status,
+      0,
+      'Publisher pushed to worker-controlled remote URL'
+    );
+
+    const cloneHead = g(['rev-parse', 'refs/heads/temp-push'], cleanDir).stdout.trim();
+    assert.strictEqual(cloneHead, sha, 'Publisher failed to transfer objects to operator mirror');
+  } finally {
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

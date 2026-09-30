@@ -133,34 +133,18 @@ function buildSanitizedMirror(cwd, tmpDir) {
 
 function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir) {
   const mirrorDir = buildSanitizedMirror(cwd, tmpDir);
-  // Push from the worker tree to the operator mirror.
-  // We use --git-dir and -c overrides to ensure that the git push process spawned by the operator
-  // ignores any malicious worker configuration like fsmonitor, hooks, or include paths.
-  const pushRes = runCommand(
-    'git',
-    [
-      '--git-dir=' + path.join(cwd, '.git'),
-      '-c',
-      'core.fsmonitor=',
-      '-c',
-      'core.hooksPath=NUL',
-      '-c',
-      'core.pager=cat',
-      '-c',
-      'diff.external=',
-      '-c',
-      'include.path=/dev/null',
-      '-c',
-      'protocol.file.allow=always',
-      'push',
-      '--no-verify',
-      mirrorDir,
-      `${reviewedSha}:refs/heads/temp-push`,
-    ],
-    cwd
-  );
-  if (pushRes.exitCode !== 0) {
-    throw new Error('PUBLISH_FAILED: failed to transfer objects to mirror: ' + pushRes.stderr);
+
+  // Copy objects directly to the mirror to completely avoid running git in the worker repository
+  // or spawning upload-pack. This ensures malformed include.path or hostile hooks in the worker's
+  // .git/config can never abort the transfer or execute code.
+  const workerObjects = path.join(cwd, '.git', 'objects');
+  const mirrorObjects = path.join(mirrorDir, 'objects');
+  fs.cpSync(workerObjects, mirrorObjects, { recursive: true, force: true });
+
+  // Set the temp-push ref in the mirror to the reviewed SHA
+  const refRes = runCommand('git', ['update-ref', 'refs/heads/temp-push', reviewedSha], mirrorDir);
+  if (refRes.exitCode !== 0) {
+    throw new Error('PUBLISH_FAILED: failed to update mirror ref: ' + refRes.stderr);
   }
 
   // Then fetch from the safe operator-controlled mirror.
