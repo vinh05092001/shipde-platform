@@ -213,10 +213,16 @@ test('publisher refusal cases', () => {
       }),
     /PUBLISH_REFUSED: missing PASS verdict/
   );
+  // TASK-AI-64 R12/R15: a reviewed commit is 40 hex characters, so a label
+  // that is not one is refused before the head is even compared.
   assert.throws(
     () => full({ reviewedSha: 'dummy-sha-that-wont-match' }),
-    /PUBLISH_REFUSED: SHA mismatch/
+    /PUBLISH_REFUSED: reviewedSha is not a 40-character commit/
   );
+  // A real commit that is not the head is refused as a mismatch.
+  assert.throws(() => full({ reviewedSha: 'd'.repeat(40) }), /PUBLISH_REFUSED: SHA mismatch/);
+  // A commit-shaped value that is neither is still refused.
+  assert.throws(() => full({ reviewedSha: 'z'.repeat(40) }), /PUBLISH_REFUSED/);
 
   fs.rmSync(repo.dir, { recursive: true, force: true });
 });
@@ -509,10 +515,17 @@ test('isolated launcher validates every attestation field and the live boundary 
   );
 
   // fully valid verdict passes every gate and only fails afterwards, at
-  // provisioning (tmpCwd is not a git repository) — proving validation runs
-  // before any provisioning work.
+  // provisioning — proving validation runs before any provisioning work.
+  // TASK-AI-64: provisioning now requires the caller's pinned base SHA, so the
+  // refusal is the missing pin rather than a `git rev-parse HEAD` in a tree
+  // that is not a repository.
   writeVerdict(validVerdict());
-  assert.throws(() => launch(validOpts()), /Could not determine HEAD SHA/);
+  assert.throws(() => launch(validOpts()), /ISOLATION_BASE_SHA_MISSING/);
+  // A malformed pin is refused by name too.
+  assert.throws(
+    () => launch(Object.assign(validOpts(), { baseSha: 'not-a-commit' })),
+    /ISOLATION_BASE_SHA_INVALID/
+  );
 
   if (fs.existsSync(verdictPath)) fs.unlinkSync(verdictPath);
   fs.rmSync(tmpCwd, { recursive: true, force: true });

@@ -7,7 +7,34 @@ const { executableFor } = require('./harness');
 const crypto = require('crypto');
 
 const WORKER_USERNAME = 'ShipDeWorker';
+// The worker root, defined once. Every component that has to know whether a
+// path is inside the worker boundary (the launcher that provisions it, the
+// publisher that must never run there, the approval registry that must stay
+// operator-side) reads this one definition instead of restating the path.
+const WORKER_ROOT = 'C:\\ShipDeWorker';
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** The worker root for one job: the worker never sees the operator's leaf name. */
+function workerRootFor(hostCwd) {
+  const jobName = path.basename(String(hostCwd || '')) || 'default';
+  return path.win32.join(WORKER_ROOT, jobName);
+}
+
+/**
+ * True when `target` is the worker root or anything under it.
+ *
+ * Compared as Windows paths on every host, so the answer does not change with
+ * the platform the Controller happens to run on. A refusal must be a refusal
+ * everywhere, not only where the worker exists.
+ */
+function isWorkerPath(target) {
+  if (!target) return false;
+  const root = path.win32.normalize(path.win32.resolve(WORKER_ROOT));
+  const full = path.win32.normalize(path.win32.resolve(String(target)));
+  if (full.toLowerCase() === root.toLowerCase()) return true;
+  const rel = path.win32.relative(root, full);
+  return rel !== '' && !rel.startsWith('..') && !path.win32.isAbsolute(rel);
+}
 
 function getFolderHash(folder) {
   const files = [];
@@ -280,7 +307,7 @@ function getIsolatedLauncher() {
 
     const hostCwd = opts.cwd || process.cwd();
     const jobName = path.basename(hostCwd) || 'default';
-    const workerRoot = `C:\\ShipDeWorker\\${jobName}`;
+    const workerRoot = workerRootFor(hostCwd);
 
     // P5: bind the FULL host worktree path, not just the worker-root leaf, so
     // two jobs sharing a directory leaf cannot share one attestation.
@@ -322,17 +349,22 @@ function getIsolatedLauncher() {
       );
     }
 
-    // Provision worktree using clean clone at the reviewed SHA
+    // Provision worktree using a clean clone checked out at the caller's
+    // pinned base SHA (AI-64-R15). The operator worktree's current HEAD is not
+    // a base: it moves under the operator's feet, and a worker provisioned at
+    // "whatever HEAD was" is not a reproducible run. An absent or malformed pin
+    // stops the run before the worker root is created.
+    const baseSha = opts.baseSha || null;
+    if (!baseSha) {
+      throw new Error('ISOLATION_BASE_SHA_MISSING: the caller must pin the base SHA to provision');
+    }
+    if (!/^[0-9a-f]{40}$/i.test(String(baseSha))) {
+      throw new Error('ISOLATION_BASE_SHA_INVALID: not a 40-character commit: ' + baseSha);
+    }
+    const headSha = String(baseSha);
     if (fs.existsSync(workerRoot)) {
       fs.rmSync(workerRoot, { recursive: true, force: true });
     }
-    const headShaRes = spawnSync('git', ['rev-parse', 'HEAD'], {
-      cwd: hostCwd,
-      encoding: 'utf8',
-      windowsHide: true,
-    });
-    const headSha = headShaRes.stdout.trim();
-    if (headShaRes.status !== 0 || !headSha) throw new Error('Could not determine HEAD SHA');
 
     // Q5: --no-hardlinks — a local clone hardlinks .git/objects files to
     // the operator repo; the worker root is outside the operator profile and
@@ -439,6 +471,10 @@ module.exports = {
   defaultVerifyBoundary,
   buildBoundaryVerifyScript,
   buildWorkerLaunchScript,
+  workerRootFor,
+  isWorkerPath,
+  WORKER_USERNAME,
+  WORKER_ROOT,
   EXPECTED_FIREWALL_RULES,
   DEFAULT_WORKER_TIMEOUT_MS,
 };

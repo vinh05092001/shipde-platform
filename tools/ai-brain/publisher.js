@@ -17,12 +17,38 @@
  * P2: the only fallback for a missing approval registry is `testMode`, an
  * explicit injected option used exclusively by tests. No argv, no environment
  * heuristic.
+ *
+ * P3: the publisher never runs inside the worker. The worker root is defined
+ * once, by isolation-launcher.js, and a `cwd` under it is a refusal with the
+ * boundary named — the loop runs this module operator-side, and a call that
+ * arrives from the worker is a bug in the call path, not a publish.
+ *
+ * P4: the publish is authorised by an approval **bound to the commit**. The
+ * approval registry is written by approval-registry.js, which only a named
+ * human authority can fill in; here the binding is checked, so an approval for
+ * one commit can never authorise a push of another.
+ *
+ * P5: the only Pull Request this module creates is a **draft**. It never marks
+ * one ready, never merges, never approves and never comments (AI-64-R13,
+ * AI-64-P07).
  */
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const approvals = require('./approval-registry');
+const { isWorkerPath } = require('./isolation-launcher');
+
+// A reviewed commit is a commit: 40 hex characters. Anything else is a label,
+// not evidence (reconcile.js SHA_40, control.ps1 headRefOid).
+const SHA_40 = /^[0-9a-f]{40}$/i;
+
+// The terminal verdicts this repository records for a reviewed slice
+// (FEATURE-DELIVERY-REGISTER rows 189..192). FALLBACK_PASS is accepted on the
+// same terms reconcile.js already states: a named reviewer and an exact
+// 40-character reviewed commit, both checked below.
+const ACCEPTED_VERDICTS = Object.freeze(['PASS', 'FALLBACK_PASS']);
 
 function runCommand(cmd, args, cwd) {
   const res = spawnSync(cmd, args, { cwd, encoding: 'utf8', windowsHide: true });
@@ -117,6 +143,111 @@ function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir) {
 }
 
 /**
+ * The draft Pull Request shape the register's evidence standard expects: a
+ * `[<WORK_ITEM_ID>]` title (reconcile.js) and a head that is the reviewed SHA
+ * (control.ps1). It is created as a draft and then verified, because a
+ * successful push is not evidence that the Pull Request points at the reviewed
+ * commit.
+ *
+ * Idempotent on the head commit, which is what makes a repeated run for the same
+ * `(workItemId, baseSha)` return the Pull Request that already exists instead of
+ * opening a second one. GitHub is the record here; no local store is added.
+ */
+function createDraftPullRequest(options) {
+  const o = options || {};
+  const { remoteUrl, branch, reviewedSha, workItemId, outcome } = o;
+  const title = '[' + String(workItemId || '').trim() + '] ' + String(outcome || 'work item');
+  if (!/^\[[A-Za-z0-9-]+\]/.test(title)) {
+    throw new Error('PUBLISH_REFUSED: draft title must begin with [<WORK_ITEM_ID>]');
+  }
+  const body =
+    o.body ||
+    'Draft opened by the Ship Dễ live loop at the reviewed commit ' +
+      reviewedSha +
+      '. Reviewer: ' +
+      (o.reviewer || 'unrecorded') +
+      '. This Pull Request is a proof artifact: the loop never merges it.';
+
+  const existing = ghRun([
+    'pr',
+    'list',
+    '--repo',
+    repoOf(remoteUrl),
+    '--head',
+    branch,
+    '--state',
+    'all',
+    '--json',
+    'number,headRefOid,isDraft',
+  ]);
+  if (existing.exitCode === 0) {
+    const list = JSON.parse(existing.stdout || '[]');
+    const atSha = (Array.isArray(list) ? list : []).find((p) => p && p.headRefOid === reviewedSha);
+    if (atSha) {
+      return { status: 'existing_draft', number: atSha.number, headRefOid: reviewedSha, title };
+    }
+  }
+
+  const created = ghRun([
+    'pr',
+    'create',
+    '--repo',
+    repoOf(remoteUrl),
+    '--draft',
+    '--head',
+    branch,
+    '--title',
+    title,
+    '--body',
+    body,
+  ]);
+  if (created.exitCode !== 0) {
+    throw new Error('PUBLISH_FAILED: gh pr create failed: ' + created.stderr);
+  }
+
+  const number = String(created.stdout || '')
+    .trim()
+    .split('#')
+    .pop()
+    .trim();
+  const view = ghRun([
+    'pr',
+    'view',
+    number,
+    '--repo',
+    repoOf(remoteUrl),
+    '--json',
+    'isDraft,headRefOid,title',
+  ]);
+  if (view.exitCode !== 0) {
+    throw new Error('PUBLISH_FAILED: could not verify the draft Pull Request: ' + view.stderr);
+  }
+  const evidence = JSON.parse(view.stdout || '{}');
+  if (evidence.isDraft !== true) {
+    throw new Error('PUBLISH_FAILED: the Pull Request is not a draft');
+  }
+  if (evidence.headRefOid !== reviewedSha) {
+    throw new Error(
+      'PUBLISH_FAILED: draft head ' + evidence.headRefOid + ' is not the reviewed commit'
+    );
+  }
+  return { status: 'draft_created', number, headRefOid: evidence.headRefOid, title };
+}
+
+/** `owner/name` for a trusted https remote, for gh's --repo flag. */
+function repoOf(remoteUrl) {
+  const parsed = validateRemoteUrl(remoteUrl);
+  const parts = parsed
+    .replace(/\.git$/, '')
+    .split('/')
+    .filter(Boolean);
+  const name = parts[parts.length - 1];
+  const owner = parts[parts.length - 2];
+  if (!owner || !name) throw new Error('PUBLISH_REFUSED: remoteUrl does not name owner/repo');
+  return owner + '/' + name;
+}
+
+/**
  * F6, N9: Push from a clean operator-side clone. Avoid running git in cwd
  * for anything except the read-only rev-parse HEAD check above; the clone
  * and the push both target the controller-pinned remoteUrl, and the object
@@ -126,37 +257,86 @@ function publish(options) {
   const { cwd, reviewedSha, approvalId, expiry, verdict, remoteUrl, branch, registryPath } =
     options;
   const testMode = options.testMode === true;
+  const log = typeof options.log === 'function' ? options.log : null;
+  const refuse = (message) => {
+    // P3/P4: a refusal is logged, not swallowed. The caller sees the throw and
+    // a human sees the line.
+    if (log) log(message);
+    throw new Error(message);
+  };
 
-  if (!cwd) throw new Error('PUBLISH_REFUSED: missing cwd');
-  if (!reviewedSha) throw new Error('PUBLISH_REFUSED: missing reviewedSha');
-  if (!approvalId) throw new Error('PUBLISH_REFUSED: missing approvalId');
-  if (!expiry) throw new Error('PUBLISH_REFUSED: missing expiry');
+  if (!cwd) refuse('PUBLISH_REFUSED: missing cwd');
+  if (isWorkerPath(cwd)) {
+    refuse(
+      'PUBLISH_REFUSED: refusing to publish from inside the worker root (' +
+        String(cwd) +
+        '); the publisher runs operator-side only'
+    );
+  }
+  if (!reviewedSha) refuse('PUBLISH_REFUSED: missing reviewedSha');
+  if (!SHA_40.test(String(reviewedSha))) {
+    refuse('PUBLISH_REFUSED: reviewedSha is not a 40-character commit: ' + reviewedSha);
+  }
+  if (!approvalId) refuse('PUBLISH_REFUSED: missing approvalId');
+  if (!expiry) refuse('PUBLISH_REFUSED: missing expiry');
 
   if (Date.now() > expiry) {
-    throw new Error('PUBLISH_REFUSED: approval expired');
+    refuse('PUBLISH_REFUSED: approval expired');
   }
 
-  if (verdict !== 'PASS') {
-    throw new Error('PUBLISH_REFUSED: missing PASS verdict, got: ' + verdict);
+  if (!ACCEPTED_VERDICTS.includes(verdict)) {
+    refuse(
+      'PUBLISH_REFUSED: missing PASS verdict, got: ' +
+        verdict +
+        ' (accepted: ' +
+        ACCEPTED_VERDICTS.join(', ') +
+        ')'
+    );
   }
 
   // F12: Validation against approval record. The registry lives on the
   // operator side; when it is absent the publish is refused unless the caller
   // explicitly injected testMode (tests only — never inferred from argv/env).
-  const regPath =
-    registryPath || path.join(process.env.LOCALAPPDATA || 'C:\\temp', 'ShipDe', 'approvals.json');
+  const regPath = approvals.registryPath(registryPath);
   if (fs.existsSync(regPath)) {
-    const registryText = fs.readFileSync(regPath, 'utf8');
-    // Operators' files may be saved by PowerShell tooling with a UTF-8 BOM;
-    // JSON.parse rejects it, so strip the BOM (written by this tool itself).
-    const registry = JSON.parse(
-      registryText.charCodeAt(0) === 0xfeff ? registryText.slice(1) : registryText
-    );
-    if (registry[approvalId] !== 'APPROVED') {
-      throw new Error('PUBLISH_REFUSED: approvalId not registered or not APPROVED');
+    const registry = approvals.readRegistry(regPath);
+    const entry = approvals.approvalEntry(registry, approvalId);
+    if (approvals.approvalState(entry) !== approvals.State.APPROVED) {
+      refuse('PUBLISH_REFUSED: approvalId not registered or not APPROVED');
+    }
+    // P4: the binding. A registered, APPROVED approval for a different commit
+    // does not authorise pushing this one.
+    const bound = approvals.approvalReviewedSha(entry);
+    if (bound && bound !== reviewedSha) {
+      refuse(
+        'PUBLISH_REFUSED: approval ' +
+          approvalId +
+          ' is bound to reviewed commit ' +
+          bound +
+          ', not ' +
+          reviewedSha
+      );
+    }
+    const boundVerdict = approvals.approvalVerdict(entry);
+    if (boundVerdict && boundVerdict !== verdict) {
+      refuse(
+        'PUBLISH_REFUSED: approval ' +
+          approvalId +
+          ' was issued for ' +
+          boundVerdict +
+          ', not ' +
+          verdict
+      );
+    }
+    if (verdict === approvals.Verdict.FALLBACK_PASS && !approvals.approvalReviewer(entry)) {
+      refuse('PUBLISH_REFUSED: ' + approvals.Verdict.FALLBACK_PASS + ' must name its reviewer');
+    }
+    const entryExpiry = approvals.approvalExpiry(entry);
+    if (entryExpiry !== null && Date.now() > entryExpiry) {
+      refuse('PUBLISH_REFUSED: approval ' + approvalId + ' expired at ' + entry.expiry);
     }
   } else if (!testMode) {
-    throw new Error('PUBLISH_REFUSED: approval registry not found');
+    refuse('PUBLISH_REFUSED: approval registry not found');
   }
 
   // P1: trusted push destination. remoteUrl and branch come from the options
@@ -164,7 +344,7 @@ function publish(options) {
   // them. The only branch fallback is derived from the controller-supplied
   // cwd path itself, never from a file inside the tree.
   if (!remoteUrl) {
-    throw new Error(
+    refuse(
       'PUBLISH_REFUSED: missing remoteUrl (push destination must come from trusted controller input)'
     );
   }
@@ -173,26 +353,27 @@ function publish(options) {
 
   const currentSha = getHeadSha(cwd);
   if (!currentSha) {
-    throw new Error('PUBLISH_REFUSED: could not resolve HEAD sha');
+    refuse('PUBLISH_REFUSED: could not resolve HEAD sha');
   }
 
   if (currentSha !== reviewedSha) {
-    throw new Error(
-      'PUBLISH_REFUSED: SHA mismatch. Expected ' + reviewedSha + ', got ' + currentSha
-    );
+    refuse('PUBLISH_REFUSED: SHA mismatch. Expected ' + reviewedSha + ', got ' + currentSha);
   }
 
   // testMode is an explicit injected option used only by tests: the external
   // clone/fetch/push is simulated so a test can never reach the network.
   if (testMode) {
-    return {
-      status: 'published',
-      sha: currentSha,
-      approvalId,
-      remoteUrl,
-      branch: targetBranch,
-      simulated: true,
-    };
+    return Object.assign(
+      {
+        status: 'published',
+        sha: currentSha,
+        approvalId,
+        remoteUrl,
+        branch: targetBranch,
+        simulated: true,
+      },
+      options.draft ? { draft: { status: 'simulated_draft', headRefOid: currentSha } } : {}
+    );
   }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-publish-'));
@@ -220,12 +401,36 @@ function publish(options) {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
-  return { status: 'published', sha: currentSha, approvalId, remoteUrl, branch: targetBranch };
+  return Object.assign(
+    { status: 'published', sha: currentSha, approvalId, remoteUrl, branch: targetBranch },
+    // P5: the draft is opened only when the caller asked for it, always at the
+    // reviewed SHA, and the loop stops here: no ready-for-review, no merge.
+    options.draft
+      ? {
+          draft: createDraftPullRequest(
+            Object.assign({}, options.draft, {
+              remoteUrl,
+              branch: targetBranch,
+              reviewedSha: currentSha,
+            })
+          ),
+        }
+      : {}
+  );
+}
+
+/** `gh` through the same shim-aware spawner every harness uses. */
+function ghRun(args, cwd) {
+  const { executableFor } = require('./harness');
+  const exe = executableFor('gh');
+  return runCommand(exe.file, exe.prefixArgs.concat(args), cwd);
 }
 
 module.exports = {
   publish,
+  createDraftPullRequest,
   buildSanitizedMirror,
   transferReviewedObjects,
   SAFE_MIRROR_CONFIG,
+  ACCEPTED_VERDICTS,
 };
