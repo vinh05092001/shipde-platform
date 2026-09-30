@@ -693,7 +693,7 @@ function reportDispatchOutcome(args, deps) {
 
   let outcome;
   try {
-    outcome = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\\uFEFF/, ''));
+    outcome = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   } catch (err) {
     error('OUTCOME_UNREADABLE: ' + file + ' (' + err.message + ')');
     exit(2);
@@ -757,21 +757,23 @@ function reportDispatchOutcome(args, deps) {
     chosen: outcome.candidateKey,
     outcome,
     stall,
-    detail: failed
-      ? stall.reselectRequired
-        ? 'STRUCTURED_FAILURE_RESELECT_REQUIRED'
-        : 'STRUCTURED_FAILURE_REPORTED'
-      : 'OUTCOME_REPORTED',
+    detail: terminal
+      ? failed
+        ? stall.reselectRequired
+          ? 'STRUCTURED_FAILURE_RESELECT_REQUIRED'
+          : 'STRUCTURED_FAILURE_REPORTED'
+        : 'OUTCOME_REPORTED'
+      : 'PROGRESS_REPORTED',
   };
   decisions.recordDecision(recorded, { dir: d.decisionDir, now });
 
   log(
     'Outcome ' +
-      (failed ? 'FAILED' : 'COMPLETED') +
+      (terminal ? (failed ? 'FAILED' : 'COMPLETED') : 'IN_PROGRESS') +
       ' for ' +
       outcome.candidateKey +
       (outcome.errorClass ? ' (class ' + outcome.errorClass + ')' : '') +
-      '; evidence and cooldown updated' +
+      (terminal ? '; evidence and cooldown updated' : '; progress reported') +
       (stall.reselectRequired
         ? '; RESELECT_REQUIRED (past ' + STALL_STRUCTURED_FAILURE_MS + 'ms)'
         : '')
@@ -796,7 +798,7 @@ async function runProfileDispatch(args, deps) {
 
   let rawProfile;
   try {
-    rawProfile = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\\uFEFF/, ''));
+    rawProfile = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   } catch (err) {
     error('PROFILE_UNREADABLE: ' + file + ' (' + err.message + ')');
     exit(2);
@@ -909,7 +911,7 @@ async function runProfileDispatch(args, deps) {
       (chosenCandidate && chosenCandidate.accountId) || '*',
       result.chosen,
       100000,
-      { home: d.home, storePath: d.storePath, now }
+      { home: d.home, path: d.storePath, now }
     );
     reserved = true;
     log('Reserved rank 1 (quota-store): ' + result.chosen);

@@ -1,1 +1,16 @@
-{ "taskId":"TASK-AI-65-CORE","role":"writer","complexity":"complex","requiredCapabilities":[],"proofFloor":"WORK_ITEM_PASS","contextSize":128000,"expectedDuration":1200000,"latencyPriority":"normal","qualityFloor":80,"costCeiling":5000,"requiredHarness":"hermes","forbiddenFailureDomains":[],"resourceCeiling":1,"currentWorkload":0 }
+{
+  "taskId": "TASK-AI-65-CORE",
+  "role": "writer",
+  "complexity": "complex",
+  "requiredCapabilities": [],
+  "proofFloor": "WORK_ITEM_PASS",
+  "contextSize": 128000,
+  "expectedDuration": 1200000,
+  "latencyPriority": "normal",
+  "qualityFloor": 80,
+  "costCeiling": 5000,
+  "requiredHarness": "paseo",
+  "forbiddenFailureDomains": [],
+  "resourceCeiling": 1,
+  "currentWorkload": 0
+}

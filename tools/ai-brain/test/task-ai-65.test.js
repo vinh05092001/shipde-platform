@@ -656,13 +656,6 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     assert.equal(entry.stall.reselectRequired, true);
   });
   test('65-13: missing floors and penalties are asserted', async () => {
-    const dirs = {
-      root: tmpDir('65-root'),
-      evidence: tmpDir('65-evidence'),
-      decisions: tmpDir('65-decisions'),
-      home: tmpDir('65-home'),
-    };
-
     // 1. PROOF_FLOOR_NOT_MET
     const noProof = cand({ accountId: 'a', modelId: 'up/m1' });
     const p1 = profile({ proofFloor: 'API_PASS' });
@@ -723,13 +716,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
   });
 
   test('65-14: --execute reservation and latency-priority controller fallback', async () => {
-    const dirs = {
-      root: tmpDir('65-root'),
-      evidence: tmpDir('65-evidence'),
-      decisions: tmpDir('65-decisions'),
-      home: tmpDir('65-home'),
-      storePath: path.join(tmpDir('65-store'), 'quota.json'),
-    };
+    dirs.storePath = path.join(tmpDir('65-store'), 'quota.json');
     fs.mkdirSync(path.dirname(dirs.storePath), { recursive: true });
     fs.writeFileSync(dirs.storePath, '{}');
 
@@ -740,9 +727,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     assert.equal(r.exitCode, 0);
 
     // Check reservation written
-    const store = JSON.parse(
-      fs.readFileSync(path.join(dirs.home, '.shipde', 'agy-quota.json'), 'utf8')
-    ).reservations;
+    const store = JSON.parse(fs.readFileSync(dirs.storePath, 'utf8')).reservations;
     assert.ok(Object.keys(store || {}).length > 0);
     assert.equal(Object.values(store)[0].workItemId, 'TASK-EXEC');
 
@@ -751,5 +736,150 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
       (e) => e.workItemId === 'TASK-EXEC' && e.stage === 'selected'
     );
     assert.equal(entry.jev.weights.latency, 55); // LATENCY_FIRST has latency 55
+  });
+  test('65-15: --report-outcome writes API_PASS for complete and stages resumed with no evidence for running', () => {
+    // 1. Terminal (completed) -> API_PASS
+    const c = cand({ modelId: 'up-65-a/model-65-out2' });
+    const goodFile = path.join(dirs.root, 'good-outcome-pass.json');
+    fs.writeFileSync(
+      goodFile,
+      JSON.stringify({ candidateKey: candidateKey(c), status: 'completed' })
+    );
+    let passExit = null;
+    dispatchCommand(
+      { 'report-outcome': goodFile },
+      {
+        evidenceDir: dirs.evidence,
+        decisionDir: dirs.decisions,
+        home: dirs.home,
+        now: NOW,
+        log: () => {},
+        error: () => {},
+        exit: (c) => {
+          passExit = c;
+        },
+      }
+    );
+    assert.equal(passExit, 0);
+    const data = evidence.loadEvidence(dirs.evidence);
+    const evList = evidence.getEvidence(data, c);
+    assert.equal(evList.length, 1);
+    assert.equal(evList[0].status, 'passed');
+    assert.equal(
+      evList[0].level,
+      evidence.Level.API,
+      'evidence proofLevel is API_PASS and not above'
+    );
+
+    // 2. Non-terminal (running) -> no evidence, stage resumed
+    const runFile = path.join(dirs.root, 'good-outcome-run.json');
+    fs.writeFileSync(runFile, JSON.stringify({ candidateKey: candidateKey(c), status: 'running' }));
+    let runExit = null;
+    dispatchCommand(
+      { 'report-outcome': runFile },
+      {
+        evidenceDir: dirs.evidence,
+        decisionDir: dirs.decisions,
+        home: dirs.home,
+        now: NOW,
+        log: () => {},
+        error: () => {},
+        exit: (c) => {
+          runExit = c;
+        },
+      }
+    );
+    assert.equal(runExit, 0);
+    const data2 = evidence.loadEvidence(dirs.evidence);
+    const evList2 = evidence.getEvidence(data2, c);
+    assert.equal(evList2.length, 1, 'no new evidence written for non-terminal status');
+    const entries = decisionLines(dirs.decisions);
+    const entry = entries[entries.length - 1];
+    assert.equal(entry.stage, 'resumed', 'non-terminal outcome stages resumed');
+  });
+
+  test('65-16: BOM is stripped from --profile and --report-outcome', async () => {
+    // 1. Profile with BOM
+    const p = profile();
+    const pFile = path.join(dirs.root, 'bom-profile.json');
+    fs.writeFileSync(
+      pFile,
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(p), 'utf8')])
+    );
+
+    let dryExit = null;
+    await dispatchCommand(
+      { profile: pFile, 'dry-run': true },
+      {
+        evidenceDir: dirs.evidence,
+        decisionDir: dirs.decisions,
+        home: dirs.home,
+        now: NOW,
+        log: () => {},
+        error: () => {},
+        exit: (c) => {
+          dryExit = c;
+        },
+      }
+    );
+    assert.equal(dryExit, 0, 'profile with BOM is parsed successfully');
+
+    // 2. Outcome with BOM
+    const c = cand();
+    const oFile = path.join(dirs.root, 'bom-outcome.json');
+    fs.writeFileSync(
+      oFile,
+      Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from(JSON.stringify({ candidateKey: candidateKey(c), status: 'completed' }), 'utf8'),
+      ])
+    );
+    let outExit = null;
+    dispatchCommand(
+      { 'report-outcome': oFile },
+      {
+        evidenceDir: dirs.evidence,
+        decisionDir: dirs.decisions,
+        home: dirs.home,
+        now: NOW,
+        log: () => {},
+        error: () => {},
+        exit: (c) => {
+          outExit = c;
+        },
+      }
+    );
+    assert.equal(outExit, 0, 'outcome with BOM is parsed successfully');
+  });
+
+  test('65-17: unknown headroom applies 15-point penalty', async () => {
+    const cOpen = cand({ accountId: 'open', modelId: 'up/m1' });
+    const cUnknown = cand({ accountId: 'unknown', modelId: 'up/m2' });
+
+    const p = profile({});
+    const r = await runDispatch(p, [cOpen, cUnknown], dirs, {
+      headrooms: { open: { status: 'open' } },
+    });
+
+    const openEntry = r.result.ranking.find((c) => c.candidateKey === candidateKey(cOpen));
+    const unknownEntry = r.result.ranking.find((c) => c.candidateKey === candidateKey(cUnknown));
+
+    assert.ok(openEntry.scoreBreakdown.headroomPenalty === 0);
+    assert.equal(unknownEntry.scoreBreakdown.headroomPenalty, 15);
+  });
+
+  test('65-18: execute reservation uses 100000 tokens', async () => {
+    dirs.storePath = path.join(tmpDir('65-store2'), 'quota.json');
+    fs.mkdirSync(path.dirname(dirs.storePath), { recursive: true });
+    fs.writeFileSync(dirs.storePath, '{}');
+    const c = cand({ accountId: 'acct-exec', modelId: 'up/m1' });
+    const p = profile({ taskId: 'TASK-EXEC' });
+
+    const r = await runDispatch(p, [c], dirs, { execute: true });
+    assert.equal(r.exitCode, 0);
+
+    const store = JSON.parse(fs.readFileSync(dirs.storePath, 'utf8')).reservations;
+    const tokens = Object.values(store)[0].tokens;
+    assert.equal(tokens, 100000, 'reservation uses 100000 tokens instead of expectedDuration ms');
   });
 });

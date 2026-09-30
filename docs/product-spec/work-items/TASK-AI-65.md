@@ -137,8 +137,8 @@ inside `pnpm test:brain` (`node --test "tools/ai-brain/test/*.test.js"`).
 
 ## Verification evidence
 
-- `node --test "tools/ai-brain/test/*.test.js"` — **1041 tests, 1041 pass, 0 fail** (includes the
-  12 new TASK-AI-65 tests; no regression in the existing suites).
+- `node --test "tools/ai-brain/test/*.test.js"` — **1048 tests, 1048 pass, 0 fail** (includes the
+  18 new TASK-AI-65 tests; no regression in the existing suites).
 - `node tools/ai-brain/cli.js dispatch --dry-run --profile <sample security-review profile>` —
   real registry candidates, exits 0: JEV `UNDECIDED` → Controller weights `QUALITY_FIRST`;
   top 3 spans `9router/gh` and `9router/kimchi` failure domains (the writer's
@@ -154,3 +154,8 @@ inside `pnpm test:brain` (`node --test "tools/ai-brain/test/*.test.js"`).
   weights decide. That is the intended fail-safe, not a degraded mode.
 - Candidates without a declared quality, cost or latency carry no sub-score; the total is
   renormalised over the signals that exist, so an unpriced candidate is never scored as cheap.
+- **Bootstrap circularity**: On a fresh checkout, proofFloor > NONE is unsatisfiable. To bootstrap, run an execution with proofFloor: 'NONE' and --report-outcome with status: 'completed'.
+- **API_PASS ceiling**: --report-outcome only ever mints API_PASS evidence. A higher proofFloor requires real execution evidence recorded via cli.js.
+- **EVIDENCE_BLOCKED**: Candidates are permanently excluded if their last probe reported model_unsupported, upstream_credential (401), upstream_credit_exhausted (402), or upstream_rate_limit/ccount_quota_exhausted (429), until their evidence explicitly changes.
+- **Headroom constants**: Candidates with unknown quota availability take a 15-point score penalty; 	ight takes a 10-point penalty.
+- **forbiddenFailureDomains grammar**: Only exact component values (e.g., gy-native-a) or composed gateway/upstream forms (9router/antigravity) are supported.

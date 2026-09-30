@@ -1,1 +1,16 @@
-{ "taskId":"TASK-AI-65-SEC-PROOFAPI","role":"security-review","complexity":"standard","requiredCapabilities":[],"proofFloor":"API_PASS","contextSize":64000,"expectedDuration":600000,"latencyPriority":"normal","qualityFloor":0,"costCeiling":1000,"requiredHarness":null,"forbiddenFailureDomains":["agy-native-a"],"resourceCeiling":4,"currentWorkload":1 }
+{
+  "taskId": "TASK-AI-65-SEC-PROOFAPI",
+  "role": "security-review",
+  "complexity": "standard",
+  "requiredCapabilities": [],
+  "proofFloor": "API_PASS",
+  "contextSize": 64000,
+  "expectedDuration": 600000,
+  "latencyPriority": "normal",
+  "qualityFloor": 0,
+  "costCeiling": 1000,
+  "requiredHarness": null,
+  "forbiddenFailureDomains": ["agy-native-a"],
+  "resourceCeiling": 4,
+  "currentWorkload": 1
+}
