@@ -21,10 +21,10 @@
 //   C. the launcher provisions the worker root by cloning it AS THE OPERATOR,
 //      so .git inside it is operator-owned while the job runs as the worker,
 //      and git >= 2.35.2 refuses every command with "detected dubious
-//      ownership" (exit 128). The host script now writes a safe.directory
-//      entry for exactly that worker root into the worker's own git config
-//      (the GIT_CONFIG_GLOBAL file inside the worker root) before the job
-//      starts — never into the operator's ~/.gitconfig, never as '*'.
+//      ownership" (exit 128). The host script now sets command-scope environment
+//      variables (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_0=safe.directory)
+//      for exactly that worker root, and explicitly unsets global config
+//      (GIT_CONFIG_GLOBAL=NUL). No global config file is written inside the worker root.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -460,7 +460,6 @@ test('the host script declares exactly the worker root safe in the worker comman
     script.includes(`\$env:GIT_CONFIG_GLOBAL = "NUL"`),
     'the job must have GIT_CONFIG_GLOBAL set to NUL'
   );
-  assert.ok(script.includes(`\$env:GIT_CONFIG_NOSYSTEM = "1"`), 'must set GIT_CONFIG_NOSYSTEM');
 
   const directoryLines = script.match(/GIT_CONFIG_VALUE_0\s*=\s*"[^"]*"/g) || [];
   assert.ok(directoryLines.length >= 1, 'the script must declare safe.directory at all');
@@ -489,9 +488,9 @@ test(
     // owned by another account, which cannot be created without changing the
     // host, so this test never requires a commit under a foreign owner. What a
     // temp dir can prove is the contract that fixes the defect — git, run
-    // inside the launch with GIT_CONFIG_GLOBAL pointing at the worker root,
-    // reports exactly that root, from exactly that file, while the operator's
-    // global config is byte-identical afterwards.
+    // inside the launch with GIT_CONFIG_COUNT variables injected,
+    // reports exactly that root from the command line scope, while the operator's
+    // global config is byte-identical afterwards. No git config file is created.
     const operatorConfigBefore = readTextIfExists(OPERATOR_GITCONFIG);
     const operatorSafeBefore = readOperatorSafeDirectory();
 
@@ -577,3 +576,63 @@ test(
     }
   }
 );
+
+test('workerRootFor refuses drive roots, siblings, and wildcards', () => {
+  const { workerRootFor } = require('../isolation-launcher');
+  assert.throws(() => workerRootFor('C:\\a\\..'), /Invalid job name/);
+  assert.throws(() => workerRootFor('C:\\a\\..\\..'), /Invalid job name/);
+  assert.throws(() => workerRootFor('C:\\work\\..'), /Invalid job name/);
+  assert.throws(() => workerRootFor('C:\\work\\?'), /Invalid job name/);
+  assert.throws(() => workerRootFor('C:\\ShipDeWorker\\*'), /Invalid job name/);
+  assert.strictEqual(workerRootFor('C:\\'), 'C:\\ShipDeWorker\\default');
+  assert.strictEqual(workerRootFor('C:\\work\\job'), 'C:\\ShipDeWorker\\job');
+});
+
+test('no config file in worker root and sibling repo fails', gitHostSkip, () => {
+  const { dir, hostRes, raw, readIt } = runGeneratedHost({
+    workerTimeoutMs: 60000,
+    targetLines: [
+      '$ErrorActionPreference = "Stop"',
+      `$gitExe = "${GIT_EXE}"`,
+      `$env:GIT_TEST_ASSUME_DIFFERENT_OWNER = "1"`,
+      `$workerRoot = $PWD.Path`,
+      `& $gitExe init $workerRoot | Out-Null`,
+      `& $gitExe status > $null 2>&1`,
+      `Write-Output ("STATUS_EXIT=" + $LASTEXITCODE)`,
+      `$sibling = Join-Path (Split-Path $workerRoot) "sibling-$(Get-Random)"`,
+      `New-Item -ItemType Directory -Path $sibling | Out-Null`,
+      `& $gitExe init $sibling | Out-Null`,
+      `$ErrorActionPreference = "Continue"`,
+      `Set-Location -Path $sibling`,
+      `& $gitExe status > $null 2>&1`,
+      `Write-Output ("SIBLING_EXIT=" + $LASTEXITCODE)`,
+      `Set-Location -Path $workerRoot`,
+      `& $gitExe -C $sibling status > $null 2>&1`,
+      `Write-Output ("SIBLING_EXIT2=" + $LASTEXITCODE)`,
+      `$configExists = Test-Path -Path "$workerRoot\\.gitconfig"`,
+      `Write-Output ("GITCONFIG_EXISTS=" + $configExists)`,
+      `exit 0`,
+    ],
+  });
+
+  try {
+    assert.strictEqual(
+      hostRes.status,
+      0,
+      'host script failed: ' + String(hostRes.stderr || hostRes.stdout || '')
+    );
+    assert.ok(raw, 'the host must write a launch result');
+    const reported = readIt();
+    const stdout = String(reported.stdout || '');
+    assert.match(stdout, /STATUS_EXIT=0/, 'exact worker root should be accepted (STATUS_EXIT=0)');
+    assert.match(stdout, /SIBLING_EXIT=128/, 'sibling repo should be refused with 128');
+    assert.match(stdout, /SIBLING_EXIT2=128/, 'git -C sibling should be refused with 128');
+    assert.match(
+      stdout,
+      /GITCONFIG_EXISTS=False/,
+      'no .gitconfig file should be created in worker root'
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

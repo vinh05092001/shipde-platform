@@ -249,12 +249,16 @@ function repairSpec(item, findings, round) {
 
 function headShaOf(cwd) {
   if (!cwd) return null;
-  const res = spawnSync('git', ['rev-parse', 'HEAD'], {
-    cwd,
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 20000,
-  });
+  const res = spawnSync(
+    'git',
+    ['-c', 'core.fsmonitor=', '-c', 'core.hooksPath=nul', 'rev-parse', 'HEAD'],
+    {
+      cwd,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 20000,
+    }
+  );
   if (!res || res.status !== 0) return null;
   return String(res.stdout || '').trim() || null;
 }

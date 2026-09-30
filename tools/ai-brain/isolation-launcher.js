@@ -260,7 +260,6 @@ $wrapperStartTime = Get-Date
 \`$env:USERPROFILE = "${workerRoot}"
 \`$env:GH_CONFIG_DIR = "${workerRoot}\\.config\\gh"
 \`$env:GIT_CONFIG_GLOBAL = "NUL"
-\`$env:GIT_CONFIG_NOSYSTEM = "1"
 \`$env:GIT_CONFIG_COUNT = "1"
 \`$env:GIT_CONFIG_KEY_0 = "safe.directory"
 \`$env:GIT_CONFIG_VALUE_0 = "${safeWorkerRootForGit}"

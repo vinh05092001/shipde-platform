@@ -59,15 +59,29 @@ function progressFromWorkerRoot(cwd, options) {
   const base = typeof o.baseSha === 'string' && o.baseSha ? o.baseSha : null;
   if (!cwd) return { diffBytes: 0, commits: 0, lastProgressAt: null };
 
-  const patch = git(cwd, ['diff', base || 'HEAD']);
+  const patch = git(cwd, [
+    '-c',
+    'core.fsmonitor=',
+    '-c',
+    'core.hooksPath=nul',
+    'diff',
+    '--no-ext-diff',
+    base || 'HEAD',
+  ]);
   const diffBytes = patch.status === 0 ? Buffer.byteLength(patch.stdout || '', 'utf8') : 0;
 
-  const counted = git(cwd, ['rev-list', '--count', base ? base + '..HEAD' : 'HEAD']);
+  const counted = git(cwd, [
+    '-c',
+    'core.hooksPath=nul',
+    'rev-list',
+    '--count',
+    base ? base + '..HEAD' : 'HEAD',
+  ]);
   const commits = counted.status === 0 ? Number(String(counted.stdout || '').trim()) || 0 : 0;
 
   let lastProgressAt = null;
   if (commits > 0) {
-    const when = git(cwd, ['log', '-1', '--format=%cI']);
+    const when = git(cwd, ['-c', 'core.hooksPath=nul', 'log', '-1', '--format=%cI']);
     if (when.status === 0) lastProgressAt = String(when.stdout || '').trim() || null;
   }
   if (!lastProgressAt) {

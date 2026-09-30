@@ -98,8 +98,7 @@ function resolveBranch(branch, cwd) {
  * git versions that honor repo-local config for that key (git >= 2.36 only
  * reads it from protected config, but the publisher must not depend on that).
  * Instead the objects are transferred via a trusted intermediate: a LOCAL
- * clone of cwd (a local clone copies object files directly and never spawns
- * upload-pack), whose config is then rewritten to a minimal trusted one
+ * clone of cwd, whose config is then rewritten to a minimal trusted one
  * before any fetch reads from it.
  */
 const SAFE_MIRROR_CONFIG = '[core]\n\tbare = true\n';

