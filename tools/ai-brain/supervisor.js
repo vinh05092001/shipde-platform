@@ -23,7 +23,23 @@ const Status = Object.freeze({
 });
 
 function git(cwd, args, timeoutMs) {
-  return spawnSync('git', args, {
+  const path = require('path');
+  const safeArgs = [
+    '--git-dir=' + path.join(cwd, '.git'),
+    '--work-tree=' + cwd,
+    '-c',
+    'core.fsmonitor=',
+    '-c',
+    'core.hooksPath=NUL',
+    '-c',
+    'core.pager=cat',
+    '-c',
+    'diff.external=',
+    '-c',
+    'include.path=/dev/null',
+    ...args,
+  ];
+  return spawnSync('git', safeArgs, {
     cwd,
     encoding: 'utf8',
     windowsHide: true,

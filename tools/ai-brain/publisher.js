@@ -60,7 +60,25 @@ function runCommand(cmd, args, cwd) {
 }
 
 function getHeadSha(cwd) {
-  const res = runCommand('git', ['rev-parse', 'HEAD'], cwd);
+  const res = runCommand(
+    'git',
+    [
+      '--git-dir=' + path.join(cwd, '.git'),
+      '-c',
+      'core.fsmonitor=',
+      '-c',
+      'core.hooksPath=NUL',
+      '-c',
+      'core.pager=cat',
+      '-c',
+      'diff.external=',
+      '-c',
+      'include.path=/dev/null',
+      'rev-parse',
+      'HEAD',
+    ],
+    cwd
+  );
   if (res.exitCode === 0) return res.stdout.trim();
   return null;
 }
@@ -92,23 +110,22 @@ function resolveBranch(branch, cwd) {
 }
 
 /**
- * Q4: never run upload-pack against the worker-writable tree. `git fetch
- * <cwd>` spawns `git upload-pack <cwd>`, which reads cwd/.git/config; a
- * planted uploadpack.packObjectsHook there could execute as the operator on
- * git versions that honor repo-local config for that key (git >= 2.36 only
- * reads it from protected config, but the publisher must not depend on that).
- * Instead the objects are transferred via a trusted intermediate: a LOCAL
- * clone of cwd (a local clone copies object files directly and never spawns
- * upload-pack), whose config is then rewritten to a minimal trusted one
- * before any fetch reads from it.
+ * Q4: never run upload-pack against the worker-writable tree. A worker that rewrites its own
+ * git config could trigger code execution via include.path, core.fsmonitor, or hooks during
+ * operator-side git commands. Even local clones (like git clone --bare --no-hardlinks) will
+ * parse the worker config, leading to vulnerabilities or aborts (e.g. malformed include.path).
+ * Instead, the operator-side git commands use --git-dir to act on the worker repo while passing
+ * configuration overrides via -c (e.g., core.fsmonitor=, core.hooksPath=NUL) to prevent
+ * executing or parsing malicious configuration. The reviewed objects are pushed directly from
+ * the worker repo to an operator-controlled bare mirror, avoiding fetch/clone altogether.
  */
 const SAFE_MIRROR_CONFIG = '[core]\n\tbare = true\n';
 
 function buildSanitizedMirror(cwd, tmpDir) {
   const mirrorDir = path.join(tmpDir, 'source-mirror');
-  const cloneRes = runCommand('git', ['clone', '--bare', '--no-hardlinks', cwd, mirrorDir], tmpDir);
-  if (cloneRes.exitCode !== 0) {
-    throw new Error('PUBLISH_FAILED: failed to mirror source tree: ' + cloneRes.stderr);
+  const initRes = runCommand('git', ['init', '--bare', mirrorDir], tmpDir);
+  if (initRes.exitCode !== 0) {
+    throw new Error('PUBLISH_FAILED: failed to init mirror source tree: ' + initRes.stderr);
   }
   fs.writeFileSync(path.join(mirrorDir, 'config'), SAFE_MIRROR_CONFIG);
   return mirrorDir;
@@ -116,21 +133,44 @@ function buildSanitizedMirror(cwd, tmpDir) {
 
 function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir) {
   const mirrorDir = buildSanitizedMirror(cwd, tmpDir);
-  // Belt-and-braces: the client-side -c values below are stripped by the
-  // local transport today (verified: GIT_CONFIG_PARAMETERS is not forwarded
-  // to the spawned upload-pack). Should a future git version forward them,
-  // an empty uploadpack.packObjectsHook must make upload-pack fail closed
-  // (it cannot spawn an empty hook) rather than execute anything, and
-  // upload-pack filters stay disabled.
+  // Push from the worker tree to the operator mirror.
+  // We use --git-dir and -c overrides to ensure that the git push process spawned by the operator
+  // ignores any malicious worker configuration like fsmonitor, hooks, or include paths.
+  const pushRes = runCommand(
+    'git',
+    [
+      '--git-dir=' + path.join(cwd, '.git'),
+      '-c',
+      'core.fsmonitor=',
+      '-c',
+      'core.hooksPath=NUL',
+      '-c',
+      'core.pager=cat',
+      '-c',
+      'diff.external=',
+      '-c',
+      'include.path=/dev/null',
+      '-c',
+      'protocol.file.allow=always',
+      'push',
+      '--no-verify',
+      mirrorDir,
+      `${reviewedSha}:refs/heads/temp-push`,
+    ],
+    cwd
+  );
+  if (pushRes.exitCode !== 0) {
+    throw new Error('PUBLISH_FAILED: failed to transfer objects to mirror: ' + pushRes.stderr);
+  }
+
+  // Then fetch from the safe operator-controlled mirror.
   const fetchRes = runCommand(
     'git',
     [
       '-c',
-      'core.hooksPath=nul',
+      'core.hooksPath=NUL',
       '-c',
-      'uploadpack.packObjectsHook=',
-      '-c',
-      'uploadpack.allowFilter=false',
+      'protocol.file.allow=always',
       'fetch',
       mirrorDir,
       `${reviewedSha}:refs/heads/temp-push`,

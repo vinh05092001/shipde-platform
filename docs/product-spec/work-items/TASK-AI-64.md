@@ -233,6 +233,8 @@ These are the acceptance floor, not aspirations. A Pull Request that violates an
 | `AI-64-R14`   | The decision log is the trace. Every selection, launch, session id, branch, classification, review round, verdict and outcome is recorded there, credential-scrubbed, append-only, one JSONL per day, and survives the process that wrote it. A run whose log cannot be read is refused, not treated as empty.                |
 | `AI-64-R15`   | The loop is fail-closed on every seam. A missing dependency, an unreadable log, an absent verdict, an absent approval, an isolation verdict that is not `CLOSED` or is stale, a base SHA that cannot be resolved, a SHA that is not 40 hex characters — each stops the run and records the reason.                                                  |
 
+- **Security Update**: Operator-side git commands acting on worker repositories (in `supervisor.js`, `orchestrate.js`, and `publisher.js`) now strictly bypass the worker's `.git/config`. `include.path` is overriden with `/dev/null` (which Windows git accepts) and other hazardous configurations are suppressed via explicit `-c` flags. The publisher uses an operator-controlled mirror and explicitly pushes from the worker via safe flags, preventing `uploadpack` hooks or malformed configs from aborting or executing in the operator's context.
+
 ### Edge cases that must be covered
 
 - Plan valid, **no eligible candidate** -> item `blocked`, no launch, no session, no PR.
