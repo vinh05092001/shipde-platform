@@ -1,0 +1,79 @@
+[
+  {
+    "name": "a default feat branch lower-cases the work item id and slugs the outcome",
+    "kind": "feat",
+    "workItemId": "TASK-AI-64",
+    "outcome": "add a pure branch-name helper",
+    "expect": "feat/task-ai-64-add-a-pure-branch-name-helper"
+  },
+  {
+    "name": "a fix branch keeps the fix kind and the FEAT prefix",
+    "kind": "fix",
+    "workItemId": "FEAT-12",
+    "outcome": "Fix the thing",
+    "expect": "fix/feat-12-fix-the-thing"
+  },
+  {
+    "name": "inner separator runs collapse to a single dash (E1-R04)",
+    "kind": "feat",
+    "workItemId": "TASK-AI-60",
+    "outcome": "a -- b",
+    "expect": "feat/task-ai-60-a-b"
+  },
+  {
+    "name": "leading and trailing separators are trimmed (E1-R04)",
+    "kind": "feat",
+    "workItemId": "TASK-AI-60",
+    "outcome": "  spaced out  ",
+    "expect": "feat/task-ai-60-spaced-out"
+  },
+  {
+    "name": "digits and TASK-FOUND ids survive the slug",
+    "kind": "feat",
+    "workItemId": "TASK-FOUND-02",
+    "outcome": "E1 R1 2026",
+    "expect": "feat/task-found-02-e1-r1-2026"
+  },
+  {
+    "name": "a result of exactly 60 characters is allowed (E1-R05)",
+    "kind": "feat",
+    "workItemId": "TASK-FOUND-02",
+    "outcome": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+    "expect": "feat/task-found-02-wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww"
+  },
+  {
+    "name": "a result of 61 characters throws instead of truncating (E1-R05)",
+    "kind": "feat",
+    "workItemId": "TASK-FOUND-02",
+    "outcome": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+    "expect": "THROWS:BRANCH_TOO_LONG"
+  },
+  {
+    "name": "an outcome that slugs to nothing throws (E1-R04)",
+    "kind": "feat",
+    "workItemId": "TASK-AI-64",
+    "outcome": "!!!",
+    "expect": "THROWS:OUTCOME_SLUG_EMPTY"
+  },
+  {
+    "name": "a kind outside feat/fix throws (E1-R03)",
+    "kind": "chore",
+    "workItemId": "TASK-AI-64",
+    "outcome": "add a pure branch-name helper",
+    "expect": "THROWS:BRANCH_KIND_INVALID"
+  },
+  {
+    "name": "a lower-case work item id throws (E1-R01)",
+    "kind": "feat",
+    "workItemId": "task-ai-64",
+    "outcome": "add a pure branch-name helper",
+    "expect": "THROWS:WORK_ITEM_ID_INVALID"
+  },
+  {
+    "name": "a work item id outside the three families throws (E1-R01)",
+    "kind": "feat",
+    "workItemId": "BUG-1",
+    "outcome": "add a pure branch-name helper",
+    "expect": "THROWS:WORK_ITEM_ID_INVALID"
+  }
+]
