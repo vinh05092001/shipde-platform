@@ -809,29 +809,45 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
   });
 
   test('65-16: BOM is stripped from --profile and --report-outcome', async () => {
-    // 1. Profile with BOM
-    const p = profile();
+    // 1. Profile with BOM. proofFloor NONE plus one injected candidate, so the
+    // parse result does not depend on the host account registry: a Linux CI
+    // runner with no ~/.shipde registry excludes the whole catalogue as
+    // WILDCARD_ACCOUNT and exits 1 after a successful parse.
+    const p = profile({ taskId: 'TASK-AI-65-BOM', proofFloor: 'NONE' });
     const pFile = path.join(dirs.root, 'bom-profile.json');
-    fs.writeFileSync(
-      pFile,
-      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(p), 'utf8')])
-    );
+    const bomProfile = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from(JSON.stringify(p), 'utf8'),
+    ]);
+    fs.writeFileSync(pFile, bomProfile);
+    assert.equal(fs.readFileSync(pFile)[0], 0xef, 'the profile file actually starts with a BOM');
 
     let dryExit = null;
+    const dryLines = [];
     await dispatchCommand(
-      { profile: pFile, 'dry-run': true },
       {
+        profile: pFile,
+        'dry-run': true,
+        'evidence-dir': dirs.evidence,
+        'decision-dir': dirs.decisions,
+      },
+      {
+        candidates: [cand({ accountId: 'acct-65-bom', modelId: 'up-65-a/model-65-bom' })],
         evidenceDir: dirs.evidence,
         decisionDir: dirs.decisions,
         home: dirs.home,
         now: NOW,
-        log: () => {},
-        error: () => {},
+        log: (s) => dryLines.push(String(s)),
+        error: (s) => dryLines.push('ERR ' + String(s)),
         exit: (c) => {
           dryExit = c;
         },
       }
     );
+    const dryLog = dryLines.join('\n');
+    assert.match(dryLog, /Task profile TASK-AI-65-BOM/);
+    assert.doesNotMatch(dryLog, /PROFILE_UNREADABLE/);
+    assert.doesNotMatch(dryLog, /Unexpected token/);
     assert.equal(dryExit, 0, 'profile with BOM is parsed successfully');
 
     // 2. Outcome with BOM
@@ -844,21 +860,27 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
         Buffer.from(JSON.stringify({ candidateKey: candidateKey(c), status: 'completed' }), 'utf8'),
       ])
     );
+    assert.equal(fs.readFileSync(oFile)[0], 0xef, 'the outcome file actually starts with a BOM');
     let outExit = null;
+    const outLines = [];
     dispatchCommand(
-      { 'report-outcome': oFile },
+      { 'report-outcome': oFile, 'evidence-dir': dirs.evidence, 'decision-dir': dirs.decisions },
       {
         evidenceDir: dirs.evidence,
         decisionDir: dirs.decisions,
         home: dirs.home,
         now: NOW,
-        log: () => {},
-        error: () => {},
+        log: (s) => outLines.push(String(s)),
+        error: (s) => outLines.push('ERR ' + String(s)),
         exit: (c) => {
           outExit = c;
         },
       }
     );
+    const outLog = outLines.join('\n');
+    assert.doesNotMatch(outLog, /OUTCOME_UNREADABLE/);
+    assert.doesNotMatch(outLog, /Unexpected token/);
+    assert.match(outLog, /Outcome COMPLETED for /);
     assert.equal(outExit, 0, 'outcome with BOM is parsed successfully');
   });
 
