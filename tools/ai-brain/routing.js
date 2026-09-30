@@ -559,22 +559,6 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       }
     }
 
-    const evList = evidence.getEvidence(context.evidenceData, c);
-    if (evList && evList.length > 0) {
-      const last = evList[evList.length - 1];
-      if (
-        last.status === 'failed' &&
-        (last.cause === 'model_not_supported' ||
-          last.cause === '401' ||
-          last.cause === '402' ||
-          last.cause === '429-quota' ||
-          String(last.body).includes('model_not_supported'))
-      ) {
-        reject('EVIDENCE_BLOCKED:' + (last.cause || 'unknown'), 'candidate');
-        continue;
-      }
-    }
-
     const headroom = ranking.resolveCandidateHeadroom(c, context);
     c.headroomStatus = headroom.status;
     if (headroom.status === 'exhausted' || headroom.status === 'cooling') {

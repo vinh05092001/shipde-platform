@@ -687,7 +687,6 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     });
     const p4 = profile({ contextSize: 4000 });
     const r4 = await runDispatch(p4, [smallCtx], dirs);
-    if (!r4.result.rejected[0]) console.log('r4 rejected:', r4.result.rejected);
     assert.ok(r4.result.rejected[0].reasonCode.startsWith('CONTEXT_TOO_SMALL'));
 
     // 5. WILDCARD_ACCOUNT
@@ -716,7 +715,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
   });
 
   test('65-14: --execute reservation and latency-priority controller fallback', async () => {
-    dirs.storePath = path.join(tmpDir('65-store'), 'quota.json');
+    dirs.storePath = path.join(dirs.home, 'quota1.json');
     fs.mkdirSync(path.dirname(dirs.storePath), { recursive: true });
     fs.writeFileSync(dirs.storePath, '{}');
 
@@ -796,6 +795,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     const entries = decisionLines(dirs.decisions);
     const entry = entries[entries.length - 1];
     assert.equal(entry.stage, 'resumed', 'non-terminal outcome stages resumed');
+    assert.equal(entry.detail, 'PROGRESS_REPORTED');
   });
 
   test('65-16: BOM is stripped from --profile and --report-outcome', async () => {
@@ -869,7 +869,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
   });
 
   test('65-18: execute reservation uses 100000 tokens', async () => {
-    dirs.storePath = path.join(tmpDir('65-store2'), 'quota.json');
+    dirs.storePath = path.join(dirs.home, 'quota2.json');
     fs.mkdirSync(path.dirname(dirs.storePath), { recursive: true });
     fs.writeFileSync(dirs.storePath, '{}');
     const c = cand({ accountId: 'acct-exec', modelId: 'up/m1' });

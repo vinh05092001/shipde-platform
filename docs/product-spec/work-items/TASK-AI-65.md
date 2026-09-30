@@ -60,7 +60,7 @@ The smallest slice that closes the gap, reusing the existing modules (`ranking.j
    requirements, required harness, cost ceiling, availability (quota-exhausted and cooldown
    candidates excluded), resource ceiling (`currentWorkload >= resourceCeiling` refuses), the
    Claude-family policy (worker/reviewer roles exclude `claude|opus|sonnet|haiku` model ids with
-   reason `CLAUDE_FAMILY_EXCLUDED_BY_POLICY`) and forbidden failure domains (the security
+   reason `CLAUDE_FAMILY_EXCLUDED_BY_POLICY`), wildcard account (`WILDCARD_ACCOUNT`, which removes 86% of the catalog that cannot be attributed or rate-limited) and forbidden failure domains (the security
    reviewer must land outside the writer's domain). The score then optimises the **fastest
    candidate meeting the floors** — latency, quality and cost weighted by the JEV/Controller
    weights, with a busy/reservation penalty and an evidence-age penalty — not the strongest
@@ -137,14 +137,18 @@ inside `pnpm test:brain` (`node --test "tools/ai-brain/test/*.test.js"`).
 
 ## Verification evidence
 
-- `node --test "tools/ai-brain/test/*.test.js"` — **1048 tests, 1048 pass, 0 fail** (includes the
+- `node --test "tools/ai-brain/test/*.test.js"` — **1061 tests, 1061 pass, 0 fail** (includes the
   18 new TASK-AI-65 tests; no regression in the existing suites).
-- `node tools/ai-brain/cli.js dispatch --dry-run --profile <sample security-review profile>` —
-  real registry candidates, exits 0: JEV `UNDECIDED` → Controller weights `QUALITY_FIRST`;
-  top 3 spans `9router/gh` and `9router/kimchi` failure domains (the writer's
-  `antigravity`/`agy-native-a` domain and all Claude candidates excluded); scores 88/81/80 instead
-  of a flat 26; pinned
-  `paseo::cli::9router::gh::ninerouter::ninerouter::gh/gpt-5.3-codex`.
+- `node tools/ai-brain/cli.js dispatch --dry-run --profile tools/ai-brain/test/fixtures/task-ai-65/sec-proofapi.json` —
+  real registry candidates, exits 1 (on a fresh checkout with no prior execution evidence):
+  JEV `UNDECIDED` → Controller weights `QUALITY_FIRST`;
+  No candidate meets the profile: REFUSED: no candidate meets the profile floors
+    EXCLUDED 1657x WILDCARD_ACCOUNT
+    EXCLUDED 257x CLAUDE_FAMILY_EXCLUDED_BY_POLICY
+    EXCLUDED 12x FORBIDDEN_FAILURE_DOMAIN
+    EXCLUDED 5x PROOF_FLOOR_NOT_MET:NONE
+
+  *(Likewise, the CORE writer and WS1 scanner profiles also correctly refuse on an empty evidence store.)*
 
 ## Known limitations
 
@@ -156,6 +160,5 @@ inside `pnpm test:brain` (`node --test "tools/ai-brain/test/*.test.js"`).
   renormalised over the signals that exist, so an unpriced candidate is never scored as cheap.
 - **Bootstrap circularity**: On a fresh checkout, proofFloor > NONE is unsatisfiable. To bootstrap, run an execution with proofFloor: 'NONE' and --report-outcome with status: 'completed'.
 - **API_PASS ceiling**: --report-outcome only ever mints API_PASS evidence. A higher proofFloor requires real execution evidence recorded via cli.js.
-- **EVIDENCE_BLOCKED**: Candidates are permanently excluded if their last probe reported model_unsupported, upstream_credential (401), upstream_credit_exhausted (402), or upstream_rate_limit/ccount_quota_exhausted (429), until their evidence explicitly changes.
-- **Headroom constants**: Candidates with unknown quota availability take a 15-point score penalty; 	ight takes a 10-point penalty.
+- **Headroom constants**: Candidates with unknown quota availability take a 15-point score penalty; tight takes a 10-point penalty.
 - **forbiddenFailureDomains grammar**: Only exact component values (e.g., gy-native-a) or composed gateway/upstream forms (9router/antigravity) are supported.
