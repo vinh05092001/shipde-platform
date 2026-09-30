@@ -250,11 +250,15 @@ function repairSpec(item, findings, round) {
 function headShaOf(cwd) {
   if (!cwd) return null;
   const { withCleanGitEnv, safeGit } = require('./supervisor');
-  return withCleanGitEnv(cwd, (tmpDir) => {
-    const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
-    if (!res || res.status !== 0) return null;
-    return String(res.stdout || '').trim() || null;
-  });
+  return withCleanGitEnv(
+    cwd,
+    (tmpDir) => {
+      const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
+      if (!res || res.status !== 0) return null;
+      return String(res.stdout || '').trim() || null;
+    },
+    { workerWritable: true }
+  );
 }
 
 /** Progress markers, measured host-side from the worker's own worktree. */

@@ -36,44 +36,54 @@ function isSubPath(parent, child) {
   return c === p || c.startsWith(p + path.sep);
 }
 
-function resolveWorkerGitDir(cwd) {
+function resolveGitDirFromGitfile(cwd, gitPath) {
+  const content = fs.readFileSync(gitPath, 'utf8').trim();
+  if (!content.startsWith('gitdir:')) {
+    return { workerGitDir: gitPath, workerCommonDir: gitPath };
+  }
+  const p = content.slice(7).trim();
+  const workerGitDir = path.resolve(cwd, p);
+  let workerCommonDir = workerGitDir;
+  const commondirPath = path.join(workerGitDir, 'commondir');
+  if (fs.existsSync(commondirPath)) {
+    const cstat = fs.lstatSync(commondirPath);
+    if (cstat.isFile()) {
+      const cp = fs.readFileSync(commondirPath, 'utf8').trim();
+      workerCommonDir = path.resolve(workerGitDir, cp);
+    }
+  }
+  if (!isSubPath(cwd, workerGitDir) || !isSubPath(cwd, workerCommonDir)) {
+    const backlinkPath = path.join(workerGitDir, 'gitdir');
+    let validWorktree = false;
+    if (fs.existsSync(backlinkPath)) {
+      const backlinkStat = fs.lstatSync(backlinkPath);
+      if (backlinkStat.isFile()) {
+        const backlinkTarget = fs.readFileSync(backlinkPath, 'utf8').trim();
+        if (path.resolve(backlinkTarget) === path.resolve(cwd, '.git')) {
+          validWorktree = true;
+        }
+      }
+    }
+    if (!validWorktree) {
+      return { workerGitDir: gitPath, workerCommonDir: gitPath };
+    }
+  }
+  return { workerGitDir, workerCommonDir };
+}
+
+function unresolvedGitDir(cwd) {
+  const refused = path.join(cwd, '.git-unresolved');
+  return { workerGitDir: refused, workerCommonDir: refused };
+}
+
+function resolveWorkerGitDir(cwd, options) {
+  const o = options || {};
   const gitPath = path.join(cwd, '.git');
   if (!fs.existsSync(gitPath)) return { workerGitDir: gitPath, workerCommonDir: gitPath };
   const stat = fs.lstatSync(gitPath);
   if (stat.isDirectory()) return { workerGitDir: gitPath, workerCommonDir: gitPath };
-  if (stat.isFile()) {
-    const content = fs.readFileSync(gitPath, 'utf8').trim();
-    if (content.startsWith('gitdir:')) {
-      const p = content.slice(7).trim();
-      const workerGitDir = path.resolve(cwd, p);
-      let workerCommonDir = workerGitDir;
-      const commondirPath = path.join(workerGitDir, 'commondir');
-      if (fs.existsSync(commondirPath)) {
-        const cstat = fs.lstatSync(commondirPath);
-        if (cstat.isFile()) {
-          const cp = fs.readFileSync(commondirPath, 'utf8').trim();
-          workerCommonDir = path.resolve(workerGitDir, cp);
-        }
-      }
-      if (!isSubPath(cwd, workerGitDir) || !isSubPath(cwd, workerCommonDir)) {
-        const backlinkPath = path.join(workerGitDir, 'gitdir');
-        let validWorktree = false;
-        if (fs.existsSync(backlinkPath)) {
-          const backlinkStat = fs.lstatSync(backlinkPath);
-          if (backlinkStat.isFile()) {
-            const backlinkTarget = fs.readFileSync(backlinkPath, 'utf8').trim();
-            if (path.resolve(backlinkTarget) === path.resolve(cwd, '.git')) {
-              validWorktree = true;
-            }
-          }
-        }
-        if (!validWorktree) {
-          return { workerGitDir: gitPath, workerCommonDir: gitPath };
-        }
-      }
-      return { workerGitDir, workerCommonDir };
-    }
-  }
+  if (o.workerWritable === true) return unresolvedGitDir(cwd);
+  if (stat.isFile()) return resolveGitDirFromGitfile(cwd, gitPath);
   return { workerGitDir: gitPath, workerCommonDir: gitPath };
 }
 
@@ -144,7 +154,7 @@ function safeCopyRefs(srcDir, destDir) {
   walk(srcDir, destDir);
 }
 
-function withCleanGitEnv(cwd, fn) {
+function withCleanGitEnv(cwd, fn, options) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-git-safe-'));
   try {
     spawnSync('git', ['init', tmpDir], { windowsHide: true });
@@ -155,7 +165,7 @@ function withCleanGitEnv(cwd, fn) {
       '[core]\n\trepositoryFormatVersion = 0\n\tbare = false\n'
     );
 
-    const { workerGitDir, workerCommonDir } = resolveWorkerGitDir(cwd);
+    const { workerGitDir, workerCommonDir } = resolveWorkerGitDir(cwd, options);
 
     const workerObjects = path.join(workerCommonDir, 'objects');
     safeCopyObjects(workerObjects, path.join(gitDir, 'objects'));
@@ -222,32 +232,36 @@ function progressFromWorkerRoot(cwd, options) {
   const base = typeof o.baseSha === 'string' && o.baseSha ? o.baseSha : null;
   if (!cwd) return { diffBytes: 0, commits: 0, lastProgressAt: null };
 
-  return withCleanGitEnv(cwd, (tmpDir) => {
-    const git = (args) => safeGit(tmpDir, cwd, args, 20000);
+  return withCleanGitEnv(
+    cwd,
+    (tmpDir) => {
+      const git = (args) => safeGit(tmpDir, cwd, args, 20000);
 
-    const patch = git(['diff', base || 'HEAD', '--no-ext-diff', '--no-textconv']);
-    const diffBytes = patch.status === 0 ? Buffer.byteLength(patch.stdout || '', 'utf8') : 0;
+      const patch = git(['diff', base || 'HEAD', '--no-ext-diff', '--no-textconv']);
+      const diffBytes = patch.status === 0 ? Buffer.byteLength(patch.stdout || '', 'utf8') : 0;
 
-    const counted = git(['rev-list', '--count', base ? base + '..HEAD' : 'HEAD']);
-    const commits = counted.status === 0 ? Number(String(counted.stdout || '').trim()) || 0 : 0;
+      const counted = git(['rev-list', '--count', base ? base + '..HEAD' : 'HEAD']);
+      const commits = counted.status === 0 ? Number(String(counted.stdout || '').trim()) || 0 : 0;
 
-    let lastProgressAt = null;
-    if (commits > 0) {
-      const when = git(['log', '-1', '--format=%cI']);
-      if (when.status === 0) lastProgressAt = String(when.stdout || '').trim() || null;
-    }
-    if (!lastProgressAt) {
-      try {
-        lastProgressAt = new Date(
-          fs.statSync(path.join(cwd, '.git', 'index')).mtimeMs
-        ).toISOString();
-      } catch (e) {
-        lastProgressAt = null;
+      let lastProgressAt = null;
+      if (commits > 0) {
+        const when = git(['log', '-1', '--format=%cI']);
+        if (when.status === 0) lastProgressAt = String(when.stdout || '').trim() || null;
       }
-    }
+      if (!lastProgressAt) {
+        try {
+          lastProgressAt = new Date(
+            fs.statSync(path.join(cwd, '.git', 'index')).mtimeMs
+          ).toISOString();
+        } catch (e) {
+          lastProgressAt = null;
+        }
+      }
 
-    return { diffBytes, commits, lastProgressAt };
-  });
+      return { diffBytes, commits, lastProgressAt };
+    },
+    { workerWritable: true }
+  );
 }
 
 function hasArtifact(session) {

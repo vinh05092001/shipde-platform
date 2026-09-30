@@ -60,13 +60,18 @@ function runCommand(cmd, args, cwd) {
   };
 }
 
-function getHeadSha(cwd) {
+function getHeadSha(cwd, options) {
   const { withCleanGitEnv, safeGit } = require('./supervisor');
-  return withCleanGitEnv(cwd, (tmpDir) => {
-    const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
-    if (res.status === 0) return res.stdout.trim();
-    return null;
-  });
+  const o = options || {};
+  return withCleanGitEnv(
+    cwd,
+    (tmpDir) => {
+      const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
+      if (res.status === 0) return res.stdout.trim();
+      return null;
+    },
+    { workerWritable: o.workerWritable === true || isWorkerPath(cwd) }
+  );
 }
 
 function validateRemoteUrl(remoteUrl) {
@@ -113,7 +118,7 @@ function buildSanitizedMirror(cwd, tmpDir) {
   return mirrorDir;
 }
 
-function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir) {
+function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir, options) {
   const mirrorDir = buildSanitizedMirror(cwd, tmpDir);
 
   // Copy objects explicitly to the mirror to completely avoid running git in the worker repository
@@ -121,7 +126,12 @@ function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir) {
   // .git/config can never abort the transfer or execute code.
   // The copy is bounded and strictly allow-lists loose objects and packfiles to prevent copying
   // objects/info/alternates or dereferencing worker-planted junctions.
-  const { workerCommonDir } = resolveWorkerGitDir(cwd);
+  // A worker-writable source refuses a gitfile or link at .git. An operator-owned
+  // linked worktree (workerWritable: false) still resolves its gitdir.
+  const o = options || {};
+  const { workerCommonDir } = resolveWorkerGitDir(cwd, {
+    workerWritable: o.workerWritable === true,
+  });
   const workerObjects = path.join(workerCommonDir, 'objects');
   const mirrorObjects = path.join(mirrorDir, 'objects');
   safeCopyObjects(workerObjects, mirrorObjects);
@@ -368,7 +378,7 @@ function publish(options) {
   validateRemoteUrl(remoteUrl);
   const targetBranch = resolveBranch(branch, cwd);
 
-  const currentSha = getHeadSha(cwd);
+  const currentSha = getHeadSha(cwd, { workerWritable: isWorkerPath(cwd) });
   if (!currentSha) {
     refuse('PUBLISH_REFUSED: could not resolve HEAD sha');
   }
@@ -404,7 +414,9 @@ function publish(options) {
     // Q4: fetch the reviewed objects via the sanitized mirror, never
     // directly from the worker-writable cwd (upload-pack would read its
     // config).
-    transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir);
+    transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir, {
+      workerWritable: isWorkerPath(cwd),
+    });
 
     const pushRes = runCommand(
       'git',

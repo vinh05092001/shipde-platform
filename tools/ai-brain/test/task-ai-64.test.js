@@ -961,6 +961,37 @@ test('64-18 operator-side git commands ignore .gitattributes and diff.external',
   }
 });
 
+function foreignTree(dir) {
+  const g = (args, cwd = dir) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  fs.mkdirSync(dir, { recursive: true });
+  g(['init', '-b', 'main']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  fs.writeFileSync(path.join(dir, 'SECRET.txt'), 'FOREIGN\n');
+  g(['add', 'SECRET.txt']);
+  g(['commit', '-m', 'foreign']);
+  const sha = g(['rev-parse', 'HEAD']).stdout.trim();
+  const blob = g(['rev-parse', 'HEAD:SECRET.txt']).stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(sha) || !/^[0-9a-f]{40}$/.test(blob)) {
+    throw new Error('foreign tree was not created: ' + sha + ' ' + blob);
+  }
+  return { g, sha, blob };
+}
+
+function assertForeignAbsent(cleanDir, blob) {
+  const shown = spawnSync('git', ['cat-file', '-t', blob], {
+    cwd: cleanDir,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  assert.notStrictEqual(
+    shown.status,
+    0,
+    'foreign blob must not be present in the clean clone: ' + shown.stdout
+  );
+}
+
 test('64-19 publisher refuses gitfile pointing outside worker root', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n71-'));
   const workerDir = path.join(tmpDir, 'worker');
@@ -968,20 +999,40 @@ test('64-19 publisher refuses gitfile pointing outside worker root', () => {
   const cleanDir = path.join(tmpDir, 'clean');
 
   fs.mkdirSync(workerDir);
-  fs.mkdirSync(otherRepo);
-  const gOther = (args) => spawnSync('git', args, { cwd: otherRepo, windowsHide: true });
-  gOther(['init']);
-  gOther(['commit', '--allow-empty', '-m', 'init']);
-  const sha = gOther(['rev-parse', 'HEAD']).stdout.toString('utf8').trim();
-
-  fs.writeFileSync(path.join(workerDir, '.git'), 'gitdir: ' + otherRepo);
+  const { sha, blob } = foreignTree(otherRepo);
+  fs.writeFileSync(path.join(workerDir, '.git'), 'gitdir: ' + path.join(otherRepo, '.git') + '\n');
 
   try {
-    fs.mkdirSync(cleanDir);
+    spawnSync('git', ['init', '--bare', cleanDir], { windowsHide: true });
     const { transferReviewedObjects } = require('../publisher');
     assert.throws(() => {
-      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir, { workerWritable: true });
     }, /PUBLISH_FAILED/i);
+    assertForeignAbsent(cleanDir, blob);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-19b publisher refuses a gitfile plus a forged gitdir backlink', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n7b-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  const otherRepo = path.join(tmpDir, 'other');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  fs.mkdirSync(workerDir);
+  const { sha, blob } = foreignTree(otherRepo);
+  const foreignGit = path.join(otherRepo, '.git');
+  fs.writeFileSync(path.join(workerDir, '.git'), 'gitdir: ' + foreignGit + '\n');
+  fs.writeFileSync(path.join(foreignGit, 'gitdir'), path.join(workerDir, '.git') + '\n');
+
+  try {
+    spawnSync('git', ['init', '--bare', cleanDir], { windowsHide: true });
+    const { transferReviewedObjects } = require('../publisher');
+    assert.throws(() => {
+      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir, { workerWritable: true });
+    }, /PUBLISH_FAILED/i);
+    assertForeignAbsent(cleanDir, blob);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -994,15 +1045,13 @@ test('64-20 publisher refuses object store link pointing outside', () => {
   const cleanDir = path.join(tmpDir, 'clean');
 
   fs.mkdirSync(workerDir);
-  fs.mkdirSync(otherRepo);
-  const gOther = (args) => spawnSync('git', args, { cwd: otherRepo, windowsHide: true });
-  const gWorker = (args) => spawnSync('git', args, { cwd: workerDir, windowsHide: true });
+  const { sha, blob } = foreignTree(otherRepo);
+  const gWorker = (args) =>
+    spawnSync('git', args, { cwd: workerDir, encoding: 'utf8', windowsHide: true });
 
-  gOther(['init']);
-  gOther(['commit', '--allow-empty', '-m', 'init']);
-  const sha = gOther(['rev-parse', 'HEAD']).stdout.toString('utf8').trim();
-
-  gWorker(['init']);
+  gWorker(['init', '-b', 'main']);
+  gWorker(['config', 'user.email', 'test@example.com']);
+  gWorker(['config', 'user.name', 'Test']);
   fs.rmSync(path.join(workerDir, '.git', 'objects'), { recursive: true, force: true });
   fs.symlinkSync(
     path.join(otherRepo, '.git', 'objects'),
@@ -1011,45 +1060,42 @@ test('64-20 publisher refuses object store link pointing outside', () => {
   );
 
   try {
-    fs.mkdirSync(cleanDir);
+    spawnSync('git', ['init', '--bare', cleanDir], { windowsHide: true });
     const { transferReviewedObjects } = require('../publisher');
     assert.throws(() => {
-      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir, { workerWritable: true });
     }, /PUBLISH_FAILED/i);
+    assertForeignAbsent(cleanDir, blob);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
-test('64-21 supervisor refuses refs store link pointing outside', () => {
+test('64-21 supervisor refuses a linked foreign repository', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n73-'));
   const workerDir = path.join(tmpDir, 'worker');
   const otherRepo = path.join(tmpDir, 'other');
 
   fs.mkdirSync(workerDir);
-  fs.mkdirSync(otherRepo);
-  const gOther = (args) => spawnSync('git', args, { cwd: otherRepo, windowsHide: true });
-  const gWorker = (args) => spawnSync('git', args, { cwd: workerDir, windowsHide: true });
+  const { sha, blob } = foreignTree(otherRepo);
+  const gWorker = (args) =>
+    spawnSync('git', args, { cwd: workerDir, encoding: 'utf8', windowsHide: true });
 
-  gOther(['init']);
-  gOther(['commit', '--allow-empty', '-m', 'init']);
-
-  gWorker(['init']);
-  fs.rmSync(path.join(workerDir, '.git', 'refs'), { recursive: true, force: true });
+  gWorker(['init', '-b', 'main']);
+  gWorker(['config', 'user.email', 'test@example.com']);
+  gWorker(['config', 'user.name', 'Test']);
+  fs.rmSync(path.join(workerDir, '.git'), { recursive: true, force: true });
   fs.symlinkSync(
-    otherRepo,
-    path.join(workerDir, '.git', 'refs'),
+    path.join(otherRepo, '.git'),
+    path.join(workerDir, '.git'),
     process.platform === 'win32' ? 'junction' : 'dir'
   );
 
   try {
     const { progressFromWorkerRoot } = require('../supervisor');
     const res = progressFromWorkerRoot(workerDir);
-    assert.strictEqual(
-      res.commits,
-      0,
-      'Should not have found the commits from otherRepo via refs link'
-    );
+    assert.strictEqual(res.commits, 0, 'foreign commits must not be counted: ' + blob);
+    assert.notStrictEqual(sha, '', 'foreign commit must exist so the refusal is meaningful');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
