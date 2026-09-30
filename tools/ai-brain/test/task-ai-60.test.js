@@ -46,11 +46,30 @@ function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-60-'));
 }
 
+// A run pins the commit it is reviewing, and TASK-AI-64 R07 makes the reviewer
+// name the commit it read, so the shared stub echoes the SHA it was handed.
+const SIM_SHA = 'a'.repeat(40);
+
+/**
+ * A launch in the live shape: it writes the durable `--usage-file` report the loop
+ * requires, because a launch that produced no durable report is not a live run
+ * (AI-64-R04) and completes nothing.
+ */
+function durableLaunch(extra) {
+  return (job) => {
+    if (job && typeof job.usageFile === 'string') {
+      fs.mkdirSync(path.dirname(job.usageFile), { recursive: true });
+      fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sim-session' }), 'utf8');
+    }
+    return Object.assign({ exitCode: 0, stdout: 'the agent changed production code' }, extra || {});
+  };
+}
+
 const SIM = {
-  run: () => ({ exitCode: 0, stdout: '{"sessionId":"sim"}' }),
+  run: durableLaunch(),
   tests: () => ({ pass: true }),
-  reviewer: () => ({ pass: true, findings: [] }),
-  repairer: () => ({ sha: 'head' }),
+  reviewer: (sha) => ({ pass: true, sha: typeof sha === 'string' ? sha : SIM_SHA, findings: [] }),
+  repairer: (findings, sha) => ({ sha: sha || SIM_SHA }),
 };
 
 test('15 planner makes a valid DAG', () => {
@@ -129,16 +148,26 @@ test('21 no-progress session stalled', () => {
 
 test('22 restart reads the checkpoint and does not redo completed steps', () => {
   const calls = [];
+  // TASK-AI-64: the checkpoint file is the only resume input, so the completed
+  // item is on disk where a real run would read it. The assertion is unchanged.
+  const checkpoint = path.join(tmpDir(), 'checkpoint.json');
+  fs.writeFileSync(
+    checkpoint,
+    JSON.stringify({ schemaVersion: 1, step: 'live_review', completed: ['A'] })
+  );
+  const launch = durableLaunch();
   const result = runOrchestration('g', {
     specs: [
       { id: 'A', files: ['a.js'] },
       { id: 'B', files: ['b.js'] },
     ],
     candidates: [cand()],
-    resumeFrom: { completed: ['A'] },
-    run: (ctx) => {
-      calls.push(ctx.workItemId);
-      return { exitCode: 0, stdout: '{}' };
+    checkpointFile: checkpoint,
+    decisionDir: tmpDir(),
+    sha: SIM_SHA,
+    run: (job) => {
+      calls.push(job.workItemId);
+      return launch(job);
     },
     tests: SIM.tests,
     reviewer: SIM.reviewer,
@@ -152,7 +181,14 @@ test('22 restart reads the checkpoint and does not redo completed steps', () => 
 test('23 old-SHA review not accepted for a new SHA', () => {
   const result = runReviewLoop(
     { sha: 'newsha', budget: 3 },
-    { runTests: () => ({ pass: true }), review: () => ({ pass: true, sha: 'oldsha' }) }
+    {
+      runTests: () => ({ pass: true }),
+      review: () => ({ pass: true, sha: 'oldsha' }),
+      // TASK-AI-64: the loop has no default repair gate any more (a missing gate
+      // is a refusal, AI-64-P08), so the seam this test does not exercise is
+      // still supplied. The assertion under test is unchanged.
+      repair: (findings, sha) => ({ sha }),
+    }
   );
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.rounds.some((r) => r.cause === 'STALE_REVIEW_SHA'));
@@ -161,7 +197,13 @@ test('23 old-SHA review not accepted for a new SHA', () => {
 test('24 PASS with findings rejected', () => {
   const result = runReviewLoop(
     { sha: 'newsha', budget: 3 },
-    { runTests: () => ({ pass: true }), review: () => ({ pass: true, findings: [{ id: 1 }] }) }
+    {
+      runTests: () => ({ pass: true }),
+      // TASK-AI-64 R07: a review now names the commit it read, so the review
+      // under test names 'newsha' too. Same assertion, live review shape.
+      review: () => ({ pass: true, sha: 'newsha', findings: [{ id: 1 }] }),
+      repair: (findings, sha) => ({ sha }),
+    }
   );
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.rounds.some((r) => r.cause === 'PASS_WITH_FINDINGS_REJECTED'));
@@ -176,7 +218,7 @@ test('25 CI failure creates a repair task with the right cause', () => {
         call += 1;
         return call === 1 ? { pass: false, cause: 'UPSTREAM_AUTH_403' } : { pass: true };
       },
-      review: () => ({ pass: true, findings: [] }),
+      review: () => ({ pass: true, sha: 'head', findings: [] }),
       repair: () => ({ sha: 'head' }),
     }
   );
@@ -189,7 +231,13 @@ test('25 CI failure creates a repair task with the right cause', () => {
 test('26 repair over budget -> BLOCKED', () => {
   const result = runReviewLoop(
     { sha: 'head', budget: 1 },
-    { runTests: () => ({ pass: false, cause: 'TEST_FAILURE' }), review: () => ({ pass: true }) }
+    {
+      runTests: () => ({ pass: false, cause: 'TEST_FAILURE' }),
+      review: () => ({ pass: true, sha: 'head' }),
+      // TASK-AI-64: the old `(findings, sha) => ({ sha })` default repair is
+      // gone, so the seam this test drives on purpose is supplied explicitly.
+      repair: (findings, sha) => ({ sha }),
+    }
   );
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.rounds.some((r) => r.cause === 'REPAIR_BUDGET_EXHAUSTED'));
@@ -207,13 +255,16 @@ test('27 a failing source does not stop a lane on another failure domain', () =>
     source: 'gw-b',
   });
   let n = 0;
+  const launch = durableLaunch();
   const result = runOrchestration('g', {
     specs: [{ id: 'A', files: ['a.js'] }],
     candidates: [first, second],
-    run: () => {
+    decisionDir: tmpDir(),
+    sha: SIM_SHA,
+    run: (job) => {
       n += 1;
       if (n === 1) return { exitCode: 3, stderr: 'usage limit reached' };
-      return { exitCode: 0, stdout: '{}' };
+      return launch(job);
     },
     tests: SIM.tests,
     reviewer: SIM.reviewer,
@@ -238,6 +289,9 @@ test('29 plan input count = completed + blocked + deferred', () => {
       { id: 'C', files: ['c.js'] },
     ],
     candidates: [cand()],
+    decisionDir: tmpDir(),
+    usageDir: tmpDir(),
+    sha: SIM_SHA,
     run: SIM.run,
     tests: SIM.tests,
     reviewer: SIM.reviewer,

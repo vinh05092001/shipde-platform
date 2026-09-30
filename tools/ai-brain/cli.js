@@ -694,6 +694,24 @@ function writeJsonFile(file, value) {
   fs.renameSync(tmp, file);
 }
 
+/**
+ * Where the harness writes its durable session report for one dispatch.
+ *
+ * The worker writes the report, so the directory has to be one the worker can
+ * reach — inside the worker root for an isolated launch. It is named by the
+ * operator (`--usage-dir`) or by the caller, never derived from the worker's
+ * own answer, and never the host-owned launch-results directory a worker
+ * cannot write.
+ */
+function usageReportFile(args, deps, item, now) {
+  const explicit = (args && args['usage-report']) || (deps && deps.usageFile);
+  if (typeof explicit === 'string' && explicit) return explicit;
+  const dir = (args && args['usage-dir']) || (deps && deps.usageDir);
+  if (typeof dir !== 'string' || !dir) return null;
+  const stem = String((item && item.workItemId) || 'session').replace(/[^A-Za-z0-9._-]/g, '-');
+  return path.join(dir, stem + '-' + (now || Date.now()) + '.json');
+}
+
 function sevenFields(candidate) {
   return {
     harness: candidate.harness || '',
@@ -767,22 +785,57 @@ function sameFailureDomain(candidate, failed, classification) {
   );
 }
 
-function applyDryRunBlocks(candidates, failedKeys, failedCandidate, classification, avoidDomain) {
+/**
+ * Marks a failed candidate, and every candidate in the same failure domain, as
+ * blocked, so the next ranking round cannot pick either. One implementation, two
+ * vocabularies: the dry run says SIMULATED_*, a live run says the plain reason.
+ * The domain rule is the Controller's (sameFailureDomain, driven by
+ * failure-classifier.js), never a second, simpler "different gateway" test.
+ */
+function applyFailureBlocks(
+  candidates,
+  failedKeys,
+  failedCandidate,
+  classification,
+  avoidDomain,
+  codes
+) {
   const candidatesApi = require('./candidates');
   for (const c of candidates) {
     const key = candidatesApi.candidateKey(c);
     if (failedKeys.has(key)) {
       c.blocked = true;
-      c.blockReason = 'SIMULATED_CANDIDATE_FAILED';
+      c.blockReason = codes.failed;
       c.blockScope = 'candidate';
       continue;
     }
     if (avoidDomain && sameFailureDomain(c, failedCandidate, classification)) {
       c.blocked = true;
-      c.blockReason = 'SIMULATED_FAILURE_DOMAIN_AVOIDED';
+      c.blockReason = codes.sameDomain;
       c.blockScope = classification.scope || 'unknown';
     }
   }
+}
+
+const DRY_RUN_BLOCK_CODES = Object.freeze({
+  failed: 'SIMULATED_CANDIDATE_FAILED',
+  sameDomain: 'SIMULATED_FAILURE_DOMAIN_AVOIDED',
+});
+
+const LIVE_BLOCK_CODES = Object.freeze({
+  failed: 'CANDIDATE_FAILED',
+  sameDomain: 'FAILURE_DOMAIN_AVOIDED',
+});
+
+function applyDryRunBlocks(candidates, failedKeys, failedCandidate, classification, avoidDomain) {
+  return applyFailureBlocks(
+    candidates,
+    failedKeys,
+    failedCandidate,
+    classification,
+    avoidDomain,
+    DRY_RUN_BLOCK_CODES
+  );
 }
 
 function candidateContextWindow(candidate) {
@@ -1035,6 +1088,9 @@ function dispatchCommand(args, deps = {}) {
   const { listAccounts } = require('./accounts');
   const { readDiscoveryCatalogue } = require('./discovery/read');
   const { getHarness, runHarness, parseLastJson, structuredOutcome } = require('./harness');
+  // The durable-session-id rule lives with the executor, which owns the harness
+  // contract; this file reads it from there rather than keeping a second copy.
+  const { readSessionId } = require('./executor');
   const { workerName, defaultPrompt } = require('./executor');
 
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
@@ -1532,11 +1588,18 @@ function dispatchCommand(args, deps = {}) {
 
     let thrownError = null;
     let isFailure = true;
+    let sessionHandle = null;
     try {
       let launcher = (deps && deps.run) || runHarness;
-      if (args['isolated-worker'] && !(deps && deps.run)) {
+      // AI-64-P03: an injected runner replaces what runs the harness process; it
+      // never decides whether the worker boundary exists. The old guard let a
+      // caller that injected a runner switch isolation off silently, with no log
+      // line, which is a control that only holds in the configuration nobody
+      // tests.
+      if (args['isolated-worker']) {
         launcher = require('./isolation-launcher').getIsolatedLauncher();
       }
+
       const harnessName =
         finalChosenCandidate.harness || (lastDecision && lastDecision.harness) || 'paseo';
       const adapter = getHarness(harnessName);
@@ -1551,6 +1614,11 @@ function dispatchCommand(args, deps = {}) {
         throw new Error('CANDIDATE_KEY_CHANGED_BEFORE_LAUNCH');
       }
 
+      // The loop hands the harness a durable-report path. Under `-z` stdout is
+      // the final response prose, so the session id can only come from the
+      // report (TASK-AI-63), and a launch that cannot produce one is a launch
+      // that cannot be resumed.
+      const usageFile = usageReportFile(args, deps, item, now);
       const launchArgs = adapter.launch({
         candidateKey: finalChosenKey,
         provider:
@@ -1564,6 +1632,7 @@ function dispatchCommand(args, deps = {}) {
         branch: item.branch,
         base: args.base || (deps && deps.base) || 'main',
         cwd: args.cwd || (deps && deps.cwd) || rootDir,
+        usageFile: usageFile,
         checkpoint: checkpointFile,
         maxAttempts: 1,
         title: workerName(item.workItemId),
@@ -1586,7 +1655,13 @@ function dispatchCommand(args, deps = {}) {
             chosen: finalChosenKey,
             harness: harnessName,
             branch: item.branch,
-            sessionId: process.pid,
+            // The claim on the branch, written before the launch. It is a claim,
+            // not a handle: the durable session id is only knowable once the
+            // harness has written its report, and it is recorded on the line
+            // below. It was `process.pid` here, which is a Node process id and
+            // not a session — decisions.js then treated that value as the
+            // session to resume (audit section 4, Gap C).
+            sessionId: null,
             worktree: args.cwd || rootDir,
             area: item.area,
             firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
@@ -1618,7 +1693,11 @@ function dispatchCommand(args, deps = {}) {
       }
 
       try {
-        launchRes = launcher(adapter, launchArgs, { cwd: args.cwd || rootDir });
+        launchRes = launcher(adapter, launchArgs, {
+          cwd: args.cwd || rootDir,
+          // The pinned base the worker root is provisioned at (AI-64-R15).
+          baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
+        });
       } catch (err) {
         thrownError = err;
         launchRes = {
@@ -1639,6 +1718,36 @@ function dispatchCommand(args, deps = {}) {
         launchRes.exitCode !== 0 ||
         (typeof launchRes.httpStatus === 'number' && launchRes.httpStatus >= 400);
 
+      // The durable handle, read from the report the launch was given. Never a
+      // pid, a timestamp or a stdout guess.
+      sessionHandle = readSessionId(adapter, { usageFile: usageFile }, launchRes || {}).id;
+      if (usageFile && !sessionHandle) {
+        // The caller asked for a durable report and the report carries no
+        // session id, so this launch cannot be resumed or stopped. A launch the
+        // loop cannot find again is a failed launch (AI-64-R04), not a success
+        // with a null handle.
+        isFailure = true;
+      }
+      if (sessionHandle) {
+        // The claim now carries the session it is a claim about, so a restart
+        // resumes that session instead of starting a second writer.
+        decisionsStore.recordDecision(
+          {
+            stage: decisionsStore.Stage.LAUNCHED,
+            workItemId: item.workItemId,
+            role: item.role,
+            chosen: finalChosenKey,
+            harness: harnessName,
+            branch: item.branch,
+            sessionId: sessionHandle,
+            worktree: args.cwd || rootDir,
+            area: item.area,
+            detail: 'DURABLE_SESSION_ID',
+          },
+          { dir: decisionDir, now }
+        );
+      }
+
       const parsed = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
       if (
         parsed &&
@@ -1657,10 +1766,11 @@ function dispatchCommand(args, deps = {}) {
             chosen: finalChosenKey,
             harness: harnessName,
             branch: item.branch,
-            sessionId: process.pid,
+            sessionId: sessionHandle,
             worktree: args.cwd || rootDir,
             area: item.area,
             outcome: isFailure ? 'failed' : 'passed',
+            detail: usageFile && !sessionHandle ? 'HARNESS_NO_SESSION_ID' : null,
             firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
             selected: finalChosenKey,
             excluded: lastDecision
@@ -1911,95 +2021,95 @@ function main() {
     process.exit(runSerenaCli(process.argv.slice(3)));
   }
 
-  // orchestrate (TASK-AI-60): dry-run autonomous loop, goal -> plan -> prompts ->
-  // Controller selection -> simulated fallback -> checkpoint/resume -> simulated
-  // tests/review/repair -> reconciliation, writing the log to --out.
+  // orchestrate (TASK-AI-64): the live autonomous loop —
+  //   node tools/ai-brain/cli.js orchestrate --goal <text|file> --specs <file>
+  //     [--isolated-worker --base-sha <40-hex>] [--checkpoint <file>] [--out <file>]
+  //
+  // The specs are the real work items the operator named and the candidates come
+  // from the live registry: the old command synthesised one DRY-RUN-GOAL item and
+  // two demo candidates, injected a launcher that failed once on a counter, and
+  // injected three green gates, so the goal text never became work and no identity
+  // came from the registry. Nothing is injected here any more — a live run either
+  // launches for real or is refused.
   if (command === 'orchestrate') {
     const { runOrchestration } = require('./orchestrate');
     const { generateCandidates } = require('./candidates');
     const sourcesApi = require('./sources');
+    const decisionsApi = require('./decisions');
+    const fsx = require('fs');
     let goal = typeof args.goal === 'string' ? args.goal : null;
     if (!goal) {
       console.error('orchestrate requires --goal <text|file>');
       process.exit(2);
     }
-    if (require('fs').existsSync(goal)) goal = require('fs').readFileSync(goal, 'utf8');
+    if (fsx.existsSync(goal)) goal = fsx.readFileSync(goal, 'utf8');
+    if (typeof args.specs !== 'string') {
+      console.error(
+        'orchestrate requires --specs <file>: the real work-item specs, as a JSON array'
+      );
+      process.exit(2);
+    }
+    const specDoc = JSON.parse(fsx.readFileSync(args.specs, 'utf8'));
+    const specs = Array.isArray(specDoc) ? specDoc : specDoc.specs;
+    if (!Array.isArray(specs) || specs.length === 0) {
+      console.error('orchestrate: --specs carried no work items');
+      process.exit(2);
+    }
     const out = typeof args.out === 'string' ? args.out : null;
     const registry = sourcesApi.loadSources();
+    const readJsonArg = (value) =>
+      typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
     const candidates = generateCandidates({
       registry,
-      catalogue: [],
-      accounts: [],
-      openCodeIds: [],
+      catalogue: readJsonArg(args.catalogue) || [],
+      accounts: readJsonArg(args.accounts) || [],
+      openCodeIds: Array.isArray(args['opencode-ids'])
+        ? args['opencode-ids']
+        : typeof args['opencode-ids'] === 'string'
+          ? args['opencode-ids'].split(',').filter(Boolean)
+          : [],
     });
-    // Dry-run demo: two synthetic candidates in different failure domains so the
-    // simulated first-candidate failure can fall back even with no live catalogue.
-    candidates.push(
-      {
-        harness: 'hermes',
-        accessPath: 'cli-a',
-        gateway: 'gw-a',
-        upstream: 'up-a',
-        accountId: 'acct-a',
-        quotaScope: 'acct-a',
-        modelId: 'demo/a',
-        source: 'gw-a',
-        kind: 'router',
-        qualifiedRoles: ['author.foundation'],
-        capabilities: { contextWindow: 64000 },
-        cost: 1,
-      },
-      {
-        harness: 'hermes',
-        accessPath: 'cli-b',
-        gateway: 'gw-b',
-        upstream: 'up-b',
-        accountId: 'acct-b',
-        quotaScope: 'acct-b',
-        modelId: 'demo/b',
-        source: 'gw-b',
-        kind: 'router',
-        qualifiedRoles: ['author.foundation'],
-        capabilities: { contextWindow: 64000 },
-        cost: 2,
-      }
-    );
-    let first = true;
     const result = runOrchestration(goal, {
-      specs: [
-        {
-          id: 'DRY-RUN-GOAL',
-          role: 'author.foundation',
-          files: [],
-          dependencies: [],
-          acceptanceCriteria: ['dry-run completes'],
-        },
-      ],
-      candidates: candidates,
-      registry: registry,
-      run: function () {
-        if (first) {
-          first = false;
-          return { exitCode: 3, stderr: 'usage limit reached' };
-        }
-        return { exitCode: 0, stdout: '{"sessionId":"dry-sim"}' };
-      },
-      tests: function () {
-        return { pass: true };
-      },
-      reviewer: function () {
-        return { pass: true, findings: [] };
-      },
-      repairer: function () {
-        return { sha: 'head' };
-      },
-      sha: 'head',
-      out: out,
+      specs,
+      specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
+      candidates,
+      registry,
+      isolatedWorker: Boolean(args['isolated-worker']),
+      decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
+      checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,
+      usageDir: typeof args['usage-dir'] === 'string' ? args['usage-dir'] : null,
+      sha: typeof args.sha === 'string' ? args.sha : null,
+      baseSha: typeof args['base-sha'] === 'string' ? args['base-sha'] : null,
+      branch: typeof args.branch === 'string' ? args.branch : null,
+      cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
+      workerRoot: typeof args['worker-root'] === 'string' ? args['worker-root'] : null,
+      reviewBudget: args['review-budget'],
+      publication: args.publish
+        ? {
+            approvalId: args.approval,
+            expiry: args['approval-expiry'] ? Date.parse(args['approval-expiry']) : undefined,
+            remoteUrl: args['remote-url'],
+            branch: typeof args.branch === 'string' ? args.branch : null,
+            draft: { workItemId: specs[0].id, outcome: String(goal).slice(0, 72) },
+          }
+        : null,
+      out,
       now: Date.now(),
     });
-    console.log(JSON.stringify({ goal: goal, reconciliation: result.reconciliation }, null, 2));
-    if (out) console.log('Wrote dry-run log to ' + out);
-    process.exit(0);
+    console.log(
+      JSON.stringify(
+        {
+          goal,
+          status: result.status,
+          reconciliation: result.reconciliation,
+          publication: result.publication,
+        },
+        null,
+        2
+      )
+    );
+    if (out) console.log('Wrote run log to ' + out);
+    process.exit(result.status === 'COMPLETED' || result.status === 'PUBLISHED_DRAFT' ? 0 : 1);
   }
 
   console.error('Lệnh không rõ: ' + command);
@@ -2017,4 +2127,13 @@ module.exports = {
   dispatchCommand,
   parseArgs,
   main,
+  // The Controller seams the live loop consumes rather than reimplements: the
+  // ranking decision, the failure-domain rule, the atomic checkpoint store.
+  readCheckpoint,
+  writeJsonFile,
+  sameFailureDomain,
+  applyFailureBlocks,
+  applyDryRunBlocks,
+  DRY_RUN_BLOCK_CODES,
+  LIVE_BLOCK_CODES,
 };

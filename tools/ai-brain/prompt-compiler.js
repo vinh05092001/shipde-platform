@@ -31,7 +31,12 @@ function compilePrompt(item, ctx) {
   lines.push('Dependencies: ' + (i.dependencies || []).join(', '));
   lines.push('Acceptance criteria:');
   for (const ac of i.acceptanceCriteria || []) lines.push('- ' + ac);
-  lines.push('Tests: ' + ((i.verification && i.verification.command) || 'node --test'));
+  const command = i.verification && i.verification.command;
+  lines.push(
+    'Tests: ' +
+      (command || '(none declared: a work item with no verification command is not dispatchable)')
+  );
+  if (command) lines.push('Expected result: ' + (i.verification.expect || '(exit code 0)'));
   lines.push('Evidence to submit: test output, the diff, and the acceptance matrix.');
   lines.push('Checkpoint: ' + (i.checkpointPolicy || 'resume-by-work-item'));
   lines.push(

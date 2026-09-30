@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "workItemId": "A",
+  "step": "live_review",
+  "updatedAt": "2026-09-01T00:00:00.000Z",
+  "failedCandidates": [],
+  "selectedCandidate": "hermes::cli-64a::gw-64-a::up-64-a::acct-64-a::acct-64-a::up-64-a/model-64-a",
+  "firstChoice": "hermes::cli-64a::gw-64-a::up-64-a::acct-64-a::acct-64-a::up-64-a/model-64-a",
+  "fallbackCandidate": null,
+  "decisionLog": [],
+  "completed": ["A"],
+  "blocked": [],
+  "deferred": []
+}

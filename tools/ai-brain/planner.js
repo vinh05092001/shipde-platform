@@ -110,7 +110,11 @@ function plan(goal, opts) {
         allowedPaths: (spec.allowedPaths || spec.files || []).slice(),
         fileOwnership: (spec.files || []).slice(),
         acceptanceCriteria: (spec.acceptanceCriteria || []).slice(),
-        verification: spec.verification || { command: 'node --test', expect: '0 failures' },
+        // AI-64-R06: a plan states the command that proves the item and the
+        // result it must produce. There is no default here: a work item with no
+        // verification command is not dispatchable, and assuming `node --test`
+        // would let a live run "verify" an item with a command nobody chose.
+        verification: spec.verification || null,
         riskDomains: (spec.riskDomains || []).slice(),
         checkpointPolicy: spec.checkpointPolicy || 'resume-by-work-item',
         rollback: spec.rollback || 'discard-branch',

@@ -1,0 +1,9 @@
+{
+  "session_id": "20260901_063508_c80aeb",
+  "model": "up-64-a/model-64-a",
+  "provider": "up-64-a",
+  "usage": {
+    "input": 10,
+    "output": 20
+  }
+}
