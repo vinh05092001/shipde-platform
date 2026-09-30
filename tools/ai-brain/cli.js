@@ -1592,9 +1592,10 @@ function dispatchCommand(args, deps = {}) {
     try {
       let launcher = (deps && deps.run) || runHarness;
       // AI-64-P03: an injected runner replaces what runs the harness process; it
-      // never decides whether the worker boundary exists. The old
-      // `&& !(deps && deps.run)` guard switched isolation off silently, with no
-      // log line, whenever a caller injected a runner.
+      // never decides whether the worker boundary exists. The old guard let a
+      // caller that injected a runner switch isolation off silently, with no log
+      // line, which is a control that only holds in the configuration nobody
+      // tests.
       if (args['isolated-worker']) {
         launcher = require('./isolation-launcher').getIsolatedLauncher();
       }
@@ -2012,95 +2013,95 @@ function main() {
     process.exit(runSerenaCli(process.argv.slice(3)));
   }
 
-  // orchestrate (TASK-AI-60): dry-run autonomous loop, goal -> plan -> prompts ->
-  // Controller selection -> simulated fallback -> checkpoint/resume -> simulated
-  // tests/review/repair -> reconciliation, writing the log to --out.
+  // orchestrate (TASK-AI-64): the live autonomous loop —
+  //   node tools/ai-brain/cli.js orchestrate --goal <text|file> --specs <file>
+  //     [--isolated-worker --base-sha <40-hex>] [--checkpoint <file>] [--out <file>]
+  //
+  // The specs are the real work items the operator named and the candidates come
+  // from the live registry: the old command synthesised one DRY-RUN-GOAL item and
+  // two demo candidates, injected a launcher that failed once on a counter, and
+  // injected three green gates, so the goal text never became work and no identity
+  // came from the registry. Nothing is injected here any more — a live run either
+  // launches for real or is refused.
   if (command === 'orchestrate') {
     const { runOrchestration } = require('./orchestrate');
     const { generateCandidates } = require('./candidates');
     const sourcesApi = require('./sources');
+    const decisionsApi = require('./decisions');
+    const fsx = require('fs');
     let goal = typeof args.goal === 'string' ? args.goal : null;
     if (!goal) {
       console.error('orchestrate requires --goal <text|file>');
       process.exit(2);
     }
-    if (require('fs').existsSync(goal)) goal = require('fs').readFileSync(goal, 'utf8');
+    if (fsx.existsSync(goal)) goal = fsx.readFileSync(goal, 'utf8');
+    if (typeof args.specs !== 'string') {
+      console.error(
+        'orchestrate requires --specs <file>: the real work-item specs, as a JSON array'
+      );
+      process.exit(2);
+    }
+    const specDoc = JSON.parse(fsx.readFileSync(args.specs, 'utf8'));
+    const specs = Array.isArray(specDoc) ? specDoc : specDoc.specs;
+    if (!Array.isArray(specs) || specs.length === 0) {
+      console.error('orchestrate: --specs carried no work items');
+      process.exit(2);
+    }
     const out = typeof args.out === 'string' ? args.out : null;
     const registry = sourcesApi.loadSources();
+    const readJsonArg = (value) =>
+      typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
     const candidates = generateCandidates({
       registry,
-      catalogue: [],
-      accounts: [],
-      openCodeIds: [],
+      catalogue: readJsonArg(args.catalogue) || [],
+      accounts: readJsonArg(args.accounts) || [],
+      openCodeIds: Array.isArray(args['opencode-ids'])
+        ? args['opencode-ids']
+        : typeof args['opencode-ids'] === 'string'
+          ? args['opencode-ids'].split(',').filter(Boolean)
+          : [],
     });
-    // Dry-run demo: two synthetic candidates in different failure domains so the
-    // simulated first-candidate failure can fall back even with no live catalogue.
-    candidates.push(
-      {
-        harness: 'hermes',
-        accessPath: 'cli-a',
-        gateway: 'gw-a',
-        upstream: 'up-a',
-        accountId: 'acct-a',
-        quotaScope: 'acct-a',
-        modelId: 'demo/a',
-        source: 'gw-a',
-        kind: 'router',
-        qualifiedRoles: ['author.foundation'],
-        capabilities: { contextWindow: 64000 },
-        cost: 1,
-      },
-      {
-        harness: 'hermes',
-        accessPath: 'cli-b',
-        gateway: 'gw-b',
-        upstream: 'up-b',
-        accountId: 'acct-b',
-        quotaScope: 'acct-b',
-        modelId: 'demo/b',
-        source: 'gw-b',
-        kind: 'router',
-        qualifiedRoles: ['author.foundation'],
-        capabilities: { contextWindow: 64000 },
-        cost: 2,
-      }
-    );
-    let first = true;
     const result = runOrchestration(goal, {
-      specs: [
-        {
-          id: 'DRY-RUN-GOAL',
-          role: 'author.foundation',
-          files: [],
-          dependencies: [],
-          acceptanceCriteria: ['dry-run completes'],
-        },
-      ],
-      candidates: candidates,
-      registry: registry,
-      run: function () {
-        if (first) {
-          first = false;
-          return { exitCode: 3, stderr: 'usage limit reached' };
-        }
-        return { exitCode: 0, stdout: '{"sessionId":"dry-sim"}' };
-      },
-      tests: function () {
-        return { pass: true };
-      },
-      reviewer: function () {
-        return { pass: true, findings: [] };
-      },
-      repairer: function () {
-        return { sha: 'head' };
-      },
-      sha: 'head',
-      out: out,
+      specs,
+      specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
+      candidates,
+      registry,
+      isolatedWorker: Boolean(args['isolated-worker']),
+      decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
+      checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,
+      usageDir: typeof args['usage-dir'] === 'string' ? args['usage-dir'] : null,
+      sha: typeof args.sha === 'string' ? args.sha : null,
+      baseSha: typeof args['base-sha'] === 'string' ? args['base-sha'] : null,
+      branch: typeof args.branch === 'string' ? args.branch : null,
+      cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
+      workerRoot: typeof args['worker-root'] === 'string' ? args['worker-root'] : null,
+      reviewBudget: args['review-budget'],
+      publication: args.publish
+        ? {
+            approvalId: args.approval,
+            expiry: args['approval-expiry'] ? Date.parse(args['approval-expiry']) : undefined,
+            remoteUrl: args['remote-url'],
+            branch: typeof args.branch === 'string' ? args.branch : null,
+            draft: { workItemId: specs[0].id, outcome: String(goal).slice(0, 72) },
+          }
+        : null,
+      out,
       now: Date.now(),
     });
-    console.log(JSON.stringify({ goal: goal, reconciliation: result.reconciliation }, null, 2));
-    if (out) console.log('Wrote dry-run log to ' + out);
-    process.exit(0);
+    console.log(
+      JSON.stringify(
+        {
+          goal,
+          status: result.status,
+          reconciliation: result.reconciliation,
+          publication: result.publication,
+        },
+        null,
+        2
+      )
+    );
+    if (out) console.log('Wrote run log to ' + out);
+    process.exit(result.status === 'COMPLETED' || result.status === 'PUBLISHED_DRAFT' ? 0 : 1);
   }
 
   console.error('Lệnh không rõ: ' + command);

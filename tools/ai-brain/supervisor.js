@@ -60,8 +60,7 @@ function progressFromWorkerRoot(cwd, options) {
   const diffBytes = patch.status === 0 ? Buffer.byteLength(patch.stdout || '', 'utf8') : 0;
 
   const counted = git(cwd, ['rev-list', '--count', base ? base + '..HEAD' : 'HEAD']);
-  const commits =
-    counted.status === 0 ? Number(String(counted.stdout || '').trim()) || 0 : 0;
+  const commits = counted.status === 0 ? Number(String(counted.stdout || '').trim()) || 0 : 0;
 
   let lastProgressAt = null;
   if (commits > 0) {
@@ -80,7 +79,6 @@ function progressFromWorkerRoot(cwd, options) {
 
   return { diffBytes, commits, lastProgressAt };
 }
-
 
 function hasArtifact(session) {
   if (!session) return false;

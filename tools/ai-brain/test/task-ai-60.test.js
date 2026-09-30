@@ -49,8 +49,24 @@ function tmpDir() {
 // A run pins the commit it is reviewing, and TASK-AI-64 R07 makes the reviewer
 // name the commit it read, so the shared stub echoes the SHA it was handed.
 const SIM_SHA = 'a'.repeat(40);
+
+/**
+ * A launch in the live shape: it writes the durable `--usage-file` report the loop
+ * requires, because a launch that produced no durable report is not a live run
+ * (AI-64-R04) and completes nothing.
+ */
+function durableLaunch(extra) {
+  return (job) => {
+    if (job && typeof job.usageFile === 'string') {
+      fs.mkdirSync(path.dirname(job.usageFile), { recursive: true });
+      fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sim-session' }), 'utf8');
+    }
+    return Object.assign({ exitCode: 0, stdout: 'the agent changed production code' }, extra || {});
+  };
+}
+
 const SIM = {
-  run: () => ({ exitCode: 0, stdout: '{"sessionId":"sim"}' }),
+  run: durableLaunch(),
   tests: () => ({ pass: true }),
   reviewer: (sha) => ({ pass: true, sha: typeof sha === 'string' ? sha : SIM_SHA, findings: [] }),
   repairer: (findings, sha) => ({ sha: sha || SIM_SHA }),
@@ -132,16 +148,26 @@ test('21 no-progress session stalled', () => {
 
 test('22 restart reads the checkpoint and does not redo completed steps', () => {
   const calls = [];
+  // TASK-AI-64: the checkpoint file is the only resume input, so the completed
+  // item is on disk where a real run would read it. The assertion is unchanged.
+  const checkpoint = path.join(tmpDir(), 'checkpoint.json');
+  fs.writeFileSync(
+    checkpoint,
+    JSON.stringify({ schemaVersion: 1, step: 'live_review', completed: ['A'] })
+  );
+  const launch = durableLaunch();
   const result = runOrchestration('g', {
     specs: [
       { id: 'A', files: ['a.js'] },
       { id: 'B', files: ['b.js'] },
     ],
     candidates: [cand()],
-    resumeFrom: { completed: ['A'] },
-    run: (ctx) => {
-      calls.push(ctx.workItemId);
-      return { exitCode: 0, stdout: '{}' };
+    checkpointFile: checkpoint,
+    decisionDir: tmpDir(),
+    sha: SIM_SHA,
+    run: (job) => {
+      calls.push(job.workItemId);
+      return launch(job);
     },
     tests: SIM.tests,
     reviewer: SIM.reviewer,
@@ -229,13 +255,16 @@ test('27 a failing source does not stop a lane on another failure domain', () =>
     source: 'gw-b',
   });
   let n = 0;
+  const launch = durableLaunch();
   const result = runOrchestration('g', {
     specs: [{ id: 'A', files: ['a.js'] }],
     candidates: [first, second],
-    run: () => {
+    decisionDir: tmpDir(),
+    sha: SIM_SHA,
+    run: (job) => {
       n += 1;
       if (n === 1) return { exitCode: 3, stderr: 'usage limit reached' };
-      return { exitCode: 0, stdout: '{}' };
+      return launch(job);
     },
     tests: SIM.tests,
     reviewer: SIM.reviewer,
@@ -260,6 +289,9 @@ test('29 plan input count = completed + blocked + deferred', () => {
       { id: 'C', files: ['c.js'] },
     ],
     candidates: [cand()],
+    decisionDir: tmpDir(),
+    usageDir: tmpDir(),
+    sha: SIM_SHA,
     run: SIM.run,
     tests: SIM.tests,
     reviewer: SIM.reviewer,

@@ -38,6 +38,10 @@ const Stage = Object.freeze({
   COMPLETED: 'completed',
   FAILED: 'failed',
   RESUMED: 'resumed',
+  // A review round (TASK-AI-64). Added to this enum rather than to a second log,
+  // so the verdict, the open findings and the refusal cause land in the one
+  // append-only trace a human reads. It opens and closes no writer claim.
+  REVIEW: 'review',
 });
 
 const SECRET_KEYS = /^(key|apiKey|api_key|token|secret|password|authorization|credential)$/i;
