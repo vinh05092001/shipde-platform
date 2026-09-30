@@ -118,6 +118,14 @@ const cline = {
  * stay a hard HARNESS_NO_SESSION_ID downstream, never a guessed value; and
  * post-hoc `sessions list` / "latest" lookups are a human, workspace-scoped,
  * racy channel that this adapter does not use.
+ *
+ * There is deliberately no `inspect` here. Paseo answers a per-session probe,
+ * so the executor can tell a gone session from a live one; v0.21.4 documents no
+ * equivalent, and an argv invented here would be a guess at an external API —
+ * the one thing a pinned adapter must not contain. Progress is therefore
+ * measured host-side (supervisor.js measures the worker root) rather than by
+ * asking the harness, and the executor skips its liveness probe for this
+ * adapter instead of failing a resume on a fabricated probe.
  */
 const hermes = {
   id: 'hermes',

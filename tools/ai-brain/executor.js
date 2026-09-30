@@ -133,10 +133,59 @@ function inspectVerdict(res) {
 }
 
 /**
+ * Reads the durable session id a launch produced, in the order the harness
+ * contract says it can exist.
+ *
+ * A harness that was handed a `--usage-file` reports there (Hermes v0.21.4:
+ * under `-z` stdout is only the final response prose, so a live run that parsed
+ * stdout failed closed as HARNESS_INVALID_JSON before the id was ever
+ * consulted — audit section 4, Gap B). A harness that reports on stdout (Paseo)
+ * keeps that channel. A harness that reports neither has no id, which is
+ * HARNESS_NO_SESSION_ID: never a pid, a timestamp or a "latest" lookup, because
+ * a value that is not a session cannot be resumed.
+ */
+function readSessionId(adapter, job, res) {
+  const reportPath = job && typeof job.usageFile === 'string' ? job.usageFile : null;
+  if (reportPath) {
+    const fs = require('fs');
+    if (!fs.existsSync(reportPath)) return { id: null, cause: 'HARNESS_USAGE_REPORT_MISSING' };
+    let report;
+    try {
+      const text = fs.readFileSync(reportPath, 'utf8');
+      report = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+    } catch (err) {
+      return { id: null, cause: 'HARNESS_USAGE_REPORT_INVALID' };
+    }
+    return { id: adapter.sessionIdFrom(report) || null, cause: 'HARNESS_NO_SESSION_ID' };
+  }
+  const parsed = parseLastJson(res.stdout);
+  if (!parsed) return { id: null, cause: 'HARNESS_INVALID_JSON' };
+  return { id: adapter.sessionIdFrom(parsed) || null, cause: 'HARNESS_NO_SESSION_ID' };
+}
+
+/**
+ * Where the harness writes its durable session report.
+ *
+ * The loop supplies the path; the worker writes the report into it. It is
+ * therefore a worker-writable directory the operator names (inside the worker
+ * root for an isolated launch), never a host-owned one the worker cannot reach.
+ */
+function usageReportPath(options, assignment) {
+  const opts = options || {};
+  const dir = opts.usageDir;
+  if (!dir) return null;
+  const stem = String((assignment && assignment.workItemId) || 'session').replace(
+    /[^A-Za-z0-9._-]/g,
+    '-'
+  );
+  return require('path').join(dir, stem + '-' + (opts.now || Date.now()) + '.json');
+}
+
+/**
  * @param plan    the object planDispatch returned; read only
  * @param options {
  *   dryRun (default true), project, now, promptFor, harnessFor,
- *   run, registry, decisionDir, cwd, base
+ *   run, registry, decisionDir, cwd, base, baseSha, usageDir
  * }
  */
 function executePlan(plan, options) {
@@ -145,9 +194,14 @@ function executePlan(plan, options) {
   const project = opts.project || 'shipde-platform';
   const promptFor = typeof opts.promptFor === 'function' ? opts.promptFor : defaultPrompt;
   let run = typeof opts.run === 'function' ? opts.run : runHarness;
-  if (opts.isolatedWorker && typeof opts.run !== 'function') {
+  // AI-64-P03: an injected runner replaces what runs the process; it never
+  // decides whether the worker boundary exists. A dependency injection used to
+  // switch isolation off silently, with no log line, which is a control that
+  // only holds in the configuration nobody tests.
+  if (opts.isolatedWorker) {
     run = require('./isolation-launcher').getIsolatedLauncher();
   }
+
   const now = opts.now || Date.now();
   const registry = opts.registry || loadSources();
   const logOpts = { dir: opts.decisionDir, now };
@@ -318,18 +372,27 @@ function executePlan(plan, options) {
       continue;
     }
 
+    // One job object, so a resume is the same launch with the pinned candidate
+    // still attached. `candidateKey` matters beyond bookkeeping: the Hermes
+    // adapter refuses a resume that lost it (harness.js
+    // HERMES_REQUIRES_PINNED_CANDIDATE), so passing only (id, prompt) turned
+    // every resume into a hard failure (audit section 6).
+    const job = {
+      candidateKey: record.offeringId,
+      provider: route.provider,
+      model: route.model,
+      accountId: a.accountId,
+      prompt: promptFor(a),
+      branch: isReview ? null : a.branch,
+      base: opts.base || 'main',
+      cwd: opts.cwd,
+      usageFile: usageReportPath(opts, a),
+      title: workerName(a.workItemId),
+      labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
+    };
     record.args = resuming
-      ? adapter.resume(existing.sessionId, resumePrompt(a))
-      : adapter.launch({
-          provider: route.provider,
-          model: route.model,
-          prompt: promptFor(a),
-          branch: isReview ? null : a.branch,
-          base: opts.base || 'main',
-          cwd: opts.cwd,
-          title: workerName(a.workItemId),
-          labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
-        });
+      ? adapter.resume(existing.sessionId, resumePrompt(a), job)
+      : adapter.launch(job);
 
     if (dryRun) {
       record.outcome = Outcome.DRY_RUN;
@@ -383,20 +446,16 @@ function executePlan(plan, options) {
       fail('HARNESS_NONZERO_EXIT');
       continue;
     }
-    if (!res.stdout || String(res.stdout).trim() === '') {
+    if (!job.usageFile && (!res.stdout || String(res.stdout).trim() === '')) {
       fail('HARNESS_EMPTY_STDOUT');
       continue;
     }
-    const parsed = parseLastJson(res.stdout);
-    if (!parsed) {
-      fail('HARNESS_INVALID_JSON');
-      continue;
-    }
-    const id = resuming ? existing.sessionId : adapter.sessionIdFrom(parsed);
+    const reported = readSessionId(adapter, job, res);
+    const id = resuming ? existing.sessionId : reported.id;
     if (!id) {
       // No id means no way to find this session again, which makes it
       // unstoppable and unresumable. Reported as failed so a human looks.
-      fail('HARNESS_NO_SESSION_ID');
+      fail(reported.cause);
       continue;
     }
 
@@ -437,5 +496,7 @@ module.exports = {
   defaultPrompt,
   resumePrompt,
   inspectVerdict,
+  readSessionId,
+  usageReportPath,
   Outcome,
 };
