@@ -17,6 +17,16 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 /** The worker root for one job: the worker never sees the operator's leaf name. */
 function workerRootFor(hostCwd) {
   const jobName = path.basename(String(hostCwd || '')) || 'default';
+  if (
+    jobName === '.' ||
+    jobName === '..' ||
+    jobName.includes('/') ||
+    jobName.includes('\\') ||
+    jobName.includes('*') ||
+    jobName.includes('?')
+  ) {
+    throw new Error('Invalid job name in workerRootFor');
+  }
   return path.win32.join(WORKER_ROOT, jobName);
 }
 
@@ -249,7 +259,11 @@ $wrapperStartTime = Get-Date
 \`$env:HOME = "${workerRoot}"
 \`$env:USERPROFILE = "${workerRoot}"
 \`$env:GH_CONFIG_DIR = "${workerRoot}\\.config\\gh"
-\`$env:GIT_CONFIG_GLOBAL = "${workerRoot}\\.gitconfig"
+\`$env:GIT_CONFIG_GLOBAL = "NUL"
+\`$env:GIT_CONFIG_NOSYSTEM = "1"
+\`$env:GIT_CONFIG_COUNT = "1"
+\`$env:GIT_CONFIG_KEY_0 = "safe.directory"
+\`$env:GIT_CONFIG_VALUE_0 = "${safeWorkerRootForGit}"
 \`$env:TEMP = "${workerRoot}\\temp"
 \`$env:TMP = "${workerRoot}\\temp"
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
@@ -260,30 +274,6 @@ if (\`$null -eq \`$jobExit) { exit 1 }
 @{ nonce = "${completionNonce}"; exitCode = [int]\`$jobExit; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
 exit \`$jobExit
 "@ | Out-File $nestedScript -Encoding UTF8
-
-# Defect C (live E2E attempt 4): the clone that provisions this root runs as
-# the OPERATOR, so .git inside the worker root is operator-owned while the job
-# runs as the worker, and git >= 2.35.2 then refuses every command in it with
-# "detected dubious ownership" (exit 128) — no job can commit, status or
-# bundle. Git's own documented remedy is a safe.directory entry in protected
-# (global) config, and the worker's global config is exactly the
-# GIT_CONFIG_GLOBAL file inside the worker root that run-target.ps1 sets. The
-# file is rewritten on every launch, so the entry is this worker root — the
-# exact path, never a wildcard — and the operator's own global configuration
-# (the one git resolves when this host script runs as the operator) is never
-# written. The config is made read-only to the worker so the worker cannot
-# inject core.hooksPath, credential.helper, or widen safe.directory.
-$workerGitConfigPath = "${workerRoot}\\.gitconfig"
-$workerGitConfigBody = '[safe]' + [Environment]::NewLine + '    directory = ${safeWorkerRootForGit}' + [Environment]::NewLine
-if (-not (Test-Path -LiteralPath "${workerRoot}")) { New-Item -ItemType Directory -Path "${workerRoot}" | Out-Null }
-if (Test-Path -LiteralPath $workerGitConfigPath) { Remove-Item -LiteralPath $workerGitConfigPath -Force -ErrorAction SilentlyContinue }
-[void][System.IO.File]::WriteAllText($workerGitConfigPath, $workerGitConfigBody)
-
-$configAcl = Get-Acl $workerGitConfigPath
-$denyRule = New-Object System.Security.AccessControl.FileSystemAccessRule("${workerUsername}", "Write, AppendData, Delete", "None", "None", "Deny")
-$configAcl.AddAccessRule($denyRule)
-Set-Acl $workerGitConfigPath $configAcl
-
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = "powershell.exe"
