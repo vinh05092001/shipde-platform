@@ -114,7 +114,7 @@ These are future implementation actions, not performed by this Work Item:
 2. Prepare a minimal worker image or isolated user filesystem containing Node, pnpm if needed, Git, the harness CLI, and the P0 guard.
 3. Mount only the assigned worktree and disposable temp/profile paths. Do not mount `C:/Users/gumac`, `.ssh`, `.git-credentials`, GitHub CLI config, browser profiles, or host package-manager auth files.
 4. Route model access through `127.0.0.1:20128` or a named model endpoint allowlist. Deny `github.com`, `api.github.com`, SSH, and all unknown outbound destinations.
-5. Launch the worker through the existing controller dispatch path, but with `cwd`, `HOME`, `USERPROFILE`, `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `SSH_AUTH_SOCK`, and proxy/network variables pointing inside the isolated boundary.
+5. Launch the worker through the existing controller dispatch path, but with `cwd`, `HOME`, `USERPROFILE`, `GH_CONFIG_DIR`, `SSH_AUTH_SOCK`, and proxy/network variables pointing inside the isolated boundary.
 6. Allow the worker to produce commits, patches, logs, screenshots, and verification artifacts in the mounted worktree or internal artifact directory.
 7. Stop the worker and prove no worker process remains.
 8. Run verification from the host against the worktree/artifact.
