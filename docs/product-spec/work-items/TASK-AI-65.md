@@ -137,18 +137,14 @@ inside `pnpm test:brain` (`node --test "tools/ai-brain/test/*.test.js"`).
 
 ## Verification evidence
 
-- `node --test "tools/ai-brain/test/*.test.js"` — **1061 tests, 1061 pass, 0 fail** (includes the
-  18 new TASK-AI-65 tests; no regression in the existing suites).
-- `node tools/ai-brain/cli.js dispatch --dry-run --profile tools/ai-brain/test/fixtures/task-ai-65/sec-proofapi.json` —
-  real registry candidates, exits 1 (on a fresh checkout with no prior execution evidence):
-  JEV `UNDECIDED` → Controller weights `QUALITY_FIRST`;
-  No candidate meets the profile: REFUSED: no candidate meets the profile floors
-    EXCLUDED 1657x WILDCARD_ACCOUNT
-    EXCLUDED 257x CLAUDE_FAMILY_EXCLUDED_BY_POLICY
-    EXCLUDED 12x FORBIDDEN_FAILURE_DOMAIN
-    EXCLUDED 5x PROOF_FLOOR_NOT_MET:NONE
-
-  *(Likewise, the CORE writer and WS1 scanner profiles also correctly refuse on an empty evidence store.)*
+- `node --test "tools/ai-brain/test/*.test.js"` — **1062 tests, 1062 pass, 0 fail** (includes the
+  19 new TASK-AI-65 tests; no regression in the existing suites).
+- `node tools/ai-brain/cli.js dispatch --dry-run --profile <file>` against the real registry, empty evidence store, exits 1. The refusal is correct (fail-closed): a proof floor above `NONE` cannot be met until an execution has recorded passed evidence. Counts below are the review measurement at `b1c5afe` (1657+257+12+5 = 1931; 1469+257+188+4 = 1918; 1906+25 = 1931):
+  - `tools/ai-brain/test/fixtures/task-ai-65/sec-proofapi.json` — JEV `UNDECIDED` → Controller weights `QUALITY_FIRST`; `REFUSED: no candidate meets the profile floors`; 1657x `WILDCARD_ACCOUNT`, 257x `CLAUDE_FAMILY_EXCLUDED_BY_POLICY`, 12x `FORBIDDEN_FAILURE_DOMAIN`, 5x `PROOF_FLOOR_NOT_MET:NONE`.
+  - `tools/ai-brain/test/fixtures/task-ai-65/core-writer.json` — 1469x `HARNESS_NOT_REQUIRED`, 257x `CLAUDE_FAMILY_EXCLUDED_BY_POLICY`, 188x `WILDCARD_ACCOUNT`, 4x `PROOF_FLOOR_NOT_MET:NONE`.
+  - `tools/ai-brain/test/fixtures/task-ai-65/ws1-scanner.json` — 1906x `WILDCARD_ACCOUNT`, 25x `PROOF_FLOOR_NOT_MET:NONE`.
+  - The same directory also holds `sec-noproof.json` (`proofFloor: NONE`) and `sec-wipass.json` (`proofFloor: WORK_ITEM_PASS`); `65-19` loads all five and asserts they are valid profiles.
+- Bootstrap sequence (see Known limitations): dispatch once with `proofFloor: "NONE"`, then `dispatch --report-outcome` with `status: "completed"`. That records `API_PASS` only. A higher `proofFloor` needs real execution evidence recorded through `cli.js`, not `--report-outcome`.
 
 ## Known limitations
 
@@ -161,4 +157,4 @@ inside `pnpm test:brain` (`node --test "tools/ai-brain/test/*.test.js"`).
 - **Bootstrap circularity**: On a fresh checkout, proofFloor > NONE is unsatisfiable. To bootstrap, run an execution with proofFloor: 'NONE' and --report-outcome with status: 'completed'.
 - **API_PASS ceiling**: --report-outcome only ever mints API_PASS evidence. A higher proofFloor requires real execution evidence recorded via cli.js.
 - **Headroom constants**: Candidates with unknown quota availability take a 15-point score penalty; tight takes a 10-point penalty.
-- **forbiddenFailureDomains grammar**: Only exact component values (e.g., gy-native-a) or composed gateway/upstream forms (9router/antigravity) are supported.
+- **forbiddenFailureDomains grammar**: component-only. `matchesForbiddenDomain` compares each forbidden value to a single candidate field (`gateway`, `upstream`, `accountId`, `accessPath`, `harness`) and never to the joined `gateway/upstream` string that `formatTopEntry` prints as `failure-domain`. `agy-native-a` matches an upstream of that name; `9router/antigravity` matches nothing. Paste a component, not the display form.

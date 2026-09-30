@@ -679,15 +679,20 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     const r3 = await runDispatch(p3, [noCap], dirs);
     assert.equal(r3.result.rejected[0].reasonCode, 'CAPABILITY_MISSING:image');
 
-    // 4. CONTEXT_SIZE_FLOOR_NOT_MET
+    // 4. Profile contextSize floor (routing.js rankForProfile). paseo has no
+    // harness context minimum, so the rejection is the profile floor, not
+    // contextRefusal. A 1000-token window on hermes would be rejected first
+    // as 'CONTEXT_TOO_SMALL: hermes requires...' with scope 'harness'.
     const smallCtx = cand({
+      harness: 'paseo',
       accountId: 'a',
       modelId: 'up/m4',
       capabilities: { contextWindow: 1000 },
     });
-    const p4 = profile({ contextSize: 4000 });
+    const p4 = profile({ contextSize: 4000, requiredHarness: null });
     const r4 = await runDispatch(p4, [smallCtx], dirs);
-    assert.ok(r4.result.rejected[0].reasonCode.startsWith('CONTEXT_TOO_SMALL'));
+    assert.equal(r4.result.rejected[0].reasonCode, 'CONTEXT_TOO_SMALL');
+    assert.equal(r4.result.rejected[0].scope, 'capability');
 
     // 5. WILDCARD_ACCOUNT
     const wildcard = cand({ accountId: '*', modelId: 'up/m5' });
@@ -774,6 +779,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     const runFile = path.join(dirs.root, 'good-outcome-run.json');
     fs.writeFileSync(runFile, JSON.stringify({ candidateKey: candidateKey(c), status: 'running' }));
     let runExit = null;
+    const runLines = [];
     dispatchCommand(
       { 'report-outcome': runFile },
       {
@@ -781,14 +787,18 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
         decisionDir: dirs.decisions,
         home: dirs.home,
         now: NOW,
-        log: () => {},
-        error: () => {},
+        log: (s) => runLines.push(String(s)),
+        error: (s) => runLines.push('ERR ' + String(s)),
         exit: (c) => {
           runExit = c;
         },
       }
     );
     assert.equal(runExit, 0);
+    const runLog = runLines.join('\n');
+    assert.match(runLog, /Outcome IN_PROGRESS for /);
+    assert.match(runLog, /progress reported/);
+    assert.doesNotMatch(runLog, /evidence and cooldown updated/);
     const data2 = evidence.loadEvidence(dirs.evidence);
     const evList2 = evidence.getEvidence(data2, c);
     assert.equal(evList2.length, 1, 'no new evidence written for non-terminal status');
@@ -881,5 +891,36 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     const store = JSON.parse(fs.readFileSync(dirs.storePath, 'utf8')).reservations;
     const tokens = Object.values(store)[0].tokens;
     assert.equal(tokens, 100000, 'reservation uses 100000 tokens instead of expectedDuration ms');
+  });
+
+  test('65-19: committed fixtures are valid profiles, and forbiddenFailureDomains is component-only', () => {
+    const fixtureDir = path.join(__dirname, 'fixtures', 'task-ai-65');
+    const names = [
+      'sec-proofapi.json',
+      'core-writer.json',
+      'ws1-scanner.json',
+      'sec-noproof.json',
+      'sec-wipass.json',
+    ];
+    for (const name of names) {
+      const raw = JSON.parse(fs.readFileSync(path.join(fixtureDir, name), 'utf8'));
+      const checked = routing.validateTaskProfile(raw);
+      assert.equal(checked.valid, true, name + ' is a valid task profile');
+    }
+
+    const composed = cand({
+      gateway: '9router',
+      upstream: 'antigravity',
+      accountId: 'acct-65-domain',
+    });
+    assert.equal(routing.failureDomainOf(composed), '9router/antigravity');
+    assert.equal(routing.matchesForbiddenDomain(composed, ['agy-native-a']), false);
+    assert.equal(routing.matchesForbiddenDomain(composed, ['antigravity']), true);
+    assert.equal(routing.matchesForbiddenDomain(composed, ['9router']), true);
+    assert.equal(
+      routing.matchesForbiddenDomain(composed, ['9router/antigravity']),
+      false,
+      'the joined display form is not a forbidden-domain value'
+    );
   });
 });
