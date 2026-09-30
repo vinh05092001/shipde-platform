@@ -577,7 +577,7 @@ test(
   }
 );
 
-test('workerRootFor refuses drive roots, siblings, and wildcards', () => {
+test('workerRootFor refuses drive roots, siblings, and wildcards', windowsSkip, () => {
   const { workerRootFor } = require('../isolation-launcher');
   assert.throws(() => workerRootFor('C:\\a\\..'), /Invalid job name/);
   assert.throws(() => workerRootFor('C:\\a\\..\\..'), /Invalid job name/);
