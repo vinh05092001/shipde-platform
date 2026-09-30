@@ -1721,6 +1721,13 @@ function dispatchCommand(args, deps = {}) {
       // The durable handle, read from the report the launch was given. Never a
       // pid, a timestamp or a stdout guess.
       sessionHandle = readSessionId(adapter, { usageFile: usageFile }, launchRes || {}).id;
+      if (usageFile && !sessionHandle) {
+        // The caller asked for a durable report and the report carries no
+        // session id, so this launch cannot be resumed or stopped. A launch the
+        // loop cannot find again is a failed launch (AI-64-R04), not a success
+        // with a null handle.
+        isFailure = true;
+      }
       if (sessionHandle) {
         // The claim now carries the session it is a claim about, so a restart
         // resumes that session instead of starting a second writer.
@@ -1763,6 +1770,7 @@ function dispatchCommand(args, deps = {}) {
             worktree: args.cwd || rootDir,
             area: item.area,
             outcome: isFailure ? 'failed' : 'passed',
+            detail: usageFile && !sessionHandle ? 'HARNESS_NO_SESSION_ID' : null,
             firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
             selected: finalChosenKey,
             excluded: lastDecision

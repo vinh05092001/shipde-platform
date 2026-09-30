@@ -28,6 +28,9 @@ function git(cwd, args, timeoutMs) {
     encoding: 'utf8',
     windowsHide: true,
     timeout: timeoutMs || 20000,
+    // A diff of a real work item is bigger than Node's 1 MB default; a truncated
+    // measurement would understate progress and could read as a stall.
+    maxBuffer: 16 * 1024 * 1024,
   });
 }
 
