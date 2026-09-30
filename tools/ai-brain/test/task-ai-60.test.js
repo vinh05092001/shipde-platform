@@ -46,11 +46,14 @@ function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-60-'));
 }
 
+// A run pins the commit it is reviewing, and TASK-AI-64 R07 makes the reviewer
+// name the commit it read, so the shared stub echoes the SHA it was handed.
+const SIM_SHA = 'a'.repeat(40);
 const SIM = {
   run: () => ({ exitCode: 0, stdout: '{"sessionId":"sim"}' }),
   tests: () => ({ pass: true }),
-  reviewer: () => ({ pass: true, findings: [] }),
-  repairer: () => ({ sha: 'head' }),
+  reviewer: (sha) => ({ pass: true, sha: typeof sha === 'string' ? sha : SIM_SHA, findings: [] }),
+  repairer: (findings, sha) => ({ sha: sha || SIM_SHA }),
 };
 
 test('15 planner makes a valid DAG', () => {
@@ -152,7 +155,14 @@ test('22 restart reads the checkpoint and does not redo completed steps', () => 
 test('23 old-SHA review not accepted for a new SHA', () => {
   const result = runReviewLoop(
     { sha: 'newsha', budget: 3 },
-    { runTests: () => ({ pass: true }), review: () => ({ pass: true, sha: 'oldsha' }) }
+    {
+      runTests: () => ({ pass: true }),
+      review: () => ({ pass: true, sha: 'oldsha' }),
+      // TASK-AI-64: the loop has no default repair gate any more (a missing gate
+      // is a refusal, AI-64-P08), so the seam this test does not exercise is
+      // still supplied. The assertion under test is unchanged.
+      repair: (findings, sha) => ({ sha }),
+    }
   );
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.rounds.some((r) => r.cause === 'STALE_REVIEW_SHA'));
@@ -161,7 +171,13 @@ test('23 old-SHA review not accepted for a new SHA', () => {
 test('24 PASS with findings rejected', () => {
   const result = runReviewLoop(
     { sha: 'newsha', budget: 3 },
-    { runTests: () => ({ pass: true }), review: () => ({ pass: true, findings: [{ id: 1 }] }) }
+    {
+      runTests: () => ({ pass: true }),
+      // TASK-AI-64 R07: a review now names the commit it read, so the review
+      // under test names 'newsha' too. Same assertion, live review shape.
+      review: () => ({ pass: true, sha: 'newsha', findings: [{ id: 1 }] }),
+      repair: (findings, sha) => ({ sha }),
+    }
   );
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.rounds.some((r) => r.cause === 'PASS_WITH_FINDINGS_REJECTED'));
@@ -176,7 +192,7 @@ test('25 CI failure creates a repair task with the right cause', () => {
         call += 1;
         return call === 1 ? { pass: false, cause: 'UPSTREAM_AUTH_403' } : { pass: true };
       },
-      review: () => ({ pass: true, findings: [] }),
+      review: () => ({ pass: true, sha: 'head', findings: [] }),
       repair: () => ({ sha: 'head' }),
     }
   );
@@ -189,7 +205,13 @@ test('25 CI failure creates a repair task with the right cause', () => {
 test('26 repair over budget -> BLOCKED', () => {
   const result = runReviewLoop(
     { sha: 'head', budget: 1 },
-    { runTests: () => ({ pass: false, cause: 'TEST_FAILURE' }), review: () => ({ pass: true }) }
+    {
+      runTests: () => ({ pass: false, cause: 'TEST_FAILURE' }),
+      review: () => ({ pass: true, sha: 'head' }),
+      // TASK-AI-64: the old `(findings, sha) => ({ sha })` default repair is
+      // gone, so the seam this test drives on purpose is supplied explicitly.
+      repair: (findings, sha) => ({ sha }),
+    }
   );
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.rounds.some((r) => r.cause === 'REPAIR_BUDGET_EXHAUSTED'));
