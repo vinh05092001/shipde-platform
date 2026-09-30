@@ -12,6 +12,10 @@
 
 const { progressVerdict, ProgressStatus } = require('./harness');
 const { spawnSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
 
 const Status = Object.freeze({
   RUNNING_WITH_PROGRESS: 'RUNNING_WITH_PROGRESS',
@@ -22,31 +26,72 @@ const Status = Object.freeze({
   UNKNOWN: 'UNKNOWN',
 });
 
-function git(cwd, args, timeoutMs) {
-  const path = require('path');
-  const safeArgs = [
-    '--git-dir=' + path.join(cwd, '.git'),
-    '--work-tree=' + cwd,
-    '-c',
-    'core.fsmonitor=',
-    '-c',
-    'core.hooksPath=NUL',
-    '-c',
-    'core.pager=cat',
-    '-c',
-    'diff.external=',
-    '-c',
-    'include.path=/dev/null',
-    ...args,
-  ];
+function withCleanGitEnv(cwd, fn) {
+  const tmpDir = path.join(os.tmpdir(), 'shipde-git-safe-' + crypto.randomBytes(4).toString('hex'));
+  spawnSync('git', ['init', tmpDir], { windowsHide: true });
+  const gitDir = path.join(tmpDir, '.git');
+  fs.mkdirSync(path.join(gitDir, 'objects', 'info'), { recursive: true });
+  fs.writeFileSync(
+    path.join(gitDir, 'config'),
+    '[core]\n\trepositoryFormatVersion = 0\n\tbare = false\n'
+  );
+
+  const workerGitDir =
+    spawnSync('git', ['-C', cwd, 'rev-parse', '--absolute-git-dir'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    }).stdout.trim() || path.join(cwd, '.git');
+  const workerCommonDirRaw = spawnSync('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  }).stdout.trim();
+  const workerCommonDir = workerCommonDirRaw ? path.resolve(cwd, workerCommonDirRaw) : workerGitDir;
+
+  const workerObjects = path.join(workerGitDir, 'objects');
+  if (fs.existsSync(workerObjects)) {
+    fs.writeFileSync(
+      path.join(gitDir, 'objects', 'info', 'alternates'),
+      workerObjects.replace(/\\/g, '/')
+    );
+  }
+
+  const copyIf = (srcDir, destDir, name) => {
+    const src = path.join(srcDir, name);
+    if (fs.existsSync(src)) {
+      if (fs.statSync(src).isDirectory()) {
+        fs.cpSync(src, path.join(destDir, name), { recursive: true, force: true });
+      } else {
+        fs.copyFileSync(src, path.join(destDir, name));
+      }
+    }
+  };
+
+  copyIf(workerGitDir, gitDir, 'HEAD');
+  copyIf(workerGitDir, gitDir, 'index');
+
+  // Refs might be in common dir for worktrees
+  copyIf(workerCommonDir, gitDir, 'refs');
+  copyIf(workerCommonDir, gitDir, 'packed-refs');
+
+  try {
+    return fn(gitDir);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function safeGit(tmpDir, cwd, args, timeoutMs) {
+  const safeArgs = ['--git-dir=' + tmpDir, '--work-tree=' + cwd, ...args];
   return spawnSync('git', safeArgs, {
     cwd,
     encoding: 'utf8',
     windowsHide: true,
     timeout: timeoutMs || 20000,
-    // A diff of a real work item is bigger than Node's 1 MB default; a truncated
-    // measurement would understate progress and could read as a stall.
     maxBuffer: 16 * 1024 * 1024,
+    env: Object.assign({}, process.env, {
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    }),
   });
 }
 
@@ -75,28 +120,32 @@ function progressFromWorkerRoot(cwd, options) {
   const base = typeof o.baseSha === 'string' && o.baseSha ? o.baseSha : null;
   if (!cwd) return { diffBytes: 0, commits: 0, lastProgressAt: null };
 
-  const patch = git(cwd, ['diff', base || 'HEAD']);
-  const diffBytes = patch.status === 0 ? Buffer.byteLength(patch.stdout || '', 'utf8') : 0;
+  return withCleanGitEnv(cwd, (tmpDir) => {
+    const git = (args) => safeGit(tmpDir, cwd, args, 20000);
 
-  const counted = git(cwd, ['rev-list', '--count', base ? base + '..HEAD' : 'HEAD']);
-  const commits = counted.status === 0 ? Number(String(counted.stdout || '').trim()) || 0 : 0;
+    const patch = git(['diff', base || 'HEAD', '--no-ext-diff', '--no-textconv']);
+    const diffBytes = patch.status === 0 ? Buffer.byteLength(patch.stdout || '', 'utf8') : 0;
 
-  let lastProgressAt = null;
-  if (commits > 0) {
-    const when = git(cwd, ['log', '-1', '--format=%cI']);
-    if (when.status === 0) lastProgressAt = String(when.stdout || '').trim() || null;
-  }
-  if (!lastProgressAt) {
-    const fs = require('fs');
-    const path = require('path');
-    try {
-      lastProgressAt = new Date(fs.statSync(path.join(cwd, '.git', 'index')).mtimeMs).toISOString();
-    } catch (e) {
-      lastProgressAt = null;
+    const counted = git(['rev-list', '--count', base ? base + '..HEAD' : 'HEAD']);
+    const commits = counted.status === 0 ? Number(String(counted.stdout || '').trim()) || 0 : 0;
+
+    let lastProgressAt = null;
+    if (commits > 0) {
+      const when = git(['log', '-1', '--format=%cI']);
+      if (when.status === 0) lastProgressAt = String(when.stdout || '').trim() || null;
     }
-  }
+    if (!lastProgressAt) {
+      try {
+        lastProgressAt = new Date(
+          fs.statSync(path.join(cwd, '.git', 'index')).mtimeMs
+        ).toISOString();
+      } catch (e) {
+        lastProgressAt = null;
+      }
+    }
 
-  return { diffBytes, commits, lastProgressAt };
+    return { diffBytes, commits, lastProgressAt };
+  });
 }
 
 function hasArtifact(session) {
@@ -139,4 +188,4 @@ function classifySession(session, opts) {
   return Status.UNKNOWN;
 }
 
-module.exports = { Status, classifySession, progressFromWorkerRoot };
+module.exports = { Status, classifySession, progressFromWorkerRoot, withCleanGitEnv, safeGit };

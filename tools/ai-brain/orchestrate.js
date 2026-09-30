@@ -249,29 +249,12 @@ function repairSpec(item, findings, round) {
 
 function headShaOf(cwd) {
   if (!cwd) return null;
-  const safeArgs = [
-    '--git-dir=' + path.join(cwd, '.git'),
-    '-c',
-    'core.fsmonitor=',
-    '-c',
-    'core.hooksPath=NUL',
-    '-c',
-    'core.pager=cat',
-    '-c',
-    'diff.external=',
-    '-c',
-    'include.path=/dev/null',
-    'rev-parse',
-    'HEAD',
-  ];
-  const res = spawnSync('git', safeArgs, {
-    cwd,
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 20000,
+  const { withCleanGitEnv, safeGit } = require('./supervisor');
+  return withCleanGitEnv(cwd, (tmpDir) => {
+    const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
+    if (!res || res.status !== 0) return null;
+    return String(res.stdout || '').trim() || null;
   });
-  if (!res || res.status !== 0) return null;
-  return String(res.stdout || '').trim() || null;
 }
 
 /** Progress markers, measured host-side from the worker's own worktree. */

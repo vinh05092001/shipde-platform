@@ -60,27 +60,12 @@ function runCommand(cmd, args, cwd) {
 }
 
 function getHeadSha(cwd) {
-  const res = runCommand(
-    'git',
-    [
-      '--git-dir=' + path.join(cwd, '.git'),
-      '-c',
-      'core.fsmonitor=',
-      '-c',
-      'core.hooksPath=NUL',
-      '-c',
-      'core.pager=cat',
-      '-c',
-      'diff.external=',
-      '-c',
-      'include.path=/dev/null',
-      'rev-parse',
-      'HEAD',
-    ],
-    cwd
-  );
-  if (res.exitCode === 0) return res.stdout.trim();
-  return null;
+  const { withCleanGitEnv, safeGit } = require('./supervisor');
+  return withCleanGitEnv(cwd, (tmpDir) => {
+    const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
+    if (res.exitCode === 0) return res.stdout.trim();
+    return null;
+  });
 }
 
 function validateRemoteUrl(remoteUrl) {
@@ -131,20 +116,66 @@ function buildSanitizedMirror(cwd, tmpDir) {
   return mirrorDir;
 }
 
+function safeCopyObjects(srcDir, destDir) {
+  let totalBytes = 0;
+  const MAX_BYTES = 500 * 1024 * 1024; // 500 MB bound
+
+  function copyFileIfSafe(src, dest) {
+    const stat = fs.lstatSync(src);
+    if (!stat.isFile()) throw new Error('Not a regular file: ' + src);
+    totalBytes += stat.size;
+    if (totalBytes > MAX_BYTES) throw new Error('Object store exceeds size bound');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+  }
+
+  if (!fs.existsSync(srcDir)) return;
+  const entries = fs.readdirSync(srcDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory() && /^[0-9a-f]{2}$/.test(entry.name)) {
+      const hexDir = path.join(srcDir, entry.name);
+      const destHex = path.join(destDir, entry.name);
+      for (const obj of fs.readdirSync(hexDir, { withFileTypes: true })) {
+        if (obj.isFile() && /^[0-9a-f]{38}$/.test(obj.name)) {
+          copyFileIfSafe(path.join(hexDir, obj.name), path.join(destHex, obj.name));
+        }
+      }
+    } else if (entry.isDirectory() && entry.name === 'pack') {
+      const packDir = path.join(srcDir, 'pack');
+      const destPack = path.join(destDir, 'pack');
+      for (const pack of fs.readdirSync(packDir, { withFileTypes: true })) {
+        if (pack.isFile() && /^pack-[0-9a-f]{40}\.(pack|idx|rev)$/.test(pack.name)) {
+          copyFileIfSafe(path.join(packDir, pack.name), path.join(destPack, pack.name));
+        }
+      }
+    }
+  }
+}
+
 function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir) {
   const mirrorDir = buildSanitizedMirror(cwd, tmpDir);
 
-  // Copy objects directly to the mirror to completely avoid running git in the worker repository
+  // Copy objects explicitly to the mirror to completely avoid running git in the worker repository
   // or spawning upload-pack. This ensures malformed include.path or hostile hooks in the worker's
   // .git/config can never abort the transfer or execute code.
+  // The copy is bounded and strictly allow-lists loose objects and packfiles to prevent copying
+  // objects/info/alternates or dereferencing worker-planted junctions.
   const workerObjects = path.join(cwd, '.git', 'objects');
   const mirrorObjects = path.join(mirrorDir, 'objects');
-  fs.cpSync(workerObjects, mirrorObjects, { recursive: true, force: true });
+  safeCopyObjects(workerObjects, mirrorObjects);
 
   // Set the temp-push ref in the mirror to the reviewed SHA
   const refRes = runCommand('git', ['update-ref', 'refs/heads/temp-push', reviewedSha], mirrorDir);
   if (refRes.exitCode !== 0) {
     throw new Error('PUBLISH_FAILED: failed to update mirror ref: ' + refRes.stderr);
+  }
+
+  // Verify the reviewed commit is fully reachable from the mirror's own objects.
+  // Since alternates are not copied, this guarantees the worker didn't supply an empty commit
+  // relying on operator-side objects.
+  const verifyRes = runCommand('git', ['rev-list', '--objects', reviewedSha], mirrorDir);
+  if (verifyRes.exitCode !== 0) {
+    throw new Error('PUBLISH_FAILED: reviewed commit is not fully reachable: ' + verifyRes.stderr);
   }
 
   // Then fetch from the safe operator-controlled mirror.

@@ -917,3 +917,82 @@ test('64-16 worker-set remote URL cannot change push destination', async () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('64-17 publisher copies allow-listed objects and ignores alternates (Finding 3)', () => {
+  const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker4-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp4-'));
+  const otherRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-other-'));
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  const gOther = (args) =>
+    spawnSync('git', args, { cwd: otherRepo, encoding: 'utf8', windowsHide: true });
+  gOther(['init']);
+  gOther(['config', 'user.email', 'test@example.com']);
+  gOther(['config', 'user.name', 'Test']);
+  fs.writeFileSync(path.join(otherRepo, 'SECRET.txt'), 'TOP SECRET OPERATOR CONTENT');
+  gOther(['add', '.']);
+  gOther(['commit', '-m', 'init']);
+  const sha = gOther(['rev-parse', 'HEAD']).stdout.trim();
+
+  const gWorker = (args) =>
+    spawnSync('git', args, { cwd: workerDir, encoding: 'utf8', windowsHide: true });
+  gWorker(['init']);
+  fs.mkdirSync(path.join(workerDir, '.git', 'objects', 'info'), { recursive: true });
+  fs.writeFileSync(
+    path.join(workerDir, '.git', 'objects', 'info', 'alternates'),
+    path.join(otherRepo, '.git', 'objects').replace(/\\/g, '/')
+  );
+
+  try {
+    fs.mkdirSync(cleanDir);
+    gWorker(['init', '--bare', cleanDir], cleanDir);
+    const { transferReviewedObjects } = require('../publisher');
+
+    assert.throws(
+      () => {
+        transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+      },
+      /PUBLISH_FAILED:.*(fully reachable|update mirror ref)/i,
+      'Publisher must verify the reviewed commit is reachable from copied objects'
+    );
+  } finally {
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(otherRepo, { recursive: true, force: true });
+  }
+});
+
+test('64-18 operator-side git commands ignore .gitattributes and diff.external (Findings 1, 2)', () => {
+  const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker5-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp5-'));
+  const marker = path.join(tmpDir, 'marker-textconv.txt');
+
+  const g = (args) =>
+    spawnSync('git', args, { cwd: workerDir, encoding: 'utf8', windowsHide: true });
+  g(['init']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  fs.writeFileSync(path.join(workerDir, 'file.txt'), 'base');
+  g(['add', '.']);
+  g(['commit', '-m', 'init']);
+  const baseSha = g(['rev-parse', 'HEAD']).stdout.trim();
+
+  // Plant textconv
+  fs.writeFileSync(path.join(workerDir, '.gitattributes'), '* diff=pwn');
+  const batPath = path.join(workerDir, 'pwn.bat');
+  fs.writeFileSync(batPath, '@echo off\necho EXECUTED > "' + marker + '"\nexit 0');
+  g(['config', 'diff.pwn.textconv', batPath]);
+
+  fs.writeFileSync(path.join(workerDir, 'file.txt'), 'changed');
+
+  try {
+    const { progressFromWorkerRoot } = require('../supervisor');
+    const res = progressFromWorkerRoot(workerDir, { baseSha });
+
+    assert.strictEqual(fs.existsSync(marker), false, 'supervisor executed textconv');
+    assert.ok(res.diffBytes > 0, 'supervisor diffBytes is 0 (diff failed or was empty)');
+  } finally {
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
