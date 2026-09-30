@@ -19,14 +19,22 @@ const {
   defaultVerifyBoundary,
   buildBoundaryVerifyScript,
   buildWorkerLaunchScript,
+  readLaunchResult,
   EXPECTED_FIREWALL_RULES,
 } = require('../isolation-launcher');
 
 // The host PowerShell is emitted by buildWorkerLaunchScript, not by the
-// launcher body itself, so source-text assertions read both production
+// launcher body itself, and the host-owned result is read by
+// readLaunchResult, so source-text assertions read all three production
 // functions. Same production source as before, only relocated.
 function launcherSource() {
-  return getIsolatedLauncher().toString() + '\n' + buildWorkerLaunchScript.toString();
+  return (
+    getIsolatedLauncher().toString() +
+    '\n' +
+    buildWorkerLaunchScript.toString() +
+    '\n' +
+    readLaunchResult.toString()
+  );
 }
 
 const scriptsDir = path.join(__dirname, '../../../scripts/ai/isolation');
