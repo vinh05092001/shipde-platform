@@ -39,6 +39,7 @@ const os = require('os');
 const path = require('path');
 const approvals = require('./approval-registry');
 const { isWorkerPath } = require('./isolation-launcher');
+const { resolveWorkerGitDir, safeCopyObjects } = require('./supervisor');
 
 // A reviewed commit is a commit: 40 hex characters. Anything else is a label,
 // not evidence (reconcile.js SHA_40, control.ps1 headRefOid).
@@ -95,14 +96,10 @@ function resolveBranch(branch, cwd) {
 }
 
 /**
- * Q4: never run upload-pack against the worker-writable tree. A worker that rewrites its own
- * git config could trigger code execution via include.path, core.fsmonitor, or hooks during
- * operator-side git commands. Even local clones (like git clone --bare --no-hardlinks) will
- * parse the worker config, leading to vulnerabilities or aborts (e.g. malformed include.path).
- * Instead, the operator-side git commands use --git-dir to act on the worker repo while passing
- * configuration overrides via -c (e.g., core.fsmonitor=, core.hooksPath=NUL) to prevent
- * executing or parsing malicious configuration. The reviewed objects are pushed directly from
- * the worker repo to an operator-controlled bare mirror, avoiding fetch/clone altogether.
+ * Q4: never run upload-pack or read configuration from the worker-writable tree. A worker that rewrites its own
+ * git config could still try to trigger code execution via include.path, core.fsmonitor, or hooks if any host-side
+ * git command is run with that configuration. To prevent this, the actual operator-side publish path *never* runs any
+ * git command inside the worker repo. Instead, it copies reachable objects directly (with an explicit allow-list, size bound, and file type check) from the resolved object store path to a sanitized mirror it creates. No -c config overrides or git flags are used to disable hooks/textconv/etc., because the worker's config is never parsed. No push is ever done from the worker's repo: only from an operator-controlled, sanitized bare mirror, after integrity check. This avoids all code/config execution vectors arising from a malicious or malformed worker repository.
  */
 const SAFE_MIRROR_CONFIG = '[core]\n\tbare = true\n';
 
@@ -116,42 +113,6 @@ function buildSanitizedMirror(cwd, tmpDir) {
   return mirrorDir;
 }
 
-function safeCopyObjects(srcDir, destDir) {
-  let totalBytes = 0;
-  const MAX_BYTES = 500 * 1024 * 1024; // 500 MB bound
-
-  function copyFileIfSafe(src, dest) {
-    const stat = fs.lstatSync(src);
-    if (!stat.isFile()) throw new Error('Not a regular file: ' + src);
-    totalBytes += stat.size;
-    if (totalBytes > MAX_BYTES) throw new Error('Object store exceeds size bound');
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(src, dest);
-  }
-
-  if (!fs.existsSync(srcDir)) return;
-  const entries = fs.readdirSync(srcDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory() && /^[0-9a-f]{2}$/.test(entry.name)) {
-      const hexDir = path.join(srcDir, entry.name);
-      const destHex = path.join(destDir, entry.name);
-      for (const obj of fs.readdirSync(hexDir, { withFileTypes: true })) {
-        if (obj.isFile() && /^[0-9a-f]{38}$/.test(obj.name)) {
-          copyFileIfSafe(path.join(hexDir, obj.name), path.join(destHex, obj.name));
-        }
-      }
-    } else if (entry.isDirectory() && entry.name === 'pack') {
-      const packDir = path.join(srcDir, 'pack');
-      const destPack = path.join(destDir, 'pack');
-      for (const pack of fs.readdirSync(packDir, { withFileTypes: true })) {
-        if (pack.isFile() && /^pack-[0-9a-f]{40}\.(pack|idx|rev)$/.test(pack.name)) {
-          copyFileIfSafe(path.join(packDir, pack.name), path.join(destPack, pack.name));
-        }
-      }
-    }
-  }
-}
-
 function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir) {
   const mirrorDir = buildSanitizedMirror(cwd, tmpDir);
 
@@ -160,7 +121,8 @@ function transferReviewedObjects(cwd, reviewedSha, cloneDir, tmpDir) {
   // .git/config can never abort the transfer or execute code.
   // The copy is bounded and strictly allow-lists loose objects and packfiles to prevent copying
   // objects/info/alternates or dereferencing worker-planted junctions.
-  const workerObjects = path.join(cwd, '.git', 'objects');
+  const { workerCommonDir } = resolveWorkerGitDir(cwd);
+  const workerObjects = path.join(workerCommonDir, 'objects');
   const mirrorObjects = path.join(mirrorDir, 'objects');
   safeCopyObjects(workerObjects, mirrorObjects);
 

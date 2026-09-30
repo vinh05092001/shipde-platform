@@ -1069,6 +1069,7 @@ module.exports = {
   runVerificationCommand,
   repairSpec,
   resolveLauncher,
+  headShaOf,
   materialiseExercise,
   ItemStatus,
   RunStatus,
