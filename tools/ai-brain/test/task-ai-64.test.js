@@ -842,7 +842,7 @@ test('64-14 operator-side git commands do not execute worker core.fsmonitor and 
   }
 });
 
-test('64-16 publisher resolves linked-worktree gitdir and transfers objects (Finding N3)', () => {
+test('64-16 publisher resolves linked-worktree gitdir and transfers objects', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worktree-'));
   const repoDir = path.join(tmpDir, 'repo');
   const wtDir = path.join(tmpDir, 'wt');
@@ -882,7 +882,7 @@ test('64-16 publisher resolves linked-worktree gitdir and transfers objects (Fin
   }
 });
 
-test('64-17 publisher copies allow-listed objects and ignores alternates (Finding 3)', () => {
+test('64-17 publisher copies allow-listed objects and ignores alternates', () => {
   const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker4-'));
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp4-'));
   const otherRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-other-'));
@@ -926,7 +926,7 @@ test('64-17 publisher copies allow-listed objects and ignores alternates (Findin
   }
 });
 
-test('64-18 operator-side git commands ignore .gitattributes and diff.external (Findings 1, 2)', () => {
+test('64-18 operator-side git commands ignore .gitattributes and diff.external', () => {
   const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-worker5-'));
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-tmp5-'));
   const marker = path.join(tmpDir, 'marker-textconv.txt');
@@ -957,6 +957,121 @@ test('64-18 operator-side git commands ignore .gitattributes and diff.external (
     assert.ok(res.diffBytes > 0, 'supervisor diffBytes is 0 (diff failed or was empty)');
   } finally {
     fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-19 publisher refuses gitfile pointing outside worker root', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n71-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  const otherRepo = path.join(tmpDir, 'other');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  fs.mkdirSync(workerDir);
+  fs.mkdirSync(otherRepo);
+  const gOther = (args) => spawnSync('git', args, { cwd: otherRepo, windowsHide: true });
+  gOther(['init']);
+  gOther(['commit', '--allow-empty', '-m', 'init']);
+  const sha = gOther(['rev-parse', 'HEAD']).stdout.toString('utf8').trim();
+
+  fs.writeFileSync(path.join(workerDir, '.git'), 'gitdir: ' + otherRepo);
+
+  try {
+    fs.mkdirSync(cleanDir);
+    const { transferReviewedObjects } = require('../publisher');
+    assert.throws(() => {
+      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+    }, /PUBLISH_FAILED/i);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-20 publisher refuses object store link pointing outside', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n72-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  const otherRepo = path.join(tmpDir, 'other');
+  const cleanDir = path.join(tmpDir, 'clean');
+
+  fs.mkdirSync(workerDir);
+  fs.mkdirSync(otherRepo);
+  const gOther = (args) => spawnSync('git', args, { cwd: otherRepo, windowsHide: true });
+  const gWorker = (args) => spawnSync('git', args, { cwd: workerDir, windowsHide: true });
+
+  gOther(['init']);
+  gOther(['commit', '--allow-empty', '-m', 'init']);
+  const sha = gOther(['rev-parse', 'HEAD']).stdout.toString('utf8').trim();
+
+  gWorker(['init']);
+  fs.rmSync(path.join(workerDir, '.git', 'objects'), { recursive: true, force: true });
+  fs.symlinkSync(
+    path.join(otherRepo, '.git', 'objects'),
+    path.join(workerDir, '.git', 'objects'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  );
+
+  try {
+    fs.mkdirSync(cleanDir);
+    const { transferReviewedObjects } = require('../publisher');
+    assert.throws(() => {
+      transferReviewedObjects(workerDir, sha, cleanDir, tmpDir);
+    }, /PUBLISH_FAILED/i);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-21 supervisor refuses refs store link pointing outside', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n73-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  const otherRepo = path.join(tmpDir, 'other');
+
+  fs.mkdirSync(workerDir);
+  fs.mkdirSync(otherRepo);
+  const gOther = (args) => spawnSync('git', args, { cwd: otherRepo, windowsHide: true });
+  const gWorker = (args) => spawnSync('git', args, { cwd: workerDir, windowsHide: true });
+
+  gOther(['init']);
+  gOther(['commit', '--allow-empty', '-m', 'init']);
+
+  gWorker(['init']);
+  fs.rmSync(path.join(workerDir, '.git', 'refs'), { recursive: true, force: true });
+  fs.symlinkSync(
+    otherRepo,
+    path.join(workerDir, '.git', 'refs'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  );
+
+  try {
+    const { progressFromWorkerRoot } = require('../supervisor');
+    const res = progressFromWorkerRoot(workerDir);
+    assert.strictEqual(
+      res.commits,
+      0,
+      'Should not have found the commits from otherRepo via refs link'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('64-22 supervisor survives file replacing object directory', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-sec-n8-'));
+  const workerDir = path.join(tmpDir, 'worker');
+  fs.mkdirSync(workerDir);
+  const gWorker = (args) => spawnSync('git', args, { cwd: workerDir, windowsHide: true });
+  gWorker(['init']);
+
+  fs.rmSync(path.join(workerDir, '.git', 'objects'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(workerDir, '.git', 'objects'), 'just a file');
+
+  try {
+    const { progressFromWorkerRoot } = require('../supervisor');
+    assert.doesNotThrow(() => {
+      const res = progressFromWorkerRoot(workerDir);
+      assert.strictEqual(res.diffBytes, 0);
+    }, 'Must handle ENOTDIR / file gracefully without throwing');
+  } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

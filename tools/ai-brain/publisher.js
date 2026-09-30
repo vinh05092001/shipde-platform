@@ -99,7 +99,7 @@ function resolveBranch(branch, cwd) {
  * Q4: never run upload-pack or read configuration from the worker-writable tree. A worker that rewrites its own
  * git config could still try to trigger code execution via include.path, core.fsmonitor, or hooks if any host-side
  * git command is run with that configuration. To prevent this, the actual operator-side publish path *never* runs any
- * git command inside the worker repo. Instead, it copies reachable objects directly (with an explicit allow-list, size bound, and file type check) from the resolved object store path to a sanitized mirror it creates. No -c config overrides or git flags are used to disable hooks/textconv/etc., because the worker's config is never parsed. No push is ever done from the worker's repo: only from an operator-controlled, sanitized bare mirror, after integrity check. This avoids all code/config execution vectors arising from a malicious or malformed worker repository.
+ * git command inside the worker repo. Instead, it copies allowed objects directly (with a size bound and file type check) from the resolved object store path to a sanitized mirror it creates. Inside the publish path, no -c config overrides or git flags are used to disable hooks/textconv/etc., because the worker's config is never parsed. No push is ever done from the worker's repo: only from an operator-controlled, sanitized bare mirror, after integrity check (which verifies the reviewed commit is fully reachable). This avoids all code/config execution vectors arising from a malicious or malformed worker repository.
  */
 const SAFE_MIRROR_CONFIG = '[core]\n\tbare = true\n';
 

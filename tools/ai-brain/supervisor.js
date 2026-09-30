@@ -25,6 +25,17 @@ const Status = Object.freeze({
   UNKNOWN: 'UNKNOWN',
 });
 
+function isSubPath(parent, child) {
+  const p = path.resolve(parent);
+  const c = path.resolve(child);
+  if (process.platform === 'win32') {
+    return (
+      c.toLowerCase() === p.toLowerCase() || c.toLowerCase().startsWith(p.toLowerCase() + path.sep)
+    );
+  }
+  return c === p || c.startsWith(p + path.sep);
+}
+
 function resolveWorkerGitDir(cwd) {
   const gitPath = path.join(cwd, '.git');
   if (!fs.existsSync(gitPath)) return { workerGitDir: gitPath, workerCommonDir: gitPath };
@@ -42,6 +53,22 @@ function resolveWorkerGitDir(cwd) {
         if (cstat.isFile()) {
           const cp = fs.readFileSync(commondirPath, 'utf8').trim();
           workerCommonDir = path.resolve(workerGitDir, cp);
+        }
+      }
+      if (!isSubPath(cwd, workerGitDir) || !isSubPath(cwd, workerCommonDir)) {
+        const backlinkPath = path.join(workerGitDir, 'gitdir');
+        let validWorktree = false;
+        if (fs.existsSync(backlinkPath)) {
+          const backlinkStat = fs.lstatSync(backlinkPath);
+          if (backlinkStat.isFile()) {
+            const backlinkTarget = fs.readFileSync(backlinkPath, 'utf8').trim();
+            if (path.resolve(backlinkTarget) === path.resolve(cwd, '.git')) {
+              validWorktree = true;
+            }
+          }
+        }
+        if (!validWorktree) {
+          return { workerGitDir: gitPath, workerCommonDir: gitPath };
         }
       }
       return { workerGitDir, workerCommonDir };
@@ -64,6 +91,9 @@ function safeCopyObjects(srcDir, destDir) {
   }
 
   if (!fs.existsSync(srcDir)) return;
+  const srcStat = fs.lstatSync(srcDir);
+  if (!srcStat.isDirectory()) return;
+
   const entries = fs.readdirSync(srcDir, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.isDirectory() && /^[0-9a-f]{2}$/.test(entry.name)) {
@@ -92,6 +122,9 @@ function safeCopyRefs(srcDir, destDir) {
 
   function walk(currentSrc, currentDest) {
     if (!fs.existsSync(currentSrc)) return;
+    const stat = fs.lstatSync(currentSrc);
+    if (!stat.isDirectory()) return;
+
     const entries = fs.readdirSync(currentSrc, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -113,36 +146,36 @@ function safeCopyRefs(srcDir, destDir) {
 
 function withCleanGitEnv(cwd, fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-git-safe-'));
-  spawnSync('git', ['init', tmpDir], { windowsHide: true });
-  const gitDir = path.join(tmpDir, '.git');
-  fs.mkdirSync(path.join(gitDir, 'objects', 'info'), { recursive: true });
-  fs.writeFileSync(
-    path.join(gitDir, 'config'),
-    '[core]\n\trepositoryFormatVersion = 0\n\tbare = false\n'
-  );
-
-  const { workerGitDir, workerCommonDir } = resolveWorkerGitDir(cwd);
-
-  const workerObjects = path.join(workerCommonDir, 'objects');
-  safeCopyObjects(workerObjects, path.join(gitDir, 'objects'));
-
-  const copyIfSafe = (srcDir, destDir, name) => {
-    const src = path.join(srcDir, name);
-    if (fs.existsSync(src)) {
-      const stat = fs.lstatSync(src);
-      if (stat.isFile()) {
-        fs.copyFileSync(src, path.join(destDir, name));
-      }
-    }
-  };
-
-  copyIfSafe(workerGitDir, gitDir, 'HEAD');
-  copyIfSafe(workerGitDir, gitDir, 'index');
-  copyIfSafe(workerCommonDir, gitDir, 'packed-refs');
-
-  safeCopyRefs(path.join(workerCommonDir, 'refs'), path.join(gitDir, 'refs'));
-
   try {
+    spawnSync('git', ['init', tmpDir], { windowsHide: true });
+    const gitDir = path.join(tmpDir, '.git');
+    fs.mkdirSync(path.join(gitDir, 'objects', 'info'), { recursive: true });
+    fs.writeFileSync(
+      path.join(gitDir, 'config'),
+      '[core]\n\trepositoryFormatVersion = 0\n\tbare = false\n'
+    );
+
+    const { workerGitDir, workerCommonDir } = resolveWorkerGitDir(cwd);
+
+    const workerObjects = path.join(workerCommonDir, 'objects');
+    safeCopyObjects(workerObjects, path.join(gitDir, 'objects'));
+
+    const copyIfSafe = (srcDir, destDir, name) => {
+      const src = path.join(srcDir, name);
+      if (fs.existsSync(src)) {
+        const stat = fs.lstatSync(src);
+        if (stat.isFile() && stat.size <= 50 * 1024 * 1024) {
+          fs.copyFileSync(src, path.join(destDir, name));
+        }
+      }
+    };
+
+    copyIfSafe(workerGitDir, gitDir, 'HEAD');
+    copyIfSafe(workerGitDir, gitDir, 'index');
+    copyIfSafe(workerCommonDir, gitDir, 'packed-refs');
+
+    safeCopyRefs(path.join(workerCommonDir, 'refs'), path.join(gitDir, 'refs'));
+
     return fn(gitDir);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
