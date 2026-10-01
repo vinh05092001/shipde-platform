@@ -272,6 +272,8 @@ function activeReservations(options) {
   return { byAccount, byOffering };
 }
 
+const RESERVATION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
 function pruneReservations(now, runningWorkItems, options, queuedWorkItems) {
   const res = getReservations(options);
   let changed = false;
@@ -279,7 +281,7 @@ function pruneReservations(now, runningWorkItems, options, queuedWorkItems) {
   const queued = queuedWorkItems || new Set();
   for (const [id, r] of Object.entries(res)) {
     const at = typeof r.at === 'number' ? r.at : Date.parse(r.at);
-    const isExpired = !Number.isFinite(at) || now - at > 2 * 60 * 1000 || at > now + 60 * 1000;
+    const isExpired = !Number.isFinite(at) || now - at > RESERVATION_TTL_MS || at > now + 60 * 1000;
     const isQueued = queued.has(r.workItemId);
     if (!running.has(r.workItemId) && (isExpired || isQueued)) {
       delete res[id];
