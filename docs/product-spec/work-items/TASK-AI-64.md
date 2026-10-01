@@ -759,4 +759,3 @@ Residual risk / known limitations:
 - Deny-list extension behavior: `executableFor` inspects only `/\.(exe|com)$/i`. Non-executable script targets that are not JavaScript (such as `.bat`, `.cmd`, or `.ps1` targets) fall through to Node wrapping.
 - Directory candidate matching: If the first existing candidate matched under `node_modules` happens to be a directory rather than a file (`tools/ai-brain/harness.js:479-481`), `exists(candidate)` evaluates to true, fails the `.exe` check, and is handed to Node wrapping.
 - Standard npm global shims emit `.exe` or `.js` targets on Windows; non-standard shims wrapping batch or PowerShell scripts remain untested shape classes.
-
