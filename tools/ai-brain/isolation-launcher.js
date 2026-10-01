@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const cp = require('child_process');
 const { executableFor } = require('./harness');
 const crypto = require('crypto');
 
@@ -16,7 +16,7 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** The worker root for one job: the worker never sees the operator's leaf name. */
 function workerRootFor(hostCwd) {
-  const jobName = path.basename(String(hostCwd || '')) || 'default';
+  const jobName = path.win32.basename(String(hostCwd || '')) || 'default';
   if (
     jobName === '.' ||
     jobName === '..' ||
@@ -74,7 +74,7 @@ function getFolderHash(folder) {
 }
 
 function queryWorkerSid() {
-  const sidRes = spawnSync(
+  const sidRes = cp.spawnSync(
     'powershell',
     ['-NoProfile', '-Command', `(Get-LocalUser -Name ${WORKER_USERNAME}).SID.Value`],
     { encoding: 'utf8', windowsHide: true }
@@ -186,7 +186,7 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
  * Q3: verifies the full expected rule set, not "at least one rule".
  */
 function defaultVerifyBoundary(sid, username) {
-  const res = spawnSync(
+  const res = cp.spawnSync(
     'powershell',
     ['-NoProfile', '-Command', buildBoundaryVerifyScript(sid, username)],
     {
@@ -223,7 +223,7 @@ function buildWorkerLaunchScript(options) {
   const workerRoot = options.workerRoot;
   const workerUsername = options.workerUsername || WORKER_USERNAME;
   const exeFile = options.exeFile;
-  const psArgs = options.psArgs;
+  const payloadArgsPath = options.payloadArgsPath;
   const launchResultPath = options.launchResultPath;
   const workerTimeoutMs = options.workerTimeoutMs;
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
@@ -247,6 +247,26 @@ $psi.Password = $sec
 
   const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
 
+  const envAllowed = [
+    'PATH',
+    'SystemRoot',
+    'SystemDrive',
+    'ALLUSERSPROFILE',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'ProgramData',
+    'ProgramFiles',
+    'ProgramFiles(x86)',
+    'CommonProgramFiles',
+    'CommonProgramFiles(x86)',
+    'PUBLIC',
+    'PATHEXT',
+  ];
+  if (options.adapterId === 'opencode-direct') {
+    envAllowed.push('NINEROUTER_API_KEY');
+  }
+  const allowedArray = '@(' + envAllowed.map((k) => `"${k}"`).join(', ') + ')';
+
   return `
 $ErrorActionPreference = "Stop"
 ${credentialLines}$nestedScript = "${workerRoot}\\run-target.ps1"
@@ -267,7 +287,9 @@ $wrapperStartTime = Get-Date
 \`$env:TMP = "${workerRoot}\\temp"
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
 Set-Location -Path "${workerRoot}"
-& "${exeFile}" ${psArgs}
+\`$env:SHIPDE_RUN_TARGET_PID = "\`$PID"
+\`$payloadArgs = @(Get-Content -LiteralPath "${payloadArgsPath}" -Raw | ConvertFrom-Json)
+& "${exeFile}" @payloadArgs
 \`$jobExit = \`$LASTEXITCODE
 if (\`$null -eq \`$jobExit) { exit 1 }
 @{ nonce = "${completionNonce}"; exitCode = [int]\`$jobExit; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
@@ -289,7 +311,7 @@ $psi.EnvironmentVariables.Clear()
 # call operator falls off the CreateProcess path for an absolute .exe, returns
 # before the job ran and leaves the payload orphaned — a green result for a
 # job that never finished.
-$allowed = @("PATH", "SystemRoot", "SystemDrive", "ALLUSERSPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "CommonProgramFiles(x86)", "PUBLIC", "PATHEXT")
+$allowed = ${allowedArray}
 foreach ($key in $allowed) {
     if ([Environment]::GetEnvironmentVariable($key)) {
         $psi.EnvironmentVariables[$key] = [Environment]::GetEnvironmentVariable($key)
@@ -432,6 +454,22 @@ $output | ConvertTo-Json -Depth 10 | Out-File "${launchResultPath}" -Encoding UT
 `;
 }
 
+function appendGitInfoExclude(workerRoot, entries) {
+  const excludePath = path.join(workerRoot, '.git', 'info', 'exclude');
+  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+  const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf8') : '';
+  const present = new Set(
+    existing
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+  );
+  const missing = entries.filter((entry) => !present.has(entry));
+  if (missing.length === 0) return;
+  const prefix = existing.length > 0 && !/\r?\n$/.test(existing) ? '\n' : '';
+  fs.appendFileSync(excludePath, prefix + missing.join('\n') + '\n', 'utf8');
+}
+
 function getIsolatedLauncher() {
   return function isolatedLauncher(adapter, args, options) {
     if (args && !Array.isArray(args)) {
@@ -467,7 +505,7 @@ function getIsolatedLauncher() {
 
     const hostCwd = opts.cwd || process.cwd();
     const jobName = path.basename(hostCwd) || 'default';
-    const workerRoot = workerRootFor(hostCwd);
+    const workerRoot = opts.workerRoot || workerRootFor(hostCwd);
 
     // P5: bind the FULL host worktree path, not just the worker-root leaf, so
     // two jobs sharing a directory leaf cannot share one attestation.
@@ -530,7 +568,7 @@ function getIsolatedLauncher() {
     // the operator repo; the worker root is outside the operator profile and
     // the worker is granted Modify, so a hardlinked object could be
     // rewritten in place to corrupt the OPERATOR repo's objects.
-    const cloneRes = spawnSync(
+    const cloneRes = cp.spawnSync(
       'git',
       ['clone', '--no-checkout', '--no-hardlinks', hostCwd, workerRoot],
       {
@@ -539,18 +577,38 @@ function getIsolatedLauncher() {
     );
     if (cloneRes.status !== 0) throw new Error('Failed to clone repository');
 
-    const checkoutRes = spawnSync('git', ['checkout', headSha], {
+    const checkoutRes = cp.spawnSync('git', ['checkout', headSha], {
       cwd: workerRoot,
       windowsHide: true,
     });
     if (checkoutRes.status !== 0) throw new Error('Failed to checkout HEAD SHA in worker root');
 
+    if (adapter.id === 'opencode-direct') {
+      const sources = require('./sources.json');
+      const routerSource = sources.sources.find((s) => s.id === '9router');
+      if (!routerSource) {
+        throw new Error('OPENCODE_DIRECT_LAUNCH_FAILED: 9router source not found in sources.json');
+      }
+
+      const configPath = path.join(workerRoot, 'opencode.json');
+      const configData = JSON.stringify({
+        provider: {
+          '9router': {
+            options: {
+              baseURL: routerSource.endpoint,
+              apiKey: `{env:${routerSource.credential.env}}`,
+            },
+          },
+        },
+      });
+      fs.writeFileSync(configPath, configData, 'utf8');
+      appendGitInfoExclude(workerRoot, ['opencode.json']);
+    }
+
     const credPath = path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'WorkerUser.cred');
 
     const exe = executableFor(adapter.command, opts);
     const fullArgs = exe.prefixArgs.concat(args);
-
-    const psArgs = fullArgs.map((a) => `'` + String(a).replace(/'/g, `''`) + `'`).join(', ');
 
     // Q6: the launch result is written to a HOST-OWNED directory outside
     // workerRoot. Inside workerRoot a worker child that survives the main
@@ -575,16 +633,22 @@ function getIsolatedLauncher() {
     // this nonce, so a leftover marker from an earlier job can never satisfy
     // the completion gate below.
     const completionNonce = crypto.randomBytes(16).toString('hex');
+    const payloadDir = path.join(workerRoot, '.shipde');
+    fs.mkdirSync(payloadDir, { recursive: true });
+    appendGitInfoExclude(workerRoot, ['.shipde/']);
+    const payloadArgsPath = path.join(payloadDir, 'launch-args-' + completionNonce + '.json');
+    fs.writeFileSync(payloadArgsPath, JSON.stringify(fullArgs), 'utf8');
 
     const scriptContent = buildWorkerLaunchScript({
       credPath,
       workerRoot,
       workerUsername: WORKER_USERNAME,
       exeFile: exe.file,
-      psArgs,
+      payloadArgsPath,
       launchResultPath,
       workerTimeoutMs,
       completionNonce,
+      adapterId: adapter.id,
     });
 
     const tempScript = path.join(
@@ -593,7 +657,7 @@ function getIsolatedLauncher() {
     );
     fs.writeFileSync(tempScript, scriptContent, 'utf8');
 
-    const hostRes = spawnSync(
+    const hostRes = cp.spawnSync(
       'powershell.exe',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tempScript],
       {
@@ -662,6 +726,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
     stdout: String(resJson.stdout || ''),
     stderr: String(resJson.stderr || ''),
     timedOut: false,
+    completionNonce: resJson.completionNonce,
   };
 }
 

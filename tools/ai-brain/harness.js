@@ -44,6 +44,13 @@ const paseo = {
   id: 'paseo',
   command: 'paseo',
   launch(job) {
+    if (job.isolatedWorker) {
+      const { isWorkerPath } = require('./isolation-launcher');
+      if (!isWorkerPath(job.cwd)) {
+        throw new Error('ISOLATED_LAUNCH_REQUIRES_WORKER_HARNESS');
+      }
+      job.newWorkspace = false;
+    }
     const args = ['run', '--provider', job.provider];
     if (job.model) args.push('--model', job.model);
     args.push('--mode', job.mode || 'full-access');
@@ -174,6 +181,28 @@ const hermes = {
   progressFromInspect(parsed, options) {
     return progressVerdict(parsed, options);
   },
+  writesUsageReport: true,
+};
+
+const opencodeDirect = {
+  id: 'opencode-direct',
+  command: 'opencode',
+  launch(job) {
+    if (!job.isolatedWorker) throw new Error('OPENCODE_DIRECT_REQUIRES_ISOLATION');
+    if (!job.model) throw new Error('OPENCODE_DIRECT_REQUIRES_PINNED_MODEL');
+    if (!job.cwd) throw new Error('OPENCODE_DIRECT_REQUIRES_DIR');
+    const args = ['run', '--model', job.model, '--dir', job.cwd, '--auto', '--format', 'json'];
+    if (job.title) args.push('--title', job.title);
+    args.push(job.prompt);
+    return args;
+  },
+  resume: null,
+  stop: null,
+  inspect: null,
+  sessionIdFrom() {
+    return null;
+  },
+  writesUsageReport: true,
 };
 
 const MIN_CONTEXT = Object.freeze({ hermes: 32000 });
@@ -370,7 +399,13 @@ const agyPool = {
   },
 };
 
-const HARNESSES = Object.freeze({ paseo, cline, hermes, 'agy-pool': agyPool });
+const HARNESSES = Object.freeze({
+  paseo,
+  cline,
+  hermes,
+  'opencode-direct': opencodeDirect,
+  'agy-pool': agyPool,
+});
 
 function pickId(obj) {
   if (!obj || typeof obj !== 'object') return null;

@@ -1419,3 +1419,332 @@ test('64-27 an ask that throws leaves the Controller selecting, and the advisory
     'the throw must surface as the real path records it: ' + JSON.stringify(record.jev.reasonCodes)
   );
 });
+
+test('64-28 isolated launch never passes --new-workspace/--worktree-mode and requires worker cwd (OBSERVATION C)', () => {
+  const { HARNESSES } = require('../harness');
+  const paseo = HARNESSES.paseo;
+  const assert = require('assert');
+
+  let threw = false;
+  try {
+    paseo.launch({ isolatedWorker: true, provider: 'opencode', cwd: 'C:\\Users\\gumac\\outside' });
+  } catch (err) {
+    threw = true;
+    assert.match(err.message, /ISOLATED_LAUNCH_REQUIRES_WORKER_HARNESS/);
+  }
+  assert.equal(threw, true, 'must refuse if cwd is outside worker root');
+
+  const args = paseo.launch({
+    isolatedWorker: true,
+    provider: 'opencode',
+    cwd: 'C:\\ShipDeWorker\\job',
+    branch: 'feat/test',
+  });
+  assert.ok(!args.includes('--new-workspace'), 'must not pass --new-workspace for isolated launch');
+  assert.ok(!args.includes('--worktree-mode'), 'must not pass --worktree-mode for isolated launch');
+});
+
+test('64-29 cli passes exercise option to orchestrate', () => {
+  const assert = require('assert');
+  const src = require('fs').readFileSync(__dirname + '/../cli.js', 'utf8');
+  assert.ok(
+    /exercise:\s*typeof args\.exercise === 'string' \? args\.exercise : null/.test(src),
+    'cli.js must wire args.exercise to runOrchestration'
+  );
+});
+
+test('64-33 materialiseExercise refuses targets outside the worker root', () => {
+  const { materialiseExercise } = require('../orchestrate');
+  const outsideWorkerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-exercise-outside-'));
+
+  assert.throws(
+    () => materialiseExercise(outsideWorkerRoot, { exercise: 'e1-branch-name' }),
+    /EXERCISE_ROOT_INVALID/,
+    'the exercise runner must not be materialised into an operator or temp worktree'
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(outsideWorkerRoot, 'tools', 'ai-brain', 'test', 'e1-branch-name.test.js')
+    ),
+    false,
+    'refused exercise materialisation must not leave a generated test file behind'
+  );
+});
+
+test('64-22 isolated live path sets isolatedWorker and worker root cwd without newWorkspace', async () => {
+  const isoPath = require.resolve('../isolation-launcher');
+  const orchPath = require.resolve('../orchestrate');
+  const isoModule = require(isoPath);
+  const realGetIsolatedLauncher = isoModule.getIsolatedLauncher;
+  const realIsWorkerPath = isoModule.isWorkerPath;
+  let launchedAdapter = null;
+  let launchedArgs = null;
+  let launchedOptions = null;
+
+  isoModule.getIsolatedLauncher = function spy() {
+    return function stubIsolatedLauncher(adapter, args, opts) {
+      launchedAdapter = adapter;
+      launchedArgs = args;
+      launchedOptions = opts;
+      return {
+        exitCode: 0,
+        stdout: 'the agent changed production code',
+        completionNonce: 'nonce-64',
+      };
+    };
+  };
+  isoModule.isWorkerPath = () => true;
+  const hostWorktree = 'C:\\Users\\gumac\\AI\\shipde-platform\\.worktrees\\ai64launch';
+  const expectedWorkerRoot = isoModule.workerRootFor(hostWorktree);
+
+  let result;
+  try {
+    delete require.cache[orchPath];
+    const fresh = require(orchPath);
+    result = await safeRun(
+      baseOpts({
+        isolatedWorker: true,
+        workerRoot: 'C:\\ShipDeWorker\\wrong-explicit-root',
+        cwd: hostWorktree,
+        decisionDir: tmpDir('task-ai-64-isolated-cwd-'),
+        candidates: [cand({ harness: 'paseo' })],
+      })
+    );
+  } finally {
+    isoModule.getIsolatedLauncher = realGetIsolatedLauncher;
+    isoModule.isWorkerPath = realIsWorkerPath;
+    delete require.cache[orchPath];
+  }
+
+  assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
+  assert.ok(launchedAdapter, 'the isolated launcher must have been called with an adapter');
+  assert.equal(
+    launchedAdapter.id,
+    'opencode-direct',
+    'isolated live launch must bypass the paseo daemon'
+  );
+  assert.equal(
+    launchedAdapter.command,
+    'opencode',
+    'isolated live launch command must be opencode'
+  );
+  assert.ok(launchedArgs, 'the isolated launcher must have been called');
+
+  assert.equal(launchedArgs[0], 'run', 'opencode direct launch must use opencode run');
+  assert.ok(
+    launchedArgs.includes('--dir') && launchedArgs.includes(expectedWorkerRoot),
+    'opencode args must contain --dir ' + expectedWorkerRoot + ': ' + launchedArgs.join(' ')
+  );
+  assert.equal(
+    launchedOptions.cwd,
+    hostWorktree,
+    'the isolated launcher must bind the verdict and clone source to the host worktree'
+  );
+  assert.equal(
+    launchedOptions.workerRoot,
+    expectedWorkerRoot,
+    'the worker root must be derived from the host worktree, not reused from job.cwd'
+  );
+  assert.ok(
+    !launchedArgs.includes('--provider') &&
+      !launchedArgs.includes('--mode') &&
+      !launchedArgs.includes('--report-outcome') &&
+      !launchedArgs.includes('--new-workspace') &&
+      !launchedArgs.includes('--worktree-mode'),
+    'opencode args must not contain paseo-only or unsupported flags: ' + launchedArgs.join(' ')
+  );
+});
+
+test('64-30 executor usage-report gate survives paseo missing report (DEFECT A)', () => {
+  const { readSessionId } = require('../executor');
+  const assert = require('assert');
+  const paseo = { writesUsageReport: false };
+  const job = { usageFile: '/tmp/does-not-exist.json' };
+  const res = readSessionId(paseo, job, { stdout: 'nothing' });
+  assert.notEqual(
+    res.cause,
+    'HARNESS_USAGE_REPORT_MISSING',
+    'must not gate on missing report if adapter does not write it'
+  );
+});
+
+test('64-31 candidates gateway uses accessPathOf to resolve router endpoint (DEFECT B)', () => {
+  const { gatewayAccountCandidates } = require('../candidates');
+  const assert = require('assert');
+  const registry = {
+    sources: [
+      { id: 'gw', kind: 'router', endpoint: 'http://gateway' },
+      { id: 'up', kind: 'model-source', reachedVia: 'gw' },
+    ],
+    dispatch: {
+      providers: {
+        up: { provider: 'up', harness: 'paseo' },
+      },
+    },
+  };
+  const accounts = [{ id: 'acct', provider: 'up' }];
+  const catalogue = [
+    {
+      gateway: 'gw',
+      upstream: 'up',
+      modelId: 'up/model',
+      role: 'author.foundation',
+      capability: {},
+    },
+  ];
+  const candidates = gatewayAccountCandidates({ registry, accounts, catalogue });
+  assert.ok(candidates.length > 0, 'must yield candidates');
+  assert.equal(
+    candidates[0].accessPath,
+    'http://gateway',
+    'accessPath must be the router endpoint, not the provider name'
+  );
+});
+
+test('64-32 isolated launch uses direct adapter without key material in argv or config; non-isolated uses paseo', () => {
+  const assert = require('assert');
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+  const { resolveRoute, readSessionId } = require('../executor');
+  const isoModule = require('../isolation-launcher');
+  const { getHarness } = require('../harness');
+
+  const registry = {
+    dispatch: {
+      providers: {
+        opencode: { provider: 'opencode', harness: 'paseo' },
+      },
+    },
+  };
+
+  // non-isolated
+  let route = resolveRoute({ provider: 'opencode' }, { isolatedWorker: false }, registry);
+  assert.equal(route.harnessName, 'paseo', 'non-isolated launch still uses paseo');
+
+  // isolated
+  route = resolveRoute({ provider: 'opencode' }, { isolatedWorker: true }, registry);
+  assert.equal(
+    route.harnessName,
+    'opencode-direct',
+    'isolated launch uses the direct adapter and never the paseo daemon'
+  );
+
+  const adapter = getHarness(route.harnessName);
+  assert.equal(adapter.id, 'opencode-direct');
+
+  const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-cfg-'));
+  const workerRoot = path.join(tmpCwd, 'worker-root');
+  const args = adapter.launch({
+    isolatedWorker: true,
+    provider: 'opencode',
+    model: 'test-provider/test-model',
+    cwd: workerRoot,
+    mode: 'full-access',
+    usageFile: path.join(workerRoot, 'usage.json'),
+    prompt: 'hello',
+  });
+
+  const argsStr = args.join(' ');
+  assert.equal(adapter.command, 'opencode', 'direct adapter command is opencode');
+  assert.equal(args[0], 'run', 'direct adapter uses opencode run');
+  assert.equal(args[args.indexOf('--model') + 1], 'test-provider/test-model');
+  assert.equal(args[args.indexOf('--dir') + 1], workerRoot);
+  assert.ok(args.includes('--auto'), 'direct adapter uses the installed non-interactive flag');
+  assert.equal(args[args.indexOf('--format') + 1], 'json');
+  assert.ok(!args.includes('--provider'), 'installed opencode run has no --provider flag');
+  assert.ok(!args.includes('--mode'), 'installed opencode run has no --mode flag');
+  assert.ok(
+    !args.includes('--report-outcome'),
+    'installed opencode run has no --report-outcome flag'
+  );
+  assert.ok(!argsStr.includes('API_KEY'), 'argv contains no key');
+
+  // Test isolation launcher config generation
+  const verdictPath = path.join(tmpCwd, 'verdict.json');
+  fs.writeFileSync(
+    verdictPath,
+    JSON.stringify({
+      verdict: 'CLOSED',
+      worktree: tmpCwd,
+      timestamp: Date.now() - 10000,
+      policyHash: isoModule.getFolderHash(path.join(tmpCwd, 'scripts/ai/isolation')),
+      sid: 'TEST-SID',
+      details: { a: 'PASS' },
+    })
+  );
+
+  const cp = require('child_process');
+  const realSpawn = cp.spawnSync;
+
+  try {
+    fs.mkdirSync(path.join(tmpCwd, 'scripts/ai/isolation'), { recursive: true });
+    const runIso = isoModule.getIsolatedLauncher();
+
+    cp.spawnSync = (cmd, cargs, opts) => {
+      if (cmd === 'git') {
+        if (cargs && cargs[0] === 'clone') {
+          try {
+            fs.mkdirSync(cargs[cargs.length - 1], { recursive: true });
+          } catch (e) {
+            console.error('mkdirSync failed in mock:', e);
+          }
+        }
+        return { status: 0 };
+      }
+      if (cmd === 'powershell.exe') {
+        const fullArgs = [cmd, ...(cargs || [])].join(' ');
+        assert.ok(
+          !fullArgs.includes('NINEROUTER_API_KEY'),
+          'NINEROUTER_API_KEY must not appear in argv'
+        );
+        return { status: 0, stdout: '' };
+      }
+      return realSpawn(cmd, cargs, opts);
+    };
+
+    try {
+      runIso(adapter, args, {
+        cwd: tmpCwd,
+        workerRoot,
+        verdictPath: verdictPath,
+        getWorkerSid: () => 'TEST-SID',
+        verifyBoundary: () => true,
+        baseSha: '0123456789012345678901234567890123456789',
+        workerTimeoutMs: 1000,
+      });
+    } catch (e) {
+      if (e.message && !e.message.includes('the host script never wrote it')) {
+        console.error('runIso threw unexpected error:', e);
+      }
+      // Read failure from missing launch result file is expected
+    }
+
+    const cfgPath = path.join(workerRoot, 'opencode.json');
+    assert.ok(fs.existsSync(cfgPath), 'generated config must exist');
+    const cfgText = fs.readFileSync(cfgPath, 'utf8');
+    assert.ok(!cfgText.includes('sk-'), 'generated config contains no literal key material');
+    assert.ok(
+      !fs.existsSync(path.join(workerRoot, '.opencode.json')),
+      'old config filename is unused'
+    );
+    assert.ok(
+      cfgText.includes('{env:NINEROUTER_API_KEY}'),
+      'only an env reference exists in config'
+    );
+    const excludeText = fs.readFileSync(path.join(workerRoot, '.git', 'info', 'exclude'), 'utf8');
+    assert.match(excludeText, /^opencode\.json$/m, 'generated opencode config must be git-ignored');
+    assert.match(excludeText, /^\.shipde\/$/m, 'generated launcher argv files must be git-ignored');
+
+    // Also test that completionNonce is preserved
+    const res = {
+      exitCode: 0,
+      stdout: '{"completed":true,"completionNonce":"my-nonce"}',
+      completionNonce: 'my-nonce',
+    };
+    const idRes = readSessionId(adapter, {}, res);
+    assert.equal(idRes.id, 'my-nonce', 'session handle is the launcher job completion nonce');
+  } finally {
+    cp.spawnSync = realSpawn;
+  }
+});

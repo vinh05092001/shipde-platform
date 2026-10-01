@@ -91,16 +91,27 @@ function parseLaunchResultFile(launchResultPath) {
   return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 }
 
+function writePayloadArgs(dir, args) {
+  fs.mkdirSync(dir, { recursive: true });
+  const payloadArgsPath = path.join(dir, 'payload-args.json');
+  fs.writeFileSync(payloadArgsPath, JSON.stringify(args), 'utf8');
+  return payloadArgsPath;
+}
+
 /**
  * Generates the production host script for a tiny target, runs it end to end,
  * and returns the raw launch result exactly as the host wrote it (PowerShell
  * 5.1 writes a UTF-8 BOM), plus everything needed to re-read it the way the
  * launcher does.
  */
-function runGeneratedHost({ targetLines, workerTimeoutMs, workerUsername }) {
+function runGeneratedHost({ targetLines, workerTimeoutMs, workerUsername, payloadArgs, env }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-launch-host-'));
   const targetPath = path.join(dir, 'target.ps1');
   fs.writeFileSync(targetPath, targetLines.join('\r\n') + '\r\n', 'utf8');
+  const args =
+    typeof payloadArgs === 'function'
+      ? payloadArgs(targetPath)
+      : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', targetPath];
 
   const launchResultPath = path.join(dir, 'launch-result.json');
   const completionNonce = crypto.randomBytes(16).toString('hex');
@@ -109,10 +120,7 @@ function runGeneratedHost({ targetLines, workerTimeoutMs, workerUsername }) {
     workerRoot: dir,
     workerUsername: workerUsername || 'ShipDeWorker',
     exeFile: POWERSHELL_EXE_PATH,
-    psArgs:
-      "'-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '" +
-      targetPath.replace(/'/g, "''") +
-      "'",
+    payloadArgsPath: writePayloadArgs(dir, args),
     launchResultPath,
     workerTimeoutMs,
     completionNonce,
@@ -130,6 +138,7 @@ function runGeneratedHost({ targetLines, workerTimeoutMs, workerUsername }) {
       windowsHide: true,
       timeout: workerTimeoutMs + 120000,
       maxBuffer: 8 * 1024 * 1024,
+      env: Object.assign({}, process.env, env || {}),
     }
   );
   const elapsedMs = Date.now() - startedAt;
@@ -156,7 +165,7 @@ test(
       workerRoot: dir,
       workerUsername: 'ShipDeWorker',
       exeFile: POWERSHELL_EXE_PATH,
-      psArgs: "'-NoProfile'",
+      payloadArgsPath: writePayloadArgs(dir, ['-NoProfile']),
       launchResultPath: path.join(dir, 'launch-result.json'),
       workerTimeoutMs: 60000,
       completionNonce: '0'.repeat(32),
@@ -178,6 +187,50 @@ test(
     );
   }
 );
+
+test('the generated host script passes prompt metacharacters literally', windowsSkip, () => {
+  const literalPrompt = 'Echo $env:X and $(whoami)';
+  const expandedSecret = 'operator-secret-must-not-expand';
+  const { dir, hostRes, raw } = runGeneratedHost({
+    workerTimeoutMs: 60000,
+    env: { X: expandedSecret },
+    payloadArgs: (targetPath) => [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      targetPath,
+      literalPrompt,
+    ],
+    targetLines: [
+      'param([string]$Prompt)',
+      '$ErrorActionPreference = "Stop"',
+      'Write-Output $Prompt',
+      'exit 0',
+    ],
+  });
+
+  assert.strictEqual(
+    hostRes.status,
+    0,
+    'host script failed: ' + String(hostRes.stderr || hostRes.stdout || '')
+  );
+  assert.ok(raw, 'the host must write a launch result');
+  assert.strictEqual(raw.exitCode, 0, 'the target must exit successfully');
+  assert.strictEqual(
+    String(raw.stdout || '').trim(),
+    literalPrompt,
+    'PowerShell must not expand prompt text before the worker receives it'
+  );
+  assert.ok(
+    !String(raw.stdout || '').includes(expandedSecret),
+    'operator environment values must not be materialised through prompt expansion'
+  );
+  assert.ok(
+    !fs.readFileSync(path.join(dir, 'run-target.ps1'), 'utf8').includes(literalPrompt),
+    'the generated run-target.ps1 must not embed the prompt text'
+  );
+});
 
 test(
   'the generated host script waits for the job and reports its exit code and output',
@@ -260,9 +313,8 @@ test('a job that never writes the completion marker is reported as a failure', w
     workerTimeoutMs: 60000,
     targetLines: [
       '$ErrorActionPreference = "Stop"',
-      '$self = Get-CimInstance Win32_Process -Filter "ProcessId=$PID"',
-      '$wrapper = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $self.ParentProcessId)',
-      'if ($wrapper -and $wrapper.CommandLine -like "*run-target.ps1*") { Stop-Process -Id $self.ParentProcessId -Force }',
+      '$wrapperPid = [int]$env:SHIPDE_RUN_TARGET_PID',
+      'if ($wrapperPid -gt 0) { Stop-Process -Id $wrapperPid -Force }',
       'Start-Sleep -Milliseconds 1500',
       'Write-Output "ORPHANED_JOB_STDOUT"',
       'exit 0',
@@ -440,7 +492,7 @@ test('the host script declares exactly the worker root safe in the worker comman
     workerRoot,
     workerUsername: 'ShipDeWorker',
     exeFile: POWERSHELL_EXE_PATH,
-    psArgs: "'-NoProfile'",
+    payloadArgsPath: writePayloadArgs(workerRoot, ['-NoProfile']),
     launchResultPath: path.join(workerRoot, 'launch-result.json'),
     workerTimeoutMs: 60000,
     completionNonce: '1'.repeat(32),

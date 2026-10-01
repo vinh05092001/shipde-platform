@@ -130,7 +130,8 @@ function resolveLauncher(o, isolatedLauncher) {
     const adapter = getHarness(job.harness);
     if (!adapter) throw new Error('HARNESS_UNKNOWN: ' + String(job.harness));
     return isolatedLauncher(adapter, adapter.launch(job), {
-      cwd: job.cwd,
+      cwd: job.hostWorktree || job.cwd,
+      workerRoot: job.workerRoot,
       baseSha: job.baseSha,
       verdictPath: job.verdictPath,
     });
@@ -143,6 +144,19 @@ function harnessFor(candidate) {
   } catch (err) {
     return null;
   }
+}
+
+function resolveLaunchRoute(candidate, options, registry) {
+  const { resolveRoute } = require('./executor');
+  return resolveRoute(
+    {
+      provider: candidate && (candidate.source || candidate.upstream || candidate.gateway),
+      model: candidate && candidate.modelId,
+      harness: candidate && candidate.harness,
+    },
+    { isolatedWorker: Boolean(options && options.isolatedWorker) },
+    registry
+  );
 }
 
 /**
@@ -327,7 +341,11 @@ function materialiseExercise(workerRoot, options) {
       'EXERCISE_ROOT_MISSING: the exercise runner may only be written into a worker root'
     );
   }
+  const { isWorkerPath } = require('./isolation-launcher');
   const root = path.resolve(workerRoot);
+  if (!isWorkerPath(root)) {
+    throw new Error('EXERCISE_ROOT_INVALID: refusing to write the runner outside the worker root');
+  }
   const target = path.join(root, EXERCISE_RUNNER);
   if (path.relative(root, target).startsWith('..') || !path.isAbsolute(target)) {
     throw new Error('EXERCISE_ROOT_INVALID: refusing to write the runner outside the worker root');
@@ -504,12 +522,18 @@ async function runOrchestration(goal, opts) {
   if (o.isolatedWorker) {
     isolatedLauncher = require('./isolation-launcher').getIsolatedLauncher();
   }
+  const hostWorktree = o.cwd || process.cwd();
+  const isolatedWorkerRoot = o.isolatedWorker
+    ? require('./isolation-launcher').workerRootFor(hostWorktree)
+    : null;
   const launcher = resolveLauncher(o, isolatedLauncher);
   log.isolation = {
     requested: Boolean(o.isolatedWorker),
     launcherObtained: Boolean(isolatedLauncher),
     executor:
       typeof o.run === 'function' ? 'injected-runner' : isolatedLauncher ? 'isolated' : 'none',
+    hostWorktree: o.isolatedWorker ? hostWorktree : null,
+    workerRoot: isolatedWorkerRoot,
     baseSha: o.baseSha || null,
   };
 
@@ -539,7 +563,6 @@ async function runOrchestration(goal, opts) {
   );
 
   const registry = o.registry || { sources: [] };
-  const sourcesApi = require('./sources');
 
   const outcome = (item, status, reason) => {
     statusOf.set(item.id, status);
@@ -648,16 +671,17 @@ async function runOrchestration(goal, opts) {
       });
       log.prompts.push({ workItemId: item.id, attempt, candidateKey: decision.chosen, prompt });
 
-      const route = sourcesApi.dispatchRoute(
-        candidate.source || candidate.upstream || candidate.gateway,
-        registry
-      );
+      const route = resolveLaunchRoute(candidate, o, registry);
+      if (!route) {
+        blockedReason = 'HARNESS_UNKNOWN: no dispatch route for ' + String(decision.chosen);
+        break;
+      }
       const job = {
         workItemId: item.id,
         candidateKey: decision.chosen,
-        harness: candidate.harness || null,
-        provider: (route && route.provider) || candidate.source || candidate.upstream,
-        model: sourcesApi.qualifyModel(candidate.modelId, route),
+        harness: route.harnessName,
+        provider: route.provider,
+        model: route.model,
         accountId: candidate.accountId,
         gateway: candidate.gateway || '',
         upstream: candidate.upstream,
@@ -666,7 +690,10 @@ async function runOrchestration(goal, opts) {
         branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
         base: o.base || 'main',
         baseSha: o.baseSha || null,
-        cwd: o.workerRoot || o.cwd,
+        hostWorktree: o.isolatedWorker ? hostWorktree : null,
+        workerRoot: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || null,
+        cwd: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd,
+        isolatedWorker: Boolean(o.isolatedWorker),
         usageFile: prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt),
         checkpoint: checkpointFile,
         title: String(item.id),
@@ -745,7 +772,7 @@ async function runOrchestration(goal, opts) {
       // The durable handle, read from the report this launch was given. An absent
       // or unparsable report means this was not a live run and nothing is recorded
       // as launched (AI-64-R04, AI-64-P08).
-      const adapter = harnessFor(candidate);
+      const adapter = harnessFor({ harness: job.harness });
       const reported = adapter
         ? require('./executor').readSessionId(adapter, job, res)
         : { id: null, cause: 'HARNESS_UNKNOWN' };
@@ -772,7 +799,7 @@ async function runOrchestration(goal, opts) {
         sessionId: reported.id,
         usageReport: job.usageFile,
         candidateKey: decision.chosen,
-        harness: candidate.harness || null,
+        harness: job.harness,
         branch: job.branch,
         baseSha: job.baseSha,
         exitCode: res.exitCode,
@@ -789,7 +816,7 @@ async function runOrchestration(goal, opts) {
           workItemId: item.id,
           role: roleOf(item),
           chosen: decision.chosen,
-          harness: candidate.harness || null,
+          harness: job.harness,
           branch: job.branch,
           sessionId: reported.id,
           detail: 'DURABLE_SESSION_ID',
@@ -840,7 +867,8 @@ async function runOrchestration(goal, opts) {
       usageDir,
       now,
       candidates,
-      evidenceData
+      evidenceData,
+      registry
     );
     if (reviewed.status === ReviewStatus.COMPLETED) {
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
@@ -871,7 +899,8 @@ async function reviewItem(
   usageDir,
   now,
   candidates,
-  evidenceData
+  evidenceData,
+  registry
 ) {
   // AI-64-R07: a review is bound to an exact commit. A run that cannot name the
   // commit under review does not review it.
@@ -921,7 +950,8 @@ async function reviewItem(
               usageDir,
               now,
               candidates,
-              evidenceData
+              evidenceData,
+              registry
             ),
     }
   );
@@ -1000,9 +1030,14 @@ function repairRound(
   usageDir,
   now,
   candidates,
-  evidenceData
+  evidenceData,
+  registry
 ) {
   return async (findings, sha) => {
+    const hostWorktree = o.cwd || process.cwd();
+    const isolatedWorkerRoot = o.isolatedWorker
+      ? require('./isolation-launcher').workerRootFor(hostWorktree)
+      : null;
     const round = ((log.review && log.review.review.repairCount) || 0) + 1;
     const spec = repairSpec(item, findings, round);
     const replanned = planner.plan(log.goal, { specs: (o.specs || []).concat([spec]) });
@@ -1033,43 +1068,48 @@ function repairRound(
     );
     if (!decision.chosen) return { sha };
     const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
+    const route = resolveLaunchRoute(candidate, o, registry);
+    if (!route) return { sha };
     const usageFile = prepareUsageReport(usageDir, planned.id + '-' + now + '-repair' + round);
     const prompt = compilePrompt(planned, {
       goal: log.goal,
       specText: o.specText,
       candidateKey: decision.chosen,
     });
+    const repairJob = {
+      workItemId: planned.id,
+      candidateKey: decision.chosen,
+      harness: route.harnessName,
+      provider: route.provider,
+      model: route.model,
+      accountId: candidate.accountId,
+      gateway: candidate.gateway || '',
+      upstream: candidate.upstream,
+      quotaScope: candidate.quotaScope,
+      prompt,
+      branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+      base: o.base || 'main',
+      baseSha: o.baseSha || null,
+      hostWorktree: o.isolatedWorker ? hostWorktree : null,
+      workerRoot: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || null,
+      cwd: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd,
+      isolatedWorker: Boolean(o.isolatedWorker),
+      usageFile,
+      checkpoint: o.checkpointFile || null,
+      title: planned.id,
+      labels: { workItem: planned.id, role: roleOf(planned), repairOf: item.id },
+    };
     let res = null;
     try {
-      res = launcher({
-        workItemId: planned.id,
-        candidateKey: decision.chosen,
-        harness: candidate.harness || null,
-        model: candidate.modelId,
-        accountId: candidate.accountId,
-        gateway: candidate.gateway || '',
-        upstream: candidate.upstream,
-        quotaScope: candidate.quotaScope,
-        prompt,
-        branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
-        base: o.base || 'main',
-        baseSha: o.baseSha || null,
-        cwd: o.workerRoot || o.cwd,
-        usageFile,
-        checkpoint: o.checkpointFile || null,
-        title: planned.id,
-        labels: { workItem: planned.id, role: roleOf(planned), repairOf: item.id },
-      });
+      res = launcher(repairJob);
     } catch (err) {
       res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
     }
     if (!res || res.exitCode !== 0) return { sha };
 
-    const adapter = harnessFor(candidate);
-    const handle = adapter
-      ? require('./executor').readSessionId(adapter, { usageFile }, res).id
-      : null;
-    const nextSha = headShaOf(o.workerRoot || o.cwd);
+    const adapter = harnessFor({ harness: repairJob.harness });
+    const handle = adapter ? require('./executor').readSessionId(adapter, repairJob, res).id : null;
+    const nextSha = headShaOf(o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd);
     if (!handle || !nextSha || nextSha === sha) return { sha };
     decisions.recordDecision(
       {
@@ -1077,11 +1117,11 @@ function repairRound(
         workItemId: planned.id,
         role: roleOf(planned),
         chosen: decision.chosen,
-        harness: candidate.harness || null,
-        branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+        harness: repairJob.harness,
+        branch: repairJob.branch,
         sessionId: handle,
         detail: 'REPAIR_ROUND: repairs ' + item.id,
-        worktree: o.workerRoot || o.cwd || null,
+        worktree: repairJob.cwd || null,
       },
       logOpts
     );
