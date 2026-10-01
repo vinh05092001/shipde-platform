@@ -146,7 +146,7 @@ test('21 no-progress session stalled', () => {
   assert.equal(verdict, Status.STALLED);
 });
 
-test('22 restart reads the checkpoint and does not redo completed steps', () => {
+test('22 restart reads the checkpoint and does not redo completed steps', async () => {
   const calls = [];
   // TASK-AI-64: the checkpoint file is the only resume input, so the completed
   // item is on disk where a real run would read it. The assertion is unchanged.
@@ -156,7 +156,7 @@ test('22 restart reads the checkpoint and does not redo completed steps', () => 
     JSON.stringify({ schemaVersion: 1, step: 'live_review', completed: ['A'] })
   );
   const launch = durableLaunch();
-  const result = runOrchestration('g', {
+  const result = await runOrchestration('g', {
     specs: [
       { id: 'A', files: ['a.js'] },
       { id: 'B', files: ['b.js'] },
@@ -178,8 +178,8 @@ test('22 restart reads the checkpoint and does not redo completed steps', () => 
   assert.ok(result.reconciliation.completed.includes('B'));
 });
 
-test('23 old-SHA review not accepted for a new SHA', () => {
-  const result = runReviewLoop(
+test('23 old-SHA review not accepted for a new SHA', async () => {
+  const result = await runReviewLoop(
     { sha: 'newsha', budget: 3 },
     {
       runTests: () => ({ pass: true }),
@@ -194,8 +194,8 @@ test('23 old-SHA review not accepted for a new SHA', () => {
   assert.ok(result.rounds.some((r) => r.cause === 'STALE_REVIEW_SHA'));
 });
 
-test('24 PASS with findings rejected', () => {
-  const result = runReviewLoop(
+test('24 PASS with findings rejected', async () => {
+  const result = await runReviewLoop(
     { sha: 'newsha', budget: 3 },
     {
       runTests: () => ({ pass: true }),
@@ -209,9 +209,9 @@ test('24 PASS with findings rejected', () => {
   assert.ok(result.rounds.some((r) => r.cause === 'PASS_WITH_FINDINGS_REJECTED'));
 });
 
-test('25 CI failure creates a repair task with the right cause', () => {
+test('25 CI failure creates a repair task with the right cause', async () => {
   let call = 0;
-  const result = runReviewLoop(
+  const result = await runReviewLoop(
     { sha: 'head', budget: 3 },
     {
       runTests: () => {
@@ -228,8 +228,8 @@ test('25 CI failure creates a repair task with the right cause', () => {
   assert.equal(repair.cause, 'UPSTREAM_AUTH_403');
 });
 
-test('26 repair over budget -> BLOCKED', () => {
-  const result = runReviewLoop(
+test('26 repair over budget -> BLOCKED', async () => {
+  const result = await runReviewLoop(
     { sha: 'head', budget: 1 },
     {
       runTests: () => ({ pass: false, cause: 'TEST_FAILURE' }),
@@ -243,7 +243,7 @@ test('26 repair over budget -> BLOCKED', () => {
   assert.ok(result.rounds.some((r) => r.cause === 'REPAIR_BUDGET_EXHAUSTED'));
 });
 
-test('27 a failing source does not stop a lane on another failure domain', () => {
+test('27 a failing source does not stop a lane on another failure domain', async () => {
   const first = cand();
   const second = cand({
     accessPath: 'cli-b',
@@ -256,7 +256,7 @@ test('27 a failing source does not stop a lane on another failure domain', () =>
   });
   let n = 0;
   const launch = durableLaunch();
-  const result = runOrchestration('g', {
+  const result = await runOrchestration('g', {
     specs: [{ id: 'A', files: ['a.js'] }],
     candidates: [first, second],
     decisionDir: tmpDir(),
@@ -281,8 +281,8 @@ test('28 a worker has no merge capability', () => {
   assert.ok(/never merge/i.test(PUBLISHER_BOUNDARY));
 });
 
-test('29 plan input count = completed + blocked + deferred', () => {
-  const result = runOrchestration('g', {
+test('29 plan input count = completed + blocked + deferred', async () => {
+  const result = await runOrchestration('g', {
     specs: [
       { id: 'A', files: ['a.js'] },
       { id: 'B', files: ['b.js'] },

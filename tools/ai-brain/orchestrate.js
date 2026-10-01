@@ -48,6 +48,9 @@ const { compilePrompt } = require('./prompt-compiler');
 const { classifySession, Status: SessionStatus, progressFromWorkerRoot } = require('./supervisor');
 const { runReviewLoop, Status: ReviewStatus } = require('./review-loop');
 const ranking = require('./ranking');
+const routing = require('./routing');
+const evidence = require('./evidence');
+const candidatesApi = require('./candidates');
 const decisions = require('./decisions');
 const { candidateKey } = require('./candidates');
 const { classifyFailure } = require('./failure-classifier');
@@ -377,16 +380,99 @@ function materialiseExercise(workerRoot, options) {
   return { path: target, cases: cases.length };
 }
 
+function buildProfile(item, o, forbiddenFailureDomains) {
+  return {
+    taskId: item.id,
+    role: roleOf(item),
+    complexity: item.complexity || 'standard',
+    requiredCapabilities: [],
+    proofFloor: 'NONE',
+    contextSize: 4000,
+    expectedDuration: 30000,
+    latencyPriority: 'normal',
+    qualityFloor: 10,
+    costCeiling: 1000,
+    requiredHarness: null,
+    forbiddenFailureDomains: forbiddenFailureDomains || [],
+    resourceCeiling: 100,
+    currentWorkload: 0,
+  };
+}
+
+async function selectCandidateForProfile(
+  item,
+  annotatedCandidates,
+  forbiddenDomains,
+  evidenceData,
+  o,
+  logOpts,
+  now
+) {
+  const profile = buildProfile(item, o, forbiddenDomains);
+
+  // The weighting assessment is the Controller's own, obtained through the real
+  // JEV path — routing.assessTask -> jev.adviseOrReason — and never hand-built
+  // here. `o.jevAsk` is the only injection point and is undefined by default, so
+  // a live run with no advisory is UNDECIDED/UNREACHABLE and the Controller's
+  // deterministic per-role fallback decides (AI-64-P01). The ask is asked about
+  // weighting profiles only, never a model, provider or account.
+  const assessment = await routing.assessTask(profile, { ask: o.jevAsk });
+
+  const rankCtx = {
+    now,
+    taskId: profile.taskId,
+    evidenceData,
+    headrooms: o.ranking && o.ranking.headrooms,
+    reservations: o.ranking && o.ranking.reservations,
+    accounts: o.ranking && o.ranking.accounts,
+    useStoredQuota: false,
+    home: o.ranking && o.ranking.home,
+    storePath: o.ranking && o.ranking.storePath,
+  };
+
+  const result = routing.rankForProfile(annotatedCandidates, profile, assessment, rankCtx);
+
+  const decisionRecorded = {
+    stage: decisions.Stage.SELECTED,
+    workItemId: profile.taskId,
+    role: profile.role,
+    taskProfile: profile,
+    jev: assessment,
+    ranking: result.ranking.map((c) => ({
+      candidateKey: c.candidateKey,
+      score: c.score,
+      scoreBreakdown: c.scoreBreakdown,
+      headroom: c.headroomStatus || 'unknown',
+      failureDomain: routing.failureDomainOf(c),
+      reservationsHeld: c.reservationsHeld || 0,
+    })),
+    rejected: result.rejected.slice(0, 50),
+    rejectedCount: result.rejected.length,
+    chosen: result.chosen,
+    reason: result.reason,
+  };
+  decisions.recordDecision(decisionRecorded, logOpts);
+
+  return {
+    chosen: result.chosen,
+    reason: result.reason,
+    result,
+  };
+}
+
 /**
  * @param goal  user goal text
  * @param opts  {
  *   specs, specText, candidates, registry, run, isolatedWorker, tests, reviewer,
  *   repairer, reviewerIdentity, sha, baseSha, base, branch, cwd, workerRoot,
  *   usageDir, reviewBudget, decisionDir, checkpointFile, out, now, publication,
- *   ranking (Controller ranking inputs: headrooms, load, reservations, ...)
+ *   ranking (Controller ranking inputs: headrooms, load, reservations, ...),
+ *   jevAsk (optional JEV advisory; absent means the Controller decides)
  * }
+ * @returns a promise for the run record: the JEV assessment is an async call, so
+ *   the loop is too.
  */
-function runOrchestration(goal, opts) {
+async function runOrchestration(goal, opts) {
   const o = opts || {};
   const now = o.now || Date.now();
   const log = buildDefaults();
@@ -443,7 +529,15 @@ function runOrchestration(goal, opts) {
     : 'DECISION_LOG_UNREADABLE: ' + (writers.damaged.join('; ') || 'unknown');
 
   const statusOf = new Map();
-  const candidates = Array.isArray(o.candidates) ? o.candidates : [];
+  const rawCandidates = Array.isArray(o.candidates) ? o.candidates : [];
+  const evidenceDir = o.evidenceDir || path.join(__dirname, 'data', 'evidence');
+  const evidenceData = evidence.loadEvidence(evidenceDir);
+  const candidates = candidatesApi.annotateCandidates(
+    rawCandidates.map((c) => Object.assign({}, c)),
+    evidenceData,
+    { now }
+  );
+
   const registry = o.registry || { sources: [] };
   const sourcesApi = require('./sources');
 
@@ -518,6 +612,7 @@ function runOrchestration(goal, opts) {
       outcome: null,
     };
     const failedKeys = new Set();
+    const forbiddenDomains = [];
     let blockedReason = null;
     let session = null;
 
@@ -525,20 +620,16 @@ function runOrchestration(goal, opts) {
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
       //    launch, with the ranking inputs it was made from (AI-64-R03).
-      const decision = ranking.rankAndRecord(
+      const decision = await selectCandidateForProfile(
+        item,
         candidates,
-        Object.assign(
-          {
-            workItemId: item.id,
-            role: roleOf(item),
-            registry,
-            now,
-            dryRun: false,
-            decisionOpts: logOpts,
-          },
-          o.ranking || {}
-        )
+        forbiddenDomains,
+        evidenceData,
+        o,
+        logOpts,
+        now
       );
+
       log.selections.push({ workItemId: item.id, attempt, decision });
       if (!decision.chosen) {
         blockedReason = 'NO_ELIGIBLE_CANDIDATE: ' + (decision.reason || 'no candidate qualifies');
@@ -739,7 +830,18 @@ function runOrchestration(goal, opts) {
       continue;
     }
 
-    const reviewed = reviewItem(o, item, session, log, logOpts, launcher, usageDir, now);
+    const reviewed = await reviewItem(
+      o,
+      item,
+      session,
+      log,
+      logOpts,
+      launcher,
+      usageDir,
+      now,
+      candidates,
+      evidenceData
+    );
     if (reviewed.status === ReviewStatus.COMPLETED) {
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
     } else {
@@ -759,7 +861,18 @@ function runOrchestration(goal, opts) {
   return finish(log, statusOf, { now, cli, checkpointFile, checkpointOnDisk, out: o.out });
 }
 /** The review / repair stage for one completed session. */
-function reviewItem(o, item, session, log, logOpts, launcher, usageDir, now) {
+async function reviewItem(
+  o,
+  item,
+  session,
+  log,
+  logOpts,
+  launcher,
+  usageDir,
+  now,
+  candidates,
+  evidenceData
+) {
   // AI-64-R07: a review is bound to an exact commit. A run that cannot name the
   // commit under review does not review it.
   if (!o.sha || !SHA_40.test(String(o.sha))) {
@@ -768,25 +881,55 @@ function reviewItem(o, item, session, log, logOpts, launcher, usageDir, now) {
       reason: 'REVIEW_SHA_UNPINNED: a 40-character commit under review is mandatory',
     };
   }
+
+  const writerCandidate = candidates.find((c) => candidateKey(c) === session.candidateKey);
+  const forbiddenDomains = writerCandidate
+    ? [writerCandidate.gateway, writerCandidate.upstream, writerCandidate.accountId].filter(Boolean)
+    : [];
+  const reviewerDecision = await selectCandidateForProfile(
+    { id: item.id + '-review', roleRequirement: { role: 'reviewer' }, complexity: item.complexity },
+    candidates,
+    forbiddenDomains,
+    evidenceData,
+    o,
+    logOpts,
+    now
+  );
+  const reviewerIdentity = reviewerDecision.chosen || o.reviewerIdentity;
+
   const budget = Number.isFinite(Number(o.reviewBudget))
     ? Number(o.reviewBudget)
     : DEFAULT_REVIEW_BUDGET;
-  const review = runReviewLoop(
+  const review = await runReviewLoop(
     { sha: o.sha, budget },
     {
       runTests: typeof o.tests === 'function' ? o.tests : () => runVerificationCommand(item, o),
-      review: typeof o.reviewer === 'function' ? o.reviewer : reviewLane(o, session.candidateKey),
+      review:
+        typeof o.reviewer === 'function'
+          ? o.reviewer
+          : reviewLane({ ...o, reviewerIdentity }, session.candidateKey),
       repair:
         typeof o.repairer === 'function'
           ? o.repairer
-          : repairRound(o, item, session, log, logOpts, launcher, usageDir, now),
+          : repairRound(
+              o,
+              item,
+              session,
+              log,
+              logOpts,
+              launcher,
+              usageDir,
+              now,
+              candidates,
+              evidenceData
+            ),
     }
   );
 
   const entry = {
     workItemId: item.id,
     sha: o.sha,
-    reviewerIdentity: o.reviewerIdentity || null,
+    reviewerIdentity: reviewerIdentity || null,
     writerCandidateKey: session.candidateKey,
     review,
   };
@@ -807,7 +950,7 @@ function reviewItem(o, item, session, log, logOpts, launcher, usageDir, now) {
         roundStage: round.stage,
         cause: round.cause || null,
         verdict: round.verdict || null,
-        reviewer: round.reviewer || o.reviewerIdentity || null,
+        reviewer: round.reviewer || reviewerIdentity || null,
         findings: round.findings || [],
         sha: round.sha || null,
         repairCount: review.repairCount,
@@ -847,8 +990,19 @@ function reviewItem(o, item, session, log, logOpts, launcher, usageDir, now) {
  * through planner.plan, and a fresh worker runs under the same isolation on a new
  * commit. The review of the old commit is stale afterwards and is never reused.
  */
-function repairRound(o, item, session, log, logOpts, launcher, usageDir, now) {
-  return (findings, sha) => {
+function repairRound(
+  o,
+  item,
+  session,
+  log,
+  logOpts,
+  launcher,
+  usageDir,
+  now,
+  candidates,
+  evidenceData
+) {
+  return async (findings, sha) => {
     const round = ((log.review && log.review.review.repairCount) || 0) + 1;
     const spec = repairSpec(item, findings, round);
     const replanned = planner.plan(log.goal, { specs: (o.specs || []).concat([spec]) });
@@ -868,22 +1022,17 @@ function repairRound(o, item, session, log, logOpts, launcher, usageDir, now) {
     const planned = replanned.workItems.find((w) => w.id === spec.id);
     if (!planned) return { sha };
 
-    const decision = ranking.rankAndRecord(
-      o.candidates || [],
-      Object.assign(
-        {
-          workItemId: planned.id,
-          role: roleOf(planned),
-          registry: o.registry,
-          now,
-          dryRun: false,
-          decisionOpts: logOpts,
-        },
-        o.ranking || {}
-      )
+    const decision = await selectCandidateForProfile(
+      planned,
+      candidates,
+      [],
+      evidenceData,
+      o,
+      logOpts,
+      now
     );
     if (!decision.chosen) return { sha };
-    const candidate = (o.candidates || []).find((c) => candidateKey(c) === decision.chosen);
+    const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
     const usageFile = prepareUsageReport(usageDir, planned.id + '-' + now + '-repair' + round);
     const prompt = compilePrompt(planned, {
       goal: log.goal,

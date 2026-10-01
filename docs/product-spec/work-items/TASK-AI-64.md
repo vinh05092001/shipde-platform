@@ -723,3 +723,11 @@ Non-executable (Windows host; documented commands, verified by CI on `ubuntu-lat
 ## Fix Notes
 
 - Fixed a defect during live run: `TypeError: cli.readCheckpoint is not a function`. The `tools/ai-brain/cli.js` entry script was invoking `main()` before assigning `module.exports`, causing a partial exports object when `orchestrate.js` lazily required it back. Fixed by reordering the export assignment before the `require.main` check and added regression test `64-23` (AC-AI-64-14).
+
+## Live run attempt 3 and orchestrate ranking fix (2026-10-01)
+
+Attempt 3 BLOCKED with NO_ELIGIBLE_CANDIDATE because orchestrate ranked un-annotated candidates with exploration budget 0.
+The fix routes per-item selection through candidates.annotateCandidates + routing.rankForProfile with the reviewer outside the writer failure domain.
+Test 64-24 fails on 4d62bdf and passes here.
+Full suite 1073/1073.
+Supervisor repair: the per-item selection now calls routing.assessTask with an injectable o.jevAsk, so a JEV that cannot advise hands authority to the Controller through the real JEV path (UNDECIDED:UNREACHABLE) instead of a hand-built assessment; tests 64-25, 64-26 and 64-27 fail on b841658 and pass here, full suite 1076/1076.
