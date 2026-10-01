@@ -89,7 +89,7 @@ const READERS = {
       if (!fs.existsSync(outFile)) {
         return { available: false, reason: 'không có out.txt' };
       }
-      
+
       const outText = fs.readFileSync(outFile, 'utf8');
       let outJson;
       try {
@@ -97,7 +97,7 @@ const READERS = {
       } catch (e) {
         return { available: false, reason: 'out.txt không phải json hợp lệ' };
       }
-      
+
       if (outJson && Array.isArray(outJson.rows)) {
         return {
           available: true,
@@ -216,11 +216,22 @@ function refreshAccount(account, options) {
 
 function refreshAll(accounts, options) {
   const allAccounts = [...(accounts || [])];
-  for (let i = 1; i <= 10; i++) {
-    allAccounts.push({
-      id: `agy${String(i).padStart(2, '0')}`,
-      provider: 'agy-pool'
-    });
+  const fs = require('fs');
+  const path = require('path');
+  const dir = (options && options.fakeRunsDir) || 'C:\\Tools\\agy-runs';
+
+  if (fs.existsSync(dir)) {
+    try {
+      const entries = fs.readdirSync(dir);
+      for (const entry of entries) {
+        if (/^agy\d+$/.test(entry) && fs.statSync(path.join(dir, entry)).isDirectory()) {
+          allAccounts.push({
+            id: entry,
+            provider: 'agy-pool'
+          });
+        }
+      }
+    } catch (e) {}
   }
   return allAccounts.map((a) => refreshAccount(a, options));
 }

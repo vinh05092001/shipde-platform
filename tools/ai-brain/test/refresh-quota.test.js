@@ -106,11 +106,37 @@ describe('Refreshing every account', () => {
         { id: 'acc-a', provider: 'antigravity' },
         { id: 'router', provider: '9router' },
       ],
-      { path: p, identity: ME, readQuota: () => OK }
+      { path: p, identity: ME, readQuota: () => OK, fakeRunsDir: p }
     );
     assert.equal(out.length, 2);
     assert.equal(out[0].ok, true);
     assert.equal(out[1].skipped, true);
+  });
+
+  test('agy-pool accounts are discovered from runs dir', () => {
+    const p = tmpStore();
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-runs-'));
+    fs.mkdirSync(path.join(runDir, 'agy01'));
+    fs.mkdirSync(path.join(runDir, 'agy02'));
+    fs.mkdirSync(path.join(runDir, 'not-agy'));
+
+    // Write fake results so they can be read
+    fs.writeFileSync(path.join(runDir, 'agy01', 'result.json'), JSON.stringify({ state: 'ok' }));
+    fs.writeFileSync(path.join(runDir, 'agy01', 'out.txt'), JSON.stringify({ rows: [] }));
+
+    fs.writeFileSync(path.join(runDir, 'agy02', 'result.json'), JSON.stringify({ state: 'login-required' }));
+    fs.writeFileSync(path.join(runDir, 'agy02', 'out.txt'), '');
+
+    const out = refreshAll([], { path: p, fakeRunsDir: runDir });
+
+    assert.equal(out.length, 2);
+
+    const a1 = out.find(o => o.accountId === 'agy01');
+    assert.equal(a1.ok, true);
+
+    const a2 = out.find(o => o.accountId === 'agy02');
+    assert.equal(a2.ok, false);
+    assert.equal(a2.reason, 'AUTH_FAILED');
   });
 });
 
