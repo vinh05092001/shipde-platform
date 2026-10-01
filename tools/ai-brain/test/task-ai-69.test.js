@@ -219,10 +219,16 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
 
   test('F1: runsDir on non-Windows resolves to absolute posix path and runAdapter rejects unsupported platform', () => {
     const { runsDir, runAdapter } = require('../agy-pool-runtime');
-    const posixDir = runsDir({ platform: 'linux', home: '/home/tester' });
-    assert.equal(posixDir, '/home/tester/.local/share/agy-runs');
-    assert.ok(path.posix.isAbsolute(posixDir));
-    assert.notEqual(posixDir, 'C:\\Tools\\agy-runs');
+    const oldXdg = process.env.XDG_DATA_HOME;
+    delete process.env.XDG_DATA_HOME;
+    try {
+      const posixDir = runsDir({ platform: 'linux', home: '/home/tester' });
+      assert.equal(posixDir, '/home/tester/.local/share/agy-runs');
+      assert.ok(path.posix.isAbsolute(posixDir));
+      assert.notEqual(posixDir, 'C:\\Tools\\agy-runs');
+    } finally {
+      if (oldXdg !== undefined) process.env.XDG_DATA_HOME = oldXdg;
+    }
 
     const res = runAdapter('agy01', { platform: 'linux' });
     assert.equal(res.exitCode, 1);
@@ -378,41 +384,170 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
     assert.match(cliRes.stderr, /OUTCOME_INVALID: invalid agy-pool account/);
   });
 
-  test('F6: refreshModels submits models job and modelIdsFromRuntime refreshes candidates', () => {
-    const root = tmpDir('ai69-f6-');
+  test('F6/R2: candidate assembly reads advertised models from out.txt and never submits live jobs implicitly', () => {
+    const root = tmpDir('ai69-f6-r2-');
     const runsDir = path.join(root, 'agy-runs');
     fs.mkdirSync(path.join(runsDir, 'agy01'), { recursive: true });
-    const adapterScript = path.join(root, 'models-adapter.js');
+    fs.writeFileSync(
+      path.join(runsDir, 'agy01', 'out.txt'),
+      JSON.stringify({
+        groups: [{ id: 'gemini', models: ['gemini-static-catalog'], weekly: { remaining: 1 } }],
+      }),
+      'utf8'
+    );
+    const markerFile = path.join(root, 'adapter-called.marker');
+    const adapterScript = path.join(root, 'guarded-adapter.js');
+    fs.writeFileSync(
+      adapterScript,
+      `const fs = require('fs'); fs.writeFileSync(${JSON.stringify(markerFile)}, 'CALLED'); process.exit(0);\n`,
+      'utf8'
+    );
+
+    const { modelIdsFromRuntime } = require('../agy-pool-runtime');
+    const { poolAccountCandidates } = require('../candidates');
+
+    // modelIdsFromRuntime with refresh / refreshModels options does NOT submit jobs or call adapter
+    const models = modelIdsFromRuntime({
+      fakeRunsDir: runsDir,
+      adapterScript,
+      refresh: true,
+      refreshModels: true,
+    });
+    assert.deepEqual(models, ['gemini-static-catalog']);
+    assert.equal(fs.existsSync(markerFile), false);
+
+    // poolAccountCandidates with discoverPool and refresh does not call adapter
+    const candidates = poolAccountCandidates({
+      accounts: [{ id: 'agy01', provider: 'agy-pool' }],
+      discoverPool: true,
+      fakeRunsDir: runsDir,
+      adapterScript,
+      refresh: true,
+    });
+    assert.ok(
+      candidates.some((c) => c.accountId === 'agy01' && c.modelId === 'gemini-static-catalog')
+    );
+    assert.equal(fs.existsSync(markerFile), false);
+  });
+
+  test('R1: unparseable reported quota value is UNKNOWN, not 0% or QUOTA_EXHAUSTED, verified through CLI', () => {
+    const root = tmpDir('ai69-r1-');
+    const runsDir = path.join(root, 'agy-runs');
+    const home = path.join(root, 'home');
+    fs.mkdirSync(path.join(home, 'Temp'), { recursive: true });
+
+    // 1. parseQuotaOutput unit verification: "N/A" -> UNKNOWN, not 0
+    const { parseQuotaOutput } = require('../agy-pool-runtime');
+    const naOutput = parseQuotaOutput(
+      JSON.stringify({
+        groups: [
+          {
+            id: 'gemini',
+            models: ['gemini-x'],
+            weekly: { remainingPercent: 'N/A' },
+            session: { remainingPercent: 5 },
+          },
+        ],
+      })
+    );
+    assert.equal(naOutput.available, true);
+    assert.equal(naOutput.rows[0].remainingPercent, 'UNKNOWN');
+    assert.equal(naOutput.rows[1].remainingPercent, 5);
+
+    // 2. Set up agy01 with unparseable quota ("N/A") and agy02 with genuine zero quota (0)
+    fs.mkdirSync(path.join(runsDir, 'agy01'), { recursive: true });
+    fs.mkdirSync(path.join(runsDir, 'agy02'), { recursive: true });
+    fs.writeFileSync(
+      path.join(runsDir, 'agy01', 'out.txt'),
+      JSON.stringify({
+        groups: [{ id: 'gemini', models: ['gemini-x'], weekly: { remainingPercent: 'N/A' } }],
+      }),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(runsDir, 'agy02', 'out.txt'),
+      JSON.stringify({
+        groups: [{ id: 'gemini', models: ['gemini-x'], weekly: { remainingPercent: 0 } }],
+      }),
+      'utf8'
+    );
+
+    const adapterScript = path.join(root, 'adapter.js');
     fs.writeFileSync(
       adapterScript,
       [
         "const fs = require('fs');",
         "const path = require('path');",
         'const dir = process.argv[2];',
-        "const job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));",
-        "if (job.command === 'models') {",
-        "  fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0 }));",
-        "  fs.writeFileSync(path.join(dir, 'out.txt'), JSON.stringify({",
-        '    groups: [{ id: "gemini", models: ["gemini-refreshed-model"], weekly: { remaining: 1 } }]',
-        '  }));',
-        '  process.exit(0);',
-        '}',
-        'process.exit(1);',
+        "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0 }));",
+        'process.exit(0);',
       ].join('\n'),
       'utf8'
     );
-    const { refreshModels, modelIdsFromRuntime } = require('../agy-pool-runtime');
-    const res = refreshModels('agy01', {
-      fakeRunsDir: runsDir,
-      adapterScript,
-    });
-    assert.equal(res.state, 'ok');
 
-    const models = modelIdsFromRuntime({
-      fakeRunsDir: runsDir,
-      adapterScript,
-      refreshModels: true,
-    });
-    assert.deepEqual(models, ['gemini-refreshed-model']);
+    const env = envFor(home, runsDir, adapterScript);
+
+    // Run CLI quota refresh
+    const quotaRes = runCli(
+      ['quota', '--pool-runtime-dir', runsDir, '--pool-adapter-script', adapterScript],
+      env,
+      root
+    );
+    const quotaOut = quotaRes.stdout + quotaRes.stderr;
+    assert.equal(quotaRes.status, 0, quotaOut);
+    // agy01 (unparseable) is NOT exhausted -> reads 1 row
+    assert.match(quotaOut, /ĐỌC ĐƯỢC agy01 — 1 dòng/);
+    assert.doesNotMatch(quotaOut, /HỎNG\s+agy01\s+—\s+QUOTA_EXHAUSTED/);
+    // agy02 (parsed 0) IS exhausted -> QUOTA_EXHAUSTED
+    assert.match(quotaOut, /HỎNG\s+agy02\s+—\s+QUOTA_EXHAUSTED/);
+
+    // Run CLI quota --show
+    const showRes = runCli(
+      ['quota', '--show', '--pool-runtime-dir', runsDir, '--pool-adapter-script', adapterScript],
+      env,
+      root
+    );
+    const showOut = showRes.stdout + showRes.stderr;
+    assert.equal(showRes.status, 0, showOut);
+    assert.match(showOut, /agy01\s+gemini\s+weekly\s+UNKNOWN/);
+    assert.match(showOut, /agy02\s+gemini\s+weekly\s+0%/);
+  });
+
+  test('R3: agyPool.launch validates accountId and rejects path traversal', () => {
+    const { getHarness } = require('../harness');
+    const poolHarness = getHarness('agy-pool');
+    assert.throws(() => {
+      poolHarness.launch({ accountId: '../../..' });
+    }, /INVALID_ACCOUNT_ID/);
+    assert.throws(() => {
+      poolHarness.launch({ accountId: 'invalid' });
+    }, /INVALID_ACCOUNT_ID/);
+  });
+
+  test('R5: adapter killed by timeout reports ADAPTER_TIMEOUT instead of ADAPTER_EXIT_-1 through CLI', () => {
+    const root = tmpDir('ai69-r5-');
+    const runsDir = path.join(root, 'agy-runs');
+    const home = path.join(root, 'home');
+    fs.mkdirSync(path.join(runsDir, 'agy01'), { recursive: true });
+    const hangingScript = path.join(root, 'hanging-adapter.js');
+    fs.writeFileSync(hangingScript, 'setInterval(() => {}, 10000);\n', 'utf8');
+
+    const env = envFor(home, runsDir, hangingScript);
+    const res = runCli(
+      [
+        'quota',
+        '--pool-runtime-dir',
+        runsDir,
+        '--pool-adapter-script',
+        hangingScript,
+        '--pool-timeout',
+        '300',
+      ],
+      env,
+      root
+    );
+    const out = res.stdout + res.stderr;
+    assert.match(out, /HỎNG\s+agy01\s+—\s+ADAPTER_TIMEOUT/);
+    assert.doesNotMatch(out, /ADAPTER_EXIT_-1/);
   });
 });

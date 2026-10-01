@@ -65,12 +65,7 @@ const READERS = {
     read: (account, opts) => {
       const { getHarness } = require('./harness');
       const adapter = getHarness('agy-pool');
-      if (adapter && typeof adapter.quota === 'function') {
-        return adapter.quota(account.id, opts);
-      }
-      const pool = require('./agy-pool-runtime');
-      const result = pool.submitJob(account.id, { command: 'quota' }, opts);
-      return pool.quotaReading(account.id, Object.assign({}, opts, { result }));
+      return adapter.quota(account.id, opts);
     },
   },
   'claude-code': {

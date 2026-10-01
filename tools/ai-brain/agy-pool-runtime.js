@@ -110,10 +110,14 @@ function runAdapter(accountId, options) {
       windowsHide: true,
       shell: false,
     });
+    const isTimeout = Boolean(
+      res.error && (res.error.code === 'ETIMEDOUT' || res.signal === 'SIGTERM')
+    );
+    const stderrText = (res.stderr || '').trim();
     return {
       exitCode: res.status === null ? -1 : res.status,
       stdout: res.stdout || '',
-      stderr: res.stderr || '',
+      stderr: stderrText || (isTimeout ? 'ADAPTER_TIMEOUT' : res.error ? res.error.message : ''),
     };
   }
 
@@ -133,10 +137,14 @@ function runAdapter(accountId, options) {
     windowsHide: true,
     shell: false,
   });
+  const isTimeout = Boolean(
+    res.error && (res.error.code === 'ETIMEDOUT' || res.signal === 'SIGTERM')
+  );
+  const stderrText = (res.stderr || '').trim();
   return {
     exitCode: res.status === null ? -1 : res.status,
     stdout: res.stdout || '',
-    stderr: res.stderr || '',
+    stderr: stderrText || (isTimeout ? 'ADAPTER_TIMEOUT' : res.error ? res.error.message : ''),
   };
 }
 
@@ -152,10 +160,16 @@ function submitJob(accountId, job, options) {
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job, null, 2), 'utf8');
   const launch = runAdapter(accountId, opts);
   if (launch.exitCode !== 0) {
+    const isTimeout =
+      (launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT')) || launch.exitCode === -1;
+    const reason =
+      launch.stderr ||
+      launch.stdout ||
+      (isTimeout ? 'ADAPTER_TIMEOUT' : `ADAPTER_EXIT_${launch.exitCode}`);
     const errorResult = {
       state: 'error',
       exitCode: launch.exitCode,
-      reason: launch.stderr || launch.stdout || `ADAPTER_EXIT_${launch.exitCode}`,
+      reason,
     };
     try {
       fs.writeFileSync(resultFile, JSON.stringify(errorResult, null, 2), 'utf8');
@@ -165,8 +179,18 @@ function submitJob(accountId, job, options) {
   return waitForResult(accountId, startedAt, opts);
 }
 
-function refreshModels(accountId, options) {
-  return submitJob(accountId, { command: 'models' }, options);
+function parseNumberValue(val) {
+  if (val === null || val === undefined || val === '' || typeof val === 'boolean') {
+    return NaN;
+  }
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    const stripped = trimmed.endsWith('%') ? trimmed.slice(0, -1).trim() : trimmed;
+    const n = Number(stripped);
+    return Number.isFinite(n) ? n : NaN;
+  }
+  const n = Number(val);
+  return Number.isFinite(n) ? n : NaN;
 }
 
 function parseQuotaJson(value) {
@@ -189,16 +213,21 @@ function parseQuotaJson(value) {
         windowValue.disabled !== undefined;
       if (!hasRemaining) continue;
 
-      const remaining =
-        windowValue.remainingPercent !== undefined
-          ? Number(windowValue.remainingPercent)
-          : windowValue.remaining !== undefined
-            ? Math.round(Number(windowValue.remaining) * 100)
-            : 0;
+      const rawPercent = parseNumberValue(windowValue.remainingPercent);
+      const rawFraction = parseNumberValue(windowValue.remaining);
+      const parsed = Number.isFinite(rawPercent)
+        ? rawPercent
+        : Number.isFinite(rawFraction)
+          ? Math.round(rawFraction * 100)
+          : NaN;
+
+      const isFinite = Number.isFinite(parsed);
+      const remainingPercent = isFinite ? parsed : windowValue.disabled ? 0 : 'UNKNOWN';
+
       rows.push({
         family,
         window: key === 'fiveHour' ? 'fiveHour' : key,
-        remainingPercent: Number.isFinite(remaining) ? remaining : 0,
+        remainingPercent,
         disabled: Boolean(windowValue.disabled),
         resetsAt: windowValue.resetAt || windowValue.resetsAt || null,
       });
@@ -251,9 +280,6 @@ function modelIdsFromRuntime(options) {
   const opts = options || {};
   const out = new Set();
   for (const accountId of discoverAccounts(opts)) {
-    if (opts.refreshModels || opts.refresh) {
-      refreshModels(accountId, opts);
-    }
     const parsed = parseQuotaOutput(readOutText(accountId, opts));
     for (const model of parsed.models || []) out.add(model);
   }
@@ -269,7 +295,6 @@ module.exports = {
   waitForResult,
   runAdapter,
   submitJob,
-  refreshModels,
   parseQuotaOutput,
   quotaReading,
   modelIdsFromRuntime,

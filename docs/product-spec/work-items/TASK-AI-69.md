@@ -6,7 +6,7 @@
 |---|---|
 | Work Item ID | `TASK-AI-69` |
 | Feature ID | `N/A` |
-| Status | `IN_PROGRESS` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | `197` |
 | Dependencies | `TASK-AI-68` |
 | Assigned author | `GEMINI` |
@@ -87,6 +87,7 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `6dd2ebcadf7387c4e728c3ecd3af62ce0d9d6dc5` | `CHANGES_REQUIRED` | `F1`, `F2`, `F3`, `F4`, `F5`, `F6`, `F7`, `F8` |
+| 2 | `5169178acddd433a06df1c8033b9ff1205342cfe` | `CHANGES_REQUIRED` | `F6`, `F7`, `R1`, `R2`, `R3`, `R4`, `R5`, `R6` |
 
 ### Review repair round 1 evidence
 
@@ -111,9 +112,28 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
 - `F7`: Untracked scratch directories `.tmp-ai69-home/` and `.tmp-ai69-temp/` excluded via `.git/info/exclude` without deleting them.
 - `F8`: Recorded residual limitations and review repair evidence in `TASK-AI-69.md`.
 
+### Review repair round 2 evidence
+
+- `F6 & R2`: Candidate model discovery was previously risking live scheduled task execution when `refreshModels` or `refresh` was set. Removed `refreshModels` dead surface and `opts.refresh` alias from `agy-pool-runtime.js`; candidate discovery purely inspects advertised models from `out.txt` and never executes jobs implicitly. Tested in `tools/ai-brain/test/task-ai-69.test.js`.
+  - Fail before: `modelIdsFromRuntime({ refresh: true })` executed `submitJob` and invoked the adapter.
+  - Pass after: `modelIdsFromRuntime({ refresh: true })` and `poolAccountCandidates` purely read `out.txt` without executing adapter.
+- `F7`: Untracked scratch directories `.tmp-ai69-home/` and `.tmp-ai69-temp/` remain untracked and excluded locally via `.git/info/exclude`. Per operational policy ("never delete files"), files are preserved. Durable ignore rule addition to `.gitignore` is documented as deferred to a foundation task since `.gitignore` is outside the allowed paths for this Work Item.
+- `R1`: Unparseable reported quota values (e.g. `"N/A"`) previously fell back to `0%` due to `Number.isFinite(remaining) ? remaining : 0`, causing `refreshAccount` to report `QUOTA_EXHAUSTED`. `parseQuotaJson` now maps unparseable values to `remainingPercent: 'UNKNOWN'`. `refreshAccount` strictly evaluates `QUOTA_EXHAUSTED` only when every reported window has a parsed finite value `<= 0` (or `disabled === true`). In CLI `--show`, `UNKNOWN` is rendered cleanly.
+  - Fail before: `parseQuotaOutput` on `"N/A"` emitted `remainingPercent: 0` and CLI `quota` reported `HỎNG agy01 — QUOTA_EXHAUSTED`.
+  - Pass after: `parseQuotaOutput` produces `remainingPercent: 'UNKNOWN'`; CLI `quota` reports `ĐỌC ĐƯỢC agy01 — 1 dòng` and `quota --show` displays `UNKNOWN`.
+- `R3`: `agyPool.launch` in `harness.js` now validates `accountId` with `isValidAccountId` before accessing runtime directories, and `cli.js` guards `adapter.launch` in a structured try-catch to record launch preparation failure into the decision log rather than throwing an unhandled stack trace.
+  - Fail before: `launch({ accountId: '../../..' })` threw unhandled into caller without account check.
+  - Pass after: Throws named `INVALID_ACCOUNT_ID` and CLI catches failure safely.
+- `R4`: `cli.js quota` previously resolved `args.home || process.env.HOME || process.env.USERPROFILE`, which preferred MSYS POSIX `HOME` over Windows platform paths. `cli.js` now mirrors `agy-pool-runtime.js` by preferring `USERPROFILE` when `process.platform === 'win32'`.
+- `R5`: `runAdapter` and `submitJob` in `agy-pool-runtime.js` previously reported processes killed by timeout as `ADAPTER_EXIT_-1`. It now detects `ETIMEDOUT` / `SIGTERM` and reports structured `ADAPTER_TIMEOUT`.
+  - Fail before: Timed out adapter printed `HỎNG agy01 — ADAPTER_EXIT_-1`.
+  - Pass after: Timed out adapter prints `HỎNG agy01 — ADAPTER_TIMEOUT`; verified via CLI spawn test in `task-ai-69.test.js`.
+- `R6`: Delivery register row in `FEATURE-DELIVERY-REGISTER.csv` updated from `IN_PROGRESS` to `READY_FOR_CODEX` to match the required state machine transition.
+
 ## Residual limitations
 
 - Native execution of `agy-pool` scheduled tasks requires a Windows host with `schtasks`; on non-Windows platforms `runAdapter` refuses execution with an explicit `UNSUPPORTED_PLATFORM` error unless overridden with `adapterScript` or `fakeRunsDir`.
-- Candidate model discovery extracts models from runtime output (`out.txt`) produced by quota or models commands; while `refreshModels` and `{ refreshModels: true }` are supported, model catalog changes are not continuously polled in the background.
+- Candidate model discovery extracts advertised models from runtime output (`out.txt`) produced by prior jobs (e.g. quota checks or task runs). Scheduled task submission for `{ command: 'models' }` is omitted from candidate assembly to guarantee that candidate generation remains non-blocking and purely read-only; background dynamic polling of the model catalogue is not implemented in this Work Item.
 - Profile dispatch timeout defaults to 120 seconds unless explicitly overridden by `--pool-timeout` or `--timeout-ms`.
+- Local scratch directories `.tmp-ai69-*` are excluded locally in `.git/info/exclude` without deleting files; durable repository-level ignore entries are deferred to foundation tasks as `.gitignore` is outside the allowed paths of this Work Item.
 
