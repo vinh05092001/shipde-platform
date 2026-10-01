@@ -326,6 +326,105 @@ function generateCandidates(opts) {
     }
   }
 
+  candidates.push(...poolAccountCandidates(o));
+
+  return candidates;
+}
+
+/**
+ * Generate agy-pool candidates.
+ */
+function poolAccountCandidates(opts) {
+  const o = opts || {};
+  const accounts = o.accounts || [];
+  const { familyOf } = require('./agy-quota');
+  const poolModels = new Set();
+
+  const native = accounts.find((a) => a.provider === 'antigravity' || a.id === 'agy-native-a');
+  if (native) {
+    for (const m of accountModels(native)) poolModels.add(m);
+  }
+
+  const catalogue = o.catalogue || [];
+  for (const c of catalogue) {
+    if (c.upstream === 'antigravity' || c.source === 'antigravity') {
+      poolModels.add(c.modelId || c.model);
+    }
+  }
+
+  if (o.evidenceData && o.evidenceData.combinations) {
+    for (const combo of o.evidenceData.combinations) {
+      if (combo.upstream === 'antigravity' || combo.source === 'antigravity') {
+        poolModels.add(combo.modelId || combo.model);
+      }
+    }
+  }
+
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+
+  const runsDir =
+    o.fakeRunsDir ||
+    process.env.AGY_RUNS_DIR ||
+    (function () {
+      const home = o.home || os.homedir();
+      const localApp =
+        process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
+      return path.join(localApp, 'agy-runs');
+    })();
+
+  const discoveredAccounts = new Set();
+  if (fs.existsSync(runsDir)) {
+    try {
+      const entries = fs.readdirSync(runsDir);
+      for (const entry of entries) {
+        if (/^agy\d+$/.test(entry) && fs.statSync(path.join(runsDir, entry)).isDirectory()) {
+          discoveredAccounts.add(entry);
+          try {
+            const quotaPath = path.join(runsDir, entry, 'quota.json');
+            if (fs.existsSync(quotaPath)) {
+              const q = JSON.parse(fs.readFileSync(quotaPath, 'utf8'));
+              for (const g of q.groups || []) {
+                if (g.id) poolModels.add(g.id);
+              }
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+
+  const candidates = [];
+  if (poolModels.size > 0) {
+    for (let i = 1; i <= 10; i++) {
+      discoveredAccounts.add('agy' + String(i).padStart(2, '0'));
+    }
+    for (const acc of discoveredAccounts) {
+      for (const model of poolModels) {
+        const family =
+          familyOf(model) ||
+          (model.includes('gemini')
+            ? 'gemini'
+            : model.includes('claude') || model.includes('gpt')
+              ? 'claude-gpt'
+              : null);
+        if (!family) continue;
+        candidates.push({
+          harness: 'agy-pool',
+          accessPath: `ShipDe\\ShipDe-${acc}`,
+          gateway: '',
+          upstream: 'antigravity',
+          accountId: acc,
+          quotaScope: `${acc}:${family}`,
+          modelId: model,
+          source: 'agy-pool',
+          kind: 'agent-cli',
+          sharedQuota: 'unknown',
+        });
+      }
+    }
+  }
   return candidates;
 }
 
@@ -526,6 +625,7 @@ module.exports = {
   accessPathOf,
   generateCandidates,
   gatewayAccountCandidates,
+  poolAccountCandidates,
   candidatesFromEvidence,
   mergeCandidates,
   annotateCandidates,

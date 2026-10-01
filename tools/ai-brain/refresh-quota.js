@@ -61,6 +61,87 @@ const READERS = {
       return quota;
     },
   },
+  'agy-pool': {
+    read: (account, opts) => {
+      const fs = require('fs');
+      const path = require('path');
+      const dir =
+        (opts && opts.fakeRunsDir) ||
+        process.env.AGY_RUNS_DIR ||
+        (function () {
+          const os = require('os');
+          const home = (opts && opts.home) || os.homedir();
+          const localApp =
+            process.env.LOCALAPPDATA ||
+            path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
+          return path.join(localApp, 'agy-runs');
+        })();
+      const resultFile = path.join(dir, account.id, 'result.json');
+      const quotaFile = path.join(dir, account.id, 'quota.json');
+
+      if (!fs.existsSync(resultFile)) {
+        return { available: false, reason: 'không có result.json' };
+      }
+      let result;
+      try {
+        result = JSON.parse(fs.readFileSync(resultFile, 'utf8').replace(/^\uFEFF/, ''));
+      } catch (e) {
+        return { available: false, reason: 'result.json hỏng' };
+      }
+
+      if (result.state === 'login-required') {
+        return { available: false, reason: 'AUTH_FAILED' };
+      }
+      if (result.state !== 'ok' && result.state !== 'quota') {
+        return { available: false, reason: result.state || 'failed' };
+      }
+
+      if (!fs.existsSync(quotaFile)) {
+        return { available: false, reason: 'không có quota.json' };
+      }
+
+      const quotaText = fs.readFileSync(quotaFile, 'utf8').replace(/^\uFEFF/, '');
+      let quotaJson;
+      try {
+        quotaJson = JSON.parse(quotaText);
+      } catch (e) {
+        return { available: false, reason: 'quota.json không phải json hợp lệ' };
+      }
+
+      if (quotaJson && Array.isArray(quotaJson.groups)) {
+        const rows = [];
+        for (const g of quotaJson.groups) {
+          const family = g.id;
+          if (g.fiveHour) {
+            rows.push({
+              family,
+              window: '5h',
+              remainingPercent:
+                g.fiveHour.remaining !== undefined ? Math.round(g.fiveHour.remaining * 100) : 0,
+              disabled: false,
+              resetsAt: g.fiveHour.resetAt,
+            });
+          }
+          if (g.weekly) {
+            rows.push({
+              family,
+              window: 'weekly',
+              remainingPercent:
+                g.weekly.remaining !== undefined ? Math.round(g.weekly.remaining * 100) : 0,
+              disabled: false,
+              resetsAt: g.weekly.resetAt,
+            });
+          }
+        }
+        return {
+          available: true,
+          rows: rows,
+          account: { known: true, email: account.id, source: 'pool' },
+        };
+      }
+      return { available: false, reason: 'quota.json thiếu groups' };
+    },
+  },
   'claude-code': {
     read: (account, opts) => {
       const identity = account.email
@@ -168,7 +249,34 @@ function refreshAccount(account, options) {
 }
 
 function refreshAll(accounts, options) {
-  return (accounts || []).map((a) => refreshAccount(a, options));
+  const allAccounts = [...(accounts || [])];
+  const fs = require('fs');
+  const path = require('path');
+  const dir =
+    (options && options.fakeRunsDir) ||
+    process.env.AGY_RUNS_DIR ||
+    (function () {
+      const os = require('os');
+      const home = (options && options.home) || os.homedir();
+      const localApp =
+        process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
+      return path.join(localApp, 'agy-runs');
+    })();
+
+  if (fs.existsSync(dir)) {
+    try {
+      const entries = fs.readdirSync(dir);
+      for (const entry of entries) {
+        if (/^agy\d+$/.test(entry) && fs.statSync(path.join(dir, entry)).isDirectory()) {
+          allAccounts.push({
+            id: entry,
+            provider: 'agy-pool',
+          });
+        }
+      }
+    } catch (e) {}
+  }
+  return allAccounts.map((a) => refreshAccount(a, options));
 }
 
-module.exports = { SUPPORTED_PROVIDERS, identityFor, refreshAccount, refreshAll };
+module.exports = { SUPPORTED_PROVIDERS, identityFor, refreshAccount, refreshAll, READERS };
