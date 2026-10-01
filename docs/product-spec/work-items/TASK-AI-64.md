@@ -749,7 +749,7 @@ Additionally, shim unwrapping handles `%~dp0%\`, `%dp0%\`, `%~dp0\`, and unquote
 
 Evidence:
 - Fail-before base SHAs:
-  - `194af0337c3527aa1975e532a2ca5c0fc657ef19`: native `.exe` target executed via `node` (producing `SyntaxError: Invalid or unexpected token` / DOS mode MZ header failure).
+  - `194af039e56ff00e742b4978c39332152512f1d9`: native `.exe` target executed via `node` (producing `SyntaxError: Invalid or unexpected token` / DOS mode MZ header failure).
   - `64d7dec2d9e47f631d8349a9dcc388f51431eff0`: space-bearing `node_modules` target truncated by `\s` exclusion and silently regressed to `.cmd` shim fallback (`ERR_ASSERTION`).
 - Command: `node --test "tools/ai-brain/test/*.test.js"`
 - Pass-after result: All tests pass. Full test suite: 1100/1100 passed (38/38 in `tools/ai-brain/test/task-ai-64.test.js`).
