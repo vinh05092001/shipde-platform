@@ -4,6 +4,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const {
+  mapFamily,
+  mapWindow,
+  parseNumberValue,
+  parseTsvRows,
+  parseFixtureGroups,
+  parseQuota,
+} = require('./agy-quota');
 
 function isValidAccountId(accountId) {
   return typeof accountId === 'string' && /^agy\d{2}$/.test(accountId);
@@ -196,62 +204,35 @@ function submitJob(accountId, job, options) {
   return waitForResult(accountId, startedAt, opts);
 }
 
-function parseNumberValue(val) {
-  if (val === null || val === undefined || val === '' || typeof val === 'boolean') {
-    return NaN;
-  }
-  if (typeof val === 'string') {
-    const trimmed = val.trim();
-    const stripped = trimmed.endsWith('%') ? trimmed.slice(0, -1).trim() : trimmed;
-    const n = Number(stripped);
-    return Number.isFinite(n) ? n : NaN;
-  }
-  const n = Number(val);
-  return Number.isFinite(n) ? n : NaN;
-}
-
 function parseQuotaJson(value) {
   const rows = [];
   const models = new Set();
   const doc = value && typeof value === 'object' ? value : {};
-  const groups = Array.isArray(doc.groups) ? doc.groups : Array.isArray(doc) ? doc : [];
-  for (const group of groups) {
-    const family = group.id || group.family || group.name;
-    if (!family) continue;
-    for (const model of group.models || []) {
-      if (model) models.add(String(model));
-    }
-    for (const key of ['fiveHour', 'weekly', 'daily', 'session']) {
-      const windowValue = group[key];
-      if (!windowValue || typeof windowValue !== 'object') continue;
-      const hasRemaining =
-        windowValue.remainingPercent !== undefined ||
-        windowValue.remaining !== undefined ||
-        windowValue.disabled !== undefined;
-      if (!hasRemaining) continue;
 
-      const rawPercent = parseNumberValue(windowValue.remainingPercent);
-      const rawFraction = parseNumberValue(windowValue.remaining);
-      const parsed = Number.isFinite(rawPercent)
-        ? rawPercent
-        : Number.isFinite(rawFraction)
-          ? Math.round(rawFraction * 100)
-          : NaN;
-
-      const isFinite = Number.isFinite(parsed);
-      const remainingPercent = isFinite ? parsed : windowValue.disabled ? 0 : null;
-      const known = isFinite || Boolean(windowValue.disabled);
-
-      rows.push({
-        family,
-        window: key === 'fiveHour' ? 'fiveHour' : key,
-        remainingPercent,
-        known,
-        disabled: Boolean(windowValue.disabled),
-        resetsAt: windowValue.resetAt || windowValue.resetsAt || null,
-      });
+  // 1. Real format: JSON wrapper with "response" field holding TSV lines
+  if (typeof doc.response === 'string' && doc.response.trim().length > 0) {
+    for (const r of parseTsvRows(doc.response)) {
+      rows.push(r);
     }
   }
+
+  // 2. Keep the existing fixture format working if any production path emits it
+  if (rows.length === 0) {
+    for (const r of parseFixtureGroups(doc)) {
+      rows.push(r);
+    }
+  }
+
+  for (const m of doc.models || []) if (m) models.add(String(m));
+  for (const g of doc.groups || []) {
+    for (const m of g.models || []) if (m) models.add(String(m));
+  }
+  if (doc.command && doc.command.data && Array.isArray(doc.command.data.groups)) {
+    for (const g of doc.command.data.groups) {
+      for (const m of g.models || []) if (m) models.add(String(m));
+    }
+  }
+
   return { rows, models: [...models] };
 }
 
@@ -272,8 +253,7 @@ function parseQuotaOutput(text) {
     };
   } catch {}
 
-  const agyQuota = require('./agy-quota');
-  const parsedText = agyQuota.parseQuota(body);
+  const parsedText = parseQuota(body);
   return Object.assign({}, parsedText, { models: [] });
 }
 
