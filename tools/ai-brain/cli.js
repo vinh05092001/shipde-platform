@@ -792,6 +792,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       fakeRunsDir: opts.fakeRunsDir,
       home: opts.home,
       discoverPool: opts.discoverPool !== false,
+      adapterScript: opts.adapterScript,
+      platform: opts.platform,
     }),
   ]);
 }
@@ -1104,6 +1106,17 @@ function dispatchProfileCommand(args, deps) {
     fakeRunsDir:
       (deps && deps.fakeRunsDir) || args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined,
     home: (deps && deps.home) || args.home || undefined,
+    adapterScript:
+      (deps && deps.adapterScript) ||
+      args['pool-adapter-script'] ||
+      process.env.AGY_POOL_ADAPTER_SCRIPT ||
+      undefined,
+    platform:
+      (deps && deps.platform) ||
+      args['pool-platform'] ||
+      args.platform ||
+      process.env.AGY_POOL_PLATFORM ||
+      undefined,
   });
 
   const candidateList = assembleForDispatch(
@@ -1120,6 +1133,9 @@ function dispatchProfileCommand(args, deps) {
       rootDir,
       home: optsWithEvidence.home,
       storePath: (deps && deps.storePath) || args['quota-store'] || undefined,
+      fakeRunsDir: optsWithEvidence.fakeRunsDir,
+      adapterScript: optsWithEvidence.adapterScript,
+      platform: optsWithEvidence.platform,
     })
   );
 }

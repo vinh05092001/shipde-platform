@@ -77,13 +77,14 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     const refreshScript = path.join(__dirname, '..', 'refresh-quota.js');
     const refreshCode = `
       const { refreshAll } = require(String.raw\`${refreshScript}\`);
-      refreshAll([], { home: String.raw\`${home}\` });
+      refreshAll([], { home: String.raw\`${home}\`, runsDir: String.raw\`${runsDir}\`, adapterScript: String.raw\`${adapterScript}\`, platform: 'win32' });
     `;
     const resRefresh = spawnSync('node', ['-e', refreshCode], {
       env: Object.assign({}, process.env, {
         LOCALAPPDATA: localApp,
         AGY_POOL_RUNS_DIR: runsDir,
         AGY_POOL_ADAPTER_SCRIPT: adapterScript,
+        AGY_POOL_PLATFORM: 'win32',
         HOME: home,
         USERPROFILE: home,
       }),
@@ -112,11 +113,24 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     const cliPath = path.join(__dirname, '..', 'cli.js');
     const res = spawnSync(
       'node',
-      [cliPath, 'dispatch', '--dry-run', '--profile', profileFile, '--json'],
+      [
+        cliPath,
+        'dispatch',
+        '--dry-run',
+        '--profile',
+        profileFile,
+        '--pool-runtime-dir',
+        runsDir,
+        '--pool-adapter-script',
+        adapterScript,
+        '--json',
+      ],
       {
         env: Object.assign({}, process.env, {
           LOCALAPPDATA: localApp,
           AGY_POOL_RUNS_DIR: runsDir,
+          AGY_POOL_ADAPTER_SCRIPT: adapterScript,
+          AGY_POOL_PLATFORM: 'win32',
           HOME: home,
           USERPROFILE: home,
         }),
@@ -155,6 +169,7 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     const reading = adapter.quota('agy01', {
       fakeRunsDir: runsDir,
       adapterScript,
+      platform: 'win32',
     });
     assert.equal(reading.available, true);
     assert.equal(reading.account.email, 'agy01');

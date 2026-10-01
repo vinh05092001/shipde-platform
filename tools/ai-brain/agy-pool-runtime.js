@@ -16,7 +16,7 @@ function runsDir(options) {
   if (process.env.AGY_POOL_RUNS_DIR) return process.env.AGY_POOL_RUNS_DIR;
   if (process.env.AGY_RUNS_DIR) return process.env.AGY_RUNS_DIR;
 
-  const platform = opts.platform || process.platform;
+  const platform = opts.platform || process.env.AGY_POOL_PLATFORM || process.platform;
   const p = platform === 'win32' ? path.win32 : path.posix;
   if (platform === 'win32') {
     return 'C:\\Tools\\agy-runs';
@@ -128,7 +128,7 @@ function runAdapter(accountId, options) {
     };
   }
 
-  const platform = opts.platform || process.platform;
+  const platform = opts.platform || process.env.AGY_POOL_PLATFORM || process.platform;
   if (platform !== 'win32') {
     return {
       exitCode: 1,

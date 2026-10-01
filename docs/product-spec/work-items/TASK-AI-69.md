@@ -157,4 +157,3 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
 - Native execution of `agy-pool` scheduled tasks requires a Windows host with `schtasks`; on non-Windows platforms `runAdapter` refuses execution with an explicit `UNSUPPORTED_PLATFORM` error unless overridden with `adapterScript` or `fakeRunsDir`.
 - Candidate model discovery extracts advertised models from runtime output (`out.txt`) produced by prior jobs (e.g. quota checks or task runs). Scheduled task submission for `{ command: 'models' }` is omitted from candidate assembly to guarantee that candidate generation remains non-blocking and purely read-only; background dynamic polling of the model catalogue is not implemented in this Work Item.
 - Profile dispatch timeout defaults to 120 seconds unless explicitly overridden by `--pool-timeout` or `--timeout-ms`.
-
