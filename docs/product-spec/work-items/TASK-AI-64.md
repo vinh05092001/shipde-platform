@@ -738,3 +738,24 @@ Observation C: The `--isolated-worker` flag caused the paseo daemon to run the a
 Decision: For isolated launches, `executor.resolveRoute` rewrites a `paseo` route to the dedicated `opencode-direct` adapter. The same route decision is consumed by `orchestrate.js`, so isolated live runs launch `opencode` directly instead of the `paseo` daemon. The `isolation-launcher.js` script starts `powershell.exe -File run-target.ps1` under the `ShipDeWorker` OS user account, and that nested script runs `opencode run --model <provider/model> --dir <worker root> --auto --format json` inside the worker root (`C:\ShipDeWorker\<job>`).
 Gateway Key Delivery: Provider access for the worker is supplied by writing a minimal `opencode.json` config inside the worker root that points to the local 9Router endpoint (`http://127.0.0.1:20128/v1`). The config file references the gateway key only through the environment reference (`{env:NINEROUTER_API_KEY}`). The `isolation-launcher.js` allow-list passes the literal value of `NINEROUTER_API_KEY` only for the `opencode-direct` worker process. The key is never written to disk, passed in argv, sent in a prompt, or leaked into the repository.
 Residual risk: The agent runs within the `ShipDeWorker` boundary and is not given operator GitHub credentials; `GH_CONFIG_DIR` is redirected to the worker root and GitHub token environment variables are not in the worker allow-list. However, because `NINEROUTER_API_KEY` is present in the `opencode-direct` process environment, a compromised agent could dump its own environment and observe the token, allowing unauthorized 9Router consumption if router-side quota and revocation controls failed.
+
+## Live run attempt 6 native shim target launch fix (2026-10-01)
+
+Observation / Defect: Live E2E attempt 6 failed on worker process launch with `SyntaxError: Invalid or unexpected token`. In `tools/ai-brain/harness.js:executableFor`, unwrapping `.cmd` shims unconditionally returned `{ file: opts.nodePath || process.execPath, prefixArgs: [target] }`. For `opencode`, the shim target is `node_modules\opencode-ai\bin\opencode.exe` (a native binary), causing Node to attempt executing machine code as JavaScript.
+Decision: `executableFor` inspects the unwrapped target's extension (case-insensitive) using a deny-list / native check:
+- Native executables (`.exe`, `.com`) return `{ file: target, prefixArgs: [] }` to be spawned directly without Node wrapping.
+- All other targets (including standard JavaScript launchers `.js`, `.cjs`, `.mjs`, and extension-less Node scripts) remain wrapped with `opts.nodePath || process.execPath`.
+Additionally, shim unwrapping handles `%~dp0%\`, `%dp0%\`, `%~dp0\`, and unquoted/forward-slash layouts, and correctly preserves space-bearing paths within quoted `node_modules` targets without premature token splitting. Regression tests in `tools/ai-brain/test/task-ai-64.test.js` verify native targets spawn directly, space-bearing paths are preserved, and script targets wrap with node.
+
+Evidence:
+- Fail-before base SHAs:
+  - `194af039e56ff00e742b4978c39332152512f1d9`: native `.exe` target executed via `node` (producing `SyntaxError: Invalid or unexpected token` / DOS mode MZ header failure).
+  - `64d7dec2d9e47f631d8349a9dcc388f51431eff0`: space-bearing `node_modules` target truncated by `\s` exclusion and silently regressed to `.cmd` shim fallback (`ERR_ASSERTION`).
+- Command: `node --test "tools/ai-brain/test/*.test.js"`
+- Pass-after result: All tests pass. Full test suite: 1100/1100 passed (38/38 in `tools/ai-brain/test/task-ai-64.test.js`).
+- Prettier check: `npx --package prettier@3.9.6 prettier --check tools/ai-brain/harness.js tools/ai-brain/test/task-ai-64.test.js docs/product-spec/work-items/TASK-AI-64.md` clean.
+
+Residual risk / known limitations:
+- Deny-list extension behavior: `executableFor` inspects only `/\.(exe|com)$/i`. Non-executable script targets that are not JavaScript (such as `.bat`, `.cmd`, or `.ps1` targets) fall through to Node wrapping.
+- Directory candidate matching: If the first existing candidate matched under `node_modules` happens to be a directory rather than a file (`tools/ai-brain/harness.js:479-481`), `exists(candidate)` evaluates to true, fails the `.exe` check, and is handed to Node wrapping.
+- Standard npm global shims emit `.exe` or `.js` targets on Windows; non-standard shims wrapping batch or PowerShell scripts remain untested shape classes.

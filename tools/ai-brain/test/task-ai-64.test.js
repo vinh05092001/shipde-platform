@@ -22,7 +22,7 @@
  * that a simulated callback is not a live run.
  */
 
-const { test } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -36,6 +36,7 @@ const { publish } = require('../publisher');
 const { candidateKey } = require('../candidates');
 const { classifyFailure, Scope } = require('../failure-classifier');
 const routing = require('../routing');
+const { executableFor } = require('../harness');
 
 const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'task-ai-64');
 const USAGE_REPORT = path.join(FIXTURE_DIR, 'hermes-usage-report.json');
@@ -1747,4 +1748,168 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
   } finally {
     cp.spawnSync = realSpawn;
   }
+});
+
+describe('TASK-AI-64 executableFor shim unwrap and native launch (DEFECT D)', () => {
+  test('executableFor on Windows spawns native .exe targets directly without node wrapping', () => {
+    // Layout with %~dp0%
+    const optsTilde = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\opencode.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.exe',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\opencode.cmd') {
+          return '@echo off\r\n"%_prog%" "%~dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const exeTilde = executableFor('opencode', optsTilde);
+    assert.equal(exeTilde.file, 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.exe');
+    assert.deepEqual(exeTilde.prefixArgs, []);
+
+    // Layout with %dp0%
+    const optsPlain = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\opencode.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.exe',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\opencode.cmd') {
+          return '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const exePlain = executableFor('opencode', optsPlain);
+    assert.equal(exePlain.file, 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.exe');
+    assert.deepEqual(exePlain.prefixArgs, []);
+  });
+
+  test('executableFor on Windows spawns native .com targets directly (case-insensitive)', () => {
+    const opts = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\native-tool.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\native-tool\\bin\\tool.COM',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\native-tool.cmd') {
+          return '"%dp0%\\node_modules\\native-tool\\bin\\tool.COM" %*';
+        }
+        return '';
+      },
+    };
+    const exe = executableFor('native-tool', opts);
+    assert.equal(exe.file, 'C:\\fake\\bin\\node_modules\\native-tool\\bin\\tool.COM');
+    assert.deepEqual(exe.prefixArgs, []);
+  });
+
+  test('executableFor on Windows wraps .js launchers and extension-less JS targets with node', () => {
+    // Opencode with .js launcher layout using %~dp0%
+    const jsOptsTilde = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\opencode.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.js',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\opencode.cmd') {
+          return '@echo off\r\n"%_prog%" "%~dp0%\\node_modules\\opencode-ai\\bin\\opencode.js" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const jsExeTilde = executableFor('opencode', jsOptsTilde);
+    assert.equal(jsExeTilde.file, 'C:\\node\\node.exe');
+    assert.deepEqual(jsExeTilde.prefixArgs, [
+      'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.js',
+    ]);
+
+    // Opencode with .js launcher layout using %dp0%
+    const jsOptsPlain = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\opencode.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.js',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\opencode.cmd') {
+          return '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\opencode-ai\\bin\\opencode.js" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const jsExePlain = executableFor('opencode', jsOptsPlain);
+    assert.equal(jsExePlain.file, 'C:\\node\\node.exe');
+    assert.deepEqual(jsExePlain.prefixArgs, [
+      'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.js',
+    ]);
+
+    // Extension-less script target
+    const bareOpts = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\cli-tool.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\cli-tool\\bin\\cli',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\cli-tool.cmd') {
+          return '"%dp0%\\node_modules\\cli-tool\\bin\\cli" %*';
+        }
+        return '';
+      },
+    };
+    const bareExe = executableFor('cli-tool', bareOpts);
+    assert.equal(bareExe.file, 'C:\\node\\node.exe');
+    assert.deepEqual(bareExe.prefixArgs, ['C:\\fake\\bin\\node_modules\\cli-tool\\bin\\cli']);
+
+    // .cjs and .mjs script targets
+    const cjsOpts = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\cjs-tool.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\cjs-tool\\bin\\cli.cjs',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\cjs-tool.cmd') {
+          return '"%dp0%\\node_modules\\cjs-tool\\bin\\cli.cjs" %*';
+        }
+        return '';
+      },
+    };
+    const cjsExe = executableFor('cjs-tool', cjsOpts);
+    assert.equal(cjsExe.file, 'C:\\node\\node.exe');
+    assert.deepEqual(cjsExe.prefixArgs, ['C:\\fake\\bin\\node_modules\\cjs-tool\\bin\\cli.cjs']);
+  });
+
+  test('executableFor on Windows preserves space-bearing node_modules targets and spawns directly', () => {
+    const opts = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\tool.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\my-pkg\\bin\\win 32\\tool.exe',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\tool.cmd') {
+          return '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\my-pkg\\bin\\win 32\\tool.exe" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const exe = executableFor('tool', opts);
+    assert.equal(exe.file, 'C:\\fake\\bin\\node_modules\\my-pkg\\bin\\win 32\\tool.exe');
+    assert.deepEqual(exe.prefixArgs, []);
+  });
 });
