@@ -100,7 +100,7 @@ test('Defect 3: reservation released for each terminal status', () => {
   }
 });
 
-test('Defect 3: stale reservation reclaimed after documented TTL (2h), 30min stays busy', () => {
+test('Defect 4: stale reservation reclaimed after documented TTL (2h), 30min stays busy', () => {
   const root = path.join(os.tmpdir(), 'task-ai-67-4-' + Date.now());
   const storePath = path.join(root, 'quota.json');
   fs.mkdirSync(root, { recursive: true });
@@ -137,4 +137,120 @@ test('Defect 3: stale reservation reclaimed after documented TTL (2h), 30min sta
 
   assert.equal(hasBusy, true, 'a 30-minute running lane must stay busy and not be reclaimed');
   assert.equal(hasStale, false, 'a crashed reservation exceeding the 2h TTL must be reclaimed');
+});
+
+test('Defect 5: REAL cli.js dispatchCommand with --execute then --report-outcome', async () => {
+  const root = path.join(os.tmpdir(), 'task-ai-67-5-' + Date.now());
+  const home = path.join(root, 'home');
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+
+  const originalHomedir = os.homedir;
+  os.homedir = () => home;
+
+  try {
+    const cli = require('../cli');
+    const taskId = 'TASK-REAL-CLI';
+    const candId = 'paseo::cli::9router::gcli::acct-1::acct-1::grok-4.7';
+
+    const profile = {
+      taskId: taskId,
+      role: 'writer',
+      complexity: 'high',
+      requiredCapabilities: [],
+      proofFloor: 'NONE',
+      contextSize: 1000,
+      expectedDuration: 100,
+      latencyPriority: 'normal',
+      qualityFloor: 0,
+      costCeiling: 10,
+      forbiddenFailureDomains: [],
+      resourceCeiling: 100,
+      currentWorkload: 0
+    };
+    const profilePath = path.join(root, 'profile.json');
+    fs.writeFileSync(profilePath, JSON.stringify(profile));
+
+    const decisionDir = path.join(root, 'decisions');
+    fs.mkdirSync(decisionDir, { recursive: true });
+
+    let exitCode = null;
+    await cli.dispatchCommand({
+      profile: profilePath,
+      execute: true,
+      'decision-dir': decisionDir,
+      root: root
+    }, {
+      exit: (code) => { exitCode = code; },
+      log: () => {},
+      error: () => {},
+      candidates: [{
+        candidateKey: candId,
+        harness: 'paseo', accessPath: 'cli', gateway: '9router', upstream: 'gcli',
+        accountId: 'acct-1', quotaScope: 'acct-1', modelId: 'grok-4.7',
+        quality: 50, cost: 0.1, contextWindow: 32000, capabilities: []
+      }],
+      ask: async () => ({ decision: null })
+    });
+
+    const quotaStore = require('../quota-store');
+    const storePath = path.join(home, '.shipde', 'agy-quota.json');
+    let res = quotaStore.getReservations({ path: storePath });
+    assert.equal(res[`${taskId}::${candId}`] !== undefined, true, 'reservation must be created in HOME');
+
+    const outcomePath = path.join(root, 'outcome-completed.json');
+    fs.writeFileSync(outcomePath, JSON.stringify({
+      status: 'COMPLETED',
+      candidateKey: candId,
+      taskId: taskId
+    }));
+
+    await cli.dispatchCommand({
+      'report-outcome': outcomePath,
+      root: root
+    }, {
+      exit: (code) => { exitCode = code; },
+      log: () => {},
+      error: () => {}
+    });
+
+    res = quotaStore.getReservations({ path: storePath });
+    assert.equal(res[`${taskId}::${candId}`], undefined, 'reservation must be released from HOME');
+
+    assert.equal(fs.existsSync(path.join(root, '.slate')), false, '.slate should not be created');
+  } finally {
+    os.homedir = originalHomedir;
+  }
+});
+
+test('Defect 6: resetTime is honoured at upstream scope', () => {
+  const dir = path.join(os.tmpdir(), 'task-ai-67-6-' + Date.now());
+  fs.mkdirSync(dir, { recursive: true });
+
+  const candidate = {
+    harness: 'paseo', accessPath: 'cli', gateway: '9router', upstream: 'gcli',
+    accountId: 'ninerouter', quotaScope: 'ninerouter', modelId: 'grok-4.7'
+  };
+
+  const now = new Date('2026-10-01T20:00:00.000Z');
+  const future = new Date('2026-10-01T23:00:00.000Z');
+
+  evidence.recordOutcome(dir, candidate, {
+    status: 'failed',
+    exitCode: 1,
+    httpStatus: 429,
+    body: 'rate limit exceeded',
+    cooldownUntil: future.toISOString(),
+  });
+
+  const loaded = evidence.loadEvidence(dir);
+
+  assert.equal(loaded.upstreamStatus['gcli'].resetTime, future.getTime(), 'upstream scope must inherit explicit resetTime');
+
+  const blocked = evidence.isCandidateBlocked(loaded, candidate, { now: now.getTime() });
+  assert.equal(blocked.blocked, true, 'candidate must be blocked');
+
+  const later = new Date('2026-10-01T21:00:00.000Z').getTime();
+  const blockedLater = evidence.isCandidateBlocked(loaded, candidate, { now: later });
+  assert.equal(blockedLater.blocked, true, 'candidate must remain blocked according to explicit resetTime');
 });

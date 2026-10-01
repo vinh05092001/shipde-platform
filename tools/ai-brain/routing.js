@@ -735,7 +735,7 @@ function reportDispatchOutcome(args, deps) {
     });
 
     const quotaStore = require('./quota-store');
-    const targetPath = d.storePath || path.join(rootDir, '.slate', 'ai-brain', 'quota.json');
+    const targetPath = quotaStore.storePath({ home: d.home, path: d.storePath });
     quotaStore.releaseReservation(outcome.taskId || outcome.workItemId || 'TASK-REPORT-OUTCOME', outcome.candidateKey, {
       home: d.home,
       path: targetPath,
