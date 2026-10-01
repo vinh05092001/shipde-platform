@@ -294,37 +294,38 @@ const agyPool = {
   launch(job, opts) {
     const fs = require('fs');
     const path = require('path');
-    const dir =
-      (opts && opts.fakeRunsDir) ||
-      process.env.AGY_RUNS_DIR ||
-      (function () {
-        const os = require('os');
-        const home = (opts && opts.home) || os.homedir();
-        const localApp =
-          process.env.LOCALAPPDATA ||
-          path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
-        return path.join(localApp, 'agy-runs');
-      })();
-    const accountDir = path.join(dir, job.accountId);
+    const pool = require('./agy-pool-runtime');
+    if (!pool.isValidAccountId(job && job.accountId)) {
+      return {
+        refusal: 'INVALID_ACCOUNT_ID',
+        reason: `INVALID_ACCOUNT_ID: account must match /^agy\\d{2}$/, got ${JSON.stringify(job && job.accountId)}`,
+        exitCode: 1,
+        state: 'error',
+      };
+    }
+    const accountDir = pool.accountDir(job.accountId, opts);
     fs.mkdirSync(accountDir, { recursive: true });
 
-    fs.writeFileSync(
-      path.join(accountDir, 'job.json'),
-      JSON.stringify({
-        cwd: job.cwd,
-        prompt: job.prompt,
-        model: job.model,
-        candidateKey: job.candidateKey,
-        accountId: job.accountId,
-        harness: 'agy-pool',
-      })
-    );
+    const payload = {
+      cwd: job.cwd,
+      prompt: job.prompt,
+      model: job.model,
+      candidateKey: job.candidateKey,
+      accountId: job.accountId,
+      harness: 'agy-pool',
+    };
 
     if (job.usageFile) {
       fs.writeFileSync(job.usageFile, JSON.stringify({ accountId: job.accountId }));
     }
 
+    fs.writeFileSync(path.join(accountDir, 'job.json'), JSON.stringify(payload, null, 2), 'utf8');
     return ['/run', '/tn', `ShipDe\\ShipDe-${job.accountId}`];
+  },
+  quota(accountId, opts) {
+    const pool = require('./agy-pool-runtime');
+    const result = pool.submitJob(accountId, { command: 'quota' }, opts);
+    return pool.quotaReading(accountId, Object.assign({}, opts, { result }));
   },
   resume(sessionId, prompt, job, opts) {
     return this.launch(Object.assign({}, job, { prompt }), opts);
@@ -336,32 +337,24 @@ const agyPool = {
     return parsed && parsed.accountId ? String(parsed.accountId) : null;
   },
   mapOutcome(accountId, candidateKey, opts) {
-    const fs = require('fs');
-    const path = require('path');
-    const dir =
-      (opts && opts.fakeRunsDir) ||
-      process.env.AGY_RUNS_DIR ||
-      (function () {
-        const os = require('os');
-        const home = (opts && opts.home) || os.homedir();
-        const localApp =
-          process.env.LOCALAPPDATA ||
-          path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
-        return path.join(localApp, 'agy-runs');
-      })();
-    const resFile = path.join(dir, accountId, 'result.json');
-    if (!fs.existsSync(resFile))
+    const pool = require('./agy-pool-runtime');
+    if (!pool.isValidAccountId(accountId)) {
+      return structuredOutcome(
+        candidateKey,
+        { exitCode: 1 },
+        { cause: 'INVALID_ACCOUNT_ID' },
+        { status: 'failed', reason: 'INVALID_ACCOUNT_ID: account must match /^agy\\d{2}$/' }
+      );
+    }
+    const res = pool.readResult(accountId, opts);
+    if (!res)
       return structuredOutcome(
         candidateKey,
         { exitCode: 1 },
         { cause: 'UNKNOWN_STATE' },
         { status: 'failed' }
       );
-
-    let res;
-    try {
-      res = JSON.parse(fs.readFileSync(resFile, 'utf8'));
-    } catch (e) {
+    if (res.reason === 'CORRUPT_RESULT') {
       return structuredOutcome(
         candidateKey,
         { exitCode: 1 },

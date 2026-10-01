@@ -144,6 +144,30 @@ describe('Headroom for a model', () => {
     assert.equal(h.known, false);
     assert.match(h.reason, /Eligibility/);
   });
+
+  test('tightest window logic ignores null/unknown quota windows and picks known window (N1)', () => {
+    const quotaWithUnknown = {
+      available: true,
+      rows: [
+        { family: Family.GEMINI, window: 'weekly', remainingPercent: null, known: false },
+        { family: Family.GEMINI, window: 'fiveHour', remainingPercent: 5, known: true },
+      ],
+    };
+    const h = headroomFor(quotaWithUnknown, 'gemini-3.8-flash-high');
+    assert.equal(h.known, true);
+    assert.equal(h.remainingPercent, 5);
+    assert.equal(h.window, 'fiveHour');
+  });
+
+  test('if all windows are unknown/null, headroomFor returns known: false and statusFrom returns unknown (N1)', () => {
+    const allUnknownQuota = {
+      available: true,
+      rows: [{ family: Family.GEMINI, window: 'weekly', remainingPercent: null, known: false }],
+    };
+    const h = headroomFor(allUnknownQuota, 'gemini-3.8-flash-high');
+    assert.equal(h.known, false);
+    assert.equal(statusFrom(h), 'unknown');
+  });
 });
 
 describe('Mapping headroom onto the scheduler vocabulary', () => {
@@ -169,6 +193,12 @@ describe('Mapping headroom onto the scheduler vocabulary', () => {
     // dispatched to.
     assert.equal(statusFrom({ known: false }), 'unknown');
     assert.equal(statusFrom(null), 'unknown');
+  });
+
+  test('non-numeric or null remainingPercent returns unknown, not open (N1)', () => {
+    assert.equal(statusFrom({ known: true, remainingPercent: null }), 'unknown');
+    assert.equal(statusFrom({ known: true, remainingPercent: 'UNKNOWN' }), 'unknown');
+    assert.equal(statusFrom({ known: false, remainingPercent: null }), 'unknown');
   });
 
   test('thresholds are configurable', () => {

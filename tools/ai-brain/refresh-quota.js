@@ -63,83 +63,9 @@ const READERS = {
   },
   'agy-pool': {
     read: (account, opts) => {
-      const fs = require('fs');
-      const path = require('path');
-      const dir =
-        (opts && opts.fakeRunsDir) ||
-        process.env.AGY_RUNS_DIR ||
-        (function () {
-          const os = require('os');
-          const home = (opts && opts.home) || os.homedir();
-          const localApp =
-            process.env.LOCALAPPDATA ||
-            path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
-          return path.join(localApp, 'agy-runs');
-        })();
-      const resultFile = path.join(dir, account.id, 'result.json');
-      const quotaFile = path.join(dir, account.id, 'quota.json');
-
-      if (!fs.existsSync(resultFile)) {
-        return { available: false, reason: 'không có result.json' };
-      }
-      let result;
-      try {
-        result = JSON.parse(fs.readFileSync(resultFile, 'utf8').replace(/^\uFEFF/, ''));
-      } catch (e) {
-        return { available: false, reason: 'result.json hỏng' };
-      }
-
-      if (result.state === 'login-required') {
-        return { available: false, reason: 'AUTH_FAILED' };
-      }
-      if (result.state !== 'ok' && result.state !== 'quota') {
-        return { available: false, reason: result.state || 'failed' };
-      }
-
-      if (!fs.existsSync(quotaFile)) {
-        return { available: false, reason: 'không có quota.json' };
-      }
-
-      const quotaText = fs.readFileSync(quotaFile, 'utf8').replace(/^\uFEFF/, '');
-      let quotaJson;
-      try {
-        quotaJson = JSON.parse(quotaText);
-      } catch (e) {
-        return { available: false, reason: 'quota.json không phải json hợp lệ' };
-      }
-
-      if (quotaJson && Array.isArray(quotaJson.groups)) {
-        const rows = [];
-        for (const g of quotaJson.groups) {
-          const family = g.id;
-          if (g.fiveHour) {
-            rows.push({
-              family,
-              window: '5h',
-              remainingPercent:
-                g.fiveHour.remaining !== undefined ? Math.round(g.fiveHour.remaining * 100) : 0,
-              disabled: false,
-              resetsAt: g.fiveHour.resetAt,
-            });
-          }
-          if (g.weekly) {
-            rows.push({
-              family,
-              window: 'weekly',
-              remainingPercent:
-                g.weekly.remaining !== undefined ? Math.round(g.weekly.remaining * 100) : 0,
-              disabled: false,
-              resetsAt: g.weekly.resetAt,
-            });
-          }
-        }
-        return {
-          available: true,
-          rows: rows,
-          account: { known: true, email: account.id, source: 'pool' },
-        };
-      }
-      return { available: false, reason: 'quota.json thiếu groups' };
+      const { getHarness } = require('./harness');
+      const adapter = getHarness('agy-pool');
+      return adapter.quota(account.id, opts);
     },
   },
   'claude-code': {
@@ -239,10 +165,21 @@ function refreshAccount(account, options) {
   // it leaves the previous, healthier reading on screen looking current.
   saveReading(account.id, quota, opts);
 
+  const exhausted =
+    account.provider === 'agy-pool' &&
+    quota.available === true &&
+    Array.isArray(quota.rows) &&
+    quota.rows.length > 0 &&
+    quota.rows.every(
+      (row) =>
+        (Number.isFinite(row.remainingPercent) && Number(row.remainingPercent) <= 0) ||
+        row.disabled === true
+    );
+
   return {
     accountId: account.id,
-    ok: quota.available === true,
-    reason: quota.available ? null : quota.reason,
+    ok: quota.available === true && !exhausted,
+    reason: exhausted ? 'QUOTA_EXHAUSTED' : quota.available ? null : quota.reason,
     account: quota.account && quota.account.known ? quota.account.email : null,
     rows: quota.available ? quota.rows.length : 0,
   };
@@ -250,33 +187,37 @@ function refreshAccount(account, options) {
 
 function refreshAll(accounts, options) {
   const allAccounts = [...(accounts || [])];
-  const fs = require('fs');
-  const path = require('path');
-  const dir =
-    (options && options.fakeRunsDir) ||
-    process.env.AGY_RUNS_DIR ||
-    (function () {
-      const os = require('os');
-      const home = (options && options.home) || os.homedir();
-      const localApp =
-        process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
-      return path.join(localApp, 'agy-runs');
-    })();
-
-  if (fs.existsSync(dir)) {
-    try {
-      const entries = fs.readdirSync(dir);
-      for (const entry of entries) {
-        if (/^agy\d+$/.test(entry) && fs.statSync(path.join(dir, entry)).isDirectory()) {
-          allAccounts.push({
-            id: entry,
-            provider: 'agy-pool',
-          });
-        }
+  const pool = require('./agy-pool-runtime');
+  const seen = new Set(allAccounts.map((account) => account && account.id).filter(Boolean));
+  const opts = options || {};
+  const shouldDiscoverPool =
+    opts.discoverPool === true ||
+    opts.fakeRunsDir ||
+    opts.runsDir ||
+    process.env.AGY_POOL_RUNS_DIR ||
+    process.env.AGY_RUNS_DIR;
+  if (shouldDiscoverPool) {
+    for (const entry of pool.discoverAccounts(options)) {
+      if (!seen.has(entry)) {
+        allAccounts.push({
+          id: entry,
+          provider: 'agy-pool',
+        });
+        seen.add(entry);
       }
-    } catch (e) {}
+    }
   }
-  return allAccounts.map((a) => refreshAccount(a, options));
+  const results = [];
+  for (const a of allAccounts) {
+    const res = refreshAccount(a, options);
+    if (typeof opts.onProgress === 'function') {
+      try {
+        opts.onProgress(res);
+      } catch {}
+    }
+    results.push(res);
+  }
+  return results;
 }
 
 module.exports = { SUPPORTED_PROVIDERS, identityFor, refreshAccount, refreshAll, READERS };

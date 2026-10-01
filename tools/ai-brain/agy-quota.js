@@ -205,11 +205,22 @@ function headroomFor(quota, model) {
   const family = familyOf(model);
   if (!family) return { known: false, reason: 'không rõ model thuộc nhóm nào' };
 
-  const rows = quota.rows.filter((r) => r.family === family);
+  const rows = (quota.rows || []).filter((r) => r.family === family);
   if (rows.length === 0) return { known: false, reason: 'không có dòng quota cho nhóm ' + family };
 
-  let tightest = rows[0];
-  for (const r of rows) {
+  const validRows = rows.filter((r) => r.known !== false && Number.isFinite(r.remainingPercent));
+  if (validRows.length === 0) {
+    return {
+      known: false,
+      reason: 'không có số liệu quota hợp lệ cho nhóm ' + family,
+      family,
+      remainingPercent: null,
+      windows: rows,
+    };
+  }
+
+  let tightest = validRows[0];
+  for (const r of validRows) {
     if (r.remainingPercent < tightest.remainingPercent) tightest = r;
   }
 
@@ -233,9 +244,16 @@ function statusFrom(headroom, options) {
   const tight = Number(opts.tightBelow) > 0 ? Number(opts.tightBelow) : 20;
   const exhausted = Number(opts.exhaustedBelow) >= 0 ? Number(opts.exhaustedBelow) : 2;
 
-  if (!headroom || !headroom.known) return 'unknown';
-  if (headroom.remainingPercent <= exhausted) return 'exhausted';
-  if (headroom.remainingPercent < tight) return 'tight';
+  const pct =
+    typeof headroom === 'number'
+      ? headroom
+      : headroom && headroom.known && Number.isFinite(headroom.remainingPercent)
+        ? headroom.remainingPercent
+        : null;
+
+  if (pct === null) return 'unknown';
+  if (pct <= exhausted) return 'exhausted';
+  if (pct < tight) return 'tight';
   return 'open';
 }
 

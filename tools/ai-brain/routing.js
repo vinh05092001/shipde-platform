@@ -685,11 +685,27 @@ function reportDispatchOutcome(args, deps) {
     return { exitCode: 2 };
   }
 
-  if (outcome && outcome.harness === 'agy-pool' && outcome.accountId) {
+  const parsedBeforeMapping =
+    outcome && outcome.candidateKey ? parseCandidateKey(outcome.candidateKey) : null;
+  if (
+    outcome &&
+    ((outcome.harness === 'agy-pool' && outcome.accountId) ||
+      (parsedBeforeMapping &&
+        parsedBeforeMapping.harness === 'agy-pool' &&
+        parsedBeforeMapping.account))
+  ) {
+    const poolAccount = outcome.accountId || parsedBeforeMapping.account;
+    const { isValidAccountId } = require('./agy-pool-runtime');
+    if (!isValidAccountId(poolAccount)) {
+      error('OUTCOME_INVALID: invalid agy-pool account: ' + String(poolAccount));
+      exit(2);
+      return { exitCode: 2, reason: 'INVALID_ACCOUNT_ID' };
+    }
     const { getHarness } = require('./harness');
     const adapter = getHarness('agy-pool');
-    const mapped = adapter.mapOutcome(outcome.accountId, outcome.candidateKey, {
+    const mapped = adapter.mapOutcome(poolAccount, outcome.candidateKey, {
       fakeRunsDir: d.fakeRunsDir,
+      home: d.home,
     });
     outcome = Object.assign({}, outcome, mapped);
   }
@@ -941,7 +957,11 @@ async function runProfileDispatch(args, deps) {
     );
   }
 
-  exit(0);
+  if (exit === process.exit) {
+    process.exitCode = 0;
+  } else {
+    exit(0);
+  }
   return {
     exitCode: 0,
     profile,

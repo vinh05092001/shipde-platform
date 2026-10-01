@@ -435,6 +435,20 @@ describe('candidate generation', () => {
 
   test('generates agy-pool candidates with the right 7-part key', () => {
     const registry = sourcesApi.loadSources();
+    const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-pool-candidates-'));
+    fs.mkdirSync(path.join(runsDir, 'agy01'));
+    fs.writeFileSync(
+      path.join(runsDir, 'agy01', 'out.txt'),
+      JSON.stringify({
+        groups: [
+          {
+            id: 'gemini',
+            models: ['gemini-3.8-flash-high'],
+            weekly: { remaining: 0.8 },
+          },
+        ],
+      })
+    );
     const accounts = [
       {
         id: 'agy-native-a',
@@ -442,7 +456,7 @@ describe('candidate generation', () => {
         models: ['gemini-3.8-flash-high', 'claude-3-5-sonnet-20241022'],
       },
     ];
-    const result = candidates.generateCandidates({ registry, accounts });
+    const result = candidates.generateCandidates({ registry, accounts, fakeRunsDir: runsDir });
 
     const poolCand = result.find(
       (c) => c.source === 'agy-pool' && c.accountId === 'agy01' && c.modelId.includes('gemini')
@@ -610,24 +624,44 @@ describe('candidate generation', () => {
     const refreshQuota = require('../refresh-quota');
     const { getHarness } = require('../harness');
 
+    function writePoolAdapter(dir) {
+      const script = path.join(dir, 'fake-pool-adapter.js');
+      fs.writeFileSync(
+        script,
+        [
+          "const fs = require('fs');",
+          "const path = require('path');",
+          'const dir = process.argv[2];',
+          "const state = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));",
+          "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(state.result));",
+          "if (state.out !== undefined) fs.writeFileSync(path.join(dir, 'out.txt'), state.out);",
+        ].join('\n')
+      );
+      return script;
+    }
+
     test('a quota result with 0% excludes that account until reset', () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-quota-test-'));
       const storePath = path.join(dir, 'quota-store.json');
       const accDir = path.join(dir, 'agy02');
       fs.mkdirSync(accDir, { recursive: true });
-      fs.writeFileSync(path.join(accDir, 'result.json'), JSON.stringify({ state: 'ok' }));
       fs.writeFileSync(
-        path.join(accDir, 'quota.json'),
+        path.join(accDir, 'state.json'),
         JSON.stringify({
-          groups: [{ id: 'gemini', fiveHour: { remaining: 0, resetAt: '2026-09-14T12:56:43Z' } }],
+          result: { state: 'ok' },
+          out: JSON.stringify({
+            groups: [{ id: 'gemini', fiveHour: { remaining: 0, resetAt: '2026-09-14T12:56:43Z' } }],
+          }),
         })
       );
+      const adapterScript = writePoolAdapter(dir);
 
       const res = refreshQuota.refreshAccount(
         { id: 'agy02', provider: 'agy-pool' },
-        { fakeRunsDir: dir, path: storePath }
+        { fakeRunsDir: dir, path: storePath, adapterScript }
       );
-      assert.equal(res.ok, true);
+      assert.equal(res.ok, false);
+      assert.equal(res.reason, 'QUOTA_EXHAUSTED');
       assert.equal(res.rows, 1);
 
       const { usableReadings } = require('../quota-store');
@@ -647,13 +681,14 @@ describe('candidate generation', () => {
       const accDir = path.join(dir, 'agy03');
       fs.mkdirSync(accDir, { recursive: true });
       fs.writeFileSync(
-        path.join(accDir, 'result.json'),
-        JSON.stringify({ state: 'login-required' })
+        path.join(accDir, 'state.json'),
+        JSON.stringify({ result: { state: 'login-required' } })
       );
+      const adapterScript = writePoolAdapter(dir);
 
       const res = refreshQuota.refreshAccount(
         { id: 'agy03', provider: 'agy-pool' },
-        { fakeRunsDir: dir, path: storePath }
+        { fakeRunsDir: dir, path: storePath, adapterScript }
       );
       assert.equal(res.ok, false);
       assert.equal(res.reason, 'AUTH_FAILED');

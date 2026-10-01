@@ -533,15 +533,33 @@ function quotaCommand(args) {
   const { readIdentity } = require('./agy-identity');
   const { listAccounts } = require('./accounts');
   const { usableReadings, storePath } = require('./quota-store');
+  const os = require('os');
 
-  const identity = readIdentity({});
+  const home =
+    args.home ||
+    (process.platform === 'win32'
+      ? process.env.USERPROFILE || process.env.HOME || os.homedir()
+      : process.env.HOME || process.env.USERPROFILE || os.homedir());
+  const poolTimeout = args['pool-timeout'] || args['timeout-ms'] || args.timeout;
+  const runtimeOpts = {
+    home,
+    fakeRunsDir: args['pool-runtime-dir'] || args['agy-runs-dir'],
+    adapterScript: args['pool-adapter-script'],
+    ...(poolTimeout
+      ? {
+          timeoutMs: Math.max(1, Number(poolTimeout)),
+          adapterTimeoutMs: Math.max(1, Number(poolTimeout)),
+        }
+      : {}),
+  };
+  const identity = readIdentity({ home });
   const accounts = listAccounts() || [];
 
   if (args.show) {
-    const { reported, problems } = usableReadings(identity, {});
+    const { reported, problems } = usableReadings(identity, runtimeOpts);
     if (args.json) return console.log(JSON.stringify({ identity, reported, problems }, null, 2));
     console.log('');
-    console.log('  Số liệu quota đang dùng được — ' + storePath({}));
+    console.log('  Số liệu quota đang dùng được — ' + storePath(runtimeOpts));
     console.log('');
     for (const [id, q] of Object.entries(reported)) {
       for (const row of q.rows) {
@@ -550,7 +568,14 @@ function quotaCommand(args) {
             id.padEnd(14) +
             row.family.padEnd(12) +
             row.window.padEnd(10) +
-            (row.disabled ? 'đã tắt' : row.remainingPercent + '%')
+            (row.disabled
+              ? 'đã tắt'
+              : row.remainingPercent === null ||
+                  row.remainingPercent === undefined ||
+                  row.remainingPercent === 'UNKNOWN' ||
+                  row.known === false
+                ? 'UNKNOWN'
+                : row.remainingPercent + '%')
         );
       }
     }
@@ -561,8 +586,13 @@ function quotaCommand(args) {
     return;
   }
 
-  const results = refreshAll(accounts, { identity });
-  if (args.json) return console.log(JSON.stringify({ identity, results }, null, 2));
+  if (args.json) {
+    const results = refreshAll(
+      accounts,
+      Object.assign({ identity, discoverPool: true }, runtimeOpts)
+    );
+    return console.log(JSON.stringify({ identity, results }, null, 2));
+  }
 
   console.log('');
   console.log(
@@ -571,11 +601,12 @@ function quotaCommand(args) {
       : '  Không xác định được account đang đăng nhập: ' + identity.reason
   );
   console.log('');
-  for (const r of results) {
+  const onProgress = (r) => {
     if (r.skipped) console.log('  BỎ QUA  ' + r.accountId + ' — ' + r.reason);
     else if (r.ok) console.log('  ĐỌC ĐƯỢC ' + r.accountId + ' — ' + r.rows + ' dòng');
     else console.log('  HỎNG    ' + r.accountId + ' — ' + r.reason);
-  }
+  };
+  refreshAll(accounts, Object.assign({ identity, discoverPool: true, onProgress }, runtimeOpts));
   console.log('');
 }
 
@@ -760,6 +791,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       evidenceData: opts.evidenceData,
       fakeRunsDir: opts.fakeRunsDir,
       home: opts.home,
+      discoverPool: opts.discoverPool !== false,
+      adapterScript: opts.adapterScript,
+      platform: opts.platform,
     }),
   ]);
 }
@@ -1070,7 +1104,14 @@ function dispatchProfileCommand(args, deps) {
   } catch (e) {
     evidenceData = {};
   }
-  const optsWithEvidence = Object.assign({}, deps, { evidenceData });
+  const optsWithEvidence = Object.assign({}, deps, {
+    evidenceData,
+    fakeRunsDir:
+      (deps && deps.fakeRunsDir) || args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined,
+    home: (deps && deps.home) || args.home || undefined,
+    adapterScript: (deps && deps.adapterScript) || undefined,
+    platform: (deps && deps.platform) || undefined,
+  });
 
   const candidateList = assembleForDispatch(
     discCat,
@@ -1081,7 +1122,15 @@ function dispatchProfileCommand(args, deps) {
 
   return require('./routing').runProfileDispatch(
     args,
-    Object.assign({}, deps, { candidates: candidateList, rootDir })
+    Object.assign({}, deps, {
+      candidates: candidateList,
+      rootDir,
+      home: optsWithEvidence.home,
+      storePath: (deps && deps.storePath) || args['quota-store'] || undefined,
+      fakeRunsDir: optsWithEvidence.fakeRunsDir,
+      adapterScript: optsWithEvidence.adapterScript,
+      platform: optsWithEvidence.platform,
+    })
   );
 }
 
@@ -1142,7 +1191,9 @@ function dispatchCommand(args, deps = {}) {
       decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
       now: deps && deps.now,
       storePath: deps && deps.storePath,
-      home: deps && deps.home,
+      home: (deps && deps.home) || args.home || undefined,
+      fakeRunsDir:
+        (deps && deps.fakeRunsDir) || args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined,
     });
   }
 
@@ -1768,93 +1819,123 @@ function dispatchCommand(args, deps = {}) {
       // report (TASK-AI-63), and a launch that cannot produce one is a launch
       // that cannot be resumed.
       const usageFile = usageReportFile(args, deps, item, now);
-      const launchArgs = adapter.launch({
-        candidateKey: finalChosenKey,
-        provider:
-          (route && route.provider) || finalChosenCandidate.source || finalChosenCandidate.upstream,
-        model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
-        accountId: finalChosenCandidate.accountId,
-        gateway: finalChosenCandidate.gateway || '',
-        upstream: finalChosenCandidate.upstream,
-        quotaScope: finalChosenCandidate.quotaScope,
-        prompt: defaultPrompt(item),
-        branch: item.branch,
-        base: args.base || (deps && deps.base) || 'main',
-        cwd: args.cwd || (deps && deps.cwd) || rootDir,
-        usageFile: usageFile,
-        checkpoint: checkpointFile,
-        maxAttempts: 1,
-        title: workerName(item.workItemId),
-        labels: {
-          workItem: item.workItemId,
-          role: item.role,
-          project: args.project || 'shipde-platform',
-        },
-      });
-
+      let launchArgs = null;
       try {
-        decisionsStore.recordDecision(
-          {
-            stage:
-              checkpoint && checkpoint.chosen
-                ? decisionsStore.Stage.RESUMED
-                : decisionsStore.Stage.LAUNCHED,
-            workItemId: item.workItemId,
+        launchArgs = adapter.launch({
+          candidateKey: finalChosenKey,
+          provider:
+            (route && route.provider) ||
+            finalChosenCandidate.source ||
+            finalChosenCandidate.upstream,
+          model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
+          accountId: finalChosenCandidate.accountId,
+          gateway: finalChosenCandidate.gateway || '',
+          upstream: finalChosenCandidate.upstream,
+          quotaScope: finalChosenCandidate.quotaScope,
+          prompt: defaultPrompt(item),
+          branch: item.branch,
+          base: args.base || (deps && deps.base) || 'main',
+          cwd: args.cwd || (deps && deps.cwd) || rootDir,
+          usageFile: usageFile,
+          checkpoint: checkpointFile,
+          maxAttempts: 1,
+          title: workerName(item.workItemId),
+          labels: {
+            workItem: item.workItemId,
             role: item.role,
-            chosen: finalChosenKey,
-            harness: harnessName,
-            branch: item.branch,
-            // The claim on the branch, written before the launch. It is a claim,
-            // not a handle: the durable session id is only knowable once the
-            // harness has written its report, and it is recorded on the line
-            // below. It was `process.pid` here, which is a Node process id and
-            // not a session — decisions.js then treated that value as the
-            // session to resume (audit section 4, Gap C).
-            sessionId: null,
-            worktree: args.cwd || rootDir,
-            area: item.area,
-            firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
-            selected: finalChosenKey,
-            excluded: lastDecision
-              ? (lastDecision.rejected || []).map((r) => ({
-                  candidateKey: r.offeringId,
-                  reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
-                  reason: r.reason,
-                }))
-              : [],
-            quota:
-              lastDecision && lastDecision.candidates
-                ? lastDecision.candidates.map((c) => ({
-                    candidateKey: c.offeringId,
-                    score: c.score,
-                    headroom: c.headroom,
-                  }))
-                : [],
-            resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
-            checkpoint: checkpointFile,
+            project: args.project || 'shipde-platform',
           },
-          { dir: decisionDir, now }
-        );
-      } catch (err) {
-        log('Failed to append LAUNCHED to decision log');
-        exit(1);
-        return { exitCode: 1, error: err };
-      }
-
-      try {
-        launchRes = launcher(adapter, launchArgs, {
-          cwd: args.cwd || rootDir,
-          // The pinned base the worker root is provisioned at (AI-64-R15).
-          baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
         });
       } catch (err) {
+        log('Harness launch preparation failed: ' + (err.message || String(err)));
         thrownError = err;
         launchRes = {
-          exitCode: err.exitCode !== undefined ? err.exitCode : -1,
+          exitCode: err.exitCode !== undefined ? err.exitCode : 1,
           stdout: '',
           stderr: err.stderr || err.message || String(err),
           error: err,
         };
+      }
+
+      if (launchArgs && !Array.isArray(launchArgs)) {
+        const reason =
+          launchArgs.reason || launchArgs.refusal || launchArgs.error || 'LAUNCH_REFUSED';
+        log('Harness launch refused: ' + reason);
+        thrownError = new Error(reason);
+        launchRes = {
+          exitCode: launchArgs.exitCode !== undefined ? launchArgs.exitCode : 1,
+          stdout: '',
+          stderr: reason,
+          error: thrownError,
+        };
+        launchArgs = null;
+      }
+
+      if (launchArgs) {
+        try {
+          decisionsStore.recordDecision(
+            {
+              stage:
+                checkpoint && checkpoint.chosen
+                  ? decisionsStore.Stage.RESUMED
+                  : decisionsStore.Stage.LAUNCHED,
+              workItemId: item.workItemId,
+              role: item.role,
+              chosen: finalChosenKey,
+              harness: harnessName,
+              branch: item.branch,
+              // The claim on the branch, written before the launch. It is a claim,
+              // not a handle: the durable session id is only knowable once the
+              // harness has written its report, and it is recorded on the line
+              // below. It was `process.pid` here, which is a Node process id and
+              // not a session — decisions.js then treated that value as the
+              // session to resume (audit section 4, Gap C).
+              sessionId: null,
+              worktree: args.cwd || rootDir,
+              area: item.area,
+              firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
+              selected: finalChosenKey,
+              excluded: lastDecision
+                ? (lastDecision.rejected || []).map((r) => ({
+                    candidateKey: r.offeringId,
+                    reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+                    reason: r.reason,
+                  }))
+                : [],
+              quota:
+                lastDecision && lastDecision.candidates
+                  ? lastDecision.candidates.map((c) => ({
+                      candidateKey: c.offeringId,
+                      score: c.score,
+                      headroom: c.headroom,
+                    }))
+                  : [],
+              resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+              checkpoint: checkpointFile,
+            },
+            { dir: decisionDir, now }
+          );
+        } catch (err) {
+          log('Failed to append LAUNCHED to decision log');
+          exit(1);
+          return { exitCode: 1, error: err };
+        }
+
+        try {
+          launchRes = launcher(adapter, launchArgs, {
+            cwd: args.cwd || rootDir,
+            // The pinned base the worker root is provisioned at (AI-64-R15).
+            baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
+          });
+        } catch (err) {
+          thrownError = err;
+          launchRes = {
+            exitCode: err.exitCode !== undefined ? err.exitCode : -1,
+            stdout: '',
+            stderr: err.stderr || err.message || String(err),
+            error: err,
+          };
+        }
       }
 
       if (deps && deps.rethrow && thrownError) {

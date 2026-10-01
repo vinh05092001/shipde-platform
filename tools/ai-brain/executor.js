@@ -397,9 +397,48 @@ function executePlan(plan, options) {
       title: workerName(a.workItemId),
       labels: { workItem: a.workItemId, role: a.role || 'unknown', project },
     };
-    record.args = resuming
-      ? adapter.resume(existing.sessionId, resumePrompt(a), job)
-      : adapter.launch(job);
+    let launchArgs;
+    try {
+      launchArgs = resuming
+        ? adapter.resume(existing.sessionId, resumePrompt(a), job)
+        : adapter.launch(job);
+    } catch (err) {
+      record.outcome = Outcome.FAILED;
+      record.detail = (err && err.message) || String(err);
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.FAILED,
+          workItemId: a.workItemId,
+          role: a.role,
+          chosen: record.offeringId,
+          harness: adapter.id,
+          branch: a.branch,
+          detail: record.detail,
+        },
+        logOpts
+      );
+      continue;
+    }
+
+    if (launchArgs && !Array.isArray(launchArgs)) {
+      record.outcome = Outcome.FAILED;
+      record.detail =
+        launchArgs.reason || launchArgs.refusal || launchArgs.error || 'LAUNCH_REFUSED';
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.FAILED,
+          workItemId: a.workItemId,
+          role: a.role,
+          chosen: record.offeringId,
+          harness: adapter.id,
+          branch: a.branch,
+          detail: record.detail,
+        },
+        logOpts
+      );
+      continue;
+    }
+    record.args = launchArgs;
 
     if (dryRun) {
       record.outcome = Outcome.DRY_RUN;
