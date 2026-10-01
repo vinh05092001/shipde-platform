@@ -1135,6 +1135,8 @@ function dispatchCommand(args, deps = {}) {
         path.join(__dirname, 'data', 'evidence'),
       decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
       now: deps && deps.now,
+      storePath: deps && deps.storePath,
+      home: deps && deps.home,
     });
   }
 

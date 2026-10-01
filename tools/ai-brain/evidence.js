@@ -280,7 +280,7 @@ function recordProbe(dir, candidate, item) {
       us.cause = classification.cause;
       us.scope = 'upstream';
       us.cooldownMs = classification.cooldownMs;
-      us.resetTime = classification.resetTime;
+      us.resetTime = cd.resetTime !== undefined ? cd.resetTime : classification.resetTime;
     }
   }
 

@@ -585,6 +585,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
 
   ranked.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    if (a.reservationsHeld !== b.reservationsHeld) return a.reservationsHeld - b.reservationsHeld;
     return a.candidateKey.localeCompare(b.candidateKey);
   });
 
@@ -717,7 +718,7 @@ function reportDispatchOutcome(args, deps) {
   };
   const now = d.now || Date.now();
   const passed = ['completed', 'passed', 'success'].includes(String(outcome.status).toLowerCase());
-  const failed = ['failed', 'error', 'aborted', 'refused'].includes(
+  const failed = ['failed', 'error', 'aborted', 'refused', 'timeout', 'cancelled'].includes(
     String(outcome.status).toLowerCase()
   );
   const terminal = passed || failed;
@@ -742,6 +743,18 @@ function reportDispatchOutcome(args, deps) {
       level: evidence.Level.API,
       source: 'report-outcome',
     });
+
+    const quotaStore = require('./quota-store');
+    const targetPath = quotaStore.storePath({ home: d.home, path: d.storePath });
+    quotaStore.releaseReservation(
+      outcome.taskId || outcome.workItemId || 'TASK-REPORT-OUTCOME',
+      outcome.candidateKey,
+      {
+        home: d.home,
+        path: targetPath,
+        now,
+      }
+    );
   }
 
   const recorded = {
