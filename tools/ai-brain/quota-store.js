@@ -170,7 +170,7 @@ function identityToCompare(reading, hostIdentity, resolvers) {
   // is discarded and the panel goes blank for a reason that is not true.
   const provider = reading && reading.provider;
   const resolve = (resolvers || PROVIDER_IDENTITY)[provider];
-  if (resolve) return resolve();
+  if (resolve) return resolve(reading);
 
   return hostIdentity;
 }
@@ -187,6 +187,7 @@ const PROVIDER_IDENTITY = {
   // its CLI is signed in as — see budgetFingerprint. Listing it here with a
   // file-based lookup would restore a check that cannot fail and cannot help.
   'claude-code': () => require('./claude-usage').readAccount({}),
+  'agy-pool': (reading) => reading && reading.account,
 };
 
 /**

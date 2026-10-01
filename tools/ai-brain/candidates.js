@@ -326,12 +326,32 @@ function generateCandidates(opts) {
     }
   }
 
+  candidates.push(...poolAccountCandidates(o));
+
+  return candidates;
+}
+
+/**
+ * Generate agy-pool candidates.
+ */
+function poolAccountCandidates(opts) {
+  const o = opts || {};
+  const accounts = o.accounts || [];
   const { familyOf } = require('./agy-quota');
   const poolModels = new Set();
+
   const native = accounts.find((a) => a.provider === 'antigravity' || a.id === 'agy-native-a');
   if (native) {
     for (const m of accountModels(native)) poolModels.add(m);
   }
+
+  const catalogue = o.catalogue || [];
+  for (const c of catalogue) {
+    if (c.upstream === 'antigravity' || c.source === 'antigravity') {
+      poolModels.add(c.modelId || c.model);
+    }
+  }
+
   if (o.evidenceData && o.evidenceData.combinations) {
     for (const combo of o.evidenceData.combinations) {
       if (combo.upstream === 'antigravity' || combo.source === 'antigravity') {
@@ -340,6 +360,7 @@ function generateCandidates(opts) {
     }
   }
 
+  const candidates = [];
   if (poolModels.size > 0) {
     for (let i = 1; i <= 10; i++) {
       const acc = 'agy' + String(i).padStart(2, '0');
@@ -361,7 +382,6 @@ function generateCandidates(opts) {
       }
     }
   }
-
   return candidates;
 }
 
@@ -562,6 +582,7 @@ module.exports = {
   accessPathOf,
   generateCandidates,
   gatewayAccountCandidates,
+  poolAccountCandidates,
   candidatesFromEvidence,
   mergeCandidates,
   annotateCandidates,

@@ -750,11 +750,18 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     resolvedRegistry,
     accounts,
     null,
-    candidatesApi.gatewayAccountCandidates({
-      registry: resolvedRegistry,
-      accounts: accounts || [],
-      catalogue: (discoveryCat && discoveryCat.candidates) || [],
-    })
+    [
+      ...candidatesApi.gatewayAccountCandidates({
+        registry: resolvedRegistry,
+        accounts: accounts || [],
+        catalogue: (discoveryCat && discoveryCat.candidates) || [],
+      }),
+      ...candidatesApi.poolAccountCandidates({
+        registry: resolvedRegistry,
+        accounts: accounts || [],
+        catalogue: (discoveryCat && discoveryCat.candidates) || [],
+      })
+    ]
   );
 }
 

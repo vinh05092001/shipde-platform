@@ -36,8 +36,9 @@ Changes required:
 
 ## Verification evidence
 
-- See `ai68-result.txt` for commit details and test results.
+- The test results and dry run log will be written to `ai68-result.txt` in the root of the worktree and committed.
 
 ## Known limitations
 
-- None.
+- The account discovery regex `/^agy\d+$/` in `refresh-quota.js` accepts any number (e.g. `agy99`), but candidate generation emits only `agy01` to `agy10`. Quota may be read for accounts that the Controller can never dispatch.
+- A quota rejection is reported as retryable because `structuredOutcome` derives `retryable` from `cooldownMs`, and `mapOutcome` only supplies `cooldownUntil`.

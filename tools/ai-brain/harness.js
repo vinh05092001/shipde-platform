@@ -268,13 +268,20 @@ const agyPool = {
     const dir = (opts && opts.fakeRunsDir) || 'C:\\Tools\\agy-runs';
     const accountDir = path.join(dir, job.accountId);
     fs.mkdirSync(accountDir, { recursive: true });
-    
+
     fs.writeFileSync(path.join(accountDir, 'job.json'), JSON.stringify({
       cwd: job.cwd,
       prompt: job.prompt,
-      model: job.model
+      model: job.model,
+      candidateKey: job.candidateKey,
+      accountId: job.accountId,
+      harness: 'agy-pool'
     }));
-    
+
+    if (job.usageFile) {
+      fs.writeFileSync(job.usageFile, JSON.stringify({ accountId: job.accountId }));
+    }
+
     return ['/run', '/tn', `ShipDe\\ShipDe-${job.accountId}`];
   },
   resume(sessionId, prompt, job, opts) {
@@ -283,8 +290,8 @@ const agyPool = {
   stop(sessionId) {
     return ['/end', '/tn', `ShipDe\\ShipDe-${sessionId}`];
   },
-  sessionIdFrom() {
-    return null;
+  sessionIdFrom(parsed) {
+    return parsed && parsed.accountId ? String(parsed.accountId) : null;
   },
   mapOutcome(accountId, candidateKey, opts) {
     const fs = require('fs');
@@ -292,12 +299,12 @@ const agyPool = {
     const dir = (opts && opts.fakeRunsDir) || 'C:\\Tools\\agy-runs';
     const resFile = path.join(dir, accountId, 'result.json');
     if (!fs.existsSync(resFile)) return structuredOutcome(candidateKey, { exitCode: 1 }, { cause: 'UNKNOWN_STATE' }, { status: 'failed' });
-    
+
     let res;
     try { res = JSON.parse(fs.readFileSync(resFile, 'utf8')); } catch (e) {
       return structuredOutcome(candidateKey, { exitCode: 1 }, { cause: 'CORRUPT_RESULT' }, { status: 'failed' });
     }
-    
+
     if (res.state === 'ok') {
       return structuredOutcome(candidateKey, { exitCode: res.exitCode || 0 }, null, { status: 'completed' });
     } else if (res.state === 'quota') {

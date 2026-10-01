@@ -610,31 +610,34 @@ describe('candidate generation', () => {
 
     test('a quota result with 0% excludes that account until reset', () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-quota-test-'));
+      const storePath = path.join(dir, 'quota-store.json');
       const accDir = path.join(dir, 'agy02');
       fs.mkdirSync(accDir, { recursive: true });
       fs.writeFileSync(path.join(accDir, 'result.json'), JSON.stringify({ state: 'ok' }));
-      fs.writeFileSync(path.join(accDir, 'out.txt'), JSON.stringify({
-        available: true,
-        rows: [{ family: 'gemini', window: '5h', percent: 0, resetsAt: '2026-09-14T12:56:43Z' }]
+      fs.writeFileSync(path.join(accDir, 'quota.json'), JSON.stringify({
+        groups: [{ id: 'gemini', fiveHour: { remaining: 0, resetAt: '2026-09-14T12:56:43Z' } }]
       }));
 
-      const res = refreshQuota.refreshAccount({ id: 'agy02', provider: 'agy-pool' }, { fakeRunsDir: dir });
+      const res = refreshQuota.refreshAccount({ id: 'agy02', provider: 'agy-pool' }, { fakeRunsDir: dir, path: storePath });
       assert.equal(res.ok, true);
       assert.equal(res.rows, 1);
+
+      const { usableReadings } = require('../quota-store');
+      const { resolveCandidateHeadroom } = require('../ranking');
+      const readings = usableReadings({ email: 'host' }, { path: storePath }).reported;
       
-      const quotaReader = refreshQuota.READERS['agy-pool'];
-      const rawQuota = quotaReader.read({ id: 'agy02' }, { fakeRunsDir: dir });
-      assert.equal(rawQuota.available, true);
-      assert.equal(rawQuota.rows[0].percent, 0);
+      const headroom = resolveCandidateHeadroom({ accountId: 'agy02', modelId: 'gemini-3.1-pro' }, { headrooms: readings });
+      assert.equal(headroom.status, 'exhausted');
     });
 
     test('login-required excluded', () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-quota-test2-'));
+      const storePath = path.join(dir, 'quota-store.json');
       const accDir = path.join(dir, 'agy03');
       fs.mkdirSync(accDir, { recursive: true });
       fs.writeFileSync(path.join(accDir, 'result.json'), JSON.stringify({ state: 'login-required' }));
 
-      const res = refreshQuota.refreshAccount({ id: 'agy03', provider: 'agy-pool' }, { fakeRunsDir: dir });
+      const res = refreshQuota.refreshAccount({ id: 'agy03', provider: 'agy-pool' }, { fakeRunsDir: dir, path: storePath });
       assert.equal(res.ok, false);
       assert.equal(res.reason, 'AUTH_FAILED');
     });

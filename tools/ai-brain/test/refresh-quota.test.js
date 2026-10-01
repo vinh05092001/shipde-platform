@@ -106,7 +106,7 @@ describe('Refreshing every account', () => {
         { id: 'acc-a', provider: 'antigravity' },
         { id: 'router', provider: '9router' },
       ],
-      { path: p, identity: ME, readQuota: () => OK, fakeRunsDir: p }
+      { path: p, identity: ME, readQuota: () => OK, fakeRunsDir: fs.mkdtempSync(path.join(os.tmpdir(), 'agy-runs-')) }
     );
     assert.equal(out.length, 2);
     assert.equal(out[0].ok, true);
@@ -122,10 +122,10 @@ describe('Refreshing every account', () => {
 
     // Write fake results so they can be read
     fs.writeFileSync(path.join(runDir, 'agy01', 'result.json'), JSON.stringify({ state: 'ok' }));
-    fs.writeFileSync(path.join(runDir, 'agy01', 'out.txt'), JSON.stringify({ rows: [] }));
+    fs.writeFileSync(path.join(runDir, 'agy01', 'quota.json'), JSON.stringify({ groups: [] }));
 
     fs.writeFileSync(path.join(runDir, 'agy02', 'result.json'), JSON.stringify({ state: 'login-required' }));
-    fs.writeFileSync(path.join(runDir, 'agy02', 'out.txt'), '');
+    fs.writeFileSync(path.join(runDir, 'agy02', 'quota.json'), '');
 
     const out = refreshAll([], { path: p, fakeRunsDir: runDir });
 

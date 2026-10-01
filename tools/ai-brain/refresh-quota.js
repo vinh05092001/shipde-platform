@@ -67,14 +67,14 @@ const READERS = {
       const path = require('path');
       const dir = (opts && opts.fakeRunsDir) || 'C:\\Tools\\agy-runs';
       const resultFile = path.join(dir, account.id, 'result.json');
-      const outFile = path.join(dir, account.id, 'out.txt');
+      const quotaFile = path.join(dir, account.id, 'quota.json');
 
       if (!fs.existsSync(resultFile)) {
         return { available: false, reason: 'không có result.json' };
       }
       let result;
       try {
-        result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+        result = JSON.parse(fs.readFileSync(resultFile, 'utf8').replace(/^\uFEFF/, ''));
       } catch (e) {
         return { available: false, reason: 'result.json hỏng' };
       }
@@ -86,26 +86,48 @@ const READERS = {
         return { available: false, reason: result.state || 'failed' };
       }
 
-      if (!fs.existsSync(outFile)) {
-        return { available: false, reason: 'không có out.txt' };
+      if (!fs.existsSync(quotaFile)) {
+        return { available: false, reason: 'không có quota.json' };
       }
 
-      const outText = fs.readFileSync(outFile, 'utf8');
-      let outJson;
+      const quotaText = fs.readFileSync(quotaFile, 'utf8').replace(/^\uFEFF/, '');
+      let quotaJson;
       try {
-        outJson = JSON.parse(outText);
+        quotaJson = JSON.parse(quotaText);
       } catch (e) {
-        return { available: false, reason: 'out.txt không phải json hợp lệ' };
+        return { available: false, reason: 'quota.json không phải json hợp lệ' };
       }
 
-      if (outJson && Array.isArray(outJson.rows)) {
+      if (quotaJson && Array.isArray(quotaJson.groups)) {
+        const rows = [];
+        for (const g of quotaJson.groups) {
+          const family = g.id;
+          if (g.fiveHour) {
+             rows.push({
+               family,
+               window: '5h',
+               remainingPercent: g.fiveHour.remaining !== undefined ? Math.round(g.fiveHour.remaining * 100) : 0,
+               disabled: false,
+               resetsAt: g.fiveHour.resetAt
+             });
+          }
+          if (g.weekly) {
+             rows.push({
+               family,
+               window: 'weekly',
+               remainingPercent: g.weekly.remaining !== undefined ? Math.round(g.weekly.remaining * 100) : 0,
+               disabled: false,
+               resetsAt: g.weekly.resetAt
+             });
+          }
+        }
         return {
           available: true,
-          rows: outJson.rows,
+          rows: rows,
           account: { known: true, email: account.id, source: 'pool' }
         };
       }
-      return { available: false, reason: 'out.txt thiếu rows' };
+      return { available: false, reason: 'quota.json thiếu groups' };
     }
   },
   'claude-code': {
