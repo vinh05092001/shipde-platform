@@ -392,7 +392,7 @@ function gatewayAccountCandidates(opts) {
     // names; the access path is the CLI the provider is reached through.
     // Both come from the registry, so a new gateway needs no branch here.
     const harness = route.harness;
-    const accessPath = source.accessPath || route.provider || '';
+    const accessPath = accessPathOf(source, registry) || '';
     if (!harness || !accessPath) continue;
 
     for (const row of catalogue) {

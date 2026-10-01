@@ -1419,3 +1419,36 @@ test('64-27 an ask that throws leaves the Controller selecting, and the advisory
     'the throw must surface as the real path records it: ' + JSON.stringify(record.jev.reasonCodes)
   );
 });
+
+test('64-28 isolated launch never passes --new-workspace/--worktree-mode and requires worker cwd (OBSERVATION C)', () => {
+  const { HARNESSES } = require('../harness');
+  const paseo = HARNESSES.paseo;
+  const assert = require('assert');
+
+  let threw = false;
+  try {
+    paseo.launch({ isolatedWorker: true, provider: 'opencode', cwd: 'C:\\Users\\gumac\\outside' });
+  } catch (err) {
+    threw = true;
+    assert.match(err.message, /ISOLATED_LAUNCH_REQUIRES_WORKER_HARNESS/);
+  }
+  assert.equal(threw, true, 'must refuse if cwd is outside worker root');
+
+  const args = paseo.launch({
+    isolatedWorker: true,
+    provider: 'opencode',
+    cwd: 'C:\\ShipDeWorker\\job',
+    branch: 'feat/test',
+  });
+  assert.ok(!args.includes('--new-workspace'), 'must not pass --new-workspace for isolated launch');
+  assert.ok(!args.includes('--worktree-mode'), 'must not pass --worktree-mode for isolated launch');
+});
+
+test('64-29 cli passes exercise option to orchestrate', () => {
+  const assert = require('assert');
+  const src = require('fs').readFileSync(__dirname + '/../cli.js', 'utf8');
+  assert.ok(
+    /exercise:\s*typeof args\.exercise === 'string' \? args\.exercise : null/.test(src),
+    'cli.js must wire args.exercise to runOrchestration'
+  );
+});

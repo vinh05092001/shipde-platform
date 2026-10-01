@@ -146,7 +146,7 @@ function inspectVerdict(res) {
  */
 function readSessionId(adapter, job, res) {
   const reportPath = job && typeof job.usageFile === 'string' ? job.usageFile : null;
-  if (reportPath) {
+  if (reportPath && adapter.writesUsageReport) {
     const fs = require('fs');
     if (!fs.existsSync(reportPath)) return { id: null, cause: 'HARNESS_USAGE_REPORT_MISSING' };
     let report;
@@ -386,6 +386,7 @@ function executePlan(plan, options) {
       branch: isReview ? null : a.branch,
       base: opts.base || 'main',
       cwd: opts.cwd,
+      isolatedWorker: Boolean(opts.isolatedWorker),
       usageFile: usageReportPath(opts, a),
       title: workerName(a.workItemId),
       labels: { workItem: a.workItemId, role: a.role || 'unknown', project },

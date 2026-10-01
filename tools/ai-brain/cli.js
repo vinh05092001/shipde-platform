@@ -659,10 +659,13 @@ function assembleCandidates(
       registry.sources.find((s) => s.id === off.provider || s.id === off.accountId);
     const harness =
       off.harness || (route && route.harness) || (source && source.harness) || 'paseo';
-    let accessPath = off.accessPath || (source && (source.accessPath || source.endpoint));
-    if (!accessPath) {
-      accessPath = route && route.harness === 'paseo' ? 'http://127.0.0.1:20128/v1' : 'cli';
+    let accessPath =
+      off.accessPath || (source ? candidatesApi.accessPathOf(source, registry) : null);
+    if (!accessPath && typeof off.accountId === 'string') {
+      const parts = off.accountId.split('::');
+      if (parts.length >= 7) accessPath = parts[1];
     }
+    if (!accessPath) accessPath = 'cli';
     // The gateway is derived from the registry, never from a name written here.
     // An offering whose provider is a gateway IS that gateway; one whose
     // provider declares a `reachedVia` rides it. When the registry says neither,
@@ -2225,6 +2228,7 @@ function main() {
       branch: typeof args.branch === 'string' ? args.branch : null,
       cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
       workerRoot: typeof args['worker-root'] === 'string' ? args['worker-root'] : null,
+      exercise: typeof args.exercise === 'string' ? args.exercise : null,
       reviewBudget: args['review-budget'],
       publication: args.publish
         ? {

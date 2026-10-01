@@ -44,6 +44,13 @@ const paseo = {
   id: 'paseo',
   command: 'paseo',
   launch(job) {
+    if (job.isolatedWorker) {
+      const { isWorkerPath } = require('./isolation-launcher');
+      if (!isWorkerPath(job.cwd)) {
+        throw new Error('ISOLATED_LAUNCH_REQUIRES_WORKER_HARNESS');
+      }
+      job.newWorkspace = false;
+    }
     const args = ['run', '--provider', job.provider];
     if (job.model) args.push('--model', job.model);
     args.push('--mode', job.mode || 'full-access');
@@ -174,6 +181,7 @@ const hermes = {
   progressFromInspect(parsed, options) {
     return progressVerdict(parsed, options);
   },
+  writesUsageReport: true,
 };
 
 const MIN_CONTEXT = Object.freeze({ hermes: 32000 });
