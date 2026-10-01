@@ -184,6 +184,29 @@ const hermes = {
   writesUsageReport: true,
 };
 
+const opencodeDirect = {
+  id: 'opencode-direct',
+  command: 'opencode',
+  launch(job) {
+    if (!job.isolatedWorker) throw new Error('OPENCODE_DIRECT_REQUIRES_ISOLATION');
+    const args = ['run', '--provider', job.provider];
+    if (job.model) args.push('--model', job.model);
+    args.push('--mode', job.mode || 'full-access');
+    if (job.title) args.push('--title', job.title);
+    for (const [k, v] of Object.entries(job.labels || {})) args.push('--label', k + '=' + v);
+    if (job.usageFile) args.push('--report-outcome', job.usageFile);
+    args.push(job.prompt);
+    return args;
+  },
+  resume: null,
+  stop: null,
+  inspect: null,
+  sessionIdFrom() {
+    return null;
+  },
+  writesUsageReport: true,
+};
+
 const MIN_CONTEXT = Object.freeze({ hermes: 32000 });
 
 function contextRefusal(harnessName, contextWindow) {
@@ -267,7 +290,7 @@ function structuredOutcome(candidateKey, res, classification, extra) {
   };
 }
 
-const HARNESSES = Object.freeze({ paseo, cline, hermes });
+const HARNESSES = Object.freeze({ paseo, cline, hermes, 'opencode-direct': opencodeDirect });
 
 function pickId(obj) {
   if (!obj || typeof obj !== 'object') return null;

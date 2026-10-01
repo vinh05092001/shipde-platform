@@ -85,11 +85,14 @@ function resumePrompt(assignment) {
 function resolveRoute(assignment, options, registry) {
   const opts = options || {};
   const route = dispatchRoute(assignment.provider, registry);
-  const harnessName =
+  let harnessName =
     assignment.harness ||
     (typeof opts.harnessFor === 'function' ? opts.harnessFor(assignment) : null) ||
     (route && route.harness) ||
     null;
+  if (opts.isolatedWorker && harnessName === 'paseo') {
+    harnessName = 'opencode-direct';
+  }
   if (!harnessName) return null;
   return {
     harnessName,
@@ -145,6 +148,9 @@ function inspectVerdict(res) {
  * a value that is not a session cannot be resumed.
  */
 function readSessionId(adapter, job, res) {
+  if (adapter.id === 'opencode-direct') {
+    return { id: res.completionNonce || null, cause: 'HARNESS_NO_SESSION_ID' };
+  }
   const reportPath = job && typeof job.usageFile === 'string' ? job.usageFile : null;
   if (reportPath && adapter.writesUsageReport) {
     const fs = require('fs');

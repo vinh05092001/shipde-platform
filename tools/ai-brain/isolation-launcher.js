@@ -289,7 +289,7 @@ $psi.EnvironmentVariables.Clear()
 # call operator falls off the CreateProcess path for an absolute .exe, returns
 # before the job ran and leaves the payload orphaned — a green result for a
 # job that never finished.
-$allowed = @("PATH", "SystemRoot", "SystemDrive", "ALLUSERSPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "CommonProgramFiles(x86)", "PUBLIC", "PATHEXT")
+$allowed = @("PATH", "SystemRoot", "SystemDrive", "ALLUSERSPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "CommonProgramFiles(x86)", "PUBLIC", "PATHEXT", "NINEROUTER_API_KEY")
 foreach ($key in $allowed) {
     if ([Environment]::GetEnvironmentVariable($key)) {
         $psi.EnvironmentVariables[$key] = [Environment]::GetEnvironmentVariable($key)
@@ -545,6 +545,19 @@ function getIsolatedLauncher() {
     });
     if (checkoutRes.status !== 0) throw new Error('Failed to checkout HEAD SHA in worker root');
 
+    if (adapter.id === 'opencode-direct') {
+      const configPath = path.join(workerRoot, '.opencode.json');
+      const configData = JSON.stringify({
+        endpoints: {
+          '9router': {
+            url: 'http://127.0.0.1:20128/v1',
+            apiKey: '{env:NINEROUTER_API_KEY}',
+          },
+        },
+      });
+      fs.writeFileSync(configPath, configData, 'utf8');
+    }
+
     const credPath = path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'WorkerUser.cred');
 
     const exe = executableFor(adapter.command, opts);
@@ -662,6 +675,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
     stdout: String(resJson.stdout || ''),
     stderr: String(resJson.stderr || ''),
     timedOut: false,
+    completionNonce: resJson.completionNonce,
   };
 }
 

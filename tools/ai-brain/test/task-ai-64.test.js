@@ -1546,3 +1546,110 @@ test('64-31 candidates gateway uses accessPathOf to resolve router endpoint (DEF
     'accessPath must be the router endpoint, not the provider name'
   );
 });
+
+test('64-32 isolated launch uses direct adapter without key material in argv or config; non-isolated uses paseo', () => {
+  const assert = require('assert');
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+  const { resolveRoute, readSessionId } = require('../executor');
+  const isoModule = require('../isolation-launcher');
+  const { getHarness } = require('../harness');
+
+  const registry = {
+    dispatch: {
+      providers: {
+        opencode: { provider: 'opencode', harness: 'paseo' },
+      },
+    },
+  };
+
+  // non-isolated
+  let route = resolveRoute({ provider: 'opencode' }, { isolatedWorker: false }, registry);
+  assert.equal(route.harnessName, 'paseo', 'non-isolated launch still uses paseo');
+
+  // isolated
+  route = resolveRoute({ provider: 'opencode' }, { isolatedWorker: true }, registry);
+  assert.equal(
+    route.harnessName,
+    'opencode-direct',
+    'isolated launch uses the direct adapter and never the paseo daemon'
+  );
+
+  const adapter = getHarness(route.harnessName);
+  assert.equal(adapter.id, 'opencode-direct');
+
+  const args = adapter.launch({
+    isolatedWorker: true,
+    provider: 'opencode',
+    model: 'test-model',
+    mode: 'full-access',
+    prompt: 'hello',
+  });
+
+  const argsStr = args.join(' ');
+  assert.ok(!argsStr.includes('API_KEY'), 'argv contains no key');
+
+  // Test isolation launcher config generation
+  const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-cfg-'));
+  const verdictPath = path.join(tmpCwd, 'verdict.json');
+  fs.writeFileSync(
+    verdictPath,
+    JSON.stringify({
+      verdict: 'CLOSED',
+      worktree: tmpCwd,
+      timestamp: Date.now() + 10000,
+      policyHash: isoModule.getFolderHash(path.join(tmpCwd, 'scripts/ai/isolation')),
+      sid: 'TEST-SID',
+      details: { a: 'PASS' },
+    })
+  );
+
+  const cp = require('child_process');
+  const realSpawn = cp.spawnSync;
+
+  try {
+    fs.mkdirSync(path.join(tmpCwd, 'scripts/ai/isolation'), { recursive: true });
+    const runIso = isoModule.getIsolatedLauncher();
+
+    cp.spawnSync = (cmd, cargs, opts) => {
+      if (cmd === 'git') return { status: 0 };
+      if (cmd === 'powershell.exe') return { status: 0, stdout: '' };
+      return realSpawn(cmd, cargs, opts);
+    };
+
+    try {
+      runIso(adapter, args, {
+        cwd: tmpCwd,
+        verdictPath: verdictPath,
+        getWorkerSid: () => 'TEST-SID',
+        verifyBoundary: () => true,
+        baseSha: '0123456789012345678901234567890123456789',
+        workerTimeoutMs: 1000,
+      });
+    } catch (e) {
+      // Read failure from missing launch result file is expected
+    }
+
+    const workerRoot = isoModule.workerRootFor(tmpCwd);
+    const cfgPath = path.join(workerRoot, '.opencode.json');
+    assert.ok(fs.existsSync(cfgPath), 'generated config must exist');
+    const cfgText = fs.readFileSync(cfgPath, 'utf8');
+    assert.ok(!cfgText.includes('sk-'), 'generated config contains no literal key material');
+    assert.ok(
+      cfgText.includes('{env:NINEROUTER_API_KEY}'),
+      'only an env reference exists in config'
+    );
+
+    // Also test that completionNonce is preserved
+    const res = {
+      exitCode: 0,
+      stdout: '{"completed":true,"completionNonce":"my-nonce"}',
+      completionNonce: 'my-nonce',
+    };
+    const idRes = readSessionId(adapter, {}, res);
+    assert.equal(idRes.id, 'my-nonce', 'session handle is the launcher job completion nonce');
+  } finally {
+    cp.spawnSync = realSpawn;
+  }
+});
