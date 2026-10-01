@@ -102,7 +102,12 @@ function getActiveReservations(ctx) {
       now: ctx && ctx.now,
     };
     const resMap = quotaStore.getReservations(lockOpts);
-    const resList = Object.values(resMap || {});
+    const now = lockOpts.now || Date.now();
+    const resList = Object.values(resMap || {}).filter((r) => {
+      const at = typeof r.at === 'number' ? r.at : Date.parse(r.at);
+      const isExpired = !Number.isFinite(at) || now - at > 2 * 60 * 1000 || at > now + 60 * 1000;
+      return !isExpired;
+    });
     if (ctx) ctx._cachedReservations = resList;
     return resList;
   } catch {

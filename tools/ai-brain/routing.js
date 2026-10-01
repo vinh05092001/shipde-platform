@@ -585,6 +585,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
 
   ranked.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    if (a.reservationsHeld !== b.reservationsHeld) return a.reservationsHeld - b.reservationsHeld;
     return a.candidateKey.localeCompare(b.candidateKey);
   });
 
@@ -708,7 +709,7 @@ function reportDispatchOutcome(args, deps) {
   };
   const now = d.now || Date.now();
   const passed = ['completed', 'passed', 'success'].includes(String(outcome.status).toLowerCase());
-  const failed = ['failed', 'error', 'aborted', 'refused'].includes(
+  const failed = ['failed', 'error', 'aborted', 'refused', 'timeout', 'cancelled'].includes(
     String(outcome.status).toLowerCase()
   );
   const terminal = passed || failed;
@@ -728,10 +729,17 @@ function reportDispatchOutcome(args, deps) {
       // The reporter observed when this budget clears. Passing it through is what
       // keeps "quota exhausted until 01:55" from decaying into a five-minute
       // cooldown the classifier scraped out of a message.
-      cooldownUntil:
-        failed && outcome.cooldownUntil !== undefined ? outcome.cooldownUntil : undefined,
+      cooldownUntil: outcome.cooldownUntil !== undefined ? outcome.cooldownUntil : undefined,
       level: evidence.Level.API,
       source: 'report-outcome',
+    });
+
+    const quotaStore = require('./quota-store');
+    const storePath = d.storePath || path.join(rootDir, '.slate', 'ai-brain', 'quota.json');
+    quotaStore.releaseReservation(outcome.taskId || outcome.workItemId || 'TASK-REPORT-OUTCOME', outcome.candidateKey, {
+      home: d.home,
+      storePath,
+      now
     });
   }
 
