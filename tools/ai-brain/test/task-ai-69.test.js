@@ -734,4 +734,155 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
     assert.equal(submitRes.state, 'error');
     assert.doesNotMatch(submitRes.reason, /ADAPTER_TIMEOUT/);
   });
+
+  test('R7: real agy quota output format (JSON wrapper -> response -> TSV rows) is parsed through CLI quota command', () => {
+    const root = tmpDir('ai69-real-format-');
+    const runsDir = path.join(root, 'agy-runs');
+    const home = path.join(root, 'home');
+    fs.mkdirSync(path.join(home, 'Temp'), { recursive: true });
+
+    // 1. Direct unit verification on real fixture
+    const { parseQuotaOutput } = require('../agy-pool-runtime');
+    const { parseQuota, headroomFor, statusFrom } = require('../agy-quota');
+    const realFixturePath = path.join(__dirname, 'fixtures', 'agy01-real-quota-out.json');
+    const realFixtureJson = fs.readFileSync(realFixturePath, 'utf8');
+    const realFixture = JSON.parse(realFixtureJson);
+
+    // Verify fixture does not contain conversation_id
+    assert.equal(realFixture.conversation_id, undefined);
+
+    const directParsed = parseQuotaOutput(realFixtureJson);
+    assert.equal(directParsed.available, true);
+    assert.equal(directParsed.rows.length, 4);
+    assert.deepEqual(directParsed.rows, [
+      {
+        family: 'gemini',
+        window: 'weekly',
+        remainingPercent: 85,
+        known: true,
+        disabled: false,
+        resetsAt: '2026-10-08T08:45:02Z',
+      },
+      {
+        family: 'gemini',
+        window: 'fiveHour',
+        remainingPercent: 100,
+        known: true,
+        disabled: false,
+        resetsAt: '2026-10-02T01:26:02Z',
+      },
+      {
+        family: 'claude-gpt',
+        window: 'weekly',
+        remainingPercent: 100,
+        known: true,
+        disabled: false,
+        resetsAt: '2026-10-08T20:26:02Z',
+      },
+      {
+        family: 'claude-gpt',
+        window: 'fiveHour',
+        remainingPercent: 100,
+        known: true,
+        disabled: false,
+        resetsAt: '2026-10-02T01:26:02Z',
+      },
+    ]);
+
+    const agyParsed = parseQuota(realFixtureJson);
+    assert.equal(agyParsed.available, true);
+    assert.equal(agyParsed.rows.length, 4);
+
+    const geminiHr = headroomFor(directParsed, 'gemini-3.8-flash-high');
+    assert.equal(geminiHr.known, true);
+    assert.equal(geminiHr.remainingPercent, 85);
+    assert.equal(geminiHr.window, 'weekly');
+    assert.equal(statusFrom(geminiHr), 'open');
+
+    // 2. Set up accounts in pool runtime:
+    // agy01: real fixture (4 rows, open)
+    // agy02: real format with unparseable TSV row -> UNKNOWN (1 row)
+    // agy03: real format with 0% remaining -> QUOTA_EXHAUSTED (1 row)
+    fs.mkdirSync(path.join(runsDir, 'agy01'), { recursive: true });
+    fs.mkdirSync(path.join(runsDir, 'agy02'), { recursive: true });
+    fs.mkdirSync(path.join(runsDir, 'agy03'), { recursive: true });
+
+    const adapterScript = writePoolAdapter(root);
+
+    writeJson(path.join(runsDir, 'agy01', 'quota-state.json'), {
+      result: { state: 'ok', exitCode: 0 },
+      out: realFixture,
+    });
+
+    writeJson(path.join(runsDir, 'agy02', 'quota-state.json'), {
+      result: { state: 'ok', exitCode: 0 },
+      out: {
+        status: 'SUCCESS',
+        response: 'Gemini Models\tWeekly Limit Remaining\tN/A\t2026-10-08T08:45:02Z\n',
+      },
+    });
+
+    writeJson(path.join(runsDir, 'agy03', 'quota-state.json'), {
+      result: { state: 'ok', exitCode: 0 },
+      out: {
+        status: 'SUCCESS',
+        response: 'Gemini Models\tWeekly Limit Remaining\t0%\t2026-10-08T08:45:02Z\n',
+      },
+    });
+
+    const env = envFor(home, runsDir, adapterScript);
+
+    // 3. CLI quota refresh
+    const quotaRes = runCli(
+      ['quota', '--pool-runtime-dir', runsDir, '--pool-adapter-script', adapterScript],
+      env,
+      root
+    );
+    const quotaOut = quotaRes.stdout + quotaRes.stderr;
+    assert.equal(quotaRes.status, 0, quotaOut);
+    assert.match(quotaOut, /ĐỌC ĐƯỢC agy01 — 4 dòng/);
+    assert.match(quotaOut, /ĐỌC ĐƯỢC agy02 — 1 dòng/);
+    assert.match(quotaOut, /HỎNG\s+agy03\s+—\s+QUOTA_EXHAUSTED/);
+
+    // 4. CLI quota --json
+    const jsonRes = runCli(
+      ['quota', '--json', '--pool-runtime-dir', runsDir, '--pool-adapter-script', adapterScript],
+      env,
+      root
+    );
+    assert.equal(jsonRes.status, 0, jsonRes.stderr);
+    const jsonParsed = JSON.parse(jsonRes.stdout);
+    const agy01Json = jsonParsed.results.find((r) => r.accountId === 'agy01');
+    const agy02Json = jsonParsed.results.find((r) => r.accountId === 'agy02');
+    const agy03Json = jsonParsed.results.find((r) => r.accountId === 'agy03');
+    assert.equal(agy01Json.ok, true);
+    assert.equal(agy01Json.rows, 4);
+    assert.equal(agy02Json.ok, true);
+    assert.equal(agy02Json.rows, 1);
+    assert.equal(agy03Json.ok, false);
+    assert.equal(agy03Json.reason, 'QUOTA_EXHAUSTED');
+
+    // 5. CLI quota --show
+    const showRes = runCli(
+      ['quota', '--show', '--pool-runtime-dir', runsDir, '--pool-adapter-script', adapterScript],
+      env,
+      root
+    );
+    const showOut = showRes.stdout + showRes.stderr;
+    assert.equal(showRes.status, 0, showOut);
+    assert.match(showOut, /agy01\s+gemini\s+weekly\s+85%/);
+    assert.match(showOut, /agy01\s+gemini\s+fiveHour\s+100%/);
+    assert.match(showOut, /agy01\s+claude-gpt\s+weekly\s+100%/);
+    assert.match(showOut, /agy01\s+claude-gpt\s+fiveHour\s+100%/);
+    assert.match(showOut, /agy02\s+gemini\s+weekly\s+UNKNOWN/);
+    assert.match(showOut, /agy03\s+gemini\s+weekly\s+0%/);
+
+    // 6. Quota cache inspection
+    const { usableReadings } = require('../quota-store');
+    const { reported } = usableReadings({ known: true, email: 'test@example.com' }, { home });
+    assert.ok(reported.agy01);
+    assert.equal(reported.agy01.rows.length, 4);
+    assert.equal(reported.agy01.rows[0].remainingPercent, 85);
+    assert.equal(reported.agy01.rows[0].resetsAt, '2026-10-08T08:45:02Z');
+  });
 });
