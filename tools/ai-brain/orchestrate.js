@@ -399,7 +399,7 @@ function buildProfile(item, o, forbiddenFailureDomains) {
   };
 }
 
-function selectCandidateForProfile(
+async function selectCandidateForProfile(
   item,
   annotatedCandidates,
   forbiddenDomains,
@@ -409,26 +409,14 @@ function selectCandidateForProfile(
   now
 ) {
   const profile = buildProfile(item, o, forbiddenDomains);
-  const fallbackId = routing.controllerFallbackProfile(profile);
-  const jevOutcome = require('./jev').Outcome;
-  const assessment = {
-    jevOutcome: jevOutcome ? jevOutcome.UNDECIDED : 'UNDECIDED',
-    decidedBy: 'controller',
-    weightProfile: fallbackId,
-    weights: routing.WEIGHT_PROFILES[fallbackId],
-    taskClass: 'standard',
-    difficulty: profile.complexity,
-    latencyPriority: profile.latencyPriority,
-    recommendedModelClass:
-      fallbackId === 'LATENCY_FIRST'
-        ? 'fast'
-        : fallbackId === 'QUALITY_FIRST'
-          ? 'high-quality'
-          : 'balanced',
-    confidence: 0,
-    reasonCodes: ['JEV_UNDECIDED:UNKNOWN', 'WEIGHTS_' + fallbackId + '_CONTROLLER_FALLBACK'],
-    reason: null,
-  };
+
+  // The weighting assessment is the Controller's own, obtained through the real
+  // JEV path — routing.assessTask -> jev.adviseOrReason — and never hand-built
+  // here. `o.jevAsk` is the only injection point and is undefined by default, so
+  // a live run with no advisory is UNDECIDED/UNREACHABLE and the Controller's
+  // deterministic per-role fallback decides (AI-64-P01). The ask is asked about
+  // weighting profiles only, never a model, provider or account.
+  const assessment = await routing.assessTask(profile, { ask: o.jevAsk });
 
   const rankCtx = {
     now,
@@ -478,10 +466,13 @@ function selectCandidateForProfile(
  *   specs, specText, candidates, registry, run, isolatedWorker, tests, reviewer,
  *   repairer, reviewerIdentity, sha, baseSha, base, branch, cwd, workerRoot,
  *   usageDir, reviewBudget, decisionDir, checkpointFile, out, now, publication,
- *   ranking (Controller ranking inputs: headrooms, load, reservations, ...)
+ *   ranking (Controller ranking inputs: headrooms, load, reservations, ...),
+ *   jevAsk (optional JEV advisory; absent means the Controller decides)
  * }
+ * @returns a promise for the run record: the JEV assessment is an async call, so
+ *   the loop is too.
  */
-function runOrchestration(goal, opts) {
+async function runOrchestration(goal, opts) {
   const o = opts || {};
   const now = o.now || Date.now();
   const log = buildDefaults();
@@ -629,7 +620,7 @@ function runOrchestration(goal, opts) {
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
       //    launch, with the ranking inputs it was made from (AI-64-R03).
-      const decision = selectCandidateForProfile(
+      const decision = await selectCandidateForProfile(
         item,
         candidates,
         forbiddenDomains,
@@ -839,7 +830,7 @@ function runOrchestration(goal, opts) {
       continue;
     }
 
-    const reviewed = reviewItem(
+    const reviewed = await reviewItem(
       o,
       item,
       session,
@@ -870,7 +861,7 @@ function runOrchestration(goal, opts) {
   return finish(log, statusOf, { now, cli, checkpointFile, checkpointOnDisk, out: o.out });
 }
 /** The review / repair stage for one completed session. */
-function reviewItem(
+async function reviewItem(
   o,
   item,
   session,
@@ -895,7 +886,7 @@ function reviewItem(
   const forbiddenDomains = writerCandidate
     ? [writerCandidate.gateway, writerCandidate.upstream, writerCandidate.accountId].filter(Boolean)
     : [];
-  const reviewerDecision = selectCandidateForProfile(
+  const reviewerDecision = await selectCandidateForProfile(
     { id: item.id + '-review', roleRequirement: { role: 'reviewer' }, complexity: item.complexity },
     candidates,
     forbiddenDomains,
@@ -909,7 +900,7 @@ function reviewItem(
   const budget = Number.isFinite(Number(o.reviewBudget))
     ? Number(o.reviewBudget)
     : DEFAULT_REVIEW_BUDGET;
-  const review = runReviewLoop(
+  const review = await runReviewLoop(
     { sha: o.sha, budget },
     {
       runTests: typeof o.tests === 'function' ? o.tests : () => runVerificationCommand(item, o),
@@ -1011,7 +1002,7 @@ function repairRound(
   candidates,
   evidenceData
 ) {
-  return (findings, sha) => {
+  return async (findings, sha) => {
     const round = ((log.review && log.review.review.repairCount) || 0) + 1;
     const spec = repairSpec(item, findings, round);
     const replanned = planner.plan(log.goal, { specs: (o.specs || []).concat([spec]) });
@@ -1031,7 +1022,7 @@ function repairRound(
     const planned = replanned.workItems.find((w) => w.id === spec.id);
     if (!planned) return { sha };
 
-    const decision = selectCandidateForProfile(
+    const decision = await selectCandidateForProfile(
       planned,
       candidates,
       [],

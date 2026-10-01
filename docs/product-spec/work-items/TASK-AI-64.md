@@ -730,3 +730,4 @@ Attempt 3 BLOCKED with NO_ELIGIBLE_CANDIDATE because orchestrate ranked un-annot
 The fix routes per-item selection through candidates.annotateCandidates + routing.rankForProfile with the reviewer outside the writer failure domain.
 Test 64-24 fails on 4d62bdf and passes here.
 Full suite 1073/1073.
+Supervisor repair: the per-item selection now calls routing.assessTask with an injectable o.jevAsk, so a JEV that cannot advise hands authority to the Controller through the real JEV path (UNDECIDED:UNREACHABLE) instead of a hand-built assessment; tests 64-25, 64-26 and 64-27 fail on b841658 and pass here, full suite 1076/1076.

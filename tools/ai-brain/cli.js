@@ -2206,7 +2206,10 @@ function main() {
           ? args['opencode-ids'].split(',').filter(Boolean)
           : [],
     });
-    const result = runOrchestration(goal, {
+    // The live loop is async (TASK-AI-65): the JEV assessment behind every
+    // Controller selection returns a promise. An unhandled rejection would crash
+    // silently, so it is caught here and turned into a non-zero exit instead.
+    runOrchestration(goal, {
       specs,
       specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
       candidates,
@@ -2232,21 +2235,32 @@ function main() {
         : null,
       out,
       now: Date.now(),
-    });
-    console.log(
-      JSON.stringify(
-        {
-          goal,
-          status: result.status,
-          reconciliation: result.reconciliation,
-          publication: result.publication,
-        },
-        null,
-        2
-      )
-    );
-    if (out) console.log('Wrote run log to ' + out);
-    process.exit(result.status === 'COMPLETED' || result.status === 'PUBLISHED_DRAFT' ? 0 : 1);
+    })
+      .then((result) => {
+        console.log(
+          JSON.stringify(
+            {
+              goal,
+              status: result.status,
+              reconciliation: result.reconciliation,
+              publication: result.publication,
+            },
+            null,
+            2
+          )
+        );
+        if (out) console.log('Wrote run log to ' + out);
+        process.exit(result.status === 'COMPLETED' || result.status === 'PUBLISHED_DRAFT' ? 0 : 1);
+      })
+      .catch((err) => {
+        console.error(
+          'Orchestrate lỗi: ' +
+            (err && err.name ? err.name + ': ' : '') +
+            (err && err.message ? err.message : err)
+        );
+        process.exit(1);
+      });
+    return;
   }
 
   console.error('Lệnh không rõ: ' + command);

@@ -52,10 +52,13 @@ function openFindingsOf(rev) {
  * @param deps  {
  *   runTests() -> { pass, cause?, findings? },
  *   review(sha) -> { pass, sha, verdict?, reviewer?, findings? },
- *   repair(findings, sha) -> { sha }
+ *   repair(findings, sha) -> { sha } | Promise<{ sha }>
  * }
+ * @returns a promise for the review result: a repair round is a Controller
+ *   selection, and the JEV assessment behind it is an async call, so a repair
+ *   seam may be async. A synchronous seam is still awaited unchanged.
  */
-function runReviewLoop(state, deps) {
+async function runReviewLoop(state, deps) {
   const s = state || {};
   const d = deps || {};
   const budget = Number.isFinite(Number(s.budget)) ? Number(s.budget) : DEFAULT_BUDGET;
@@ -97,7 +100,7 @@ function runReviewLoop(state, deps) {
         rounds.push({ round, stage: 'blocked', sha: currentSha, cause: Refusal.BUDGET_EXHAUSTED });
         return { status: Status.BLOCKED, rounds, finalSha: currentSha, repairCount };
       }
-      const rep = repair(tests.findings || [], currentSha);
+      const rep = await repair(tests.findings || [], currentSha);
       currentSha = (rep && rep.sha) || currentSha;
       tests = runTests();
       continue;
@@ -162,7 +165,7 @@ function runReviewLoop(state, deps) {
       rounds.push({ round, stage: 'blocked', sha: currentSha, cause: Refusal.BUDGET_EXHAUSTED });
       return { status: Status.BLOCKED, rounds, finalSha: currentSha, repairCount };
     }
-    const rep = repair(open, currentSha);
+    const rep = await repair(open, currentSha);
     currentSha = (rep && rep.sha) || currentSha;
     tests = runTests();
   }

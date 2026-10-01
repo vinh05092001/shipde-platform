@@ -35,6 +35,7 @@ const { runReviewLoop } = require('../review-loop');
 const { publish } = require('../publisher');
 const { candidateKey } = require('../candidates');
 const { classifyFailure, Scope } = require('../failure-classifier');
+const routing = require('../routing');
 
 const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'task-ai-64');
 const USAGE_REPORT = path.join(FIXTURE_DIR, 'hermes-usage-report.json');
@@ -155,9 +156,9 @@ function decisionText(dir) {
 }
 
 /** A refusal is a legitimate outcome for a live-loop contract; capture it. */
-function safeRun(opts) {
+async function safeRun(opts) {
   try {
-    return { log: runOrchestration(GOAL, opts), refusal: null };
+    return { log: await runOrchestration(GOAL, opts), refusal: null };
   } catch (err) {
     return { log: null, refusal: err };
   }
@@ -200,15 +201,15 @@ function makeTempRepo() {
   return { dir, sha: git(['rev-parse', 'HEAD']).stdout.trim() };
 }
 
-test('64-01 a simulated launch is never counted as a live run (AI-64-P08, AI-64-R04)', () => {
+test('64-01 a simulated launch is never counted as a live run (AI-64-P08, AI-64-R04)', async () => {
   // (a) No launcher supplied at all. The loop must not substitute a success.
   const dirDefault = tmpDir('task-ai-64-sim-default-');
-  const withDefault = safeRun(baseOpts({ decisionDir: dirDefault }));
+  const withDefault = await safeRun(baseOpts({ decisionDir: dirDefault }));
 
   // (b) A hard-coded simulated callback — the shape the shipped dry-run CLI
   // injects — that returns exit 0 and a stdout "session" but no durable report.
   const dirCallback = tmpDir('task-ai-64-sim-callback-');
-  const withCallback = safeRun(
+  const withCallback = await safeRun(
     baseOpts({
       decisionDir: dirCallback,
       run: () => ({ exitCode: 0, stdout: '{"sessionId":"dry-sim"}' }),
@@ -238,7 +239,7 @@ test('64-01 a simulated launch is never counted as a live run (AI-64-P08, AI-64-
   }
 });
 
-test("64-02 the harness is given the Controller's pinned candidateKey, never one the loop chose (AI-64-P01, AI-64-R03)", () => {
+test("64-02 the harness is given the Controller's pinned candidateKey, never one the loop chose (AI-64-P01, AI-64-R03)", async () => {
   const dir = tmpDir('task-ai-64-pinned-');
   const candidates = [
     cand(),
@@ -253,7 +254,7 @@ test("64-02 the harness is given the Controller's pinned candidateKey, never one
     }),
   ];
   const run = recorder([GATEWAY_FAILURE, liveLaunch()]);
-  const result = safeRun(baseOpts({ candidates, decisionDir: dir, run }));
+  const result = await safeRun(baseOpts({ candidates, decisionDir: dir, run }));
   assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
 
   const launched = run.calls.map((j) => j.candidateKey);
@@ -293,7 +294,7 @@ test("64-02 the harness is given the Controller's pinned candidateKey, never one
   }
 });
 
-test('64-03 a live run goes through the isolated launcher, injected runner or not (AI-64-P03, AI-64-R15)', () => {
+test('64-03 a live run goes through the isolated launcher, injected runner or not (AI-64-P03, AI-64-R15)', async () => {
   // The loop must obtain the OS isolation launcher for a live run. The spy
   // stands in for it so the test never provisions a worker account; what is
   // under test is that the launcher is requested at all, even though a test
@@ -314,7 +315,7 @@ test('64-03 a live run goes through the isolated launcher, injected runner or no
   try {
     delete require.cache[orchPath];
     const fresh = require(orchPath);
-    result = safeRun(
+    result = await safeRun(
       baseOpts({
         isolatedWorker: true,
         decisionDir: tmpDir('task-ai-64-isolated-'),
@@ -355,10 +356,10 @@ test('64-03 a live run goes through the isolated launcher, injected runner or no
   }
 });
 
-test('64-04 the durable session handle is read from the report and stored, never guessed (AI-64-R04)', () => {
+test('64-04 the durable session handle is read from the report and stored, never guessed (AI-64-R04)', async () => {
   const dir = tmpDir('task-ai-64-session-');
   const run = recorder([liveLaunch()]);
-  const result = safeRun(baseOpts({ decisionDir: dir, run }));
+  const result = await safeRun(baseOpts({ decisionDir: dir, run }));
   assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
 
   const handles = decisionLines(dir)
@@ -390,7 +391,7 @@ test('64-04 the durable session handle is read from the report and stored, never
   }
 });
 
-test('64-05 a stopped run resumes from the checkpoint file and writes it back (AI-64-R14, AC-AI-64-14/15)', () => {
+test('64-05 a stopped run resumes from the checkpoint file and writes it back (AI-64-R14, AC-AI-64-14/15)', async () => {
   const dir = tmpDir('task-ai-64-checkpoint-');
   const checkpointFile = path.join(dir, 'checkpoint.json');
   fs.copyFileSync(CHECKPOINT_SEED, checkpointFile);
@@ -400,7 +401,7 @@ test('64-05 a stopped run resumes from the checkpoint file and writes it back (A
   const run = recorder([liveLaunch()]);
   // The path is offered under both spellings the loop already uses, so the test
   // binds to the contract (a checkpoint file on disk) and not to one option name.
-  const result = safeRun(
+  const result = await safeRun(
     baseOpts({
       specs: [
         { id: 'A', files: ['a.js'] },
@@ -438,10 +439,10 @@ test('64-05 a stopped run resumes from the checkpoint file and writes it back (A
   );
 });
 
-test('64-06 an empty SUCCESS is not a completion and never reaches review (AI-64-R05, AC-AI-64-09)', () => {
+test('64-06 an empty SUCCESS is not a completion and never reaches review (AI-64-R05, AC-AI-64-09)', async () => {
   const dir = tmpDir('task-ai-64-empty-');
   let reviewCalls = 0;
-  const result = safeRun(
+  const result = await safeRun(
     baseOpts({
       decisionDir: dir,
       // exit 0, nothing written, no diff, no output.
@@ -471,10 +472,10 @@ test('64-06 an empty SUCCESS is not a completion and never reaches review (AI-64
   );
 });
 
-test('64-07 a stalled session stops the run and leaves a checkpoint for a human (AI-64-R05, AC-AI-64-09)', () => {
+test('64-07 a stalled session stops the run and leaves a checkpoint for a human (AI-64-R05, AC-AI-64-09)', async () => {
   const dir = tmpDir('task-ai-64-stalled-');
   const checkpointFile = path.join(dir, 'checkpoint.json');
-  const result = safeRun(
+  const result = await safeRun(
     baseOpts({
       decisionDir: tmpDir('task-ai-64-stalled-log-'),
       checkpointFile,
@@ -508,9 +509,9 @@ test('64-07 a stalled session stops the run and leaves a checkpoint for a human 
   );
 });
 
-test('64-08 a review is bound to the exact SHA it read (AI-64-R07, AC-AI-64-10)', () => {
+test('64-08 a review is bound to the exact SHA it read (AI-64-R07, AC-AI-64-10)', async () => {
   // A review of a different commit is stale evidence for this commit.
-  const stale = runReviewLoop(
+  const stale = await runReviewLoop(
     { sha: SHA_A, budget: 3 },
     {
       runTests: PASS_TESTS,
@@ -525,7 +526,7 @@ test('64-08 a review is bound to the exact SHA it read (AI-64-R07, AC-AI-64-10)'
   );
 
   // A review that names no SHA at all is evidence for every commit at once.
-  const unbound = runReviewLoop(
+  const unbound = await runReviewLoop(
     { sha: SHA_A, budget: 3 },
     { runTests: PASS_TESTS, review: () => ({ pass: true, findings: [] }), repair: FIX_REPAIR }
   );
@@ -541,9 +542,9 @@ test('64-08 a review is bound to the exact SHA it read (AI-64-R07, AC-AI-64-10)'
   );
 });
 
-test('64-09 a PASS verdict carrying open findings is rejected, and the contradiction is recorded (AI-64-R07, AI-64-R14)', () => {
+test('64-09 a PASS verdict carrying open findings is rejected, and the contradiction is recorded (AI-64-R07, AI-64-R14)', async () => {
   const dir = tmpDir('task-ai-64-pass-findings-');
-  const result = safeRun(
+  const result = await safeRun(
     baseOpts({
       decisionDir: dir,
       run: recorder([liveLaunch()]),
@@ -574,10 +575,10 @@ test('64-09 a PASS verdict carrying open findings is rejected, and the contradic
   );
 });
 
-test('64-10 the repair budget is finite and the exhausted run ends BLOCKED with its reason (AI-64-R10, AI-64-R14)', () => {
+test('64-10 the repair budget is finite and the exhausted run ends BLOCKED with its reason (AI-64-R10, AI-64-R14)', async () => {
   const dir = tmpDir('task-ai-64-budget-');
   let reviewCalls = 0;
-  const result = safeRun(
+  const result = await safeRun(
     baseOpts({
       decisionDir: dir,
       reviewBudget: 2,
@@ -719,7 +720,7 @@ test('64-12 the publisher refuses a commit no approval reviewed (AI-64-R12, AC-A
   }
 });
 
-test('64-13 a gateway-scoped failure selects a candidate outside that failure domain (AI-64-R11, AC-AI-64-16)', () => {
+test('64-13 a gateway-scoped failure selects a candidate outside that failure domain (AI-64-R11, AC-AI-64-16)', async () => {
   assert.equal(
     classifyFailure(GATEWAY_FAILURE).scope,
     Scope.GATEWAY,
@@ -748,7 +749,7 @@ test('64-13 a gateway-scoped failure selects a candidate outside that failure do
   const pool = [cand(), sameGateway, otherGateway];
   const byKey = new Map(pool.map((c) => [candidateKey(c), c]));
   const domainRun = recorder([GATEWAY_FAILURE, liveLaunch()]);
-  const result = safeRun(
+  const result = await safeRun(
     baseOpts({ candidates: pool, decisionDir: tmpDir('task-ai-64-domain-'), run: domainRun })
   );
   assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
@@ -770,7 +771,7 @@ test('64-13 a gateway-scoped failure selects a candidate outside that failure do
   // Contrast: when a candidate outside the domain exists, it is used, so the
   // check above cannot be satisfied by refusing every fallback.
   const controlRun = recorder([GATEWAY_FAILURE, liveLaunch()]);
-  const control = safeRun(
+  const control = await safeRun(
     baseOpts({
       candidates: [cand(), otherGateway],
       decisionDir: tmpDir('task-ai-64-domain-control-'),
@@ -1160,7 +1161,7 @@ test('64-23 cli.js as entry script resolves module.exports before orchestrate re
   );
 });
 
-test('64-24 runOrchestration selects API_PASS candidate, isolates reviewer domain, and skips QUOTA_EXHAUSTED', () => {
+test('64-24 runOrchestration selects API_PASS candidate, isolates reviewer domain, and skips QUOTA_EXHAUSTED', async () => {
   const dir = tmpDir('task-ai-64-evidence-');
   const evidenceDir = path.join(dir, 'evidence');
   fs.mkdirSync(evidenceDir, { recursive: true });
@@ -1224,7 +1225,7 @@ test('64-24 runOrchestration selects API_PASS candidate, isolates reviewer domai
     specs: [{ id: 'TEST-1', roleRequirement: { role: 'author.foundation' }, files: [] }],
   };
 
-  const log = runOrchestration(GOAL, o);
+  const log = await runOrchestration(GOAL, o);
   assert.ok(!log.refusal, 'runOrchestration failed: ' + log.refusal);
 
   const logFile = path.join(dir, DAY + '.jsonl');
@@ -1271,5 +1272,150 @@ test('64-24 runOrchestration selects API_PASS candidate, isolates reviewer domai
   assert.ok(
     !passDomainParts.includes(chosenReviewerDomainParts[0]),
     'Reviewer gateway must differ'
+  );
+});
+
+/**
+ * Options for a run whose only interest is the assessment the Controller ranked
+ * a work item with.
+ *
+ * The session is deliberately COMPLETED_EMPTY: the run records the selection and
+ * then stops, so the assertions below bind to the JEV assessment written with
+ * that selection (AI-64-P01, AI-64-R03) and not to the review or publication
+ * stages that follow a completed session.
+ */
+function assessOpts(extra) {
+  return baseOpts(
+    Object.assign(
+      {
+        candidates: [cand()],
+        run: recorder([liveLaunch({ exitCode: 0, stdout: '', artifact: null })]),
+      },
+      extra || {}
+    )
+  );
+}
+
+/** The decision-log record of the one selection this run makes: the writer's. */
+function writerAssessment(dir) {
+  const record = decisionLines(dir).find(
+    (d) => d.stage === 'selected' && d.workItemId === 'A' && d.role === 'author.foundation'
+  );
+  assert.ok(record, 'the Controller selection must be written to the decision log');
+  return record;
+}
+
+test('64-25 with no ask wired the selection records the assessment routing.assessTask produced', async () => {
+  const dir = tmpDir('task-ai-64-jev-unreachable-');
+  const result = await safeRun(assessOpts({ decisionDir: dir }));
+  assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
+
+  const record = writerAssessment(dir);
+  const jev = record.jev;
+
+  assert.equal(jev.jevOutcome, 'UNDECIDED', 'no ask is configured, so JEV cannot advise');
+  assert.equal(
+    jev.decidedBy,
+    'controller',
+    'a JEV that cannot advise hands the decision to the Controller, which is the point'
+  );
+  assert.ok(
+    jev.reasonCodes.includes('JEV_UNDECIDED:UNREACHABLE'),
+    'the recorded reason code must be the one the real JEV path produces for an absent ask: ' +
+      JSON.stringify(jev.reasonCodes)
+  );
+  assert.ok(
+    !jev.reasonCodes.includes('JEV_UNDECIDED:UNKNOWN'),
+    'a reason code invented here instead of obtained is not evidence about why the Controller ' +
+      'decided; UNKNOWN is the hand-built marker this test exists to reject'
+  );
+  assert.deepEqual(
+    jev,
+    await routing.assessTask(record.taskProfile, {}),
+    'the recorded assessment must be the one routing.assessTask returns for the recorded profile, ' +
+      'byte for byte — no field of it is built in this loop'
+  );
+});
+
+test('64-26 an injected ask that decides supplies the weight profile the selection ranks with', async () => {
+  const dir = tmpDir('task-ai-64-jev-decided-');
+  const questions = [];
+  const result = await safeRun(
+    assessOpts({
+      decisionDir: dir,
+      jevAsk: async (question) => {
+        questions.push(question);
+        return { choice: 'QUALITY_FIRST', confidence: 0.9, reason: 'the reviewer asked' };
+      },
+    })
+  );
+  assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
+
+  assert.ok(questions.length > 0, 'the loop must ask JEV through the real path, not decide alone');
+  for (const question of questions) {
+    assert.deepEqual(
+      question.options,
+      Object.keys(routing.WEIGHT_PROFILES),
+      'the closed question offers weighting profiles and nothing else'
+    );
+    assert.ok(
+      !/\b(model|provider|account|gateway)\b/i.test(JSON.stringify(question.options)),
+      'a weighting advisory never offers an identity: ' + JSON.stringify(question.options)
+    );
+  }
+
+  const jev = writerAssessment(dir).jev;
+  assert.equal(jev.jevOutcome, 'DECIDED', 'a valid answer above the confidence floor decides');
+  assert.equal(jev.decidedBy, 'jev', 'JEV decided, so the Controller ranks with its weights');
+  assert.equal(
+    jev.weightProfile,
+    'QUALITY_FIRST',
+    'the decided weight profile must be the one recorded for the selection; the per-role ' +
+      'Controller fallback for this role is BALANCED, so a recorded BALANCED means the answer was ' +
+      'never asked for'
+  );
+  assert.deepEqual(
+    jev.weights,
+    routing.WEIGHT_PROFILES.QUALITY_FIRST,
+    'the ranking weights must be the decided profile’s own weights'
+  );
+  assert.ok(jev.reasonCodes.includes('JEV_DECIDED'), 'a decided assessment records JEV_DECIDED');
+  assert.ok(
+    !jev.reasonCodes.some((code) => code.startsWith('JEV_UNDECIDED')),
+    'a decided assessment records no UNDECIDED code: ' + JSON.stringify(jev.reasonCodes)
+  );
+});
+
+test('64-27 an ask that throws leaves the Controller selecting, and the advisory is recorded as unreachable', async () => {
+  const dir = tmpDir('task-ai-64-jev-throws-');
+  let asked = 0;
+  const result = await safeRun(
+    assessOpts({
+      decisionDir: dir,
+      jevAsk: async () => {
+        asked += 1;
+        throw new Error('the JEV advisory is unreachable');
+      },
+    })
+  );
+
+  assert.equal(result.refusal, null, 'a throwing advisory is an unreachable advisory, not a crash');
+  assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
+  assert.ok(
+    asked > 0,
+    'the loop must ask through the real JEV path, so a throwing ask is exercised'
+  );
+
+  const record = writerAssessment(dir);
+  assert.ok(record.chosen, 'the Controller must still select a candidate when JEV cannot advise');
+  assert.equal(record.jev.decidedBy, 'controller', 'the decision is the Controller’s, not JEV’s');
+  assert.equal(
+    record.jev.weightProfile,
+    'BALANCED',
+    'the Controller falls back to its deterministic per-role profile'
+  );
+  assert.ok(
+    record.jev.reasonCodes.includes('JEV_UNDECIDED:UNREACHABLE'),
+    'the throw must surface as the real path records it: ' + JSON.stringify(record.jev.reasonCodes)
   );
 });
