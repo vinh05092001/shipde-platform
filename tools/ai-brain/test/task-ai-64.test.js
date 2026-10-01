@@ -1453,6 +1453,22 @@ test('64-29 cli passes exercise option to orchestrate', () => {
   );
 });
 
+test('64-33 materialiseExercise refuses targets outside the worker root', () => {
+  const { materialiseExercise } = require('../orchestrate');
+  const outsideWorkerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-exercise-outside-'));
+
+  assert.throws(
+    () => materialiseExercise(outsideWorkerRoot, { exercise: 'e1-branch-name' }),
+    /EXERCISE_ROOT_INVALID/,
+    'the exercise runner must not be materialised into an operator or temp worktree'
+  );
+  assert.equal(
+    fs.existsSync(path.join(outsideWorkerRoot, 'tools', 'ai-brain', 'test', 'e1-branch-name.test.js')),
+    false,
+    'refused exercise materialisation must not leave a generated test file behind'
+  );
+});
+
 test('64-22 isolated live path sets isolatedWorker and worker root cwd without newWorkspace', async () => {
   const isoPath = require.resolve('../isolation-launcher');
   const orchPath = require.resolve('../orchestrate');
@@ -1461,11 +1477,13 @@ test('64-22 isolated live path sets isolatedWorker and worker root cwd without n
   const realIsWorkerPath = isoModule.isWorkerPath;
   let launchedAdapter = null;
   let launchedArgs = null;
+  let launchedOptions = null;
 
   isoModule.getIsolatedLauncher = function spy() {
     return function stubIsolatedLauncher(adapter, args, opts) {
       launchedAdapter = adapter;
       launchedArgs = args;
+      launchedOptions = opts;
       return {
         exitCode: 0,
         stdout: 'the agent changed production code',
@@ -1474,6 +1492,8 @@ test('64-22 isolated live path sets isolatedWorker and worker root cwd without n
     };
   };
   isoModule.isWorkerPath = () => true;
+  const hostWorktree = 'C:\\Users\\gumac\\AI\\shipde-platform\\.worktrees\\ai64launch';
+  const expectedWorkerRoot = isoModule.workerRootFor(hostWorktree);
 
   let result;
   try {
@@ -1482,8 +1502,8 @@ test('64-22 isolated live path sets isolatedWorker and worker root cwd without n
     result = await safeRun(
       baseOpts({
         isolatedWorker: true,
-        workerRoot: '/fake/worker/root',
-        cwd: '/operator/cwd',
+        workerRoot: 'C:\\ShipDeWorker\\wrong-explicit-root',
+        cwd: hostWorktree,
         decisionDir: tmpDir('task-ai-64-isolated-cwd-'),
         candidates: [cand({ harness: 'paseo' })],
       })
@@ -1510,8 +1530,18 @@ test('64-22 isolated live path sets isolatedWorker and worker root cwd without n
 
   assert.equal(launchedArgs[0], 'run', 'opencode direct launch must use opencode run');
   assert.ok(
-    launchedArgs.includes('--dir') && launchedArgs.includes('/fake/worker/root'),
-    'opencode args must contain --dir /fake/worker/root: ' + launchedArgs.join(' ')
+    launchedArgs.includes('--dir') && launchedArgs.includes(expectedWorkerRoot),
+    'opencode args must contain --dir ' + expectedWorkerRoot + ': ' + launchedArgs.join(' ')
+  );
+  assert.equal(
+    launchedOptions.cwd,
+    hostWorktree,
+    'the isolated launcher must bind the verdict and clone source to the host worktree'
+  );
+  assert.equal(
+    launchedOptions.workerRoot,
+    expectedWorkerRoot,
+    'the worker root must be derived from the host worktree, not reused from job.cwd'
   );
   assert.ok(
     !launchedArgs.includes('--provider') &&
@@ -1601,13 +1631,15 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
   const adapter = getHarness(route.harnessName);
   assert.equal(adapter.id, 'opencode-direct');
 
+  const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-cfg-'));
+  const workerRoot = path.join(tmpCwd, 'worker-root');
   const args = adapter.launch({
     isolatedWorker: true,
     provider: 'opencode',
     model: 'test-provider/test-model',
-    cwd: 'C:\\ShipDeWorker\\task-ai-64',
+    cwd: workerRoot,
     mode: 'full-access',
-    usageFile: 'C:\\ShipDeWorker\\task-ai-64\\usage.json',
+    usageFile: path.join(workerRoot, 'usage.json'),
     prompt: 'hello',
   });
 
@@ -1615,7 +1647,7 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
   assert.equal(adapter.command, 'opencode', 'direct adapter command is opencode');
   assert.equal(args[0], 'run', 'direct adapter uses opencode run');
   assert.equal(args[args.indexOf('--model') + 1], 'test-provider/test-model');
-  assert.equal(args[args.indexOf('--dir') + 1], 'C:\\ShipDeWorker\\task-ai-64');
+  assert.equal(args[args.indexOf('--dir') + 1], workerRoot);
   assert.ok(args.includes('--auto'), 'direct adapter uses the installed non-interactive flag');
   assert.equal(args[args.indexOf('--format') + 1], 'json');
   assert.ok(!args.includes('--provider'), 'installed opencode run has no --provider flag');
@@ -1627,7 +1659,6 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
   assert.ok(!argsStr.includes('API_KEY'), 'argv contains no key');
 
   // Test isolation launcher config generation
-  const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-cfg-'));
   const verdictPath = path.join(tmpCwd, 'verdict.json');
   fs.writeFileSync(
     verdictPath,
@@ -1673,7 +1704,7 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
     try {
       runIso(adapter, args, {
         cwd: tmpCwd,
-        workerRoot: path.join(tmpCwd, 'worker-root'),
+        workerRoot,
         verdictPath: verdictPath,
         getWorkerSid: () => 'TEST-SID',
         verifyBoundary: () => true,
@@ -1687,7 +1718,6 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
       // Read failure from missing launch result file is expected
     }
 
-    const workerRoot = path.join(tmpCwd, 'worker-root');
     const cfgPath = path.join(workerRoot, 'opencode.json');
     assert.ok(fs.existsSync(cfgPath), 'generated config must exist');
     const cfgText = fs.readFileSync(cfgPath, 'utf8');
@@ -1700,6 +1730,9 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
       cfgText.includes('{env:NINEROUTER_API_KEY}'),
       'only an env reference exists in config'
     );
+    const excludeText = fs.readFileSync(path.join(workerRoot, '.git', 'info', 'exclude'), 'utf8');
+    assert.match(excludeText, /^opencode\.json$/m, 'generated opencode config must be git-ignored');
+    assert.match(excludeText, /^\.shipde\/$/m, 'generated launcher argv files must be git-ignored');
 
     // Also test that completionNonce is preserved
     const res = {

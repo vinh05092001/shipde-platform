@@ -130,7 +130,8 @@ function resolveLauncher(o, isolatedLauncher) {
     const adapter = getHarness(job.harness);
     if (!adapter) throw new Error('HARNESS_UNKNOWN: ' + String(job.harness));
     return isolatedLauncher(adapter, adapter.launch(job), {
-      cwd: job.cwd,
+      cwd: job.hostWorktree || job.cwd,
+      workerRoot: job.workerRoot,
       baseSha: job.baseSha,
       verdictPath: job.verdictPath,
     });
@@ -340,7 +341,11 @@ function materialiseExercise(workerRoot, options) {
       'EXERCISE_ROOT_MISSING: the exercise runner may only be written into a worker root'
     );
   }
+  const { isWorkerPath } = require('./isolation-launcher');
   const root = path.resolve(workerRoot);
+  if (!isWorkerPath(root)) {
+    throw new Error('EXERCISE_ROOT_INVALID: refusing to write the runner outside the worker root');
+  }
   const target = path.join(root, EXERCISE_RUNNER);
   if (path.relative(root, target).startsWith('..') || !path.isAbsolute(target)) {
     throw new Error('EXERCISE_ROOT_INVALID: refusing to write the runner outside the worker root');
@@ -517,12 +522,18 @@ async function runOrchestration(goal, opts) {
   if (o.isolatedWorker) {
     isolatedLauncher = require('./isolation-launcher').getIsolatedLauncher();
   }
+  const hostWorktree = o.cwd || process.cwd();
+  const isolatedWorkerRoot = o.isolatedWorker
+    ? require('./isolation-launcher').workerRootFor(hostWorktree)
+    : null;
   const launcher = resolveLauncher(o, isolatedLauncher);
   log.isolation = {
     requested: Boolean(o.isolatedWorker),
     launcherObtained: Boolean(isolatedLauncher),
     executor:
       typeof o.run === 'function' ? 'injected-runner' : isolatedLauncher ? 'isolated' : 'none',
+    hostWorktree: o.isolatedWorker ? hostWorktree : null,
+    workerRoot: isolatedWorkerRoot,
     baseSha: o.baseSha || null,
   };
 
@@ -679,7 +690,9 @@ async function runOrchestration(goal, opts) {
         branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
         base: o.base || 'main',
         baseSha: o.baseSha || null,
-        cwd: o.isolatedWorker ? o.workerRoot : o.workerRoot || o.cwd,
+        hostWorktree: o.isolatedWorker ? hostWorktree : null,
+        workerRoot: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || null,
+        cwd: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd,
         isolatedWorker: Boolean(o.isolatedWorker),
         usageFile: prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt),
         checkpoint: checkpointFile,
@@ -1021,6 +1034,10 @@ function repairRound(
   registry
 ) {
   return async (findings, sha) => {
+    const hostWorktree = o.cwd || process.cwd();
+    const isolatedWorkerRoot = o.isolatedWorker
+      ? require('./isolation-launcher').workerRootFor(hostWorktree)
+      : null;
     const round = ((log.review && log.review.review.repairCount) || 0) + 1;
     const spec = repairSpec(item, findings, round);
     const replanned = planner.plan(log.goal, { specs: (o.specs || []).concat([spec]) });
@@ -1073,7 +1090,9 @@ function repairRound(
       branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
       base: o.base || 'main',
       baseSha: o.baseSha || null,
-      cwd: o.isolatedWorker ? o.workerRoot : o.workerRoot || o.cwd,
+      hostWorktree: o.isolatedWorker ? hostWorktree : null,
+      workerRoot: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || null,
+      cwd: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd,
       isolatedWorker: Boolean(o.isolatedWorker),
       usageFile,
       checkpoint: o.checkpointFile || null,
@@ -1090,7 +1109,7 @@ function repairRound(
 
     const adapter = harnessFor({ harness: repairJob.harness });
     const handle = adapter ? require('./executor').readSessionId(adapter, repairJob, res).id : null;
-    const nextSha = headShaOf(o.workerRoot || o.cwd);
+    const nextSha = headShaOf(o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd);
     if (!handle || !nextSha || nextSha === sha) return { sha };
     decisions.recordDecision(
       {

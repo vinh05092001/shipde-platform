@@ -223,7 +223,7 @@ function buildWorkerLaunchScript(options) {
   const workerRoot = options.workerRoot;
   const workerUsername = options.workerUsername || WORKER_USERNAME;
   const exeFile = options.exeFile;
-  const psArgs = options.psArgs;
+  const payloadArgsPath = options.payloadArgsPath;
   const launchResultPath = options.launchResultPath;
   const workerTimeoutMs = options.workerTimeoutMs;
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
@@ -287,7 +287,9 @@ $wrapperStartTime = Get-Date
 \`$env:TMP = "${workerRoot}\\temp"
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
 Set-Location -Path "${workerRoot}"
-& "${exeFile}" ${psArgs}
+\`$env:SHIPDE_RUN_TARGET_PID = "\`$PID"
+\`$payloadArgs = @(Get-Content -LiteralPath "${payloadArgsPath}" -Raw | ConvertFrom-Json)
+& "${exeFile}" @payloadArgs
 \`$jobExit = \`$LASTEXITCODE
 if (\`$null -eq \`$jobExit) { exit 1 }
 @{ nonce = "${completionNonce}"; exitCode = [int]\`$jobExit; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
@@ -452,6 +454,22 @@ $output | ConvertTo-Json -Depth 10 | Out-File "${launchResultPath}" -Encoding UT
 `;
 }
 
+function appendGitInfoExclude(workerRoot, entries) {
+  const excludePath = path.join(workerRoot, '.git', 'info', 'exclude');
+  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+  const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf8') : '';
+  const present = new Set(
+    existing
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+  );
+  const missing = entries.filter((entry) => !present.has(entry));
+  if (missing.length === 0) return;
+  const prefix = existing.length > 0 && !/\r?\n$/.test(existing) ? '\n' : '';
+  fs.appendFileSync(excludePath, prefix + missing.join('\n') + '\n', 'utf8');
+}
+
 function getIsolatedLauncher() {
   return function isolatedLauncher(adapter, args, options) {
     if (args && !Array.isArray(args)) {
@@ -584,14 +602,13 @@ function getIsolatedLauncher() {
         },
       });
       fs.writeFileSync(configPath, configData, 'utf8');
+      appendGitInfoExclude(workerRoot, ['opencode.json']);
     }
 
     const credPath = path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'WorkerUser.cred');
 
     const exe = executableFor(adapter.command, opts);
     const fullArgs = exe.prefixArgs.concat(args);
-
-    const psArgs = fullArgs.map((a) => `'` + String(a).replace(/'/g, `''`) + `'`).join(', ');
 
     // Q6: the launch result is written to a HOST-OWNED directory outside
     // workerRoot. Inside workerRoot a worker child that survives the main
@@ -616,13 +633,18 @@ function getIsolatedLauncher() {
     // this nonce, so a leftover marker from an earlier job can never satisfy
     // the completion gate below.
     const completionNonce = crypto.randomBytes(16).toString('hex');
+    const payloadDir = path.join(workerRoot, '.shipde');
+    fs.mkdirSync(payloadDir, { recursive: true });
+    appendGitInfoExclude(workerRoot, ['.shipde/']);
+    const payloadArgsPath = path.join(payloadDir, 'launch-args-' + completionNonce + '.json');
+    fs.writeFileSync(payloadArgsPath, JSON.stringify(fullArgs), 'utf8');
 
     const scriptContent = buildWorkerLaunchScript({
       credPath,
       workerRoot,
       workerUsername: WORKER_USERNAME,
       exeFile: exe.file,
-      psArgs,
+      payloadArgsPath,
       launchResultPath,
       workerTimeoutMs,
       completionNonce,
