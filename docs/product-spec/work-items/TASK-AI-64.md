@@ -11,7 +11,7 @@
 | Dependencies    | `TASK-AI-50`; `TASK-AI-58`; `TASK-AI-59`; `TASK-AI-60`; `TASK-AI-61`; `TASK-AI-63`                                                                                                                                                                                                                                                                    |
 | Assigned author | `GEMINI`                                                                                                                                                                                                                                                                                                                                             |
 | Risk            | `HIGH`                                                                                                                                                                                                                                                                                                                                               |
-| Allowed paths   | `tools/ai-brain/orchestrate.js`, `tools/ai-brain/planner.js`, `tools/ai-brain/prompt-compiler.js`, `tools/ai-brain/supervisor.js`, `tools/ai-brain/review-loop.js`, `tools/ai-brain/executor.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/harness.js`, `tools/ai-brain/isolation-launcher.js`, `tools/ai-brain/publisher.js`, `tools/ai-brain/decisions.js`, `tools/ai-brain/approval-registry.js`, `tools/ai-brain/exercise/e1-branch-name.cases.json`, `tools/ai-brain/branch-name.js`, `tools/ai-brain/test/task-ai-64.test.js`, `tools/ai-brain/test/fixtures/task-ai-64/`, `tools/ai-brain/test/isolation.test.js`, `tools/ai-brain/test/executor.test.js`, `tools/ai-brain/test/task-ai-60.test.js`, `docs/product-spec/work-items/TASK-AI-64.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths   | `tools/ai-brain/orchestrate.js`, `tools/ai-brain/planner.js`, `tools/ai-brain/prompt-compiler.js`, `tools/ai-brain/supervisor.js`, `tools/ai-brain/review-loop.js`, `tools/ai-brain/executor.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/harness.js`, `tools/ai-brain/isolation-launcher.js`, `tools/ai-brain/publisher.js`, `tools/ai-brain/decisions.js`, `tools/ai-brain/approval-registry.js`, `tools/ai-brain/exercise/e1-branch-name.cases.json`, `tools/ai-brain/branch-name.js`, `tools/ai-brain/sources.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-64.test.js`, `tools/ai-brain/test/failure-classifier.test.js`, `tools/ai-brain/test/fixtures/task-ai-64/`, `tools/ai-brain/test/isolation.test.js`, `tools/ai-brain/test/executor.test.js`, `tools/ai-brain/test/task-ai-60.test.js`, `docs/product-spec/work-items/TASK-AI-64.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer        | `Codex — fresh independent task`                                                                                                                                                                                                                                                                                                                       |
 | Branch          | `feat/task-ai-64-live-loop`                                                                                                                                                                                                                                                                                                                 |
 | Pull Request    | `#166`                                                                                                                                                                                                                                                                                                                                            |
@@ -30,6 +30,14 @@ reserved test ids and are unmet.
 `tools/ai-brain/test/task-ai-64.test.js` reads it at load time and copies from it: the three fixtures
 `hermes-usage-report.json`, `checkpoint-resume.json` and `approval-registry.json` are required by the
 named test file, and a Pull Request that carries the test without them is not buildable.
+
+`tools/ai-brain/sources.js`, `tools/ai-brain/failure-classifier.js`, and
+`tools/ai-brain/test/failure-classifier.test.js` are allowed paths amended during live run attempt 7
+review (Defect E repair): `sources.js` exports `providerFromPrefix` ensuring the launcher's provider
+definition is derived directly from the exact model string opencode receives; `failure-classifier.js`
+classifies OpenCode harness configuration failures into `Scope.HARNESS` / `Cause.LAUNCH_CONFIG` with
+finite cooldown and preserves matched stdout in evidence, preventing launch failures from poisoning
+model domains; and `test/failure-classifier.test.js` houses the unit regression tests for Case 13.
 
 `tools/ai-brain/test/e1-branch-name.test.js` is deliberately **not** an allowed path. It is
 materialised inside the worker root at run time and is never committed (§ "First live coding
@@ -738,3 +746,58 @@ Observation C: The `--isolated-worker` flag caused the paseo daemon to run the a
 Decision: For isolated launches, `executor.resolveRoute` rewrites a `paseo` route to the dedicated `opencode-direct` adapter. The same route decision is consumed by `orchestrate.js`, so isolated live runs launch `opencode` directly instead of the `paseo` daemon. The `isolation-launcher.js` script starts `powershell.exe -File run-target.ps1` under the `ShipDeWorker` OS user account, and that nested script runs `opencode run --model <provider/model> --dir <worker root> --auto --format json` inside the worker root (`C:\ShipDeWorker\<job>`).
 Gateway Key Delivery: Provider access for the worker is supplied by writing a minimal `opencode.json` config inside the worker root that points to the local 9Router endpoint (`http://127.0.0.1:20128/v1`). The config file references the gateway key only through the environment reference (`{env:NINEROUTER_API_KEY}`). The `isolation-launcher.js` allow-list passes the literal value of `NINEROUTER_API_KEY` only for the `opencode-direct` worker process. The key is never written to disk, passed in argv, sent in a prompt, or leaked into the repository.
 Residual risk: The agent runs within the `ShipDeWorker` boundary and is not given operator GitHub credentials; `GH_CONFIG_DIR` is redirected to the worker root and GitHub token environment variables are not in the worker allow-list. However, because `NINEROUTER_API_KEY` is present in the `opencode-direct` process environment, a compromised agent could dump its own environment and observe the token, allowing unauthorized 9Router consumption if router-side quota and revocation controls failed.
+
+## Live run attempt 6 native shim target launch fix (2026-10-01)
+
+Observation / Defect: Live E2E attempt 6 failed on worker process launch with `SyntaxError: Invalid or unexpected token`. In `tools/ai-brain/harness.js:executableFor`, unwrapping `.cmd` shims unconditionally returned `{ file: opts.nodePath || process.execPath, prefixArgs: [target] }`. For `opencode`, the shim target is `node_modules\opencode-ai\bin\opencode.exe` (a native binary), causing Node to attempt executing machine code as JavaScript.
+Decision: `executableFor` inspects the unwrapped target's extension (case-insensitive) using a deny-list / native check:
+- Native executables (`.exe`, `.com`) return `{ file: target, prefixArgs: [] }` to be spawned directly without Node wrapping.
+- All other targets (including standard JavaScript launchers `.js`, `.cjs`, `.mjs`, and extension-less Node scripts) remain wrapped with `opts.nodePath || process.execPath`.
+Additionally, shim unwrapping handles `%~dp0%\`, `%dp0%\`, `%~dp0\`, and unquoted/forward-slash layouts, and correctly preserves space-bearing paths within quoted `node_modules` targets without premature token splitting. Regression tests in `tools/ai-brain/test/task-ai-64.test.js` verify native targets spawn directly, space-bearing paths are preserved, and script targets wrap with node.
+
+Evidence:
+- Fail-before base SHAs:
+  - `194af039e56ff00e742b4978c39332152512f1d9`: native `.exe` target executed via `node` (producing `SyntaxError: Invalid or unexpected token` / DOS mode MZ header failure).
+  - `64d7dec2d9e47f631d8349a9dcc388f51431eff0`: space-bearing `node_modules` target truncated by `\s` exclusion and silently regressed to `.cmd` shim fallback (`ERR_ASSERTION`).
+- Command: `node --test "tools/ai-brain/test/*.test.js"`
+- Pass-after result: All tests pass. Full test suite: 1100/1100 passed (38/38 in `tools/ai-brain/test/task-ai-64.test.js`).
+- Prettier check: `npx --package prettier@3.9.6 prettier --check tools/ai-brain/harness.js tools/ai-brain/test/task-ai-64.test.js docs/product-spec/work-items/TASK-AI-64.md` clean.
+
+Residual risk / known limitations:
+- Deny-list extension behavior: `executableFor` inspects only `/\.(exe|com)$/i`. Non-executable script targets that are not JavaScript (such as `.bat`, `.cmd`, or `.ps1` targets) fall through to Node wrapping.
+- Directory candidate matching: If the first existing candidate matched under `node_modules` happens to be a directory rather than a file (`tools/ai-brain/harness.js:479-481`), `exists(candidate)` evaluates to true, fails the `.exe` check, and is handed to Node wrapping.
+- Standard npm global shims emit `.exe` or `.js` targets on Windows; non-standard shims wrapping batch or PowerShell scripts remain untested shape classes.
+
+## Live run attempt 7 worker provider id and config error fix (2026-10-02)
+
+Observation / Defect E: Live E2E attempt 7 failed with exit 1 within 5 seconds with stdout:
+`{"type":"error","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details."}}}`.
+Investigation revealed two compounding defects:
+1. Provider ID Mismatch & Incomplete OpenCode Configuration: `tools/ai-brain/isolation-launcher.js` wrote `opencode.json` with hardcoded provider `"9router"`:
+   ```json
+   { "provider": { "9router": { "options": { "baseURL": "...", "apiKey": "{env:NINEROUTER_API_KEY}" } } } }
+   ```
+   while `opencode-direct` invoked `--model ninerouter/ag/gemini-3.1-pro-low`. Because `ninerouter` was not defined in `opencode.json`, OpenCode failed to resolve the provider. Furthermore, for custom OpenAI-compatible endpoints, OpenCode requires the `@ai-sdk/openai-compatible` npm driver, baseURL, apiKey env reference, and a `models` map declaring the pinned model.
+2. Premature Domain Block from Launch/Harness Config Failure: Because OpenCode exited before issuing any model request, the orchestrator evaluated the exit without passing `stdout` to `classifyFailure`, which defaulted to `Scope.UNKNOWN`. In `sameFailureDomain`, `Scope.UNKNOWN` treated the error as an upstream/gateway failure and blocked all remaining candidates sharing `9router/ag` (`FAILURE_DOMAIN_AVOIDED`), ending with `NO_ELIGIBLE_CANDIDATE`.
+
+Decision & Implementation:
+1. Model-Derived Provider Derivation (`tools/ai-brain/isolation-launcher.js` & `tools/ai-brain/sources.js`): In `isolation-launcher.js`, extracted the exact `--model` argument received by opencode and derived `providerId` directly from that string using `sources.providerFromPrefix(pinnedModel)`, ensuring agreement (`providerFromPrefix(pinnedModel) === providerId`) without divergent lookups.
+2. Complete OpenCode Provider Specification (`tools/ai-brain/isolation-launcher.js`): Configured `opencode.json` with the model-derived `providerId`, `npm: '@ai-sdk/openai-compatible'`, `options.baseURL`, `options.apiKey: '{env:...}'`, and a `models` map registering both the fully qualified and relative model keys.
+3. Gated Harness / Launch Config Classification with Finite Cooldown (`tools/ai-brain/failure-classifier.js`): Added `Cause.HARNESS_FAILED` and `Cause.LAUNCH_CONFIG` under `Scope.HARNESS`. Case 13 is gated on absence of HTTP status (`!hasHttpStatus`, ensuring upstream HTTP responses are never misclassified as launch failures), non-zero exit code / no model call, and OpenCode local error envelope / provider resolution errors. Both causes are given a finite cooldown of 5 minutes (`DEFAULT_COOLDOWNS`), guaranteeing transient upstream 5xx errors never produce permanent bans.
+4. Matched Stdout in Evidence (`tools/ai-brain/failure-classifier.js`): Accepted and recorded scrubbed `stdout` into durable `evidence` (documented in JSDoc) so classifications driven by stdout error payloads preserve audit evidence.
+5. Cleaned Domain Non-Interference (`tools/ai-brain/cli.js:sameFailureDomain`): In `sameFailureDomain`, `Cause.LAUNCH_CONFIG` under harness scope returns `false` across candidates so harness configuration errors do not poison or block the upstream/gateway domain. Removed dead/unreachable branch comparisons.
+6. Orchestration Telemetry (`tools/ai-brain/orchestrate.js`): Passed `stdout` in addition to `body` and `stderr` to `classifyFailure` so early JSON error outputs on stdout are properly classified.
+7. Allowed Paths Amended (`docs/product-spec/work-items/TASK-AI-64.md`): Boundary updated to include `sources.js`, `failure-classifier.js`, and `test/failure-classifier.test.js` with documented justification.
+
+Evidence:
+- Fail-before base SHA: `56af8522de5ff411aaa35813ca05ccd707bf3e40` (9 failing tests across the updated test files: 5 DEFECT E failures in `tools/ai-brain/test/task-ai-64.test.js` [5/43 fail] and 4 Case 13 failures in `tools/ai-brain/test/failure-classifier.test.js` [4/70 fail]).
+- Pass-after result: All tests pass. Full test suite: 1110/1110 passed (43/43 in `tools/ai-brain/test/task-ai-64.test.js`, 70/70 in `tools/ai-brain/test/failure-classifier.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js" "tools/ai-brain/test/failure-classifier.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `npx --package prettier@3.9.6 prettier --check tools/ai-brain/sources.js tools/ai-brain/isolation-launcher.js tools/ai-brain/failure-classifier.js tools/ai-brain/cli.js tools/ai-brain/orchestrate.js tools/ai-brain/test/task-ai-64.test.js tools/ai-brain/test/failure-classifier.test.js docs/product-spec/work-items/TASK-AI-64.md`
+  - `git diff --check` clean.
+
+Residual risk / known limitations:
+- If OpenCode encounters server-side errors from an upstream API that emit into the `UnknownError` envelope on stdout without an HTTP status, those could be classified as `LAUNCH_CONFIG`; the finite 5-minute cooldown bounds recovery time and prevents permanent candidate bans.
+- Pre-installed `@ai-sdk/openai-compatible` is dynamically resolved by OpenCode at runtime from its environment or npm cache; in offline or firewalled environments without global caching, package installation could fail if not pre-seeded.

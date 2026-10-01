@@ -27,6 +27,8 @@ const Cause = {
   GENUINE_CAPACITY: 'genuine_capacity',
   ACCOUNT_AUTH_FAILED: 'account_auth_failed',
   EXHAUSTION_HIDING: 'exhaustion_hiding',
+  HARNESS_FAILED: 'harness_failed',
+  LAUNCH_CONFIG: 'launch_config',
   UNKNOWN: 'unknown',
 };
 
@@ -112,6 +114,8 @@ const DEFAULT_COOLDOWNS = {
   [Cause.GENUINE_CAPACITY]: 10 * 60 * 1000, // 10 minutes
   [Cause.ACCOUNT_AUTH_FAILED]: null, // never recovers
   [Cause.EXHAUSTION_HIDING]: 60 * 60 * 1000, // 1 hour
+  [Cause.HARNESS_FAILED]: 5 * 60 * 1000, // 5 minutes
+  [Cause.LAUNCH_CONFIG]: 5 * 60 * 1000, // 5 minutes (finite cooldown)
   [Cause.UNKNOWN]: 5 * 60 * 1000, // 5 minutes
 };
 
@@ -138,12 +142,13 @@ function extractInnerStatus(text) {
  * @param {number} [input.exitCode] - Process exit code
  * @param {number} [input.httpStatus] - HTTP status code
  * @param {string} [input.body] - Response body text
+ * @param {string} [input.stdout] - Stdout output
  * @param {string} [input.stderr] - Stderr output
  * @param {string} [input.accountId] - Associated account id
  * @returns {Object} Classification result
  */
 function classifyFailure(input) {
-  const { exitCode, httpStatus, body = '', stderr = '', accountId } = input || {};
+  const { exitCode, httpStatus, body = '', stderr = '', stdout = '', accountId } = input || {};
   const text = [
     String(
       body ||
@@ -152,11 +157,13 @@ function classifyFailure(input) {
         input?.message ||
         ''
     ),
+    String(stdout || input?.stdout || ''),
     String(stderr || ''),
   ]
     .filter(Boolean)
     .join('\n');
   const { scrubText } = require('./decisions');
+  const scrubbedStdout = scrubText(String(stdout || input?.stdout || '')).slice(0, 500);
   const evidence = {
     exitCode,
     httpStatus,
@@ -169,6 +176,7 @@ function classifyFailure(input) {
           ''
       )
     ).slice(0, 500),
+    stdout: scrubbedStdout,
     stderr: scrubText(String(stderr || '')).slice(0, 500),
   };
   if (evidence.httpStatus === undefined || evidence.httpStatus === null) {
@@ -176,6 +184,9 @@ function classifyFailure(input) {
   }
   if (evidence.exitCode === undefined || evidence.exitCode === null) {
     delete evidence.exitCode;
+  }
+  if (!evidence.stdout) {
+    delete evidence.stdout;
   }
 
   // If outer status is 503, look for inner status in body (gateway pattern: "[402]: ...")
@@ -361,6 +372,43 @@ function classifyFailure(input) {
       cause: Cause.UNKNOWN,
       scope: Scope.GATEWAY,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.UNKNOWN],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: null,
+    };
+  }
+
+  // Case 13: Harness / launch config failure (e.g. OpenCode provider/config resolution error before model call)
+  // Gated on absence of HTTP status (no model HTTP call) and non-zero exit status or explicit harness cause
+  const hasHttpStatus = httpStatus !== undefined && httpStatus !== null && Number(httpStatus) > 0;
+  const isExplicitHarness =
+    input?.cause === 'LAUNCH_CONFIG' ||
+    input?.cause === 'HARNESS_FAILED' ||
+    /LAUNCH_CONFIG|HARNESS_FAILED/i.test(text);
+
+  if (
+    (!hasHttpStatus || isExplicitHarness) &&
+    (isExplicitHarness ||
+      (exitCode !== 0 &&
+        (/UnknownError.*Unexpected server error|Unexpected server error.*UnknownError/i.test(
+          text
+        ) ||
+          /(?:\"name\"|\bname\b)\s*:\s*\"UnknownError\"/i.test(text) ||
+          /provider.{0,30}(?:not found|not registered|cannot resolve|failed to resolve|unknown)/i.test(
+            text
+          ) ||
+          /(?:cannot|failed to|unable to|could not)\s+resolve\s+provider/i.test(text) ||
+          /(?:unknown|unresolved|invalid|missing).{0,20}provider/i.test(text) ||
+          /@ai-sdk\/openai-compatible/i.test(text) ||
+          /(?:harness|launch).{0,15}config(?:uration)?.{0,15}error/i.test(text))))
+  ) {
+    const isHarnessFailed =
+      /HARNESS_FAILED|harness_failed/i.test(text) && !/LAUNCH_CONFIG|launch_config/i.test(text);
+    const cause = isHarnessFailed ? Cause.HARNESS_FAILED : Cause.LAUNCH_CONFIG;
+    return {
+      cause,
+      scope: Scope.HARNESS,
+      cooldownMs: DEFAULT_COOLDOWNS[cause] !== undefined ? DEFAULT_COOLDOWNS[cause] : 5 * 60 * 1000,
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: null,

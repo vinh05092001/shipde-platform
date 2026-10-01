@@ -747,7 +747,8 @@ async function runOrchestration(goal, opts) {
         const classification = classifyFailure({
           exitCode: res ? res.exitCode : -1,
           httpStatus: res ? res.httpStatus : undefined,
-          body: res ? res.body : undefined,
+          body: res ? res.body || res.stdout : undefined,
+          stdout: res ? res.stdout : undefined,
           stderr: res ? res.stderr : undefined,
           accountId: candidate.accountId,
         });

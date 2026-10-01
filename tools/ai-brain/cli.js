@@ -895,6 +895,9 @@ function sameFailureDomain(candidate, failed, classification) {
     return candidate.accessPath && candidate.accessPath === failed.accessPath;
   }
   if (scope === 'harness') {
+    if (classification && classification.cause === 'launch_config') {
+      return false;
+    }
     return candidate.harness && candidate.harness === failed.harness;
   }
   return (

@@ -22,7 +22,7 @@
  * that a simulated callback is not a live run.
  */
 
-const { test } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -36,6 +36,7 @@ const { publish } = require('../publisher');
 const { candidateKey } = require('../candidates');
 const { classifyFailure, Scope } = require('../failure-classifier');
 const routing = require('../routing');
+const { executableFor } = require('../harness');
 
 const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'task-ai-64');
 const USAGE_REPORT = path.join(FIXTURE_DIR, 'hermes-usage-report.json');
@@ -1747,4 +1748,396 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
   } finally {
     cp.spawnSync = realSpawn;
   }
+});
+
+describe('TASK-AI-64 executableFor shim unwrap and native launch (DEFECT D)', () => {
+  test('executableFor on Windows spawns native .exe targets directly without node wrapping', () => {
+    // Layout with %~dp0%
+    const optsTilde = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\opencode.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.exe',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\opencode.cmd') {
+          return '@echo off\r\n"%_prog%" "%~dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const exeTilde = executableFor('opencode', optsTilde);
+    assert.equal(exeTilde.file, 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.exe');
+    assert.deepEqual(exeTilde.prefixArgs, []);
+
+    // Layout with %dp0%
+    const optsPlain = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\opencode.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.exe',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\opencode.cmd') {
+          return '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const exePlain = executableFor('opencode', optsPlain);
+    assert.equal(exePlain.file, 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.exe');
+    assert.deepEqual(exePlain.prefixArgs, []);
+  });
+
+  test('executableFor on Windows spawns native .com targets directly (case-insensitive)', () => {
+    const opts = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\native-tool.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\native-tool\\bin\\tool.COM',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\native-tool.cmd') {
+          return '"%dp0%\\node_modules\\native-tool\\bin\\tool.COM" %*';
+        }
+        return '';
+      },
+    };
+    const exe = executableFor('native-tool', opts);
+    assert.equal(exe.file, 'C:\\fake\\bin\\node_modules\\native-tool\\bin\\tool.COM');
+    assert.deepEqual(exe.prefixArgs, []);
+  });
+
+  test('executableFor on Windows wraps .js launchers and extension-less JS targets with node', () => {
+    // Opencode with .js launcher layout using %~dp0%
+    const jsOptsTilde = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\opencode.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.js',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\opencode.cmd') {
+          return '@echo off\r\n"%_prog%" "%~dp0%\\node_modules\\opencode-ai\\bin\\opencode.js" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const jsExeTilde = executableFor('opencode', jsOptsTilde);
+    assert.equal(jsExeTilde.file, 'C:\\node\\node.exe');
+    assert.deepEqual(jsExeTilde.prefixArgs, [
+      'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.js',
+    ]);
+
+    // Opencode with .js launcher layout using %dp0%
+    const jsOptsPlain = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\opencode.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.js',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\opencode.cmd') {
+          return '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\opencode-ai\\bin\\opencode.js" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const jsExePlain = executableFor('opencode', jsOptsPlain);
+    assert.equal(jsExePlain.file, 'C:\\node\\node.exe');
+    assert.deepEqual(jsExePlain.prefixArgs, [
+      'C:\\fake\\bin\\node_modules\\opencode-ai\\bin\\opencode.js',
+    ]);
+
+    // Extension-less script target
+    const bareOpts = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\cli-tool.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\cli-tool\\bin\\cli',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\cli-tool.cmd') {
+          return '"%dp0%\\node_modules\\cli-tool\\bin\\cli" %*';
+        }
+        return '';
+      },
+    };
+    const bareExe = executableFor('cli-tool', bareOpts);
+    assert.equal(bareExe.file, 'C:\\node\\node.exe');
+    assert.deepEqual(bareExe.prefixArgs, ['C:\\fake\\bin\\node_modules\\cli-tool\\bin\\cli']);
+
+    // .cjs and .mjs script targets
+    const cjsOpts = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\cjs-tool.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\cjs-tool\\bin\\cli.cjs',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\cjs-tool.cmd') {
+          return '"%dp0%\\node_modules\\cjs-tool\\bin\\cli.cjs" %*';
+        }
+        return '';
+      },
+    };
+    const cjsExe = executableFor('cjs-tool', cjsOpts);
+    assert.equal(cjsExe.file, 'C:\\node\\node.exe');
+    assert.deepEqual(cjsExe.prefixArgs, ['C:\\fake\\bin\\node_modules\\cjs-tool\\bin\\cli.cjs']);
+  });
+
+  test('executableFor on Windows preserves space-bearing node_modules targets and spawns directly', () => {
+    const opts = {
+      platform: 'win32',
+      path: 'C:\\fake\\bin',
+      nodePath: 'C:\\node\\node.exe',
+      fileExists: (p) =>
+        p === 'C:\\fake\\bin\\tool.cmd' ||
+        p === 'C:\\fake\\bin\\node_modules\\my-pkg\\bin\\win 32\\tool.exe',
+      readFile: (p) => {
+        if (p === 'C:\\fake\\bin\\tool.cmd') {
+          return '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\my-pkg\\bin\\win 32\\tool.exe" %*\r\n';
+        }
+        return '';
+      },
+    };
+    const exe = executableFor('tool', opts);
+    assert.equal(exe.file, 'C:\\fake\\bin\\node_modules\\my-pkg\\bin\\win 32\\tool.exe');
+    assert.deepEqual(exe.prefixArgs, []);
+  });
+});
+
+describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', () => {
+  const sourcesApi = require('../sources');
+  const failureApi = require('../failure-classifier');
+  const cliApi = require('../cli');
+  const cp = require('child_process');
+
+  test('sources.providerFromPrefix derives provider id matching model prefix', () => {
+    assert.equal(typeof sourcesApi.providerFromPrefix, 'function');
+    assert.equal(sourcesApi.providerFromPrefix('ninerouter/'), 'ninerouter');
+    assert.equal(sourcesApi.providerFromPrefix('ninerouter/ag/'), 'ninerouter');
+    assert.equal(sourcesApi.providerFromPrefix('ninerouter/ag/gemini-3.1-pro-low'), 'ninerouter');
+    assert.equal(sourcesApi.providerFromPrefix({ modelPrefix: 'ninerouter/' }), 'ninerouter');
+    assert.equal(sourcesApi.providerFromPrefix(''), '');
+    assert.equal(sourcesApi.providerFromPrefix(null), '');
+  });
+
+  test('opencode-direct isolated worker config derives provider id from model prefix and includes @ai-sdk/openai-compatible and models map', () => {
+    const isoMod = require('../isolation-launcher');
+    const { getHarness } = require('../harness');
+    const directAdapter = getHarness('opencode-direct');
+    assert.ok(directAdapter);
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'defect-e-worker-'));
+    const fakeHostCwd = path.join(tmpDir, 'host');
+    const fakeWorkerRoot = path.join(tmpDir, 'worker');
+    fs.mkdirSync(fakeHostCwd, { recursive: true });
+    fs.mkdirSync(fakeWorkerRoot, { recursive: true });
+    fs.mkdirSync(path.join(fakeHostCwd, 'scripts/ai/isolation'), { recursive: true });
+
+    const verdictFile = path.join(fakeHostCwd, 'verdict.json');
+    fs.writeFileSync(
+      verdictFile,
+      JSON.stringify({
+        verdict: 'CLOSED',
+        worktree: fakeHostCwd,
+        timestamp: Date.now() - 1000,
+        policyHash: isoMod.getFolderHash(path.join(fakeHostCwd, 'scripts/ai/isolation')),
+        sid: 'TEST-SID',
+        details: {},
+      })
+    );
+
+    const realSpawn = cp.spawnSync;
+    try {
+      cp.spawnSync = (cmd, cargs, opts) => {
+        if (cmd === 'git') {
+          if (cargs && cargs[0] === 'clone') {
+            fs.mkdirSync(path.join(cargs[cargs.length - 1], '.git', 'info'), { recursive: true });
+          }
+          return { status: 0 };
+        }
+        if (cmd === 'powershell.exe') {
+          return { status: 0, stdout: '' };
+        }
+        return realSpawn(cmd, cargs, opts);
+      };
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const directArgs = directAdapter.launch({
+        isolatedWorker: true,
+        model: 'ninerouter/ag/gemini-3.1-pro-low',
+        cwd: fakeWorkerRoot,
+        prompt: 'test prompt',
+      });
+
+      try {
+        runIso(directAdapter, directArgs, {
+          cwd: fakeHostCwd,
+          workerRoot: fakeWorkerRoot,
+          verdictPath: verdictFile,
+          getWorkerSid: () => 'TEST-SID',
+          verifyBoundary: () => true,
+          baseSha: '0123456789012345678901234567890123456789',
+          workerTimeoutMs: 1000,
+        });
+      } catch (_) {}
+
+      const cfgFile = path.join(fakeWorkerRoot, 'opencode.json');
+      assert.ok(fs.existsSync(cfgFile), 'opencode.json must exist');
+      const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+
+      // 1. Provider id must be derived from the exact --model argument opencode receives
+      const modelArg = directArgs[directArgs.indexOf('--model') + 1];
+      const expectedProvider = sourcesApi.providerFromPrefix(modelArg);
+      assert.equal(expectedProvider, 'ninerouter');
+      assert.ok(
+        cfg.provider[expectedProvider],
+        `provider id in opencode.json must match derived provider '${expectedProvider}'`
+      );
+      assert.equal(Object.keys(cfg.provider)[0], expectedProvider);
+      assert.equal(cfg.provider['9router'], undefined, 'provider id 9router must not be hardcoded');
+
+      // 2. npm package must be @ai-sdk/openai-compatible
+      assert.equal(cfg.provider[expectedProvider].npm, '@ai-sdk/openai-compatible');
+
+      // 3. options must declare baseURL and apiKey env reference
+      assert.equal(cfg.provider[expectedProvider].options.baseURL, 'http://127.0.0.1:20128/v1');
+      assert.equal(cfg.provider[expectedProvider].options.apiKey, '{env:NINEROUTER_API_KEY}');
+
+      // 4. models map must contain the pinned model id
+      assert.ok(cfg.provider[expectedProvider].models, 'models map must exist');
+      assert.ok(
+        cfg.provider[expectedProvider].models['ag/gemini-3.1-pro-low'] ||
+          cfg.provider[expectedProvider].models['ninerouter/ag/gemini-3.1-pro-low'],
+        'models map must contain the pinned model id'
+      );
+
+      // 5. Dynamic agreement: provider id in opencode.json changes with the exact --model argument
+      const altArgs = directAdapter.launch({
+        isolatedWorker: true,
+        model: 'customprov/ag/gemini-3.1-pro-low',
+        cwd: fakeWorkerRoot,
+        prompt: 'test prompt',
+      });
+      try {
+        runIso(directAdapter, altArgs, {
+          cwd: fakeHostCwd,
+          workerRoot: fakeWorkerRoot,
+          verdictPath: verdictFile,
+          getWorkerSid: () => 'TEST-SID',
+          verifyBoundary: () => true,
+          baseSha: '0123456789012345678901234567890123456789',
+          workerTimeoutMs: 1000,
+        });
+      } catch (_) {}
+      const cfgAlt = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+      const altModel = altArgs[altArgs.indexOf('--model') + 1];
+      const expectedAltProvider = sourcesApi.providerFromPrefix(altModel);
+      assert.equal(expectedAltProvider, 'customprov');
+      assert.ok(
+        cfgAlt.provider[expectedAltProvider],
+        `provider id in opencode.json must match provider '${expectedAltProvider}' derived from --model`
+      );
+      assert.equal(Object.keys(cfgAlt.provider)[0], expectedAltProvider);
+    } finally {
+      cp.spawnSync = realSpawn;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('classifyFailure classifies opencode resolution error as Scope.HARNESS and Cause.LAUNCH_CONFIG', () => {
+    // Attempt 7 error output from opencode
+    const opencodeErr = {
+      exitCode: 1,
+      stdout:
+        '{"type":"error","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details."}}}',
+    };
+    const c1 = failureApi.classifyFailure(opencodeErr);
+    assert.equal(c1.scope, failureApi.Scope.HARNESS);
+    assert.equal(c1.cause, failureApi.Cause.LAUNCH_CONFIG);
+    assert.equal(c1.cooldownMs, 5 * 60 * 1000);
+    assert.ok(c1.evidence.stdout.includes('Unexpected server error'));
+
+    const c2 = failureApi.classifyFailure({
+      exitCode: 1,
+      stderr: 'Error: Cannot find module @ai-sdk/openai-compatible',
+    });
+    assert.equal(c2.scope, failureApi.Scope.HARNESS);
+    assert.equal(c2.cause, failureApi.Cause.LAUNCH_CONFIG);
+    assert.equal(c2.cooldownMs, 5 * 60 * 1000);
+
+    const c3 = failureApi.classifyFailure({
+      exitCode: 1,
+      body: 'Error: Unknown provider ninerouter in opencode.json configuration',
+    });
+    assert.equal(c3.scope, failureApi.Scope.HARNESS);
+    assert.equal(c3.cause, failureApi.Cause.LAUNCH_CONFIG);
+    assert.equal(c3.cooldownMs, 5 * 60 * 1000);
+  });
+
+  test('sameFailureDomain for launch_config error does NOT block other candidates on same gateway/upstream', () => {
+    const failedCand = {
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      harness: 'paseo',
+      modelId: 'ag/gemini-3.1-pro-low',
+    };
+    const otherCand = {
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'ninerouter',
+      harness: 'paseo',
+      modelId: 'ag/gemini-3.1-pro-low',
+    };
+
+    // A launch_config harness failure does not block candidate 2 sharing gateway/upstream
+    assert.equal(
+      cliApi.sameFailureDomain(otherCand, failedCand, {
+        scope: failureApi.Scope.HARNESS,
+        cause: failureApi.Cause.LAUNCH_CONFIG,
+      }),
+      false
+    );
+  });
+
+  test('applyFailureBlocks with LAUNCH_CONFIG marks only failed candidate and leaves others in domain unblocked', () => {
+    const candidatesApi = require('../candidates');
+    const cand1 = {
+      harness: 'paseo',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      modelId: 'ag/gemini-3.1-pro-low',
+    };
+    const cand2 = {
+      harness: 'paseo',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'ninerouter',
+      modelId: 'ag/gemini-3.1-pro-low',
+    };
+    const candidates = [cand1, cand2];
+    const failedKeys = new Set([candidatesApi.candidateKey(cand1)]);
+    cliApi.applyFailureBlocks(
+      candidates,
+      failedKeys,
+      cand1,
+      { scope: failureApi.Scope.HARNESS, cause: failureApi.Cause.LAUNCH_CONFIG },
+      true,
+      cliApi.LIVE_BLOCK_CODES
+    );
+    assert.equal(cand1.blocked, true);
+    assert.equal(cand1.blockReason, cliApi.LIVE_BLOCK_CODES.failed);
+    assert.equal(cand2.blocked, undefined);
+  });
 });

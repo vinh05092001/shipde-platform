@@ -462,13 +462,28 @@ function executableFor(command, options) {
     try {
       // Anchored on node_modules: the shim also quotes "%dp0%\node.exe" a few
       // lines earlier, and matching that one resolves to a file which is not
-      // there, so the unwrap fell back to the .cmd that cannot be spawned.
-      const match = /"%dp0%\\(node_modules\\[^"]+)"/.exec(readFile(shim));
-      if (match) target = p.join(dir, match[1]);
+      // there, so only match entries referencing node_modules. Handles
+      // "%dp0%\", "%~dp0%\", "%~dp0\", "%~dp0", space-bearing quoted paths,
+      // and unquoted/forward-slash variants.
+      const content = readFile(shim);
+      const re =
+        /"%~?dp0%?[\\/]?(node_modules[\\/][^"\r\n]+)"|%~?dp0%?[\\/]?(node_modules[\\/][^\s"\r\n]+)/gi;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        const candidate = p.join(dir, m[1] || m[2]);
+        if (exists(candidate)) {
+          target = candidate;
+          break;
+        }
+        if (!target) target = candidate;
+      }
     } catch (_) {
       target = null;
     }
     if (target && exists(target)) {
+      if (/\.(exe|com)$/i.test(target)) {
+        return { file: target, prefixArgs: [] };
+      }
       return { file: opts.nodePath || process.execPath, prefixArgs: [target] };
     }
     // A shim whose target cannot be read is still better named than nothing:
