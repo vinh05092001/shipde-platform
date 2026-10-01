@@ -1452,3 +1452,97 @@ test('64-29 cli passes exercise option to orchestrate', () => {
     'cli.js must wire args.exercise to runOrchestration'
   );
 });
+
+test('64-22 isolated live path sets isolatedWorker and worker root cwd without newWorkspace', async () => {
+  const isoPath = require.resolve('../isolation-launcher');
+  const orchPath = require.resolve('../orchestrate');
+  const isoModule = require(isoPath);
+  const realGetIsolatedLauncher = isoModule.getIsolatedLauncher;
+  const realIsWorkerPath = isoModule.isWorkerPath;
+  let launchedArgs = null;
+
+  isoModule.getIsolatedLauncher = function spy() {
+    return function stubIsolatedLauncher(adapter, args, opts) {
+      launchedArgs = args;
+      return { exitCode: 0, stdout: 'the agent changed production code' };
+    };
+  };
+  isoModule.isWorkerPath = () => true;
+
+  let result;
+  try {
+    delete require.cache[orchPath];
+    const fresh = require(orchPath);
+    result = await safeRun(
+      baseOpts({
+        isolatedWorker: true,
+        workerRoot: '/fake/worker/root',
+        cwd: '/operator/cwd',
+        decisionDir: tmpDir('task-ai-64-isolated-cwd-'),
+        candidates: [cand({ harness: 'paseo' })],
+      })
+    );
+  } finally {
+    isoModule.getIsolatedLauncher = realGetIsolatedLauncher;
+    isoModule.isWorkerPath = realIsWorkerPath;
+    delete require.cache[orchPath];
+  }
+
+  assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
+  assert.ok(launchedArgs, 'the isolated launcher must have been called');
+
+  assert.ok(
+    launchedArgs.includes('--cwd') && launchedArgs.includes('/fake/worker/root'),
+    'paseo args must contain --cwd /fake/worker/root: ' + launchedArgs.join(' ')
+  );
+  assert.ok(
+    !launchedArgs.includes('--new-workspace') && !launchedArgs.includes('--worktree-mode'),
+    'paseo args must not contain --new-workspace or --worktree-mode: ' + launchedArgs.join(' ')
+  );
+});
+
+test('64-30 executor usage-report gate survives paseo missing report (DEFECT A)', () => {
+  const { readSessionId } = require('../executor');
+  const assert = require('assert');
+  const paseo = { writesUsageReport: false };
+  const job = { usageFile: '/tmp/does-not-exist.json' };
+  const res = readSessionId(paseo, job, { stdout: 'nothing' });
+  assert.notEqual(
+    res.cause,
+    'HARNESS_USAGE_REPORT_MISSING',
+    'must not gate on missing report if adapter does not write it'
+  );
+});
+
+test('64-31 candidates gateway uses accessPathOf to resolve router endpoint (DEFECT B)', () => {
+  const { gatewayAccountCandidates } = require('../candidates');
+  const assert = require('assert');
+  const registry = {
+    sources: [
+      { id: 'gw', kind: 'router', endpoint: 'http://gateway' },
+      { id: 'up', kind: 'model-source', reachedVia: 'gw' },
+    ],
+    dispatch: {
+      providers: {
+        up: { provider: 'up', harness: 'paseo' },
+      },
+    },
+  };
+  const accounts = [{ id: 'acct', provider: 'up' }];
+  const catalogue = [
+    {
+      gateway: 'gw',
+      upstream: 'up',
+      modelId: 'up/model',
+      role: 'author.foundation',
+      capability: {},
+    },
+  ];
+  const candidates = gatewayAccountCandidates({ registry, accounts, catalogue });
+  assert.ok(candidates.length > 0, 'must yield candidates');
+  assert.equal(
+    candidates[0].accessPath,
+    'http://gateway',
+    'accessPath must be the router endpoint, not the provider name'
+  );
+});
