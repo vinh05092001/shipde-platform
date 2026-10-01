@@ -326,6 +326,42 @@ function generateCandidates(opts) {
     }
   }
 
+  const { familyOf } = require('./agy-quota');
+  const poolModels = new Set();
+  const native = accounts.find((a) => a.provider === 'antigravity' || a.id === 'agy-native-a');
+  if (native) {
+    for (const m of accountModels(native)) poolModels.add(m);
+  }
+  if (o.evidenceData && o.evidenceData.combinations) {
+    for (const combo of o.evidenceData.combinations) {
+      if (combo.upstream === 'antigravity' || combo.source === 'antigravity') {
+        poolModels.add(combo.modelId || combo.model);
+      }
+    }
+  }
+
+  if (poolModels.size > 0) {
+    for (let i = 1; i <= 10; i++) {
+      const acc = 'agy' + String(i).padStart(2, '0');
+      for (const model of poolModels) {
+        const family = familyOf(model);
+        if (!family) continue;
+        candidates.push({
+          harness: 'agy-pool',
+          accessPath: `ShipDe\\ShipDe-${acc}`,
+          gateway: '',
+          upstream: 'antigravity',
+          accountId: acc,
+          quotaScope: `${acc}:${family}`,
+          modelId: model,
+          source: 'agy-pool',
+          kind: 'agent-cli',
+          sharedQuota: 'unknown',
+        });
+      }
+    }
+  }
+
   return candidates;
 }
 

@@ -61,6 +61,53 @@ const READERS = {
       return quota;
     },
   },
+  'agy-pool': {
+    read: (account, opts) => {
+      const fs = require('fs');
+      const path = require('path');
+      const dir = (opts && opts.fakeRunsDir) || 'C:\\Tools\\agy-runs';
+      const resultFile = path.join(dir, account.id, 'result.json');
+      const outFile = path.join(dir, account.id, 'out.txt');
+
+      if (!fs.existsSync(resultFile)) {
+        return { available: false, reason: 'không có result.json' };
+      }
+      let result;
+      try {
+        result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+      } catch (e) {
+        return { available: false, reason: 'result.json hỏng' };
+      }
+
+      if (result.state === 'login-required') {
+        return { available: false, reason: 'AUTH_FAILED' };
+      }
+      if (result.state !== 'ok' && result.state !== 'quota') {
+        return { available: false, reason: result.state || 'failed' };
+      }
+
+      if (!fs.existsSync(outFile)) {
+        return { available: false, reason: 'không có out.txt' };
+      }
+      
+      const outText = fs.readFileSync(outFile, 'utf8');
+      let outJson;
+      try {
+        outJson = JSON.parse(outText);
+      } catch (e) {
+        return { available: false, reason: 'out.txt không phải json hợp lệ' };
+      }
+      
+      if (outJson && Array.isArray(outJson.rows)) {
+        return {
+          available: true,
+          rows: outJson.rows,
+          account: { known: true, email: account.id, source: 'pool' }
+        };
+      }
+      return { available: false, reason: 'out.txt thiếu rows' };
+    }
+  },
   'claude-code': {
     read: (account, opts) => {
       const identity = account.email
@@ -168,7 +215,14 @@ function refreshAccount(account, options) {
 }
 
 function refreshAll(accounts, options) {
-  return (accounts || []).map((a) => refreshAccount(a, options));
+  const allAccounts = [...(accounts || [])];
+  for (let i = 1; i <= 10; i++) {
+    allAccounts.push({
+      id: `agy${String(i).padStart(2, '0')}`,
+      provider: 'agy-pool'
+    });
+  }
+  return allAccounts.map((a) => refreshAccount(a, options));
 }
 
-module.exports = { SUPPORTED_PROVIDERS, identityFor, refreshAccount, refreshAll };
+module.exports = { SUPPORTED_PROVIDERS, identityFor, refreshAccount, refreshAll, READERS };
