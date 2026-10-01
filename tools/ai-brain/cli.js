@@ -860,8 +860,8 @@ function sameFailureDomain(candidate, failed, classification) {
   if (scope === 'access_path') {
     return candidate.accessPath && candidate.accessPath === failed.accessPath;
   }
-  if (scope === 'harness' || scope === 'launch_config') {
-    if (classification.cause === 'launch_config' || classification.cause === 'LAUNCH_CONFIG') {
+  if (scope === 'harness') {
+    if (classification && classification.cause === 'launch_config') {
       return false;
     }
     return candidate.harness && candidate.harness === failed.harness;

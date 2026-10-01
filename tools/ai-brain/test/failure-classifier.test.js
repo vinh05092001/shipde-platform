@@ -15,6 +15,7 @@ const {
   HumanAction,
   parseResetTime,
   classifyFailure,
+  DEFAULT_COOLDOWNS,
 } = require('../failure-classifier');
 
 describe('parseResetTime', () => {
@@ -429,7 +430,7 @@ describe('Additional edge cases', () => {
 });
 
 describe('Case 13: harness / launch config error', () => {
-  test('OpenCode Unexpected server error in stdout classifies as LAUNCH_CONFIG with HARNESS scope', () => {
+  test('OpenCode Unexpected server error in stdout classifies as LAUNCH_CONFIG with HARNESS scope, finite cooldown, and records stdout in evidence', () => {
     const result = classifyFailure({
       exitCode: 1,
       stdout:
@@ -438,6 +439,8 @@ describe('Case 13: harness / launch config error', () => {
     assert.equal(result.cause, Cause.LAUNCH_CONFIG);
     assert.equal(result.scope, Scope.HARNESS);
     assert.equal(result.humanAction, HumanAction.NONE);
+    assert.equal(result.cooldownMs, 5 * 60 * 1000);
+    assert.ok(result.evidence.stdout.includes('Unexpected server error'));
   });
 
   test('provider resolution error classifies as LAUNCH_CONFIG with HARNESS scope', () => {
@@ -449,12 +452,29 @@ describe('Case 13: harness / launch config error', () => {
     assert.equal(result.scope, Scope.HARNESS);
   });
 
-  test('explicit HARNESS_FAILED cause is preserved with HARNESS scope', () => {
+  test('explicit HARNESS_FAILED cause is preserved with HARNESS scope and finite cooldown', () => {
     const result = classifyFailure({
       exitCode: 1,
       cause: 'HARNESS_FAILED',
     });
     assert.equal(result.cause, Cause.HARNESS_FAILED);
     assert.equal(result.scope, Scope.HARNESS);
+    assert.equal(result.cooldownMs, 5 * 60 * 1000);
+  });
+
+  test('upstream HTTP 500/502 error with unexpected server error body is not classified as LAUNCH_CONFIG', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      httpStatus: 500,
+      body: 'Unexpected server error. Check server logs for details.',
+    });
+    assert.notEqual(result.cause, Cause.LAUNCH_CONFIG);
+    assert.equal(result.cause, Cause.UNKNOWN);
+    assert.equal(result.scope, Scope.UNKNOWN);
+  });
+
+  test('LAUNCH_CONFIG and HARNESS_FAILED have finite default cooldowns', () => {
+    assert.equal(DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG], 5 * 60 * 1000);
+    assert.equal(DEFAULT_COOLDOWNS[Cause.HARNESS_FAILED], 5 * 60 * 1000);
   });
 });

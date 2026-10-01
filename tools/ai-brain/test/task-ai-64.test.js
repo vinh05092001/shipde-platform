@@ -1995,24 +1995,59 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
       assert.ok(fs.existsSync(cfgFile), 'opencode.json must exist');
       const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
 
-      // 1. Provider id must be "ninerouter", NOT "9router"
-      assert.ok(cfg.provider.ninerouter, 'provider id in opencode.json must be ninerouter');
+      // 1. Provider id must be derived from the exact --model argument opencode receives
+      const modelArg = directArgs[directArgs.indexOf('--model') + 1];
+      const expectedProvider = sourcesApi.providerFromPrefix(modelArg);
+      assert.equal(expectedProvider, 'ninerouter');
+      assert.ok(
+        cfg.provider[expectedProvider],
+        `provider id in opencode.json must match derived provider '${expectedProvider}'`
+      );
+      assert.equal(Object.keys(cfg.provider)[0], expectedProvider);
       assert.equal(cfg.provider['9router'], undefined, 'provider id 9router must not be hardcoded');
 
       // 2. npm package must be @ai-sdk/openai-compatible
-      assert.equal(cfg.provider.ninerouter.npm, '@ai-sdk/openai-compatible');
+      assert.equal(cfg.provider[expectedProvider].npm, '@ai-sdk/openai-compatible');
 
       // 3. options must declare baseURL and apiKey env reference
-      assert.equal(cfg.provider.ninerouter.options.baseURL, 'http://127.0.0.1:20128/v1');
-      assert.equal(cfg.provider.ninerouter.options.apiKey, '{env:NINEROUTER_API_KEY}');
+      assert.equal(cfg.provider[expectedProvider].options.baseURL, 'http://127.0.0.1:20128/v1');
+      assert.equal(cfg.provider[expectedProvider].options.apiKey, '{env:NINEROUTER_API_KEY}');
 
       // 4. models map must contain the pinned model id
-      assert.ok(cfg.provider.ninerouter.models, 'models map must exist');
+      assert.ok(cfg.provider[expectedProvider].models, 'models map must exist');
       assert.ok(
-        cfg.provider.ninerouter.models['ag/gemini-3.1-pro-low'] ||
-          cfg.provider.ninerouter.models['ninerouter/ag/gemini-3.1-pro-low'],
+        cfg.provider[expectedProvider].models['ag/gemini-3.1-pro-low'] ||
+          cfg.provider[expectedProvider].models['ninerouter/ag/gemini-3.1-pro-low'],
         'models map must contain the pinned model id'
       );
+
+      // 5. Dynamic agreement: provider id in opencode.json changes with the exact --model argument
+      const altArgs = directAdapter.launch({
+        isolatedWorker: true,
+        model: 'customprov/ag/gemini-3.1-pro-low',
+        cwd: fakeWorkerRoot,
+        prompt: 'test prompt',
+      });
+      try {
+        runIso(directAdapter, altArgs, {
+          cwd: fakeHostCwd,
+          workerRoot: fakeWorkerRoot,
+          verdictPath: verdictFile,
+          getWorkerSid: () => 'TEST-SID',
+          verifyBoundary: () => true,
+          baseSha: '0123456789012345678901234567890123456789',
+          workerTimeoutMs: 1000,
+        });
+      } catch (_) {}
+      const cfgAlt = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+      const altModel = altArgs[altArgs.indexOf('--model') + 1];
+      const expectedAltProvider = sourcesApi.providerFromPrefix(altModel);
+      assert.equal(expectedAltProvider, 'customprov');
+      assert.ok(
+        cfgAlt.provider[expectedAltProvider],
+        `provider id in opencode.json must match provider '${expectedAltProvider}' derived from --model`
+      );
+      assert.equal(Object.keys(cfgAlt.provider)[0], expectedAltProvider);
     } finally {
       cp.spawnSync = realSpawn;
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -2029,6 +2064,8 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
     const c1 = failureApi.classifyFailure(opencodeErr);
     assert.equal(c1.scope, failureApi.Scope.HARNESS);
     assert.equal(c1.cause, failureApi.Cause.LAUNCH_CONFIG);
+    assert.equal(c1.cooldownMs, 5 * 60 * 1000);
+    assert.ok(c1.evidence.stdout.includes('Unexpected server error'));
 
     const c2 = failureApi.classifyFailure({
       exitCode: 1,
@@ -2036,6 +2073,7 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
     });
     assert.equal(c2.scope, failureApi.Scope.HARNESS);
     assert.equal(c2.cause, failureApi.Cause.LAUNCH_CONFIG);
+    assert.equal(c2.cooldownMs, 5 * 60 * 1000);
 
     const c3 = failureApi.classifyFailure({
       exitCode: 1,
@@ -2043,6 +2081,7 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
     });
     assert.equal(c3.scope, failureApi.Scope.HARNESS);
     assert.equal(c3.cause, failureApi.Cause.LAUNCH_CONFIG);
+    assert.equal(c3.cooldownMs, 5 * 60 * 1000);
   });
 
   test('sameFailureDomain for launch_config error does NOT block other candidates on same gateway/upstream', () => {

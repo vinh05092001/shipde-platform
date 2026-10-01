@@ -591,18 +591,28 @@ function getIsolatedLauncher() {
         throw new Error('OPENCODE_DIRECT_LAUNCH_FAILED: 9router source not found in sources.json');
       }
 
-      // Derive provider id from the same source as the --model prefix (one function, no second hard-coded name)
-      const providerId =
-        sourcesModule.providerFromPrefix(routerSource.modelPrefix) ||
-        sourcesModule.providerFromPrefix(routerSource) ||
-        routerSource.id;
-
-      // Extract pinned model id from args or options to populate models map
+      // Extract pinned model id from args or options (the exact --model string opencode receives)
       const modelIdx = Array.isArray(args) ? args.indexOf('--model') : -1;
       const pinnedModel =
         modelIdx !== -1 && modelIdx + 1 < args.length
           ? args[modelIdx + 1]
           : (opts && opts.pinnedModel) || (opts && opts.model) || null;
+
+      // Derive provider id directly from the exact --model string opencode receives
+      const providerId =
+        (pinnedModel && sourcesModule.providerFromPrefix(pinnedModel)) ||
+        sourcesModule.providerFromPrefix(routerSource.modelPrefix) ||
+        sourcesModule.providerFromPrefix(routerSource) ||
+        routerSource.id;
+
+      if (pinnedModel) {
+        const derivedFromModel = sourcesModule.providerFromPrefix(pinnedModel);
+        if (derivedFromModel && derivedFromModel !== providerId) {
+          throw new Error(
+            `OPENCODE_DIRECT_LAUNCH_FAILED: provider mismatch between model prefix '${derivedFromModel}' and provider '${providerId}'`
+          );
+        }
+      }
 
       const modelsMap = {};
       if (pinnedModel) {
