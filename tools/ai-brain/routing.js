@@ -685,6 +685,15 @@ function reportDispatchOutcome(args, deps) {
     return { exitCode: 2 };
   }
 
+  if (outcome && outcome.harness === 'agy-pool' && outcome.accountId) {
+    const { getHarness } = require('./harness');
+    const adapter = getHarness('agy-pool');
+    const mapped = adapter.mapOutcome(outcome.accountId, outcome.candidateKey, {
+      fakeRunsDir: d.fakeRunsDir,
+    });
+    outcome = Object.assign({}, outcome, mapped);
+  }
+
   const missing = ['candidateKey', 'status'].filter(
     (f) => outcome[f] === undefined || outcome[f] === null || outcome[f] === ''
   );
@@ -834,7 +843,7 @@ async function runProfileDispatch(args, deps) {
     headrooms: d.headrooms,
     reservations: d.reservations,
     accounts: d.accounts,
-    useStoredQuota: false,
+    useStoredQuota: d.useStoredQuota !== false,
     home: d.home,
     storePath: d.storePath,
   };

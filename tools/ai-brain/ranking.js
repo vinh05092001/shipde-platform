@@ -232,9 +232,16 @@ function resolveCandidateHeadroom(candidate, ctx) {
   if (typeof reading === 'string') {
     status = reading;
   } else if (reading && typeof reading === 'object') {
-    if (reading.status) status = reading.status;
-    if (reading.worstRatio !== undefined) worstRatio = reading.worstRatio;
-    if (reading.reason) reason = reading.reason;
+    if (reading.status) {
+      status = reading.status;
+      if (reading.worstRatio !== undefined) worstRatio = reading.worstRatio;
+      if (reading.reason) reason = reading.reason;
+    } else if (Array.isArray(reading.rows)) {
+      const agyQuota = require('./agy-quota');
+      const hr = agyQuota.headroomFor(reading, candidate.modelId);
+      status = agyQuota.statusFrom(hr, ctx);
+      reason = hr.reason;
+    }
   }
 
   return {

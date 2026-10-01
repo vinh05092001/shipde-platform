@@ -259,7 +259,118 @@ function structuredOutcome(candidateKey, res, classification, extra) {
   };
 }
 
-const HARNESSES = Object.freeze({ paseo, cline, hermes });
+const agyPool = {
+  id: 'agy-pool',
+  command: 'schtasks',
+  launch(job, opts) {
+    const fs = require('fs');
+    const path = require('path');
+    const dir =
+      (opts && opts.fakeRunsDir) ||
+      process.env.AGY_RUNS_DIR ||
+      (function () {
+        const os = require('os');
+        const home = (opts && opts.home) || os.homedir();
+        const localApp =
+          process.env.LOCALAPPDATA ||
+          path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
+        return path.join(localApp, 'agy-runs');
+      })();
+    const accountDir = path.join(dir, job.accountId);
+    fs.mkdirSync(accountDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(accountDir, 'job.json'),
+      JSON.stringify({
+        cwd: job.cwd,
+        prompt: job.prompt,
+        model: job.model,
+        candidateKey: job.candidateKey,
+        accountId: job.accountId,
+        harness: 'agy-pool',
+      })
+    );
+
+    if (job.usageFile) {
+      fs.writeFileSync(job.usageFile, JSON.stringify({ accountId: job.accountId }));
+    }
+
+    return ['/run', '/tn', `ShipDe\\ShipDe-${job.accountId}`];
+  },
+  resume(sessionId, prompt, job, opts) {
+    return this.launch(Object.assign({}, job, { prompt }), opts);
+  },
+  stop(sessionId) {
+    return ['/end', '/tn', `ShipDe\\ShipDe-${sessionId}`];
+  },
+  sessionIdFrom(parsed) {
+    return parsed && parsed.accountId ? String(parsed.accountId) : null;
+  },
+  mapOutcome(accountId, candidateKey, opts) {
+    const fs = require('fs');
+    const path = require('path');
+    const dir =
+      (opts && opts.fakeRunsDir) ||
+      process.env.AGY_RUNS_DIR ||
+      (function () {
+        const os = require('os');
+        const home = (opts && opts.home) || os.homedir();
+        const localApp =
+          process.env.LOCALAPPDATA ||
+          path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
+        return path.join(localApp, 'agy-runs');
+      })();
+    const resFile = path.join(dir, accountId, 'result.json');
+    if (!fs.existsSync(resFile))
+      return structuredOutcome(
+        candidateKey,
+        { exitCode: 1 },
+        { cause: 'UNKNOWN_STATE' },
+        { status: 'failed' }
+      );
+
+    let res;
+    try {
+      res = JSON.parse(fs.readFileSync(resFile, 'utf8'));
+    } catch (e) {
+      return structuredOutcome(
+        candidateKey,
+        { exitCode: 1 },
+        { cause: 'CORRUPT_RESULT' },
+        { status: 'failed' }
+      );
+    }
+
+    if (res.state === 'ok') {
+      return structuredOutcome(candidateKey, { exitCode: res.exitCode || 0 }, null, {
+        status: 'completed',
+      });
+    } else if (res.state === 'quota') {
+      return structuredOutcome(
+        candidateKey,
+        { exitCode: res.exitCode || 1 },
+        { cause: 'QUOTA_EXHAUSTED' },
+        { status: 'failed', cooldownUntil: res.resetsAt || null }
+      );
+    } else if (res.state === 'login-required') {
+      return structuredOutcome(
+        candidateKey,
+        { exitCode: res.exitCode || 1 },
+        { cause: 'AUTH_FAILED' },
+        { status: 'failed' }
+      );
+    } else {
+      return structuredOutcome(
+        candidateKey,
+        { exitCode: res.exitCode || 1 },
+        { cause: 'FAILED' },
+        { status: 'failed' }
+      );
+    }
+  },
+};
+
+const HARNESSES = Object.freeze({ paseo, cline, hermes, 'agy-pool': agyPool });
 
 function pickId(obj) {
   if (!obj || typeof obj !== 'object') return null;
