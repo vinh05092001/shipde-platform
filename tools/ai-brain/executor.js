@@ -148,9 +148,6 @@ function inspectVerdict(res) {
  * a value that is not a session cannot be resumed.
  */
 function readSessionId(adapter, job, res) {
-  if (adapter.id === 'opencode-direct') {
-    return { id: res.completionNonce || null, cause: 'HARNESS_NO_SESSION_ID' };
-  }
   const reportPath = job && typeof job.usageFile === 'string' ? job.usageFile : null;
   if (reportPath && adapter.writesUsageReport) {
     const fs = require('fs');
@@ -163,6 +160,9 @@ function readSessionId(adapter, job, res) {
       return { id: null, cause: 'HARNESS_USAGE_REPORT_INVALID' };
     }
     return { id: adapter.sessionIdFrom(report) || null, cause: 'HARNESS_NO_SESSION_ID' };
+  }
+  if (adapter.id === 'opencode-direct') {
+    return { id: res.completionNonce || null, cause: 'HARNESS_NO_SESSION_ID' };
   }
   const parsed = parseLastJson(res.stdout);
   if (!parsed) return { id: null, cause: 'HARNESS_INVALID_JSON' };

@@ -184,6 +184,10 @@ function withCleanGitEnv(cwd, fn, options) {
     copyIfSafe(workerGitDir, gitDir, 'index');
     copyIfSafe(workerCommonDir, gitDir, 'packed-refs');
 
+    fs.mkdirSync(path.join(gitDir, 'info'), { recursive: true });
+    copyIfSafe(path.join(workerGitDir, 'info'), path.join(gitDir, 'info'), 'exclude');
+    copyIfSafe(path.join(workerCommonDir, 'info'), path.join(gitDir, 'info'), 'exclude');
+
     safeCopyRefs(path.join(workerCommonDir, 'refs'), path.join(gitDir, 'refs'));
 
     return fn(gitDir);

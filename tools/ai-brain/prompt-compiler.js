@@ -43,6 +43,19 @@ function compilePrompt(item, ctx) {
     'Stop conditions: fail closed on a denied operation, a dependency cycle, or a missing dependency.'
   );
   lines.push(PUBLISHER_BOUNDARY);
+  const branch = c.branch || (i.id ? 'feat/' + String(i.id).toLowerCase() : 'exercise');
+  lines.push(
+    'Commit requirement: you must create exactly one local commit on the exercise branch (' +
+      branch +
+      ') containing all your changes (no push).'
+  );
+  if (c.usageFile) {
+    lines.push(
+      'Usage report: write your session usage report to ' +
+        c.usageFile +
+        ' (or it will be collected from harness result).'
+    );
+  }
   if (c.candidateKey) lines.push('Pinned candidateKey: ' + c.candidateKey);
   return lines.join('\n');
 }

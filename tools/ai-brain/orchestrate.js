@@ -222,9 +222,42 @@ function runVerificationCommand(item, options) {
   const expect = verification.expect || null;
   const exitOk = Boolean(res) && res.status === 0;
   const expectOk = expect ? output.includes(expect) : true;
+  if (!exitOk || !expectOk) {
+    return {
+      pass: false,
+      cause: exitOk ? 'VERIFICATION_EXPECT_MISSING' : 'VERIFICATION_EXIT',
+      command,
+      expect,
+      exitCode: res ? res.status : null,
+      detail: output.slice(-2000),
+    };
+  }
+
+  // After verification command passes, verify worker commit:
+  // After the agent returns, read the worker head with git rev-parse HEAD in the worker root;
+  // head == base SHA or a dirty tree means NO_LOCAL_COMMIT (a structured failure that feeds bounded repair)
+  const commitCheck = verifyWorkerCommit(cwd, o.baseSha);
+  if (!commitCheck.pass) {
+    return {
+      pass: false,
+      cause: 'NO_LOCAL_COMMIT',
+      findings: [
+        {
+          id: 'NO_LOCAL_COMMIT',
+          open: true,
+          detail: commitCheck.detail,
+        },
+      ],
+      command,
+      expect,
+      exitCode: res ? res.status : null,
+      detail: commitCheck.detail,
+    };
+  }
+
   return {
-    pass: exitOk && expectOk,
-    cause: exitOk && expectOk ? null : exitOk ? 'VERIFICATION_EXPECT_MISSING' : 'VERIFICATION_EXIT',
+    pass: true,
+    cause: null,
     command,
     expect,
     exitCode: res ? res.status : null,
@@ -289,17 +322,151 @@ function repairSpec(item, findings, round) {
 }
 
 function headShaOf(cwd) {
-  if (!cwd) return null;
+  if (!cwd || !fs.existsSync(path.join(cwd, '.git'))) return null;
   const { withCleanGitEnv, safeGit } = require('./supervisor');
-  return withCleanGitEnv(
-    cwd,
-    (tmpDir) => {
-      const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
-      if (!res || res.status !== 0) return null;
-      return String(res.stdout || '').trim() || null;
+  try {
+    return withCleanGitEnv(
+      cwd,
+      (tmpDir) => {
+        const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
+        if (!res || res.status !== 0) return null;
+        return String(res.stdout || '').trim() || null;
+      },
+      { workerWritable: true }
+    );
+  } catch (err) {
+    return null;
+  }
+}
+
+function isTreeDirty(cwd) {
+  if (!cwd || !fs.existsSync(path.join(cwd, '.git'))) return false;
+  const { withCleanGitEnv, safeGit } = require('./supervisor');
+  try {
+    return withCleanGitEnv(
+      cwd,
+      (tmpDir) => {
+        const res = safeGit(tmpDir, cwd, ['status', '--porcelain'], 20000);
+        if (!res || res.status !== 0) return false;
+        return String(res.stdout || '').trim().length > 0;
+      },
+      { workerWritable: true }
+    );
+  } catch (err) {
+    return false;
+  }
+}
+
+function verifyWorkerCommit(workerRoot, baseSha) {
+  if (!workerRoot) return { pass: true };
+  const headSha = headShaOf(workerRoot);
+  const isGitRepo = fs.existsSync(path.join(workerRoot, '.git'));
+  if (!headSha) {
+    if (isGitRepo) {
+      return {
+        pass: false,
+        cause: 'NO_LOCAL_COMMIT',
+        headSha: null,
+        baseSha: baseSha || null,
+        detail: 'no commit found at HEAD in worker root',
+      };
+    }
+    return { pass: true };
+  }
+  const cleanBase = baseSha ? String(baseSha).trim() : null;
+  if (cleanBase && headSha.toLowerCase() === cleanBase.toLowerCase()) {
+    return {
+      pass: false,
+      cause: 'NO_LOCAL_COMMIT',
+      headSha,
+      baseSha: cleanBase,
+      detail: 'worker head matches base SHA ' + cleanBase + ' (no local commit created)',
+    };
+  }
+  if (isTreeDirty(workerRoot)) {
+    return {
+      pass: false,
+      cause: 'NO_LOCAL_COMMIT',
+      headSha,
+      baseSha: cleanBase,
+      detail: 'worker left uncommitted changes in the worktree (dirty tree)',
+    };
+  }
+  return {
+    pass: true,
+    headSha,
+    baseSha: cleanBase,
+  };
+}
+
+function writeUsageReportFromHarnessResult(job, res) {
+  if (!job || !job.usageFile || typeof job.usageFile !== 'string') return null;
+  if (fs.existsSync(job.usageFile)) return job.usageFile;
+
+  // Hermes CLI writes its own --usage-file; an absent report for Hermes is an error (AI-64-R04, 64-01).
+  // Adapters like opencode-direct do not have a CLI --usage-file flag, so the loop writes it from the result.
+  if (job.harness === 'hermes') return null;
+  if (typeof job.run === 'function' && job.harness !== 'opencode-direct') return null;
+
+  let sessionId = null;
+  let tokens = { input: 0, output: 0, total: 0 };
+
+  const stdout = String((res && res.stdout) || '');
+  if (stdout) {
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      if (line.startsWith('{') && line.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.sessionID || parsed.sessionId || parsed.session_id) {
+            sessionId = parsed.sessionID || parsed.sessionId || parsed.session_id;
+          }
+          if (parsed.tokens) {
+            tokens.input = Number(parsed.tokens.input) || tokens.input;
+            tokens.output = Number(parsed.tokens.output) || tokens.output;
+            tokens.total = Number(parsed.tokens.total) || tokens.total;
+          } else if (parsed.part && parsed.part.tokens) {
+            tokens.input = Number(parsed.part.tokens.input) || tokens.input;
+            tokens.output = Number(parsed.part.tokens.output) || tokens.output;
+            tokens.total = Number(parsed.part.tokens.total) || tokens.total;
+          }
+        } catch (e) {
+          // ignore non-json line
+        }
+      }
+    }
+  }
+
+  if (!sessionId && res && res.completionNonce) {
+    sessionId = res.completionNonce;
+  }
+
+  // A failed launch reports session_id: null per AC-AI-64-23 / TASK-AI-63
+  if (res && res.exitCode !== 0 && res.exitCode !== null && res.exitCode !== undefined) {
+    sessionId = null;
+  }
+
+  const report = {
+    session_id: sessionId,
+    model: job.model || (job.candidate && job.candidate.model) || null,
+    provider: job.upstream || job.provider || (job.candidate && job.candidate.provider) || null,
+    usage: {
+      input: tokens.input,
+      output: tokens.output,
+      total: tokens.total || tokens.input + tokens.output,
     },
-    { workerWritable: true }
-  );
+  };
+
+  try {
+    fs.mkdirSync(path.dirname(job.usageFile), { recursive: true });
+    fs.writeFileSync(job.usageFile, JSON.stringify(report, null, 2), 'utf8');
+    return job.usageFile;
+  } catch (err) {
+    return null;
+  }
 }
 
 /** Progress markers, measured host-side from the worker's own worktree. */
@@ -597,12 +764,17 @@ async function runOrchestration(goal, opts) {
       if (launch.firstChoice === null) launch.firstChoice = decision.chosen;
       launch.selected = decision.chosen;
 
+      const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
+      const usageFile = prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt);
+
       // The prompt carries the pinned key the Controller chose (AI-64-R02), so it
       // is compiled per attempt rather than once before any selection.
       const prompt = compilePrompt(item, {
         goal,
         specText: o.specText,
         candidateKey: decision.chosen,
+        branch,
+        usageFile,
       });
       log.prompts.push({ workItemId: item.id, attempt, candidateKey: decision.chosen, prompt });
 
@@ -622,14 +794,14 @@ async function runOrchestration(goal, opts) {
         upstream: candidate.upstream,
         quotaScope: candidate.quotaScope,
         prompt,
-        branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+        branch,
         base: o.base || 'main',
         baseSha: o.baseSha || null,
         hostWorktree: o.isolatedWorker ? hostWorktree : null,
         workerRoot: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || null,
         cwd: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd,
         isolatedWorker: Boolean(o.isolatedWorker),
-        usageFile: prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt),
+        usageFile,
         checkpoint: checkpointFile,
         title: String(item.id),
         labels: { workItem: String(item.id), role: roleOf(item) },
@@ -655,6 +827,8 @@ async function runOrchestration(goal, opts) {
       } catch (err) {
         res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
       }
+
+      writeUsageReportFromHarnessResult(job, res);
 
       if (res && res.exercise) {
         job.exercise = res.exercise;
@@ -757,7 +931,12 @@ async function runOrchestration(goal, opts) {
         startedAt: res.startedAt || null,
         exercise: job.exercise || null,
         failBefore: job.failBefore || (job.exercise && job.exercise.failBefore) || null,
+        worktree: job.cwd || null,
       };
+      const workerHead = headShaOf(job.cwd);
+      if (workerHead) {
+        session.headSha = workerHead;
+      }
       log.sessions.push(session);
       log.launches.push(launch);
       log.exercise = session.exercise;
@@ -856,9 +1035,21 @@ async function reviewItem(
   evidenceData,
   registry
 ) {
+  const hostWorktree = o.cwd || process.cwd();
+  const isolatedWorkerRoot = o.isolatedWorker
+    ? require('./isolation-launcher').workerRootFor(hostWorktree)
+    : null;
+  const workerRoot =
+    (o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) ||
+    session.worktree ||
+    o.cwd ||
+    process.cwd();
+  const workerHead = headShaOf(workerRoot) || session.headSha;
+  const targetSha = workerHead && SHA_40.test(workerHead) ? workerHead : o.sha;
+
   // AI-64-R07: a review is bound to an exact commit. A run that cannot name the
   // commit under review does not review it.
-  if (!o.sha || !SHA_40.test(String(o.sha))) {
+  if (!targetSha || !SHA_40.test(String(targetSha))) {
     return {
       status: ReviewStatus.BLOCKED,
       reason: 'REVIEW_SHA_UNPINNED: a 40-character commit under review is mandatory',
@@ -884,13 +1075,20 @@ async function reviewItem(
     ? Number(o.reviewBudget)
     : DEFAULT_REVIEW_BUDGET;
   const review = await runReviewLoop(
-    { sha: o.sha, budget },
+    { sha: targetSha, budget },
     {
-      runTests: typeof o.tests === 'function' ? o.tests : () => runVerificationCommand(item, o),
+      runTests:
+        typeof o.tests === 'function'
+          ? o.tests
+          : () =>
+              runVerificationCommand(
+                item,
+                Object.assign({}, o, { workerRoot, baseSha: session.baseSha || o.baseSha })
+              ),
       review:
         typeof o.reviewer === 'function'
           ? o.reviewer
-          : reviewLane({ ...o, reviewerIdentity }, session.candidateKey),
+          : reviewLane(Object.assign({}, o, { reviewerIdentity }), session.candidateKey),
       repair:
         typeof o.repairer === 'function'
           ? o.repairer
@@ -912,7 +1110,7 @@ async function reviewItem(
 
   const entry = {
     workItemId: item.id,
-    sha: o.sha,
+    sha: review.finalSha || targetSha,
     reviewerIdentity: reviewerIdentity || null,
     writerCandidateKey: session.candidateKey,
     review,
@@ -1024,12 +1222,16 @@ function repairRound(
     const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
     const route = resolveLaunchRoute(candidate, o, registry);
     if (!route) return { sha };
+    const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
     const usageFile = prepareUsageReport(usageDir, planned.id + '-' + now + '-repair' + round);
     const prompt = compilePrompt(planned, {
       goal: log.goal,
       specText: o.specText,
       candidateKey: decision.chosen,
+      branch,
+      usageFile,
     });
+    const repairWorkerRoot = o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd;
     const repairJob = {
       workItemId: planned.id,
       candidateKey: decision.chosen,
@@ -1041,12 +1243,12 @@ function repairRound(
       upstream: candidate.upstream,
       quotaScope: candidate.quotaScope,
       prompt,
-      branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+      branch,
       base: o.base || 'main',
       baseSha: o.baseSha || null,
       hostWorktree: o.isolatedWorker ? hostWorktree : null,
       workerRoot: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || null,
-      cwd: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd,
+      cwd: repairWorkerRoot,
       isolatedWorker: Boolean(o.isolatedWorker),
       usageFile,
       checkpoint: o.checkpointFile || null,
@@ -1055,16 +1257,17 @@ function repairRound(
     };
     let res = null;
     try {
-      res = launcher(repairJob);
+      res = await launcher(repairJob);
     } catch (err) {
       res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
     }
+    writeUsageReportFromHarnessResult(repairJob, res);
     if (!res || res.exitCode !== 0) return { sha };
 
     const adapter = harnessFor({ harness: repairJob.harness });
     const handle = adapter ? require('./executor').readSessionId(adapter, repairJob, res).id : null;
-    const nextSha = headShaOf(o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd);
-    if (!handle || !nextSha || nextSha === sha) return { sha };
+    const nextSha = headShaOf(repairWorkerRoot);
+    if (!handle || !nextSha || nextSha === sha || isTreeDirty(repairWorkerRoot)) return { sha };
     decisions.recordDecision(
       {
         stage: decisions.Stage.LAUNCHED,
@@ -1217,6 +1420,9 @@ module.exports = {
   repairSpec,
   resolveLauncher,
   headShaOf,
+  isTreeDirty,
+  verifyWorkerCommit,
+  writeUsageReportFromHarnessResult,
   materialiseExercise,
   captureFailBefore,
   ItemStatus,
