@@ -253,6 +253,22 @@ function qualifyModel(model, route) {
   return prefix + name;
 }
 
+/**
+ * Derives the harness/toolchain provider id from a modelPrefix, source, or qualified model string.
+ *
+ * e.g. 'ninerouter/' -> 'ninerouter'
+ *      'ninerouter/ag/' -> 'ninerouter'
+ *      'ninerouter/ag/gemini-3.1-pro-low' -> 'ninerouter'
+ */
+function providerFromPrefix(target) {
+  if (!target) return '';
+  const raw =
+    typeof target === 'object' ? target.modelPrefix || target.prefix || '' : String(target);
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '';
+  return trimmed.split('/')[0].trim();
+}
+
 module.exports = {
   Kind,
   CAPACITY_KINDS,
@@ -268,4 +284,5 @@ module.exports = {
   describeAll,
   dispatchRoute,
   qualifyModel,
+  providerFromPrefix,
 };
