@@ -687,7 +687,9 @@ function reportDispatchOutcome(args, deps) {
   if (outcome && outcome.harness === 'agy-pool' && outcome.accountId) {
     const { getHarness } = require('./harness');
     const adapter = getHarness('agy-pool');
-    const mapped = adapter.mapOutcome(outcome.accountId, outcome.candidateKey, { fakeRunsDir: d.fakeRunsDir });
+    const mapped = adapter.mapOutcome(outcome.accountId, outcome.candidateKey, {
+      fakeRunsDir: d.fakeRunsDir,
+    });
     outcome = Object.assign({}, outcome, mapped);
   }
 

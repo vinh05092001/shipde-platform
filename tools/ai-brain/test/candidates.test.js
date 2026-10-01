@@ -439,12 +439,14 @@ describe('candidate generation', () => {
       {
         id: 'agy-native-a',
         provider: 'antigravity',
-        models: ['gemini-3.8-flash-high', 'claude-3-5-sonnet-20241022']
-      }
+        models: ['gemini-3.8-flash-high', 'claude-3-5-sonnet-20241022'],
+      },
     ];
     const result = candidates.generateCandidates({ registry, accounts });
 
-    const poolCand = result.find((c) => c.source === 'agy-pool' && c.accountId === 'agy01' && c.modelId.includes('gemini'));
+    const poolCand = result.find(
+      (c) => c.source === 'agy-pool' && c.accountId === 'agy01' && c.modelId.includes('gemini')
+    );
     assert.ok(poolCand, 'has agy01 pool candidate');
     assert.equal(poolCand.harness, 'agy-pool');
     assert.equal(poolCand.accessPath, 'ShipDe\\ShipDe-agy01');
@@ -614,19 +616,28 @@ describe('candidate generation', () => {
       const accDir = path.join(dir, 'agy02');
       fs.mkdirSync(accDir, { recursive: true });
       fs.writeFileSync(path.join(accDir, 'result.json'), JSON.stringify({ state: 'ok' }));
-      fs.writeFileSync(path.join(accDir, 'quota.json'), JSON.stringify({
-        groups: [{ id: 'gemini', fiveHour: { remaining: 0, resetAt: '2026-09-14T12:56:43Z' } }]
-      }));
+      fs.writeFileSync(
+        path.join(accDir, 'quota.json'),
+        JSON.stringify({
+          groups: [{ id: 'gemini', fiveHour: { remaining: 0, resetAt: '2026-09-14T12:56:43Z' } }],
+        })
+      );
 
-      const res = refreshQuota.refreshAccount({ id: 'agy02', provider: 'agy-pool' }, { fakeRunsDir: dir, path: storePath });
+      const res = refreshQuota.refreshAccount(
+        { id: 'agy02', provider: 'agy-pool' },
+        { fakeRunsDir: dir, path: storePath }
+      );
       assert.equal(res.ok, true);
       assert.equal(res.rows, 1);
 
       const { usableReadings } = require('../quota-store');
       const { resolveCandidateHeadroom } = require('../ranking');
       const readings = usableReadings({ email: 'host' }, { path: storePath }).reported;
-      
-      const headroom = resolveCandidateHeadroom({ accountId: 'agy02', modelId: 'gemini-3.1-pro' }, { headrooms: readings });
+
+      const headroom = resolveCandidateHeadroom(
+        { accountId: 'agy02', modelId: 'gemini-3.1-pro' },
+        { headrooms: readings }
+      );
       assert.equal(headroom.status, 'exhausted');
     });
 
@@ -635,9 +646,15 @@ describe('candidate generation', () => {
       const storePath = path.join(dir, 'quota-store.json');
       const accDir = path.join(dir, 'agy03');
       fs.mkdirSync(accDir, { recursive: true });
-      fs.writeFileSync(path.join(accDir, 'result.json'), JSON.stringify({ state: 'login-required' }));
+      fs.writeFileSync(
+        path.join(accDir, 'result.json'),
+        JSON.stringify({ state: 'login-required' })
+      );
 
-      const res = refreshQuota.refreshAccount({ id: 'agy03', provider: 'agy-pool' }, { fakeRunsDir: dir, path: storePath });
+      const res = refreshQuota.refreshAccount(
+        { id: 'agy03', provider: 'agy-pool' },
+        { fakeRunsDir: dir, path: storePath }
+      );
       assert.equal(res.ok, false);
       assert.equal(res.reason, 'AUTH_FAILED');
     });
@@ -645,33 +662,47 @@ describe('candidate generation', () => {
     test('the adapter writes the expected job.json and maps each result state', () => {
       const adapter = getHarness('agy-pool');
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-adapter-test-'));
-      const job = { accountId: 'agy04', cwd: '/test/cwd', prompt: 'test prompt', model: 'gemini-test' };
-      
+      const job = {
+        accountId: 'agy04',
+        cwd: '/test/cwd',
+        prompt: 'test prompt',
+        model: 'gemini-test',
+      };
+
       const args = adapter.launch(job, { fakeRunsDir: dir });
       assert.deepEqual(args, ['/run', '/tn', 'ShipDe\\ShipDe-agy04']);
-      
+
       const jobJson = JSON.parse(fs.readFileSync(path.join(dir, 'agy04', 'job.json'), 'utf8'));
       assert.equal(jobJson.cwd, '/test/cwd');
       assert.equal(jobJson.prompt, 'test prompt');
       assert.equal(jobJson.model, 'gemini-test');
 
       const key = 'test-key';
-      
-      fs.writeFileSync(path.join(dir, 'agy04', 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0 }));
+
+      fs.writeFileSync(
+        path.join(dir, 'agy04', 'result.json'),
+        JSON.stringify({ state: 'ok', exitCode: 0 })
+      );
       let out = adapter.mapOutcome('agy04', key, { fakeRunsDir: dir });
       assert.equal(out.status, 'completed');
-      
-      fs.writeFileSync(path.join(dir, 'agy04', 'result.json'), JSON.stringify({ state: 'quota', resetsAt: '2026-10-10T10:10:10Z' }));
+
+      fs.writeFileSync(
+        path.join(dir, 'agy04', 'result.json'),
+        JSON.stringify({ state: 'quota', resetsAt: '2026-10-10T10:10:10Z' })
+      );
       out = adapter.mapOutcome('agy04', key, { fakeRunsDir: dir });
       assert.equal(out.status, 'failed');
       assert.equal(out.errorClass, 'QUOTA_EXHAUSTED');
       assert.equal(out.cooldownUntil, '2026-10-10T10:10:10Z');
-      
-      fs.writeFileSync(path.join(dir, 'agy04', 'result.json'), JSON.stringify({ state: 'login-required' }));
+
+      fs.writeFileSync(
+        path.join(dir, 'agy04', 'result.json'),
+        JSON.stringify({ state: 'login-required' })
+      );
       out = adapter.mapOutcome('agy04', key, { fakeRunsDir: dir });
       assert.equal(out.status, 'failed');
       assert.equal(out.errorClass, 'AUTH_FAILED');
-      
+
       fs.writeFileSync(path.join(dir, 'agy04', 'result.json'), JSON.stringify({ state: 'error' }));
       out = adapter.mapOutcome('agy04', key, { fakeRunsDir: dir });
       assert.equal(out.status, 'failed');

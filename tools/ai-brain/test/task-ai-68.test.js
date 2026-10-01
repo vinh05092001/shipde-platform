@@ -81,11 +81,7 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     const out = res.stdout.toString() + '\n' + res.stderr.toString();
 
     assert.match(out, /Pinned.*:\s+agy-pool::.*::agy01/, 'agy01 should be pinned');
-    assert.doesNotMatch(
-      out,
-      /Pinned.*:\s+agy-pool::.*::agy02/,
-      'agy02 should NOT be pinned'
-    );
+    assert.doesNotMatch(out, /Pinned.*:\s+agy-pool::.*::agy02/, 'agy02 should NOT be pinned');
 
     // Check that agy02 is in the rejected list or ranked low
     assert.match(out, /agy02/, 'agy02 should appear in the output (e.g. rejected for quota)');
