@@ -5,19 +5,38 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+function isValidAccountId(accountId) {
+  return typeof accountId === 'string' && /^agy\d{2}$/.test(accountId);
+}
+
 function runsDir(options) {
   const opts = options || {};
-  return (
-    opts.fakeRunsDir ||
-    opts.runsDir ||
-    process.env.AGY_POOL_RUNS_DIR ||
-    process.env.AGY_RUNS_DIR ||
-    'C:\\Tools\\agy-runs'
-  );
+  if (opts.fakeRunsDir) return opts.fakeRunsDir;
+  if (opts.runsDir) return opts.runsDir;
+  if (process.env.AGY_POOL_RUNS_DIR) return process.env.AGY_POOL_RUNS_DIR;
+  if (process.env.AGY_RUNS_DIR) return process.env.AGY_RUNS_DIR;
+
+  const platform = opts.platform || process.platform;
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  if (platform === 'win32') {
+    return 'C:\\Tools\\agy-runs';
+  }
+  const home =
+    opts.home ||
+    process.env.HOME ||
+    (platform === 'win32' ? process.env.USERPROFILE : null) ||
+    os.homedir();
+  const base = process.env.XDG_DATA_HOME || p.join(home, '.local', 'share');
+  return p.join(base, 'agy-runs');
 }
 
 function accountDir(accountId, options) {
-  return path.join(runsDir(options), String(accountId || ''));
+  if (!isValidAccountId(accountId)) {
+    throw new Error(
+      `INVALID_ACCOUNT_ID: account must match /^agy\\d{2}$/, got ${JSON.stringify(accountId)}`
+    );
+  }
+  return path.join(runsDir(options), accountId);
 }
 
 function discoverAccounts(options) {
@@ -25,7 +44,7 @@ function discoverAccounts(options) {
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && /^agy\d{2}$/.test(entry.name))
+      .filter((entry) => entry.isDirectory() && isValidAccountId(entry.name))
       .map((entry) => entry.name)
       .sort();
   } catch {
@@ -38,6 +57,7 @@ function readJson(file) {
 }
 
 function readResult(accountId, options) {
+  if (!isValidAccountId(accountId)) return { state: 'error', reason: 'INVALID_ACCOUNT_ID' };
   const file = path.join(accountDir(accountId, options), 'result.json');
   try {
     return readJson(file);
@@ -48,6 +68,7 @@ function readResult(accountId, options) {
 }
 
 function readOutText(accountId, options) {
+  if (!isValidAccountId(accountId)) return '';
   const file = path.join(accountDir(accountId, options), 'out.txt');
   try {
     return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
@@ -57,6 +78,7 @@ function readOutText(accountId, options) {
 }
 
 function waitForResult(accountId, sinceMs, options) {
+  if (!isValidAccountId(accountId)) return { state: 'error', reason: 'INVALID_ACCOUNT_ID' };
   const opts = options || {};
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 120000;
   const file = path.join(accountDir(accountId, opts), 'result.json');
@@ -72,6 +94,13 @@ function waitForResult(accountId, sinceMs, options) {
 }
 
 function runAdapter(accountId, options) {
+  if (!isValidAccountId(accountId)) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'INVALID_ACCOUNT_ID: account must match /^agy\\d{2}$/',
+    };
+  }
   const opts = options || {};
   const script = opts.adapterScript || process.env.AGY_POOL_ADAPTER_SCRIPT;
   if (script) {
@@ -85,6 +114,15 @@ function runAdapter(accountId, options) {
       exitCode: res.status === null ? -1 : res.status,
       stdout: res.stdout || '',
       stderr: res.stderr || '',
+    };
+  }
+
+  const platform = opts.platform || process.platform;
+  if (platform !== 'win32') {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'UNSUPPORTED_PLATFORM: agy-pool requires Windows schtasks',
     };
   }
 
@@ -103,6 +141,9 @@ function runAdapter(accountId, options) {
 }
 
 function submitJob(accountId, job, options) {
+  if (!isValidAccountId(accountId)) {
+    return { state: 'error', exitCode: 1, reason: 'INVALID_ACCOUNT_ID' };
+  }
   const opts = options || {};
   const dir = accountDir(accountId, opts);
   fs.mkdirSync(dir, { recursive: true });
@@ -110,16 +151,22 @@ function submitJob(accountId, job, options) {
   const startedAt = Date.now();
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job, null, 2), 'utf8');
   const launch = runAdapter(accountId, opts);
-  const result = waitForResult(accountId, startedAt, opts);
-  if (!result && launch.exitCode !== 0) {
-    fs.writeFileSync(
-      resultFile,
-      JSON.stringify({ state: 'error', exitCode: launch.exitCode, reason: launch.stderr }, null, 2),
-      'utf8'
-    );
-    return readResult(accountId, opts);
+  if (launch.exitCode !== 0) {
+    const errorResult = {
+      state: 'error',
+      exitCode: launch.exitCode,
+      reason: launch.stderr || launch.stdout || `ADAPTER_EXIT_${launch.exitCode}`,
+    };
+    try {
+      fs.writeFileSync(resultFile, JSON.stringify(errorResult, null, 2), 'utf8');
+    } catch {}
+    return errorResult;
   }
-  return result;
+  return waitForResult(accountId, startedAt, opts);
+}
+
+function refreshModels(accountId, options) {
+  return submitJob(accountId, { command: 'models' }, options);
 }
 
 function parseQuotaJson(value) {
@@ -135,7 +182,13 @@ function parseQuotaJson(value) {
     }
     for (const key of ['fiveHour', 'weekly', 'daily', 'session']) {
       const windowValue = group[key];
-      if (!windowValue) continue;
+      if (!windowValue || typeof windowValue !== 'object') continue;
+      const hasRemaining =
+        windowValue.remainingPercent !== undefined ||
+        windowValue.remaining !== undefined ||
+        windowValue.disabled !== undefined;
+      if (!hasRemaining) continue;
+
       const remaining =
         windowValue.remainingPercent !== undefined
           ? Number(windowValue.remainingPercent)
@@ -163,6 +216,12 @@ function parseQuotaOutput(text) {
     if (quota.rows.length > 0) {
       return { available: true, rows: quota.rows, models: quota.models };
     }
+    return {
+      available: false,
+      reason: 'không có số liệu quota hợp lệ trong out.txt',
+      rows: [],
+      models: quota.models,
+    };
   } catch {}
 
   const agyQuota = require('./agy-quota');
@@ -189,9 +248,13 @@ function quotaReading(accountId, options) {
 }
 
 function modelIdsFromRuntime(options) {
+  const opts = options || {};
   const out = new Set();
-  for (const accountId of discoverAccounts(options)) {
-    const parsed = parseQuotaOutput(readOutText(accountId, options));
+  for (const accountId of discoverAccounts(opts)) {
+    if (opts.refreshModels || opts.refresh) {
+      refreshModels(accountId, opts);
+    }
+    const parsed = parseQuotaOutput(readOutText(accountId, opts));
     for (const model of parsed.models || []) out.add(model);
   }
   return [...out].sort();
@@ -203,8 +266,12 @@ module.exports = {
   discoverAccounts,
   readResult,
   readOutText,
+  waitForResult,
+  runAdapter,
   submitJob,
+  refreshModels,
   parseQuotaOutput,
   quotaReading,
   modelIdsFromRuntime,
+  isValidAccountId,
 };

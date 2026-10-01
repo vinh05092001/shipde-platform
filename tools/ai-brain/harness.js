@@ -330,6 +330,14 @@ const agyPool = {
   },
   mapOutcome(accountId, candidateKey, opts) {
     const pool = require('./agy-pool-runtime');
+    if (!pool.isValidAccountId(accountId)) {
+      return structuredOutcome(
+        candidateKey,
+        { exitCode: 1 },
+        { cause: 'INVALID_ACCOUNT_ID' },
+        { status: 'failed', reason: 'INVALID_ACCOUNT_ID: account must match /^agy\\d{2}$/' }
+      );
+    }
     const res = pool.readResult(accountId, opts);
     if (!res)
       return structuredOutcome(

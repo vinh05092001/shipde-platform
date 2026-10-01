@@ -694,16 +694,19 @@ function reportDispatchOutcome(args, deps) {
         parsedBeforeMapping.harness === 'agy-pool' &&
         parsedBeforeMapping.account))
   ) {
+    const poolAccount = outcome.accountId || parsedBeforeMapping.account;
+    const { isValidAccountId } = require('./agy-pool-runtime');
+    if (!isValidAccountId(poolAccount)) {
+      error('OUTCOME_INVALID: invalid agy-pool account: ' + String(poolAccount));
+      exit(2);
+      return { exitCode: 2, reason: 'INVALID_ACCOUNT_ID' };
+    }
     const { getHarness } = require('./harness');
     const adapter = getHarness('agy-pool');
-    const mapped = adapter.mapOutcome(
-      outcome.accountId || parsedBeforeMapping.account,
-      outcome.candidateKey,
-      {
-        fakeRunsDir: d.fakeRunsDir,
-        home: d.home,
-      }
-    );
+    const mapped = adapter.mapOutcome(poolAccount, outcome.candidateKey, {
+      fakeRunsDir: d.fakeRunsDir,
+      home: d.home,
+    });
     outcome = Object.assign({}, outcome, mapped);
   }
 

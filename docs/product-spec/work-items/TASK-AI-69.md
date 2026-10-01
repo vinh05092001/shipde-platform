@@ -86,8 +86,34 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `TBD` | `TBD` | `TBD` |
+| 1 | `6dd2ebcadf7387c4e728c3ecd3af62ce0d9d6dc5` | `CHANGES_REQUIRED` | `F1`, `F2`, `F3`, `F4`, `F5`, `F6`, `F7`, `F8` |
+
+### Review repair round 1 evidence
+
+- `F1`: `runsDir` on non-Windows previously defaulted to relative Windows literal `C:\Tools\agy-runs`, creating a directory in cwd. `runsDir` now resolves non-Windows base via `XDG_DATA_HOME` or `~/.local/share/agy-runs` using POSIX path separators, and `runAdapter` immediately returns `exitCode: 1` with `UNSUPPORTED_PLATFORM: agy-pool requires Windows schtasks` when executed outside Windows without an adapter script.
+  - Fail before: `runsDir({ platform: 'linux' })` returned `'C:\\Tools\\agy-runs'`; `runAdapter` failed on missing binary without explicit platform reason.
+  - Pass after: `tools/ai-brain/test/task-ai-69.test.js` asserts `runsDir({ platform: 'linux' })` is absolute POSIX and `runAdapter` returns `UNSUPPORTED_PLATFORM`.
+- `F2`: `submitJob` previously waited up to 120s even if the adapter launch failed immediately. It now checks launch failure before waiting, immediately writing error result and returning the adapter error. Added `--pool-timeout` / `--timeout-ms` flags to `cli.js quota` and streaming per-account progress output via `opts.onProgress`.
+  - Fail before: `submitJob` blocked for full `timeoutMs` on launch exit != 0, returning `POOL_TIMEOUT`.
+  - Pass after: `submitJob` returns in <100ms with exit code and reason; verified in `task-ai-69.test.js`.
+- `F3`: `parseQuotaJson` converted windows without remaining quota into `remainingPercent: 0`, and `refreshAccount` mapped that to `QUOTA_EXHAUSTED`. `parseQuotaJson` now ignores unpopulated windows and marks unparseable JSON output as unavailable (`không có số liệu quota hợp lệ trong out.txt`), and `refreshAccount` only concludes `QUOTA_EXHAUSTED` when every reported window has non-positive remaining quota.
+  - Fail before: `parseQuotaOutput('{"groups":[{"id":"gemini","weekly":{"resetAt":"..."}}]}')` emitted `remainingPercent: 0` and `refreshAccount` returned `QUOTA_EXHAUSTED`.
+  - Pass after: `parseQuotaOutput` returns `available: false`, and `refreshAccount` preserves reason without mapping to `QUOTA_EXHAUSTED`.
+- `F4`: Unvalidated `candidateKey` allowed path traversal in `accountDir`. Added strict `isValidAccountId` check (`/^agy\d{2}$/`) in `accountDir`, `readResult`, `runAdapter`, `submitJob`, `harness.mapOutcome`, and `routing.reportDispatchOutcome`.
+  - Fail before: `accountDir('../../..')` returned traversed directory; `mapOutcome` read arbitrary filesystem paths.
+  - Pass after: `accountDir('../../..')` throws `INVALID_ACCOUNT_ID`, `mapOutcome` returns `INVALID_ACCOUNT_ID`, and CLI `dispatch --report-outcome` exits code 2 with `OUTCOME_INVALID`.
+- `F5`: `agyPool.quota(accountId, opts)` in `harness.js` was uncalled dead surface. Added caller in `refresh-quota.js` and dedicated unit test in `task-ai-68.test.js`.
+  - Fail before: Zero callers or tests in repo.
+  - Pass after: `refresh-quota.js` calls `agyPool.quota`; unit test in `tools/ai-brain/test/task-ai-68.test.js` passes.
+- `F6`: Runtime candidate models relied on unrefreshed `out.txt`. Added `refreshModels` in `agy-pool-runtime.js` submitting `{ command: 'models' }`, and `modelIdsFromRuntime({ refreshModels: true })` triggers refresh.
+  - Fail before: No `refreshModels` function; no mechanism to submit `{ command: 'models' }`.
+  - Pass after: `refreshModels` submits `{ command: 'models' }` and parses advertised models; verified in `task-ai-69.test.js`.
+- `F7`: Untracked scratch directories `.tmp-ai69-home/` and `.tmp-ai69-temp/` excluded via `.git/info/exclude` without deleting them.
+- `F8`: Recorded residual limitations and review repair evidence in `TASK-AI-69.md`.
 
 ## Residual limitations
 
-None.
+- Native execution of `agy-pool` scheduled tasks requires a Windows host with `schtasks`; on non-Windows platforms `runAdapter` refuses execution with an explicit `UNSUPPORTED_PLATFORM` error unless overridden with `adapterScript` or `fakeRunsDir`.
+- Candidate model discovery extracts models from runtime output (`out.txt`) produced by quota or models commands; while `refreshModels` and `{ refreshModels: true }` are supported, model catalog changes are not continuously polled in the background.
+- Profile dispatch timeout defaults to 120 seconds unless explicitly overridden by `--pool-timeout` or `--timeout-ms`.
+

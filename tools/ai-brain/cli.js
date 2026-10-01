@@ -535,10 +535,17 @@ function quotaCommand(args) {
   const { usableReadings, storePath } = require('./quota-store');
 
   const home = args.home || process.env.HOME || process.env.USERPROFILE;
+  const poolTimeout = args['pool-timeout'] || args['timeout-ms'] || args.timeout;
   const runtimeOpts = {
     home,
     fakeRunsDir: args['pool-runtime-dir'] || args['agy-runs-dir'],
     adapterScript: args['pool-adapter-script'],
+    ...(poolTimeout
+      ? {
+          timeoutMs: Math.max(1, Number(poolTimeout)),
+          adapterTimeoutMs: Math.max(1, Number(poolTimeout)),
+        }
+      : {}),
   };
   const identity = readIdentity({ home });
   const accounts = listAccounts() || [];
@@ -567,11 +574,13 @@ function quotaCommand(args) {
     return;
   }
 
-  const results = refreshAll(
-    accounts,
-    Object.assign({ identity, discoverPool: true }, runtimeOpts)
-  );
-  if (args.json) return console.log(JSON.stringify({ identity, results }, null, 2));
+  if (args.json) {
+    const results = refreshAll(
+      accounts,
+      Object.assign({ identity, discoverPool: true }, runtimeOpts)
+    );
+    return console.log(JSON.stringify({ identity, results }, null, 2));
+  }
 
   console.log('');
   console.log(
@@ -580,11 +589,12 @@ function quotaCommand(args) {
       : '  Không xác định được account đang đăng nhập: ' + identity.reason
   );
   console.log('');
-  for (const r of results) {
+  const onProgress = (r) => {
     if (r.skipped) console.log('  BỎ QUA  ' + r.accountId + ' — ' + r.reason);
     else if (r.ok) console.log('  ĐỌC ĐƯỢC ' + r.accountId + ' — ' + r.rows + ' dòng');
     else console.log('  HỎNG    ' + r.accountId + ' — ' + r.reason);
-  }
+  };
+  refreshAll(accounts, Object.assign({ identity, discoverPool: true, onProgress }, runtimeOpts));
   console.log('');
 }
 

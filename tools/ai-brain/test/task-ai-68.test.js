@@ -132,4 +132,33 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     // Check that agy02 is in the rejected list or ranked low
     assert.match(out, /agy02/, 'agy02 should appear in the output (e.g. rejected for quota)');
   });
+
+  test('agyPool.quota reads quota via adapter and returns parsed reading', () => {
+    const root = tmpDir('ai68-quota-test-');
+    const runsDir = path.join(root, 'agy-runs');
+    fs.mkdirSync(path.join(runsDir, 'agy01'), { recursive: true });
+    writeJson(path.join(runsDir, 'agy01', 'state.json'), {
+      result: { state: 'ok', exitCode: 0 },
+      out: JSON.stringify({
+        groups: [
+          {
+            id: 'gemini',
+            models: ['gemini-test-pro'],
+            weekly: { remaining: 0.75, resetAt: '2026-10-02T00:00:00Z' },
+          },
+        ],
+      }),
+    });
+    const adapterScript = writePoolAdapter(runsDir);
+    const { getHarness } = require('../harness');
+    const adapter = getHarness('agy-pool');
+    const reading = adapter.quota('agy01', {
+      fakeRunsDir: runsDir,
+      adapterScript,
+    });
+    assert.equal(reading.available, true);
+    assert.equal(reading.account.email, 'agy01');
+    assert.equal(reading.rows.length, 1);
+    assert.equal(reading.rows[0].remainingPercent, 75);
+  });
 });

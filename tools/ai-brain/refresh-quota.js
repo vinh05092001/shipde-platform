@@ -63,6 +63,11 @@ const READERS = {
   },
   'agy-pool': {
     read: (account, opts) => {
+      const { getHarness } = require('./harness');
+      const adapter = getHarness('agy-pool');
+      if (adapter && typeof adapter.quota === 'function') {
+        return adapter.quota(account.id, opts);
+      }
       const pool = require('./agy-pool-runtime');
       const result = pool.submitJob(account.id, { command: 'quota' }, opts);
       return pool.quotaReading(account.id, Object.assign({}, opts, { result }));
@@ -170,7 +175,11 @@ function refreshAccount(account, options) {
     quota.available === true &&
     Array.isArray(quota.rows) &&
     quota.rows.length > 0 &&
-    quota.rows.every((row) => Number(row.remainingPercent || 0) <= 0 || row.disabled);
+    quota.rows.every(
+      (row) =>
+        (Number.isFinite(row.remainingPercent) && Number(row.remainingPercent) <= 0) ||
+        row.disabled === true
+    );
 
   return {
     accountId: account.id,
@@ -203,7 +212,17 @@ function refreshAll(accounts, options) {
       }
     }
   }
-  return allAccounts.map((a) => refreshAccount(a, options));
+  const results = [];
+  for (const a of allAccounts) {
+    const res = refreshAccount(a, options);
+    if (typeof opts.onProgress === 'function') {
+      try {
+        opts.onProgress(res);
+      } catch {}
+    }
+    results.push(res);
+  }
+  return results;
 }
 
 module.exports = { SUPPORTED_PROVIDERS, identityFor, refreshAccount, refreshAll, READERS };
