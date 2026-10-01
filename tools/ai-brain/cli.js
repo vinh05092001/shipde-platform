@@ -1106,17 +1106,8 @@ function dispatchProfileCommand(args, deps) {
     fakeRunsDir:
       (deps && deps.fakeRunsDir) || args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined,
     home: (deps && deps.home) || args.home || undefined,
-    adapterScript:
-      (deps && deps.adapterScript) ||
-      args['pool-adapter-script'] ||
-      process.env.AGY_POOL_ADAPTER_SCRIPT ||
-      undefined,
-    platform:
-      (deps && deps.platform) ||
-      args['pool-platform'] ||
-      args.platform ||
-      process.env.AGY_POOL_PLATFORM ||
-      undefined,
+    adapterScript: (deps && deps.adapterScript) || undefined,
+    platform: (deps && deps.platform) || undefined,
   });
 
   const candidateList = assembleForDispatch(

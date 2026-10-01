@@ -77,14 +77,13 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     const refreshScript = path.join(__dirname, '..', 'refresh-quota.js');
     const refreshCode = `
       const { refreshAll } = require(String.raw\`${refreshScript}\`);
-      refreshAll([], { home: String.raw\`${home}\`, runsDir: String.raw\`${runsDir}\`, adapterScript: String.raw\`${adapterScript}\`, platform: 'win32' });
+      refreshAll([], { home: String.raw\`${home}\`, runsDir: String.raw\`${runsDir}\`, adapterScript: String.raw\`${adapterScript}\` });
     `;
     const resRefresh = spawnSync('node', ['-e', refreshCode], {
       env: Object.assign({}, process.env, {
         LOCALAPPDATA: localApp,
         AGY_POOL_RUNS_DIR: runsDir,
         AGY_POOL_ADAPTER_SCRIPT: adapterScript,
-        AGY_POOL_PLATFORM: 'win32',
         HOME: home,
         USERPROFILE: home,
       }),
@@ -111,35 +110,29 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     });
 
     const cliPath = path.join(__dirname, '..', 'cli.js');
+    const outFile = path.join(root, 'dispatch-out.log');
+    const outFd = fs.openSync(outFile, 'w');
     const res = spawnSync(
       'node',
-      [
-        cliPath,
-        'dispatch',
-        '--dry-run',
-        '--profile',
-        profileFile,
-        '--pool-runtime-dir',
-        runsDir,
-        '--pool-adapter-script',
-        adapterScript,
-        '--json',
-      ],
+      [cliPath, 'dispatch', '--dry-run', '--profile', profileFile, '--json'],
       {
+        stdio: ['ignore', outFd, 'pipe'],
         env: Object.assign({}, process.env, {
           LOCALAPPDATA: localApp,
           AGY_POOL_RUNS_DIR: runsDir,
           AGY_POOL_ADAPTER_SCRIPT: adapterScript,
-          AGY_POOL_PLATFORM: 'win32',
           HOME: home,
           USERPROFILE: home,
         }),
         cwd: root,
+        maxBuffer: 10 * 1024 * 1024,
       }
     );
+    fs.closeSync(outFd);
 
-    const out = res.stdout.toString() + '\n' + res.stderr.toString();
+    const out = fs.readFileSync(outFile, 'utf8') + '\n' + (res.stderr ? res.stderr.toString() : '');
 
+    assert.equal(res.status, 0, 'dispatch CLI should exit 0');
     assert.match(out, /Pinned.*:\s+agy-pool::.*::agy01/, 'agy01 should be pinned');
     assert.doesNotMatch(out, /Pinned.*:\s+agy-pool::.*::agy02/, 'agy02 should NOT be pinned');
 
@@ -169,7 +162,6 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     const reading = adapter.quota('agy01', {
       fakeRunsDir: runsDir,
       adapterScript,
-      platform: 'win32',
     });
     assert.equal(reading.available, true);
     assert.equal(reading.account.email, 'agy01');

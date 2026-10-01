@@ -957,7 +957,11 @@ async function runProfileDispatch(args, deps) {
     );
   }
 
-  exit(0);
+  if (exit === process.exit) {
+    process.exitCode = 0;
+  } else {
+    exit(0);
+  }
   return {
     exitCode: 0,
     profile,
