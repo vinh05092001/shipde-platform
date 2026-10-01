@@ -423,6 +423,19 @@ describe('Dispatch planning', () => {
     );
     assert.equal(plan1.assignments.length, 1);
 
+    const ctxHeld = {
+      now: NOW + 30 * 60 * 1000,
+      governedDecision: 'DEC-017',
+      running: [],
+      limits: { maxImplementationAgents: 10 },
+    };
+    const heldPlan = planDispatch(
+      [item({ workItemId: 'REL-HELD', branch: 'feat/rel-held' })],
+      [limited],
+      ctxHeld
+    );
+    assert.equal(heldPlan.assignments.length, 0, '30-minute reservation is still held');
+
     const ctx2 = {
       now: NOW + 2.5 * 60 * 60 * 1000,
       governedDecision: 'DEC-017',
