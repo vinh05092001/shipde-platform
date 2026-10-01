@@ -424,7 +424,7 @@ describe('Dispatch planning', () => {
     assert.equal(plan1.assignments.length, 1);
 
     const ctx2 = {
-      now: NOW + 3 * 60 * 1000,
+      now: NOW + 2.5 * 60 * 60 * 1000,
       governedDecision: 'DEC-017',
       running: [],
       limits: { maxImplementationAgents: 10 },

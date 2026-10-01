@@ -729,16 +729,16 @@ function reportDispatchOutcome(args, deps) {
       // The reporter observed when this budget clears. Passing it through is what
       // keeps "quota exhausted until 01:55" from decaying into a five-minute
       // cooldown the classifier scraped out of a message.
-      cooldownUntil: outcome.cooldownUntil !== undefined ? outcome.cooldownUntil : undefined,
+      cooldownUntil: failed && outcome.cooldownUntil !== undefined ? outcome.cooldownUntil : undefined,
       level: evidence.Level.API,
       source: 'report-outcome',
     });
 
     const quotaStore = require('./quota-store');
-    const storePath = d.storePath || path.join(rootDir, '.slate', 'ai-brain', 'quota.json');
+    const targetPath = d.storePath || path.join(rootDir, '.slate', 'ai-brain', 'quota.json');
     quotaStore.releaseReservation(outcome.taskId || outcome.workItemId || 'TASK-REPORT-OUTCOME', outcome.candidateKey, {
       home: d.home,
-      storePath,
+      path: targetPath,
       now
     });
   }
