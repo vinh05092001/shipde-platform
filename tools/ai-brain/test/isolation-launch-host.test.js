@@ -111,13 +111,7 @@ function runGeneratedHost({ targetLines, workerTimeoutMs, workerUsername, payloa
   const args =
     typeof payloadArgs === 'function'
       ? payloadArgs(targetPath)
-      : [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          targetPath,
-        ];
+      : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', targetPath];
 
   const launchResultPath = path.join(dir, 'launch-result.json');
   const completionNonce = crypto.randomBytes(16).toString('hex');
@@ -194,53 +188,49 @@ test(
   }
 );
 
-test(
-  'the generated host script passes prompt metacharacters literally',
-  windowsSkip,
-  () => {
-    const literalPrompt = 'Echo $env:X and $(whoami)';
-    const expandedSecret = 'operator-secret-must-not-expand';
-    const { dir, hostRes, raw } = runGeneratedHost({
-      workerTimeoutMs: 60000,
-      env: { X: expandedSecret },
-      payloadArgs: (targetPath) => [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        targetPath,
-        literalPrompt,
-      ],
-      targetLines: [
-        'param([string]$Prompt)',
-        '$ErrorActionPreference = "Stop"',
-        'Write-Output $Prompt',
-        'exit 0',
-      ],
-    });
-
-    assert.strictEqual(
-      hostRes.status,
-      0,
-      'host script failed: ' + String(hostRes.stderr || hostRes.stdout || '')
-    );
-    assert.ok(raw, 'the host must write a launch result');
-    assert.strictEqual(raw.exitCode, 0, 'the target must exit successfully');
-    assert.strictEqual(
-      String(raw.stdout || '').trim(),
+test('the generated host script passes prompt metacharacters literally', windowsSkip, () => {
+  const literalPrompt = 'Echo $env:X and $(whoami)';
+  const expandedSecret = 'operator-secret-must-not-expand';
+  const { dir, hostRes, raw } = runGeneratedHost({
+    workerTimeoutMs: 60000,
+    env: { X: expandedSecret },
+    payloadArgs: (targetPath) => [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      targetPath,
       literalPrompt,
-      'PowerShell must not expand prompt text before the worker receives it'
-    );
-    assert.ok(
-      !String(raw.stdout || '').includes(expandedSecret),
-      'operator environment values must not be materialised through prompt expansion'
-    );
-    assert.ok(
-      !fs.readFileSync(path.join(dir, 'run-target.ps1'), 'utf8').includes(literalPrompt),
-      'the generated run-target.ps1 must not embed the prompt text'
-    );
-  }
-);
+    ],
+    targetLines: [
+      'param([string]$Prompt)',
+      '$ErrorActionPreference = "Stop"',
+      'Write-Output $Prompt',
+      'exit 0',
+    ],
+  });
+
+  assert.strictEqual(
+    hostRes.status,
+    0,
+    'host script failed: ' + String(hostRes.stderr || hostRes.stdout || '')
+  );
+  assert.ok(raw, 'the host must write a launch result');
+  assert.strictEqual(raw.exitCode, 0, 'the target must exit successfully');
+  assert.strictEqual(
+    String(raw.stdout || '').trim(),
+    literalPrompt,
+    'PowerShell must not expand prompt text before the worker receives it'
+  );
+  assert.ok(
+    !String(raw.stdout || '').includes(expandedSecret),
+    'operator environment values must not be materialised through prompt expansion'
+  );
+  assert.ok(
+    !fs.readFileSync(path.join(dir, 'run-target.ps1'), 'utf8').includes(literalPrompt),
+    'the generated run-target.ps1 must not embed the prompt text'
+  );
+});
 
 test(
   'the generated host script waits for the job and reports its exit code and output',

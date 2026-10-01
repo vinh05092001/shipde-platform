@@ -16,7 +16,7 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** The worker root for one job: the worker never sees the operator's leaf name. */
 function workerRootFor(hostCwd) {
-  const jobName = path.basename(String(hostCwd || '')) || 'default';
+  const jobName = path.win32.basename(String(hostCwd || '')) || 'default';
   if (
     jobName === '.' ||
     jobName === '..' ||

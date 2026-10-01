@@ -1463,7 +1463,9 @@ test('64-33 materialiseExercise refuses targets outside the worker root', () => 
     'the exercise runner must not be materialised into an operator or temp worktree'
   );
   assert.equal(
-    fs.existsSync(path.join(outsideWorkerRoot, 'tools', 'ai-brain', 'test', 'e1-branch-name.test.js')),
+    fs.existsSync(
+      path.join(outsideWorkerRoot, 'tools', 'ai-brain', 'test', 'e1-branch-name.test.js')
+    ),
     false,
     'refused exercise materialisation must not leave a generated test file behind'
   );
@@ -1683,7 +1685,7 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
       if (cmd === 'git') {
         if (cargs && cargs[0] === 'clone') {
           try {
-            fs.mkdirSync(cargs[4], { recursive: true });
+            fs.mkdirSync(cargs[cargs.length - 1], { recursive: true });
           } catch (e) {
             console.error('mkdirSync failed in mock:', e);
           }
