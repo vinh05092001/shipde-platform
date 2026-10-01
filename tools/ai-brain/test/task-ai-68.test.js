@@ -12,6 +12,22 @@ function writeJson(file, obj) {
   fs.writeFileSync(file, JSON.stringify(obj, null, 2));
 }
 
+function writePoolAdapter(dir) {
+  const script = path.join(dir, 'fake-pool-adapter.js');
+  fs.writeFileSync(
+    script,
+    [
+      "const fs = require('fs');",
+      "const path = require('path');",
+      'const dir = process.argv[2];',
+      "const state = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));",
+      "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(state.result));",
+      "if (state.out !== undefined) fs.writeFileSync(path.join(dir, 'out.txt'), state.out);",
+    ].join('\n')
+  );
+  return script;
+}
+
 const { test, describe } = require('node:test');
 
 describe('TASK-AI-68: pool candidates reach the live ranking', () => {
@@ -20,18 +36,41 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     const localApp = path.join(home, 'AppData', 'Local');
     const runsDir = path.join(localApp, 'agy-runs');
     fs.mkdirSync(runsDir, { recursive: true });
+    const adapterScript = writePoolAdapter(runsDir);
 
     // Fake agy01: 100% quota
     fs.mkdirSync(path.join(runsDir, 'agy01'));
-    writeJson(path.join(runsDir, 'agy01', 'quota.json'), { groups: [{ id: 'gemini' }] });
-    writeJson(path.join(runsDir, 'agy01', 'result.json'), { state: 'ok' });
+    writeJson(path.join(runsDir, 'agy01', 'state.json'), {
+      result: { state: 'ok' },
+      out: JSON.stringify({
+        groups: [
+          {
+            id: 'gemini',
+            models: ['gemini-test-pro'],
+            weekly: { remaining: 1 },
+            fiveHour: { remaining: 1 },
+          },
+        ],
+      }),
+    });
 
     // Fake agy02: 0% quota
     fs.mkdirSync(path.join(runsDir, 'agy02'));
-    writeJson(path.join(runsDir, 'agy02', 'quota.json'), { groups: [{ id: 'gemini' }] });
-    writeJson(path.join(runsDir, 'agy02', 'result.json'), {
-      state: 'quota',
-      resetsAt: new Date(Date.now() + 86400000).toISOString(),
+    writeJson(path.join(runsDir, 'agy02', 'state.json'), {
+      result: {
+        state: 'quota',
+        resetsAt: new Date(Date.now() + 86400000).toISOString(),
+      },
+      out: JSON.stringify({
+        groups: [
+          {
+            id: 'gemini',
+            models: ['gemini-test-pro'],
+            weekly: { remaining: 0 },
+            fiveHour: { remaining: 0 },
+          },
+        ],
+      }),
     });
 
     // We must run refresh quota so the evidence/ranking stores the quota
@@ -43,6 +82,8 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     const resRefresh = spawnSync('node', ['-e', refreshCode], {
       env: Object.assign({}, process.env, {
         LOCALAPPDATA: localApp,
+        AGY_POOL_RUNS_DIR: runsDir,
+        AGY_POOL_ADAPTER_SCRIPT: adapterScript,
         HOME: home,
         USERPROFILE: home,
       }),
@@ -69,14 +110,19 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     });
 
     const cliPath = path.join(__dirname, '..', 'cli.js');
-    const res = spawnSync('node', [cliPath, 'dispatch', '--dry-run', '--profile', profileFile], {
-      env: Object.assign({}, process.env, {
-        LOCALAPPDATA: localApp,
-        HOME: home,
-        USERPROFILE: home,
-      }),
-      cwd: root,
-    });
+    const res = spawnSync(
+      'node',
+      [cliPath, 'dispatch', '--dry-run', '--profile', profileFile, '--json'],
+      {
+        env: Object.assign({}, process.env, {
+          LOCALAPPDATA: localApp,
+          AGY_POOL_RUNS_DIR: runsDir,
+          HOME: home,
+          USERPROFILE: home,
+        }),
+        cwd: root,
+      }
+    );
 
     const out = res.stdout.toString() + '\n' + res.stderr.toString();
 

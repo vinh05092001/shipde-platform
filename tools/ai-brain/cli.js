@@ -534,14 +534,20 @@ function quotaCommand(args) {
   const { listAccounts } = require('./accounts');
   const { usableReadings, storePath } = require('./quota-store');
 
-  const identity = readIdentity({});
+  const home = args.home || process.env.HOME || process.env.USERPROFILE;
+  const runtimeOpts = {
+    home,
+    fakeRunsDir: args['pool-runtime-dir'] || args['agy-runs-dir'],
+    adapterScript: args['pool-adapter-script'],
+  };
+  const identity = readIdentity({ home });
   const accounts = listAccounts() || [];
 
   if (args.show) {
-    const { reported, problems } = usableReadings(identity, {});
+    const { reported, problems } = usableReadings(identity, runtimeOpts);
     if (args.json) return console.log(JSON.stringify({ identity, reported, problems }, null, 2));
     console.log('');
-    console.log('  Số liệu quota đang dùng được — ' + storePath({}));
+    console.log('  Số liệu quota đang dùng được — ' + storePath(runtimeOpts));
     console.log('');
     for (const [id, q] of Object.entries(reported)) {
       for (const row of q.rows) {
@@ -561,7 +567,10 @@ function quotaCommand(args) {
     return;
   }
 
-  const results = refreshAll(accounts, { identity });
+  const results = refreshAll(
+    accounts,
+    Object.assign({ identity, discoverPool: true }, runtimeOpts)
+  );
   if (args.json) return console.log(JSON.stringify({ identity, results }, null, 2));
 
   console.log('');
@@ -760,6 +769,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       evidenceData: opts.evidenceData,
       fakeRunsDir: opts.fakeRunsDir,
       home: opts.home,
+      discoverPool: opts.discoverPool !== false,
     }),
   ]);
 }
@@ -1067,7 +1077,12 @@ function dispatchProfileCommand(args, deps) {
   } catch (e) {
     evidenceData = {};
   }
-  const optsWithEvidence = Object.assign({}, deps, { evidenceData });
+  const optsWithEvidence = Object.assign({}, deps, {
+    evidenceData,
+    fakeRunsDir:
+      (deps && deps.fakeRunsDir) || args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined,
+    home: (deps && deps.home) || args.home || undefined,
+  });
 
   const candidateList = assembleForDispatch(
     discCat,
@@ -1078,7 +1093,12 @@ function dispatchProfileCommand(args, deps) {
 
   return require('./routing').runProfileDispatch(
     args,
-    Object.assign({}, deps, { candidates: candidateList, rootDir })
+    Object.assign({}, deps, {
+      candidates: candidateList,
+      rootDir,
+      home: optsWithEvidence.home,
+      storePath: (deps && deps.storePath) || args['quota-store'] || undefined,
+    })
   );
 }
 
@@ -1139,7 +1159,9 @@ function dispatchCommand(args, deps = {}) {
       decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
       now: deps && deps.now,
       storePath: deps && deps.storePath,
-      home: deps && deps.home,
+      home: (deps && deps.home) || args.home || undefined,
+      fakeRunsDir:
+        (deps && deps.fakeRunsDir) || args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined,
     });
   }
 

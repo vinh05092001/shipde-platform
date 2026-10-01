@@ -685,12 +685,25 @@ function reportDispatchOutcome(args, deps) {
     return { exitCode: 2 };
   }
 
-  if (outcome && outcome.harness === 'agy-pool' && outcome.accountId) {
+  const parsedBeforeMapping =
+    outcome && outcome.candidateKey ? parseCandidateKey(outcome.candidateKey) : null;
+  if (
+    outcome &&
+    ((outcome.harness === 'agy-pool' && outcome.accountId) ||
+      (parsedBeforeMapping &&
+        parsedBeforeMapping.harness === 'agy-pool' &&
+        parsedBeforeMapping.account))
+  ) {
     const { getHarness } = require('./harness');
     const adapter = getHarness('agy-pool');
-    const mapped = adapter.mapOutcome(outcome.accountId, outcome.candidateKey, {
-      fakeRunsDir: d.fakeRunsDir,
-    });
+    const mapped = adapter.mapOutcome(
+      outcome.accountId || parsedBeforeMapping.account,
+      outcome.candidateKey,
+      {
+        fakeRunsDir: d.fakeRunsDir,
+        home: d.home,
+      }
+    );
     outcome = Object.assign({}, outcome, mapped);
   }
 

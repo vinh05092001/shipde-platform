@@ -360,46 +360,21 @@ function poolAccountCandidates(opts) {
     }
   }
 
-  const fs = require('fs');
-  const path = require('path');
-  const os = require('os');
-
-  const runsDir =
-    o.fakeRunsDir ||
-    process.env.AGY_RUNS_DIR ||
-    (function () {
-      const home = o.home || os.homedir();
-      const localApp =
-        process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
-      return path.join(localApp, 'agy-runs');
-    })();
-
+  const pool = require('./agy-pool-runtime');
   const discoveredAccounts = new Set();
-  if (fs.existsSync(runsDir)) {
-    try {
-      const entries = fs.readdirSync(runsDir);
-      for (const entry of entries) {
-        if (/^agy\d+$/.test(entry) && fs.statSync(path.join(runsDir, entry)).isDirectory()) {
-          discoveredAccounts.add(entry);
-          try {
-            const quotaPath = path.join(runsDir, entry, 'quota.json');
-            if (fs.existsSync(quotaPath)) {
-              const q = JSON.parse(fs.readFileSync(quotaPath, 'utf8'));
-              for (const g of q.groups || []) {
-                if (g.id) poolModels.add(g.id);
-              }
-            }
-          } catch (e) {}
-        }
-      }
-    } catch (e) {}
+  const shouldDiscoverPool =
+    o.discoverPool === true ||
+    o.fakeRunsDir ||
+    o.runsDir ||
+    process.env.AGY_POOL_RUNS_DIR ||
+    process.env.AGY_RUNS_DIR;
+  if (shouldDiscoverPool) {
+    for (const accountId of pool.discoverAccounts(o)) discoveredAccounts.add(accountId);
+    for (const modelId of pool.modelIdsFromRuntime(o)) poolModels.add(modelId);
   }
 
   const candidates = [];
   if (poolModels.size > 0) {
-    for (let i = 1; i <= 10; i++) {
-      discoveredAccounts.add('agy' + String(i).padStart(2, '0'));
-    }
     for (const acc of discoveredAccounts) {
       for (const model of poolModels) {
         const family =

@@ -99,6 +99,22 @@ describe('Skipping accounts that cannot answer', () => {
 });
 
 describe('Refreshing every account', () => {
+  function writePoolAdapter(dir) {
+    const script = path.join(dir, 'fake-pool-adapter.js');
+    fs.writeFileSync(
+      script,
+      [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        'const dir = process.argv[2];',
+        "const state = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));",
+        "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(state.result));",
+        "if (state.out !== undefined) fs.writeFileSync(path.join(dir, 'out.txt'), state.out);",
+      ].join('\n')
+    );
+    return script;
+  }
+
   test('each account is reported separately', () => {
     const p = tmpStore();
     const out = refreshAll(
@@ -121,21 +137,33 @@ describe('Refreshing every account', () => {
   test('agy-pool accounts are discovered from runs dir', () => {
     const p = tmpStore();
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-runs-'));
+    const adapterScript = writePoolAdapter(runDir);
     fs.mkdirSync(path.join(runDir, 'agy01'));
     fs.mkdirSync(path.join(runDir, 'agy02'));
     fs.mkdirSync(path.join(runDir, 'not-agy'));
 
-    // Write fake results so they can be read
-    fs.writeFileSync(path.join(runDir, 'agy01', 'result.json'), JSON.stringify({ state: 'ok' }));
-    fs.writeFileSync(path.join(runDir, 'agy01', 'quota.json'), JSON.stringify({ groups: [] }));
+    fs.writeFileSync(
+      path.join(runDir, 'agy01', 'state.json'),
+      JSON.stringify({
+        result: { state: 'ok' },
+        out: JSON.stringify({
+          groups: [
+            {
+              id: 'gemini',
+              models: ['gemini-test-pro'],
+              weekly: { remaining: 0.8 },
+            },
+          ],
+        }),
+      })
+    );
 
     fs.writeFileSync(
-      path.join(runDir, 'agy02', 'result.json'),
-      JSON.stringify({ state: 'login-required' })
+      path.join(runDir, 'agy02', 'state.json'),
+      JSON.stringify({ result: { state: 'login-required' }, out: '' })
     );
-    fs.writeFileSync(path.join(runDir, 'agy02', 'quota.json'), '');
 
-    const out = refreshAll([], { path: p, fakeRunsDir: runDir });
+    const out = refreshAll([], { path: p, fakeRunsDir: runDir, adapterScript });
 
     assert.equal(out.length, 2);
 
