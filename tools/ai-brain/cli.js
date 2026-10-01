@@ -579,7 +579,14 @@ function quotaCommand(args) {
   console.log('');
 }
 
-function assembleCandidates(discoveryCat, offerings, registry, accounts, injectedCandidates) {
+function assembleCandidates(
+  discoveryCat,
+  offerings,
+  registry,
+  accounts,
+  injectedCandidates,
+  gatewayCandidates
+) {
   if (Array.isArray(injectedCandidates)) {
     return injectedCandidates.map((c) => Object.assign({}, c));
   }
@@ -630,7 +637,20 @@ function assembleCandidates(discoveryCat, offerings, registry, accounts, injecte
     }
   }
 
-  // 2. Offerings candidates
+  // 2. Offerings candidates, then the gateway-advertised candidates for each
+  // concrete account. The advertised ones come last so an operator's declared
+  // entry for the same seven-part key wins: it carries the declared grades and
+  // limits, and the advertised row only proves the route exists.
+  const advertised = gatewayCandidates || [];
+  for (const off of advertised) {
+    const key = candidatesApi.candidateKey(off);
+    const c = Object.assign({}, off, { key });
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      result.push(c);
+    }
+  }
+
   for (const off of offerings || []) {
     const route = sourcesApi.dispatchRoute(off.provider, registry);
     const source =
@@ -643,10 +663,16 @@ function assembleCandidates(discoveryCat, offerings, registry, accounts, injecte
     if (!accessPath) {
       accessPath = route && route.harness === 'paseo' ? 'http://127.0.0.1:20128/v1' : 'cli';
     }
+    // The gateway is derived from the registry, never from a name written here.
+    // An offering whose provider is a gateway IS that gateway; one whose
+    // provider declares a `reachedVia` rides it. When the registry says neither,
+    // the gateway is genuinely unknown — and an unknown gateway is recorded as
+    // empty, because a guess produces a key that can never match recorded
+    // evidence while looking exactly like one that can.
     const gateway =
       off.gateway ||
       (source && source.reachedVia) ||
-      (source && source.kind === 'router' ? source.id : '9router');
+      (source && source.kind === sourcesApi.Kind.ROUTER ? source.id : '');
     const parsed = candidatesApi.parsePrefix(off.model);
     const upstream =
       off.upstream || (parsed && parsed.upstream) || off.provider || (source && source.id) || '';
@@ -678,6 +704,58 @@ function assembleCandidates(discoveryCat, offerings, registry, accounts, injecte
   }
 
   return result;
+}
+
+/**
+ * The whole candidate set for one dispatch: the discovery catalogue, the
+ * offerings, and the models each concrete gateway account can actually reach.
+ *
+ * The third part is what makes recorded evidence usable. An outcome recorded
+ * against `paseo::cli::9router::ag::ninerouter::ninerouter::ag/gemini-3.1-pro-low`
+ * can only ever match a candidate with that exact seven-part identity, and the
+ * only thing that can mint one is the account whose route reaches the gateway
+ * that advertises `ag/…`. Without this, a source that did real work tonight was
+ * invisible to the Controller until an operator typed its model name into an
+ * account file by hand.
+ *
+ * Both dispatch paths — the item path and the profile path — assemble here, so
+ * a candidate is the same kind of object with the same seven-part identity
+ * whichever way it was requested. An injected candidate list still wins: a
+ * caller that supplies its own candidates is testing or replaying them, not
+ * asking what the machine actually serves.
+ */
+function assembleForDispatch(discoveryCat, accounts, registry, options) {
+  const candidatesApi = require('./candidates');
+  const { expandOfferings } = require('./offerings');
+  const opts = options || {};
+
+  const resolvedRegistry = registry || require('./sources').loadSources();
+
+  if (Array.isArray(opts.candidates)) {
+    return assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates);
+  }
+
+  let offs = opts.offerings;
+  if (!offs) {
+    try {
+      offs = expandOfferings(accounts);
+    } catch {
+      offs = [];
+    }
+  }
+
+  return assembleCandidates(
+    discoveryCat,
+    offs,
+    resolvedRegistry,
+    accounts,
+    null,
+    candidatesApi.gatewayAccountCandidates({
+      registry: resolvedRegistry,
+      accounts: accounts || [],
+      catalogue: (discoveryCat && discoveryCat.candidates) || [],
+    })
+  );
 }
 
 function readCheckpoint(file) {
@@ -960,15 +1038,11 @@ function buildDryRunLog(parts) {
 function dispatchProfileCommand(args, deps) {
   const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
   const sourcesApi = require('./sources');
-  const { expandOfferings } = require('./offerings');
   const { listAccounts } = require('./accounts');
   const { readDiscoveryCatalogue } = require('./discovery/read');
 
-  let candidateList;
-  if (deps && Array.isArray(deps.candidates)) {
-    candidateList = deps.candidates.map((c) => Object.assign({}, c));
-  } else {
-    let discCat;
+  let discCat;
+  if (!(deps && Array.isArray(deps.candidates))) {
     try {
       discCat = readDiscoveryCatalogue({
         dataDir: (deps && deps.discoveryDataDir) || path.join(__dirname, 'data', 'discovery'),
@@ -976,15 +1050,9 @@ function dispatchProfileCommand(args, deps) {
     } catch {
       discCat = { candidates: [] };
     }
-    const accounts = listAccounts() || [];
-    let offs;
-    try {
-      offs = expandOfferings(accounts);
-    } catch {
-      offs = [];
-    }
-    candidateList = assembleCandidates(discCat, offs, sourcesApi.loadSources(), accounts, null);
   }
+  const accounts = listAccounts() || [];
+  const candidateList = assembleForDispatch(discCat, accounts, sourcesApi.loadSources(), deps);
 
   return require('./routing').runProfileDispatch(
     args,
@@ -1154,7 +1222,6 @@ function dispatchCommand(args, deps = {}) {
   const ranking = require('./ranking');
   const candidatesApi = require('./candidates');
   const quotaStore = require('./quota-store');
-  const { expandOfferings } = require('./offerings');
   const { listAccounts } = require('./accounts');
   const { readDiscoveryCatalogue } = require('./discovery/read');
   const { getHarness, runHarness, parseLastJson, structuredOutcome } = require('./harness');
@@ -1183,22 +1250,7 @@ function dispatchCommand(args, deps = {}) {
   }
 
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
-  let offs = deps && deps.offerings;
-  if (!offs && (!deps || !deps.candidates)) {
-    try {
-      offs = expandOfferings(accounts);
-    } catch {
-      offs = [];
-    }
-  }
-
-  const candidateList = assembleCandidates(
-    discCat,
-    offs,
-    registry,
-    accounts,
-    deps && deps.candidates
-  );
+  const candidateList = assembleForDispatch(discCat, accounts, registry, deps);
 
   // Filter by explicit pins (--model, --account, --harness)
   const pinModel = args.model || (deps && deps.model);

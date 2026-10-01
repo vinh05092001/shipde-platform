@@ -246,6 +246,23 @@ function recordProbe(dir, candidate, item) {
     cd.quotaScope = candidate.quotaScope || '';
     cd.modelId = candidate.modelId || candidate.model;
 
+    // A caller that observed the moment this clears is carrying better evidence
+    // than a duration scraped out of an error string. "quota resets at 01:55" is
+    // a fact about this budget; `reset after ~3h` in free text is a guess that a
+    // single unparsed word can shorten from three hours to five minutes — which
+    // is how a source that is hard down all night gets dispatched to again. The
+    // explicit instant wins when it parses; an unparseable one is ignored, never
+    // guessed at, and the classification's own answer stands.
+    const declaredReset = item.cooldownUntil;
+    if (declaredReset !== undefined && declaredReset !== null && declaredReset !== '') {
+      const resetAt =
+        typeof declaredReset === 'number' ? declaredReset : new Date(declaredReset).getTime();
+      if (Number.isFinite(resetAt)) {
+        cd.resetTime = resetAt;
+        cd.cooldownUntil = new Date(resetAt).toISOString();
+      }
+    }
+
     // Apply the scope the classifier returns:
     // model, upstream, account, access path, gateway or harness - and nothing wider.
     // UNKNOWN cools down exactly the one candidate that produced it - never a harness, never a gateway.
