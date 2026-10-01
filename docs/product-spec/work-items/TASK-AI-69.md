@@ -11,10 +11,12 @@
 | Dependencies | `TASK-AI-68` |
 | Assigned author | `GEMINI` |
 | Risk | `MEDIUM` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-69.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `tools/ai-brain/agy-pool-runtime.js`; `tools/ai-brain/agy-quota.js`; `tools/ai-brain/candidates.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/executor.js`; `tools/ai-brain/harness.js`; `tools/ai-brain/orchestrate.js`; `tools/ai-brain/refresh-quota.js`; `tools/ai-brain/routing.js`; `tools/ai-brain/test/*.test.js` |
+| Allowed paths | DASHBOARD.html; docs/product-spec/work-items/TASK-AI-69.md; docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv; tools/ai-brain/agy-pool-runtime.js; tools/ai-brain/agy-quota.js; tools/ai-brain/candidates.js; tools/ai-brain/cli.js; tools/ai-brain/executor.js; tools/ai-brain/harness.js; tools/ai-brain/orchestrate.js; tools/ai-brain/refresh-quota.js; tools/ai-brain/routing.js; tools/ai-brain/test/*.test.js; tools/ai-dashboard/client.js; tools/ai-dashboard/test/vendor-quota-panel.test.js |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-69-pool-quota-evidence` |
 | Pull Request | `TBD` |
+
+*Allowed paths amendment justification: DASHBOARD.html, tools/ai-dashboard/client.js, and tools/ai-dashboard/test/vendor-quota-panel.test.js are included to render null and unknown quota rows as UNKNOWN instead of misleadingly displaying null% in exhausted rose.*
 
 ## Business outcome
 
@@ -143,6 +145,12 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
 - `N2`: `runAdapter` in `tools/ai-brain/agy-pool-runtime.js` derives the failure reason from `res.error` (for `ETIMEDOUT`) and `res.signal` rather than inferring `ADAPTER_TIMEOUT` from any `exitCode: -1`. In `submitJob`, an adapter failure is only categorized as `ADAPTER_TIMEOUT` if the launch stderr actually indicates timeout; terminations from signals or non-timeout errors emit `ADAPTER_SIGNAL_<signal>` or `ADAPTER_EXIT_<code/status>`.
   - Fail before: Process killed by signal with empty output had `exitCode === -1` and was reported as `ADAPTER_TIMEOUT`.
   - Pass after: Terminations by signal emit `ADAPTER_SIGNAL_<signal>` and non-zero exits emit `ADAPTER_EXIT_<code>`; `ADAPTER_TIMEOUT` is reserved exclusively for genuine timeouts (`ETIMEDOUT`); verified in `task-ai-69.test.js`.
+
+### Review repair round 4 evidence
+
+- `N1 (display)`: `tools/ai-dashboard/client.js` and `DASHBOARD.html` evaluate `isUnknownQuota` on vendor quota rows, rendering `UNKNOWN` with neutral tone (`text-base-content/70` in client.js, `text-slate-400` in DASHBOARD.html) and neutral 0-width track bar for null/unknown/non-finite remainingPercent values, avoiding misrendering as `null%`, `NaN`, or exhausted/healthy colors. Verified with regression tests in `tools/ai-dashboard/test/vendor-quota-panel.test.js`.
+  - Fail before (at 6714470): `{ remainingPercent: null, known: false }` rendered `<span class="font-mono font-bold text-rose-300 tabular-nums">null%</span>` and bar `<div class="h-full bg-rose-500" style="width:0%"></div>`; tests in `vendor-quota-panel.test.js` failed (`must contain UNKNOWN` / `assert.ok(!html.includes('NaN'))` / `DASHBOARD.html must contain UNKNOWN`).
+  - Pass after: Renders `UNKNOWN` with neutral tone and neutral bar; `!html.includes('null%')`, `!html.includes('NaN')`, `!html.includes('text-rose-300 tabular-nums">UNKNOWN')`, and all 12 tests in `vendor-quota-panel.test.js` pass.
 
 ## Residual limitations
 

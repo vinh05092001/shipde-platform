@@ -15,6 +15,7 @@ const path = require('path');
 const vm = require('vm');
 
 const CLIENT = path.join(__dirname, '..', 'client.js');
+const DASHBOARD = path.join(__dirname, '..', '..', '..', 'DASHBOARD.html');
 
 /** Loads client.js with just enough DOM for the panel, and returns its output. */
 function render(vendor) {
@@ -29,6 +30,38 @@ function render(vendor) {
     },
   });
   vm.runInContext(fs.readFileSync(CLIENT, 'utf8'), ctx);
+  ctx.renderVendorQuota(vendor);
+  return el.innerHTML;
+}
+
+/** Loads DASHBOARD.html with just enough DOM for the panel, and returns its output. */
+function renderDashboard(vendor) {
+  const el = { innerHTML: '' };
+  const ctx = vm.createContext({
+    console,
+    window: {},
+    document: {
+      getElementById: (id) => (id === 'capacityVendor' ? el : null),
+      addEventListener() {},
+      querySelectorAll: () => [],
+    },
+  });
+  const html = fs.readFileSync(DASHBOARD, 'utf8');
+  const startMarker = '<script>';
+  const endMarker = '</script>';
+  let pos = 0;
+  while (pos < html.length) {
+    const start = html.indexOf(startMarker, pos);
+    if (start === -1) break;
+    const end = html.indexOf(endMarker, start);
+    if (end === -1) break;
+    const code = html.substring(start + startMarker.length, end);
+    if (code.includes('function renderVendorQuota')) {
+      vm.runInContext(code, ctx);
+      break;
+    }
+    pos = end + endMarker.length;
+  }
   ctx.renderVendorQuota(vendor);
   return el.innerHTML;
 }
@@ -127,5 +160,89 @@ describe('Not trusting the numbers it is handed', () => {
       problems: [],
     });
     assert.ok(!html.includes('<img src=x>'));
+  });
+
+  test('an unknown or null quota window renders as UNKNOWN, never as null% or exhausted or green', () => {
+    const html = render({
+      identity: HOST,
+      accounts: [
+        {
+          accountId: 'agy01',
+          account: 'someone@gmail.com',
+          observedAt: '2026-09-14T09:00:00Z',
+          rows: [
+            { family: 'gemini', window: 'weekly', remainingPercent: null, known: false },
+            { family: 'gemini', window: 'fiveHour', remainingPercent: 5, known: true },
+          ],
+        },
+      ],
+      problems: [],
+    });
+    assert.ok(html.includes('UNKNOWN'), 'must contain UNKNOWN');
+    assert.ok(!html.includes('null%'), 'must not contain null%');
+    assert.ok(!html.includes('NaN'), 'must not contain NaN');
+    assert.ok(
+      !html.includes('text-rose-300 tabular-nums">UNKNOWN'),
+      'unknown figure must not use exhausted text-rose-300'
+    );
+    assert.ok(
+      !html.includes('text-emerald-300 tabular-nums">UNKNOWN'),
+      'unknown figure must not use green text-emerald-300'
+    );
+  });
+
+  test('non-finite or unread quota variants render as UNKNOWN without green bar or NaN', () => {
+    const html = render({
+      identity: HOST,
+      accounts: [
+        {
+          accountId: 'agy02',
+          account: 'someone@gmail.com',
+          observedAt: '2026-09-14T09:00:00Z',
+          rows: [
+            { family: 'gemini', window: 'weekly', remainingPercent: 'UNKNOWN', known: false },
+            { family: 'claude-gpt', window: 'weekly', remainingPercent: undefined, known: false },
+            { family: 'claude-gpt', window: 'fiveHour', remainingPercent: NaN, known: false },
+          ],
+        },
+      ],
+      problems: [],
+    });
+    assert.ok(!html.includes('null%'));
+    assert.ok(!html.includes('NaN'));
+    assert.ok(!html.includes('undefined%'));
+    assert.ok(!html.includes('UNKNOWN%'));
+    assert.ok(!html.includes('bg-emerald-500'));
+    assert.ok(!html.includes('text-emerald-300'));
+    assert.ok(html.includes('UNKNOWN'));
+  });
+
+  test('DASHBOARD.html renders unknown or null quota as UNKNOWN, never as null% or exhausted or green', () => {
+    const html = renderDashboard({
+      identity: HOST,
+      accounts: [
+        {
+          accountId: 'agy01',
+          account: 'someone@gmail.com',
+          observedAt: '2026-09-14T09:00:00Z',
+          rows: [
+            { family: 'gemini', window: 'weekly', remainingPercent: null, known: false },
+            { family: 'gemini', window: 'fiveHour', remainingPercent: 5, known: true },
+          ],
+        },
+      ],
+      problems: [],
+    });
+    assert.ok(html.includes('UNKNOWN'), 'DASHBOARD.html must contain UNKNOWN');
+    assert.ok(!html.includes('null%'), 'DASHBOARD.html must not contain null%');
+    assert.ok(!html.includes('NaN'), 'DASHBOARD.html must not contain NaN');
+    assert.ok(
+      !html.includes('text-rose-300 tabular-nums">UNKNOWN'),
+      'DASHBOARD.html unknown figure must not use exhausted text-rose-300'
+    );
+    assert.ok(
+      !html.includes('text-emerald-300 tabular-nums">UNKNOWN'),
+      'DASHBOARD.html unknown figure must not use green text-emerald-300'
+    );
   });
 });

@@ -994,7 +994,32 @@ function renderVendorQuota(vendor) {
     return;
   }
 
-  const bar = (percent, disabled) => {
+  const isUnknownQuota = (row) =>
+    !row.disabled &&
+    (row.known === false ||
+      row.remainingPercent === null ||
+      row.remainingPercent === undefined ||
+      row.remainingPercent === 'UNKNOWN' ||
+      row.remainingPercent === '' ||
+      typeof row.remainingPercent === 'boolean' ||
+      !Number.isFinite(Number(row.remainingPercent)));
+
+  const bar = (percent, disabled, unknown) => {
+    const isUnk =
+      unknown ||
+      (!disabled &&
+        (percent === null ||
+          percent === undefined ||
+          percent === 'UNKNOWN' ||
+          percent === '' ||
+          typeof percent === 'boolean' ||
+          !Number.isFinite(Number(percent))));
+    if (isUnk) {
+      return (
+        '<div class="h-1.5 rounded-full bg-base-200 overflow-hidden w-full">' +
+        '<div class="h-full bg-base-300" style="width:0%"></div></div>'
+      );
+    }
     const pct = Math.max(0, Math.min(100, Number(percent) || 0));
     const colour =
       disabled || pct <= 2 ? 'bg-rose-500' : pct < 20 ? 'bg-amber-400' : 'bg-emerald-500';
@@ -1013,17 +1038,21 @@ function renderVendorQuota(vendor) {
     // on. Where the provider stated spend instead, its own number is kept in
     // the tooltip so a figure here can be checked against the CLI without
     // anyone having to recall which direction the subtraction went.
-    const value = row.disabled ? 'đã tắt' : row.remainingPercent + '%';
+    const isUnknown = isUnknownQuota(row);
+    const value = row.disabled ? 'đã tắt' : isUnknown ? 'UNKNOWN' : row.remainingPercent + '%';
     const title =
       typeof row.usedPercent === 'number'
         ? ' title="' + escapeHtml('nhà cung cấp báo: đã dùng ' + row.usedPercent + '%') + '"'
         : '';
-    const tone =
-      row.disabled || row.remainingPercent <= 2
-        ? 'text-rose-300'
-        : row.remainingPercent < 20
-          ? 'text-amber-300'
-          : 'text-emerald-300';
+    const tone = row.disabled
+      ? 'text-rose-300'
+      : isUnknown
+        ? 'text-base-content/70'
+        : row.remainingPercent <= 2
+          ? 'text-rose-300'
+          : row.remainingPercent < 20
+            ? 'text-amber-300'
+            : 'text-emerald-300';
     return (
       '<div class="grid grid-cols-[7.5rem_3rem_1fr_auto] items-center gap-2 text-[11px]">' +
       '<span class="text-base-content/70">' +
@@ -1032,7 +1061,7 @@ function renderVendorQuota(vendor) {
       '<span class="text-base-content/70">' +
       escapeHtml(WINDOW_LABEL[row.window] || row.window) +
       '</span>' +
-      bar(row.remainingPercent, row.disabled) +
+      bar(row.remainingPercent, row.disabled, isUnknown) +
       '<span class="font-mono font-bold ' +
       tone +
       ' tabular-nums"' +
