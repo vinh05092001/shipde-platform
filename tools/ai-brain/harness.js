@@ -470,12 +470,14 @@ function executableFor(command, options) {
       // Anchored on node_modules: the shim also quotes "%dp0%\node.exe" a few
       // lines earlier, and matching that one resolves to a file which is not
       // there, so only match entries referencing node_modules. Handles
-      // "%dp0%\", "%~dp0%\", "%~dp0\", "%~dp0" and unquoted/forward-slash variants.
+      // "%dp0%\", "%~dp0%\", "%~dp0\", "%~dp0", space-bearing quoted paths,
+      // and unquoted/forward-slash variants.
       const content = readFile(shim);
-      const re = /"?%~?dp0%?[\\/]?(node_modules[\\/][^"\r\n\s]+)"?/gi;
+      const re =
+        /"%~?dp0%?[\\/]?(node_modules[\\/][^"\r\n]+)"|%~?dp0%?[\\/]?(node_modules[\\/][^\s"\r\n]+)/gi;
       let m;
       while ((m = re.exec(content)) !== null) {
-        const candidate = p.join(dir, m[1]);
+        const candidate = p.join(dir, m[1] || m[2]);
         if (exists(candidate)) {
           target = candidate;
           break;

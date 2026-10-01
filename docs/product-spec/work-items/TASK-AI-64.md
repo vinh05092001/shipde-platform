@@ -742,7 +742,21 @@ Residual risk: The agent runs within the `ShipDeWorker` boundary and is not give
 ## Live run attempt 6 native shim target launch fix (2026-10-01)
 
 Observation / Defect: Live E2E attempt 6 failed on worker process launch with `SyntaxError: Invalid or unexpected token`. In `tools/ai-brain/harness.js:executableFor`, unwrapping `.cmd` shims unconditionally returned `{ file: opts.nodePath || process.execPath, prefixArgs: [target] }`. For `opencode`, the shim target is `node_modules\opencode-ai\bin\opencode.exe` (a native binary), causing Node to attempt executing machine code as JavaScript.
-Decision: `executableFor` now inspects the unwrapped target's extension (case-insensitive):
+Decision: `executableFor` inspects the unwrapped target's extension (case-insensitive) using a deny-list / native check:
 - Native executables (`.exe`, `.com`) return `{ file: target, prefixArgs: [] }` to be spawned directly without Node wrapping.
-- JavaScript launchers (`.js`, `.cjs`, `.mjs`, or extension-less) remain wrapped with `opts.nodePath || process.execPath`.
-Additionally, shim unwrapping now handles both `%~dp0%\` and `%dp0%\` layouts (as well as forward slashes and unquoted variants) for opencode native binaries and `.js` launchers. Platform-independent tests 8, 9, and 10 in `tools/ai-brain/test/task-ai-63.test.js` verify native targets spawn directly and script targets wrap with node.
+- All other targets (including standard JavaScript launchers `.js`, `.cjs`, `.mjs`, and extension-less Node scripts) remain wrapped with `opts.nodePath || process.execPath`.
+Additionally, shim unwrapping handles `%~dp0%\`, `%dp0%\`, `%~dp0\`, and unquoted/forward-slash layouts, and correctly preserves space-bearing paths within quoted `node_modules` targets without premature token splitting. Regression tests in `tools/ai-brain/test/task-ai-64.test.js` verify native targets spawn directly, space-bearing paths are preserved, and script targets wrap with node.
+
+Evidence:
+- Fail-before base SHAs:
+  - `194af0337c3527aa1975e532a2ca5c0fc657ef19`: native `.exe` target executed via `node` (producing `SyntaxError: Invalid or unexpected token` / DOS mode MZ header failure).
+  - `64d7dec2d9e47f631d8349a9dcc388f51431eff0`: space-bearing `node_modules` target truncated by `\s` exclusion and silently regressed to `.cmd` shim fallback (`ERR_ASSERTION`).
+- Command: `node --test "tools/ai-brain/test/*.test.js"`
+- Pass-after result: All tests pass. Full test suite: 1100/1100 passed (38/38 in `tools/ai-brain/test/task-ai-64.test.js`).
+- Prettier check: `npx --package prettier@3.9.6 prettier --check tools/ai-brain/harness.js tools/ai-brain/test/task-ai-64.test.js docs/product-spec/work-items/TASK-AI-64.md` clean.
+
+Residual risk / known limitations:
+- Deny-list extension behavior: `executableFor` inspects only `/\.(exe|com)$/i`. Non-executable script targets that are not JavaScript (such as `.bat`, `.cmd`, or `.ps1` targets) fall through to Node wrapping.
+- Directory candidate matching: If the first existing candidate matched under `node_modules` happens to be a directory rather than a file (`tools/ai-brain/harness.js:479-481`), `exists(candidate)` evaluates to true, fails the `.exe` check, and is handed to Node wrapping.
+- Standard npm global shims emit `.exe` or `.js` targets on Windows; non-standard shims wrapping batch or PowerShell scripts remain untested shape classes.
+
