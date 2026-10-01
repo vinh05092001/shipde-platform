@@ -1913,3 +1913,192 @@ describe('TASK-AI-64 executableFor shim unwrap and native launch (DEFECT D)', ()
     assert.deepEqual(exe.prefixArgs, []);
   });
 });
+
+describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', () => {
+  const sourcesApi = require('../sources');
+  const failureApi = require('../failure-classifier');
+  const cliApi = require('../cli');
+  const cp = require('child_process');
+
+  test('sources.providerFromPrefix derives provider id matching model prefix', () => {
+    assert.equal(typeof sourcesApi.providerFromPrefix, 'function');
+    assert.equal(sourcesApi.providerFromPrefix('ninerouter/'), 'ninerouter');
+    assert.equal(sourcesApi.providerFromPrefix('ninerouter/ag/'), 'ninerouter');
+    assert.equal(sourcesApi.providerFromPrefix('ninerouter/ag/gemini-3.1-pro-low'), 'ninerouter');
+    assert.equal(sourcesApi.providerFromPrefix({ modelPrefix: 'ninerouter/' }), 'ninerouter');
+    assert.equal(sourcesApi.providerFromPrefix(''), '');
+    assert.equal(sourcesApi.providerFromPrefix(null), '');
+  });
+
+  test('opencode-direct isolated worker config derives provider id from model prefix and includes @ai-sdk/openai-compatible and models map', () => {
+    const isoMod = require('../isolation-launcher');
+    const { getHarness } = require('../harness');
+    const directAdapter = getHarness('opencode-direct');
+    assert.ok(directAdapter);
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'defect-e-worker-'));
+    const fakeHostCwd = path.join(tmpDir, 'host');
+    const fakeWorkerRoot = path.join(tmpDir, 'worker');
+    fs.mkdirSync(fakeHostCwd, { recursive: true });
+    fs.mkdirSync(fakeWorkerRoot, { recursive: true });
+    fs.mkdirSync(path.join(fakeHostCwd, 'scripts/ai/isolation'), { recursive: true });
+
+    const verdictFile = path.join(fakeHostCwd, 'verdict.json');
+    fs.writeFileSync(
+      verdictFile,
+      JSON.stringify({
+        verdict: 'CLOSED',
+        worktree: fakeHostCwd,
+        timestamp: Date.now() - 1000,
+        policyHash: isoMod.getFolderHash(path.join(fakeHostCwd, 'scripts/ai/isolation')),
+        sid: 'TEST-SID',
+        details: {},
+      })
+    );
+
+    const realSpawn = cp.spawnSync;
+    try {
+      cp.spawnSync = (cmd, cargs, opts) => {
+        if (cmd === 'git') {
+          if (cargs && cargs[0] === 'clone') {
+            fs.mkdirSync(path.join(cargs[cargs.length - 1], '.git', 'info'), { recursive: true });
+          }
+          return { status: 0 };
+        }
+        if (cmd === 'powershell.exe') {
+          return { status: 0, stdout: '' };
+        }
+        return realSpawn(cmd, cargs, opts);
+      };
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const directArgs = directAdapter.launch({
+        isolatedWorker: true,
+        model: 'ninerouter/ag/gemini-3.1-pro-low',
+        cwd: fakeWorkerRoot,
+        prompt: 'test prompt',
+      });
+
+      try {
+        runIso(directAdapter, directArgs, {
+          cwd: fakeHostCwd,
+          workerRoot: fakeWorkerRoot,
+          verdictPath: verdictFile,
+          getWorkerSid: () => 'TEST-SID',
+          verifyBoundary: () => true,
+          baseSha: '0123456789012345678901234567890123456789',
+          workerTimeoutMs: 1000,
+        });
+      } catch (_) {}
+
+      const cfgFile = path.join(fakeWorkerRoot, 'opencode.json');
+      assert.ok(fs.existsSync(cfgFile), 'opencode.json must exist');
+      const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+
+      // 1. Provider id must be "ninerouter", NOT "9router"
+      assert.ok(cfg.provider.ninerouter, 'provider id in opencode.json must be ninerouter');
+      assert.equal(cfg.provider['9router'], undefined, 'provider id 9router must not be hardcoded');
+
+      // 2. npm package must be @ai-sdk/openai-compatible
+      assert.equal(cfg.provider.ninerouter.npm, '@ai-sdk/openai-compatible');
+
+      // 3. options must declare baseURL and apiKey env reference
+      assert.equal(cfg.provider.ninerouter.options.baseURL, 'http://127.0.0.1:20128/v1');
+      assert.equal(cfg.provider.ninerouter.options.apiKey, '{env:NINEROUTER_API_KEY}');
+
+      // 4. models map must contain the pinned model id
+      assert.ok(cfg.provider.ninerouter.models, 'models map must exist');
+      assert.ok(
+        cfg.provider.ninerouter.models['ag/gemini-3.1-pro-low'] ||
+          cfg.provider.ninerouter.models['ninerouter/ag/gemini-3.1-pro-low'],
+        'models map must contain the pinned model id'
+      );
+    } finally {
+      cp.spawnSync = realSpawn;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('classifyFailure classifies opencode resolution error as Scope.HARNESS and Cause.LAUNCH_CONFIG', () => {
+    // Attempt 7 error output from opencode
+    const opencodeErr = {
+      exitCode: 1,
+      stdout:
+        '{"type":"error","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details."}}}',
+    };
+    const c1 = failureApi.classifyFailure(opencodeErr);
+    assert.equal(c1.scope, failureApi.Scope.HARNESS);
+    assert.equal(c1.cause, failureApi.Cause.LAUNCH_CONFIG);
+
+    const c2 = failureApi.classifyFailure({
+      exitCode: 1,
+      stderr: 'Error: Cannot find module @ai-sdk/openai-compatible',
+    });
+    assert.equal(c2.scope, failureApi.Scope.HARNESS);
+    assert.equal(c2.cause, failureApi.Cause.LAUNCH_CONFIG);
+
+    const c3 = failureApi.classifyFailure({
+      exitCode: 1,
+      body: 'Error: Unknown provider ninerouter in opencode.json configuration',
+    });
+    assert.equal(c3.scope, failureApi.Scope.HARNESS);
+    assert.equal(c3.cause, failureApi.Cause.LAUNCH_CONFIG);
+  });
+
+  test('sameFailureDomain for launch_config error does NOT block other candidates on same gateway/upstream', () => {
+    const failedCand = {
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      harness: 'paseo',
+      modelId: 'ag/gemini-3.1-pro-low',
+    };
+    const otherCand = {
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'ninerouter',
+      harness: 'paseo',
+      modelId: 'ag/gemini-3.1-pro-low',
+    };
+
+    // A launch_config harness failure does not block candidate 2 sharing gateway/upstream
+    assert.equal(
+      cliApi.sameFailureDomain(otherCand, failedCand, {
+        scope: failureApi.Scope.HARNESS,
+        cause: failureApi.Cause.LAUNCH_CONFIG,
+      }),
+      false
+    );
+  });
+
+  test('applyFailureBlocks with LAUNCH_CONFIG marks only failed candidate and leaves others in domain unblocked', () => {
+    const candidatesApi = require('../candidates');
+    const cand1 = {
+      harness: 'paseo',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      modelId: 'ag/gemini-3.1-pro-low',
+    };
+    const cand2 = {
+      harness: 'paseo',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'ninerouter',
+      modelId: 'ag/gemini-3.1-pro-low',
+    };
+    const candidates = [cand1, cand2];
+    const failedKeys = new Set([candidatesApi.candidateKey(cand1)]);
+    cliApi.applyFailureBlocks(
+      candidates,
+      failedKeys,
+      cand1,
+      { scope: failureApi.Scope.HARNESS, cause: failureApi.Cause.LAUNCH_CONFIG },
+      true,
+      cliApi.LIVE_BLOCK_CODES
+    );
+    assert.equal(cand1.blocked, true);
+    assert.equal(cand1.blockReason, cliApi.LIVE_BLOCK_CODES.failed);
+    assert.equal(cand2.blocked, undefined);
+  });
+});

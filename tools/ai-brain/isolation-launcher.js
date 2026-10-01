@@ -584,20 +584,50 @@ function getIsolatedLauncher() {
     if (checkoutRes.status !== 0) throw new Error('Failed to checkout HEAD SHA in worker root');
 
     if (adapter.id === 'opencode-direct') {
+      const sourcesModule = require('./sources');
       const sources = require('./sources.json');
       const routerSource = sources.sources.find((s) => s.id === '9router');
       if (!routerSource) {
         throw new Error('OPENCODE_DIRECT_LAUNCH_FAILED: 9router source not found in sources.json');
       }
 
+      // Derive provider id from the same source as the --model prefix (one function, no second hard-coded name)
+      const providerId =
+        sourcesModule.providerFromPrefix(routerSource.modelPrefix) ||
+        sourcesModule.providerFromPrefix(routerSource) ||
+        routerSource.id;
+
+      // Extract pinned model id from args or options to populate models map
+      const modelIdx = Array.isArray(args) ? args.indexOf('--model') : -1;
+      const pinnedModel =
+        modelIdx !== -1 && modelIdx + 1 < args.length
+          ? args[modelIdx + 1]
+          : (opts && opts.pinnedModel) || (opts && opts.model) || null;
+
+      const modelsMap = {};
+      if (pinnedModel) {
+        modelsMap[pinnedModel] = { id: pinnedModel, name: pinnedModel };
+        const prefixWithSlash = providerId + '/';
+        if (pinnedModel.startsWith(prefixWithSlash)) {
+          const relativeId = pinnedModel.slice(prefixWithSlash.length);
+          if (relativeId) {
+            modelsMap[relativeId] = { id: relativeId, name: relativeId };
+          }
+        }
+      }
+
       const configPath = path.join(workerRoot, 'opencode.json');
       const configData = JSON.stringify({
+        $schema: 'https://opencode.ai/config.json',
         provider: {
-          '9router': {
+          [providerId]: {
+            npm: '@ai-sdk/openai-compatible',
+            name: routerSource.label || providerId,
             options: {
               baseURL: routerSource.endpoint,
               apiKey: `{env:${routerSource.credential.env}}`,
             },
+            models: modelsMap,
           },
         },
       });

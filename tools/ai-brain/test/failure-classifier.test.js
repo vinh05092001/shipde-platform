@@ -427,3 +427,34 @@ describe('Additional edge cases', () => {
     assert.equal(result.cause, Cause.UNKNOWN);
   });
 });
+
+describe('Case 13: harness / launch config error', () => {
+  test('OpenCode Unexpected server error in stdout classifies as LAUNCH_CONFIG with HARNESS scope', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      stdout:
+        '{"type":"error","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details."}}}',
+    });
+    assert.equal(result.cause, Cause.LAUNCH_CONFIG);
+    assert.equal(result.scope, Scope.HARNESS);
+    assert.equal(result.humanAction, HumanAction.NONE);
+  });
+
+  test('provider resolution error classifies as LAUNCH_CONFIG with HARNESS scope', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      stderr: 'Error: cannot resolve provider "ninerouter"',
+    });
+    assert.equal(result.cause, Cause.LAUNCH_CONFIG);
+    assert.equal(result.scope, Scope.HARNESS);
+  });
+
+  test('explicit HARNESS_FAILED cause is preserved with HARNESS scope', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      cause: 'HARNESS_FAILED',
+    });
+    assert.equal(result.cause, Cause.HARNESS_FAILED);
+    assert.equal(result.scope, Scope.HARNESS);
+  });
+});

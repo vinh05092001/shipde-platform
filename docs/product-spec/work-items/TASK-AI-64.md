@@ -759,3 +759,35 @@ Residual risk / known limitations:
 - Deny-list extension behavior: `executableFor` inspects only `/\.(exe|com)$/i`. Non-executable script targets that are not JavaScript (such as `.bat`, `.cmd`, or `.ps1` targets) fall through to Node wrapping.
 - Directory candidate matching: If the first existing candidate matched under `node_modules` happens to be a directory rather than a file (`tools/ai-brain/harness.js:479-481`), `exists(candidate)` evaluates to true, fails the `.exe` check, and is handed to Node wrapping.
 - Standard npm global shims emit `.exe` or `.js` targets on Windows; non-standard shims wrapping batch or PowerShell scripts remain untested shape classes.
+
+## Live run attempt 7 worker provider id and config error fix (2026-10-02)
+
+Observation / Defect E: Live E2E attempt 7 failed with exit 1 within 5 seconds with stdout:
+`{"type":"error","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details."}}}`.
+Investigation revealed two compounding defects:
+1. Provider ID Mismatch & Incomplete OpenCode Configuration: `tools/ai-brain/isolation-launcher.js` wrote `opencode.json` with hardcoded provider `"9router"`:
+   ```json
+   { "provider": { "9router": { "options": { "baseURL": "...", "apiKey": "{env:NINEROUTER_API_KEY}" } } } }
+   ```
+   while `opencode-direct` invoked `--model ninerouter/ag/gemini-3.1-pro-low`. Because `ninerouter` was not defined in `opencode.json`, OpenCode failed to resolve the provider. Furthermore, for custom OpenAI-compatible endpoints, OpenCode requires the `@ai-sdk/openai-compatible` npm driver, baseURL, apiKey env reference, and a `models` map declaring the pinned model.
+2. Premature Domain Block from Launch/Harness Config Failure: Because OpenCode exited before issuing any model request, the orchestrator evaluated the exit without passing `stdout` to `classifyFailure`, which defaulted to `Scope.UNKNOWN`. In `sameFailureDomain`, `Scope.UNKNOWN` treated the error as an upstream/gateway failure and blocked all remaining candidates sharing `9router/ag` (`FAILURE_DOMAIN_AVOIDED`), ending with `NO_ELIGIBLE_CANDIDATE`.
+
+Decision & Implementation:
+1. Unified Provider Derivation (`tools/ai-brain/sources.js:providerFromPrefix`): Added and exported `providerFromPrefix(target)` to derive the provider identifier from the same source as the model prefix (e.g. `'ninerouter/'` -> `'ninerouter'`), eliminating disparate hard-coded provider identifiers.
+2. Complete OpenCode Provider Specification (`tools/ai-brain/isolation-launcher.js`): Configured `opencode.json` with the derived `providerId`, `npm: '@ai-sdk/openai-compatible'`, `options.baseURL`, `options.apiKey: '{env:...}'`, and a `models` map registering the pinned model (`ag/gemini-3.1-pro-low` and `ninerouter/ag/gemini-3.1-pro-low`).
+3. Harness / Launch Config Classification (`tools/ai-brain/failure-classifier.js`): Added `Cause.HARNESS_FAILED` and `Cause.LAUNCH_CONFIG` under `Scope.HARNESS`. Case 13 classifies OpenCode's `UnknownError` / `Unexpected server error`, provider resolution errors, and config errors into `Scope.HARNESS` / `Cause.LAUNCH_CONFIG`.
+4. Domain Non-Interference (`tools/ai-brain/cli.js:sameFailureDomain`): In `sameFailureDomain`, `Cause.LAUNCH_CONFIG` under harness scope returns `false` across candidates so harness configuration errors do not poison or block the upstream/gateway domain.
+5. Orchestration Telemetry (`tools/ai-brain/orchestrate.js`): Passed `stdout` in addition to `body` and `stderr` to `classifyFailure` so early JSON error outputs on stdout are properly classified.
+
+Evidence:
+- Fail-before base SHA: `56af8522de5ff411aaa35813ca05ccd707bf3e40` (4 failing tests in `tools/ai-brain/test/task-ai-64.test.js`).
+- Pass-after result: All tests pass. Full test suite: 1108/1108 passed (43/43 in `tools/ai-brain/test/task-ai-64.test.js`, 71/71 in `tools/ai-brain/test/failure-classifier.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js" "tools/ai-brain/test/failure-classifier.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `npx --package prettier@3.9.6 prettier --check tools/ai-brain/sources.js tools/ai-brain/isolation-launcher.js tools/ai-brain/failure-classifier.js tools/ai-brain/cli.js tools/ai-brain/orchestrate.js tools/ai-brain/test/task-ai-64.test.js tools/ai-brain/test/failure-classifier.test.js docs/product-spec/work-items/TASK-AI-64.md`
+  - `git diff --check` clean.
+
+Residual risk / known limitations:
+- If OpenCode encounters server-side errors from an upstream API that also return `UnknownError` / `Unexpected server error`, those could be classified as `LAUNCH_CONFIG` unless downstream error inspection differentiates remote HTTP error codes.
+- Pre-installed `@ai-sdk/openai-compatible` is dynamically resolved by OpenCode at runtime from its environment or npm cache; in offline or firewalled environments without global caching, package installation could fail if not pre-seeded.

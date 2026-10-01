@@ -27,6 +27,8 @@ const Cause = {
   GENUINE_CAPACITY: 'genuine_capacity',
   ACCOUNT_AUTH_FAILED: 'account_auth_failed',
   EXHAUSTION_HIDING: 'exhaustion_hiding',
+  HARNESS_FAILED: 'harness_failed',
+  LAUNCH_CONFIG: 'launch_config',
   UNKNOWN: 'unknown',
 };
 
@@ -112,6 +114,8 @@ const DEFAULT_COOLDOWNS = {
   [Cause.GENUINE_CAPACITY]: 10 * 60 * 1000, // 10 minutes
   [Cause.ACCOUNT_AUTH_FAILED]: null, // never recovers
   [Cause.EXHAUSTION_HIDING]: 60 * 60 * 1000, // 1 hour
+  [Cause.HARNESS_FAILED]: null,
+  [Cause.LAUNCH_CONFIG]: null,
   [Cause.UNKNOWN]: 5 * 60 * 1000, // 5 minutes
 };
 
@@ -143,7 +147,7 @@ function extractInnerStatus(text) {
  * @returns {Object} Classification result
  */
 function classifyFailure(input) {
-  const { exitCode, httpStatus, body = '', stderr = '', accountId } = input || {};
+  const { exitCode, httpStatus, body = '', stderr = '', stdout = '', accountId } = input || {};
   const text = [
     String(
       body ||
@@ -152,6 +156,7 @@ function classifyFailure(input) {
         input?.message ||
         ''
     ),
+    String(stdout || input?.stdout || ''),
     String(stderr || ''),
   ]
     .filter(Boolean)
@@ -361,6 +366,32 @@ function classifyFailure(input) {
       cause: Cause.UNKNOWN,
       scope: Scope.GATEWAY,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.UNKNOWN],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: null,
+    };
+  }
+
+  // Case 13: Harness / launch config failure (e.g. OpenCode provider/config resolution error before model call)
+  if (
+    /UnknownError.*Unexpected server error|Unexpected server error.*UnknownError/i.test(text) ||
+    /Unexpected server error\. Check server logs for details/i.test(text) ||
+    /provider.{0,30}(?:not found|not registered|cannot resolve|failed to resolve|unknown)/i.test(
+      text
+    ) ||
+    /(?:cannot|failed to|unable to|could not)\s+resolve\s+provider/i.test(text) ||
+    /(?:unknown|unresolved|invalid|missing).{0,20}provider/i.test(text) ||
+    /@ai-sdk\/openai-compatible/i.test(text) ||
+    /LAUNCH_CONFIG|HARNESS_FAILED/i.test(text) ||
+    /(?:harness|launch).{0,15}config(?:uration)?.{0,15}error/i.test(text)
+  ) {
+    const isHarnessFailed =
+      /HARNESS_FAILED|harness_failed/i.test(text) && !/LAUNCH_CONFIG|launch_config/i.test(text);
+    const cause = isHarnessFailed ? Cause.HARNESS_FAILED : Cause.LAUNCH_CONFIG;
+    return {
+      cause,
+      scope: Scope.HARNESS,
+      cooldownMs: DEFAULT_COOLDOWNS[cause] !== undefined ? DEFAULT_COOLDOWNS[cause] : null,
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: null,
