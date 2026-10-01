@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const cp = require('child_process');
 const { executableFor } = require('./harness');
 const crypto = require('crypto');
 
@@ -74,7 +74,7 @@ function getFolderHash(folder) {
 }
 
 function queryWorkerSid() {
-  const sidRes = spawnSync(
+  const sidRes = cp.spawnSync(
     'powershell',
     ['-NoProfile', '-Command', `(Get-LocalUser -Name ${WORKER_USERNAME}).SID.Value`],
     { encoding: 'utf8', windowsHide: true }
@@ -186,7 +186,7 @@ function buildBoundaryVerifyScript(sid, username, expectedRules) {
  * Q3: verifies the full expected rule set, not "at least one rule".
  */
 function defaultVerifyBoundary(sid, username) {
-  const res = spawnSync(
+  const res = cp.spawnSync(
     'powershell',
     ['-NoProfile', '-Command', buildBoundaryVerifyScript(sid, username)],
     {
@@ -247,6 +247,26 @@ $psi.Password = $sec
 
   const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
 
+  const envAllowed = [
+    'PATH',
+    'SystemRoot',
+    'SystemDrive',
+    'ALLUSERSPROFILE',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'ProgramData',
+    'ProgramFiles',
+    'ProgramFiles(x86)',
+    'CommonProgramFiles',
+    'CommonProgramFiles(x86)',
+    'PUBLIC',
+    'PATHEXT',
+  ];
+  if (options.adapterId === 'opencode-direct') {
+    envAllowed.push('NINEROUTER_API_KEY');
+  }
+  const allowedArray = '@(' + envAllowed.map((k) => `"${k}"`).join(', ') + ')';
+
   return `
 $ErrorActionPreference = "Stop"
 ${credentialLines}$nestedScript = "${workerRoot}\\run-target.ps1"
@@ -289,7 +309,7 @@ $psi.EnvironmentVariables.Clear()
 # call operator falls off the CreateProcess path for an absolute .exe, returns
 # before the job ran and leaves the payload orphaned — a green result for a
 # job that never finished.
-$allowed = @("PATH", "SystemRoot", "SystemDrive", "ALLUSERSPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "CommonProgramFiles(x86)", "PUBLIC", "PATHEXT", "NINEROUTER_API_KEY")
+$allowed = ${allowedArray}
 foreach ($key in $allowed) {
     if ([Environment]::GetEnvironmentVariable($key)) {
         $psi.EnvironmentVariables[$key] = [Environment]::GetEnvironmentVariable($key)
@@ -530,7 +550,7 @@ function getIsolatedLauncher() {
     // the operator repo; the worker root is outside the operator profile and
     // the worker is granted Modify, so a hardlinked object could be
     // rewritten in place to corrupt the OPERATOR repo's objects.
-    const cloneRes = spawnSync(
+    const cloneRes = cp.spawnSync(
       'git',
       ['clone', '--no-checkout', '--no-hardlinks', hostCwd, workerRoot],
       {
@@ -539,19 +559,27 @@ function getIsolatedLauncher() {
     );
     if (cloneRes.status !== 0) throw new Error('Failed to clone repository');
 
-    const checkoutRes = spawnSync('git', ['checkout', headSha], {
+    const checkoutRes = cp.spawnSync('git', ['checkout', headSha], {
       cwd: workerRoot,
       windowsHide: true,
     });
     if (checkoutRes.status !== 0) throw new Error('Failed to checkout HEAD SHA in worker root');
 
     if (adapter.id === 'opencode-direct') {
+      const sources = require('./sources.json');
+      const routerSource = sources.sources.find((s) => s.id === '9router');
+      if (!routerSource) {
+        throw new Error('OPENCODE_DIRECT_LAUNCH_FAILED: 9router source not found in sources.json');
+      }
+
       const configPath = path.join(workerRoot, '.opencode.json');
       const configData = JSON.stringify({
-        endpoints: {
+        provider: {
           '9router': {
-            url: 'http://127.0.0.1:20128/v1',
-            apiKey: '{env:NINEROUTER_API_KEY}',
+            options: {
+              baseURL: routerSource.endpoint,
+              apiKey: `{env:${routerSource.credential.env}}`,
+            },
           },
         },
       });
@@ -598,6 +626,7 @@ function getIsolatedLauncher() {
       launchResultPath,
       workerTimeoutMs,
       completionNonce,
+      adapterId: adapter.id,
     });
 
     const tempScript = path.join(
@@ -606,7 +635,7 @@ function getIsolatedLauncher() {
     );
     fs.writeFileSync(tempScript, scriptContent, 'utf8');
 
-    const hostRes = spawnSync(
+    const hostRes = cp.spawnSync(
       'powershell.exe',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tempScript],
       {

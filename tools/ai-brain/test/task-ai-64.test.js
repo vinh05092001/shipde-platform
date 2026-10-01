@@ -1598,7 +1598,7 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
     JSON.stringify({
       verdict: 'CLOSED',
       worktree: tmpCwd,
-      timestamp: Date.now() + 10000,
+      timestamp: Date.now() - 10000,
       policyHash: isoModule.getFolderHash(path.join(tmpCwd, 'scripts/ai/isolation')),
       sid: 'TEST-SID',
       details: { a: 'PASS' },
@@ -1613,8 +1613,24 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
     const runIso = isoModule.getIsolatedLauncher();
 
     cp.spawnSync = (cmd, cargs, opts) => {
-      if (cmd === 'git') return { status: 0 };
-      if (cmd === 'powershell.exe') return { status: 0, stdout: '' };
+      if (cmd === 'git') {
+        if (cargs && cargs[0] === 'clone') {
+          try {
+            fs.mkdirSync(cargs[4], { recursive: true });
+          } catch (e) {
+            console.error('mkdirSync failed in mock:', e);
+          }
+        }
+        return { status: 0 };
+      }
+      if (cmd === 'powershell.exe') {
+        const fullArgs = [cmd, ...(cargs || [])].join(' ');
+        assert.ok(
+          !fullArgs.includes('NINEROUTER_API_KEY'),
+          'NINEROUTER_API_KEY must not appear in argv'
+        );
+        return { status: 0, stdout: '' };
+      }
       return realSpawn(cmd, cargs, opts);
     };
 
@@ -1628,6 +1644,9 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
         workerTimeoutMs: 1000,
       });
     } catch (e) {
+      if (e.message && !e.message.includes('the host script never wrote it')) {
+        console.error('runIso threw unexpected error:', e);
+      }
       // Read failure from missing launch result file is expected
     }
 

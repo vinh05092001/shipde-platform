@@ -1,1 +1,0 @@
-COMPLETED: Isolated launch direct adapter implementation and hermetic tests added. Tests pass.
