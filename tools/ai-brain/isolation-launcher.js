@@ -470,6 +470,180 @@ function appendGitInfoExclude(workerRoot, entries) {
   fs.appendFileSync(excludePath, prefix + missing.join('\n') + '\n', 'utf8');
 }
 
+const EXERCISE_CASES = path.join(__dirname, 'exercise', 'e1-branch-name.cases.json');
+const EXERCISE_RUNNER = path.join('tools', 'ai-brain', 'test', 'e1-branch-name.test.js');
+const THROWS = 'THROWS:';
+
+function exerciseCasesPath(exerciseName) {
+  const name = String(exerciseName || 'e1-branch-name').trim();
+  if (name === 'e1' || name === 'e1-branch-name' || name === 'true' || !name) {
+    return EXERCISE_CASES;
+  }
+  const candidate = path.join(__dirname, 'exercise', `${name}.cases.json`);
+  if (fs.existsSync(candidate)) return candidate;
+  return EXERCISE_CASES;
+}
+
+/**
+ * Captures fail-before host-side in workerRoot at the pinned base SHA.
+ *
+ * Runs the exercise runner command (node --test tools/ai-brain/test/e1-branch-name.test.js)
+ * in workerRoot before the agent begins work. Because tools/ai-brain/branch-name.js
+ * does not exist at the base SHA, the command exits non-zero (missing module error).
+ * This real captured execution transcript provides honest fail-before evidence.
+ */
+function captureFailBefore(workerRoot, options) {
+  const o = options || {};
+  const spawn = o.spawnSync || cp.spawnSync;
+  const runnerRel = path.join('tools', 'ai-brain', 'test', 'e1-branch-name.test.js');
+  const runnerPosix = runnerRel.replace(/\\/g, '/');
+  const runnerFull = path.join(workerRoot, runnerRel);
+  if (!fs.existsSync(runnerFull)) {
+    throw new Error('FAIL_BEFORE_RUNNER_MISSING: ' + runnerFull);
+  }
+
+  const command =
+    (o.verification && o.verification.command) || o.exerciseCommand || `node --test ${runnerPosix}`;
+
+  const childEnv = Object.assign({}, process.env, o.env || {});
+  delete childEnv.NODE_TEST_CONTEXT;
+  delete childEnv.NODE_TEST_WORKER_ID;
+
+  let res;
+  if (!o.verification && !o.exerciseCommand) {
+    const execPath = o.nodePath || process.execPath;
+    res = spawn(execPath, ['--test', runnerPosix], {
+      cwd: workerRoot,
+      env: childEnv,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: o.timeoutMs || 30000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  } else {
+    res = spawn(command, {
+      cwd: workerRoot,
+      env: childEnv,
+      encoding: 'utf8',
+      shell: true,
+      windowsHide: true,
+      timeout: o.timeoutMs || 30000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  }
+
+  const stdout = String((res && res.stdout) || '');
+  const stderr = String((res && res.stderr) || '');
+  const exitCode = res ? (res.status !== null && res.status !== undefined ? res.status : -1) : -1;
+  const output = (stdout + (stderr ? (stdout ? '\n' : '') + stderr : '')).slice(-2000);
+
+  return {
+    command,
+    exitCode,
+    stdout,
+    stderr,
+    output,
+    capturedAt: new Date().toISOString(),
+    pass: exitCode === 0,
+  };
+}
+
+/**
+ * Materialises the exercise's runner INSIDE the worker root, from the committed
+ * case data, AFTER the worker root has been provisioned.
+ *
+ * Keeps the runner untracked by adding it to .git/info/exclude in the worker clone,
+ * and captures fail-before at the base SHA in the provisioned tree.
+ */
+function materialiseExercise(workerRoot, options) {
+  const o = options || {};
+  if (!workerRoot) {
+    throw new Error(
+      'EXERCISE_ROOT_MISSING: the exercise runner may only be written into a worker root'
+    );
+  }
+  const root = path.resolve(workerRoot);
+  const checkWorker = (o && o.isWorkerPath) || isWorkerPath;
+  if (!checkWorker(root)) {
+    throw new Error('EXERCISE_ROOT_INVALID: refusing to write the runner outside the worker root');
+  }
+  const target = path.join(root, EXERCISE_RUNNER);
+  if (path.relative(root, target).startsWith('..') || !path.isAbsolute(target)) {
+    throw new Error('EXERCISE_ROOT_INVALID: refusing to write the runner outside the worker root');
+  }
+  const casesFile = exerciseCasesPath(o.exercise);
+  if (!fs.existsSync(casesFile)) {
+    throw new Error('EXERCISE_CASES_MISSING: ' + casesFile);
+  }
+  const cases = JSON.parse(fs.readFileSync(casesFile, 'utf8'));
+  if (!Array.isArray(cases) || cases.length === 0) {
+    throw new Error('EXERCISE_CASES_EMPTY: ' + casesFile);
+  }
+  const body = [
+    "'use strict';",
+    '',
+    '// Materialised inside the worker root from tools/ai-brain/exercise/e1-branch-name.cases.json.',
+    '// Never committed: the test:brain glob would pick this file up on the integration',
+    '// branch. Run it with: node --test tools/ai-brain/test/e1-branch-name.test.js',
+    '',
+    "const { test } = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "const cases = require('../exercise/e1-branch-name.cases.json');",
+    "const { normalizeWorkItemBranch } = require('../branch-name');",
+    '',
+    'const THROWS = ' + JSON.stringify(THROWS) + ';',
+    '',
+    'for (const c of cases) {',
+    '  test(c.name, () => {',
+    '    if (typeof c.expect === "string" && c.expect.startsWith(THROWS)) {',
+    '      const code = c.expect.slice(THROWS.length);',
+    '      assert.throws(',
+    '        () => normalizeWorkItemBranch(c.workItemId, c.kind, c.outcome),',
+    '        (err) => {',
+    '          const named = String((err && err.code) || "") + " " + String((err && err.message) || "");',
+    '          assert.ok(',
+    '            named.includes(code),',
+    '            "expected the thrown error to be " + code + ", got: " + named',
+    '          );',
+    '          return true;',
+    '        }',
+    '      );',
+    '      return;',
+    '    }',
+    '    assert.equal(normalizeWorkItemBranch(c.workItemId, c.kind, c.outcome), c.expect);',
+    '  });',
+    '}',
+    '',
+  ].join('\n');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, body, 'utf8');
+
+  // Keep it untracked in git
+  appendGitInfoExclude(root, ['tools/ai-brain/test/e1-branch-name.test.js']);
+
+  let failBefore = null;
+  if (!o.skipFailBefore) {
+    try {
+      failBefore = captureFailBefore(root, o);
+    } catch (err) {
+      failBefore = {
+        command:
+          (o.verification && o.verification.command) ||
+          'node --test tools/ai-brain/test/e1-branch-name.test.js',
+        exitCode: -1,
+        stdout: '',
+        stderr: String((err && err.message) || err),
+        output: String((err && err.message) || err),
+        capturedAt: new Date().toISOString(),
+        pass: false,
+        error: String((err && err.message) || err),
+      };
+    }
+  }
+
+  return { path: target, cases: cases.length, failBefore };
+}
+
 function getIsolatedLauncher() {
   return function isolatedLauncher(adapter, args, options) {
     if (args && !Array.isArray(args)) {
@@ -645,6 +819,30 @@ function getIsolatedLauncher() {
       appendGitInfoExclude(workerRoot, ['opencode.json']);
     }
 
+    let exerciseResult = null;
+    if (opts.exercise) {
+      exerciseResult = materialiseExercise(workerRoot, {
+        exercise: opts.exercise,
+        baseSha: headSha,
+        spawnSync: opts.spawnSync,
+        isWorkerPath: opts.isWorkerPath,
+      });
+      appendGitInfoExclude(workerRoot, ['tools/ai-brain/test/e1-branch-name.test.js']);
+    }
+
+    if (typeof opts.onProvisioned === 'function') {
+      const hookRes = opts.onProvisioned(workerRoot, {
+        baseSha: headSha,
+        exercise: opts.exercise,
+        exerciseResult,
+        adapter,
+        args,
+      });
+      if (hookRes && !exerciseResult) {
+        exerciseResult = hookRes;
+      }
+    }
+
     const credPath = path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'WorkerUser.cred');
 
     const exe = executableFor(adapter.command, opts);
@@ -712,7 +910,12 @@ function getIsolatedLauncher() {
       fs.unlinkSync(tempScript);
     } catch (e) {}
 
-    return readLaunchResult(launchResultPath, completionNonce, hostRes);
+    const launchResult = readLaunchResult(launchResultPath, completionNonce, hostRes);
+    if (exerciseResult) {
+      launchResult.exercise = exerciseResult;
+      launchResult.failBefore = exerciseResult.failBefore;
+    }
+    return launchResult;
   };
 }
 
@@ -778,6 +981,9 @@ module.exports = {
   buildWorkerLaunchScript,
   workerRootFor,
   isWorkerPath,
+  appendGitInfoExclude,
+  materialiseExercise,
+  captureFailBefore,
   WORKER_USERNAME,
   WORKER_ROOT,
   readLaunchResult,

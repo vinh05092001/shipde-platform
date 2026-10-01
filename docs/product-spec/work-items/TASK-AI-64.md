@@ -801,3 +801,36 @@ Evidence:
 Residual risk / known limitations:
 - If OpenCode encounters server-side errors from an upstream API that emit into the `UnknownError` envelope on stdout without an HTTP status, those could be classified as `LAUNCH_CONFIG`; the finite 5-minute cooldown bounds recovery time and prevents permanent candidate bans.
 - Pre-installed `@ai-sdk/openai-compatible` is dynamically resolved by OpenCode at runtime from its environment or npm cache; in offline or firewalled environments without global caching, package installation could fail if not pre-seeded.
+
+## Live run attempt 10 exercise runner after provision fix (2026-10-02)
+
+Observation / Defect G: In Live E2E attempt 10, orchestrate ran with `--isolated-worker --exercise e1`, but inside the worker root `C:/ShipDeWorker/isolation` the runner file `tools/ai-brain/test/e1-branch-name.test.js` did not exist when the agent ran (`live10-worker-opencode.log`), forcing the agent to improvise an in-memory/scratch test.
+Cause: `tools/ai-brain/orchestrate.js` called `materialiseExercise(job.cwd, o)` before `launcher(job)`. For isolated workers, `tools/ai-brain/isolation-launcher.js` then provisioned the worker root (`git clone --no-checkout` followed by `git checkout <baseSha>`), wiping the pre-materialised runner file before the agent started.
+
+Decision & Implementation:
+1. Post-Provisioning Runner Materialisation (`tools/ai-brain/isolation-launcher.js`):
+   - `isolatedLauncher` accepts `opts.exercise` and `opts.onProvisioned`.
+   - After provisioning the worker root (`git clone --no-checkout` + `git checkout headSha`), the launcher invokes `materialiseExercise(workerRoot, opts)` and the `opts.onProvisioned(workerRoot, opts)` callback, ensuring the runner exists before writing `run-target.ps1` and launching the agent process.
+   - Excluded from Git Tracking: `appendGitInfoExclude(workerRoot, ['tools/ai-brain/test/e1-branch-name.test.js'])` ensures the runner remains untracked in `.git/info/exclude` in the worker clone, preventing it from ever being staged or committed into the repository or published draft Pull Request.
+   - Fail-Before Capture at Base SHA: Invokes `captureFailBefore(workerRoot, exerciseInfo.runnerRel)` host-side at the pinned base SHA, capturing the missing module error and non-zero exit code into `launchResult.failBefore` and `launchResult.exercise`.
+2. Clean Child Test Environment: Stripped `NODE_TEST_CONTEXT` and `NODE_TEST_WORKER_ID` from spawned child test process environment in `captureFailBefore` so recursive `node --test` execution in the provisioned tree executes cleanly without being skipped.
+3. Orchestrator Integration (`tools/ai-brain/orchestrate.js`):
+   - Reuses `materialiseExercise` and `captureFailBefore` exported from `isolation-launcher.js`.
+   - `resolveLauncher` forwards `opts.exercise` and `opts.onProvisioned` to `isolatedLauncher`.
+   - For isolated workers, `runOrchestration` defers materialisation to `isolatedLauncher`, and records `res.exercise` and `res.failBefore` on the job, session, and log outputs.
+
+Evidence:
+- Fail-before base SHA: `ab7f3728fb264abfd3fe09c0e26c67e0e35770c2` (runner absent when agent starts, no fail-before captured by launcher, no onProvisioned hook).
+- Pass-after result: All tests pass. 3 new regression tests in `tools/ai-brain/test/task-ai-64.test.js`:
+  1. The runner file exists in the provisioned worker root when the agent process starts, `onProvisioned` hook is called, and `failBefore` is captured at base SHA.
+  2. Exercise runner is untracked by git and never committed (verified with real git repo).
+  3. Orchestrator forwards `exercise` and records `exercise` and `failBefore` on `log` and `session`.
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `npx --package prettier@3.9.6 prettier --check tools/ai-brain/isolation-launcher.js tools/ai-brain/orchestrate.js tools/ai-brain/test/task-ai-64.test.js docs/product-spec/work-items/TASK-AI-64.md`
+  - `git diff --check` clean.
+
+Residual risk / known limitations:
+- Materialisation depends on `tools/ai-brain/exercise/e1-branch-name.cases.json` being present either in the provisioned tree or host worktree.
+- The runner file is excluded locally via `.git/info/exclude`; if `.git/info` cannot be created or written, exclusion would fail closed.

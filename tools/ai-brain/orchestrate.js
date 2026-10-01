@@ -54,6 +54,7 @@ const candidatesApi = require('./candidates');
 const decisions = require('./decisions');
 const { candidateKey } = require('./candidates');
 const { classifyFailure } = require('./failure-classifier');
+const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
 
 const ItemStatus = Object.freeze({
   COMPLETED: 'completed',
@@ -155,6 +156,8 @@ function resolveLauncher(o, isolatedLauncher) {
       workerRoot: job.workerRoot,
       baseSha: job.baseSha,
       verdictPath: job.verdictPath,
+      exercise: job.exercise || o.exercise || null,
+      onProvisioned: typeof o.onProvisioned === 'function' ? o.onProvisioned : undefined,
     });
   };
 }
@@ -328,95 +331,6 @@ function prepareUsageReport(dir, stem) {
 
 function unique(list) {
   return Array.from(new Set(list.filter(Boolean)));
-}
-
-const EXERCISE_CASES = path.join(__dirname, 'exercise', 'e1-branch-name.cases.json');
-const EXERCISE_RUNNER = path.join('tools', 'ai-brain', 'test', 'e1-branch-name.test.js');
-const THROWS = 'THROWS:';
-
-/**
- * Materialises the exercise's runner INSIDE the worker root, from the committed
- * case data, before the agent is launched.
- *
- * The runner is deliberately never committed: `pnpm test:brain` is
- * `node --test "tools/ai-brain/test/*.test.js"`, so a committed copy at that path
- * would join the integration suite on main and break it there. The committed
- * artifact of the exercise is the data file, which asserts nothing by itself and
- * breaks nothing in CI.
- *
- * That gives the fail-before / pass-after pair its honesty: at the pinned base SHA
- * with this file present and `branch-name.js` absent, the command exits non-zero
- * with a missing-module error — a real captured run, not an assertion about one —
- * and after the agent implements the module the same command exits 0.
- *
- * `expect` is the exact expected string, or `THROWS:<CODE>` for the exact error
- * code the module must raise (as `err.code`, or as the start of `err.message`).
- *
- * Refuses a target that is not inside the worker root: the runner belongs in the
- * worker's own tree and nowhere else.
- */
-function materialiseExercise(workerRoot, options) {
-  const o = options || {};
-  if (!workerRoot) {
-    throw new Error(
-      'EXERCISE_ROOT_MISSING: the exercise runner may only be written into a worker root'
-    );
-  }
-  const { isWorkerPath } = require('./isolation-launcher');
-  const root = path.resolve(workerRoot);
-  if (!isWorkerPath(root)) {
-    throw new Error('EXERCISE_ROOT_INVALID: refusing to write the runner outside the worker root');
-  }
-  const target = path.join(root, EXERCISE_RUNNER);
-  if (path.relative(root, target).startsWith('..') || !path.isAbsolute(target)) {
-    throw new Error('EXERCISE_ROOT_INVALID: refusing to write the runner outside the worker root');
-  }
-  if (!fs.existsSync(EXERCISE_CASES)) {
-    throw new Error('EXERCISE_CASES_MISSING: ' + EXERCISE_CASES);
-  }
-  const cases = JSON.parse(fs.readFileSync(EXERCISE_CASES, 'utf8'));
-  if (!Array.isArray(cases) || cases.length === 0) {
-    throw new Error('EXERCISE_CASES_EMPTY: ' + EXERCISE_CASES);
-  }
-  const body = [
-    "'use strict';",
-    '',
-    '// Materialised inside the worker root from tools/ai-brain/exercise/e1-branch-name.cases.json.',
-    '// Never committed: the test:brain glob would pick this file up on the integration',
-    '// branch. Run it with: node --test tools/ai-brain/test/e1-branch-name.test.js',
-    '',
-    "const { test } = require('node:test');",
-    "const assert = require('node:assert/strict');",
-    "const cases = require('../exercise/e1-branch-name.cases.json');",
-    "const { normalizeWorkItemBranch } = require('../branch-name');",
-    '',
-    'const THROWS = ' + JSON.stringify(THROWS) + ';',
-    '',
-    'for (const c of cases) {',
-    '  test(c.name, () => {',
-    '    if (typeof c.expect === "string" && c.expect.startsWith(THROWS)) {',
-    '      const code = c.expect.slice(THROWS.length);',
-    '      assert.throws(',
-    '        () => normalizeWorkItemBranch(c.workItemId, c.kind, c.outcome),',
-    '        (err) => {',
-    '          const named = String((err && err.code) || "") + " " + String((err && err.message) || "");',
-    '          assert.ok(',
-    '            named.includes(code),',
-    '            "expected the thrown error to be " + code + ", got: " + named',
-    '          );',
-    '          return true;',
-    '        }',
-    '      );',
-    '      return;',
-    '    }',
-    '    assert.equal(normalizeWorkItemBranch(c.workItemId, c.kind, c.outcome), c.expect);',
-    '  });',
-    '}',
-    '',
-  ].join('\n');
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, body, 'utf8');
-  return { path: target, cases: cases.length };
 }
 
 function buildProfile(item, o, forbiddenFailureDomains) {
@@ -719,13 +633,20 @@ async function runOrchestration(goal, opts) {
         checkpoint: checkpointFile,
         title: String(item.id),
         labels: { workItem: String(item.id), role: roleOf(item) },
+        exercise: o.exercise || null,
       };
 
       // The exercise runner exists in the worker's own tree before the agent
       // starts, so the fail-before at the pinned base SHA is a real captured run
       // and the pass-after at the worker's head SHA is the same command.
-      if (o.exercise && job.cwd) {
+      // For isolated worker launches, the runner is materialised inside the
+      // isolated launcher AFTER the worker root is provisioned so git clone does
+      // not overwrite it. For non-isolated or injected runners, materialise here.
+      if (o.exercise && job.cwd && (!o.isolatedWorker || typeof o.run === 'function')) {
         job.exercise = materialiseExercise(job.cwd, o);
+        if (job.exercise && job.exercise.failBefore) {
+          job.failBefore = job.exercise.failBefore;
+        }
       }
 
       let res = null;
@@ -733,6 +654,13 @@ async function runOrchestration(goal, opts) {
         res = launcher(job);
       } catch (err) {
         res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
+      }
+
+      if (res && res.exercise) {
+        job.exercise = res.exercise;
+      }
+      if (res && res.failBefore) {
+        job.failBefore = res.failBefore;
       }
 
       // A definite non-zero exit is a failed launch. A session that has not exited
@@ -827,9 +755,13 @@ async function runOrchestration(goal, opts) {
         exitCode: res.exitCode,
         status,
         startedAt: res.startedAt || null,
+        exercise: job.exercise || null,
+        failBefore: job.failBefore || (job.exercise && job.exercise.failBefore) || null,
       };
       log.sessions.push(session);
       log.launches.push(launch);
+      log.exercise = session.exercise;
+      log.failBefore = session.failBefore;
       launch.outcome = 'launched';
 
       decisions.recordDecision(
@@ -1286,6 +1218,7 @@ module.exports = {
   resolveLauncher,
   headShaOf,
   materialiseExercise,
+  captureFailBefore,
   ItemStatus,
   RunStatus,
   PublicationStatus,

@@ -2140,4 +2140,323 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
     assert.equal(cand1.blockReason, cliApi.LIVE_BLOCK_CODES.failed);
     assert.equal(cand2.blocked, undefined);
   });
+
+  describe('TASK-AI-64 exercise runner materialisation after provision (DEFECT G)', () => {
+    test('the runner file exists in the provisioned worker root when the agent starts and fail-before is captured', () => {
+      const isoMod = require('../isolation-launcher');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-defect-g-'));
+      const fakeHostCwd = path.join(tmpDir, 'host');
+      const fakeWorkerRoot = path.join(tmpDir, 'worker');
+      fs.mkdirSync(path.join(fakeHostCwd, 'scripts', 'ai', 'isolation'), { recursive: true });
+      fs.writeFileSync(
+        path.join(fakeHostCwd, 'scripts', 'ai', 'isolation', 'Set-WorkerAcl.ps1'),
+        '# isolation'
+      );
+      fs.mkdirSync(path.join(fakeHostCwd, 'tools', 'ai-brain', 'exercise'), { recursive: true });
+      fs.copyFileSync(
+        path.join(__dirname, '../exercise/e1-branch-name.cases.json'),
+        path.join(fakeHostCwd, 'tools', 'ai-brain', 'exercise', 'e1-branch-name.cases.json')
+      );
+
+      const verdictFile = path.join(fakeHostCwd, 'verdict.json');
+      fs.writeFileSync(
+        verdictFile,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          worktree: fakeHostCwd,
+          timestamp: new Date().toISOString(),
+          policyHash: isoMod.getFolderHash(path.join(fakeHostCwd, 'scripts', 'ai', 'isolation')),
+          sid: 'TEST-SID',
+          details: { check1: 'PASS', check2: 'PASS' },
+        })
+      );
+
+      const adapter = {
+        id: 'opencode-direct',
+        command: 'opencode',
+        launch: () => [
+          'run',
+          '--model',
+          'ninerouter/ag/gemini-3.1-pro-low',
+          '--dir',
+          fakeWorkerRoot,
+        ],
+      };
+
+      let runnerExistsWhenAgentStarted = false;
+      let hookCalled = false;
+      let hookReceivedRoot = null;
+      const realSpawn = cp.spawnSync;
+
+      try {
+        cp.spawnSync = (cmd, cargs, opts) => {
+          if (cmd === 'git') {
+            if (cargs && cargs[0] === 'clone') {
+              fs.mkdirSync(fakeWorkerRoot, { recursive: true });
+              fs.mkdirSync(path.join(fakeWorkerRoot, '.git', 'info'), { recursive: true });
+              fs.mkdirSync(path.join(fakeWorkerRoot, 'tools', 'ai-brain', 'exercise'), {
+                recursive: true,
+              });
+              fs.copyFileSync(
+                path.join(__dirname, '../exercise/e1-branch-name.cases.json'),
+                path.join(
+                  fakeWorkerRoot,
+                  'tools',
+                  'ai-brain',
+                  'exercise',
+                  'e1-branch-name.cases.json'
+                )
+              );
+            }
+            return { status: 0 };
+          }
+          if (cmd === 'powershell.exe') {
+            // This represents the host script starting the agent process
+            const runnerFile = path.join(
+              fakeWorkerRoot,
+              'tools',
+              'ai-brain',
+              'test',
+              'e1-branch-name.test.js'
+            );
+            runnerExistsWhenAgentStarted = fs.existsSync(runnerFile);
+
+            // Find the launchResultPath and write successful launch result with matching nonce
+            const fileIdx = cargs.indexOf('-File');
+            if (fileIdx !== -1 && fileIdx + 1 < cargs.length) {
+              const scriptPath = cargs[fileIdx + 1];
+              if (fs.existsSync(scriptPath)) {
+                const scriptContent = fs.readFileSync(scriptPath, 'utf8');
+                const nonceMatch = scriptContent.match(/\$completionNonce = "([^"]+)"/);
+                const resultMatch = scriptContent.match(/Out-File "([^"]+\.json)" -Encoding UTF8/);
+                if (nonceMatch && resultMatch) {
+                  fs.writeFileSync(
+                    resultMatch[1],
+                    JSON.stringify({
+                      exitCode: 0,
+                      completed: true,
+                      completionNonce: nonceMatch[1],
+                      timedOut: false,
+                      stdout: 'worker completed',
+                      stderr: '',
+                    }),
+                    'utf8'
+                  );
+                }
+              }
+            }
+            return { status: 0, stdout: '' };
+          }
+          return realSpawn(cmd, cargs, opts);
+        };
+
+        const runIso = isoMod.getIsolatedLauncher();
+        const res = runIso(adapter, adapter.launch(), {
+          cwd: fakeHostCwd,
+          workerRoot: fakeWorkerRoot,
+          verdictPath: verdictFile,
+          getWorkerSid: () => 'TEST-SID',
+          verifyBoundary: () => true,
+          baseSha: '0123456789012345678901234567890123456789',
+          workerTimeoutMs: 1000,
+          exercise: 'e1',
+          isWorkerPath: () => true,
+          onProvisioned: (root, pOpts) => {
+            hookCalled = true;
+            hookReceivedRoot = root;
+          },
+        });
+
+        // 1. The runner file exists in the provisioned worker root when the agent starts
+        assert.equal(
+          runnerExistsWhenAgentStarted,
+          true,
+          'the runner file must exist in the provisioned worker root when the agent process starts'
+        );
+        assert.equal(
+          fs.existsSync(
+            path.join(fakeWorkerRoot, 'tools', 'ai-brain', 'test', 'e1-branch-name.test.js')
+          ),
+          true,
+          'runner file remains present in worker root after provision'
+        );
+
+        // 2. onProvisioned hook was called after git clone/checkout and before agent launch
+        assert.equal(hookCalled, true, 'onProvisioned hook must be called');
+        assert.equal(hookReceivedRoot, fakeWorkerRoot, 'onProvisioned received workerRoot');
+
+        // 3. Fail-before was captured at the base SHA in the provisioned tree
+        assert.ok(res.failBefore, 'launch result must capture failBefore');
+        assert.equal(res.failBefore.pass, false, 'fail-before must report pass: false at base SHA');
+        assert.notEqual(res.failBefore.exitCode, 0, 'fail-before must exit non-zero at base SHA');
+        assert.match(
+          res.failBefore.command,
+          /node --test tools\/ai-brain\/test\/e1-branch-name\.test\.js/,
+          'fail-before command must target the exercise runner'
+        );
+        assert.ok(
+          res.failBefore.output.includes('branch-name') ||
+            res.failBefore.stderr.includes('branch-name') ||
+            res.failBefore.exitCode !== 0,
+          'fail-before captures missing module / non-zero exit'
+        );
+
+        // 4. It is never committed: added to .git/info/exclude
+        const excludeContent = fs.readFileSync(
+          path.join(fakeWorkerRoot, '.git', 'info', 'exclude'),
+          'utf8'
+        );
+        assert.ok(
+          excludeContent.includes('tools/ai-brain/test/e1-branch-name.test.js'),
+          'exercise runner must be excluded in .git/info/exclude'
+        );
+      } finally {
+        cp.spawnSync = realSpawn;
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test('exercise runner is untracked by git and never committed', () => {
+      const isoMod = require('../isolation-launcher');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-git-exclude-'));
+
+      try {
+        // Create a real git repo
+        cp.spawnSync('git', ['init'], { cwd: tmpDir });
+        cp.spawnSync('git', ['config', 'user.email', 'test@shipde.local'], { cwd: tmpDir });
+        cp.spawnSync('git', ['config', 'user.name', 'Test Author'], { cwd: tmpDir });
+
+        fs.mkdirSync(path.join(tmpDir, 'tools', 'ai-brain', 'exercise'), { recursive: true });
+        fs.copyFileSync(
+          path.join(__dirname, '../exercise/e1-branch-name.cases.json'),
+          path.join(tmpDir, 'tools', 'ai-brain', 'exercise', 'e1-branch-name.cases.json')
+        );
+        fs.writeFileSync(path.join(tmpDir, 'existing.txt'), 'base');
+        cp.spawnSync('git', ['add', '.'], { cwd: tmpDir });
+        cp.spawnSync('git', ['commit', '-m', 'initial base commit'], { cwd: tmpDir });
+
+        // Materialise exercise into tmpDir
+        const result = isoMod.materialiseExercise(tmpDir, {
+          exercise: 'e1',
+          isWorkerPath: () => true,
+        });
+
+        assert.ok(fs.existsSync(result.path), 'runner file written');
+        assert.ok(result.failBefore, 'fail-before captured');
+        assert.equal(result.failBefore.pass, false, 'fail-before failed at base SHA');
+
+        // Check git status: runner must NOT be reported as untracked
+        const statusRes = cp.spawnSync('git', ['status', '--porcelain'], {
+          cwd: tmpDir,
+          encoding: 'utf8',
+        });
+        assert.ok(
+          !statusRes.stdout.includes('e1-branch-name.test.js'),
+          'git status must not show the excluded exercise runner'
+        );
+
+        // Commit all changes: runner must NOT be committed
+        cp.spawnSync('git', ['add', '.'], { cwd: tmpDir });
+        const statusAfterAdd = cp.spawnSync('git', ['status', '--porcelain'], {
+          cwd: tmpDir,
+          encoding: 'utf8',
+        });
+        assert.ok(
+          !statusAfterAdd.stdout.includes('e1-branch-name.test.js'),
+          'git add must not stage the excluded exercise runner'
+        );
+
+        const lsFiles = cp.spawnSync('git', ['ls-files'], { cwd: tmpDir, encoding: 'utf8' });
+        assert.ok(
+          !lsFiles.stdout.includes('e1-branch-name.test.js'),
+          'git ls-files must never list the exercise runner'
+        );
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test('orchestrate with isolatedWorker and exercise attaches exercise and fail-before to job and session', async () => {
+      const orch = require('../orchestrate');
+      const isoMod = require('../isolation-launcher');
+      const realGetIsolatedLauncher = isoMod.getIsolatedLauncher;
+      const realIsWorkerPath = isoMod.isWorkerPath;
+
+      let launcherOptions = null;
+
+      isoMod.getIsolatedLauncher = function spy() {
+        return function stubIsolatedLauncher(adapter, args, opts) {
+          launcherOptions = opts;
+          return {
+            exitCode: 0,
+            stdout: 'opencode finished',
+            completionNonce: 'test-nonce',
+            exercise: {
+              path: 'C:\\ShipDeWorker\\isolation\\tools\\ai-brain\\test\\e1-branch-name.test.js',
+              cases: 11,
+              failBefore: {
+                command: 'node --test tools/ai-brain/test/e1-branch-name.test.js',
+                exitCode: 1,
+                pass: false,
+                output: 'Cannot find module ../branch-name',
+              },
+            },
+            failBefore: {
+              command: 'node --test tools/ai-brain/test/e1-branch-name.test.js',
+              exitCode: 1,
+              pass: false,
+              output: 'Cannot find module ../branch-name',
+            },
+          };
+        };
+      };
+      isoMod.isWorkerPath = () => true;
+
+      const hostWorktree = 'C:\\Users\\gumac\\AI\\shipde-platform\\.worktrees\\ai64ex';
+      const tmpDecisions = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-orch-dec-'));
+
+      try {
+        const candidates = [
+          {
+            harness: 'paseo',
+            source: '9router',
+            modelId: 'ag/gemini-3.1-pro-low',
+            gateway: '9router',
+            upstream: 'ag',
+            accountId: 'codex',
+          },
+        ];
+
+        const res = await orch.runOrchestration('exercise run', {
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              roleRequirement: { role: 'author.foundation' },
+              verification: { command: 'node --test' },
+            },
+          ],
+          candidates,
+          isolatedWorker: true,
+          exercise: 'e1',
+          cwd: hostWorktree,
+          decisionDir: tmpDecisions,
+        });
+
+        assert.ok(launcherOptions, 'isolated launcher must have been called');
+        assert.equal(
+          launcherOptions.exercise,
+          'e1',
+          'orchestrate must forward exercise option to isolatedLauncher'
+        );
+        assert.ok(res.exercise, 'orchestrate log must record exercise');
+        assert.ok(res.failBefore, 'orchestrate log must record failBefore');
+        assert.equal(res.failBefore.pass, false);
+        assert.equal(res.sessions[0].failBefore.pass, false);
+      } finally {
+        isoMod.getIsolatedLauncher = realGetIsolatedLauncher;
+        isoMod.isWorkerPath = realIsWorkerPath;
+        fs.rmSync(tmpDecisions, { recursive: true, force: true });
+      }
+    });
+  });
 });
