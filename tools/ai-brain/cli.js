@@ -744,25 +744,21 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     }
   }
 
-  return assembleCandidates(
-    discoveryCat,
-    offs,
-    resolvedRegistry,
-    accounts,
-    null,
-    [
-      ...candidatesApi.gatewayAccountCandidates({
-        registry: resolvedRegistry,
-        accounts: accounts || [],
-        catalogue: (discoveryCat && discoveryCat.candidates) || [],
-      }),
-      ...candidatesApi.poolAccountCandidates({
-        registry: resolvedRegistry,
-        accounts: accounts || [],
-        catalogue: (discoveryCat && discoveryCat.candidates) || [],
-      })
-    ]
-  );
+  return assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
+    ...candidatesApi.gatewayAccountCandidates({
+      registry: resolvedRegistry,
+      accounts: accounts || [],
+      catalogue: (discoveryCat && discoveryCat.candidates) || [],
+    }),
+    ...candidatesApi.poolAccountCandidates({
+      registry: resolvedRegistry,
+      accounts: accounts || [],
+      catalogue: (discoveryCat && discoveryCat.candidates) || [],
+      evidenceData: opts.evidenceData,
+      fakeRunsDir: opts.fakeRunsDir,
+      home: opts.home,
+    }),
+  ]);
 }
 
 function readCheckpoint(file) {
@@ -1059,7 +1055,23 @@ function dispatchProfileCommand(args, deps) {
     }
   }
   const accounts = listAccounts() || [];
-  const candidateList = assembleForDispatch(discCat, accounts, sourcesApi.loadSources(), deps);
+
+  const evidenceDir =
+    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+  let evidenceData;
+  try {
+    evidenceData = require('./evidence').loadEvidence(evidenceDir);
+  } catch (e) {
+    evidenceData = {};
+  }
+  const optsWithEvidence = Object.assign({}, deps, { evidenceData });
+
+  const candidateList = assembleForDispatch(
+    discCat,
+    accounts,
+    sourcesApi.loadSources(),
+    optsWithEvidence
+  );
 
   return require('./routing').runProfileDispatch(
     args,

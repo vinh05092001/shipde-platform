@@ -65,7 +65,17 @@ const READERS = {
     read: (account, opts) => {
       const fs = require('fs');
       const path = require('path');
-      const dir = (opts && opts.fakeRunsDir) || 'C:\\Tools\\agy-runs';
+      const dir =
+        (opts && opts.fakeRunsDir) ||
+        process.env.AGY_RUNS_DIR ||
+        (function () {
+          const os = require('os');
+          const home = (opts && opts.home) || os.homedir();
+          const localApp =
+            process.env.LOCALAPPDATA ||
+            path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
+          return path.join(localApp, 'agy-runs');
+        })();
       const resultFile = path.join(dir, account.id, 'result.json');
       const quotaFile = path.join(dir, account.id, 'quota.json');
 
@@ -103,32 +113,34 @@ const READERS = {
         for (const g of quotaJson.groups) {
           const family = g.id;
           if (g.fiveHour) {
-             rows.push({
-               family,
-               window: '5h',
-               remainingPercent: g.fiveHour.remaining !== undefined ? Math.round(g.fiveHour.remaining * 100) : 0,
-               disabled: false,
-               resetsAt: g.fiveHour.resetAt
-             });
+            rows.push({
+              family,
+              window: '5h',
+              remainingPercent:
+                g.fiveHour.remaining !== undefined ? Math.round(g.fiveHour.remaining * 100) : 0,
+              disabled: false,
+              resetsAt: g.fiveHour.resetAt,
+            });
           }
           if (g.weekly) {
-             rows.push({
-               family,
-               window: 'weekly',
-               remainingPercent: g.weekly.remaining !== undefined ? Math.round(g.weekly.remaining * 100) : 0,
-               disabled: false,
-               resetsAt: g.weekly.resetAt
-             });
+            rows.push({
+              family,
+              window: 'weekly',
+              remainingPercent:
+                g.weekly.remaining !== undefined ? Math.round(g.weekly.remaining * 100) : 0,
+              disabled: false,
+              resetsAt: g.weekly.resetAt,
+            });
           }
         }
         return {
           available: true,
           rows: rows,
-          account: { known: true, email: account.id, source: 'pool' }
+          account: { known: true, email: account.id, source: 'pool' },
         };
       }
       return { available: false, reason: 'quota.json thiếu groups' };
-    }
+    },
   },
   'claude-code': {
     read: (account, opts) => {
@@ -240,7 +252,16 @@ function refreshAll(accounts, options) {
   const allAccounts = [...(accounts || [])];
   const fs = require('fs');
   const path = require('path');
-  const dir = (options && options.fakeRunsDir) || 'C:\\Tools\\agy-runs';
+  const dir =
+    (options && options.fakeRunsDir) ||
+    process.env.AGY_RUNS_DIR ||
+    (function () {
+      const os = require('os');
+      const home = (options && options.home) || os.homedir();
+      const localApp =
+        process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || home, 'AppData', 'Local');
+      return path.join(localApp, 'agy-runs');
+    })();
 
   if (fs.existsSync(dir)) {
     try {
@@ -249,7 +270,7 @@ function refreshAll(accounts, options) {
         if (/^agy\d+$/.test(entry) && fs.statSync(path.join(dir, entry)).isDirectory()) {
           allAccounts.push({
             id: entry,
-            provider: 'agy-pool'
+            provider: 'agy-pool',
           });
         }
       }

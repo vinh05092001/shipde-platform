@@ -828,7 +828,7 @@ async function runProfileDispatch(args, deps) {
     headrooms: d.headrooms,
     reservations: d.reservations,
     accounts: d.accounts,
-    useStoredQuota: false,
+    useStoredQuota: d.useStoredQuota !== false,
     home: d.home,
     storePath: d.storePath,
   };
