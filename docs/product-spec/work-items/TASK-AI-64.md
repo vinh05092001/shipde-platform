@@ -719,3 +719,7 @@ Non-executable (Windows host; documented commands, verified by CI on `ubuntu-lat
   substitute for a product Work Item.
 - The live-proof draft Pull Request stays open and unmerged. If a human later merges it, that merge
   happens entirely outside this Work Item's evidence and this Work Item makes no claim about it.
+
+## Fix Notes
+
+- Fixed a defect during live run: \TypeError: cli.readCheckpoint is not a function\. The \	ools/ai-brain/cli.js\ entry script was invoking \main()\ before assigning \module.exports\, causing a partial exports object when \orchestrate.js\ lazily required it back. Fixed by reordering the export assignment before the \equire.main\ check and added regression test \64-23\ (AC-AI-64-14).

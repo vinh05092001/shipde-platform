@@ -2256,10 +2256,6 @@ function main() {
   process.exit(2);
 }
 
-if (require.main === module) {
-  main();
-}
-
 module.exports = {
   dispatchCommand,
   parseArgs,
@@ -2274,3 +2270,7 @@ module.exports = {
   DRY_RUN_BLOCK_CODES,
   LIVE_BLOCK_CODES,
 };
+
+if (require.main === module) {
+  main();
+}

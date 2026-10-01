@@ -1121,3 +1121,41 @@ test('64-22 supervisor survives file replacing object directory', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('64-23 cli.js as entry script resolves module.exports before orchestrate requires it', () => {
+  const dir = tmpDir('task-ai-64-cli-entry-');
+  const checkpointFile = path.join(dir, 'checkpoint.json');
+  fs.writeFileSync(checkpointFile, JSON.stringify({ completed: [] }));
+  const specsFile = path.join(dir, 'specs.json');
+  fs.writeFileSync(specsFile, JSON.stringify([{ id: 'FEAT-1', files: ['a.js'] }]));
+
+  const child = spawnSync(
+    process.execPath,
+    [
+      path.join(__dirname, '../cli.js'),
+      'orchestrate',
+      '--goal',
+      'foo',
+      '--checkpoint-file',
+      checkpointFile,
+      '--specs',
+      specsFile,
+      '--dry-run',
+    ],
+    {
+      cwd: dir,
+      encoding: 'utf8',
+      windowsHide: true,
+      env: Object.assign({}, process.env, { NODE_ENV: 'test' }),
+    }
+  );
+
+  assert.ok(
+    !child.stderr.includes('TypeError: cli.readCheckpoint is not a function'),
+    'The CLI must not crash with TypeError: cli.readCheckpoint is not a function'
+  );
+  assert.ok(
+    !child.stderr.includes('TypeError'),
+    'The CLI must not crash with any TypeError. stderr: ' + child.stderr
+  );
+});
