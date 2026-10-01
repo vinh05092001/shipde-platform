@@ -1159,3 +1159,117 @@ test('64-23 cli.js as entry script resolves module.exports before orchestrate re
     'The CLI must not crash with any TypeError. stderr: ' + child.stderr
   );
 });
+
+test('64-24 runOrchestration selects API_PASS candidate, isolates reviewer domain, and skips QUOTA_EXHAUSTED', () => {
+  const dir = tmpDir('task-ai-64-evidence-');
+  const evidenceDir = path.join(dir, 'evidence');
+  fs.mkdirSync(evidenceDir, { recursive: true });
+
+  const passedCandidate = cand({
+    gateway: 'gw-pass',
+    upstream: 'up-pass',
+    accountId: 'acct-pass',
+  });
+
+  const quotaCandidate = cand({
+    gateway: 'gw-quota',
+    upstream: 'up-quota',
+    accountId: 'acct-quota',
+  });
+
+  const reviewerCandidate = cand({
+    gateway: 'gw-reviewer',
+    upstream: 'up-reviewer',
+    accountId: 'acct-reviewer',
+    qualifiedRoles: ['reviewer.primary'],
+  });
+
+  // Write evidence for passedCandidate (API_PASS)
+  const passedKey = candidateKey(passedCandidate);
+  const safeFileName = passedKey.replace(/[:\/]/g, '_') + '.jsonl';
+  const evidenceFile = path.join(evidenceDir, safeFileName);
+  fs.writeFileSync(
+    evidenceFile,
+    JSON.stringify({
+      status: 'passed',
+      level: 'API_PASS',
+      ts: new Date(NOW - 1000).toISOString(),
+      source: 'test',
+    }) + '\n',
+    'utf8'
+  );
+
+  let reviewLaneWriterDomain = null;
+  const o = {
+    decisionDir: dir,
+    evidenceDir,
+    now: NOW,
+    isolatedWorker: true,
+    run: (job) => {
+      // Must write usage file to be considered a durable session
+      if (job.usageFile)
+        fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'test-session-1' }));
+      return { exitCode: 0, stdout: 'Generated artifact', stderr: '' };
+    },
+    candidates: [passedCandidate, quotaCandidate, reviewerCandidate],
+    ranking: {
+      headrooms: {
+        'acct-quota': { status: 'exhausted' },
+        'acct-pass': { status: 'available' },
+        'acct-reviewer': { status: 'available' },
+      },
+    },
+    sha: SHA_A,
+    reviewer: () => ({ pass: true, sha: SHA_A, verdict: 'PASS', findings: [] }),
+    specs: [{ id: 'TEST-1', roleRequirement: { role: 'author.foundation' }, files: [] }],
+  };
+
+  const log = runOrchestration(GOAL, o);
+  assert.ok(!log.refusal, 'runOrchestration failed: ' + log.refusal);
+
+  const logFile = path.join(dir, DAY + '.jsonl');
+  if (!fs.existsSync(logFile)) {
+    throw new Error(
+      'Log file not created! log.status=' +
+        log.status +
+        ', log.outcomes=' +
+        JSON.stringify(log.outcomes)
+    );
+  }
+  const decisionsLog = fs
+    .readFileSync(logFile, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+  const writerSelection = decisionsLog.find(
+    (d) => d.stage === 'selected' && d.role === 'author.foundation'
+  );
+  assert.ok(writerSelection, 'Writer must be selected');
+  assert.equal(writerSelection.chosen, passedKey, 'Must select the API_PASS candidate');
+
+  const quotaRejected = writerSelection.rejected.find(
+    (r) => r.candidateKey === candidateKey(quotaCandidate)
+  );
+  assert.ok(quotaRejected, 'QUOTA_EXHAUSTED candidate must be rejected');
+  assert.equal(quotaRejected.reasonCode, 'QUOTA_EXHAUSTED', 'Reason code must be QUOTA_EXHAUSTED');
+
+  const reviewSelection = decisionsLog.find((d) => d.stage === 'selected' && d.role === 'reviewer');
+  assert.ok(reviewSelection, 'Reviewer must be selected');
+
+  const writerDomain = writerSelection.chosen.split('/').slice(0, 3).join('/'); // Just picking the parts... wait, the logic uses gateway/upstream/accountId
+  assert.notEqual(reviewSelection.chosen, passedKey, 'Reviewer must not be the same as the writer');
+
+  // Ensure writer's domain is in the forbidden domains
+  const passDomainParts = [
+    passedCandidate.gateway,
+    passedCandidate.upstream,
+    passedCandidate.accountId,
+  ];
+  const chosenReviewerDomainParts = reviewSelection.chosen.split('/'); // Actually gateway/upstream/account
+  // We can just check that they are different
+  assert.ok(
+    !passDomainParts.includes(chosenReviewerDomainParts[0]),
+    'Reviewer gateway must differ'
+  );
+});
