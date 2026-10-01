@@ -296,9 +296,12 @@ const agyPool = {
     const path = require('path');
     const pool = require('./agy-pool-runtime');
     if (!pool.isValidAccountId(job && job.accountId)) {
-      throw new Error(
-        `INVALID_ACCOUNT_ID: account must match /^agy\\d{2}$/, got ${JSON.stringify(job && job.accountId)}`
-      );
+      return {
+        refusal: 'INVALID_ACCOUNT_ID',
+        reason: `INVALID_ACCOUNT_ID: account must match /^agy\\d{2}$/, got ${JSON.stringify(job && job.accountId)}`,
+        exitCode: 1,
+        state: 'error',
+      };
     }
     const accountDir = pool.accountDir(job.accountId, opts);
     fs.mkdirSync(accountDir, { recursive: true });

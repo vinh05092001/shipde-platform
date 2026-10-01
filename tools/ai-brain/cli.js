@@ -570,7 +570,10 @@ function quotaCommand(args) {
             row.window.padEnd(10) +
             (row.disabled
               ? 'đã tắt'
-              : row.remainingPercent === 'UNKNOWN'
+              : row.remainingPercent === null ||
+                  row.remainingPercent === undefined ||
+                  row.remainingPercent === 'UNKNOWN' ||
+                  row.known === false
                 ? 'UNKNOWN'
                 : row.remainingPercent + '%')
         );
@@ -1842,6 +1845,20 @@ function dispatchCommand(args, deps = {}) {
           stderr: err.stderr || err.message || String(err),
           error: err,
         };
+      }
+
+      if (launchArgs && !Array.isArray(launchArgs)) {
+        const reason =
+          launchArgs.reason || launchArgs.refusal || launchArgs.error || 'LAUNCH_REFUSED';
+        log('Harness launch refused: ' + reason);
+        thrownError = new Error(reason);
+        launchRes = {
+          exitCode: launchArgs.exitCode !== undefined ? launchArgs.exitCode : 1,
+          stdout: '',
+          stderr: reason,
+          error: thrownError,
+        };
+        launchArgs = null;
       }
 
       if (launchArgs) {

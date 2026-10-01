@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-68` |
 | Assigned author | `GEMINI` |
 | Risk | `MEDIUM` |
-| Allowed paths | `docs/product-spec/work-items/TASK-AI-69.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `tools/ai-brain/agy-pool-runtime.js`; `tools/ai-brain/candidates.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/harness.js`; `tools/ai-brain/refresh-quota.js`; `tools/ai-brain/routing.js`; `tools/ai-brain/test/*.test.js` |
+| Allowed paths | `docs/product-spec/work-items/TASK-AI-69.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `tools/ai-brain/agy-pool-runtime.js`; `tools/ai-brain/agy-quota.js`; `tools/ai-brain/candidates.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/executor.js`; `tools/ai-brain/harness.js`; `tools/ai-brain/orchestrate.js`; `tools/ai-brain/refresh-quota.js`; `tools/ai-brain/routing.js`; `tools/ai-brain/test/*.test.js` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-69-pool-quota-evidence` |
 | Pull Request | `TBD` |
@@ -80,7 +80,7 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
 ## Verification commands
 
 - `node --test "tools/ai-brain/test/*.test.js"`
-- `npx --package prettier@3.9.6 prettier --check docs/product-spec/work-items/TASK-AI-69.md tools/ai-brain/agy-pool-runtime.js tools/ai-brain/candidates.js tools/ai-brain/cli.js tools/ai-brain/harness.js tools/ai-brain/refresh-quota.js tools/ai-brain/routing.js tools/ai-brain/test/refresh-quota.test.js tools/ai-brain/test/task-ai-68.test.js tools/ai-brain/test/task-ai-69.test.js`
+- `npx --package prettier@3.9.6 prettier --check docs/product-spec/work-items/TASK-AI-69.md tools/ai-brain/agy-pool-runtime.js tools/ai-brain/agy-quota.js tools/ai-brain/candidates.js tools/ai-brain/cli.js tools/ai-brain/executor.js tools/ai-brain/harness.js tools/ai-brain/orchestrate.js tools/ai-brain/refresh-quota.js tools/ai-brain/routing.js tools/ai-brain/test/agy-quota.test.js tools/ai-brain/test/candidates.test.js tools/ai-brain/test/refresh-quota.test.js tools/ai-brain/test/task-ai-68.test.js tools/ai-brain/test/task-ai-69.test.js`
 
 ## Codex review record
 
@@ -88,6 +88,7 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
 |---|---|---|---|
 | 1 | `6dd2ebcadf7387c4e728c3ecd3af62ce0d9d6dc5` | `CHANGES_REQUIRED` | `F1`, `F2`, `F3`, `F4`, `F5`, `F6`, `F7`, `F8` |
 | 2 | `5169178acddd433a06df1c8033b9ff1205342cfe` | `CHANGES_REQUIRED` | `F6`, `F7`, `R1`, `R2`, `R3`, `R4`, `R5`, `R6` |
+| 3 | `2044d0c0d4278a202df2864382b852e5d6fa0976` | `CHANGES_REQUIRED` | `F7`, `R3`, `N1`, `N2` |
 
 ### Review repair round 1 evidence
 
@@ -109,7 +110,7 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
 - `F6`: Runtime candidate models relied on unrefreshed `out.txt`. Added `refreshModels` in `agy-pool-runtime.js` submitting `{ command: 'models' }`, and `modelIdsFromRuntime({ refreshModels: true })` triggers refresh.
   - Fail before: No `refreshModels` function; no mechanism to submit `{ command: 'models' }`.
   - Pass after: `refreshModels` submits `{ command: 'models' }` and parses advertised models; verified in `task-ai-69.test.js`.
-- `F7`: Untracked scratch directories `.tmp-ai69-home/` and `.tmp-ai69-temp/` excluded via `.git/info/exclude` without deleting them.
+- `F7`: Untracked scratch directories `.tmp-ai69-home/` and `.tmp-ai69-temp/` moved out of worktree root by supervisor; all tests and runtime scratch use temporary directories outside the worktree.
 - `F8`: Recorded residual limitations and review repair evidence in `TASK-AI-69.md`.
 
 ### Review repair round 2 evidence
@@ -117,7 +118,7 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
 - `F6 & R2`: Candidate model discovery was previously risking live scheduled task execution when `refreshModels` or `refresh` was set. Removed `refreshModels` dead surface and `opts.refresh` alias from `agy-pool-runtime.js`; candidate discovery purely inspects advertised models from `out.txt` and never executes jobs implicitly. Tested in `tools/ai-brain/test/task-ai-69.test.js`.
   - Fail before: `modelIdsFromRuntime({ refresh: true })` executed `submitJob` and invoked the adapter.
   - Pass after: `modelIdsFromRuntime({ refresh: true })` and `poolAccountCandidates` purely read `out.txt` without executing adapter.
-- `F7`: Untracked scratch directories `.tmp-ai69-home/` and `.tmp-ai69-temp/` remain untracked and excluded locally via `.git/info/exclude`. Per operational policy ("never delete files"), files are preserved. Durable ignore rule addition to `.gitignore` is documented as deferred to a foundation task since `.gitignore` is outside the allowed paths for this Work Item.
+- `F7`: Scratch directories `.tmp-ai69-home/` and `.tmp-ai69-temp/` moved out of the worktree by supervisor; tests and scratch files use temporary directories outside the worktree.
 - `R1`: Unparseable reported quota values (e.g. `"N/A"`) previously fell back to `0%` due to `Number.isFinite(remaining) ? remaining : 0`, causing `refreshAccount` to report `QUOTA_EXHAUSTED`. `parseQuotaJson` now maps unparseable values to `remainingPercent: 'UNKNOWN'`. `refreshAccount` strictly evaluates `QUOTA_EXHAUSTED` only when every reported window has a parsed finite value `<= 0` (or `disabled === true`). In CLI `--show`, `UNKNOWN` is rendered cleanly.
   - Fail before: `parseQuotaOutput` on `"N/A"` emitted `remainingPercent: 0` and CLI `quota` reported `HỎNG agy01 — QUOTA_EXHAUSTED`.
   - Pass after: `parseQuotaOutput` produces `remainingPercent: 'UNKNOWN'`; CLI `quota` reports `ĐỌC ĐƯỢC agy01 — 1 dòng` and `quota --show` displays `UNKNOWN`.
@@ -130,10 +131,22 @@ The AI-brain CLI accepts injected runtime paths for tests and local verification
   - Pass after: Timed out adapter prints `HỎNG agy01 — ADAPTER_TIMEOUT`; verified via CLI spawn test in `task-ai-69.test.js`.
 - `R6`: Delivery register row in `FEATURE-DELIVERY-REGISTER.csv` updated from `IN_PROGRESS` to `READY_FOR_CODEX` to match the required state machine transition.
 
+### Review repair round 3 evidence
+
+- `F7`: The supervisor moved the untracked scratch directories `.tmp-ai69-home/` and `.tmp-ai69-temp/` out of the worktree root. All test executions and scratch operations now strictly use temporary directories outside the worktree under `os.tmpdir()`, ensuring the worktree is completely clean and untracked artifacts are never created within the repository tree.
+- `R3`: `agyPool.launch` in `tools/ai-brain/harness.js` returns a structured refusal `{ refusal: 'INVALID_ACCOUNT_ID', reason: ..., exitCode: 1, state: 'error' }` instead of throwing an unhandled exception. In `tools/ai-brain/executor.js`, `adapter.launch(job)` and `adapter.resume` are wrapped in try/catch and also check for non-array structured refusals, marking `record.outcome = Outcome.FAILED` and recording `Stage.FAILED` so `executePlan` and `cli.js dispatch --plan` report structured failure without crashing. In `tools/ai-brain/orchestrate.js`, `resolveLauncher` catches launch errors and wraps structured refusals as failed launch results. In `tools/ai-brain/cli.js`, non-array refusal results from `adapter.launch` are detected and recorded as failed decisions. Added fail-before / pass-after tests covering harness launch refusal, executor plan execution, CLI dispatch plan, and CLI dispatch launch guard.
+  - Fail before: `harness.agyPool.launch({ accountId: 'invalid' })` threw unhandled error; `executePlan` with invalid pool account crashed with unhandled exception; `cli.js dispatch --plan` crashed with stack trace.
+  - Pass after: `agyPool.launch` returns structured refusal object; `executePlan` returns `summary.failed: 1`; `cli.js dispatch --plan` exits code 1 with structured result; CLI launch guard records failed decision; verified in `task-ai-69.test.js`.
+- `N1`: Quota windows with missing or unparseable remaining values (e.g. `"N/A"`) now emit `remainingPercent: null` and `known: false` instead of a string `'UNKNOWN'` in numeric fields. In `tools/ai-brain/agy-quota.js`, `headroomFor` filters for valid finite rows and returns `known: false` when all windows are unknown, ensuring `statusFrom` returns `'unknown'` instead of `'open'`. The tightest-window logic ignores unknown windows and selects valid finite windows. In `cli.js quota --show`, unknown/null quota entries continue to be rendered cleanly as `UNKNOWN`.
+  - Fail before: `headroomFor` on `{ rows: [{ family: 'gemini', window: 'weekly', remainingPercent: 'UNKNOWN' }] }` returned `{ known: true, remainingPercent: 'UNKNOWN' }` and `statusFrom` returned `'open'`; tightest-window selection failed to pick known windows over `'UNKNOWN'`.
+  - Pass after: `parseQuotaOutput` produces `remainingPercent: null, known: false`; `headroomFor` ignores unknown windows and returns `known: false` if no valid rows exist; `statusFrom` returns `'unknown'`; `quota --show` renders `UNKNOWN`; verified in `agy-quota.test.js` and `task-ai-69.test.js`.
+- `N2`: `runAdapter` in `tools/ai-brain/agy-pool-runtime.js` derives the failure reason from `res.error` (for `ETIMEDOUT`) and `res.signal` rather than inferring `ADAPTER_TIMEOUT` from any `exitCode: -1`. In `submitJob`, an adapter failure is only categorized as `ADAPTER_TIMEOUT` if the launch stderr actually indicates timeout; terminations from signals or non-timeout errors emit `ADAPTER_SIGNAL_<signal>` or `ADAPTER_EXIT_<code/status>`.
+  - Fail before: Process killed by signal with empty output had `exitCode === -1` and was reported as `ADAPTER_TIMEOUT`.
+  - Pass after: Terminations by signal emit `ADAPTER_SIGNAL_<signal>` and non-zero exits emit `ADAPTER_EXIT_<code>`; `ADAPTER_TIMEOUT` is reserved exclusively for genuine timeouts (`ETIMEDOUT`); verified in `task-ai-69.test.js`.
+
 ## Residual limitations
 
 - Native execution of `agy-pool` scheduled tasks requires a Windows host with `schtasks`; on non-Windows platforms `runAdapter` refuses execution with an explicit `UNSUPPORTED_PLATFORM` error unless overridden with `adapterScript` or `fakeRunsDir`.
 - Candidate model discovery extracts advertised models from runtime output (`out.txt`) produced by prior jobs (e.g. quota checks or task runs). Scheduled task submission for `{ command: 'models' }` is omitted from candidate assembly to guarantee that candidate generation remains non-blocking and purely read-only; background dynamic polling of the model catalogue is not implemented in this Work Item.
 - Profile dispatch timeout defaults to 120 seconds unless explicitly overridden by `--pool-timeout` or `--timeout-ms`.
-- Local scratch directories `.tmp-ai69-*` are excluded locally in `.git/info/exclude` without deleting files; durable repository-level ignore entries are deferred to foundation tasks as `.gitignore` is outside the allowed paths of this Work Item.
 

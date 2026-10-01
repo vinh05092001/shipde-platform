@@ -436,7 +436,7 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
     const home = path.join(root, 'home');
     fs.mkdirSync(path.join(home, 'Temp'), { recursive: true });
 
-    // 1. parseQuotaOutput unit verification: "N/A" -> UNKNOWN, not 0
+    // 1. parseQuotaOutput unit verification: "N/A" -> null / known: false, not 0 or string 'UNKNOWN'
     const { parseQuotaOutput } = require('../agy-pool-runtime');
     const naOutput = parseQuotaOutput(
       JSON.stringify({
@@ -451,8 +451,25 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
       })
     );
     assert.equal(naOutput.available, true);
-    assert.equal(naOutput.rows[0].remainingPercent, 'UNKNOWN');
+    assert.equal(naOutput.rows[0].remainingPercent, null);
+    assert.equal(naOutput.rows[0].known, false);
     assert.equal(naOutput.rows[1].remainingPercent, 5);
+    assert.equal(naOutput.rows[1].known, true);
+
+    const { headroomFor, statusFrom } = require('../agy-quota');
+    const hr = headroomFor(naOutput, 'gemini-2.5-pro');
+    assert.equal(hr.known, true);
+    assert.equal(hr.remainingPercent, 5);
+    assert.equal(hr.window, 'session');
+    assert.equal(statusFrom(hr), 'tight');
+
+    const onlyNaOutput = {
+      available: true,
+      rows: [{ family: 'gemini', window: 'weekly', remainingPercent: null, known: false }],
+    };
+    const onlyNaHr = headroomFor(onlyNaOutput, 'gemini-2.5-pro');
+    assert.equal(onlyNaHr.known, false);
+    assert.equal(statusFrom(onlyNaHr), 'unknown');
 
     // 2. Set up agy01 with unparseable quota ("N/A") and agy02 with genuine zero quota (0)
     fs.mkdirSync(path.join(runsDir, 'agy01'), { recursive: true });
@@ -513,15 +530,139 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
     assert.match(showOut, /agy02\s+gemini\s+weekly\s+0%/);
   });
 
-  test('R3: agyPool.launch validates accountId and rejects path traversal', () => {
+  test('R3: agyPool.launch returns structured refusal for invalid account instead of throwing', () => {
     const { getHarness } = require('../harness');
     const poolHarness = getHarness('agy-pool');
-    assert.throws(() => {
-      poolHarness.launch({ accountId: '../../..' });
-    }, /INVALID_ACCOUNT_ID/);
-    assert.throws(() => {
-      poolHarness.launch({ accountId: 'invalid' });
-    }, /INVALID_ACCOUNT_ID/);
+    const traversal = poolHarness.launch({ accountId: '../../..' });
+    assert.equal(traversal.state, 'error');
+    assert.equal(traversal.refusal, 'INVALID_ACCOUNT_ID');
+    assert.equal(traversal.exitCode, 1);
+    assert.match(traversal.reason, /INVALID_ACCOUNT_ID/);
+
+    const invalid = poolHarness.launch({ accountId: 'invalid' });
+    assert.equal(invalid.state, 'error');
+    assert.equal(invalid.refusal, 'INVALID_ACCOUNT_ID');
+    assert.equal(invalid.exitCode, 1);
+
+    const resumeRes = poolHarness.resume('sess1', 'prompt', { accountId: 'invalid' });
+    assert.equal(resumeRes.state, 'error');
+    assert.equal(resumeRes.refusal, 'INVALID_ACCOUNT_ID');
+  });
+
+  test('R3: executor.executePlan handles invalid pool account as structured failure without throwing', () => {
+    const { executePlan } = require('../executor');
+    const plan = {
+      assignments: [
+        {
+          workItemId: 'TASK-AI-999',
+          role: 'IMPLEMENTATION',
+          branch: 'feat/test',
+          offeringId: 'agy-pool::tools::none::none::invalid::standard::gemini-2.5-pro',
+          accountId: 'invalid',
+          harness: 'agy-pool',
+        },
+      ],
+    };
+    const root = tmpDir('ai69-r3-plan-');
+    const decisionDir = path.join(root, 'decisions');
+    const result = executePlan(plan, {
+      dryRun: false,
+      decisionDir,
+    });
+    assert.equal(result.summary.failed, 1);
+    assert.equal(result.summary.launched, 0);
+    assert.equal(result.records[0].outcome, 'FAILED');
+    assert.match(result.records[0].detail, /INVALID_ACCOUNT_ID/);
+  });
+
+  test('R3: cli dispatch --plan returns structured failure on invalid pool account', () => {
+    const root = tmpDir('ai69-r3-cli-plan-');
+    const planFile = path.join(root, 'plan.json');
+    const home = path.join(root, 'home');
+    fs.mkdirSync(home, { recursive: true });
+    writeJson(planFile, {
+      assignments: [
+        {
+          workItemId: 'TASK-AI-999',
+          role: 'IMPLEMENTATION',
+          branch: 'feat/test',
+          offeringId: 'agy-pool::tools::none::none::invalid::standard::gemini-2.5-pro',
+          accountId: 'invalid',
+          harness: 'agy-pool',
+        },
+      ],
+    });
+    const env = envFor(home, path.join(root, 'runs'), '');
+    const res = runCli(['dispatch', '--plan', planFile, '--execute', '--json'], env, root);
+    const out = res.stdout + res.stderr;
+    assert.equal(res.status, 1, out);
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.result.summary.failed, 1);
+    assert.equal(parsed.result.records[0].outcome, 'FAILED');
+  });
+
+  test('R3: cli dispatch launch guard catches preparation failure and records failed decision', () => {
+    const { dispatchCommand } = require('../cli');
+    const { candidateKey } = require('../candidates');
+    const evidence = require('../evidence');
+    const root = tmpDir('ai69-r3-cli-guard-');
+    const home = path.join(root, 'home');
+    const decisionDir = path.join(root, 'decisions');
+    const evidenceDir = path.join(root, 'evidence');
+    fs.mkdirSync(decisionDir, { recursive: true });
+    fs.mkdirSync(evidenceDir, { recursive: true });
+
+    const poolCand = {
+      harness: 'agy-pool',
+      accessPath: 'tools',
+      gateway: 'none',
+      upstream: 'none',
+      accountId: 'invalid',
+      quotaScope: 'standard',
+      modelId: 'gemini-2.5-pro',
+      status: 'active',
+      available: true,
+      qualifiedRoles: ['IMPLEMENTATION'],
+      cost: 10,
+      quality: 80,
+    };
+    poolCand.key = candidateKey(poolCand);
+    evidence.recordOutcome(evidenceDir, poolCand, {
+      status: 'passed',
+      level: evidence.Level.OUTCOME,
+      exitCode: 0,
+      source: 'seed',
+    });
+
+    let logged = [];
+    const fakeLog = (msg) => logged.push(msg);
+
+    const result = dispatchCommand(
+      {
+        execute: true,
+        project: 'shipde-platform',
+        'decision-dir': decisionDir,
+        'evidence-dir': evidenceDir,
+        item: 'TASK-AI-999',
+        home,
+      },
+      {
+        items: [{ workItemId: 'TASK-AI-999', role: 'IMPLEMENTATION', branch: 'feat/test' }],
+        candidates: [poolCand],
+        evidenceDir,
+        decisionDir,
+        log: fakeLog,
+        exit: () => {},
+      }
+    );
+
+    assert.equal(result.exitCode, 1);
+    const decisionsStore = require('../decisions');
+    const recorded = decisionsStore.readDecisions({ dir: decisionDir });
+    const failedDecisions = recorded.filter((d) => d.stage === decisionsStore.Stage.FAILED);
+    assert.equal(failedDecisions.length, 1);
+    assert.match(failedDecisions[0].chosen || '', /invalid/);
+    assert.match(logged.join('\n'), /Harness launch refused: INVALID_ACCOUNT_ID/);
   });
 
   test('R5: adapter killed by timeout reports ADAPTER_TIMEOUT instead of ADAPTER_EXIT_-1 through CLI', () => {
@@ -549,5 +690,48 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
     const out = res.stdout + res.stderr;
     assert.match(out, /HỎNG\s+agy01\s+—\s+ADAPTER_TIMEOUT/);
     assert.doesNotMatch(out, /ADAPTER_EXIT_-1/);
+  });
+
+  test('N2: adapter termination by non-timeout signal or exit code is not reported as ADAPTER_TIMEOUT', () => {
+    const root = tmpDir('ai69-n2-');
+    const runsDir = path.join(root, 'agy-runs');
+    const home = path.join(root, 'home');
+    fs.mkdirSync(path.join(runsDir, 'agy01'), { recursive: true });
+
+    const errorScript = path.join(root, 'error-adapter.js');
+    fs.writeFileSync(errorScript, 'process.exit(2);\n', 'utf8');
+
+    const env = envFor(home, runsDir, errorScript);
+    const res = runCli(
+      [
+        'quota',
+        '--pool-runtime-dir',
+        runsDir,
+        '--pool-adapter-script',
+        errorScript,
+        '--pool-timeout',
+        '5000',
+      ],
+      env,
+      root
+    );
+    const out = res.stdout + res.stderr;
+    assert.match(out, /HỎNG\s+agy01\s+—\s+ADAPTER_EXIT_2/);
+    assert.doesNotMatch(out, /ADAPTER_TIMEOUT/);
+
+    const pool = require('../agy-pool-runtime');
+    const killedScript = path.join(root, 'killed-adapter.js');
+    fs.writeFileSync(killedScript, 'process.kill(process.pid, "SIGTERM");\n', 'utf8');
+    const submitRes = pool.submitJob(
+      'agy01',
+      { command: 'quota' },
+      {
+        runsDir,
+        adapterScript: killedScript,
+        adapterTimeoutMs: 5000,
+      }
+    );
+    assert.equal(submitRes.state, 'error');
+    assert.doesNotMatch(submitRes.reason, /ADAPTER_TIMEOUT/);
   });
 });

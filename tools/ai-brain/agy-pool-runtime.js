@@ -110,14 +110,21 @@ function runAdapter(accountId, options) {
       windowsHide: true,
       shell: false,
     });
-    const isTimeout = Boolean(
-      res.error && (res.error.code === 'ETIMEDOUT' || res.signal === 'SIGTERM')
-    );
+    const isTimeout = Boolean(res.error && res.error.code === 'ETIMEDOUT');
     const stderrText = (res.stderr || '').trim();
+    let defaultStderr = '';
+    if (isTimeout) {
+      defaultStderr = 'ADAPTER_TIMEOUT';
+    } else if (res.error) {
+      defaultStderr = res.error.message || String(res.error);
+    } else if (res.signal) {
+      defaultStderr = `ADAPTER_SIGNAL_${res.signal}`;
+    }
     return {
       exitCode: res.status === null ? -1 : res.status,
+      signal: res.signal || null,
       stdout: res.stdout || '',
-      stderr: stderrText || (isTimeout ? 'ADAPTER_TIMEOUT' : res.error ? res.error.message : ''),
+      stderr: stderrText || defaultStderr,
     };
   }
 
@@ -137,14 +144,21 @@ function runAdapter(accountId, options) {
     windowsHide: true,
     shell: false,
   });
-  const isTimeout = Boolean(
-    res.error && (res.error.code === 'ETIMEDOUT' || res.signal === 'SIGTERM')
-  );
+  const isTimeout = Boolean(res.error && res.error.code === 'ETIMEDOUT');
   const stderrText = (res.stderr || '').trim();
+  let defaultStderr = '';
+  if (isTimeout) {
+    defaultStderr = 'ADAPTER_TIMEOUT';
+  } else if (res.error) {
+    defaultStderr = res.error.message || String(res.error);
+  } else if (res.signal) {
+    defaultStderr = `ADAPTER_SIGNAL_${res.signal}`;
+  }
   return {
     exitCode: res.status === null ? -1 : res.status,
+    signal: res.signal || null,
     stdout: res.stdout || '',
-    stderr: stderrText || (isTimeout ? 'ADAPTER_TIMEOUT' : res.error ? res.error.message : ''),
+    stderr: stderrText || defaultStderr,
   };
 }
 
@@ -160,12 +174,15 @@ function submitJob(accountId, job, options) {
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job, null, 2), 'utf8');
   const launch = runAdapter(accountId, opts);
   if (launch.exitCode !== 0) {
-    const isTimeout =
-      (launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT')) || launch.exitCode === -1;
+    const isTimeout = Boolean(launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT'));
     const reason =
       launch.stderr ||
       launch.stdout ||
-      (isTimeout ? 'ADAPTER_TIMEOUT' : `ADAPTER_EXIT_${launch.exitCode}`);
+      (isTimeout
+        ? 'ADAPTER_TIMEOUT'
+        : launch.signal
+          ? `ADAPTER_SIGNAL_${launch.signal}`
+          : `ADAPTER_EXIT_${launch.exitCode}`);
     const errorResult = {
       state: 'error',
       exitCode: launch.exitCode,
@@ -222,12 +239,14 @@ function parseQuotaJson(value) {
           : NaN;
 
       const isFinite = Number.isFinite(parsed);
-      const remainingPercent = isFinite ? parsed : windowValue.disabled ? 0 : 'UNKNOWN';
+      const remainingPercent = isFinite ? parsed : windowValue.disabled ? 0 : null;
+      const known = isFinite || Boolean(windowValue.disabled);
 
       rows.push({
         family,
         window: key === 'fiveHour' ? 'fiveHour' : key,
         remainingPercent,
+        known,
         disabled: Boolean(windowValue.disabled),
         resetsAt: windowValue.resetAt || windowValue.resetsAt || null,
       });

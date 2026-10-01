@@ -129,7 +129,28 @@ function resolveLauncher(o, isolatedLauncher) {
   return (job) => {
     const adapter = getHarness(job.harness);
     if (!adapter) throw new Error('HARNESS_UNKNOWN: ' + String(job.harness));
-    return isolatedLauncher(adapter, adapter.launch(job), {
+    let launchArgs;
+    try {
+      launchArgs = adapter.launch(job);
+    } catch (err) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: (err && err.message) || String(err),
+        error: err,
+      };
+    }
+    if (launchArgs && !Array.isArray(launchArgs)) {
+      const reason =
+        launchArgs.reason || launchArgs.refusal || launchArgs.error || 'LAUNCH_REFUSED';
+      return {
+        exitCode: launchArgs.exitCode !== undefined ? launchArgs.exitCode : 1,
+        stdout: '',
+        stderr: reason,
+        refusal: launchArgs.refusal || reason,
+      };
+    }
+    return isolatedLauncher(adapter, launchArgs, {
       cwd: job.hostWorktree || job.cwd,
       workerRoot: job.workerRoot,
       baseSha: job.baseSha,
