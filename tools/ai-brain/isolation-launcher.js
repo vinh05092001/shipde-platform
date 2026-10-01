@@ -487,7 +487,7 @@ function getIsolatedLauncher() {
 
     const hostCwd = opts.cwd || process.cwd();
     const jobName = path.basename(hostCwd) || 'default';
-    const workerRoot = workerRootFor(hostCwd);
+    const workerRoot = opts.workerRoot || workerRootFor(hostCwd);
 
     // P5: bind the FULL host worktree path, not just the worker-root leaf, so
     // two jobs sharing a directory leaf cannot share one attestation.
@@ -572,7 +572,7 @@ function getIsolatedLauncher() {
         throw new Error('OPENCODE_DIRECT_LAUNCH_FAILED: 9router source not found in sources.json');
       }
 
-      const configPath = path.join(workerRoot, '.opencode.json');
+      const configPath = path.join(workerRoot, 'opencode.json');
       const configData = JSON.stringify({
         provider: {
           '9router': {

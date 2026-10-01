@@ -145,6 +145,19 @@ function harnessFor(candidate) {
   }
 }
 
+function resolveLaunchRoute(candidate, options, registry) {
+  const { resolveRoute } = require('./executor');
+  return resolveRoute(
+    {
+      provider: candidate && (candidate.source || candidate.upstream || candidate.gateway),
+      model: candidate && candidate.modelId,
+      harness: candidate && candidate.harness,
+    },
+    { isolatedWorker: Boolean(options && options.isolatedWorker) },
+    registry
+  );
+}
+
 /**
  * The host-side test gate: the item's own verification command, run here.
  *
@@ -539,7 +552,6 @@ async function runOrchestration(goal, opts) {
   );
 
   const registry = o.registry || { sources: [] };
-  const sourcesApi = require('./sources');
 
   const outcome = (item, status, reason) => {
     statusOf.set(item.id, status);
@@ -648,16 +660,17 @@ async function runOrchestration(goal, opts) {
       });
       log.prompts.push({ workItemId: item.id, attempt, candidateKey: decision.chosen, prompt });
 
-      const route = sourcesApi.dispatchRoute(
-        candidate.source || candidate.upstream || candidate.gateway,
-        registry
-      );
+      const route = resolveLaunchRoute(candidate, o, registry);
+      if (!route) {
+        blockedReason = 'HARNESS_UNKNOWN: no dispatch route for ' + String(decision.chosen);
+        break;
+      }
       const job = {
         workItemId: item.id,
         candidateKey: decision.chosen,
-        harness: candidate.harness || null,
-        provider: (route && route.provider) || candidate.source || candidate.upstream,
-        model: sourcesApi.qualifyModel(candidate.modelId, route),
+        harness: route.harnessName,
+        provider: route.provider,
+        model: route.model,
         accountId: candidate.accountId,
         gateway: candidate.gateway || '',
         upstream: candidate.upstream,
@@ -746,7 +759,7 @@ async function runOrchestration(goal, opts) {
       // The durable handle, read from the report this launch was given. An absent
       // or unparsable report means this was not a live run and nothing is recorded
       // as launched (AI-64-R04, AI-64-P08).
-      const adapter = harnessFor(candidate);
+      const adapter = harnessFor({ harness: job.harness });
       const reported = adapter
         ? require('./executor').readSessionId(adapter, job, res)
         : { id: null, cause: 'HARNESS_UNKNOWN' };
@@ -773,7 +786,7 @@ async function runOrchestration(goal, opts) {
         sessionId: reported.id,
         usageReport: job.usageFile,
         candidateKey: decision.chosen,
-        harness: candidate.harness || null,
+        harness: job.harness,
         branch: job.branch,
         baseSha: job.baseSha,
         exitCode: res.exitCode,
@@ -790,7 +803,7 @@ async function runOrchestration(goal, opts) {
           workItemId: item.id,
           role: roleOf(item),
           chosen: decision.chosen,
-          harness: candidate.harness || null,
+          harness: job.harness,
           branch: job.branch,
           sessionId: reported.id,
           detail: 'DURABLE_SESSION_ID',
@@ -841,7 +854,8 @@ async function runOrchestration(goal, opts) {
       usageDir,
       now,
       candidates,
-      evidenceData
+      evidenceData,
+      registry
     );
     if (reviewed.status === ReviewStatus.COMPLETED) {
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
@@ -872,7 +886,8 @@ async function reviewItem(
   usageDir,
   now,
   candidates,
-  evidenceData
+  evidenceData,
+  registry
 ) {
   // AI-64-R07: a review is bound to an exact commit. A run that cannot name the
   // commit under review does not review it.
@@ -922,7 +937,8 @@ async function reviewItem(
               usageDir,
               now,
               candidates,
-              evidenceData
+              evidenceData,
+              registry
             ),
     }
   );
@@ -1001,7 +1017,8 @@ function repairRound(
   usageDir,
   now,
   candidates,
-  evidenceData
+  evidenceData,
+  registry
 ) {
   return async (findings, sha) => {
     const round = ((log.review && log.review.review.repairCount) || 0) + 1;
@@ -1034,42 +1051,45 @@ function repairRound(
     );
     if (!decision.chosen) return { sha };
     const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
+    const route = resolveLaunchRoute(candidate, o, registry);
+    if (!route) return { sha };
     const usageFile = prepareUsageReport(usageDir, planned.id + '-' + now + '-repair' + round);
     const prompt = compilePrompt(planned, {
       goal: log.goal,
       specText: o.specText,
       candidateKey: decision.chosen,
     });
+    const repairJob = {
+      workItemId: planned.id,
+      candidateKey: decision.chosen,
+      harness: route.harnessName,
+      provider: route.provider,
+      model: route.model,
+      accountId: candidate.accountId,
+      gateway: candidate.gateway || '',
+      upstream: candidate.upstream,
+      quotaScope: candidate.quotaScope,
+      prompt,
+      branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+      base: o.base || 'main',
+      baseSha: o.baseSha || null,
+      cwd: o.isolatedWorker ? o.workerRoot : o.workerRoot || o.cwd,
+      isolatedWorker: Boolean(o.isolatedWorker),
+      usageFile,
+      checkpoint: o.checkpointFile || null,
+      title: planned.id,
+      labels: { workItem: planned.id, role: roleOf(planned), repairOf: item.id },
+    };
     let res = null;
     try {
-      res = launcher({
-        workItemId: planned.id,
-        candidateKey: decision.chosen,
-        harness: candidate.harness || null,
-        model: candidate.modelId,
-        accountId: candidate.accountId,
-        gateway: candidate.gateway || '',
-        upstream: candidate.upstream,
-        quotaScope: candidate.quotaScope,
-        prompt,
-        branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
-        base: o.base || 'main',
-        baseSha: o.baseSha || null,
-        cwd: o.workerRoot || o.cwd,
-        usageFile,
-        checkpoint: o.checkpointFile || null,
-        title: planned.id,
-        labels: { workItem: planned.id, role: roleOf(planned), repairOf: item.id },
-      });
+      res = launcher(repairJob);
     } catch (err) {
       res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
     }
     if (!res || res.exitCode !== 0) return { sha };
 
-    const adapter = harnessFor(candidate);
-    const handle = adapter
-      ? require('./executor').readSessionId(adapter, { usageFile }, res).id
-      : null;
+    const adapter = harnessFor({ harness: repairJob.harness });
+    const handle = adapter ? require('./executor').readSessionId(adapter, repairJob, res).id : null;
     const nextSha = headShaOf(o.workerRoot || o.cwd);
     if (!handle || !nextSha || nextSha === sha) return { sha };
     decisions.recordDecision(
@@ -1078,11 +1098,11 @@ function repairRound(
         workItemId: planned.id,
         role: roleOf(planned),
         chosen: decision.chosen,
-        harness: candidate.harness || null,
-        branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+        harness: repairJob.harness,
+        branch: repairJob.branch,
         sessionId: handle,
         detail: 'REPAIR_ROUND: repairs ' + item.id,
-        worktree: o.workerRoot || o.cwd || null,
+        worktree: repairJob.cwd || null,
       },
       logOpts
     );

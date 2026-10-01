@@ -1459,12 +1459,18 @@ test('64-22 isolated live path sets isolatedWorker and worker root cwd without n
   const isoModule = require(isoPath);
   const realGetIsolatedLauncher = isoModule.getIsolatedLauncher;
   const realIsWorkerPath = isoModule.isWorkerPath;
+  let launchedAdapter = null;
   let launchedArgs = null;
 
   isoModule.getIsolatedLauncher = function spy() {
     return function stubIsolatedLauncher(adapter, args, opts) {
+      launchedAdapter = adapter;
       launchedArgs = args;
-      return { exitCode: 0, stdout: 'the agent changed production code' };
+      return {
+        exitCode: 0,
+        stdout: 'the agent changed production code',
+        completionNonce: 'nonce-64',
+      };
     };
   };
   isoModule.isWorkerPath = () => true;
@@ -1489,15 +1495,31 @@ test('64-22 isolated live path sets isolatedWorker and worker root cwd without n
   }
 
   assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
+  assert.ok(launchedAdapter, 'the isolated launcher must have been called with an adapter');
+  assert.equal(
+    launchedAdapter.id,
+    'opencode-direct',
+    'isolated live launch must bypass the paseo daemon'
+  );
+  assert.equal(
+    launchedAdapter.command,
+    'opencode',
+    'isolated live launch command must be opencode'
+  );
   assert.ok(launchedArgs, 'the isolated launcher must have been called');
 
+  assert.equal(launchedArgs[0], 'run', 'opencode direct launch must use opencode run');
   assert.ok(
-    launchedArgs.includes('--cwd') && launchedArgs.includes('/fake/worker/root'),
-    'paseo args must contain --cwd /fake/worker/root: ' + launchedArgs.join(' ')
+    launchedArgs.includes('--dir') && launchedArgs.includes('/fake/worker/root'),
+    'opencode args must contain --dir /fake/worker/root: ' + launchedArgs.join(' ')
   );
   assert.ok(
-    !launchedArgs.includes('--new-workspace') && !launchedArgs.includes('--worktree-mode'),
-    'paseo args must not contain --new-workspace or --worktree-mode: ' + launchedArgs.join(' ')
+    !launchedArgs.includes('--provider') &&
+      !launchedArgs.includes('--mode') &&
+      !launchedArgs.includes('--report-outcome') &&
+      !launchedArgs.includes('--new-workspace') &&
+      !launchedArgs.includes('--worktree-mode'),
+    'opencode args must not contain paseo-only or unsupported flags: ' + launchedArgs.join(' ')
   );
 });
 
@@ -1582,12 +1604,26 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
   const args = adapter.launch({
     isolatedWorker: true,
     provider: 'opencode',
-    model: 'test-model',
+    model: 'test-provider/test-model',
+    cwd: 'C:\\ShipDeWorker\\task-ai-64',
     mode: 'full-access',
+    usageFile: 'C:\\ShipDeWorker\\task-ai-64\\usage.json',
     prompt: 'hello',
   });
 
   const argsStr = args.join(' ');
+  assert.equal(adapter.command, 'opencode', 'direct adapter command is opencode');
+  assert.equal(args[0], 'run', 'direct adapter uses opencode run');
+  assert.equal(args[args.indexOf('--model') + 1], 'test-provider/test-model');
+  assert.equal(args[args.indexOf('--dir') + 1], 'C:\\ShipDeWorker\\task-ai-64');
+  assert.ok(args.includes('--auto'), 'direct adapter uses the installed non-interactive flag');
+  assert.equal(args[args.indexOf('--format') + 1], 'json');
+  assert.ok(!args.includes('--provider'), 'installed opencode run has no --provider flag');
+  assert.ok(!args.includes('--mode'), 'installed opencode run has no --mode flag');
+  assert.ok(
+    !args.includes('--report-outcome'),
+    'installed opencode run has no --report-outcome flag'
+  );
   assert.ok(!argsStr.includes('API_KEY'), 'argv contains no key');
 
   // Test isolation launcher config generation
@@ -1637,6 +1673,7 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
     try {
       runIso(adapter, args, {
         cwd: tmpCwd,
+        workerRoot: path.join(tmpCwd, 'worker-root'),
         verdictPath: verdictPath,
         getWorkerSid: () => 'TEST-SID',
         verifyBoundary: () => true,
@@ -1650,11 +1687,15 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
       // Read failure from missing launch result file is expected
     }
 
-    const workerRoot = isoModule.workerRootFor(tmpCwd);
-    const cfgPath = path.join(workerRoot, '.opencode.json');
+    const workerRoot = path.join(tmpCwd, 'worker-root');
+    const cfgPath = path.join(workerRoot, 'opencode.json');
     assert.ok(fs.existsSync(cfgPath), 'generated config must exist');
     const cfgText = fs.readFileSync(cfgPath, 'utf8');
     assert.ok(!cfgText.includes('sk-'), 'generated config contains no literal key material');
+    assert.ok(
+      !fs.existsSync(path.join(workerRoot, '.opencode.json')),
+      'old config filename is unused'
+    );
     assert.ok(
       cfgText.includes('{env:NINEROUTER_API_KEY}'),
       'only an env reference exists in config'

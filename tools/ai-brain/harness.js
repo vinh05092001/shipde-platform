@@ -189,12 +189,10 @@ const opencodeDirect = {
   command: 'opencode',
   launch(job) {
     if (!job.isolatedWorker) throw new Error('OPENCODE_DIRECT_REQUIRES_ISOLATION');
-    const args = ['run', '--provider', job.provider];
-    if (job.model) args.push('--model', job.model);
-    args.push('--mode', job.mode || 'full-access');
+    if (!job.model) throw new Error('OPENCODE_DIRECT_REQUIRES_PINNED_MODEL');
+    if (!job.cwd) throw new Error('OPENCODE_DIRECT_REQUIRES_DIR');
+    const args = ['run', '--model', job.model, '--dir', job.cwd, '--auto', '--format', 'json'];
     if (job.title) args.push('--title', job.title);
-    for (const [k, v] of Object.entries(job.labels || {})) args.push('--label', k + '=' + v);
-    if (job.usageFile) args.push('--report-outcome', job.usageFile);
     args.push(job.prompt);
     return args;
   },
