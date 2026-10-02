@@ -234,9 +234,13 @@ function runVerificationCommand(item, options) {
   }
 
   // After verification command passes, verify worker commit:
-  // After the agent returns, read the worker head with git rev-parse HEAD in the worker root;
-  // head == base SHA or a dirty tree means NO_LOCAL_COMMIT (a structured failure that feeds bounded repair)
-  const commitCheck = verifyWorkerCommit(cwd, o.baseSha);
+  const workerRoot =
+    o.workerRoot ||
+    (o.isolatedWorker
+      ? require('./isolation-launcher').workerRootFor(o.cwd || process.cwd())
+      : null) ||
+    null;
+  const commitCheck = verifyWorkerCommit(workerRoot, o.baseSha);
   if (!commitCheck.pass) {
     return {
       pass: false,
@@ -1040,12 +1044,14 @@ async function reviewItem(
     ? require('./isolation-launcher').workerRootFor(hostWorktree)
     : null;
   const workerRoot =
-    (o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) ||
-    session.worktree ||
-    o.cwd ||
-    process.cwd();
-  const workerHead = headShaOf(workerRoot) || session.headSha;
-  const targetSha = workerHead && SHA_40.test(workerHead) ? workerHead : o.sha;
+    (o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) || session.worktree || null;
+  const workerHead = (workerRoot && headShaOf(workerRoot)) || session.headSha || null;
+  const targetSha =
+    workerHead && SHA_40.test(workerHead)
+      ? workerHead
+      : o.sha && SHA_40.test(String(o.sha))
+        ? o.sha
+        : null;
 
   // AI-64-R07: a review is bound to an exact commit. A run that cannot name the
   // commit under review does not review it.

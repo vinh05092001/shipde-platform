@@ -197,7 +197,17 @@ function withCleanGitEnv(cwd, fn, options) {
 }
 
 function safeGit(tmpDir, cwd, args, timeoutMs) {
-  const safeArgs = ['--git-dir=' + tmpDir, '--work-tree=' + cwd, ...args];
+  const normCwd = path.resolve(cwd).replace(/\\/g, '/');
+  const normTmp = path.resolve(tmpDir).replace(/\\/g, '/');
+  const safeArgs = [
+    '-c',
+    'safe.directory=' + normCwd,
+    '-c',
+    'safe.directory=' + normTmp,
+    '--git-dir=' + tmpDir,
+    '--work-tree=' + cwd,
+    ...args,
+  ];
   return spawnSync('git', safeArgs, {
     cwd,
     encoding: 'utf8',

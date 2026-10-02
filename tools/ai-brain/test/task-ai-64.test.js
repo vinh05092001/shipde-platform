@@ -2776,4 +2776,79 @@ describe('TASK-AI-64 worker head review, local commit verification, and usage re
     assert.equal(session.id, null);
     assert.equal(session.cause, 'HARNESS_USAGE_REPORT_MISSING');
   });
+
+  test('runOrchestration and runVerificationCommand do not bind to process.cwd() git repo when workerRoot is unspecified (POSIX simulation)', async () => {
+    const hostRepo = makeTempRepo();
+    const origCwd = process.cwd();
+    const dirDecisions = tmpDir('task-ai-64-posix-sim-dec-');
+
+    try {
+      // Switch process.cwd() into hostRepo to simulate running inside a git clone (like Ubuntu CI)
+      process.chdir(hostRepo.dir);
+
+      // (1) In a repo cwd, safeRun with baseOpts and open findings rejects with PASS_WITH_FINDINGS_REJECTED (64-09 parity)
+      const resPass = await safeRun(
+        baseOpts({
+          decisionDir: dirDecisions,
+          run: recorder([liveLaunch()]),
+          reviewer: () => ({
+            pass: true,
+            sha: SHA_A,
+            verdict: 'PASS',
+            findings: [{ id: 'F-1', open: true, detail: 'open finding' }],
+          }),
+        })
+      );
+      assert.ok(resPass.log, 'run record must exist');
+      const tracePass = JSON.stringify(resPass.log) + '\n' + decisionText(dirDecisions);
+      assert.ok(
+        tracePass.includes('PASS_WITH_FINDINGS_REJECTED'),
+        'PASS with open findings must be rejected even when cwd is a git repo'
+      );
+      assert.ok(tracePass.includes('F-1'), 'finding ID must be recorded');
+
+      // (2) In a repo cwd, safeRun with reviewBudget exhausts and logs REPAIR_BUDGET_EXHAUSTED (64-10 parity)
+      const dirBudget = tmpDir('task-ai-64-posix-budget-');
+      let reviewCalls = 0;
+      const resBudget = await safeRun(
+        baseOpts({
+          decisionDir: dirBudget,
+          reviewBudget: 2,
+          run: recorder([liveLaunch()]),
+          reviewer: () => {
+            reviewCalls += 1;
+            return {
+              pass: false,
+              sha: SHA_A,
+              verdict: 'CHANGES_REQUIRED',
+              findings: [{ id: 'F-' + reviewCalls, open: true }],
+            };
+          },
+        })
+      );
+      assert.ok(resBudget.log, 'budget run record must exist');
+      assert.ok(reviewCalls > 1, 'must perform repair rounds (saw ' + reviewCalls + ')');
+      assert.ok(
+        decisionText(dirBudget).includes('REPAIR_BUDGET_EXHAUSTED'),
+        'decision log must record REPAIR_BUDGET_EXHAUSTED'
+      );
+
+      // (3) runVerificationCommand ignores dirty state in process.cwd() when workerRoot is unspecified
+      fs.writeFileSync(path.join(hostRepo.dir, 'dirty-file.txt'), 'dirty\n');
+      const item = {
+        id: 'ITEM-TEST',
+        verification: { command: 'node -e "process.exit(0)"' },
+      };
+      const resVerify = runVerificationCommand(item, {});
+      assert.equal(
+        resVerify.pass,
+        true,
+        'verification without workerRoot must pass and ignore dirty process.cwd()'
+      );
+    } finally {
+      process.chdir(origCwd);
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(dirDecisions, { recursive: true, force: true });
+    }
+  });
 });

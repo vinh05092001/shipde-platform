@@ -878,3 +878,14 @@ Evidence:
 Residual risk / known limitations:
 - The worker commit author and message are defined by the agent/git config inside the worker environment; `verifyWorkerCommit` asserts commit existence, parentage, and clean worktree status rather than commit message format.
 - OpenCode telemetry extraction relies on stdout JSON lines or completionNonce fallback; non-zero exit codes write `session_id: null` to ensure fail-closed behavior.
+
+## CI fix round 1 of 2: Worker-head verification parity on POSIX (2026-10-02)
+
+Observation / Root Cause:
+In commit `b971372`, `orchestrate.js:reviewItem` resolved `workerRoot` as `(o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) || session.worktree || o.cwd || process.cwd()`. On Windows in the local worktree checkout (`.worktrees/ai64head`), `.git` is a worktree file, which `withCleanGitEnv` (with `workerWritable: true`) refused as `.git-unresolved`, causing `headShaOf(process.cwd())` to return `null` and safely falling back to `o.sha` (`SHA_A`). However, on Ubuntu CI, the repository is checked out as a standard clone with a `.git` directory, so `headShaOf(process.cwd())` succeeded and returned the HEAD commit of the CI clone repository. This caused `targetSha` to bind to the CI commit SHA instead of `o.sha` (`SHA_A`), leading tests `64-09` and `64-10` to immediately block with `STALE_REVIEW_SHA` on round 1 because their mock reviewers returned `SHA_A`. Similarly, `runVerificationCommand` erroneously verified commits on `process.cwd()`.
+
+Fix:
+1. In `orchestrate.js:reviewItem`, removed `o.cwd || process.cwd()` fallback from `workerRoot`. If no isolated worker, explicit worker root, or session worktree exists, `workerRoot` resolves to `null`, ensuring `targetSha` preserves `o.sha`.
+2. In `orchestrate.js:runVerificationCommand`, scoped `verifyWorkerCommit` to `workerRoot` (returning `pass: true` when `workerRoot` is absent) rather than testing `process.cwd()`.
+3. In `supervisor.js:safeGit`, added scoped `-c safe.directory=<normCwd>` and `-c safe.directory=<normTmp>` arguments to prevent dubious ownership errors when `GIT_CONFIG_GLOBAL` is ignored on POSIX.
+4. In `tools/ai-brain/test/task-ai-64.test.js`, added POSIX clone simulation tests proving that running from inside a git clone directory does not bind review to the host repository when `workerRoot` is unspecified.
