@@ -384,7 +384,9 @@ function classifyFailure(input) {
   const isExplicitHarness =
     input?.cause === 'LAUNCH_CONFIG' ||
     input?.cause === 'HARNESS_FAILED' ||
-    /LAUNCH_CONFIG|HARNESS_FAILED/i.test(text);
+    input?.cause === 'UNKNOWN_HARNESS' ||
+    input?.cause === 'HARNESS_UNKNOWN' ||
+    /LAUNCH_CONFIG|HARNESS_FAILED|UNKNOWN_HARNESS|HARNESS_UNKNOWN/i.test(text);
 
   if (
     (!hasHttpStatus || isExplicitHarness) &&
@@ -398,7 +400,7 @@ function classifyFailure(input) {
             text
           ) ||
           /(?:cannot|failed to|unable to|could not)\s+resolve\s+provider/i.test(text) ||
-          /(?:unknown|unresolved|invalid|missing).{0,20}provider/i.test(text) ||
+          /(?:unknown|unresolved|invalid|missing).{0,20}(?:provider|harness)/i.test(text) ||
           /@ai-sdk\/openai-compatible/i.test(text) ||
           /(?:harness|launch).{0,15}config(?:uration)?.{0,15}error/i.test(text))))
   ) {

@@ -33,7 +33,7 @@
 const { REVIEW_ROLES, IMPLEMENTATION_ROLES } = require('./scheduler');
 const { offeringId: toOfferingId } = require('./offerings');
 const { getHarness, runHarness, parseLastJson } = require('./harness');
-const { loadSources, dispatchRoute, qualifyModel } = require('./sources');
+const { loadSources, dispatchRoute, qualifyModel, runsOpenCodeHarness } = require('./sources');
 const decisions = require('./decisions');
 
 const Outcome = Object.freeze({
@@ -84,13 +84,14 @@ function resumePrompt(assignment) {
  */
 function resolveRoute(assignment, options, registry) {
   const opts = options || {};
-  const route = dispatchRoute(assignment.provider, registry);
+  const reg = registry || loadSources();
+  const route = dispatchRoute(assignment.provider, reg);
   let harnessName =
     assignment.harness ||
     (typeof opts.harnessFor === 'function' ? opts.harnessFor(assignment) : null) ||
     (route && route.harness) ||
     null;
-  if (opts.isolatedWorker && harnessName === 'paseo') {
+  if (opts.isolatedWorker && runsOpenCodeHarness(harnessName, reg)) {
     harnessName = 'opencode-direct';
   }
   if (!harnessName) return null;
