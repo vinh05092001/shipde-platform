@@ -1065,7 +1065,6 @@ Evidence:
 
 Residual risk / known limitations:
 - Active in-flight worker watchdog: The launcher timeout remains at 30 minutes (`workerTimeoutMs` / `WaitForExit($timeoutMs)`). During an in-flight run where upstream returns terminal quota errors (such as `Unavailable (reset after 116h)`), the worker may continue retrying until the launcher timeout kills it. Once the timeout kills the worker, the classification accurately maps the failure to `QUOTA_EXHAUSTED` (with the parsed reset hint) or `TIMEOUT` (with upstream failure scope), allowing the orchestrator loop to immediately fall back to an alternate candidate/domain rather than stalling. Implementing an active in-flight output watchdog in the launcher is deferred as a residual enhancement because `WaitForExit($timeoutMs)` is a pinned P6 contract assertion in `isolation.test.js` and asynchronous pipe reading across the `ShipDeWorker` impersonation boundary blocks early stream inspection without dedicated log file streaming.
-
 ## Live E2E Attempt 16: Worker provider error envelope classification and upstream quota fallback (Defect N) (2026-10-02)
 
 Observation / Defect N:
@@ -1104,3 +1103,40 @@ Evidence:
 
 Residual risk / known limitations:
 - If a future provider emits non-standard error structures that are neither JSON nor matching standard HTTP status error patterns, it safely falls back to `Cause.UNKNOWN` with candidate-scoped isolation.
+
+## Live E2E Attempt 17: Hardened dirty check agrees with provisioned checkout line-ending normalization and worker excludes (Defect O) (2026-10-02)
+
+Observation / Defect O:
+In Live E2E attempt 17 (run data `C:/Users/gumac/AI/shipde-platform/.worktrees/logs/night/live17-data/out.json`), the isolated worker successfully created local commits (`11cfd20`, `fd11370`), but every repair round was rejected with `NO_LOCAL_COMMIT` ("worker left uncommitted changes in the worktree (dirty tree)"). A normal `git status --porcelain` in `C:/ShipDeWorker/isolation` was clean, but supervisor `isTreeDirty` running through `withCleanGitEnv`/`safeGit` reported `" M docs/product-spec/scripts/validate_docs.py"`. This occurred due to an environment normalization discrepancy: the worker checkout was provisioned with host system line ending and mode settings (`core.autocrlf=true`, `core.filemode=false`), whereas `withCleanGitEnv` and `safeGit` operated with an empty config and `GIT_CONFIG_NOSYSTEM=1`, running status under `core.autocrlf=false` and default `core.filemode=true`. Furthermore, `withCleanGitEnv` risked reporting scratch files as untracked whenever worker `info/exclude` could not be safely resolved.
+
+Fix:
+1. Safe Configuration Resolution & Line-Ending Normalization (`tools/ai-brain/supervisor.js`):
+   - Added `getEffectiveEolConfig(targetCwd, explicitOpts)`: Queries host effective `core.autocrlf` and `core.eol` (falling back to caller-supplied overrides if present).
+   - Added `readSafeRepoConfig(cwd, options)`: Inspects repository `.git/config` for whitelisted line-ending and platform flags (`core.autocrlf`, `core.eol`, and `core.filemode`), falling back to effective host configuration and Windows default `filemode=false`. Strictly enforces whitelist values and ignores all untrusted/worker-controlled configurations (`hooksPath`, `fsmonitor`, `diff.external`, filter drivers).
+   - Updated `withCleanGitEnv` and `safeGit`: `withCleanGitEnv` writes the safe configuration (`filemode`, `autocrlf`, `eol`) into `gitDir/config`, and `safeGit` passes them as explicit `-c` flags (`-c core.autocrlf=...`, `-c core.eol=...`, `-c core.filemode=...`) while maintaining all PR #184 hardening protections (`core.hooksPath=NUL`, `core.fsmonitor=false`, `core.attributesFile=NUL`, `diff.external=`).
+2. Worker-Root Excludes Guarantee (`tools/ai-brain/supervisor.js`):
+   - Added `WORKER_ROOT_EXCLUDES` and `ensureWorkerRootExcludes(gitDir, extra)`: Guarantees that `.shipde/`, `run-target*`, `temp/`, `.config/`, `.local/`, `Microsoft/`, `tools/ai-brain/test/e1-branch-name.test.js`, `tools/ai-brain/test/e1-*.test.js`, and `opencode.json` are always present in the supervisor's `gitDir/info/exclude`, even when `resolveWorkerGitDir` refuses to follow worker-controlled gitfiles or when worker exclude files are missing.
+3. Provisioning Checkout Normalization (`tools/ai-brain/isolation-launcher.js`):
+   - In `provisionWorker`: Queries effective line-ending configuration via `getEffectiveEolConfig(hostCwd, opts)` and passes explicit `-c` flags (`core.autocrlf`, `core.eol`, and Windows `core.filemode=false`) to the checkout command.
+   - Configures `core.autocrlf`, `core.eol`, and `core.filemode` explicitly in `workerRoot/.git/config` post-checkout so worker-executed git commands and subsequent supervisor dirty checks operate under the identical normalization context.
+4. Orchestrator Options Propagation (`tools/ai-brain/orchestrate.js`):
+   - Forwarded optional `options` through `headShaOf`, `isTreeDirty`, and `verifyWorkerCommit` to `withCleanGitEnv` and `safeGit`.
+5. Regression Tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Added Defect O test suite verifying:
+     - A provisioned worker root with a CRLF-normalized tracked file and excluded scratch across all categories is NOT dirty (`isTreeDirty === false`, `verifyWorkerCommit.pass === true`), while a real uncommitted change IS dirty (`isTreeDirty === true`, `NO_LOCAL_COMMIT` dirty tree). Test is Ubuntu-portable by provisioning with explicit CRLF normalization options.
+     - Hardened dirty check honours worker-root excludes even on worker-writable worktrees where worker `info/exclude` cannot be resolved.
+     - `readSafeRepoConfig` extracts safe settings and ignores malicious worker-controlled `hooksPath`, `fsmonitor`, and `diff.external`.
+
+Evidence:
+- Fail-before base SHA: `fdd1f80` / `fdd1f80f4edce721cac95de3c7ca2d4de0d7aa80`
+  - In `C:/ShipDeWorker/isolation`, `isTreeDirty` returned `true` with `" M docs/product-spec/scripts/validate_docs.py\n"` at `fdd1f80`.
+  - A provisioned worker root with CRLF-normalized tracked files was rejected with `NO_LOCAL_COMMIT` ("dirty tree").
+- Pass-after result: All tests pass. 79/79 passed in `tools/ai-brain/test/task-ai-64.test.js`; 1183/1183 passed in full brain suite (`tools/ai-brain/test/*.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.
