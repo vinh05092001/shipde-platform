@@ -2939,6 +2939,106 @@ describe('TASK-AI-64 repair keeps worker commit and reviewer uses gateway+upstre
     }
   });
 
+  test('isolated launcher does not execute worker core.hooksPath/post-checkout or core.fsmonitor on retained worker root (Defect J repair hardening)', () => {
+    const hostRepo = makeTempRepo();
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-hardened-worker-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+    const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+
+    try {
+      git(['clone', '--no-hardlinks', hostRepo.dir, workerDir]);
+      git(['config', 'user.email', 'worker@shipde.test'], workerDir);
+      git(['config', 'user.name', 'Worker'], workerDir);
+
+      fs.writeFileSync(path.join(workerDir, 'worker-code.js'), 'console.log("worker repair");\n');
+      git(['add', '.'], workerDir);
+      git(['commit', '-q', '-m', 'worker commit'], workerDir);
+      const workerSha = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.notEqual(workerSha, hostRepo.sha);
+
+      // Plant worker hooks and config in workerDir
+      const markerHook = path.join(workerDir, 'marker-hook.txt');
+      const markerFsmonitor = path.join(workerDir, 'marker-fsmonitor.txt');
+      const hookDir = path.join(workerDir, 'hooks');
+      fs.mkdirSync(hookDir, { recursive: true });
+      const hookScript = path.join(hookDir, 'post-checkout');
+      fs.writeFileSync(hookScript, `#!/bin/sh\necho HOOK > "${markerHook.replace(/\\/g, '/')}"\n`);
+      try {
+        fs.chmodSync(hookScript, 0o755);
+      } catch {}
+
+      git(['config', 'core.hooksPath', hookDir.replace(/\\/g, '/')], workerDir);
+      git(
+        ['config', 'core.fsmonitor', `echo FSMONITOR > "${markerFsmonitor.replace(/\\/g, '/')}"`],
+        workerDir
+      );
+
+      const fakeSid = 'S-1-5-21-test-sid';
+      const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+      fs.writeFileSync(
+        verdictPath,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          details: { github_push: 'PASS', operator_profile: 'PASS' },
+          timestamp: new Date().toISOString(),
+          sid: fakeSid,
+          worktree: hostRepo.dir,
+          policyHash,
+        })
+      );
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const mockAdapter = {
+        id: 'echo',
+        command: 'echo',
+      };
+
+      const opts = {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: workerSha,
+        verdictPath,
+        getWorkerSid: () => fakeSid,
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, spawnOpts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh') {
+            return { status: 0, stdout: 'ok', stderr: '' };
+          }
+          return spawnSync(cmd, args, spawnOpts);
+        },
+      };
+
+      try {
+        runIso(mockAdapter, ['hello'], opts);
+      } catch (err) {
+        // We only care about provisioning
+      }
+
+      assert.strictEqual(
+        fs.existsSync(markerHook),
+        false,
+        'isolated launcher must not execute worker-planted core.hooksPath post-checkout hook'
+      );
+      assert.strictEqual(
+        fs.existsSync(markerFsmonitor),
+        false,
+        'isolated launcher must not execute worker-planted core.fsmonitor'
+      );
+
+      const currentHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.strictEqual(currentHead, workerSha, 'worker root must be checked out at workerSha');
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+    }
+  });
+
   test('isolated launcher re-provisions and fails with structured error ISOLATION_CHECKOUT_FAILED when commit is absent (Defect J)', () => {
     const hostRepo = makeTempRepo();
     fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });

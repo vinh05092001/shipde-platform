@@ -740,20 +740,67 @@ function getIsolatedLauncher() {
     // existing worker root and its commits without deleting or re-cloning.
     // Re-provision only when absent or invalid (or when the requested head is
     // not present), and fail with a structured reason if checkout fails.
+    //
+    // Operator-side git commands acting on a retained worker root must never
+    // execute worker-planted hooks, fsmonitor, or consult worker config
+    // (TASK-AI-64.md:249). The verification of whether the commit is present
+    // and whether HEAD already equals the target SHA is performed through
+    // withCleanGitEnv / safeGit. If HEAD already matches headSha, checkout is
+    // skipped entirely. Any necessary checkout is invoked with clean
+    // GIT_CONFIG environment and explicit -c core.hooksPath=NUL / -c core.fsmonitor=false.
     let alreadyHoldsHead = false;
+    let headIsAlreadyTarget = false;
+    const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
     if (fs.existsSync(workerRoot)) {
       const gitDir = path.join(workerRoot, '.git');
       if (fs.existsSync(gitDir)) {
-        const revRes = cp.spawnSync(
-          'git',
-          ['rev-parse', '--verify', '--quiet', headSha + '^{commit}'],
-          {
-            cwd: workerRoot,
-            windowsHide: true,
-          }
-        );
-        if (revRes.status === 0) {
-          alreadyHoldsHead = true;
+        try {
+          const { withCleanGitEnv, safeGit } = require('./supervisor');
+          withCleanGitEnv(
+            workerRoot,
+            (safeGitDir) => {
+              const revRes = safeGit(
+                safeGitDir,
+                workerRoot,
+                [
+                  '-c',
+                  'core.hooksPath=' + nulDevice,
+                  '-c',
+                  'core.fsmonitor=false',
+                  'rev-parse',
+                  '--verify',
+                  '--quiet',
+                  headSha + '^{commit}',
+                ],
+                20000
+              );
+              if (revRes && revRes.status === 0) {
+                alreadyHoldsHead = true;
+              }
+              const curHeadRes = safeGit(
+                safeGitDir,
+                workerRoot,
+                [
+                  '-c',
+                  'core.hooksPath=' + nulDevice,
+                  '-c',
+                  'core.fsmonitor=false',
+                  'rev-parse',
+                  '--verify',
+                  '--quiet',
+                  'HEAD^{commit}',
+                ],
+                20000
+              );
+              if (curHeadRes && curHeadRes.status === 0 && curHeadRes.stdout.trim() === headSha) {
+                headIsAlreadyTarget = true;
+              }
+            },
+            { workerWritable: true }
+          );
+        } catch {
+          alreadyHoldsHead = false;
+          headIsAlreadyTarget = false;
         }
       }
     }
@@ -772,19 +819,47 @@ function getIsolatedLauncher() {
         ['clone', '--no-checkout', '--no-hardlinks', hostCwd, workerRoot],
         {
           windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
         }
       );
       if (cloneRes.status !== 0) throw new Error('Failed to clone repository');
     }
 
-    const checkoutRes = cp.spawnSync('git', ['checkout', headSha], {
-      cwd: workerRoot,
-      windowsHide: true,
-    });
-    if (checkoutRes.status !== 0) {
-      throw new Error(
-        'ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: ' + headSha
+    if (!headIsAlreadyTarget) {
+      const normWorkerRoot = path.resolve(workerRoot).replace(/\\/g, '/');
+      const checkoutRes = cp.spawnSync(
+        'git',
+        [
+          '-c',
+          'core.hooksPath=' + nulDevice,
+          '-c',
+          'core.fsmonitor=false',
+          '-c',
+          'diff.external=',
+          '-c',
+          'safe.directory=' + normWorkerRoot,
+          'checkout',
+          headSha,
+        ],
+        {
+          cwd: workerRoot,
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        }
       );
+      if (checkoutRes.status !== 0) {
+        throw new Error(
+          'ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: ' + headSha
+        );
+      }
     }
 
     if (adapter.id === 'opencode-direct') {
