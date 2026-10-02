@@ -807,3 +807,118 @@ describe('Case 14: launcher timeout and upstream quota exhaustion (Defect M)', (
     );
   });
 });
+
+describe('Case 15: OpenCode provider error envelope (Defect N)', () => {
+  const live16Stdout =
+    JSON.stringify({
+      type: 'error',
+      timestamp: 1790938156379,
+      sessionID: 'ses_stripped',
+      error: {
+        name: 'APIError',
+        data: {
+          message:
+            '[cline/cline-free/deepseek-v4.1-flash] [429]: {"error":{"code":"INFERENCE_CAP_ERROR","message":"Error 429: Daily free limit reached on model deepseek/deepseek-v4.1-flash. Try again in 15h 27m"}}\n (reset after 57s)',
+          statusCode: 503,
+          isRetryable: true,
+          responseHeaders: {
+            connection: 'keep-alive',
+            'content-type': 'application/json',
+            date: 'Fri, 02 Oct 2026 10:49:16 GMT',
+            'keep-alive': 'timeout=5',
+            'retry-after': '57',
+            'transfer-encoding': 'chunked',
+            vary: 'rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch',
+          },
+          responseBody:
+            '{"error":{"message":"[cline/cline-free/deepseek-v4.1-flash] [429]: {\\"error\\":{\\"code\\":\\"INFERENCE_CAP_ERROR\\",\\"message\\":\\"Error 429: Daily free limit reached on model deepseek/deepseek-v4.1-flash. Try again in 15h 27m\\"}}\\n (reset after 57s)"}}',
+          metadata: {
+            url: 'http://127.0.0.1:20128/v1/chat/completions',
+          },
+        },
+      },
+    }) + '\r\n';
+
+  test('OpenCode provider error envelope with statusCode 503, inner 429 INFERENCE_CAP_ERROR, and Try again in 15h 27m classifies as QUOTA_EXHAUSTED with ~15h27m cooldown', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      stdout: live16Stdout,
+    });
+    assert.equal(result.cause, Cause.QUOTA_EXHAUSTED);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.humanAction, HumanAction.NONE);
+    assert.equal(result.cooldownMs, (15 * 3600 + 27 * 60) * 1000);
+    assert.ok(result.evidence.stdout.includes('INFERENCE_CAP_ERROR'));
+  });
+
+  test('launcher timeout takes precedence over OpenCode provider error envelope', () => {
+    const result = classifyFailure({
+      exitCode: -1,
+      timedOut: true,
+      stdout: live16Stdout,
+      stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+    });
+    assert.equal(result.cause, Cause.TIMEOUT);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.cooldownMs, DEFAULT_COOLDOWNS[Cause.TIMEOUT]);
+    assert.equal(result.cooldownMs, 10 * 60 * 1000);
+  });
+
+  test('arbitrary free text in worker stdout mentioning INFERENCE_CAP_ERROR does not widen to QUOTA_EXHAUSTED', () => {
+    const freeTextStdout = [
+      'Running test suite...',
+      'FAIL test/inference.spec.js',
+      '  ● Inference › handles INFERENCE_CAP_ERROR correctly',
+      '    Expected INFERENCE_CAP_ERROR but received SUCCESS',
+      '    Try again in 15h 27m',
+      'Tests: 1 failed, 5 passed',
+    ].join('\n');
+    const result = classifyFailure({
+      exitCode: 1,
+      stdout: freeTextStdout,
+    });
+    assert.notEqual(result.cause, Cause.QUOTA_EXHAUSTED);
+    assert.notEqual(result.scope, Scope.UPSTREAM);
+    assert.equal(result.cause, Cause.UNKNOWN);
+    assert.equal(result.scope, Scope.UNKNOWN);
+  });
+
+  test('QUOTA_EXHAUSTED from provider envelope matches only candidates with same upstream', () => {
+    const { sameFailureDomain } = require('../cli');
+    const classification = classifyFailure({
+      exitCode: 1,
+      stdout: live16Stdout,
+    });
+    const failedCandidate = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'cl',
+      accountId: 'codex',
+      modelId: 'ninerouter/cl/deepseek/deepseek-v4.1-flash',
+    };
+    const sameUpstreamCandidate = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'cl',
+      accountId: 'other-account',
+      modelId: 'ninerouter/cl/deepseek/deepseek-v4-flash',
+    };
+    const otherUpstreamCandidate = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'gh',
+      accountId: 'codex',
+      modelId: 'ninerouter/gh/gpt-5.3-codex',
+    };
+    assert.equal(
+      sameFailureDomain(sameUpstreamCandidate, failedCandidate, classification),
+      true,
+      'candidates on the same upstream (cl) share the failure domain'
+    );
+    assert.equal(
+      sameFailureDomain(otherUpstreamCandidate, failedCandidate, classification),
+      false,
+      'candidates on alternate upstream (gh) remain eligible'
+    );
+  });
+});

@@ -4320,6 +4320,130 @@ describe('TASK-AI-64 worker timeout and upstream quota fallback (DEFECT M)', () 
       fs.rmSync(evidenceDir, { recursive: true, force: true });
     }
   });
+
+  test('worker with OpenCode provider error envelope classifies as QUOTA_EXHAUSTED and falls back to alternate failure domain (Defect N)', async () => {
+    const hostRepo = makeTempRepo();
+    const decisionDir = tmpDir('task-ai-64-defect-n-fallback-dec-');
+    const evidenceDir = tmpDir('task-ai-64-defect-n-fallback-ev-');
+
+    const candCl = cand({
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'cl',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/cl/deepseek/deepseek-v4.1-flash',
+      source: 'oc',
+    });
+    const candGh = cand({
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'gh',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/gh/gpt-5.3-codex',
+      source: 'oc',
+    });
+
+    const live16Stdout =
+      JSON.stringify({
+        type: 'error',
+        timestamp: 1790938156379,
+        sessionID: 'ses_stripped',
+        error: {
+          name: 'APIError',
+          data: {
+            message:
+              '[cline/cline-free/deepseek-v4.1-flash] [429]: {"error":{"code":"INFERENCE_CAP_ERROR","message":"Error 429: Daily free limit reached on model deepseek/deepseek-v4.1-flash. Try again in 15h 27m"}}\n (reset after 57s)',
+            statusCode: 503,
+            isRetryable: true,
+            responseHeaders: {
+              connection: 'keep-alive',
+              'content-type': 'application/json',
+              date: 'Fri, 02 Oct 2026 10:49:16 GMT',
+              'keep-alive': 'timeout=5',
+              'retry-after': '57',
+              'transfer-encoding': 'chunked',
+              vary: 'rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch',
+            },
+            responseBody:
+              '{"error":{"message":"[cline/cline-free/deepseek-v4.1-flash] [429]: {\\"error\\":{\\"code\\":\\"INFERENCE_CAP_ERROR\\",\\"message\\":\\"Error 429: Daily free limit reached on model deepseek/deepseek-v4.1-flash. Try again in 15h 27m\\"}}\\n (reset after 57s)"}}',
+            metadata: {
+              url: 'http://127.0.0.1:20128/v1/chat/completions',
+            },
+          },
+        },
+      }) + '\r\n';
+
+    const calls = [];
+    const run = (job) => {
+      calls.push(job);
+      if (job.upstream === 'cl') {
+        return {
+          exitCode: 1,
+          timedOut: false,
+          completed: true,
+          stderr: '',
+          failureReason: '',
+          stdout: live16Stdout,
+          completionNonce: '049a76c079c16bf10e7fb9559dfabd9f',
+        };
+      }
+      return {
+        exitCode: 0,
+        timedOut: false,
+        completed: true,
+        stdout:
+          'the agent changed production code\n{"sessionID":"session-defect-n-fallback","tokens":{"input":10,"output":20,"total":30}}',
+        stderr: '',
+        completionNonce: 'nonce-defect-n-fallback',
+      };
+    };
+
+    try {
+      const result = await safeRun(
+        baseOpts({
+          run,
+          cwd: hostRepo.dir,
+          baseSha: hostRepo.sha,
+          sha: hostRepo.sha,
+          decisionDir,
+          evidenceDir,
+          candidates: [candCl, candGh],
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              roleRequirement: { role: 'author.foundation' },
+              files: ['branch-name.js'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          reviewer: () => ({ pass: true, sha: hostRepo.sha, verdict: 'PASS', findings: [] }),
+        })
+      );
+
+      assert.ok(result.log, 'orchestration returns log');
+      assert.strictEqual(
+        result.log.status,
+        'COMPLETED',
+        'orchestration must succeed by falling back to alternate upstream failure domain'
+      );
+      assert.strictEqual(calls.length, 2);
+      assert.strictEqual(calls[0].upstream, 'cl');
+      assert.strictEqual(calls[1].upstream, 'gh');
+
+      const failedDecisions = decisionLines(decisionDir).filter((d) => d.stage === 'failed');
+      assert.ok(failedDecisions.length > 0);
+      assert.strictEqual(failedDecisions[0].failureScope, 'upstream');
+      assert.strictEqual(failedDecisions[0].detail, 'quota_exhausted');
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('TASK-AI-64 hardened dirty check agrees with provisioned checkout line-ending normalization and worker excludes (DEFECT O)', () => {
