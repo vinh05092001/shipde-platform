@@ -30,6 +30,8 @@ const Cause = {
   HARNESS_FAILED: 'harness_failed',
   LAUNCH_CONFIG: 'launch_config',
   UNKNOWN: 'unknown',
+  TIMEOUT: 'timeout',
+  QUOTA_EXHAUSTED: 'quota_exhausted',
 };
 
 /**
@@ -61,8 +63,19 @@ function parseResetTime(text) {
   if (!text) return null;
   const s = String(text);
 
-  // Pattern: "reset after 1m 59s" or "reset after 151h 23m"
-  const afterMatch = s.match(/reset after\s+(\d+)h\s*(\d*)m?(?:\s*(\d+)s?)?/i);
+  // Pattern: "Resets in 62h28m31s"
+  const inMatch = s.match(/resets?\s+(?:in|after)\s*(\d+)h(\d+)m(\d+)s/i);
+  if (inMatch) {
+    const hours = parseInt(inMatch[1], 10);
+    const minutes = parseInt(inMatch[2], 10);
+    const seconds = parseInt(inMatch[3], 10);
+    return (hours * 3600 + minutes * 60 + seconds) * 1000;
+  }
+
+  // Pattern: "reset after 151h 23m", "reset after 116h", "reset after 2 hours"
+  const afterMatch = s.match(
+    /reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:h|hr|hours?)(?:\s*(\d+)\s*(?:m|min|minutes?)?)?(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
+  );
   if (afterMatch) {
     const hours = parseInt(afterMatch[1], 10);
     const minutes = parseInt(afterMatch[2] || '0', 10);
@@ -71,28 +84,20 @@ function parseResetTime(text) {
   }
 
   // Pattern: "reset after 1m 59s" (no hours)
-  const afterMatchShort = s.match(/reset after\s+(\d+)m\s*(\d*)s?/i);
+  const afterMatchShort = s.match(
+    /reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:m|min|minutes?)(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
+  );
   if (afterMatchShort) {
     const minutes = parseInt(afterMatchShort[1], 10);
     const seconds = parseInt(afterMatchShort[2] || '0', 10);
     return (minutes * 60 + seconds) * 1000;
   }
 
-  // Pattern: "Resets in 62h28m31s"
-  const inMatch = s.match(/resets? in\s+(\d+)h(\d+)m(\d+)s/i);
-  if (inMatch) {
-    const hours = parseInt(inMatch[1], 10);
-    const minutes = parseInt(inMatch[2], 10);
-    const seconds = parseInt(inMatch[3], 10);
-    return (hours * 3600 + minutes * 60 + seconds) * 1000;
-  }
-
-  // Pattern: "Resets in 5m30s" or "Resets in 30s"
-  const inMatchShort = s.match(/resets? in\s+(\d+)m?(\d*)s?/i);
-  if (inMatchShort) {
-    const minutes = parseInt(inMatchShort[1], 10);
-    const seconds = parseInt(inMatchShort[2] || '0', 10);
-    return (minutes * 60 + seconds) * 1000;
+  // Pattern: "reset after 30s" (seconds only)
+  const afterMatchSec = s.match(/reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:s|sec|seconds?)/i);
+  if (afterMatchSec) {
+    const seconds = parseInt(afterMatchSec[1], 10);
+    return seconds * 1000;
   }
 
   return null;
@@ -117,6 +122,8 @@ const DEFAULT_COOLDOWNS = {
   [Cause.HARNESS_FAILED]: 5 * 60 * 1000, // 5 minutes
   [Cause.LAUNCH_CONFIG]: 5 * 60 * 1000, // 5 minutes (finite cooldown)
   [Cause.UNKNOWN]: 5 * 60 * 1000, // 5 minutes
+  [Cause.TIMEOUT]: 10 * 60 * 1000, // 10 minutes
+  [Cause.QUOTA_EXHAUSTED]: 60 * 60 * 1000, // 1 hour
 };
 
 /**
@@ -232,6 +239,54 @@ function classifyFailure(input) {
       humanAction: HumanAction.REQUIRED,
       evidence,
       resetTime: null,
+    };
+  }
+
+  // Upstream quota exhausted (e.g. "Unavailable (reset after ...)", FreeUsageLimit, 429 quota exhaustion)
+  const isUpstreamQuota =
+    !/running/i.test(text) &&
+    (input?.cause === Cause.QUOTA_EXHAUSTED ||
+      input?.cause === 'QUOTA_EXHAUSTED' ||
+      input?.cause === 'quota_exhausted' ||
+      /FreeUsageLimit/i.test(text) ||
+      /Unavailable\s*\([^)]*reset after/i.test(text) ||
+      /unavailable.*reset after/i.test(text) ||
+      ((effectiveStatus === 429 || /429/i.test(text)) &&
+        (/quota|usage.?limit|free.?tier|resource.?exhausted|unavailable/i.test(text) ||
+          /reset after|resets in/i.test(text))) ||
+      (/quota.{0,20}(?:exhausted|exceeded|limit)|(?:exhausted|exceeded).{0,20}quota/i.test(text) &&
+        exitCode !== 3 &&
+        !/account/i.test(text)));
+
+  if (isUpstreamQuota) {
+    const resetMs = parseResetTime(text);
+    return {
+      cause: Cause.QUOTA_EXHAUSTED,
+      scope: Scope.UPSTREAM,
+      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: resetMs ? Date.now() + resetMs : null,
+    };
+  }
+
+  // Launcher timeout (timedOut true / ISOLATION_LAUNCHER timed out)
+  const isTimedOut = Boolean(
+    input?.timedOut === true ||
+    input?.cause === Cause.TIMEOUT ||
+    input?.cause === 'TIMEOUT' ||
+    input?.cause === 'timeout' ||
+    /ISOLATION_LAUNCHER.*timed out/i.test(text)
+  );
+
+  if (isTimedOut) {
+    return {
+      cause: Cause.TIMEOUT,
+      scope: Scope.UPSTREAM,
+      cooldownMs: DEFAULT_COOLDOWNS[Cause.TIMEOUT],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: Date.now() + DEFAULT_COOLDOWNS[Cause.TIMEOUT],
     };
   }
 

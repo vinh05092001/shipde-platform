@@ -526,3 +526,132 @@ describe('Case 13: harness / launch config error', () => {
     );
   });
 });
+
+describe('Case 14: launcher timeout and upstream quota exhaustion (Defect M)', () => {
+  const { sameFailureDomain } = require('../cli');
+
+  test('launcher timeout with timedOut: true classifies as TIMEOUT with UPSTREAM scope and finite cooldown', () => {
+    const result = classifyFailure({
+      exitCode: -1,
+      timedOut: true,
+      stderr: 'some stderr before kill',
+    });
+    assert.equal(result.cause, Cause.TIMEOUT);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.humanAction, HumanAction.NONE);
+    assert.equal(result.cooldownMs, DEFAULT_COOLDOWNS[Cause.TIMEOUT]);
+    assert.equal(DEFAULT_COOLDOWNS[Cause.TIMEOUT], 10 * 60 * 1000);
+    assert.ok(result.resetTime !== null);
+  });
+
+  test('launcher timeout with ISOLATION_LAUNCHER message in stderr classifies as TIMEOUT with UPSTREAM scope', () => {
+    const result = classifyFailure({
+      exitCode: -1,
+      stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+    });
+    assert.equal(result.cause, Cause.TIMEOUT);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.humanAction, HumanAction.NONE);
+  });
+
+  test('upstream Unavailable with reset hint classifies as QUOTA_EXHAUSTED with UPSTREAM scope and cooldown from reset hint', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      stdout: '{"type":"error","error":{"message":"Unavailable (reset after 116h)"}}',
+    });
+    assert.equal(result.cause, Cause.QUOTA_EXHAUSTED);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.humanAction, HumanAction.NONE);
+    assert.equal(result.cooldownMs, 116 * 3600 * 1000);
+    assert.ok(result.evidence.stdout.includes('Unavailable (reset after 116h)'));
+  });
+
+  test('upstream 429 with FreeUsageLimit in body/stderr classifies as QUOTA_EXHAUSTED with UPSTREAM scope', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      httpStatus: 429,
+      stderr: 'HTTP 429: FreeUsageLimit exceeded, please upgrade or wait',
+    });
+    assert.equal(result.cause, Cause.QUOTA_EXHAUSTED);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.humanAction, HumanAction.NONE);
+    assert.equal(result.cooldownMs, DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED]);
+  });
+
+  test('launcher timeout combined with upstream Unavailable error classifies as QUOTA_EXHAUSTED with reset cooldown rather than generic TIMEOUT', () => {
+    const result = classifyFailure({
+      exitCode: -1,
+      timedOut: true,
+      stdout: 'OpenCode worker retrying... Error: Unavailable (reset after 116h)',
+      stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+    });
+    assert.equal(result.cause, Cause.QUOTA_EXHAUSTED);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.cooldownMs, 116 * 3600 * 1000);
+  });
+
+  test('TIMEOUT failure domain matches only candidates with same upstream and allows other upstreams on the same gateway', () => {
+    const classification = classifyFailure({
+      exitCode: -1,
+      timedOut: true,
+      stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+    });
+    const failedCandidate = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      modelId: 'ninerouter/ag/gemini-3.7-flash-medium',
+    };
+    const sameUpstreamCandidate = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'ninerouter',
+      modelId: 'ninerouter/ag/gemini-3.1-pro-low',
+    };
+    const differentUpstreamCandidate = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'gh',
+      accountId: 'codex',
+      modelId: 'ninerouter/gh/gpt-5.3-codex',
+    };
+    assert.equal(
+      sameFailureDomain(sameUpstreamCandidate, failedCandidate, classification),
+      true,
+      'candidates on the same upstream (ag) must share the failure domain'
+    );
+    assert.equal(
+      sameFailureDomain(differentUpstreamCandidate, failedCandidate, classification),
+      false,
+      'candidates on another upstream (gh) must NOT be blocked, enabling loop fallback'
+    );
+  });
+
+  test('QUOTA_EXHAUSTED failure domain matches only candidates with same upstream and allows other upstreams on the same gateway', () => {
+    const classification = classifyFailure({
+      exitCode: 1,
+      stdout: 'Unavailable (reset after 116h)',
+    });
+    const failedCandidate = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      modelId: 'ninerouter/ag/gemini-3.7-flash-medium',
+    };
+    const otherUpstreamCandidate = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'cl',
+      accountId: 'codex',
+      modelId: 'ninerouter/cl/deepseek/deepseek-v4-flash',
+    };
+    assert.equal(
+      sameFailureDomain(otherUpstreamCandidate, failedCandidate, classification),
+      false,
+      'alternate upstream (cl) must remain eligible when upstream (ag) quota is exhausted'
+    );
+  });
+});

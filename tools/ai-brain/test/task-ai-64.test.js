@@ -34,7 +34,7 @@ const { Status: SessionStatus } = require('../supervisor');
 const { runReviewLoop } = require('../review-loop');
 const { publish } = require('../publisher');
 const { candidateKey } = require('../candidates');
-const { classifyFailure, Scope } = require('../failure-classifier');
+const { classifyFailure, Scope, Cause } = require('../failure-classifier');
 const routing = require('../routing');
 const { executableFor } = require('../harness');
 
@@ -4005,6 +4005,306 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
       assert.ok(failedDecisions.length > 0, 'decision log must contain failed record');
       assert.strictEqual(failedDecisions[0].failureScope, 'harness');
       assert.strictEqual(failedDecisions[0].detail, 'launch_config');
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('TASK-AI-64 worker timeout and upstream quota fallback (DEFECT M)', () => {
+  test('worker killed by launcher timeout falls back to candidate in alternate upstream failure domain (fails at 790b644, passes after)', async () => {
+    const hostRepo = makeTempRepo();
+    const decisionDir = tmpDir('task-ai-64-defect-m-to-dec-');
+    const evidenceDir = tmpDir('task-ai-64-defect-m-to-ev-');
+
+    const candAg = cand({
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/ag/gemini-3.7-flash-medium',
+      source: 'oc',
+    });
+    const candGh = cand({
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'gh',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/gh/gpt-5.3-codex',
+      source: 'oc',
+    });
+
+    const calls = [];
+    const run = (job) => {
+      calls.push(job);
+      if (job.upstream === 'ag' || (job.model && job.model.includes('gemini'))) {
+        return {
+          exitCode: -1,
+          timedOut: true,
+          stdout: '',
+          stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+        };
+      }
+      return {
+        exitCode: 0,
+        timedOut: false,
+        stdout:
+          'the agent changed production code\n{"sessionID":"session-defect-m-to","tokens":{"input":10,"output":20,"total":30}}',
+        stderr: '',
+        completionNonce: 'nonce-defect-m-to',
+      };
+    };
+
+    try {
+      const result = await safeRun(
+        baseOpts({
+          run,
+          cwd: hostRepo.dir,
+          baseSha: hostRepo.sha,
+          sha: hostRepo.sha,
+          decisionDir,
+          evidenceDir,
+          candidates: [candAg, candGh],
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              roleRequirement: { role: 'author.foundation' },
+              files: ['branch-name.js'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          reviewer: () => ({ pass: true, sha: hostRepo.sha, verdict: 'PASS', findings: [] }),
+        })
+      );
+
+      assert.ok(result.log, 'orchestration returns log');
+      assert.strictEqual(
+        result.log.status,
+        'COMPLETED',
+        'orchestration must succeed by falling back to alternate upstream'
+      );
+      assert.strictEqual(calls.length, 2, 'must attempt both candidates');
+      assert.strictEqual(calls[0].upstream, 'ag', 'first attempt was ag');
+      assert.strictEqual(calls[1].upstream, 'gh', 'fallback attempt was gh');
+      assert.deepEqual(result.log.reconciliation.completed, ['TASK-AI-64']);
+
+      const failedDecisions = decisionLines(decisionDir).filter((d) => d.stage === 'failed');
+      assert.ok(failedDecisions.length > 0, 'decision log must contain failed record for timeout');
+      assert.strictEqual(failedDecisions[0].failureScope, 'upstream');
+      assert.strictEqual(failedDecisions[0].detail, 'timeout');
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('worker with upstream Unavailable error classifies as QUOTA_EXHAUSTED and falls back to alternate upstream (fails at 790b644, passes after)', async () => {
+    const hostRepo = makeTempRepo();
+    const decisionDir = tmpDir('task-ai-64-defect-m-quota-dec-');
+    const evidenceDir = tmpDir('task-ai-64-defect-m-quota-ev-');
+
+    const candAg = cand({
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/ag/gemini-3.7-flash-medium',
+      source: 'oc',
+    });
+    const candGh = cand({
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'gh',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/gh/gpt-5.3-codex',
+      source: 'oc',
+    });
+
+    const calls = [];
+    const run = (job) => {
+      calls.push(job);
+      if (job.upstream === 'ag') {
+        return {
+          exitCode: -1,
+          timedOut: true,
+          stdout:
+            'OpenCode error event: {"type":"error","error":{"message":"Unavailable (reset after 116h)"}}',
+          stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+        };
+      }
+      return {
+        exitCode: 0,
+        timedOut: false,
+        stdout:
+          'the agent changed production code\n{"sessionID":"session-defect-m-quota","tokens":{"input":10,"output":20,"total":30}}',
+        stderr: '',
+        completionNonce: 'nonce-defect-m-quota',
+      };
+    };
+
+    try {
+      const result = await safeRun(
+        baseOpts({
+          run,
+          cwd: hostRepo.dir,
+          baseSha: hostRepo.sha,
+          sha: hostRepo.sha,
+          decisionDir,
+          evidenceDir,
+          candidates: [candAg, candGh],
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              roleRequirement: { role: 'author.foundation' },
+              files: ['branch-name.js'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          reviewer: () => ({ pass: true, sha: hostRepo.sha, verdict: 'PASS', findings: [] }),
+        })
+      );
+
+      assert.ok(result.log, 'orchestration returns log');
+      assert.strictEqual(
+        result.log.status,
+        'COMPLETED',
+        'orchestration must succeed by falling back to alternate upstream'
+      );
+      assert.strictEqual(calls.length, 2);
+      assert.strictEqual(calls[1].upstream, 'gh');
+
+      const failedDecisions = decisionLines(decisionDir).filter((d) => d.stage === 'failed');
+      assert.ok(failedDecisions.length > 0);
+      assert.strictEqual(failedDecisions[0].failureScope, 'upstream');
+      assert.strictEqual(failedDecisions[0].detail, 'quota_exhausted');
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('worker timeout with no alternate failure domain blocks with structured reason and records cause in outcome (fails at 790b644, passes after)', async () => {
+    const hostRepo = makeTempRepo();
+    const decisionDir = tmpDir('task-ai-64-defect-m-noalt-dec-');
+    const evidenceDir = tmpDir('task-ai-64-defect-m-noalt-ev-');
+
+    const candAg = cand({
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/ag/gemini-3.7-flash-medium',
+      source: 'oc',
+    });
+
+    const run = () => ({
+      exitCode: -1,
+      timedOut: true,
+      stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+    });
+
+    try {
+      const result = await safeRun(
+        baseOpts({
+          run,
+          cwd: hostRepo.dir,
+          baseSha: hostRepo.sha,
+          sha: hostRepo.sha,
+          decisionDir,
+          evidenceDir,
+          candidates: [candAg],
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              roleRequirement: { role: 'author.foundation' },
+              files: ['branch-name.js'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+        })
+      );
+
+      assert.ok(result.log, 'orchestration returns log');
+      assert.strictEqual(result.log.status, 'BLOCKED');
+      assert.ok(result.log.outcomes && result.log.outcomes.length > 0);
+      assert.strictEqual(result.log.outcomes[0].status, 'blocked');
+      assert.strictEqual(
+        result.log.outcomes[0].reason,
+        'NO_ALTERNATE_FAILURE_DOMAIN: upstream (timeout)'
+      );
+      assert.strictEqual(result.log.outcomes[0].cause, Cause.TIMEOUT);
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('worker quota error with no alternate failure domain blocks with structured reason and records cause in outcome (fails at 790b644, passes after)', async () => {
+    const hostRepo = makeTempRepo();
+    const decisionDir = tmpDir('task-ai-64-defect-m-noaltquota-dec-');
+    const evidenceDir = tmpDir('task-ai-64-defect-m-noaltquota-ev-');
+
+    const candAg = cand({
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/ag/gemini-3.7-flash-medium',
+      source: 'oc',
+    });
+
+    const run = () => ({
+      exitCode: 1,
+      stdout: '{"type":"error","error":{"message":"Unavailable (reset after 116h)"}}',
+    });
+
+    try {
+      const result = await safeRun(
+        baseOpts({
+          run,
+          cwd: hostRepo.dir,
+          baseSha: hostRepo.sha,
+          sha: hostRepo.sha,
+          decisionDir,
+          evidenceDir,
+          candidates: [candAg],
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              roleRequirement: { role: 'author.foundation' },
+              files: ['branch-name.js'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+        })
+      );
+
+      assert.ok(result.log, 'orchestration returns log');
+      assert.strictEqual(result.log.status, 'BLOCKED');
+      assert.ok(result.log.outcomes && result.log.outcomes.length > 0);
+      assert.strictEqual(result.log.outcomes[0].status, 'blocked');
+      assert.strictEqual(
+        result.log.outcomes[0].reason,
+        'NO_ALTERNATE_FAILURE_DOMAIN: upstream (quota_exhausted)'
+      );
+      assert.strictEqual(result.log.outcomes[0].cause, Cause.QUOTA_EXHAUSTED);
     } finally {
       fs.rmSync(hostRepo.dir, { recursive: true, force: true });
       fs.rmSync(decisionDir, { recursive: true, force: true });

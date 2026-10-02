@@ -671,9 +671,10 @@ async function runOrchestration(goal, opts) {
 
   const registry = o.registry || { sources: [] };
 
-  const outcome = (item, status, reason) => {
+  const outcome = (item, status, reason, extra) => {
     statusOf.set(item.id, status);
-    log.outcomes.push({ workItemId: item.id, status, reason: reason || null });
+    const entry = Object.assign({ workItemId: item.id, status, reason: reason || null }, extra);
+    log.outcomes.push(entry);
     return reason;
   };
 
@@ -858,6 +859,11 @@ async function runOrchestration(goal, opts) {
           stdout: res ? res.stdout : undefined,
           stderr: res ? res.stderr : undefined,
           accountId: candidate.accountId,
+          timedOut: Boolean(
+            res &&
+            (res.timedOut === true ||
+              /ISOLATION_LAUNCHER.*timed out|worker timed out/i.test(res.stderr || ''))
+          ),
         });
         launch.scope = classification.scope;
         launch.cause = classification.cause;
@@ -973,7 +979,12 @@ async function runOrchestration(goal, opts) {
     }
 
     if (!session) {
-      outcome(item, ItemStatus.BLOCKED, blockedReason || 'NO_LIVE_SESSION');
+      outcome(
+        item,
+        ItemStatus.BLOCKED,
+        blockedReason || 'NO_LIVE_SESSION',
+        launch.cause ? { cause: launch.cause } : undefined
+      );
       continue;
     }
     if (blockedReason) {
@@ -991,7 +1002,12 @@ async function runOrchestration(goal, opts) {
         },
         logOpts
       );
-      outcome(item, ItemStatus.BLOCKED, blockedReason);
+      outcome(
+        item,
+        ItemStatus.BLOCKED,
+        blockedReason,
+        launch.cause ? { cause: launch.cause } : undefined
+      );
       continue;
     }
 
