@@ -1065,3 +1065,42 @@ Evidence:
 
 Residual risk / known limitations:
 - Active in-flight worker watchdog: The launcher timeout remains at 30 minutes (`workerTimeoutMs` / `WaitForExit($timeoutMs)`). During an in-flight run where upstream returns terminal quota errors (such as `Unavailable (reset after 116h)`), the worker may continue retrying until the launcher timeout kills it. Once the timeout kills the worker, the classification accurately maps the failure to `QUOTA_EXHAUSTED` (with the parsed reset hint) or `TIMEOUT` (with upstream failure scope), allowing the orchestrator loop to immediately fall back to an alternate candidate/domain rather than stalling. Implementing an active in-flight output watchdog in the launcher is deferred as a residual enhancement because `WaitForExit($timeoutMs)` is a pinned P6 contract assertion in `isolation.test.js` and asynchronous pipe reading across the `ShipDeWorker` impersonation boundary blocks early stream inspection without dedicated log file streaming.
+
+## Live E2E Attempt 16: Worker provider error envelope classification and upstream quota fallback (Defect N) (2026-10-02)
+
+Observation / Defect N:
+In Live E2E attempt 16 (launch result `.worktrees/logs/night/live16-launch-result.json`), OpenCode exited with code 1 and stdout containing a structured provider error envelope:
+`{"type":"error","timestamp":1790938156379,"sessionID":"ses_...","error":{"name":"APIError","data":{"message":"[cline/cline-free/deepseek-v4.1-flash] [429]: {\"error\":{\"code\":\"INFERENCE_CAP_ERROR\",\"message\":\"Error 429: Daily free limit reached on model deepseek/deepseek-v4.1-flash. Try again in 15h 27m\"}}\n (reset after 57s)","statusCode":503,"isRetryable":true,"responseHeaders":{...},"responseBody":"..."}}}`.
+Because `classifyFailure` received no outer `httpStatus` and did not parse the structured OpenCode error event envelope, it defaulted to `Cause.UNKNOWN` / `Scope.UNKNOWN`. `cli.js:sameFailureDomain` treated `Scope.UNKNOWN` as sharing gateway `9router`, blocking all candidates on `9router` and preventing fallback to other upstreams. Furthermore, `parseResetTime` only parsed `resets in/after` and did not support `Try again in ...`, and would have taken the outer gateway rate-limit header (`57s`) rather than the provider daily inference cap cooldown (`15h 27m`).
+
+Fix:
+1. Structured Provider Error Envelope Extraction (`tools/ai-brain/failure-classifier.js`):
+   - Added `extractStructuredProviderEvents(stdout)` to parse JSON error events from worker stdout (`parsed.type === 'error'` or `parsed.error`).
+   - In `extractProviderErrorText`: extracts both `error.data.message` and `error.data.responseBody` from structured error events.
+   - Extracts outer status (`error.data.statusCode`), inner status code (from `extractInnerStatus` on message or responseBody, e.g. `[429]`), and structured quota signals (`INFERENCE_CAP_ERROR`, `daily free limit reached`, `FreeUsageLimit`, `Unavailable reset after`).
+   - Resolves effective HTTP status from inner and outer envelope status codes when caller supplies no outer `httpStatus`.
+   - Gated strictly on structured JSON fields: arbitrary free text printed by workers (e.g. test output, logs) cannot trigger quota classification or widen failure domains.
+2. "Try again in" Reset Time Parsing & Precedence (`tools/ai-brain/failure-classifier.js`):
+   - In `parseResetTime`: extended patterns to parse `(?:resets?|try\s+again)\s+(?:in|after)`.
+   - Pattern order ensures hour-based quota hints (`Try again in 15h 27m`) take precedence over transient seconds-only resets (`(reset after 57s)`), yielding the exact ~15h27m cooldown (`55620000` ms) bounded by `MAX_RESET_MS`.
+   - Launcher timeout precedence remains unchanged: authentic launcher timeout signals (`timedOut: true`, launcher stderr) evaluate before provider envelope parsing and classify as `Cause.TIMEOUT` with 10m cooldown.
+3. Upstream Failure Domain Isolation & Fallback (`tools/ai-brain/cli.js` & `tools/ai-brain/orchestrate.js`):
+   - Classifies as `Cause.QUOTA_EXHAUSTED` with `Scope.UPSTREAM`.
+   - `sameFailureDomain` blocks only candidates sharing the failed candidate's upstream (e.g. `cl`), leaving other upstreams on `9router` (e.g. `gh`) eligible for immediate fallback.
+4. Regression Tests (`tools/ai-brain/test/failure-classifier.test.js` & `tools/ai-brain/test/task-ai-64.test.js`):
+   - Unit regression tests in `test/failure-classifier.test.js` (Case 15): classification of real `live16-launch-result.json` stdout envelope (ids stripped) as `QUOTA_EXHAUSTED` with `Scope.UPSTREAM` and 15h27m cooldown; launcher timeout precedence over provider error envelope; arbitrary free text containing `INFERENCE_CAP_ERROR` not widening to quota; and failure domain isolation.
+   - Orchestration regression test in `test/task-ai-64.test.js`: worker returning OpenCode provider error envelope classifies as `QUOTA_EXHAUSTED` and falls back to alternate candidate on different upstream (`gh`), completing the run.
+
+Evidence:
+- Fail-before base SHA: `fdd1f80` / `fdd1f8021cbb007a3306db3fc3e020290ca8350d`
+  - `classifyFailure` on `live16` stdout envelope classified as `Cause.UNKNOWN` / `Scope.UNKNOWN` with 5m cooldown (`300000` ms).
+- Pass-after result: All tests pass. 77/77 passed in `tools/ai-brain/test/task-ai-64.test.js`; 93/93 passed in `tools/ai-brain/test/failure-classifier.test.js`; 1185/1185 passed in full brain suite (`tools/ai-brain/test/*.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/failure-classifier.test.js"`
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- If a future provider emits non-standard error structures that are neither JSON nor matching standard HTTP status error patterns, it safely falls back to `Cause.UNKNOWN` with candidate-scoped isolation.
