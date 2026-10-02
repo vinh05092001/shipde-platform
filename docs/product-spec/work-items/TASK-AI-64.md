@@ -926,3 +926,33 @@ Evidence:
 Residual risk / known limitations:
 - A repair round preserves the existing worker root when the requested commit SHA is already verified locally; if the worker root is corrupted or missing the commit, it safely falls back to a clean re-clone and fails closed with `ISOLATION_CHECKOUT_FAILED` if checkout fails.
 - Reviewer failure domain separation requires at least two distinct upstreams or distinct account identities available in the registry.
+
+## Repair round 2 of 2: Never check out inside a retained worker root (2026-10-02)
+
+Observation / Finding 1:
+In review `f0bc0320fb941e9fb2be5bee6b2c8c5a4dbc26a5.md`, when a retained worker root already held the target commit (`alreadyHoldsHead = true`) but HEAD was at a different commit (`headIsAlreadyTarget = false`), `isolation-launcher.js` executed `git checkout <headSha>` directly inside `workerRoot`. Because git reads repo-local `.git/config` during checkout, any worker-planted smudge filter (`filter.<driver>.smudge`) or custom driver executed as the operator outside the `ShipDeWorker` boundary.
+
+Fix:
+1. Never check out in a retained worker root (`tools/ai-brain/isolation-launcher.js`):
+   - Removed `git checkout` entirely from the retained worker root path.
+   - Retained worker root (`workerRoot` and `.git` exist) is kept only when a hardened read (`withCleanGitEnv` / `safeGit`) confirms HEAD already equals the requested `headSha`.
+   - If HEAD does not equal `headSha` (or is invalid/corrupt), returns structured failure `WORKER_HEAD_MISMATCH` that the repair loop in `orchestrate.js` treats as a failed repair attempt, preserving the worker's commits without deleting, re-cloning, or checking out.
+2. Hardened operator git environment (`tools/ai-brain/supervisor.js`):
+   - In `safeGit`: Added `-c core.hooksPath=<nulDevice>`, `-c core.fsmonitor=false`, `-c core.attributesFile=<nulDevice>`, `-c diff.external=`, and set `GIT_CONFIG_SYSTEM=<nulDevice>` alongside `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=<nulDevice>`.
+   - In `withCleanGitEnv`: Hardened `git init` with clean `GIT_CONFIG_*` environment.
+3. Regression tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - (a) Mismatched-head case: Retained worker root with planted `filter.evil.smudge` + `.gitattributes`, `core.attributesFile`, `core.hooksPath` post-checkout, and `core.fsmonitor`; forces mismatched HEAD; asserts `WORKER_HEAD_MISMATCH` is thrown, no marker file is written, and the worker commit is preserved without checkout.
+   - (b) Matching-head case: Asserts no checkout is executed, no markers are written, and the worker commit is kept.
+
+Evidence:
+- Fail-before base SHA: `f0bc032` / `f0bc0320fb941e9fb2be5bee6b2c8c5a4dbc26a5`
+  - `isolation-launcher.js` executed `git checkout` inside `workerRoot`, running worker-planted smudge filter as operator.
+- Pass-after result: All tests pass. 65/65 passed in `tools/ai-brain/test/task-ai-64.test.js`; 1150/1150 passed in full brain suite (`tools/ai-brain/test/*.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.
