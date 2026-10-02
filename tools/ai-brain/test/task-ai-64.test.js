@@ -4964,3 +4964,254 @@ describe('TASK-AI-64 provisioned worker root pinned to base SHA in linked worktr
     }
   });
 });
+
+describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)', () => {
+  const { compilePrompt } = require('../prompt-compiler');
+  const {
+    verifyWorkerCommit,
+    isTreeDirty,
+    getTreeStatus,
+    repairRound,
+    repairSpec,
+  } = require('../orchestrate');
+  const sourcesApi = require('../sources');
+
+  test('compiled worker prompt explicitly states clean-tree rules (fails at b305bb3, passes after)', () => {
+    const p = compilePrompt(
+      {
+        id: 'TASK-AI-64',
+        allowedPaths: ['tools/ai-brain/branch-name.js'],
+        verification: { command: 'node --test tools/ai-brain/test/e1-branch-name.test.js' },
+        acceptanceCriteria: ['pure branch name helper'],
+      },
+      { goal: 'pure branch name helper', branch: 'feat/task-ai-64' }
+    );
+
+    assert.ok(
+      p.includes('work only inside the allowed paths'),
+      'prompt must state to work only inside allowed paths'
+    );
+    assert.ok(
+      p.includes('do not create scratch/backup/test files outside them'),
+      'prompt must forbid creating scratch/backup/test files outside allowed paths'
+    );
+    assert.ok(
+      p.includes('delete any temporary file before finishing'),
+      'prompt must require deleting any temporary file before finishing'
+    );
+    assert.ok(
+      p.includes(
+        'finish with exactly one local commit and a clean git status (no untracked files)'
+      ),
+      'prompt must require one local commit and a clean git status'
+    );
+  });
+
+  test('verifyWorkerCommit returns exact offending paths and head/base SHAs when worker leaves untracked scratch files (fails at b305bb3, passes after)', () => {
+    const repo = makeTempRepo();
+    const git = (args) =>
+      spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+        cwd: repo.dir,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+
+    try {
+      const baseSha = repo.sha;
+
+      fs.mkdirSync(path.join(repo.dir, 'tools', 'ai-brain'), { recursive: true });
+      fs.writeFileSync(
+        path.join(repo.dir, 'tools', 'ai-brain', 'branch-name.js'),
+        'module.exports = {};\n'
+      );
+      git(['add', '.']);
+      git(['commit', '-q', '-m', 'feat: branch name']);
+      const headSha = git(['rev-parse', 'HEAD']).stdout.trim();
+      assert.notStrictEqual(headSha, baseSha);
+
+      // Reproducing live attempt 19: worker leaves untracked scratch files
+      fs.writeFileSync(path.join(repo.dir, 'test.js'), '// scratch 1\n');
+      fs.writeFileSync(path.join(repo.dir, 'test-my.js'), '// scratch 2\n');
+      fs.writeFileSync(
+        path.join(repo.dir, 'tools', 'ai-brain', 'branch-name.js.backup'),
+        '// backup\n'
+      );
+
+      const check = verifyWorkerCommit(repo.dir, baseSha);
+      assert.strictEqual(check.pass, false);
+      assert.strictEqual(check.cause, 'NO_LOCAL_COMMIT');
+      assert.match(check.detail, /dirty tree/);
+      assert.strictEqual(check.headSha, headSha);
+      assert.strictEqual(check.baseSha, baseSha);
+
+      assert.ok(Array.isArray(check.dirtyPaths), 'check.dirtyPaths must be an array');
+      assert.ok(check.dirtyPaths.includes('test.js'), 'dirtyPaths must include test.js');
+      assert.ok(check.dirtyPaths.includes('test-my.js'), 'dirtyPaths must include test-my.js');
+      assert.ok(
+        check.dirtyPaths.includes('tools/ai-brain/branch-name.js.backup'),
+        'dirtyPaths must include tools/ai-brain/branch-name.js.backup'
+      );
+
+      assert.ok(check.detail.includes('test.js'), 'detail must include test.js');
+      assert.ok(check.detail.includes('test-my.js'), 'detail must include test-my.js');
+      assert.ok(
+        check.detail.includes('tools/ai-brain/branch-name.js.backup'),
+        'detail must include tools/ai-brain/branch-name.js.backup'
+      );
+      assert.ok(check.detail.includes(headSha), 'detail must include head SHA');
+      assert.ok(check.detail.includes(baseSha), 'detail must include base SHA');
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('repairRound and repairSpec compile repair prompt listing exact dirty paths and head/base SHAs (fails at b305bb3, passes after)', async () => {
+    const item = {
+      id: 'TASK-AI-64',
+      allowedPaths: ['tools/ai-brain/branch-name.js'],
+      verification: { command: 'node --test tools/ai-brain/test/e1-branch-name.test.js' },
+      acceptanceCriteria: ['pure branch name helper'],
+      complexity: 'standard',
+    };
+
+    const baseSha = 'b305bb3f041fad001dee9dff3706cf28087fbb13';
+    const headSha = 'c4a64f5f041fad001dee9dff3706cf28087fbb13';
+    const dirtyPaths = ['test.js', 'test-my.js', 'tools/ai-brain/branch-name.js.backup'];
+
+    const cand = {
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ag/gemini-3.1-pro-low',
+      source: '9router',
+      kind: 'router',
+    };
+    cand.candidateKey = candidateKey(cand);
+
+    let capturedJob = null;
+    const launcherSpy = async (job) => {
+      capturedJob = job;
+      return { exitCode: 0, stdout: 'fixed', completionNonce: 'nonce' };
+    };
+
+    const repairFn = repairRound(
+      { specs: [item], baseSha },
+      item,
+      { candidateKey: cand.candidateKey, baseSha },
+      { goal: 'pure branch name helper' },
+      {},
+      launcherSpy,
+      os.tmpdir(),
+      Date.now(),
+      [cand],
+      {},
+      sourcesApi.loadSources()
+    );
+
+    const findings = [
+      {
+        id: 'NO_LOCAL_COMMIT',
+        open: true,
+        detail:
+          'worker left uncommitted changes in the worktree (dirty tree); offending paths: ' +
+          dirtyPaths.join(', ') +
+          '; HEAD SHA: ' +
+          headSha +
+          ', base SHA: ' +
+          baseSha,
+        dirtyPaths,
+        headSha,
+        baseSha,
+      },
+    ];
+
+    await repairFn(findings, headSha);
+    assert.ok(capturedJob, 'launcher must be invoked for repair');
+    const prompt = capturedJob.prompt;
+
+    assert.ok(prompt.includes('test.js'), 'repair prompt must list test.js');
+    assert.ok(prompt.includes('test-my.js'), 'repair prompt must list test-my.js');
+    assert.ok(
+      prompt.includes('tools/ai-brain/branch-name.js.backup'),
+      'repair prompt must list tools/ai-brain/branch-name.js.backup'
+    );
+    assert.ok(prompt.includes(headSha), 'repair prompt must list head SHA');
+    assert.ok(prompt.includes(baseSha), 'repair prompt must list base SHA');
+    assert.ok(
+      prompt.includes('work only inside the allowed paths'),
+      'repair prompt must carry clean tree rules'
+    );
+
+    // Also verify repairSpec produces criteria containing dirty paths and SHAs
+    const spec = repairSpec(item, findings, 2);
+    assert.ok(Array.isArray(spec.dirtyPaths));
+    assert.deepStrictEqual(spec.dirtyPaths, dirtyPaths);
+    assert.strictEqual(spec.headSha, headSha);
+    assert.strictEqual(spec.baseSha, baseSha);
+    assert.ok(spec.acceptanceCriteria[0].includes('test.js'));
+    assert.ok(spec.acceptanceCriteria[0].includes('test-my.js'));
+    assert.ok(spec.acceptanceCriteria[0].includes('tools/ai-brain/branch-name.js.backup'));
+  });
+
+  test('clean-tree rule is preserved: verifyWorkerCommit and isTreeDirty reject untracked scratch files while clean tree passes', () => {
+    const repo = makeTempRepo();
+    const git = (args) =>
+      spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+        cwd: repo.dir,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+
+    try {
+      const baseSha = repo.sha;
+
+      // 1. Clean commit -> passes
+      fs.mkdirSync(path.join(repo.dir, 'tools', 'ai-brain'), { recursive: true });
+      fs.writeFileSync(
+        path.join(repo.dir, 'tools', 'ai-brain', 'branch-name.js'),
+        'module.exports = {};\n'
+      );
+      git(['add', '.']);
+      git(['commit', '-q', '-m', 'feat: branch name']);
+
+      assert.strictEqual(isTreeDirty(repo.dir), false);
+      const passCheck = verifyWorkerCommit(repo.dir, baseSha);
+      assert.strictEqual(passCheck.pass, true);
+
+      // 2. Untracked file -> fails with NO_LOCAL_COMMIT and dirty tree
+      fs.writeFileSync(path.join(repo.dir, 'scratch.js'), '// scratch\n');
+      assert.strictEqual(isTreeDirty(repo.dir), true);
+      const dirtyCheck = verifyWorkerCommit(repo.dir, baseSha);
+      assert.strictEqual(dirtyCheck.pass, false);
+      assert.strictEqual(dirtyCheck.cause, 'NO_LOCAL_COMMIT');
+      assert.match(dirtyCheck.detail, /dirty tree/);
+      assert.ok(dirtyCheck.dirtyPaths.includes('scratch.js'));
+
+      // 3. Delete scratch -> passes again
+      fs.unlinkSync(path.join(repo.dir, 'scratch.js'));
+      assert.strictEqual(isTreeDirty(repo.dir), false);
+      assert.strictEqual(verifyWorkerCommit(repo.dir, baseSha).pass, true);
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('verifyWorkerCommit reports head and base SHAs and offending paths when worker HEAD matches baseSha', () => {
+    const repo = makeTempRepo();
+    try {
+      fs.writeFileSync(path.join(repo.dir, 'extra.txt'), 'uncommitted\n');
+      const check = verifyWorkerCommit(repo.dir, repo.sha);
+      assert.strictEqual(check.pass, false);
+      assert.strictEqual(check.cause, 'NO_LOCAL_COMMIT');
+      assert.match(check.detail, /matches base SHA/);
+      assert.ok(check.detail.includes(repo.sha));
+      assert.ok(check.dirtyPaths.includes('extra.txt'));
+      assert.ok(check.detail.includes('extra.txt'));
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -13,9 +13,12 @@ const PUBLISHER_BOUNDARY =
   'Publisher boundary: you are a worker. Never push, never open a Pull Request, ' +
   'never merge. Submit your evidence and stop.';
 
+const CLEAN_TREE_RULES =
+  'Clean tree requirement: work only inside the allowed paths, do not create scratch/backup/test files outside them, delete any temporary file before finishing, finish with exactly one local commit and a clean git status (no untracked files).';
+
 /**
  * @param item  a plan work item (from planner.js)
- * @param ctx   { goal, specText, candidateKey }
+ * @param ctx   { goal, specText, candidateKey, branch, usageFile, dirtyPaths, headSha, baseSha }
  * @returns a single prompt string
  */
 function compilePrompt(item, ctx) {
@@ -49,6 +52,61 @@ function compilePrompt(item, ctx) {
       branch +
       ') containing all your changes (no push).'
   );
+  lines.push(CLEAN_TREE_RULES);
+
+  let dirtyPaths = [];
+  if (Array.isArray(c.dirtyPaths) && c.dirtyPaths.length > 0) {
+    dirtyPaths = c.dirtyPaths.slice();
+  } else if (Array.isArray(i.dirtyPaths) && i.dirtyPaths.length > 0) {
+    dirtyPaths = i.dirtyPaths.slice();
+  } else if (Array.isArray(i.acceptanceCriteria)) {
+    for (const ac of i.acceptanceCriteria) {
+      const match = typeof ac === 'string' && ac.match(/offending paths:\s*([^;.]+)/i);
+      if (match) {
+        const extracted = match[1]
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (extracted.length > 0) {
+          dirtyPaths.push(...extracted);
+        }
+      }
+    }
+  }
+  dirtyPaths = [...new Set(dirtyPaths)];
+
+  let headSha = c.headSha || i.headSha || null;
+  if (!headSha && Array.isArray(i.acceptanceCriteria)) {
+    for (const ac of i.acceptanceCriteria) {
+      const match = typeof ac === 'string' && ac.match(/HEAD SHA:\s*([a-f0-9]+)/i);
+      if (match) {
+        headSha = match[1];
+        break;
+      }
+    }
+  }
+
+  let baseSha = c.baseSha || i.baseSha || null;
+  if (!baseSha && Array.isArray(i.acceptanceCriteria)) {
+    for (const ac of i.acceptanceCriteria) {
+      const match = typeof ac === 'string' && ac.match(/base SHA:\s*([a-f0-9]+)/i);
+      if (match) {
+        baseSha = match[1];
+        break;
+      }
+    }
+  }
+
+  if (dirtyPaths.length > 0) {
+    lines.push('Offending paths: ' + dirtyPaths.join(', '));
+  }
+  if (headSha && headSha !== 'none') {
+    lines.push('HEAD SHA: ' + headSha);
+  }
+  if (baseSha && baseSha !== 'none') {
+    lines.push('Base SHA: ' + baseSha);
+  }
+
   if (c.usageFile) {
     lines.push(
       'Usage report: write your session usage report to ' +
@@ -60,4 +118,4 @@ function compilePrompt(item, ctx) {
   return lines.join('\n');
 }
 
-module.exports = { compilePrompt, PUBLISHER_BOUNDARY };
+module.exports = { compilePrompt, PUBLISHER_BOUNDARY, CLEAN_TREE_RULES };

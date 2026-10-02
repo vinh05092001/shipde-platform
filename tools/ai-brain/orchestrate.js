@@ -243,7 +243,7 @@ function runVerificationCommand(item, options) {
       ? require('./isolation-launcher').workerRootFor(o.cwd || process.cwd())
       : null) ||
     null;
-  const commitCheck = verifyWorkerCommit(workerRoot, o.baseSha);
+  const commitCheck = verifyWorkerCommit(workerRoot, o.baseSha, o);
   if (!commitCheck.pass) {
     return {
       pass: false,
@@ -253,6 +253,9 @@ function runVerificationCommand(item, options) {
           id: 'NO_LOCAL_COMMIT',
           open: true,
           detail: commitCheck.detail,
+          dirtyPaths: commitCheck.dirtyPaths || [],
+          headSha: commitCheck.headSha || null,
+          baseSha: commitCheck.baseSha || null,
         },
       ],
       command,
@@ -314,17 +317,47 @@ function reviewLane(o, writerKey) {
  * planner's FILE_OWNED_TWICE check — which is the point. The refusal has to
  * happen at the planner, not downstream.
  */
+function formatFindingDetail(f) {
+  if (!f) return 'open finding';
+  let detail = String(f.detail || 'open finding');
+  const dirty = Array.isArray(f.dirtyPaths) ? f.dirtyPaths : [];
+  if (dirty.length > 0 && !dirty.some((p) => detail.includes(p))) {
+    detail += '; offending paths: ' + dirty.join(', ');
+  }
+  if (f.headSha && !detail.includes(f.headSha)) {
+    detail += '; HEAD SHA: ' + f.headSha;
+  }
+  if (f.baseSha && !detail.includes(f.baseSha)) {
+    detail += '; base SHA: ' + f.baseSha;
+  }
+  return detail;
+}
+
 function repairSpec(item, findings, round) {
+  const repairFindings = Array.isArray(findings) ? findings : [];
+  const dirtyPaths = [
+    ...new Set(
+      repairFindings.flatMap((f) => (Array.isArray(f && f.dirtyPaths) ? f.dirtyPaths : []))
+    ),
+  ];
+  const headSha =
+    repairFindings.find((f) => f && f.headSha && typeof f.headSha === 'string')?.headSha || null;
+  const baseSha =
+    repairFindings.find((f) => f && f.baseSha && typeof f.baseSha === 'string')?.baseSha || null;
+
   return {
     id: item.id + '-repair-' + round,
     role: roleOf(item),
     files: [],
     allowedPaths: (item.allowedPaths || []).slice(),
     dependencies: [item.id],
-    acceptanceCriteria: (findings || []).map(
-      (f) => (f && f.id ? f.id : 'finding') + ': ' + String((f && f.detail) || 'open finding')
+    acceptanceCriteria: repairFindings.map(
+      (f) => (f && f.id ? f.id : 'finding') + ': ' + formatFindingDetail(f)
     ),
     verification: (item && item.verification) || null,
+    dirtyPaths,
+    headSha,
+    baseSha,
   };
 }
 
@@ -346,48 +379,89 @@ function headShaOf(cwd, options) {
   }
 }
 
-function isTreeDirty(cwd, options) {
-  if (!cwd || !fs.existsSync(path.join(cwd, '.git'))) return false;
+function getTreeStatus(cwd, options) {
+  if (!cwd || !fs.existsSync(path.join(cwd, '.git'))) {
+    return { isDirty: false, dirtyPaths: [], lines: [] };
+  }
   const { withCleanGitEnv, safeGit } = require('./supervisor');
   try {
     return withCleanGitEnv(
       cwd,
       (tmpDir) => {
         const res = safeGit(tmpDir, cwd, ['status', '--porcelain'], 20000, options);
-        if (!res || res.status !== 0) return false;
-        return String(res.stdout || '').trim().length > 0;
+        if (!res || res.status !== 0) return { isDirty: false, dirtyPaths: [], lines: [] };
+        const raw = String(res.stdout || '').trim();
+        if (!raw) return { isDirty: false, dirtyPaths: [], lines: [] };
+        const lines = raw
+          .split(/\r?\n/)
+          .map((l) => l.trimEnd())
+          .filter(Boolean);
+        const dirtyPaths = [
+          ...new Set(
+            lines.map((line) => {
+              let p = line.slice(3).trim();
+              if (p.includes(' -> ')) {
+                p = p.split(' -> ')[1].trim();
+              }
+              if (p.startsWith('"') && p.endsWith('"')) {
+                p = p.slice(1, -1);
+              }
+              return p;
+            })
+          ),
+        ];
+        return { isDirty: lines.length > 0, dirtyPaths, lines };
       },
       Object.assign({ workerWritable: true }, options)
     );
   } catch (err) {
-    return false;
+    return { isDirty: false, dirtyPaths: [], lines: [] };
   }
+}
+
+function isTreeDirty(cwd, options) {
+  return getTreeStatus(cwd, options).isDirty;
 }
 
 function verifyWorkerCommit(workerRoot, baseSha, options) {
   if (!workerRoot) return { pass: true };
   const headSha = headShaOf(workerRoot, options);
   const isGitRepo = fs.existsSync(path.join(workerRoot, '.git'));
+  const cleanBase = baseSha ? String(baseSha).trim() : null;
   if (!headSha) {
     if (isGitRepo) {
       return {
         pass: false,
         cause: 'NO_LOCAL_COMMIT',
         headSha: null,
-        baseSha: baseSha || null,
-        detail: 'no commit found at HEAD in worker root',
+        baseSha: cleanBase,
+        dirtyPaths: [],
+        detail:
+          'no commit found at HEAD in worker root; HEAD SHA: none, base SHA: ' +
+          (cleanBase || 'none'),
       };
     }
     return { pass: true };
   }
-  const cleanBase = baseSha ? String(baseSha).trim() : null;
   if (cleanBase && headSha.toLowerCase() === cleanBase.toLowerCase()) {
+    const treeStatus = getTreeStatus(workerRoot, options);
+    const dirtyPaths = treeStatus.dirtyPaths;
+    const pathsDetail = dirtyPaths.length > 0 ? '; offending paths: ' + dirtyPaths.join(', ') : '';
     return {
       pass: false,
       cause: 'NO_LOCAL_COMMIT',
       headSha,
       baseSha: cleanBase,
-      detail: 'worker head matches base SHA ' + cleanBase + ' (no local commit created)',
+      dirtyPaths,
+      detail:
+        'worker head matches base SHA ' +
+        cleanBase +
+        ' (no local commit created)' +
+        pathsDetail +
+        '; HEAD SHA: ' +
+        headSha +
+        ', base SHA: ' +
+        cleanBase,
     };
   }
   if (cleanBase && headSha) {
@@ -428,22 +502,46 @@ function verifyWorkerCommit(workerRoot, baseSha, options) {
       }
     })();
     if (!isAncestor) {
+      const treeStatus = getTreeStatus(workerRoot, options);
+      const dirtyPaths = treeStatus.dirtyPaths;
+      const pathsDetail =
+        dirtyPaths.length > 0 ? '; offending paths: ' + dirtyPaths.join(', ') : '';
       return {
         pass: false,
         cause: 'NO_LOCAL_COMMIT',
         headSha,
         baseSha: cleanBase,
-        detail: 'worker commit ' + headSha + ' is not a descendant of base SHA ' + cleanBase,
+        dirtyPaths,
+        detail:
+          'worker commit ' +
+          headSha +
+          ' is not a descendant of base SHA ' +
+          cleanBase +
+          pathsDetail +
+          '; HEAD SHA: ' +
+          headSha +
+          ', base SHA: ' +
+          cleanBase,
       };
     }
   }
-  if (isTreeDirty(workerRoot, options)) {
+  const treeStatus = getTreeStatus(workerRoot, options);
+  if (treeStatus.isDirty) {
+    const dirtyPaths = treeStatus.dirtyPaths;
+    const pathsStr = dirtyPaths.join(', ');
     return {
       pass: false,
       cause: 'NO_LOCAL_COMMIT',
       headSha,
       baseSha: cleanBase,
-      detail: 'worker left uncommitted changes in the worktree (dirty tree)',
+      dirtyPaths,
+      detail:
+        'worker left uncommitted changes in the worktree (dirty tree); offending paths: ' +
+        pathsStr +
+        '; HEAD SHA: ' +
+        (headSha || 'none') +
+        ', base SHA: ' +
+        (cleanBase || 'none'),
     };
   }
   return {
@@ -1311,12 +1409,26 @@ function repairRound(
     if (!route) return { sha };
     const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
     const usageFile = prepareUsageReport(usageDir, planned.id + '-' + now + '-repair' + round);
+    const repairFindings = Array.isArray(findings) ? findings : [];
+    const dirtyPaths = [
+      ...new Set(
+        repairFindings.flatMap((f) => (Array.isArray(f && f.dirtyPaths) ? f.dirtyPaths : []))
+      ),
+    ];
+    const headSha =
+      repairFindings.find((f) => f && f.headSha && typeof f.headSha === 'string')?.headSha || sha;
+    const baseSha =
+      repairFindings.find((f) => f && f.baseSha && typeof f.baseSha === 'string')?.baseSha ||
+      o.baseSha;
     const prompt = compilePrompt(planned, {
       goal: log.goal,
       specText: o.specText,
       candidateKey: decision.chosen,
       branch,
       usageFile,
+      dirtyPaths,
+      headSha,
+      baseSha,
     });
     const repairWorkerRoot = o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd;
     const repairJob = {
@@ -1509,6 +1621,7 @@ module.exports = {
   resolveLauncher,
   headShaOf,
   isTreeDirty,
+  getTreeStatus,
   verifyWorkerCommit,
   writeUsageReportFromHarnessResult,
   materialiseExercise,

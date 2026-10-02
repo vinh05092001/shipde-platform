@@ -1181,3 +1181,42 @@ Evidence:
 
 Residual risk / known limitations:
 - None.
+
+## Live E2E Attempt 19: Worker prompt requires clean tree and repair names dirty paths (Defect R) (2026-10-02)
+
+Observation / Defect R:
+In Live E2E attempt 19 (run data `C:/Users/gumac/AI/shipde-platform/.worktrees/logs/night/live19-data/out.json`), the isolated worker produced a correct commit (`c4a64f5`; exercise runner passed 11/11) but left untracked scratch files `test.js`, `test-my.js`, and `tools/ai-brain/branch-name.js.backup`. `verifyWorkerCommit` correctly detected a dirty tree and rejected it with `NO_LOCAL_COMMIT`, ending the run in `REPAIR_BUDGET_EXHAUSTED` (round 1 also had no commit created). The repair prompt only told the worker `worker left uncommitted changes in the worktree (dirty tree)` without specifying which files made the tree dirty or the relevant head and base SHAs.
+
+Fix:
+1. Explicit Clean-Tree Prompt Requirements (`tools/ai-brain/prompt-compiler.js`):
+   - Added `CLEAN_TREE_RULES` stating explicitly: work only inside the allowed paths, do not create scratch/backup/test files outside them, delete any temporary file before finishing, finish with exactly one local commit and a clean git status (no untracked files).
+   - In `compilePrompt`: Injects clean tree rules into all worker prompts, and formats explicit `Offending paths: <paths>`, `HEAD SHA: <headSha>`, and `Base SHA: <baseSha>` sections when dirty paths or SHAs are provided via context, item properties, or repair criteria.
+2. Hardened Tree Status & Offending Path Extraction (`tools/ai-brain/orchestrate.js`):
+   - Added `getTreeStatus(cwd, options)`: Runs `git status --porcelain` in the hardened clean git environment (`withCleanGitEnv`/`safeGit`), parsing untracked (`??`), modified (`M`), added (`A`), and deleted (`D`) file paths into a unique `dirtyPaths` array while preserving all PR #184 / Defect O hardening guarantees and excludes.
+   - Refactored `isTreeDirty(cwd, options)` to delegate to `getTreeStatus(cwd, options).isDirty`, keeping the clean-tree rule strictly unchanged.
+   - In `verifyWorkerCommit`: Returns `dirtyPaths`, `headSha`, and `baseSha`. When `isTreeDirty` triggers, constructs `detail` listing the exact offending paths (e.g. `offending paths: test.js, test-my.js, tools/ai-brain/branch-name.js.backup`) and head/base SHAs while preserving `/dirty tree/` matching. When `headSha === baseSha` or ancestry fails, also queries and attaches offending paths and SHAs.
+3. Repair Spec & Prompt Forwarding (`tools/ai-brain/orchestrate.js`):
+   - In `runVerificationCommand`: Populates `dirtyPaths`, `headSha`, and `baseSha` on `findings` entries for `NO_LOCAL_COMMIT`.
+   - In `repairSpec`: Implemented `formatFindingDetail` ensuring acceptance criteria include exact offending paths and head/base SHAs, and attaches `dirtyPaths`, `headSha`, and `baseSha` to the repair spec.
+   - In `repairRound`: Extracts `dirtyPaths`, `headSha`, and `baseSha` from incoming findings and passes them directly to `compilePrompt` alongside `planned`, ensuring the repair prompt provides the worker the exact filenames to delete/clean.
+4. Regression Tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Added Defect R test suite (5 tests):
+     - Compiled worker prompt explicitly states clean-tree rules (fails at b305bb3, passes after).
+     - `verifyWorkerCommit` returns exact offending paths and head/base SHAs when worker leaves untracked scratch files (fails at b305bb3, passes after).
+     - `repairRound` and `repairSpec` compile repair prompt listing exact dirty paths and head/base SHAs (fails at b305bb3, passes after).
+     - Clean-tree rule is preserved: `verifyWorkerCommit` and `isTreeDirty` reject untracked scratch files while clean tree passes.
+     - `verifyWorkerCommit` reports head and base SHAs and offending paths when worker HEAD matches baseSha.
+
+Evidence:
+- Fail-before base SHA: `b305bb3` / `b305bb3f041fad001dee9dff3706cf28087fbb13`
+  - In Live attempt 19, isolated worker left untracked scratch files `test.js`, `test-my.js`, and `tools/ai-brain/branch-name.js.backup`.
+  - At `b305bb3`, `compilePrompt` lacked explicit clean tree rules; `verifyWorkerCommit` reported only `worker left uncommitted changes in the worktree (dirty tree)` without dirty paths; and `repairRound` did not list offending paths in the repair prompt.
+- Pass-after result: All tests pass. 90/90 passed in `tools/ai-brain/test/task-ai-64.test.js`; full brain suite passing.
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.
