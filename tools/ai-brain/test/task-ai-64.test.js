@@ -4312,3 +4312,199 @@ describe('TASK-AI-64 worker timeout and upstream quota fallback (DEFECT M)', () 
     }
   });
 });
+
+describe('TASK-AI-64 hardened dirty check agrees with provisioned checkout line-ending normalization and worker excludes (DEFECT O)', () => {
+  const isoMod = require('../isolation-launcher');
+  const { isTreeDirty, verifyWorkerCommit } = require('../orchestrate');
+  const { readSafeRepoConfig } = require('../supervisor');
+
+  test('a provisioned worker root with a CRLF-normalized tracked file and excluded scratch is NOT dirty, a real uncommitted change IS dirty (fails at fdd1f80, passes after)', () => {
+    const hostRepo = makeTempRepo();
+    const git = (args, cwd) =>
+      spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+        cwd,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+
+    const trackedRelPath = path.join('docs', 'validate_docs.py');
+    fs.mkdirSync(path.join(hostRepo.dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, trackedRelPath), 'def validate():\n    return True\n');
+    git(['add', '.'], hostRepo.dir);
+    git(['commit', '-q', '-m', 'add validate_docs'], hostRepo.dir);
+    const hostSha = git(['rev-parse', 'HEAD'], hostRepo.dir).stdout.trim();
+
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts', 'ai', 'isolation'), { recursive: true });
+    fs.writeFileSync(
+      path.join(hostRepo.dir, 'scripts', 'ai', 'isolation', 'dummy.ps1'),
+      '# dummy\n'
+    );
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts', 'ai', 'isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-worker-eol-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-eol-'));
+    const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+    fs.writeFileSync(
+      verdictPath,
+      JSON.stringify({
+        verdict: 'CLOSED',
+        timestamp: new Date().toISOString(),
+        sid: 'TEST-SID',
+        worktree: hostRepo.dir,
+        policyHash,
+        details: { check: 'PASS' },
+      })
+    );
+
+    const runIso = isoMod.getIsolatedLauncher();
+    const mockAdapter = { id: 'echo', command: 'echo' };
+
+    try {
+      runIso(mockAdapter, ['hello'], {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: hostSha,
+        verdictPath,
+        autocrlf: 'true', // Ubuntu-portable: explicit CRLF normalization requested for provision
+        getWorkerSid: () => 'TEST-SID',
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, opts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh')
+            return { status: 0, stdout: 'ok', stderr: '' };
+          return spawnSync(cmd, args, opts);
+        },
+      });
+    } catch {
+      // provisioning is what we verify
+    }
+
+    try {
+      // Ensure the tracked file on disk has CRLF line endings (matching a checkout under core.autocrlf=true)
+      const trackedWorkerPath = path.join(workerDir, trackedRelPath);
+      const content = fs.readFileSync(trackedWorkerPath, 'utf8');
+      if (!content.includes('\r\n')) {
+        fs.writeFileSync(trackedWorkerPath, content.replace(/\r?\n/g, '\r\n'), 'utf8');
+      }
+
+      // Worker commits its own work (so HEAD != baseSha)
+      git(['config', 'user.name', 'Worker'], workerDir);
+      git(['config', 'user.email', 'worker@example.com'], workerDir);
+      fs.writeFileSync(path.join(workerDir, 'solution.js'), 'module.exports = 42;\n');
+      git(['add', 'solution.js'], workerDir);
+      git(['commit', '-q', '-m', 'feat: solution'], workerDir);
+      const workerSha = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.notStrictEqual(workerSha, hostSha);
+
+      // Excluded scratch across all standard worker categories
+      fs.mkdirSync(path.join(workerDir, '.shipde'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workerDir, '.shipde', 'launch-args.json'),
+        JSON.stringify({ args: [] })
+      );
+      fs.writeFileSync(path.join(workerDir, 'run-target.ps1'), '# script');
+      fs.writeFileSync(
+        path.join(workerDir, 'run-target.complete.json'),
+        JSON.stringify({ done: true })
+      );
+      fs.mkdirSync(path.join(workerDir, 'temp'), { recursive: true });
+      fs.writeFileSync(path.join(workerDir, 'temp', 'scratch.tmp'), 'temp');
+      fs.mkdirSync(path.join(workerDir, '.config'), { recursive: true });
+      fs.writeFileSync(path.join(workerDir, '.config', 'cfg'), 'cfg');
+      fs.mkdirSync(path.join(workerDir, '.local'), { recursive: true });
+      fs.writeFileSync(path.join(workerDir, '.local', 'state'), 'state');
+      fs.mkdirSync(path.join(workerDir, 'Microsoft'), { recursive: true });
+      fs.writeFileSync(path.join(workerDir, 'Microsoft', 'telemetry'), 'telemetry');
+      fs.mkdirSync(path.join(workerDir, 'tools', 'ai-brain', 'test'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workerDir, 'tools', 'ai-brain', 'test', 'e1-branch-name.test.js'),
+        '// runner'
+      );
+      fs.writeFileSync(path.join(workerDir, 'opencode.json'), '{}');
+
+      // Check 1: Provisioned worker root with CRLF-normalized tracked file and scratch is NOT dirty
+      assert.strictEqual(
+        isTreeDirty(workerDir),
+        false,
+        'provisioned worker root with CRLF tracked file and excluded scratch must NOT be dirty'
+      );
+      const commitCheck = verifyWorkerCommit(workerDir, hostSha);
+      assert.strictEqual(
+        commitCheck.pass,
+        true,
+        'verifyWorkerCommit must pass on clean worker root'
+      );
+      assert.strictEqual(commitCheck.headSha, workerSha);
+      assert.strictEqual(commitCheck.baseSha, hostSha);
+
+      // Check 2: A real uncommitted change IS dirty
+      fs.appendFileSync(path.join(workerDir, 'solution.js'), '// uncommitted change\n');
+      assert.strictEqual(
+        isTreeDirty(workerDir),
+        true,
+        'worker root with real uncommitted changes MUST be dirty'
+      );
+      const commitCheckDirty = verifyWorkerCommit(workerDir, hostSha);
+      assert.strictEqual(commitCheckDirty.pass, false);
+      assert.strictEqual(commitCheckDirty.cause, 'NO_LOCAL_COMMIT');
+      assert.match(commitCheckDirty.detail, /dirty tree/);
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+    }
+  });
+
+  test('hardened status honours worker-root excludes even when worker info/exclude cannot be resolved (workerWritable worktree)', () => {
+    const repo = makeTempRepo();
+    try {
+      // Simulate scratch files in worker root without writing to .git/info/exclude
+      fs.mkdirSync(path.join(repo.dir, '.shipde'), { recursive: true });
+      fs.writeFileSync(path.join(repo.dir, '.shipde', 'marker.json'), '{}');
+      fs.writeFileSync(path.join(repo.dir, 'run-target.ps1'), '# run target');
+      fs.writeFileSync(path.join(repo.dir, 'run-target.complete.json'), '{}');
+      fs.mkdirSync(path.join(repo.dir, 'temp'), { recursive: true });
+      fs.writeFileSync(path.join(repo.dir, 'temp', 'foo.tmp'), 'tmp');
+      fs.mkdirSync(path.join(repo.dir, '.config'), { recursive: true });
+      fs.writeFileSync(path.join(repo.dir, '.config', 'cfg'), 'cfg');
+      fs.mkdirSync(path.join(repo.dir, '.local'), { recursive: true });
+      fs.writeFileSync(path.join(repo.dir, '.local', 'state'), 'state');
+      fs.mkdirSync(path.join(repo.dir, 'Microsoft'), { recursive: true });
+      fs.writeFileSync(path.join(repo.dir, 'Microsoft', 'telemetry'), 'telemetry');
+      fs.mkdirSync(path.join(repo.dir, 'tools', 'ai-brain', 'test'), { recursive: true });
+      fs.writeFileSync(
+        path.join(repo.dir, 'tools', 'ai-brain', 'test', 'e1-branch-name.test.js'),
+        '// runner'
+      );
+      fs.writeFileSync(path.join(repo.dir, 'opencode.json'), '{}');
+
+      // isTreeDirty must honour the worker-root excludes even if worker info/exclude was never populated
+      assert.strictEqual(
+        isTreeDirty(repo.dir),
+        false,
+        'hardened dirty check must honour all worker-root excludes'
+      );
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('readSafeRepoConfig extracts safe settings and ignores worker-controlled hooks, fsmonitor, and filters', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-safe-cfg-'));
+    fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.git', 'config'),
+      '[core]\n\tautocrlf = input\n\teol = lf\n\tfilemode = false\n\thooksPath = C:/malicious/hooks\n\tfsmonitor = C:/malicious/daemon\n[diff]\n\texternal = C:/malicious/diff\n'
+    );
+    try {
+      const conf = readSafeRepoConfig(dir);
+      assert.strictEqual(conf.autocrlf, 'input');
+      assert.strictEqual(conf.eol, 'lf');
+      assert.strictEqual(conf.filemode, 'false');
+      assert.strictEqual(conf.hooksPath, undefined);
+      assert.strictEqual(conf.fsmonitor, undefined);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
