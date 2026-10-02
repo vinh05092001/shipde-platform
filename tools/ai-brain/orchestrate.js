@@ -1256,20 +1256,49 @@ async function selectCandidateForProfile(
     now,
     taskId: profile.taskId,
     evidenceData,
-    headrooms: o.ranking && o.ranking.headrooms,
-    reservations: o.ranking && o.ranking.reservations,
-    accounts: o.ranking && o.ranking.accounts,
+    headrooms: o && o.ranking && o.ranking.headrooms,
+    reservations: o && o.ranking && o.ranking.reservations,
+    accounts: o && o.ranking && o.ranking.accounts,
     useStoredQuota: false,
-    home: o.ranking && o.ranking.home,
-    storePath: o.ranking && o.ranking.storePath,
+    home: o && o.ranking && o.ranking.home,
+    storePath: o && o.ranking && o.ranking.storePath,
   };
 
   const result = routing.rankForProfile(annotatedCandidates, profile, assessment, rankCtx);
 
+  const writerKey = (item && item.writerCandidateKey) || null;
+  if (writerKey) {
+    if (result.chosen && result.chosen === writerKey) {
+      result.chosen = null;
+      result.reason = 'REFUSED: reviewer equals writer';
+    }
+    const alreadyRejected = result.rejected.some((r) => r.candidateKey === writerKey);
+    if (!alreadyRejected) {
+      const writerCand = (annotatedCandidates || []).find((c) => candidateKey(c) === writerKey);
+      if (writerCand) {
+        result.rejected.push({
+          candidateKey: writerKey,
+          reasonCode: 'REVIEWER_EQUALS_WRITER',
+          reason: 'reviewer must not equal writer',
+          scope: 'candidate',
+          upstream: writerCand.upstream,
+          modelId: writerCand.modelId,
+          accountId: writerCand.accountId || '*',
+        });
+      }
+    }
+  }
+
+  const stage =
+    profile.role === 'reviewer'
+      ? (decisions.Stage && decisions.Stage.REVIEWER_SELECTION) || 'reviewer-selection'
+      : (decisions.Stage && decisions.Stage.SELECTED) || 'selected';
+
   const decisionRecorded = {
-    stage: decisions.Stage.SELECTED,
+    stage,
     workItemId: profile.taskId,
     role: profile.role,
+    profile,
     taskProfile: profile,
     jev: assessment,
     ranking: result.ranking.map((c) => ({
@@ -1790,25 +1819,31 @@ async function reviewItem(
     };
   }
 
-  const writerCandidate = candidates.find((c) => candidateKey(c) === session.candidateKey);
+  const writerKey = (session && session.candidateKey) || null;
+  const writerCandidate = (Array.isArray(candidates) ? candidates : []).find(
+    (c) => candidateKey(c) === writerKey
+  );
   let writerUpstream = writerCandidate && writerCandidate.upstream;
-  let writerAccount = writerCandidate && writerCandidate.accountId;
   let writerGateway = writerCandidate && writerCandidate.gateway;
-  if (!writerCandidate && session && session.candidateKey) {
-    const parts = session.candidateKey.split('::');
-    if (parts.length >= 7) {
-      writerGateway = parts[2];
-      writerUpstream = parts[3];
-      writerAccount = parts[4];
+  if ((!writerUpstream || !writerGateway) && writerKey) {
+    const parsed = candidatesApi.parseCandidateKey(writerKey);
+    if (parsed) {
+      if (!writerGateway) writerGateway = parsed.gateway;
+      if (!writerUpstream) writerUpstream = parsed.upstream;
     }
   }
-  // The failure domain is per gateway+upstream (each upstream is an independent
-  // failure domain). Only the writer's upstream (or gateway if no upstream) and
-  // account are forbidden, allowing reviewer candidates on the same gateway
-  // with distinct upstreams.
-  const forbiddenDomains = [writerUpstream || writerGateway, writerAccount].filter(Boolean);
+  // The failure domain is per gateway+upstream (Defect K / Defect T).
+  // Only the writer's upstream (or gateway if no upstream) is forbidden,
+  // allowing reviewer candidates on the same gateway with distinct upstreams
+  // without forbidding the shared router account.
+  const forbiddenDomains = [writerUpstream || writerGateway].filter(Boolean);
   const reviewerDecision = await selectCandidateForProfile(
-    { id: item.id + '-review', roleRequirement: { role: 'reviewer' }, complexity: item.complexity },
+    {
+      id: item.id + '-review',
+      roleRequirement: { role: 'reviewer' },
+      complexity: item.complexity,
+      writerCandidateKey: writerKey,
+    },
     candidates,
     forbiddenDomains,
     evidenceData,
@@ -2203,6 +2238,7 @@ module.exports = {
   selectCandidateForProfile,
   repairRound,
   reviewLane,
+  reviewItem,
   provisionReviewRoot,
   ItemStatus,
   RunStatus,

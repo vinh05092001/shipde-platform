@@ -1256,7 +1256,9 @@ test('64-24 runOrchestration selects API_PASS candidate, isolates reviewer domai
   assert.ok(quotaRejected, 'QUOTA_EXHAUSTED candidate must be rejected');
   assert.equal(quotaRejected.reasonCode, 'QUOTA_EXHAUSTED', 'Reason code must be QUOTA_EXHAUSTED');
 
-  const reviewSelection = decisionsLog.find((d) => d.stage === 'selected' && d.role === 'reviewer');
+  const reviewSelection = decisionsLog.find(
+    (d) => (d.stage === 'reviewer-selection' || d.stage === 'selected') && d.role === 'reviewer'
+  );
   assert.ok(reviewSelection, 'Reviewer must be selected');
 
   const writerDomain = writerSelection.chosen.split('/').slice(0, 3).join('/'); // Just picking the parts... wait, the logic uses gateway/upstream/accountId
@@ -5591,6 +5593,294 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         assert.strictEqual(res.log.outcomes[0].reason, 'REVIEWER_EQUALS_WRITER');
       } finally {
         fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('TASK-AI-64 reviewer exclusion uses gateway+upstream failure domain (Defect T)', () => {
+    const { selectCandidateForProfile } = require('../orchestrate');
+
+    function makeDefectTCandidates() {
+      const writerCand = cand({
+        gateway: '9router',
+        upstream: 'kgw',
+        accountId: 'codex',
+        quotaScope: 'codex',
+        qualifiedRoles: ['author.foundation'],
+        modelId: 'ninerouter/kgw/nvidia/nemotron-3-super-120b-a12b:free',
+        quality: 95,
+      });
+      const reviewerCandCl = cand({
+        gateway: '9router',
+        upstream: 'cl',
+        accountId: 'codex',
+        quotaScope: 'codex',
+        qualifiedRoles: ['reviewer.primary'],
+        modelId: 'ninerouter/cl/nvidia/nemotron-3-ultra-550b-a55b:free',
+        quality: 80,
+      });
+      const reviewerCandKgw = cand({
+        gateway: '9router',
+        upstream: 'kgw',
+        accountId: 'codex',
+        quotaScope: 'codex',
+        qualifiedRoles: ['reviewer.primary'],
+        modelId: 'ninerouter/kgw/nvidia/nemotron-3-ultra-550b-a55b:free',
+        quality: 80,
+      });
+      return { writerCand, reviewerCandCl, reviewerCandKgw };
+    }
+
+    test('writer 9router/kgw + candidate 9router/cl -> cl chosen (fails at 4a727a6, passes after)', async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-dec-cl-');
+      const { writerCand, reviewerCandCl } = makeDefectTCandidates();
+
+      try {
+        let reviewerExecuted = false;
+        const opts = baseOpts({
+          decisionDir: dirDecisions,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCandCl],
+          ranking: {
+            headrooms: {
+              codex: { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'A',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['a works'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              reviewerExecuted = true;
+              fs.writeFileSync(
+                job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                JSON.stringify({
+                  sha: job.baseSha,
+                  verdict: 'PASS',
+                  findings: [],
+                })
+              );
+              return { exitCode: 0, stdout: 'review pass' };
+            }
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit' };
+          },
+        });
+        delete opts.reviewer;
+
+        const res = await safeRun(opts);
+        assert.strictEqual(res.log.outcomes[0].status, 'completed');
+        assert.strictEqual(res.log.outcomes[0].reason, 'REVIEW_PASS');
+        assert.strictEqual(reviewerExecuted, true, 'reviewer must have executed');
+        assert.strictEqual(
+          res.log.reviews[0].reviewerIdentity,
+          candidateKey(reviewerCandCl),
+          'reviewer candidate must be 9router/cl despite shared codex account'
+        );
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+      }
+    });
+
+    test('candidate only in 9router/kgw -> refused (fails at 4a727a6, passes after)', async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-dec-refused-');
+      const { writerCand, reviewerCandKgw } = makeDefectTCandidates();
+
+      try {
+        let reviewerExecuted = false;
+        const opts = baseOpts({
+          decisionDir: dirDecisions,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCandKgw],
+          ranking: {
+            headrooms: {
+              codex: { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'A',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['a works'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              reviewerExecuted = true;
+              return { exitCode: 0, stdout: 'should not run' };
+            }
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit' };
+          },
+        });
+        delete opts.reviewer;
+
+        const res = await safeRun(opts);
+        assert.ok(res.log, 'orchestration must finish');
+        assert.strictEqual(res.log.outcomes[0].status, 'blocked');
+        assert.strictEqual(reviewerExecuted, false, 'reviewer must not run when refused');
+        assert.strictEqual(res.log.reviews[0].reviewerIdentity, null);
+        assert.strictEqual(
+          res.log.reviews[0].review.rounds[0].findings[0].id,
+          'NO_REVIEWER_CANDIDATE'
+        );
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+      }
+    });
+
+    test('decision log has the reviewer-selection record (fails at 4a727a6, passes after)', async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-dec-record-');
+      const { writerCand, reviewerCandCl, reviewerCandKgw } = makeDefectTCandidates();
+
+      try {
+        const opts = baseOpts({
+          decisionDir: dirDecisions,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCandCl, reviewerCandKgw],
+          ranking: {
+            headrooms: {
+              codex: { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'A',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['a works'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              fs.writeFileSync(
+                job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                JSON.stringify({
+                  sha: job.baseSha,
+                  verdict: 'PASS',
+                  findings: [],
+                })
+              );
+              return { exitCode: 0, stdout: 'review pass' };
+            }
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit' };
+          },
+        });
+        delete opts.reviewer;
+
+        const res = await safeRun(opts);
+        assert.ok(res.log, 'orchestration must finish');
+
+        const lines = decisionLines(dirDecisions);
+        const reviewerSel = lines.find((r) => r.stage === 'reviewer-selection');
+        assert.ok(reviewerSel, 'decision log must contain record with stage reviewer-selection');
+        assert.strictEqual(reviewerSel.stage, 'reviewer-selection');
+        assert.strictEqual(reviewerSel.role, 'reviewer');
+        assert.ok(reviewerSel.profile, 'must record profile');
+        assert.ok(Array.isArray(reviewerSel.ranking), 'must record ranking array');
+        assert.ok(Array.isArray(reviewerSel.rejected), 'must record rejected array');
+        assert.strictEqual(reviewerSel.chosen, candidateKey(reviewerCandCl));
+
+        // Verify rejected contains kgw candidate with reason code FORBIDDEN_FAILURE_DOMAIN
+        const rejectedKgw = reviewerSel.rejected.find(
+          (r) => r.candidateKey === candidateKey(reviewerCandKgw)
+        );
+        assert.ok(rejectedKgw, 'reviewer in writer failure domain kgw must be in rejected[]');
+        assert.strictEqual(rejectedKgw.reasonCode, 'FORBIDDEN_FAILURE_DOMAIN');
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+      }
+    });
+
+    test('selectCandidateForProfile directly: candidate only in 9router/kgw -> refused with FORBIDDEN_FAILURE_DOMAIN in rejected[]', async () => {
+      const dirDecisions = tmpDir('task-ai-64-dec-direct-refused-');
+      const { writerCand, reviewerCandKgw } = makeDefectTCandidates();
+
+      try {
+        const forbiddenDomains = [writerCand.upstream || writerCand.gateway].filter(Boolean);
+        const decision = await selectCandidateForProfile(
+          {
+            id: 'TASK-AI-64-review',
+            roleRequirement: { role: 'reviewer' },
+            complexity: 'standard',
+            writerCandidateKey: candidateKey(writerCand),
+          },
+          [reviewerCandKgw],
+          forbiddenDomains,
+          {},
+          { ranking: { headrooms: { codex: { status: 'available' } } } },
+          { dir: dirDecisions, now: NOW },
+          NOW
+        );
+
+        assert.strictEqual(
+          decision.chosen,
+          null,
+          'must be refused when only in same failure domain'
+        );
+        assert.ok(
+          decision.result.rejected.some((r) => r.reasonCode === 'FORBIDDEN_FAILURE_DOMAIN')
+        );
+
+        const lines = decisionLines(dirDecisions);
+        const sel = lines.find((r) => r.stage === 'reviewer-selection');
+        assert.ok(sel, 'decision log must contain reviewer-selection record');
+        assert.strictEqual(sel.chosen, null);
+        assert.ok(sel.rejected.some((r) => r.reasonCode === 'FORBIDDEN_FAILURE_DOMAIN'));
+      } finally {
         fs.rmSync(dirDecisions, { recursive: true, force: true });
       }
     });
