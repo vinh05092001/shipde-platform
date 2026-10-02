@@ -42,6 +42,7 @@ const Stage = Object.freeze({
   // so the verdict, the open findings and the refusal cause land in the one
   // append-only trace a human reads. It opens and closes no writer claim.
   REVIEW: 'review',
+  REVIEWER_SELECTION: 'reviewer-selection',
 });
 
 const SECRET_KEYS = /^(key|apiKey|api_key|token|secret|password|authorization|credential)$/i;

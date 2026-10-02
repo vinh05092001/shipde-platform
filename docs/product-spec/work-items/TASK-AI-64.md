@@ -1263,3 +1263,38 @@ Evidence:
 
 Residual risk / known limitations:
 - None.
+
+## Live E2E Attempt 21: Reviewer exclusion uses gateway+upstream failure domain (Defect T) (2026-10-02)
+
+Observation / Defect T:
+In Live attempt 21 (run data `C:/Users/gumac/AI/shipde-platform/.worktrees/logs/night/live21-data/`), writer `opencode::cli::9router::kgw::codex::codex::ninerouter/kgw/nvidia/nemotron-3-super-120b-a12b:free` produced commit `1fcdff6`, but every review round was REFUSED with `NO_REVIEWER_CANDIDATE` although the catalogue offers `cl/nvidia/nemotron-3-ultra-550b-a55b:free` (gateway `9router`, upstream `cl`) which is outside the writer failure domain `9router/kgw`. `reviewItem` in `orchestrate.js` built `forbiddenDomains` from the writer upstream/gateway AND account (`[writerUpstream || writerGateway, writerAccount]`); since all candidates shared gateway `9router` and router account `codex`, this excluded all reviewer candidates.
+
+Fix:
+1. Reviewer Exclusion Scoped to Gateway+Upstream Failure Domain (`tools/ai-brain/orchestrate.js`):
+   - In `reviewItem`: Replaced `forbiddenDomains = [writerUpstream || writerGateway, writerAccount].filter(Boolean)` with `forbiddenDomains = [writerUpstream || writerGateway].filter(Boolean)`. Reviewer exclusion uses the gateway+upstream failure domain (or gateway if no upstream), allowing reviewer candidates on the same gateway with distinct upstreams without forbidding the shared router account (`writerAccount`).
+   - Forwarded `writerCandidateKey: writerKey` into profile/item for reviewer selection.
+2. Diagnosable Reviewer Selection Decision Logging & Reviewer != Writer Enforcement (`tools/ai-brain/orchestrate.js`, `tools/ai-brain/decisions.js`):
+   - In `decisions.js`: Added `REVIEWER_SELECTION: 'reviewer-selection'` to `Stage` enum.
+   - In `orchestrate.js:selectCandidateForProfile`: When selecting a candidate for `role === 'reviewer'`, records decision with `stage: Stage.REVIEWER_SELECTION` (`'reviewer-selection'`) containing `profile`, `ranking`, `rejected[]` with reason codes, and `chosen`, making review candidate refusals fully diagnosable in the decision log.
+   - Enforced `reviewer != writer`: If `result.chosen === writerKey`, resets `chosen` to `null` with reason `REFUSED: reviewer equals writer` and records `REVIEWER_EQUALS_WRITER` in `rejected[]`.
+3. Regression Tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Added Defect T regression suite:
+     - Writer `9router/kgw` + candidate `9router/cl` (sharing gateway and account) selects `cl` as reviewer and completes review (fails at `4a727a6`, passes after).
+     - Candidate only in `9router/kgw` is refused with `NO_REVIEWER_CANDIDATE` (fails at `4a727a6`, passes after).
+     - Decision log records `stage: 'reviewer-selection'` with `profile`, `ranking`, `rejected[]` reason codes, and `chosen` (fails at `4a727a6`, passes after).
+     - Direct `selectCandidateForProfile` test verifying candidate only in `9router/kgw` is refused with `FORBIDDEN_FAILURE_DOMAIN` in `rejected[]` and decision log.
+   - Tests are fully Ubuntu-portable.
+
+Evidence:
+- Fail-before base SHA: `4a727a6` / `4a727a66c406bc45bc49352e89f7ea5d72ee83c4`
+  - In Live attempt 21, writer on `9router/kgw` excluded all reviewer candidates on `9router` because `writerAccount` (`codex`) was included in `forbiddenDomains`.
+  - Decision log lacked `reviewer-selection` stage record.
+- Pass-after result: All tests pass. 99/99 passed in `tools/ai-brain/test/task-ai-64.test.js`; full brain suite passing.
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.
