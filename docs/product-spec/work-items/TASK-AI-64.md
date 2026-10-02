@@ -987,3 +987,40 @@ Evidence:
 
 Residual risk / known limitations:
 - None.
+
+## Live E2E Attempt 13: Isolated route covers opencode harness (Defect L) (2026-10-02)
+
+Observation / Defect L:
+In Live E2E attempt 13 (`.worktrees/logs/night/ai64-live-run1-20261002-attempt13.md`), the Controller selected a writer candidate on source `oc` (`opencode::cli::9router::cl::...`), whose registry entry in `tools/ai-brain/data/sources.json` specifies `harness: "opencode"`. On the isolated execution path (`--isolated-worker`), `executor.resolveRoute` only rewrote `paseo` -> `opencode-direct`. Consequently:
+1. `getHarness("opencode")` threw `UNKNOWN_HARNESS: opencode` during `resolveLauncher`, preventing the worker from launching.
+2. `classifyFailure` received the launch error and classified it as `Scope.UNKNOWN` / `Cause.UNKNOWN`, which `sameFailureDomain` treated as an upstream/gateway failure domain block, blocking all other candidates in that domain with `NO_ALTERNATE_FAILURE_DOMAIN: unknown (unknown)`.
+
+Fix:
+1. Data-Driven OpenCode Harness Routing (`tools/ai-brain/sources.js` & `tools/ai-brain/executor.js`):
+   - Added `runsOpenCodeHarness(harnessName, registry)` in `sources.js`: Inspects registry data (`sources.json` `harness` field) to identify harnesses running the OpenCode CLI (`opencode` and `paseo`), without hard-coding models or providers.
+   - In `executor.js:resolveRoute`: On the isolated path (`opts.isolatedWorker`), if `runsOpenCodeHarness(harnessName, registry)` is true, rewrites the harness to `opencode-direct`.
+   - On the non-isolated path: Preserves `harnessName` (i.e. keeps `opencode` without silently falling back to `paseo`), returning a clean refusal when no non-isolated adapter is registered.
+2. Launch Configuration Failure Classification (`tools/ai-brain/failure-classifier.js` & `tools/ai-brain/orchestrate.js`):
+   - In `orchestrate.js:resolveLauncher`: Throws structured error `UNKNOWN_HARNESS: <harness>`.
+   - In `failure-classifier.js`: Classified `UNKNOWN_HARNESS` and `HARNESS_UNKNOWN` as `Scope.HARNESS` and `Cause.LAUNCH_CONFIG` under Case 13.
+   - Non-blocking failure domain: Because `cli.js:sameFailureDomain` treats `Scope.HARNESS` + `Cause.LAUNCH_CONFIG` as candidate-scoped (`return false`), launch config failures mark only the failing candidate in `failedKeys` without poisoning or blocking other candidates sharing the gateway/upstream domain.
+3. Regression Tests (`tools/ai-brain/test/task-ai-64.test.js` & `tools/ai-brain/test/failure-classifier.test.js`):
+   - `runsOpenCodeHarness identifies both opencode and paseo from registry data`.
+   - `resolveRoute on isolated path maps harness opencode to opencode-direct, while non-isolated preserves it`.
+   - `orchestrate with a candidate of harness opencode on the isolated path routes to opencode-direct and launches worker (fails at 0e04eed, passes after)`.
+   - `orchestrate with candidate of harness opencode on non-isolated path refuses with UNKNOWN_HARNESS and classifies as Scope.HARNESS`.
+   - Failure classifier tests verifying `UNKNOWN_HARNESS` and `HARNESS_UNKNOWN` classify as `Cause.LAUNCH_CONFIG` / `Scope.HARNESS` and `sameFailureDomain` returns `false`.
+
+Evidence:
+- Fail-before base SHA: `0e04eed` / `0e04eed9f43f80c65c692a7a4214f494fc7d1f56`
+  - `orchestrate` with candidate of harness `opencode` threw `UNKNOWN_HARNESS` on isolated path and classified as `Scope.UNKNOWN` / `Cause.UNKNOWN`.
+- Pass-after result: All tests pass. 72/72 passed in `tools/ai-brain/test/task-ai-64.test.js`; 1160/1160 passed in full brain suite (`tools/ai-brain/test/*.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/failure-classifier.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- Non-isolated execution path does not define an `opencode` harness adapter; callers requesting non-isolated runs with harness `opencode` receive a structured `UNKNOWN_HARNESS` refusal rather than implicit diversion to `paseo`.

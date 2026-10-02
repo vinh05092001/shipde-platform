@@ -3818,3 +3818,197 @@ describe('TASK-AI-64 repair keeps worker commit and reviewer uses gateway+upstre
     }
   });
 });
+
+describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () => {
+  const { runsOpenCodeHarness } = require('../sources');
+  const { resolveRoute } = require('../executor');
+  const { getHarness } = require('../harness');
+  const isoModule = require('../isolation-launcher');
+
+  test('runsOpenCodeHarness identifies both opencode and paseo from registry data', () => {
+    assert.strictEqual(runsOpenCodeHarness('opencode'), true);
+    assert.strictEqual(runsOpenCodeHarness('paseo'), true);
+    assert.strictEqual(runsOpenCodeHarness('hermes'), false);
+    assert.strictEqual(runsOpenCodeHarness('cline'), false);
+    assert.strictEqual(runsOpenCodeHarness('agy'), false);
+    assert.strictEqual(runsOpenCodeHarness('codex'), false);
+  });
+
+  test('resolveRoute on isolated path maps harness opencode to opencode-direct, while non-isolated preserves it', () => {
+    // isolated
+    const isolatedRoute = resolveRoute(
+      { provider: 'oc', harness: 'opencode', model: 'ninerouter/ag/gemini-3.1-pro-low' },
+      { isolatedWorker: true }
+    );
+    assert.strictEqual(isolatedRoute.harnessName, 'opencode-direct');
+    assert.strictEqual(isolatedRoute.provider, 'opencode');
+    assert.strictEqual(isolatedRoute.model, 'ninerouter/ag/gemini-3.1-pro-low');
+
+    // non-isolated: preserves harness opencode and does not silently pick paseo
+    const nonIsolatedRoute = resolveRoute(
+      { provider: 'oc', harness: 'opencode', model: 'ninerouter/ag/gemini-3.1-pro-low' },
+      { isolatedWorker: false }
+    );
+    assert.strictEqual(nonIsolatedRoute.harnessName, 'opencode');
+    assert.strictEqual(getHarness(nonIsolatedRoute.harnessName), null);
+  });
+
+  test('orchestrate with a candidate of harness opencode on the isolated path routes to opencode-direct and launches worker (fails at 0e04eed, passes after)', async () => {
+    const hostRepo = makeTempRepo();
+    const decisionDir = tmpDir('task-ai-64-defect-l-decision-');
+    const evidenceDir = tmpDir('task-ai-64-defect-l-evidence-');
+
+    const realGetIsolatedLauncher = isoModule.getIsolatedLauncher;
+    const realIsWorkerPath = isoModule.isWorkerPath;
+
+    let launchedAdapter = null;
+    let launchArgsCaptured = null;
+
+    isoModule.getIsolatedLauncher = () => {
+      return (adapter, launchArgs, launchOpts) => {
+        launchedAdapter = adapter;
+        launchArgsCaptured = launchArgs;
+        return {
+          exitCode: 0,
+          stdout:
+            'the agent changed production code\n{"sessionID":"session-defect-l","tokens":{"input":10,"output":20,"total":30}}',
+          stderr: '',
+          completionNonce: 'nonce-defect-l',
+        };
+      };
+    };
+    isoModule.isWorkerPath = () => true;
+
+    const opencodeCandidate = cand({
+      harness: 'opencode',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/ag/gemini-3.1-pro-low',
+      source: 'oc',
+    });
+
+    const orchPath = require.resolve('../orchestrate');
+    let result;
+    try {
+      delete require.cache[orchPath];
+      const fresh = require(orchPath);
+      result = await safeRun(
+        baseOpts({
+          isolatedWorker: true,
+          cwd: hostRepo.dir,
+          baseSha: hostRepo.sha,
+          sha: hostRepo.sha,
+          decisionDir,
+          evidenceDir,
+          candidates: [opencodeCandidate],
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              roleRequirement: { role: 'author.foundation' },
+              files: ['branch-name.js'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          reviewer: () => ({ pass: true, sha: hostRepo.sha, verdict: 'PASS', findings: [] }),
+        })
+      );
+    } finally {
+      isoModule.getIsolatedLauncher = realGetIsolatedLauncher;
+      isoModule.isWorkerPath = realIsWorkerPath;
+      delete require.cache[orchPath];
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    }
+
+    assert.ok(result.log, 'orchestration must return a log');
+    assert.strictEqual(result.log.status, 'COMPLETED');
+    assert.ok(launchedAdapter, 'isolated launcher must have been called');
+    assert.strictEqual(
+      launchedAdapter.id,
+      'opencode-direct',
+      'isolated launcher must receive opencode-direct adapter'
+    );
+    assert.strictEqual(launchedAdapter.command, 'opencode');
+    assert.ok(Array.isArray(launchArgsCaptured), 'launchArgs must be an array');
+    assert.ok(launchArgsCaptured.includes('ninerouter/ag/gemini-3.1-pro-low'));
+    assert.deepEqual(result.log.reconciliation.completed, ['TASK-AI-64']);
+  });
+
+  test('orchestrate with candidate of harness opencode on non-isolated path refuses with UNKNOWN_HARNESS and classifies as Scope.HARNESS', async () => {
+    const hostRepo = makeTempRepo();
+    const decisionDir = tmpDir('task-ai-64-defect-l-noniso-dec-');
+    const evidenceDir = tmpDir('task-ai-64-defect-l-noniso-ev-');
+    const { executePlan, Outcome } = require('../executor');
+
+    // 1. Direct executor refusal on non-isolated path
+    const plan = {
+      assignments: [
+        {
+          workItemId: 'TASK-AI-64',
+          branch: 'feat/task-ai-64',
+          provider: 'oc',
+          harness: 'opencode',
+          model: 'ninerouter/ag/gemini-3.1-pro-low',
+          role: 'author.foundation',
+        },
+      ],
+    };
+    const execResult = executePlan(plan, { dryRun: false, isolatedWorker: false, decisionDir });
+    assert.strictEqual(execResult.records[0].outcome, Outcome.REFUSED);
+    assert.strictEqual(execResult.records[0].detail, 'UNKNOWN_HARNESS: opencode');
+
+    // 2. Through orchestrate with a non-isolated harness runner
+    const opencodeCandidate = cand({
+      harness: 'opencode',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ninerouter/ag/gemini-3.1-pro-low',
+      source: 'oc',
+    });
+
+    try {
+      const result = await safeRun(
+        baseOpts({
+          isolatedWorker: false,
+          run: (job) => {
+            const adapter = getHarness(job.harness);
+            if (!adapter) throw new Error('UNKNOWN_HARNESS: ' + String(job.harness));
+            return adapter.launch(job);
+          },
+          cwd: hostRepo.dir,
+          baseSha: hostRepo.sha,
+          sha: hostRepo.sha,
+          decisionDir,
+          evidenceDir,
+          candidates: [opencodeCandidate],
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              roleRequirement: { role: 'author.foundation' },
+              files: ['branch-name.js'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+        })
+      );
+
+      assert.ok(result.log, 'orchestration returns log');
+      assert.strictEqual(result.log.status, 'BLOCKED');
+      const failedDecisions = decisionLines(decisionDir).filter((d) => d.stage === 'failed');
+      assert.ok(failedDecisions.length > 0, 'decision log must contain failed record');
+      assert.strictEqual(failedDecisions[0].failureScope, 'harness');
+      assert.strictEqual(failedDecisions[0].detail, 'launch_config');
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    }
+  });
+});

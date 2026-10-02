@@ -129,7 +129,7 @@ function resolveLauncher(o, isolatedLauncher) {
   const { getHarness } = require('./harness');
   return (job) => {
     const adapter = getHarness(job.harness);
-    if (!adapter) throw new Error('HARNESS_UNKNOWN: ' + String(job.harness));
+    if (!adapter) throw new Error('UNKNOWN_HARNESS: ' + String(job.harness));
     let launchArgs;
     try {
       launchArgs = adapter.launch(job);

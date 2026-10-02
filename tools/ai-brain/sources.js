@@ -235,7 +235,8 @@ function describeAll(options) {
  * executor — the `if/else` chain in dispatch.sh is what this replaces.
  */
 function dispatchRoute(provider, registry) {
-  const table = ((registry && registry.dispatch) || {}).providers || {};
+  const reg = registry || loadSources();
+  const table = ((reg && reg.dispatch) || {}).providers || {};
   const route = table[String(provider || '').toLowerCase()];
   if (!route) return null;
   return {
@@ -269,6 +270,26 @@ function providerFromPrefix(target) {
   return trimmed.split('/')[0].trim();
 }
 
+/**
+ * Whether a harness name runs the OpenCode CLI (e.g. 'opencode' or 'paseo'),
+ * decided from registry data (sources.json harness field), never by hard-coding
+ * a model or provider.
+ */
+function runsOpenCodeHarness(harnessName, registry) {
+  if (!harnessName) return false;
+  const name = String(harnessName).toLowerCase();
+  const reg = registry || loadSources();
+  const sources = reg && Array.isArray(reg.sources) ? reg.sources : [];
+  const openCodeHarnesses = new Set(
+    sources
+      .map((s) => s && s.harness && String(s.harness).toLowerCase())
+      .filter((h) => h === 'opencode' || h === 'paseo')
+  );
+  openCodeHarnesses.add('opencode');
+  openCodeHarnesses.add('paseo');
+  return openCodeHarnesses.has(name);
+}
+
 module.exports = {
   Kind,
   CAPACITY_KINDS,
@@ -285,4 +306,5 @@ module.exports = {
   dispatchRoute,
   qualifyModel,
   providerFromPrefix,
+  runsOpenCodeHarness,
 };

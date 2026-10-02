@@ -477,4 +477,52 @@ describe('Case 13: harness / launch config error', () => {
     assert.equal(DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG], 5 * 60 * 1000);
     assert.equal(DEFAULT_COOLDOWNS[Cause.HARNESS_FAILED], 5 * 60 * 1000);
   });
+
+  test('UNKNOWN_HARNESS in stderr classifies as LAUNCH_CONFIG with HARNESS scope and finite cooldown', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      stderr: 'Error: UNKNOWN_HARNESS: opencode',
+    });
+    assert.equal(result.cause, Cause.LAUNCH_CONFIG);
+    assert.equal(result.scope, Scope.HARNESS);
+    assert.equal(result.humanAction, HumanAction.NONE);
+    assert.equal(result.cooldownMs, 5 * 60 * 1000);
+    assert.ok(result.evidence.stderr.includes('UNKNOWN_HARNESS: opencode'));
+  });
+
+  test('HARNESS_UNKNOWN in stderr also classifies as LAUNCH_CONFIG with HARNESS scope', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      stderr: 'Error: HARNESS_UNKNOWN: opencode',
+    });
+    assert.equal(result.cause, Cause.LAUNCH_CONFIG);
+    assert.equal(result.scope, Scope.HARNESS);
+  });
+
+  test('UNKNOWN_HARNESS failure does not block other candidates in the upstream failure domain', () => {
+    const { sameFailureDomain } = require('../cli');
+    const classification = classifyFailure({
+      exitCode: 1,
+      stderr: 'UNKNOWN_HARNESS: opencode',
+    });
+    const failedCandidate = {
+      harness: 'opencode',
+      gateway: '9router',
+      upstream: 'cl',
+      accountId: 'codex',
+      modelId: 'ninerouter/cl/deepseek/deepseek-v4-flash',
+    };
+    const otherCandidate = {
+      harness: 'paseo',
+      gateway: '9router',
+      upstream: 'cl',
+      accountId: 'codex',
+      modelId: 'ninerouter/cl/deepseek/deepseek-v4-flash',
+    };
+    assert.equal(
+      sameFailureDomain(otherCandidate, failedCandidate, classification),
+      false,
+      'harness config failure must not avoid the upstream failure domain'
+    );
+  });
 });
