@@ -1220,3 +1220,46 @@ Evidence:
 
 Residual risk / known limitations:
 - None.
+
+## Live E2E Attempt 20: Wire exact-SHA review lane into the live loop (Defect S) (2026-10-02)
+
+Observation / Defect S:
+In Live E2E attempt 20 (run data `C:/Users/gumac/AI/shipde-platform/.worktrees/logs/night/live20-data/`, orchestrate log `live20-orchestrate.log`, worker git log `worker-git-log.txt`), the isolated worker produced local commits `18e3cfb` and `97f6bb2` on base SHA `7d8bfdf` with a clean tree, successfully completing local verification. However, when reaching the review stage, `orchestrate` threw `REVIEW_ROUTE_UNAVAILABLE: no exact-SHA review lane is wired for the live loop` at `tools/ai-brain/orchestrate.js:304` because `reviewLane` was an unwired stub that threw when an injected mock reviewer was absent.
+
+Fix:
+1. Review Prompt Compilation (`tools/ai-brain/prompt-compiler.js`):
+   - Added `compileReviewPrompt(item, ctx)`: Compiles an independent reviewer prompt containing the Work Item, role requirement (`reviewer`), exact review target commit SHA, base SHA, allowed files, acceptance criteria, exercise test command, base..head diff text, publisher boundary, read-only isolated root constraints, and machine-readable JSON verdict file requirement (`verdict.json`: `sha`, `verdict: "PASS" | "CHANGES_REQUIRED"`, `findings[]`).
+2. Separate Read-Only Review Root Provisioning (`tools/ai-brain/orchestrate.js`):
+   - Added `provisionReviewRoot(workerRoot, reviewRoot, targetSha, options)`: Provisions a separate read-only review root from the worker repository using hardened git per PR #184 / #187 / #189. Copies sanitized objects from the worker's object store via `withCleanGitEnv` / `safeCopyObjects` without consulting worker configuration, creates an operator-controlled ref at `targetSha`, clones with `--no-checkout --no-hardlinks`, configures safe line endings and filemode, checks out `targetSha`, and verifies HEAD matches `targetSha` with hardened `rev-parse --verify --quiet HEAD^{commit}`. Ensures the reviewer cannot modify the writer root.
+3. Review Lane Implementation & Fail-Closed Verdict Parsing (`tools/ai-brain/orchestrate.js`, `tools/ai-brain/review-loop.js`):
+   - In `review-loop.js`: Awaited `review(currentSha)` to support asynchronous review harness execution, and preserved structured refusal causes (`rev.cause` / `findings[0].id`) for unbound and stale SHA rounds.
+   - In `orchestrate.js`: Re-implemented `reviewLane`:
+     - Enforces `reviewer==writer refused`: Rejects immediately with `REVIEWER_EQUALS_WRITER` if the reviewer candidate matches the writer candidate.
+     - Selects the reviewer candidate chosen by the Controller outside the writer failure domain (Defect K). Fails closed with `NO_REVIEWER_CANDIDATE` if no eligible candidate meets floors.
+     - Resolves launch route and executes the reviewer through the launcher in `reviewWorkerRoot`.
+     - Computes host-side diff `baseSha..targetSha` and injects it into the compiled review prompt.
+     - Parses `verdict.json` fail-closed: missing file, invalid JSON, invalid schema, or `sha !== targetSha` produces `CHANGES_REQUIRED` (or `STALE_REVIEW_SHA`), feeding findings into `repairRound`.
+     - Valid `PASS` with open findings is rejected (`PASS_WITH_FINDINGS_REJECTED`), while clean `PASS` on exact SHA completes the item with `REVIEW_PASS`.
+   - Propagated execution context (`item`, `session`, `log`, `logOpts`, `launcher`, `usageDir`, `now`, `candidates`, `evidenceData`, `registry`) into `reviewLane` call from `reviewItem`.
+4. Regression Tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Added Defect S test suite (5 tests with injected launcher seam):
+     - PASS verdict on exact SHA completes the item (fails at 7d8bfdf with REVIEW_ROUTE_UNAVAILABLE, passes after).
+     - CHANGES_REQUIRED goes to repair and completes after repair commit and second review (fails at 7d8bfdf, passes after).
+     - PASS with open findings rejected with `PASS_WITH_FINDINGS_REJECTED` (fails at 7d8bfdf, passes after).
+     - SHA mismatch rejected with `STALE_REVIEW_SHA` (fails at 7d8bfdf, passes after).
+     - Reviewer equals writer refused with `REVIEWER_EQUALS_WRITER` (fails at 7d8bfdf, passes after).
+   - Tests are fully Ubuntu-portable.
+
+Evidence:
+- Fail-before base SHA: `7d8bfdf` / `7d8bfdf62fdd2487eaa39f22023683c0e4d4b0f1`
+  - In Live attempt 20, orchestrate crashed at the review stage with `Error: REVIEW_ROUTE_UNAVAILABLE: no exact-SHA review lane is wired for the live loop`.
+  - At `7d8bfdf`, `reviewLane` lacked review execution, separate review root provisioning, review prompt compilation, and fail-closed verdict parsing.
+- Pass-after result: All tests pass. 95/95 passed in `tools/ai-brain/test/task-ai-64.test.js`; full brain suite passing.
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.

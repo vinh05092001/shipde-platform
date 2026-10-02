@@ -106,16 +106,37 @@ async function runReviewLoop(state, deps) {
       continue;
     }
 
-    const rev = review(currentSha);
+    const rev = await review(currentSha);
 
     // A review that names no commit is evidence for every commit at once.
     if (!rev || typeof rev.sha !== 'string' || rev.sha.trim() === '') {
-      rounds.push({ round, stage: 'blocked', sha: currentSha, cause: Refusal.SHA_UNBOUND });
+      const cause =
+        (rev && rev.cause) ||
+        (rev && rev.findings && rev.findings[0] && rev.findings[0].id) ||
+        Refusal.SHA_UNBOUND;
+      rounds.push({
+        round,
+        stage: 'blocked',
+        sha: currentSha,
+        cause,
+        verdict: (rev && rev.verdict) || null,
+        reviewer: (rev && rev.reviewer) || null,
+        findings: (rev && rev.findings) || [],
+      });
       return { status: Status.BLOCKED, rounds, finalSha: currentSha, repairCount };
     }
     // A review of a different commit is stale evidence for this commit.
     if (rev.sha !== currentSha) {
-      rounds.push({ round, stage: 'blocked', sha: currentSha, cause: Refusal.STALE_SHA });
+      const cause = (rev && rev.cause) || Refusal.STALE_SHA;
+      rounds.push({
+        round,
+        stage: 'blocked',
+        sha: currentSha,
+        cause,
+        verdict: (rev && rev.verdict) || null,
+        reviewer: (rev && rev.reviewer) || null,
+        findings: (rev && rev.findings) || [],
+      });
       return { status: Status.BLOCKED, rounds, finalSha: currentSha, repairCount };
     }
 
