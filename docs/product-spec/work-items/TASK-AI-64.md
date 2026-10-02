@@ -956,3 +956,34 @@ Evidence:
 
 Residual risk / known limitations:
 - None.
+
+## Escalated author: Fresh worker root on first launch, retained only for repair (2026-10-02)
+
+Observation / Finding 1:
+In review `c8fe4fac992ceaa41d917df330f7dee304eb86b2.md`, the retained-root hardening over-corrected: `isolation-launcher.js` treated any existing `workerRoot` holding `.git` as retained and threw `WORKER_HEAD_MISMATCH` when HEAD != requested SHA. Because `workerRoot` is keyed by the host worktree leaf (`C:\ShipDeWorker\<leaf>`), normal first launches of subsequent runs with new `--base-sha` could no longer re-provision at the pinned base SHA and failed closed.
+
+Required design & Fix:
+1. Explicitly distinguish initial launch vs repair round (`tools/ai-brain/isolation-launcher.js` & `tools/ai-brain/orchestrate.js`):
+   - Initial launch of a work item (no repair context, `retainWorkerHead` is undefined): always re-provisions a fresh worker root at the pinned base SHA (delete + `git clone --no-checkout --no-hardlinks` + `git checkout <headSha>` inside the fresh clone), regardless of what an earlier run left in `workerRoot`.
+   - Repair round (`retainWorkerHead: <40-char sha>` passed explicitly by `orchestrate.js:repairRound`): keeps the existing root only if a hardened read (no worker config honoured: clean `GIT_CONFIG_GLOBAL`/`SYSTEM`=NUL, `-c core.hooksPath=NUL`, `-c core.fsmonitor=false`, `-c core.attributesFile=NUL`, `-c diff.external=`) confirms `HEAD == retainWorkerHead`. Never runs `git checkout` or any working-tree-mutating git inside a retained root. If absent or mismatched, throws structured `WORKER_HEAD_MISMATCH` error for that repair attempt without mutating or deleting the worker root.
+2. Forwarding in orchestrator (`tools/ai-brain/orchestrate.js`):
+   - In `resolveLauncher`: Forwards `retainWorkerHead: job.retainWorkerHead || undefined` to `isolatedLauncher`.
+   - In `repairRound`: Adds `retainWorkerHead: sha || null` to `repairJob`.
+3. Regression tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Kept all security regression tests from `c8fe4fa` passing with explicit `retainWorkerHead` in repair context.
+   - Added `stale root on initial launch is re-provisioned at base (fails at c8fe4fa, passes after)`: verifies that a stale worker root left by a prior run is completely wiped and re-cloned/checked out at the pinned base SHA on initial launch (fails at `c8fe4fa`, passes after).
+   - Added `repair with matching head keeps the commit and runs no checkout`: verifies that a repair round with matching `retainWorkerHead` retains the root and worker commit without executing checkout or worker-planted smudge/hook/fsmonitor.
+   - Added `repair with mismatched head is structured, no marker written`: verifies that a repair round with mismatched `retainWorkerHead` fails closed with structured `WORKER_HEAD_MISMATCH` without executing checkout or worker-planted smudge/hook/fsmonitor.
+
+Evidence:
+- Fail-before base SHA: `c8fe4fa` / `c8fe4fac992ceaa41d917df330f7dee304eb86b2`
+  - `isolation-launcher.js` refused stale worker root on initial launch with `WORKER_HEAD_MISMATCH`.
+- Pass-after result: All tests pass. 68/68 passed in `tools/ai-brain/test/task-ai-64.test.js`; 1153/1153 passed in full brain suite (`tools/ai-brain/test/*.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.

@@ -735,55 +735,56 @@ function getIsolatedLauncher() {
     }
     const headSha = String(baseSha);
 
-    // Defect J: A repair round passes the worker's local commit SHA.
-    // If the worker root already holds the requested head commit, keep the
-    // existing worker root and its commits without deleting or re-cloning.
-    // Re-provision only when absent or invalid.
-    //
-    // Operator-side git commands acting on a retained worker root must never
-    // execute worker-planted hooks, smudge filters, fsmonitor, or consult
-    // worker config (TASK-AI-64.md:249). The operator must NEVER run git checkout
-    // (or any working-tree-mutating git) inside a retained worker root.
-    // The worker root is retained only when a hardened read (via withCleanGitEnv /
-    // safeGit with clean GIT_CONFIG_GLOBAL/SYSTEM=NUL, git-dir reading clean config,
-    // -c core.hooksPath=NUL -c core.fsmonitor=false -c core.attributesFile=NUL) shows
-    // HEAD already equals the requested SHA; otherwise we fail with structured
-    // error WORKER_HEAD_MISMATCH that the repair loop treats as a failed repair
-    // attempt — without re-cloning over the worker commit and without checking out.
+    // Distinguish initial launch of a work item vs repair round explicitly:
+    // (1) Initial launch (no repair context, retainWorkerHead is not provided):
+    //     always re-provision a fresh worker root at the pinned base SHA
+    //     (delete + git clone --no-checkout --no-hardlinks + checkout inside the fresh clone),
+    //     regardless of what an earlier run left in workerRoot.
+    // (2) Repair round (retainWorkerHead is provided, e.g. <40-char sha>):
+    //     keep the existing root only if a hardened read (clean GIT_CONFIG_GLOBAL/SYSTEM=NUL,
+    //     -c core.hooksPath=NUL -c core.fsmonitor=false -c core.attributesFile=NUL) shows
+    //     HEAD == that sha; never run checkout or any tree-mutating git in a retained root;
+    //     mismatch -> structured WORKER_HEAD_MISMATCH failure for that repair attempt.
     const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
-    const isRetainedWorker =
-      fs.existsSync(workerRoot) && fs.existsSync(path.join(workerRoot, '.git'));
+    const retainWorkerHead =
+      typeof opts.retainWorkerHead === 'string'
+        ? opts.retainWorkerHead.trim()
+        : opts.retainWorkerHead
+          ? headSha
+          : null;
 
-    if (isRetainedWorker) {
+    if (retainWorkerHead) {
       let retainedHeadSha = null;
-      try {
-        const { withCleanGitEnv, safeGit } = require('./supervisor');
-        retainedHeadSha = withCleanGitEnv(
-          workerRoot,
-          (safeGitDir) => {
-            const curHeadRes = safeGit(
-              safeGitDir,
-              workerRoot,
-              ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
-              20000
-            );
-            if (curHeadRes && curHeadRes.status === 0 && curHeadRes.stdout) {
-              return curHeadRes.stdout.trim();
-            }
-            return null;
-          },
-          { workerWritable: true }
-        );
-      } catch {
-        retainedHeadSha = null;
+      if (fs.existsSync(workerRoot) && fs.existsSync(path.join(workerRoot, '.git'))) {
+        try {
+          const { withCleanGitEnv, safeGit } = require('./supervisor');
+          retainedHeadSha = withCleanGitEnv(
+            workerRoot,
+            (safeGitDir) => {
+              const curHeadRes = safeGit(
+                safeGitDir,
+                workerRoot,
+                ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+                20000
+              );
+              if (curHeadRes && curHeadRes.status === 0 && curHeadRes.stdout) {
+                return curHeadRes.stdout.trim();
+              }
+              return null;
+            },
+            { workerWritable: true }
+          );
+        } catch {
+          retainedHeadSha = null;
+        }
       }
 
-      if (!retainedHeadSha || retainedHeadSha.toLowerCase() !== headSha.toLowerCase()) {
+      if (!retainedHeadSha || retainedHeadSha.toLowerCase() !== retainWorkerHead.toLowerCase()) {
         const err = new Error(
           'WORKER_HEAD_MISMATCH: retained worker root HEAD (' +
             (retainedHeadSha || 'unknown') +
             ') does not match requested SHA ' +
-            headSha
+            retainWorkerHead
         );
         err.code = 'WORKER_HEAD_MISMATCH';
         throw err;
