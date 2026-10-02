@@ -317,6 +317,14 @@ Candidate technologies are inventoried in `tools/ecosystem-manifest.json` under 
 - A shadow pass never writes the register. Each pass hashes the register's bytes before and after and fails if they differ. A divergence is fixed in the shadow or investigated in the register, never resolved by editing the register to match.
 - The pass is local and offline. The upstream Beads binary is not installed, not required, and not exercised; a green comparison means a projection of the register agrees with the register, not that Beads does.
 
+### Promotion gate for proposed memory (TASK-AI-22)
+
+Under policy `AI-TOOL-06`, memory and skills remain untrusted until human-reviewed into `shipde-brain`. `TASK-AI-22` establishes the promotion gate:
+
+- An agent may propose a lesson (`node tools/ai-brain/cli.js lesson propose`), writing `status: proposed`, `approved_by: null`, proposer identity, and 40-character `source_commit`.
+- Only `node tools/ai-brain/cli.js lesson approve <id>` can write `status: approved`. It derives the approver from the operator's authenticated GitHub login (never declared input), strictly refuses self-approval (`SELF_APPROVAL`, `AI-22-R02`) and agent approval (`AGENT_APPROVAL`, `AI-22-R03`), re-validates against `lesson-schema.json`, and appends an immutable promotion record (`promotion-record.jsonl`).
+- Reject (`status: rejected`, `approved_by: null`) and supersede (`status: superseded`, naming an existing approved replacement) follow the same gate and append-only record.
+
 ## Activation Profiles
 
 Tool usage is governed by 9 task-based activation profiles defined in `tools/ecosystem-profiles.json`:
