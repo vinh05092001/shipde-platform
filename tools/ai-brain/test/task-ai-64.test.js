@@ -1691,6 +1691,9 @@ test('64-32 isolated launch uses direct adapter without key material in argv or 
             console.error('mkdirSync failed in mock:', e);
           }
         }
+        if (cargs && cargs.includes('rev-parse')) {
+          return { status: 0, stdout: '0123456789012345678901234567890123456789\n' };
+        }
         return { status: 0 };
       }
       if (cmd === 'powershell.exe') {
@@ -1963,6 +1966,9 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
           if (cargs && cargs[0] === 'clone') {
             fs.mkdirSync(path.join(cargs[cargs.length - 1], '.git', 'info'), { recursive: true });
           }
+          if (cargs && cargs.includes('rev-parse')) {
+            return { status: 0, stdout: '0123456789012345678901234567890123456789\n' };
+          }
           return { status: 0 };
         }
         if (cmd === 'powershell.exe') {
@@ -2210,6 +2216,9 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
                   'e1-branch-name.cases.json'
                 )
               );
+            }
+            if (cargs && cargs.includes('rev-parse')) {
+              return { status: 0, stdout: '0123456789012345678901234567890123456789\n' };
             }
             return { status: 0 };
           }
@@ -4505,6 +4514,329 @@ describe('TASK-AI-64 hardened dirty check agrees with provisioned checkout line-
       assert.strictEqual(conf.fsmonitor, undefined);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('TASK-AI-64 provisioned worker root pinned to base SHA in linked worktree (DEFECT Q)', () => {
+  const { isTreeDirty, verifyWorkerCommit } = require('../orchestrate');
+  const isoMod = require('../isolation-launcher');
+  const { captureFailBefore } = require('../isolation-launcher');
+  const supervisor = require('../supervisor');
+
+  test('provisioning pins worker root to base SHA when host is a linked worktree whose primary HEAD differs from base SHA (fails at adb6cfc, passes after)', () => {
+    const primaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-primary-'));
+    const hostWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-linked-'));
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-worker-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-verdict-'));
+    const git = (args, cwd) =>
+      spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+        cwd,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+
+    try {
+      git(['init', '-q', '-b', 'main'], primaryDir);
+      git(['config', 'user.email', 'worker@shipde.test'], primaryDir);
+      git(['config', 'user.name', 'Worker'], primaryDir);
+      fs.writeFileSync(path.join(primaryDir, 'file.txt'), 'version 1\n');
+      git(['add', '.'], primaryDir);
+      git(['commit', '-q', '-m', 'commit 1'], primaryDir);
+      const c1Sha = git(['rev-parse', 'HEAD'], primaryDir).stdout.trim();
+
+      // Create branch feat/task-ai-64 pointing to c1
+      git(['branch', 'feat/task-ai-64'], primaryDir);
+
+      // Create commit c2 on main
+      fs.writeFileSync(path.join(primaryDir, 'file.txt'), 'version 2\n');
+      git(['commit', '-q', '-am', 'commit 2'], primaryDir);
+      const c2Sha = git(['rev-parse', 'HEAD'], primaryDir).stdout.trim();
+      assert.notStrictEqual(c1Sha, c2Sha);
+
+      // Detach primary at c1 so primary HEAD is c1Sha, differing from base SHA c2Sha
+      git(['checkout', '-q', c1Sha], primaryDir);
+      assert.strictEqual(git(['rev-parse', 'HEAD'], primaryDir).stdout.trim(), c1Sha);
+
+      // Add linked worktree hostWorktree at c2Sha
+      git(['worktree', 'add', '--detach', '-q', hostWorktree, c2Sha], primaryDir);
+      assert.strictEqual(git(['rev-parse', 'HEAD'], hostWorktree).stdout.trim(), c2Sha);
+
+      fs.mkdirSync(path.join(hostWorktree, 'scripts', 'ai', 'isolation'), { recursive: true });
+      fs.writeFileSync(
+        path.join(hostWorktree, 'scripts', 'ai', 'isolation', 'dummy.ps1'),
+        '# dummy\n'
+      );
+      const policyHash = isoMod.getFolderHash(
+        path.join(hostWorktree, 'scripts', 'ai', 'isolation')
+      );
+      const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+      fs.writeFileSync(
+        verdictPath,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          timestamp: new Date().toISOString(),
+          sid: 'TEST-SID',
+          worktree: hostWorktree,
+          policyHash,
+          details: { check: 'PASS' },
+        })
+      );
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const mockAdapter = { id: 'echo', command: 'echo' };
+
+      try {
+        runIso(mockAdapter, ['hello'], {
+          cwd: hostWorktree,
+          workerRoot: workerDir,
+          baseSha: c2Sha,
+          workItemId: 'TASK-AI-64',
+          branch: 'feat/task-ai-64',
+          verdictPath,
+          getWorkerSid: () => 'TEST-SID',
+          verifyBoundary: () => true,
+          isWorkerPath: () => true,
+          spawnSync: (cmd, args, opts) => {
+            if (cmd === 'powershell.exe' || cmd === 'pwsh')
+              return { status: 0, stdout: 'ok', stderr: '' };
+            return spawnSync(cmd, args, opts);
+          },
+        });
+      } catch {
+        // provisioning is what we verify
+      }
+
+      // Worker root HEAD must be pinned to c2Sha (baseSha), NOT c1Sha (primary checkout / clone default)
+      const workerHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.strictEqual(
+        workerHead,
+        c2Sha,
+        'provisioned worker root HEAD must match requested baseSha exactly'
+      );
+
+      // Remote origin tracking ref in worker root must also be updated to c2Sha
+      const remoteBranchSha = git(
+        ['rev-parse', 'refs/remotes/origin/feat/task-ai-64'],
+        workerDir
+      ).stdout.trim();
+      assert.strictEqual(
+        remoteBranchSha,
+        c2Sha,
+        'remote origin tracking branch must be pinned to baseSha'
+      );
+
+      // Even after checking out the exercise branch, HEAD must remain at c2Sha
+      git(['checkout', '-q', 'feat/task-ai-64'], workerDir);
+      const postCheckoutHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.strictEqual(
+        postCheckoutHead,
+        c2Sha,
+        'HEAD after checking out exercise branch must remain at baseSha'
+      );
+    } finally {
+      fs.rmSync(primaryDir, { recursive: true, force: true });
+      fs.rmSync(hostWorktree, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+    }
+  });
+
+  test('hard structured failure PROVISION_BASE_MISMATCH if provisioned worker root HEAD does not match requested base SHA', () => {
+    const hostRepo = makeTempRepo();
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-worker-mismatch-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-verdict-mismatch-'));
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts', 'ai', 'isolation'), { recursive: true });
+    fs.writeFileSync(
+      path.join(hostRepo.dir, 'scripts', 'ai', 'isolation', 'dummy.ps1'),
+      '# dummy\n'
+    );
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts', 'ai', 'isolation'));
+    const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+    fs.writeFileSync(
+      verdictPath,
+      JSON.stringify({
+        verdict: 'CLOSED',
+        timestamp: new Date().toISOString(),
+        sid: 'TEST-SID',
+        worktree: hostRepo.dir,
+        policyHash,
+        details: { check: 'PASS' },
+      })
+    );
+
+    const runIso = isoMod.getIsolatedLauncher();
+    const mockAdapter = { id: 'echo', command: 'echo' };
+
+    const origWithClean = supervisor.withCleanGitEnv;
+    supervisor.withCleanGitEnv = () => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+    let thrown = null;
+    try {
+      runIso(mockAdapter, ['hello'], {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: hostRepo.sha,
+        verdictPath,
+        getWorkerSid: () => 'TEST-SID',
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, opts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh')
+            return { status: 0, stdout: 'ok', stderr: '' };
+          return spawnSync(cmd, args, opts);
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      supervisor.withCleanGitEnv = origWithClean;
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+    }
+
+    assert.ok(thrown, 'must throw on provisioned HEAD mismatch');
+    assert.strictEqual(thrown.code, 'PROVISION_BASE_MISMATCH');
+    assert.match(thrown.message, /PROVISION_BASE_MISMATCH/);
+  });
+
+  test('pre-launch check throws PROVISION_BASE_MISMATCH if worker root HEAD moves before agent start', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-prelaunch-'));
+    const git = (args) =>
+      spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+        cwd: dir,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+    git(['init', '-q']);
+    git(['config', 'user.email', 'worker@shipde.test']);
+    git(['config', 'user.name', 'Worker']);
+    fs.writeFileSync(path.join(dir, 'payload.txt'), 'init\n');
+    git(['add', '.']);
+    git(['commit', '-q', '-m', 'init']);
+    const c1 = git(['rev-parse', 'HEAD']).stdout.trim();
+    fs.writeFileSync(path.join(dir, 'payload.txt'), 'second\n');
+    git(['commit', '-q', '-am', 'second']);
+    const c2 = git(['rev-parse', 'HEAD']).stdout.trim();
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-worker-pl-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-verdict-pl-'));
+    fs.mkdirSync(path.join(dir, 'scripts', 'ai', 'isolation'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'scripts', 'ai', 'isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(dir, 'scripts', 'ai', 'isolation'));
+    const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+    fs.writeFileSync(
+      verdictPath,
+      JSON.stringify({
+        verdict: 'CLOSED',
+        timestamp: new Date().toISOString(),
+        sid: 'TEST-SID',
+        worktree: dir,
+        policyHash,
+        details: { check: 'PASS' },
+      })
+    );
+
+    const runIso = isoMod.getIsolatedLauncher();
+    const mockAdapter = { id: 'echo', command: 'echo' };
+
+    let thrown = null;
+    try {
+      runIso(mockAdapter, ['hello'], {
+        cwd: dir,
+        workerRoot: workerDir,
+        baseSha: c2,
+        verdictPath,
+        getWorkerSid: () => 'TEST-SID',
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        onProvisioned: (root) => {
+          // Simulate moving HEAD away from baseSha before agent starts
+          spawnSync('git', ['-c', 'safe.directory=*', 'checkout', '-q', c1], { cwd: root });
+        },
+        spawnSync: (cmd, args, opts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh')
+            return { status: 0, stdout: 'ok', stderr: '' };
+          return spawnSync(cmd, args, opts);
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+    }
+
+    assert.ok(thrown, 'must throw when HEAD moves before launch');
+    assert.strictEqual(thrown.code, 'PROVISION_BASE_MISMATCH');
+    assert.match(thrown.message, /PROVISION_BASE_MISMATCH: worker root HEAD before agent start/);
+  });
+
+  test('captureFailBefore asserts ancestry and throws FAIL_BEFORE_ANCESTRY_MISMATCH when base SHA is not ancestor of worker HEAD', () => {
+    const repo = makeTempRepo();
+    const runnerDir = path.join(repo.dir, 'tools', 'ai-brain', 'test');
+    fs.mkdirSync(runnerDir, { recursive: true });
+    fs.writeFileSync(path.join(runnerDir, 'e1-branch-name.test.js'), '// runner\n');
+
+    try {
+      // 1. Ancestry matches: passes
+      const matchingRes = captureFailBefore(repo.dir, {
+        baseSha: repo.sha,
+        exerciseCommand: 'git status',
+      });
+      assert.strictEqual(matchingRes.ancestry, true);
+
+      // 2. Ancestry mismatch: throws FAIL_BEFORE_ANCESTRY_MISMATCH
+      let ancestryErr = null;
+      try {
+        captureFailBefore(repo.dir, {
+          baseSha: '1111222233334444555566667777888899990000',
+          exerciseCommand: 'git status',
+        });
+      } catch (err) {
+        ancestryErr = err;
+      }
+      assert.ok(ancestryErr, 'must throw on ancestry mismatch');
+      assert.strictEqual(ancestryErr.code, 'FAIL_BEFORE_ANCESTRY_MISMATCH');
+      assert.match(ancestryErr.message, /FAIL_BEFORE_ANCESTRY_MISMATCH/);
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('verifyWorkerCommit fails with NO_LOCAL_COMMIT when worker commit is not a descendant of base SHA (fails at adb6cfc, passes after)', () => {
+    const repo = makeTempRepo();
+    const git = (args) =>
+      spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+        cwd: repo.dir,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+
+    try {
+      const c1Sha = repo.sha;
+
+      git(['checkout', '-q', '-b', 'branchA']);
+      fs.writeFileSync(path.join(repo.dir, 'a.txt'), 'branchA content\n');
+      git(['add', '.']);
+      git(['commit', '-q', '-m', 'branchA commit']);
+      const branchASha = git(['rev-parse', 'HEAD']).stdout.trim();
+
+      git(['checkout', '-q', c1Sha]);
+      git(['checkout', '-q', '-b', 'branchB']);
+      fs.writeFileSync(path.join(repo.dir, 'b.txt'), 'branchB content\n');
+      git(['add', '.']);
+      git(['commit', '-q', '-m', 'branchB commit']);
+      const branchBSha = git(['rev-parse', 'HEAD']).stdout.trim();
+
+      const check = verifyWorkerCommit(repo.dir, branchASha);
+      assert.strictEqual(check.pass, false);
+      assert.strictEqual(check.cause, 'NO_LOCAL_COMMIT');
+      assert.match(check.detail, /not a descendant of base SHA/);
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
     }
   });
 });

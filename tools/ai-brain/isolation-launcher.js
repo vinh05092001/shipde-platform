@@ -502,6 +502,47 @@ function captureFailBefore(workerRoot, options) {
     throw new Error('FAIL_BEFORE_RUNNER_MISSING: ' + runnerFull);
   }
 
+  const baseSha = o.baseSha ? String(o.baseSha).trim() : null;
+  if (baseSha) {
+    const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    const normWorkerRoot = path.resolve(workerRoot).replace(/\\/g, '/');
+    const ancestryCheck = spawn(
+      'git',
+      [
+        '-c',
+        'safe.directory=' + normWorkerRoot,
+        '-c',
+        'core.hooksPath=' + nulDevice,
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.attributesFile=' + nulDevice,
+        'merge-base',
+        '--is-ancestor',
+        baseSha,
+        'HEAD',
+      ],
+      {
+        cwd: workerRoot,
+        windowsHide: true,
+        env: Object.assign({}, process.env, {
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_CONFIG_GLOBAL: nulDevice,
+          GIT_CONFIG_SYSTEM: nulDevice,
+        }),
+      }
+    );
+    if (!ancestryCheck || ancestryCheck.status !== 0) {
+      const err = new Error(
+        'FAIL_BEFORE_ANCESTRY_MISMATCH: base SHA ' +
+          baseSha +
+          ' is not an ancestor of worker root HEAD'
+      );
+      err.code = 'FAIL_BEFORE_ANCESTRY_MISMATCH';
+      throw err;
+    }
+  }
+
   const command =
     (o.verification && o.verification.command) || o.exerciseCommand || `node --test ${runnerPosix}`;
 
@@ -545,6 +586,7 @@ function captureFailBefore(workerRoot, options) {
     output,
     capturedAt: new Date().toISOString(),
     pass: exitCode === 0,
+    ancestry: true,
   };
 }
 
@@ -626,6 +668,9 @@ function materialiseExercise(workerRoot, options) {
     try {
       failBefore = captureFailBefore(root, o);
     } catch (err) {
+      if (err && err.code === 'FAIL_BEFORE_ANCESTRY_MISMATCH') {
+        throw err;
+      }
       failBefore = {
         command:
           (o.verification && o.verification.command) ||
@@ -838,7 +883,14 @@ function getIsolatedLauncher() {
       if (eolConfig.eol !== null) {
         checkoutArgs.push('-c', 'core.eol=' + eolConfig.eol);
       }
-      checkoutArgs.push('checkout', headSha);
+      const targetBranch =
+        opts.branch || (opts.workItemId ? 'feat/' + String(opts.workItemId).toLowerCase() : null);
+
+      if (targetBranch) {
+        checkoutArgs.push('checkout', '-B', targetBranch, headSha);
+      } else {
+        checkoutArgs.push('checkout', headSha);
+      }
 
       const checkoutRes = cp.spawnSync('git', checkoutArgs, {
         cwd: workerRoot,
@@ -853,6 +905,18 @@ function getIsolatedLauncher() {
         throw new Error(
           'ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: ' + headSha
         );
+      }
+
+      if (targetBranch) {
+        cp.spawnSync('git', ['update-ref', 'refs/remotes/origin/' + targetBranch, headSha], {
+          cwd: workerRoot,
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        });
       }
 
       if (eolConfig.autocrlf !== null) {
@@ -887,6 +951,75 @@ function getIsolatedLauncher() {
             GIT_CONFIG_SYSTEM: nulDevice,
           }),
         });
+      }
+
+      // Provisioning must end with HEAD == requested base SHA exactly, verified with a hardened rev-parse;
+      // any mismatch is a hard structured failure (PROVISION_BASE_MISMATCH) before the agent starts.
+      const { withCleanGitEnv, safeGit } = require('./supervisor');
+      let provisionedHeadSha = null;
+      try {
+        provisionedHeadSha = withCleanGitEnv(
+          workerRoot,
+          (safeGitDir) => {
+            const curHeadRes = safeGit(
+              safeGitDir,
+              workerRoot,
+              ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+              20000
+            );
+            if (curHeadRes && curHeadRes.status === 0 && curHeadRes.stdout) {
+              return curHeadRes.stdout.trim();
+            }
+            return null;
+          },
+          { workerWritable: true }
+        );
+      } catch {
+        provisionedHeadSha = null;
+      }
+
+      if (!provisionedHeadSha) {
+        const revRes = (opts.spawnSync || cp.spawnSync)(
+          'git',
+          [
+            '-c',
+            'safe.directory=' + normWorkerRoot,
+            '-c',
+            'core.hooksPath=' + nulDevice,
+            '-c',
+            'core.fsmonitor=false',
+            '-c',
+            'core.attributesFile=' + nulDevice,
+            'rev-parse',
+            '--verify',
+            '--quiet',
+            'HEAD^{commit}',
+          ],
+          {
+            cwd: workerRoot,
+            encoding: 'utf8',
+            windowsHide: true,
+            env: Object.assign({}, process.env, {
+              GIT_CONFIG_NOSYSTEM: '1',
+              GIT_CONFIG_GLOBAL: nulDevice,
+              GIT_CONFIG_SYSTEM: nulDevice,
+            }),
+          }
+        );
+        if (revRes && revRes.status === 0 && revRes.stdout) {
+          provisionedHeadSha = revRes.stdout.trim();
+        }
+      }
+
+      if (!provisionedHeadSha || provisionedHeadSha.toLowerCase() !== headSha.toLowerCase()) {
+        const err = new Error(
+          'PROVISION_BASE_MISMATCH: provisioned worker root HEAD (' +
+            (provisionedHeadSha || 'unknown') +
+            ') does not match requested base SHA ' +
+            headSha
+        );
+        err.code = 'PROVISION_BASE_MISMATCH';
+        throw err;
       }
     }
 
@@ -974,6 +1107,76 @@ function getIsolatedLauncher() {
       if (hookRes && !exerciseResult) {
         exerciseResult = hookRes;
       }
+    }
+
+    // Final pre-launch check: verify HEAD has not moved from base SHA (or retained head) before agent starts
+    const expectedActiveSha = retainWorkerHead || headSha;
+    const { withCleanGitEnv, safeGit } = require('./supervisor');
+    let preLaunchHead = null;
+    try {
+      preLaunchHead = withCleanGitEnv(
+        workerRoot,
+        (safeGitDir) => {
+          const curHeadRes = safeGit(
+            safeGitDir,
+            workerRoot,
+            ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+            20000
+          );
+          if (curHeadRes && curHeadRes.status === 0 && curHeadRes.stdout) {
+            return curHeadRes.stdout.trim();
+          }
+          return null;
+        },
+        { workerWritable: true }
+      );
+    } catch {
+      preLaunchHead = null;
+    }
+    if (!preLaunchHead) {
+      const normWorker = path.resolve(workerRoot).replace(/\\/g, '/');
+      const revRes = (opts.spawnSync || cp.spawnSync)(
+        'git',
+        [
+          '-c',
+          'safe.directory=' + normWorker,
+          '-c',
+          'core.hooksPath=' + nulDevice,
+          '-c',
+          'core.fsmonitor=false',
+          '-c',
+          'core.attributesFile=' + nulDevice,
+          'rev-parse',
+          '--verify',
+          '--quiet',
+          'HEAD^{commit}',
+        ],
+        {
+          cwd: workerRoot,
+          encoding: 'utf8',
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        }
+      );
+      if (revRes && revRes.status === 0 && revRes.stdout) {
+        preLaunchHead = revRes.stdout.trim();
+      }
+    }
+    if (!preLaunchHead || preLaunchHead.toLowerCase() !== expectedActiveSha.toLowerCase()) {
+      const code = retainWorkerHead ? 'WORKER_HEAD_MISMATCH' : 'PROVISION_BASE_MISMATCH';
+      const err = new Error(
+        code +
+          ': worker root HEAD before agent start (' +
+          (preLaunchHead || 'unknown') +
+          ') does not match requested SHA ' +
+          expectedActiveSha
+      );
+      err.code = code;
+      throw err;
     }
 
     const credPath = path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'WorkerUser.cred');
