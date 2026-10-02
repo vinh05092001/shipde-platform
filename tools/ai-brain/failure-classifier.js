@@ -72,16 +72,16 @@ function parseResetTime(text) {
   let resultMs = null;
 
   // Pattern: "Resets in 62h28m31s"
-  const inMatch = s.match(/resets?\s+(?:in|after)\s*(\d+)h(\d+)m(\d+)s/i);
+  const inMatch = s.match(/(?:resets?|try\s+again)\s+(?:in|after)\s*(\d+)h\s*(\d+)m\s*(\d+)s/i);
   if (inMatch) {
     const hours = parseInt(inMatch[1], 10);
     const minutes = parseInt(inMatch[2], 10);
     const seconds = parseInt(inMatch[3], 10);
     resultMs = (hours * 3600 + minutes * 60 + seconds) * 1000;
   } else {
-    // Pattern: "reset after 151h 23m", "reset after 116h", "reset after 2 hours"
+    // Pattern: "reset after 151h 23m", "reset after 116h", "reset after 2 hours", "Try again in 15h 27m"
     const afterMatch = s.match(
-      /reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:h|hr|hours?)(?:\s*(\d+)\s*(?:m|min|minutes?)?)?(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
+      /(?:resets?|try\s+again)\s+(?:after|in)\s+(\d+)\s*(?:h|hr|hours?)(?:\s*(\d+)\s*(?:m|min|minutes?)?)?(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
     );
     if (afterMatch) {
       const hours = parseInt(afterMatch[1], 10);
@@ -91,7 +91,7 @@ function parseResetTime(text) {
     } else {
       // Pattern: "reset after 1m 59s" (no hours)
       const afterMatchShort = s.match(
-        /reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:m|min|minutes?)(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
+        /(?:resets?|try\s+again)\s+(?:after|in)\s+(\d+)\s*(?:m|min|minutes?)(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
       );
       if (afterMatchShort) {
         const minutes = parseInt(afterMatchShort[1], 10);
@@ -99,7 +99,9 @@ function parseResetTime(text) {
         resultMs = (minutes * 60 + seconds) * 1000;
       } else {
         // Pattern: "reset after 30s" (seconds only)
-        const afterMatchSec = s.match(/reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:s|sec|seconds?)/i);
+        const afterMatchSec = s.match(
+          /(?:resets?|try\s+again)\s+(?:after|in)\s+(\d+)\s*(?:s|sec|seconds?)/i
+        );
         if (afterMatchSec) {
           const seconds = parseInt(afterMatchSec[1], 10);
           resultMs = seconds * 1000;
@@ -169,13 +171,20 @@ function extractProviderErrorText(stdout) {
         try {
           const parsed = JSON.parse(trimmed.slice(start, end + 1));
           if (parsed && (parsed.type === 'error' || parsed.error)) {
-            const msg =
-              (parsed.error &&
-                (parsed.error.message || parsed.error.data?.message || parsed.error.name)) ||
-              (typeof parsed.error === 'string' ? parsed.error : '') ||
-              parsed.message ||
-              '';
-            if (msg) errorLines.push(String(msg));
+            if (parsed.error && parsed.error.data) {
+              if (parsed.error.data.message) errorLines.push(String(parsed.error.data.message));
+              if (parsed.error.data.responseBody) {
+                const rb = parsed.error.data.responseBody;
+                errorLines.push(typeof rb === 'string' ? rb : JSON.stringify(rb));
+              }
+            } else {
+              const msg =
+                (parsed.error && (parsed.error.message || parsed.error.name)) ||
+                (typeof parsed.error === 'string' ? parsed.error : '') ||
+                parsed.message ||
+                '';
+              if (msg) errorLines.push(String(msg));
+            }
           }
         } catch (_) {}
       }
@@ -188,6 +197,32 @@ function extractProviderErrorText(stdout) {
     }
   }
   return errorLines.join('\n');
+}
+
+/**
+ * Extracts structured provider error events from stdout JSON lines.
+ */
+function extractStructuredProviderEvents(stdout) {
+  if (!stdout) return [];
+  const s = String(stdout);
+  const events = [];
+  const lines = s.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.includes('{') && trimmed.includes('}')) {
+      const start = trimmed.indexOf('{');
+      const end = trimmed.lastIndexOf('}');
+      if (start !== -1 && end > start) {
+        try {
+          const parsed = JSON.parse(trimmed.slice(start, end + 1));
+          if (parsed && (parsed.type === 'error' || parsed.error)) {
+            events.push(parsed);
+          }
+        } catch (_) {}
+      }
+    }
+  }
+  return events;
 }
 
 /**
@@ -266,15 +301,57 @@ function classifyFailure(input) {
     };
   }
 
+  const providerEvents = extractStructuredProviderEvents(stdout);
+  let envelopeStatus = null;
+  let envelopeInnerStatus = null;
+  let isStructuredEnvelopeQuota = false;
+
+  for (const ev of providerEvents) {
+    const err = ev.error;
+    const data = err?.data;
+    if (data && Number.isFinite(Number(data.statusCode))) {
+      envelopeStatus = Number(data.statusCode);
+    }
+    const innerMsg = extractInnerStatus(data?.message);
+    const innerBody = extractInnerStatus(
+      typeof data?.responseBody === 'string'
+        ? data.responseBody
+        : JSON.stringify(data?.responseBody || '')
+    );
+    if (innerMsg || innerBody) {
+      envelopeInnerStatus = innerMsg || innerBody;
+    }
+    const eventText = [
+      err?.name,
+      err?.message,
+      data?.message,
+      typeof data?.responseBody === 'string'
+        ? data.responseBody
+        : JSON.stringify(data?.responseBody || ''),
+    ]
+      .filter(Boolean)
+      .join('\n');
+    if (
+      /INFERENCE_CAP_ERROR/i.test(eventText) ||
+      /(?:daily\s+)?free\s+limit\s+reached/i.test(eventText) ||
+      /FreeUsageLimit/i.test(eventText) ||
+      /Unavailable\s*\([^)]*reset after/i.test(eventText)
+    ) {
+      isStructuredEnvelopeQuota = true;
+    }
+  }
+
   const rawBodyText = String(
     body || (typeof input?.error === 'string' ? input.error : '') || input?.message || ''
   );
 
-  // If outer status is 503, look for inner status in body (gateway pattern: "[402]: ...")
+  // If outer status is 503, look for inner status in body or structured error envelope
   // Status extraction is strictly anchored to body or structured status line, never raw worker stdout (F2)
-  const innerStatus = extractInnerStatus(rawBodyText);
+  const innerStatus = extractInnerStatus(rawBodyText) || envelopeInnerStatus;
+  const outerStatus =
+    httpStatus !== undefined && httpStatus !== null ? Number(httpStatus) : envelopeStatus;
   let effectiveStatus =
-    httpStatus === 503 ? (innerStatus ?? httpStatus) : (innerStatus ?? httpStatus);
+    outerStatus === 503 ? (innerStatus ?? outerStatus) : (innerStatus ?? outerStatus);
   if (effectiveStatus === undefined || effectiveStatus === null) {
     if (/\bHTTP\s+429\b/i.test(stderr) || /\bstatus\s*:\s*429\b/i.test(stderr)) {
       effectiveStatus = 429;
@@ -330,7 +407,9 @@ function classifyFailure(input) {
   // Case 13: Harness / launch config failure (e.g. OpenCode provider/config resolution error before model call)
   // Gated on absence of HTTP status (no model HTTP call) and non-zero exit status or explicit harness cause.
   // Must take precedence over worker-controlled stdout to prevent domain widening (F2).
-  const hasHttpStatus = httpStatus !== undefined && httpStatus !== null && Number(httpStatus) > 0;
+  const hasHttpStatus =
+    (httpStatus !== undefined && httpStatus !== null && Number(httpStatus) > 0) ||
+    (envelopeStatus !== null && envelopeStatus > 0);
   const isExplicitHarness =
     input?.cause === 'LAUNCH_CONFIG' ||
     input?.cause === 'HARNESS_FAILED' ||
@@ -398,11 +477,12 @@ function classifyFailure(input) {
 
   const isStructured429Quota =
     effectiveStatus === 429 &&
-    /quota|usage.?limit|free.?tier|resource.?exhausted|unavailable|resets?\s+(?:in|after)/i.test(
+    /quota|usage.?limit|free.?tier|free.?limit|inference.?cap|resource.?exhausted|unavailable|resets?\s+(?:in|after)|try\s+again\s+(?:in|after)/i.test(
       errorPayloadText
     );
 
   const isEnvelopeQuota =
+    isStructuredEnvelopeQuota ||
     /FreeUsageLimit/i.test(errorPayloadText) ||
     /Unavailable\s*\([^)]*reset after/i.test(errorPayloadText) ||
     /unavailable.*reset after/i.test(errorPayloadText);
