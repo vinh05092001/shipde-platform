@@ -44,7 +44,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const planner = require('./planner');
-const { compilePrompt } = require('./prompt-compiler');
+const { compilePrompt, compileReviewPrompt } = require('./prompt-compiler');
 const { classifySession, Status: SessionStatus, progressFromWorkerRoot } = require('./supervisor');
 const { runReviewLoop, Status: ReviewStatus } = require('./review-loop');
 const ranking = require('./ranking');
@@ -276,20 +276,207 @@ function runVerificationCommand(item, options) {
 }
 
 /**
- * The review lane, when the caller wired one.
- *
- * A reviewer is a Controller-scheduled role (scheduler.js REVIEW_ROLES), never a
- * literal here. This slice has no Node route for it: the live exact-SHA review is
- * the host-authenticated CLI control.ps1 drives against a Pull Request, and a
- * live run has no Pull Request at review time. Inventing one would be a guessed
- * external API and a hard-coded model, which AI-64-P01 and AI-64-P06 forbid, so
- * an unwired lane refuses loudly instead of passing the item.
+ * Provision a separate read-only review root from the worker repository at the exact targetSha.
+ * Hardened git per PR #184/#187/#189: never consults worker config, copies sanitized objects,
+ * configures safe line endings and filemode, and verifies HEAD matches targetSha via hardened rev-parse.
  */
-function reviewLane(o, writerKey) {
-  if (o.reviewerIdentity && writerKey && o.reviewerIdentity === writerKey) {
+function provisionReviewRoot(workerRoot, reviewRoot, targetSha, options) {
+  const o = options || {};
+  if (!workerRoot || !fs.existsSync(workerRoot)) {
+    fs.mkdirSync(reviewRoot, { recursive: true });
+    return;
+  }
+  const workerGit = path.join(workerRoot, '.git');
+  if (!fs.existsSync(workerGit)) {
+    fs.mkdirSync(reviewRoot, { recursive: true });
+    return;
+  }
+
+  if (fs.existsSync(reviewRoot)) {
+    fs.rmSync(reviewRoot, { recursive: true, force: true });
+  }
+
+  const { withCleanGitEnv, safeGit, getEffectiveEolConfig } = require('./supervisor');
+  withCleanGitEnv(
+    workerRoot,
+    (safeGitDir) => {
+      const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+      const safeRepoDir = path.dirname(safeGitDir);
+
+      // Verify targetSha is present in the sanitized object store
+      const revCheck = safeGit(safeGitDir, safeRepoDir, ['cat-file', '-e', targetSha], 20000);
+      if (revCheck.status !== 0) {
+        throw new Error(
+          'PROVISION_REVIEW_FAILED: commit ' + targetSha + ' not found in worker object store'
+        );
+      }
+
+      // Point a temporary branch ref at targetSha in the clean safe repo
+      safeGit(
+        safeGitDir,
+        safeRepoDir,
+        ['update-ref', 'refs/heads/review-target', targetSha],
+        20000
+      );
+
+      // Clone from safe operator-controlled repository to reviewRoot with --no-hardlinks
+      const cloneRes = (o.spawnSync || spawnSync)(
+        'git',
+        ['clone', '--no-checkout', '--no-hardlinks', safeRepoDir, reviewRoot],
+        {
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        }
+      );
+      if (cloneRes.status !== 0) {
+        throw new Error(
+          'PROVISION_REVIEW_FAILED: failed to clone safe repository: ' + (cloneRes.stderr || '')
+        );
+      }
+
+      const eolConfig = getEffectiveEolConfig(workerRoot, o);
+      const normReviewRoot = path.resolve(reviewRoot).replace(/\\/g, '/');
+      const checkoutArgs = [
+        '-c',
+        'core.hooksPath=' + nulDevice,
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.attributesFile=' + nulDevice,
+        '-c',
+        'diff.external=',
+        '-c',
+        'safe.directory=' + normReviewRoot,
+      ];
+      if (process.platform === 'win32') {
+        checkoutArgs.push('-c', 'core.filemode=false');
+      }
+      if (eolConfig.autocrlf !== null) {
+        checkoutArgs.push('-c', 'core.autocrlf=' + eolConfig.autocrlf);
+      }
+      if (eolConfig.eol !== null) {
+        checkoutArgs.push('-c', 'core.eol=' + eolConfig.eol);
+      }
+      checkoutArgs.push('checkout', targetSha);
+
+      const checkoutRes = (o.spawnSync || spawnSync)('git', checkoutArgs, {
+        cwd: reviewRoot,
+        windowsHide: true,
+        env: Object.assign({}, process.env, {
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_CONFIG_GLOBAL: nulDevice,
+          GIT_CONFIG_SYSTEM: nulDevice,
+        }),
+      });
+      if (checkoutRes.status !== 0) {
+        throw new Error(
+          'PROVISION_REVIEW_FAILED: failed to checkout targetSha: ' + (checkoutRes.stderr || '')
+        );
+      }
+
+      if (eolConfig.autocrlf !== null) {
+        spawnSync('git', ['config', 'core.autocrlf', eolConfig.autocrlf], {
+          cwd: reviewRoot,
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        });
+      }
+      if (eolConfig.eol !== null) {
+        spawnSync('git', ['config', 'core.eol', eolConfig.eol], {
+          cwd: reviewRoot,
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        });
+      }
+      if (process.platform === 'win32') {
+        spawnSync('git', ['config', 'core.filemode', 'false'], {
+          cwd: reviewRoot,
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        });
+      }
+
+      // Hardened rev-parse HEAD^{commit} verification (PR #189)
+      let verifiedHead = null;
+      try {
+        verifiedHead = withCleanGitEnv(
+          reviewRoot,
+          (safeRevGitDir) => {
+            const curRes = safeGit(
+              safeRevGitDir,
+              reviewRoot,
+              ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+              20000
+            );
+            return curRes && curRes.status === 0 && curRes.stdout ? curRes.stdout.trim() : null;
+          },
+          { workerWritable: true }
+        );
+      } catch {
+        verifiedHead = null;
+      }
+      if (!verifiedHead || verifiedHead.toLowerCase() !== targetSha.toLowerCase()) {
+        throw new Error(
+          'PROVISION_REVIEW_MISMATCH: review root HEAD (' +
+            (verifiedHead || 'unknown') +
+            ') does not match ' +
+            targetSha
+        );
+      }
+    },
+    { workerWritable: true }
+  );
+}
+
+/**
+ * The review lane for the live isolated loop.
+ *
+ * Runs the reviewer candidate selected by the Controller outside the writer failure domain.
+ * Operates in a SEPARATE read-only review root provisioned from the worker repository at the exact worker head SHA.
+ * Gives the reviewer a compiled review prompt requiring a machine-readable verdict file (verdict.json).
+ * Parses the verdict file fail-closed (missing/malformed/sha mismatch -> not PASS) and feeds findings into the repair path.
+ */
+function reviewLane(
+  o,
+  itemOrWriterKey,
+  session,
+  log,
+  logOpts,
+  launcher,
+  usageDir,
+  now,
+  candidates,
+  evidenceData,
+  registry
+) {
+  const writerKey =
+    typeof itemOrWriterKey === 'string'
+      ? itemOrWriterKey
+      : (session && session.candidateKey) || null;
+  const item = typeof itemOrWriterKey === 'object' ? itemOrWriterKey : null;
+  const reviewerIdentity = (o && o.reviewerIdentity) || null;
+
+  if (reviewerIdentity && writerKey && reviewerIdentity === writerKey) {
     return () => ({
       pass: false,
       sha: null,
+      cause: 'REVIEWER_EQUALS_WRITER',
       verdict: 'REFUSED',
       findings: [
         {
@@ -300,10 +487,385 @@ function reviewLane(o, writerKey) {
       ],
     });
   }
-  return () => {
-    throw new Error(
-      'REVIEW_ROUTE_UNAVAILABLE: no exact-SHA review lane is wired for the live loop'
+
+  if (!launcher && !item) {
+    return () => {
+      throw new Error(
+        'REVIEW_ROUTE_UNAVAILABLE: no exact-SHA review lane is wired for the live loop'
+      );
+    };
+  }
+
+  return async (currentSha) => {
+    if (!currentSha || typeof currentSha !== 'string' || !SHA_40.test(currentSha.trim())) {
+      return {
+        pass: false,
+        sha: null,
+        cause: 'REVIEW_SHA_UNBOUND',
+        verdict: 'REFUSED',
+        findings: [
+          {
+            id: 'REVIEW_SHA_UNBOUND',
+            open: true,
+            detail: 'review target commit must be a valid 40-character SHA',
+          },
+        ],
+      };
+    }
+    const targetSha = currentSha.trim();
+
+    if (!reviewerIdentity) {
+      return {
+        pass: false,
+        sha: targetSha,
+        cause: 'NO_REVIEWER_CANDIDATE',
+        verdict: 'REFUSED',
+        findings: [
+          {
+            id: 'NO_REVIEWER_CANDIDATE',
+            open: true,
+            detail: 'no eligible reviewer candidate available outside writer failure domain',
+          },
+        ],
+      };
+    }
+
+    if (writerKey && reviewerIdentity === writerKey) {
+      return {
+        pass: false,
+        sha: null,
+        cause: 'REVIEWER_EQUALS_WRITER',
+        verdict: 'REFUSED',
+        findings: [
+          {
+            id: 'REVIEWER_EQUALS_WRITER',
+            open: true,
+            detail: 'the review lane resolved to the writer candidate ' + String(writerKey),
+          },
+        ],
+      };
+    }
+
+    const candidateList = Array.isArray(candidates) ? candidates : [];
+    const candidate =
+      candidateList.find((c) => candidateKey(c) === reviewerIdentity) ||
+      candidatesApi.parseCandidateKey(reviewerIdentity);
+    if (!candidate) {
+      return {
+        pass: false,
+        sha: targetSha,
+        cause: 'REVIEWER_CANDIDATE_MISSING',
+        verdict: 'REFUSED',
+        findings: [
+          {
+            id: 'REVIEWER_CANDIDATE_MISSING',
+            open: true,
+            detail: 'reviewer candidate could not be resolved from ' + reviewerIdentity,
+          },
+        ],
+      };
+    }
+
+    const route = resolveLaunchRoute(candidate, o, registry);
+    if (!route || !route.harnessName) {
+      return {
+        pass: false,
+        sha: targetSha,
+        cause: 'REVIEW_ROUTE_UNRESOLVABLE',
+        verdict: 'REFUSED',
+        findings: [
+          {
+            id: 'REVIEW_ROUTE_UNRESOLVABLE',
+            open: true,
+            detail: 'cannot resolve launch route for reviewer candidate ' + reviewerIdentity,
+          },
+        ],
+      };
+    }
+
+    const hostWorktree = o.cwd || process.cwd();
+    const isolatedWorkerRoot = o.isolatedWorker
+      ? require('./isolation-launcher').workerRootFor(hostWorktree)
+      : null;
+    const workerRoot =
+      (o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) ||
+      (session && session.worktree) ||
+      o.cwd;
+    const reviewWorkerRoot =
+      o.reviewRoot ||
+      (o.isolatedWorker && isolatedWorkerRoot
+        ? path.win32.join(
+            path.win32.dirname(isolatedWorkerRoot),
+            path.win32.basename(isolatedWorkerRoot) + '-review'
+          )
+        : workerRoot
+          ? workerRoot + '-review'
+          : path.join(os.tmpdir(), 'shipde-review-' + Date.now()));
+
+    provisionReviewRoot(workerRoot, reviewWorkerRoot, targetSha, o);
+
+    // Compute diff baseSha..targetSha host-side
+    let diffText = '';
+    const baseSha = (session && session.baseSha) || o.baseSha || null;
+    if (baseSha && fs.existsSync(path.join(reviewWorkerRoot, '.git'))) {
+      const { withCleanGitEnv, safeGit } = require('./supervisor');
+      try {
+        diffText =
+          withCleanGitEnv(
+            reviewWorkerRoot,
+            (safeGitDir) => {
+              const dRes = safeGit(
+                safeGitDir,
+                reviewWorkerRoot,
+                ['diff', baseSha + '..' + targetSha],
+                20000
+              );
+              return dRes && dRes.status === 0 ? dRes.stdout : '';
+            },
+            { workerWritable: true }
+          ) || '';
+      } catch {
+        diffText = '';
+      }
+    }
+
+    const verdictFile = path.join(reviewWorkerRoot, 'verdict.json');
+    if (fs.existsSync(verdictFile)) {
+      try {
+        fs.unlinkSync(verdictFile);
+      } catch {
+        // ignore
+      }
+    }
+
+    const usageFile = prepareUsageReport(
+      usageDir,
+      (item ? item.id : 'review') + '-' + (now || Date.now()) + '-review-' + targetSha.slice(0, 7)
     );
+
+    const reviewPrompt = compileReviewPrompt(item, {
+      goal: log ? log.goal : null,
+      headSha: targetSha,
+      baseSha,
+      diffText,
+      verdictFile,
+      usageFile,
+      candidateKey: reviewerIdentity,
+      exercise: o.exercise || null,
+    });
+
+    const reviewJob = {
+      workItemId: (item ? item.id : 'item') + '-review',
+      candidateKey: reviewerIdentity,
+      harness: route.harnessName,
+      provider: route.provider,
+      model: route.model,
+      accountId: candidate.accountId,
+      gateway: candidate.gateway || '',
+      upstream: candidate.upstream,
+      quotaScope: candidate.quotaScope,
+      prompt: reviewPrompt,
+      branch:
+        (session && session.branch) ||
+        o.branch ||
+        (item ? 'feat/' + String(item.id).toLowerCase() : 'review'),
+      base: o.base || 'main',
+      baseSha: targetSha,
+      retainWorkerHead: targetSha,
+      hostWorktree: o.isolatedWorker ? hostWorktree : null,
+      workerRoot: o.isolatedWorker ? reviewWorkerRoot : o.workerRoot || null,
+      cwd: reviewWorkerRoot,
+      isolatedWorker: Boolean(o.isolatedWorker),
+      usageFile,
+      verdictFile,
+      isReview: true,
+      checkpoint: o.checkpointFile || null,
+      title: (item ? item.id : 'item') + '-review',
+      labels: {
+        workItem: (item ? item.id : 'item') + '-review',
+        role: 'reviewer',
+        reviewOf: item ? item.id : undefined,
+      },
+      exercise: o.exercise || null,
+    };
+
+    let res = null;
+    try {
+      res = await launcher(reviewJob);
+    } catch (err) {
+      res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
+    }
+
+    writeUsageReportFromHarnessResult(reviewJob, res);
+
+    if (logOpts) {
+      const adapter = harnessFor({ harness: reviewJob.harness });
+      const handle = adapter
+        ? require('./executor').readSessionId(adapter, reviewJob, res).id
+        : null;
+      if (handle) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.LAUNCHED,
+            workItemId: (item ? item.id : 'item') + '-review',
+            role: 'reviewer',
+            chosen: reviewerIdentity,
+            harness: reviewJob.harness,
+            branch: reviewJob.branch,
+            sessionId: handle,
+            detail: 'REVIEW_LANE: reviews ' + (item ? item.id : 'item') + ' at ' + targetSha,
+            worktree: reviewWorkerRoot,
+          },
+          logOpts
+        );
+      }
+    }
+
+    // Fail-closed verdict parsing
+    let effectiveVerdictFile = verdictFile;
+    if (!fs.existsSync(effectiveVerdictFile)) {
+      const altFile = path.join(reviewWorkerRoot, 'review-verdict.json');
+      if (fs.existsSync(altFile)) {
+        effectiveVerdictFile = altFile;
+      }
+    }
+
+    if (!fs.existsSync(effectiveVerdictFile)) {
+      return {
+        pass: false,
+        sha: targetSha,
+        verdict: 'CHANGES_REQUIRED',
+        reviewer: reviewerIdentity,
+        findings: [
+          {
+            id: 'VERDICT_FILE_MISSING',
+            open: true,
+            detail: 'review verdict file was not produced at ' + verdictFile,
+          },
+        ],
+      };
+    }
+
+    let parsed = null;
+    try {
+      const raw = fs.readFileSync(effectiveVerdictFile, 'utf8');
+      parsed = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+    } catch (err) {
+      return {
+        pass: false,
+        sha: targetSha,
+        verdict: 'CHANGES_REQUIRED',
+        reviewer: reviewerIdentity,
+        findings: [
+          {
+            id: 'VERDICT_FILE_MALFORMED',
+            open: true,
+            detail: 'verdict file is not valid JSON: ' + ((err && err.message) || err),
+          },
+        ],
+      };
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
+      return {
+        pass: false,
+        sha: targetSha,
+        verdict: 'CHANGES_REQUIRED',
+        reviewer: reviewerIdentity,
+        findings: [
+          {
+            id: 'VERDICT_FILE_INVALID',
+            open: true,
+            detail: 'verdict file root must be an object',
+          },
+        ],
+      };
+    }
+
+    const verdictSha = typeof parsed.sha === 'string' ? parsed.sha.trim() : null;
+    if (
+      !verdictSha ||
+      !SHA_40.test(verdictSha) ||
+      verdictSha.toLowerCase() !== targetSha.toLowerCase()
+    ) {
+      return {
+        pass: false,
+        sha: verdictSha || null,
+        verdict: 'CHANGES_REQUIRED',
+        cause: 'STALE_REVIEW_SHA',
+        reviewer: reviewerIdentity,
+        findings: [
+          {
+            id: 'STALE_REVIEW_SHA',
+            open: true,
+            detail:
+              'verdict sha (' +
+              (verdictSha || 'missing') +
+              ') does not match reviewed sha (' +
+              targetSha +
+              ')',
+          },
+        ],
+      };
+    }
+
+    const verdictStr = String(parsed.verdict || '')
+      .trim()
+      .toUpperCase();
+    const rawFindings = Array.isArray(parsed.findings) ? parsed.findings : [];
+    const findings = rawFindings.map((f, idx) => {
+      if (typeof f === 'string') {
+        return { id: 'FINDING_' + (idx + 1), open: true, detail: f };
+      }
+      return {
+        id: (f && f.id) || 'FINDING_' + (idx + 1),
+        open: f && f.closed === true ? false : true,
+        detail: (f && f.detail) || 'open finding',
+      };
+    });
+
+    if (verdictStr !== 'PASS' && verdictStr !== 'CHANGES_REQUIRED') {
+      return {
+        pass: false,
+        sha: targetSha,
+        verdict: 'CHANGES_REQUIRED',
+        reviewer: reviewerIdentity,
+        findings: [
+          {
+            id: 'VERDICT_INVALID',
+            open: true,
+            detail: 'verdict must be PASS or CHANGES_REQUIRED, got: ' + verdictStr,
+          },
+        ],
+      };
+    }
+
+    if (verdictStr === 'PASS') {
+      return {
+        pass: true,
+        sha: targetSha,
+        verdict: 'PASS',
+        reviewer: reviewerIdentity,
+        findings,
+      };
+    }
+
+    return {
+      pass: false,
+      sha: targetSha,
+      verdict: 'CHANGES_REQUIRED',
+      reviewer: reviewerIdentity,
+      findings:
+        findings.length > 0
+          ? findings
+          : [
+              {
+                id: 'CHANGES_REQUIRED',
+                open: true,
+                detail: 'reviewer requested changes',
+              },
+            ],
+    };
   };
 }
 
@@ -1273,7 +1835,19 @@ async function reviewItem(
       review:
         typeof o.reviewer === 'function'
           ? o.reviewer
-          : reviewLane(Object.assign({}, o, { reviewerIdentity }), session.candidateKey),
+          : reviewLane(
+              Object.assign({}, o, { reviewerIdentity }),
+              item,
+              session,
+              log,
+              logOpts,
+              launcher,
+              usageDir,
+              now,
+              candidates,
+              evidenceData,
+              registry
+            ),
       repair:
         typeof o.repairer === 'function'
           ? o.repairer
@@ -1628,6 +2202,8 @@ module.exports = {
   captureFailBefore,
   selectCandidateForProfile,
   repairRound,
+  reviewLane,
+  provisionReviewRoot,
   ItemStatus,
   RunStatus,
   PublicationStatus,

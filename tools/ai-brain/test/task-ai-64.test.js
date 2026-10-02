@@ -5214,4 +5214,385 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
       fs.rmSync(repo.dir, { recursive: true, force: true });
     }
   });
+
+  describe('TASK-AI-64 review lane wired for live loop (Defect S)', () => {
+    function makeCandidates() {
+      const writerCand = cand({
+        gateway: 'gw-writer',
+        upstream: 'up-writer',
+        accountId: 'acct-writer',
+        quotaScope: 'acct-writer',
+        qualifiedRoles: ['author.foundation'],
+      });
+      const reviewerCand = cand({
+        gateway: 'gw-reviewer',
+        upstream: 'up-reviewer',
+        accountId: 'acct-reviewer',
+        quotaScope: 'acct-reviewer',
+        qualifiedRoles: ['reviewer.primary'],
+      });
+      return { writerCand, reviewerCand };
+    }
+
+    test('PASS verdict on exact SHA completes the item', async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-dec-pass-');
+      const { writerCand, reviewerCand } = makeCandidates();
+
+      try {
+        let reviewerCwd = null;
+        let reviewPromptSeen = null;
+        const opts = baseOpts({
+          decisionDir: dirDecisions,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          ranking: {
+            headrooms: {
+              'acct-writer': { status: 'available' },
+              'acct-reviewer': { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'A',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['a works'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              reviewerCwd = job.cwd;
+              reviewPromptSeen = job.prompt;
+              const targetSha = job.baseSha;
+              fs.writeFileSync(
+                job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                JSON.stringify({
+                  sha: targetSha,
+                  verdict: 'PASS',
+                  findings: [],
+                })
+              );
+              return { exitCode: 0, stdout: 'review pass' };
+            }
+            // Writer phase
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit made' };
+          },
+        });
+        delete opts.reviewer;
+
+        const res = await safeRun(opts);
+        assert.ok(res.log, 'orchestration must succeed: ' + res.refusal);
+        assert.strictEqual(res.log.outcomes[0].status, 'completed');
+        assert.strictEqual(res.log.outcomes[0].reason, 'REVIEW_PASS');
+        assert.strictEqual(res.log.reviews[0].review.verdict, 'PASS');
+        const workerHead = git(['rev-parse', 'HEAD']).stdout.trim();
+        assert.strictEqual(res.log.reviews[0].sha, workerHead);
+        assert.notStrictEqual(reviewerCwd, repo.dir, 'reviewer must run in separate root');
+        assert.ok(reviewPromptSeen.includes('Work Item: A'));
+        assert.ok(reviewPromptSeen.includes('Role requirement: reviewer'));
+        assert.ok(reviewPromptSeen.includes(workerHead));
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+      }
+    });
+
+    test('CHANGES_REQUIRED goes to repair', async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-dec-repair-');
+      const { writerCand, reviewerCand } = makeCandidates();
+
+      try {
+        let reviewRound = 0;
+        let repairJobsSeen = 0;
+        const opts = baseOpts({
+          decisionDir: dirDecisions,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          ranking: {
+            headrooms: {
+              'acct-writer': { status: 'available' },
+              'acct-reviewer': { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'A',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['a works'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              reviewRound += 1;
+              const targetSha = job.baseSha;
+              if (reviewRound === 1) {
+                fs.writeFileSync(
+                  job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                  JSON.stringify({
+                    sha: targetSha,
+                    verdict: 'CHANGES_REQUIRED',
+                    findings: [
+                      { id: 'EXPORT_MISSING', open: true, detail: 'must export valid helper' },
+                    ],
+                  })
+                );
+                return { exitCode: 0, stdout: 'changes requested' };
+              }
+              fs.writeFileSync(
+                job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                JSON.stringify({
+                  sha: targetSha,
+                  verdict: 'PASS',
+                  findings: [],
+                })
+              );
+              return { exitCode: 0, stdout: 'second review pass' };
+            }
+            // Writer / repair phase
+            if (job.labels && job.labels.repairOf) {
+              repairJobsSeen += 1;
+              fs.appendFileSync(path.join(job.cwd, 'branch-name.js'), '// repaired\n');
+              git(['add', '.']);
+              git(['commit', '-q', '-m', 'fix: repair export']);
+              return { exitCode: 0, stdout: 'repair commit made' };
+            }
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = 1;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: initial branch-name']);
+            return { exitCode: 0, stdout: 'initial writer commit' };
+          },
+        });
+        delete opts.reviewer;
+        delete opts.repairer;
+
+        const res = await safeRun(opts);
+        assert.ok(res.log, 'orchestration must succeed: ' + res.refusal);
+        assert.strictEqual(res.log.outcomes[0].status, 'completed');
+        assert.strictEqual(res.log.outcomes[0].reason, 'REVIEW_PASS');
+        assert.strictEqual(repairJobsSeen, 1, 'repair launcher must run');
+        assert.strictEqual(reviewRound, 2, 'reviewer must run twice');
+        const finalHead = git(['rev-parse', 'HEAD']).stdout.trim();
+        assert.strictEqual(res.log.reviews[0].sha, finalHead);
+        assert.strictEqual(res.log.reviews[0].review.repairCount, 1);
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+      }
+    });
+
+    test('PASS with open findings rejected', async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-dec-open-');
+      const { writerCand, reviewerCand } = makeCandidates();
+
+      try {
+        const opts = baseOpts({
+          decisionDir: dirDecisions,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          ranking: {
+            headrooms: {
+              'acct-writer': { status: 'available' },
+              'acct-reviewer': { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'A',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['a works'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              const targetSha = job.baseSha;
+              fs.writeFileSync(
+                job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                JSON.stringify({
+                  sha: targetSha,
+                  verdict: 'PASS',
+                  findings: [
+                    { id: 'UNRESOLVED_FINDING', open: true, detail: 'contradictory finding' },
+                  ],
+                })
+              );
+              return { exitCode: 0, stdout: 'contradictory review' };
+            }
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit' };
+          },
+        });
+        delete opts.reviewer;
+
+        const res = await safeRun(opts);
+        assert.ok(res.log, 'orchestration must finish');
+        assert.strictEqual(res.log.outcomes[0].status, 'blocked');
+        assert.strictEqual(res.log.outcomes[0].reason, 'PASS_WITH_FINDINGS_REJECTED');
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+      }
+    });
+
+    test('sha mismatch rejected', async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-dec-mismatch-');
+      const { writerCand, reviewerCand } = makeCandidates();
+
+      try {
+        const opts = baseOpts({
+          decisionDir: dirDecisions,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          ranking: {
+            headrooms: {
+              'acct-writer': { status: 'available' },
+              'acct-reviewer': { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'A',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['a works'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              fs.writeFileSync(
+                job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                JSON.stringify({
+                  sha: '0000000000000000000000000000000000000000',
+                  verdict: 'PASS',
+                  findings: [],
+                })
+              );
+              return { exitCode: 0, stdout: 'stale review' };
+            }
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit' };
+          },
+        });
+        delete opts.reviewer;
+
+        const res = await safeRun(opts);
+        assert.ok(res.log, 'orchestration must finish');
+        assert.strictEqual(res.log.outcomes[0].status, 'blocked');
+        assert.strictEqual(res.log.outcomes[0].reason, 'STALE_REVIEW_SHA');
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+      }
+    });
+
+    test('reviewer==writer refused', async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-dec-equal-');
+      const { writerCand } = makeCandidates();
+
+      try {
+        const opts = baseOpts({
+          decisionDir: dirDecisions,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand],
+          reviewerIdentity: candidateKey(writerCand),
+          ranking: {
+            headrooms: {
+              'acct-writer': { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'A',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['a works'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit' };
+          },
+        });
+        delete opts.reviewer;
+
+        const res = await safeRun(opts);
+        assert.ok(res.log, 'orchestration must finish');
+        assert.strictEqual(res.log.outcomes[0].status, 'blocked');
+        assert.strictEqual(res.log.outcomes[0].reason, 'REVIEWER_EQUALS_WRITER');
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+      }
+    });
+  });
 });

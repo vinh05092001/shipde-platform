@@ -118,4 +118,72 @@ function compilePrompt(item, ctx) {
   return lines.join('\n');
 }
 
-module.exports = { compilePrompt, PUBLISHER_BOUNDARY, CLEAN_TREE_RULES };
+/**
+ * Compile prompt for the independent review stage.
+ * @param item a plan work item
+ * @param ctx  { goal, headSha, baseSha, diffText, verdictFile, usageFile, candidateKey, exercise }
+ * @returns a single review prompt string
+ */
+function compileReviewPrompt(item, ctx) {
+  const c = ctx || {};
+  const i = item || {};
+  const lines = [];
+  lines.push('Work Item: ' + (i.id || ''));
+  lines.push('Goal: ' + (c.goal || ''));
+  lines.push('Role requirement: reviewer');
+  lines.push('Review target commit (exact SHA): ' + (c.headSha || ''));
+  lines.push('Base SHA: ' + (c.baseSha || ''));
+  lines.push('Allowed files: ' + ((i.allowedPaths || []).join(', ') || '(unspecified)'));
+  lines.push('Acceptance criteria:');
+  for (const ac of i.acceptanceCriteria || []) lines.push('- ' + ac);
+  const exerciseCommand =
+    (i.verification && i.verification.command) ||
+    (c.exercise && c.exercise.command) ||
+    '(none declared)';
+  lines.push('Exercise command: ' + exerciseCommand);
+  if (i.verification && i.verification.expect) {
+    lines.push('Expected test result: ' + i.verification.expect);
+  }
+  lines.push('Diff (' + (c.baseSha || 'base') + '..' + (c.headSha || 'head') + '):');
+  lines.push(c.diffText || '(empty diff)');
+  lines.push(PUBLISHER_BOUNDARY);
+  lines.push(
+    'Review instructions: You are an independent reviewer operating in a separate read-only root. ' +
+      'Inspect the diff and verify all acceptance criteria and exercise tests. ' +
+      'Do NOT modify any code in the writer root.'
+  );
+  lines.push(
+    'Verdict file requirement: Write your review verdict as a JSON file to ' +
+      (c.verdictFile || 'verdict.json') +
+      ' containing:\n' +
+      JSON.stringify(
+        {
+          sha: c.headSha || '<exact-40-char-sha>',
+          verdict: 'PASS | CHANGES_REQUIRED',
+          findings: [
+            {
+              id: 'ISSUE_ID',
+              open: true,
+              detail: 'description of finding',
+            },
+          ],
+        },
+        null,
+        2
+      )
+  );
+  lines.push(
+    'If all acceptance criteria are met and tests pass, verdict must be "PASS" and findings must be []. ' +
+      'If any criterion is unmet or tests fail, verdict must be "CHANGES_REQUIRED" and findings must list open issues. ' +
+      'Never return PASS with open findings.'
+  );
+  if (c.usageFile) {
+    lines.push('Usage report: write your session usage report to ' + c.usageFile);
+  }
+  if (c.candidateKey) {
+    lines.push('Pinned candidateKey: ' + c.candidateKey);
+  }
+  return lines.join('\n');
+}
+
+module.exports = { compilePrompt, compileReviewPrompt, PUBLISHER_BOUNDARY, CLEAN_TREE_RULES };
