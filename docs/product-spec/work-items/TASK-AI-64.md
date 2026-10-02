@@ -11,7 +11,7 @@
 | Dependencies    | `TASK-AI-50`; `TASK-AI-58`; `TASK-AI-59`; `TASK-AI-60`; `TASK-AI-61`; `TASK-AI-63`                                                                                                                                                                                                                                                                    |
 | Assigned author | `GEMINI`                                                                                                                                                                                                                                                                                                                                             |
 | Risk            | `HIGH`                                                                                                                                                                                                                                                                                                                                               |
-| Allowed paths   | `tools/ai-brain/orchestrate.js`, `tools/ai-brain/planner.js`, `tools/ai-brain/prompt-compiler.js`, `tools/ai-brain/supervisor.js`, `tools/ai-brain/review-loop.js`, `tools/ai-brain/executor.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/harness.js`, `tools/ai-brain/isolation-launcher.js`, `tools/ai-brain/publisher.js`, `tools/ai-brain/decisions.js`, `tools/ai-brain/approval-registry.js`, `tools/ai-brain/exercise/e1-branch-name.cases.json`, `tools/ai-brain/branch-name.js`, `tools/ai-brain/sources.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-64.test.js`, `tools/ai-brain/test/failure-classifier.test.js`, `tools/ai-brain/test/fixtures/task-ai-64/`, `tools/ai-brain/test/isolation.test.js`, `tools/ai-brain/test/executor.test.js`, `tools/ai-brain/test/task-ai-60.test.js`, `docs/product-spec/work-items/TASK-AI-64.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths   | `tools/ai-brain/orchestrate.js`, `tools/ai-brain/planner.js`, `tools/ai-brain/prompt-compiler.js`, `tools/ai-brain/supervisor.js`, `tools/ai-brain/review-loop.js`, `tools/ai-brain/executor.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/harness.js`, `tools/ai-brain/isolation-launcher.js`, `tools/ai-brain/publisher.js`, `tools/ai-brain/decisions.js`, `tools/ai-brain/approval-registry.js`, `tools/ai-brain/exercise/e1-branch-name.cases.json`, `tools/ai-brain/branch-name.js`, `tools/ai-brain/sources.js`, `tools/ai-brain/candidates.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-64.test.js`, `tools/ai-brain/test/failure-classifier.test.js`, `tools/ai-brain/test/fixtures/task-ai-64/`, `tools/ai-brain/test/isolation.test.js`, `tools/ai-brain/test/executor.test.js`, `tools/ai-brain/test/task-ai-60.test.js`, `docs/product-spec/work-items/TASK-AI-64.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer        | `Codex — fresh independent task`                                                                                                                                                                                                                                                                                                                       |
 | Branch          | `feat/task-ai-64-live-loop`                                                                                                                                                                                                                                                                                                                 |
 | Pull Request    | `#166`                                                                                                                                                                                                                                                                                                                                            |
@@ -38,6 +38,11 @@ definition is derived directly from the exact model string opencode receives; `f
 classifies OpenCode harness configuration failures into `Scope.HARNESS` / `Cause.LAUNCH_CONFIG` with
 finite cooldown and preserves matched stdout in evidence, preventing launch failures from poisoning
 model domains; and `test/failure-classifier.test.js` houses the unit regression tests for Case 13.
+
+`tools/ai-brain/candidates.js` is an allowed path amended during live run attempt 12 review
+(Defect K repair): `candidates.js` avoids emitting wildcard accounts (`accountId: '*'`) from catalogue
+expansion when concrete accounts are present and maps `reachedVia` router accounts to dependent harnesses,
+ensuring reviewer candidates are not rejected by `WILDCARD_ACCOUNT`.
 
 `tools/ai-brain/test/e1-branch-name.test.js` is deliberately **not** an allowed path. It is
 materialised inside the worker root at run time and is never committed (§ "First live coding
@@ -889,3 +894,35 @@ Fix:
 2. In `orchestrate.js:runVerificationCommand`, scoped `verifyWorkerCommit` to `workerRoot` (returning `pass: true` when `workerRoot` is absent) rather than testing `process.cwd()`.
 3. In `supervisor.js:safeGit`, added scoped `-c safe.directory=<normCwd>` and `-c safe.directory=<normTmp>` arguments to prevent dubious ownership errors when `GIT_CONFIG_GLOBAL` is ignored on POSIX.
 4. In `tools/ai-brain/test/task-ai-64.test.js`, added POSIX clone simulation tests proving that running from inside a git clone directory does not bind review to the host repository when `workerRoot` is unspecified.
+
+## Live E2E Attempt 12 repair: Worker commit preservation and gateway+upstream failure domain (2026-10-02)
+
+Observation / Defect J & Defect K:
+In Live E2E attempt 12 (`.worktrees/logs/night/ai64-live-run1-20261002-attempt12.md`), the isolated worker (`ag/gemini-3.1-pro-low`) successfully wrote `tools/ai-brain/branch-name.js` and created a real local commit `817bc8b0e6a89d31a309fc2549cd5b567902951f`. However:
+1. (Defect J) Worker Commit Loss during Repair: When verification failed, `repairRound` passed the commit SHA to `isolation-launcher.js:getIsolatedLauncher`, which deleted and re-cloned the worker root from the host repository. Because the worker commit was never pushed to the host, `git checkout <sha>` in the fresh clone failed, destroying the worker commit and crashing subsequent repairs with `Failed to checkout HEAD SHA in worker root`.
+2. (Defect K) Overly Broad Reviewer Exclusion & Wildcard Accounts: In `orchestrate.js:reviewItem`, the reviewer selection refused all candidates (19x `FORBIDDEN_FAILURE_DOMAIN`, 8x `WILDCARD_ACCOUNT`, 5x `CANDIDATE_BLOCKED`). The writer was `9router::ag` (account `codex`). Setting `forbiddenDomains = [writerGateway, writerUpstream, writerAccount]` forbade the entire `9router` gateway (`'9router'`), which blocked valid reviewer candidates on other upstreams (`cl`, `ocz`, `gh`). Furthermore, `candidates.js:generateCandidates` emitted wildcard account candidates (`accountId: '*'`) for catalogue entries when concrete accounts existed or for dependencies reaching via a router (`source.reachedVia`), which were subsequently rejected by `routing.rankForProfile` with `WILDCARD_ACCOUNT`.
+
+Fix:
+1. Worker Root and Commit Preservation (`tools/ai-brain/isolation-launcher.js` & `tools/ai-brain/orchestrate.js`):
+   - In `isolation-launcher.js`: Before deleting `workerRoot` and re-cloning from `hostCwd`, checked if `git rev-parse --verify --quiet <headSha>^{commit}` succeeds in `workerRoot`. If the commit already exists in the worker root, skipped deletion and re-cloning, preserving existing commits. If absent or invalid, re-provisioned and checked out `headSha`, throwing structured error `ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: <headSha>`.
+   - In `orchestrate.js:repairRound`: Bound `repairJob.baseSha` to `sha || o.baseSha || null`, ensuring the worker commit under review is forwarded as the base commit for the repair round.
+2. Failure Domain Scoped to Gateway+Upstream & Account Inheritance (`tools/ai-brain/orchestrate.js` & `tools/ai-brain/candidates.js`):
+   - In `orchestrate.js:reviewItem`: Redefined `forbiddenDomains = [writerUpstream || writerGateway, writerAccount].filter(Boolean)`. Because failure domains are defined per gateway+upstream (each upstream is an independent failure domain), this permits reviewer candidates on the same router with distinct upstreams (e.g., `9router/cl`, `9router/ocz`).
+   - In `candidates.js:generateCandidates`: Inherited bound accounts from `source.reachedVia` when direct accounts are empty. When concrete accounts exist (`accounts.some(a => a.id && a.id !== '*')`), suppressed `sharedArc` (`accountId: '*'`) from catalogue expansion, preventing creation of un-routable wildcard candidates.
+
+Evidence:
+- Fail-before base SHA: `fb78bec` / `fb78bec80e1f3ff8308f272db326c1448113e88d`
+  - `isolation-launcher.js` unconditionally deleted worker root on re-provisioning, losing worker commits.
+  - `orchestrate.js:reviewItem` forbade the entire router gateway, blocking all reviewer candidates.
+  - `candidates.js:generateCandidates` generated wildcard candidates rejected as `WILDCARD_ACCOUNT`.
+- Pass-after result: All tests pass. 5 new regression tests in `tools/ai-brain/test/task-ai-64.test.js`:
+  - Full test suite: 1148/1148 passed (63/63 in `tools/ai-brain/test/task-ai-64.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `npx --package prettier@3.9.6 prettier --check tools/ai-brain/candidates.js tools/ai-brain/isolation-launcher.js tools/ai-brain/orchestrate.js tools/ai-brain/test/task-ai-64.test.js docs/product-spec/work-items/TASK-AI-64.md`
+  - `git diff --check` clean.
+
+Residual risk / known limitations:
+- A repair round preserves the existing worker root when the requested commit SHA is already verified locally; if the worker root is corrupted or missing the commit, it safely falls back to a clean re-clone and fails closed with `ISOLATION_CHECKOUT_FAILED` if checkout fails.
+- Reviewer failure domain separation requires at least two distinct upstreams or distinct account identities available in the registry.

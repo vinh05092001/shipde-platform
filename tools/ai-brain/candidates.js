@@ -114,8 +114,12 @@ function generateCandidates(opts) {
   for (const source of registry.sources) {
     if (sourcesApi.isRetired(source.id, registry)) continue;
     if (sourcesApi.isDeferred(source.id, registry)) continue;
-    const bound = accountsFor(accounts, source.id);
-    const sharedArc = bound.length === 0;
+    let bound = accountsFor(accounts, source.id);
+    if (bound.length === 0 && source.reachedVia) {
+      bound = accountsFor(accounts, source.reachedVia);
+    }
+    const hasConcreteAccounts = (accounts || []).some((a) => a && a.id && a.id !== '*');
+    const sharedArc = bound.length === 0 && !hasConcreteAccounts;
 
     if (source.kind === 'router' && source.servesModels !== false) {
       // Gateway: expand catalogue into (upstream, model) pairs.

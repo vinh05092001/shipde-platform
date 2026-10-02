@@ -734,28 +734,58 @@ function getIsolatedLauncher() {
       throw new Error('ISOLATION_BASE_SHA_INVALID: not a 40-character commit: ' + baseSha);
     }
     const headSha = String(baseSha);
+
+    // Defect J: A repair round passes the worker's local commit SHA.
+    // If the worker root already holds the requested head commit, keep the
+    // existing worker root and its commits without deleting or re-cloning.
+    // Re-provision only when absent or invalid (or when the requested head is
+    // not present), and fail with a structured reason if checkout fails.
+    let alreadyHoldsHead = false;
     if (fs.existsSync(workerRoot)) {
-      fs.rmSync(workerRoot, { recursive: true, force: true });
+      const gitDir = path.join(workerRoot, '.git');
+      if (fs.existsSync(gitDir)) {
+        const revRes = cp.spawnSync(
+          'git',
+          ['rev-parse', '--verify', '--quiet', headSha + '^{commit}'],
+          {
+            cwd: workerRoot,
+            windowsHide: true,
+          }
+        );
+        if (revRes.status === 0) {
+          alreadyHoldsHead = true;
+        }
+      }
     }
 
-    // Q5: --no-hardlinks — a local clone hardlinks .git/objects files to
-    // the operator repo; the worker root is outside the operator profile and
-    // the worker is granted Modify, so a hardlinked object could be
-    // rewritten in place to corrupt the OPERATOR repo's objects.
-    const cloneRes = cp.spawnSync(
-      'git',
-      ['clone', '--no-checkout', '--no-hardlinks', hostCwd, workerRoot],
-      {
-        windowsHide: true,
+    if (!alreadyHoldsHead) {
+      if (fs.existsSync(workerRoot)) {
+        fs.rmSync(workerRoot, { recursive: true, force: true });
       }
-    );
-    if (cloneRes.status !== 0) throw new Error('Failed to clone repository');
+
+      // Q5: --no-hardlinks — a local clone hardlinks .git/objects files to
+      // the operator repo; the worker root is outside the operator profile and
+      // the worker is granted Modify, so a hardlinked object could be
+      // rewritten in place to corrupt the OPERATOR repo's objects.
+      const cloneRes = cp.spawnSync(
+        'git',
+        ['clone', '--no-checkout', '--no-hardlinks', hostCwd, workerRoot],
+        {
+          windowsHide: true,
+        }
+      );
+      if (cloneRes.status !== 0) throw new Error('Failed to clone repository');
+    }
 
     const checkoutRes = cp.spawnSync('git', ['checkout', headSha], {
       cwd: workerRoot,
       windowsHide: true,
     });
-    if (checkoutRes.status !== 0) throw new Error('Failed to checkout HEAD SHA in worker root');
+    if (checkoutRes.status !== 0) {
+      throw new Error(
+        'ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: ' + headSha
+      );
+    }
 
     if (adapter.id === 'opencode-direct') {
       const sourcesModule = require('./sources');

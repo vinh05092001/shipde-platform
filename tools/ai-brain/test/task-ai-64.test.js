@@ -2852,3 +2852,308 @@ describe('TASK-AI-64 worker head review, local commit verification, and usage re
     }
   });
 });
+
+describe('TASK-AI-64 repair keeps worker commit and reviewer uses gateway+upstream failure domain (DEFECTS J & K)', () => {
+  const { selectCandidateForProfile, repairRound } = require('../orchestrate');
+  const { generateCandidates, candidateKey } = require('../candidates');
+  const sourcesApi = require('../sources');
+  const isoMod = require('../isolation-launcher');
+
+  test('isolated launcher keeps existing worker root and commits when requested head SHA is present (Defect J)', () => {
+    const hostRepo = makeTempRepo();
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-worker-root-'));
+    const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+
+    try {
+      // Clone hostRepo into workerDir
+      git(['clone', '--no-hardlinks', hostRepo.dir, workerDir]);
+      git(['config', 'user.email', 'worker@shipde.test'], workerDir);
+      git(['config', 'user.name', 'Worker'], workerDir);
+
+      // Create a local worker commit in workerDir that does NOT exist in hostRepo
+      fs.writeFileSync(path.join(workerDir, 'worker-code.js'), 'console.log("worker change");\n');
+      git(['add', '.'], workerDir);
+      git(['commit', '-q', '-m', 'worker commit'], workerDir);
+      const workerSha = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.notEqual(workerSha, hostRepo.sha);
+
+      // Place a canary file in workerDir to prove it is not deleted/re-cloned
+      fs.writeFileSync(path.join(workerDir, 'canary.txt'), 'keep-me\n');
+
+      const fakeSid = 'S-1-5-21-test-sid';
+      const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+      const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+      fs.writeFileSync(
+        verdictPath,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          details: { github_push: 'PASS', operator_profile: 'PASS' },
+          timestamp: new Date().toISOString(),
+          sid: fakeSid,
+          worktree: hostRepo.dir,
+          policyHash,
+        })
+      );
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const mockAdapter = {
+        id: 'echo',
+        command: 'echo',
+      };
+
+      const opts = {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: workerSha,
+        verdictPath,
+        getWorkerSid: () => fakeSid,
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, spawnOpts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh') {
+            return { status: 0, stdout: 'ok', stderr: '' };
+          }
+          return spawnSync(cmd, args, spawnOpts);
+        },
+      };
+
+      try {
+        runIso(mockAdapter, ['hello'], opts);
+      } catch (err) {
+        // Even if running the script fails, the provisioning step must not delete workerDir
+      }
+
+      assert.ok(
+        fs.existsSync(path.join(workerDir, 'canary.txt')),
+        'worker root must NOT be deleted or re-cloned when it holds requested head SHA'
+      );
+      const currentHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.equal(currentHead, workerSha, 'worker root must be checked out at workerSha');
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+    }
+  });
+
+  test('isolated launcher re-provisions and fails with structured error ISOLATION_CHECKOUT_FAILED when commit is absent (Defect J)', () => {
+    const hostRepo = makeTempRepo();
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-corrupt-worker-'));
+    fs.writeFileSync(path.join(workerDir, 'junk.txt'), 'corrupt\n');
+
+    const fakeSid = 'S-1-5-21-test-sid';
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+    const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+    fs.writeFileSync(
+      verdictPath,
+      JSON.stringify({
+        verdict: 'CLOSED',
+        details: { github_push: 'PASS', operator_profile: 'PASS' },
+        timestamp: new Date().toISOString(),
+        sid: fakeSid,
+        worktree: hostRepo.dir,
+        policyHash,
+      })
+    );
+
+    const runIso = isoMod.getIsolatedLauncher();
+    const mockAdapter = { id: 'echo', command: 'echo' };
+    const missingSha = '1111222233334444555566667777888899990000';
+
+    try {
+      assert.throws(
+        () =>
+          runIso(mockAdapter, ['hello'], {
+            cwd: hostRepo.dir,
+            workerRoot: workerDir,
+            baseSha: missingSha,
+            verdictPath,
+            getWorkerSid: () => fakeSid,
+            verifyBoundary: () => true,
+            isWorkerPath: () => true,
+          }),
+        /ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: 1111222233334444555566667777888899990000/
+      );
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+    }
+  });
+
+  test('repairRound passes commit sha under review as baseSha to launcher (Defect J)', async () => {
+    const item = {
+      id: 'TASK-AI-64',
+      allowedPaths: ['tools/ai-brain/branch-name.js'],
+      verification: { command: 'node --test tools/ai-brain/test/e1-branch-name.test.js' },
+      acceptanceCriteria: ['pure branch name helper'],
+      complexity: 'standard',
+    };
+
+    const workerSha = '817bc8b0e6a89d31a309fc2549cd5b567902951f';
+    const cand = {
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ag/gemini-3.1-pro-low',
+      source: '9router',
+      kind: 'router',
+    };
+    cand.candidateKey = candidateKey(cand);
+
+    let capturedJob = null;
+    const launcherSpy = async (job) => {
+      capturedJob = job;
+      return { exitCode: 0, stdout: 'fixed', completionNonce: 'nonce' };
+    };
+
+    const repairFn = repairRound(
+      { specs: [item], baseSha: '0000000000000000000000000000000000000001' },
+      item,
+      { candidateKey: cand.candidateKey, baseSha: '0000000000000000000000000000000000000001' },
+      { goal: 'test goal' },
+      {},
+      launcherSpy,
+      os.tmpdir(),
+      Date.now(),
+      [cand],
+      {},
+      sourcesApi.loadSources()
+    );
+
+    await repairFn([{ id: 'VERIFICATION_EXPECT_MISSING', open: true }], workerSha);
+    assert.ok(capturedJob, 'launcher must be invoked for repair');
+    assert.equal(
+      capturedJob.baseSha,
+      workerSha,
+      'repairJob must pass the worker commit sha under review as baseSha'
+    );
+  });
+
+  test('generateCandidates with concrete accounts does not emit wildcard account candidates from catalogue (Defect K)', () => {
+    const registry = sourcesApi.loadSources();
+    const catalogue = [
+      'ag/gemini-3.1-pro-low',
+      'ag/gemini-3.7-flash-medium',
+      'cl/deepseek/deepseek-v4-flash',
+      'ocz/big-pickle',
+    ];
+    const accounts = [
+      { id: 'codex', sourceId: '9router' },
+      { id: 'ninerouter', sourceId: '9router' },
+    ];
+
+    const result = generateCandidates({ registry, catalogue, accounts });
+
+    // 1. None of the generated candidates should have accountId: '*'
+    const wildcards = result.filter((c) => c.accountId === '*');
+    assert.equal(
+      wildcards.length,
+      0,
+      'must not produce wildcard accounts when concrete accounts are present: ' +
+        JSON.stringify(wildcards.map(candidateKey))
+    );
+
+    // 2. OpenCode must inherit concrete accounts from 9router
+    const opencodeCandidates = result.filter((c) => c.harness === 'opencode');
+    assert.ok(opencodeCandidates.length > 0, 'opencode candidates must exist');
+    for (const oc of opencodeCandidates) {
+      assert.ok(
+        oc.accountId === 'codex' || oc.accountId === 'ninerouter',
+        'opencode candidate must inherit concrete account: ' + candidateKey(oc)
+      );
+    }
+
+    // 3. Other routers without accounts (rqsty, thb) must not emit wildcard candidates
+    const rqstyCandidates = result.filter((c) => c.gateway === 'rqsty' || c.source === 'rqsty');
+    assert.equal(rqstyCandidates.length, 0, 'rqsty with no accounts must emit 0 candidates');
+  });
+
+  test('reviewer selection allows candidate on same gateway with different upstream and account (Defect K)', async () => {
+    const candidates = [
+      // Same upstream ag (forbidden)
+      {
+        harness: 'paseo',
+        accessPath: 'http://127.0.0.1:20128/v1',
+        gateway: '9router',
+        upstream: 'ag',
+        accountId: 'ninerouter',
+        quotaScope: 'ninerouter',
+        modelId: 'ag/gemini-3.7-flash-medium',
+        source: '9router',
+        kind: 'router',
+        quality: 80,
+      },
+      // Same account codex (forbidden)
+      {
+        harness: 'paseo',
+        accessPath: 'http://127.0.0.1:20128/v1',
+        gateway: '9router',
+        upstream: 'cl',
+        accountId: 'codex',
+        quotaScope: 'codex',
+        modelId: 'cl/deepseek/deepseek-v4-flash',
+        source: '9router',
+        kind: 'router',
+        quality: 80,
+      },
+      // Different upstream cl AND different account ninerouter (ALLOWED!)
+      {
+        harness: 'paseo',
+        accessPath: 'http://127.0.0.1:20128/v1',
+        gateway: '9router',
+        upstream: 'cl',
+        accountId: 'ninerouter',
+        quotaScope: 'ninerouter',
+        modelId: 'cl/deepseek/deepseek-v4-flash',
+        source: '9router',
+        kind: 'router',
+        quality: 80,
+      },
+    ];
+    for (const c of candidates) c.candidateKey = candidateKey(c);
+
+    // Derive forbiddenDomains as orchestrate.js reviewItem does
+    const writerCandidate = {
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+    };
+    const forbiddenDomains = [
+      writerCandidate.upstream || writerCandidate.gateway,
+      writerCandidate.accountId,
+    ].filter(Boolean);
+
+    assert.deepEqual(
+      forbiddenDomains,
+      ['ag', 'codex'],
+      'must forbid writer upstream and account, not whole gateway'
+    );
+
+    const reviewerDecision = await selectCandidateForProfile(
+      { id: 'TASK-AI-64-review', roleRequirement: { role: 'reviewer' }, complexity: 'standard' },
+      candidates,
+      forbiddenDomains,
+      {},
+      {},
+      {},
+      Date.now()
+    );
+
+    assert.ok(reviewerDecision.chosen, 'reviewer candidate must be selected, not refused');
+    assert.equal(
+      reviewerDecision.chosen,
+      candidates[2].candidateKey,
+      'reviewer candidate must be 9router/cl with ninerouter account'
+    );
+  });
+});
