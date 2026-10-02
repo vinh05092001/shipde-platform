@@ -852,18 +852,20 @@ async function runOrchestration(goal, opts) {
         // The failure is classified by the shared classifier, and the replacement
         // is chosen by the Controller's failure-domain rule rather than by a scan
         // of this loop (AI-64-R11).
+        const isLauncherTimedOut = Boolean(
+          res &&
+          (res.timedOut === true ||
+            /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.stderr || '') ||
+            /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.failureReason || ''))
+        );
         const classification = classifyFailure({
           exitCode: res ? res.exitCode : -1,
           httpStatus: res ? res.httpStatus : undefined,
-          body: res ? res.body || res.stdout : undefined,
+          body: res ? res.body : undefined,
           stdout: res ? res.stdout : undefined,
           stderr: res ? res.stderr : undefined,
           accountId: candidate.accountId,
-          timedOut: Boolean(
-            res &&
-            (res.timedOut === true ||
-              /ISOLATION_LAUNCHER.*timed out|worker timed out/i.test(res.stderr || ''))
-          ),
+          timedOut: isLauncherTimedOut,
         });
         launch.scope = classification.scope;
         launch.cause = classification.cause;

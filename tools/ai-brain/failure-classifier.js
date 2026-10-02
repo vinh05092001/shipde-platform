@@ -56,12 +56,20 @@ const HumanAction = {
 };
 
 /**
+ * Maximum cooldown allowed for parsed reset hints (30 days in ms).
+ */
+const MAX_RESET_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
  * Parses a reset time from text like "reset after 1m 59s", "Resets in 62h28m31s",
- * or "reset after 151h 23m". Returns milliseconds from now, or null if not found.
+ * or "reset after 151h 23m". Returns milliseconds from now, bounded by MAX_RESET_MS,
+ * or null if not found.
  */
 function parseResetTime(text) {
   if (!text) return null;
   const s = String(text);
+
+  let resultMs = null;
 
   // Pattern: "Resets in 62h28m31s"
   const inMatch = s.match(/resets?\s+(?:in|after)\s*(\d+)h(\d+)m(\d+)s/i);
@@ -69,38 +77,39 @@ function parseResetTime(text) {
     const hours = parseInt(inMatch[1], 10);
     const minutes = parseInt(inMatch[2], 10);
     const seconds = parseInt(inMatch[3], 10);
-    return (hours * 3600 + minutes * 60 + seconds) * 1000;
+    resultMs = (hours * 3600 + minutes * 60 + seconds) * 1000;
+  } else {
+    // Pattern: "reset after 151h 23m", "reset after 116h", "reset after 2 hours"
+    const afterMatch = s.match(
+      /reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:h|hr|hours?)(?:\s*(\d+)\s*(?:m|min|minutes?)?)?(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
+    );
+    if (afterMatch) {
+      const hours = parseInt(afterMatch[1], 10);
+      const minutes = parseInt(afterMatch[2] || '0', 10);
+      const seconds = parseInt(afterMatch[3] || '0', 10);
+      resultMs = (hours * 3600 + minutes * 60 + seconds) * 1000;
+    } else {
+      // Pattern: "reset after 1m 59s" (no hours)
+      const afterMatchShort = s.match(
+        /reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:m|min|minutes?)(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
+      );
+      if (afterMatchShort) {
+        const minutes = parseInt(afterMatchShort[1], 10);
+        const seconds = parseInt(afterMatchShort[2] || '0', 10);
+        resultMs = (minutes * 60 + seconds) * 1000;
+      } else {
+        // Pattern: "reset after 30s" (seconds only)
+        const afterMatchSec = s.match(/reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:s|sec|seconds?)/i);
+        if (afterMatchSec) {
+          const seconds = parseInt(afterMatchSec[1], 10);
+          resultMs = seconds * 1000;
+        }
+      }
+    }
   }
 
-  // Pattern: "reset after 151h 23m", "reset after 116h", "reset after 2 hours"
-  const afterMatch = s.match(
-    /reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:h|hr|hours?)(?:\s*(\d+)\s*(?:m|min|minutes?)?)?(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
-  );
-  if (afterMatch) {
-    const hours = parseInt(afterMatch[1], 10);
-    const minutes = parseInt(afterMatch[2] || '0', 10);
-    const seconds = parseInt(afterMatch[3] || '0', 10);
-    return (hours * 3600 + minutes * 60 + seconds) * 1000;
-  }
-
-  // Pattern: "reset after 1m 59s" (no hours)
-  const afterMatchShort = s.match(
-    /reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:m|min|minutes?)(?:\s*(\d+)\s*(?:s|sec|seconds?)?)?/i
-  );
-  if (afterMatchShort) {
-    const minutes = parseInt(afterMatchShort[1], 10);
-    const seconds = parseInt(afterMatchShort[2] || '0', 10);
-    return (minutes * 60 + seconds) * 1000;
-  }
-
-  // Pattern: "reset after 30s" (seconds only)
-  const afterMatchSec = s.match(/reset(?:s)?\s+(?:after|in)\s+(\d+)\s*(?:s|sec|seconds?)/i);
-  if (afterMatchSec) {
-    const seconds = parseInt(afterMatchSec[1], 10);
-    return seconds * 1000;
-  }
-
-  return null;
+  if (resultMs === null || !Number.isFinite(resultMs)) return null;
+  return Math.min(Math.max(resultMs, 0), MAX_RESET_MS);
 }
 
 /**
@@ -140,6 +149,45 @@ function extractInnerStatus(text) {
   if (!text) return null;
   const match = String(text).match(/[\[(]\s*(401|402|403|404|429)\s*[\])]/);
   return match ? parseInt(match[1], 10) : null;
+}
+
+/**
+ * Extracts structured provider error text from stdout JSON lines or formatted error messages.
+ * Untrusted worker text (normal test output, console.log, file listings) is ignored.
+ */
+function extractProviderErrorText(stdout) {
+  if (!stdout) return '';
+  const s = String(stdout);
+  const errorLines = [];
+  const lines = s.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.includes('{') && trimmed.includes('}')) {
+      const start = trimmed.indexOf('{');
+      const end = trimmed.lastIndexOf('}');
+      if (start !== -1 && end > start) {
+        try {
+          const parsed = JSON.parse(trimmed.slice(start, end + 1));
+          if (parsed && (parsed.type === 'error' || parsed.error)) {
+            const msg =
+              (parsed.error &&
+                (parsed.error.message || parsed.error.data?.message || parsed.error.name)) ||
+              (typeof parsed.error === 'string' ? parsed.error : '') ||
+              parsed.message ||
+              '';
+            if (msg) errorLines.push(String(msg));
+          }
+        } catch (_) {}
+      }
+    }
+    const errorMatch = trimmed.match(/(?:^|\b)(?:Error|HTTP \d+):\s*.+/i);
+    if (errorMatch) {
+      errorLines.push(errorMatch[0]);
+    } else if (/Unavailable\s*\([^)]*reset after/i.test(trimmed)) {
+      errorLines.push(trimmed);
+    }
+  }
+  return errorLines.join('\n');
 }
 
 /**
@@ -196,87 +244,15 @@ function classifyFailure(input) {
     delete evidence.stdout;
   }
 
-  // If outer status is 503, look for inner status in body (gateway pattern: "[402]: ...")
-  const innerStatus = extractInnerStatus(text);
-  const effectiveStatus =
-    httpStatus === 503 ? (innerStatus ?? httpStatus) : (innerStatus ?? httpStatus);
-
-  // Case 2: upstream monthly limit (402 with MONTHLY_REQUEST_COUNT or "monthly limit")
-  if (
-    effectiveStatus === 402 &&
-    /MONTHLY_REQUEST_COUNT|monthly.{0,10}limit|monthly.{0,10}request/i.test(text)
-  ) {
-    const resetMs = parseResetTime(text);
-    return {
-      cause: Cause.UPSTREAM_MONTHLY_LIMIT,
-      scope: Scope.UPSTREAM,
-      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_MONTHLY_LIMIT],
-      humanAction: HumanAction.NONE,
-      evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
-    };
-  }
-
-  // Case 1: upstream credit exhausted (402 with "out of credit" / provider credit, or generic 402)
-  if (effectiveStatus === 402 || effectiveStatus === 504) {
-    const resetMs = parseResetTime(text);
-    return {
-      cause: Cause.UPSTREAM_CREDIT_EXHAUSTED,
-      scope: Scope.UPSTREAM,
-      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_CREDIT_EXHAUSTED],
-      humanAction: HumanAction.NONE,
-      evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
-    };
-  }
-
-  // Case 3: upstream entitlement (403 unauthorized / not licensed)
-  if (effectiveStatus === 403 || /not licensed to use Copilot/i.test(text)) {
-    return {
-      cause: Cause.UPSTREAM_ENTITLEMENT,
-      scope: Scope.UPSTREAM,
-      cooldownMs: DEFAULT_COOLDOWNS[Cause.UPSTREAM_ENTITLEMENT],
-      humanAction: HumanAction.REQUIRED,
-      evidence,
-      resetTime: null,
-    };
-  }
-
-  // Upstream quota exhausted (e.g. "Unavailable (reset after ...)", FreeUsageLimit, 429 quota exhaustion)
-  const isUpstreamQuota =
-    !/running/i.test(text) &&
-    (input?.cause === Cause.QUOTA_EXHAUSTED ||
-      input?.cause === 'QUOTA_EXHAUSTED' ||
-      input?.cause === 'quota_exhausted' ||
-      /FreeUsageLimit/i.test(text) ||
-      /Unavailable\s*\([^)]*reset after/i.test(text) ||
-      /unavailable.*reset after/i.test(text) ||
-      ((effectiveStatus === 429 || /429/i.test(text)) &&
-        (/quota|usage.?limit|free.?tier|resource.?exhausted|unavailable/i.test(text) ||
-          /reset after|resets in/i.test(text))) ||
-      (/quota.{0,20}(?:exhausted|exceeded|limit)|(?:exhausted|exceeded).{0,20}quota/i.test(text) &&
-        exitCode !== 3 &&
-        !/account/i.test(text)));
-
-  if (isUpstreamQuota) {
-    const resetMs = parseResetTime(text);
-    return {
-      cause: Cause.QUOTA_EXHAUSTED,
-      scope: Scope.UPSTREAM,
-      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED],
-      humanAction: HumanAction.NONE,
-      evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
-    };
-  }
-
-  // Launcher timeout (timedOut true / ISOLATION_LAUNCHER timed out)
+  // Launcher timeout: authentic signal from launcher (structured timedOut flag, Cause.TIMEOUT, or launcher stderr prefix)
+  // Launcher timeout takes precedence over all worker output and quota errors (F1)
   const isTimedOut = Boolean(
     input?.timedOut === true ||
     input?.cause === Cause.TIMEOUT ||
     input?.cause === 'TIMEOUT' ||
     input?.cause === 'timeout' ||
-    /ISOLATION_LAUNCHER.*timed out/i.test(text)
+    /\[ISOLATION_LAUNCHER\] worker timed out/i.test(stderr) ||
+    /\[ISOLATION_LAUNCHER\] worker timed out/i.test(input?.failureReason || '')
   );
 
   if (isTimedOut) {
@@ -290,12 +266,171 @@ function classifyFailure(input) {
     };
   }
 
-  // Case 4: upstream rate limit (429 with rate limit indicators)
+  const rawBodyText = String(
+    body || (typeof input?.error === 'string' ? input.error : '') || input?.message || ''
+  );
+
+  // If outer status is 503, look for inner status in body (gateway pattern: "[402]: ...")
+  // Status extraction is strictly anchored to body or structured status line, never raw worker stdout (F2)
+  const innerStatus = extractInnerStatus(rawBodyText);
+  let effectiveStatus =
+    httpStatus === 503 ? (innerStatus ?? httpStatus) : (innerStatus ?? httpStatus);
+  if (effectiveStatus === undefined || effectiveStatus === null) {
+    if (/\bHTTP\s+429\b/i.test(stderr) || /\bstatus\s*:\s*429\b/i.test(stderr)) {
+      effectiveStatus = 429;
+    }
+  }
+
+  const providerErrorText = extractProviderErrorText(stdout);
+  const errorPayloadText = [rawBodyText, stderr, providerErrorText].filter(Boolean).join('\n');
+
+  // Case 2: upstream monthly limit (402 with MONTHLY_REQUEST_COUNT or "monthly limit")
+  if (
+    effectiveStatus === 402 &&
+    /MONTHLY_REQUEST_COUNT|monthly.{0,10}limit|monthly.{0,10}request/i.test(
+      errorPayloadText || text
+    )
+  ) {
+    const resetMs = parseResetTime(errorPayloadText || text);
+    return {
+      cause: Cause.UPSTREAM_MONTHLY_LIMIT,
+      scope: Scope.UPSTREAM,
+      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_MONTHLY_LIMIT],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: resetMs ? Date.now() + resetMs : null,
+    };
+  }
+
+  // Case 1: upstream credit exhausted (402 with "out of credit" / provider credit, or generic 402)
+  if (effectiveStatus === 402 || effectiveStatus === 504) {
+    const resetMs = parseResetTime(errorPayloadText || text);
+    return {
+      cause: Cause.UPSTREAM_CREDIT_EXHAUSTED,
+      scope: Scope.UPSTREAM,
+      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_CREDIT_EXHAUSTED],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: resetMs ? Date.now() + resetMs : null,
+    };
+  }
+
+  // Case 3: upstream entitlement (403 unauthorized / not licensed)
+  if (effectiveStatus === 403 || /not licensed to use Copilot/i.test(errorPayloadText || text)) {
+    return {
+      cause: Cause.UPSTREAM_ENTITLEMENT,
+      scope: Scope.UPSTREAM,
+      cooldownMs: DEFAULT_COOLDOWNS[Cause.UPSTREAM_ENTITLEMENT],
+      humanAction: HumanAction.REQUIRED,
+      evidence,
+      resetTime: null,
+    };
+  }
+
+  // Case 13: Harness / launch config failure (e.g. OpenCode provider/config resolution error before model call)
+  // Gated on absence of HTTP status (no model HTTP call) and non-zero exit status or explicit harness cause.
+  // Must take precedence over worker-controlled stdout to prevent domain widening (F2).
+  const hasHttpStatus = httpStatus !== undefined && httpStatus !== null && Number(httpStatus) > 0;
+  const isExplicitHarness =
+    input?.cause === 'LAUNCH_CONFIG' ||
+    input?.cause === 'HARNESS_FAILED' ||
+    input?.cause === 'UNKNOWN_HARNESS' ||
+    input?.cause === 'HARNESS_UNKNOWN' ||
+    /LAUNCH_CONFIG|HARNESS_FAILED|UNKNOWN_HARNESS|HARNESS_UNKNOWN/i.test(text);
+
+  if (
+    (!hasHttpStatus || isExplicitHarness) &&
+    (isExplicitHarness ||
+      (exitCode !== 0 &&
+        (/UnknownError.*Unexpected server error|Unexpected server error.*UnknownError/i.test(
+          text
+        ) ||
+          /(?:\"name\"|\bname\b)\s*:\s*\"UnknownError\"/i.test(text) ||
+          /provider.{0,30}(?:not found|not registered|cannot resolve|failed to resolve|unknown)/i.test(
+            text
+          ) ||
+          /(?:cannot|failed to|unable to|could not)\s+resolve\s+provider/i.test(text) ||
+          /(?:unknown|unresolved|invalid|missing).{0,20}(?:provider|harness)/i.test(text) ||
+          /@ai-sdk\/openai-compatible/i.test(text) ||
+          /(?:harness|launch).{0,15}config(?:uration)?.{0,15}error/i.test(text))))
+  ) {
+    const isHarnessFailed =
+      /HARNESS_FAILED|harness_failed/i.test(text) && !/LAUNCH_CONFIG|launch_config/i.test(text);
+    const cause = isHarnessFailed ? Cause.HARNESS_FAILED : Cause.LAUNCH_CONFIG;
+    return {
+      cause,
+      scope: Scope.HARNESS,
+      cooldownMs: DEFAULT_COOLDOWNS[cause] !== undefined ? DEFAULT_COOLDOWNS[cause] : 5 * 60 * 1000,
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: null,
+    };
+  }
+
+  // Case 11: exhaustion hiding (Paseo "running" status but provider reports unavailable with long reset)
+  // Scoped strictly to session status signal so normal worker event streams are not blocked (F3)
+  const isExhaustionHiding = Boolean(
+    (input?.sessionStatus === 'running' ||
+      /Paseo reported status\s*[`"']?running[`"']?/i.test(text) ||
+      /session\s+status\s*[`"']?running[`"']?/i.test(text) ||
+      /status\s*[`"']?running[`"']?\s*for an hour/i.test(text)) &&
+    /unavailable|unavailable.*reset|reset after.*[0-9]+h/i.test(text)
+  );
+
+  if (isExhaustionHiding) {
+    const resetMs = parseResetTime(errorPayloadText || text);
+    return {
+      cause: Cause.EXHAUSTION_HIDING,
+      scope: Scope.UPSTREAM,
+      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.EXHAUSTION_HIDING],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: resetMs ? Date.now() + resetMs : null,
+    };
+  }
+
+  // Upstream quota exhausted (e.g. "Unavailable (reset after ...)", FreeUsageLimit, HTTP 429 quota indicators)
+  // Derived only from structured signals or provider error envelopes, never arbitrary worker text (F1, F2)
+  const isExplicitQuota =
+    input?.cause === Cause.QUOTA_EXHAUSTED ||
+    input?.cause === 'QUOTA_EXHAUSTED' ||
+    input?.cause === 'quota_exhausted';
+
+  const isStructured429Quota =
+    effectiveStatus === 429 &&
+    /quota|usage.?limit|free.?tier|resource.?exhausted|unavailable|resets?\s+(?:in|after)/i.test(
+      errorPayloadText
+    );
+
+  const isEnvelopeQuota =
+    /FreeUsageLimit/i.test(errorPayloadText) ||
+    /Unavailable\s*\([^)]*reset after/i.test(errorPayloadText) ||
+    /unavailable.*reset after/i.test(errorPayloadText);
+
+  const isUpstreamQuota =
+    !isExhaustionHiding &&
+    (isExplicitQuota || isStructured429Quota || isEnvelopeQuota) &&
+    exitCode !== 3 &&
+    !/account/i.test(input?.cause || '');
+
+  if (isUpstreamQuota) {
+    const resetMs = parseResetTime(errorPayloadText || text);
+    return {
+      cause: Cause.QUOTA_EXHAUSTED,
+      scope: Scope.UPSTREAM,
+      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: resetMs ? Date.now() + resetMs : null,
+    };
+  }
+
+  // Case 4: upstream rate limit (429 with rate limit indicators, or plain 429)
   if (
     effectiveStatus === 429 ||
-    /rate.?limit|too many requests|user_global_rate_limited/i.test(text)
+    /rate.?limit|too many requests|user_global_rate_limited/i.test(errorPayloadText)
   ) {
-    const resetMs = parseResetTime(text);
+    const resetMs = parseResetTime(errorPayloadText || text);
     return {
       cause: Cause.UPSTREAM_RATE_LIMIT,
       scope: Scope.UPSTREAM,
@@ -405,19 +540,6 @@ function classifyFailure(input) {
     };
   }
 
-  // Case 11: exhaustion hiding (Paseo "running" status but provider reports unavailable with long reset)
-  if (/running/i.test(text) && /unavailable|unavailable.*reset|reset after.*[0-9]+h/i.test(text)) {
-    const resetMs = parseResetTime(text);
-    return {
-      cause: Cause.EXHAUSTION_HIDING,
-      scope: Scope.UPSTREAM,
-      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.EXHAUSTION_HIDING],
-      humanAction: HumanAction.NONE,
-      evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
-    };
-  }
-
   // Case 12: HTTP process failure means gateway or access path failure
   if (
     httpStatus === 0 ||
@@ -427,45 +549,6 @@ function classifyFailure(input) {
       cause: Cause.UNKNOWN,
       scope: Scope.GATEWAY,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.UNKNOWN],
-      humanAction: HumanAction.NONE,
-      evidence,
-      resetTime: null,
-    };
-  }
-
-  // Case 13: Harness / launch config failure (e.g. OpenCode provider/config resolution error before model call)
-  // Gated on absence of HTTP status (no model HTTP call) and non-zero exit status or explicit harness cause
-  const hasHttpStatus = httpStatus !== undefined && httpStatus !== null && Number(httpStatus) > 0;
-  const isExplicitHarness =
-    input?.cause === 'LAUNCH_CONFIG' ||
-    input?.cause === 'HARNESS_FAILED' ||
-    input?.cause === 'UNKNOWN_HARNESS' ||
-    input?.cause === 'HARNESS_UNKNOWN' ||
-    /LAUNCH_CONFIG|HARNESS_FAILED|UNKNOWN_HARNESS|HARNESS_UNKNOWN/i.test(text);
-
-  if (
-    (!hasHttpStatus || isExplicitHarness) &&
-    (isExplicitHarness ||
-      (exitCode !== 0 &&
-        (/UnknownError.*Unexpected server error|Unexpected server error.*UnknownError/i.test(
-          text
-        ) ||
-          /(?:\"name\"|\bname\b)\s*:\s*\"UnknownError\"/i.test(text) ||
-          /provider.{0,30}(?:not found|not registered|cannot resolve|failed to resolve|unknown)/i.test(
-            text
-          ) ||
-          /(?:cannot|failed to|unable to|could not)\s+resolve\s+provider/i.test(text) ||
-          /(?:unknown|unresolved|invalid|missing).{0,20}(?:provider|harness)/i.test(text) ||
-          /@ai-sdk\/openai-compatible/i.test(text) ||
-          /(?:harness|launch).{0,15}config(?:uration)?.{0,15}error/i.test(text))))
-  ) {
-    const isHarnessFailed =
-      /HARNESS_FAILED|harness_failed/i.test(text) && !/LAUNCH_CONFIG|launch_config/i.test(text);
-    const cause = isHarnessFailed ? Cause.HARNESS_FAILED : Cause.LAUNCH_CONFIG;
-    return {
-      cause,
-      scope: Scope.HARNESS,
-      cooldownMs: DEFAULT_COOLDOWNS[cause] !== undefined ? DEFAULT_COOLDOWNS[cause] : 5 * 60 * 1000,
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: null,
@@ -490,6 +573,7 @@ module.exports = {
   Scope,
   HumanAction,
   parseResetTime,
+  MAX_RESET_MS,
   DEFAULT_COOLDOWNS,
   requiresHumanAction,
   classifyFailure,

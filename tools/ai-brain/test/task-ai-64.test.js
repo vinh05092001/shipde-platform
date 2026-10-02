@@ -4136,11 +4136,11 @@ describe('TASK-AI-64 worker timeout and upstream quota fallback (DEFECT M)', () 
       calls.push(job);
       if (job.upstream === 'ag') {
         return {
-          exitCode: -1,
-          timedOut: true,
+          exitCode: 1,
+          timedOut: false,
           stdout:
             'OpenCode error event: {"type":"error","error":{"message":"Unavailable (reset after 116h)"}}',
-          stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+          stderr: '',
         };
       }
       return {

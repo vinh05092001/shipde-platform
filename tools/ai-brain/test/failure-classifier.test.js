@@ -14,6 +14,7 @@ const {
   Scope,
   HumanAction,
   parseResetTime,
+  MAX_RESET_MS,
   classifyFailure,
   DEFAULT_COOLDOWNS,
 } = require('../failure-classifier');
@@ -27,6 +28,12 @@ describe('parseResetTime', () => {
   test('parses "reset after 151h 23m"', () => {
     const ms = parseResetTime('reset after 151h 23m');
     assert.equal(ms, (151 * 3600 + 23 * 60) * 1000);
+  });
+
+  test('caps reset hints exceeding MAX_RESET_MS (30 days)', () => {
+    const ms = parseResetTime('reset after 999999h');
+    assert.equal(ms, MAX_RESET_MS);
+    assert.equal(MAX_RESET_MS, 30 * 24 * 60 * 60 * 1000);
   });
 
   test('parses "Resets in 62h28m31s"', () => {
@@ -578,16 +585,161 @@ describe('Case 14: launcher timeout and upstream quota exhaustion (Defect M)', (
     assert.equal(result.cooldownMs, DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED]);
   });
 
-  test('launcher timeout combined with upstream Unavailable error classifies as QUOTA_EXHAUSTED with reset cooldown rather than generic TIMEOUT', () => {
+  test('launcher timeout takes precedence over worker stdout error and classifies as TIMEOUT with 10m cooldown', () => {
     const result = classifyFailure({
       exitCode: -1,
       timedOut: true,
       stdout: 'OpenCode worker retrying... Error: Unavailable (reset after 116h)',
       stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
     });
+    assert.equal(result.cause, Cause.TIMEOUT);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.cooldownMs, DEFAULT_COOLDOWNS[Cause.TIMEOUT]);
+    assert.equal(result.cooldownMs, 10 * 60 * 1000);
+  });
+
+  test('Finding F1: real launcher timeout with 429 in timestamps and quota in test listings classifies as TIMEOUT, not quota_exhausted', () => {
+    const realisticStdout = [
+      'OpenCode starting session...',
+      'PASS tools/ai-brain/test/agy-quota.test.js',
+      'PASS tools/ai-brain/test/quota-store.test.js',
+      'PASS tools/ai-brain/test/refresh-quota.test.js',
+      '{"type":"step_start","step":1,"timestamp":1790885714291,"eventId":"event-429-start"}',
+      '{"type":"tool_call","name":"exec","id":"call-429-001"}',
+      'duration: 429ms',
+    ].join('\n');
+    const result = classifyFailure({
+      exitCode: -1,
+      timedOut: true,
+      stdout: realisticStdout,
+      stderr: '\r\n[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+    });
+    assert.equal(result.cause, Cause.TIMEOUT);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.cooldownMs, DEFAULT_COOLDOWNS[Cause.TIMEOUT]);
+    assert.equal(result.cooldownMs, 10 * 60 * 1000);
+  });
+
+  test('Finding F1: realistic multi-line OpenCode session with provider error event killed by launcher timeout classifies as TIMEOUT', () => {
+    const realisticStdout = [
+      'OpenCode starting session...',
+      '{"type":"step_start","step":1}',
+      '{"type":"tool_call","name":"exec","id":"call-1"}',
+      '{"type":"error","error":{"message":"Unavailable (reset after 116h)"}}',
+      '{"type":"status","status":"retrying"}',
+      'OpenCode worker waiting for retry...',
+    ].join('\n');
+    const result = classifyFailure({
+      exitCode: -1,
+      timedOut: true,
+      stdout: realisticStdout,
+      stderr: '[ISOLATION_LAUNCHER] worker timed out after 1800000 ms and was killed',
+    });
+    assert.equal(result.cause, Cause.TIMEOUT);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.cooldownMs, DEFAULT_COOLDOWNS[Cause.TIMEOUT]);
+    assert.equal(result.cooldownMs, 10 * 60 * 1000);
+  });
+
+  test('Finding F2: untrusted worker stdout printing quota exceeded in test failure does not widen to QUOTA_EXHAUSTED', () => {
+    const realisticBuildFailureStdout = [
+      'yarn run test',
+      'FAIL src/quota/quota-manager.spec.ts',
+      '  ● QuotaManager › should handle quota exceeded',
+      '    AssertionError: expected status 429 to equal 200',
+      '      at Object.<anonymous> (src/quota/quota-manager.spec.ts:42:9)',
+      '429 Too Many Requests: quota exceeded resets in 1h',
+      'Tests: 1 failed, 10 passed, 11 total',
+    ].join('\n');
+    const result = classifyFailure({
+      exitCode: 1,
+      stdout: realisticBuildFailureStdout,
+    });
+    assert.notEqual(result.cause, Cause.QUOTA_EXHAUSTED);
+    assert.notEqual(result.scope, Scope.UPSTREAM);
+  });
+
+  test('Finding F2: untrusted worker adding 429 quota to stdout cannot widen harness launch_config failure to upstream quota', () => {
+    const honestHarnessStdout = [
+      '{"type":"step_start","step":1}',
+      '{"type":"error","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details."}}}',
+    ].join('\n');
+    const spoofedStdout =
+      honestHarnessStdout + '\n429 Too Many Requests: quota exceeded resets in 1h';
+
+    const result = classifyFailure({
+      exitCode: 1,
+      stdout: spoofedStdout,
+    });
+    assert.equal(result.cause, Cause.LAUNCH_CONFIG);
+    assert.equal(result.scope, Scope.HARNESS);
+    assert.equal(result.cooldownMs, DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG]);
+
+    // Candidate on same upstream but different model must NOT be blocked
+    const cand1 = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      modelId: 'ag/m1',
+    };
+    const cand2 = {
+      harness: 'opencode-direct',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      modelId: 'ag/m2',
+    };
+    assert.equal(sameFailureDomain(cand2, cand1, result), false);
+  });
+
+  test('Finding F2: attacker-chosen unbounded reset hint is capped at MAX_RESET_MS', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      stdout: '{"type":"error","error":{"message":"Unavailable (reset after 999999h)"}}',
+    });
+    assert.equal(result.cause, Cause.QUOTA_EXHAUSTED);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.cooldownMs, MAX_RESET_MS);
+    assert.equal(MAX_RESET_MS, 30 * 24 * 60 * 60 * 1000);
+  });
+
+  test('Finding F3: real quota error with OpenCode status: running event stream classifies as QUOTA_EXHAUSTED with parsed reset cooldown', () => {
+    const stdout = [
+      '{"type":"status","status":"running"}',
+      '{"type":"step_start","step":1}',
+      '{"type":"error","error":{"message":"Unavailable (reset after 116h)"}}',
+    ].join('\n');
+    const result = classifyFailure({
+      exitCode: 1,
+      stdout,
+    });
     assert.equal(result.cause, Cause.QUOTA_EXHAUSTED);
     assert.equal(result.scope, Scope.UPSTREAM);
     assert.equal(result.cooldownMs, 116 * 3600 * 1000);
+  });
+
+  test('Finding F3: FreeUsageLimit with OpenCode status: running event stream classifies as QUOTA_EXHAUSTED', () => {
+    const stdout = ['{"type":"status","status":"running"}', '{"type":"step_start","step":1}'].join(
+      '\n'
+    );
+    const result = classifyFailure({
+      exitCode: 1,
+      httpStatus: 429,
+      stdout,
+      stderr: 'HTTP 429: FreeUsageLimit exceeded, please upgrade or wait',
+    });
+    assert.equal(result.cause, Cause.QUOTA_EXHAUSTED);
+    assert.equal(result.scope, Scope.UPSTREAM);
+    assert.equal(result.cooldownMs, DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED]);
+  });
+
+  test('untrusted worker stderr printing "worker timed out" without launcher signal does not trigger TIMEOUT', () => {
+    const result = classifyFailure({
+      exitCode: 1,
+      stderr: 'worker timed out internally while doing something',
+    });
+    assert.notEqual(result.cause, Cause.TIMEOUT);
   });
 
   test('TIMEOUT failure domain matches only candidates with same upstream and allows other upstreams on the same gateway', () => {
