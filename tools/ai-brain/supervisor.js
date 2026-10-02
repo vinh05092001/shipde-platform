@@ -184,6 +184,10 @@ function withCleanGitEnv(cwd, fn, options) {
     copyIfSafe(workerGitDir, gitDir, 'index');
     copyIfSafe(workerCommonDir, gitDir, 'packed-refs');
 
+    fs.mkdirSync(path.join(gitDir, 'info'), { recursive: true });
+    copyIfSafe(path.join(workerGitDir, 'info'), path.join(gitDir, 'info'), 'exclude');
+    copyIfSafe(path.join(workerCommonDir, 'info'), path.join(gitDir, 'info'), 'exclude');
+
     safeCopyRefs(path.join(workerCommonDir, 'refs'), path.join(gitDir, 'refs'));
 
     return fn(gitDir);
@@ -193,7 +197,17 @@ function withCleanGitEnv(cwd, fn, options) {
 }
 
 function safeGit(tmpDir, cwd, args, timeoutMs) {
-  const safeArgs = ['--git-dir=' + tmpDir, '--work-tree=' + cwd, ...args];
+  const normCwd = path.resolve(cwd).replace(/\\/g, '/');
+  const normTmp = path.resolve(tmpDir).replace(/\\/g, '/');
+  const safeArgs = [
+    '-c',
+    'safe.directory=' + normCwd,
+    '-c',
+    'safe.directory=' + normTmp,
+    '--git-dir=' + tmpDir,
+    '--work-tree=' + cwd,
+    ...args,
+  ];
   return spawnSync('git', safeArgs, {
     cwd,
     encoding: 'utf8',

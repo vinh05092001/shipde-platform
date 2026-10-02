@@ -2460,3 +2460,395 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
     });
   });
 });
+
+describe('TASK-AI-64 worker head review, local commit verification, and usage report (DEFECT H & A)', () => {
+  const promptCompiler = require('../prompt-compiler');
+  const {
+    verifyWorkerCommit,
+    isTreeDirty,
+    runVerificationCommand,
+    writeUsageReportFromHarnessResult,
+    runOrchestration,
+  } = require('../orchestrate');
+  const { readSessionId } = require('../executor');
+  const { getHarness } = require('../harness');
+  const { runReviewLoop } = require('../review-loop');
+
+  test('compilePrompt requires local commit on exercise branch and includes usage report target', () => {
+    const item = {
+      id: 'TASK-AI-64',
+      allowedPaths: ['tools/ai-brain/branch-name.js'],
+      verification: { command: 'node --test tools/ai-brain/test/e1-branch-name.test.js' },
+      acceptanceCriteria: ['pure branch name helper'],
+    };
+    const p = promptCompiler.compilePrompt(item, {
+      goal: 'test goal',
+      branch: 'feat/task-ai-64-e1',
+      usageFile: 'C:/temp/usage-report.json',
+    });
+
+    assert.ok(
+      p.includes(
+        'Commit requirement: you must create exactly one local commit on the exercise branch (feat/task-ai-64-e1) containing all your changes (no push).'
+      ),
+      'prompt must contain explicit local commit requirement on the exercise branch'
+    );
+    assert.ok(
+      p.includes('Usage report: write your session usage report to C:/temp/usage-report.json'),
+      'prompt must contain usage report instruction when usageFile is specified'
+    );
+  });
+
+  test('verifyWorkerCommit fails with NO_LOCAL_COMMIT when worker HEAD matches baseSha', () => {
+    const repo = makeTempRepo();
+    try {
+      // Create an untracked or modified file
+      fs.writeFileSync(path.join(repo.dir, 'extra.txt'), 'unstaged change\n');
+      const check = verifyWorkerCommit(repo.dir, repo.sha);
+      assert.equal(check.pass, false);
+      assert.equal(check.cause, 'NO_LOCAL_COMMIT');
+      assert.match(check.detail, /matches base SHA/);
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('verifyWorkerCommit fails with NO_LOCAL_COMMIT when worker has uncommitted changes (dirty tree)', () => {
+    const repo = makeTempRepo();
+    const git = (args) =>
+      spawnSync('git', args, { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+    try {
+      // Create a commit so HEAD != baseSha
+      fs.mkdirSync(path.join(repo.dir, 'tools', 'ai-brain'), { recursive: true });
+      fs.writeFileSync(
+        path.join(repo.dir, 'tools', 'ai-brain', 'branch-name.js'),
+        'module.exports = {};\n'
+      );
+      git(['add', '.']);
+      git(['commit', '-q', '-m', 'feat: branch name']);
+      const newSha = git(['rev-parse', 'HEAD']).stdout.trim();
+      assert.notEqual(newSha, repo.sha);
+
+      // Now leave an uncommitted dirty file
+      fs.writeFileSync(path.join(repo.dir, 'dirty.txt'), 'uncommitted work\n');
+
+      const check = verifyWorkerCommit(repo.dir, repo.sha);
+      assert.equal(check.pass, false);
+      assert.equal(check.cause, 'NO_LOCAL_COMMIT');
+      assert.match(check.detail, /dirty tree/);
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('verifyWorkerCommit passes when worker has one local commit and clean tree', () => {
+    const repo = makeTempRepo();
+    const git = (args) =>
+      spawnSync('git', args, { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+    try {
+      // Create a local commit
+      fs.writeFileSync(path.join(repo.dir, 'branch-name.js'), 'module.exports = {};\n');
+      git(['add', '.']);
+      git(['commit', '-q', '-m', 'feat: add branch-name']);
+      const newSha = git(['rev-parse', 'HEAD']).stdout.trim();
+
+      const check = verifyWorkerCommit(repo.dir, repo.sha);
+      assert.equal(check.pass, true);
+      assert.equal(check.headSha, newSha);
+      assert.equal(check.baseSha, repo.sha);
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('verifyWorkerCommit ignores files excluded in .git/info/exclude', () => {
+    const repo = makeTempRepo();
+    const git = (args) =>
+      spawnSync('git', args, { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+    try {
+      // Create a local commit
+      fs.writeFileSync(path.join(repo.dir, 'branch-name.js'), 'module.exports = {};\n');
+      git(['add', '.']);
+      git(['commit', '-q', '-m', 'feat: add branch-name']);
+      const newSha = git(['rev-parse', 'HEAD']).stdout.trim();
+
+      // Add excluded runner file and write it to worktree
+      fs.mkdirSync(path.join(repo.dir, '.git', 'info'), { recursive: true });
+      fs.appendFileSync(
+        path.join(repo.dir, '.git', 'info', 'exclude'),
+        'tools/ai-brain/test/e1-branch-name.test.js\n.shipde/\n',
+        'utf8'
+      );
+      fs.mkdirSync(path.join(repo.dir, 'tools', 'ai-brain', 'test'), { recursive: true });
+      fs.writeFileSync(
+        path.join(repo.dir, 'tools', 'ai-brain', 'test', 'e1-branch-name.test.js'),
+        '// runner\n'
+      );
+
+      const check = verifyWorkerCommit(repo.dir, repo.sha);
+      assert.equal(check.pass, true, 'excluded runner must not mark the worktree dirty');
+      assert.equal(check.headSha, newSha);
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('runVerificationCommand returns NO_LOCAL_COMMIT when tests pass on disk but git changes are uncommitted', () => {
+    const repo = makeTempRepo();
+    try {
+      // Write the required file so verification command exits 0
+      fs.writeFileSync(path.join(repo.dir, 'test-target.js'), 'module.exports = 42;\n');
+      const item = {
+        id: 'TEST-1',
+        verification: {
+          command: 'node -e "process.exit(0)"',
+          expect: '',
+        },
+      };
+      const res = runVerificationCommand(item, {
+        workerRoot: repo.dir,
+        baseSha: repo.sha,
+      });
+      assert.equal(res.pass, false);
+      assert.equal(res.cause, 'NO_LOCAL_COMMIT');
+      assert.ok(Array.isArray(res.findings) && res.findings.length > 0);
+      assert.equal(res.findings[0].id, 'NO_LOCAL_COMMIT');
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('runOrchestration pins review to worker head SHA and does not block with REVIEW_SHA_UNPINNED when o.sha is null', async () => {
+    const repo = makeTempRepo();
+    const git = (args) =>
+      spawnSync('git', args, { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+    const dirDecisions = tmpDir('task-ai-64-orch-head-dec-');
+
+    try {
+      // Worker commits a change
+      fs.writeFileSync(path.join(repo.dir, 'branch-name.js'), 'module.exports = true;\n');
+      git(['add', '.']);
+      git(['commit', '-q', '-m', 'feat: branch-name']);
+      const workerHead = git(['rev-parse', 'HEAD']).stdout.trim();
+
+      let reviewedSha = null;
+      const opts = baseOpts({
+        decisionDir: dirDecisions,
+        workerRoot: repo.dir,
+        baseSha: repo.sha,
+        sha: null, // o.sha is null like live CLI run!
+        run: liveLaunch({ exitCode: 0, stdout: 'success' }),
+        tests: PASS_TESTS,
+        reviewer: (arg) => {
+          reviewedSha = typeof arg === 'string' ? arg : arg && arg.sha;
+          return { pass: true, sha: reviewedSha, verdict: 'PASS', findings: [] };
+        },
+      });
+
+      const res = await safeRun(opts);
+      assert.ok(res.log, 'orchestration must succeed without unpinned error: ' + res.refusal);
+      assert.equal(isLiveCompletion(res, 'A'), true, 'work item A must complete');
+      assert.equal(reviewedSha, workerHead, 'reviewer must receive worker head SHA');
+      assert.equal(res.log.reviews[0].sha, workerHead, 'review entry must record worker head SHA');
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+      fs.rmSync(dirDecisions, { recursive: true, force: true });
+    }
+  });
+
+  test('runReviewLoop routes NO_LOCAL_COMMIT through repair and completes when repair worker commits', async () => {
+    let runTestCalls = 0;
+    let repairCalls = 0;
+    const initialSha = SHA_A;
+    const repairedSha = SHA_B;
+
+    const res = await runReviewLoop(
+      { sha: initialSha, budget: 2 },
+      {
+        runTests: () => {
+          runTestCalls += 1;
+          if (runTestCalls === 1) {
+            return {
+              pass: false,
+              cause: 'NO_LOCAL_COMMIT',
+              findings: [{ id: 'NO_LOCAL_COMMIT', open: true, detail: 'dirty tree' }],
+            };
+          }
+          return { pass: true };
+        },
+        review: (sha) => ({
+          pass: true,
+          sha,
+          verdict: 'PASS',
+          findings: [],
+        }),
+        repair: (findings, sha) => {
+          repairCalls += 1;
+          assert.equal(findings[0].id, 'NO_LOCAL_COMMIT');
+          return { sha: repairedSha };
+        },
+      }
+    );
+
+    assert.equal(res.status, 'COMPLETED');
+    assert.equal(res.finalSha, repairedSha);
+    assert.equal(repairCalls, 1);
+    assert.equal(res.repairCount, 1);
+    assert.ok(res.rounds.some((r) => r.cause === 'NO_LOCAL_COMMIT'));
+  });
+
+  test('writeUsageReportFromHarnessResult writes usage report from opencode stdout telemetry and readSessionId parses it', () => {
+    const tmpUsageDir = tmpDir('task-ai-64-usage-');
+    const usageFile = path.join(tmpUsageDir, 'usage-test.json');
+    const opencodeDirect = getHarness('opencode-direct');
+
+    try {
+      const job = {
+        harness: 'opencode-direct',
+        usageFile,
+        model: 'ag/gemini-3.1-pro-low',
+        upstream: 'ag',
+      };
+      const res = {
+        exitCode: 0,
+        stdout:
+          'some log\n{"sessionID":"ses-opencode-42","tokens":{"input":150,"output":75,"total":225}}\nDone',
+      };
+
+      const writtenPath = writeUsageReportFromHarnessResult(job, res);
+      assert.equal(writtenPath, usageFile);
+      assert.ok(fs.existsSync(usageFile));
+
+      const parsed = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
+      assert.equal(parsed.session_id, 'ses-opencode-42');
+      assert.equal(parsed.usage.input, 150);
+      assert.equal(parsed.usage.output, 75);
+      assert.equal(parsed.usage.total, 225);
+
+      const session = readSessionId(opencodeDirect, job, res);
+      assert.equal(session.id, 'ses-opencode-42');
+    } finally {
+      fs.rmSync(tmpUsageDir, { recursive: true, force: true });
+    }
+  });
+
+  test('writeUsageReportFromHarnessResult sets session_id to null on non-zero exit code and fails closed', () => {
+    const tmpUsageDir = tmpDir('task-ai-64-usage-fail-');
+    const usageFile = path.join(tmpUsageDir, 'usage-fail.json');
+    const opencodeDirect = getHarness('opencode-direct');
+
+    try {
+      const job = {
+        harness: 'opencode-direct',
+        usageFile,
+        model: 'ag/gemini-3.1-pro-low',
+        upstream: 'ag',
+      };
+      const res = {
+        exitCode: 1,
+        completionNonce: 'nonce-12345',
+        stdout: 'error occurred',
+      };
+
+      writeUsageReportFromHarnessResult(job, res);
+      assert.ok(fs.existsSync(usageFile));
+
+      const parsed = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
+      assert.equal(parsed.session_id, null, 'failed launch must record session_id: null');
+
+      const session = readSessionId(opencodeDirect, job, res);
+      assert.equal(session.id, null);
+      assert.equal(session.cause, 'HARNESS_NO_SESSION_ID');
+    } finally {
+      fs.rmSync(tmpUsageDir, { recursive: true, force: true });
+    }
+  });
+
+  test('readSessionId fails closed with HARNESS_USAGE_REPORT_MISSING when usage report is absent', () => {
+    const opencodeDirect = getHarness('opencode-direct');
+    const job = {
+      harness: 'opencode-direct',
+      usageFile: path.join(os.tmpdir(), 'non-existent-usage-' + Date.now() + '.json'),
+    };
+    const res = { exitCode: 0, stdout: '' };
+
+    const session = readSessionId(opencodeDirect, job, res);
+    assert.equal(session.id, null);
+    assert.equal(session.cause, 'HARNESS_USAGE_REPORT_MISSING');
+  });
+
+  test('runOrchestration and runVerificationCommand do not bind to process.cwd() git repo when workerRoot is unspecified (POSIX simulation)', async () => {
+    const hostRepo = makeTempRepo();
+    const origCwd = process.cwd();
+    const dirDecisions = tmpDir('task-ai-64-posix-sim-dec-');
+
+    try {
+      // Switch process.cwd() into hostRepo to simulate running inside a git clone (like Ubuntu CI)
+      process.chdir(hostRepo.dir);
+
+      // (1) In a repo cwd, safeRun with baseOpts and open findings rejects with PASS_WITH_FINDINGS_REJECTED (64-09 parity)
+      const resPass = await safeRun(
+        baseOpts({
+          decisionDir: dirDecisions,
+          run: recorder([liveLaunch()]),
+          reviewer: () => ({
+            pass: true,
+            sha: SHA_A,
+            verdict: 'PASS',
+            findings: [{ id: 'F-1', open: true, detail: 'open finding' }],
+          }),
+        })
+      );
+      assert.ok(resPass.log, 'run record must exist');
+      const tracePass = JSON.stringify(resPass.log) + '\n' + decisionText(dirDecisions);
+      assert.ok(
+        tracePass.includes('PASS_WITH_FINDINGS_REJECTED'),
+        'PASS with open findings must be rejected even when cwd is a git repo'
+      );
+      assert.ok(tracePass.includes('F-1'), 'finding ID must be recorded');
+
+      // (2) In a repo cwd, safeRun with reviewBudget exhausts and logs REPAIR_BUDGET_EXHAUSTED (64-10 parity)
+      const dirBudget = tmpDir('task-ai-64-posix-budget-');
+      let reviewCalls = 0;
+      const resBudget = await safeRun(
+        baseOpts({
+          decisionDir: dirBudget,
+          reviewBudget: 2,
+          run: recorder([liveLaunch()]),
+          reviewer: () => {
+            reviewCalls += 1;
+            return {
+              pass: false,
+              sha: SHA_A,
+              verdict: 'CHANGES_REQUIRED',
+              findings: [{ id: 'F-' + reviewCalls, open: true }],
+            };
+          },
+        })
+      );
+      assert.ok(resBudget.log, 'budget run record must exist');
+      assert.ok(reviewCalls > 1, 'must perform repair rounds (saw ' + reviewCalls + ')');
+      assert.ok(
+        decisionText(dirBudget).includes('REPAIR_BUDGET_EXHAUSTED'),
+        'decision log must record REPAIR_BUDGET_EXHAUSTED'
+      );
+
+      // (3) runVerificationCommand ignores dirty state in process.cwd() when workerRoot is unspecified
+      fs.writeFileSync(path.join(hostRepo.dir, 'dirty-file.txt'), 'dirty\n');
+      const item = {
+        id: 'ITEM-TEST',
+        verification: { command: 'node -e "process.exit(0)"' },
+      };
+      const resVerify = runVerificationCommand(item, {});
+      assert.equal(
+        resVerify.pass,
+        true,
+        'verification without workerRoot must pass and ignore dirty process.cwd()'
+      );
+    } finally {
+      process.chdir(origCwd);
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(dirDecisions, { recursive: true, force: true });
+    }
+  });
+});

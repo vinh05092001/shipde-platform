@@ -873,7 +873,15 @@ function getIsolatedLauncher() {
     const completionNonce = crypto.randomBytes(16).toString('hex');
     const payloadDir = path.join(workerRoot, '.shipde');
     fs.mkdirSync(payloadDir, { recursive: true });
-    appendGitInfoExclude(workerRoot, ['.shipde/']);
+    appendGitInfoExclude(workerRoot, [
+      '.shipde/',
+      'run-target.ps1',
+      'run-target.complete.json',
+      'temp/',
+      '.config/',
+      '.local/',
+      'Microsoft/',
+    ]);
     const payloadArgsPath = path.join(payloadDir, 'launch-args-' + completionNonce + '.json');
     fs.writeFileSync(payloadArgsPath, JSON.stringify(fullArgs), 'utf8');
 

@@ -834,3 +834,58 @@ Evidence:
 Residual risk / known limitations:
 - Materialisation depends on `tools/ai-brain/exercise/e1-branch-name.cases.json` being present either in the provisioned tree or host worktree.
 - The runner file is excluded locally via `.git/info/exclude`; if `.git/info` cannot be created or written, exclusion would fail closed.
+
+## Live run attempt 11 worker head review, commit requirement, and usage report fix (2026-10-02)
+
+Observation / Defect H & Defect A:
+In Live E2E attempt 11 (`.worktrees/logs/night/ai64-live-run1-20261002-attempt11.md`), the isolated worker (`gemini-3.1-pro-low`) successfully wrote `tools/ai-brain/branch-name.js`, and host-side verification confirmed that fail-before failed at the base SHA and passed after the agent implementation. However:
+1. (H1) Uncommitted Worker Changes: The worker left the code change uncommitted in the worker root (`C:/ShipDeWorker/isolation`). The prompt lacked an explicit local commit requirement, and the orchestrator lacked worker git commit verification (`head == baseSha` or dirty tree).
+2. (H2) Review SHA Unpinned: In `tools/ai-brain/orchestrate.js:reviewItem`, the review loop statically referenced `o.sha` from the CLI `--sha` option. Since `--sha` was not supplied on the CLI, `o.sha` was null, causing the review loop to immediately block with `REVIEW_SHA_UNPINNED` and bypassing bounded repair.
+3. (A) Missing Usage Report: The usage report file named in `out.json` (`job.usageFile` under `%TEMP%/shipde-usage/`) was never written to disk for `opencode-direct` launches because OpenCode lacks a `--usage-file` CLI flag, and `readSessionId` bypassed usage report verification for `opencode-direct`.
+
+Decision & Implementation:
+1. Explicit Worker Commit Requirement (`tools/ai-brain/prompt-compiler.js`):
+   - Added mandatory commit instruction to compiled prompts: `Commit requirement: you must create exactly one local commit on the exercise branch (${branch}) containing all your changes (no push).`
+   - Added usage report output instruction when `usageFile` is passed.
+2. Clean Git Environment with Untracked Exclude Support (`tools/ai-brain/supervisor.js` & `tools/ai-brain/isolation-launcher.js`):
+   - In `supervisor.js:withCleanGitEnv`, added safe copying of `info/exclude` into the operator-controlled clean temporary git environment so `status --porcelain`, `rev-parse`, and `diff` respect untracked file exclusions.
+   - In `isolation-launcher.js:appendGitInfoExclude`, excluded harness runtime artifacts (`.shipde/`, `run-target.ps1`, `run-target.complete.json`, `temp/`, `.config/`, `.local/`, `Microsoft/`) in the worker root so operator telemetry does not dirty the worker worktree.
+3. Worker Commit Verification & Bounded Repair Routing (`tools/ai-brain/orchestrate.js`):
+   - Implemented `headShaOf(cwd)`, `isTreeDirty(cwd)`, and `verifyWorkerCommit(workerRoot, baseSha)`.
+   - `verifyWorkerCommit` asserts that worker HEAD is a valid commit, `headSha !== baseSha`, and `isTreeDirty` is false. If uncommitted, returns `NO_LOCAL_COMMIT` with descriptive detail.
+   - In `runVerificationCommand`: runs test command host-side; when exit and expect pass, executes `verifyWorkerCommit`. On uncommitted changes or missing commit, returns `{ pass: false, cause: 'NO_LOCAL_COMMIT', findings: [{ id: 'NO_LOCAL_COMMIT', open: true, detail }] }`, feeding `runReviewLoop`'s bounded repair mechanism without crashing or prematurely blocking with `REVIEW_SHA_UNPINNED`.
+4. Pinned Worker Head Review (`tools/ai-brain/orchestrate.js`):
+   - In `reviewItem`, resolves `targetSha = workerHead || o.sha` (40-char SHA); passes `workerRoot` and `baseSha` into verification options for `runReviewLoop`; records `sha: review.finalSha || targetSha`.
+5. Usage Report Generation and Fail-Closed Verification (`tools/ai-brain/orchestrate.js`, `tools/ai-brain/harness.js`, `tools/ai-brain/executor.js`):
+   - In `orchestrate.js:writeUsageReportFromHarnessResult(job, res)`, generates the durable usage report for `opencode-direct` from stdout JSON telemetry (`sessionID`, token counts) or `completionNonce`; if the launch exited non-zero, sets `session_id: null`. Preserves Hermes CLI usage report writing.
+   - In `harness.js:opencodeDirect.sessionIdFrom`, extracts `session_id`/`sessionId`/`sessionID` from the usage report.
+   - In `executor.js:readSessionId`, enforces reading and validating `job.usageFile` when `adapter.writesUsageReport` is true, failing closed with `HARNESS_USAGE_REPORT_MISSING` if absent and `HARNESS_USAGE_REPORT_INVALID` if malformed, falling back to `completionNonce` only when `job.usageFile` was omitted.
+
+Evidence:
+- Fail-before base SHA: `723fc8f` / `723fc8f31922cba2703aa406326b864a7812bb67`
+  - Prompt omitted commit requirement and usage report instructions.
+  - Worker commit unverified; dirty trees allowed.
+  - `reviewItem` blocked with `REVIEW_SHA_UNPINNED` when `o.sha` was null.
+  - OpenCode usage report file never created on disk; `readSessionId` bypassed usage report verification.
+- Pass-after result: All tests pass. 11 new regression tests in `tools/ai-brain/test/task-ai-64.test.js`:
+  - Full test suite: 1142/1142 passed (57/57 in `tools/ai-brain/test/task-ai-64.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `npx --package prettier@3.9.6 prettier --check tools/ai-brain/executor.js tools/ai-brain/harness.js tools/ai-brain/isolation-launcher.js tools/ai-brain/orchestrate.js tools/ai-brain/prompt-compiler.js tools/ai-brain/supervisor.js tools/ai-brain/test/task-ai-64.test.js docs/product-spec/work-items/TASK-AI-64.md`
+  - `git diff --check` clean.
+
+Residual risk / known limitations:
+- The worker commit author and message are defined by the agent/git config inside the worker environment; `verifyWorkerCommit` asserts commit existence, parentage, and clean worktree status rather than commit message format.
+- OpenCode telemetry extraction relies on stdout JSON lines or completionNonce fallback; non-zero exit codes write `session_id: null` to ensure fail-closed behavior.
+
+## CI fix round 1 of 2: Worker-head verification parity on POSIX (2026-10-02)
+
+Observation / Root Cause:
+In commit `b971372`, `orchestrate.js:reviewItem` resolved `workerRoot` as `(o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) || session.worktree || o.cwd || process.cwd()`. On Windows in the local worktree checkout (`.worktrees/ai64head`), `.git` is a worktree file, which `withCleanGitEnv` (with `workerWritable: true`) refused as `.git-unresolved`, causing `headShaOf(process.cwd())` to return `null` and safely falling back to `o.sha` (`SHA_A`). However, on Ubuntu CI, the repository is checked out as a standard clone with a `.git` directory, so `headShaOf(process.cwd())` succeeded and returned the HEAD commit of the CI clone repository. This caused `targetSha` to bind to the CI commit SHA instead of `o.sha` (`SHA_A`), leading tests `64-09` and `64-10` to immediately block with `STALE_REVIEW_SHA` on round 1 because their mock reviewers returned `SHA_A`. Similarly, `runVerificationCommand` erroneously verified commits on `process.cwd()`.
+
+Fix:
+1. In `orchestrate.js:reviewItem`, removed `o.cwd || process.cwd()` fallback from `workerRoot`. If no isolated worker, explicit worker root, or session worktree exists, `workerRoot` resolves to `null`, ensuring `targetSha` preserves `o.sha`.
+2. In `orchestrate.js:runVerificationCommand`, scoped `verifyWorkerCommit` to `workerRoot` (returning `pass: true` when `workerRoot` is absent) rather than testing `process.cwd()`.
+3. In `supervisor.js:safeGit`, added scoped `-c safe.directory=<normCwd>` and `-c safe.directory=<normTmp>` arguments to prevent dubious ownership errors when `GIT_CONFIG_GLOBAL` is ignored on POSIX.
+4. In `tools/ai-brain/test/task-ai-64.test.js`, added POSIX clone simulation tests proving that running from inside a git clone directory does not bind review to the host repository when `workerRoot` is unspecified.

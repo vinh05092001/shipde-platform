@@ -199,8 +199,9 @@ const opencodeDirect = {
   resume: null,
   stop: null,
   inspect: null,
-  sessionIdFrom() {
-    return null;
+  sessionIdFrom(parsed) {
+    const v = parsed && (parsed.session_id || parsed.sessionId || parsed.sessionID);
+    return v !== undefined && v !== null && String(v).trim() !== '' ? String(v) : null;
   },
   writesUsageReport: true,
 };
