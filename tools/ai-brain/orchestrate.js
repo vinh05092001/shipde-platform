@@ -155,6 +155,7 @@ function resolveLauncher(o, isolatedLauncher) {
       cwd: job.hostWorktree || job.cwd,
       workerRoot: job.workerRoot,
       baseSha: job.baseSha,
+      retainWorkerHead: job.retainWorkerHead || undefined,
       verdictPath: job.verdictPath,
       exercise: job.exercise || o.exercise || null,
       onProvisioned: typeof o.onProvisioned === 'function' ? o.onProvisioned : undefined,
@@ -1063,9 +1064,22 @@ async function reviewItem(
   }
 
   const writerCandidate = candidates.find((c) => candidateKey(c) === session.candidateKey);
-  const forbiddenDomains = writerCandidate
-    ? [writerCandidate.gateway, writerCandidate.upstream, writerCandidate.accountId].filter(Boolean)
-    : [];
+  let writerUpstream = writerCandidate && writerCandidate.upstream;
+  let writerAccount = writerCandidate && writerCandidate.accountId;
+  let writerGateway = writerCandidate && writerCandidate.gateway;
+  if (!writerCandidate && session && session.candidateKey) {
+    const parts = session.candidateKey.split('::');
+    if (parts.length >= 7) {
+      writerGateway = parts[2];
+      writerUpstream = parts[3];
+      writerAccount = parts[4];
+    }
+  }
+  // The failure domain is per gateway+upstream (each upstream is an independent
+  // failure domain). Only the writer's upstream (or gateway if no upstream) and
+  // account are forbidden, allowing reviewer candidates on the same gateway
+  // with distinct upstreams.
+  const forbiddenDomains = [writerUpstream || writerGateway, writerAccount].filter(Boolean);
   const reviewerDecision = await selectCandidateForProfile(
     { id: item.id + '-review', roleRequirement: { role: 'reviewer' }, complexity: item.complexity },
     candidates,
@@ -1251,7 +1265,8 @@ function repairRound(
       prompt,
       branch,
       base: o.base || 'main',
-      baseSha: o.baseSha || null,
+      baseSha: sha || o.baseSha || null,
+      retainWorkerHead: sha || null,
       hostWorktree: o.isolatedWorker ? hostWorktree : null,
       workerRoot: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || null,
       cwd: repairWorkerRoot,
@@ -1431,6 +1446,8 @@ module.exports = {
   writeUsageReportFromHarnessResult,
   materialiseExercise,
   captureFailBefore,
+  selectCandidateForProfile,
+  repairRound,
   ItemStatus,
   RunStatus,
   PublicationStatus,

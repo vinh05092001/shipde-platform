@@ -2022,16 +2022,18 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
       );
 
       // 5. Dynamic agreement: provider id in opencode.json changes with the exact --model argument
+      const fakeWorkerRootAlt = path.join(tmpDir, 'worker-alt');
+      fs.mkdirSync(fakeWorkerRootAlt, { recursive: true });
       const altArgs = directAdapter.launch({
         isolatedWorker: true,
         model: 'customprov/ag/gemini-3.1-pro-low',
-        cwd: fakeWorkerRoot,
+        cwd: fakeWorkerRootAlt,
         prompt: 'test prompt',
       });
       try {
         runIso(directAdapter, altArgs, {
           cwd: fakeHostCwd,
-          workerRoot: fakeWorkerRoot,
+          workerRoot: fakeWorkerRootAlt,
           verdictPath: verdictFile,
           getWorkerSid: () => 'TEST-SID',
           verifyBoundary: () => true,
@@ -2039,7 +2041,8 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
           workerTimeoutMs: 1000,
         });
       } catch (_) {}
-      const cfgAlt = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+      const cfgAltFile = path.join(fakeWorkerRootAlt, 'opencode.json');
+      const cfgAlt = JSON.parse(fs.readFileSync(cfgAltFile, 'utf8'));
       const altModel = altArgs[altArgs.indexOf('--model') + 1];
       const expectedAltProvider = sourcesApi.providerFromPrefix(altModel);
       assert.equal(expectedAltProvider, 'customprov');
@@ -2849,6 +2852,969 @@ describe('TASK-AI-64 worker head review, local commit verification, and usage re
       process.chdir(origCwd);
       fs.rmSync(hostRepo.dir, { recursive: true, force: true });
       fs.rmSync(dirDecisions, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('TASK-AI-64 repair keeps worker commit and reviewer uses gateway+upstream failure domain (DEFECTS J & K)', () => {
+  const { selectCandidateForProfile, repairRound } = require('../orchestrate');
+  const { generateCandidates, candidateKey } = require('../candidates');
+  const sourcesApi = require('../sources');
+  const isoMod = require('../isolation-launcher');
+
+  test('isolated launcher keeps existing worker root and commits when requested head SHA is present (Defect J)', () => {
+    const hostRepo = makeTempRepo();
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-worker-root-'));
+    const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+
+    try {
+      // Clone hostRepo into workerDir
+      git(['clone', '--no-hardlinks', hostRepo.dir, workerDir]);
+      git(['config', 'user.email', 'worker@shipde.test'], workerDir);
+      git(['config', 'user.name', 'Worker'], workerDir);
+
+      // Create a local worker commit in workerDir that does NOT exist in hostRepo
+      fs.writeFileSync(path.join(workerDir, 'worker-code.js'), 'console.log("worker change");\n');
+      git(['add', '.'], workerDir);
+      git(['commit', '-q', '-m', 'worker commit'], workerDir);
+      const workerSha = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.notEqual(workerSha, hostRepo.sha);
+
+      // Place a canary file in workerDir to prove it is not deleted/re-cloned
+      fs.writeFileSync(path.join(workerDir, 'canary.txt'), 'keep-me\n');
+
+      const fakeSid = 'S-1-5-21-test-sid';
+      const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+      const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+      fs.writeFileSync(
+        verdictPath,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          details: { github_push: 'PASS', operator_profile: 'PASS' },
+          timestamp: new Date().toISOString(),
+          sid: fakeSid,
+          worktree: hostRepo.dir,
+          policyHash,
+        })
+      );
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const mockAdapter = {
+        id: 'echo',
+        command: 'echo',
+      };
+
+      const opts = {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: workerSha,
+        retainWorkerHead: workerSha,
+        verdictPath,
+        getWorkerSid: () => fakeSid,
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, spawnOpts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh') {
+            return { status: 0, stdout: 'ok', stderr: '' };
+          }
+          return spawnSync(cmd, args, spawnOpts);
+        },
+      };
+
+      try {
+        runIso(mockAdapter, ['hello'], opts);
+      } catch (err) {
+        // Even if running the script fails, the provisioning step must not delete workerDir
+      }
+
+      assert.ok(
+        fs.existsSync(path.join(workerDir, 'canary.txt')),
+        'worker root must NOT be deleted or re-cloned when it holds requested head SHA'
+      );
+      const currentHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.equal(currentHead, workerSha, 'worker root must be checked out at workerSha');
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+    }
+  });
+
+  test('isolated launcher refuses mismatched HEAD on retained worker root with WORKER_HEAD_MISMATCH and never checks out or runs planted filter/hook/fsmonitor (Finding 1)', () => {
+    const hostRepo = makeTempRepo();
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-mismatch-worker-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+    const markerSmudge = path.join(os.tmpdir(), `marker-smudge-${Date.now()}-${process.pid}.txt`);
+    const markerHook = path.join(os.tmpdir(), `marker-hook-${Date.now()}-${process.pid}.txt`);
+    const markerFsmonitor = path.join(
+      os.tmpdir(),
+      `marker-fsmonitor-${Date.now()}-${process.pid}.txt`
+    );
+    const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+
+    try {
+      git(['clone', '--no-hardlinks', hostRepo.dir, workerDir]);
+      git(['config', 'user.email', 'worker@shipde.test'], workerDir);
+      git(['config', 'user.name', 'Worker'], workerDir);
+
+      fs.writeFileSync(path.join(workerDir, 'worker-code.js'), 'console.log("worker commit 1");\n');
+      git(['add', '.'], workerDir);
+      git(['commit', '-q', '-m', 'worker commit 1'], workerDir);
+      const workerSha = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.notEqual(workerSha, hostRepo.sha);
+
+      // Plant worker hooks, smudge filter, attributes, and fsmonitor
+      const hookDir = path.join(workerDir, 'hooks');
+      fs.mkdirSync(hookDir, { recursive: true });
+      const hookScript = path.join(hookDir, 'post-checkout');
+      fs.writeFileSync(hookScript, `#!/bin/sh\necho HOOK > "${markerHook.replace(/\\/g, '/')}"\n`);
+      try {
+        fs.chmodSync(hookScript, 0o755);
+      } catch {}
+
+      const smudgeScript = path.join(workerDir, 'smudge.js');
+      fs.writeFileSync(
+        smudgeScript,
+        `const fs = require('fs');\nfs.writeFileSync(${JSON.stringify(markerSmudge)}, 'SMUDGE');\nprocess.stdin.pipe(process.stdout);\n`
+      );
+
+      const fsmonitorScript = path.join(workerDir, 'fsmonitor.js');
+      fs.writeFileSync(
+        fsmonitorScript,
+        `const fs = require('fs');\nfs.writeFileSync(${JSON.stringify(markerFsmonitor)}, 'FSMONITOR');\n`
+      );
+
+      const evilAttr = path.join(workerDir, 'evil-attributes');
+      fs.writeFileSync(evilAttr, '* filter=evil\n');
+      fs.writeFileSync(path.join(workerDir, '.gitattributes'), '* filter=evil\n');
+
+      git(
+        ['config', 'filter.evil.smudge', `node "${smudgeScript.replace(/\\/g, '/')}"`],
+        workerDir
+      );
+      git(['config', 'core.hooksPath', hookDir.replace(/\\/g, '/')], workerDir);
+      git(['config', 'core.attributesFile', evilAttr.replace(/\\/g, '/')], workerDir);
+      git(['config', 'core.fsmonitor', `node "${fsmonitorScript.replace(/\\/g, '/')}"`], workerDir);
+
+      const fakeSid = 'S-1-5-21-test-sid';
+      const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+      fs.writeFileSync(
+        verdictPath,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          details: { github_push: 'PASS', operator_profile: 'PASS' },
+          timestamp: new Date().toISOString(),
+          sid: fakeSid,
+          worktree: hostRepo.dir,
+          policyHash,
+        })
+      );
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const mockAdapter = {
+        id: 'echo',
+        command: 'echo',
+      };
+
+      // Force mismatched-head case: baseSha is hostRepo.sha, while worker root is at workerSha
+      const opts = {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: hostRepo.sha,
+        retainWorkerHead: hostRepo.sha,
+        verdictPath,
+        getWorkerSid: () => fakeSid,
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, spawnOpts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh') {
+            return { status: 0, stdout: 'ok', stderr: '' };
+          }
+          return spawnSync(cmd, args, spawnOpts);
+        },
+      };
+
+      assert.throws(
+        () => runIso(mockAdapter, ['hello'], opts),
+        /WORKER_HEAD_MISMATCH/,
+        'mismatched HEAD in retained worker root must return structured WORKER_HEAD_MISMATCH error'
+      );
+
+      assert.strictEqual(
+        fs.existsSync(markerSmudge),
+        false,
+        'isolated launcher must not execute worker-planted filter.<driver>.smudge on mismatched HEAD'
+      );
+      assert.strictEqual(
+        fs.existsSync(markerHook),
+        false,
+        'isolated launcher must not execute worker-planted core.hooksPath post-checkout hook on mismatched HEAD'
+      );
+      assert.strictEqual(
+        fs.existsSync(markerFsmonitor),
+        false,
+        'isolated launcher must not execute worker-planted core.fsmonitor on mismatched HEAD'
+      );
+
+      const currentHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.strictEqual(
+        currentHead,
+        workerSha,
+        'worker root commit must be preserved and not checked out'
+      );
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+      if (fs.existsSync(markerSmudge)) fs.rmSync(markerSmudge, { force: true });
+      if (fs.existsSync(markerHook)) fs.rmSync(markerHook, { force: true });
+      if (fs.existsSync(markerFsmonitor)) fs.rmSync(markerFsmonitor, { force: true });
+    }
+  });
+
+  test('isolated launcher keeps worker commit and runs no checkout when retained worker root HEAD matches requested SHA (Finding 1)', () => {
+    const hostRepo = makeTempRepo();
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-matching-worker-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+    const markerSmudge = path.join(os.tmpdir(), `marker-smudge-${Date.now()}-${process.pid}.txt`);
+    const markerHook = path.join(os.tmpdir(), `marker-hook-${Date.now()}-${process.pid}.txt`);
+    const markerFsmonitor = path.join(
+      os.tmpdir(),
+      `marker-fsmonitor-${Date.now()}-${process.pid}.txt`
+    );
+    const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+
+    try {
+      git(['clone', '--no-hardlinks', hostRepo.dir, workerDir]);
+      git(['config', 'user.email', 'worker@shipde.test'], workerDir);
+      git(['config', 'user.name', 'Worker'], workerDir);
+
+      fs.writeFileSync(path.join(workerDir, 'worker-code.js'), 'console.log("worker repair");\n');
+      git(['add', '.'], workerDir);
+      git(['commit', '-q', '-m', 'worker commit'], workerDir);
+      const workerSha = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.notEqual(workerSha, hostRepo.sha);
+
+      // Plant worker hooks, smudge filter, attributes, and fsmonitor
+      const hookDir = path.join(workerDir, 'hooks');
+      fs.mkdirSync(hookDir, { recursive: true });
+      const hookScript = path.join(hookDir, 'post-checkout');
+      fs.writeFileSync(hookScript, `#!/bin/sh\necho HOOK > "${markerHook.replace(/\\/g, '/')}"\n`);
+      try {
+        fs.chmodSync(hookScript, 0o755);
+      } catch {}
+
+      const smudgeScript = path.join(workerDir, 'smudge.js');
+      fs.writeFileSync(
+        smudgeScript,
+        `const fs = require('fs');\nfs.writeFileSync(${JSON.stringify(markerSmudge)}, 'SMUDGE');\nprocess.stdin.pipe(process.stdout);\n`
+      );
+
+      const fsmonitorScript = path.join(workerDir, 'fsmonitor.js');
+      fs.writeFileSync(
+        fsmonitorScript,
+        `const fs = require('fs');\nfs.writeFileSync(${JSON.stringify(markerFsmonitor)}, 'FSMONITOR');\n`
+      );
+
+      const evilAttr = path.join(workerDir, 'evil-attributes');
+      fs.writeFileSync(evilAttr, '* filter=evil\n');
+      fs.writeFileSync(path.join(workerDir, '.gitattributes'), '* filter=evil\n');
+
+      git(
+        ['config', 'filter.evil.smudge', `node "${smudgeScript.replace(/\\/g, '/')}"`],
+        workerDir
+      );
+      git(['config', 'core.hooksPath', hookDir.replace(/\\/g, '/')], workerDir);
+      git(['config', 'core.attributesFile', evilAttr.replace(/\\/g, '/')], workerDir);
+      git(['config', 'core.fsmonitor', `node "${fsmonitorScript.replace(/\\/g, '/')}"`], workerDir);
+
+      const fakeSid = 'S-1-5-21-test-sid';
+      const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+      fs.writeFileSync(
+        verdictPath,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          details: { github_push: 'PASS', operator_profile: 'PASS' },
+          timestamp: new Date().toISOString(),
+          sid: fakeSid,
+          worktree: hostRepo.dir,
+          policyHash,
+        })
+      );
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const mockAdapter = {
+        id: 'echo',
+        command: 'echo',
+      };
+
+      // Matching-head case: baseSha is workerSha (HEAD already equals requested SHA)
+      const opts = {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: workerSha,
+        retainWorkerHead: workerSha,
+        verdictPath,
+        getWorkerSid: () => fakeSid,
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, spawnOpts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh') {
+            return { status: 0, stdout: 'ok', stderr: '' };
+          }
+          return spawnSync(cmd, args, spawnOpts);
+        },
+      };
+
+      try {
+        runIso(mockAdapter, ['hello'], opts);
+      } catch (err) {
+        // We only care about provisioning/checkout
+      }
+
+      assert.strictEqual(
+        fs.existsSync(markerSmudge),
+        false,
+        'isolated launcher must not execute worker-planted filter.<driver>.smudge on matching HEAD'
+      );
+      assert.strictEqual(
+        fs.existsSync(markerHook),
+        false,
+        'isolated launcher must not execute worker-planted core.hooksPath post-checkout hook on matching HEAD'
+      );
+      assert.strictEqual(
+        fs.existsSync(markerFsmonitor),
+        false,
+        'isolated launcher must not execute worker-planted core.fsmonitor on matching HEAD'
+      );
+
+      const currentHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.strictEqual(
+        currentHead,
+        workerSha,
+        'worker root must keep workerSha without checkout'
+      );
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+      if (fs.existsSync(markerSmudge)) fs.rmSync(markerSmudge, { force: true });
+      if (fs.existsSync(markerHook)) fs.rmSync(markerHook, { force: true });
+      if (fs.existsSync(markerFsmonitor)) fs.rmSync(markerFsmonitor, { force: true });
+    }
+  });
+
+  test('isolated launcher re-provisions and fails with structured error ISOLATION_CHECKOUT_FAILED when commit is absent (Defect J)', () => {
+    const hostRepo = makeTempRepo();
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-corrupt-worker-'));
+    fs.writeFileSync(path.join(workerDir, 'junk.txt'), 'corrupt\n');
+
+    const fakeSid = 'S-1-5-21-test-sid';
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+    const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+    fs.writeFileSync(
+      verdictPath,
+      JSON.stringify({
+        verdict: 'CLOSED',
+        details: { github_push: 'PASS', operator_profile: 'PASS' },
+        timestamp: new Date().toISOString(),
+        sid: fakeSid,
+        worktree: hostRepo.dir,
+        policyHash,
+      })
+    );
+
+    const runIso = isoMod.getIsolatedLauncher();
+    const mockAdapter = { id: 'echo', command: 'echo' };
+    const missingSha = '1111222233334444555566667777888899990000';
+
+    try {
+      assert.throws(
+        () =>
+          runIso(mockAdapter, ['hello'], {
+            cwd: hostRepo.dir,
+            workerRoot: workerDir,
+            baseSha: missingSha,
+            verdictPath,
+            getWorkerSid: () => fakeSid,
+            verifyBoundary: () => true,
+            isWorkerPath: () => true,
+          }),
+        /ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: 1111222233334444555566667777888899990000/
+      );
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+    }
+  });
+
+  test('repairRound passes commit sha under review as baseSha to launcher (Defect J)', async () => {
+    const item = {
+      id: 'TASK-AI-64',
+      allowedPaths: ['tools/ai-brain/branch-name.js'],
+      verification: { command: 'node --test tools/ai-brain/test/e1-branch-name.test.js' },
+      acceptanceCriteria: ['pure branch name helper'],
+      complexity: 'standard',
+    };
+
+    const workerSha = '817bc8b0e6a89d31a309fc2549cd5b567902951f';
+    const cand = {
+      harness: 'opencode-direct',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+      quotaScope: 'codex',
+      modelId: 'ag/gemini-3.1-pro-low',
+      source: '9router',
+      kind: 'router',
+    };
+    cand.candidateKey = candidateKey(cand);
+
+    let capturedJob = null;
+    const launcherSpy = async (job) => {
+      capturedJob = job;
+      return { exitCode: 0, stdout: 'fixed', completionNonce: 'nonce' };
+    };
+
+    const repairFn = repairRound(
+      { specs: [item], baseSha: '0000000000000000000000000000000000000001' },
+      item,
+      { candidateKey: cand.candidateKey, baseSha: '0000000000000000000000000000000000000001' },
+      { goal: 'test goal' },
+      {},
+      launcherSpy,
+      os.tmpdir(),
+      Date.now(),
+      [cand],
+      {},
+      sourcesApi.loadSources()
+    );
+
+    await repairFn([{ id: 'VERIFICATION_EXPECT_MISSING', open: true }], workerSha);
+    assert.ok(capturedJob, 'launcher must be invoked for repair');
+    assert.equal(
+      capturedJob.baseSha,
+      workerSha,
+      'repairJob must pass the worker commit sha under review as baseSha'
+    );
+    assert.equal(
+      capturedJob.retainWorkerHead,
+      workerSha,
+      'repairJob must pass the worker commit sha under review as retainWorkerHead'
+    );
+  });
+
+  test('generateCandidates with concrete accounts does not emit wildcard account candidates from catalogue (Defect K)', () => {
+    const registry = sourcesApi.loadSources();
+    const catalogue = [
+      'ag/gemini-3.1-pro-low',
+      'ag/gemini-3.7-flash-medium',
+      'cl/deepseek/deepseek-v4-flash',
+      'ocz/big-pickle',
+    ];
+    const accounts = [
+      { id: 'codex', sourceId: '9router' },
+      { id: 'ninerouter', sourceId: '9router' },
+    ];
+
+    const result = generateCandidates({ registry, catalogue, accounts });
+
+    // 1. None of the generated candidates should have accountId: '*'
+    const wildcards = result.filter((c) => c.accountId === '*');
+    assert.equal(
+      wildcards.length,
+      0,
+      'must not produce wildcard accounts when concrete accounts are present: ' +
+        JSON.stringify(wildcards.map(candidateKey))
+    );
+
+    // 2. OpenCode must inherit concrete accounts from 9router
+    const opencodeCandidates = result.filter((c) => c.harness === 'opencode');
+    assert.ok(opencodeCandidates.length > 0, 'opencode candidates must exist');
+    for (const oc of opencodeCandidates) {
+      assert.ok(
+        oc.accountId === 'codex' || oc.accountId === 'ninerouter',
+        'opencode candidate must inherit concrete account: ' + candidateKey(oc)
+      );
+    }
+
+    // 3. Other routers without accounts (rqsty, thb) must not emit wildcard candidates
+    const rqstyCandidates = result.filter((c) => c.gateway === 'rqsty' || c.source === 'rqsty');
+    assert.equal(rqstyCandidates.length, 0, 'rqsty with no accounts must emit 0 candidates');
+  });
+
+  test('reviewer selection allows candidate on same gateway with different upstream and account (Defect K)', async () => {
+    const candidates = [
+      // Same upstream ag (forbidden)
+      {
+        harness: 'paseo',
+        accessPath: 'http://127.0.0.1:20128/v1',
+        gateway: '9router',
+        upstream: 'ag',
+        accountId: 'ninerouter',
+        quotaScope: 'ninerouter',
+        modelId: 'ag/gemini-3.7-flash-medium',
+        source: '9router',
+        kind: 'router',
+        quality: 80,
+      },
+      // Same account codex (forbidden)
+      {
+        harness: 'paseo',
+        accessPath: 'http://127.0.0.1:20128/v1',
+        gateway: '9router',
+        upstream: 'cl',
+        accountId: 'codex',
+        quotaScope: 'codex',
+        modelId: 'cl/deepseek/deepseek-v4-flash',
+        source: '9router',
+        kind: 'router',
+        quality: 80,
+      },
+      // Different upstream cl AND different account ninerouter (ALLOWED!)
+      {
+        harness: 'paseo',
+        accessPath: 'http://127.0.0.1:20128/v1',
+        gateway: '9router',
+        upstream: 'cl',
+        accountId: 'ninerouter',
+        quotaScope: 'ninerouter',
+        modelId: 'cl/deepseek/deepseek-v4-flash',
+        source: '9router',
+        kind: 'router',
+        quality: 80,
+      },
+    ];
+    for (const c of candidates) c.candidateKey = candidateKey(c);
+
+    // Derive forbiddenDomains as orchestrate.js reviewItem does
+    const writerCandidate = {
+      gateway: '9router',
+      upstream: 'ag',
+      accountId: 'codex',
+    };
+    const forbiddenDomains = [
+      writerCandidate.upstream || writerCandidate.gateway,
+      writerCandidate.accountId,
+    ].filter(Boolean);
+
+    assert.deepEqual(
+      forbiddenDomains,
+      ['ag', 'codex'],
+      'must forbid writer upstream and account, not whole gateway'
+    );
+
+    const reviewerDecision = await selectCandidateForProfile(
+      { id: 'TASK-AI-64-review', roleRequirement: { role: 'reviewer' }, complexity: 'standard' },
+      candidates,
+      forbiddenDomains,
+      {},
+      {},
+      {},
+      Date.now()
+    );
+
+    assert.ok(reviewerDecision.chosen, 'reviewer candidate must be selected, not refused');
+    assert.equal(
+      reviewerDecision.chosen,
+      candidates[2].candidateKey,
+      'reviewer candidate must be 9router/cl with ninerouter account'
+    );
+  });
+
+  test('stale root on initial launch is re-provisioned at base (fails at c8fe4fa, passes after)', () => {
+    const hostRepo = makeTempRepo();
+    const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'base-update.txt'), 'host base B\n');
+    git(['add', '.'], hostRepo.dir);
+    git(['commit', '-q', '-m', 'host commit B'], hostRepo.dir);
+    const hostShaB = git(['rev-parse', 'HEAD'], hostRepo.dir).stdout.trim();
+    assert.notEqual(hostShaB, hostRepo.sha);
+
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-stale-initial-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+
+    try {
+      // Simulate an earlier run that cloned hostRepo at initial commit and left a worker commit C and old file
+      git(['clone', '--no-hardlinks', hostRepo.dir, workerDir]);
+      git(['config', 'user.email', 'worker@shipde.test'], workerDir);
+      git(['config', 'user.name', 'Worker'], workerDir);
+
+      fs.writeFileSync(path.join(workerDir, 'stale-worker-file.txt'), 'stale worker commit C\n');
+      git(['add', '.'], workerDir);
+      git(['commit', '-q', '-m', 'stale worker commit C'], workerDir);
+      const workerShaC = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.notEqual(workerShaC, hostShaB);
+
+      fs.writeFileSync(path.join(workerDir, 'stale-leftover.txt'), 'from previous run\n');
+
+      const fakeSid = 'S-1-5-21-test-sid';
+      const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+      fs.writeFileSync(
+        verdictPath,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          details: { github_push: 'PASS', operator_profile: 'PASS' },
+          timestamp: new Date().toISOString(),
+          sid: fakeSid,
+          worktree: hostRepo.dir,
+          policyHash,
+        })
+      );
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const mockAdapter = {
+        id: 'echo',
+        command: 'echo',
+      };
+
+      // Initial launch of a work item: no retainWorkerHead context, requesting baseSha = hostShaB
+      const opts = {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: hostShaB,
+        verdictPath,
+        getWorkerSid: () => fakeSid,
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, spawnOpts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh') {
+            return { status: 0, stdout: 'ok', stderr: '' };
+          }
+          return spawnSync(cmd, args, spawnOpts);
+        },
+      };
+
+      try {
+        runIso(mockAdapter, ['hello'], opts);
+      } catch (err) {
+        // Provisioning is what we are verifying
+      }
+
+      // Stale leftover must be deleted, worker root must be re-provisioned at hostShaB
+      assert.strictEqual(
+        fs.existsSync(path.join(workerDir, 'stale-leftover.txt')),
+        false,
+        'stale files from previous run must be deleted upon re-provisioning'
+      );
+      assert.strictEqual(
+        fs.existsSync(path.join(workerDir, 'base-update.txt')),
+        true,
+        'new base files from hostRepo must be checked out in re-provisioned worker root'
+      );
+      const currentHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.strictEqual(
+        currentHead,
+        hostShaB,
+        'worker root must be checked out at requested baseSha'
+      );
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+    }
+  });
+
+  test('repair with matching head keeps the commit and runs no checkout', () => {
+    const hostRepo = makeTempRepo();
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-repair-match-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+    const markerSmudge = path.join(
+      os.tmpdir(),
+      `marker-smudge-match-${Date.now()}-${process.pid}.txt`
+    );
+    const markerHook = path.join(os.tmpdir(), `marker-hook-match-${Date.now()}-${process.pid}.txt`);
+    const markerFsmonitor = path.join(
+      os.tmpdir(),
+      `marker-fsmonitor-match-${Date.now()}-${process.pid}.txt`
+    );
+    const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+
+    try {
+      git(['clone', '--no-hardlinks', hostRepo.dir, workerDir]);
+      git(['config', 'user.email', 'worker@shipde.test'], workerDir);
+      git(['config', 'user.name', 'Worker'], workerDir);
+
+      fs.writeFileSync(path.join(workerDir, 'worker-repair.js'), 'console.log("repair commit");\n');
+      git(['add', '.'], workerDir);
+      git(['commit', '-q', '-m', 'worker commit for repair'], workerDir);
+      const workerSha = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.notEqual(workerSha, hostRepo.sha);
+
+      // Canary to prove no re-cloning
+      fs.writeFileSync(path.join(workerDir, 'canary.txt'), 'canary\n');
+
+      // Plant worker hooks, smudge filter, attributes, and fsmonitor
+      const hookDir = path.join(workerDir, 'hooks');
+      fs.mkdirSync(hookDir, { recursive: true });
+      const hookScript = path.join(hookDir, 'post-checkout');
+      fs.writeFileSync(hookScript, `#!/bin/sh\necho HOOK > "${markerHook.replace(/\\/g, '/')}"\n`);
+      try {
+        fs.chmodSync(hookScript, 0o755);
+      } catch {}
+
+      const smudgeScript = path.join(workerDir, 'smudge.js');
+      fs.writeFileSync(
+        smudgeScript,
+        `const fs = require('fs');\nfs.writeFileSync(${JSON.stringify(markerSmudge)}, 'SMUDGE');\nprocess.stdin.pipe(process.stdout);\n`
+      );
+
+      const fsmonitorScript = path.join(workerDir, 'fsmonitor.js');
+      fs.writeFileSync(
+        fsmonitorScript,
+        `const fs = require('fs');\nfs.writeFileSync(${JSON.stringify(markerFsmonitor)}, 'FSMONITOR');\n`
+      );
+
+      const evilAttr = path.join(workerDir, 'evil-attributes');
+      fs.writeFileSync(evilAttr, '* filter=evil\n');
+      fs.writeFileSync(path.join(workerDir, '.gitattributes'), '* filter=evil\n');
+
+      git(
+        ['config', 'filter.evil.smudge', `node "${smudgeScript.replace(/\\/g, '/')}"`],
+        workerDir
+      );
+      git(['config', 'core.hooksPath', hookDir.replace(/\\/g, '/')], workerDir);
+      git(['config', 'core.attributesFile', evilAttr.replace(/\\/g, '/')], workerDir);
+      git(['config', 'core.fsmonitor', `node "${fsmonitorScript.replace(/\\/g, '/')}"`], workerDir);
+
+      const fakeSid = 'S-1-5-21-test-sid';
+      const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+      fs.writeFileSync(
+        verdictPath,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          details: { github_push: 'PASS', operator_profile: 'PASS' },
+          timestamp: new Date().toISOString(),
+          sid: fakeSid,
+          worktree: hostRepo.dir,
+          policyHash,
+        })
+      );
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const mockAdapter = { id: 'echo', command: 'echo' };
+
+      // Explicit repair round option: retainWorkerHead matches workerSha
+      const opts = {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: workerSha,
+        retainWorkerHead: workerSha,
+        verdictPath,
+        getWorkerSid: () => fakeSid,
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, spawnOpts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh') {
+            return { status: 0, stdout: 'ok', stderr: '' };
+          }
+          return spawnSync(cmd, args, spawnOpts);
+        },
+      };
+
+      try {
+        runIso(mockAdapter, ['hello'], opts);
+      } catch (err) {}
+
+      assert.strictEqual(
+        fs.existsSync(markerSmudge),
+        false,
+        'smudge filter must not execute on matching repair HEAD'
+      );
+      assert.strictEqual(
+        fs.existsSync(markerHook),
+        false,
+        'post-checkout hook must not execute on matching repair HEAD'
+      );
+      assert.strictEqual(
+        fs.existsSync(markerFsmonitor),
+        false,
+        'fsmonitor must not execute on matching repair HEAD'
+      );
+      assert.strictEqual(
+        fs.existsSync(path.join(workerDir, 'canary.txt')),
+        true,
+        'worker root must be retained without deletion'
+      );
+      const currentHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.strictEqual(
+        currentHead,
+        workerSha,
+        'worker root HEAD must remain at worker commit without checkout'
+      );
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+      if (fs.existsSync(markerSmudge)) fs.rmSync(markerSmudge, { force: true });
+      if (fs.existsSync(markerHook)) fs.rmSync(markerHook, { force: true });
+      if (fs.existsSync(markerFsmonitor)) fs.rmSync(markerFsmonitor, { force: true });
+    }
+  });
+
+  test('repair with mismatched head is structured, no marker written', () => {
+    const hostRepo = makeTempRepo();
+    fs.mkdirSync(path.join(hostRepo.dir, 'scripts/ai/isolation'), { recursive: true });
+    fs.writeFileSync(path.join(hostRepo.dir, 'scripts/ai/isolation', 'dummy.ps1'), '# dummy\n');
+    const policyHash = isoMod.getFolderHash(path.join(hostRepo.dir, 'scripts/ai/isolation'));
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-repair-mismatch-'));
+    const verdictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-verdict-'));
+    const markerSmudge = path.join(
+      os.tmpdir(),
+      `marker-smudge-mismatch-${Date.now()}-${process.pid}.txt`
+    );
+    const markerHook = path.join(
+      os.tmpdir(),
+      `marker-hook-mismatch-${Date.now()}-${process.pid}.txt`
+    );
+    const markerFsmonitor = path.join(
+      os.tmpdir(),
+      `marker-fsmonitor-mismatch-${Date.now()}-${process.pid}.txt`
+    );
+    const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+
+    try {
+      git(['clone', '--no-hardlinks', hostRepo.dir, workerDir]);
+      git(['config', 'user.email', 'worker@shipde.test'], workerDir);
+      git(['config', 'user.name', 'Worker'], workerDir);
+
+      fs.writeFileSync(path.join(workerDir, 'worker-file.js'), 'console.log("worker file");\n');
+      git(['add', '.'], workerDir);
+      git(['commit', '-q', '-m', 'worker commit'], workerDir);
+      const workerSha = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.notEqual(workerSha, hostRepo.sha);
+
+      // Plant worker hooks, smudge filter, attributes, and fsmonitor
+      const hookDir = path.join(workerDir, 'hooks');
+      fs.mkdirSync(hookDir, { recursive: true });
+      const hookScript = path.join(hookDir, 'post-checkout');
+      fs.writeFileSync(hookScript, `#!/bin/sh\necho HOOK > "${markerHook.replace(/\\/g, '/')}"\n`);
+      try {
+        fs.chmodSync(hookScript, 0o755);
+      } catch {}
+
+      const smudgeScript = path.join(workerDir, 'smudge.js');
+      fs.writeFileSync(
+        smudgeScript,
+        `const fs = require('fs');\nfs.writeFileSync(${JSON.stringify(markerSmudge)}, 'SMUDGE');\nprocess.stdin.pipe(process.stdout);\n`
+      );
+
+      const fsmonitorScript = path.join(workerDir, 'fsmonitor.js');
+      fs.writeFileSync(
+        fsmonitorScript,
+        `const fs = require('fs');\nfs.writeFileSync(${JSON.stringify(markerFsmonitor)}, 'FSMONITOR');\n`
+      );
+
+      const evilAttr = path.join(workerDir, 'evil-attributes');
+      fs.writeFileSync(evilAttr, '* filter=evil\n');
+      fs.writeFileSync(path.join(workerDir, '.gitattributes'), '* filter=evil\n');
+
+      git(
+        ['config', 'filter.evil.smudge', `node "${smudgeScript.replace(/\\/g, '/')}"`],
+        workerDir
+      );
+      git(['config', 'core.hooksPath', hookDir.replace(/\\/g, '/')], workerDir);
+      git(['config', 'core.attributesFile', evilAttr.replace(/\\/g, '/')], workerDir);
+      git(['config', 'core.fsmonitor', `node "${fsmonitorScript.replace(/\\/g, '/')}"`], workerDir);
+
+      const fakeSid = 'S-1-5-21-test-sid';
+      const verdictPath = path.join(verdictDir, 'isolation-verdict.json');
+      fs.writeFileSync(
+        verdictPath,
+        JSON.stringify({
+          verdict: 'CLOSED',
+          details: { github_push: 'PASS', operator_profile: 'PASS' },
+          timestamp: new Date().toISOString(),
+          sid: fakeSid,
+          worktree: hostRepo.dir,
+          policyHash,
+        })
+      );
+
+      const runIso = isoMod.getIsolatedLauncher();
+      const mockAdapter = { id: 'echo', command: 'echo' };
+
+      // Explicit repair round option: retainWorkerHead passed, but differs from worker HEAD (workerSha)
+      const opts = {
+        cwd: hostRepo.dir,
+        workerRoot: workerDir,
+        baseSha: hostRepo.sha,
+        retainWorkerHead: hostRepo.sha,
+        verdictPath,
+        getWorkerSid: () => fakeSid,
+        verifyBoundary: () => true,
+        isWorkerPath: () => true,
+        spawnSync: (cmd, args, spawnOpts) => {
+          if (cmd === 'powershell.exe' || cmd === 'pwsh') {
+            return { status: 0, stdout: 'ok', stderr: '' };
+          }
+          return spawnSync(cmd, args, spawnOpts);
+        },
+      };
+
+      assert.throws(
+        () => runIso(mockAdapter, ['hello'], opts),
+        (err) => {
+          assert.strictEqual(err.code, 'WORKER_HEAD_MISMATCH');
+          assert.match(err.message, /WORKER_HEAD_MISMATCH/);
+          return true;
+        },
+        'mismatched HEAD on repair must throw structured WORKER_HEAD_MISMATCH error'
+      );
+
+      assert.strictEqual(
+        fs.existsSync(markerSmudge),
+        false,
+        'smudge filter must not execute on mismatched repair HEAD'
+      );
+      assert.strictEqual(
+        fs.existsSync(markerHook),
+        false,
+        'post-checkout hook must not execute on mismatched repair HEAD'
+      );
+      assert.strictEqual(
+        fs.existsSync(markerFsmonitor),
+        false,
+        'fsmonitor must not execute on mismatched repair HEAD'
+      );
+      const currentHead = git(['rev-parse', 'HEAD'], workerDir).stdout.trim();
+      assert.strictEqual(
+        currentHead,
+        workerSha,
+        'worker root HEAD must be preserved at worker commit without checkout'
+      );
+    } finally {
+      fs.rmSync(hostRepo.dir, { recursive: true, force: true });
+      fs.rmSync(workerDir, { recursive: true, force: true });
+      fs.rmSync(verdictDir, { recursive: true, force: true });
+      if (fs.existsSync(markerSmudge)) fs.rmSync(markerSmudge, { force: true });
+      if (fs.existsSync(markerHook)) fs.rmSync(markerHook, { force: true });
+      if (fs.existsSync(markerFsmonitor)) fs.rmSync(markerFsmonitor, { force: true });
     }
   });
 });

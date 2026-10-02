@@ -734,28 +734,118 @@ function getIsolatedLauncher() {
       throw new Error('ISOLATION_BASE_SHA_INVALID: not a 40-character commit: ' + baseSha);
     }
     const headSha = String(baseSha);
-    if (fs.existsSync(workerRoot)) {
-      fs.rmSync(workerRoot, { recursive: true, force: true });
-    }
 
-    // Q5: --no-hardlinks — a local clone hardlinks .git/objects files to
-    // the operator repo; the worker root is outside the operator profile and
-    // the worker is granted Modify, so a hardlinked object could be
-    // rewritten in place to corrupt the OPERATOR repo's objects.
-    const cloneRes = cp.spawnSync(
-      'git',
-      ['clone', '--no-checkout', '--no-hardlinks', hostCwd, workerRoot],
-      {
-        windowsHide: true,
+    // Distinguish initial launch of a work item vs repair round explicitly:
+    // (1) Initial launch (no repair context, retainWorkerHead is not provided):
+    //     always re-provision a fresh worker root at the pinned base SHA
+    //     (delete + git clone --no-checkout --no-hardlinks + checkout inside the fresh clone),
+    //     regardless of what an earlier run left in workerRoot.
+    // (2) Repair round (retainWorkerHead is provided, e.g. <40-char sha>):
+    //     keep the existing root only if a hardened read (clean GIT_CONFIG_GLOBAL/SYSTEM=NUL,
+    //     -c core.hooksPath=NUL -c core.fsmonitor=false -c core.attributesFile=NUL) shows
+    //     HEAD == that sha; never run checkout or any tree-mutating git in a retained root;
+    //     mismatch -> structured WORKER_HEAD_MISMATCH failure for that repair attempt.
+    const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    const retainWorkerHead =
+      typeof opts.retainWorkerHead === 'string'
+        ? opts.retainWorkerHead.trim()
+        : opts.retainWorkerHead
+          ? headSha
+          : null;
+
+    if (retainWorkerHead) {
+      let retainedHeadSha = null;
+      if (fs.existsSync(workerRoot) && fs.existsSync(path.join(workerRoot, '.git'))) {
+        try {
+          const { withCleanGitEnv, safeGit } = require('./supervisor');
+          retainedHeadSha = withCleanGitEnv(
+            workerRoot,
+            (safeGitDir) => {
+              const curHeadRes = safeGit(
+                safeGitDir,
+                workerRoot,
+                ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+                20000
+              );
+              if (curHeadRes && curHeadRes.status === 0 && curHeadRes.stdout) {
+                return curHeadRes.stdout.trim();
+              }
+              return null;
+            },
+            { workerWritable: true }
+          );
+        } catch {
+          retainedHeadSha = null;
+        }
       }
-    );
-    if (cloneRes.status !== 0) throw new Error('Failed to clone repository');
 
-    const checkoutRes = cp.spawnSync('git', ['checkout', headSha], {
-      cwd: workerRoot,
-      windowsHide: true,
-    });
-    if (checkoutRes.status !== 0) throw new Error('Failed to checkout HEAD SHA in worker root');
+      if (!retainedHeadSha || retainedHeadSha.toLowerCase() !== retainWorkerHead.toLowerCase()) {
+        const err = new Error(
+          'WORKER_HEAD_MISMATCH: retained worker root HEAD (' +
+            (retainedHeadSha || 'unknown') +
+            ') does not match requested SHA ' +
+            retainWorkerHead
+        );
+        err.code = 'WORKER_HEAD_MISMATCH';
+        throw err;
+      }
+      // Matching HEAD: retain worker root and its commits as-is. NEVER run checkout.
+    } else {
+      if (fs.existsSync(workerRoot)) {
+        fs.rmSync(workerRoot, { recursive: true, force: true });
+      }
+
+      // Q5: --no-hardlinks — a local clone hardlinks .git/objects files to
+      // the operator repo; the worker root is outside the operator profile and
+      // the worker is granted Modify, so a hardlinked object could be
+      // rewritten in place to corrupt the OPERATOR repo's objects.
+      const cloneRes = cp.spawnSync(
+        'git',
+        ['clone', '--no-checkout', '--no-hardlinks', hostCwd, workerRoot],
+        {
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        }
+      );
+      if (cloneRes.status !== 0) throw new Error('Failed to clone repository');
+
+      const normWorkerRoot = path.resolve(workerRoot).replace(/\\/g, '/');
+      const checkoutRes = cp.spawnSync(
+        'git',
+        [
+          '-c',
+          'core.hooksPath=' + nulDevice,
+          '-c',
+          'core.fsmonitor=false',
+          '-c',
+          'core.attributesFile=' + nulDevice,
+          '-c',
+          'diff.external=',
+          '-c',
+          'safe.directory=' + normWorkerRoot,
+          'checkout',
+          headSha,
+        ],
+        {
+          cwd: workerRoot,
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        }
+      );
+      if (checkoutRes.status !== 0) {
+        throw new Error(
+          'ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: ' + headSha
+        );
+      }
+    }
 
     if (adapter.id === 'opencode-direct') {
       const sourcesModule = require('./sources');

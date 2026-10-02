@@ -156,8 +156,16 @@ function safeCopyRefs(srcDir, destDir) {
 
 function withCleanGitEnv(cwd, fn, options) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-git-safe-'));
+  const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
   try {
-    spawnSync('git', ['init', tmpDir], { windowsHide: true });
+    spawnSync('git', ['init', tmpDir], {
+      windowsHide: true,
+      env: Object.assign({}, process.env, {
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: nulDevice,
+        GIT_CONFIG_SYSTEM: nulDevice,
+      }),
+    });
     const gitDir = path.join(tmpDir, '.git');
     fs.mkdirSync(path.join(gitDir, 'objects', 'info'), { recursive: true });
     fs.writeFileSync(
@@ -199,11 +207,20 @@ function withCleanGitEnv(cwd, fn, options) {
 function safeGit(tmpDir, cwd, args, timeoutMs) {
   const normCwd = path.resolve(cwd).replace(/\\/g, '/');
   const normTmp = path.resolve(tmpDir).replace(/\\/g, '/');
+  const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const safeArgs = [
     '-c',
     'safe.directory=' + normCwd,
     '-c',
     'safe.directory=' + normTmp,
+    '-c',
+    'core.hooksPath=' + nulDevice,
+    '-c',
+    'core.fsmonitor=false',
+    '-c',
+    'core.attributesFile=' + nulDevice,
+    '-c',
+    'diff.external=',
     '--git-dir=' + tmpDir,
     '--work-tree=' + cwd,
     ...args,
@@ -216,7 +233,8 @@ function safeGit(tmpDir, cwd, args, timeoutMs) {
     maxBuffer: 16 * 1024 * 1024,
     env: Object.assign({}, process.env, {
       GIT_CONFIG_NOSYSTEM: '1',
-      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_GLOBAL: nulDevice,
+      GIT_CONFIG_SYSTEM: nulDevice,
     }),
   });
 }

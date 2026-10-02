@@ -11,7 +11,7 @@
 | Dependencies    | `TASK-AI-50`; `TASK-AI-58`; `TASK-AI-59`; `TASK-AI-60`; `TASK-AI-61`; `TASK-AI-63`                                                                                                                                                                                                                                                                    |
 | Assigned author | `GEMINI`                                                                                                                                                                                                                                                                                                                                             |
 | Risk            | `HIGH`                                                                                                                                                                                                                                                                                                                                               |
-| Allowed paths   | `tools/ai-brain/orchestrate.js`, `tools/ai-brain/planner.js`, `tools/ai-brain/prompt-compiler.js`, `tools/ai-brain/supervisor.js`, `tools/ai-brain/review-loop.js`, `tools/ai-brain/executor.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/harness.js`, `tools/ai-brain/isolation-launcher.js`, `tools/ai-brain/publisher.js`, `tools/ai-brain/decisions.js`, `tools/ai-brain/approval-registry.js`, `tools/ai-brain/exercise/e1-branch-name.cases.json`, `tools/ai-brain/branch-name.js`, `tools/ai-brain/sources.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-64.test.js`, `tools/ai-brain/test/failure-classifier.test.js`, `tools/ai-brain/test/fixtures/task-ai-64/`, `tools/ai-brain/test/isolation.test.js`, `tools/ai-brain/test/executor.test.js`, `tools/ai-brain/test/task-ai-60.test.js`, `docs/product-spec/work-items/TASK-AI-64.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths   | `tools/ai-brain/orchestrate.js`, `tools/ai-brain/planner.js`, `tools/ai-brain/prompt-compiler.js`, `tools/ai-brain/supervisor.js`, `tools/ai-brain/review-loop.js`, `tools/ai-brain/executor.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/harness.js`, `tools/ai-brain/isolation-launcher.js`, `tools/ai-brain/publisher.js`, `tools/ai-brain/decisions.js`, `tools/ai-brain/approval-registry.js`, `tools/ai-brain/exercise/e1-branch-name.cases.json`, `tools/ai-brain/branch-name.js`, `tools/ai-brain/sources.js`, `tools/ai-brain/candidates.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-64.test.js`, `tools/ai-brain/test/failure-classifier.test.js`, `tools/ai-brain/test/fixtures/task-ai-64/`, `tools/ai-brain/test/isolation.test.js`, `tools/ai-brain/test/executor.test.js`, `tools/ai-brain/test/task-ai-60.test.js`, `docs/product-spec/work-items/TASK-AI-64.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer        | `Codex — fresh independent task`                                                                                                                                                                                                                                                                                                                       |
 | Branch          | `feat/task-ai-64-live-loop`                                                                                                                                                                                                                                                                                                                 |
 | Pull Request    | `#166`                                                                                                                                                                                                                                                                                                                                            |
@@ -38,6 +38,11 @@ definition is derived directly from the exact model string opencode receives; `f
 classifies OpenCode harness configuration failures into `Scope.HARNESS` / `Cause.LAUNCH_CONFIG` with
 finite cooldown and preserves matched stdout in evidence, preventing launch failures from poisoning
 model domains; and `test/failure-classifier.test.js` houses the unit regression tests for Case 13.
+
+`tools/ai-brain/candidates.js` is an allowed path amended during live run attempt 12 review
+(Defect K repair): `candidates.js` avoids emitting wildcard accounts (`accountId: '*'`) from catalogue
+expansion when concrete accounts are present and maps `reachedVia` router accounts to dependent harnesses,
+ensuring reviewer candidates are not rejected by `WILDCARD_ACCOUNT`.
 
 `tools/ai-brain/test/e1-branch-name.test.js` is deliberately **not** an allowed path. It is
 materialised inside the worker root at run time and is never committed (§ "First live coding
@@ -241,7 +246,7 @@ These are the acceptance floor, not aspirations. A Pull Request that violates an
 | `AI-64-R14`   | The decision log is the trace. Every selection, launch, session id, branch, classification, review round, verdict and outcome is recorded there, credential-scrubbed, append-only, one JSONL per day, and survives the process that wrote it. A run whose log cannot be read is refused, not treated as empty.                |
 | `AI-64-R15`   | The loop is fail-closed on every seam. A missing dependency, an unreadable log, an absent verdict, an absent approval, an isolation verdict that is not `CLOSED` or is stale, a base SHA that cannot be resolved, a SHA that is not 40 hex characters — each stops the run and records the reason.                                                  |
 
-- **Security Update**: Operator-side git commands acting on worker repositories (in `supervisor.js`, `orchestrate.js`, and `publisher.js`) are never run inside the worker repo or with its config, even for source object retrieval. Instead, the implementation creates a blank safe repo under operator control and copies allow-listed objects (with a size bound and file-type checks) from the worker tree's own `.git` directory. No configuration overrides, flags, or attempts to “bypass” or “guarantee” parsing/config immunity are used or claimed, because the code does not consult the worker's configuration file at any point in the object/copy/publish step. This also protects against alternates chains, textconv filters, hooks, and malformed configs like `include.path`. (Note: no command in the transfer or push path can run a hook, so the hook guard is structural rather than tested). Object and ref copies are file-by-file with `lstat` and a byte cap, and a junction or symlink at a copy root is not followed. A worker-writable cwd is accepted only when `.git` is a real directory: a gitfile is refused outright, because the worker can write both the gitfile and a matching `gitdir` backlink. Gitdir resolution, including a linked-worktree backlink, is used only for an operator-owned cwd. Choosing which store is read is itself a risk surface, not only the bytes copied from it. `git clone --separate-git-dir` is an unsupported operator layout: its gitfile points outside the checkout and has no worktree backlink, so publish and host-side measurement refuse it. Re-clone without `--separate-git-dir`.
+- **Security Update**: Operator-side git commands acting on worker repositories (in `supervisor.js`, `orchestrate.js`, `isolation-launcher.js`, and `publisher.js`) are never run inside the worker repo or with its config, even for source object retrieval. Instead, the implementation creates a blank safe repo under operator control and copies allow-listed objects (with a size bound and file-type checks) from the worker tree's own `.git` directory. No configuration overrides, flags, or attempts to “bypass” or “guarantee” parsing/config immunity are used or claimed, because the code does not consult the worker's configuration file at any point in the object/copy/publish step. This also protects against alternates chains, textconv filters, hooks, and malformed configs like `include.path`. (Note: no command in the transfer or push path can run a hook, so the hook guard is structural rather than tested). Object and ref copies are file-by-file with `lstat` and a byte cap, and a junction or symlink at a copy root is not followed. A worker-writable cwd is accepted only when `.git` is a real directory: a gitfile is refused outright, because the worker can write both the gitfile and a matching `gitdir` backlink. Gitdir resolution, including a linked-worktree backlink, is used only for an operator-owned cwd. Choosing which store is read is itself a risk surface, not only the bytes copied from it. `git clone --separate-git-dir` is an unsupported operator layout: its gitfile points outside the checkout and has no worktree backlink, so publish and host-side measurement refuse it. Re-clone without `--separate-git-dir`.
 
 ### Edge cases that must be covered
 
@@ -889,3 +894,96 @@ Fix:
 2. In `orchestrate.js:runVerificationCommand`, scoped `verifyWorkerCommit` to `workerRoot` (returning `pass: true` when `workerRoot` is absent) rather than testing `process.cwd()`.
 3. In `supervisor.js:safeGit`, added scoped `-c safe.directory=<normCwd>` and `-c safe.directory=<normTmp>` arguments to prevent dubious ownership errors when `GIT_CONFIG_GLOBAL` is ignored on POSIX.
 4. In `tools/ai-brain/test/task-ai-64.test.js`, added POSIX clone simulation tests proving that running from inside a git clone directory does not bind review to the host repository when `workerRoot` is unspecified.
+
+## Live E2E Attempt 12 repair: Worker commit preservation and gateway+upstream failure domain (2026-10-02)
+
+Observation / Defect J & Defect K:
+In Live E2E attempt 12 (`.worktrees/logs/night/ai64-live-run1-20261002-attempt12.md`), the isolated worker (`ag/gemini-3.1-pro-low`) successfully wrote `tools/ai-brain/branch-name.js` and created a real local commit `817bc8b0e6a89d31a309fc2549cd5b567902951f`. However:
+1. (Defect J) Worker Commit Loss during Repair: When verification failed, `repairRound` passed the commit SHA to `isolation-launcher.js:getIsolatedLauncher`, which deleted and re-cloned the worker root from the host repository. Because the worker commit was never pushed to the host, `git checkout <sha>` in the fresh clone failed, destroying the worker commit and crashing subsequent repairs with `Failed to checkout HEAD SHA in worker root`.
+2. (Defect K) Overly Broad Reviewer Exclusion & Wildcard Accounts: In `orchestrate.js:reviewItem`, the reviewer selection refused all candidates (19x `FORBIDDEN_FAILURE_DOMAIN`, 8x `WILDCARD_ACCOUNT`, 5x `CANDIDATE_BLOCKED`). The writer was `9router::ag` (account `codex`). Setting `forbiddenDomains = [writerGateway, writerUpstream, writerAccount]` forbade the entire `9router` gateway (`'9router'`), which blocked valid reviewer candidates on other upstreams (`cl`, `ocz`, `gh`). Furthermore, `candidates.js:generateCandidates` emitted wildcard account candidates (`accountId: '*'`) for catalogue entries when concrete accounts existed or for dependencies reaching via a router (`source.reachedVia`), which were subsequently rejected by `routing.rankForProfile` with `WILDCARD_ACCOUNT`.
+
+Fix:
+1. Worker Root and Commit Preservation (`tools/ai-brain/isolation-launcher.js` & `tools/ai-brain/orchestrate.js`):
+   - In `isolation-launcher.js`: Before deleting `workerRoot` and re-cloning from `hostCwd`, checked if `git rev-parse --verify --quiet <headSha>^{commit}` succeeds in `workerRoot`. If the commit already exists in the worker root, skipped deletion and re-cloning, preserving existing commits. If absent or invalid, re-provisioned and checked out `headSha`, throwing structured error `ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: <headSha>`.
+   - In `orchestrate.js:repairRound`: Bound `repairJob.baseSha` to `sha || o.baseSha || null`, ensuring the worker commit under review is forwarded as the base commit for the repair round.
+2. Failure Domain Scoped to Gateway+Upstream & Account Inheritance (`tools/ai-brain/orchestrate.js` & `tools/ai-brain/candidates.js`):
+   - In `orchestrate.js:reviewItem`: Redefined `forbiddenDomains = [writerUpstream || writerGateway, writerAccount].filter(Boolean)`. Because failure domains are defined per gateway+upstream (each upstream is an independent failure domain), this permits reviewer candidates on the same router with distinct upstreams (e.g., `9router/cl`, `9router/ocz`).
+   - In `candidates.js:generateCandidates`: Inherited bound accounts from `source.reachedVia` when direct accounts are empty. When concrete accounts exist (`accounts.some(a => a.id && a.id !== '*')`), suppressed `sharedArc` (`accountId: '*'`) from catalogue expansion, preventing creation of un-routable wildcard candidates.
+
+Evidence:
+- Fail-before base SHA: `fb78bec` / `fb78bec80e1f3ff8308f272db326c1448113e88d`
+  - `isolation-launcher.js` unconditionally deleted worker root on re-provisioning, losing worker commits.
+  - `orchestrate.js:reviewItem` forbade the entire router gateway, blocking all reviewer candidates.
+  - `candidates.js:generateCandidates` generated wildcard candidates rejected as `WILDCARD_ACCOUNT`.
+- Pass-after result: All tests pass. 5 new regression tests in `tools/ai-brain/test/task-ai-64.test.js`:
+  - Full test suite: 1148/1148 passed (63/63 in `tools/ai-brain/test/task-ai-64.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `npx --package prettier@3.9.6 prettier --check tools/ai-brain/candidates.js tools/ai-brain/isolation-launcher.js tools/ai-brain/orchestrate.js tools/ai-brain/test/task-ai-64.test.js docs/product-spec/work-items/TASK-AI-64.md`
+  - `git diff --check` clean.
+
+Residual risk / known limitations:
+- A repair round preserves the existing worker root when the requested commit SHA is already verified locally; if the worker root is corrupted or missing the commit, it safely falls back to a clean re-clone and fails closed with `ISOLATION_CHECKOUT_FAILED` if checkout fails.
+- Reviewer failure domain separation requires at least two distinct upstreams or distinct account identities available in the registry.
+
+## Repair round 2 of 2: Never check out inside a retained worker root (2026-10-02)
+
+Observation / Finding 1:
+In review `f0bc0320fb941e9fb2be5bee6b2c8c5a4dbc26a5.md`, when a retained worker root already held the target commit (`alreadyHoldsHead = true`) but HEAD was at a different commit (`headIsAlreadyTarget = false`), `isolation-launcher.js` executed `git checkout <headSha>` directly inside `workerRoot`. Because git reads repo-local `.git/config` during checkout, any worker-planted smudge filter (`filter.<driver>.smudge`) or custom driver executed as the operator outside the `ShipDeWorker` boundary.
+
+Fix:
+1. Never check out in a retained worker root (`tools/ai-brain/isolation-launcher.js`):
+   - Removed `git checkout` entirely from the retained worker root path.
+   - Retained worker root (`workerRoot` and `.git` exist) is kept only when a hardened read (`withCleanGitEnv` / `safeGit`) confirms HEAD already equals the requested `headSha`.
+   - If HEAD does not equal `headSha` (or is invalid/corrupt), returns structured failure `WORKER_HEAD_MISMATCH` that the repair loop in `orchestrate.js` treats as a failed repair attempt, preserving the worker's commits without deleting, re-cloning, or checking out.
+2. Hardened operator git environment (`tools/ai-brain/supervisor.js`):
+   - In `safeGit`: Added `-c core.hooksPath=<nulDevice>`, `-c core.fsmonitor=false`, `-c core.attributesFile=<nulDevice>`, `-c diff.external=`, and set `GIT_CONFIG_SYSTEM=<nulDevice>` alongside `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=<nulDevice>`.
+   - In `withCleanGitEnv`: Hardened `git init` with clean `GIT_CONFIG_*` environment.
+3. Regression tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - (a) Mismatched-head case: Retained worker root with planted `filter.evil.smudge` + `.gitattributes`, `core.attributesFile`, `core.hooksPath` post-checkout, and `core.fsmonitor`; forces mismatched HEAD; asserts `WORKER_HEAD_MISMATCH` is thrown, no marker file is written, and the worker commit is preserved without checkout.
+   - (b) Matching-head case: Asserts no checkout is executed, no markers are written, and the worker commit is kept.
+
+Evidence:
+- Fail-before base SHA: `f0bc032` / `f0bc0320fb941e9fb2be5bee6b2c8c5a4dbc26a5`
+  - `isolation-launcher.js` executed `git checkout` inside `workerRoot`, running worker-planted smudge filter as operator.
+- Pass-after result: All tests pass. 65/65 passed in `tools/ai-brain/test/task-ai-64.test.js`; 1150/1150 passed in full brain suite (`tools/ai-brain/test/*.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.
+
+## Escalated author: Fresh worker root on first launch, retained only for repair (2026-10-02)
+
+Observation / Finding 1:
+In review `c8fe4fac992ceaa41d917df330f7dee304eb86b2.md`, the retained-root hardening over-corrected: `isolation-launcher.js` treated any existing `workerRoot` holding `.git` as retained and threw `WORKER_HEAD_MISMATCH` when HEAD != requested SHA. Because `workerRoot` is keyed by the host worktree leaf (`C:\ShipDeWorker\<leaf>`), normal first launches of subsequent runs with new `--base-sha` could no longer re-provision at the pinned base SHA and failed closed.
+
+Required design & Fix:
+1. Explicitly distinguish initial launch vs repair round (`tools/ai-brain/isolation-launcher.js` & `tools/ai-brain/orchestrate.js`):
+   - Initial launch of a work item (no repair context, `retainWorkerHead` is undefined): always re-provisions a fresh worker root at the pinned base SHA (delete + `git clone --no-checkout --no-hardlinks` + `git checkout <headSha>` inside the fresh clone), regardless of what an earlier run left in `workerRoot`.
+   - Repair round (`retainWorkerHead: <40-char sha>` passed explicitly by `orchestrate.js:repairRound`): keeps the existing root only if a hardened read (no worker config honoured: clean `GIT_CONFIG_GLOBAL`/`SYSTEM`=NUL, `-c core.hooksPath=NUL`, `-c core.fsmonitor=false`, `-c core.attributesFile=NUL`, `-c diff.external=`) confirms `HEAD == retainWorkerHead`. Never runs `git checkout` or any working-tree-mutating git inside a retained root. If absent or mismatched, throws structured `WORKER_HEAD_MISMATCH` error for that repair attempt without mutating or deleting the worker root.
+2. Forwarding in orchestrator (`tools/ai-brain/orchestrate.js`):
+   - In `resolveLauncher`: Forwards `retainWorkerHead: job.retainWorkerHead || undefined` to `isolatedLauncher`.
+   - In `repairRound`: Adds `retainWorkerHead: sha || null` to `repairJob`.
+3. Regression tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Kept all security regression tests from `c8fe4fa` passing with explicit `retainWorkerHead` in repair context.
+   - Added `stale root on initial launch is re-provisioned at base (fails at c8fe4fa, passes after)`: verifies that a stale worker root left by a prior run is completely wiped and re-cloned/checked out at the pinned base SHA on initial launch (fails at `c8fe4fa`, passes after).
+   - Added `repair with matching head keeps the commit and runs no checkout`: verifies that a repair round with matching `retainWorkerHead` retains the root and worker commit without executing checkout or worker-planted smudge/hook/fsmonitor.
+   - Added `repair with mismatched head is structured, no marker written`: verifies that a repair round with mismatched `retainWorkerHead` fails closed with structured `WORKER_HEAD_MISMATCH` without executing checkout or worker-planted smudge/hook/fsmonitor.
+
+Evidence:
+- Fail-before base SHA: `c8fe4fa` / `c8fe4fac992ceaa41d917df330f7dee304eb86b2`
+  - `isolation-launcher.js` refused stale worker root on initial launch with `WORKER_HEAD_MISMATCH`.
+- Pass-after result: All tests pass. 68/68 passed in `tools/ai-brain/test/task-ai-64.test.js`; 1153/1153 passed in full brain suite (`tools/ai-brain/test/*.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.
