@@ -1024,3 +1024,44 @@ Evidence:
 
 Residual risk / known limitations:
 - Non-isolated execution path does not define an `opencode` harness adapter; callers requesting non-isolated runs with harness `opencode` receive a structured `UNKNOWN_HARNESS` refusal rather than implicit diversion to `paseo`.
+
+## Live E2E Attempt 15: Worker timeout classification and upstream quota fallback (Defect M) (2026-10-02)
+
+Observation / Defect M:
+In Live E2E attempt 15 (log `.worktrees/logs/night/live15-orchestrate.log`, run data `tools/ai-brain/data/live15/out.json`, launch result `%LOCALAPPDATA%/ShipDe/launch-results/isolation-1790931015966.json`), the isolated worker (`opencode-direct`, model `ninerouter/ag/gemini-3.7-flash-medium`) was killed by the 30-minute launcher timeout because the upstream answered `"Unavailable (reset after 116h)"` and OpenCode kept retrying internally. Because `classifyFailure` received no HTTP status and unrecognized error text, it defaulted to `Scope.UNKNOWN` / `Cause.UNKNOWN`. `cli.js:sameFailureDomain` treated `Scope.UNKNOWN` as sharing gateway `9router`, blocking all remaining candidates across every upstream on `9router`, and the loop halted with `NO_ALTERNATE_FAILURE_DOMAIN: unknown (unknown)`.
+
+Fix:
+1. Launcher Timeout Classification & Precedence (F1) (`tools/ai-brain/failure-classifier.js` & `tools/ai-brain/orchestrate.js`):
+   - Added `Cause.TIMEOUT` (`'timeout'`) and default cooldown (`10 * 60 * 1000`) in `failure-classifier.js`.
+   - Launcher timeout takes precedence: When launcher timeout occurs (`input.timedOut === true`, `input.cause === 'TIMEOUT'`, or `/\[ISOLATION_LAUNCHER\] worker timed out/` in stderr/failureReason), it classifies immediately as `Cause.TIMEOUT` with `Scope.UPSTREAM` (10m cooldown), ensuring launcher timeouts are never misattributed to `quota_exhausted`.
+   - In `orchestrate.js`: Forwards authentic `isLauncherTimedOut` from launcher result (`res.timedOut || /\[ISOLATION_LAUNCHER\] worker timed out/`) into `classifyFailure` without unanchored worker stderr pattern.
+   - In `orchestrate.js:outcome`: Records `launch.cause` into `log.outcomes` (`{ workItemId, status, reason, cause }`), preserving the root cause in the structured outcome alongside `reason`.
+2. Upstream Quota Classification, Error Envelopes & Bounded Cooldown (F2, F3) (`tools/ai-brain/failure-classifier.js`):
+   - Added `Cause.QUOTA_EXHAUSTED` (`'quota_exhausted'`) and default cooldown (`60 * 60 * 1000`) in `failure-classifier.js`.
+   - Bounded `parseResetTime` by `MAX_RESET_MS` (`30 * 24 * 60 * 60 * 1000`, 30 days) to prevent attacker-chosen unbounded cooldowns.
+   - In `classifyFailure`: Quota classification derives strictly from structured signals (`input.cause`, HTTP 429 status code, or provider error envelopes in `stdout`/`stderr`), not arbitrary worker stdout text.
+   - Gated Case 13 (`LAUNCH_CONFIG`) before worker text scanning so untrusted worker stdout cannot widen a harness launch failure into an upstream-scoped block.
+   - Scoped `running` check to active session status signals (`isExhaustionHiding`), ensuring ordinary OpenCode `"status": "running"` event stream outputs do not bypass quota classification.
+3. Upstream Failure Domain Isolation & Fallback (`tools/ai-brain/cli.js` & `tools/ai-brain/orchestrate.js`):
+   - Because `scope` is `Scope.UPSTREAM`, `cli.js:sameFailureDomain` matches only candidates sharing `failed.upstream` (e.g. `ag`). Candidates on different upstreams (e.g. `gh`, `cl`, `ocz`) on `9router` remain eligible.
+   - The orchestrator loop successfully falls back to alternate failure domains rather than stopping.
+4. Regression Tests (`tools/ai-brain/test/failure-classifier.test.js` & `tools/ai-brain/test/task-ai-64.test.js`):
+   - Unit regression tests in `test/failure-classifier.test.js` (Case 14): timeout precedence over worker output, real multi-line launcher timeout artifact classification (F1), worker output unable to widen harness launch_config failure (F2), unbounded reset hint capping (F2), real quota error with OpenCode `"status": "running"` (F3), FreeUsageLimit with running status line (F3), and failure domain isolation.
+   - 4 orchestration regression tests in `test/task-ai-64.test.js` (Defect M): fallback on launcher timeout to alternate upstream, fallback on upstream quota error, structured `NO_ALTERNATE_FAILURE_DOMAIN: upstream (timeout)` with outcome cause when no alternate exists, and structured `NO_ALTERNATE_FAILURE_DOMAIN: upstream (quota_exhausted)` with outcome cause.
+
+Evidence:
+- Fail-before base SHA: `790b644` / `790b644b9d8c22c48626f930e3822b2f6d5ebb2f` (and repair round 1 base `9009f63` / `9009f63b6a46d7b889e5fd7c9eea1b510eb5eb42`)
+  - `classifyFailure({ timedOut: true })` classified as `Cause.UNKNOWN` / `Scope.UNKNOWN` at `790b644`.
+  - Real launcher timeout artifact `isolation-1790885717760.json` misclassified as `Cause.QUOTA_EXHAUSTED` at `9009f63` due to unanchored 429 and quota keywords in worker stdout; now correctly classified as `Cause.TIMEOUT` with 10m cooldown.
+  - Harness `launch_config` failure with spoofed worker stdout line `429 ... quota exceeded` misclassified as `Cause.QUOTA_EXHAUSTED` at `9009f63`; now correctly classified as `Cause.LAUNCH_CONFIG`.
+  - Quota error with OpenCode `"status": "running"` line misclassified as `Cause.TIMEOUT` at `9009f63`; now correctly classified as `Cause.QUOTA_EXHAUSTED` with parsed reset hint cooldown.
+- Pass-after result: All tests pass. 76/76 passed in `tools/ai-brain/test/task-ai-64.test.js`; 89/89 passed in `tools/ai-brain/test/failure-classifier.test.js`; 27/27 passed in `tools/ai-brain/test/isolation.test.js`; 1180/1180 passed in full brain suite (`tools/ai-brain/test/*.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/failure-classifier.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- Active in-flight worker watchdog: The launcher timeout remains at 30 minutes (`workerTimeoutMs` / `WaitForExit($timeoutMs)`). During an in-flight run where upstream returns terminal quota errors (such as `Unavailable (reset after 116h)`), the worker may continue retrying until the launcher timeout kills it. Once the timeout kills the worker, the classification accurately maps the failure to `QUOTA_EXHAUSTED` (with the parsed reset hint) or `TIMEOUT` (with upstream failure scope), allowing the orchestrator loop to immediately fall back to an alternate candidate/domain rather than stalling. Implementing an active in-flight output watchdog in the launcher is deferred as a residual enhancement because `WaitForExit($timeoutMs)` is a pinned P6 contract assertion in `isolation.test.js` and asynchronous pipe reading across the `ShipDeWorker` impersonation boundary blocks early stream inspection without dedicated log file streaming.
