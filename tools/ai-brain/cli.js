@@ -1926,6 +1926,8 @@ function dispatchCommand(args, deps = {}) {
             cwd: args.cwd || rootDir,
             // The pinned base the worker root is provisioned at (AI-64-R15).
             baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
+            branch: item.branch,
+            workItemId: item.workItemId,
           });
         } catch (err) {
           thrownError = err;

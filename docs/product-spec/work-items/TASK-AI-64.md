@@ -1140,3 +1140,44 @@ Evidence:
 
 Residual risk / known limitations:
 - None.
+
+## Live E2E Attempt 18: Provisioned worker root pinned to base SHA in linked worktree (Defect Q) (2026-10-02)
+
+Observation / Defect Q:
+In Live E2E attempt 18 (run data `C:/Users/gumac/AI/shipde-platform/.worktrees/logs/night/live18-data/out.json`, worker git log `../logs/night/live18-worker-git-log.txt`), `orchestrate` ran with `--base-sha adb6cfc121312b230ef5d727a5dd87bd35e97f59` from host worktree `C:/Users/gumac/AI/shipde-platform/.worktrees/isolation`. However, the provisioned worker root `C:/ShipDeWorker/isolation` ended up on commit `42f97c5` (the primary checkout HEAD of the shared repository / stale branch ref `feat/task-ai-64`). Because the worker root was provisioned with a detached `git checkout <headSha>` and did not create or pin the exercise branch or update the remote tracking branch, when the worker executed git switch/checkout on the requested exercise branch (`feat/task-ai-64`), Git matched the cloned remote tracking branch `origin/feat/task-ai-64` pointing to `42f97c5`. The worker committed on top of `42f97c5`, which was not a descendant of `adb6cfc`, causing exercise cases to be missing and verification to fail. Furthermore, provisioning did not verify that HEAD matched the requested base SHA via hardened rev-parse, `captureFailBefore` did not verify ancestry, and `verifyWorkerCommit` did not check commit ancestry before accepting worker commits.
+
+Fix:
+1. Pinned Branch Provisioning and Remote Ref Alignment (`tools/ai-brain/isolation-launcher.js`, `tools/ai-brain/orchestrate.js`, `tools/ai-brain/cli.js`):
+   - In `cli.js`: Passed `branch` and `workItemId` to `orchestrate.runOrchestration`.
+   - In `orchestrate.js`: Propagated `branch` and `workItemId` through `resolveLauncher` to `isolatedLauncher`.
+   - In `isolation-launcher.js`: In `provisionWorker`, derived `targetBranch` from `opts.branch` or `opts.workItemId` (`feat/<workItemId>`). Provisioning checks out the base SHA directly onto `targetBranch` using `git checkout -B <targetBranch> <headSha>`. Updates `refs/remotes/origin/<targetBranch>` in the provisioned worker root to `headSha`, ensuring any subsequent checkout or switch by the agent stays pinned to the base SHA.
+2. Hardened Provisioning HEAD Verification (`tools/ai-brain/isolation-launcher.js`):
+   - After provisioning and line-ending/filemode configuration, hardened `rev-parse --verify --quiet HEAD^{commit}` runs via `withCleanGitEnv`/`safeGit` (with fallback to direct hardened git invocation with `safe.directory` and null configs).
+   - Any mismatch between provisioned worker root HEAD and requested `headSha` immediately throws a hard structured `PROVISION_BASE_MISMATCH` failure before the agent starts.
+   - Pre-launch check: Before spawning the adapter/agent process, verifies once more that worker root HEAD equals `expectedActiveSha` (`retainWorkerHead || headSha`), throwing `PROVISION_BASE_MISMATCH` (or `WORKER_HEAD_MISMATCH`) on discrepancy.
+3. Fail-Before Ancestry Assertion (`tools/ai-brain/isolation-launcher.js`):
+   - In `captureFailBefore`: Runs `git merge-base --is-ancestor <baseSha> HEAD`. If `baseSha` is not an ancestor of worker root HEAD, throws `FAIL_BEFORE_ANCESTRY_MISMATCH`.
+   - In `materialiseExercise`: Propagates `FAIL_BEFORE_ANCESTRY_MISMATCH` immediately, preventing invalid fail-before captures on diverged trees.
+4. Worker Commit Ancestry Assertion (`tools/ai-brain/orchestrate.js`):
+   - In `verifyWorkerCommit`: Runs `git merge-base --is-ancestor <cleanBase> <headSha>`. If the worker commit is not a descendant of the base SHA, rejects with `{ pass: false, cause: 'NO_LOCAL_COMMIT', detail: 'worker commit ... is not a descendant of base SHA ...' }`.
+5. Regression Tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Added Defect Q test suite (5 tests):
+     - Provisioning pins worker root to base SHA when host is a linked worktree whose primary HEAD differs from base SHA (fails at adb6cfc, passes after).
+     - Hard structured failure `PROVISION_BASE_MISMATCH` if provisioned worker root HEAD does not match requested base SHA.
+     - Pre-launch check throws `PROVISION_BASE_MISMATCH` if worker root HEAD moves before agent start.
+     - `captureFailBefore` asserts ancestry and throws `FAIL_BEFORE_ANCESTRY_MISMATCH` when base SHA is not ancestor of worker HEAD.
+     - `verifyWorkerCommit` fails with `NO_LOCAL_COMMIT` when worker commit is not a descendant of base SHA (fails at adb6cfc, passes after).
+
+Evidence:
+- Fail-before base SHA: `adb6cfc` / `adb6cfc121312b230ef5d727a5dd87bd35e97f59`
+  - In Live attempt 18, `C:/ShipDeWorker/isolation` provisioned from linked worktree `.worktrees/isolation` moved to `42f97c5` on `feat/task-ai-64` checkout.
+  - At `adb6cfc`, `verifyWorkerCommit` lacked `merge-base --is-ancestor` assertion and accepted non-descendant commits; `captureFailBefore` lacked ancestry checks; and `isolation-launcher` lacked `PROVISION_BASE_MISMATCH` rev-parse verification.
+- Pass-after result: All tests pass. 84/84 passed in `tools/ai-brain/test/task-ai-64.test.js`; 1188/1188 passed in full brain suite (`tools/ai-brain/test/*.test.js`).
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.

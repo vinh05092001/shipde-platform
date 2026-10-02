@@ -155,6 +155,8 @@ function resolveLauncher(o, isolatedLauncher) {
       cwd: job.hostWorktree || job.cwd,
       workerRoot: job.workerRoot,
       baseSha: job.baseSha,
+      branch: job.branch,
+      workItemId: job.title || (job.labels && job.labels.workItem) || null,
       retainWorkerHead: job.retainWorkerHead || undefined,
       verdictPath: job.verdictPath,
       exercise: job.exercise || o.exercise || null,
@@ -387,6 +389,53 @@ function verifyWorkerCommit(workerRoot, baseSha, options) {
       baseSha: cleanBase,
       detail: 'worker head matches base SHA ' + cleanBase + ' (no local commit created)',
     };
+  }
+  if (cleanBase && headSha) {
+    const isAncestor = (() => {
+      try {
+        const check = (options && options.spawnSync) || spawnSync;
+        const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+        const normWorkerRoot = path.resolve(workerRoot).replace(/\\/g, '/');
+        const res = check(
+          'git',
+          [
+            '-c',
+            'safe.directory=' + normWorkerRoot,
+            '-c',
+            'core.hooksPath=' + nulDevice,
+            '-c',
+            'core.fsmonitor=false',
+            '-c',
+            'core.attributesFile=' + nulDevice,
+            'merge-base',
+            '--is-ancestor',
+            cleanBase,
+            headSha,
+          ],
+          {
+            cwd: workerRoot,
+            windowsHide: true,
+            env: Object.assign({}, process.env, {
+              GIT_CONFIG_NOSYSTEM: '1',
+              GIT_CONFIG_GLOBAL: nulDevice,
+              GIT_CONFIG_SYSTEM: nulDevice,
+            }),
+          }
+        );
+        return res && res.status === 0;
+      } catch {
+        return false;
+      }
+    })();
+    if (!isAncestor) {
+      return {
+        pass: false,
+        cause: 'NO_LOCAL_COMMIT',
+        headSha,
+        baseSha: cleanBase,
+        detail: 'worker commit ' + headSha + ' is not a descendant of base SHA ' + cleanBase,
+      };
+    }
   }
   if (isTreeDirty(workerRoot, options)) {
     return {
