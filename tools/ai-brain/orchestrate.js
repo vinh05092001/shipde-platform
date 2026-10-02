@@ -326,45 +326,45 @@ function repairSpec(item, findings, round) {
   };
 }
 
-function headShaOf(cwd) {
+function headShaOf(cwd, options) {
   if (!cwd || !fs.existsSync(path.join(cwd, '.git'))) return null;
   const { withCleanGitEnv, safeGit } = require('./supervisor');
   try {
     return withCleanGitEnv(
       cwd,
       (tmpDir) => {
-        const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000);
+        const res = safeGit(tmpDir, cwd, ['rev-parse', 'HEAD'], 20000, options);
         if (!res || res.status !== 0) return null;
         return String(res.stdout || '').trim() || null;
       },
-      { workerWritable: true }
+      Object.assign({ workerWritable: true }, options)
     );
   } catch (err) {
     return null;
   }
 }
 
-function isTreeDirty(cwd) {
+function isTreeDirty(cwd, options) {
   if (!cwd || !fs.existsSync(path.join(cwd, '.git'))) return false;
   const { withCleanGitEnv, safeGit } = require('./supervisor');
   try {
     return withCleanGitEnv(
       cwd,
       (tmpDir) => {
-        const res = safeGit(tmpDir, cwd, ['status', '--porcelain'], 20000);
+        const res = safeGit(tmpDir, cwd, ['status', '--porcelain'], 20000, options);
         if (!res || res.status !== 0) return false;
         return String(res.stdout || '').trim().length > 0;
       },
-      { workerWritable: true }
+      Object.assign({ workerWritable: true }, options)
     );
   } catch (err) {
     return false;
   }
 }
 
-function verifyWorkerCommit(workerRoot, baseSha) {
+function verifyWorkerCommit(workerRoot, baseSha, options) {
   if (!workerRoot) return { pass: true };
-  const headSha = headShaOf(workerRoot);
+  const headSha = headShaOf(workerRoot, options);
   const isGitRepo = fs.existsSync(path.join(workerRoot, '.git'));
   if (!headSha) {
     if (isGitRepo) {
@@ -388,7 +388,7 @@ function verifyWorkerCommit(workerRoot, baseSha) {
       detail: 'worker head matches base SHA ' + cleanBase + ' (no local commit created)',
     };
   }
-  if (isTreeDirty(workerRoot)) {
+  if (isTreeDirty(workerRoot, options)) {
     return {
       pass: false,
       cause: 'NO_LOCAL_COMMIT',

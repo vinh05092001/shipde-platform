@@ -154,6 +154,153 @@ function safeCopyRefs(srcDir, destDir) {
   walk(srcDir, destDir);
 }
 
+const WORKER_ROOT_EXCLUDES = [
+  '.shipde/',
+  'run-target*',
+  'temp/',
+  '.config/',
+  '.local/',
+  'Microsoft/',
+  'tools/ai-brain/test/e1-branch-name.test.js',
+  'tools/ai-brain/test/e1-*.test.js',
+  'opencode.json',
+];
+
+function ensureWorkerRootExcludes(gitDir, extra) {
+  const excludePath = path.join(gitDir, 'info', 'exclude');
+  let existing = '';
+  if (fs.existsSync(excludePath)) {
+    try {
+      existing = fs.readFileSync(excludePath, 'utf8');
+    } catch {}
+  }
+  const lines = existing
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const present = new Set(lines);
+  const combined = WORKER_ROOT_EXCLUDES.concat(Array.isArray(extra) ? extra : []);
+  const missing = combined.filter((entry) => !present.has(entry));
+  if (missing.length === 0) return;
+  const prefix = existing.length > 0 && !/\r?\n$/.test(existing) ? '\n' : '';
+  fs.appendFileSync(excludePath, prefix + missing.join('\n') + '\n', 'utf8');
+}
+
+function getEffectiveEolConfig(targetCwd, explicitOpts) {
+  let autocrlf = null;
+  let eol = null;
+  if (explicitOpts) {
+    if (explicitOpts.coreAutocrlf !== undefined) autocrlf = String(explicitOpts.coreAutocrlf);
+    else if (explicitOpts.autocrlf !== undefined) autocrlf = String(explicitOpts.autocrlf);
+    if (explicitOpts.coreEol !== undefined) eol = String(explicitOpts.coreEol);
+    else if (explicitOpts.eol !== undefined) eol = String(explicitOpts.eol);
+  }
+  if (autocrlf === null || eol === null) {
+    try {
+      if (autocrlf === null) {
+        const res = spawnSync('git', ['config', '--get', 'core.autocrlf'], {
+          cwd: targetCwd || process.cwd(),
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+        if (res && res.status === 0 && res.stdout) {
+          autocrlf = res.stdout.trim() || null;
+        }
+      }
+      if (eol === null) {
+        const res = spawnSync('git', ['config', '--get', 'core.eol'], {
+          cwd: targetCwd || process.cwd(),
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+        if (res && res.status === 0 && res.stdout) {
+          eol = res.stdout.trim() || null;
+        }
+      }
+    } catch {}
+  }
+  return { autocrlf, eol };
+}
+
+function readSafeRepoConfig(cwd, options) {
+  const result = {
+    autocrlf: null,
+    eol: null,
+    filemode: process.platform === 'win32' ? 'false' : null,
+  };
+
+  if (options) {
+    if (options.autocrlf !== undefined) result.autocrlf = String(options.autocrlf).toLowerCase();
+    if (options.coreAutocrlf !== undefined)
+      result.autocrlf = String(options.coreAutocrlf).toLowerCase();
+    if (options.eol !== undefined) result.eol = String(options.eol).toLowerCase();
+    if (options.coreEol !== undefined) result.eol = String(options.coreEol).toLowerCase();
+    if (options.filemode !== undefined) result.filemode = String(options.filemode).toLowerCase();
+    if (options.coreFilemode !== undefined)
+      result.filemode = String(options.coreFilemode).toLowerCase();
+  }
+
+  if (cwd) {
+    const configPath = path.join(cwd, '.git', 'config');
+    if (fs.existsSync(configPath)) {
+      try {
+        const content = fs.readFileSync(configPath, 'utf8');
+        if (result.autocrlf === null) {
+          const match = content.match(/^\s*autocrlf\s*=\s*(.+)$/im);
+          if (match) {
+            const val = match[1].trim().toLowerCase();
+            if (['true', 'false', 'input'].includes(val)) {
+              result.autocrlf = val;
+            }
+          }
+        }
+        if (result.eol === null) {
+          const match = content.match(/^\s*eol\s*=\s*(.+)$/im);
+          if (match) {
+            const val = match[1].trim().toLowerCase();
+            if (['lf', 'crlf', 'native'].includes(val)) {
+              result.eol = val;
+            }
+          }
+        }
+        if (result.filemode === null || process.platform === 'win32') {
+          const match = content.match(/^\s*filemode\s*=\s*(.+)$/im);
+          if (match) {
+            const val = match[1].trim().toLowerCase();
+            if (['true', 'false'].includes(val)) {
+              result.filemode = val;
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  if (result.autocrlf === null || result.eol === null) {
+    const effective = getEffectiveEolConfig(cwd, options);
+    if (result.autocrlf === null && effective.autocrlf) {
+      const val = effective.autocrlf.toLowerCase();
+      if (['true', 'false', 'input'].includes(val)) result.autocrlf = val;
+    }
+    if (result.eol === null && effective.eol) {
+      const val = effective.eol.toLowerCase();
+      if (['lf', 'crlf', 'native'].includes(val)) result.eol = val;
+    }
+  }
+
+  if (result.autocrlf && !['true', 'false', 'input'].includes(result.autocrlf)) {
+    result.autocrlf = null;
+  }
+  if (result.eol && !['lf', 'crlf', 'native'].includes(result.eol)) {
+    result.eol = null;
+  }
+  if (result.filemode && !['true', 'false'].includes(result.filemode)) {
+    result.filemode = process.platform === 'win32' ? 'false' : null;
+  }
+
+  return result;
+}
+
 function withCleanGitEnv(cwd, fn, options) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-git-safe-'));
   const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
@@ -168,10 +315,13 @@ function withCleanGitEnv(cwd, fn, options) {
     });
     const gitDir = path.join(tmpDir, '.git');
     fs.mkdirSync(path.join(gitDir, 'objects', 'info'), { recursive: true });
-    fs.writeFileSync(
-      path.join(gitDir, 'config'),
-      '[core]\n\trepositoryFormatVersion = 0\n\tbare = false\n'
-    );
+
+    const safeConfig = readSafeRepoConfig(cwd, options);
+    let configStr = '[core]\n\trepositoryFormatVersion = 0\n\tbare = false\n';
+    if (safeConfig.filemode !== null) configStr += `\tfilemode = ${safeConfig.filemode}\n`;
+    if (safeConfig.autocrlf !== null) configStr += `\tautocrlf = ${safeConfig.autocrlf}\n`;
+    if (safeConfig.eol !== null) configStr += `\teol = ${safeConfig.eol}\n`;
+    fs.writeFileSync(path.join(gitDir, 'config'), configStr);
 
     const { workerGitDir, workerCommonDir } = resolveWorkerGitDir(cwd, options);
 
@@ -196,6 +346,8 @@ function withCleanGitEnv(cwd, fn, options) {
     copyIfSafe(path.join(workerGitDir, 'info'), path.join(gitDir, 'info'), 'exclude');
     copyIfSafe(path.join(workerCommonDir, 'info'), path.join(gitDir, 'info'), 'exclude');
 
+    ensureWorkerRootExcludes(gitDir, options && options.extraExcludes);
+
     safeCopyRefs(path.join(workerCommonDir, 'refs'), path.join(gitDir, 'refs'));
 
     return fn(gitDir);
@@ -204,10 +356,11 @@ function withCleanGitEnv(cwd, fn, options) {
   }
 }
 
-function safeGit(tmpDir, cwd, args, timeoutMs) {
+function safeGit(tmpDir, cwd, args, timeoutMs, options) {
   const normCwd = path.resolve(cwd).replace(/\\/g, '/');
   const normTmp = path.resolve(tmpDir).replace(/\\/g, '/');
   const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const safeConfig = readSafeRepoConfig(cwd, options);
   const safeArgs = [
     '-c',
     'safe.directory=' + normCwd,
@@ -221,10 +374,17 @@ function safeGit(tmpDir, cwd, args, timeoutMs) {
     'core.attributesFile=' + nulDevice,
     '-c',
     'diff.external=',
-    '--git-dir=' + tmpDir,
-    '--work-tree=' + cwd,
-    ...args,
   ];
+  if (safeConfig.filemode !== null) {
+    safeArgs.push('-c', 'core.filemode=' + safeConfig.filemode);
+  }
+  if (safeConfig.autocrlf !== null) {
+    safeArgs.push('-c', 'core.autocrlf=' + safeConfig.autocrlf);
+  }
+  if (safeConfig.eol !== null) {
+    safeArgs.push('-c', 'core.eol=' + safeConfig.eol);
+  }
+  safeArgs.push('--git-dir=' + tmpDir, '--work-tree=' + cwd, ...args);
   return spawnSync('git', safeArgs, {
     cwd,
     encoding: 'utf8',
@@ -344,4 +504,7 @@ module.exports = {
   safeGit,
   resolveWorkerGitDir,
   safeCopyObjects,
+  getEffectiveEolConfig,
+  readSafeRepoConfig,
+  WORKER_ROOT_EXCLUDES,
 };

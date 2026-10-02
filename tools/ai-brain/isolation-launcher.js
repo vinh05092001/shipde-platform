@@ -813,24 +813,50 @@ function getIsolatedLauncher() {
       );
       if (cloneRes.status !== 0) throw new Error('Failed to clone repository');
 
+      const { getEffectiveEolConfig } = require('./supervisor');
+      const eolConfig = getEffectiveEolConfig(hostCwd, opts);
+
       const normWorkerRoot = path.resolve(workerRoot).replace(/\\/g, '/');
-      const checkoutRes = cp.spawnSync(
-        'git',
-        [
-          '-c',
-          'core.hooksPath=' + nulDevice,
-          '-c',
-          'core.fsmonitor=false',
-          '-c',
-          'core.attributesFile=' + nulDevice,
-          '-c',
-          'diff.external=',
-          '-c',
-          'safe.directory=' + normWorkerRoot,
-          'checkout',
-          headSha,
-        ],
-        {
+      const checkoutArgs = [
+        '-c',
+        'core.hooksPath=' + nulDevice,
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.attributesFile=' + nulDevice,
+        '-c',
+        'diff.external=',
+        '-c',
+        'safe.directory=' + normWorkerRoot,
+      ];
+      if (process.platform === 'win32') {
+        checkoutArgs.push('-c', 'core.filemode=false');
+      }
+      if (eolConfig.autocrlf !== null) {
+        checkoutArgs.push('-c', 'core.autocrlf=' + eolConfig.autocrlf);
+      }
+      if (eolConfig.eol !== null) {
+        checkoutArgs.push('-c', 'core.eol=' + eolConfig.eol);
+      }
+      checkoutArgs.push('checkout', headSha);
+
+      const checkoutRes = cp.spawnSync('git', checkoutArgs, {
+        cwd: workerRoot,
+        windowsHide: true,
+        env: Object.assign({}, process.env, {
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_CONFIG_GLOBAL: nulDevice,
+          GIT_CONFIG_SYSTEM: nulDevice,
+        }),
+      });
+      if (checkoutRes.status !== 0) {
+        throw new Error(
+          'ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: ' + headSha
+        );
+      }
+
+      if (eolConfig.autocrlf !== null) {
+        cp.spawnSync('git', ['config', 'core.autocrlf', eolConfig.autocrlf], {
           cwd: workerRoot,
           windowsHide: true,
           env: Object.assign({}, process.env, {
@@ -838,12 +864,29 @@ function getIsolatedLauncher() {
             GIT_CONFIG_GLOBAL: nulDevice,
             GIT_CONFIG_SYSTEM: nulDevice,
           }),
-        }
-      );
-      if (checkoutRes.status !== 0) {
-        throw new Error(
-          'ISOLATION_CHECKOUT_FAILED: Failed to checkout HEAD SHA in worker root: ' + headSha
-        );
+        });
+      }
+      if (eolConfig.eol !== null) {
+        cp.spawnSync('git', ['config', 'core.eol', eolConfig.eol], {
+          cwd: workerRoot,
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        });
+      }
+      if (process.platform === 'win32') {
+        cp.spawnSync('git', ['config', 'core.filemode', 'false'], {
+          cwd: workerRoot,
+          windowsHide: true,
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        });
       }
     }
 
