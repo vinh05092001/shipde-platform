@@ -42,6 +42,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const crypto = require('crypto');
 
 const planner = require('./planner');
 const { compilePrompt, compileReviewPrompt } = require('./prompt-compiler');
@@ -53,6 +54,7 @@ const evidence = require('./evidence');
 const candidatesApi = require('./candidates');
 const decisions = require('./decisions');
 const { candidateKey } = require('./candidates');
+const { parseCandidateKey } = require('./discovery/identity');
 const { classifyFailure } = require('./failure-classifier');
 const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
 
@@ -78,6 +80,7 @@ const PublicationStatus = Object.freeze({
 
 const DEFAULT_REVIEW_BUDGET = 3;
 const SHA_40 = /^[0-9a-f]{40}$/i;
+const ACCEPTED_VERDICTS = Object.freeze(['PASS', 'FALLBACK_PASS']);
 
 function buildDefaults() {
   return {
@@ -1214,6 +1217,610 @@ function unique(list) {
   return Array.from(new Set(list.filter(Boolean)));
 }
 
+/**
+ * A receipt count: a number, or null when the field is absent, null or not a
+ * number. `Number(null)` is `0`, so coercing first would launder an omitted
+ * `repairCount` into "no repairs happened" — absence is never evidence
+ * (AI-64-P08), and each count check downstream tests the raw field for null.
+ */
+function receiptCount(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const count = Number(value);
+  return Number.isFinite(count) ? count : null;
+}
+
+/**
+ * Extracts and normalizes the recorded review result for one work item from a checkpoint.
+ * Supports checkpoint.reviews as array or object, as well as completedReviews/reviewResults.
+ */
+function extractCheckpointReview(checkpoint, workItemId) {
+  if (!checkpoint) return null;
+  let raw = null;
+  if (Array.isArray(checkpoint.reviews)) {
+    raw = checkpoint.reviews.find((r) => r && (r.workItemId === workItemId || r.id === workItemId));
+  } else if (checkpoint.reviews && typeof checkpoint.reviews === 'object') {
+    raw = checkpoint.reviews[workItemId];
+  }
+  if (!raw && Array.isArray(checkpoint.completedReviews)) {
+    raw = checkpoint.completedReviews.find(
+      (r) => r && (r.workItemId === workItemId || r.id === workItemId)
+    );
+  } else if (
+    !raw &&
+    checkpoint.completedReviews &&
+    typeof checkpoint.completedReviews === 'object'
+  ) {
+    raw = checkpoint.completedReviews[workItemId];
+  }
+  if (!raw && Array.isArray(checkpoint.reviewResults)) {
+    raw = checkpoint.reviewResults.find(
+      (r) => r && (r.workItemId === workItemId || r.id === workItemId)
+    );
+  } else if (!raw && checkpoint.reviewResults && typeof checkpoint.reviewResults === 'object') {
+    raw = checkpoint.reviewResults[workItemId];
+  }
+  if (!raw || typeof raw !== 'object') return null;
+
+  const sha =
+    raw.sha || raw.reviewedSha || (raw.review && (raw.review.finalSha || raw.review.sha)) || null;
+  const verdict = raw.verdict || (raw.review && raw.review.verdict) || null;
+  const reviewer =
+    raw.reviewer ||
+    raw.reviewerKey ||
+    raw.reviewerIdentity ||
+    (raw.review && raw.review.reviewer) ||
+    null;
+  const workerRoot =
+    raw.workerRoot || raw.worktree || (raw.review && raw.review.workerRoot) || null;
+  const publishCwd = raw.publishCwd || (raw.review && raw.review.publishCwd) || null;
+  const branch = raw.branch || (raw.review && raw.review.branch) || null;
+  const baseSha = raw.baseSha || (raw.review && raw.review.baseSha) || null;
+  const writerCandidateKey = raw.writerCandidateKey || raw.writer || null;
+  const draftTitle = raw.draftTitle || raw.title || null;
+
+  const record = {
+    workItemId: raw.workItemId || raw.id || workItemId,
+    sha: typeof sha === 'string' ? sha.trim() : null,
+    reviewedSha: typeof sha === 'string' ? sha.trim() : null,
+    verdict: typeof verdict === 'string' ? verdict.trim() : null,
+    reviewer: typeof reviewer === 'string' ? reviewer.trim() : null,
+    reviewerKey: typeof reviewer === 'string' ? reviewer.trim() : null,
+    workerRoot: typeof workerRoot === 'string' ? workerRoot : null,
+    publishCwd: typeof publishCwd === 'string' ? publishCwd : null,
+    branch: typeof branch === 'string' ? branch : null,
+    baseSha: typeof baseSha === 'string' ? baseSha.trim() : null,
+    writerCandidateKey: typeof writerCandidateKey === 'string' ? writerCandidateKey.trim() : null,
+    draftTitle: typeof draftTitle === 'string' ? draftTitle.trim() : null,
+    tests: raw.tests && typeof raw.tests === 'object' ? raw.tests : null,
+    reviewRounds: receiptCount(raw.reviewRounds),
+    openFindings: receiptCount(raw.openFindings),
+    decisionLog: raw.decisionLog && typeof raw.decisionLog === 'object' ? raw.decisionLog : null,
+    repairCount: receiptCount(raw.repairCount),
+    integrity: raw.integrity && typeof raw.integrity === 'object' ? raw.integrity : null,
+  };
+  // Absence stays absence. The integrity digest covers the keys that are
+  // present, so re-materialising a field the checkpoint never carried as
+  // `null` would rename an incomplete receipt "integrity mismatch" instead of
+  // letting the check for that exact field report what is missing.
+  for (const key of Object.keys(record)) {
+    if (record[key] === null && !Object.prototype.hasOwnProperty.call(raw, key)) {
+      delete record[key];
+    }
+  }
+  return record;
+}
+
+function stableJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map((v) => stableJson(v)).join(',') + ']';
+  return (
+    '{' +
+    Object.keys(value)
+      .sort()
+      .map((k) => JSON.stringify(k) + ':' + stableJson(value[k]))
+      .join(',') +
+    '}'
+  );
+}
+
+function sha256Text(value) {
+  return crypto
+    .createHash('sha256')
+    .update(String(value || ''), 'utf8')
+    .digest('hex');
+}
+
+function digestObject(value) {
+  return sha256Text(stableJson(value));
+}
+
+function receiptIntegrityPayload(receipt) {
+  const r = Object.assign({}, receipt || {});
+  delete r.integrity;
+  delete r.reviewedSha;
+  delete r.reviewerKey;
+  return r;
+}
+
+function attachReceiptIntegrity(receipt) {
+  const r = Object.assign({}, receipt || {});
+  r.integrity = {
+    algorithm: 'sha256:stable-json:v1',
+    digest: digestObject(receiptIntegrityPayload(r)),
+  };
+  return r;
+}
+
+/**
+ * The open findings of the COMPLETED review, not the sum of every round.
+ *
+ * A run that needed a repair has a first round carrying the finding that caused
+ * the repair and a final round that passed with no findings at all (AI-64-R07).
+ * Summing every round made every repaired run's own receipt contradictory —
+ * `verdict: PASS` with `openFindings: 1` — and the receipt was then refused by
+ * the very validator that wrote it, so a completed REVIEW_PASS could never be
+ * published. The final round is the round the item completed on, so only its
+ * findings describe the receipt; earlier rounds stay in the decision log.
+ */
+function countOpenFindings(rounds) {
+  if (!Array.isArray(rounds) || rounds.length === 0) return 0;
+  const final = rounds[rounds.length - 1];
+  const findings = final && Array.isArray(final.findings) ? final.findings : [];
+  let count = 0;
+  for (const finding of findings) {
+    if (!finding || finding.closed !== true) count += 1;
+  }
+  return count;
+}
+
+function compactTestEvidence(result, failBefore) {
+  const headExit =
+    result && result.headExitCode !== undefined && result.headExitCode !== null
+      ? result.headExitCode
+      : result && result.exitCode !== undefined && result.exitCode !== null
+        ? result.exitCode
+        : null;
+  const baseExit =
+    result && result.baseExitCode !== undefined && result.baseExitCode !== null
+      ? result.baseExitCode
+      : failBefore && failBefore.exitCode !== undefined && failBefore.exitCode !== null
+        ? failBefore.exitCode
+        : null;
+  const headOutput =
+    (result &&
+      (result.detail || result.output || result.stdout || result.stderr || result.cause)) ||
+    '';
+  const baseOutput =
+    (result && result.baseOutput) ||
+    (failBefore &&
+      (failBefore.output || failBefore.detail || failBefore.stdout || failBefore.stderr || '')) ||
+    '';
+  return {
+    command: (result && result.command) || (failBefore && failBefore.command) || null,
+    baseExitCode: baseExit,
+    headExitCode: headExit,
+    outputDigest: digestObject({
+      base: String(baseOutput),
+      head: String(headOutput),
+    }),
+  };
+}
+
+function normalizedReceiptTests(tests) {
+  if (!tests || typeof tests !== 'object') return null;
+  const baseExitCode = Number(tests.baseExitCode);
+  const headExitCode = Number(tests.headExitCode);
+  return {
+    command: tests.command ? String(tests.command) : null,
+    baseExitCode: Number.isFinite(baseExitCode) ? baseExitCode : null,
+    headExitCode: Number.isFinite(headExitCode) ? headExitCode : null,
+    outputDigest: tests.outputDigest ? String(tests.outputDigest) : null,
+  };
+}
+
+function draftTitleForItem(item) {
+  const outcome =
+    (item && (item.businessOutcome || item.outcome || item.title || item.name)) ||
+    (item && Array.isArray(item.acceptanceCriteria) && item.acceptanceCriteria[0]) ||
+    (item && item.verification && item.verification.expect) ||
+    null;
+  const clean = outcome ? String(outcome).trim() : '';
+  return '[' + String((item && item.id) || 'WORK-ITEM') + '] ' + (clean || 'verified work item');
+}
+
+function receiptFailureDomain(candidateKeyValue) {
+  const parsed = parseCandidateKey(candidateKeyValue);
+  if (!parsed) return null;
+  return parsed.upstream || parsed.gateway || null;
+}
+
+/**
+ * The operator-side directory a publish of this receipt runs from.
+ *
+ * `workerRoot` is where the reviewed commit was produced and is where the
+ * receipt verifies it, but an isolated run's worker root sits inside the worker
+ * boundary and the publisher refuses to run there (`publisher.js`, unchanged).
+ * The receipt therefore carries the publish cwd separately:
+ *
+ *   - an explicitly designated `publisherCwd` wins;
+ *   - an isolated run publishes from the host worktree, never from the worker;
+ *   - otherwise the worker root is operator-side already and stays the cwd.
+ *
+ * Absence is not a default: a receipt with no publish cwd is refused.
+ */
+function publishCwdForReceipt(o, workerRoot) {
+  const opts = o || {};
+  if (opts.publisherCwd) return String(opts.publisherCwd);
+  if (opts.isolatedWorker) return String(opts.cwd || process.cwd());
+  return workerRoot ? String(workerRoot) : null;
+}
+
+/**
+ * The single cwd expression shared by receipt validation and publication.
+ *
+ * Both stages used to resolve it separately, so they could disagree about the
+ * directory being published from: validation saw the operator input while
+ * publication fell back to the worker root. One expression, one answer.
+ */
+function resolvePublishCwd(o, rec) {
+  const opts = o || {};
+  return (
+    (opts.publication && opts.publication.cwd) ||
+    opts.publisherCwd ||
+    opts.cwd ||
+    (rec && rec.publishCwd) ||
+    null
+  );
+}
+
+function decisionLogEvidenceFor(logOpts, workItemId, sha, verdict, reviewer) {
+  const out = {
+    dir: (logOpts && logOpts.dir) || null,
+    now: (logOpts && logOpts.now) || null,
+    completed: false,
+    reviewedSha: null,
+    verdict: verdict || null,
+    reviewer: reviewer || null,
+    reviewRounds: null,
+    repairCount: null,
+    tests: null,
+    rounds: [],
+    digest: null,
+  };
+  if (!out.dir) return out;
+  const records = decisions.readDecisionsSafe(logOpts);
+  const matched = records.filter((r) => r && r.workItemId === workItemId);
+  const completed = matched
+    .slice()
+    .reverse()
+    .find((r) => r.stage === decisions.Stage.COMPLETED && r.reviewedSha === sha);
+  const reviewRecords = matched.filter(
+    (r) =>
+      r.stage === decisions.Stage.REVIEW &&
+      (r.sha === sha || r.reviewedSha === sha) &&
+      (!reviewer || r.reviewer === reviewer) &&
+      (!verdict || r.verdict === verdict)
+  );
+  const completedTests = normalizedReceiptTests(completed && completed.tests);
+  out.completed = Boolean(completed);
+  out.reviewedSha = completed ? completed.reviewedSha || sha : null;
+  out.reviewRounds = reviewRecords.length;
+  out.repairCount =
+    completed && Number.isFinite(Number(completed.repairCount))
+      ? Number(completed.repairCount)
+      : reviewRecords.reduce(
+          (max, r) =>
+            Number.isFinite(Number(r.repairCount)) ? Math.max(max, Number(r.repairCount)) : max,
+          0
+        );
+  out.tests = completedTests;
+  out.rounds = reviewRecords.map((r) => ({
+    round: r.round || null,
+    stage: r.roundStage || null,
+    sha: r.sha || r.reviewedSha || null,
+    verdict: r.verdict || null,
+    reviewer: r.reviewer || null,
+    findings: Array.isArray(r.findings) ? r.findings : [],
+  }));
+  out.digest = digestObject({
+    completed: completed || null,
+    reviews: reviewRecords,
+  });
+  return out;
+}
+
+function verifyReceiptIntegrity(rec) {
+  if (!rec || !rec.integrity || rec.integrity.algorithm !== 'sha256:stable-json:v1') {
+    return 'PUBLISH_REFUSED: receipt integrity missing';
+  }
+  const expected = digestObject(receiptIntegrityPayload(rec));
+  if (rec.integrity.digest !== expected) {
+    return 'PUBLISH_REFUSED: receipt integrity mismatch';
+  }
+  return null;
+}
+
+function verifyReceiptCommit(rec, publishCwd) {
+  // The publish cwd is rebuilt from the receipt, so it has to be present and it
+  // has to be a directory the publisher may run from: an isolated run's worker
+  // root sits inside the worker boundary and `publisher.js` refuses it. The
+  // worker root stays where the commit is verified — that is its own role.
+  if (!rec || !rec.publishCwd) return 'PUBLISH_REFUSED: receipt missing publish cwd';
+  const { isWorkerPath } = require('./isolation-launcher');
+  if (isWorkerPath(rec.publishCwd)) {
+    return (
+      'PUBLISH_REFUSED: receipt publish cwd is inside the worker root (' +
+      String(rec.publishCwd) +
+      '); the publisher runs operator-side only'
+    );
+  }
+  const workerRoot = rec && rec.workerRoot;
+  if (!workerRoot) return 'PUBLISH_REFUSED: receipt missing workerRoot';
+  if (!fs.existsSync(workerRoot) || !fs.existsSync(path.join(workerRoot, '.git'))) {
+    return 'PUBLISH_REFUSED: receipt workerRoot is not a git repository: ' + String(workerRoot);
+  }
+  if (!publishCwd) return 'PUBLISH_REFUSED: missing publish cwd for receipt check';
+  if (path.resolve(publishCwd) !== path.resolve(rec.publishCwd)) {
+    return 'PUBLISH_REFUSED: receipt publish cwd does not match publish cwd';
+  }
+  const { withCleanGitEnv, safeGit } = require('./supervisor');
+  try {
+    return withCleanGitEnv(
+      workerRoot,
+      (tmpDir) => {
+        const exists = safeGit(tmpDir, workerRoot, ['rev-parse', rec.sha + '^{commit}'], 20000, {
+          workerWritable: true,
+        });
+        if (!exists || exists.status !== 0) {
+          return 'PUBLISH_REFUSED: reviewed commit not found in worker repo: ' + rec.sha;
+        }
+        if (!rec.baseSha || !SHA_40.test(rec.baseSha)) {
+          return 'PUBLISH_REFUSED: receipt missing valid baseSha';
+        }
+        if (rec.sha.toLowerCase() === rec.baseSha.toLowerCase()) {
+          return 'PUBLISH_REFUSED: reviewed commit equals base (no worker commit)';
+        }
+        const ancestor = safeGit(
+          tmpDir,
+          workerRoot,
+          ['merge-base', '--is-ancestor', rec.baseSha, rec.sha],
+          20000,
+          { workerWritable: true }
+        );
+        if (!ancestor || ancestor.status !== 0) {
+          return (
+            'PUBLISH_REFUSED: reviewed commit ' +
+            rec.sha +
+            ' does not descend from base ' +
+            rec.baseSha
+          );
+        }
+        return null;
+      },
+      { workerWritable: true }
+    );
+  } catch (err) {
+    return 'PUBLISH_REFUSED: hardened git receipt check failed: ' + String(err && err.message);
+  }
+}
+
+function verifyReceiptTests(rec) {
+  const tests = rec && rec.tests;
+  if (!tests || typeof tests !== 'object') return 'PUBLISH_REFUSED: receipt missing test evidence';
+  if (!tests.command) return 'PUBLISH_REFUSED: receipt missing verification command';
+  const baseExitCode = Number(tests.baseExitCode);
+  const headExitCode = Number(tests.headExitCode);
+  if (!Number.isFinite(baseExitCode) || baseExitCode === 0) {
+    return 'PUBLISH_REFUSED: receipt fail-before did not fail';
+  }
+  if (!Number.isFinite(headExitCode) || headExitCode !== 0) {
+    return 'PUBLISH_REFUSED: receipt pass-after did not pass';
+  }
+  if (!tests.outputDigest || !/^[0-9a-f]{64}$/i.test(String(tests.outputDigest))) {
+    return 'PUBLISH_REFUSED: receipt missing test output digest';
+  }
+  return null;
+}
+
+function verifyReceiptReviewerSeparation(rec) {
+  if (!rec.writerCandidateKey) return 'PUBLISH_REFUSED: receipt missing writer identity';
+  const writerDomain = receiptFailureDomain(rec.writerCandidateKey);
+  const reviewerDomain = receiptFailureDomain(rec.reviewer);
+  if (!writerDomain || !reviewerDomain) {
+    return 'PUBLISH_REFUSED: receipt cannot parse writer/reviewer failure domain';
+  }
+  if (writerDomain === reviewerDomain) {
+    return 'PUBLISH_REFUSED: reviewer shares writer failure domain';
+  }
+  return null;
+}
+
+function verifyReceiptDecisionLog(rec, workItemId) {
+  const evidenceRecord = rec && rec.decisionLog;
+  if (!evidenceRecord || !evidenceRecord.dir) {
+    return 'PUBLISH_REFUSED: receipt missing decision log evidence';
+  }
+  let current;
+  try {
+    current = decisionLogEvidenceFor(
+      { dir: evidenceRecord.dir, now: evidenceRecord.now || undefined },
+      workItemId,
+      rec.sha,
+      rec.verdict,
+      rec.reviewer
+    );
+  } catch (err) {
+    return 'PUBLISH_REFUSED: decision log unreadable: ' + String(err && err.message);
+  }
+  if (!current.completed || current.reviewedSha !== rec.sha) {
+    return 'PUBLISH_REFUSED: decision log does not confirm reviewed commit';
+  }
+  if (!evidenceRecord.digest || current.digest !== evidenceRecord.digest) {
+    return 'PUBLISH_REFUSED: decision log evidence mismatch';
+  }
+  // Like with like: both sides count the `review` records that attest to THIS
+  // receipt's reviewed commit and verdict (the matched set). The receipt used
+  // to store the total round count, which also holds the repair rounds that
+  // reviewed earlier commits, so every multi-round run refused against a log
+  // that reported the matched count. Repair history is `repairCount`.
+  if (current.reviewRounds !== rec.reviewRounds) {
+    return 'PUBLISH_REFUSED: decision log review round count mismatch';
+  }
+  // Absence is not evidence (AI-64-P08): an omitted repairCount is an
+  // incomplete receipt and refuses on the raw field, before any coercion —
+  // `Number(null)` is 0 and would otherwise read as "no repairs happened".
+  if (typeof rec.repairCount !== 'number' || !Number.isFinite(rec.repairCount)) {
+    return 'PUBLISH_REFUSED: receipt missing repair count';
+  }
+  if (current.repairCount !== rec.repairCount) {
+    return 'PUBLISH_REFUSED: decision log repair count mismatch';
+  }
+  if (
+    !current.tests ||
+    digestObject(current.tests) !== digestObject(normalizedReceiptTests(rec.tests))
+  ) {
+    return 'PUBLISH_REFUSED: decision log test evidence mismatch';
+  }
+  return null;
+}
+
+function validateCheckpointReceipt(rec, item, o) {
+  if (!rec) return 'NO_REVIEWED_COMMIT: missing review record in checkpoint for ' + item.id;
+  if (!rec.sha || !SHA_40.test(rec.sha)) {
+    return 'PUBLISH_REFUSED: invalid reviewedSha in checkpoint for ' + item.id + ': ' + rec.sha;
+  }
+  if (!ACCEPTED_VERDICTS.includes(rec.verdict)) {
+    return (
+      'PUBLISH_REFUSED: checkpoint did not record a PASS verdict for ' +
+      item.id +
+      ', got: ' +
+      String(rec.verdict)
+    );
+  }
+  if (!rec.reviewer)
+    return 'PUBLISH_REFUSED: checkpoint review record missing reviewer for ' + item.id;
+  // No open findings in the COMPLETED review (AI-64-R07 / AC-AI-64-24), which
+  // is what `countOpenFindings` now counts: the round the item completed on.
+  if (rec.openFindings !== 0) return 'PUBLISH_REFUSED: receipt has open findings';
+  if (!rec.reviewRounds || rec.reviewRounds < 1) {
+    return 'PUBLISH_REFUSED: receipt missing review rounds';
+  }
+  if (!rec.branch) return 'PUBLISH_REFUSED: receipt missing branch';
+  if (!rec.draftTitle) return 'PUBLISH_REFUSED: receipt missing draft title';
+  return (
+    verifyReceiptIntegrity(rec) ||
+    verifyReceiptCommit(rec, resolvePublishCwd(o, rec)) ||
+    verifyReceiptTests(rec) ||
+    verifyReceiptReviewerSeparation(rec) ||
+    verifyReceiptDecisionLog(rec, item.id)
+  );
+}
+
+function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
+  const sha =
+    entry.sha ||
+    entry.reviewedSha ||
+    (entry.review && (entry.review.finalSha || entry.review.sha)) ||
+    null;
+  const verdict = (entry.review && entry.review.verdict) || entry.verdict || null;
+  const reviewer =
+    entry.reviewer ||
+    entry.reviewerKey ||
+    entry.reviewerIdentity ||
+    (entry.review && entry.review.reviewer) ||
+    null;
+  const workerRoot =
+    entry.workerRoot || entry.worktree || (entry.review && entry.review.workerRoot) || null;
+  const branch = entry.branch || (entry.review && entry.review.branch) || null;
+  const baseSha =
+    entry.baseSha ||
+    (entry.session && entry.session.baseSha) ||
+    (entry.review && entry.review.baseSha) ||
+    null;
+  const writerCandidateKey = entry.writerCandidateKey || entry.writer || null;
+  const publishCwd = entry.publishCwd || null;
+  const repairCount =
+    entry.review && Number.isFinite(Number(entry.review.repairCount))
+      ? Number(entry.review.repairCount)
+      : null;
+  const openFindings = countOpenFindings(entry.review && entry.review.rounds);
+  const tests =
+    entry.tests || compactTestEvidence(entry.testResult || null, entry.failBefore || null);
+
+  if (!sha) return null;
+
+  const cleanSha = String(sha).trim();
+  const cleanVerdict = verdict ? String(verdict).trim() : null;
+  const cleanReviewer = reviewer ? String(reviewer).trim() : null;
+  // One decision-log read anchors both counts. `reviewRounds` is taken from it
+  // rather than from `entry.review.rounds.length`, so the receipt and the log
+  // compare the same set: the `review` records that attest to THIS reviewed
+  // commit and verdict. The receipt's total round count would also contain the
+  // repair rounds that reviewed earlier commits, and every multi-round run then
+  // refused against a log that never held them.
+  const decisionLog = decisionLogEvidenceFor(
+    logOpts || {},
+    workItemId,
+    cleanSha,
+    cleanVerdict,
+    cleanReviewer
+  );
+  const receipt = {
+    workItemId,
+    sha: cleanSha,
+    baseSha: baseSha ? String(baseSha).trim() : null,
+    verdict: cleanVerdict,
+    reviewer: cleanReviewer,
+    writerCandidateKey: writerCandidateKey ? String(writerCandidateKey).trim() : null,
+    workerRoot: workerRoot ? String(workerRoot).trim() : null,
+    publishCwd: publishCwd ? String(publishCwd).trim() : null,
+    branch: branch ? String(branch).trim() : null,
+    draftTitle: entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }),
+    tests,
+    reviewRounds: decisionLog.reviewRounds,
+    repairCount,
+    openFindings,
+    decisionLog,
+  };
+  return attachReceiptIntegrity(receipt);
+}
+
+function buildCheckpointReviews(log, prior, completedIds, logOpts) {
+  const map = new Map();
+  if (prior) {
+    const priorReviews = Array.isArray(prior.reviews)
+      ? prior.reviews
+      : prior.reviews && typeof prior.reviews === 'object'
+        ? Object.values(prior.reviews)
+        : [];
+    for (const r of priorReviews) {
+      if (r && (r.workItemId || r.id)) {
+        const id = r.workItemId || r.id;
+        if (r.checkpointReviewError) continue;
+        map.set(id, r);
+      }
+    }
+  }
+
+  if (Array.isArray(log.reviews)) {
+    for (const entry of log.reviews) {
+      if (!entry || !entry.workItemId) continue;
+      if (entry.fromCheckpoint && entry.checkpointReviewError) continue;
+      const normalized = normalizeReviewForCheckpoint(entry, entry.workItemId, logOpts);
+      if (normalized) map.set(entry.workItemId, normalized);
+    }
+  }
+
+  const completedSet = new Set(completedIds || []);
+  const result = [];
+  for (const [id, rec] of map.entries()) {
+    if (completedSet.has(id)) {
+      result.push(rec);
+    }
+  }
+  return result;
+}
+
 function buildProfile(item, o, forbiddenFailureDomains) {
   return {
     taskId: item.id,
@@ -1425,6 +2032,56 @@ async function runOrchestration(goal, opts) {
     }
     if (completedBefore.has(item.id)) {
       outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_COMPLETED');
+      const rec = extractCheckpointReview(checkpointOnDisk, item.id);
+      const checkpointReviewError = validateCheckpointReceipt(rec, item, o);
+      const anchoredEvidence =
+        !checkpointReviewError && rec
+          ? decisionLogEvidenceFor(
+              { dir: rec.decisionLog.dir, now: rec.decisionLog.now || undefined },
+              item.id,
+              rec.sha,
+              rec.verdict,
+              rec.reviewer
+            )
+          : null;
+
+      const reviewEntry = {
+        workItemId: item.id,
+        sha: rec ? rec.sha : null,
+        reviewedSha: rec ? rec.sha : null,
+        reviewerIdentity: rec ? rec.reviewer : null,
+        reviewer: rec ? rec.reviewer : null,
+        writerCandidateKey: rec ? rec.writerCandidateKey : null,
+        workerRoot: rec ? rec.workerRoot : null,
+        publishCwd: rec ? rec.publishCwd : null,
+        branch: rec ? rec.branch : null,
+        baseSha: rec ? rec.baseSha : null,
+        draftTitle: rec ? rec.draftTitle : null,
+        tests: rec ? rec.tests : null,
+        reviewRounds: rec ? rec.reviewRounds : null,
+        repairCount: rec ? rec.repairCount : null,
+        openFindings: rec ? rec.openFindings : null,
+        decisionLog: rec ? rec.decisionLog : null,
+        integrity: rec ? rec.integrity : null,
+        fromCheckpoint: true,
+        checkpointReviewError,
+        review:
+          !checkpointReviewError && rec
+            ? {
+                status: ReviewStatus.COMPLETED,
+                finalSha: rec.sha,
+                verdict: rec.verdict,
+                reviewer: rec.reviewer,
+                workerRoot: rec.workerRoot,
+                branch: rec.branch,
+                baseSha: rec.baseSha,
+                rounds: anchoredEvidence.rounds,
+                repairCount: anchoredEvidence.repairCount,
+              }
+            : null,
+      };
+      log.reviews.push(reviewEntry);
+      log.review = reviewEntry;
       continue;
     }
     if (logUnreadable) {
@@ -1776,11 +2433,11 @@ async function runOrchestration(goal, opts) {
   //    an unwired run says so instead of pretending a draft Pull Request exists.
   for (const entry of log.reviews) log.publications.push(publication(o, entry));
   log.publication = log.publications[log.publications.length - 1] || {
-    status: PublicationStatus.NOT_REQUESTED,
+    status: o.publication ? PublicationStatus.REFUSED : PublicationStatus.NOT_REQUESTED,
     reason: 'NO_REVIEWED_COMMIT: nothing to publish',
   };
 
-  return finish(log, statusOf, { now, cli, checkpointFile, checkpointOnDisk, out: o.out });
+  return finish(log, statusOf, { now, cli, checkpointFile, checkpointOnDisk, out: o.out, logOpts });
 }
 /** The review / repair stage for one completed session. */
 async function reviewItem(
@@ -1856,17 +2513,23 @@ async function reviewItem(
   const budget = Number.isFinite(Number(o.reviewBudget))
     ? Number(o.reviewBudget)
     : DEFAULT_REVIEW_BUDGET;
+  let lastTestResult = null;
+  const runTestsForReview =
+    typeof o.tests === 'function'
+      ? o.tests
+      : () =>
+          runVerificationCommand(
+            item,
+            Object.assign({}, o, { workerRoot, baseSha: session.baseSha || o.baseSha })
+          );
+  const captureRunTests = () => {
+    lastTestResult = runTestsForReview();
+    return lastTestResult;
+  };
   const review = await runReviewLoop(
     { sha: targetSha, budget },
     {
-      runTests:
-        typeof o.tests === 'function'
-          ? o.tests
-          : () =>
-              runVerificationCommand(
-                item,
-                Object.assign({}, o, { workerRoot, baseSha: session.baseSha || o.baseSha })
-              ),
+      runTests: captureRunTests,
       review:
         typeof o.reviewer === 'function'
           ? o.reviewer
@@ -1906,7 +2569,16 @@ async function reviewItem(
     workItemId: item.id,
     sha: review.finalSha || targetSha,
     reviewerIdentity: reviewerIdentity || null,
+    reviewer: reviewerIdentity || null,
     writerCandidateKey: session.candidateKey,
+    workerRoot: workerRoot || (session && session.worktree) || null,
+    publishCwd: publishCwdForReceipt(o, workerRoot || (session && session.worktree) || null),
+    branch: (session && session.branch) || o.branch || null,
+    baseSha: (session && session.baseSha) || o.baseSha || null,
+    draftTitle: draftTitleForItem(item),
+    item,
+    testResult: lastTestResult,
+    failBefore: (session && session.failBefore) || null,
     review,
   };
   log.reviews.push(entry);
@@ -1929,6 +2601,7 @@ async function reviewItem(
         reviewer: round.reviewer || reviewerIdentity || null,
         findings: round.findings || [],
         sha: round.sha || null,
+        tests: compactTestEvidence(lastTestResult, (session && session.failBefore) || null),
         repairCount: review.repairCount,
       },
       logOpts
@@ -1955,6 +2628,11 @@ async function reviewItem(
       outcome: review.status === ReviewStatus.COMPLETED ? 'passed' : 'failed',
       detail: reason,
       reviewedSha: review.finalSha,
+      verdict: review.verdict || null,
+      reviewer: reviewerIdentity || null,
+      tests: compactTestEvidence(lastTestResult, (session && session.failBefore) || null),
+      reviewRounds: Array.isArray(review.rounds) ? review.rounds.length : null,
+      repairCount: review.repairCount,
     },
     logOpts
   );
@@ -2104,26 +2782,65 @@ function repairRound(
  * is the correct outcome, not a fallback to an unapproved push.
  */
 function publication(o, entry) {
-  const review = entry && entry.review;
-  if (!review || review.status !== ReviewStatus.COMPLETED) {
+  const request = o.publication;
+  if (entry && entry.checkpointReviewError) {
     return {
-      status: PublicationStatus.NOT_REQUESTED,
-      reason: 'NO_REVIEWED_COMMIT: the item did not reach a passing review',
+      status: PublicationStatus.REFUSED,
+      workItemId: entry.workItemId,
+      reason: entry.checkpointReviewError,
     };
   }
-  const request = o.publication;
   if (!request) {
+    const review = entry && entry.review;
+    if (
+      entry &&
+      (!review ||
+        review.status !== ReviewStatus.COMPLETED ||
+        !ACCEPTED_VERDICTS.includes(review.verdict))
+    ) {
+      return {
+        status: PublicationStatus.NOT_REQUESTED,
+        workItemId: entry.workItemId,
+        reason: 'NO_REVIEWED_COMMIT: the item did not reach a passing review',
+      };
+    }
     return {
       status: PublicationStatus.NOT_REQUESTED,
       reason: 'APPROVAL_NOT_SUPPLIED: the loop cannot mint the approval that authorises a publish',
     };
   }
+  const review = entry && entry.review;
+  if (
+    !review ||
+    review.status !== ReviewStatus.COMPLETED ||
+    !ACCEPTED_VERDICTS.includes(review.verdict)
+  ) {
+    return {
+      status: PublicationStatus.REFUSED,
+      workItemId: entry && entry.workItemId,
+      reason: 'NO_REVIEWED_COMMIT: the item did not reach a passing review',
+    };
+  }
   try {
     const result = require('./publisher').publish(
       Object.assign({}, request, {
-        cwd: request.cwd || o.publisherCwd || o.cwd,
+        // Same expression the receipt was validated with, so the directory the
+        // publisher runs in is the directory the receipt was checked against —
+        // rebuilt from the receipt when the operator named none.
+        cwd: resolvePublishCwd(o, entry),
         reviewedSha: review.finalSha,
         verdict: review.verdict || 'PASS',
+        reviewer:
+          entry.reviewerIdentity || review.reviewer || entry.reviewer || request.reviewer || null,
+        branch: request.branch || entry.branch || (review && review.branch) || null,
+        draft:
+          request.draft ||
+          (entry.draftTitle
+            ? {
+                workItemId: entry.workItemId,
+                outcome: String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item',
+              }
+            : undefined),
         log: typeof o.log === 'function' ? o.log : null,
       })
     );
@@ -2186,9 +2903,21 @@ function finish(log, statusOf, ctx) {
   if (log.plan.errors.length > 0) {
     log.status = RunStatus.REFUSED;
     log.refusal = log.plan.errors.join('; ');
-  } else if (publications.some((p) => p.status === PublicationStatus.REFUSED)) {
+  } else if (
+    publications.some((p) => p.status === PublicationStatus.REFUSED) ||
+    (log.publication && log.publication.status === PublicationStatus.REFUSED)
+  ) {
     log.status = RunStatus.REFUSED;
-  } else if (publications.some((p) => p.status === PublicationStatus.PUBLISHED_DRAFT)) {
+    const refusedPublication =
+      publications.find((p) => p.status === PublicationStatus.REFUSED) ||
+      (log.publication && log.publication.status === PublicationStatus.REFUSED
+        ? log.publication
+        : null);
+    log.refusal = (refusedPublication && refusedPublication.reason) || 'PUBLICATION_REFUSED';
+  } else if (
+    publications.some((p) => p.status === PublicationStatus.PUBLISHED_DRAFT) ||
+    (log.publication && log.publication.status === PublicationStatus.PUBLISHED_DRAFT)
+  ) {
     log.status = RunStatus.PUBLISHED_DRAFT;
   } else if (blocked.length > 0) {
     log.status = RunStatus.BLOCKED;
@@ -2197,20 +2926,26 @@ function finish(log, statusOf, ctx) {
   }
 
   const prior = ctx.checkpointOnDisk || {};
+  const allCompleted = unique((prior.completed || []).concat(completed));
+  const checkpointReviews = buildCheckpointReviews(log, prior, allCompleted, ctx.logOpts || {});
   const next = Object.assign({}, prior, {
     schemaVersion: 1,
     step: log.status === RunStatus.PUBLISHED_DRAFT ? 'live_published' : 'live_review',
     updatedAt: new Date(ctx.now).toISOString(),
     workItemIds: log.plan.workItems.map((i) => i.id),
-    completed: unique((prior.completed || []).concat(completed)),
+    completed: allCompleted,
     blocked,
     deferred,
-    sessions: log.sessions.map((s) => ({
-      workItemId: s.workItemId,
-      sessionId: s.sessionId,
-      status: s.status,
-      candidateKey: s.candidateKey,
-    })),
+    sessions:
+      log.sessions.length > 0
+        ? log.sessions.map((s) => ({
+            workItemId: s.workItemId,
+            sessionId: s.sessionId,
+            status: s.status,
+            candidateKey: s.candidateKey,
+          }))
+        : prior.sessions || [],
+    reviews: checkpointReviews,
     publication: log.publication,
   });
   log.checkpoint = next;
@@ -2240,6 +2975,8 @@ module.exports = {
   reviewLane,
   reviewItem,
   provisionReviewRoot,
+  publishCwdForReceipt,
+  resolvePublishCwd,
   ItemStatus,
   RunStatus,
   PublicationStatus,
