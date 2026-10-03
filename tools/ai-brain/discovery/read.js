@@ -70,6 +70,13 @@ const { readCatalogue, currentState, StateMap } = require('./store');
 
 const DEFAULT_DATA_DIR = path.join(__dirname, '..', 'data', 'discovery');
 
+/**
+ * Import evidence files this reader ingests, by filename prefix. Every importer
+ * that writes a candidate summary into `imports/` adds its own prefix here, so
+ * an imported advertisement reaches the Controller without a second read path.
+ */
+const IMPORT_FILE_PREFIXES = Object.freeze(['checkpoint-', 'probe-pass-', 'catalogue-import-']);
+
 const STATUS_RANK = {
   UNTESTED: 0,
   PASS: 1,
@@ -454,7 +461,7 @@ function readDiscoveryCatalogue(opts) {
       // Sort deterministic
       files.sort();
       for (const file of files) {
-        if (!file.startsWith('checkpoint-') && !file.startsWith('probe-pass-')) continue;
+        if (!IMPORT_FILE_PREFIXES.some((prefix) => file.startsWith(prefix))) continue;
         try {
           const entry = JSON.parse(fs.readFileSync(path.join(importsDir, file), 'utf8'));
           if (entry && Array.isArray(entry.candidates)) {
@@ -798,6 +805,7 @@ function readDiscoveryCatalogue(opts) {
 }
 
 module.exports = {
+  IMPORT_FILE_PREFIXES,
   readDiscoveryCatalogue,
   readCatalogue: readDiscoveryCatalogue,
   getCandidates: readDiscoveryCatalogue,

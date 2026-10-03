@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-09-28",
+  "updatedAt": "2026-10-03",
   "note": "Adding a source is an entry here plus a qualification probe. Nothing in the dispatch path may branch on a source id.",
   "sources": [
     {
@@ -139,12 +139,14 @@
       "id": "codex",
       "label": "Codex",
       "kind": "agent-cli",
-      "servesModels": false,
+      "servesModels": true,
+      "modelsFrom": "account",
       "harness": "codex",
       "accessPath": "cli",
       "credential": { "type": "account", "store": "~/.codex" },
       "verify": { "method": "version-command", "command": "codex --version" },
-      "quota": { "unit": "session", "window": "5h" }
+      "quota": { "unit": "session", "window": "5h" },
+      "comment": "TASK-AI-70: the CLI runs models, it does not host them. modelsFrom=account means the only model ids that may exist for this source are the ones a bound account declares in accounts.registry.json, so a Codex account with declared models becomes a candidate and this file still names no model. Adding a model is an account entry, never a code edit."
     },
     {
       "id": "qwen",
