@@ -17,7 +17,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { importCatalogue, proofVerdict, resolveSource } = require('../discovery/catalogue-import');
+const {
+  importCatalogue,
+  proofVerdict,
+  resolveSource,
+  hostOf,
+} = require('../discovery/catalogue-import');
 const { readDiscoveryCatalogue } = require('../discovery/read');
 const sourcesApi = require('../sources');
 
@@ -28,8 +33,51 @@ const CATALOGUE_FIXTURE = path.join(__dirname, 'fixtures', 'task-ai-70', 'ws1-ca
 /** The gateway host the audited fixture dialled; sources.json knows it as 9router. */
 const GATEWAY_HOST = '127.0.0.1:20128';
 
+/**
+ * Where scratch directories go, in order of preference. `os.tmpdir()` first
+ * because that is the convention, then the variables that override it, then a
+ * directory under the home. Nothing is written inside the repository: a
+ * worktree scratch directory is exactly what TASK-AI-69 review round 3 had to
+ * undo. The first writable base wins, so the suite still runs where the OS temp
+ * directory is read-only, and reports itself skipped when nothing is writable.
+ */
+const TEMP_BASES = [
+  () => os.tmpdir(),
+  () => process.env.TMPDIR,
+  () => process.env.TEMP,
+  () => process.env.TMP,
+  () => (process.env.HOME ? path.join(process.env.HOME, '.cache', 'ai-brain-tests') : null),
+  () =>
+    process.env.USERPROFILE ? path.join(process.env.USERPROFILE, '.cache', 'ai-brain-tests') : null,
+];
+
+let tempBaseCache;
+
+function writableTempBase() {
+  if (tempBaseCache !== undefined) return tempBaseCache;
+  tempBaseCache = null;
+  for (const candidate of TEMP_BASES) {
+    const base = candidate();
+    if (!base) continue;
+    const probe = path.join(base, '.ai-brain-probe-' + process.pid);
+    try {
+      fs.mkdirSync(base, { recursive: true });
+      fs.writeFileSync(probe, 'x');
+      fs.rmSync(probe, { force: true });
+      tempBaseCache = base;
+      return base;
+    } catch (err) {
+      // EPERM/EACCES/EROFS: try the next base rather than failing the suite.
+    }
+  }
+  return null;
+}
+
+/** A scratch directory outside the worktree, or null when nothing is writable. */
 function tmpDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const base = writableTempBase();
+  if (!base) return null;
+  return fs.mkdtempSync(path.join(base, prefix));
 }
 
 function writeJson(file, value) {
@@ -134,10 +182,23 @@ function parseJsonTail(text) {
   return JSON.parse(body);
 }
 
-/** The gateway/upstream failure domain a seven-part key belongs to. */
+/** The failure domain a seven-part key belongs to. */
 function domainOf(key) {
   const parts = String(key).split('::');
   return parts[2] + '/' + parts[3];
+}
+
+/**
+ * A scenario world, or a skip. A host whose scratch directory is read-only must
+ * not fail the suite — it has to say it could not run.
+ */
+function requireScenario(t, prefix) {
+  const world = scenario(prefix);
+  if (!world) {
+    t.skip('no writable scratch directory on this host');
+    return null;
+  }
+  return world;
 }
 
 /**
@@ -146,6 +207,7 @@ function domainOf(key) {
  */
 function scenario(prefix) {
   const root = tmpDir(prefix);
+  if (!root) return null;
   const home = path.join(root, 'home');
   const discoveryDir = path.join(root, 'discovery');
   const evidenceDir = path.join(root, 'evidence');
@@ -236,8 +298,9 @@ function topKeys(result) {
 }
 
 describe('TASK-AI-70: catalogue import through the CLI', () => {
-  test('AC-AI-70-01: an imported catalogue makes dispatch rank several candidates across failure domains', () => {
-    const w = scenario('ai70-rank-');
+  test('AC-AI-70-01: an imported catalogue makes dispatch rank several candidates across failure domains', (t) => {
+    const w = requireScenario(t, 'ai70-rank-');
+    if (!w) return;
 
     const before = w.dispatchJson();
     assert.equal(before.status, 1, before.text);
@@ -245,8 +308,8 @@ describe('TASK-AI-70: catalogue import through the CLI', () => {
 
     const imported = w.import();
     assert.equal(imported.status, 0, imported.text);
-    assert.match(imported.text, /advertised 7 candidates/);
-    assert.match(imported.text, /proof API_PASS 4/);
+    assert.match(imported.text, /advertised 9 candidates/);
+    assert.match(imported.text, /proof API_PASS 5/);
 
     const result = w.dispatchJson();
     assert.equal(result.status, 0, result.text);
@@ -275,8 +338,9 @@ describe('TASK-AI-70: catalogue import through the CLI', () => {
     assert.match(result.text, /Pinned \(dry run, no reservation\): /);
   });
 
-  test('AC-AI-70-02: CATALOG_ONLY, not-probed and historical-only rows never pass the proof floor', () => {
-    const w = scenario('ai70-floor-');
+  test('AC-AI-70-02: CATALOG_ONLY, not-probed and historical-only rows never pass the proof floor', (t) => {
+    const w = requireScenario(t, 'ai70-floor-');
+    if (!w) return;
     assert.equal(w.import().status, 0);
 
     const result = w.dispatchJson({ proofFloor: 'API_PASS' });
@@ -337,8 +401,82 @@ describe('TASK-AI-70: catalogue import through the CLI', () => {
     assert.equal(evidence.upstreamStatus && Object.keys(evidence.upstreamStatus).length, 0);
   });
 
-  test('AC-AI-70-04: an imported Claude-family row stays excluded by the existing policy', () => {
-    const w = scenario('ai70-policy-');
+  test('AC-AI-70-07: registered gateways import by host; unregistered ones are skipped with UNKNOWN_SOURCE', (t) => {
+    const registry = sourcesApi.loadSources();
+    // The rows below are resolvable ONLY by gateway host: their `source` labels
+    // match no registry id or label, exactly like the real WS1 rows for tencent,
+    // amd-radeon and jev. An import that did not consult the registry host index
+    // would report every one of them as an unknown source.
+    const hostOnlyRows = [
+      {
+        row: { source: 'Tencent TokenHub', gateway: 'tokenhub-intl.tencentcloudmaas.com' },
+        id: 'tencent',
+      },
+      { row: { source: 'AMD Radeon', gateway: 'developer.amd.com.cn' }, id: 'amd-radeon' },
+      { row: { source: 'Jev (typesafe /systemone)', gateway: 'api.typesafe.ai' }, id: 'jev' },
+    ];
+    for (const { row, id } of hostOnlyRows) {
+      const resolved = resolveSource(row, registry);
+      assert.equal(resolved.source && resolved.source.id, id, 'host resolution failed for ' + id);
+      assert.equal(resolved.matchedBy, 'host');
+      assert.ok(
+        !registry.sources.some(
+          (s) =>
+            String(s.label).toLowerCase() === row.source.toLowerCase() ||
+            String(s.id).toLowerCase() === row.source.toLowerCase()
+        ),
+        'fixture row for ' + id + ' must not be resolvable by label'
+      );
+    }
+
+    const w = requireScenario(t, 'ai70-gateway-');
+    if (!w) return;
+    const imported = w.import(['--json']);
+    assert.equal(imported.status, 0, imported.text);
+    const summary = parseJsonTail(imported.text);
+
+    // Registered gateways resolved by host reached the ledger.
+    assert.equal(summary.sources.tencent, 1, 'a host-resolved tencent row was not imported');
+    assert.equal(
+      summary.sources['amd-radeon'],
+      1,
+      'a host-resolved amd-radeon row was not imported'
+    );
+    const ledgerModelIds = w.ledgerLines().map((line) => JSON.parse(line).modelId);
+    assert.ok(
+      ledgerModelIds.includes('tencent/test-host-resolved-source'),
+      'the host-resolved tencent advertisement is missing from the ledger'
+    );
+    assert.ok(
+      ledgerModelIds.includes('amd-radeon/test-host-resolved-source'),
+      'the host-resolved amd-radeon advertisement is missing from the ledger'
+    );
+
+    // A registered gateway the registry declares as serving no models resolves,
+    // and is then refused by that declaration rather than by an unknown source.
+    assert.equal(
+      summary.sources.jev,
+      undefined,
+      'a decision service was counted as a model source'
+    );
+    assert.equal(summary.skipped.SOURCE_SERVES_NO_MODELS, 1);
+    assert.ok(!ledgerModelIds.includes('jev/test-closed-question'));
+
+    // Unregistered gateways are skipped, and named as unknown.
+    assert.equal(summary.skipped.UNKNOWN_SOURCE, 2);
+    for (const modelId of ['hotel/test-unregistered', 'pgs-grove/test-unregistered-vendor']) {
+      assert.ok(
+        !ledgerModelIds.includes(modelId),
+        modelId + ' was imported from an unknown gateway'
+      );
+    }
+    assert.equal(summary.totalRows, 16);
+    assert.equal(summary.advertised, 9);
+  });
+
+  test('AC-AI-70-04: an imported Claude-family row stays excluded by the existing policy', (t) => {
+    const w = requireScenario(t, 'ai70-policy-');
+    if (!w) return;
     assert.equal(w.import().status, 0);
 
     const result = w.dispatchJson({ role: 'writer', proofFloor: 'NONE' });
@@ -355,12 +493,14 @@ describe('TASK-AI-70: catalogue import through the CLI', () => {
     assert.ok(!String(payload.pinned).includes('test-claude-family'));
   });
 
-  test('AC-AI-70-06: re-import is idempotent, unknown and deferred rows are skipped, malformed rows counted', () => {
-    const w = scenario('ai70-idempotent-');
-    const first = w.import();
+  test('AC-AI-70-06: re-import is idempotent, unknown and deferred rows are skipped, malformed rows counted', (t) => {
+    const w = requireScenario(t, 'ai70-idempotent-');
+    if (!w) return;
+    const first = w.import(['--json']);
     assert.equal(first.status, 0, first.text);
+    const firstSummary = parseJsonTail(first.text);
     const linesAfterFirst = w.ledgerLines().length;
-    assert.equal(linesAfterFirst, 7);
+    assert.equal(linesAfterFirst, 9);
 
     const second = w.import(['--json']);
     assert.equal(second.status, 0, second.text);
@@ -370,18 +510,23 @@ describe('TASK-AI-70: catalogue import through the CLI', () => {
       0,
       'a repeated import appended to an append-only ledger'
     );
-    assert.equal(summary.ledgerKeysAlreadyPresent, 7);
+    assert.equal(summary.ledgerKeysAlreadyPresent, 9);
     assert.equal(summary.proofRecorded, 0);
-    assert.equal(summary.proofAlreadyRecorded, summary.apiPass + summary.workItemPass);
+    assert.equal(summary.proofAlreadyRecorded, firstSummary.proofRecorded);
     assert.equal(w.ledgerLines().length, linesAfterFirst, 'ledger grew on re-import');
 
-    assert.equal(summary.skipped.UNKNOWN_SOURCE, 1, 'unknown gateway was not skipped');
+    assert.equal(summary.skipped.UNKNOWN_SOURCE, 2, 'unregistered gateways were not skipped');
     assert.equal(summary.skipped.DEFERRED, 1, 'deferred source was not skipped');
+    assert.equal(
+      summary.skipped.SOURCE_SERVES_NO_MODELS,
+      1,
+      'a source serving no models was imported'
+    );
     assert.equal(summary.skipped.NO_MODEL_ID, 2, 'rows without a model id were not skipped');
     assert.equal(summary.malformedRows, 1, 'malformed row was not counted');
     assert.equal(summary.proofWithheld.PROOF_WITHHELD_NOT_PROBED, 1);
     assert.equal(summary.proofWithheld.PROOF_WITHHELD_NOT_CURRENT, 1);
-    assert.equal(summary.proofWithheld.NOT_A_PROOF, 1);
+    assert.equal(summary.proofWithheld.NOT_A_PROOF, 2);
     assert.equal(summary.failureRows, 1);
 
     // Ledger lines are transitions only, with the seven-part key and no account.
@@ -394,8 +539,9 @@ describe('TASK-AI-70: catalogue import through the CLI', () => {
     }
   });
 
-  test('an empty catalogue is refused and writes nothing', () => {
-    const w = scenario('ai70-empty-');
+  test('an empty catalogue is refused and writes nothing', (t) => {
+    const w = requireScenario(t, 'ai70-empty-');
+    if (!w) return;
     const empty = path.join(w.root, 'empty.jsonl');
     fs.writeFileSync(empty, '', 'utf8');
     const refused = runCli(
@@ -419,8 +565,9 @@ describe('TASK-AI-70: catalogue import through the CLI', () => {
 });
 
 describe('TASK-AI-70: an agent-cli source becomes a candidate by a bound account', () => {
-  test('AC-AI-70-03: a codex account with declared models yields seven-part codex candidates', () => {
-    const w = scenario('ai70-codex-');
+  test('AC-AI-70-03: a codex account with declared models yields seven-part codex candidates', (t) => {
+    const w = requireScenario(t, 'ai70-codex-');
+    if (!w) return;
 
     const planner = w.candidates('planner');
     assert.equal(planner.status, 0, planner.text);
@@ -456,9 +603,10 @@ describe('TASK-AI-70: an agent-cli source becomes a candidate by a bound account
     assert.equal(described.countsAsCapacity, false, 'a CLI harness is not capacity');
   });
 
-  test('an agent-cli source with no bound account yields only an unresolved wildcard placeholder', () => {
+  test('an agent-cli source with no bound account yields only an unresolved wildcard placeholder', (t) => {
     const registry = sourcesApi.loadSources();
-    const w = scenario('ai70-codex-unbound-');
+    const w = requireScenario(t, 'ai70-codex-unbound-');
+    if (!w) return;
     const emptyAccounts = path.join(w.root, 'none.json');
     writeJson(emptyAccounts, []);
     const listed = runCli(
@@ -621,10 +769,36 @@ describe('TASK-AI-70: importer units (lowest useful level)', () => {
     const unknown = resolveSource({ gateway: 'nowhere.example', source: 'nowhere' }, registry);
     assert.equal(unknown.source, null);
     assert.equal(unknown.matchedBy, 'none');
+
+    // An index handed in empty is repaired rather than trusted: a caller must not
+    // be able to switch host resolution off and see every registered row reported
+    // as an unknown source. This is the regression the review found.
+    const emptyCache = { hosts: new Map() };
+    const repaired = resolveSource(
+      { gateway: GATEWAY_HOST, source: 'an audit label no registry carries' },
+      registry,
+      emptyCache
+    );
+    assert.equal(repaired.source && repaired.source.id, '9router');
+    assert.equal(repaired.matchedBy, 'host');
+    assert.ok(emptyCache.hosts.size > 0, 'the supplied index was not filled from the registry');
+
+    // An audit placeholder is not a host and resolves to nothing.
+    for (const placeholder of ['n/a (local process)', 'n/a (harness)', '']) {
+      assert.equal(hostOf(placeholder), '', JSON.stringify(placeholder));
+    }
+    assert.equal(
+      hostOf('tokenhub-intl.tencentcloudmaas.com'),
+      'tokenhub-intl.tencentcloudmaas.com'
+    );
   });
 
-  test('importCatalogue with no accounts records no proof and writes only advertisements', () => {
+  test('importCatalogue with no accounts records no proof and writes only advertisements', (t) => {
     const root = tmpDir('ai70-unit-');
+    if (!root) {
+      t.skip('no writable scratch directory on this host');
+      return;
+    }
     const dataDir = path.join(root, 'discovery');
     const evidenceDir = path.join(root, 'evidence');
     const recorded = [];
@@ -641,10 +815,10 @@ describe('TASK-AI-70: importer units (lowest useful level)', () => {
     assert.equal(summary.proofRecorded, 0);
     assert.equal(recorded.length, 0, 'proof was recorded with no account to match it');
     assert.equal(summary.proofWithoutAccount, summary.apiPass + summary.workItemPass);
-    assert.equal(summary.advertised, 7);
-    assert.equal(summary.ledgerTransitions, 7);
+    assert.equal(summary.advertised, 9);
+    assert.equal(summary.ledgerTransitions, 9);
     const catalogue = readDiscoveryCatalogue({ dataDir });
-    assert.equal(catalogue.candidates.length, 7);
+    assert.equal(catalogue.candidates.length, 9);
     assert.equal(
       catalogue.candidates.every((c) => c.resultState === 'UNTESTED' && c.proofLevel === null),
       true

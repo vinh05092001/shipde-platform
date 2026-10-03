@@ -97,6 +97,7 @@ const SKIPPED_REASONS = Object.freeze({
   RETIRED: 'RETIRED',
   DEFERRED: 'DEFERRED',
   NO_MODEL_ID: 'NO_MODEL_ID',
+  SOURCE_SERVES_NO_MODELS: 'SOURCE_SERVES_NO_MODELS',
 });
 
 /** Read a JSON-lines audit catalogue. Malformed lines are counted, not fatal. */
@@ -123,7 +124,15 @@ function text(value) {
   return value === null || value === undefined ? '' : String(value).trim();
 }
 
-/** The host of a URL, or a bare host string, lower-cased. Empty when there is none. */
+/**
+ * The host of a URL, or a bare host string, lower-cased. Empty when there is
+ * none.
+ *
+ * An audit writes placeholders where it had no network route — `n/a (local
+ * process)`, `n/a (harness)` — and those must never resolve to a one-letter
+ * "host" that could collide with something real. So a host has to look like one:
+ * labels of host characters, at least one dot, and no space.
+ */
 function hostOf(value) {
   const raw = text(value);
   if (!raw) return '';
@@ -138,7 +147,10 @@ function hostOf(value) {
     const match = withScheme.match(/^[a-z][a-z0-9+.-]*:\/\/([^/]+)/i);
     host = match ? match[1].split('@').pop().split(':')[0].toLowerCase() : '';
   }
-  return host;
+  const hostname = host.split(':')[0];
+  if (!hostname || /\s/.test(hostname)) return '';
+  if (hostname !== 'localhost' && hostname.indexOf('.') === -1) return '';
+  return /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(hostname) ? host : '';
 }
 
 /**
@@ -149,13 +161,22 @@ function hostOf(value) {
  * endpoint that reaches it. A row that names no host is matched by source id or
  * label. Returns `{ source, matchedBy }`, or `{ source: null }` when nothing in
  * the registry answers — an unknown gateway is refused, never invented.
+ *
+ * `hostCache` is `{ hosts: Map }` so an import can resolve thousands of rows
+ * against one index. An index that arrives empty is treated as uninitialised and
+ * rebuilt from the registry: a caller that hands over an empty map must not be
+ * able to disable host resolution and have every registered row reported as an
+ * unknown source.
  */
-function resolveSource(row, registry, prefixCache) {
+function resolveSource(row, registry, hostCache) {
   const sources = (registry && registry.sources) || [];
-  const cache =
-    prefixCache && prefixCache.hosts instanceof Map ? prefixCache : { hosts: hostIndex(sources) };
+  let hosts = hostCache && hostCache.hosts instanceof Map ? hostCache.hosts : null;
+  if (!hosts) hosts = hostIndex(sources);
+  else if (hosts.size === 0) {
+    for (const [host, id] of hostIndex(sources)) if (!hosts.has(host)) hosts.set(host, id);
+  }
   for (const host of [hostOf(row.gateway), hostOf(row.endpoint)].filter(Boolean)) {
-    const id = cache.hosts.get(host);
+    const id = hosts.get(host);
     if (id) {
       const source = sources.find((s) => s.id === id);
       if (source) return { source, matchedBy: 'host' };
@@ -353,7 +374,11 @@ function importCatalogue(options) {
 
   const advertised = new Map();
   const proven = new Map();
-  const hostCache = { hosts: new Map() };
+  // The real registry host index, built once: an audit records the host it dialled
+  // while the registry records the endpoint, so host matching is the only way most
+  // rows resolve at all. `resolveSource` also repairs an index that arrives empty,
+  // so this can never silently degrade into "every registered row is unknown".
+  const hostCache = { hosts: hostIndex(registry.sources) };
 
   for (const row of rows) {
     const resolved = resolveSource(row, registry, hostCache);
@@ -369,6 +394,13 @@ function importCatalogue(options) {
     const deferred = sourcesApi.isDeferred(source.id, registry);
     if (deferred) {
       bump(summary.skipped, SKIPPED_REASONS.DEFERRED);
+      continue;
+    }
+    // A source the registry itself declares as serving no models — a harness, an
+    // orchestrator, a decision service — never becomes an advertised candidate.
+    // The registry already says what it can do; the import does not second-guess it.
+    if (source.servesModels === false) {
+      bump(summary.skipped, SKIPPED_REASONS.SOURCE_SERVES_NO_MODELS);
       continue;
     }
 
