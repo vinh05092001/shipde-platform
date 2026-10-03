@@ -100,6 +100,14 @@ class ShipDeDatabase {
       last_active: '15 phút trước',
       is_revoked: false,
     },
+    {
+      id: 'dev_current',
+      user_id: 'usr_01',
+      user_name: 'Nguyễn Văn An (Chủ Shop)',
+      device: 'MacBook Pro · Chrome 127',
+      last_active: 'Đang hoạt động',
+      is_revoked: false,
+    },
   ];
 
   public carrierAccounts: CarrierAccount[] = [

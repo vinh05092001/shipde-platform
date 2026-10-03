@@ -258,6 +258,126 @@ paths:
       responses:
         '200':
           description: Current user and memberships
+  /sessions:
+    post:
+      tags: [Auth]
+      summary: Create a new session at login (API-SESSION-CREATE, FEAT-AUTH-06)
+      description: |
+        Creates a device session for the authenticated user. This endpoint is used
+        by the login flow (FEAT-AUTH-03) to issue a session token. The raw token
+        is returned once and never stored; only its SHA-256 hash is persisted.
+      operationId: createSession
+      security: []  # Called by login flow which provides merchant context via internal service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateSessionResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          description: Cross-tenant session creation forbidden
+          $ref: '#/components/responses/Error'
+    get:
+      tags: [Auth]
+      summary: List active sessions for current user (API-SESSION-LIST, FEAT-AUTH-06)
+      description: |
+        Returns all sessions for the authenticated user within the merchant tenant.
+        Sessions expired by inactivity (30 days) or absolute lifetime (90 days) are
+        marked EXPIRED. The current session is marked with is_current=true.
+      operationId: listSessions
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paged list of sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSessionsResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+  /sessions/{sessionId}:
+    delete:
+      tags: [Auth]
+      summary: Revoke a single session (API-SESSION-REVOKE, FEAT-AUTH-06)
+      description: |
+        Revokes the specified session. Idempotent: revoking an already-revoked
+        session returns success. Requires ownership (same user) or admin scope.
+      operationId: revokeSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokeSessionResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          description: Not owner of session or cross-tenant
+          $ref: '#/components/responses/Error'
+        '404':
+          description: Session not found
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Auth]
+      summary: Update session last activity (heartbeat) (API-SESSION-HEARTBEAT, FEAT-AUTH-06)
+      description: |
+        Updates the last_active_at timestamp for the current session only.
+        Returns 403 if session is not ACTIVE or not owned by caller.
+      operationId: heartbeatSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Heartbeat updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatSessionResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          description: Session not active or not owned by caller
+          $ref: '#/components/responses/Error'
+        '404':
+          description: Session not found
+          $ref: '#/components/responses/Error'
+  /sessions/revoke-all:
+    post:
+      tags: [Auth]
+      summary: Revoke all sessions for current user (API-SESSION-REVOKE-ALL, FEAT-AUTH-06)
+      description: |
+        Revokes all active sessions for the authenticated user. Optionally includes
+        the current session (logout everywhere). Returns count of revoked sessions.
+      operationId: revokeAllSessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeAllSessionsRequest'
+      responses:
+        '200':
+          description: All sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokeAllSessionsResponse'
+        '401':
+          $ref: '#/components/responses/Error'
   /shops:
     get:
       tags: [Organization]
@@ -522,6 +642,13 @@ components:
   parameters:
     Id:
       name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SessionId:
+      name: sessionId
       in: path
       required: true
       schema:
@@ -1030,6 +1157,136 @@ components:
         correlationId:
           type: string
           example: 123e4567-e89b-12d3-a456-426614174000
+    CreateSessionRequest:
+      type: object
+      required: [user_id, device_id]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        device_model:
+          type: string
+          maxLength: 128
+        user_agent:
+          type: string
+          maxLength: 512
+        ip_address:
+          type: string
+          maxLength: 64
+        fcm_token:
+          type: string
+          maxLength: 256
+    CreateSessionResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [session_id, session_token, device_id, status, expires_at, created_at]
+          properties:
+            session_id:
+              type: string
+              format: uuid
+            session_token:
+              type: string
+              description: Raw session token (returned once only)
+            device_id:
+              type: string
+            device_model:
+              type: string
+            status:
+              type: string
+              enum: [ACTIVE, REVOKED, EXPIRED, INACTIVE]
+            expires_at:
+              type: string
+              format: date-time
+            created_at:
+              type: string
+              format: date-time
+        meta:
+          $ref: '#/components/schemas/Meta'
+    SessionListItem:
+      type: object
+      required: [session_id, device_id, status, last_active_at, expires_at, created_at, is_current]
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+        device_model:
+          type: string
+        user_agent:
+          type: string
+        ip_address:
+          type: string
+          description: SHA-256 truncated hash of IP address
+        status:
+          type: string
+          enum: [ACTIVE, REVOKED, EXPIRED, INACTIVE]
+        last_active_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        is_current:
+          type: boolean
+          description: True if this is the current session making the request
+    ListSessionsResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionListItem'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    RevokeSessionResponse:
+      type: object
+      required: [session_id, status, message]
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [REVOKED]
+        message:
+          type: string
+    RevokeAllSessionsRequest:
+      type: object
+      properties:
+        include_current:
+          type: boolean
+          default: false
+    RevokeAllSessionsResponse:
+      type: object
+      required: [revoked_count, message]
+      properties:
+        revoked_count:
+          type: integer
+          minimum: 0
+        message:
+          type: string
+    HeartbeatSessionResponse:
+      type: object
+      required: [session_id, last_active_at]
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        last_active_at:
+          type: string
+          format: date-time
     ReadinessResponse:
       type: object
       required: [status, service, timestamp, correlationId, checks]
