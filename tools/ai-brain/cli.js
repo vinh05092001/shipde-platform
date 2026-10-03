@@ -1088,7 +1088,10 @@ function dispatchProfileCommand(args, deps) {
   if (!(deps && Array.isArray(deps.candidates))) {
     try {
       discCat = readDiscoveryCatalogue({
-        dataDir: (deps && deps.discoveryDataDir) || path.join(__dirname, 'data', 'discovery'),
+        dataDir:
+          (deps && deps.discoveryDataDir) ||
+          args['discovery-dir'] ||
+          path.join(__dirname, 'data', 'discovery'),
       });
     } catch {
       discCat = { candidates: [] };
@@ -1106,6 +1109,7 @@ function dispatchProfileCommand(args, deps) {
   }
   const optsWithEvidence = Object.assign({}, deps, {
     evidenceData,
+    discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
     fakeRunsDir:
       (deps && deps.fakeRunsDir) || args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined,
     home: (deps && deps.home) || args.home || undefined,
@@ -2195,6 +2199,192 @@ function shadowCommand(args) {
   if (result.mode === 'compare' && result.divergences.length > 0) process.exit(1);
 }
 
+/**
+ * `discovery import` and `discovery candidates` (TASK-AI-70).
+ *
+ * The Controller ranked one candidate at a time because the sources and models
+ * that work today were never visible to it as data. `import` turns a reviewed
+ * model audit into the two stores dispatch already reads, with the proof
+ * carried exactly as the audit stated it; `candidates` prints what the two
+ * production readers produce, so "what does the Controller see" is inspectable
+ * without dispatching anything.
+ *
+ * `import` is the only writer here and it writes only where it is told: the
+ * discovery ledger and import file under `--discovery-dir`, and the evidence
+ * store under `--evidence-dir`. It performs no network call, reads no
+ * credential, and never fabricates or promotes a proof.
+ */
+function discoveryCommand(args, deps) {
+  const d = deps || {};
+  const log = d.log || console.log;
+  const error = d.error || console.error;
+  const exit = d.exit || process.exit;
+  const fsx = require('fs');
+  const { listAccounts } = require('./accounts');
+  const sub = args._[1] || 'candidates';
+  const dataDir = args['discovery-dir'] || path.join(__dirname, 'data', 'discovery');
+  const evidenceDir = args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+  const rootDir = args.root || d.rootDir || process.cwd();
+
+  if (sub === 'import') {
+    const { importCatalogue, formatSummary } = require('./discovery/catalogue-import');
+    if (typeof args.catalogue !== 'string' || !args.catalogue) {
+      error('discovery import requires --catalogue <audit catalogue.jsonl>');
+      exit(2);
+      return { exitCode: 2 };
+    }
+    const filePath = path.resolve(rootDir, args.catalogue);
+    if (!fsx.existsSync(filePath)) {
+      error('CATALOGUE_MISSING: ' + filePath);
+      exit(2);
+      return { exitCode: 2 };
+    }
+    const accounts = Array.isArray(d.accounts) ? d.accounts : listAccounts() || [];
+    let summary;
+    try {
+      summary = importCatalogue({
+        filePath,
+        accounts,
+        dataDir,
+        evidenceDir,
+        home: args.home || d.home,
+        dryRun: args['dry-run'] === true || args.dryRun === true,
+        now: d.now,
+      });
+    } catch (err) {
+      error('CATALOGUE_UNREADABLE: ' + (err && err.message ? err.message : err));
+      exit(2);
+      return { exitCode: 2 };
+    }
+    if (summary.refused) {
+      error('CATALOGUE_REFUSED: ' + summary.refused);
+      log(formatSummary(summary));
+      exit(2);
+      return { exitCode: 2, summary };
+    }
+    if (args.json) log(JSON.stringify(summary, null, 2));
+    else log(formatSummary(summary));
+    exit(0);
+    return { exitCode: 0, summary };
+  }
+
+  if (sub !== 'candidates') {
+    error('Lệnh không rõ: discovery ' + sub);
+    error(
+      'Dùng: discovery import --catalogue <file> | discovery candidates [--view dispatch|planner]'
+    );
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  const sourcesApi = require('./sources');
+  const candidatesApi = require('./candidates');
+  const routing = require('./routing');
+  const evidence = require('./evidence');
+  const { readDiscoveryCatalogue } = require('./discovery/read');
+
+  const view = typeof args.view === 'string' ? args.view : 'dispatch';
+  if (view !== 'dispatch' && view !== 'planner') {
+    error('UNKNOWN_VIEW: ' + view + ' (expected dispatch or planner)');
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  let accounts;
+  if (typeof args.accounts === 'string') {
+    accounts = readJsonOrExit(path.resolve(rootDir, args.accounts), 'accounts');
+    if (!Array.isArray(accounts)) {
+      error('ACCOUNTS_INVALID: --accounts must hold a JSON array');
+      exit(2);
+      return { exitCode: 2 };
+    }
+  } else if (Array.isArray(d.accounts)) {
+    accounts = d.accounts;
+  } else {
+    accounts = listAccounts() || [];
+  }
+
+  const registry = sourcesApi.loadSources();
+  let discCat = { candidates: [] };
+  try {
+    discCat = readDiscoveryCatalogue({ dataDir });
+  } catch {
+    discCat = { candidates: [] };
+  }
+  let evidenceData = {};
+  try {
+    evidenceData = evidence.loadEvidence(evidenceDir);
+  } catch {
+    evidenceData = {};
+  }
+
+  const poolRuntimeDir = args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined;
+  const home = args.home || d.home;
+  const catalogueIds = discCat.candidates.map((c) => c.modelId).filter(Boolean);
+  const candidates =
+    view === 'planner'
+      ? candidatesApi.generateCandidates({
+          registry,
+          accounts,
+          catalogue: catalogueIds,
+          home,
+          fakeRunsDir: poolRuntimeDir,
+          discoverPool: Boolean(poolRuntimeDir),
+        })
+      : assembleForDispatch(discCat, accounts, registry, {
+          evidenceData,
+          home,
+          fakeRunsDir: poolRuntimeDir,
+          discoverPool: Boolean(poolRuntimeDir),
+        });
+
+  const annotated = candidatesApi.annotateCandidates(
+    candidates.map((c) => Object.assign({}, c)),
+    evidenceData,
+    { now: d.now }
+  );
+  const rows = annotated.map((c) => ({
+    candidateKey: candidatesApi.candidateKey(c),
+    harness: c.harness || '',
+    accessPath: c.accessPath || '',
+    gateway: c.gateway || '',
+    upstream: c.upstream || '',
+    account: c.accountId || '*',
+    quotaScope: c.quotaScope || '',
+    modelId: c.modelId || c.model || '',
+    proof: routing.proofObserved(evidenceData, c) || null,
+    failureDomain: routing.failureDomainOf(c),
+    blocked: Boolean(c.blocked),
+  }));
+
+  if (args.json) {
+    log(
+      JSON.stringify(
+        { view, discoveryDir: dataDir, evidenceDir, count: rows.length, candidates: rows },
+        null,
+        2
+      )
+    );
+  } else {
+    log('Discovery candidates (' + view + ' view): ' + rows.length);
+    for (const r of rows) {
+      log(
+        '  ' +
+          r.candidateKey +
+          ' | proof ' +
+          (r.proof || 'unproven') +
+          ' | failure-domain ' +
+          r.failureDomain +
+          ' | account ' +
+          r.account
+      );
+    }
+  }
+  if (exit === process.exit) process.exitCode = 0;
+  else exit(0);
+  return { exitCode: 0, view, candidates: rows };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -2220,6 +2410,10 @@ function main() {
     return;
   }
   if (command === 'shadow') return shadowCommand(args);
+  // discovery import | discovery candidates (TASK-AI-70): bring a reviewed
+  // model audit into the stores dispatch reads, then show what the Controller
+  // sees. Synchronous, like reconcile and quota.
+  if (command === 'discovery') return discoveryCommand(args);
   // account add | account limits | account secret (TASK-AI-29). The account
   // surface parses its own argv strictly, so a mistyped flag is refused
   // rather than dropped, and never routes through reconcile allowlists.
@@ -2394,6 +2588,11 @@ module.exports = {
   applyDryRunBlocks,
   DRY_RUN_BLOCK_CODES,
   LIVE_BLOCK_CODES,
+  // TASK-AI-70: one candidate assembly for both dispatch paths and for the
+  // read-only `discovery candidates` listing, so what is listed is what dispatch
+  // would rank.
+  assembleForDispatch,
+  discoveryCommand,
 };
 
 if (require.main === module) {
