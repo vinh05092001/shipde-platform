@@ -74,6 +74,64 @@ function recordKey(accountId, model) {
 }
 
 /**
+ * Checks whether an account uses an openai-compatible launch kind.
+ */
+function isOpenAiCompatibleAccount(accountId, options) {
+  if (!accountId) return false;
+  const opts = options || {};
+
+  // 1. Explicitly supplied accounts list (in io or options)
+  const accounts = opts.accounts;
+  if (Array.isArray(accounts)) {
+    const acc = accounts.find((a) => a && a.id === accountId);
+    if (acc) return Boolean(acc.launch && acc.launch.kind === 'openai-compatible');
+  }
+
+  // 2. Check accounts registry if available
+  try {
+    const { listAccounts } = require('./accounts');
+    const registered = listAccounts(opts);
+    const acc = registered.find((a) => a && a.id === accountId);
+    if (acc) return Boolean(acc.launch && acc.launch.kind === 'openai-compatible');
+  } catch (_) {}
+
+  // 3. Check seed accounts declarations
+  try {
+    const { ACCOUNTS } = require('./seed-accounts');
+    const acc = ACCOUNTS.find((a) => a && a.id === accountId);
+    if (acc) return Boolean(acc.launch && acc.launch.kind === 'openai-compatible');
+  } catch (_) {}
+
+  // 4. Default: ninerouter is the known openai-compatible gateway account
+  if (accountId === 'ninerouter') return true;
+
+  return false;
+}
+
+/**
+ * Identifies whether a record is an unverified false pass from before HTTP status checking.
+ *
+ * Before the fix, curl exited 0 on any HTTP response (including 401, 403, 500)
+ * and the probe recorded: { outcome: 'pass', reason: 'answered' } without HTTP
+ * status verification.
+ *
+ * Genuine openai-compatible completions record "answered (HTTP 2xx)".
+ * Genuine cli and docker-compose passes are not openai-compatible; their exit
+ * code 0 and non-empty stdout represent genuine command completions.
+ *
+ * Hence, a record is a false pass if and only if:
+ * 1. outcome === 'pass'
+ * 2. It does NOT record verified HTTP status (matching /HTTP\s+2\d\d/i)
+ * 3. The account is an openai-compatible provider requiring HTTP verification.
+ */
+function isFalsePass(record, options) {
+  if (!record || typeof record !== 'object') return false;
+  if (record.outcome !== 'pass') return false;
+  if (/HTTP\s+2\d\d/i.test(record.reason || '')) return false;
+  return isOpenAiCompatibleAccount(record.accountId, options);
+}
+
+/**
  * Loads the result record, tolerating absence and corruption where absence
  * is the only survivable case.
  *
@@ -97,12 +155,47 @@ function loadResults(file, io) {
   }
   try {
     const parsed = JSON.parse(text);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+
+    // Purge only pre-fix false passes from openai-compatible providers.
+    // Genuine passes from cli/docker-compose or verified HTTP 2xx completions are preserved.
+    if (!sink.noScrub) {
+      for (const key of Object.keys(obj)) {
+        if (isFalsePass(obj[key], sink)) {
+          delete obj[key];
+        }
+      }
+    }
+
+    return obj;
   } catch (e) {
     throw Object.assign(new Error('RESULT_CORRUPT: ' + e.message), {
       code: 'RESULT_CORRUPT',
     });
   }
+}
+
+/**
+ * One-time migration to clean false passes from a stored results file.
+ * Preserves genuine cli/docker-compose passes and verified HTTP 2xx passes.
+ */
+function migrateResults(file, io) {
+  const sink = io || {};
+  const fsMod = sink.fs || require('fs');
+  const fileIo = sink.fileIo || fsMod;
+  const store = loadResults(file, Object.assign({}, sink, { noScrub: true }));
+  let migratedCount = 0;
+  for (const key of Object.keys(store)) {
+    if (isFalsePass(store[key], sink)) {
+      delete store[key];
+      migratedCount += 1;
+    }
+  }
+  if (migratedCount > 0) {
+    fsMod.mkdirSync(path.dirname(file), { recursive: true });
+    fileIo.writeFileSync(file, JSON.stringify(store, null, 2) + '\n');
+  }
+  return { migratedCount, store };
 }
 
 /**
@@ -144,6 +237,14 @@ function cachedVerdict(store, accountId, model, options) {
   const opts = options || {};
   const entry = (store || {})[recordKey(accountId, model)];
   if (!entry) return { action: 'probe' };
+
+  // Refuse unverified false passes: an offering from an openai-compatible
+  // provider lacking verified HTTP status evidence must never be reused from
+  // cache; it must trigger a real probe.
+  if (isFalsePass(entry, opts)) {
+    return { action: 'probe', stale: true, reason: 'unverified legacy pass lacking HTTP status' };
+  }
+
   const windowMs = opts.cacheWindowMs === undefined ? DEFAULT_CACHE_WINDOW_MS : opts.cacheWindowMs;
   const now = opts.now || Date.now();
   const taken = Date.parse(entry.instant);
@@ -222,8 +323,11 @@ function probeCommand(account, model, probeText) {
       max_tokens: 1,
       messages: [{ role: 'user', content: probeText }],
     });
+    // -w appends the HTTP status as a parseable trailer. Without it, curl exits
+    // 0 for any HTTP response including 4xx/5xx and the probe records an error
+    // body as 'pass'. The trailer is extracted by parseProbeOutput.
     return (
-      'curl -sS -X POST "' +
+      'curl -sS -w "\\n__PROBE_HTTP_STATUS__%{http_code}" -X POST "' +
       url +
       '" -H "Content-Type: application/json" -d "' +
       body.replace(/"/g, '\\"') +
@@ -289,7 +393,7 @@ function runBounded(command, options) {
         finish({ outcome: 'timeout', treeKilled, reason: 'probe exceeded its timeout' });
         return;
       }
-      if (code === 0) finish({ outcome: 'pass', treeKilled, reason: 'answered' });
+      if (code === 0) finish({ outcome: 'pass', treeKilled, reason: 'answered', stdout });
       else
         finish({
           outcome: 'fail',
@@ -366,6 +470,116 @@ function buildRecord(accountId, model, outcome, latencyMs, reason, now) {
     latencyMs,
     reason,
   });
+}
+
+// The HTTP status trailer that probeCommand appends to curl stdout.
+const HTTP_STATUS_TRAILER = '__PROBE_HTTP_STATUS__';
+
+/**
+ * Decides whether a probe's stdout represents a real model completion or an
+ * error that curl reported as exit 0.
+ *
+ * The three launch kinds each have their own evidence standard:
+ *
+ * - `openai-compatible`: curl appends `__PROBE_HTTP_STATUS__<code>` to stdout.
+ *   A pass requires HTTP 2xx **and** a response body with `choices[*].message`
+ *   containing non-empty `content`. An error body — 401, 403, 429, 500, 502
+ *   — produces `fail` with the status code and the gateway's own error message
+ *   preserved, because "Missing API key" and "upstream timeout" are different
+ *   facts and the outcome must not flatten them.
+ *
+ * - `cli` / `docker-compose`: exit code 0 with non-empty stdout is accepted.
+ *   These commands run the provider's own client, which is expected to exit
+ *   non-zero on failure. A future enhancement could parse structured output,
+ *   but exit code is already a meaningful signal for host commands.
+ *
+ * This function returns either `null` (the raw outcome stands) or an override
+ * `{ outcome, reason }` that replaces it.
+ */
+function parseProbeOutput(launchKind, rawResult) {
+  // Only override when the raw result claims success.
+  if (rawResult.outcome !== 'pass') return null;
+  const stdout = rawResult.stdout || '';
+
+  if (launchKind === 'openai-compatible') {
+    // Extract HTTP status from the trailer appended by -w.
+    const trailerIdx = stdout.lastIndexOf(HTTP_STATUS_TRAILER);
+    let httpStatus = 0;
+    let responseBody = stdout;
+    if (trailerIdx >= 0) {
+      httpStatus = parseInt(stdout.slice(trailerIdx + HTTP_STATUS_TRAILER.length).trim(), 10) || 0;
+      responseBody = stdout.slice(0, trailerIdx).trim();
+    }
+
+    // An HTTP error is a fail, not a pass.
+    if (httpStatus >= 400 || httpStatus === 0) {
+      let errorMsg = '';
+      try {
+        const parsed = JSON.parse(responseBody);
+        if (parsed && parsed.error) {
+          errorMsg = parsed.error.message || parsed.error.type || JSON.stringify(parsed.error);
+        }
+      } catch (_) {
+        errorMsg = responseBody.slice(0, 80);
+      }
+      return {
+        outcome: 'fail',
+        reason: (
+          'HTTP ' + (httpStatus || '???') + ': ' + errorMsg
+        ).slice(0, 160),
+      };
+    }
+
+    // HTTP 2xx: verify the body actually contains a completion.
+    try {
+      const parsed = JSON.parse(responseBody);
+      const choices = parsed && parsed.choices;
+      if (!Array.isArray(choices) || choices.length === 0) {
+        return {
+          outcome: 'fail',
+          reason: ('HTTP ' + httpStatus + ': response has no choices').slice(0, 160),
+        };
+      }
+      const choice = choices[0];
+      const msg = choice && choice.message;
+      let rawContent = msg && msg.content;
+      if (rawContent === undefined && choice && typeof choice.text === 'string') {
+        rawContent = choice.text;
+      }
+      if (Array.isArray(rawContent)) {
+        rawContent = rawContent
+          .map((part) => (typeof part === 'string' ? part : (part && part.text) || ''))
+          .join('');
+      }
+      const content = typeof rawContent === 'string' ? rawContent.trim() : '';
+      if (content.length === 0) {
+        return {
+          outcome: 'fail',
+          reason: ('HTTP ' + httpStatus + ': response choice has no content').slice(0, 160),
+        };
+      }
+      // A genuine completion.
+      return {
+        outcome: 'pass',
+        reason: 'answered (HTTP ' + httpStatus + ')',
+      };
+    } catch (_) {
+      return {
+        outcome: 'fail',
+        reason: ('HTTP ' + httpStatus + ': response body is not valid JSON').slice(0, 160),
+      };
+    }
+  }
+
+  // cli / docker-compose: exit code 0 is the provider client's own verdict.
+  // Non-empty stdout is minimal evidence that something was produced.
+  if (stdout.trim().length === 0) {
+    return {
+      outcome: 'fail',
+      reason: 'process exited 0 but produced no output',
+    };
+  }
+  return null;
 }
 
 /**
@@ -492,13 +706,22 @@ async function probeAccount(input) {
       });
   const latencyMs = Date.now() - started;
 
+  // Validate the response content. An exit-code-0 from curl does not mean the
+  // model answered: it means the HTTP transaction completed. parseProbeOutput
+  // checks the actual response and overrides the outcome when the body is an
+  // error, preserving the gateway's own reason as evidence.
+  const launchKind = (account.launch && account.launch.kind) || 'unknown';
+  const override = parseProbeOutput(launchKind, ran);
+  const finalOutcome = override ? override.outcome : ran.outcome;
+  const finalReason = override ? override.reason : ran.reason;
+
   return saveResult(
     buildRecord(
       account.id,
       model,
-      ran.outcome,
+      finalOutcome,
       latencyMs,
-      String(ran.reason || '').slice(0, 160),
+      String(finalReason || '').slice(0, 160),
       now
     ),
     file,
@@ -618,6 +841,7 @@ module.exports = {
   REQUIRED_FIELDS,
   DEFAULT_PROBE_TIMEOUT_MS,
   DEFAULT_CACHE_WINDOW_MS,
+  HTTP_STATUS_TRAILER,
   validateResultShape,
   recordKey,
   loadResults,
@@ -626,6 +850,10 @@ module.exports = {
   cheapestModel,
   probeCommand,
   runBounded,
+  parseProbeOutput,
+  isOpenAiCompatibleAccount,
+  isFalsePass,
+  migrateResults,
   probeAccount,
   parseProbeArgs,
   runProbeCli,
