@@ -13,8 +13,8 @@
 | Risk | `MEDIUM` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-25.md`, `tools/ai-brain/feedback.js`, `tools/ai-brain/test/feedback.test.js`, `tools/ai-brain/acceptance/ac-25-*.js`, `tools/ai-brain/acceptance/lib/role-feedback.js`, `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `spec/task-ai-25` |
-| Pull Request | `#86` |
+| Branch | `spec/task-ai-25` (specification, merged as PR #86); `feat/brain-narrow` (delivery) |
+| Pull Request | `#86` (specification); `#143` (delivery) |
 
 ### Status transition ledger
 
@@ -213,6 +213,14 @@ node tools/ai-guard/cli.js secret-surface
 pnpm format:check
 node --test tools/ai-brain/test/feedback.test.js
 ```
+## Delivery record for feat/brain-narrow
+
+Branch `feat/brain-narrow`, PR `#143`, HEAD `103b481`.
+
+The branch adds exactly one file: `tools/ai-brain/feedback.js`. This is the production wrapper for the TASK-AI-25 qualifiedRoles feedback rule. The wrapper re-exports the rule from `tools/ai-brain/acceptance/lib/role-feedback.js` by reference (`module.exports = require('./acceptance/lib/role-feedback')`) rather than copying or reimplementing it. The single-source invariant is enforced by `AC-AI-25-04`: a private copy or re-implementation in `feedback.js` exits `1` `SINGLE_SOURCE_FAILED`, while the sanctioned re-export exits `0` `SINGLE_SOURCE`.
+
+Review verdict: **PASS** at `103b481`. No findings. No code changes beyond the wrapper file. No rule behavior changed.
+
 ## Codex review record
 
 | Review round | Reviewed commit | Verdict | Findings resolved |
