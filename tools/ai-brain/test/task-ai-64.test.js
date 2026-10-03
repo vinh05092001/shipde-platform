@@ -5885,4 +5885,470 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
       }
     });
   });
+
+  describe('TASK-AI-64 resume can publish the recorded reviewed commit (Defect U)', () => {
+    function makeDefectUCandidates() {
+      const writerCand = cand({
+        gateway: '9router',
+        upstream: 'kgw',
+        accountId: 'codex',
+        quotaScope: 'codex',
+        qualifiedRoles: ['author.foundation'],
+        modelId: 'ninerouter/kgw/nvidia/nemotron-3-super-120b-a12b:free',
+        quality: 95,
+      });
+      const reviewerCand = cand({
+        gateway: '9router',
+        upstream: 'ocz',
+        accountId: 'codex',
+        quotaScope: 'codex',
+        qualifiedRoles: ['reviewer.primary'],
+        modelId: 'ninerouter/ocz/big-pickle',
+        quality: 80,
+      });
+      return { writerCand, reviewerCand };
+    }
+
+    test('complete-then-resume-with-publish calls the publisher with the recorded sha', async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-u-dec-');
+      const dirCheckpoint = tmpDir('task-ai-64-u-ckpt-');
+      const checkpointFile = path.join(dirCheckpoint, 'checkpoint.json');
+      const registryDir = tmpDir('task-ai-64-u-reg-');
+      const registryPath = path.join(registryDir, 'approvals.json');
+      const { writerCand, reviewerCand } = makeDefectUCandidates();
+
+      let workerRunCount = 0;
+      let reviewRunCount = 0;
+
+      try {
+        // Step 1: Initial run without --publish completes the item and writes the review record to the checkpoint
+        const opts1 = baseOpts({
+          decisionDir: dirDecisions,
+          checkpointFile,
+          checkpoint: checkpointFile,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          ranking: {
+            headrooms: {
+              codex: { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['branch helper'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              reviewRunCount++;
+              const targetSha = job.baseSha;
+              fs.writeFileSync(
+                job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                JSON.stringify({
+                  sha: targetSha,
+                  verdict: 'PASS',
+                  findings: [],
+                })
+              );
+              return { exitCode: 0, stdout: 'review pass' };
+            }
+            workerRunCount++;
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit made' };
+          },
+        });
+        delete opts1.reviewer;
+
+        const res1 = await safeRun(opts1);
+        assert.ok(res1.log, 'first orchestration must succeed: ' + res1.refusal);
+        assert.strictEqual(res1.log.outcomes[0].status, 'completed');
+        assert.strictEqual(res1.log.outcomes[0].reason, 'REVIEW_PASS');
+        assert.strictEqual(res1.log.status, 'COMPLETED');
+        assert.strictEqual(res1.log.publication.status, 'NOT_REQUESTED');
+        assert.strictEqual(workerRunCount, 1);
+        assert.strictEqual(reviewRunCount, 1);
+
+        const workerHead = git(['rev-parse', 'HEAD']).stdout.trim();
+        assert.strictEqual(res1.log.reviews[0].sha, workerHead);
+
+        // Verify checkpoint file on disk has completed item and recorded review result
+        const ckptOnDisk = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+        assert.deepStrictEqual(ckptOnDisk.completed, ['TASK-AI-64']);
+        assert.ok(Array.isArray(ckptOnDisk.reviews), 'checkpoint must persist reviews array');
+        assert.strictEqual(ckptOnDisk.reviews.length, 1);
+        const recordedReview = ckptOnDisk.reviews[0];
+        assert.strictEqual(recordedReview.workItemId, 'TASK-AI-64');
+        assert.strictEqual(recordedReview.sha, workerHead);
+        assert.strictEqual(recordedReview.verdict, 'PASS');
+        assert.strictEqual(recordedReview.reviewer, candidateKey(reviewerCand));
+        assert.strictEqual(recordedReview.workerRoot, repo.dir);
+
+        // Step 2: Operator creates SHA-bound approval in registry
+        fs.writeFileSync(
+          registryPath,
+          JSON.stringify({
+            'AP-64-RESUME': {
+              approvalId: 'AP-64-RESUME',
+              state: 'APPROVED',
+              reviewedSha: workerHead,
+              verdict: 'PASS',
+              reviewer: candidateKey(reviewerCand),
+              issuedAt: new Date().toISOString(),
+              expiry: '2100-01-01T00:00:00.000Z',
+            },
+          })
+        );
+
+        // Step 3: Resume run with --publish and approval AP-64-RESUME
+        const dirDecisionsResume = tmpDir('task-ai-64-u-dec-resume-');
+        const opts2 = baseOpts({
+          decisionDir: dirDecisionsResume,
+          checkpointFile,
+          checkpoint: checkpointFile,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          ranking: {
+            headrooms: {
+              codex: { status: 'available' },
+            },
+          },
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['branch helper'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          publication: {
+            approvalId: 'AP-64-RESUME',
+            expiry: Date.now() + 60000,
+            remoteUrl: TRUSTED_URL,
+            branch: 'feat/task-ai-64',
+            testMode: true,
+            cwd: repo.dir,
+            registryPath,
+          },
+          run: () => {
+            assert.fail('worker or reviewer must NOT run on resume');
+          },
+        });
+        delete opts2.reviewer;
+
+        const res2 = await safeRun(opts2);
+        assert.ok(res2.log, 'resumed orchestration must succeed: ' + res2.refusal);
+        assert.strictEqual(res2.log.outcomes[0].status, 'completed');
+        assert.strictEqual(res2.log.outcomes[0].reason, 'CHECKPOINT_COMPLETED');
+        assert.strictEqual(workerRunCount, 1, 'worker must not be re-run');
+        assert.strictEqual(reviewRunCount, 1, 'reviewer must not be re-run');
+        assert.strictEqual(res2.log.status, 'PUBLISHED_DRAFT');
+        assert.strictEqual(res2.log.publication.status, 'PUBLISHED_DRAFT');
+        assert.strictEqual(res2.log.publication.result.sha, workerHead);
+        assert.strictEqual(res2.log.publication.result.approvalId, 'AP-64-RESUME');
+
+        // Checkpoint updated to live_published, still records review
+        const ckptOnDisk2 = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+        assert.strictEqual(ckptOnDisk2.step, 'live_published');
+        assert.deepStrictEqual(ckptOnDisk2.completed, ['TASK-AI-64']);
+        assert.strictEqual(ckptOnDisk2.reviews[0].sha, workerHead);
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+        fs.rmSync(dirCheckpoint, { recursive: true, force: true });
+        fs.rmSync(registryDir, { recursive: true, force: true });
+      }
+    });
+
+    test('missing/forged record refuses', async () => {
+      const repo = makeTempRepo();
+      const dirDecisions = tmpDir('task-ai-64-u-ref-dec-');
+      const dirCheckpoint = tmpDir('task-ai-64-u-ref-ckpt-');
+      const registryDir = tmpDir('task-ai-64-u-ref-reg-');
+      const registryPath = path.join(registryDir, 'approvals.json');
+      const { writerCand, reviewerCand } = makeDefectUCandidates();
+
+      fs.writeFileSync(
+        registryPath,
+        JSON.stringify({
+          'AP-64-TEST': {
+            approvalId: 'AP-64-TEST',
+            state: 'APPROVED',
+            reviewedSha: repo.sha,
+            verdict: 'PASS',
+            reviewer: candidateKey(reviewerCand),
+            issuedAt: new Date().toISOString(),
+            expiry: '2100-01-01T00:00:00.000Z',
+          },
+        })
+      );
+
+      try {
+        // Case 2a: Missing review record (checkpoint has completed: ['TASK-AI-64'], but reviews missing or empty, like live22)
+        const ckptMissing = path.join(dirCheckpoint, 'checkpoint-missing.json');
+        fs.writeFileSync(
+          ckptMissing,
+          JSON.stringify({
+            schemaVersion: 1,
+            step: 'live_review',
+            updatedAt: new Date().toISOString(),
+            workItemIds: ['TASK-AI-64'],
+            completed: ['TASK-AI-64'],
+            blocked: [],
+            deferred: [],
+            sessions: [],
+          })
+        );
+
+        const optsMissing = baseOpts({
+          decisionDir: dirDecisions,
+          checkpointFile: ckptMissing,
+          checkpoint: ckptMissing,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          candidates: [writerCand, reviewerCand],
+          specs: [{ id: 'TASK-AI-64', files: ['branch-name.js'] }],
+          publication: {
+            approvalId: 'AP-64-TEST',
+            expiry: Date.now() + 60000,
+            remoteUrl: TRUSTED_URL,
+            branch: 'feat/task-ai-64',
+            testMode: true,
+            cwd: repo.dir,
+            registryPath,
+          },
+          run: () => {
+            assert.fail('worker must not run on resume');
+          },
+        });
+        delete optsMissing.reviewer;
+
+        const resMissing = await safeRun(optsMissing);
+        assert.strictEqual(resMissing.log.status, 'REFUSED');
+        assert.strictEqual(resMissing.log.publication.status, 'REFUSED');
+        assert.match(
+          resMissing.log.publication.reason,
+          /NO_REVIEWED_COMMIT|missing review record/i
+        );
+
+        // Case 2b: Forged invalid SHA in checkpoint
+        const ckptForgedSha = path.join(dirCheckpoint, 'checkpoint-forged-sha.json');
+        fs.writeFileSync(
+          ckptForgedSha,
+          JSON.stringify({
+            schemaVersion: 1,
+            step: 'live_review',
+            updatedAt: new Date().toISOString(),
+            workItemIds: ['TASK-AI-64'],
+            completed: ['TASK-AI-64'],
+            blocked: [],
+            deferred: [],
+            sessions: [],
+            reviews: [
+              {
+                workItemId: 'TASK-AI-64',
+                sha: 'forged-sha-not-40-hex',
+                verdict: 'PASS',
+                reviewer: candidateKey(reviewerCand),
+              },
+            ],
+          })
+        );
+
+        const optsForgedSha = baseOpts({
+          decisionDir: dirDecisions,
+          checkpointFile: ckptForgedSha,
+          checkpoint: ckptForgedSha,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          candidates: [writerCand, reviewerCand],
+          specs: [{ id: 'TASK-AI-64', files: ['branch-name.js'] }],
+          publication: {
+            approvalId: 'AP-64-TEST',
+            expiry: Date.now() + 60000,
+            remoteUrl: TRUSTED_URL,
+            branch: 'feat/task-ai-64',
+            testMode: true,
+            cwd: repo.dir,
+            registryPath,
+          },
+          run: () => {
+            assert.fail('worker must not run on resume');
+          },
+        });
+        delete optsForgedSha.reviewer;
+
+        const resForgedSha = await safeRun(optsForgedSha);
+        assert.strictEqual(resForgedSha.log.status, 'REFUSED');
+        assert.strictEqual(resForgedSha.log.publication.status, 'REFUSED');
+        assert.match(resForgedSha.log.publication.reason, /invalid reviewedSha|PUBLISH_REFUSED/i);
+
+        // Case 2c: Non-PASS verdict in checkpoint
+        const ckptNonPass = path.join(dirCheckpoint, 'checkpoint-non-pass.json');
+        fs.writeFileSync(
+          ckptNonPass,
+          JSON.stringify({
+            schemaVersion: 1,
+            step: 'live_review',
+            updatedAt: new Date().toISOString(),
+            workItemIds: ['TASK-AI-64'],
+            completed: ['TASK-AI-64'],
+            blocked: [],
+            deferred: [],
+            sessions: [],
+            reviews: [
+              {
+                workItemId: 'TASK-AI-64',
+                sha: repo.sha,
+                verdict: 'CHANGES_REQUIRED',
+                reviewer: candidateKey(reviewerCand),
+              },
+            ],
+          })
+        );
+
+        const optsNonPass = baseOpts({
+          decisionDir: dirDecisions,
+          checkpointFile: ckptNonPass,
+          checkpoint: ckptNonPass,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          candidates: [writerCand, reviewerCand],
+          specs: [{ id: 'TASK-AI-64', files: ['branch-name.js'] }],
+          publication: {
+            approvalId: 'AP-64-TEST',
+            expiry: Date.now() + 60000,
+            remoteUrl: TRUSTED_URL,
+            branch: 'feat/task-ai-64',
+            testMode: true,
+            cwd: repo.dir,
+            registryPath,
+          },
+          run: () => {
+            assert.fail('worker must not run on resume');
+          },
+        });
+        delete optsNonPass.reviewer;
+
+        const resNonPass = await safeRun(optsNonPass);
+        assert.strictEqual(resNonPass.log.status, 'REFUSED');
+        assert.strictEqual(resNonPass.log.publication.status, 'REFUSED');
+        assert.match(resNonPass.log.publication.reason, /PASS|PUBLISH_REFUSED|NO_REVIEWED_COMMIT/i);
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+        fs.rmSync(dirCheckpoint, { recursive: true, force: true });
+        fs.rmSync(registryDir, { recursive: true, force: true });
+      }
+    });
+
+    test('approval bound to another sha refuses', async () => {
+      const repo = makeTempRepo();
+      const dirDecisions = tmpDir('task-ai-64-u-bound-dec-');
+      const dirCheckpoint = tmpDir('task-ai-64-u-bound-ckpt-');
+      const checkpointFile = path.join(dirCheckpoint, 'checkpoint.json');
+      const registryDir = tmpDir('task-ai-64-u-bound-reg-');
+      const registryPath = path.join(registryDir, 'approvals.json');
+      const { writerCand, reviewerCand } = makeDefectUCandidates();
+
+      const OTHER_SHA = '1111111111111111111111111111111111111111';
+
+      // Checkpoint has review for repo.sha
+      fs.writeFileSync(
+        checkpointFile,
+        JSON.stringify({
+          schemaVersion: 1,
+          step: 'live_review',
+          updatedAt: new Date().toISOString(),
+          workItemIds: ['TASK-AI-64'],
+          completed: ['TASK-AI-64'],
+          blocked: [],
+          deferred: [],
+          sessions: [],
+          reviews: [
+            {
+              workItemId: 'TASK-AI-64',
+              sha: repo.sha,
+              verdict: 'PASS',
+              reviewer: candidateKey(reviewerCand),
+              workerRoot: repo.dir,
+              branch: 'feat/task-ai-64',
+            },
+          ],
+        })
+      );
+
+      // Approval registry has approval bound to a DIFFERENT commit (OTHER_SHA)
+      fs.writeFileSync(
+        registryPath,
+        JSON.stringify({
+          'AP-OTHER-SHA': {
+            approvalId: 'AP-OTHER-SHA',
+            state: 'APPROVED',
+            reviewedSha: OTHER_SHA,
+            verdict: 'PASS',
+            reviewer: candidateKey(reviewerCand),
+            issuedAt: new Date().toISOString(),
+            expiry: '2100-01-01T00:00:00.000Z',
+          },
+        })
+      );
+
+      try {
+        const opts = baseOpts({
+          decisionDir: dirDecisions,
+          checkpointFile,
+          checkpoint: checkpointFile,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          candidates: [writerCand, reviewerCand],
+          specs: [{ id: 'TASK-AI-64', files: ['branch-name.js'] }],
+          publication: {
+            approvalId: 'AP-OTHER-SHA',
+            expiry: Date.now() + 60000,
+            remoteUrl: TRUSTED_URL,
+            branch: 'feat/task-ai-64',
+            testMode: true,
+            cwd: repo.dir,
+            registryPath,
+          },
+          run: () => {
+            assert.fail('worker must not run on resume');
+          },
+        });
+        delete opts.reviewer;
+
+        const res = await safeRun(opts);
+        assert.strictEqual(res.log.status, 'REFUSED');
+        assert.strictEqual(res.log.publication.status, 'REFUSED');
+        assert.match(
+          res.log.publication.reason,
+          /PUBLISH_REFUSED: approval AP-OTHER-SHA is bound to reviewed commit/i
+        );
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+        fs.rmSync(dirCheckpoint, { recursive: true, force: true });
+        fs.rmSync(registryDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

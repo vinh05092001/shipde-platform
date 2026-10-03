@@ -78,6 +78,7 @@ const PublicationStatus = Object.freeze({
 
 const DEFAULT_REVIEW_BUDGET = 3;
 const SHA_40 = /^[0-9a-f]{40}$/i;
+const ACCEPTED_VERDICTS = Object.freeze(['PASS', 'FALLBACK_PASS']);
 
 function buildDefaults() {
   return {
@@ -1214,6 +1215,128 @@ function unique(list) {
   return Array.from(new Set(list.filter(Boolean)));
 }
 
+/**
+ * Extracts and normalizes the recorded review result for one work item from a checkpoint.
+ * Supports checkpoint.reviews as array or object, as well as completedReviews/reviewResults.
+ */
+function extractCheckpointReview(checkpoint, workItemId) {
+  if (!checkpoint) return null;
+  let raw = null;
+  if (Array.isArray(checkpoint.reviews)) {
+    raw = checkpoint.reviews.find((r) => r && (r.workItemId === workItemId || r.id === workItemId));
+  } else if (checkpoint.reviews && typeof checkpoint.reviews === 'object') {
+    raw = checkpoint.reviews[workItemId];
+  }
+  if (!raw && Array.isArray(checkpoint.completedReviews)) {
+    raw = checkpoint.completedReviews.find(
+      (r) => r && (r.workItemId === workItemId || r.id === workItemId)
+    );
+  } else if (
+    !raw &&
+    checkpoint.completedReviews &&
+    typeof checkpoint.completedReviews === 'object'
+  ) {
+    raw = checkpoint.completedReviews[workItemId];
+  }
+  if (!raw && Array.isArray(checkpoint.reviewResults)) {
+    raw = checkpoint.reviewResults.find(
+      (r) => r && (r.workItemId === workItemId || r.id === workItemId)
+    );
+  } else if (!raw && checkpoint.reviewResults && typeof checkpoint.reviewResults === 'object') {
+    raw = checkpoint.reviewResults[workItemId];
+  }
+  if (!raw || typeof raw !== 'object') return null;
+
+  const sha =
+    raw.sha || raw.reviewedSha || (raw.review && (raw.review.finalSha || raw.review.sha)) || null;
+  const verdict = raw.verdict || (raw.review && raw.review.verdict) || null;
+  const reviewer =
+    raw.reviewer ||
+    raw.reviewerKey ||
+    raw.reviewerIdentity ||
+    (raw.review && raw.review.reviewer) ||
+    null;
+  const workerRoot =
+    raw.workerRoot || raw.worktree || (raw.review && raw.review.workerRoot) || null;
+  const branch = raw.branch || (raw.review && raw.review.branch) || null;
+
+  return {
+    workItemId: raw.workItemId || raw.id || workItemId,
+    sha: typeof sha === 'string' ? sha.trim() : null,
+    reviewedSha: typeof sha === 'string' ? sha.trim() : null,
+    verdict: typeof verdict === 'string' ? verdict.trim() : null,
+    reviewer: typeof reviewer === 'string' ? reviewer.trim() : null,
+    reviewerKey: typeof reviewer === 'string' ? reviewer.trim() : null,
+    workerRoot: typeof workerRoot === 'string' ? workerRoot : null,
+    branch: typeof branch === 'string' ? branch : null,
+  };
+}
+
+function normalizeReviewForCheckpoint(entry, workItemId) {
+  const sha =
+    entry.sha ||
+    entry.reviewedSha ||
+    (entry.review && (entry.review.finalSha || entry.review.sha)) ||
+    null;
+  const verdict = (entry.review && entry.review.verdict) || entry.verdict || 'PASS';
+  const reviewer =
+    entry.reviewer ||
+    entry.reviewerKey ||
+    entry.reviewerIdentity ||
+    (entry.review && entry.review.reviewer) ||
+    null;
+  const workerRoot =
+    entry.workerRoot || entry.worktree || (entry.review && entry.review.workerRoot) || null;
+  const branch = entry.branch || (entry.review && entry.review.branch) || null;
+
+  if (!sha) return null;
+
+  return {
+    workItemId,
+    sha: String(sha).trim(),
+    verdict: String(verdict).trim(),
+    reviewer: reviewer ? String(reviewer).trim() : null,
+    workerRoot: workerRoot ? String(workerRoot).trim() : null,
+    branch: branch ? String(branch).trim() : null,
+  };
+}
+
+function buildCheckpointReviews(log, prior, completedIds) {
+  const map = new Map();
+  if (prior) {
+    const priorReviews = Array.isArray(prior.reviews)
+      ? prior.reviews
+      : prior.reviews && typeof prior.reviews === 'object'
+        ? Object.values(prior.reviews)
+        : [];
+    for (const r of priorReviews) {
+      if (r && (r.workItemId || r.id)) {
+        const id = r.workItemId || r.id;
+        const normalized = normalizeReviewForCheckpoint(r, id);
+        if (normalized) map.set(id, normalized);
+      }
+    }
+  }
+
+  if (Array.isArray(log.reviews)) {
+    for (const entry of log.reviews) {
+      if (!entry || !entry.workItemId) continue;
+      if (entry.fromCheckpoint && entry.checkpointReviewError) continue;
+      const normalized = normalizeReviewForCheckpoint(entry, entry.workItemId);
+      if (normalized) map.set(entry.workItemId, normalized);
+    }
+  }
+
+  const completedSet = new Set(completedIds || []);
+  const result = [];
+  for (const [id, rec] of map.entries()) {
+    if (completedSet.has(id)) {
+      result.push(rec);
+    }
+  }
+  return result;
+}
+
 function buildProfile(item, o, forbiddenFailureDomains) {
   return {
     taskId: item.id,
@@ -1425,6 +1548,55 @@ async function runOrchestration(goal, opts) {
     }
     if (completedBefore.has(item.id)) {
       outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_COMPLETED');
+      const rec = extractCheckpointReview(checkpointOnDisk, item.id);
+      let checkpointReviewError = null;
+      if (!rec) {
+        checkpointReviewError =
+          'NO_REVIEWED_COMMIT: missing review record in checkpoint for ' + item.id;
+      } else if (!rec.sha || !SHA_40.test(rec.sha)) {
+        checkpointReviewError =
+          'PUBLISH_REFUSED: invalid reviewedSha in checkpoint for ' +
+          item.id +
+          ': ' +
+          String(rec.sha);
+      } else if (!ACCEPTED_VERDICTS.includes(rec.verdict)) {
+        checkpointReviewError =
+          'PUBLISH_REFUSED: checkpoint did not record a PASS verdict for ' +
+          item.id +
+          ', got: ' +
+          String(rec.verdict);
+      } else if (!rec.reviewer) {
+        checkpointReviewError =
+          'PUBLISH_REFUSED: checkpoint review record missing reviewer for ' + item.id;
+      }
+
+      const reviewEntry = {
+        workItemId: item.id,
+        sha: rec ? rec.sha : null,
+        reviewedSha: rec ? rec.sha : null,
+        reviewerIdentity: rec ? rec.reviewer : null,
+        reviewer: rec ? rec.reviewer : null,
+        writerCandidateKey: null,
+        workerRoot: rec ? rec.workerRoot : null,
+        branch: rec ? rec.branch : null,
+        fromCheckpoint: true,
+        checkpointReviewError,
+        review:
+          !checkpointReviewError && rec
+            ? {
+                status: ReviewStatus.COMPLETED,
+                finalSha: rec.sha,
+                verdict: rec.verdict,
+                reviewer: rec.reviewer,
+                workerRoot: rec.workerRoot,
+                branch: rec.branch,
+                rounds: [],
+                repairCount: 0,
+              }
+            : null,
+      };
+      log.reviews.push(reviewEntry);
+      log.review = reviewEntry;
       continue;
     }
     if (logUnreadable) {
@@ -1776,7 +1948,7 @@ async function runOrchestration(goal, opts) {
   //    an unwired run says so instead of pretending a draft Pull Request exists.
   for (const entry of log.reviews) log.publications.push(publication(o, entry));
   log.publication = log.publications[log.publications.length - 1] || {
-    status: PublicationStatus.NOT_REQUESTED,
+    status: o.publication ? PublicationStatus.REFUSED : PublicationStatus.NOT_REQUESTED,
     reason: 'NO_REVIEWED_COMMIT: nothing to publish',
   };
 
@@ -1906,7 +2078,10 @@ async function reviewItem(
     workItemId: item.id,
     sha: review.finalSha || targetSha,
     reviewerIdentity: reviewerIdentity || null,
+    reviewer: reviewerIdentity || null,
     writerCandidateKey: session.candidateKey,
+    workerRoot: workerRoot || (session && session.worktree) || null,
+    branch: (session && session.branch) || o.branch || null,
     review,
   };
   log.reviews.push(entry);
@@ -2104,18 +2279,30 @@ function repairRound(
  * is the correct outcome, not a fallback to an unapproved push.
  */
 function publication(o, entry) {
-  const review = entry && entry.review;
-  if (!review || review.status !== ReviewStatus.COMPLETED) {
-    return {
-      status: PublicationStatus.NOT_REQUESTED,
-      reason: 'NO_REVIEWED_COMMIT: the item did not reach a passing review',
-    };
-  }
   const request = o.publication;
   if (!request) {
     return {
       status: PublicationStatus.NOT_REQUESTED,
       reason: 'APPROVAL_NOT_SUPPLIED: the loop cannot mint the approval that authorises a publish',
+    };
+  }
+  if (entry && entry.checkpointReviewError) {
+    return {
+      status: PublicationStatus.REFUSED,
+      workItemId: entry.workItemId,
+      reason: entry.checkpointReviewError,
+    };
+  }
+  const review = entry && entry.review;
+  if (
+    !review ||
+    review.status !== ReviewStatus.COMPLETED ||
+    !ACCEPTED_VERDICTS.includes(review.verdict)
+  ) {
+    return {
+      status: PublicationStatus.REFUSED,
+      workItemId: entry && entry.workItemId,
+      reason: 'NO_REVIEWED_COMMIT: the item did not reach a passing review',
     };
   }
   try {
@@ -2124,6 +2311,9 @@ function publication(o, entry) {
         cwd: request.cwd || o.publisherCwd || o.cwd,
         reviewedSha: review.finalSha,
         verdict: review.verdict || 'PASS',
+        reviewer:
+          entry.reviewerIdentity || review.reviewer || entry.reviewer || request.reviewer || null,
+        branch: request.branch || entry.branch || (review && review.branch) || null,
         log: typeof o.log === 'function' ? o.log : null,
       })
     );
@@ -2186,9 +2376,16 @@ function finish(log, statusOf, ctx) {
   if (log.plan.errors.length > 0) {
     log.status = RunStatus.REFUSED;
     log.refusal = log.plan.errors.join('; ');
-  } else if (publications.some((p) => p.status === PublicationStatus.REFUSED)) {
+  } else if (
+    publications.some((p) => p.status === PublicationStatus.REFUSED) ||
+    (log.publication && log.publication.status === PublicationStatus.REFUSED)
+  ) {
     log.status = RunStatus.REFUSED;
-  } else if (publications.some((p) => p.status === PublicationStatus.PUBLISHED_DRAFT)) {
+    log.refusal = (log.publication && log.publication.reason) || 'PUBLICATION_REFUSED';
+  } else if (
+    publications.some((p) => p.status === PublicationStatus.PUBLISHED_DRAFT) ||
+    (log.publication && log.publication.status === PublicationStatus.PUBLISHED_DRAFT)
+  ) {
     log.status = RunStatus.PUBLISHED_DRAFT;
   } else if (blocked.length > 0) {
     log.status = RunStatus.BLOCKED;
@@ -2197,20 +2394,26 @@ function finish(log, statusOf, ctx) {
   }
 
   const prior = ctx.checkpointOnDisk || {};
+  const allCompleted = unique((prior.completed || []).concat(completed));
+  const checkpointReviews = buildCheckpointReviews(log, prior, allCompleted);
   const next = Object.assign({}, prior, {
     schemaVersion: 1,
     step: log.status === RunStatus.PUBLISHED_DRAFT ? 'live_published' : 'live_review',
     updatedAt: new Date(ctx.now).toISOString(),
     workItemIds: log.plan.workItems.map((i) => i.id),
-    completed: unique((prior.completed || []).concat(completed)),
+    completed: allCompleted,
     blocked,
     deferred,
-    sessions: log.sessions.map((s) => ({
-      workItemId: s.workItemId,
-      sessionId: s.sessionId,
-      status: s.status,
-      candidateKey: s.candidateKey,
-    })),
+    sessions:
+      log.sessions.length > 0
+        ? log.sessions.map((s) => ({
+            workItemId: s.workItemId,
+            sessionId: s.sessionId,
+            status: s.status,
+            candidateKey: s.candidateKey,
+          }))
+        : prior.sessions || [],
+    reviews: checkpointReviews,
     publication: log.publication,
   });
   log.checkpoint = next;

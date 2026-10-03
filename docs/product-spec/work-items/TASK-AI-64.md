@@ -1298,3 +1298,37 @@ Evidence:
 
 Residual risk / known limitations:
 - None.
+
+## Live E2E Attempt 22: Resume can publish the recorded reviewed commit (Defect U) (2026-10-03)
+
+Observation / Defect U:
+In Live attempt 22 (run data `C:/Users/gumac/AI/shipde-platform/.worktrees/logs/night/live22-data/`), the loop completed with `REVIEW_PASS` on worker commit `2d23262d107d88d8623467b5670298af97af6c89` (reviewer `opencode::cli::9router::ocz::codex::codex::ninerouter/ocz/big-pickle`), but was run without `--publish`. The operator then issued a SHA-bound approval and re-ran `orchestrate` with the same `--checkpoint` plus `--publish --approval <id>`. Because the checkpoint (`checkpoint.json`) recorded only `completed: ["TASK-AI-64"]` and not the reviewed commit, the resumed run skipped the item as already completed (`CHECKPOINT_COMPLETED`), leaving `log.reviews` empty; the publisher then reported `NO_REVIEWED_COMMIT: nothing to publish` (`out-publish.json`), failing to publish the approved commit.
+
+Fix:
+1. Persist Review Results in Checkpoints (`tools/ai-brain/orchestrate.js`):
+   - In `reviewItem`: Populated `reviewer`, `workerRoot`, and `branch` on each review entry in `log.reviews`.
+   - In `finish`: Built `checkpointReviews` via `buildCheckpointReviews(log, prior, allCompleted)` to persist per completed item the review result (`sha`, `verdict`, `reviewer`, `workerRoot`, `branch`) in the checkpoint JSON under `reviews: [...]`, preserving prior review records across runs.
+2. Checkpoint Review Extraction & Publication on Resume (`tools/ai-brain/orchestrate.js`):
+   - Added `extractCheckpointReview(checkpoint, workItemId)`: Reads recorded review records from `checkpoint.reviews` (array or map) or alternate keys (`completedReviews`, `reviewResults`).
+   - In `runOrchestration`: When resuming an item in `completedBefore`, validates the checkpoint review record (asserting exact 40-character SHA, valid PASS verdict, and reviewer presence) and attaches it to `log.reviews` without re-running the worker or review. If the record is missing or forged, marks structured `checkpointReviewError`.
+   - In `publication`: When `--publish` is requested, publishes from the recorded reviewed commit through existing publisher gates (approval bound to exact sha, verdict, reviewer, expiry), while refusing fail-closed if the checkpoint review is missing, forged, or did not record a PASS verdict.
+3. Regression Tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Added Defect U regression suite:
+     - `complete-then-resume-with-publish calls the publisher with the recorded sha`: Initial run completes with review pass and persists review to checkpoint; resume run with `--publish` and SHA-bound approval publishes from the recorded commit without re-running worker or reviewer (fails at `a7687e1`, passes after).
+     - `missing/forged record refuses`: A checkpoint with completed items but missing review record, forged invalid SHA, or non-PASS verdict refuses publication with structured reason (fails at `a7687e1`, passes after).
+     - `approval bound to another sha refuses`: An approval bound to a different commit refuses publication at publisher gate (fails at `a7687e1`, passes after).
+   - Tests are fully Ubuntu-portable.
+
+Evidence:
+- Fail-before base SHA: `a7687e1` / `a7687e1bb9b83981afa6b724f9f80ec054832ee0`
+  - In Live attempt 22, orchestrate resumed with `--publish` skipped completed items without populating review results, producing `NO_REVIEWED_COMMIT: nothing to publish`.
+  - Checkpoint did not persist reviewed SHA, verdict, reviewer, worker root, or branch.
+- Pass-after result: All tests pass. 102/102 passed in `tools/ai-brain/test/task-ai-64.test.js`; full brain suite passing.
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.
