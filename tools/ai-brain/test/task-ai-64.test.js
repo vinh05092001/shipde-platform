@@ -5930,6 +5930,7 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         specs: [
           {
             id: 'TASK-AI-64',
+            businessOutcome: 'Publish the checkpointed reviewed commit',
             files: ['branch-name.js'],
             acceptanceCriteria: ['branch helper'],
             verification: { command: 'node -e "process.exit(0)"', expect: '' },
@@ -6032,6 +6033,7 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
           specs: [
             {
               id: 'TASK-AI-64',
+              businessOutcome: 'Publish the checkpointed reviewed commit',
               files: ['branch-name.js'],
               acceptanceCriteria: ['branch helper'],
               verification: { command: 'node -e "process.exit(0)"', expect: '' },
@@ -6102,7 +6104,15 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         assert.match(recordedReview.tests.outputDigest, /^[0-9a-f]{64}$/);
         assert.strictEqual(recordedReview.openFindings, 0);
         assert.strictEqual(recordedReview.reviewRounds, 1);
+        assert.strictEqual(recordedReview.repairCount, 0);
+        assert.strictEqual(
+          recordedReview.draftTitle,
+          '[TASK-AI-64] Publish the checkpointed reviewed commit'
+        );
         assert.ok(recordedReview.decisionLog.completed);
+        assert.strictEqual(recordedReview.decisionLog.reviewRounds, 1);
+        assert.strictEqual(recordedReview.decisionLog.repairCount, 0);
+        assert.deepStrictEqual(recordedReview.decisionLog.tests, recordedReview.tests);
         assert.match(recordedReview.integrity.digest, /^[0-9a-f]{64}$/);
 
         // Step 2: Operator creates SHA-bound approval in registry
@@ -6169,6 +6179,8 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         assert.strictEqual(res2.log.publication.status, 'PUBLISHED_DRAFT');
         assert.strictEqual(res2.log.publication.result.sha, workerHead);
         assert.strictEqual(res2.log.publication.result.approvalId, 'AP-64-RESUME');
+        assert.strictEqual(res2.log.review.review.rounds.length, 1);
+        assert.strictEqual(res2.log.review.review.repairCount, 0);
 
         // Checkpoint updated to live_published, still records review
         const ckptOnDisk2 = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
@@ -6445,6 +6457,51 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
           /pass-after did not pass/i
         );
         await expectReceiptRefusal(
+          'tests-missing-base-exit',
+          (r) => {
+            delete r.tests.baseExitCode;
+            resignReceipt(r);
+          },
+          /fail-before did not fail/i
+        );
+        await expectReceiptRefusal(
+          'tests-nonnumeric-base-exit',
+          (r) => {
+            r.tests.baseExitCode = 'not-a-number';
+            resignReceipt(r);
+          },
+          /fail-before did not fail/i
+        );
+        await expectReceiptRefusal(
+          'fabricated-tests',
+          (r) => {
+            r.tests = {
+              command: 'pnpm test:brain',
+              baseExitCode: 1,
+              headExitCode: 0,
+              outputDigest: crypto.createHash('sha256').update('nothing ran at all').digest('hex'),
+            };
+            resignReceipt(r);
+          },
+          /decision log test evidence mismatch/i
+        );
+        await expectReceiptRefusal(
+          'review-rounds',
+          (r) => {
+            r.reviewRounds = 99;
+            resignReceipt(r);
+          },
+          /review round count mismatch/i
+        );
+        await expectReceiptRefusal(
+          'repair-count',
+          (r) => {
+            r.repairCount = 99;
+            resignReceipt(r);
+          },
+          /repair count mismatch/i
+        );
+        await expectReceiptRefusal(
           'findings',
           (r) => {
             r.openFindings = 1;
@@ -6474,6 +6531,158 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         fs.rmSync(dirCheckpoint, { recursive: true, force: true });
         fs.rmSync(registryDir, { recursive: true, force: true });
       }
+    });
+
+    test('receipt evidence is anchored, numeric, and complete on resume', async (t) => {
+      const repo = makeTempRepo();
+      const dirDecisions = tmpDir('task-ai-64-u-anchor-dec-');
+      const dirCheckpoint = tmpDir('task-ai-64-u-anchor-ckpt-');
+      const checkpointFile = path.join(dirCheckpoint, 'checkpoint-valid.json');
+      const registryDir = tmpDir('task-ai-64-u-anchor-reg-');
+      const registryPath = path.join(registryDir, 'approvals.json');
+      const { writerCand, reviewerCand } = makeDefectUCandidates();
+
+      try {
+        const { checkpoint: validCheckpoint, sha: validSha } = await writeValidDefectUCheckpoint(
+          repo,
+          checkpointFile,
+          dirDecisions,
+          {
+            writerCand,
+            reviewerCand,
+          }
+        );
+        fs.writeFileSync(
+          registryPath,
+          JSON.stringify({
+            'AP-64-ANCHOR': {
+              approvalId: 'AP-64-ANCHOR',
+              state: 'APPROVED',
+              reviewedSha: validSha,
+              verdict: 'PASS',
+              reviewer: candidateKey(reviewerCand),
+              issuedAt: new Date().toISOString(),
+              expiry: '2100-01-01T00:00:00.000Z',
+            },
+          })
+        );
+
+        async function expectReceiptRefusal(name, mutate, pattern) {
+          await t.test(name, async () => {
+            const ckpt = path.join(dirCheckpoint, 'checkpoint-anchor-' + name + '.json');
+            writeMutatedCheckpoint(ckpt, validCheckpoint, mutate);
+            const opts = baseOpts({
+              decisionDir: tmpDir('task-ai-64-u-anchor-resume-dec-'),
+              checkpointFile: ckpt,
+              checkpoint: ckpt,
+              workerRoot: repo.dir,
+              baseSha: repo.sha,
+              candidates: [writerCand, reviewerCand],
+              specs: [{ id: 'TASK-AI-64', files: ['branch-name.js'] }],
+              publication: {
+                approvalId: 'AP-64-ANCHOR',
+                expiry: Date.now() + 60000,
+                remoteUrl: TRUSTED_URL,
+                branch: 'feat/task-ai-64',
+                testMode: true,
+                cwd: repo.dir,
+                registryPath,
+              },
+              run: () => {
+                assert.fail('worker must not run on resume');
+              },
+            });
+            delete opts.reviewer;
+            const res = await safeRun(opts);
+            assert.strictEqual(res.log.status, 'REFUSED');
+            assert.strictEqual(res.log.publication.status, 'REFUSED');
+            assert.match(res.log.publication.reason, pattern);
+          });
+        }
+
+        await t.test('draft title comes from the Work Item outcome', () => {
+          assert.strictEqual(
+            validCheckpoint.reviews[0].draftTitle,
+            '[TASK-AI-64] Publish the checkpointed reviewed commit'
+          );
+        });
+        await t.test('recorded tests are independently anchored in the decision log', () => {
+          assert.deepStrictEqual(
+            validCheckpoint.reviews[0].decisionLog.tests,
+            validCheckpoint.reviews[0].tests
+          );
+        });
+
+        await expectReceiptRefusal(
+          'absent baseExitCode refuses as incomplete evidence',
+          (r) => {
+            delete r.tests.baseExitCode;
+            resignReceipt(r);
+          },
+          /fail-before did not fail/i
+        );
+        await expectReceiptRefusal(
+          'non-numeric baseExitCode refuses as incomplete evidence',
+          (r) => {
+            r.tests.baseExitCode = 'not-a-number';
+            resignReceipt(r);
+          },
+          /fail-before did not fail/i
+        );
+        await expectReceiptRefusal(
+          'fabricated test evidence refuses against the decision log anchor',
+          (r) => {
+            r.tests = {
+              command: 'pnpm test:brain',
+              baseExitCode: 1,
+              headExitCode: 0,
+              outputDigest: crypto.createHash('sha256').update('nothing ran at all').digest('hex'),
+            };
+            resignReceipt(r);
+          },
+          /decision log test evidence mismatch/i
+        );
+        await expectReceiptRefusal(
+          'reviewRounds must match the recorded decision log',
+          (r) => {
+            r.reviewRounds = 99;
+            resignReceipt(r);
+          },
+          /review round count mismatch/i
+        );
+        await expectReceiptRefusal(
+          'repairCount must match the recorded decision log',
+          (r) => {
+            r.repairCount = 99;
+            resignReceipt(r);
+          },
+          /repair count mismatch/i
+        );
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+        fs.rmSync(dirCheckpoint, { recursive: true, force: true });
+        fs.rmSync(registryDir, { recursive: true, force: true });
+      }
+    });
+
+    test('Work Item repair evidence names the reviewed SHA and corrected test pattern', () => {
+      const text = fs.readFileSync(
+        path.join(
+          __dirname,
+          '..',
+          '..',
+          '..',
+          'docs',
+          'product-spec',
+          'work-items',
+          'TASK-AI-64.md'
+        ),
+        'utf8'
+      );
+      assert.match(text, /Pass-after head SHA: `9a53116ee2b0cb57e9ec3aebdc1d2a92001e612d`/);
+      assert.doesNotMatch(text, /recorded in repair commit after this section/i);
+      assert.match(text, /--test-name-pattern="recorded reviewed commit"/);
     });
 
     test('approval bound to another sha refuses', async () => {

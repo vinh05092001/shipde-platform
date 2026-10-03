@@ -105,6 +105,8 @@ function plan(goal, opts) {
     for (const spec of specs) {
       workItems.push({
         id: spec.id,
+        title: spec.title || null,
+        businessOutcome: spec.businessOutcome || spec.outcome || null,
         roleRequirement: roleRequirementFor(spec),
         dependencies: (spec.dependencies || []).slice(),
         allowedPaths: (spec.allowedPaths || spec.files || []).slice(),

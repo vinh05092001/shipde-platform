@@ -1281,6 +1281,7 @@ function extractCheckpointReview(checkpoint, workItemId) {
     reviewRounds: Number.isFinite(Number(raw.reviewRounds)) ? Number(raw.reviewRounds) : null,
     openFindings: Number.isFinite(Number(raw.openFindings)) ? Number(raw.openFindings) : null,
     decisionLog: raw.decisionLog && typeof raw.decisionLog === 'object' ? raw.decisionLog : null,
+    repairCount: Number.isFinite(Number(raw.repairCount)) ? Number(raw.repairCount) : null,
     integrity: raw.integrity && typeof raw.integrity === 'object' ? raw.integrity : null,
   };
 }
@@ -1369,6 +1370,28 @@ function compactTestEvidence(result, failBefore) {
   };
 }
 
+function normalizedReceiptTests(tests) {
+  if (!tests || typeof tests !== 'object') return null;
+  const baseExitCode = Number(tests.baseExitCode);
+  const headExitCode = Number(tests.headExitCode);
+  return {
+    command: tests.command ? String(tests.command) : null,
+    baseExitCode: Number.isFinite(baseExitCode) ? baseExitCode : null,
+    headExitCode: Number.isFinite(headExitCode) ? headExitCode : null,
+    outputDigest: tests.outputDigest ? String(tests.outputDigest) : null,
+  };
+}
+
+function draftTitleForItem(item) {
+  const outcome =
+    (item && (item.businessOutcome || item.outcome || item.title || item.name)) ||
+    (item && Array.isArray(item.acceptanceCriteria) && item.acceptanceCriteria[0]) ||
+    (item && item.verification && item.verification.expect) ||
+    null;
+  const clean = outcome ? String(outcome).trim() : '';
+  return '[' + String((item && item.id) || 'WORK-ITEM') + '] ' + (clean || 'verified work item');
+}
+
 function receiptFailureDomain(candidateKeyValue) {
   const parsed = parseCandidateKey(candidateKeyValue);
   if (!parsed) return null;
@@ -1383,6 +1406,10 @@ function decisionLogEvidenceFor(logOpts, workItemId, sha, verdict, reviewer) {
     reviewedSha: null,
     verdict: verdict || null,
     reviewer: reviewer || null,
+    reviewRounds: null,
+    repairCount: null,
+    tests: null,
+    rounds: [],
     digest: null,
   };
   if (!out.dir) return out;
@@ -1399,8 +1426,27 @@ function decisionLogEvidenceFor(logOpts, workItemId, sha, verdict, reviewer) {
       (!reviewer || r.reviewer === reviewer) &&
       (!verdict || r.verdict === verdict)
   );
+  const completedTests = normalizedReceiptTests(completed && completed.tests);
   out.completed = Boolean(completed);
   out.reviewedSha = completed ? completed.reviewedSha || sha : null;
+  out.reviewRounds = reviewRecords.length;
+  out.repairCount =
+    completed && Number.isFinite(Number(completed.repairCount))
+      ? Number(completed.repairCount)
+      : reviewRecords.reduce(
+          (max, r) =>
+            Number.isFinite(Number(r.repairCount)) ? Math.max(max, Number(r.repairCount)) : max,
+          0
+        );
+  out.tests = completedTests;
+  out.rounds = reviewRecords.map((r) => ({
+    round: r.round || null,
+    stage: r.roundStage || null,
+    sha: r.sha || r.reviewedSha || null,
+    verdict: r.verdict || null,
+    reviewer: r.reviewer || null,
+    findings: Array.isArray(r.findings) ? r.findings : [],
+  }));
   out.digest = digestObject({
     completed: completed || null,
     reviews: reviewRecords,
@@ -1474,10 +1520,12 @@ function verifyReceiptTests(rec) {
   const tests = rec && rec.tests;
   if (!tests || typeof tests !== 'object') return 'PUBLISH_REFUSED: receipt missing test evidence';
   if (!tests.command) return 'PUBLISH_REFUSED: receipt missing verification command';
-  if (!(Number(tests.baseExitCode) !== 0)) {
+  const baseExitCode = Number(tests.baseExitCode);
+  const headExitCode = Number(tests.headExitCode);
+  if (!Number.isFinite(baseExitCode) || baseExitCode === 0) {
     return 'PUBLISH_REFUSED: receipt fail-before did not fail';
   }
-  if (Number(tests.headExitCode) !== 0) {
+  if (!Number.isFinite(headExitCode) || headExitCode !== 0) {
     return 'PUBLISH_REFUSED: receipt pass-after did not pass';
   }
   if (!tests.outputDigest || !/^[0-9a-f]{64}$/i.test(String(tests.outputDigest))) {
@@ -1521,6 +1569,19 @@ function verifyReceiptDecisionLog(rec, workItemId) {
   }
   if (!evidenceRecord.digest || current.digest !== evidenceRecord.digest) {
     return 'PUBLISH_REFUSED: decision log evidence mismatch';
+  }
+  if (current.reviewRounds !== rec.reviewRounds) {
+    return 'PUBLISH_REFUSED: decision log review round count mismatch';
+  }
+  const receiptRepairCount = Number(rec.repairCount);
+  if (!Number.isFinite(receiptRepairCount) || current.repairCount !== receiptRepairCount) {
+    return 'PUBLISH_REFUSED: decision log repair count mismatch';
+  }
+  if (
+    !current.tests ||
+    digestObject(current.tests) !== digestObject(normalizedReceiptTests(rec.tests))
+  ) {
+    return 'PUBLISH_REFUSED: decision log test evidence mismatch';
   }
   return null;
 }
@@ -1580,6 +1641,10 @@ function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
   const reviewRounds = Array.isArray(entry.review && entry.review.rounds)
     ? entry.review.rounds.length
     : null;
+  const repairCount =
+    entry.review && Number.isFinite(Number(entry.review.repairCount))
+      ? Number(entry.review.repairCount)
+      : null;
   const openFindings = countOpenFindings(entry.review && entry.review.rounds);
   const tests =
     entry.tests || compactTestEvidence(entry.testResult || null, entry.failBefore || null);
@@ -1598,9 +1663,10 @@ function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
     writerCandidateKey: writerCandidateKey ? String(writerCandidateKey).trim() : null,
     workerRoot: workerRoot ? String(workerRoot).trim() : null,
     branch: branch ? String(branch).trim() : null,
-    draftTitle: entry.draftTitle || '[' + String(entry.workItemId || workItemId) + '] work item',
+    draftTitle: entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }),
     tests,
     reviewRounds,
+    repairCount,
     openFindings,
     decisionLog: decisionLogEvidenceFor(
       logOpts || {},
@@ -1862,6 +1928,16 @@ async function runOrchestration(goal, opts) {
       outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_COMPLETED');
       const rec = extractCheckpointReview(checkpointOnDisk, item.id);
       const checkpointReviewError = validateCheckpointReceipt(rec, item, o);
+      const anchoredEvidence =
+        !checkpointReviewError && rec
+          ? decisionLogEvidenceFor(
+              { dir: rec.decisionLog.dir, now: rec.decisionLog.now || undefined },
+              item.id,
+              rec.sha,
+              rec.verdict,
+              rec.reviewer
+            )
+          : null;
 
       const reviewEntry = {
         workItemId: item.id,
@@ -1876,6 +1952,7 @@ async function runOrchestration(goal, opts) {
         draftTitle: rec ? rec.draftTitle : null,
         tests: rec ? rec.tests : null,
         reviewRounds: rec ? rec.reviewRounds : null,
+        repairCount: rec ? rec.repairCount : null,
         openFindings: rec ? rec.openFindings : null,
         decisionLog: rec ? rec.decisionLog : null,
         integrity: rec ? rec.integrity : null,
@@ -1891,15 +1968,8 @@ async function runOrchestration(goal, opts) {
                 workerRoot: rec.workerRoot,
                 branch: rec.branch,
                 baseSha: rec.baseSha,
-                rounds: Array.from({ length: rec.reviewRounds }, (_, idx) => ({
-                  round: idx + 1,
-                  stage: 'review-pass',
-                  sha: rec.sha,
-                  verdict: rec.verdict,
-                  reviewer: rec.reviewer,
-                  findings: [],
-                })),
-                repairCount: 0,
+                rounds: anchoredEvidence.rounds,
+                repairCount: anchoredEvidence.repairCount,
               }
             : null,
       };
@@ -2397,7 +2467,8 @@ async function reviewItem(
     workerRoot: workerRoot || (session && session.worktree) || null,
     branch: (session && session.branch) || o.branch || null,
     baseSha: (session && session.baseSha) || o.baseSha || null,
-    draftTitle: '[' + String(item.id) + '] work item',
+    draftTitle: draftTitleForItem(item),
+    item,
     testResult: lastTestResult,
     failBefore: (session && session.failBefore) || null,
     review,
@@ -2422,6 +2493,7 @@ async function reviewItem(
         reviewer: round.reviewer || reviewerIdentity || null,
         findings: round.findings || [],
         sha: round.sha || null,
+        tests: compactTestEvidence(lastTestResult, (session && session.failBefore) || null),
         repairCount: review.repairCount,
       },
       logOpts
@@ -2448,6 +2520,11 @@ async function reviewItem(
       outcome: review.status === ReviewStatus.COMPLETED ? 'passed' : 'failed',
       detail: reason,
       reviewedSha: review.finalSha,
+      verdict: review.verdict || null,
+      reviewer: reviewerIdentity || null,
+      tests: compactTestEvidence(lastTestResult, (session && session.failBefore) || null),
+      reviewRounds: Array.isArray(review.rounds) ? review.rounds.length : null,
+      repairCount: review.repairCount,
     },
     logOpts
   );

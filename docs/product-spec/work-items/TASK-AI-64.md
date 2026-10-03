@@ -982,14 +982,50 @@ Fix:
 Evidence:
 - Fail-before base SHA: `a7687e1` / `a7687e1bb9b83981afa6b724f9f80ec054832ee0`
   - The Defect U tests fail at base because no durable receipt exists and completed resume cannot publish the recorded reviewed commit.
-- Pass-after head SHA: recorded in repair commit after this section.
+- Pass-after head SHA: `9a53116ee2b0cb57e9ec3aebdc1d2a92001e612d`.
 - Commands run:
-  - `node --test --test-name-pattern="Defect U" tools/ai-brain/test/task-ai-64.test.js` -> 3/3 pass.
+  - `node --test --test-name-pattern="recorded reviewed commit" tools/ai-brain/test/task-ai-64.test.js` -> 3/3 pass.
   - `node --test --test-name-pattern="64-24" tools/ai-brain/test/task-ai-64.test.js` -> 1/1 pass after preserving no-publish terminal behavior.
   - `node --test "tools/ai-brain/test/*.test.js"` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 1210/1210 pass, 210 suites pass, 0 fail.
 
 Residual risk / known limitations:
 - Pre-repair checkpoints that lack any durable receipt remain unrecoverable by design and must be re-reviewed or re-run; absence of receipt evidence is refused, not converted to PASS.
+
+## Repair Round 2 of 2: Receipt evidence is anchored and complete (Defect U review findings F12-F16) (2026-10-03)
+
+Observation:
+The independent review of commit `9a53116ee2b0cb57e9ec3aebdc1d2a92001e612d` closed F1-F11 but found five remaining gaps. Missing or non-numeric `tests.baseExitCode` could pass as fail-before evidence, `tests` were only shape-checked inside the receipt, `reviewRounds` and resumed round history were self-asserted by the receipt, the draft title was the literal placeholder `[TASK-AI-64] work item`, and this Work Item evidence block still had an unfilled SHA placeholder plus the wrong Defect U test pattern.
+
+Fix:
+1. Numeric fail-closed test receipt validation (`tools/ai-brain/orchestrate.js`):
+   - `baseExitCode` and `headExitCode` must be finite numbers before comparison. Missing, absent, `NaN`, or string-only fake values are incomplete evidence and refuse.
+2. Independent test-evidence anchor (`tools/ai-brain/orchestrate.js`):
+   - The review execution records compacted test evidence into the append-only decision log at execution time on both `review` and `completed` records.
+   - Resume validation recomputes decision-log evidence and compares receipt `tests` against the recorded decision-log copy. A fabricated receipt can recompute its unkeyed integrity checksum, but it cannot make the old decision-log record contain the fabricated command, exit codes, or output digest.
+3. Decision-log review rounds and repair count (`tools/ai-brain/orchestrate.js`):
+   - `reviewRounds` is compared with the matching `review` records in the decision log.
+   - `repairCount` is persisted in the receipt and compared with the `completed` decision record.
+   - Resumed `log.review.review.rounds` is rebuilt from recorded decision-log review records, not synthesized from the receipt's claimed count.
+4. Real draft title (`tools/ai-brain/planner.js`, `tools/ai-brain/orchestrate.js`):
+   - Planner now carries `title` and `businessOutcome` / `outcome` through to work items.
+   - Receipt draft titles are derived from the Work Item outcome fields, falling back to acceptance evidence, instead of the literal string `work item`.
+5. Work Item evidence block (`docs/product-spec/work-items/TASK-AI-64.md`):
+   - Round 1 now names the actual pass-after SHA `9a53116ee2b0cb57e9ec3aebdc1d2a92001e612d`.
+   - The Defect U command now uses `--test-name-pattern="recorded reviewed commit"`, matching the suite name.
+
+Evidence:
+- Fail-before SHA: `9a53116ee2b0cb57e9ec3aebdc1d2a92001e612d`.
+  - Exported `9a53116` to a temp tree and copied the repaired Defect U test file over it. `node --test --test-name-pattern="recorded reviewed commit" tools/ai-brain/test/task-ai-64.test.js` failed 11/12 before the fix: missing `repairCount`, literal draft title, absent decision-log test anchor, absent and non-numeric `baseExitCode` publishing as `PUBLISHED_DRAFT`, fabricated test evidence publishing, review-round mismatch publishing, and incomplete Work Item evidence.
+- Pass-after working tree:
+  - `node --test --test-name-pattern="recorded reviewed commit" tools/ai-brain/test/task-ai-64.test.js` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 12/12 pass.
+  - `node --test tools/ai-brain/test/task-ai-64.test.js` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 111/111 pass, 13 suites pass, 0 fail.
+  - `node --test "tools/ai-brain/test/*.test.js"` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 1219/1219 pass, 210 suites pass, 0 fail.
+- Sound-anchor choice:
+  - Chosen anchor is the append-only decision log written during the execution run. It records test command, fail-before/pass-after exit codes, output digest, review rounds, and repair count before resume. Resume re-reads that log and refuses if the checkpoint receipt disagrees.
+  - This is stronger than receipt-only integrity: `integrity` remains an unkeyed stable-JSON checksum for corruption detection, not authenticity. Authenticity for publish is still the combined exact commit/ancestry check, reviewer-domain separation, SHA-bound approval, and decision-log cross-check.
+
+Residual risk / known limitations:
+- Pre-round-2 durable receipts that lack decision-log test and repair-count anchors fail closed on publish resume and require a fresh reviewed run or documented re-review.
 
 ## Escalated author: Fresh worker root on first launch, retained only for repair (2026-10-02)
 
