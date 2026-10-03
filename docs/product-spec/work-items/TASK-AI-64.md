@@ -970,7 +970,7 @@ Fix:
 2. Resume Validation (`tools/ai-brain/orchestrate.js`):
    - Validates receipt integrity, exact 40-character SHA, PASS verdict, reviewer, branch, draft title, review rounds, zero open findings, test evidence, writer/reviewer failure-domain separation, and decision-log confirmation.
    - Cross-checks the recorded SHA in the recorded worker repo using hardened `withCleanGitEnv` / `safeGit`: `rev-parse <sha>^{commit}`, `merge-base --is-ancestor <baseSha> <sha>`, and explicit `sha != baseSha`.
-   - Requires receipt `workerRoot` to match publish `cwd`; publication can rebuild `cwd`, branch, reviewer, verdict, reviewed SHA, and draft title from the receipt while keeping `publisher.js` gates unchanged.
+   - Requires receipt `workerRoot` to match publish `cwd`; publication can rebuild `cwd`, branch, reviewer, verdict, reviewed SHA, and draft title from the receipt while keeping `publisher.js` gates unchanged. (Superseded by Repair Round 3: the element that must match publish `cwd` is the receipt's `publishCwd`, an operator-side directory; `workerRoot` is where the commit and its ancestry are verified. For an isolated run the two are necessarily different, because `publisher.js` refuses any cwd inside the worker root.)
 3. Publication Diagnostics (`tools/ai-brain/orchestrate.js`):
    - Keeps no-publish runs non-publishing while preserving `NO_REVIEWED_COMMIT` diagnostics.
    - Final refusal now reports the concrete refused publication reason rather than a generic `PUBLICATION_REFUSED`.
@@ -1012,10 +1012,12 @@ Fix:
 5. Work Item evidence block (`docs/product-spec/work-items/TASK-AI-64.md`):
    - Round 1 now names the actual pass-after SHA `9a53116ee2b0cb57e9ec3aebdc1d2a92001e612d`.
    - The Defect U command now uses `--test-name-pattern="recorded reviewed commit"`, matching the suite name.
+  - Round 2 now names its own pass-after SHA `0c4685c19cd5d39d6bab0bd1662d3334d2fbf6aa`, closing the placeholder F16 raised for round 1.
 
 Evidence:
 - Fail-before SHA: `9a53116ee2b0cb57e9ec3aebdc1d2a92001e612d`.
   - Exported `9a53116` to a temp tree and copied the repaired Defect U test file over it. `node --test --test-name-pattern="recorded reviewed commit" tools/ai-brain/test/task-ai-64.test.js` failed 11/12 before the fix: missing `repairCount`, literal draft title, absent decision-log test anchor, absent and non-numeric `baseExitCode` publishing as `PUBLISHED_DRAFT`, fabricated test evidence publishing, review-round mismatch publishing, and incomplete Work Item evidence.
+- Pass-after head SHA: `0c4685c19cd5d39d6bab0bd1662d3334d2fbf6aa`.
 - Pass-after working tree:
   - `node --test --test-name-pattern="recorded reviewed commit" tools/ai-brain/test/task-ai-64.test.js` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 12/12 pass.
   - `node --test tools/ai-brain/test/task-ai-64.test.js` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 111/111 pass, 13 suites pass, 0 fail.
@@ -1026,6 +1028,41 @@ Evidence:
 
 Residual risk / known limitations:
 - Pre-round-2 durable receipts that lack decision-log test and repair-count anchors fail closed on publish resume and require a fresh reviewed run or documented re-review.
+
+## Repair Round 3: Repaired runs publish; receipt counts and cwd consistent (Defect U review findings F17-F21) (2026-10-03)
+
+Observation:
+The independent review of commit `0c4685c19cd5d39d6bab0bd1662d3334d2fbf6aa` closed F1-F16 but found five remaining gaps. `openFindings` was summed across every review round, so a run that completed `REVIEW_PASS` after a repair still carried `openFindings: 1` and was refused by the validator that wrote it; `reviewRounds` compared the receipt's total round count with the decision log's matched subset, so every multi-round run refused; the rebuilt publish `cwd` was the receipt's `workerRoot`, which an isolated run records under `C:\ShipDeWorker` and `publisher.js` refuses, so requirement (d) was unsatisfiable in this Work Item's own isolated scenario; an omitted `repairCount` was read as `Number(null) === 0` and, when the signature matched the shape the extractor re-materialised, published as `PUBLISHED_DRAFT`; and round 2's evidence block still carried no pass-after SHA.
+
+Fix:
+1. Open findings of the completed review (`tools/ai-brain/orchestrate.js`):
+   - `countOpenFindings` counts the findings of the final round — the round the item completed on — instead of summing every round. Repair rounds and refused review rounds keep their history in the decision log. A repaired receipt now reads `verdict: PASS` with `openFindings: 0`; a receipt whose completed round still carries an open finding refuses.
+2. Like-for-like `reviewRounds` (`tools/ai-brain/orchestrate.js`):
+   - The receipt's `reviewRounds` is taken from the same decision-log evidence the validator compares against: the `review` records that attest to this receipt's reviewed commit and verdict. How many rounds a repaired run went through is `repairCount`, which was already compared like-for-like with the `completed` record.
+3. Operator-side publish cwd (`tools/ai-brain/orchestrate.js`):
+   - The receipt carries `publishCwd` next to `workerRoot`. An isolated run records the host worktree (or an explicitly designated `publisherCwd`), never the worker root; a non-isolated run records the worker root it already published from. Absence refuses: `PUBLISH_REFUSED: receipt missing publish cwd`.
+   - Receipt validation and the publication stage resolve the cwd through one shared `resolvePublishCwd`, so the directory the receipt was checked against is the directory the publisher runs in — rebuilt from the receipt when the operator names none, and the two expressions can no longer disagree.
+   - A receipt may never name a publish cwd inside the worker boundary: `PUBLISH_REFUSED: receipt publish cwd is inside the worker root`. `workerRoot` keeps its own role: the hardened `withCleanGitEnv` / `safeGit` commit-existence and ancestry checks still run there.
+   - `publisher.js` is unchanged: no gate, credential, push path or approval rule was touched.
+4. Incomplete receipt refusal (`tools/ai-brain/orchestrate.js`):
+   - Absence stays absence in `extractCheckpointReview`: a count that is absent, `null` or non-numeric stays `null` (never `Number(null) === 0`), a field the checkpoint never carried is not re-materialised as `null`, and `verifyReceiptDecisionLog` refuses on the raw field before any coercion — `PUBLISH_REFUSED: receipt missing repair count`.
+5. Evidence (`docs/product-spec/work-items/TASK-AI-64.md`, `tools/ai-brain/test/task-ai-64.test.js`):
+   - Round 2 now records its pass-after SHA `0c4685c19cd5d39d6bab0bd1662d3334d2fbf6aa`, and round 1's statement about `workerRoot` matching publish `cwd` is marked superseded by this round.
+
+Evidence:
+- Fail-before SHA: `0c4685c19cd5d39d6bab0bd1662d3334d2fbf6aa`.
+  - Exported `0c4685c` to a temp tree and copied the repaired Defect U test file over it. `node --test --test-name-pattern="recorded reviewed commit" tools/ai-brain/test/task-ai-64.test.js` failed 8/19 (seven tests plus their parent suite): the repaired-run receipt reported `openFindings: 1` instead of publishing, `publishCwdForReceipt` did not exist, the operator-side publish cwd could not be rebuilt (`missing publish cwd for receipt workerRoot check`), absent and `null` `repairCount` were refused as `receipt integrity mismatch` instead of being named, an omitted `repairCount` whose signature matched the extracted shape published as `PUBLISHED_DRAFT`, and round 2's pass-after SHA was absent from this Work Item.
+- Pass-after head SHA: filled by the merge commit of this repair (the commands below ran on the working tree that became it).
+- Pass-after working tree:
+  - `node --test --test-name-pattern="recorded reviewed commit" tools/ai-brain/test/task-ai-64.test.js` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 19/19 pass, 2 suites pass, 0 fail.
+  - `node --test tools/ai-brain/test/task-ai-64.test.js` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 118/118 pass, 13 suites pass, 0 fail.
+  - `node --test "tools/ai-brain/test/*.test.js"` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 1226/1226 pass, 210 suites pass, 0 fail.
+- What stays closed: F1-F16 keep their round-1 and round-2 tests, all of which still pass; `tools/ai-brain/publisher.js` is byte-identical to `0c4685c`; no credential, push path or approval rule was added.
+
+Residual risk / known limitations:
+- Receipts written before round 3 carry no `publishCwd` and fail closed on publish resume (`receipt integrity mismatch` or `receipt missing publish cwd`); they require a fresh reviewed run or documented re-review rather than a looser check.
+- An isolated run publishes only from an operator-side ref that contains the reviewed commit at HEAD. Fetching the reviewed commit out of the worker root into the host worktree is an operator action; without it the publisher refuses with its unchanged `SHA mismatch` gate, and the receipt names that refusal's cause instead of pointing the publisher at the worker root.
+- `integrity` remains an unkeyed sha256 over the receipt's own data — corruption detection, not authenticity — as round 2 states. Authenticity for publish is still the commit/ancestry check, reviewer-domain separation, SHA-bound approval and the decision-log cross-check.
 
 ## Escalated author: Fresh worker root on first launch, retained only for repair (2026-10-02)
 

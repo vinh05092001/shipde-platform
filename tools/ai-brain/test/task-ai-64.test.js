@@ -30,7 +30,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
-const { runOrchestration } = require('../orchestrate');
+const { runOrchestration, publishCwdForReceipt } = require('../orchestrate');
 const { Status: SessionStatus } = require('../supervisor');
 const { runReviewLoop } = require('../review-loop');
 const { publish } = require('../publisher');
@@ -6658,12 +6658,451 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
           },
           /repair count mismatch/i
         );
+        await expectReceiptRefusal(
+          'absent repairCount refuses as incomplete evidence (F20)',
+          (r) => {
+            delete r.repairCount;
+            resignReceipt(r);
+          },
+          /receipt missing repair count/i
+        );
+        await expectReceiptRefusal(
+          'null repairCount refuses instead of coercing to zero (F20)',
+          (r) => {
+            r.repairCount = null;
+            resignReceipt(r);
+          },
+          /receipt missing repair count/i
+        );
+        // The hole itself: a signature computed over exactly the shape the
+        // validator re-materialises for an omitted field. `Number(null) === 0`
+        // made this receipt publishable as long as the decision log said 0.
+        await expectReceiptRefusal(
+          'an omitted repairCount that passed integrity still refuses (F20)',
+          (r) => {
+            delete r.repairCount;
+            const payload = Object.assign({}, r);
+            delete payload.integrity;
+            payload.repairCount = null;
+            r.integrity = {
+              algorithm: 'sha256:stable-json:v1',
+              digest: crypto.createHash('sha256').update(stableJson(payload), 'utf8').digest('hex'),
+            };
+          },
+          /PUBLISH_REFUSED/
+        );
       } finally {
         fs.rmSync(repo.dir, { recursive: true, force: true });
         fs.rmSync(dirDecisions, { recursive: true, force: true });
         fs.rmSync(dirCheckpoint, { recursive: true, force: true });
         fs.rmSync(registryDir, { recursive: true, force: true });
       }
+    });
+
+    test("a repaired run's receipt publishes once the final round passes (F17, F18)", async () => {
+      const repo = makeTempRepo();
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const dirDecisions = tmpDir('task-ai-64-u-f17-dec-');
+      const dirCheckpoint = tmpDir('task-ai-64-u-f17-ckpt-');
+      const checkpointFile = path.join(dirCheckpoint, 'checkpoint.json');
+      const registryDir = tmpDir('task-ai-64-u-f17-reg-');
+      const registryPath = path.join(registryDir, 'approvals.json');
+      const { writerCand, reviewerCand } = makeDefectUCandidates();
+
+      let workerRunCount = 0;
+      let reviewCalls = 0;
+      // Round one refuses with an open finding, the repair runs, round two
+      // passes with none. The item still completes REVIEW_PASS (AI-64-R07 /
+      // AC-AI-64-24), so its receipt must be publishable.
+      const reviewerSeam = (arg) => {
+        const sha = typeof arg === 'string' ? arg : (arg && arg.sha) || null;
+        reviewCalls += 1;
+        if (reviewCalls === 1) {
+          return {
+            pass: false,
+            sha,
+            verdict: 'CHANGES_REQUIRED',
+            findings: [{ id: 'F-REPAIR-1', detail: 'finding that caused the repair' }],
+          };
+        }
+        return { pass: true, sha, verdict: 'PASS', findings: [] };
+      };
+
+      try {
+        const opts1 = baseOpts({
+          decisionDir: dirDecisions,
+          checkpointFile,
+          checkpoint: checkpointFile,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          ranking: { headrooms: { codex: { status: 'available' } } },
+          reviewer: reviewerSeam,
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              businessOutcome: 'Publish the checkpointed reviewed commit',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['branch helper'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          tests: () => ({
+            pass: true,
+            command: 'node -e "process.exit(0)"',
+            baseExitCode: 1,
+            headExitCode: 0,
+            detail: 'pass-after ok',
+            baseOutput: 'fail-before missing branch-name',
+          }),
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              assert.fail('the injected reviewer seam must review, not the launcher');
+            }
+            workerRunCount += 1;
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit made' };
+          },
+        });
+
+        const res1 = await safeRun(opts1);
+        assert.ok(
+          res1.log,
+          'a run that completed after repair must not be refused: ' + res1.refusal
+        );
+        assert.strictEqual(res1.log.status, 'COMPLETED');
+        assert.strictEqual(res1.log.outcomes[0].reason, 'REVIEW_PASS');
+        assert.strictEqual(workerRunCount, 1);
+        assert.strictEqual(reviewCalls, 2, 'one refused round plus one passing round');
+
+        const receipt = JSON.parse(fs.readFileSync(checkpointFile, 'utf8')).reviews[0];
+        assert.strictEqual(
+          receipt.openFindings,
+          0,
+          'F17: the completed round carries no open findings'
+        );
+        assert.strictEqual(
+          receipt.reviewRounds,
+          1,
+          'F18: the receipt counts what the decision log counts'
+        );
+        assert.strictEqual(receipt.repairCount, 1);
+        assert.strictEqual(receipt.decisionLog.reviewRounds, 1);
+        assert.strictEqual(receipt.publishCwd, repo.dir);
+
+        const reviewedSha = receipt.sha;
+        fs.writeFileSync(
+          registryPath,
+          JSON.stringify({
+            'AP-64-F17': {
+              approvalId: 'AP-64-F17',
+              state: 'APPROVED',
+              reviewedSha,
+              verdict: 'PASS',
+              reviewer: candidateKey(reviewerCand),
+              issuedAt: new Date().toISOString(),
+              expiry: '2100-01-01T00:00:00.000Z',
+            },
+          })
+        );
+
+        const opts2 = baseOpts({
+          decisionDir: tmpDir('task-ai-64-u-f17-resume-dec-'),
+          checkpointFile,
+          checkpoint: checkpointFile,
+          workerRoot: repo.dir,
+          baseSha: repo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['branch helper'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          publication: {
+            approvalId: 'AP-64-F17',
+            expiry: Date.now() + 60000,
+            remoteUrl: TRUSTED_URL,
+            branch: 'feat/task-ai-64',
+            testMode: true,
+            cwd: repo.dir,
+            registryPath,
+          },
+          run: () => {
+            assert.fail('worker must not run on resume');
+          },
+        });
+
+        const res2 = await safeRun(opts2);
+        assert.ok(res2.log, 'a repaired receipt must publish on resume: ' + res2.refusal);
+        assert.strictEqual(workerRunCount, 1, 'worker must not be re-run');
+        assert.strictEqual(res2.log.status, 'PUBLISHED_DRAFT');
+        assert.strictEqual(res2.log.publication.status, 'PUBLISHED_DRAFT');
+        assert.strictEqual(res2.log.publication.result.sha, reviewedSha);
+      } finally {
+        fs.rmSync(repo.dir, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+        fs.rmSync(dirCheckpoint, { recursive: true, force: true });
+        fs.rmSync(registryDir, { recursive: true, force: true });
+      }
+    });
+
+    test('publish cwd for a receipt is operator-side for an isolated run (F19)', () => {
+      // The isolated case cannot be provisioned in a portable test (the worker
+      // root is `C:\ShipDeWorker\...`), so the rule that resolves it is asserted
+      // directly: an isolated receipt publishes from the host worktree, never
+      // from the worker boundary, and an explicit designation wins.
+      assert.strictEqual(
+        publishCwdForReceipt(
+          { isolatedWorker: true, cwd: path.join('C:', 'host', 'repo') },
+          path.join('C:', 'ShipDeWorker', 'repo')
+        ),
+        path.join('C:', 'host', 'repo')
+      );
+      assert.strictEqual(
+        publishCwdForReceipt({ isolatedWorker: true }, process.cwd()),
+        process.cwd()
+      );
+      assert.strictEqual(
+        publishCwdForReceipt(
+          { publisherCwd: path.join('C:', 'ops', 'ref') },
+          path.join('C:', 'temp', 'repo')
+        ),
+        path.join('C:', 'ops', 'ref')
+      );
+      assert.strictEqual(
+        publishCwdForReceipt({}, path.join('C:', 'temp', 'repo')),
+        path.join('C:', 'temp', 'repo')
+      );
+      assert.strictEqual(publishCwdForReceipt({}, null), null);
+    });
+
+    test('the receipt publishes from an operator-side publish cwd, not the worker root (F19)', async () => {
+      const workerRepo = makeTempRepo();
+      const operatorParent = tmpDir('task-ai-64-u-f19-op-');
+      const operatorRef = path.join(operatorParent, 'operator-ref');
+      const otherCwd = path.join(operatorParent, 'other-cwd');
+      const dirDecisions = tmpDir('task-ai-64-u-f19-dec-');
+      const dirCheckpoint = tmpDir('task-ai-64-u-f19-ckpt-');
+      const checkpointFile = path.join(dirCheckpoint, 'checkpoint.json');
+      const registryDir = tmpDir('task-ai-64-u-f19-reg-');
+      const registryPath = path.join(registryDir, 'approvals.json');
+      const { writerCand, reviewerCand } = makeDefectUCandidates();
+
+      try {
+        // Step 1: the run designates the operator-side publish cwd, which is
+        // what an isolated run records instead of its worker root.
+        const opts1 = baseOpts({
+          decisionDir: dirDecisions,
+          checkpointFile,
+          checkpoint: checkpointFile,
+          workerRoot: workerRepo.dir,
+          baseSha: workerRepo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          ranking: { headrooms: { codex: { status: 'available' } } },
+          publisherCwd: operatorRef,
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              businessOutcome: 'Publish the checkpointed reviewed commit',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['branch helper'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          tests: () => ({
+            pass: true,
+            command: 'node -e "process.exit(0)"',
+            baseExitCode: 1,
+            headExitCode: 0,
+            detail: 'pass-after ok',
+            baseOutput: 'fail-before missing branch-name',
+          }),
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              const targetSha = job.baseSha;
+              fs.writeFileSync(
+                job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                JSON.stringify({ sha: targetSha, verdict: 'PASS', findings: [] })
+              );
+              return { exitCode: 0, stdout: 'review pass' };
+            }
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            spawnSync('git', ['-c', 'safe.directory=*', 'add', '.'], {
+              cwd: workerRepo.dir,
+              encoding: 'utf8',
+              windowsHide: true,
+            });
+            spawnSync(
+              'git',
+              ['-c', 'safe.directory=*', 'commit', '-q', '-m', 'feat: branch-name'],
+              {
+                cwd: workerRepo.dir,
+                encoding: 'utf8',
+                windowsHide: true,
+              }
+            );
+            return { exitCode: 0, stdout: 'writer commit made' };
+          },
+        });
+
+        const res1 = await safeRun(opts1);
+        assert.ok(res1.log, 'first run must complete: ' + res1.refusal);
+        const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+        const receipt = checkpoint.reviews[0];
+        const reviewedSha = receipt.sha;
+
+        // The operator-side ref that contains the reviewed commit at HEAD.
+        const cloneRes = spawnSync(
+          'git',
+          ['-c', 'safe.directory=*', 'clone', '-q', workerRepo.dir, operatorRef],
+          { encoding: 'utf8', windowsHide: true }
+        );
+        assert.strictEqual(cloneRes.status, 0, 'clone must succeed: ' + cloneRes.stderr);
+        const opGit = (args) =>
+          spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+            cwd: operatorRef,
+            encoding: 'utf8',
+            windowsHide: true,
+          });
+        assert.strictEqual(opGit(['checkout', '-q', reviewedSha]).status, 0);
+        assert.strictEqual(opGit(['rev-parse', 'HEAD']).stdout.trim(), reviewedSha);
+
+        fs.writeFileSync(
+          registryPath,
+          JSON.stringify({
+            'AP-64-F19': {
+              approvalId: 'AP-64-F19',
+              state: 'APPROVED',
+              reviewedSha,
+              verdict: 'PASS',
+              reviewer: candidateKey(reviewerCand),
+              issuedAt: new Date().toISOString(),
+              expiry: '2100-01-01T00:00:00.000Z',
+            },
+          })
+        );
+
+        let resumeCount = 0;
+        const resume = async (publication, mutate) => {
+          resumeCount += 1;
+          const target = path.join(dirCheckpoint, 'checkpoint-resume-' + resumeCount + '.json');
+          if (mutate) {
+            writeMutatedCheckpoint(target, checkpoint, mutate);
+          } else {
+            fs.writeFileSync(target, JSON.stringify(checkpoint));
+          }
+          const opts = baseOpts({
+            decisionDir: tmpDir('task-ai-64-u-f19-resume-dec-'),
+            checkpointFile: target,
+            checkpoint: target,
+            workerRoot: workerRepo.dir,
+            baseSha: workerRepo.sha,
+            sha: null,
+            candidates: [writerCand, reviewerCand],
+            specs: [
+              {
+                id: 'TASK-AI-64',
+                files: ['branch-name.js'],
+                acceptanceCriteria: ['branch helper'],
+                verification: { command: 'node -e "process.exit(0)"', expect: '' },
+              },
+            ],
+            publication: Object.assign(
+              {
+                approvalId: 'AP-64-F19',
+                expiry: Date.now() + 60000,
+                remoteUrl: TRUSTED_URL,
+                branch: 'feat/task-ai-64',
+                testMode: true,
+                registryPath,
+              },
+              publication || {}
+            ),
+            run: () => {
+              assert.fail('worker must not run on resume');
+            },
+          });
+          return safeRun(opts);
+        };
+        const publicationForWorkerRepo = { cwd: workerRepo.dir };
+
+        // A: no --cwd at all. Publication rebuilds the cwd from the receipt and
+        // runs in the operator-side ref, never in the worker root.
+        const rebuilt = await resume(null);
+        assert.ok(rebuilt.log, 'rebuilt cwd resume must not be refused: ' + rebuilt.refusal);
+        assert.strictEqual(rebuilt.log.status, 'PUBLISHED_DRAFT');
+        assert.strictEqual(rebuilt.log.publication.status, 'PUBLISHED_DRAFT');
+        assert.strictEqual(rebuilt.log.publication.result.sha, reviewedSha);
+        assert.strictEqual(rebuilt.log.publication.result.simulated, true);
+        assert.strictEqual(receipt.publishCwd, operatorRef, 'the receipt names the publish cwd');
+        assert.notStrictEqual(receipt.publishCwd, receipt.workerRoot);
+
+        // B: an absent publish cwd is an incomplete receipt.
+        const absent = await resume(publicationForWorkerRepo, (r) => {
+          delete r.publishCwd;
+          resignReceipt(r);
+        });
+        assert.strictEqual(absent.log.status, 'REFUSED');
+        assert.match(absent.log.publication.reason, /receipt missing publish cwd/i);
+
+        // C: a receipt may never name a publish cwd inside the worker boundary.
+        const inWorker = await resume(publicationForWorkerRepo, (r) => {
+          r.publishCwd = path.join('C:', 'ShipDeWorker', 'isolation');
+          resignReceipt(r);
+        });
+        assert.strictEqual(inWorker.log.status, 'REFUSED');
+        assert.match(inWorker.log.publication.reason, /publish cwd is inside the worker root/i);
+
+        // D: the receipt binds the publish cwd; a different directory refuses.
+        const mismatch = await resume(publicationForWorkerRepo, (r) => {
+          r.publishCwd = otherCwd;
+          resignReceipt(r);
+        });
+        assert.strictEqual(mismatch.log.status, 'REFUSED');
+        assert.match(mismatch.log.publication.reason, /receipt publish cwd does not match/i);
+      } finally {
+        fs.rmSync(workerRepo.dir, { recursive: true, force: true });
+        fs.rmSync(operatorParent, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+        fs.rmSync(dirCheckpoint, { recursive: true, force: true });
+        fs.rmSync(registryDir, { recursive: true, force: true });
+      }
+    });
+
+    test('Work Item round2 evidence names its pass-after SHA (F21)', () => {
+      const text = fs.readFileSync(
+        path.join(
+          __dirname,
+          '..',
+          '..',
+          '..',
+          'docs',
+          'product-spec',
+          'work-items',
+          'TASK-AI-64.md'
+        ),
+        'utf8'
+      );
+      assert.match(text, /Pass-after head SHA: `0c4685c19cd5d39d6bab0bd1662d3334d2fbf6aa`/);
     });
 
     test('Work Item repair evidence names the reviewed SHA and corrected test pattern', () => {

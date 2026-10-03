@@ -1218,6 +1218,18 @@ function unique(list) {
 }
 
 /**
+ * A receipt count: a number, or null when the field is absent, null or not a
+ * number. `Number(null)` is `0`, so coercing first would launder an omitted
+ * `repairCount` into "no repairs happened" — absence is never evidence
+ * (AI-64-P08), and each count check downstream tests the raw field for null.
+ */
+function receiptCount(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const count = Number(value);
+  return Number.isFinite(count) ? count : null;
+}
+
+/**
  * Extracts and normalizes the recorded review result for one work item from a checkpoint.
  * Supports checkpoint.reviews as array or object, as well as completedReviews/reviewResults.
  */
@@ -1260,12 +1272,13 @@ function extractCheckpointReview(checkpoint, workItemId) {
     null;
   const workerRoot =
     raw.workerRoot || raw.worktree || (raw.review && raw.review.workerRoot) || null;
+  const publishCwd = raw.publishCwd || (raw.review && raw.review.publishCwd) || null;
   const branch = raw.branch || (raw.review && raw.review.branch) || null;
   const baseSha = raw.baseSha || (raw.review && raw.review.baseSha) || null;
   const writerCandidateKey = raw.writerCandidateKey || raw.writer || null;
   const draftTitle = raw.draftTitle || raw.title || null;
 
-  return {
+  const record = {
     workItemId: raw.workItemId || raw.id || workItemId,
     sha: typeof sha === 'string' ? sha.trim() : null,
     reviewedSha: typeof sha === 'string' ? sha.trim() : null,
@@ -1273,17 +1286,28 @@ function extractCheckpointReview(checkpoint, workItemId) {
     reviewer: typeof reviewer === 'string' ? reviewer.trim() : null,
     reviewerKey: typeof reviewer === 'string' ? reviewer.trim() : null,
     workerRoot: typeof workerRoot === 'string' ? workerRoot : null,
+    publishCwd: typeof publishCwd === 'string' ? publishCwd : null,
     branch: typeof branch === 'string' ? branch : null,
     baseSha: typeof baseSha === 'string' ? baseSha.trim() : null,
     writerCandidateKey: typeof writerCandidateKey === 'string' ? writerCandidateKey.trim() : null,
     draftTitle: typeof draftTitle === 'string' ? draftTitle.trim() : null,
     tests: raw.tests && typeof raw.tests === 'object' ? raw.tests : null,
-    reviewRounds: Number.isFinite(Number(raw.reviewRounds)) ? Number(raw.reviewRounds) : null,
-    openFindings: Number.isFinite(Number(raw.openFindings)) ? Number(raw.openFindings) : null,
+    reviewRounds: receiptCount(raw.reviewRounds),
+    openFindings: receiptCount(raw.openFindings),
     decisionLog: raw.decisionLog && typeof raw.decisionLog === 'object' ? raw.decisionLog : null,
-    repairCount: Number.isFinite(Number(raw.repairCount)) ? Number(raw.repairCount) : null,
+    repairCount: receiptCount(raw.repairCount),
     integrity: raw.integrity && typeof raw.integrity === 'object' ? raw.integrity : null,
   };
+  // Absence stays absence. The integrity digest covers the keys that are
+  // present, so re-materialising a field the checkpoint never carried as
+  // `null` would rename an incomplete receipt "integrity mismatch" instead of
+  // letting the check for that exact field report what is missing.
+  for (const key of Object.keys(record)) {
+    if (record[key] === null && !Object.prototype.hasOwnProperty.call(raw, key)) {
+      delete record[key];
+    }
+  }
+  return record;
 }
 
 function stableJson(value) {
@@ -1327,12 +1351,24 @@ function attachReceiptIntegrity(receipt) {
   return r;
 }
 
+/**
+ * The open findings of the COMPLETED review, not the sum of every round.
+ *
+ * A run that needed a repair has a first round carrying the finding that caused
+ * the repair and a final round that passed with no findings at all (AI-64-R07).
+ * Summing every round made every repaired run's own receipt contradictory —
+ * `verdict: PASS` with `openFindings: 1` — and the receipt was then refused by
+ * the very validator that wrote it, so a completed REVIEW_PASS could never be
+ * published. The final round is the round the item completed on, so only its
+ * findings describe the receipt; earlier rounds stay in the decision log.
+ */
 function countOpenFindings(rounds) {
+  if (!Array.isArray(rounds) || rounds.length === 0) return 0;
+  const final = rounds[rounds.length - 1];
+  const findings = final && Array.isArray(final.findings) ? final.findings : [];
   let count = 0;
-  for (const round of Array.isArray(rounds) ? rounds : []) {
-    for (const finding of Array.isArray(round && round.findings) ? round.findings : []) {
-      if (!finding || finding.closed !== true) count += 1;
-    }
+  for (const finding of findings) {
+    if (!finding || finding.closed !== true) count += 1;
   }
   return count;
 }
@@ -1396,6 +1432,45 @@ function receiptFailureDomain(candidateKeyValue) {
   const parsed = parseCandidateKey(candidateKeyValue);
   if (!parsed) return null;
   return parsed.upstream || parsed.gateway || null;
+}
+
+/**
+ * The operator-side directory a publish of this receipt runs from.
+ *
+ * `workerRoot` is where the reviewed commit was produced and is where the
+ * receipt verifies it, but an isolated run's worker root sits inside the worker
+ * boundary and the publisher refuses to run there (`publisher.js`, unchanged).
+ * The receipt therefore carries the publish cwd separately:
+ *
+ *   - an explicitly designated `publisherCwd` wins;
+ *   - an isolated run publishes from the host worktree, never from the worker;
+ *   - otherwise the worker root is operator-side already and stays the cwd.
+ *
+ * Absence is not a default: a receipt with no publish cwd is refused.
+ */
+function publishCwdForReceipt(o, workerRoot) {
+  const opts = o || {};
+  if (opts.publisherCwd) return String(opts.publisherCwd);
+  if (opts.isolatedWorker) return String(opts.cwd || process.cwd());
+  return workerRoot ? String(workerRoot) : null;
+}
+
+/**
+ * The single cwd expression shared by receipt validation and publication.
+ *
+ * Both stages used to resolve it separately, so they could disagree about the
+ * directory being published from: validation saw the operator input while
+ * publication fell back to the worker root. One expression, one answer.
+ */
+function resolvePublishCwd(o, rec) {
+  const opts = o || {};
+  return (
+    (opts.publication && opts.publication.cwd) ||
+    opts.publisherCwd ||
+    opts.cwd ||
+    (rec && rec.publishCwd) ||
+    null
+  );
 }
 
 function decisionLogEvidenceFor(logOpts, workItemId, sha, verdict, reviewer) {
@@ -1466,14 +1541,27 @@ function verifyReceiptIntegrity(rec) {
 }
 
 function verifyReceiptCommit(rec, publishCwd) {
+  // The publish cwd is rebuilt from the receipt, so it has to be present and it
+  // has to be a directory the publisher may run from: an isolated run's worker
+  // root sits inside the worker boundary and `publisher.js` refuses it. The
+  // worker root stays where the commit is verified — that is its own role.
+  if (!rec || !rec.publishCwd) return 'PUBLISH_REFUSED: receipt missing publish cwd';
+  const { isWorkerPath } = require('./isolation-launcher');
+  if (isWorkerPath(rec.publishCwd)) {
+    return (
+      'PUBLISH_REFUSED: receipt publish cwd is inside the worker root (' +
+      String(rec.publishCwd) +
+      '); the publisher runs operator-side only'
+    );
+  }
   const workerRoot = rec && rec.workerRoot;
   if (!workerRoot) return 'PUBLISH_REFUSED: receipt missing workerRoot';
   if (!fs.existsSync(workerRoot) || !fs.existsSync(path.join(workerRoot, '.git'))) {
     return 'PUBLISH_REFUSED: receipt workerRoot is not a git repository: ' + String(workerRoot);
   }
-  if (!publishCwd) return 'PUBLISH_REFUSED: missing publish cwd for receipt workerRoot check';
-  if (path.resolve(workerRoot) !== path.resolve(publishCwd)) {
-    return 'PUBLISH_REFUSED: receipt workerRoot does not match publish cwd';
+  if (!publishCwd) return 'PUBLISH_REFUSED: missing publish cwd for receipt check';
+  if (path.resolve(publishCwd) !== path.resolve(rec.publishCwd)) {
+    return 'PUBLISH_REFUSED: receipt publish cwd does not match publish cwd';
   }
   const { withCleanGitEnv, safeGit } = require('./supervisor');
   try {
@@ -1570,11 +1658,21 @@ function verifyReceiptDecisionLog(rec, workItemId) {
   if (!evidenceRecord.digest || current.digest !== evidenceRecord.digest) {
     return 'PUBLISH_REFUSED: decision log evidence mismatch';
   }
+  // Like with like: both sides count the `review` records that attest to THIS
+  // receipt's reviewed commit and verdict (the matched set). The receipt used
+  // to store the total round count, which also holds the repair rounds that
+  // reviewed earlier commits, so every multi-round run refused against a log
+  // that reported the matched count. Repair history is `repairCount`.
   if (current.reviewRounds !== rec.reviewRounds) {
     return 'PUBLISH_REFUSED: decision log review round count mismatch';
   }
-  const receiptRepairCount = Number(rec.repairCount);
-  if (!Number.isFinite(receiptRepairCount) || current.repairCount !== receiptRepairCount) {
+  // Absence is not evidence (AI-64-P08): an omitted repairCount is an
+  // incomplete receipt and refuses on the raw field, before any coercion —
+  // `Number(null)` is 0 and would otherwise read as "no repairs happened".
+  if (typeof rec.repairCount !== 'number' || !Number.isFinite(rec.repairCount)) {
+    return 'PUBLISH_REFUSED: receipt missing repair count';
+  }
+  if (current.repairCount !== rec.repairCount) {
     return 'PUBLISH_REFUSED: decision log repair count mismatch';
   }
   if (
@@ -1601,6 +1699,8 @@ function validateCheckpointReceipt(rec, item, o) {
   }
   if (!rec.reviewer)
     return 'PUBLISH_REFUSED: checkpoint review record missing reviewer for ' + item.id;
+  // No open findings in the COMPLETED review (AI-64-R07 / AC-AI-64-24), which
+  // is what `countOpenFindings` now counts: the round the item completed on.
   if (rec.openFindings !== 0) return 'PUBLISH_REFUSED: receipt has open findings';
   if (!rec.reviewRounds || rec.reviewRounds < 1) {
     return 'PUBLISH_REFUSED: receipt missing review rounds';
@@ -1609,7 +1709,7 @@ function validateCheckpointReceipt(rec, item, o) {
   if (!rec.draftTitle) return 'PUBLISH_REFUSED: receipt missing draft title';
   return (
     verifyReceiptIntegrity(rec) ||
-    verifyReceiptCommit(rec, (o.publication && o.publication.cwd) || o.publisherCwd || o.cwd) ||
+    verifyReceiptCommit(rec, resolvePublishCwd(o, rec)) ||
     verifyReceiptTests(rec) ||
     verifyReceiptReviewerSeparation(rec) ||
     verifyReceiptDecisionLog(rec, item.id)
@@ -1638,9 +1738,7 @@ function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
     (entry.review && entry.review.baseSha) ||
     null;
   const writerCandidateKey = entry.writerCandidateKey || entry.writer || null;
-  const reviewRounds = Array.isArray(entry.review && entry.review.rounds)
-    ? entry.review.rounds.length
-    : null;
+  const publishCwd = entry.publishCwd || null;
   const repairCount =
     entry.review && Number.isFinite(Number(entry.review.repairCount))
       ? Number(entry.review.repairCount)
@@ -1654,6 +1752,19 @@ function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
   const cleanSha = String(sha).trim();
   const cleanVerdict = verdict ? String(verdict).trim() : null;
   const cleanReviewer = reviewer ? String(reviewer).trim() : null;
+  // One decision-log read anchors both counts. `reviewRounds` is taken from it
+  // rather than from `entry.review.rounds.length`, so the receipt and the log
+  // compare the same set: the `review` records that attest to THIS reviewed
+  // commit and verdict. The receipt's total round count would also contain the
+  // repair rounds that reviewed earlier commits, and every multi-round run then
+  // refused against a log that never held them.
+  const decisionLog = decisionLogEvidenceFor(
+    logOpts || {},
+    workItemId,
+    cleanSha,
+    cleanVerdict,
+    cleanReviewer
+  );
   const receipt = {
     workItemId,
     sha: cleanSha,
@@ -1662,19 +1773,14 @@ function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
     reviewer: cleanReviewer,
     writerCandidateKey: writerCandidateKey ? String(writerCandidateKey).trim() : null,
     workerRoot: workerRoot ? String(workerRoot).trim() : null,
+    publishCwd: publishCwd ? String(publishCwd).trim() : null,
     branch: branch ? String(branch).trim() : null,
     draftTitle: entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }),
     tests,
-    reviewRounds,
+    reviewRounds: decisionLog.reviewRounds,
     repairCount,
     openFindings,
-    decisionLog: decisionLogEvidenceFor(
-      logOpts || {},
-      workItemId,
-      cleanSha,
-      cleanVerdict,
-      cleanReviewer
-    ),
+    decisionLog,
   };
   return attachReceiptIntegrity(receipt);
 }
@@ -1947,6 +2053,7 @@ async function runOrchestration(goal, opts) {
         reviewer: rec ? rec.reviewer : null,
         writerCandidateKey: rec ? rec.writerCandidateKey : null,
         workerRoot: rec ? rec.workerRoot : null,
+        publishCwd: rec ? rec.publishCwd : null,
         branch: rec ? rec.branch : null,
         baseSha: rec ? rec.baseSha : null,
         draftTitle: rec ? rec.draftTitle : null,
@@ -2465,6 +2572,7 @@ async function reviewItem(
     reviewer: reviewerIdentity || null,
     writerCandidateKey: session.candidateKey,
     workerRoot: workerRoot || (session && session.worktree) || null,
+    publishCwd: publishCwdForReceipt(o, workerRoot || (session && session.worktree) || null),
     branch: (session && session.branch) || o.branch || null,
     baseSha: (session && session.baseSha) || o.baseSha || null,
     draftTitle: draftTitleForItem(item),
@@ -2716,7 +2824,10 @@ function publication(o, entry) {
   try {
     const result = require('./publisher').publish(
       Object.assign({}, request, {
-        cwd: request.cwd || entry.workerRoot || o.publisherCwd || o.cwd,
+        // Same expression the receipt was validated with, so the directory the
+        // publisher runs in is the directory the receipt was checked against —
+        // rebuilt from the receipt when the operator named none.
+        cwd: resolvePublishCwd(o, entry),
         reviewedSha: review.finalSha,
         verdict: review.verdict || 'PASS',
         reviewer:
@@ -2864,6 +2975,8 @@ module.exports = {
   reviewLane,
   reviewItem,
   provisionReviewRoot,
+  publishCwdForReceipt,
+  resolvePublishCwd,
   ItemStatus,
   RunStatus,
   PublicationStatus,
