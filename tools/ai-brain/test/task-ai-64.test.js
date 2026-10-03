@@ -27,6 +27,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 const { runOrchestration } = require('../orchestrate');
@@ -5909,6 +5910,92 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
       return { writerCand, reviewerCand };
     }
 
+    async function writeValidDefectUCheckpoint(repo, checkpointFile, decisionDir, candidates) {
+      const { writerCand, reviewerCand } = candidates;
+      const git = (args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd: repo.dir,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      const opts = baseOpts({
+        decisionDir,
+        checkpointFile,
+        checkpoint: checkpointFile,
+        workerRoot: repo.dir,
+        baseSha: repo.sha,
+        sha: null,
+        candidates: [writerCand, reviewerCand],
+        ranking: { headrooms: { codex: { status: 'available' } } },
+        specs: [
+          {
+            id: 'TASK-AI-64',
+            files: ['branch-name.js'],
+            acceptanceCriteria: ['branch helper'],
+            verification: { command: 'node -e "process.exit(0)"', expect: '' },
+          },
+        ],
+        tests: () => ({
+          pass: true,
+          command: 'node -e "process.exit(0)"',
+          baseExitCode: 1,
+          headExitCode: 0,
+          detail: 'pass-after ok',
+          baseOutput: 'fail-before missing branch-name',
+        }),
+        run: (job) => {
+          if (job.usageFile) {
+            fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+          }
+          if (job.isReview) {
+            const targetSha = job.baseSha;
+            fs.writeFileSync(
+              job.verdictFile || path.join(job.cwd, 'verdict.json'),
+              JSON.stringify({ sha: targetSha, verdict: 'PASS', findings: [] })
+            );
+            return { exitCode: 0, stdout: 'review pass' };
+          }
+          fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+          git(['add', '.']);
+          git(['commit', '-q', '-m', 'feat: branch-name']);
+          return { exitCode: 0, stdout: 'writer commit made' };
+        },
+      });
+      delete opts.reviewer;
+      const result = await safeRun(opts);
+      assert.ok(result.log, 'valid receipt setup must complete: ' + result.refusal);
+      const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+      return { checkpoint, receipt: checkpoint.reviews[0], sha: checkpoint.reviews[0].sha };
+    }
+
+    function writeMutatedCheckpoint(target, checkpoint, mutator) {
+      const next = JSON.parse(JSON.stringify(checkpoint));
+      mutator(next.reviews[0], next);
+      fs.writeFileSync(target, JSON.stringify(next));
+    }
+
+    function stableJson(value) {
+      if (value === null || typeof value !== 'object') return JSON.stringify(value);
+      if (Array.isArray(value)) return '[' + value.map((v) => stableJson(v)).join(',') + ']';
+      return (
+        '{' +
+        Object.keys(value)
+          .sort()
+          .map((k) => JSON.stringify(k) + ':' + stableJson(value[k]))
+          .join(',') +
+        '}'
+      );
+    }
+
+    function resignReceipt(receipt) {
+      const payload = Object.assign({}, receipt);
+      delete payload.integrity;
+      receipt.integrity = {
+        algorithm: 'sha256:stable-json:v1',
+        digest: crypto.createHash('sha256').update(stableJson(payload), 'utf8').digest('hex'),
+      };
+    }
+
     test('complete-then-resume-with-publish calls the publisher with the recorded sha', async () => {
       const repo = makeTempRepo();
       const git = (args) =>
@@ -5950,6 +6037,14 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
               verification: { command: 'node -e "process.exit(0)"', expect: '' },
             },
           ],
+          tests: () => ({
+            pass: true,
+            command: 'node -e "process.exit(0)"',
+            baseExitCode: 1,
+            headExitCode: 0,
+            detail: 'pass-after ok',
+            baseOutput: 'fail-before missing branch-name',
+          }),
           run: (job) => {
             if (job.usageFile) {
               fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
@@ -5998,7 +6093,17 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         assert.strictEqual(recordedReview.sha, workerHead);
         assert.strictEqual(recordedReview.verdict, 'PASS');
         assert.strictEqual(recordedReview.reviewer, candidateKey(reviewerCand));
+        assert.strictEqual(recordedReview.writerCandidateKey, candidateKey(writerCand));
         assert.strictEqual(recordedReview.workerRoot, repo.dir);
+        assert.strictEqual(recordedReview.baseSha, repo.sha);
+        assert.strictEqual(recordedReview.tests.command, 'node -e "process.exit(0)"');
+        assert.strictEqual(recordedReview.tests.baseExitCode, 1);
+        assert.strictEqual(recordedReview.tests.headExitCode, 0);
+        assert.match(recordedReview.tests.outputDigest, /^[0-9a-f]{64}$/);
+        assert.strictEqual(recordedReview.openFindings, 0);
+        assert.strictEqual(recordedReview.reviewRounds, 1);
+        assert.ok(recordedReview.decisionLog.completed);
+        assert.match(recordedReview.integrity.digest, /^[0-9a-f]{64}$/);
 
         // Step 2: Operator creates SHA-bound approval in registry
         fs.writeFileSync(
@@ -6252,6 +6357,117 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         assert.strictEqual(resNonPass.log.status, 'REFUSED');
         assert.strictEqual(resNonPass.log.publication.status, 'REFUSED');
         assert.match(resNonPass.log.publication.reason, /PASS|PUBLISH_REFUSED|NO_REVIEWED_COMMIT/i);
+
+        const validCheckpointFile = path.join(dirCheckpoint, 'checkpoint-valid.json');
+        const {
+          checkpoint: validCheckpoint,
+          receipt: validReceipt,
+          sha: validSha,
+        } = await writeValidDefectUCheckpoint(repo, validCheckpointFile, dirDecisions, {
+          writerCand,
+          reviewerCand,
+        });
+        fs.writeFileSync(
+          registryPath,
+          JSON.stringify({
+            'AP-64-TEST': {
+              approvalId: 'AP-64-TEST',
+              state: 'APPROVED',
+              reviewedSha: validSha,
+              verdict: 'PASS',
+              reviewer: candidateKey(reviewerCand),
+              issuedAt: new Date().toISOString(),
+              expiry: '2100-01-01T00:00:00.000Z',
+            },
+          })
+        );
+
+        async function expectReceiptRefusal(name, mutate, pattern) {
+          const ckpt = path.join(dirCheckpoint, 'checkpoint-' + name + '.json');
+          writeMutatedCheckpoint(ckpt, validCheckpoint, mutate);
+          const opts = baseOpts({
+            decisionDir: tmpDir('task-ai-64-u-mut-dec-'),
+            checkpointFile: ckpt,
+            checkpoint: ckpt,
+            workerRoot: repo.dir,
+            baseSha: repo.sha,
+            candidates: [writerCand, reviewerCand],
+            specs: [{ id: 'TASK-AI-64', files: ['branch-name.js'] }],
+            publication: {
+              approvalId: 'AP-64-TEST',
+              expiry: Date.now() + 60000,
+              remoteUrl: TRUSTED_URL,
+              branch: 'feat/task-ai-64',
+              testMode: true,
+              cwd: repo.dir,
+              registryPath,
+            },
+            run: () => {
+              assert.fail('worker must not run on resume');
+            },
+          });
+          delete opts.reviewer;
+          const res = await safeRun(opts);
+          assert.strictEqual(res.log.status, 'REFUSED', name);
+          assert.strictEqual(res.log.publication.status, 'REFUSED', name);
+          assert.match(res.log.publication.reason, pattern, name);
+        }
+
+        await expectReceiptRefusal(
+          'integrity',
+          (r) => {
+            r.branch = 'feat/tampered';
+          },
+          /integrity mismatch/i
+        );
+        await expectReceiptRefusal(
+          'ghost',
+          (r) => {
+            r.sha = 'f'.repeat(40);
+            resignReceipt(r);
+          },
+          /not found in worker repo/i
+        );
+        await expectReceiptRefusal(
+          'base',
+          (r) => {
+            r.sha = repo.sha;
+            resignReceipt(r);
+          },
+          /equals base|approval|decision log|descend from base/i
+        );
+        await expectReceiptRefusal(
+          'tests',
+          (r) => {
+            r.tests.headExitCode = 1;
+            resignReceipt(r);
+          },
+          /pass-after did not pass/i
+        );
+        await expectReceiptRefusal(
+          'findings',
+          (r) => {
+            r.openFindings = 1;
+            resignReceipt(r);
+          },
+          /open findings/i
+        );
+        await expectReceiptRefusal(
+          'same-domain',
+          (r) => {
+            r.reviewer = r.writerCandidateKey;
+            resignReceipt(r);
+          },
+          /shares writer failure domain/i
+        );
+        await expectReceiptRefusal(
+          'decision-log',
+          (r) => {
+            r.decisionLog.digest = '0'.repeat(64);
+            resignReceipt(r);
+          },
+          /decision log evidence mismatch/i
+        );
       } finally {
         fs.rmSync(repo.dir, { recursive: true, force: true });
         fs.rmSync(dirDecisions, { recursive: true, force: true });
@@ -6271,48 +6487,28 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
 
       const OTHER_SHA = '1111111111111111111111111111111111111111';
 
-      // Checkpoint has review for repo.sha
-      fs.writeFileSync(
-        checkpointFile,
-        JSON.stringify({
-          schemaVersion: 1,
-          step: 'live_review',
-          updatedAt: new Date().toISOString(),
-          workItemIds: ['TASK-AI-64'],
-          completed: ['TASK-AI-64'],
-          blocked: [],
-          deferred: [],
-          sessions: [],
-          reviews: [
-            {
-              workItemId: 'TASK-AI-64',
-              sha: repo.sha,
+      try {
+        await writeValidDefectUCheckpoint(repo, checkpointFile, dirDecisions, {
+          writerCand,
+          reviewerCand,
+        });
+
+        // Approval registry has approval bound to a DIFFERENT commit (OTHER_SHA)
+        fs.writeFileSync(
+          registryPath,
+          JSON.stringify({
+            'AP-OTHER-SHA': {
+              approvalId: 'AP-OTHER-SHA',
+              state: 'APPROVED',
+              reviewedSha: OTHER_SHA,
               verdict: 'PASS',
               reviewer: candidateKey(reviewerCand),
-              workerRoot: repo.dir,
-              branch: 'feat/task-ai-64',
+              issuedAt: new Date().toISOString(),
+              expiry: '2100-01-01T00:00:00.000Z',
             },
-          ],
-        })
-      );
+          })
+        );
 
-      // Approval registry has approval bound to a DIFFERENT commit (OTHER_SHA)
-      fs.writeFileSync(
-        registryPath,
-        JSON.stringify({
-          'AP-OTHER-SHA': {
-            approvalId: 'AP-OTHER-SHA',
-            state: 'APPROVED',
-            reviewedSha: OTHER_SHA,
-            verdict: 'PASS',
-            reviewer: candidateKey(reviewerCand),
-            issuedAt: new Date().toISOString(),
-            expiry: '2100-01-01T00:00:00.000Z',
-          },
-        })
-      );
-
-      try {
         const opts = baseOpts({
           decisionDir: dirDecisions,
           checkpointFile,

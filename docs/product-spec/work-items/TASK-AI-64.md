@@ -955,7 +955,41 @@ Evidence:
   - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
 
 Residual risk / known limitations:
-- None.
+- Repair round 1 supersedes the earlier six-field checkpoint review record with a durable execution receipt. Pre-repair checkpoints that never captured a receipt, including the original Live attempt 22 `checkpoint.json`, still fail closed and require a fresh reviewed run or documented re-review rather than being silently published.
+
+## Repair Round 1 of 2: Durable execution receipt for resume and publish (Defect U review findings F1-F11) (2026-10-03)
+
+Observation:
+The independent review of commit `8f67987` found that Defect U persisted only `{workItemId, sha, verdict, reviewer, workerRoot, branch}` and defaulted missing verdicts to `PASS`. A completed checkpoint could therefore be incomplete, forged, or self-asserted, yet still be rewritten or published on resume. Required repair: persist a durable execution receipt sufficient to verify commit existence and ancestry, fail-before/pass-after evidence, exact-SHA PASS review with no open findings and reviewer outside the writer failure domain, publisher input reconstruction, no worker/reviewer re-run on resume, and integrity plus decision-log cross-check.
+
+Fix:
+1. Durable Receipt Shape (`tools/ai-brain/orchestrate.js`):
+   - Removed the default `PASS` verdict in checkpoint normalization; absent verdict remains absent and refuses.
+   - Persisted `baseSha`, `writerCandidateKey`, `reviewRounds`, `openFindings`, `tests` (`command`, `baseExitCode`, `headExitCode`, `outputDigest`), `decisionLog` evidence (`dir`, `now`, `completed`, `reviewedSha`, `verdict`, `reviewer`, `digest`), `draftTitle`, and `integrity` (`sha256:stable-json:v1`) for each completed receipt.
+   - Preserved prior checkpoint review records verbatim instead of re-normalizing incomplete records into valid-looking records.
+2. Resume Validation (`tools/ai-brain/orchestrate.js`):
+   - Validates receipt integrity, exact 40-character SHA, PASS verdict, reviewer, branch, draft title, review rounds, zero open findings, test evidence, writer/reviewer failure-domain separation, and decision-log confirmation.
+   - Cross-checks the recorded SHA in the recorded worker repo using hardened `withCleanGitEnv` / `safeGit`: `rev-parse <sha>^{commit}`, `merge-base --is-ancestor <baseSha> <sha>`, and explicit `sha != baseSha`.
+   - Requires receipt `workerRoot` to match publish `cwd`; publication can rebuild `cwd`, branch, reviewer, verdict, reviewed SHA, and draft title from the receipt while keeping `publisher.js` gates unchanged.
+3. Publication Diagnostics (`tools/ai-brain/orchestrate.js`):
+   - Keeps no-publish runs non-publishing while preserving `NO_REVIEWED_COMMIT` diagnostics.
+   - Final refusal now reports the concrete refused publication reason rather than a generic `PUBLICATION_REFUSED`.
+4. Regression Tests (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Extended Defect U tests to assert the full receipt fields on the completed checkpoint.
+   - Added mutation cases for integrity tampering, ghost SHA, base-commit receipt, failing pass-after evidence, open findings, same-domain reviewer, decision-log mismatch, missing review record, invalid SHA, non-PASS verdict, and approval bound to another SHA.
+   - Resume publish still proves worker/reviewer are not re-run and publishes the recorded SHA only after the receipt validates.
+
+Evidence:
+- Fail-before base SHA: `a7687e1` / `a7687e1bb9b83981afa6b724f9f80ec054832ee0`
+  - The Defect U tests fail at base because no durable receipt exists and completed resume cannot publish the recorded reviewed commit.
+- Pass-after head SHA: recorded in repair commit after this section.
+- Commands run:
+  - `node --test --test-name-pattern="Defect U" tools/ai-brain/test/task-ai-64.test.js` -> 3/3 pass.
+  - `node --test --test-name-pattern="64-24" tools/ai-brain/test/task-ai-64.test.js` -> 1/1 pass after preserving no-publish terminal behavior.
+  - `node --test "tools/ai-brain/test/*.test.js"` with temp `HOME`, `USERPROFILE`, and `TEMP` outside the worktree -> 1210/1210 pass, 210 suites pass, 0 fail.
+
+Residual risk / known limitations:
+- Pre-repair checkpoints that lack any durable receipt remain unrecoverable by design and must be re-reviewed or re-run; absence of receipt evidence is refused, not converted to PASS.
 
 ## Escalated author: Fresh worker root on first launch, retained only for repair (2026-10-02)
 
