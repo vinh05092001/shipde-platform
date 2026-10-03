@@ -119,6 +119,47 @@ export class RateLimitService {
     return { allowed: true };
   }
 
+  /**
+   * Check forgot password rate limits (FEAT-AUTH-04):
+   * - IP: max 5 attempts per 3600 seconds
+   * - Identifier (email or phone): max 3 attempts per 3600 seconds
+   *
+   * `subject` says which of the two this is. It used to be guessed from the
+   * string — "IP addresses typically don't contain @ or ." — and every IPv4
+   * address contains three dots, so every IP was given the stricter
+   * identifier limit of 3 instead of the 5 AC-05 specifies. The caller
+   * already knows which it is passing, so it says so.
+   */
+  async checkForgotPasswordLimit(
+    identifier: string,
+    subject: 'ip' | 'identifier' = 'identifier'
+  ): Promise<RateLimitResult> {
+    const windowSeconds = 3600;
+    const key = `ratelimit:forgot:${identifier}`;
+
+    const check = await this.getAttempts(key, windowSeconds);
+    const maxAttempts = subject === 'ip' ? 5 : 3;
+
+    if (check.count >= maxAttempts) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: `Too many forgot password attempts for ${identifier}`,
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  /**
+   * Record a forgot password attempt.
+   */
+  async recordForgotPasswordAttempt(ip: string, identifier: string): Promise<void> {
+    const windowSeconds = 3600;
+    await this.recordAttemptKey(`ratelimit:forgot:${ip}`, windowSeconds);
+    await this.recordAttemptKey(`ratelimit:forgot:${identifier}`, windowSeconds);
+  }
+
   async recordResendAttempt(
     identifier: string,
     channel: string,
