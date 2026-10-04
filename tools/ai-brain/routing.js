@@ -305,16 +305,96 @@ function claudeFamilyExclusion(role, modelId) {
   return CLAUDE_FAMILY_REASON;
 }
 
+const publisher = require('./publisher');
+
+function failureDomainFromCandidateKey(key) {
+  if (typeof publisher.failureDomainFromCandidateKey === 'function') {
+    return publisher.failureDomainFromCandidateKey(key);
+  }
+  const parts = String(key || '').split('::');
+  if (parts.length !== 7) return null;
+  const domain = [parts[2], parts[3]].filter((p) => p && p !== '*');
+  return domain.length ? domain.join('/') : 'unknown';
+}
+
+let upstreamGatewayIndex = null;
+function getUpstreamGatewayIndex() {
+  if (upstreamGatewayIndex) return upstreamGatewayIndex;
+  upstreamGatewayIndex = new Map();
+  try {
+    const catFile = path.join(__dirname, 'data', 'discovery', 'catalogue.jsonl');
+    if (fs.existsSync(catFile)) {
+      const raw = fs.readFileSync(catFile, 'utf8');
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const entry = JSON.parse(line);
+          if (entry.upstream && entry.gateway && !upstreamGatewayIndex.has(entry.upstream)) {
+            upstreamGatewayIndex.set(entry.upstream, entry.gateway);
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  try {
+    const { loadSources } = require('./sources');
+    const loaded = loadSources();
+    for (const src of (loaded && loaded.sources) || []) {
+      if (src.routerAlias && src.reachedVia && !upstreamGatewayIndex.has(src.routerAlias)) {
+        upstreamGatewayIndex.set(src.routerAlias, src.reachedVia);
+      }
+    }
+  } catch (_) {}
+  return upstreamGatewayIndex;
+}
+
+function resolveGatewayForUpstream(upstream) {
+  if (!upstream || upstream === '*') return '';
+  const idx = getUpstreamGatewayIndex();
+  return idx.get(upstream) || '';
+}
+
+function canonicalFailureDomain(x) {
+  if (!x) return 'unknown';
+  if (typeof x === 'object') {
+    if (x.gateway && x.upstream && x.gateway !== '*') {
+      return `${x.gateway}/${x.upstream}`;
+    }
+    if (x.candidateKey) {
+      const fromKey = failureDomainFromCandidateKey(x.candidateKey);
+      if (fromKey && fromKey !== 'unknown') return fromKey;
+    }
+    const gw = x.gateway && x.gateway !== '*' ? x.gateway : resolveGatewayForUpstream(x.upstream);
+    const up = x.upstream && x.upstream !== '*' ? x.upstream : '';
+    const parts = [gw, up].filter(Boolean);
+    return parts.length ? parts.join('/') : 'unknown';
+  }
+
+  const str = String(x).trim();
+  if (str.includes('::')) {
+    const fromKey = failureDomainFromCandidateKey(str);
+    if (fromKey) return fromKey;
+  }
+  if (str.includes('/')) {
+    const parts = str.split('/').filter(Boolean);
+    if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
+    if (parts.length === 1) return canonicalFailureDomain(parts[0]);
+    return str;
+  }
+  const gw = resolveGatewayForUpstream(str);
+  if (gw) {
+    return `${gw}/${str}`;
+  }
+  return str;
+}
+
 /**
  * A candidate's failure domain, in the vocabulary the Controller's
  * failure-classifier scopes already use. The display form joins the concrete
  * parts; `null` parts are dropped so an empty domain is visible, not guessed.
  */
 function failureDomainOf(candidate) {
-  const parts = [candidate.gateway, candidate.upstream].filter(
-    (p) => p !== undefined && p !== null && p !== '' && p !== '*'
-  );
-  return parts.length ? parts.join('/') : 'unknown';
+  return canonicalFailureDomain(candidate);
 }
 
 /** Whether any identity dimension of the candidate is an explicitly forbidden domain. */
@@ -329,6 +409,24 @@ function matchesForbiddenDomain(candidate, forbiddenFailureDomains) {
     candidate.harness,
   ];
   return fields.some((f) => f !== undefined && f !== null && f !== '*' && domains.has(f));
+}
+
+function isForbiddenCandidate(candidate, forbiddenFailureDomains) {
+  if (!forbiddenFailureDomains || forbiddenFailureDomains.length === 0) return false;
+  if (matchesForbiddenDomain(candidate, forbiddenFailureDomains)) return true;
+  const candCanonical = canonicalFailureDomain(candidate);
+  for (const f of forbiddenFailureDomains) {
+    if (!f) continue;
+    const fCanonical = canonicalFailureDomain(f);
+    if (fCanonical && candCanonical === fCanonical) return true;
+    if (typeof f === 'string') {
+      const parts = f.split('/').filter(Boolean);
+      for (const p of parts) {
+        if (p && (candidate.upstream === p || candidate.gateway === p)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 function hasQuotaAccountReadings(home, storePath) {
@@ -383,22 +481,78 @@ function blendedCost(candidate) {
 }
 
 function latencyScoreOf(candidate) {
-  const raw =
+  let raw =
     candidate.latencyMs !== undefined
       ? candidate.latencyMs
       : candidate.expectedDurationMs !== undefined
         ? candidate.expectedDurationMs
         : candidate.expectedLatencyMs;
+  if ((raw === undefined || raw === null) && Array.isArray(candidate.evidence)) {
+    for (const e of candidate.evidence) {
+      if (e && Number.isFinite(Number(e.latencyMs))) {
+        raw = Number(e.latencyMs);
+        break;
+      }
+    }
+  }
   const ms = Number(raw);
   if (!Number.isFinite(ms) || ms < 0) return null;
   const cap = 30 * 60 * 1000;
   return Math.round(100 * (1 - Math.min(1, Math.log10(1 + ms) / Math.log10(1 + cap))));
 }
 
-function qualityScoreOf(candidate) {
-  const q = Number(candidate && candidate.quality);
-  if (!Number.isFinite(q)) return null;
-  return Math.max(0, Math.min(100, q));
+function qualityScoreOf(candidate, now) {
+  const items = ((candidate && candidate.evidence) || []).filter((e) => e && e.status === 'passed');
+  let base = null;
+  let newestAt = null;
+
+  if (items.length > 0) {
+    base = 60; // API_PASS floor
+    for (const e of items) {
+      const level =
+        e.proofLevel ||
+        (e.level === 3 ? 'WORK_ITEM_PASS' : e.level === 2 ? 'HARNESS_PASS' : 'API_PASS');
+      if (level === 'WORK_ITEM_PASS') {
+        base = Math.max(base, 100);
+      } else if (level === 'HARNESS_PASS') {
+        base = Math.max(base, 80);
+      } else if (level === 'API_PASS') {
+        base = Math.max(base, 60);
+      }
+      const at = Date.parse(e.ts || e.at || '');
+      if (Number.isFinite(at) && (newestAt === null || at > newestAt)) {
+        newestAt = at;
+      }
+    }
+  }
+
+  const declared = Number(candidate && candidate.quality);
+  if (Number.isFinite(declared)) {
+    base = base !== null ? Math.max(base, declared) : declared;
+  }
+
+  if (base === null) return null;
+
+  let recencyPenalty = 0;
+  if (newestAt !== null) {
+    const currentTime = now || Date.now();
+    const ageMs = Math.max(0, currentTime - newestAt);
+    recencyPenalty = Math.min(15, Math.round(15 * (ageMs / (30 * 24 * 60 * 60 * 1000))));
+  }
+  return Math.max(1, Math.min(100, Math.round(base - recencyPenalty)));
+}
+
+function reliabilityScoreOf(candidate) {
+  const items = (candidate && candidate.evidence) || [];
+  let passed = 0;
+  let failed = 0;
+  for (const e of items) {
+    if (!e) continue;
+    if (e.status === 'passed') passed += 1;
+    else if (e.status === 'failed') failed += 1;
+  }
+  if (passed + failed === 0) return null;
+  return Math.round(100 * (passed / (passed + failed)));
 }
 
 function costScoreOf(candidate) {
@@ -429,35 +583,48 @@ function evidenceAgePenalty(candidate, now) {
  * fast.
  */
 function scoreForProfile(candidate, assessment, ctx) {
-  const parts = [];
+  const now = (ctx && ctx.now) || Date.now();
   const latency = latencyScoreOf(candidate);
-  if (latency !== null) {
-    parts.push([assessment.weights.latency, latency]);
-  } else if (
-    assessment &&
-    assessment.weightProfile === 'LATENCY_FIRST' &&
-    assessment.weights.latency >= Math.max(assessment.weights.quality, assessment.weights.cost)
-  ) {
-    parts.push([assessment.weights.latency, 0]);
-  }
-  const quality = qualityScoreOf(candidate);
-  if (quality !== null) parts.push([assessment.weights.quality, quality]);
+  const quality = qualityScoreOf(candidate, now);
+  const reliability = reliabilityScoreOf(candidate);
   const cost = costScoreOf(candidate);
-  if (cost !== null) parts.push([assessment.weights.cost, cost]);
 
-  let weightSum = 0;
-  let total = 0;
-  for (const [weight, value] of parts) {
-    total += weight * value;
-    weightSum += weight;
+  const rawQualityWeight =
+    assessment && assessment.weights && assessment.weights.quality !== undefined
+      ? assessment.weights.quality
+      : 33;
+  let wQuality = rawQualityWeight;
+  let wReliability = 0;
+  if (assessment && assessment.weights && assessment.weights.reliability !== undefined) {
+    wReliability = assessment.weights.reliability;
+  } else if (rawQualityWeight > 0) {
+    wReliability = Math.round(rawQualityWeight * 0.35);
+    wQuality = rawQualityWeight - wReliability;
   }
-  let score = weightSum > 0 ? Math.round(total / weightSum) : 0;
+  const wLatency =
+    assessment && assessment.weights && assessment.weights.latency !== undefined
+      ? assessment.weights.latency
+      : 34;
+  const wCost =
+    assessment && assessment.weights && assessment.weights.cost !== undefined
+      ? assessment.weights.cost
+      : 33;
+
+  const totalWeight = wQuality + wReliability + wLatency + wCost;
+
+  let total = 0;
+  if (quality !== null) total += wQuality * quality;
+  if (reliability !== null) total += wReliability * reliability;
+  if (latency !== null) total += wLatency * latency;
+  if (cost !== null) total += wCost * cost;
+
+  let score = totalWeight > 0 ? Math.round(total / totalWeight) : 0;
 
   const busy = ranking
     .reservationsForCandidate(candidate, ranking.getActiveReservations(ctx))
     .filter((r) => r && r.workItemId !== ctx.taskId).length;
   const busyPenalty = busy * BUSY_PENALTY_PER_RESERVATION;
-  const agePenalty = evidenceAgePenalty(candidate, ctx.now);
+  const agePenalty = evidenceAgePenalty(candidate, now);
   const headroomPenalty =
     candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
   score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
@@ -467,6 +634,7 @@ function scoreForProfile(candidate, assessment, ctx) {
     breakdown: {
       latency,
       quality,
+      reliability,
       cost,
       busyPenalty,
       evidenceAgePenalty: agePenalty,
@@ -551,7 +719,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       reject('HARNESS_NOT_REQUIRED', 'harness');
       continue;
     }
-    if (matchesForbiddenDomain(c, profile.forbiddenFailureDomains)) {
+    if (isForbiddenCandidate(c, profile.forbiddenFailureDomains)) {
       reject('FORBIDDEN_FAILURE_DOMAIN', 'gateway');
       continue;
     }
@@ -633,8 +801,10 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     return a.candidateKey.localeCompare(b.candidateKey);
   });
 
+  const allZero = ranked.length > 0 && ranked.every((c) => c.score === 0);
   const top3 = ranked.slice(0, 3);
   const chosen = top3.length ? top3[0].candidateKey : null;
+  const reasonCode = allZero ? 'MODEL_SELECTION_NOT_PROVEN' : null;
   const reason = chosen
     ? 'fastest candidate meeting quality floor ' +
       profile.qualityFloor +
@@ -653,6 +823,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     ranking: ranked,
     rejected,
     refused: chosen ? null : 'NO_CANDIDATE_MEETS_PROFILE',
+    reasonCode,
     reason,
   };
 }
@@ -944,6 +1115,46 @@ async function runProfileDispatch(args, deps) {
     enforceKnownQuota: args.execute === true && hasQuotaAccountReadings(d.home, d.storePath),
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
+  const execute = args.execute === true;
+
+  if (result.reasonCode === 'MODEL_SELECTION_NOT_PROVEN' && execute) {
+    if (rankCtx.explorationBudget <= 0) {
+      const refusedCode = 'MODEL_SELECTION_NOT_PROVEN';
+      log('Refusing to reserve unproven candidates without exploration budget: ' + result.reason);
+      if (args.json) {
+        log(
+          JSON.stringify(
+            {
+              profile,
+              assessment,
+              top3: result.top3,
+              rejected: jsonRejectedSlice(result, profile),
+              rejectedCount: result.rejected.length,
+              refused: refusedCode,
+              reasonCode: refusedCode,
+              pinned: null,
+            },
+            null,
+            2
+          )
+        );
+      }
+      exit(1);
+      return {
+        exitCode: 1,
+        profile,
+        assessment,
+        refused: refusedCode,
+        reasonCode: refusedCode,
+        rejected: result.rejected,
+      };
+    } else {
+      result.reasonCode = 'EXPLORATION';
+      if (result.top3 && result.top3.length > 0) {
+        result.top3[0].quotaReasonCode = 'EXPLORATION';
+      }
+    }
+  }
 
   // The decision log is the trace: profile, JEV result, full ranking, final
   // candidate — written even in a dry run, because the ranking decision is
@@ -963,7 +1174,11 @@ async function runProfileDispatch(args, deps) {
       score: c.score,
       scoreBreakdown: c.scoreBreakdown,
       headroom: c.headroomStatus || 'unknown',
-      failureDomain: failureDomainOf(c),
+      failureDomain: canonicalFailureDomain(c),
+      account:
+        !c.accountId || c.accountId === '*' || c.accountId === 'UNPINNED'
+          ? 'UNPINNED'
+          : c.accountId,
       reservationsHeld: c.reservationsHeld || 0,
       quotaReasonCode: c.quotaReasonCode || null,
       proof: proofObserved(evidenceData, c) || 'NONE',
@@ -973,6 +1188,7 @@ async function runProfileDispatch(args, deps) {
     rejectedCount: result.rejected.length,
     chosen: result.chosen,
     reason: result.reason,
+    reasonCode: result.reasonCode || null,
   };
   decisions.recordDecision(decisionRecorded, {
     dir: args['decision-dir'] || d.decisionDir,
@@ -996,6 +1212,7 @@ async function runProfileDispatch(args, deps) {
   );
 
   if (!result.chosen) {
+    const refusedCode = result.refused || result.reasonCode || 'NO_CANDIDATE_MEETS_PROFILE';
     log('No candidate meets the profile: ' + result.reason);
     const byCode = new Map();
     for (const r of result.rejected) {
@@ -1011,7 +1228,8 @@ async function runProfileDispatch(args, deps) {
             top3: result.top3,
             rejected: jsonRejectedSlice(result, profile),
             rejectedCount: result.rejected.length,
-            refused: result.refused,
+            refused: refusedCode,
+            reasonCode: result.reasonCode || refusedCode,
             pinned: null,
           },
           null,
@@ -1024,7 +1242,8 @@ async function runProfileDispatch(args, deps) {
       exitCode: 1,
       profile,
       assessment,
-      refused: result.refused,
+      refused: refusedCode,
+      reasonCode: result.reasonCode || refusedCode,
       rejected: result.rejected,
     };
   }
@@ -1032,24 +1251,144 @@ async function runProfileDispatch(args, deps) {
   log('Top candidates:');
   result.top3.forEach((entry, i) => log(formatTopEntry(entry, i + 1)));
 
-  const execute = args.execute === true;
   let reserved = false;
+  let reservationId = null;
+  let launchRequest = null;
+
   if (execute) {
-    const chosenCandidate = result.ranking.find((c) => c.candidateKey === result.chosen);
-    quotaStore.recordReservation(
-      profile.taskId,
-      profile.role,
-      (chosenCandidate && chosenCandidate.accountId) || '*',
-      result.chosen,
-      100000,
-      { home: d.home, path: d.storePath, now }
-    );
+    const chosenCandidate = result.ranking.find((c) => c.candidateKey === result.chosen) || {};
+    const parsedKey = parseCandidateKey(result.chosen) || {};
+    const harness = chosenCandidate.harness || parsedKey.harness;
+    const accessPath = chosenCandidate.accessPath || parsedKey.accessPath;
+    const gateway =
+      chosenCandidate.gateway !== undefined ? chosenCandidate.gateway : parsedKey.gateway || '';
+    const upstream = chosenCandidate.upstream || parsedKey.upstream;
+    let account = chosenCandidate.accountId || parsedKey.account;
+    if (!account || account === '*' || account === 'UNPINNED') {
+      account = 'UNPINNED';
+    }
+    const modelId = chosenCandidate.modelId || parsedKey.modelId;
+    reservationId = `${profile.taskId}::${result.chosen}`;
+
+    launchRequest = {
+      candidateKey: result.chosen,
+      harness,
+      accessPath,
+      gateway,
+      upstream,
+      account,
+      modelId,
+      reservationId,
+    };
+
+    quotaStore.recordReservation(profile.taskId, profile.role, account, result.chosen, 100000, {
+      home: d.home,
+      path: d.storePath,
+      now,
+    });
     reserved = true;
     log('Reserved rank 1 (quota-store): ' + result.chosen);
   }
 
   const pinned = result.chosen;
   log((execute ? 'Pinned for execution: ' : 'Pinned (dry run, no reservation): ') + pinned);
+
+  if (execute && (args.launch === true || args.launch)) {
+    const launcher = d.launcher || args.launcher || defaultLauncher;
+    const origGw = launchRequest.gateway;
+    const origUp = launchRequest.upstream;
+    const origAcc = launchRequest.account;
+    const origModel = launchRequest.modelId;
+
+    let launchResult = null;
+    let launchFailed = false;
+    let launchError = null;
+
+    try {
+      launchResult = await launcher(launchRequest);
+      if (
+        launchResult &&
+        (launchResult.status === 'failed' ||
+          launchResult.status === 'error' ||
+          launchResult.failed === true ||
+          (typeof launchResult.exitCode === 'number' && launchResult.exitCode !== 0))
+      ) {
+        launchFailed = true;
+      }
+    } catch (err) {
+      launchFailed = true;
+      launchError = err;
+    }
+
+    if (
+      launchRequest.gateway !== origGw ||
+      launchRequest.upstream !== origUp ||
+      launchRequest.account !== origAcc ||
+      launchRequest.modelId !== origModel
+    ) {
+      throw new Error(
+        'LAUNCHER_MUTATION_FORBIDDEN: launcher must not alter gateway/upstream/account/model'
+      );
+    }
+
+    if (launchFailed) {
+      quotaStore.releaseReservation(profile.taskId, launchRequest.candidateKey, {
+        home: d.home,
+        path: d.storePath,
+        now,
+      });
+
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.FAILED,
+          workItemId: profile.taskId,
+          role: profile.role,
+          chosen: launchRequest.candidateKey,
+          reservationId: launchRequest.reservationId,
+          launchRequest,
+          outcome: launchResult || {
+            status: 'failed',
+            error: (launchError && launchError.message) || String(launchError),
+          },
+          detail: 'LAUNCH_FAILED',
+        },
+        { dir: args['decision-dir'] || d.decisionDir, now }
+      );
+
+      log('Launch FAILED for ' + launchRequest.candidateKey);
+      exit(1);
+      return {
+        exitCode: 1,
+        profile,
+        assessment,
+        ranking: result.ranking,
+        top3: result.top3,
+        rejected: result.rejected,
+        pinnedCandidateKey: pinned,
+        reserved: false,
+        reservationId,
+        launchRequest,
+        launchResult,
+        launchError,
+      };
+    }
+
+    decisions.recordDecision(
+      {
+        stage: decisions.Stage.COMPLETED,
+        workItemId: profile.taskId,
+        role: profile.role,
+        chosen: launchRequest.candidateKey,
+        reservationId: launchRequest.reservationId,
+        launchRequest,
+        outcome: launchResult || { status: 'completed' },
+        detail: 'LAUNCH_SUCCESS',
+      },
+      { dir: args['decision-dir'] || d.decisionDir, now }
+    );
+
+    log('Launch SUCCESS for ' + launchRequest.candidateKey);
+  }
 
   if (args.json) {
     log(
@@ -1061,6 +1400,7 @@ async function runProfileDispatch(args, deps) {
           rejected: jsonRejectedSlice(result, profile),
           rejectedCount: result.rejected.length,
           pinned,
+          launchRequest,
         },
         null,
         2
@@ -1082,7 +1422,37 @@ async function runProfileDispatch(args, deps) {
     rejected: result.rejected,
     pinnedCandidateKey: pinned,
     reserved,
+    reservationId,
+    launchRequest,
   };
+}
+
+async function defaultLauncher(request) {
+  const { getHarness } = require('./harness');
+  const adapter = getHarness(request.harness);
+  if (!adapter) {
+    throw new Error('UNKNOWN_HARNESS: ' + request.harness);
+  }
+  const job = {
+    candidateKey: request.candidateKey,
+    harness: request.harness,
+    accessPath: request.accessPath,
+    gateway: request.gateway,
+    upstream: request.upstream,
+    account: request.account,
+    accountId: request.account,
+    modelId: request.modelId,
+    model: request.modelId,
+    reservationId: request.reservationId,
+  };
+  const launchArgs = adapter.launch(job);
+  if (launchArgs && !Array.isArray(launchArgs) && (launchArgs.refusal || launchArgs.error)) {
+    return {
+      status: 'failed',
+      reason: launchArgs.reason || launchArgs.refusal || launchArgs.error,
+    };
+  }
+  return { status: 'completed', launchArgs };
 }
 
 module.exports = {
@@ -1101,6 +1471,7 @@ module.exports = {
   controllerFallbackProfile,
   assessTask,
   claudeFamilyExclusion,
+  canonicalFailureDomain,
   failureDomainOf,
   matchesForbiddenDomain,
   proofObserved,
