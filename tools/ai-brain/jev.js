@@ -1,5 +1,11 @@
 'use strict';
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const http = require('http');
+const https = require('https');
+
 const Outcome = Object.freeze({
   DECIDED: 'DECIDED',
   UNDECIDED: 'UNDECIDED',
@@ -15,6 +21,155 @@ function undecided(reason) {
     reason,
   };
 }
+
+function resolveStorePath(store, options) {
+  if (!store || typeof store !== 'string') return null;
+  const home = (options && options.home) || os.homedir();
+  if (store.startsWith('~/')) return path.join(home, store.slice(2));
+  if (store.startsWith('~\\')) return path.join(home, store.slice(2));
+  return store;
+}
+
+function readCredential(source, options) {
+  const cred = (source && source.credential) || {};
+  const env = (options && options.env) || process.env;
+  if (cred.env && env[cred.env] !== undefined && String(env[cred.env]).trim() !== '') {
+    return { present: true, value: String(env[cred.env]).trim(), how: 'env ' + cred.env };
+  }
+  const storePath = resolveStorePath(cred.store, options);
+  if (storePath) {
+    try {
+      const value = fs.readFileSync(storePath, 'utf8').trim();
+      if (value) return { present: true, value, how: 'store ' + cred.store };
+    } catch {}
+  }
+  return {
+    present: false,
+    value: null,
+    how: cred.env ? 'env ' + cred.env + ' unset' : 'credential missing',
+  };
+}
+
+function postJson(url, body, headers, options) {
+  const client = options && options.httpClient;
+  if (typeof client === 'function') return client(url, body, headers);
+
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const payload = JSON.stringify(body);
+    const transport = parsed.protocol === 'http:' ? http : https;
+    const req = transport.request(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        method: 'POST',
+        timeout: (options && options.timeoutMs) || 30000,
+        headers: Object.assign(
+          {
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(payload),
+          },
+          headers || {}
+        ),
+      },
+      (res) => {
+        let text = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          text += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error('JEV_HTTP_' + res.statusCode));
+            return;
+          }
+          try {
+            resolve(JSON.parse(text));
+          } catch (err) {
+            reject(err);
+          }
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('JEV_TIMEOUT')));
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+function normalizeAdvice(raw) {
+  if (!raw || typeof raw !== 'object') return raw;
+  if (raw.choice !== undefined || raw.confidence !== undefined) return raw;
+  const answer = raw.answer || raw.decision || raw.result || raw.data || null;
+  if (answer && typeof answer === 'object') {
+    return {
+      choice:
+        answer.choice !== undefined
+          ? answer.choice
+          : answer.option !== undefined
+            ? answer.option
+            : answer.value,
+      confidence: answer.confidence,
+      reason: answer.reason || answer.rationale || raw.reason || null,
+    };
+  }
+  return raw;
+}
+
+function advisoryNamesIdentity(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  const prohibited = [
+    'model',
+    'modelId',
+    'provider',
+    'account',
+    'accountId',
+    'gateway',
+    'upstream',
+    'candidate',
+    'candidateKey',
+  ];
+  return prohibited.some((field) => raw[field] !== undefined && raw[field] !== null);
+}
+
+function buildJevAsk(source, options) {
+  if (!source || source.kind !== 'decision-service') return null;
+  const env = (options && options.env) || process.env;
+  const endpoint = (env && env.JEV_ENDPOINT) || source.endpoint;
+  if (!endpoint) return null;
+  if (source.mayWriteCode === true) return null;
+  const credential = readCredential(source, options);
+  if (!credential.present) {
+    return async () => {
+      throw new Error('JEV_CREDENTIAL_MISSING');
+    };
+  }
+  return async (question) => {
+    const raw = await postJson(
+      endpoint,
+      {
+        kind: question.kind,
+        prompt: question.prompt,
+        evidence: question.evidence,
+        options: question.options,
+      },
+      { authorization: 'Bearer ' + credential.value },
+      options
+    );
+    return normalizeAdvice(raw);
+  };
+}
+
+const buildAskFromSource = buildJevAsk;
 
 function validateClosedQuestion(question) {
   const q = question || {};
@@ -50,10 +205,11 @@ async function advise(question, options) {
       options: question.options.slice(),
     });
   } catch (err) {
-    return undecided('UNREACHABLE');
+    return undecided(err && err.message === 'JEV_TIMEOUT' ? 'TIMEOUT' : 'UNREACHABLE');
   }
 
   if (!raw || typeof raw !== 'object') return undecided('MALFORMED_OUTPUT');
+  if (advisoryNamesIdentity(raw)) return undecided('IDENTITY_PROHIBITED');
   const choice = raw.choice === undefined ? null : String(raw.choice);
   const confidence = Number(raw.confidence);
   if (!question.options.includes(choice)) return undecided('MALFORMED_OUTPUT');
@@ -110,6 +266,9 @@ function transcriptQuestion(transcript, states) {
 module.exports = {
   Outcome,
   DEFAULT_MIN_CONFIDENCE,
+  readCredential,
+  buildJevAsk,
+  buildAskFromSource,
   advise,
   adviseOrReason,
   roleQuestion,

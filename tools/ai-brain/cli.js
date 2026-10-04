@@ -29,7 +29,6 @@
  */
 
 const path = require('path');
-const { loadRegister } = require('../ai-dashboard/register-adapter');
 const { reconcileRegister, planReconciliation, applyStatusMutations } = require('./reconcile');
 const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
@@ -86,6 +85,36 @@ const PROTECTED_WORKTREE = 'shipde-platform';
 const REFUSAL_PROTECTED =
   'Write-back refused: running in protected main worktree/branch. ' +
   'Mutations require a dedicated feature worktree and branch.';
+
+function loadRegister(filePath, preferredBranch, rootDir) {
+  try {
+    return require('../ai-dashboard/register-adapter').loadRegister(
+      filePath,
+      preferredBranch,
+      rootDir
+    );
+  } catch (err) {
+    if (
+      err &&
+      err.code === 'MODULE_NOT_FOUND' &&
+      String(err.message || '').includes('../ai-dashboard/register-adapter')
+    ) {
+      return {
+        health: {
+          name: 'register',
+          status: 'unavailable',
+          observedAt: new Date().toISOString(),
+          latencyMs: 0,
+          provenance: filePath,
+          impact: 'Register adapter is unavailable in this copied tool surface',
+          error: err.message,
+        },
+        data: { items: [] },
+      };
+    }
+    throw err;
+  }
+}
 
 function pick(args, kebab, camel) {
   return args[kebab] === undefined ? args[camel] : args[kebab];
@@ -779,6 +808,24 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   }
 
   return assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
+    ...candidatesApi.generateCandidates({
+      registry: resolvedRegistry,
+      accounts: accounts || [],
+      openCodeIds: (accounts || []).flatMap((account) =>
+        ((account && account.models) || [])
+          .map((model) => (typeof model === 'string' ? model : model && model.model))
+          .filter(Boolean)
+      ),
+      catalogue: ((discoveryCat && discoveryCat.candidates) || [])
+        .map((row) => row && (row.modelId || row.model))
+        .filter(Boolean),
+      evidenceData: opts.evidenceData,
+      fakeRunsDir: opts.fakeRunsDir,
+      home: opts.home,
+      discoverPool: opts.discoverPool !== false,
+      adapterScript: opts.adapterScript,
+      platform: opts.platform,
+    }),
     ...candidatesApi.gatewayAccountCandidates({
       registry: resolvedRegistry,
       accounts: accounts || [],
@@ -1081,6 +1128,7 @@ function buildDryRunLog(parts) {
 function dispatchProfileCommand(args, deps) {
   const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
   const sourcesApi = require('./sources');
+  const jev = require('./jev');
   const { listAccounts } = require('./accounts');
   const { readDiscoveryCatalogue } = require('./discovery/read');
 
@@ -1111,24 +1159,47 @@ function dispatchProfileCommand(args, deps) {
     evidenceData,
     discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
     fakeRunsDir:
-      (deps && deps.fakeRunsDir) || args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined,
+      (deps && deps.fakeRunsDir) ||
+      args['pool-runtime-dir'] ||
+      args['agy-runs-dir'] ||
+      process.env.AGY_POOL_RUNS_DIR ||
+      process.env.AGY_RUNS_DIR ||
+      undefined,
+    discoverPool:
+      (deps && deps.discoverPool === true) ||
+      Boolean(
+        args['pool-runtime-dir'] ||
+        args['agy-runs-dir'] ||
+        process.env.AGY_POOL_RUNS_DIR ||
+        process.env.AGY_RUNS_DIR
+      ),
     home: (deps && deps.home) || args.home || undefined,
-    adapterScript: (deps && deps.adapterScript) || undefined,
+    adapterScript: (deps && deps.adapterScript) || process.env.AGY_POOL_ADAPTER_SCRIPT || undefined,
     platform: (deps && deps.platform) || undefined,
   });
 
-  const candidateList = assembleForDispatch(
-    discCat,
-    accounts,
-    sourcesApi.loadSources(),
-    optsWithEvidence
-  );
+  const registry = (deps && deps.registry) || sourcesApi.loadSources();
+  const candidateList = assembleForDispatch(discCat, accounts, registry, optsWithEvidence);
+  const jevSource = sourcesApi.getSource('jev', registry);
+  const jevAsk =
+    (deps && deps.ask) ||
+    (deps && deps.jevAsk) ||
+    jev.buildAskFromSource(jevSource, {
+      home: optsWithEvidence.home,
+      env: (deps && deps.env) || process.env,
+      httpClient: deps && deps.jevHttpClient,
+      timeoutMs: deps && deps.jevTimeoutMs,
+    });
 
   return require('./routing').runProfileDispatch(
     args,
     Object.assign({}, deps, {
       candidates: candidateList,
       rootDir,
+      ask: jevAsk,
+      minConfidence: jevSource && jevSource.minConfidence,
+      explorationBudget:
+        args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 0,
       home: optsWithEvidence.home,
       storePath: (deps && deps.storePath) || args['quota-store'] || undefined,
       fakeRunsDir: optsWithEvidence.fakeRunsDir,
@@ -2518,6 +2589,8 @@ function main() {
       specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
       candidates,
       registry,
+      home: typeof args.home === 'string' ? args.home : undefined,
+      enforceProofFloors: true,
       isolatedWorker: Boolean(args['isolated-worker']),
       decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
       checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,

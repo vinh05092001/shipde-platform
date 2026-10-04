@@ -100,6 +100,13 @@ function resolveBranch(branch, cwd) {
   return target;
 }
 
+function failureDomainFromCandidateKey(key) {
+  const parts = String(key || '').split('::');
+  if (parts.length !== 7) return null;
+  const domain = [parts[2], parts[3]].filter((p) => p && p !== '*');
+  return domain.length ? domain.join('/') : 'unknown';
+}
+
 /**
  * Q4: never run upload-pack or read configuration from the worker-writable tree. A worker that rewrites its own
  * git config could still try to trigger code execution via include.path, core.fsmonitor, or hooks if any host-side
@@ -192,7 +199,9 @@ function createDraftPullRequest(options) {
     'Draft opened by the Ship Dễ live loop at the reviewed commit ' +
       reviewedSha +
       '. Reviewer: ' +
-      (o.reviewer || 'unrecorded') +
+      (o.reviewer || o.reviewerCandidateKey || 'missing reviewer') +
+      '. Decision evidence: ' +
+      (o.decisionEvidence || 'not supplied') +
       '. This Pull Request is a proof artifact: the loop never merges it.';
 
   const existing = ghRun([
@@ -319,6 +328,22 @@ function publish(options) {
         ACCEPTED_VERDICTS.join(', ') +
         ')'
     );
+  }
+
+  const hasReviewerField = Object.prototype.hasOwnProperty.call(options, 'reviewerCandidateKey');
+  const hasArtifactField = Object.prototype.hasOwnProperty.call(options, 'reviewArtifact');
+  if (hasReviewerField && !options.reviewerCandidateKey) {
+    refuse('PUBLISH_REFUSED: missing reviewer candidate key');
+  }
+  if (hasArtifactField && (!options.reviewArtifact || !fs.existsSync(options.reviewArtifact))) {
+    refuse('PUBLISH_REFUSED: missing review artifact');
+  }
+  if (options.writerCandidateKey && options.reviewerCandidateKey) {
+    const writerDomain = failureDomainFromCandidateKey(options.writerCandidateKey);
+    const reviewerDomain = failureDomainFromCandidateKey(options.reviewerCandidateKey);
+    if (writerDomain && reviewerDomain && writerDomain === reviewerDomain) {
+      refuse('PUBLISH_REFUSED: reviewer shares writer failure domain ' + reviewerDomain);
+    }
   }
 
   // F12: Validation against approval record. The registry lives on the

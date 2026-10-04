@@ -328,15 +328,31 @@ function matchesForbiddenDomain(candidate, forbiddenFailureDomains) {
   return fields.some((f) => f !== undefined && f !== null && f !== '*' && domains.has(f));
 }
 
+function hasQuotaAccountReadings(home, storePath) {
+  try {
+    const file = quotaStore.storePath({ home, path: storePath });
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Boolean(parsed && parsed.accounts && Object.keys(parsed.accounts).length > 0);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The strongest proof level a candidate has *passed*. Failed evidence carries a
  * proofLevel too, and counting it would let a candidate that just failed pose
  * as proven, so only passed items are considered.
  */
 function proofObserved(evidenceData, candidate) {
-  const passed = (evidence.getEvidence(evidenceData, candidate) || []).filter(
-    (e) => e.status === 'passed'
-  );
+  let items = evidence.getEvidence(evidenceData, candidate) || [];
+  if (items.length === 0 && evidenceData && candidate) {
+    const keyed = evidenceData[candidateKey(candidate)];
+    if (Array.isArray(keyed)) items = keyed;
+  }
+  if (items.length === 0 && Array.isArray(candidate && candidate.evidence)) {
+    items = candidate.evidence;
+  }
+  const passed = (items || []).filter((e) => e.status === 'passed');
   return evidence.proofLevelOf(passed);
 }
 
@@ -412,7 +428,15 @@ function evidenceAgePenalty(candidate, now) {
 function scoreForProfile(candidate, assessment, ctx) {
   const parts = [];
   const latency = latencyScoreOf(candidate);
-  if (latency !== null) parts.push([assessment.weights.latency, latency]);
+  if (latency !== null) {
+    parts.push([assessment.weights.latency, latency]);
+  } else if (
+    assessment &&
+    assessment.weightProfile === 'LATENCY_FIRST' &&
+    assessment.weights.latency >= Math.max(assessment.weights.quality, assessment.weights.cost)
+  ) {
+    parts.push([assessment.weights.latency, 0]);
+  }
   const quality = qualityScoreOf(candidate);
   if (quality !== null) parts.push([assessment.weights.quality, quality]);
   const cost = costScoreOf(candidate);
@@ -462,6 +486,12 @@ function scoreForProfile(candidate, assessment, ctx) {
 function rankForProfile(candidates, profile, assessment, ctx) {
   const context = ctx || {};
   const now = context.now || Date.now();
+  const explorationBudget = Number.isFinite(Number(context.explorationBudget))
+    ? Number(context.explorationBudget)
+    : 0;
+  let quotaUnknownAdmitted = Number.isFinite(Number(context.priorUnknownQuota))
+    ? Number(context.priorUnknownQuota)
+    : 0;
   const ranked = [];
   const rejected = [];
 
@@ -568,6 +598,17 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       );
       continue;
     }
+    if (headroom.status === 'unknown') {
+      if (context.enforceKnownQuota === true && quotaUnknownAdmitted >= explorationBudget) {
+        reject('QUOTA_UNKNOWN_NO_EXPLORATION_BUDGET', 'quotaScope');
+        continue;
+      }
+      quotaUnknownAdmitted += 1;
+      c.quotaReasonCode =
+        context.enforceKnownQuota === true
+          ? 'QUOTA_UNKNOWN_EXPLORATION_BUDGET'
+          : 'QUOTA_UNKNOWN_DRY_RUN_INSPECTION';
+    }
 
     if (!context._scoreContext)
       context._scoreContext = Object.assign({}, context, { taskId: profile.taskId, now });
@@ -634,6 +675,32 @@ function formatTopEntry(entry, rank) {
     entry.score +
     (entry.reservationsHeld ? ' (busy: ' + entry.reservationsHeld + ' held)' : '')
   );
+}
+
+function jsonRejectedSlice(result, profile) {
+  const requiredHarness = profile && profile.requiredHarness;
+  const picked = [];
+  const seen = new Set();
+  const add = (item) => {
+    if (!item || seen.has(item.candidateKey)) return;
+    seen.add(item.candidateKey);
+    picked.push(item);
+  };
+
+  for (const r of result.rejected || []) {
+    if (
+      (requiredHarness && String(r.candidateKey || '').startsWith(requiredHarness + '::')) ||
+      r.reasonCode === 'QUOTA_EXHAUSTED' ||
+      r.reasonCode === 'COOLDOWN_ACTIVE'
+    ) {
+      add(r);
+    }
+  }
+  for (const r of result.rejected || []) {
+    if (picked.length >= REJECTED_RECORDED_LIMIT) break;
+    add(r);
+  }
+  return picked.slice(0, REJECTED_RECORDED_LIMIT);
 }
 
 function rankProofOf(entry) {
@@ -840,7 +907,10 @@ async function runProfileDispatch(args, deps) {
   }
   const profile = rawProfile;
 
-  const assessment = await assessTask(profile, { ask: d.ask });
+  const assessment = await assessTask(profile, {
+    ask: d.ask,
+    minConfidence: d.minConfidence,
+  });
 
   const evidenceDir =
     d.evidenceDir || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
@@ -862,6 +932,13 @@ async function runProfileDispatch(args, deps) {
     useStoredQuota: d.useStoredQuota !== false,
     home: d.home,
     storePath: d.storePath,
+    explorationBudget:
+      d.explorationBudget !== undefined
+        ? Number(d.explorationBudget)
+        : args['exploration-budget'] !== undefined
+          ? Number(args['exploration-budget'])
+          : 0,
+    enforceKnownQuota: args.execute === true && hasQuotaAccountReadings(d.home, d.storePath),
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
 
@@ -881,8 +958,11 @@ async function runProfileDispatch(args, deps) {
       headroom: c.headroomStatus || 'unknown',
       failureDomain: failureDomainOf(c),
       reservationsHeld: c.reservationsHeld || 0,
+      quotaReasonCode: c.quotaReasonCode || null,
+      proof: proofObserved(evidenceData, c) || 'NONE',
+      capabilityEvidence: c.capabilities || {},
     })),
-    rejected: result.rejected.slice(0, REJECTED_RECORDED_LIMIT),
+    rejected: jsonRejectedSlice(result, profile),
     rejectedCount: result.rejected.length,
     chosen: result.chosen,
     reason: result.reason,
@@ -915,6 +995,23 @@ async function runProfileDispatch(args, deps) {
       byCode.set(r.reasonCode, (byCode.get(r.reasonCode) || 0) + 1);
     }
     for (const [code, count] of byCode) log('  EXCLUDED ' + count + 'x ' + code);
+    if (args.json) {
+      log(
+        JSON.stringify(
+          {
+            profile,
+            assessment,
+            top3: result.top3,
+            rejected: jsonRejectedSlice(result, profile),
+            rejectedCount: result.rejected.length,
+            refused: result.refused,
+            pinned: null,
+          },
+          null,
+          2
+        )
+      );
+    }
     exit(1);
     return {
       exitCode: 1,
@@ -950,7 +1047,14 @@ async function runProfileDispatch(args, deps) {
   if (args.json) {
     log(
       JSON.stringify(
-        { profile, assessment, top3: result.top3, rejected: result.rejected, pinned },
+        {
+          profile,
+          assessment,
+          top3: result.top3,
+          rejected: jsonRejectedSlice(result, profile),
+          rejectedCount: result.rejected.length,
+          pinned,
+        },
         null,
         2
       )

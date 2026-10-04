@@ -1,0 +1,1 @@
+{"ts":"2026-10-04T00:00:00.000Z","source":"Aurora Compute","harness":"paseo","accessPath":"cli","gateway":"aurora","upstream":"aurora","account":"aurora-main","quotaScope":"aurora-main","modelId":"aurora/aurora-coder-xl","proofLevel":"WORK_ITEM_PASS","evidence":"probe WORK_ITEM_PASS","latencyMs":600,"quality":92,"status":"CURRENT_AVAILABLE"}

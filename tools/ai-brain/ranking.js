@@ -185,6 +185,7 @@ function resolveCandidateHeadroom(candidate, ctx) {
         const idRes = readIdentity({ home: ctx && ctx.home });
         reported = quotaStore.usableReadings(idRes, {
           home: ctx && ctx.home,
+          path: ctx && (ctx.storePath || ctx.quotaFile),
           now: (ctx && ctx.now) || Date.now(),
         }).reported;
       } catch {}
@@ -430,6 +431,7 @@ function rankAndRecord(candidates, context) {
       const idRes = readIdentity({ home: ctx.home });
       ctx.reported = quotaStore.usableReadings(idRes, {
         home: ctx.home,
+        path: ctx.storePath || ctx.quotaFile,
         now: ctx.now || Date.now(),
       }).reported;
     } catch {

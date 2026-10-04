@@ -112,6 +112,22 @@ function plan(goal, opts) {
         allowedPaths: (spec.allowedPaths || spec.files || []).slice(),
         fileOwnership: (spec.files || []).slice(),
         acceptanceCriteria: (spec.acceptanceCriteria || []).slice(),
+        complexity: spec.complexity || 'standard',
+        proofFloor: spec.proofFloor || null,
+        contextSize: spec.contextSize || null,
+        expectedDuration: spec.expectedDuration || spec.expectedDurationMs || null,
+        latencyPriority: spec.latencyPriority || null,
+        qualityFloor: spec.qualityFloor || null,
+        costCeiling: spec.costCeiling || null,
+        resourceCeiling: spec.resourceCeiling || null,
+        currentWorkload: spec.currentWorkload || null,
+        exploration: spec.exploration === true,
+        requiredCapabilities: Array.isArray(spec.requiredCapabilities)
+          ? spec.requiredCapabilities.slice()
+          : null,
+        forbiddenFailureDomains: Array.isArray(spec.forbiddenFailureDomains)
+          ? spec.forbiddenFailureDomains.slice()
+          : null,
         // AI-64-R06: a plan states the command that proves the item and the
         // result it must produce. There is no default here: a work item with no
         // verification command is not dispatchable, and assuming `node --test`

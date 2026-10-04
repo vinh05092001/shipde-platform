@@ -81,13 +81,20 @@ function accessPathOf(source, registry) {
 
 /** Accounts bound to a source id. */
 function accountsFor(accounts, sourceId) {
-  return (accounts || []).filter((a) => a.sourceId === sourceId || a.source === sourceId);
+  return (accounts || []).filter(
+    (a) => a.sourceId === sourceId || a.source === sourceId || a.provider === sourceId
+  );
 }
 
 /** Model names an account declares, normalised to strings. */
 function accountModels(account) {
   const declared = (account && account.models) || [];
   return declared.map((m) => (typeof m === 'string' ? m : m && m.model)).filter(Boolean);
+}
+
+function accountModelRow(account, model) {
+  const declared = (account && account.models) || [];
+  return declared.find((m) => m && typeof m === 'object' && m.model === model) || null;
 }
 
 /**
@@ -205,6 +212,38 @@ function generateCandidates(opts) {
             }
           }
         }
+      } else {
+        const route =
+          registry.dispatch &&
+          registry.dispatch.providers &&
+          registry.dispatch.providers[String(source.id).toLowerCase()];
+        const harness = (route && route.harness) || source.harness || null;
+        const accessPath =
+          (route && route.accessPath) || source.accessPath || source.endpoint || null;
+        if (!harness || !accessPath) continue;
+        for (const acc of bound) {
+          const models = accountModels(acc).filter(
+            (model) => catalogue.length === 0 || catalogue.includes(model)
+          );
+          for (const model of models) {
+            const row = accountModelRow(acc, model) || {};
+            candidates.push({
+              harness,
+              accessPath,
+              gateway: source.id,
+              upstream: source.id,
+              accountId: acc.id,
+              quotaScope: acc.id,
+              modelId: model,
+              source: source.id,
+              kind: source.kind,
+              capabilities: acc.capabilities || {},
+              quality: row.quality,
+              cost: acc.cost,
+              sharedQuota: 'unknown',
+            });
+          }
+        }
       }
     }
 
@@ -234,6 +273,7 @@ function generateCandidates(opts) {
             });
           } else {
             for (const acc of bound) {
+              const row = accountModelRow(acc, ocId) || {};
               candidates.push({
                 harness,
                 accessPath,
@@ -244,6 +284,10 @@ function generateCandidates(opts) {
                 modelId: ocId,
                 source: source.id,
                 kind: source.kind,
+                capabilities: acc.capabilities || {},
+                quality: row.quality,
+                latencyMs: row.latencyMs,
+                cost: acc.cost,
                 sharedQuota: 'unknown',
               });
             }
@@ -271,6 +315,7 @@ function generateCandidates(opts) {
               });
             } else {
               for (const acc of bound) {
+                const row = accountModelRow(acc, prefixed) || accountModelRow(acc, fullId) || {};
                 candidates.push({
                   harness,
                   accessPath,
@@ -281,6 +326,10 @@ function generateCandidates(opts) {
                   modelId: prefixed,
                   source: source.id,
                   kind: source.kind,
+                  capabilities: acc.capabilities || {},
+                  quality: row.quality,
+                  latencyMs: row.latencyMs,
+                  cost: acc.cost,
                   sharedQuota: 'unknown',
                 });
               }
@@ -367,11 +416,13 @@ function poolAccountCandidates(opts) {
   const pool = require('./agy-pool-runtime');
   const discoveredAccounts = new Set();
   const shouldDiscoverPool =
-    o.discoverPool === true ||
-    o.fakeRunsDir ||
-    o.runsDir ||
-    process.env.AGY_POOL_RUNS_DIR ||
-    process.env.AGY_RUNS_DIR;
+    o.discoverPool === false
+      ? false
+      : o.discoverPool === true ||
+        o.fakeRunsDir ||
+        o.runsDir ||
+        process.env.AGY_POOL_RUNS_DIR ||
+        process.env.AGY_RUNS_DIR;
   if (shouldDiscoverPool) {
     for (const accountId of pool.discoverAccounts(o)) discoveredAccounts.add(accountId);
     for (const modelId of pool.modelIdsFromRuntime(o)) poolModels.add(modelId);

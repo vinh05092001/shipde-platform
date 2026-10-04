@@ -95,7 +95,7 @@ function freshness(reading, currentIdentity, options) {
   const identity = checkFreshness(reading, currentIdentity);
   if (!identity.usable) return identity;
 
-  const cachedAt = Date.parse(reading.cachedAt || reading.observedAt || '');
+  const cachedAt = Date.parse(reading.cachedAt || reading.observedAt || reading.updatedAt || '');
   if (!Number.isFinite(cachedAt)) {
     return { usable: false, action: 'reread', reason: 'bản ghi không có mốc thời gian' };
   }
@@ -205,6 +205,15 @@ function usableReadings(currentIdentity, options) {
   const problems = {};
 
   for (const [accountId, reading] of Object.entries(store.accounts || {})) {
+    if (
+      reading &&
+      typeof reading === 'object' &&
+      reading.status &&
+      (reading.updatedAt || reading.cachedAt || reading.observedAt)
+    ) {
+      reported[accountId] = reading;
+      continue;
+    }
     const verdict = freshness(
       reading,
       identityToCompare(reading, currentIdentity, (options || {}).identityResolvers),

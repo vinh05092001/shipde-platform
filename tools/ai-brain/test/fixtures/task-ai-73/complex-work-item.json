@@ -1,0 +1,19 @@
+{
+  "id": "TASK-AI-73",
+  "featureId": "FEAT-SELECTION-EVIDENCE",
+  "title": "Live JEV and evidence-based candidate selection",
+  "roleRequirement": {
+    "role": "writer",
+    "capabilities": ["tools", "workspace-edit"]
+  },
+  "complexity": "complex",
+  "qualityFloor": 80,
+  "costCeiling": 5000,
+  "contextSize": 128000,
+  "expectedDuration": 600000,
+  "latencyPriority": "normal",
+  "resourceCeiling": 4,
+  "currentWorkload": 1,
+  "proofFloor": "WORK_ITEM_PASS",
+  "exploration": false
+}
