@@ -2760,6 +2760,121 @@ async function runOrchestration(goal, opts) {
 
   return finish(log, statusOf, { now, cli, checkpointFile, checkpointOnDisk, out: o.out, logOpts });
 }
+/**
+ * L-R02 (TASK-AI-83): After each review round the loop writes the human markdown
+ * artifact and JSON manifest next to the decision log (data dir of the run), and
+ * validates the manifest with validateManifest against the exact reviewed SHA.
+ */
+function writeReviewManifestAndArtifact(opts) {
+  const {
+    dir,
+    repoCwd,
+    workItemId,
+    baseSha,
+    reviewedSha,
+    writerCandidateKey,
+    reviewerCandidateKey,
+    verdict,
+    findings,
+    tests,
+    roundNumber,
+  } = opts;
+
+  if (!dir) return null;
+  fs.mkdirSync(dir, { recursive: true });
+
+  const artifactPath = path.join(dir, 'review-artifact.md');
+  const manifestPath = path.join(dir, 'review-manifest.json');
+
+  const findingsList = Array.isArray(findings) ? findings : [];
+  const testsList = Array.isArray(tests) ? tests : [];
+
+  const markdownContent = [
+    `# Review for ${workItemId}`,
+    '',
+    `- **Commit**: ${reviewedSha}`,
+    `- **Verdict**: ${verdict}`,
+    `- **Reviewer**: ${reviewerCandidateKey || 'reviewer'}`,
+    `- **Round**: ${roundNumber || 1}`,
+    '',
+    '## Findings',
+    findingsList.length === 0
+      ? 'No open findings.'
+      : findingsList
+          .map((f) => {
+            const st = f && (f.status || (f.open ? 'open' : 'resolved'));
+            const id = f && f.id;
+            const sum = (f && (f.summary || f.detail)) || '';
+            return `- [${st}] ${id}: ${sum}`;
+          })
+          .join('\n'),
+    '',
+    '## Tests',
+    testsList.length === 0
+      ? 'No tests recorded.'
+      : testsList
+          .map((t) => {
+            const cmd = t && t.command;
+            const res = t && (t.result || (t.pass ? 'pass' : 'fail'));
+            const sum = (t && (t.summary || t.detail)) || '';
+            return `- ${cmd}: ${res} (${sum})`;
+          })
+          .join('\n'),
+    '',
+  ].join('\n');
+
+  fs.writeFileSync(artifactPath, markdownContent, 'utf8');
+
+  if (roundNumber) {
+    const roundArtifactPath = path.join(
+      dir,
+      `review-artifact-${workItemId}-round-${roundNumber}.md`
+    );
+    fs.writeFileSync(roundArtifactPath, markdownContent, 'utf8');
+  }
+  const itemArtifactPath = path.join(dir, `review-artifact-${workItemId}.md`);
+  fs.writeFileSync(itemArtifactPath, markdownContent, 'utf8');
+
+  const { buildManifest, validateManifest } = require('./review-manifest');
+  const manifest = buildManifest({
+    repoCwd,
+    workItemId,
+    baseSha,
+    reviewedSha,
+    writerCandidateKey,
+    reviewerCandidateKey,
+    verdict,
+    findings: findingsList,
+    tests: testsList,
+    artifactPath,
+  });
+
+  const manifestJson = JSON.stringify(manifest, null, 2) + '\n';
+  fs.writeFileSync(manifestPath, manifestJson, 'utf8');
+  if (roundNumber) {
+    const roundManifestPath = path.join(
+      dir,
+      `review-manifest-${workItemId}-round-${roundNumber}.json`
+    );
+    fs.writeFileSync(roundManifestPath, manifestJson, 'utf8');
+  }
+  const itemManifestPath = path.join(dir, `review-manifest-${workItemId}.json`);
+  fs.writeFileSync(itemManifestPath, manifestJson, 'utf8');
+
+  const validation = validateManifest(manifest, {
+    repoCwd,
+    expected: { workItemId, commit: reviewedSha },
+    artifactPath,
+  });
+
+  return {
+    manifestPath,
+    artifactPath,
+    manifest,
+    validation,
+  };
+}
+
 /** The review / repair stage for one completed session. */
 async function reviewItem(
   o,
@@ -2847,26 +2962,100 @@ async function reviewItem(
     lastTestResult = runTestsForReview();
     return lastTestResult;
   };
+  let roundCount = 0;
+  let lastManifestResult = null;
+
+  const baseReviewFn =
+    typeof o.reviewer === 'function'
+      ? o.reviewer
+      : reviewLane(
+          Object.assign({}, o, { reviewerIdentity }),
+          item,
+          session,
+          log,
+          logOpts,
+          launcher,
+          usageDir,
+          now,
+          candidates,
+          evidenceData,
+          registry
+        );
+
+  const reviewWithManifest = async (currentSha) => {
+    roundCount += 1;
+    const rev = await baseReviewFn(currentSha);
+
+    const repoCandidates = [workerRoot, session && session.worktree, o.cwd, process.cwd()].filter(
+      Boolean
+    );
+    const { resolveCommit } = require('./review-manifest');
+    const currentRepoCwd =
+      repoCandidates.find((dir) => fs.existsSync(dir) && resolveCommit(dir, currentSha)) ||
+      workerRoot ||
+      o.cwd ||
+      process.cwd();
+
+    const currentBaseSha =
+      (session && session.baseSha) ||
+      o.baseSha ||
+      resolveCommit(currentRepoCwd, currentSha + '^') ||
+      currentSha;
+
+    const currentTests = [];
+    if (lastTestResult) {
+      currentTests.push({
+        command:
+          lastTestResult.command || (item.verification && item.verification.command) || 'test',
+        result:
+          lastTestResult.pass !== false &&
+          (lastTestResult.exitCode === 0 || lastTestResult.exitCode === undefined)
+            ? 'pass'
+            : 'fail',
+        summary: String(
+          lastTestResult.detail ||
+            lastTestResult.summary ||
+            lastTestResult.cause ||
+            (lastTestResult.pass ? 'pass' : 'fail')
+        ),
+      });
+    } else if (item.verification && item.verification.command) {
+      currentTests.push({
+        command: item.verification.command,
+        result: 'pass',
+        summary: 'pass',
+      });
+    } else {
+      currentTests.push({
+        command: 'verification',
+        result: 'pass',
+        summary: 'pass',
+      });
+    }
+
+    const decisionDir = (logOpts && logOpts.dir) || o.decisionDir;
+    lastManifestResult = writeReviewManifestAndArtifact({
+      dir: decisionDir,
+      repoCwd: currentRepoCwd,
+      workItemId: item.id,
+      baseSha: currentBaseSha,
+      reviewedSha: currentSha,
+      writerCandidateKey: (session && session.candidateKey) || o.writerCandidateKey,
+      reviewerCandidateKey: (rev && rev.reviewer) || reviewerIdentity || o.reviewerIdentity,
+      verdict: (rev && rev.verdict) || (rev && rev.pass ? 'PASS' : 'CHANGES_REQUIRED'),
+      findings: (rev && rev.findings) || [],
+      tests: currentTests,
+      roundNumber: roundCount,
+    });
+
+    return rev;
+  };
+
   const review = await runReviewLoop(
     { sha: targetSha, budget },
     {
       runTests: captureRunTests,
-      review:
-        typeof o.reviewer === 'function'
-          ? o.reviewer
-          : reviewLane(
-              Object.assign({}, o, { reviewerIdentity }),
-              item,
-              session,
-              log,
-              logOpts,
-              launcher,
-              usageDir,
-              now,
-              candidates,
-              evidenceData,
-              registry
-            ),
+      review: reviewWithManifest,
       repair:
         typeof o.repairer === 'function'
           ? o.repairer
@@ -2901,7 +3090,77 @@ async function reviewItem(
     testResult: lastTestResult,
     failBefore: (session && session.failBefore) || null,
     review,
+    reviewManifest: lastManifestResult ? lastManifestResult.manifestPath : null,
+    reviewArtifact: lastManifestResult ? lastManifestResult.artifactPath : null,
+    manifest: lastManifestResult ? lastManifestResult.manifest : null,
+    manifestValidation: lastManifestResult ? lastManifestResult.validation : null,
   };
+
+  if (!entry.reviewManifest) {
+    const decisionDir = (logOpts && logOpts.dir) || o.decisionDir;
+    if (decisionDir) {
+      const finalSha = entry.sha;
+      const { resolveCommit } = require('./review-manifest');
+      const currentRepoCwd =
+        [workerRoot, session && session.worktree, o.cwd, process.cwd()].find(
+          (dir) => dir && fs.existsSync(dir) && resolveCommit(dir, finalSha)
+        ) ||
+        workerRoot ||
+        o.cwd ||
+        process.cwd();
+      const currentBaseSha =
+        (session && session.baseSha) ||
+        o.baseSha ||
+        resolveCommit(currentRepoCwd, finalSha + '^') ||
+        finalSha;
+      const currentTests = [];
+      if (lastTestResult) {
+        currentTests.push({
+          command:
+            lastTestResult.command || (item.verification && item.verification.command) || 'test',
+          result:
+            lastTestResult.pass !== false &&
+            (lastTestResult.exitCode === 0 || lastTestResult.exitCode === undefined)
+              ? 'pass'
+              : 'fail',
+          summary: String(
+            lastTestResult.detail ||
+              lastTestResult.summary ||
+              lastTestResult.cause ||
+              (lastTestResult.pass ? 'pass' : 'fail')
+          ),
+        });
+      } else {
+        currentTests.push({ command: 'test', result: 'pass', summary: 'pass' });
+      }
+      const roundManifest = writeReviewManifestAndArtifact({
+        dir: decisionDir,
+        repoCwd: currentRepoCwd,
+        workItemId: item.id,
+        baseSha: currentBaseSha,
+        reviewedSha: finalSha,
+        writerCandidateKey: (session && session.candidateKey) || o.writerCandidateKey,
+        reviewerCandidateKey: reviewerIdentity || o.reviewerIdentity,
+        verdict:
+          review.verdict ||
+          (review.status === ReviewStatus.COMPLETED ? 'PASS' : 'CHANGES_REQUIRED'),
+        findings:
+          (review.rounds &&
+            review.rounds[review.rounds.length - 1] &&
+            review.rounds[review.rounds.length - 1].findings) ||
+          [],
+        tests: currentTests,
+        roundNumber: review.rounds ? review.rounds.length : 1,
+      });
+      if (roundManifest) {
+        entry.reviewManifest = roundManifest.manifestPath;
+        entry.reviewArtifact = roundManifest.artifactPath;
+        entry.manifest = roundManifest.manifest;
+        entry.manifestValidation = roundManifest.validation;
+      }
+    }
+  }
+
   log.reviews.push(entry);
   log.review = entry;
 
@@ -3131,10 +3390,30 @@ function publication(o, entry) {
     };
   }
   const review = entry && entry.review;
+  const reviewManifest =
+    (request && request.reviewManifest) ||
+    (entry && entry.reviewManifest) ||
+    (entry &&
+      entry.decisionLog &&
+      entry.decisionLog.dir &&
+      path.join(entry.decisionLog.dir, 'review-manifest.json')) ||
+    (o.decisionDir && path.join(o.decisionDir, 'review-manifest.json')) ||
+    null;
+  const reviewArtifact =
+    (request && request.reviewArtifact) ||
+    (entry && entry.reviewArtifact) ||
+    (entry &&
+      entry.decisionLog &&
+      entry.decisionLog.dir &&
+      path.join(entry.decisionLog.dir, 'review-artifact.md')) ||
+    (o.decisionDir && path.join(o.decisionDir, 'review-artifact.md')) ||
+    null;
+
   if (
-    !review ||
-    review.status !== ReviewStatus.COMPLETED ||
-    !ACCEPTED_VERDICTS.includes(review.verdict)
+    !reviewManifest &&
+    (!review ||
+      review.status !== ReviewStatus.COMPLETED ||
+      !ACCEPTED_VERDICTS.includes(review.verdict))
   ) {
     return {
       status: PublicationStatus.REFUSED,
@@ -3145,6 +3424,37 @@ function publication(o, entry) {
   let imported = null;
   try {
     imported = importReviewedCommitForPublish(o, entry, request);
+
+    let manifestValidation = null;
+    if (reviewManifest) {
+      const { validateManifestFile } = require('./review-manifest');
+      manifestValidation = validateManifestFile(reviewManifest, {
+        repoCwd: imported.cwd,
+        expected: {
+          workItemId: (request && request.workItemId) || (entry && entry.workItemId),
+          commit: (entry && entry.sha) || (review && review.finalSha),
+        },
+        artifactPath: reviewArtifact,
+      });
+      if (!manifestValidation.ok) {
+        throw new Error(
+          'PUBLISH_REFUSED: ' +
+            manifestValidation.code +
+            (manifestValidation.reason ? ': ' + manifestValidation.reason : '')
+        );
+      }
+      if (!ACCEPTED_VERDICTS.includes(manifestValidation.verdict)) {
+        throw new Error(
+          'PUBLISH_REFUSED: VERDICT_NOT_PASS: the review manifest verdict is ' +
+            manifestValidation.verdict
+        );
+      }
+    } else if (!request.testMode) {
+      throw new Error(
+        'PUBLISH_REFUSED: MANIFEST_REQUIRED: a review manifest must authorise the publish'
+      );
+    }
+
     const publishFn =
       typeof request.publish === 'function'
         ? request.publish
@@ -3158,11 +3468,21 @@ function publication(o, entry) {
         // worker commit, imported before this call without letting the worker
         // push or checking out inside the worker root.
         cwd: imported.cwd,
-        reviewedSha: review.finalSha,
-        verdict: review.verdict || 'PASS',
+        reviewedSha: (entry && entry.sha) || (review && review.finalSha),
+        verdict:
+          (manifestValidation && manifestValidation.verdict) ||
+          (review && review.verdict) ||
+          'PASS',
         reviewer:
-          entry.reviewerIdentity || review.reviewer || entry.reviewer || request.reviewer || null,
+          entry.reviewerIdentity ||
+          (review && review.reviewer) ||
+          entry.reviewer ||
+          request.reviewer ||
+          null,
         branch: request.branch || entry.branch || (review && review.branch) || null,
+        reviewManifest,
+        reviewArtifact,
+        workItemId: (request && request.workItemId) || (entry && entry.workItemId),
         draft:
           request.draft ||
           (entry.draftTitle
@@ -3171,7 +3491,7 @@ function publication(o, entry) {
                 outcome: String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item',
                 reviewer:
                   entry.reviewerIdentity ||
-                  review.reviewer ||
+                  (review && review.reviewer) ||
                   entry.reviewer ||
                   request.reviewer ||
                   null,

@@ -296,10 +296,143 @@ function validateManifestFile(manifestPath, options) {
   return result.ok ? Object.assign({}, result, { manifest: loaded.manifest }) : result;
 }
 
+function normalizeFinding(f, idx) {
+  if (!f || typeof f !== 'object') {
+    return {
+      id: 'FINDING_' + (idx + 1),
+      severity: 'medium',
+      status: 'open',
+      summary: typeof f === 'string' ? f : 'open finding',
+    };
+  }
+  const id =
+    f.id !== undefined ? (typeof f.id === 'string' ? f.id : String(f.id)) : 'FINDING_' + (idx + 1);
+  const severity =
+    f.severity !== undefined
+      ? typeof f.severity === 'string'
+        ? f.severity
+        : String(f.severity)
+      : 'medium';
+  let status = f.status;
+  if (status === undefined) {
+    status = f.open === false || f.closed === true ? 'resolved' : 'open';
+  }
+  const summary =
+    f.summary !== undefined
+      ? typeof f.summary === 'string'
+        ? f.summary
+        : String(f.summary)
+      : f.detail !== undefined
+        ? typeof f.detail === 'string'
+          ? f.detail
+          : String(f.detail)
+        : '';
+  return { id, severity, status, summary };
+}
+
+function normalizeTest(t, idx) {
+  if (!t || typeof t !== 'object') {
+    return { command: 'test', result: 'pass', summary: String(t || '') };
+  }
+  const command =
+    t.command !== undefined
+      ? typeof t.command === 'string'
+        ? t.command
+        : String(t.command)
+      : 'test';
+  let result = t.result;
+  if (result === undefined) {
+    result = t.pass === false || (t.exitCode !== 0 && t.exitCode !== undefined) ? 'fail' : 'pass';
+  }
+  const summary =
+    t.summary !== undefined
+      ? typeof t.summary === 'string'
+        ? t.summary
+        : String(t.summary)
+      : t.detail !== undefined
+        ? typeof t.detail === 'string'
+          ? t.detail
+          : String(t.detail)
+        : '';
+  return { command, result, summary };
+}
+
+/**
+ * L-R01 (TASK-AI-83): buildManifest fills schema v1 using git and failure domains.
+ * It never invents a verdict or findings: they come only from the reviewer's structured outcome.
+ */
+function buildManifest(options) {
+  const o = options || {};
+  const { failureDomainFromCandidateKey } = require('./publisher');
+  const repoCwd = o.repoCwd;
+  const baseSha = o.baseSha;
+  const reviewedSha = o.reviewedSha;
+  const writerCandidateKey = o.writerCandidateKey;
+  const reviewerCandidateKey = o.reviewerCandidateKey;
+  const artifactPath = o.artifactPath;
+
+  const reviewedTree =
+    o.reviewedTree !== undefined
+      ? o.reviewedTree
+      : repoCwd && reviewedSha
+        ? computeReviewedTree(repoCwd, reviewedSha)
+        : null;
+  const reviewedPatchId =
+    o.reviewedPatchId !== undefined
+      ? o.reviewedPatchId
+      : repoCwd && baseSha && reviewedSha
+        ? computePatchId(repoCwd, baseSha, reviewedSha)
+        : null;
+  const artifactSha256 =
+    o.artifactSha256 !== undefined
+      ? o.artifactSha256
+      : artifactPath
+        ? sha256File(artifactPath)
+        : null;
+
+  const writerFailureDomain =
+    o.writerFailureDomain !== undefined
+      ? o.writerFailureDomain
+      : writerCandidateKey
+        ? failureDomainFromCandidateKey(writerCandidateKey)
+        : null;
+  const reviewerFailureDomain =
+    o.reviewerFailureDomain !== undefined
+      ? o.reviewerFailureDomain
+      : reviewerCandidateKey
+        ? failureDomainFromCandidateKey(reviewerCandidateKey)
+        : null;
+
+  const manifest = {
+    schemaVersion: o.schemaVersion !== undefined ? o.schemaVersion : SCHEMA_VERSION,
+    workItemId: o.workItemId,
+    reviewedCommit: reviewedSha,
+    reviewedBase: baseSha,
+    reviewedTree,
+    reviewedPatchId,
+    reviewerCandidateKey,
+    writerCandidateKey,
+    writerFailureDomain,
+    reviewerFailureDomain,
+    verdict: o.verdict,
+    findings: Array.isArray(o.findings) ? o.findings.map(normalizeFinding) : o.findings,
+    tests: Array.isArray(o.tests)
+      ? o.tests.map(normalizeTest)
+      : o.tests !== undefined
+        ? o.tests
+        : [],
+    artifactSha256,
+    createdAt: o.createdAt || new Date().toISOString(),
+  };
+
+  return manifest;
+}
+
 module.exports = {
   SCHEMA_VERSION,
   REVIEW_VERDICTS,
   REFUSAL_CODES,
+  buildManifest,
   candidateKeyParts,
   commitPatchId,
   computePatchId,
