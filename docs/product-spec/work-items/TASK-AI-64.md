@@ -1439,3 +1439,33 @@ Evidence:
 
 Residual risk / known limitations:
 - None.
+
+## Live E2E Attempt 23: Publish imports the reviewed worker commit into an operator-side clone (Defect X) (2026-10-04)
+
+Observation / Defect X:
+In Live attempt 23 (run data `C:/Users/gumac/AI/shipde-platform/.worktrees/logs/night/live23-data/`, receipt `checkpoint.json`, publish output `out-publish2.json`), the live loop completed `REVIEW_PASS` on worker commit `fa4c89f558f8ab2da98f4e780c14f96062eaf62a`, which existed only in the isolated worker repository `C:/ShipDeWorker/isolation`. The receipt's `publishCwd` was the operator host worktree at base `e857b8992ead15cfda5ebc36690a62bec735917b`. On resume with `--publish` and a SHA-bound approval, `publisher.js` correctly refused with `PUBLISH_REFUSED: SHA mismatch. Expected fa4c89f..., got e857b89...` because publication handed the base host worktree to the publisher instead of an operator-side checkout of the reviewed worker commit.
+
+Fix:
+1. Operator-side publish import (`tools/ai-brain/orchestrate.js`):
+   - Added a publication import step that creates a dedicated temporary operator-side clone from the receipt/operator publish cwd, fetches the exact reviewed SHA from the recorded worker repository, points the receipt branch at that SHA, checks it out in the temporary clone, and verifies `HEAD == reviewedSha`.
+   - The import runs hardened git with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` set to the null device, hooks/fsmonitor/attributes disabled, and no checkout inside the worker root.
+   - The publisher still owns the existing approval, verdict, remote URL, draft, and SHA gates. It receives the imported operator clone as `cwd`; the worker repository never receives credentials and never pushes.
+2. Fail-closed verification:
+   - Publication refuses if the reviewed commit is missing, if `baseSha` is invalid, if the worker or publish cwd is not a git repository, if the import branch is invalid, if the imported `HEAD` differs from the reviewed SHA, or if the reviewed SHA does not descend from the receipt base SHA.
+3. Regression test (`tools/ai-brain/test/task-ai-64.test.js`):
+   - Added `Defect X resume imports reviewed worker commit before publisher runs`: a fixture worker repo advances to a reviewed commit while the operator host clone remains at the base; resume with `--publish` reaches an injected publisher seam only after the temporary operator clone has `HEAD == reviewedSha`, ancestry from `baseSha`, and a cwd distinct from both worker and host.
+   - The fixture is network-free and Ubuntu-portable.
+
+Evidence:
+- Fail-before base SHA: `e857b8992ead15cfda5ebc36690a62bec735917b`
+  - Live attempt 23 reviewed SHA: `fa4c89f558f8ab2da98f4e780c14f96062eaf62a`.
+  - Publisher refused from the operator host base checkout with `PUBLISH_REFUSED: SHA mismatch. Expected fa4c89f..., got e857b89...`.
+- Pass-after result: All tests pass. 119/119 passed in `tools/ai-brain/test/task-ai-64.test.js`; full brain suite passing with 1239/1239.
+- Commands run:
+  - `node --test "tools/ai-brain/test/task-ai-64.test.js"`
+  - `node --test "tools/ai-brain/test/*.test.js"`
+  - `git diff --check` clean.
+  - `npx --package prettier@3.9.6 prettier --check` on changed files clean.
+
+Residual risk / known limitations:
+- None.

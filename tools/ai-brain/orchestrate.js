@@ -1473,6 +1473,144 @@ function resolvePublishCwd(o, rec) {
   );
 }
 
+function hardenedGitEnv() {
+  const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  return Object.assign({}, process.env, {
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: nulDevice,
+    GIT_CONFIG_SYSTEM: nulDevice,
+  });
+}
+
+function hardenedGitArgs(cwd, extraSafeDirs) {
+  const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const dirs = [cwd].concat(Array.isArray(extraSafeDirs) ? extraSafeDirs : []).filter(Boolean);
+  const args = [];
+  for (const dir of dirs) {
+    args.push('-c', 'safe.directory=' + path.resolve(dir).replace(/\\/g, '/'));
+  }
+  args.push(
+    '-c',
+    'core.hooksPath=' + nulDevice,
+    '-c',
+    'core.fsmonitor=false',
+    '-c',
+    'core.attributesFile=' + nulDevice,
+    '-c',
+    'diff.external=',
+    '-c',
+    'uploadpack.packObjectsHook='
+  );
+  return args;
+}
+
+function runHardenedGit(cwd, args, extraSafeDirs) {
+  return spawnSync('git', hardenedGitArgs(cwd, extraSafeDirs).concat(args), {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 30000,
+    maxBuffer: 16 * 1024 * 1024,
+    env: hardenedGitEnv(),
+  });
+}
+
+function assertGitOk(res, refusal) {
+  if (!res || res.status !== 0) {
+    const detail = res && (res.stderr || res.stdout) ? String(res.stderr || res.stdout).trim() : '';
+    throw new Error(refusal + (detail ? ': ' + detail : ''));
+  }
+  return String((res && res.stdout) || '').trim();
+}
+
+function reviewedPublishBranch(entry, request) {
+  const branch = (entry && entry.branch) || (request && request.branch) || null;
+  if (!branch) throw new Error('PUBLISH_REFUSED: missing publish branch');
+  return String(branch).replace(/^refs\/heads\//, '');
+}
+
+function importReviewedCommitForPublish(o, entry, request) {
+  const reviewedSha = entry && (entry.sha || entry.reviewedSha);
+  const workerRoot = entry && entry.workerRoot;
+  const baseSha = entry && entry.baseSha;
+  const publishCwd = resolvePublishCwd(o, entry);
+  const branch = reviewedPublishBranch(entry, request);
+
+  if (!reviewedSha || !SHA_40.test(String(reviewedSha))) {
+    throw new Error('PUBLISH_REFUSED: invalid reviewed commit for publish import');
+  }
+  if (!baseSha || !SHA_40.test(String(baseSha))) {
+    throw new Error('PUBLISH_REFUSED: publish import missing valid baseSha');
+  }
+  if (!workerRoot || !fs.existsSync(path.join(workerRoot, '.git'))) {
+    throw new Error('PUBLISH_REFUSED: publish import workerRoot is not a git repository');
+  }
+  if (!publishCwd || !fs.existsSync(path.join(publishCwd, '.git'))) {
+    throw new Error('PUBLISH_REFUSED: publish import cwd is not a git repository');
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-publish-import-'));
+  const cloneDir = path.join(tmpDir, 'publish-worktree');
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  };
+
+  try {
+    assertGitOk(
+      runHardenedGit(
+        tmpDir,
+        ['clone', '--no-local', '--no-hardlinks', '--no-tags', publishCwd, cloneDir],
+        [publishCwd]
+      ),
+      'PUBLISH_REFUSED: failed to create operator-side publish clone'
+    );
+    assertGitOk(
+      runHardenedGit(
+        cloneDir,
+        ['fetch', '--no-tags', '--no-recurse-submodules', workerRoot, reviewedSha],
+        [workerRoot]
+      ),
+      'PUBLISH_REFUSED: failed to import reviewed commit from worker repo'
+    );
+    assertGitOk(
+      runHardenedGit(cloneDir, ['rev-parse', '--verify', reviewedSha + '^{commit}']),
+      'PUBLISH_REFUSED: imported reviewed commit is missing'
+    );
+    assertGitOk(
+      runHardenedGit(cloneDir, ['merge-base', '--is-ancestor', baseSha, reviewedSha]),
+      'PUBLISH_REFUSED: reviewed commit ' + reviewedSha + ' does not descend from base ' + baseSha
+    );
+    assertGitOk(
+      runHardenedGit(cloneDir, ['check-ref-format', '--branch', branch]),
+      'PUBLISH_REFUSED: invalid publish branch'
+    );
+    assertGitOk(
+      runHardenedGit(cloneDir, ['branch', '-f', branch, reviewedSha]),
+      'PUBLISH_REFUSED: failed to point publish branch at reviewed commit'
+    );
+    assertGitOk(
+      runHardenedGit(cloneDir, ['checkout', '-f', branch]),
+      'PUBLISH_REFUSED: failed to checkout publish branch'
+    );
+    const head = assertGitOk(
+      runHardenedGit(cloneDir, ['rev-parse', 'HEAD']),
+      'PUBLISH_REFUSED: could not verify publish import HEAD'
+    );
+    if (head !== reviewedSha) {
+      throw new Error(
+        'PUBLISH_REFUSED: publish import HEAD mismatch. Expected ' + reviewedSha + ', got ' + head
+      );
+    }
+    return { cwd: cloneDir, cleanup };
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+}
+
 function decisionLogEvidenceFor(logOpts, workItemId, sha, verdict, reviewer) {
   const out = {
     dir: (logOpts && logOpts.dir) || null,
@@ -2821,13 +2959,22 @@ function publication(o, entry) {
       reason: 'NO_REVIEWED_COMMIT: the item did not reach a passing review',
     };
   }
+  let imported = null;
   try {
-    const result = require('./publisher').publish(
+    imported = importReviewedCommitForPublish(o, entry, request);
+    const publishFn =
+      typeof request.publish === 'function'
+        ? request.publish
+        : typeof o.publisher === 'function'
+          ? o.publisher
+          : require('./publisher').publish;
+    const result = publishFn(
       Object.assign({}, request, {
-        // Same expression the receipt was validated with, so the directory the
-        // publisher runs in is the directory the receipt was checked against —
-        // rebuilt from the receipt when the operator named none.
-        cwd: resolvePublishCwd(o, entry),
+        // The publisher still owns the approval, destination and draft gates.
+        // Its cwd is now an operator-side clone whose HEAD is the reviewed
+        // worker commit, imported before this call without letting the worker
+        // push or checking out inside the worker root.
+        cwd: imported.cwd,
         reviewedSha: review.finalSha,
         verdict: review.verdict || 'PASS',
         reviewer:
@@ -2851,6 +2998,8 @@ function publication(o, entry) {
       workItemId: entry.workItemId,
       reason: String((err && err.message) || err),
     };
+  } finally {
+    if (imported) imported.cleanup();
   }
 }
 

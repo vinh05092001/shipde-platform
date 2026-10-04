@@ -7088,6 +7088,146 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
       }
     });
 
+    test('Defect X resume imports reviewed worker commit before publisher runs', async () => {
+      const workerRepo = makeTempRepo();
+      const operatorParent = tmpDir('task-ai-64-x-op-');
+      const operatorHost = path.join(operatorParent, 'operator-host');
+      const dirDecisions = tmpDir('task-ai-64-x-dec-');
+      const dirCheckpoint = tmpDir('task-ai-64-x-ckpt-');
+      const checkpointFile = path.join(dirCheckpoint, 'checkpoint.json');
+      const { writerCand, reviewerCand } = makeDefectUCandidates();
+      const git = (cwd, args) =>
+        spawnSync('git', ['-c', 'safe.directory=*', ...args], {
+          cwd,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+
+      try {
+        const clone = spawnSync('git', ['clone', '-q', workerRepo.dir, operatorHost], {
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+        assert.strictEqual(clone.status, 0, 'operator host clone must exist: ' + clone.stderr);
+        assert.strictEqual(git(operatorHost, ['rev-parse', 'HEAD']).stdout.trim(), workerRepo.sha);
+
+        const opts1 = baseOpts({
+          decisionDir: dirDecisions,
+          checkpointFile,
+          checkpoint: checkpointFile,
+          workerRoot: workerRepo.dir,
+          baseSha: workerRepo.sha,
+          publisherCwd: operatorHost,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          ranking: { headrooms: { codex: { status: 'available' } } },
+          specs: [
+            {
+              id: 'TASK-AI-64',
+              businessOutcome: 'Publish imports reviewed worker commit',
+              files: ['branch-name.js'],
+              acceptanceCriteria: ['branch helper'],
+              verification: { command: 'node -e "process.exit(0)"', expect: '' },
+            },
+          ],
+          tests: () => ({
+            pass: true,
+            command: 'node -e "process.exit(0)"',
+            baseExitCode: 1,
+            headExitCode: 0,
+            detail: 'pass-after ok',
+            baseOutput: 'fail-before missing branch-name',
+          }),
+          run: (job) => {
+            if (job.usageFile) {
+              fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+            }
+            if (job.isReview) {
+              fs.writeFileSync(
+                job.verdictFile || path.join(job.cwd, 'verdict.json'),
+                JSON.stringify({ sha: job.baseSha, verdict: 'PASS', findings: [] })
+              );
+              return { exitCode: 0, stdout: 'review pass' };
+            }
+            fs.writeFileSync(path.join(job.cwd, 'branch-name.js'), 'module.exports = true;\n');
+            git(workerRepo.dir, ['add', '.']);
+            git(workerRepo.dir, ['commit', '-q', '-m', 'feat: branch-name']);
+            return { exitCode: 0, stdout: 'writer commit made' };
+          },
+        });
+        delete opts1.reviewer;
+
+        const res1 = await safeRun(opts1);
+        assert.ok(res1.log, 'first run must complete: ' + res1.refusal);
+        const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+        const receipt = checkpoint.reviews[0];
+        const reviewedSha = receipt.sha;
+        assert.notStrictEqual(reviewedSha, workerRepo.sha);
+        assert.strictEqual(receipt.publishCwd, operatorHost);
+        assert.strictEqual(git(operatorHost, ['rev-parse', 'HEAD']).stdout.trim(), workerRepo.sha);
+
+        let publisherCalled = false;
+        const resumeDir = tmpDir('task-ai-64-x-resume-dec-');
+        const opts2 = baseOpts({
+          decisionDir: resumeDir,
+          checkpointFile,
+          checkpoint: checkpointFile,
+          workerRoot: workerRepo.dir,
+          baseSha: workerRepo.sha,
+          sha: null,
+          candidates: [writerCand, reviewerCand],
+          specs: [{ id: 'TASK-AI-64', files: ['branch-name.js'] }],
+          publication: {
+            approvalId: 'AP-64-X',
+            expiry: Date.now() + 60000,
+            remoteUrl: TRUSTED_URL,
+            branch: 'fix/task-ai-64-publish-import',
+            testMode: true,
+            publish: (options) => {
+              publisherCalled = true;
+              assert.notStrictEqual(path.resolve(options.cwd), path.resolve(workerRepo.dir));
+              assert.notStrictEqual(path.resolve(options.cwd), path.resolve(operatorHost));
+              assert.strictEqual(options.reviewedSha, reviewedSha);
+              assert.strictEqual(
+                git(options.cwd, ['rev-parse', 'HEAD']).stdout.trim(),
+                reviewedSha
+              );
+              assert.strictEqual(
+                git(options.cwd, ['merge-base', '--is-ancestor', workerRepo.sha, reviewedSha])
+                  .status,
+                0
+              );
+              return {
+                status: 'published',
+                sha: reviewedSha,
+                approvalId: options.approvalId,
+                remoteUrl: options.remoteUrl,
+                branch: options.branch,
+                simulated: true,
+              };
+            },
+          },
+          run: () => {
+            assert.fail('worker or reviewer must not run on publish resume');
+          },
+        });
+        delete opts2.reviewer;
+
+        const res2 = await safeRun(opts2);
+        assert.ok(res2.log, 'resume publish must succeed: ' + res2.refusal);
+        assert.strictEqual(publisherCalled, true);
+        assert.strictEqual(res2.log.status, 'PUBLISHED_DRAFT');
+        assert.strictEqual(res2.log.publication.status, 'PUBLISHED_DRAFT');
+        assert.strictEqual(res2.log.publication.result.sha, reviewedSha);
+        assert.strictEqual(git(operatorHost, ['rev-parse', 'HEAD']).stdout.trim(), workerRepo.sha);
+      } finally {
+        fs.rmSync(workerRepo.dir, { recursive: true, force: true });
+        fs.rmSync(operatorParent, { recursive: true, force: true });
+        fs.rmSync(dirDecisions, { recursive: true, force: true });
+        fs.rmSync(dirCheckpoint, { recursive: true, force: true });
+      }
+    });
+
     test('Work Item round2 evidence names its pass-after SHA (F21)', () => {
       const text = fs.readFileSync(
         path.join(
