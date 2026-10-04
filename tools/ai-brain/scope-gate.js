@@ -8,9 +8,10 @@
  * S-R01 parseScope(workItem) requires workItemId, acceptanceIds[], ownedGlobs[], forbiddenGlobs[],
  *   testCommands[], maxDiffLines, repairBudget, maxToolCalls; anything else is SCOPE_INVALID by name.
  * S-R02 checkDiff({repoCwd, base, head, scope}) refuses, in order, FORBIDDEN_PATH, DEPENDENCY_ADDED
- *   (package.json dependencies/devDependencies or a lockfile, unless scope.allowDependencies),
- *   OUT_OF_OWNERSHIP, ASSERTION_WEAKENED (a test file loses assertion lines while adding none),
- *   DIFF_BUDGET_EXCEEDED and NO_EVIDENCE (SUCCESS claimed, empty diff, no test report).
+ *   (a package.json dependency, devDependency, optionalDependency or peerDependency, or any lockfile,
+ *   unless scope.allowDependencies), OUT_OF_OWNERSHIP, ASSERTION_WEAKENED (a test file that was modified,
+ *   renamed or deleted lost assertion lines while adding none), DIFF_BUDGET_EXCEEDED and NO_EVIDENCE
+ *   (SUCCESS claimed, empty diff, no test report).
  * S-R03 checkTrace(actions, scope) refuses UNTRACED_ACTION for an undeclared acceptance id and
  *   FORBIDDEN_ACTION for kind push|open_pr|merge|change_candidate.
  */
@@ -27,6 +28,9 @@ const ORDER_NAMES =
   'FORBIDDEN_PATH DEPENDENCY_ADDED OUT_OF_OWNERSHIP ASSERTION_WEAKENED DIFF_BUDGET_EXCEEDED NO_EVIDENCE';
 const REFUSAL_ORDER = ORDER_NAMES.split(' ');
 const FORBIDDEN_KINDS = new Set(['push', 'open_pr', 'merge', 'change_candidate']);
+// A test file that was modified, renamed or deleted can have lost assertions; a new one cannot have.
+const WEAKENABLE = new Set(['M', 'R', 'D']);
+const DEPENDENCY_FIELDS = 'dependencies devDependencies optionalDependencies peerDependencies';
 const KIND_ALIAS = { openpr: 'open_pr', pullrequest: 'open_pr' };
 
 function git(args, cwd) {
@@ -142,13 +146,17 @@ function readDiffFacts(repoCwd, base, head) {
   return { ok: true, rows, diffLines: added + deleted };
 }
 
-/** Dependency sections of a package.json at one ref, so a rename is not read as a dependency move. */
+/**
+ * Every dependency section of a package.json at one ref — dependencies, devDependencies,
+ * optionalDependencies and peerDependencies — so a rename is not read as a dependency move.
+ */
 function manifestSections(repoCwd, ref, rel) {
   const blob = git(['show', `${ref}:${rel}`], repoCwd);
   if (!blob.ok) return null;
   try {
     const parsed = JSON.parse(blob.stdout);
-    return JSON.stringify([parsed.dependencies || {}, parsed.devDependencies || {}]);
+    const wanted = DEPENDENCY_FIELDS.split(' ');
+    return JSON.stringify(wanted.map((field) => parsed[field] || {}));
   } catch {
     return null;
   }
@@ -202,7 +210,7 @@ function checkDiff(options) {
   const weakened = [];
   for (const row of rows) {
     if (!isTestFile(row.path) || !matchGlobs(scope.ownedGlobs, row.path)) continue;
-    if (row.status !== 'M' && row.status !== 'R') continue;
+    if (!WEAKENABLE.has(row.status)) continue;
     const loss = assertionLoss(repoCwd, base, head, row.path);
     if (loss.removed > 0 && loss.added === 0) {
       weakened.push(row.path);

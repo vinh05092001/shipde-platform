@@ -10,7 +10,9 @@
  *   summary is head 40 lines + tail 40 lines + byte and line counts.
  * O-R02 Redaction happens before storage and reuses scrubText from ./decisions, the scrubber evidence.js
  *   uses, so no second secret regex set lives here; read() re-scrubs defensively.
- * O-R03 read(handle, {grep?, startLine?, endLine?, maxBytes=4096}) returns a bounded slice.
+ * O-R03 read(handle, {grep?, startLine?, endLine?, maxBytes=4096}) returns a bounded slice: a grep or
+ *   line-range window. Whole lines are kept; a first line that alone exceeds maxBytes is clipped to it
+ *   and truncated is reported, so maxBytes is a hard ceiling.
  * O-R04 rotate({dir, maxAgeMs, maxBytes}) deletes the oldest artifacts past the limits, inside dir only.
  */
 
@@ -35,6 +37,13 @@ const positive = (value, fallback) => (Number.isFinite(value) && value > 0 ? val
 const defaultDir = () => path.join(os.tmpdir(), 'shipde-output-store');
 const lines = (text) => (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
 const inside = (dir, target) => !path.relative(dir, target).startsWith('..');
+
+/** Clip one line to a byte room, dropping characters so a multi-byte sequence is never split. */
+function clipToBytes(line, room) {
+  let cut = Math.min(line.length, room);
+  while (cut > 0 && Buffer.byteLength(line.slice(0, cut), 'utf8') + 1 > room) cut -= 1;
+  return line.slice(0, cut);
+}
 
 function summarise(text) {
   const all = lines(text);
@@ -90,15 +99,26 @@ function read(handle, options) {
     : null;
   const wanted = matches ? matches.map((hit) => hit.text) : window;
 
+  // Whole lines are preserved; a first line that alone busts maxBytes is clipped to it, never returned
+  // whole and never over the ceiling.
   const kept = [];
   let bytes = 0;
+  let truncated = false;
   for (const line of wanted) {
-    const size = Buffer.byteLength(line, 'utf8') + 1;
-    if (kept.length > 0 && bytes + size > maxBytes) break;
+    const room = maxBytes - bytes;
+    if (Buffer.byteLength(line, 'utf8') + 1 > room) {
+      if (kept.length === 0 && room > 1) {
+        const clipped = clipToBytes(line, room);
+        kept.push(clipped);
+        bytes += Buffer.byteLength(clipped, 'utf8') + 1;
+      }
+      truncated = true;
+      break;
+    }
     kept.push(line);
-    bytes += size;
+    bytes += Buffer.byteLength(line, 'utf8') + 1;
   }
-  const truncated = kept.length < wanted.length;
+  if (kept.length < wanted.length) truncated = true;
   const text = kept.join('\n');
   const hits = { matched: matches ? matches.length : null, matches, lines: kept, text };
   return Object.assign({ ok: true, handle: id, bytes, truncated, totalLines: all.length }, hits);

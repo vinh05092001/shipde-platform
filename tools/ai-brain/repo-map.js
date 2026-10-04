@@ -5,9 +5,11 @@
  * Per tracked .js/.ts-family file: path, exported symbols, one signature line per function/class, and
  * import edges. No bodies. No daemon, no database.
  *
- * R-R01 buildRepoMap({repoCwd, paths?, budgetTokens=1500}) lists path, exports, signature lines, edges.
- * R-R02 Bounded by budgetTokens with tokens = ceil(chars/4); over budget the lowest rank goes first
- *   (rank = inbound import edges, then path) and {truncated, omitted} is reported.
+ * R-R01 buildRepoMap({repoCwd, paths?, budgetTokens=1500}) lists path, exports, signature lines, edges;
+ *   a function body is never emitted, including the concise body of an expression-bodied arrow.
+ * R-R02 tokens = ceil(chars/4) never exceeds budgetTokens (an unbudgetable header emits nothing); the
+ *   walk keeps the longest prefix that fits, so the lowest rank goes first (rank = inbound import edges,
+ *   then path), while a file too big for any budget is skipped rather than ending the walk.
  * R-R03 Cached at <git-common-dir>/shipde-repo-map/<tree>.json (<tree> = the HEAD tree hash), so a new
  *   tree is a miss. A restricted request (paths) never touches the shared cache.
  * R-R04 expand({repoCwd, file, reason}) returns one file's unbudgeted signature block, else REASON_REQUIRED.
@@ -78,11 +80,18 @@ function scanLines(source) {
   });
 }
 
-/** R-R01 signature line only: everything from the first body brace onwards is dropped. */
+/**
+ * R-R01 signature line only. A body starts at the first `{`, or — for an arrow function with a concise
+ * body and therefore no brace — right after `=>`. Either way no body character is ever emitted.
+ */
 function signatureOf(line) {
   const flat = line.replace(/\s+/g, ' ').trim();
   const brace = flat.indexOf('{');
-  const out = (brace >= 0 ? flat.slice(0, brace) : flat).replace(/\s+$/, '');
+  const arrow = flat.indexOf('=>');
+  let out = flat;
+  if (arrow >= 0 && (brace < 0 || arrow < brace)) out = flat.slice(0, arrow + 2);
+  else if (brace >= 0) out = flat.slice(0, brace);
+  out = out.replace(/\s+$/, '');
   return out.length > MAX_SIGNATURE_CHARS ? out.slice(0, MAX_SIGNATURE_CHARS - 3) + '...' : out;
 }
 
@@ -220,20 +229,33 @@ function readTrackedFiles(repoCwd, paths) {
   return { ok: true, files };
 }
 
+/**
+ * R-R02 walk the ranked list and keep the longest prefix that fits budgetTokens, so the lowest-ranked
+ * files are the ones dropped. A single file that cannot fit even an otherwise empty map is skipped
+ * instead of ending the walk, so one oversized file cannot starve everything below it. When the header
+ * alone busts the budget nothing at all is emitted. tokens can never exceed budgetTokens.
+ */
 function applyBudget(files, tree, budgetTokens) {
+  const header = renderHeader(tree, files.length);
+  const done = (kept, omitted, text) => ({ files: kept, omitted, text, truncated: omitted > 0 });
+  if (estimateTokens(header) > budgetTokens) return done([], files.length, '');
   const kept = [];
-  let text = renderHeader(tree, files.length);
-  let omitted = 0;
-  for (const file of files) {
+  let text = header;
+  let skipped = 0;
+  for (let at = 0; at < files.length; at += 1) {
+    const file = files[at];
     const block = `${text}\n${renderFile(file)}`;
     if (estimateTokens(block) > budgetTokens) {
-      omitted += 1;
-    } else {
-      text = block;
-      kept.push(file);
+      if (estimateTokens(renderFile(file)) <= budgetTokens) {
+        return done(kept, skipped + files.length - at, text);
+      }
+      skipped += 1;
+      continue;
     }
+    text = block;
+    kept.push(file);
   }
-  return { files: kept, omitted, text, truncated: omitted > 0 };
+  return done(kept, skipped, text);
 }
 
 /** R-R01/R-R02/R-R03 budgeted repository map over the tracked code files of one tree. */

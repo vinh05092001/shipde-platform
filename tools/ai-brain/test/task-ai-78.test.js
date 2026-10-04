@@ -51,6 +51,8 @@ async function alphaRun(times) { return beta.betaHelper(times); }
 
 const alphaArrow = (first, second) => first + second;
 
+const arrowNoBraces = (x) => 'ARROW_NO_BRACES_BODY_SECRET';
+
 module.exports = { AlphaService, alphaRun, alphaArrow };
 `,
   'src/gamma.ts': `import { alphaRun } from './alpha';
@@ -65,6 +67,15 @@ export function gammaPick(rows: GammaRow[]): GammaRow | null {
 };
 
 const KEEP_TEST = "const assert = require('node:assert/strict');\n\ntest('k', () => {\n%s\n});\n";
+const MANY = Array.from(
+  { length: 20 },
+  (unused, at) => `function fn${at}(arg${at}) { return arg${at}; }`
+);
+// a-big.js is imported, so it ranks first, and it is far too big for the budget F-4 hands it.
+const RANK_FIXTURE = {
+  'b-small.js': "const big = require('./a-big');\n\nmodule.exports = { big };\n",
+  'a-big.js': `${MANY.join('\n')}\n`,
+};
 const BASE_REPO = {
   'README.md': '# base\n',
   'package.json': '{\n  "name": "fixture",\n  "version": "1.0.0"\n}\n',
@@ -110,14 +121,19 @@ function gitRepo(files) {
     git('commit', '-m', message);
     return git('rev-parse', 'HEAD');
   };
-  return { dir, git, commit, write: (more) => writeFiles(dir, more) };
+  const remove = (rel) => fs.rmSync(path.join(dir, rel));
+  return { dir, git, commit, remove, write: (more) => writeFiles(dir, more) };
 }
 
 function diffCase(change, over, options) {
   const repo = gitRepo(BASE_REPO);
   const base = repo.git('rev-parse', 'HEAD');
-  repo.write(change);
-  const head = Object.keys(change).length === 0 ? base : repo.commit('candidate change');
+  const files = Object.assign({}, change);
+  const drop = files.remove;
+  delete files.remove;
+  repo.write(files);
+  if (drop) repo.remove(drop);
+  const head = Object.keys(files).length === 0 && !drop ? base : repo.commit('candidate change');
   const input = { repoCwd: repo.dir, base, head, scope: scope(over) };
   return load('scope-gate').checkDiff(Object.assign(input, options));
 }
@@ -360,5 +376,62 @@ describe('TASK-AI-78 Gate C: repo map, scope gate, output store', () => {
     ok(sized.bytes <= 1000);
     eq(outputStore.read(artifacts[1].handle, { dir }).code, 'ARTIFACT_NOT_FOUND');
     same(outputStore.rotate({ dir: tmpDir('ai78-rot-empty-') }).deleted, []);
+  });
+
+  test('F1 (O-R03): read() never returns more than maxBytes, not even for one long line', () => {
+    const outputStore = load('output-store');
+    const dir = tmpDir('ai78-f1-');
+    const artifact = parked(dir, `${'X'.repeat(5000)}\nsecond line\n`, 64);
+    const slice = outputStore.read(artifact.handle, { dir, maxBytes: 50 });
+    eq(slice.ok, true);
+    eq(slice.truncated, true);
+    ok(slice.bytes <= 50, `maxBytes 50 respected, got ${slice.bytes}`);
+    ok(slice.text.length < 5000, 'the oversized line is clipped, never returned whole');
+    ok(outputStore.read(artifact.handle, { dir, maxBytes: 1 }).bytes <= 1);
+  });
+
+  test('F2 (R-R01): an expression-bodied arrow contributes its signature and never its body', () => {
+    const dir = gitRepo(FIXTURE_REPO).dir;
+    const built = map(dir, { budgetTokens: 100000 });
+    eq(
+      built.text.includes('ARROW_NO_BRACES_BODY_SECRET'),
+      false,
+      'no concise arrow body in the map'
+    );
+    ok(built.text.includes('const arrowNoBraces = (x) =>'));
+  });
+
+  test('F3 (S-R02): deleting a test file is ASSERTION_WEAKENED, not a clean pass', () => {
+    const gone = diffCase({ remove: 'test/keep.test.js' });
+    eq(gone.code, 'ASSERTION_WEAKENED');
+    ok(gone.removed > 0, 'the assertions the deleted file carried are reported as removed');
+    eq(gone.added, 0);
+  });
+
+  test('F4 (R-R02): the budget is never exceeded and an oversized top-rank file is skipped', () => {
+    const dir = gitRepo(FIXTURE_REPO).dir;
+    const starved = map(dir, { budgetTokens: 10 });
+    eq(starved.text, '', 'a budget below the header emits nothing at all');
+    eq(starved.tokens, 0);
+    eq(starved.truncated, true);
+    eq(starved.omitted, 3);
+    for (const budget of [1, 12, 40, 90, 300]) {
+      const sized = map(dir, { budgetTokens: budget });
+      ok(sized.tokens <= budget, `budget ${budget} respected, got ${sized.tokens}`);
+      eq(sized.files.length + sized.omitted, 3, 'every file is kept or reported omitted');
+    }
+    const ranked = map(gitRepo(RANK_FIXTURE).dir, { budgetTokens: 60 });
+    same(listed(ranked), ['b-small.js'], 'the oversized top-rank file is skipped, not starved');
+    eq(ranked.omitted, 1);
+    ok(ranked.tokens <= 60);
+  });
+
+  test('F5 (S-R02): optionalDependencies and peerDependencies are DEPENDENCY_ADDED too', () => {
+    for (const field of ['optionalDependencies', 'peerDependencies']) {
+      const added = `{\n  "name": "fixture",\n  "${field}": { "left-pad": "1.0.0" }\n}\n`;
+      const res = diffCase({ 'package.json': added });
+      eq(res.code, 'DEPENDENCY_ADDED', field);
+      eq(res.reason, 'manifest', field);
+    }
   });
 });
