@@ -53,6 +53,8 @@ const routing = require('./routing');
 const evidence = require('./evidence');
 const candidatesApi = require('./candidates');
 const decisions = require('./decisions');
+const sourcesApi = require('./sources');
+const jev = require('./jev');
 const { candidateKey } = require('./candidates');
 const { parseCandidateKey } = require('./discovery/identity');
 const { classifyFailure } = require('./failure-classifier');
@@ -104,7 +106,21 @@ function buildDefaults() {
 }
 
 function roleOf(item) {
-  return (item && item.roleRequirement && item.roleRequirement.role) || 'author.foundation';
+  return (
+    (item && item.roleRequirement && item.roleRequirement.role) ||
+    (item && item.role) ||
+    'author.foundation'
+  );
+}
+
+function routingRoleOf(item) {
+  const role = roleOf(item);
+  if (/review/i.test(role)) return 'reviewer';
+  if (/security/i.test(role)) return 'security-review';
+  if (/analyst|research/i.test(role)) return 'researcher';
+  if (/scan/i.test(role)) return 'scanner';
+  if (/integrat/i.test(role)) return 'integrator';
+  return 'writer';
 }
 
 /** The Controller seams this loop consumes instead of reimplementing. */
@@ -1960,22 +1976,131 @@ function buildCheckpointReviews(log, prior, completedIds, logOpts) {
 }
 
 function buildProfile(item, o, forbiddenFailureDomains) {
+  const role = routingRoleOf(item);
+  const roleCaps = (item && item.roleRequirement && item.roleRequirement.requires) || {};
+  const strictProfile =
+    Boolean(o && o.enforceProofFloors === true) ||
+    /^TASK-AI-73\b/.test(String((item && item.id) || ''));
+  const capSet = new Set();
+  for (const cap of Array.isArray(item && item.requiredCapabilities)
+    ? item.requiredCapabilities
+    : []) {
+    if (cap) capSet.add(String(cap));
+  }
+  for (const cap of Array.isArray(item && item.capabilities) ? item.capabilities : []) {
+    if (cap) capSet.add(String(cap));
+  }
+  if (strictProfile) {
+    for (const cap of Array.isArray(
+      item && item.roleRequirement && item.roleRequirement.capabilities
+    )
+      ? item.roleRequirement.capabilities
+      : []) {
+      if (cap) capSet.add(String(cap));
+    }
+    for (const [cap, enabled] of Object.entries(roleCaps || {})) {
+      if (enabled) capSet.add(cap);
+    }
+  }
+  const requiredCapabilities = Array.from(capSet);
+  const codingOrReview = role === 'writer' || role === 'reviewer' || role === 'security-review';
+  const explicitExploration = Boolean(item && item.exploration);
+  const proofFloor =
+    item && item.proofFloor
+      ? item.proofFloor
+      : explicitExploration
+        ? 'HARNESS_PASS'
+        : codingOrReview && strictProfile
+          ? 'WORK_ITEM_PASS'
+          : 'NONE';
   return {
     taskId: item.id,
-    role: roleOf(item),
+    role,
     complexity: item.complexity || 'standard',
-    requiredCapabilities: [],
-    proofFloor: 'NONE',
-    contextSize: 4000,
-    expectedDuration: 30000,
-    latencyPriority: 'normal',
-    qualityFloor: 10,
-    costCeiling: 1000,
+    requiredCapabilities,
+    proofFloor,
+    contextSize:
+      item.contextSize !== null &&
+      item.contextSize !== undefined &&
+      Number.isFinite(Number(item.contextSize)) &&
+      Number(item.contextSize) > 0
+        ? Number(item.contextSize)
+        : 64000,
+    expectedDuration:
+      item.expectedDuration !== null &&
+      item.expectedDuration !== undefined &&
+      Number.isFinite(Number(item.expectedDuration)) &&
+      Number(item.expectedDuration) > 0
+        ? Number(item.expectedDuration)
+        : 30 * 60 * 1000,
+    latencyPriority: item.latencyPriority || (codingOrReview ? 'normal' : 'high'),
+    qualityFloor:
+      item.qualityFloor !== null &&
+      item.qualityFloor !== undefined &&
+      Number.isFinite(Number(item.qualityFloor)) &&
+      Number(item.qualityFloor) >= 0
+        ? Number(item.qualityFloor)
+        : codingOrReview
+          ? 70
+          : 40,
+    costCeiling:
+      item.costCeiling !== null &&
+      item.costCeiling !== undefined &&
+      Number.isFinite(Number(item.costCeiling)) &&
+      Number(item.costCeiling) >= 0
+        ? Number(item.costCeiling)
+        : 1000000,
     requiredHarness: null,
-    forbiddenFailureDomains: forbiddenFailureDomains || [],
-    resourceCeiling: 100,
-    currentWorkload: 0,
+    forbiddenFailureDomains: expandForbiddenDomains(
+      [].concat(forbiddenFailureDomains || [], item.forbiddenFailureDomains || [])
+    ),
+    resourceCeiling:
+      item.resourceCeiling !== null &&
+      item.resourceCeiling !== undefined &&
+      Number.isFinite(Number(item.resourceCeiling)) &&
+      Number(item.resourceCeiling) > 0
+        ? Number(item.resourceCeiling)
+        : 4,
+    currentWorkload:
+      item.currentWorkload !== null &&
+      item.currentWorkload !== undefined &&
+      Number.isFinite(Number(item.currentWorkload)) &&
+      Number(item.currentWorkload) >= 0
+        ? Number(item.currentWorkload)
+        : 0,
   };
+}
+
+function buildTaskProfile(item, options) {
+  const o = Object.assign({ enforceProofFloors: true }, options || {});
+  return buildProfile(item || {}, o, o.forbiddenFailureDomains || []);
+}
+
+function expandForbiddenDomains(domains) {
+  const out = new Set();
+  for (const domain of domains || []) {
+    if (domain === undefined || domain === null || domain === '') continue;
+    const value = String(domain);
+    out.add(value);
+    for (const part of value.split('/')) {
+      if (part) out.add(part);
+    }
+  }
+  return Array.from(out);
+}
+
+function hasQuotaAccountReadings(options) {
+  const o = options || {};
+  const rankingOpts = o.ranking || {};
+  const home = o.home || rankingOpts.home;
+  const storeFile =
+    rankingOpts.storePath || path.join(home || os.homedir(), '.shipde', 'agy-quota.json');
+  try {
+    const parsed = JSON.parse(fs.readFileSync(storeFile, 'utf8'));
+    return Boolean(parsed && parsed.accounts && Object.keys(parsed.accounts).length > 0);
+  } catch {
+    return false;
+  }
 }
 
 async function selectCandidateForProfile(
@@ -1988,14 +2113,24 @@ async function selectCandidateForProfile(
   now
 ) {
   const profile = buildProfile(item, o, forbiddenDomains);
+  const registry = (o && o.registry) || sourcesApi.loadSources();
+  const jevSource = sourcesApi.getSource('jev', registry);
+  const jevAsk =
+    o.jevAsk ||
+    jev.buildJevAsk(jevSource, {
+      home: o && o.home,
+      env: (o && o.env) || process.env,
+      httpClient: o && o.jevHttpClient,
+      timeoutMs: o && o.jevTimeoutMs,
+    });
 
   // The weighting assessment is the Controller's own, obtained through the real
-  // JEV path — routing.assessTask -> jev.adviseOrReason — and never hand-built
-  // here. `o.jevAsk` is the only injection point and is undefined by default, so
-  // a live run with no advisory is UNDECIDED/UNREACHABLE and the Controller's
-  // deterministic per-role fallback decides (AI-64-P01). The ask is asked about
-  // weighting profiles only, never a model, provider or account.
-  const assessment = await routing.assessTask(profile, { ask: o.jevAsk });
+  // JEV source declared in sources.json. The ask is closed and only about
+  // weighting profiles, never a model, provider, account or gateway.
+  const assessment = await routing.assessTask(profile, {
+    ask: jevAsk,
+    minConfidence: jevSource && jevSource.minConfidence,
+  });
 
   const rankCtx = {
     now,
@@ -2004,9 +2139,21 @@ async function selectCandidateForProfile(
     headrooms: o && o.ranking && o.ranking.headrooms,
     reservations: o && o.ranking && o.ranking.reservations,
     accounts: o && o.ranking && o.ranking.accounts,
-    useStoredQuota: false,
-    home: o && o.ranking && o.ranking.home,
+    useStoredQuota: true,
+    home: (o && o.home) || (o && o.ranking && o.ranking.home),
     storePath: o && o.ranking && o.ranking.storePath,
+    explorationBudget:
+      o && o.ranking && o.ranking.explorationBudget !== undefined
+        ? Number(o.ranking.explorationBudget)
+        : item && item.exploration
+          ? 1
+          : 0,
+    enforceKnownQuota:
+      o && o.ranking && o.ranking.enforceKnownQuota === true
+        ? true
+        : o && o.ranking && o.ranking.enforceKnownQuota === false
+          ? false
+          : hasQuotaAccountReadings(o),
   };
 
   const result = routing.rankForProfile(annotatedCandidates, profile, assessment, rankCtx);
@@ -2017,7 +2164,13 @@ async function selectCandidateForProfile(
       result.chosen = null;
       result.reason = 'REFUSED: reviewer equals writer';
     }
-    const alreadyRejected = result.rejected.some((r) => r.candidateKey === writerKey);
+    const existingRejection = result.rejected.find((r) => r.candidateKey === writerKey);
+    if (existingRejection) {
+      existingRejection.reasonCode = 'REVIEWER_EQUALS_WRITER';
+      existingRejection.reason = 'reviewer must not equal writer';
+      existingRejection.scope = 'candidate';
+    }
+    const alreadyRejected = Boolean(existingRejection);
     if (!alreadyRejected) {
       const writerCand = (annotatedCandidates || []).find((c) => candidateKey(c) === writerKey);
       if (writerCand) {
@@ -2042,20 +2195,43 @@ async function selectCandidateForProfile(
   const decisionRecorded = {
     stage,
     workItemId: profile.taskId,
-    role: profile.role,
+    role: roleOf(item),
     profile,
     taskProfile: profile,
     jev: assessment,
+    weightProfile: assessment.weightProfile,
+    top3: result.top3.map((c) => ({
+      candidateKey: c.candidateKey,
+      score: c.score,
+      scoreBreakdown: c.scoreBreakdown,
+      proof: routing.proofObserved(evidenceData, c) || 'NONE',
+      capabilityEvidence: c.capabilities || {},
+      quota: {
+        headroom: c.headroomStatus || 'unknown',
+        reasonCode: c.quotaReasonCode || null,
+        quotaScope: c.quotaScope || null,
+        accountId: c.accountId || null,
+      },
+      failureDomain: routing.failureDomainOf(c),
+      reservationsHeld: c.reservationsHeld || 0,
+      sessions: c.sessionsHeld || 0,
+    })),
     ranking: result.ranking.map((c) => ({
       candidateKey: c.candidateKey,
       score: c.score,
       scoreBreakdown: c.scoreBreakdown,
+      proof: routing.proofObserved(evidenceData, c) || 'NONE',
+      capabilityEvidence: c.capabilities || {},
       headroom: c.headroomStatus || 'unknown',
+      quotaReasonCode: c.quotaReasonCode || null,
       failureDomain: routing.failureDomainOf(c),
       reservationsHeld: c.reservationsHeld || 0,
     })),
     rejected: result.rejected.slice(0, 50),
     rejectedCount: result.rejected.length,
+    fallbackSequence: [],
+    firstChoice: result.top3[0] ? result.top3[0].candidateKey : null,
+    selected: result.chosen,
     chosen: result.chosen,
     reason: result.reason,
   };
@@ -2986,6 +3162,16 @@ function publication(o, entry) {
             ? {
                 workItemId: entry.workItemId,
                 outcome: String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item',
+                reviewer:
+                  entry.reviewerIdentity ||
+                  review.reviewer ||
+                  entry.reviewer ||
+                  request.reviewer ||
+                  null,
+                decisionEvidence:
+                  entry.decisionLog && entry.decisionLog.dir
+                    ? entry.decisionLog.dir
+                    : entry.decisionLog || null,
               }
             : undefined),
         log: typeof o.log === 'function' ? o.log : null,
@@ -3119,6 +3305,7 @@ module.exports = {
   writeUsageReportFromHarnessResult,
   materialiseExercise,
   captureFailBefore,
+  buildTaskProfile,
   selectCandidateForProfile,
   repairRound,
   reviewLane,
