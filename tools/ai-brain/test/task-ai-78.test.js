@@ -78,6 +78,7 @@ const RANK_FIXTURE = {
 };
 const BASE_REPO = {
   'README.md': '# base\n',
+  'docs/plan.md': '# plan\n',
   'package.json': '{\n  "name": "fixture",\n  "version": "1.0.0"\n}\n',
   'src/keep.js': 'module.exports = 1;\n',
   'test/keep.test.js': KEEP_TEST.replace('%s', '  assert.equal(1, 1);'),
@@ -240,7 +241,7 @@ describe('TASK-AI-78 Gate C: repo map, scope gate, output store', () => {
     eq(clean.ok, true);
     eq(clean.code, 'DIFF_OK');
     eq(clean.workItemId, 'TASK-AI-78');
-    const both = diffCase({ 'README.md': '# drifted\n', 'docs/plan.md': '# plan\n' });
+    const both = diffCase({ 'README.md': '# drifted\n', 'docs/plan.md': '# plan v2\n' });
     eq(both.code, 'FORBIDDEN_PATH', 'precedence puts FORBIDDEN_PATH first');
     ok(both.refusals.some((one) => one.code === 'OUT_OF_OWNERSHIP'));
     eq(diffCase({ 'README.md': '# drifted\n' }).code, 'OUT_OF_OWNERSHIP');
@@ -433,5 +434,54 @@ describe('TASK-AI-78 Gate C: repo map, scope gate, output store', () => {
       eq(res.code, 'DEPENDENCY_ADDED', field);
       eq(res.reason, 'manifest', field);
     }
+  });
+
+  test('N1 (S-R02): a rename is judged as delete(old) + add(new) for assertions and lines', () => {
+    const scopeGate = load('scope-gate');
+    // The assertions move out of the renamed path: the loss must still be caught.
+    const hollow =
+      "const assert = require('node:assert/strict');\n\ntest('k', () => {\n  void 1;\n});\n";
+    const stripped = diffCase({ remove: 'test/keep.test.js', 'test/renamed.test.js': hollow });
+    eq(stripped.code, 'ASSERTION_WEAKENED');
+    ok(stripped.removed > 0, 'the assertions the pre-image carried are reported as removed');
+    // The same rename with every assertion intact is not weakening.
+    const intact = diffCase({
+      remove: 'test/keep.test.js',
+      'test/renamed.test.js': KEEP_TEST.replace('%s', '  assert.equal(1, 1);'),
+    });
+    eq(intact.code, 'DIFF_OK', 'a rename that keeps its assertions is not weakening');
+
+    // Lines changed inside a renamed file count toward the diff budget.
+    const repo = gitRepo(BASE_REPO);
+    const rows = Array.from({ length: 120 }, (unused, at) => `const row${at} = ${at};`);
+    repo.write({ 'src/service.js': `${rows.join('\n')}\n` });
+    const base = repo.commit('add service');
+    repo.write({
+      'src/service.js': '',
+      'src/service-v2.js': `${rows.join('\n')}\nconst extra = 1;\n`,
+    });
+    const head = repo.commit('rename and extend service');
+    const renamed = scopeGate.checkDiff({
+      repoCwd: repo.dir,
+      base,
+      head,
+      scope: scope({ maxDiffLines: 100 }),
+    });
+    eq(renamed.code, 'DIFF_BUDGET_EXCEEDED', 'a rename cannot hide its line changes');
+    ok(
+      renamed.diffLines > 100,
+      `expected the renamed lines to be counted, got ${renamed.diffLines}`
+    );
+  });
+
+  test('N2 (S-R02): renaming a forbidden or unowned path into an owned one is still drift', () => {
+    const smuggled = diffCase({ remove: 'docs/plan.md', 'src/plan.md': '# plan\n' });
+    eq(smuggled.code, 'FORBIDDEN_PATH');
+    eq(smuggled.path, 'docs/plan.md', 'the pre-image is judged, not only the destination');
+    const hijacked = diffCase({ remove: 'README.md', 'src/readme.md': '# base\n' });
+    eq(hijacked.code, 'OUT_OF_OWNERSHIP');
+    eq(hijacked.path, 'README.md', 'the pre-image is judged, not only the destination');
+    const allowed = diffCase({ remove: 'src/keep.js', 'src/keep2.js': 'module.exports = 2;\n' });
+    eq(allowed.ok, true, 'a rename inside the owned globs is still allowed');
   });
 });

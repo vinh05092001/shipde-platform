@@ -6,6 +6,7 @@
 - Status: READY_FOR_CODEX
 - Assigned author: Controller-selected paseo::http://127.0.0.1:20128/v1::9router::ocz::xkiro::xkiro::ocz/big-pickle
 - Dependencies: TASK-AI-76
+- Scope amendment: diff budget 1100 + 250 for review repairs (total 1348)
 - Patterns: repo map after Aider (no Aider code); scope and traceability after Spec Kit (no Spec Kit code)
 - Status of integration: EXPERIMENTAL — modules are not wired into the default prompt path until a benchmark shows at least 40% input-token reduction without lower pass rate
 

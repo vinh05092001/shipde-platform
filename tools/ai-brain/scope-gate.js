@@ -9,9 +9,12 @@
  *   testCommands[], maxDiffLines, repairBudget, maxToolCalls; anything else is SCOPE_INVALID by name.
  * S-R02 checkDiff({repoCwd, base, head, scope}) refuses, in order, FORBIDDEN_PATH, DEPENDENCY_ADDED
  *   (a package.json dependency, devDependency, optionalDependency or peerDependency, or any lockfile,
- *   unless scope.allowDependencies), OUT_OF_OWNERSHIP, ASSERTION_WEAKENED (a test file that was modified,
- *   renamed or deleted lost assertion lines while adding none), DIFF_BUDGET_EXCEEDED and NO_EVIDENCE
- *   (SUCCESS claimed, empty diff, no test report).
+ *   unless scope.allowDependencies), OUT_OF_OWNERSHIP, ASSERTION_WEAKENED (a test file that was modified
+ *   or deleted lost assertion lines while adding none; a renamed or copied test file lost assertions,
+ *   meaning its pre-image carried more than its post-image), DIFF_BUDGET_EXCEEDED — the line changes of
+ *   a rename are counted on both sides — and NO_EVIDENCE (SUCCESS claimed, empty diff, no test report).
+ *   A rename or copy is judged as delete(pre-image) + add(post-image): both paths face the forbidden and
+ *   ownership checks, so a file cannot be moved out of a forbidden or unowned path into an owned one.
  * S-R03 checkTrace(actions, scope) refuses UNTRACED_ACTION for an undeclared acceptance id and
  *   FORBIDDEN_ACTION for kind push|open_pr|merge|change_candidate.
  */
@@ -29,7 +32,9 @@ const ORDER_NAMES =
 const REFUSAL_ORDER = ORDER_NAMES.split(' ');
 const FORBIDDEN_KINDS = new Set(['push', 'open_pr', 'merge', 'change_candidate']);
 // A test file that was modified, renamed or deleted can have lost assertions; a new one cannot have.
-const WEAKENABLE = new Set(['M', 'R', 'D']);
+const WEAKENABLE = new Set(['M', 'D']);
+// A rename or a copy is judged from its two blobs, never from a single pathspec diff.
+const RENAMEABLE = new Set(['R', 'C']);
 const DEPENDENCY_FIELDS = 'dependencies devDependencies optionalDependencies peerDependencies';
 const KIND_ALIAS = { openpr: 'open_pr', pullrequest: 'open_pr' };
 
@@ -112,38 +117,47 @@ function parseScope(workItem) {
 }
 
 /** `git diff --name-status -z`: a status letter then one path, two for a rename or a copy. */
+/**
+ * `git diff --name-status -M -z`: a status letter then its path, and for a rename or a copy the
+ * pre-image before the post-image. Both are kept, because a rename is judged as delete(pre) + add(post).
+ */
 function parseNameStatus(raw) {
   const tokens = raw.split('\0').filter(Boolean);
   const rows = [];
   for (let i = 0; i < tokens.length; i += 1) {
     if (!/^[A-Z]/.test(tokens[i]) || !tokens[i + 1]) continue;
     const renamed = 'RC'.includes(tokens[i][0]);
-    rows.push({ status: tokens[i][0], path: renamed ? tokens[i + 2] : tokens[i + 1] });
+    const pre = tokens[i + 1];
+    rows.push({ status: tokens[i][0], path: renamed ? tokens[i + 2] || pre : pre, oldPath: pre });
     i += renamed ? 2 : 1;
   }
   return rows;
 }
 
 function readDiffFacts(repoCwd, base, head) {
-  const names = git(['diff', '--name-status', '-z', base, head], repoCwd);
+  // -M makes a rename one row carrying both paths. --no-renames makes numstat report the two plain
+  // sides (delete the pre-image, add the post-image) instead of the dir/{old => new} shorthand that
+  // cannot be keyed by path. -z means git emits raw paths, so no quoting mode has to be negotiated.
+  const names = git(['diff', '--name-status', '-M', '-z', base, head], repoCwd);
   if (!names.ok) return { ok: false, stderr: names.stderr };
-  const nums = git(['-c', 'core.quotepath=false', 'diff', '--numstat', base, head], repoCwd);
+  const nums = git(['diff', '--numstat', '--no-renames', '-z', base, head], repoCwd);
   if (!nums.ok) return { ok: false, stderr: nums.stderr };
   const counts = new Map();
-  for (const line of nums.stdout.split('\n')) {
-    const [add, del, ...rest] = line.split('\t');
+  for (const entry of nums.stdout.split('\0')) {
+    const [add, del, ...rest] = entry.split('\t');
     if (rest.length === 0) continue;
     counts.set(rest.join('\t'), { added: Number(add) || 0, deleted: Number(del) || 0 });
   }
-  let added = 0;
-  let deleted = 0;
+  const none = { added: 0, deleted: 0 };
+  let diffLines = 0;
   const rows = parseNameStatus(names.stdout).map((row) => {
-    const count = counts.get(row.path) || { added: 0, deleted: 0 };
-    added += count.added;
-    deleted += count.deleted;
+    const gone = counts.get(row.oldPath) || none;
+    const born = row.oldPath === row.path ? gone : counts.get(row.path) || none;
+    const count = { added: gone.added + born.added, deleted: gone.deleted + born.deleted };
+    diffLines += count.added + count.deleted;
     return Object.assign(row, count);
   });
-  return { ok: true, rows, diffLines: added + deleted };
+  return { ok: true, rows, diffLines };
 }
 
 /**
@@ -181,6 +195,20 @@ function assertionLoss(repoCwd, base, head, rel) {
   return loss;
 }
 
+/** Assertions a blob carries, counted from the blob because one pathspec cannot diff a rename. */
+function assertionCount(repoCwd, ref, rel) {
+  const blob = git(['show', `${ref}:${rel}`], repoCwd);
+  if (!blob.ok) return 0;
+  return blob.stdout.split('\n').filter((line) => ASSERTION.test(line)).length;
+}
+
+/** A rename loses assertions when its pre-image carried more than its post-image does. */
+function renameLoss(repoCwd, base, head, row) {
+  const had = assertionCount(repoCwd, base, row.oldPath);
+  const has = assertionCount(repoCwd, head, row.path);
+  return { removed: Math.max(0, had - has), added: has };
+}
+
 /** S-R02 diff drift gate. Returns the first refusal by precedence plus every refusal found. */
 function checkDiff(options) {
   const opts = options || {};
@@ -199,8 +227,10 @@ function checkDiff(options) {
   const refusals = [];
   const allowed = scope.allowDependencies;
   const movedDeps = (rel) => isManifest(rel) && dependenciesMoved(repoCwd, base, head, rel);
-  // A rename is judged on its post-image path, which is the file the Pull Request would carry.
-  for (const rel of rows.map((row) => row.path)) {
+  // A rename is judged as delete(pre-image) + add(post-image): both paths are checked, so moving a
+  // forbidden or unowned file into an owned directory cannot smuggle it past the gate.
+  const touched = rows.flatMap((row) => [row.path, row.oldPath]).filter(Boolean);
+  for (const rel of touched) {
     if (matchGlobs(scope.forbiddenGlobs, rel)) push('FORBIDDEN_PATH', rel);
     else if (isLock(rel) && !allowed) push('DEPENDENCY_ADDED', rel, 'lockfile');
     else if (!allowed && movedDeps(rel)) push('DEPENDENCY_ADDED', rel, 'manifest');
@@ -209,10 +239,18 @@ function checkDiff(options) {
 
   const weakened = [];
   for (const row of rows) {
-    if (!isTestFile(row.path) || !matchGlobs(scope.ownedGlobs, row.path)) continue;
-    if (!WEAKENABLE.has(row.status)) continue;
-    const loss = assertionLoss(repoCwd, base, head, row.path);
-    if (loss.removed > 0 && loss.added === 0) {
+    // The file as it existed before: for a rename that is the pre-image, which is what is being lost.
+    const before = row.oldPath;
+    if (!isTestFile(before) || !matchGlobs(scope.ownedGlobs, before)) continue;
+    const renamed = RENAMEABLE.has(row.status);
+    if (!renamed && !WEAKENABLE.has(row.status)) continue;
+    const loss = renamed
+      ? renameLoss(repoCwd, base, head, row)
+      : assertionLoss(repoCwd, base, head, before);
+    // A rename loses assertions when the pre-image carried more than the post-image does; a modified
+    // or deleted file loses them only while adding none.
+    const lost = loss.removed > 0 && (renamed || loss.added === 0);
+    if (lost) {
       weakened.push(row.path);
       refusals.push(Object.assign({ code: 'ASSERTION_WEAKENED', path: row.path }, loss));
     }
