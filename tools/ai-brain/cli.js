@@ -2658,9 +2658,127 @@ function reviewCommand(args, deps) {
   return { exitCode: code, result };
 }
 
-function main(rawArgv, deps = {}) {
-  const args = (deps && deps.args) || parseArgs(rawArgv || process.argv.slice(2));
-  const command = (args._ && args._[0]) || (rawArgv && rawArgv[0]) || 'reconcile';
+/**
+ * orchestrate (TASK-AI-64, TASK-AI-85): the live autonomous loop —
+ *   node tools/ai-brain/cli.js orchestrate --goal <text|file> --specs <file>
+ *     [--isolated-worker --base-sha <40-hex>] [--checkpoint <file>] [--out <file>]
+ *     [--evidence-dir <dir>]
+ */
+function orchestrateCommand(args, deps = {}) {
+  const d = deps || {};
+  const { runOrchestration } = d.runOrchestration ? d : require('./orchestrate');
+  const { generateCandidates } = require('./candidates');
+  const sourcesApi = require('./sources');
+  const decisionsApi = require('./decisions');
+  const fsx = require('fs');
+  const log = d.log || console.log;
+  const exit = d.exit || process.exit;
+  let goal = typeof args.goal === 'string' ? args.goal : null;
+  if (!goal) {
+    console.error('orchestrate requires --goal <text|file>');
+    exit(2);
+    return Promise.resolve({ exitCode: 2 });
+  }
+  if (fsx.existsSync(goal)) goal = fsx.readFileSync(goal, 'utf8');
+  if (typeof args.specs !== 'string') {
+    console.error('orchestrate requires --specs <file>: the real work-item specs, as a JSON array');
+    exit(2);
+    return Promise.resolve({ exitCode: 2 });
+  }
+  const specDoc = JSON.parse(fsx.readFileSync(args.specs, 'utf8'));
+  const specs = Array.isArray(specDoc) ? specDoc : specDoc.specs;
+  if (!Array.isArray(specs) || specs.length === 0) {
+    console.error('orchestrate: --specs carried no work items');
+    exit(2);
+    return Promise.resolve({ exitCode: 2 });
+  }
+  const out = typeof args.out === 'string' ? args.out : null;
+  const registry = sourcesApi.loadSources();
+  const readJsonArg = (value) =>
+    typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
+  const candidates = generateCandidates({
+    registry,
+    catalogue: readJsonArg(args.catalogue) || [],
+    accounts: readJsonArg(args.accounts) || [],
+    openCodeIds: Array.isArray(args['opencode-ids'])
+      ? args['opencode-ids']
+      : typeof args['opencode-ids'] === 'string'
+        ? args['opencode-ids'].split(',').filter(Boolean)
+        : [],
+  });
+  const evidenceDir =
+    typeof args['evidence-dir'] === 'string' && args['evidence-dir']
+      ? args['evidence-dir']
+      : path.join(__dirname, 'data', 'evidence');
+  // The live loop is async (TASK-AI-65): the JEV assessment behind every
+  // Controller selection returns a promise. An unhandled rejection would crash
+  // silently, so it is caught here and turned into a non-zero exit instead.
+  return runOrchestration(goal, {
+    specs,
+    specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
+    candidates,
+    registry,
+    evidenceDir,
+    run: d.run,
+    tests: d.tests,
+    reviewer: d.reviewer,
+    home: typeof args.home === 'string' ? args.home : undefined,
+    enforceProofFloors: true,
+    isolatedWorker: Boolean(args['isolated-worker']),
+    decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
+    checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,
+    usageDir: typeof args['usage-dir'] === 'string' ? args['usage-dir'] : null,
+    sha: typeof args.sha === 'string' ? args.sha : (d && d.sha) || null,
+    baseSha: typeof args['base-sha'] === 'string' ? args['base-sha'] : (d && d.baseSha) || null,
+    branch: typeof args.branch === 'string' ? args.branch : null,
+    cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
+    workerRoot: typeof args['worker-root'] === 'string' ? args['worker-root'] : null,
+    exercise: typeof args.exercise === 'string' ? args.exercise : null,
+    reviewBudget: args['review-budget'],
+    publication: args.publish
+      ? {
+          approvalId: args.approval,
+          expiry: args['approval-expiry'] ? Date.parse(args['approval-expiry']) : undefined,
+          remoteUrl: args['remote-url'],
+          branch: typeof args.branch === 'string' ? args.branch : null,
+          draft: { workItemId: specs[0].id, outcome: String(goal).slice(0, 72) },
+        }
+      : null,
+    out,
+    now: (d && d.now) || Date.now(),
+  })
+    .then((result) => {
+      log(
+        JSON.stringify(
+          {
+            goal,
+            status: result.status,
+            reconciliation: result.reconciliation,
+            publication: result.publication,
+          },
+          null,
+          2
+        )
+      );
+      if (out) log('Wrote run log to ' + out);
+      const exitCode = result.status === 'COMPLETED' || result.status === 'PUBLISHED_DRAFT' ? 0 : 1;
+      exit(exitCode);
+      return Object.assign({ exitCode }, result);
+    })
+    .catch((err) => {
+      console.error(
+        'Orchestrate lỗi: ' +
+          (err && err.name ? err.name + ': ' : '') +
+          (err && err.message ? err.message : err)
+      );
+      exit(1);
+      return { exitCode: 1, error: err };
+    });
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const command = args._[0] || 'reconcile';
 
   if (command === 'reconcile') return reconcileCommand(args);
   if (command === 'manifest') return manifestCommand(args);
@@ -2751,113 +2869,7 @@ function main(rawArgv, deps = {}) {
   // injected three green gates, so the goal text never became work and no identity
   // came from the registry. Nothing is injected here any more — a live run either
   // launches for real or is refused.
-  if (command === 'orchestrate') {
-    const { runOrchestration } = deps && deps.runOrchestration ? deps : require('./orchestrate');
-    const { generateCandidates } = require('./candidates');
-    const sourcesApi = require('./sources');
-    const decisionsApi = require('./decisions');
-    const fsx = require('fs');
-    const log = (deps && deps.log) || console.log;
-    const exit = (deps && deps.exit) || process.exit;
-    let goal = typeof args.goal === 'string' ? args.goal : null;
-    if (!goal) {
-      console.error('orchestrate requires --goal <text|file>');
-      process.exit(2);
-    }
-    if (fsx.existsSync(goal)) goal = fsx.readFileSync(goal, 'utf8');
-    if (typeof args.specs !== 'string') {
-      console.error(
-        'orchestrate requires --specs <file>: the real work-item specs, as a JSON array'
-      );
-      process.exit(2);
-    }
-    const specDoc = JSON.parse(fsx.readFileSync(args.specs, 'utf8'));
-    const specs = Array.isArray(specDoc) ? specDoc : specDoc.specs;
-    if (!Array.isArray(specs) || specs.length === 0) {
-      console.error('orchestrate: --specs carried no work items');
-      process.exit(2);
-    }
-    const out = typeof args.out === 'string' ? args.out : null;
-    const registry = sourcesApi.loadSources();
-    const readJsonArg = (value) =>
-      typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
-    const candidates = generateCandidates({
-      registry,
-      catalogue: readJsonArg(args.catalogue) || [],
-      accounts: readJsonArg(args.accounts) || [],
-      openCodeIds: Array.isArray(args['opencode-ids'])
-        ? args['opencode-ids']
-        : typeof args['opencode-ids'] === 'string'
-          ? args['opencode-ids'].split(',').filter(Boolean)
-          : [],
-    });
-    const evidenceDir = args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
-    // The live loop is async (TASK-AI-65): the JEV assessment behind every
-    // Controller selection returns a promise. An unhandled rejection would crash
-    // silently, so it is caught here and turned into a non-zero exit instead.
-    return runOrchestration(goal, {
-      specs,
-      specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
-      candidates,
-      registry,
-      evidenceDir,
-      run: deps && deps.run,
-      tests: deps && deps.tests,
-      reviewer: deps && deps.reviewer,
-      home: typeof args.home === 'string' ? args.home : undefined,
-      enforceProofFloors: true,
-      isolatedWorker: Boolean(args['isolated-worker']),
-      decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
-      checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,
-      usageDir: typeof args['usage-dir'] === 'string' ? args['usage-dir'] : null,
-      sha: typeof args.sha === 'string' ? args.sha : null,
-      baseSha: typeof args['base-sha'] === 'string' ? args['base-sha'] : null,
-      branch: typeof args.branch === 'string' ? args.branch : null,
-      cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
-      workerRoot: typeof args['worker-root'] === 'string' ? args['worker-root'] : null,
-      exercise: typeof args.exercise === 'string' ? args.exercise : null,
-      reviewBudget: args['review-budget'],
-      publication: args.publish
-        ? {
-            approvalId: args.approval,
-            expiry: args['approval-expiry'] ? Date.parse(args['approval-expiry']) : undefined,
-            remoteUrl: args['remote-url'],
-            branch: typeof args.branch === 'string' ? args.branch : null,
-            draft: { workItemId: specs[0].id, outcome: String(goal).slice(0, 72) },
-          }
-        : null,
-      out,
-      now: (deps && deps.now) || Date.now(),
-    })
-      .then((result) => {
-        log(
-          JSON.stringify(
-            {
-              goal,
-              status: result.status,
-              reconciliation: result.reconciliation,
-              publication: result.publication,
-            },
-            null,
-            2
-          )
-        );
-        if (out) log('Wrote run log to ' + out);
-        const exitCode =
-          result.status === 'COMPLETED' || result.status === 'PUBLISHED_DRAFT' ? 0 : 1;
-        exit(exitCode);
-        return Object.assign({ exitCode }, result);
-      })
-      .catch((err) => {
-        console.error(
-          'Orchestrate lỗi: ' +
-            (err && err.name ? err.name + ': ' : '') +
-            (err && err.message ? err.message : err)
-        );
-        exit(1);
-        return { exitCode: 1, error: err };
-      });
-  }
+  if (command === 'orchestrate') return orchestrateCommand(args);
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
@@ -2888,10 +2900,6 @@ module.exports = {
   reviewCommand,
   orchestrateCommand,
 };
-
-function orchestrateCommand(args, deps = {}) {
-  return main(['orchestrate'], Object.assign({}, deps, { args }));
-}
 
 if (require.main === module) {
   main();
