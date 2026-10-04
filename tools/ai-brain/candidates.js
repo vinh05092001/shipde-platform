@@ -566,6 +566,20 @@ function gatewayAccountCandidates(opts) {
   return out;
 }
 
+function resolveComboCapabilities(combo, accounts) {
+  const accountId = combo && (combo.accountId || combo.account);
+  if (accountId && accountId !== '*' && accountId !== 'UNPINNED' && Array.isArray(accounts)) {
+    const acc = accounts.find((a) => a && a.id === accountId);
+    if (acc && acc.capabilities && Object.keys(acc.capabilities).length > 0) {
+      return Object.assign({}, acc.capabilities);
+    }
+  }
+  if (combo && combo.capabilities && Object.keys(combo.capabilities).length > 0) {
+    return Object.assign({}, combo.capabilities);
+  }
+  return {};
+}
+
 /**
  * Expand evidence-known combinations into candidates that the live catalogue
  * may have missed (e.g. models that were probed before but aren't currently
@@ -575,7 +589,13 @@ function gatewayAccountCandidates(opts) {
  * unverified history; they are never assigned default account '*' or quotaScope
  * and never treated as verified active candidates.
  */
-function candidatesFromEvidence(evidenceData) {
+function candidatesFromEvidence(evidenceData, options) {
+  const accounts =
+    options && Array.isArray(options.accounts)
+      ? options.accounts
+      : Array.isArray(options)
+        ? options
+        : [];
   const out = [];
   for (const combo of (evidenceData && evidenceData.combinations) || []) {
     const isLegacy = combo.legacy || (!combo.accountId && !combo.quotaScope);
@@ -611,7 +631,7 @@ function candidatesFromEvidence(evidenceData) {
         kind: 'evidence',
         sharedQuota: 'unknown',
         evidence: evidenceList,
-        capabilities: combo.capabilities || {},
+        capabilities: resolveComboCapabilities(combo, accounts),
       };
       if (combo.cost !== undefined) cand.cost = combo.cost;
       if (combo.quality !== undefined) cand.quality = combo.quality;
