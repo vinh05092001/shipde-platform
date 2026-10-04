@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "workItemId": "TASK-AI-77",
+  "reviewedCommit": "1111111111111111111111111111111111111111",
+  "reviewedBase": "2222222222222222222222222222222222222222",
+  "reviewedTree": "3333333333333333333333333333333333333333",
+  "reviewedPatchId": "4444444444444444444444444444444444444444",
+  "reviewerCandidateKey": "codex::cli::review-gw::openai::rev-acc::rev-scope::gpt-5-codex",
+  "writerCandidateKey": "openclaw::opencode::router::github::acc-1::scope-1",
+  "writerFailureDomain": "router/github",
+  "reviewerFailureDomain": "review-gw/openai",
+  "verdict": "PASS",
+  "findings": [],
+  "tests": [{ "command": "node --test", "result": "pass", "summary": "green" }],
+  "artifactSha256": "5555555555555555555555555555555555555555555555555555555555555555",
+  "createdAt": "2026-10-04T00:00:00.000Z"
+}
