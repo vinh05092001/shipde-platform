@@ -9,11 +9,14 @@
  * Rules:
  *   W-R01 sha must be exactly 40 lowercase hex, else refuse SHA_INVALID.
  *   W-R02 writer must parse as a 7-part candidate key with non-empty parts, else WRITER_KEY_INVALID.
- *   W-R03 review file must exist; line 1 must contain the full sha; line 2 must be exactly
- *         'Review verdict: PASS'; else REVIEW_NOT_PASS (or REVIEW_SHA_MISMATCH when line 1 lacks the sha).
- *   W-R04 sha must be an ancestor of (or equal to) the main ref (git merge-base --is-ancestor),
- *         else NOT_MERGED. Squash merges: also accept when the review file names the sha and the
- *         main-ref history contains a commit whose message contains '[<work-item>]' — record which path proved it (ancestor|squash).
+ *   W-R03 the markdown review is the artifact the manifest binds: it must exist, name the
+ *         reviewed sha on line 1 and carry exactly 'Review verdict: PASS' on line 2, else
+ *         REVIEW_NOT_PASS (or REVIEW_SHA_MISMATCH when line 1 lacks the sha).
+ *   W-R04/M-R08 merge binding: the reviewed sha must be reachable from the main ref AND a main
+ *         commit whose message contains [<work-item>] must carry the reviewed patch (patch-id of
+ *         mergeCommit^..mergeCommit equals reviewedPatchId) — 'ancestor'; the same patch equality
+ *         proves a squash when the reviewed commit is not an ancestor — 'squash'. A [<work-item>]
+ *         message whose patch differs is SQUASH_PATCH_MISMATCH; a commit message alone is never enough.
  *   W-R05 reviewer must be non-empty and must not equal the writer key, nor share its upstream segment or modelId,
  *         else REVIEWER_NOT_INDEPENDENT.
  *   W-R06 on success call evidence.recordProbe(dir, candidate, {level: 3 (OUTCOME), proofLevel:'WORK_ITEM_PASS',
@@ -22,12 +25,22 @@
  *   W-R07 idempotent: importing the same sha+writer twice adds no second item (returns ALREADY_RECORDED).
  *   W-R08 every refusal writes nothing to the evidence store; exit code 0 on success/ALREADY_RECORDED,
  *         1 on refusal, 2 on bad argv.
+ *
+ * TASK-AI-77 (Gate B) adds the structured review manifest, which becomes the
+ * only source of the verdict, the reviewed tree, the reviewed patch and the
+ * reviewer identity — the markdown is no longer evidence on its own:
+ *   M-R07 --manifest is required; a markdown review alone is MANIFEST_REQUIRED.
+ *   M-R08 the merge must carry the reviewed patch; --pr-head must be the reviewed commit.
+ *   M-R09 the recorded item names workItemId, reviewedCommit, reviewedTree,
+ *         reviewedPatchId, mergeCommit and the manifest's sha256, written through
+ *         evidence.recordProbe into the one existing evidence store.
  */
 
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 const evidence = require('./evidence');
+const reviewManifest = require('./review-manifest');
 const { candidateKey, parseCandidateKey } = require('./discovery/identity');
 
 /** Check if commitSha is an ancestor of ref via git merge-base --is-ancestor */
@@ -48,47 +61,77 @@ function isGitAncestor(commitSha, ref, gitCwd) {
   }
 }
 
-/** Check if main-ref history contains a commit whose message contains [<work-item>] */
-function findSquashCommit(wId, ref, gitCwd) {
-  if (!wId) return false;
+/**
+ * M-R08: every commit on `ref` whose message carries `[<work-item>]`, newest first.
+ * A message is a candidate, never the proof: each candidate still has to carry
+ * the reviewed patch.
+ */
+function findWorkItemCommits(wId, ref, gitCwd) {
+  if (!wId) return [];
   try {
-    const needle = `[${wId}]`;
     const res = cp.spawnSync(
       'git',
-      ['-c', 'safe.directory=*', 'log', ref, '-F', `--grep=${needle}`, '-n', '1', '--format=%H'],
+      ['-c', 'safe.directory=*', 'log', ref, '-F', `--grep=[${wId}]`, '--format=%H'],
       {
         cwd: gitCwd,
         encoding: 'utf8',
         windowsHide: true,
       }
     );
-    if (res.status === 0 && res.stdout && res.stdout.trim().length > 0) {
-      return true;
-    }
-    const resCi = cp.spawnSync(
-      'git',
-      [
-        '-c',
-        'safe.directory=*',
-        'log',
-        ref,
-        '-i',
-        '-F',
-        `--grep=${needle}`,
-        '-n',
-        '1',
-        '--format=%H',
-      ],
-      {
-        cwd: gitCwd,
-        encoding: 'utf8',
-        windowsHide: true,
-      }
-    );
-    return resCi.status === 0 && resCi.stdout && resCi.stdout.trim().length > 0;
+    if (res.status !== 0 || !res.stdout) return [];
+    return res.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => /^[0-9a-f]{40}$/i.test(line));
   } catch {
-    return false;
+    return [];
   }
+}
+
+/**
+ * M-R08 merge binding. Proof that the reviewed change is what actually landed:
+ *
+ *   ancestor — the reviewed commit is reachable from the main ref AND a main
+ *              commit titled `[<work-item>]` carries exactly the reviewed patch.
+ *   squash   — same patch equality, but the reviewed commit is not an ancestor
+ *              because the branch was squashed.
+ *
+ * A `[<work-item>]` message whose patch-id differs from the reviewed one is
+ * SQUASH_PATCH_MISMATCH: the title alone never promotes anything.
+ */
+function bindMergeProof(options) {
+  const { sha, workItem, mainRef, cwd, reviewedPatchId } = options;
+  const candidates = findWorkItemCommits(workItem, mainRef, cwd);
+  const matching = candidates.filter((c) => {
+    const patchId = reviewManifest.commitPatchId(cwd, c);
+    return Boolean(patchId) && patchId === String(reviewedPatchId || '').toLowerCase();
+  });
+  const ancestor = isGitAncestor(sha, mainRef, cwd);
+  if (matching.length > 0) {
+    return {
+      ok: true,
+      mergeProof: ancestor ? 'ancestor' : 'squash',
+      mergeCommit: matching[0],
+    };
+  }
+  if (candidates.length > 0) {
+    return {
+      ok: false,
+      code: 'SQUASH_PATCH_MISMATCH',
+      reason:
+        'a [' +
+        workItem +
+        '] commit exists on ' +
+        mainRef +
+        ' but it does not carry the reviewed patch-id ' +
+        reviewedPatchId,
+    };
+  }
+  return {
+    ok: false,
+    code: 'NOT_MERGED',
+    reason: `commit ${sha} is not merged into ${mainRef} (no [${workItem}] commit carries the reviewed patch)`,
+  };
 }
 
 /**
@@ -159,11 +202,13 @@ function checkReviewerIndependence(reviewer, writerParts) {
  * Import a work item pass into the evidence store.
  *
  * @param {object} opts
+ * @param {string} opts.manifest path to the structured review manifest (M-R07)
  * @param {string} opts.sha 40-hex commit sha
  * @param {string} opts.writer 7-part candidateKey
- * @param {string} opts.review path to review md
+ * @param {string} opts.review path to the markdown review the manifest binds
  * @param {string} opts.reviewer reviewer identity string
  * @param {string} opts.workItem work item id
+ * @param {string} [opts.prHead] PR head sha; must equal the reviewed commit (M-R08)
  * @param {string} [opts.mainRef='origin/main'] git ref for main
  * @param {string} [opts.evidenceDir] path to evidence store directory
  * @param {string} [opts.cwd] current working directory for git / relative paths
@@ -218,8 +263,35 @@ function importWorkItemPass(opts) {
   };
   const normalizedWriterKey = candidateKey(candidate);
 
-  // W-R03: review file must exist; line 1 must contain full sha; line 2 must be exactly 'Review verdict: PASS'
-  const reviewFile = options.review || options.reviewFile || options['review-file'];
+  // M-R07: the verdict, the reviewed tree, the reviewed patch and the reviewer
+  // identity all come from the manifest. A markdown review on its own is prose,
+  // and prose is refused rather than promoted.
+  const manifestArg =
+    options.manifest || options['manifest-path'] || options['review-manifest'] || null;
+  if (!manifestArg) {
+    return {
+      ok: false,
+      code: 'MANIFEST_REQUIRED',
+      reason:
+        'a structured review manifest is required: the markdown review alone is not review evidence',
+    };
+  }
+  const manifestPath = path.isAbsolute(manifestArg) ? manifestArg : path.resolve(cwd, manifestArg);
+  const loaded = reviewManifest.readManifest(manifestPath);
+  if (!loaded.ok) return loaded;
+  const manifest = loaded.manifest;
+  const manifestSha256 = reviewManifest.sha256File(manifestPath);
+
+  // W-R03: the markdown review is the artifact the manifest binds — it must
+  // exist, name the reviewed commit and still be the PASS-shaped review
+  // document. It is no longer where the verdict is read from.
+  const reviewFile =
+    options.review ||
+    options.reviewFile ||
+    options['review-file'] ||
+    options.artifact ||
+    options['artifact-path'] ||
+    null;
   if (!reviewFile || typeof reviewFile !== 'string') {
     return {
       ok: false,
@@ -278,20 +350,45 @@ function importWorkItemPass(opts) {
     };
   }
 
-  // W-R04: sha must be ancestor of main ref, or squash merge where review file names sha and main has [<work-item>]
-  const mainRef = options.mainRef || options['main-ref'] || 'origin/main';
-  let mergeProof = null;
-  if (isGitAncestor(sha, mainRef, cwd)) {
-    mergeProof = 'ancestor';
-  } else if (reviewContent.includes(sha) && findSquashCommit(workItem, mainRef, cwd)) {
-    mergeProof = 'squash';
-  } else {
+  // M-R01..M-R05: the manifest must be well formed, bound to this work item and
+  // to this exact commit, tree and patch, independently reviewed, and bound to
+  // this markdown by sha256. Anything else is refused with the manifest's code.
+  const checked = reviewManifest.validateManifest(manifest, {
+    repoCwd: cwd,
+    expected: { workItemId: workItem, commit: sha },
+    artifactPath: reviewPath,
+  });
+  if (!checked.ok) return checked;
+  if (checked.verdict !== 'PASS') {
     return {
       ok: false,
-      code: 'NOT_MERGED',
-      reason: `commit ${sha} is not merged into ${mainRef} (not an ancestor and no squash commit matching [${workItem}])`,
+      code: 'VERDICT_NOT_PASS',
+      reason: 'the review manifest verdict is ' + checked.verdict + ', not PASS',
     };
   }
+
+  // M-R08: an optional PR head that is not the reviewed commit means the Pull
+  // Request moved; refuse before it can be read as evidence.
+  const prHead = options.prHead || options['pr-head'] || null;
+  if (prHead && String(prHead).trim().toLowerCase() !== checked.reviewedCommit) {
+    return {
+      ok: false,
+      code: 'PR_HEAD_MISMATCH',
+      reason: `Pull Request head ${prHead} is not the reviewed commit ${checked.reviewedCommit}`,
+    };
+  }
+
+  // W-R04 / M-R08: the merge must carry the reviewed patch.
+  const mainRef = options.mainRef || options['main-ref'] || 'origin/main';
+  const binding = bindMergeProof({
+    sha,
+    workItem,
+    mainRef,
+    cwd,
+    reviewedPatchId: checked.reviewedPatchId,
+  });
+  if (!binding.ok) return { ok: false, code: binding.code, reason: binding.reason };
+  const mergeProof = binding.mergeProof;
 
   // W-R05: reviewer must be non-empty and must not equal writer key, nor share upstream segment or modelId
   const reviewer = options.reviewer;
@@ -328,7 +425,9 @@ function importWorkItemPass(opts) {
     };
   }
 
-  // W-R06: on success call evidence.recordProbe
+  // W-R06 / M-R09: on success call evidence.recordProbe in the one existing
+  // store. The item carries the whole binding, so the promotion can be re-checked
+  // against git later without re-reading prose.
   const probeItem = {
     level: 3,
     proofLevel: 'WORK_ITEM_PASS',
@@ -339,6 +438,13 @@ function importWorkItemPass(opts) {
     reviewer,
     reviewFile,
     mergeProof,
+    workItemId: manifest.workItemId,
+    reviewedCommit: checked.reviewedCommit,
+    reviewedTree: checked.reviewedTree,
+    reviewedPatchId: checked.reviewedPatchId,
+    mergeCommit: binding.mergeCommit,
+    manifestSha256,
+    reviewerCandidateKey: manifest.reviewerCandidateKey,
   };
 
   evidence.recordProbe(resolvedEvidenceDir, candidate, probeItem);
@@ -352,12 +458,16 @@ function importWorkItemPass(opts) {
     reviewer,
     reviewFile,
     mergeProof,
+    mergeCommit: binding.mergeCommit,
+    reviewedPatchId: checked.reviewedPatchId,
+    manifestSha256,
   };
 }
 
 module.exports = {
   importWorkItemPass,
   isGitAncestor,
-  findSquashCommit,
+  findWorkItemCommits,
+  bindMergeProof,
   checkReviewerIndependence,
 };

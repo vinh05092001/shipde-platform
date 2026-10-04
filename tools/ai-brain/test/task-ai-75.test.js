@@ -36,6 +36,8 @@ const { evidenceCommand } = require('../cli');
 const evidence = require('../evidence');
 const routing = require('../routing');
 const { candidateKey } = require('../discovery/identity');
+const { computeReviewedTree, computePatchId, sha256File } = require('../review-manifest');
+const { failureDomainFromCandidateKey } = require('../publisher');
 
 const cleanupDirs = [];
 function tmpDir(prefix) {
@@ -85,6 +87,52 @@ function writeReview(dir, filename, sha, verdict = 'PASS') {
   const content = `# Independent review for commit ${sha}\nReview verdict: ${verdict}\n\nEvidence and notes.\n`;
   fs.writeFileSync(filePath, content, 'utf8');
   return filePath;
+}
+
+// TASK-AI-77: the import is now authorised by a structured review manifest, so
+// every fixture below that imports a review also writes the manifest that binds
+// it (W-R04 base..commit, tree and the sha256 of the same markdown file). No
+// assertion below changed: each test still proves the behaviour it proved.
+function writeManifest(repo, opts) {
+  const writer = opts.writer || VALID_WRITER;
+  const reviewer =
+    opts.reviewer || 'codex::cli::review-gw::openai::rev-acc::rev-scope::gpt-5-codex';
+  const manifest = {
+    schemaVersion: 1,
+    workItemId: opts.workItem || 'TASK-AI-75',
+    reviewedCommit: opts.commit,
+    reviewedBase: opts.base,
+    reviewedTree: computeReviewedTree(repo.dir, opts.commit),
+    reviewedPatchId: computePatchId(repo.dir, opts.base, opts.commit),
+    reviewerCandidateKey: reviewer,
+    writerCandidateKey: writer,
+    writerFailureDomain: failureDomainFromCandidateKey(writer),
+    reviewerFailureDomain: failureDomainFromCandidateKey(reviewer),
+    verdict: opts.verdict || 'PASS',
+    findings: [],
+    tests: [{ command: 'node --test', result: 'pass', summary: 'green' }],
+    artifactSha256: sha256File(opts.review),
+    createdAt: '2026-10-04T00:00:00.000Z',
+  };
+  const filePath = path.join(repo.dir, opts.filename || 'review-manifest.json');
+  fs.writeFileSync(filePath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  return filePath;
+}
+
+/**
+ * One reviewed commit on its own branch, merged into main with the [<work-item>]
+ * title and the reviewed patch (W-R04 ancestor path, M-R08).
+ */
+function mergeReviewedWork(repo, workItem) {
+  const base = repo.git(['rev-parse', 'HEAD']);
+  repo.git(['checkout', '-b', 'feat/reviewed']);
+  fs.writeFileSync(path.join(repo.dir, 'reviewed.txt'), 'reviewed work\n', 'utf8');
+  repo.git(['add', 'reviewed.txt']);
+  repo.git(['commit', '-m', 'feat: reviewed work item']);
+  const commit = repo.git(['rev-parse', 'HEAD']);
+  repo.git(['checkout', 'main']);
+  repo.git(['merge', '--no-ff', '-m', `[${workItem}] Merge reviewed work item`, 'feat/reviewed']);
+  return { commit, base };
 }
 
 const VALID_WRITER = 'openclaw::opencode::router::github::acc-1::scope-1::gpt-4.1';
@@ -234,11 +282,33 @@ describe('TASK-AI-75: Work-evidence importer', () => {
     const evDir = tmpDir('ev-r03-');
     const sha = '1111111111111111111111111111111111111111';
 
+    // M-R07: the markdown review alone is no longer evidence.
+    const proseOnly = writeReview(repo.dir, 'rev-prose.md', sha);
+    const noManifest = importWorkItemPass({
+      sha,
+      writer: VALID_WRITER,
+      review: proseOnly,
+      reviewer: 'codex-reviewer',
+      workItem: 'TASK-AI-75',
+      mainRef: 'main',
+      evidenceDir: evDir,
+      cwd: repo.dir,
+    });
+    assert.equal(noManifest.ok, false);
+    assert.equal(noManifest.code, 'MANIFEST_REQUIRED');
+
     // File does not exist
+    const missingReview = writeReview(repo.dir, 'rev-present.md', sha);
+    const missingManifest = writeManifest(repo, {
+      commit: sha,
+      base: repo.git(['rev-parse', 'HEAD']),
+      review: missingReview,
+    });
     const r1 = importWorkItemPass({
       sha,
       writer: VALID_WRITER,
       review: path.join(repo.dir, 'non-existent.md'),
+      manifest: missingManifest,
       reviewer: 'codex-reviewer',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -259,6 +329,12 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review: mismatchFile,
+      manifest: writeManifest(repo, {
+        commit: sha,
+        base: repo.git(['rev-parse', 'HEAD']),
+        review: mismatchFile,
+        filename: 'rev-mismatch.manifest.json',
+      }),
       reviewer: 'codex-reviewer',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -274,6 +350,12 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review: failFile,
+      manifest: writeManifest(repo, {
+        commit: sha,
+        base: repo.git(['rev-parse', 'HEAD']),
+        review: failFile,
+        filename: 'rev-fail.manifest.json',
+      }),
       reviewer: 'codex-reviewer',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -290,6 +372,12 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review: spaceFile,
+      manifest: writeManifest(repo, {
+        commit: sha,
+        base: repo.git(['rev-parse', 'HEAD']),
+        review: spaceFile,
+        filename: 'rev-space.manifest.json',
+      }),
       reviewer: 'codex-reviewer',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -317,6 +405,12 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha: unmergedSha,
       writer: VALID_WRITER,
       review: unmergedReview,
+      manifest: writeManifest(repo, {
+        commit: unmergedSha,
+        base: repo.git(['rev-parse', unmergedSha + '^']),
+        review: unmergedReview,
+        filename: 'rev-unmerged.manifest.json',
+      }),
       reviewer: 'codex-reviewer',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -328,18 +422,31 @@ describe('TASK-AI-75: Work-evidence importer', () => {
 
     // 2. Ancestor merge path: commit merged directly into main
     repo.git(['checkout', '-b', 'feat/task-ai-ancestor']);
+    const ancestorBase = repo.git(['rev-parse', 'HEAD']);
     fs.writeFileSync(path.join(repo.dir, 'ancestor.txt'), 'ancestor\n', 'utf8');
     repo.git(['add', 'ancestor.txt']);
     repo.git(['commit', '-m', 'feat: ancestor commit']);
     const ancestorSha = repo.git(['rev-parse', 'HEAD']);
     repo.git(['checkout', 'main']);
-    repo.git(['merge', '--no-ff', '-m', 'Merge feature branch', 'feat/task-ai-ancestor']);
+    repo.git([
+      'merge',
+      '--no-ff',
+      '-m',
+      '[TASK-AI-75] Merge feature branch',
+      'feat/task-ai-ancestor',
+    ]);
 
     const ancestorReview = writeReview(repo.dir, 'rev-ancestor.md', ancestorSha);
     const r2 = importWorkItemPass({
       sha: ancestorSha,
       writer: VALID_WRITER,
       review: ancestorReview,
+      manifest: writeManifest(repo, {
+        commit: ancestorSha,
+        base: ancestorBase,
+        review: ancestorReview,
+        filename: 'rev-ancestor.manifest.json',
+      }),
       reviewer: 'codex-reviewer',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -352,6 +459,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
 
     // 3. Squash merge path: feature commit squashed onto main with [<work-item>] in commit message
     repo.git(['checkout', '-b', 'feat/task-ai-squash']);
+    const squashBase = repo.git(['rev-parse', 'HEAD']);
     fs.writeFileSync(path.join(repo.dir, 'squash.txt'), 'squash feature content\n', 'utf8');
     repo.git(['add', 'squash.txt']);
     repo.git(['commit', '-m', 'feat: pre-squash commit']);
@@ -369,6 +477,12 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha: squashFeatureSha,
       writer: VALID_WRITER,
       review: squashReview,
+      manifest: writeManifest(repo, {
+        commit: squashFeatureSha,
+        base: squashBase,
+        review: squashReview,
+        filename: 'rev-squash.manifest.json',
+      }),
       reviewer: 'codex-reviewer',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -383,8 +497,15 @@ describe('TASK-AI-75: Work-evidence importer', () => {
   test('W-R05: reviewer must be non-empty and must not equal writer key, nor share upstream segment or modelId', () => {
     const repo = createTestGitRepo();
     const evDir = tmpDir('ev-r05-');
-    const sha = repo.git(['rev-parse', 'HEAD']);
+    const reviewed = mergeReviewedWork(repo, 'TASK-AI-75');
+    const sha = reviewed.commit;
     const review = writeReview(repo.dir, 'rev.md', sha);
+    const manifest = writeManifest(repo, {
+      commit: reviewed.commit,
+      base: reviewed.base,
+      review,
+      filename: 'rev.manifest.json',
+    });
     // writer is: openclaw::opencode::router::github::acc-1::scope-1::gpt-4.1
     // upstream is 'github', modelId is 'gpt-4.1'
 
@@ -393,6 +514,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: '',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -407,6 +529,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: VALID_WRITER,
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -421,6 +544,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: 'paseo::opencode::router::github::acc-2::scope-2::claude-3-5',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -435,6 +559,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: 'paseo::opencode::router::openai::acc-2::scope-2::gpt-4.1',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -449,6 +574,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: 'github',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -463,6 +589,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: 'gpt-4.1',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -477,6 +604,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: 'chatgpt-codex-connector[bot]',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -490,13 +618,21 @@ describe('TASK-AI-75: Work-evidence importer', () => {
   test('W-R06: on success call evidence.recordProbe so routing proofObserved reports WORK_ITEM_PASS for exact candidate', () => {
     const repo = createTestGitRepo();
     const evDir = tmpDir('ev-r06-');
-    const sha = repo.git(['rev-parse', 'HEAD']);
+    const reviewed = mergeReviewedWork(repo, 'TASK-AI-75');
+    const sha = reviewed.commit;
     const review = writeReview(repo.dir, 'rev.md', sha);
+    const manifest = writeManifest(repo, {
+      commit: reviewed.commit,
+      base: reviewed.base,
+      review,
+      filename: 'rev.manifest.json',
+    });
 
     const r = importWorkItemPass({
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: 'independent-codex',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -553,14 +689,22 @@ describe('TASK-AI-75: Work-evidence importer', () => {
   test('W-R07: idempotent: importing same sha+writer twice adds no second item (returns ALREADY_RECORDED)', () => {
     const repo = createTestGitRepo();
     const evDir = tmpDir('ev-r07-');
-    const sha = repo.git(['rev-parse', 'HEAD']);
+    const reviewed = mergeReviewedWork(repo, 'TASK-AI-75');
+    const sha = reviewed.commit;
     const review = writeReview(repo.dir, 'rev.md', sha);
+    const manifest = writeManifest(repo, {
+      commit: reviewed.commit,
+      base: reviewed.base,
+      review,
+      filename: 'rev.manifest.json',
+    });
 
     // First import
     const r1 = importWorkItemPass({
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: 'independent-codex',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -575,6 +719,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: VALID_WRITER,
       review,
+      manifest,
       reviewer: 'independent-codex',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -604,8 +749,15 @@ describe('TASK-AI-75: Work-evidence importer', () => {
   test('W-R08: every refusal writes nothing to evidence store; exit code 0 on success/ALREADY_RECORDED, 1 on refusal, 2 on bad argv', () => {
     const repo = createTestGitRepo();
     const evDir = tmpDir('ev-r08-');
-    const sha = repo.git(['rev-parse', 'HEAD']);
+    const reviewed = mergeReviewedWork(repo, 'TASK-AI-75');
+    const sha = reviewed.commit;
     const review = writeReview(repo.dir, 'rev.md', sha);
+    const manifest = writeManifest(repo, {
+      commit: reviewed.commit,
+      base: reviewed.base,
+      review,
+      filename: 'rev.manifest.json',
+    });
 
     // Verify refusals write nothing
     const refusals = [
@@ -662,6 +814,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
         sha: 'bad-sha',
         writer: VALID_WRITER,
         review,
+        manifest,
         reviewer: 'codex',
         'work-item': 'TASK-AI-75',
         'main-ref': 'main',
@@ -680,6 +833,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
         sha,
         writer: VALID_WRITER,
         review,
+        manifest,
         reviewer: 'independent-codex',
         'work-item': 'TASK-AI-75',
         'main-ref': 'main',
@@ -698,6 +852,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
         sha,
         writer: VALID_WRITER,
         review,
+        manifest,
         reviewer: 'independent-codex',
         'work-item': 'TASK-AI-75',
         'main-ref': 'main',
@@ -714,8 +869,15 @@ describe('TASK-AI-75: Work-evidence importer', () => {
   test('W-R09: routing rank rejects candidate with PROOF_FLOOR_NOT_MET before import and accepts it after import with proofFloor WORK_ITEM_PASS', async () => {
     const repo = createTestGitRepo();
     const evDir = tmpDir('ev-r09-');
-    const sha = repo.git(['rev-parse', 'HEAD']);
+    const reviewed = mergeReviewedWork(repo, 'TASK-AI-75');
+    const sha = reviewed.commit;
     const review = writeReview(repo.dir, 'rev.md', sha);
+    const manifest = writeManifest(repo, {
+      commit: reviewed.commit,
+      base: reviewed.base,
+      review,
+      filename: 'rev.manifest.json',
+    });
 
     const candidate = {
       harness: 'openclaw',
@@ -770,6 +932,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
       sha,
       writer: key,
       review,
+      manifest,
       reviewer: 'independent-codex',
       workItem: 'TASK-AI-75',
       mainRef: 'main',
@@ -793,8 +956,15 @@ describe('TASK-AI-75: Work-evidence importer', () => {
   test('CLI end-to-end process execution', () => {
     const repo = createTestGitRepo();
     const evDir = tmpDir('ev-cli-proc-');
-    const sha = repo.git(['rev-parse', 'HEAD']);
+    const reviewed = mergeReviewedWork(repo, 'TASK-AI-75');
+    const sha = reviewed.commit;
     const review = writeReview(repo.dir, 'rev.md', sha);
+    const manifest = writeManifest(repo, {
+      commit: reviewed.commit,
+      base: reviewed.base,
+      review,
+      filename: 'rev.manifest.json',
+    });
     const cliPath = path.resolve(__dirname, '..', 'cli.js');
 
     // Test successful CLI execution via node subprocess
@@ -810,6 +980,8 @@ describe('TASK-AI-75: Work-evidence importer', () => {
         VALID_WRITER,
         '--review',
         review,
+        '--manifest',
+        manifest,
         '--reviewer',
         'independent-codex',
         '--work-item',
@@ -840,6 +1012,8 @@ describe('TASK-AI-75: Work-evidence importer', () => {
         VALID_WRITER,
         '--review',
         review,
+        '--manifest',
+        manifest,
         '--reviewer',
         'independent-codex',
         '--work-item',
