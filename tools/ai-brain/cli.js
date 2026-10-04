@@ -689,6 +689,19 @@ function assembleCandidates(
         c.capabilities = off.capabilities;
       }
     }
+    if (
+      (!c.capabilities || Object.keys(c.capabilities).length === 0) &&
+      accountId &&
+      accountId !== '*'
+    ) {
+      const acc = (accounts || []).find((a) => a && a.id === accountId);
+      if (acc && acc.capabilities) {
+        c.capabilities = Object.assign({}, acc.capabilities, c.capabilities || {});
+      }
+      if (c.cost === undefined && acc && acc.cost !== undefined) {
+        c.cost = acc.cost;
+      }
+    }
     const key = candidatesApi.candidateKey(c);
     c.key = key;
     if (!seenKeys.has(key)) {

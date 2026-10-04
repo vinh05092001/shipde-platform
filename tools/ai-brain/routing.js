@@ -290,6 +290,9 @@ async function assessTask(profile, opts) {
     latencyPriority: profile.latencyPriority,
     recommendedModelClass,
     confidence: jevDecided ? result.confidence : 0,
+    probabilities: jevDecided && result.probabilities ? result.probabilities : null,
+    jevModel: jevDecided && result.jevModel ? result.jevModel : null,
+    usage: jevDecided && result.usage ? result.usage : null,
     reasonCodes,
     reason: (result.jev && result.jev.reason) || result.reason || null,
   };
@@ -951,6 +954,10 @@ async function runProfileDispatch(args, deps) {
     role: profile.role,
     taskProfile: profile,
     jev: assessment,
+    weightProfile: assessment.weightProfile,
+    jevModel: assessment.jevModel || null,
+    confidence: assessment.confidence !== undefined ? assessment.confidence : null,
+    probabilities: assessment.probabilities || null,
     ranking: result.ranking.map((c) => ({
       candidateKey: c.candidateKey,
       score: c.score,

@@ -70,3 +70,53 @@ Implementation evidence must include the merged contract-test commit status, foc
 ## Residual Limitations
 
 JEV availability is intentionally not required for Controller progress. If the source is unreachable, times out, returns malformed output, or falls below `minConfidence`, the Controller records `UNDECIDED` and proceeds only through deterministic fallback weights and normal ranking gates.
+
+## Data Gap and Evidence Analysis: WORK_ITEM_PASS Refusal
+
+Following the resolution of Defect Y (TypeSafe JEV OpenAPI contract conformance) and Problem 2 defect fixes (reading capability evidence from bound accounts and treating `minContext` as `contextSize`), candidate filtering correctly evaluates capability floors.
+
+### Root Cause Analysis of Live Run Refusal (`proof3-data`)
+
+1. **JEV Adapter Defect Y (Resolved):**
+   - Previous behavior: `buildJevAsk` posted `{kind, prompt, evidence, options}` to `/v1/systemone`, resulting in HTTP 400 'Invalid request' from `api.typesafe.ai`.
+   - Resolution: Adapter conforms strictly to the OpenAPI specification (`POST /v1/systemone` with `{model, state, questions: {weightProfile: {type: 'choice', instructions, criteria}}}`), reads model `"jev-latest"` from `sources.json`, and records `jevModel`, `confidence`, and `probabilities` in the decision log.
+
+2. **Capability Evidence & `minContext` (Resolved):**
+   - Previous behavior: `generateCandidates` and `gatewayAccountCandidates` dropped `capabilities` declared on bound accounts (`ninerouter`). Furthermore, `buildProfile` added `minContext: 200000` to `requiredCapabilities` as a capability name rather than mapping it to `contextSize`.
+   - Resolution: Bound account capabilities (`jsonSchema`, `tools`, `contextWindow`) are now attached to candidate objects, and `minContext` in role requirements sets `contextSize: 200000` without polluting `requiredCapabilities`. Candidates successfully pass the capability floor.
+
+3. **Remaining Refusal: Proof Floor Honesty (`WORK_ITEM_PASS`):**
+   - Complex coding tasks (such as `TASK-AI-74` in `proof3-data`) require `proofFloor: WORK_ITEM_PASS`.
+   - The evidence store (`tools/ai-brain/data/evidence/`) currently contains **zero** `WORK_ITEM_PASS` records for any of the 24 live candidates discovered from the 9Router gateway.
+   - Per AGENTS.md, TASK-AI-65, and TASK-AI-70, the proof floor **must not be lowered** to mask missing evidence. The candidates are honestly and correctly refused with `PROOF_FLOOR_NOT_MET:NONE`.
+
+### Candidate Evidence Audit (Live Proof Run)
+
+- **Candidates with `WORK_ITEM_PASS` in Evidence Store:** 0 of 24 (None)
+- **Candidates lacking `WORK_ITEM_PASS` in Evidence Store:** 24 of 24 (All refused with `PROOF_FLOOR_NOT_MET:NONE`):
+  1. `paseo::http://127.0.0.1:20128/v1::9router::xmtp::ninerouter::ninerouter::xmtp/mimo-v2.6-pro`
+  2. `paseo::http://127.0.0.1:20128/v1::9router::xmtp::codex::codex::xmtp/mimo-v2.6-pro`
+  3. `paseo::http://127.0.0.1:20128/v1::9router::xmtp::ninerouter::ninerouter::xmtp/mimo-v2.6-flash`
+  4. `paseo::http://127.0.0.1:20128/v1::9router::xmtp::codex::codex::xmtp/mimo-v2.6-flash`
+  5. `paseo::http://127.0.0.1:20128/v1::9router::kgw::ninerouter::ninerouter::kgw/nvidia/nemotron-3-super-120b-a12b:free`
+  6. `paseo::http://127.0.0.1:20128/v1::9router::kgw::codex::codex::kgw/nvidia/nemotron-3-super-120b-a12b:free`
+  7. `paseo::http://127.0.0.1:20128/v1::9router::ocz::ninerouter::ninerouter::ocz/big-pickle`
+  8. `paseo::http://127.0.0.1:20128/v1::9router::ocz::codex::codex::ocz/big-pickle`
+  9. `paseo::http://127.0.0.1:20128/v1::9router::cl::ninerouter::ninerouter::cl/nvidia/nemotron-3-ultra-550b-a55b:free`
+  10. `paseo::http://127.0.0.1:20128/v1::9router::cl::codex::codex::cl/nvidia/nemotron-3-ultra-550b-a55b:free`
+  11. `paseo::http://127.0.0.1:20128/v1::9router::cl::ninerouter::ninerouter::cl/cline-free/muse-spark-1.3-contributor`
+  12. `paseo::http://127.0.0.1:20128/v1::9router::cl::codex::codex::cl/cline-free/muse-spark-1.3-contributor`
+  13. `opencode::cli::9router::xmtp::ninerouter::ninerouter::ninerouter/xmtp/mimo-v2.6-pro`
+  14. `opencode::cli::9router::xmtp::codex::codex::ninerouter/xmtp/mimo-v2.6-pro`
+  15. `opencode::cli::9router::xmtp::ninerouter::ninerouter::ninerouter/xmtp/mimo-v2.6-flash`
+  16. `opencode::cli::9router::xmtp::codex::codex::ninerouter/xmtp/mimo-v2.6-flash`
+  17. `opencode::cli::9router::kgw::ninerouter::ninerouter::ninerouter/kgw/nvidia/nemotron-3-super-120b-a12b:free`
+  18. `opencode::cli::9router::kgw::codex::codex::ninerouter/kgw/nvidia/nemotron-3-super-120b-a12b:free`
+  19. `opencode::cli::9router::ocz::ninerouter::ninerouter::ninerouter/ocz/big-pickle`
+  20. `opencode::cli::9router::ocz::codex::codex::ninerouter/ocz/big-pickle`
+  21. `opencode::cli::9router::cl::ninerouter::ninerouter::ninerouter/cl/nvidia/nemotron-3-ultra-550b-a55b:free`
+  22. `opencode::cli::9router::cl::codex::codex::ninerouter/cl/nvidia/nemotron-3-ultra-550b-a55b:free`
+  23. `opencode::cli::9router::cl::ninerouter::ninerouter::ninerouter/cl/cline-free/muse-spark-1.3-contributor`
+  24. `opencode::cli::9router::cl::codex::codex::ninerouter/cl/cline-free/muse-spark-1.3-contributor`
+
+To graduate these candidates for production coding, exploration runs (such as probe items or exploration work items) must be executed to record verified `WORK_ITEM_PASS` evidence in the repository's evidence store.
