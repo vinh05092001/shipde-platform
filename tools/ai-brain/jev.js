@@ -109,6 +109,22 @@ function postJson(url, body, headers, options) {
 function normalizeAdvice(raw) {
   if (!raw || typeof raw !== 'object') return raw;
   if (raw.choice !== undefined || raw.confidence !== undefined) return raw;
+  if (raw.answers && typeof raw.answers === 'object') {
+    const answer =
+      raw.answers.weightProfile ||
+      raw.answers.advisory ||
+      raw.answers.choice ||
+      raw.answers[Object.keys(raw.answers)[0]];
+    if (answer && typeof answer === 'object' && answer.type === 'choice') {
+      return {
+        choice: answer.choice,
+        confidence: answer.confidence,
+        probabilities: answer.probabilities,
+        jevModel: raw.model || null,
+        usage: raw.usage || null,
+      };
+    }
+  }
   const answer = raw.answer || raw.decision || raw.result || raw.data || null;
   if (answer && typeof answer === 'object') {
     return {
@@ -119,6 +135,7 @@ function normalizeAdvice(raw) {
             ? answer.option
             : answer.value,
       confidence: answer.confidence,
+      probabilities: answer.probabilities,
       reason: answer.reason || answer.rationale || raw.reason || null,
     };
   }
@@ -146,6 +163,7 @@ function buildJevAsk(source, options) {
   const env = (options && options.env) || process.env;
   const endpoint = (env && env.JEV_ENDPOINT) || source.endpoint;
   if (!endpoint) return null;
+  if (!source.model || typeof source.model !== 'string') return null;
   if (source.mayWriteCode === true) return null;
   const credential = readCredential(source, options);
   if (!credential.present) {
@@ -154,13 +172,23 @@ function buildJevAsk(source, options) {
     };
   }
   return async (question) => {
+    const criteria = {};
+    for (const option of question.options || []) {
+      const value = String(option);
+      criteria[value] = 'Choose ' + value + ' when it best fits the supplied state.';
+    }
     const raw = await postJson(
       endpoint,
       {
-        kind: question.kind,
-        prompt: question.prompt,
-        evidence: question.evidence,
-        options: question.options,
+        model: source.model,
+        state: question.evidence,
+        questions: {
+          weightProfile: {
+            type: 'choice',
+            instructions: question.prompt,
+            criteria,
+          },
+        },
       },
       { authorization: 'Bearer ' + credential.value },
       options
@@ -220,6 +248,10 @@ async function advise(question, options) {
     outcome: Outcome.DECIDED,
     choice,
     confidence,
+    probabilities:
+      raw.probabilities && typeof raw.probabilities === 'object' ? raw.probabilities : undefined,
+    jevModel: raw.jevModel || null,
+    usage: raw.usage || null,
     reason: raw.reason || null,
   };
 }

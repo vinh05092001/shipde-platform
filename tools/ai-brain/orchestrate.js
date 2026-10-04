@@ -1996,7 +1996,7 @@ function buildProfile(item, o, forbiddenFailureDomains) {
       if (cap) capSet.add(String(cap));
     }
     for (const [cap, enabled] of Object.entries(roleCaps || {})) {
-      if (enabled) capSet.add(cap);
+      if (cap !== 'minContext' && enabled) capSet.add(cap);
     }
   }
   const requiredCapabilities = Array.from(capSet);
@@ -2022,7 +2022,13 @@ function buildProfile(item, o, forbiddenFailureDomains) {
       Number.isFinite(Number(item.contextSize)) &&
       Number(item.contextSize) > 0
         ? Number(item.contextSize)
-        : 64000,
+        : strictProfile &&
+            roleCaps.minContext !== null &&
+            roleCaps.minContext !== undefined &&
+            Number.isFinite(Number(roleCaps.minContext)) &&
+            Number(roleCaps.minContext) > 0
+          ? Number(roleCaps.minContext)
+          : 64000,
     expectedDuration:
       item.expectedDuration !== null &&
       item.expectedDuration !== undefined &&
@@ -2198,6 +2204,9 @@ async function selectCandidateForProfile(
     taskProfile: profile,
     jev: assessment,
     weightProfile: assessment.weightProfile,
+    jevModel: assessment.jevModel || null,
+    confidence: assessment.confidence !== undefined ? assessment.confidence : null,
+    probabilities: assessment.probabilities || null,
     top3: result.top3.map((c) => ({
       candidateKey: c.candidateKey,
       score: c.score,

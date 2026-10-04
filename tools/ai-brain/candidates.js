@@ -162,6 +162,8 @@ function generateCandidates(opts) {
               modelId: fullId,
               source: source.id,
               kind: source.kind,
+              capabilities: acc.capabilities || {},
+              cost: acc.cost,
               sharedQuota: 'unknown',
             });
           }
@@ -207,6 +209,8 @@ function generateCandidates(opts) {
                 source: source.id,
                 kind: source.kind,
                 reachedVia: source.reachedVia,
+                capabilities: acc.capabilities || {},
+                cost: acc.cost,
                 sharedQuota: 'unknown',
               });
             }
@@ -370,6 +374,8 @@ function generateCandidates(opts) {
                 modelId: model,
                 source: source.id,
                 kind: source.kind,
+                capabilities: acc.capabilities || {},
+                cost: acc.cost,
                 sharedQuota: 'unknown',
               });
             }
@@ -450,6 +456,8 @@ function poolAccountCandidates(opts) {
           modelId: model,
           source: 'agy-pool',
           kind: 'agent-cli',
+          capabilities: (native && native.capabilities) || {},
+          cost: native && native.cost,
           sharedQuota: 'unknown',
         });
       }
@@ -544,6 +552,7 @@ function gatewayAccountCandidates(opts) {
         source: gateway,
         kind: gatewaySource.kind,
         advertised: true,
+        capabilities: account.capabilities || {},
         // A gateway catalogue proves a route exists, never that the account may
         // use it. Quality and cost stay undeclared until evidence supplies them,
         // so an advertised model is never scored as if it were measured.

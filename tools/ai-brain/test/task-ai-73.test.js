@@ -140,6 +140,42 @@ function spawnCli(args, options) {
   });
 }
 
+function systemOneChoice(choice, confidence, probabilities) {
+  return {
+    model: 'jev-latest',
+    answers: {
+      weightProfile: {
+        type: 'choice',
+        choice,
+        confidence,
+        probabilities:
+          probabilities ||
+          (choice === 'LATENCY_FIRST'
+            ? { LATENCY_FIRST: confidence, BALANCED: 0.03, QUALITY_FIRST: 0.02 }
+            : { LATENCY_FIRST: 0.02, BALANCED: confidence, QUALITY_FIRST: 0.01 }),
+      },
+    },
+    usage: { input_tokens: 120, output_tokens: 8 },
+  };
+}
+
+function assertSystemOneRequest(body) {
+  assert.equal(body.model, 'jev-latest', 'JEV model must come from source data');
+  assert.ok(body.state, 'TypeSafe request must include state');
+  assert.ok(body.questions && body.questions.weightProfile, 'request must include named question');
+  assert.equal(body.questions.weightProfile.type, 'choice');
+  assert.ok(body.questions.weightProfile.instructions, 'choice question must include instructions');
+  assert.deepEqual(
+    Object.keys(body.questions.weightProfile.criteria).sort(),
+    ['BALANCED', 'LATENCY_FIRST', 'QUALITY_FIRST'].sort(),
+    'criteria must carry exactly the closed weighting-profile choices'
+  );
+  assert.equal(body.kind, undefined, 'legacy kind field must not be sent');
+  assert.equal(body.prompt, undefined, 'legacy prompt field must not be sent');
+  assert.equal(body.evidence, undefined, 'legacy evidence field must not be sent');
+  assert.equal(body.options, undefined, 'legacy options field must not be sent');
+}
+
 describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
   // =========================================================================
   // Test 1: live CLI really supplies a jevAsk adapter
@@ -172,9 +208,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
           body: body ? JSON.parse(body) : null,
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify({ choice: 'LATENCY_FIRST', confidence: 0.95, reason: 'fast advisory' })
-        );
+        res.end(JSON.stringify(systemOneChoice('LATENCY_FIRST', 0.95)));
       });
     });
 
@@ -207,6 +241,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         serverRequests.length > 0,
         'Expected mock JEV server to be called by live CLI, but received 0 requests (live CLI did not supply jevAsk)'
       );
+      assertSystemOneRequest(serverRequests[0].body);
 
       const parsed = parseJsonOutput(res.stdout);
       assert.ok(parsed && parsed.assessment, 'CLI must output assessment in JSON');
@@ -225,6 +260,8 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         'LATENCY_FIRST',
         'Assessment must reflect JEV advisory LATENCY_FIRST'
       );
+      assert.equal(parsed.assessment.jevModel, 'jev-latest');
+      assert.ok(parsed.assessment.probabilities, 'decision must retain JEV probabilities');
     } finally {
       server.close();
     }
@@ -252,7 +289,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       setTimeout(() => {
         if (!res.writableEnded) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ choice: 'LATENCY_FIRST', confidence: 0.95 }));
+          res.end(JSON.stringify(systemOneChoice('LATENCY_FIRST', 0.95)));
         }
       }, 2000);
     });
@@ -265,6 +302,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         id: 'jev',
         kind: 'decision-service',
         endpoint: `http://127.0.0.1:${port}/v1/systemone`,
+        model: 'jev-latest',
         credential: { type: 'api-key', env: 'TYPESAFE_API_KEY' },
         minConfidence: 0.7,
       };
@@ -328,14 +366,21 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
     // At base, live CLI does not supply jevAsk, so assessment is always UNDECIDED
     // and weightProfile remains the default fallback (QUALITY_FIRST for reviewer).
 
+    const serverRequests = [];
     const server = http.createServer((req, res) => {
       let body = '';
       req.on('data', (chunk) => {
         body += chunk;
       });
       req.on('end', () => {
+        serverRequests.push({
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body: body ? JSON.parse(body) : null,
+        });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ choice: 'LATENCY_FIRST', confidence: 0.95 }));
+        res.end(JSON.stringify(systemOneChoice('LATENCY_FIRST', 0.95)));
       });
     });
 
@@ -387,6 +432,12 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         env,
         timeout: 10000,
       });
+
+      assert.ok(
+        serverRequests.length > 0,
+        'Expected mock JEV server to be called by live CLI in Test 3'
+      );
+      assertSystemOneRequest(serverRequests[0].body);
 
       const parsed = parseJsonOutput(res.stdout);
       assert.ok(parsed && parsed.assessment, 'Live CLI must return JSON assessment');
@@ -1172,7 +1223,15 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       [cand1, cand2, candRejected],
       [],
       evidenceData,
-      { decisionDir },
+      {
+        decisionDir,
+        jevAsk: async () => ({
+          choice: 'QUALITY_FIRST',
+          confidence: 0.95,
+          probabilities: { QUALITY_FIRST: 0.95, BALANCED: 0.05 },
+          jevModel: 'jev-latest',
+        }),
+      },
       { dir: decisionDir },
       Date.now()
     );
@@ -1189,6 +1248,16 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
 
     assert.equal(entry.workItemId, 'TASK-AI-73-DECISION-LOG');
     assert.ok(entry.taskProfile, 'Decision log must record taskProfile');
+    assert.strictEqual(entry.jevModel, 'jev-latest', 'Decision log must record JEV model');
+    assert.strictEqual(entry.confidence, 0.95, 'Decision log must record JEV confidence');
+    assert.deepStrictEqual(
+      entry.probabilities,
+      { QUALITY_FIRST: 0.95, BALANCED: 0.05 },
+      'Decision log must record JEV probabilities'
+    );
+    assert.ok(entry.jev, 'Decision log must record jev assessment');
+    assert.strictEqual(entry.jev.jevModel, 'jev-latest');
+    assert.deepStrictEqual(entry.jev.probabilities, { QUALITY_FIRST: 0.95, BALANCED: 0.05 });
 
     // top3 contract check
     assert.ok(
@@ -1296,5 +1365,257 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       'New model added by data only must be eligible and rankable by Controller without code changes'
     );
     assert.equal(rankResult.chosen, candidateKey(auroraCandidate));
+  });
+
+  // =========================================================================
+  // Test 14: JEV adapter follows TypeSafe OpenAPI contract and never sends legacy shape
+  // =========================================================================
+  test('14 JEV adapter follows TypeSafe OpenAPI contract and never sends legacy shape {kind, prompt, evidence, options}', async () => {
+    // Expected contract:
+    // 1. JEV model name must come from data (source.model), returning null if missing.
+    // 2. HTTP POST is to /v1/systemone with { model, state, questions: { weightProfile: { type: 'choice', instructions, criteria } } }.
+    // 3. Legacy fields (kind, prompt, evidence, options) are never sent.
+    // 4. Response parsing extracts choice, confidence, probabilities, jevModel, usage.
+
+    // Part 1: source without model returns null
+    const noModelSource = {
+      id: 'jev',
+      kind: 'decision-service',
+      endpoint: 'https://api.typesafe.ai/v1/systemone',
+      credential: { type: 'api-key', env: 'TYPESAFE_API_KEY' },
+    };
+    assert.strictEqual(
+      jev.buildJevAsk(noModelSource, { env: { TYPESAFE_API_KEY: 'test-key' } }),
+      null,
+      'buildJevAsk must return null if source.model is not specified in data'
+    );
+
+    // Part 2: real contract mock server
+    const serverRequests = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        const parsedBody = body ? JSON.parse(body) : {};
+        serverRequests.push({
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body: parsedBody,
+        });
+
+        // If legacy fields are posted, simulate api.typesafe.ai HTTP 400 Invalid request
+        if (parsedBody.kind || parsedBody.prompt || parsedBody.options) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid request: legacy fields not allowed' }));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            model: 'jev-latest',
+            answers: {
+              weightProfile: {
+                type: 'choice',
+                choice: 'BALANCED',
+                confidence: 0.97,
+                probabilities: {
+                  BALANCED: 0.97,
+                  LATENCY_FIRST: 0.02,
+                  QUALITY_FIRST: 0.01,
+                },
+              },
+            },
+            usage: { input_tokens: 120, output_tokens: 8 },
+          })
+        );
+      });
+    });
+
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+
+    try {
+      const source = {
+        id: 'jev',
+        kind: 'decision-service',
+        endpoint: `http://127.0.0.1:${port}/v1/systemone`,
+        model: 'jev-latest',
+        credential: { type: 'api-key', env: 'TYPESAFE_API_KEY' },
+        minConfidence: 0.7,
+      };
+
+      const ask = jev.buildJevAsk(source, { env: { TYPESAFE_API_KEY: 'test-key-123' } });
+      assert.strictEqual(typeof ask, 'function', 'buildJevAsk must return an async ask function');
+
+      const question = {
+        kind: 'advisory',
+        prompt: 'Choose the optimal weighting profile for this task.',
+        evidence: JSON.stringify({ taskId: 'TASK-AI-73-PROBE', complexity: 'standard' }),
+        options: ['BALANCED', 'LATENCY_FIRST', 'QUALITY_FIRST'],
+      };
+
+      const advice = await ask(question);
+      assert.strictEqual(advice.choice, 'BALANCED');
+      assert.strictEqual(advice.confidence, 0.97);
+      assert.deepStrictEqual(advice.probabilities, {
+        BALANCED: 0.97,
+        LATENCY_FIRST: 0.02,
+        QUALITY_FIRST: 0.01,
+      });
+      assert.strictEqual(advice.jevModel, 'jev-latest');
+      assert.deepStrictEqual(advice.usage, { input_tokens: 120, output_tokens: 8 });
+
+      // Verify the recorded HTTP request strictly satisfies the OpenAPI contract
+      assert.strictEqual(serverRequests.length, 1);
+      const req = serverRequests[0];
+      assert.strictEqual(req.method, 'POST');
+      assert.strictEqual(req.url, '/v1/systemone');
+      assert.strictEqual(req.headers.authorization, 'Bearer test-key-123');
+
+      const reqBody = req.body;
+      assert.strictEqual(reqBody.model, 'jev-latest');
+      assert.strictEqual(reqBody.state, question.evidence);
+      assert.ok(reqBody.questions && reqBody.questions.weightProfile);
+      assert.strictEqual(reqBody.questions.weightProfile.type, 'choice');
+      assert.strictEqual(reqBody.questions.weightProfile.instructions, question.prompt);
+      assert.deepStrictEqual(
+        Object.keys(reqBody.questions.weightProfile.criteria).sort(),
+        ['BALANCED', 'LATENCY_FIRST', 'QUALITY_FIRST'].sort()
+      );
+
+      // Explicit assertions that old shape is NOT sent
+      assert.strictEqual(reqBody.kind, undefined, 'legacy field kind must not be sent');
+      assert.strictEqual(reqBody.prompt, undefined, 'legacy field prompt must not be sent');
+      assert.strictEqual(reqBody.evidence, undefined, 'legacy field evidence must not be sent');
+      assert.strictEqual(reqBody.options, undefined, 'legacy field options must not be sent');
+    } finally {
+      server.close();
+    }
+  });
+
+  // =========================================================================
+  // Test 15: capability evidence is read from bound accounts and minContext sets contextSize
+  // =========================================================================
+  test('15 capability evidence is read from bound accounts and minContext sets contextSize', async () => {
+    // Problem 2 contract:
+    // 1. minContext is not a boolean capability; it sets profile.contextSize and is excluded from requiredCapabilities.
+    // 2. Candidate generation reads capabilities declared on bound accounts.
+    // 3. Candidates with declared capabilities pass the capability filter and do not reject with CAPABILITY_MISSING:jsonSchema.
+
+    const workItem = {
+      id: 'TASK-AI-73-CAP-TEST',
+      roleRequirement: {
+        role: 'author.foundation',
+        requires: {
+          jsonSchema: true,
+          tools: true,
+          minContext: 200000,
+        },
+      },
+      complexity: 'standard',
+    };
+
+    // 1. buildTaskProfile sets contextSize to 200000 and excludes minContext from requiredCapabilities
+    const profile = orchestrate.buildTaskProfile(workItem);
+    assert.strictEqual(
+      profile.contextSize,
+      200000,
+      'contextSize must be derived from roleCaps.minContext'
+    );
+    assert.ok(
+      !profile.requiredCapabilities.includes('minContext'),
+      'minContext must NOT appear in requiredCapabilities'
+    );
+    assert.ok(
+      profile.requiredCapabilities.includes('jsonSchema'),
+      'jsonSchema must be in requiredCapabilities'
+    );
+    assert.ok(
+      profile.requiredCapabilities.includes('tools'),
+      'tools must be in requiredCapabilities'
+    );
+
+    // 2. Candidate generation reads capabilities from bound accounts
+    const fakeRegistry = {
+      sources: [
+        {
+          id: '9router',
+          kind: 'router',
+          harness: 'hermes',
+          accessPath: 'http://127.0.0.1:20128/v1',
+          servesModels: true,
+        },
+      ],
+      dispatch: {
+        providers: {
+          ninerouter: { harness: 'hermes', accessPath: 'http://127.0.0.1:20128/v1' },
+        },
+      },
+    };
+
+    const fakeAccounts = [
+      {
+        id: 'ninerouter',
+        provider: '9router',
+        enabled: true,
+        capabilities: { jsonSchema: true, tools: true, contextWindow: 200000 },
+        cost: { inputPerMillion: 1, outputPerMillion: 2 },
+      },
+    ];
+
+    const generated = candidatesApi.generateCandidates({
+      registry: fakeRegistry,
+      accounts: fakeAccounts,
+      catalogue: ['xmtp/mimo-v2.6-pro'],
+    });
+
+    assert.ok(generated.length > 0, 'Candidates must be generated for xmtp/mimo-v2.6-pro');
+    const candObj = generated[0];
+    assert.strictEqual(
+      candObj.capabilities.jsonSchema,
+      true,
+      'candidate must retain jsonSchema capability'
+    );
+    assert.strictEqual(candObj.capabilities.tools, true, 'candidate must retain tools capability');
+    assert.strictEqual(
+      candObj.capabilities.contextWindow,
+      200000,
+      'candidate must retain contextWindow'
+    );
+
+    // 3. Candidate evaluation against profile
+    const assessment = {
+      jevOutcome: 'UNDECIDED',
+      decidedBy: 'controller',
+      weightProfile: 'BALANCED',
+      weights: { latency: 34, quality: 33, cost: 33 },
+    };
+
+    const rankResult = routing.rankForProfile([candObj], profile, assessment, {
+      now: Date.now(),
+      evidenceData: {},
+    });
+
+    // The candidate MUST NOT be rejected for CAPABILITY_MISSING:jsonSchema or CONTEXT_TOO_SMALL
+    const capabilityRejections = rankResult.rejected.filter(
+      (r) => r.reasonCode.startsWith('CAPABILITY_MISSING') || r.reasonCode === 'CONTEXT_TOO_SMALL'
+    );
+    assert.strictEqual(
+      capabilityRejections.length,
+      0,
+      'Candidate must pass capability floor; rejected reasons: ' +
+        JSON.stringify(rankResult.rejected)
+    );
+
+    // Because profile has proofFloor WORK_ITEM_PASS and evidenceData is empty, the honest refusal is PROOF_FLOOR_NOT_MET:NONE
+    assert.strictEqual(
+      rankResult.rejected[0].reasonCode,
+      'PROOF_FLOOR_NOT_MET:NONE',
+      'Refusal must strictly be due to missing WORK_ITEM_PASS evidence'
+    );
   });
 });
