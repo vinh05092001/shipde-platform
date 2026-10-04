@@ -108,6 +108,42 @@ function failureDomainFromCandidateKey(key) {
 }
 
 /**
+ * M-R06 (TASK-AI-77): a push is authorised by a structured review manifest, not
+ * by the option values themselves. The manifest is validated against the very
+ * commit and work item being pushed BEFORE anything leaves this machine, and a
+ * refusal names the manifest's own code, so the operator reads WHY the reviewed
+ * evidence does not cover this push.
+ *
+ * The single exception is `testMode`, the explicit injected test-only option P2
+ * already defines for the approval registry: a simulated publish pushes nothing,
+ * so it cannot launder evidence. A manifest that IS supplied is always
+ * validated, in testMode too — the seam is "no push, no manifest", never "any
+ * manifest is fine".
+ */
+function requireReviewManifest(options, refuse) {
+  const o = options || {};
+  const testMode = o.testMode === true;
+  if (testMode && !o.reviewManifest) return null;
+  if (!o.reviewManifest) {
+    refuse('PUBLISH_REFUSED: MANIFEST_REQUIRED: a review manifest must authorise the publish');
+  }
+  const { validateManifestFile } = require('./review-manifest');
+  const result = validateManifestFile(o.reviewManifest, {
+    repoCwd: o.cwd,
+    expected: { workItemId: o.workItemId, commit: o.reviewedSha },
+    artifactPath: o.reviewArtifact || null,
+  });
+  if (!result.ok) {
+    refuse('PUBLISH_REFUSED: ' + result.code + (result.reason ? ': ' + result.reason : ''));
+  }
+  // A review that did not pass cannot authorise a push, however well bound.
+  if (!ACCEPTED_VERDICTS.includes(result.verdict)) {
+    refuse('PUBLISH_REFUSED: VERDICT_NOT_PASS: the review manifest verdict is ' + result.verdict);
+  }
+  return result;
+}
+
+/**
  * Q4: never run upload-pack or read configuration from the worker-writable tree. A worker that rewrites its own
  * git config could still try to trigger code execution via include.path, core.fsmonitor, or hooks if any host-side
  * git command is run with that configuration. To prevent this, the actual operator-side publish path *never* runs any
@@ -391,6 +427,12 @@ function publish(options) {
     refuse('PUBLISH_REFUSED: approval registry not found');
   }
 
+  // M-R06: the review manifest gate. It sits after the approval the named human
+  // already issued and before the destination, the head check, the clone and the
+  // push: an approval authorises a push, the manifest says whether the reviewed
+  // evidence covers it.
+  requireReviewManifest(options, refuse);
+
   // P1: trusted push destination. remoteUrl and branch come from the options
   // the controller passed in; the worker-writable cwd is never consulted for
   // them. The only branch fallback is derived from the controller-supplied
@@ -485,6 +527,9 @@ module.exports = {
   createDraftPullRequest,
   buildSanitizedMirror,
   transferReviewedObjects,
+  // M-R04: the reviewer-independence rule has exactly one definition; the review
+  // manifest reuses it instead of restating it.
+  failureDomainFromCandidateKey,
   SAFE_MIRROR_CONFIG,
   ACCEPTED_VERDICTS,
 };
