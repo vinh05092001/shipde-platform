@@ -2658,9 +2658,9 @@ function reviewCommand(args, deps) {
   return { exitCode: code, result };
 }
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const command = args._[0] || 'reconcile';
+function main(rawArgv, deps = {}) {
+  const args = (deps && deps.args) || parseArgs(rawArgv || process.argv.slice(2));
+  const command = (args._ && args._[0]) || (rawArgv && rawArgv[0]) || 'reconcile';
 
   if (command === 'reconcile') return reconcileCommand(args);
   if (command === 'manifest') return manifestCommand(args);
@@ -2752,11 +2752,13 @@ function main() {
   // came from the registry. Nothing is injected here any more — a live run either
   // launches for real or is refused.
   if (command === 'orchestrate') {
-    const { runOrchestration } = require('./orchestrate');
+    const { runOrchestration } = deps && deps.runOrchestration ? deps : require('./orchestrate');
     const { generateCandidates } = require('./candidates');
     const sourcesApi = require('./sources');
     const decisionsApi = require('./decisions');
     const fsx = require('fs');
+    const log = (deps && deps.log) || console.log;
+    const exit = (deps && deps.exit) || process.exit;
     let goal = typeof args.goal === 'string' ? args.goal : null;
     if (!goal) {
       console.error('orchestrate requires --goal <text|file>');
@@ -2789,14 +2791,19 @@ function main() {
           ? args['opencode-ids'].split(',').filter(Boolean)
           : [],
     });
+    const evidenceDir = args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
     // The live loop is async (TASK-AI-65): the JEV assessment behind every
     // Controller selection returns a promise. An unhandled rejection would crash
     // silently, so it is caught here and turned into a non-zero exit instead.
-    runOrchestration(goal, {
+    return runOrchestration(goal, {
       specs,
       specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
       candidates,
       registry,
+      evidenceDir,
+      run: deps && deps.run,
+      tests: deps && deps.tests,
+      reviewer: deps && deps.reviewer,
       home: typeof args.home === 'string' ? args.home : undefined,
       enforceProofFloors: true,
       isolatedWorker: Boolean(args['isolated-worker']),
@@ -2820,10 +2827,10 @@ function main() {
           }
         : null,
       out,
-      now: Date.now(),
+      now: (deps && deps.now) || Date.now(),
     })
       .then((result) => {
-        console.log(
+        log(
           JSON.stringify(
             {
               goal,
@@ -2835,8 +2842,11 @@ function main() {
             2
           )
         );
-        if (out) console.log('Wrote run log to ' + out);
-        process.exit(result.status === 'COMPLETED' || result.status === 'PUBLISHED_DRAFT' ? 0 : 1);
+        if (out) log('Wrote run log to ' + out);
+        const exitCode =
+          result.status === 'COMPLETED' || result.status === 'PUBLISHED_DRAFT' ? 0 : 1;
+        exit(exitCode);
+        return Object.assign({ exitCode }, result);
       })
       .catch((err) => {
         console.error(
@@ -2844,9 +2854,9 @@ function main() {
             (err && err.name ? err.name + ': ' : '') +
             (err && err.message ? err.message : err)
         );
-        process.exit(1);
+        exit(1);
+        return { exitCode: 1, error: err };
       });
-    return;
   }
 
   console.error('Lệnh không rõ: ' + command);
@@ -2876,7 +2886,12 @@ module.exports = {
   discoveryCommand,
   evidenceCommand,
   reviewCommand,
+  orchestrateCommand,
 };
+
+function orchestrateCommand(args, deps = {}) {
+  return main(['orchestrate'], Object.assign({}, deps, { args }));
+}
 
 if (require.main === module) {
   main();
