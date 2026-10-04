@@ -676,7 +676,7 @@ function reviewLane(
       harness: route.harnessName,
       provider: route.provider,
       model: route.model,
-      accountId: candidate.accountId,
+      accountId: normalizeAccount(candidate.accountId),
       gateway: candidate.gateway || '',
       upstream: candidate.upstream,
       quotaScope: candidate.quotaScope,
@@ -1442,9 +1442,15 @@ function draftTitleForItem(item) {
 }
 
 function receiptFailureDomain(candidateKeyValue) {
+  const domain = routing.canonicalFailureDomain(candidateKeyValue);
+  if (domain && domain !== 'unknown') return domain;
   const parsed = parseCandidateKey(candidateKeyValue);
   if (!parsed) return null;
   return parsed.upstream || parsed.gateway || null;
+}
+
+function normalizeAccount(id) {
+  return !id || id === '*' || id === 'UNPINNED' ? 'UNPINNED' : id;
 }
 
 /**
@@ -2107,6 +2113,37 @@ function hasQuotaAccountReadings(options) {
   }
 }
 
+function buildCandidates(options, evidenceData) {
+  const o = options || {};
+  let baseCandidates = [];
+  if (Array.isArray(o.candidates)) {
+    baseCandidates = o.candidates;
+  } else if (o.accounts || o.catalogue) {
+    baseCandidates = candidatesApi.generateCandidates({
+      registry: o.registry || sourcesApi.loadSources(),
+      catalogue: o.catalogue || [],
+      accounts: o.accounts || [],
+      openCodeIds: o.openCodeIds || [],
+    });
+  }
+  const testsInjectedCandidates = Array.isArray(o.candidates);
+  const evData =
+    evidenceData !== undefined
+      ? evidenceData
+      : o.evidenceData !== undefined
+        ? o.evidenceData
+        : o.evidenceDir
+          ? evidence.loadEvidence(o.evidenceDir)
+          : testsInjectedCandidates
+            ? null
+            : evidence.loadEvidence(path.join(__dirname, 'data', 'evidence'));
+  const evCandidates =
+    evData && Array.isArray(evData.combinations)
+      ? candidatesApi.candidatesFromEvidence(evData).filter((c) => !c.legacy)
+      : [];
+  return candidatesApi.mergeCandidates(baseCandidates, evCandidates);
+}
+
 async function selectCandidateForProfile(
   item,
   annotatedCandidates,
@@ -2128,6 +2165,24 @@ async function selectCandidateForProfile(
       timeoutMs: o && o.jevTimeoutMs,
     });
 
+  const evData =
+    evidenceData && (evidenceData.combinations || Object.keys(evidenceData).length > 0)
+      ? evidenceData
+      : o && o.evidenceDir
+        ? evidence.loadEvidence(o.evidenceDir)
+        : evidenceData;
+
+  let candidates = Array.isArray(annotatedCandidates) ? annotatedCandidates : [];
+  if (evData && Array.isArray(evData.combinations) && evData.combinations.length > 0) {
+    const evCandidates = candidatesApi.candidatesFromEvidence(evData).filter((c) => !c.legacy);
+    candidates = candidatesApi.mergeCandidates(candidates, evCandidates);
+    candidates = candidatesApi.annotateCandidates(
+      candidates.map((c) => Object.assign({}, c)),
+      evData,
+      { now }
+    );
+  }
+
   // The weighting assessment is the Controller's own, obtained through the real
   // JEV source declared in sources.json. The ask is closed and only about
   // weighting profiles, never a model, provider, account or gateway.
@@ -2139,7 +2194,7 @@ async function selectCandidateForProfile(
   const rankCtx = {
     now,
     taskId: profile.taskId,
-    evidenceData,
+    evidenceData: evData,
     headrooms: o && o.ranking && o.ranking.headrooms,
     reservations: o && o.ranking && o.ranking.reservations,
     accounts: o && o.ranking && o.ranking.accounts,
@@ -2160,7 +2215,7 @@ async function selectCandidateForProfile(
           : hasQuotaAccountReadings(o),
   };
 
-  const result = routing.rankForProfile(annotatedCandidates, profile, assessment, rankCtx);
+  const result = routing.rankForProfile(candidates, profile, assessment, rankCtx);
 
   const writerKey = (item && item.writerCandidateKey) || null;
   if (writerKey) {
@@ -2176,7 +2231,7 @@ async function selectCandidateForProfile(
     }
     const alreadyRejected = Boolean(existingRejection);
     if (!alreadyRejected) {
-      const writerCand = (annotatedCandidates || []).find((c) => candidateKey(c) === writerKey);
+      const writerCand = (candidates || []).find((c) => candidateKey(c) === writerKey);
       if (writerCand) {
         result.rejected.push({
           candidateKey: writerKey,
@@ -2211,13 +2266,14 @@ async function selectCandidateForProfile(
       candidateKey: c.candidateKey,
       score: c.score,
       scoreBreakdown: c.scoreBreakdown,
-      proof: routing.proofObserved(evidenceData, c) || 'NONE',
+      proof: routing.proofObserved(evData, c) || 'NONE',
       capabilityEvidence: c.capabilities || {},
+      account: normalizeAccount(c.accountId),
       quota: {
         headroom: c.headroomStatus || 'unknown',
         reasonCode: c.quotaReasonCode || null,
         quotaScope: c.quotaScope || null,
-        accountId: c.accountId || null,
+        accountId: normalizeAccount(c.accountId),
       },
       failureDomain: routing.failureDomainOf(c),
       reservationsHeld: c.reservationsHeld || 0,
@@ -2227,11 +2283,12 @@ async function selectCandidateForProfile(
       candidateKey: c.candidateKey,
       score: c.score,
       scoreBreakdown: c.scoreBreakdown,
-      proof: routing.proofObserved(evidenceData, c) || 'NONE',
+      proof: routing.proofObserved(evData, c) || 'NONE',
       capabilityEvidence: c.capabilities || {},
       headroom: c.headroomStatus || 'unknown',
       quotaReasonCode: c.quotaReasonCode || null,
       failureDomain: routing.failureDomainOf(c),
+      account: normalizeAccount(c.accountId),
       reservationsHeld: c.reservationsHeld || 0,
     })),
     rejected: result.rejected.slice(0, 50),
@@ -2326,9 +2383,16 @@ async function runOrchestration(goal, opts) {
     : 'DECISION_LOG_UNREADABLE: ' + (writers.damaged.join('; ') || 'unknown');
 
   const statusOf = new Map();
-  const rawCandidates = Array.isArray(o.candidates) ? o.candidates : [];
-  const evidenceDir = o.evidenceDir || path.join(__dirname, 'data', 'evidence');
-  const evidenceData = evidence.loadEvidence(evidenceDir);
+  const testsInjectedCandidates = Array.isArray(o.candidates);
+  const evidenceDir =
+    o.evidenceDir || (testsInjectedCandidates ? null : path.join(__dirname, 'data', 'evidence'));
+  const evidenceData =
+    o.evidenceData !== undefined
+      ? o.evidenceData
+      : evidenceDir
+        ? evidence.loadEvidence(evidenceDir)
+        : null;
+  const rawCandidates = buildCandidates(o, evidenceData);
   const candidates = candidatesApi.annotateCandidates(
     rawCandidates.map((c) => Object.assign({}, c)),
     evidenceData,
@@ -2511,7 +2575,7 @@ async function runOrchestration(goal, opts) {
         harness: route.harnessName,
         provider: route.provider,
         model: route.model,
-        accountId: candidate.accountId,
+        accountId: normalizeAccount(candidate.accountId),
         gateway: candidate.gateway || '',
         upstream: candidate.upstream,
         quotaScope: candidate.quotaScope,
@@ -3045,7 +3109,7 @@ function repairRound(
       harness: route.harnessName,
       provider: route.provider,
       model: route.model,
-      accountId: candidate.accountId,
+      accountId: normalizeAccount(candidate.accountId),
       gateway: candidate.gateway || '',
       upstream: candidate.upstream,
       quotaScope: candidate.quotaScope,
@@ -3313,6 +3377,7 @@ module.exports = {
   materialiseExercise,
   captureFailBefore,
   buildTaskProfile,
+  buildCandidates,
   selectCandidateForProfile,
   repairRound,
   reviewLane,
