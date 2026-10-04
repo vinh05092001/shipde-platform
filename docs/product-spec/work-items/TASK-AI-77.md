@@ -6,7 +6,7 @@
 - Status: READY_FOR_CODEX
 - Assigned author: Controller-selected paseo::http://127.0.0.1:20128/v1::9router::ocz::xkiro::xkiro::ocz/big-pickle (JEV UNDECIDED low confidence; exploration budget 1)
 - Dependencies: TASK-AI-75, TASK-AI-76
-- Scope amendments: additive edits to task-ai-75.test.js (M-R07 requires manifests); diff budget raised from 900 to 1500 lines (805 are tests)
+- Scope amendments: additive edits to task-ai-75.test.js (M-R07 requires manifests); diff budget raised from 900 to 1600 lines (most are tests; repair F1 added 89)
 
 ## Business Outcome
 

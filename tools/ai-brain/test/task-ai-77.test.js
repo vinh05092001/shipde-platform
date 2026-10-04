@@ -187,7 +187,11 @@ const validate = (fixture, extra) =>
   manifestApi().validateManifest(
     fixture.manifest,
     Object.assign(
-      { repoCwd: fixture.repo.dir, expected: { workItemId: WORK_ITEM, commit: fixture.commit } },
+      {
+        repoCwd: fixture.repo.dir,
+        expected: { workItemId: WORK_ITEM, commit: fixture.commit },
+        artifactPath: fixture.review,
+      },
       extra || {}
     )
   );
@@ -208,6 +212,7 @@ test('M-R01 every schema field is required; a malformed manifest is SCHEMA_INVAL
   const bound = {
     repoCwd: fixture.repo.dir,
     expected: { workItemId: WORK_ITEM, commit: fixture.commit },
+    artifactPath: fixture.review,
   };
   const check = (manifest) => api.validateManifest(manifest, bound);
   assert.equal(check(fixture.manifest).ok, true, 'a faithful manifest validates');
@@ -251,11 +256,13 @@ test('M-R01 every schema field is required; a malformed manifest is SCHEMA_INVAL
 test('M-R02 tree and patch are recomputed from git, never read from the manifest', () => {
   const api = manifestApi();
   const fixture = mergedRepo();
+  const bound = {
+    repoCwd: fixture.repo.dir,
+    expected: { workItemId: WORK_ITEM, commit: fixture.commit },
+    artifactPath: fixture.review,
+  };
   const check = (override) =>
-    api.validateManifest(Object.assign({}, fixture.manifest, override), {
-      repoCwd: fixture.repo.dir,
-      expected: { workItemId: WORK_ITEM, commit: fixture.commit },
-    });
+    api.validateManifest(Object.assign({}, fixture.manifest, override), bound);
   assertCode(check({ reviewedTree: 'a'.repeat(40) }), 'TREE_MISMATCH', 'only git catches this');
   assertCode(check({ reviewedPatchId: 'b'.repeat(40) }), 'PATCH_MISMATCH', 'only git catches this');
   // The manifest is about one commit, never about HEAD: git moving on must not
@@ -264,12 +271,22 @@ test('M-R02 tree and patch are recomputed from git, never read from the manifest
   fixture.repo.git(['add', 'later.txt']);
   fixture.repo.git(['commit', '-q', '-m', 'later commit']);
   assert.equal(
-    validate({ repo: fixture.repo, commit: fixture.commit, manifest: fixture.manifest }).ok,
+    validate({
+      repo: fixture.repo,
+      commit: fixture.commit,
+      manifest: fixture.manifest,
+      review: fixture.review,
+    }).ok,
     true,
     'a later commit on main must not disturb a manifest bound to its own commit'
   );
   assertCode(
-    validate({ repo: fixture.repo, commit: fixture.base, manifest: fixture.manifest }),
+    validate({
+      repo: fixture.repo,
+      commit: fixture.base,
+      manifest: fixture.manifest,
+      review: fixture.review,
+    }),
     'SHA_MISMATCH',
     'expected.commit that is not the reviewed commit is SHA_MISMATCH'
   );
@@ -369,6 +386,24 @@ test('M-R05 artifactSha256 must be the sha256 of the markdown review it accompan
     'ARTIFACT_HASH_MISMATCH',
     'a missing artifact cannot match a recorded digest'
   );
+  // F1: the hash comparison must not be skippable. A caller that names no
+  // artifact gets a refusal, never an unchecked manifest.
+  assertCode(
+    manifestApi().validateManifest(fixture.manifest, {
+      repoCwd: fixture.repo.dir,
+      expected: { workItemId: WORK_ITEM, commit: fixture.commit },
+    }),
+    'ARTIFACT_REQUIRED',
+    'a manifest with no artifactPath is refused, not trusted'
+  );
+  assertCode(
+    manifestApi().validateManifest(fixture.manifest, {
+      repoCwd: fixture.repo.dir,
+      expected: { workItemId: WORK_ITEM, commit: fixture.commit },
+      artifactPath: '',
+    }),
+    'ARTIFACT_REQUIRED'
+  );
 });
 
 // M-R06 -----------------------------------------------------------------------
@@ -432,6 +467,16 @@ test('M-R06 publish requires the manifest and validates it before any push', () 
     () => publisher.publish({ ...options, testMode: true, reviewManifest: other.file }),
     /PUBLISH_REFUSED: SHA_MISMATCH/,
     'a manifest that IS supplied is validated in testMode too'
+  );
+  // F1: the manifest is only honoured together with the markdown review it
+  // binds, so a publish naming no reviewArtifact is refused rather than
+  // carrying an unchecked artifactSha256.
+  const noArtifact = { ...options };
+  delete noArtifact.reviewArtifact;
+  assert.throws(
+    () => publisher.publish({ ...noArtifact, testMode: true, reviewManifest: good.file }),
+    /PUBLISH_REFUSED: ARTIFACT_REQUIRED/,
+    'a publish with no review artifact is refused'
   );
   assert.equal(
     publisher.publish({ ...options, testMode: true, reviewManifest: good.file }).status,

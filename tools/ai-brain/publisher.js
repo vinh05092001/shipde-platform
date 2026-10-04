@@ -119,6 +119,10 @@ function failureDomainFromCandidateKey(key) {
  * so it cannot launder evidence. A manifest that IS supplied is always
  * validated, in testMode too — the seam is "no push, no manifest", never "any
  * manifest is fine".
+ *
+ * The manifest is only honoured together with the markdown review it binds, so
+ * a publish that names no reviewArtifact is refused (ARTIFACT_REQUIRED) instead
+ * of carrying an unchecked artifactSha256.
  */
 function requireReviewManifest(options, refuse) {
   const o = options || {};
@@ -127,11 +131,14 @@ function requireReviewManifest(options, refuse) {
   if (!o.reviewManifest) {
     refuse('PUBLISH_REFUSED: MANIFEST_REQUIRED: a review manifest must authorise the publish');
   }
+  if (!o.reviewArtifact) {
+    refuse('PUBLISH_REFUSED: ARTIFACT_REQUIRED: the review manifest must name its markdown review');
+  }
   const { validateManifestFile } = require('./review-manifest');
   const result = validateManifestFile(o.reviewManifest, {
     repoCwd: o.cwd,
     expected: { workItemId: o.workItemId, commit: o.reviewedSha },
-    artifactPath: o.reviewArtifact || null,
+    artifactPath: o.reviewArtifact,
   });
   if (!result.ok) {
     refuse('PUBLISH_REFUSED: ' + result.code + (result.reason ? ': ' + result.reason : ''));

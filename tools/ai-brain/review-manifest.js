@@ -14,7 +14,9 @@
  *   M-R03 PASS with any finding left `open` is PASS_WITH_OPEN_FINDINGS.
  *   M-R04 the reviewer is independent: never the writer key, never the writer failure domain,
  *          never the same upstream or modelId — the domain rule is reused from publisher.js.
- *   M-R05 artifactSha256 must equal the sha256 of the markdown review the manifest accompanies.
+ *   M-R05 artifactSha256 must equal the sha256 of the markdown review the manifest accompanies;
+ *          the review is not optional — a manifest with no artifactPath is ARTIFACT_REQUIRED, never
+ *          an unchecked manifest.
  */
 
 const crypto = require('crypto');
@@ -37,6 +39,7 @@ const REFUSAL_CODES = Object.freeze([
   'PASS_WITH_OPEN_FINDINGS',
   'REVIEWER_NOT_INDEPENDENT',
   'ARTIFACT_HASH_MISMATCH',
+  'ARTIFACT_REQUIRED',
 ]);
 
 const refusal = (code, reason) => ({ ok: false, code, reason });
@@ -212,7 +215,7 @@ function schemaRefusal(manifest) {
  * @param {object} [options]
  * @param {string} options.repoCwd repository the commit is recomputed in (M-R02)
  * @param {object} [options.expected] {workItemId, commit} the caller's binding
- * @param {string} [options.artifactPath] markdown review the manifest accompanies (M-R05)
+ * @param {string} options.artifactPath markdown review the manifest accompanies (M-R05)
  * @returns {object} {ok:true,...} or {ok:false, code, reason}
  */
 function validateManifest(manifest, options) {
@@ -222,6 +225,12 @@ function validateManifest(manifest, options) {
   if (invalid) return invalid;
   if (typeof o.repoCwd !== 'string' || o.repoCwd.trim() === '') {
     return refusal('SCHEMA_INVALID', 'repoCwd is required: tree and patch are recomputed from git');
+  }
+  // M-R05: the markdown review is part of the evidence, not an optional extra.
+  // Skipping the hash comparison would let any manifest be honoured unchecked,
+  // so a missing artifact is refused before any git work happens.
+  if (!text(o.artifactPath)) {
+    return refusal('ARTIFACT_REQUIRED', 'artifactPath is required: the review must be named');
   }
   if (expected.workItemId && norm(expected.workItemId) !== norm(manifest.workItemId)) {
     return refusal('WORK_ITEM_MISMATCH', 'manifest reviews ' + manifest.workItemId);
@@ -252,11 +261,9 @@ function validateManifest(manifest, options) {
   if (notIndependent) return notIndependent;
 
   // M-R05: the manifest is bound to the exact human-readable review.
-  if (o.artifactPath) {
-    const digest = sha256File(o.artifactPath);
-    if (!digest || digest !== norm(manifest.artifactSha256)) {
-      return refusal('ARTIFACT_HASH_MISMATCH', 'artifact sha256 is not ' + o.artifactPath);
-    }
+  const digest = sha256File(o.artifactPath);
+  if (!digest || digest !== norm(manifest.artifactSha256)) {
+    return refusal('ARTIFACT_HASH_MISMATCH', 'artifact sha256 is not ' + o.artifactPath);
   }
   return {
     ok: true,
