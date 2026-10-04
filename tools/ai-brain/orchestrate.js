@@ -2137,9 +2137,10 @@ function buildCandidates(options, evidenceData) {
           : testsInjectedCandidates
             ? null
             : evidence.loadEvidence(path.join(__dirname, 'data', 'evidence'));
+  const accounts = (o && o.accounts) || (o && o.ranking && o.ranking.accounts) || [];
   const evCandidates =
     evData && Array.isArray(evData.combinations)
-      ? candidatesApi.candidatesFromEvidence(evData).filter((c) => !c.legacy)
+      ? candidatesApi.candidatesFromEvidence(evData, { accounts }).filter((c) => !c.legacy)
       : [];
   return candidatesApi.mergeCandidates(baseCandidates, evCandidates);
 }
@@ -2174,7 +2175,10 @@ async function selectCandidateForProfile(
 
   let candidates = Array.isArray(annotatedCandidates) ? annotatedCandidates : [];
   if (evData && Array.isArray(evData.combinations) && evData.combinations.length > 0) {
-    const evCandidates = candidatesApi.candidatesFromEvidence(evData).filter((c) => !c.legacy);
+    const accounts = (o && o.accounts) || (o && o.ranking && o.ranking.accounts) || [];
+    const evCandidates = candidatesApi
+      .candidatesFromEvidence(evData, { accounts })
+      .filter((c) => !c.legacy);
     candidates = candidatesApi.mergeCandidates(candidates, evCandidates);
     candidates = candidatesApi.annotateCandidates(
       candidates.map((c) => Object.assign({}, c)),
