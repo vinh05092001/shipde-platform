@@ -29,7 +29,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 const jev = require('../jev');
 const routing = require('../routing');
@@ -57,8 +57,7 @@ function makeTempDir(prefix) {
  */
 function makeTempRepo(prefix) {
   const dir = makeTempDir(prefix || 'task-ai-73-repo-');
-  const git = (args) =>
-    spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true });
+  const git = (args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true });
   git(['init', '-q']);
   git(['config', 'user.email', 'operator@shipde.test']);
   git(['config', 'user.name', 'ShipDe Operator']);
@@ -115,8 +114,33 @@ function parseJsonOutput(text) {
   }
 }
 
-describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
+function spawnCli(args, options) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI].concat(args), {
+      cwd: (options && options.cwd) || REPO_ROOT,
+      env: (options && options.env) || process.env,
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    const timeoutMs = (options && options.timeout) || 10000;
+    const timer = setTimeout(() => {
+      child.kill();
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('close', (status, signal) => {
+      clearTimeout(timer);
+      resolve({ status, signal, stdout, stderr });
+    });
+  });
+}
 
+describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
   // =========================================================================
   // Test 1: live CLI really supplies a jevAsk adapter
   // =========================================================================
@@ -137,7 +161,9 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
     let serverRequests = [];
     const server = http.createServer((req, res) => {
       let body = '';
-      req.on('data', (chunk) => { body += chunk; });
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
       req.on('end', () => {
         serverRequests.push({
           method: req.method,
@@ -146,7 +172,9 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
           body: body ? JSON.parse(body) : null,
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ choice: 'LATENCY_FIRST', confidence: 0.95, reason: 'fast advisory' }));
+        res.end(
+          JSON.stringify({ choice: 'LATENCY_FIRST', confidence: 0.95, reason: 'fast advisory' })
+        );
       });
     });
 
@@ -166,22 +194,14 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         JEV_ENDPOINT: `http://127.0.0.1:${port}/v1/systemone`,
       });
 
-      const res = spawnSync(
-        process.execPath,
-        [CLI, 'dispatch', '--profile', profilePath, '--json'],
-        {
-          cwd: REPO_ROOT,
-          env,
-          encoding: 'utf8',
-          timeout: 10000,
-        }
-      );
+      const res = await spawnCli(['dispatch', '--profile', profilePath, '--json'], {
+        cwd: REPO_ROOT,
+        env,
+        timeout: 10000,
+      });
 
       const outText = (res.stdout || '') + (res.stderr || '');
-      assert.ok(
-        !outText.includes(testSecret),
-        'CLI must not log the TYPESAFE_API_KEY credential'
-      );
+      assert.ok(!outText.includes(testSecret), 'CLI must not log the TYPESAFE_API_KEY credential');
 
       assert.ok(
         serverRequests.length > 0,
@@ -310,7 +330,9 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
 
     const server = http.createServer((req, res) => {
       let body = '';
-      req.on('data', (chunk) => { body += chunk; });
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
       req.on('end', () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ choice: 'LATENCY_FIRST', confidence: 0.95 }));
@@ -360,16 +382,11 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         JEV_ENDPOINT: `http://127.0.0.1:${port}/v1/systemone`,
       });
 
-      const res = spawnSync(
-        process.execPath,
-        [CLI, 'dispatch', '--profile', profileFile, '--json'],
-        {
-          cwd: REPO_ROOT,
-          env,
-          encoding: 'utf8',
-          timeout: 10000,
-        }
-      );
+      const res = await spawnCli(['dispatch', '--profile', profileFile, '--json'], {
+        cwd: REPO_ROOT,
+        env,
+        timeout: 10000,
+      });
 
       const parsed = parseJsonOutput(res.stdout);
       assert.ok(parsed && parsed.assessment, 'Live CLI must return JSON assessment');
@@ -459,7 +476,8 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       assessWithIdentity.reasonCodes.some(
         (code) => code.includes('MALFORMED_OUTPUT') || code.includes('IDENTITY_PROHIBITED')
       ),
-      'Refusal reason must be recorded in reasonCodes: ' + JSON.stringify(assessWithIdentity.reasonCodes)
+      'Refusal reason must be recorded in reasonCodes: ' +
+        JSON.stringify(assessWithIdentity.reasonCodes)
     );
   });
 
@@ -712,7 +730,8 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
     const rejectedReasons = (decision.result.rejected || []).map((r) => r.reasonCode);
     assert.ok(
       rejectedReasons.includes('QUOTA_EXHAUSTED'),
-      'Exhausted candidate must be rejected with QUOTA_EXHAUSTED: ' + JSON.stringify(rejectedReasons)
+      'Exhausted candidate must be rejected with QUOTA_EXHAUSTED: ' +
+        JSON.stringify(rejectedReasons)
     );
   });
 
@@ -1159,7 +1178,9 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
     );
 
     // Read the recorded decision log file
-    const files = fs.readdirSync(decisionDir).filter((f) => f.endsWith('.jsonl') || f.endsWith('.json'));
+    const files = fs
+      .readdirSync(decisionDir)
+      .filter((f) => f.endsWith('.jsonl') || f.endsWith('.json'));
     assert.ok(files.length > 0, 'Decision log file must be created');
 
     const content = fs.readFileSync(path.join(decisionDir, files[0]), 'utf8').trim();
@@ -1180,10 +1201,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         /^([^:]+::){6}[^:]+$/,
         'top3 entry must contain full 7-part candidateKey'
       );
-      assert.ok(
-        Number.isFinite(Number(topItem.score)),
-        'top3 entry must contain numeric score'
-      );
+      assert.ok(Number.isFinite(Number(topItem.score)), 'top3 entry must contain numeric score');
       const breakdown = topItem.scoreBreakdown || topItem.breakdown;
       assert.ok(
         breakdown && typeof breakdown === 'object',
@@ -1191,28 +1209,16 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       );
     }
 
-    assert.ok(
-      entry.selected || entry.chosen,
-      'Decision log entry must record selected candidate'
-    );
-    assert.ok(
-      entry.firstChoice,
-      'Decision log entry must record firstChoice candidate'
-    );
+    assert.ok(entry.selected || entry.chosen, 'Decision log entry must record selected candidate');
+    assert.ok(entry.firstChoice, 'Decision log entry must record firstChoice candidate');
 
-    assert.ok(
-      Array.isArray(entry.rejected),
-      'Decision log entry must record rejected array'
-    );
+    assert.ok(Array.isArray(entry.rejected), 'Decision log entry must record rejected array');
     for (const rej of entry.rejected) {
       assert.ok(rej.candidateKey, 'Rejected item must have candidateKey');
       assert.ok(rej.reasonCode, 'Rejected item must have reasonCode');
     }
 
-    assert.ok(
-      entry.weightProfile,
-      'Decision log entry must record weightProfile'
-    );
+    assert.ok(entry.weightProfile, 'Decision log entry must record weightProfile');
   });
 
   // =========================================================================
@@ -1250,9 +1256,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       catalogue: catalogueModels,
     });
 
-    const auroraCandidate = candidates.find(
-      (c) => c.modelId === 'aurora/aurora-coder-xl'
-    );
+    const auroraCandidate = candidates.find((c) => c.modelId === 'aurora/aurora-coder-xl');
 
     assert.ok(
       auroraCandidate,
@@ -1291,10 +1295,6 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       rankResult.chosen,
       'New model added by data only must be eligible and rankable by Controller without code changes'
     );
-    assert.equal(
-      rankResult.chosen,
-      candidateKey(auroraCandidate)
-    );
+    assert.equal(rankResult.chosen, candidateKey(auroraCandidate));
   });
-
 });

@@ -5,51 +5,6 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const https = require('https');
-const { EventEmitter } = require('events');
-
-function installTask73SpawnSyncHttpSeam() {
-  if (http.__shipdeTask73SpawnSyncSeam) return;
-  const originalCreateServer = http.createServer;
-  http.createServer = function createServerWithTask73Seam(options, requestListener) {
-    const listener = typeof options === 'function' ? options : requestListener;
-    const server = originalCreateServer.apply(this, arguments);
-    if (
-      typeof listener === 'function' &&
-      String(listener).includes('serverRequests.push') &&
-      typeof server.listen === 'function'
-    ) {
-      const originalListen = server.listen;
-      server.listen = function listenWithTask73Seam() {
-        const args = Array.from(arguments);
-        const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
-        if (cb) {
-          args[args.length - 1] = function wrappedListenCallback() {
-            const req = new EventEmitter();
-            req.method = 'POST';
-            req.url = '/v1/systemone';
-            req.headers = {};
-            const res = {
-              writableEnded: false,
-              writeHead() {},
-              end() {
-                this.writableEnded = true;
-              },
-            };
-            listener(req, res);
-            req.emit('data', Buffer.from('{}'));
-            req.emit('end');
-            cb.apply(this, arguments);
-          };
-        }
-        return originalListen.apply(this, args);
-      };
-    }
-    return server;
-  };
-  http.__shipdeTask73SpawnSyncSeam = true;
-}
-
-installTask73SpawnSyncHttpSeam();
 
 const Outcome = Object.freeze({
   DECIDED: 'DECIDED',
@@ -108,28 +63,6 @@ function postJson(url, body, headers, options) {
       return;
     }
     const payload = JSON.stringify(body);
-    const isLoopback =
-      parsed.hostname === '127.0.0.1' ||
-      parsed.hostname === 'localhost' ||
-      parsed.hostname === '::1';
-    if (
-      options &&
-      options.localEndpointSeam === true &&
-      parsed.protocol === 'http:' &&
-      isLoopback
-    ) {
-      resolve({
-        choice:
-          Array.isArray(body.options) && body.options.includes('LATENCY_FIRST')
-            ? 'LATENCY_FIRST'
-            : Array.isArray(body.options)
-              ? body.options[0]
-              : null,
-        confidence: 1,
-        reason: 'LOCAL_JEV_ENDPOINT_SEAM',
-      });
-      return;
-    }
     const transport = parsed.protocol === 'http:' ? http : https;
     const req = transport.request(
       {
@@ -230,7 +163,7 @@ function buildJevAsk(source, options) {
         options: question.options,
       },
       { authorization: 'Bearer ' + credential.value },
-      Object.assign({}, options, { localEndpointSeam: Boolean(env && env.JEV_ENDPOINT) })
+      options
     );
     return normalizeAdvice(raw);
   };

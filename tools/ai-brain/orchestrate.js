@@ -613,10 +613,7 @@ function reviewLane(
     const reviewWorkerRoot =
       o.reviewRoot ||
       (o.isolatedWorker && isolatedWorkerRoot
-        ? path.win32.join(
-            path.win32.dirname(isolatedWorkerRoot),
-            path.win32.basename(isolatedWorkerRoot) + '-review'
-          )
+        ? path.join(path.dirname(isolatedWorkerRoot), path.basename(isolatedWorkerRoot) + '-review')
         : workerRoot
           ? workerRoot + '-review'
           : path.join(os.tmpdir(), 'shipde-review-' + Date.now()));
@@ -2094,7 +2091,8 @@ function hasQuotaAccountReadings(options) {
   const rankingOpts = o.ranking || {};
   const home = o.home || rankingOpts.home;
   const storeFile =
-    rankingOpts.storePath || path.join(home || os.homedir(), '.shipde', 'agy-quota.json');
+    rankingOpts.storePath || (home ? path.join(home, '.shipde', 'agy-quota.json') : null);
+  if (!storeFile) return false;
   try {
     const parsed = JSON.parse(fs.readFileSync(storeFile, 'utf8'));
     return Boolean(parsed && parsed.accounts && Object.keys(parsed.accounts).length > 0);

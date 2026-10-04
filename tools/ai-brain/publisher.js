@@ -199,7 +199,7 @@ function createDraftPullRequest(options) {
     'Draft opened by the Ship Dễ live loop at the reviewed commit ' +
       reviewedSha +
       '. Reviewer: ' +
-      (o.reviewer || 'unrecorded') +
+      (o.reviewer || o.reviewerCandidateKey || 'missing reviewer') +
       '. Decision evidence: ' +
       (o.decisionEvidence || 'not supplied') +
       '. This Pull Request is a proof artifact: the loop never merges it.';

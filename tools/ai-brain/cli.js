@@ -29,7 +29,6 @@
  */
 
 const path = require('path');
-const { loadRegister } = require('../ai-dashboard/register-adapter');
 const { reconcileRegister, planReconciliation, applyStatusMutations } = require('./reconcile');
 const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
@@ -86,6 +85,36 @@ const PROTECTED_WORKTREE = 'shipde-platform';
 const REFUSAL_PROTECTED =
   'Write-back refused: running in protected main worktree/branch. ' +
   'Mutations require a dedicated feature worktree and branch.';
+
+function loadRegister(filePath, preferredBranch, rootDir) {
+  try {
+    return require('../ai-dashboard/register-adapter').loadRegister(
+      filePath,
+      preferredBranch,
+      rootDir
+    );
+  } catch (err) {
+    if (
+      err &&
+      err.code === 'MODULE_NOT_FOUND' &&
+      String(err.message || '').includes('../ai-dashboard/register-adapter')
+    ) {
+      return {
+        health: {
+          name: 'register',
+          status: 'unavailable',
+          observedAt: new Date().toISOString(),
+          latencyMs: 0,
+          provenance: filePath,
+          impact: 'Register adapter is unavailable in this copied tool surface',
+          error: err.message,
+        },
+        data: { items: [] },
+      };
+    }
+    throw err;
+  }
+}
 
 function pick(args, kebab, camel) {
   return args[kebab] === undefined ? args[camel] : args[kebab];
