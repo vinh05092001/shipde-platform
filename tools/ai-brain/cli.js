@@ -2469,6 +2469,103 @@ function discoveryCommand(args, deps) {
   return { exitCode: 0, view, candidates: rows };
 }
 
+/**
+ * evidence import-work (TASK-AI-75): turn real merged, independently reviewed
+ * work into WORK_ITEM_PASS evidence. Never fabricates.
+ *
+ *   node tools/ai-brain/cli.js evidence import-work \
+ *     --sha <40-hex> \
+ *     --writer <7-part candidateKey harness::accessPath::gateway::upstream::account::quotaScope::modelId> \
+ *     --review <path to review md> \
+ *     --reviewer <reviewer identity string> \
+ *     --work-item <id> \
+ *     [--main-ref origin/main] \
+ *     [--evidence-dir <dir>] \
+ *     [--json]
+ */
+function evidenceCommand(args, deps) {
+  const d = deps || {};
+  const log = d.log || console.log;
+  const error = d.error || console.error;
+  const exit = d.exit || process.exit;
+  const rootDir = args.root || d.rootDir || process.cwd();
+  const sub = args._[1];
+
+  if (sub !== 'import-work') {
+    error('Lệnh không rõ: evidence ' + (sub || ''));
+    error(
+      'Dùng: evidence import-work --sha <40-hex> --writer <key> --review <file> --reviewer <identity> --work-item <id> [--main-ref <ref>] [--evidence-dir <dir>] [--json]'
+    );
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  const sha = args.sha;
+  const writer = args.writer;
+  const review = args.review;
+  const reviewer = args.reviewer;
+  const workItem = args['work-item'] || args.workItem;
+
+  if (
+    typeof sha !== 'string' ||
+    !sha ||
+    typeof writer !== 'string' ||
+    !writer ||
+    typeof review !== 'string' ||
+    !review ||
+    typeof reviewer !== 'string' ||
+    !reviewer ||
+    typeof workItem !== 'string' ||
+    !workItem
+  ) {
+    error('evidence import-work requires --sha, --writer, --review, --reviewer, --work-item');
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  const { importWorkItemPass } = require('./work-evidence');
+  const evidenceDir =
+    args['evidence-dir'] ||
+    args.evidenceDir ||
+    d.evidenceDir ||
+    path.join(__dirname, 'data', 'evidence');
+  const mainRef = args['main-ref'] || args.mainRef || 'origin/main';
+  const reviewPath = path.isAbsolute(review) ? review : path.resolve(rootDir, review);
+
+  const result = importWorkItemPass({
+    sha,
+    writer,
+    review: reviewPath,
+    reviewer,
+    workItem,
+    mainRef,
+    evidenceDir,
+    cwd: rootDir,
+  });
+
+  if (!result.ok) {
+    if (args.json) {
+      log(JSON.stringify(result, null, 2));
+    } else {
+      error('REFUSED: ' + result.code + (result.reason ? ' - ' + result.reason : ''));
+    }
+    exit(1);
+    return { exitCode: 1, result };
+  }
+
+  if (args.json) {
+    log(JSON.stringify(result, null, 2));
+  } else {
+    if (result.status === 'ALREADY_RECORDED') {
+      log('ALREADY_RECORDED: ' + result.candidateKey + ' sha ' + result.sha);
+    } else {
+      log('IMPORTED: ' + result.candidateKey + ' sha ' + result.sha + ' proof ' + result.mergeProof);
+    }
+  }
+  exit(0);
+  return { exitCode: 0, result };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -2498,6 +2595,9 @@ function main() {
   // model audit into the stores dispatch reads, then show what the Controller
   // sees. Synchronous, like reconcile and quota.
   if (command === 'discovery') return discoveryCommand(args);
+  // evidence import-work (TASK-AI-75): turn real merged, independently reviewed
+  // work into WORK_ITEM_PASS evidence.
+  if (command === 'evidence') return evidenceCommand(args);
   // account add | account limits | account secret (TASK-AI-29). The account
   // surface parses its own argv strictly, so a mistyped flag is refused
   // rather than dropped, and never routes through reconcile allowlists.
@@ -2656,7 +2756,7 @@ function main() {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify | serena'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence'
   );
   process.exit(2);
 }
@@ -2679,6 +2779,7 @@ module.exports = {
   // would rank.
   assembleForDispatch,
   discoveryCommand,
+  evidenceCommand,
 };
 
 if (require.main === module) {
