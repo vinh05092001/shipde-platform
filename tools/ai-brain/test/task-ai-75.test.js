@@ -285,11 +285,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
 
     // Line 2 has extra whitespace -> REVIEW_NOT_PASS
     const spaceFile = path.join(repo.dir, 'rev-space.md');
-    fs.writeFileSync(
-      spaceFile,
-      `# Review for commit ${sha}\nReview verdict: PASS \n`,
-      'utf8'
-    );
+    fs.writeFileSync(spaceFile, `# Review for commit ${sha}\nReview verdict: PASS \n`, 'utf8');
     const r4 = importWorkItemPass({
       sha,
       writer: VALID_WRITER,
@@ -615,11 +611,19 @@ describe('TASK-AI-75: Work-evidence importer', () => {
     const refusals = [
       { sha: 'bad-sha', writer: VALID_WRITER, review, reviewer: 'codex', workItem: 'TASK-AI-75' },
       { sha, writer: 'bad-writer', review, reviewer: 'codex', workItem: 'TASK-AI-75' },
-      { sha, writer: VALID_WRITER, review: 'nonexistent.md', reviewer: 'codex', workItem: 'TASK-AI-75' },
+      {
+        sha,
+        writer: VALID_WRITER,
+        review: 'nonexistent.md',
+        reviewer: 'codex',
+        workItem: 'TASK-AI-75',
+      },
       { sha, writer: VALID_WRITER, review, reviewer: VALID_WRITER, workItem: 'TASK-AI-75' },
     ];
     for (const badOpts of refusals) {
-      const res = importWorkItemPass(Object.assign({}, badOpts, { mainRef: 'main', evidenceDir: evDir, cwd: repo.dir }));
+      const res = importWorkItemPass(
+        Object.assign({}, badOpts, { mainRef: 'main', evidenceDir: evDir, cwd: repo.dir })
+      );
       assert.equal(res.ok, false);
       assert.equal(fs.existsSync(path.join(evDir, 'evidence.json')), false);
     }
@@ -850,11 +854,11 @@ describe('TASK-AI-75: Work-evidence importer', () => {
     assert.equal(procRefusal.status, 1);
 
     // Test CLI bad argv exit code 2
-    const procBadArgv = cp.spawnSync(
-      process.execPath,
-      [cliPath, 'evidence', 'import-work'],
-      { cwd: repo.dir, encoding: 'utf8', windowsHide: true }
-    );
+    const procBadArgv = cp.spawnSync(process.execPath, [cliPath, 'evidence', 'import-work'], {
+      cwd: repo.dir,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
     assert.equal(procBadArgv.status, 2);
   });
 });

@@ -2559,7 +2559,9 @@ function evidenceCommand(args, deps) {
     if (result.status === 'ALREADY_RECORDED') {
       log('ALREADY_RECORDED: ' + result.candidateKey + ' sha ' + result.sha);
     } else {
-      log('IMPORTED: ' + result.candidateKey + ' sha ' + result.sha + ' proof ' + result.mergeProof);
+      log(
+        'IMPORTED: ' + result.candidateKey + ' sha ' + result.sha + ' proof ' + result.mergeProof
+      );
     }
   }
   exit(0);

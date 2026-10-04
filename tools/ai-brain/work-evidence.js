@@ -67,7 +67,18 @@ function findSquashCommit(wId, ref, gitCwd) {
     }
     const resCi = cp.spawnSync(
       'git',
-      ['-c', 'safe.directory=*', 'log', ref, '-i', '-F', `--grep=${needle}`, '-n', '1', '--format=%H'],
+      [
+        '-c',
+        'safe.directory=*',
+        'log',
+        ref,
+        '-i',
+        '-F',
+        `--grep=${needle}`,
+        '-n',
+        '1',
+        '--format=%H',
+      ],
       {
         cwd: gitCwd,
         encoding: 'utf8',
@@ -108,7 +119,10 @@ function checkReviewerIndependence(reviewer, writerParts) {
     const revUpstream = revParts[3].trim().toLowerCase();
     const revModelId = revParts[6].trim().toLowerCase();
     if (revUpstream === writerUpstream || revModelId === writerModelId) {
-      return { independent: false, reason: 'reviewer shares upstream segment or modelId with writer' };
+      return {
+        independent: false,
+        reason: 'reviewer shares upstream segment or modelId with writer',
+      };
     }
   } else {
     const parsedRev = parseCandidateKey(revTrim);
@@ -123,9 +137,15 @@ function checkReviewerIndependence(reviewer, writerParts) {
   }
 
   // Token / segment check
-  const tokens = revTrim.split(/[/:]+/).map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const tokens = revTrim
+    .split(/[/:]+/)
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
   if (tokens.includes(writerUpstream) || tokens.includes(writerModelId)) {
-    return { independent: false, reason: 'reviewer shares upstream segment or modelId with writer' };
+    return {
+      independent: false,
+      reason: 'reviewer shares upstream segment or modelId with writer',
+    };
   }
 
   if (revTrim.toLowerCase() === writerUpstream || revTrim.toLowerCase() === writerModelId) {
@@ -286,9 +306,7 @@ function importWorkItemPass(opts) {
 
   // Evidence directory
   const evidenceDir =
-    options.evidenceDir ||
-    options['evidence-dir'] ||
-    path.join(__dirname, 'data', 'evidence');
+    options.evidenceDir || options['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
   const resolvedEvidenceDir = path.isAbsolute(evidenceDir)
     ? evidenceDir
     : path.resolve(cwd, evidenceDir);
