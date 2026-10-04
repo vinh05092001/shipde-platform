@@ -2480,13 +2480,19 @@ function discoveryCommand(args, deps) {
  *
  *   node tools/ai-brain/cli.js evidence import-work \
  *     --sha <40-hex> \
+ *     --manifest <path to review-manifest.json> \
  *     --writer <7-part candidateKey harness::accessPath::gateway::upstream::account::quotaScope::modelId> \
  *     --review <path to review md> \
  *     --reviewer <reviewer identity string> \
  *     --work-item <id> \
+ *     [--pr-head <40-hex>] \
  *     [--main-ref origin/main] \
  *     [--evidence-dir <dir>] \
  *     [--json]
+ *
+ * TASK-AI-77: --manifest is what authorises the import. It is refused as
+ * MANIFEST_REQUIRED (exit 1) rather than as bad argv, so a caller that forgot it
+ * sees why instead of a usage error.
  */
 function evidenceCommand(args, deps) {
   const d = deps || {};
@@ -2499,7 +2505,7 @@ function evidenceCommand(args, deps) {
   if (sub !== 'import-work') {
     error('Lệnh không rõ: evidence ' + (sub || ''));
     error(
-      'Dùng: evidence import-work --sha <40-hex> --writer <key> --review <file> --reviewer <identity> --work-item <id> [--main-ref <ref>] [--evidence-dir <dir>] [--json]'
+      'Dùng: evidence import-work --sha <40-hex> --manifest <file> --writer <key> --review <file> --reviewer <identity> --work-item <id> [--pr-head <sha>] [--main-ref <ref>] [--evidence-dir <dir>] [--json]'
     );
     exit(2);
     return { exitCode: 2 };
@@ -2541,6 +2547,8 @@ function evidenceCommand(args, deps) {
     sha,
     writer,
     review: reviewPath,
+    manifest: args.manifest || args['manifest-path'] || null,
+    prHead: args['pr-head'] || args.prHead || null,
     reviewer,
     workItem,
     mainRef,
@@ -2571,6 +2579,83 @@ function evidenceCommand(args, deps) {
   }
   exit(0);
   return { exitCode: 0, result };
+}
+
+/**
+ * review manifest validate (TASK-AI-77): check a structured review manifest
+ * against git and against the markdown review it accompanies, before anything is
+ * published or promoted on the strength of it.
+ *
+ *   node tools/ai-brain/cli.js review manifest validate \
+ *     --manifest <path to review-manifest.json> --artifact <path to the review> \
+ *     --work-item <id> --sha <40-hex reviewed commit> [--json]
+ *
+ * Exit 0 when the manifest is a faithful binding, 1 when it is refused (the
+ * refusal code is printed), 2 on bad argv.
+ */
+function reviewCommand(args, deps) {
+  const d = deps || {};
+  const log = d.log || console.log;
+  const error = d.error || console.error;
+  const exit = d.exit || process.exit;
+  const rootDir = args.root || d.rootDir || process.cwd();
+  const sub = args._[1];
+  const action = args._[2];
+
+  if (sub !== 'manifest' || action !== 'validate') {
+    error('Lệnh không rõ: review ' + [sub, action].filter(Boolean).join(' '));
+    error(
+      'Dùng: review manifest validate --manifest <file> --artifact <file.md> --work-item <id> --sha <40-hex> [--json]'
+    );
+    if (exit === process.exit) process.exitCode = 2;
+    else exit(2);
+    return { exitCode: 2 };
+  }
+
+  const manifest = args.manifest;
+  const artifact = args.artifact;
+  const workItem = args['work-item'] || args.workItem;
+  const sha = args.sha;
+  const missing = [manifest, artifact, workItem, sha].some(
+    (value) => typeof value !== 'string' || value.trim() === ''
+  );
+  if (missing) {
+    error('review manifest validate requires --manifest, --artifact, --work-item, --sha');
+    if (exit === process.exit) process.exitCode = 2;
+    else exit(2);
+    return { exitCode: 2 };
+  }
+
+  const { validateManifestFile } = require('./review-manifest');
+  const resolveArg = (value) => (path.isAbsolute(value) ? value : path.resolve(rootDir, value));
+  const result = validateManifestFile(resolveArg(manifest), {
+    repoCwd: rootDir,
+    expected: { workItemId: workItem, commit: sha },
+    artifactPath: resolveArg(artifact),
+  });
+
+  if (args.json) {
+    log(JSON.stringify(result, null, 2));
+  } else if (!result.ok) {
+    error('REFUSED: ' + result.code + (result.reason ? ' - ' + result.reason : ''));
+  } else {
+    log(
+      'OK: ' +
+        result.workItemId +
+        ' ' +
+        result.reviewedCommit +
+        ' verdict ' +
+        result.verdict +
+        ' (' +
+        result.openFindings +
+        ' open finding(s))'
+    );
+  }
+
+  const code = result.ok ? 0 : 1;
+  if (exit === process.exit) process.exitCode = code;
+  else exit(code);
+  return { exitCode: code, result };
 }
 
 function main() {
@@ -2605,6 +2690,9 @@ function main() {
   // evidence import-work (TASK-AI-75): turn real merged, independently reviewed
   // work into WORK_ITEM_PASS evidence.
   if (command === 'evidence') return evidenceCommand(args);
+  // review manifest validate (TASK-AI-77): check a review manifest against git
+  // before anything is published or promoted on the strength of it.
+  if (command === 'review') return reviewCommand(args);
   // account add | account limits | account secret (TASK-AI-29). The account
   // surface parses its own argv strictly, so a mistyped flag is refused
   // rather than dropped, and never routes through reconcile allowlists.
@@ -2763,7 +2851,7 @@ function main() {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review'
   );
   process.exit(2);
 }
@@ -2787,6 +2875,7 @@ module.exports = {
   assembleForDispatch,
   discoveryCommand,
   evidenceCommand,
+  reviewCommand,
 };
 
 if (require.main === module) {
