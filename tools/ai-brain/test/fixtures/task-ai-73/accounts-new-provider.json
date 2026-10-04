@@ -10,9 +10,7 @@
       "limits": {},
       "capabilities": { "tools": true, "contextWindow": 128000 },
       "cost": { "inputPerMillion": 2.5, "outputPerMillion": 10 },
-      "models": [
-        { "model": "aurora/aurora-coder-xl", "quality": 92 }
-      ]
+      "models": [{ "model": "aurora/aurora-coder-xl", "quality": 92 }]
     }
   ]
 }
