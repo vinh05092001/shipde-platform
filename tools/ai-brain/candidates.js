@@ -596,18 +596,28 @@ function candidatesFromEvidence(evidenceData) {
         sharedQuota: 'unknown',
       });
     } else {
-      out.push({
+      const evidenceList = Array.isArray(combo.evidence)
+        ? combo.evidence.map((e) => Object.assign({}, e))
+        : [];
+      const cand = {
         harness: combo.harness,
         accessPath: combo.accessPath,
         gateway: combo.gateway || '',
         upstream: combo.upstream,
-        accountId: combo.accountId || '*',
-        quotaScope: combo.quotaScope || combo.upstream,
+        accountId: combo.accountId || combo.account || '*',
+        quotaScope: combo.quotaScope || combo.upstream || '',
         modelId: combo.modelId || combo.model,
         source: combo.source || combo.upstream,
         kind: 'evidence',
         sharedQuota: 'unknown',
-      });
+        evidence: evidenceList,
+        capabilities: combo.capabilities || {},
+      };
+      if (combo.cost !== undefined) cand.cost = combo.cost;
+      if (combo.quality !== undefined) cand.quality = combo.quality;
+      if (combo.latencyMs !== undefined) cand.latencyMs = combo.latencyMs;
+      if (combo.qualifiedRoles) cand.qualifiedRoles = combo.qualifiedRoles;
+      out.push(cand);
     }
   }
   return out;
@@ -642,7 +652,7 @@ function annotateCandidates(candidates, evidenceData, opts) {
       continue;
     }
     const ev = evidence.getEvidence(evidenceData, c);
-    c.evidence = ev;
+    c.evidence = ev && ev.length > 0 ? ev : c.evidence || [];
     c.status = evidence.candidateStatus(evidenceData, c);
 
     const block = evidence.isCandidateBlocked

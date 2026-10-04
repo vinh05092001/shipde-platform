@@ -855,6 +855,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       adapterScript: opts.adapterScript,
       platform: opts.platform,
     }),
+    ...candidatesApi.candidatesFromEvidence(opts.evidenceData).filter((c) => {
+      if (c.legacy) return false;
+      return Array.isArray(c.evidence) && c.evidence.some((e) => e && e.status === 'passed');
+    }),
   ]);
 }
 
@@ -1218,6 +1222,7 @@ function dispatchProfileCommand(args, deps) {
       fakeRunsDir: optsWithEvidence.fakeRunsDir,
       adapterScript: optsWithEvidence.adapterScript,
       platform: optsWithEvidence.platform,
+      launcher: (deps && deps.launcher) || args.launcher || undefined,
     })
   );
 }
