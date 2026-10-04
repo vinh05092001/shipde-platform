@@ -85,6 +85,25 @@ function profile(over) {
 }
 
 /**
+ * JEV isolation for every dispatch under test. The dispatch builds its ask
+ * through buildJevAsk's own options (home, env, httpClient), so the tests
+ * supply an isolated home (dirs.home, a fresh temp dir with no key file) and
+ * an env without TYPESAFE_API_KEY: the credential resolves as missing, the
+ * ask fails closed and the Controller decides — exactly as on a CI runner
+ * with no key. The denying httpClient makes network I/O impossible even if a
+ * credential were to resolve on the host.
+ */
+function hermeticJevEnv() {
+  const env = Object.assign({}, process.env);
+  delete env.TYPESAFE_API_KEY;
+  return env;
+}
+
+function denyJevNetwork() {
+  throw new Error('JEV_NETWORK_DISABLED_IN_TESTS');
+}
+
+/**
  * Runs one profile dispatch with injected candidates and captured output.
  * `deps.over` extends the deps (ask, reservations, headrooms...).
  */
@@ -99,6 +118,8 @@ async function runDispatch(p, candidates, dirs, over) {
       evidenceDir: dirs.evidence,
       decisionDir: dirs.decisions,
       home: dirs.home,
+      env: hermeticJevEnv(),
+      jevHttpClient: denyJevNetwork,
       storePath: dirs.storePath,
       now: NOW,
       reservations: [],
@@ -836,6 +857,8 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
         evidenceDir: dirs.evidence,
         decisionDir: dirs.decisions,
         home: dirs.home,
+        env: hermeticJevEnv(),
+        jevHttpClient: denyJevNetwork,
         now: NOW,
         log: (s) => dryLines.push(String(s)),
         error: (s) => dryLines.push('ERR ' + String(s)),
