@@ -253,6 +253,11 @@ describe('TASK-AI-91: failed candidate not re-selected & bounded fallback', () =
     const candEvidence = evidence.getEvidence(evData, candX1);
     assert.ok(candEvidence.length > 0, 'outcome must be recorded in evidence store');
     assert.equal(candEvidence[0].exitCode, 1, 'recorded exitCode is 1');
+    assert.equal(
+      candEvidence[0].scope,
+      'upstream',
+      'recorded outcome in evidence path includes classified scope'
+    );
 
     // candX2 must NOT have been launched because candX1 failed with upstream scope!
     assert.ok(
@@ -342,6 +347,12 @@ describe('TASK-AI-91: failed candidate not re-selected & bounded fallback', () =
       modelId: 'up-1/m1',
       quality: 90,
     });
+    const cand1SameDomain = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-1',
+      modelId: 'up-1/m2',
+      quality: 89,
+    });
     const cand2 = sampleCandidate({
       gateway: '9router',
       upstream: 'up-2',
@@ -369,7 +380,7 @@ describe('TASK-AI-91: failed candidate not re-selected & bounded fallback', () =
           verification: { command: 'node -e "process.exit(0)"', expect: '' },
         },
       ],
-      candidates: [cand1, cand2],
+      candidates: [cand1, cand1SameDomain, cand2],
       evidenceDir,
       decisionDir,
       now: NOW,
@@ -395,6 +406,23 @@ describe('TASK-AI-91: failed candidate not re-selected & bounded fallback', () =
     assert.ok(Array.isArray(fd.excluded) || Array.isArray(fd.excludedSet), 'records excluded set');
     const excludedList = fd.excluded || fd.excludedSet;
     assert.ok(excludedList.includes(cand1.candidateKey), 'excluded set includes failed key');
+    assert.ok(
+      excludedList.includes(cand1SameDomain.candidateKey) || excludedList.includes('9router/up-1'),
+      'failed decision excluded set includes domain-based exclusions'
+    );
+
+    const selDecisions = decisionsList.filter((d) => d.stage === 'selected');
+    assert.ok(selDecisions.length >= 2, 'must record selection for attempt 2');
+    const sel2 = selDecisions[1];
+    const selExcluded = sel2.excluded || sel2.excludedSet;
+    assert.ok(
+      selExcluded.includes(cand1.candidateKey),
+      'selection decision excluded set includes failed key'
+    );
+    assert.ok(
+      selExcluded.includes(cand1SameDomain.candidateKey) || selExcluded.includes('9router/up-1'),
+      'selection decision excluded set includes domain-based exclusions'
+    );
   });
 
   // F-R05 test: fake launcher fails for key A (upstream X) -> next selection is a key outside X; when every candidate fails -> BLOCKED after bounded attempts with NO_ALTERNATE_FAILURE_DOMAIN; the same key is never selected twice.
@@ -469,5 +497,225 @@ describe('TASK-AI-91: failed candidate not re-selected & bounded fallback', () =
     assert.equal(String(outcome.status).toLowerCase(), 'blocked');
     assert.equal(outcome.reasonCode, 'NO_ALTERNATE_FAILURE_DOMAIN');
     assert.deepEqual(outcome.triedKeys, attempts);
+  });
+
+  // P1: candidate key or failure domain that failed in the writer lane is never selected by reviewer lane
+  test('P1 reviewer lane: key or failure domain that failed in writer lane is never selected by reviewer lane', async () => {
+    const candWriterFail = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-fail-rev',
+      modelId: 'up-fail-rev/m1',
+      quality: 99,
+      latencyMs: 100,
+    });
+    const candSameDomain = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-fail-rev',
+      modelId: 'up-fail-rev/m2',
+      quality: 98,
+      latencyMs: 100,
+    });
+    const candWriterPass = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-writer-rev',
+      modelId: 'up-writer-rev/m1',
+      quality: 90,
+      latencyMs: 500,
+    });
+    const candReviewerEligible = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-reviewer-rev',
+      modelId: 'up-reviewer-rev/m1',
+      quality: 80,
+      latencyMs: 500,
+    });
+
+    const launchedKeys = [];
+    const run = (job) => {
+      launchedKeys.push(job.candidateKey);
+      if (job.usageFile)
+        fs.writeFileSync(
+          job.usageFile,
+          JSON.stringify({ session_id: 'sess-' + launchedKeys.length })
+        );
+      if (job.candidateKey === candWriterFail.candidateKey) {
+        return { exitCode: 1, httpStatus: 429, stderr: '429 RESOURCE_EXHAUSTED: quota exhausted' };
+      }
+      if (job.isReview) {
+        fs.writeFileSync(
+          job.verdictFile || path.join(job.cwd, 'verdict.json'),
+          JSON.stringify({ sha: job.baseSha, verdict: 'PASS', findings: [] })
+        );
+      }
+      return { exitCode: 0, stdout: 'ok' };
+    };
+
+    const result = await orchestrate.runOrchestration('Goal for reviewer lane exclusion', {
+      specs: [
+        {
+          id: 'ITEM-91-REV',
+          roleRequirement: { role: 'writer' },
+          files: ['file.js'],
+          acceptanceCriteria: ['works'],
+          proofFloor: 'NONE',
+          verification: { command: 'node -e "process.exit(0)"', expect: '' },
+        },
+      ],
+      candidates: [candWriterFail, candSameDomain, candWriterPass, candReviewerEligible],
+      evidenceDir,
+      decisionDir,
+      now: NOW,
+      run,
+      tests: () => ({ pass: true, findings: [] }),
+      sha: '4444444444444444444444444444444444444444',
+      baseSha: '4444444444444444444444444444444444444444',
+    });
+
+    assert.equal(
+      launchedKeys[0],
+      candWriterFail.candidateKey,
+      'writer first attempted candWriterFail'
+    );
+    assert.equal(
+      launchedKeys[1],
+      candWriterPass.candidateKey,
+      'writer fell back to candWriterPass'
+    );
+
+    const reviews = (result.log && result.log.reviews) || result.reviews || [];
+    assert.ok(reviews.length > 0, 'review entry must exist');
+    const reviewerKey =
+      reviews[0].reviewerCandidateKey || reviews[0].reviewer || reviews[0].reviewerIdentity;
+    assert.equal(
+      reviewerKey,
+      candReviewerEligible.candidateKey,
+      'reviewer lane selected candReviewerEligible'
+    );
+    assert.notEqual(
+      reviewerKey,
+      candWriterFail.candidateKey,
+      'reviewer lane never selected key that failed in writer lane'
+    );
+    assert.notEqual(
+      reviewerKey,
+      candSameDomain.candidateKey,
+      'reviewer lane never selected candidate in domain that failed in writer lane'
+    );
+
+    // Verify reviewer-selection decision log contains exclusions
+    const decisionsList = readDecisions(decisionDir);
+    const revDecision = decisionsList.find(
+      (d) =>
+        d.stage === 'reviewer-selection' &&
+        (d.workItemId === 'ITEM-91-REV-review' || d.workItemId === 'ITEM-91-REV')
+    );
+    assert.ok(revDecision, 'must have reviewer-selection decision');
+    const revExcluded = revDecision.excluded || revDecision.excludedSet;
+    assert.ok(
+      revExcluded.includes(candWriterFail.candidateKey),
+      'reviewer decision excludes writer-failed key'
+    );
+    assert.ok(
+      revExcluded.includes(candSameDomain.candidateKey) ||
+        revExcluded.includes('9router/up-fail-rev'),
+      'reviewer decision excludes writer-failed domain'
+    );
+  });
+
+  // P1: candidate key or failure domain that failed in the writer lane is never selected by repair lane
+  test('P1 repair lane: key or failure domain that failed in writer lane is never selected by repair lane', async () => {
+    const candWriterFail = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-fail-rep',
+      modelId: 'up-fail-rep/m1',
+      quality: 99,
+      latencyMs: 100,
+    });
+    const candSameDomain = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-fail-rep',
+      modelId: 'up-fail-rep/m2',
+      quality: 98,
+      latencyMs: 100,
+    });
+    const candWriterPass = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-writer-rep',
+      modelId: 'up-writer-rep/m1',
+      quality: 90,
+      latencyMs: 500,
+    });
+
+    const launchedKeys = [];
+    const repairLaunches = [];
+    const run = (job) => {
+      launchedKeys.push(job.candidateKey);
+      if (job.title && String(job.title).includes('repair')) {
+        repairLaunches.push(job.candidateKey);
+      }
+      if (job.usageFile)
+        fs.writeFileSync(
+          job.usageFile,
+          JSON.stringify({ session_id: 'sess-' + launchedKeys.length })
+        );
+      if (job.candidateKey === candWriterFail.candidateKey) {
+        return { exitCode: 1, httpStatus: 429, stderr: '429 RESOURCE_EXHAUSTED: quota exhausted' };
+      }
+      return { exitCode: 0, stdout: 'ok' };
+    };
+
+    let reviewRound = 0;
+    const reviewer = (currentSha) => {
+      reviewRound += 1;
+      if (reviewRound === 1) {
+        return {
+          sha: currentSha,
+          verdict: 'CHANGES_REQUIRED',
+          findings: [{ id: 'NEED_REPAIR', open: true }],
+        };
+      }
+      return {
+        sha: currentSha,
+        verdict: 'PASS',
+        findings: [],
+      };
+    };
+
+    await orchestrate.runOrchestration('Goal for repair lane exclusion', {
+      specs: [
+        {
+          id: 'ITEM-91-REP',
+          roleRequirement: { role: 'writer' },
+          files: ['file.js'],
+          acceptanceCriteria: ['works'],
+          proofFloor: 'NONE',
+          verification: { command: 'node -e "process.exit(0)"', expect: '' },
+        },
+      ],
+      candidates: [candWriterFail, candSameDomain, candWriterPass],
+      evidenceDir,
+      decisionDir,
+      now: NOW,
+      run,
+      tests: () => ({ pass: true, findings: [] }),
+      reviewer,
+      sha: '5555555555555555555555555555555555555555',
+      baseSha: '5555555555555555555555555555555555555555',
+    });
+
+    assert.ok(repairLaunches.length > 0, 'repair round was launched');
+    assert.ok(
+      !repairLaunches.includes(candWriterFail.candidateKey),
+      'repair lane never selected key that failed in writer lane'
+    );
+    assert.ok(
+      !repairLaunches.includes(candSameDomain.candidateKey),
+      'repair lane never selected candidate in domain that failed in writer lane'
+    );
+    assert.equal(
+      repairLaunches[0],
+      candWriterPass.candidateKey,
+      'repair lane selected candWriterPass'
+    );
   });
 });

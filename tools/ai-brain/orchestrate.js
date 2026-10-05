@@ -2200,6 +2200,7 @@ function recordLaunchFailureEvidence(
     stderr: res ? res.stderr : undefined,
     body: res ? res.body : undefined,
     cause: classification.cause,
+    scope: classification.scope,
     httpStatus: res ? res.httpStatus : undefined,
     level: evidence.Level ? evidence.Level.API : 'API',
     source: 'launch-failure',
@@ -2351,9 +2352,20 @@ async function selectCandidateForProfile(
 
   const result = routing.rankForProfile(candidates, profile, assessment, rankCtx);
 
-  if (result.chosen && failedKeySet.has(result.chosen)) {
-    result.chosen = null;
-    result.reason = 'REFUSED: candidate launch previously failed';
+  if (result.chosen) {
+    if (failedKeySet.has(result.chosen)) {
+      result.chosen = null;
+      result.reason = 'REFUSED: candidate launch previously failed';
+    } else {
+      const chosenCand = candidates.find((c) => candidateKey(c) === result.chosen);
+      if (chosenCand) {
+        const cDomain = routing.canonicalFailureDomain(chosenCand);
+        if (excludedDomainSet.has(cDomain)) {
+          result.chosen = null;
+          result.reason = 'REFUSED: failure domain previously excluded';
+        }
+      }
+    }
   }
 
   const writerKey = (item && item.writerCandidateKey) || null;
@@ -2389,6 +2401,18 @@ async function selectCandidateForProfile(
     profile.role === 'reviewer'
       ? (decisions.Stage && decisions.Stage.REVIEWER_SELECTION) || 'reviewer-selection'
       : (decisions.Stage && decisions.Stage.SELECTED) || 'selected';
+
+  const allExcluded = new Set(failedKeySet);
+  for (const c of candidates) {
+    const k = candidateKey(c);
+    const cDomain = routing.canonicalFailureDomain(c);
+    if (excludedDomainSet.has(cDomain)) {
+      allExcluded.add(k);
+    }
+  }
+  for (const d of excludedDomainSet) {
+    allExcluded.add(d);
+  }
 
   const decisionRecorded = {
     stage,
@@ -2440,8 +2464,8 @@ async function selectCandidateForProfile(
     chosen: result.chosen,
     chosenKey: result.chosen,
     reason: result.reason,
-    excluded: Array.from(failedKeySet),
-    excludedSet: Array.from(failedKeySet),
+    excluded: Array.from(allExcluded),
+    excludedSet: Array.from(allExcluded),
   };
   decisions.recordDecision(decisionRecorded, logOpts);
 
@@ -2666,9 +2690,17 @@ async function runOrchestration(goal, opts) {
       cause: null,
       outcome: null,
     };
-    const failedKeys = new Set();
+    if (!item.failedKeys || !(item.failedKeys instanceof Set)) {
+      item.failedKeys = new Set(Array.isArray(item.failedKeys) ? item.failedKeys : []);
+    }
+    if (!item.excludedDomains || !(item.excludedDomains instanceof Set)) {
+      item.excludedDomains = new Set(
+        Array.isArray(item.excludedDomains) ? item.excludedDomains : []
+      );
+    }
+    const failedKeys = item.failedKeys;
     const forbiddenDomains = [];
-    const excludedDomains = new Set();
+    const excludedDomains = item.excludedDomains;
     const domainAttempts = new Map();
     let blockedReason = null;
     let session = null;
@@ -2844,6 +2876,17 @@ async function runOrchestration(goal, opts) {
           true,
           cli.LIVE_BLOCK_CODES
         );
+        const allFailedExcluded = new Set(failedKeys);
+        for (const c of candidates) {
+          const k = candidateKey(c);
+          const cDomain = routing.canonicalFailureDomain(c);
+          if (excludedDomains.has(cDomain)) {
+            allFailedExcluded.add(k);
+          }
+        }
+        for (const d of excludedDomains) {
+          allFailedExcluded.add(d);
+        }
         decisions.recordDecision(
           {
             stage: decisions.Stage.FAILED,
@@ -2856,8 +2899,8 @@ async function runOrchestration(goal, opts) {
             branch: job.branch,
             failureScope: classification.scope,
             detail: classification.cause,
-            excluded: Array.from(failedKeys),
-            excludedSet: Array.from(failedKeys),
+            excluded: Array.from(allFailedExcluded),
+            excludedSet: Array.from(allFailedExcluded),
           },
           logOpts
         );
@@ -3014,7 +3057,8 @@ async function runOrchestration(goal, opts) {
       now,
       candidates,
       evidenceData,
-      registry
+      registry,
+      { failedKeys, excludedDomains }
     );
     if (reviewed.status === ReviewStatus.COMPLETED) {
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
@@ -3161,8 +3205,28 @@ async function reviewItem(
   now,
   candidates,
   evidenceData,
-  registry
+  registry,
+  opts
 ) {
+  const options = opts || {};
+  const failedKeys =
+    options.failedKeys ||
+    (item && item.failedKeys) ||
+    (session && session.failedKeys) ||
+    (o && o.failedKeys) ||
+    new Set();
+  const failedKeySet =
+    failedKeys instanceof Set ? failedKeys : new Set(Array.isArray(failedKeys) ? failedKeys : []);
+  const excludedDomains =
+    options.excludedDomains ||
+    (item && item.excludedDomains) ||
+    (session && session.excludedDomains) ||
+    (o && o.excludedDomains) ||
+    new Set();
+  const excludedDomainSet =
+    excludedDomains instanceof Set
+      ? excludedDomains
+      : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
   const hostWorktree = o.cwd || process.cwd();
   const isolatedWorkerRoot = o.isolatedWorker
     ? require('./isolation-launcher').workerRootFor(hostWorktree)
@@ -3210,13 +3274,16 @@ async function reviewItem(
       roleRequirement: { role: 'reviewer' },
       complexity: item.complexity,
       writerCandidateKey: writerKey,
+      failedKeys: failedKeySet,
+      excludedDomains: excludedDomainSet,
     },
     candidates,
     forbiddenDomains,
     evidenceData,
     o,
     logOpts,
-    now
+    now,
+    { failedKeys: failedKeySet, excludedDomains: excludedDomainSet }
   );
   const reviewerIdentity = reviewerDecision.chosen || o.reviewerIdentity;
 
@@ -3344,7 +3411,8 @@ async function reviewItem(
               now,
               candidates,
               evidenceData,
-              registry
+              registry,
+              { failedKeys: failedKeySet, excludedDomains: excludedDomainSet }
             ),
     }
   );
@@ -3509,8 +3577,29 @@ function repairRound(
   now,
   candidates,
   evidenceData,
-  registry
+  registry,
+  opts
 ) {
+  const options = opts || {};
+  const failedKeys =
+    options.failedKeys ||
+    (item && item.failedKeys) ||
+    (session && session.failedKeys) ||
+    (o && o.failedKeys) ||
+    new Set();
+  const failedKeySet =
+    failedKeys instanceof Set ? failedKeys : new Set(Array.isArray(failedKeys) ? failedKeys : []);
+  const excludedDomains =
+    options.excludedDomains ||
+    (item && item.excludedDomains) ||
+    (session && session.excludedDomains) ||
+    (o && o.excludedDomains) ||
+    new Set();
+  const excludedDomainSet =
+    excludedDomains instanceof Set
+      ? excludedDomains
+      : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
+
   return async (findings, sha) => {
     const hostWorktree = o.cwd || process.cwd();
     const isolatedWorkerRoot = o.isolatedWorker
@@ -3535,6 +3624,8 @@ function repairRound(
     const planned = replanned.workItems.find((w) => w.id === spec.id);
     if (!planned) return { sha };
 
+    planned.failedKeys = failedKeySet;
+    planned.excludedDomains = excludedDomainSet;
     const decision = await selectCandidateForProfile(
       planned,
       candidates,
@@ -3542,7 +3633,8 @@ function repairRound(
       evidenceData,
       o,
       logOpts,
-      now
+      now,
+      { failedKeys: failedKeySet, excludedDomains: excludedDomainSet }
     );
     if (!decision.chosen) return { sha };
     const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
@@ -3603,7 +3695,30 @@ function repairRound(
       res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
     }
     writeUsageReportFromHarnessResult(repairJob, res);
-    if (!res || res.exitCode !== 0) return { sha };
+    if (!res || res.exitCode !== 0) {
+      failedKeySet.add(decision.chosen);
+      if (item && item.failedKeys instanceof Set) item.failedKeys.add(decision.chosen);
+      const classification = classifyFailure({
+        exitCode: res ? res.exitCode : 1,
+        httpStatus: res ? res.httpStatus : undefined,
+        body: res ? res.body || res.stderr || '' : '',
+        stderr: res ? res.stderr : '',
+        accountId: candidate.accountId,
+      });
+      const candDomain = routing.canonicalFailureDomain(candidate);
+      if (
+        (classification.scope === 'upstream' || classification.scope === 'gateway') &&
+        candDomain
+      ) {
+        excludedDomainSet.add(candDomain);
+        if (item && item.excludedDomains instanceof Set) item.excludedDomains.add(candDomain);
+      }
+      const evidenceDir = (o && o.evidenceDir) || null;
+      if (evidenceDir || evidenceData) {
+        recordLaunchFailureEvidence(evidenceDir, evidenceData, candidate, res, classification, now);
+      }
+      return { sha };
+    }
 
     const adapter = harnessFor({ harness: repairJob.harness });
     const handle = adapter ? require('./executor').readSessionId(adapter, repairJob, res).id : null;
