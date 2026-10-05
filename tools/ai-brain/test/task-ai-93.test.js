@@ -505,4 +505,296 @@ describe('TASK-AI-93: per-domain attempt cap and failure evidence across all lan
     const runRepairEv = evidence.getEvidence(runEvData, candY);
     assert.ok(runRepairEv.length > 0, 'repair failure appears in runs evidence data');
   });
+
+  // P1: reviewer launch failure adds reviewer key to failedKeys, excludes domain for upstream scope, records evidence, and ensures failed reviewer is never re-selected by repair
+  test('P1 reviewer launch failure: key added to shared failedKeys, domain excluded for upstream scope, failure evidence recorded, never re-selected by repair', async () => {
+    const candW1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'writer-up',
+      modelId: 'writer-up/m1',
+      quality: 100,
+    });
+    const candW2 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'writer-up',
+      modelId: 'writer-up/m2',
+      quality: 99,
+    });
+    const candReviewerFail = sampleCandidate({
+      gateway: '9router',
+      upstream: 'rev-fail-up',
+      modelId: 'rev-fail-up/m1',
+      quality: 95,
+    });
+    const candReviewerSameDomain = sampleCandidate({
+      gateway: '9router',
+      upstream: 'rev-fail-up',
+      modelId: 'rev-fail-up/m2',
+      quality: 94,
+    });
+    const candRepairAlt = sampleCandidate({
+      gateway: '9router',
+      upstream: 'repair-alt-up',
+      modelId: 'repair-alt-up/m1',
+      quality: 80,
+    });
+
+    const launchedKeys = [];
+    const repairKeys = [];
+    const run = (job) => {
+      launchedKeys.push(job.candidateKey);
+      if (job.usageFile) {
+        fs.writeFileSync(
+          job.usageFile,
+          JSON.stringify({ session_id: 'sess-p1-' + launchedKeys.length })
+        );
+      }
+      if (job.title && String(job.title).includes('repair')) {
+        repairKeys.push(job.candidateKey);
+        return { exitCode: 0, stdout: 'repair ok' };
+      }
+      // candW1 fails in writer (attempt 1 in writer-up)
+      if (job.candidateKey === candW1.candidateKey) {
+        return { exitCode: 1, httpStatus: 404, stderr: 'model not found' };
+      }
+      // candW2 succeeds in writer (attempt 2 in writer-up -> writer-up exhausted)
+      if (job.candidateKey === candW2.candidateKey) {
+        return { exitCode: 0, stdout: 'ok' };
+      }
+      // Reviewer launch failure with upstream scope
+      if (job.candidateKey === candReviewerFail.candidateKey) {
+        return {
+          exitCode: 1,
+          httpStatus: 429,
+          stderr: '429 RESOURCE_EXHAUSTED: quota exhausted',
+        };
+      }
+      return { exitCode: 0, stdout: 'ok' };
+    };
+
+    await orchestrate.runOrchestration('Goal for P1 reviewer launch failure', {
+      specs: [
+        {
+          id: 'ITEM-93-P1-REV-FAIL',
+          roleRequirement: { role: 'writer' },
+          files: ['file.js'],
+          acceptanceCriteria: ['works'],
+          proofFloor: 'NONE',
+          verification: { command: 'node -e "process.exit(0)"', expect: '' },
+        },
+      ],
+      candidates: [candW1, candW2, candReviewerFail, candReviewerSameDomain, candRepairAlt],
+      evidenceDir,
+      decisionDir,
+      now: NOW,
+      run,
+      tests: () => ({ pass: true, findings: [] }),
+      sha: '5555555555555555555555555555555555555555',
+      baseSha: '5555555555555555555555555555555555555555',
+    });
+
+    // Repair must have been executed
+    assert.ok(repairKeys.length > 0, 'repair round was executed');
+    // Failed reviewer key must not be re-selected by repair
+    assert.ok(
+      !repairKeys.includes(candReviewerFail.candidateKey),
+      'failed reviewer key must never be selected by repair'
+    );
+    // Reviewer failure was upstream-scoped -> entire domain excluded
+    assert.ok(
+      !repairKeys.includes(candReviewerSameDomain.candidateKey),
+      'reviewer upstream failure domain must be excluded from repair selection'
+    );
+    assert.equal(
+      repairKeys[0],
+      candRepairAlt.candidateKey,
+      'repair selected alternate domain candidate'
+    );
+
+    // Failure evidence must be recorded for candReviewerFail
+    const evData = evidence.loadEvidence(evidenceDir);
+    assert.ok(evData, 'evidence exists');
+    const revEv = evidence.getEvidence(evData, candReviewerFail);
+    assert.ok(revEv.length > 0, 'reviewer launch failure recorded in evidence store');
+    assert.equal(revEv[0].status, 'failed');
+    assert.equal(revEv[0].scope, 'upstream');
+  });
+
+  // P2: BLOCKED outcomes must list in triedKeys every attempted key (successful launches included, not only failed ones)
+  test('P2 triedKeys: BLOCKED outcomes list every attempted key including successful writer launch', async () => {
+    const candW1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'dom-writer',
+      modelId: 'dom-writer/m1',
+      quality: 99,
+    });
+    const candW2 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'dom-writer',
+      modelId: 'dom-writer/m2',
+      quality: 98,
+    });
+    const candRepair = sampleCandidate({
+      gateway: '9router',
+      upstream: 'dom-repair',
+      modelId: 'dom-repair/m1',
+      quality: 85,
+    });
+
+    const launchedKeys = [];
+    const run = (job) => {
+      launchedKeys.push(job.candidateKey);
+      if (job.usageFile) {
+        fs.writeFileSync(
+          job.usageFile,
+          JSON.stringify({ session_id: 'sess-p2-tried-' + launchedKeys.length })
+        );
+      }
+      // candW1 fails in writer
+      if (job.candidateKey === candW1.candidateKey) {
+        return { exitCode: 1, httpStatus: 404, stderr: 'model not found' };
+      }
+      // candW2 succeeds in writer
+      if (
+        job.candidateKey === candW2.candidateKey &&
+        !(job.title && String(job.title).includes('repair'))
+      ) {
+        return { exitCode: 0, stdout: 'ok' };
+      }
+      // Repair fails
+      return { exitCode: 1, httpStatus: 404, stderr: 'repair model not found' };
+    };
+
+    let reviewRound = 0;
+    const reviewer = (sha) => {
+      reviewRound += 1;
+      return {
+        sha,
+        verdict: 'CHANGES_REQUIRED',
+        findings: [{ id: 'NEED_FIX_' + reviewRound, open: true }],
+      };
+    };
+
+    const result = await orchestrate.runOrchestration('Goal for P2 triedKeys', {
+      specs: [
+        {
+          id: 'ITEM-93-P2-TRIED',
+          roleRequirement: { role: 'writer' },
+          files: ['file.js'],
+          acceptanceCriteria: ['works'],
+          proofFloor: 'NONE',
+          verification: { command: 'node -e "process.exit(0)"', expect: '' },
+        },
+      ],
+      candidates: [candW1, candW2, candRepair],
+      evidenceDir,
+      decisionDir,
+      now: NOW,
+      run,
+      tests: () => ({ pass: true, findings: [] }),
+      reviewer,
+      sha: '6666666666666666666666666666666666666666',
+      baseSha: '6666666666666666666666666666666666666666',
+    });
+
+    const outcomes = (result.log && result.log.outcomes) || result.outcomes;
+    assert.ok(outcomes && outcomes.length > 0);
+    const outcome = outcomes[0];
+    assert.equal(String(outcome.status).toLowerCase(), 'blocked');
+    assert.ok(Array.isArray(outcome.triedKeys), 'outcome has triedKeys array');
+    assert.ok(
+      outcome.triedKeys.includes(candW2.candidateKey),
+      'triedKeys must include successfully launched writer key'
+    );
+    assert.ok(
+      outcome.triedKeys.includes(candW1.candidateKey),
+      'triedKeys must include failed writer key'
+    );
+    assert.ok(
+      outcome.triedKeys.includes(candRepair.candidateKey),
+      'triedKeys must include repair candidate'
+    );
+  });
+
+  // P2: reviewer selection must pass its attempt number so decision log records attempt/attemptNumber
+  test('P2 reviewer attempt: reviewer selection passes attempt number and decision log records attempt and attemptNumber', async () => {
+    const candWriter = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-w',
+      modelId: 'up-w/m1',
+      quality: 90,
+    });
+    const candReviewer = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-r',
+      modelId: 'up-r/m1',
+      quality: 85,
+    });
+
+    const run = (job) => {
+      if (job.usageFile) {
+        fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-p2-rev-att' }));
+      }
+      return { exitCode: 0, stdout: 'ok' };
+    };
+
+    await orchestrate.runOrchestration('Goal for P2 reviewer attempt', {
+      specs: [
+        {
+          id: 'ITEM-93-P2-ATTEMPT',
+          roleRequirement: { role: 'writer' },
+          files: ['file.js'],
+          acceptanceCriteria: ['works'],
+          proofFloor: 'NONE',
+          verification: { command: 'node -e "process.exit(0)"', expect: '' },
+        },
+      ],
+      candidates: [candWriter, candReviewer],
+      evidenceDir,
+      decisionDir,
+      now: NOW,
+      run,
+      tests: () => ({ pass: true, findings: [] }),
+      reviewer: () => ({
+        sha: '7777777777777777777777777777777777777777',
+        verdict: 'PASS',
+        findings: [],
+      }),
+      sha: '7777777777777777777777777777777777777777',
+      baseSha: '7777777777777777777777777777777777777777',
+    });
+
+    // Read decisions
+    const files = fs.readdirSync(decisionDir).filter((f) => f.endsWith('.jsonl'));
+    const decisionsList = [];
+    for (const file of files.sort()) {
+      const raw = fs.readFileSync(path.join(decisionDir, file), 'utf8');
+      for (const line of raw.split('\n')) {
+        if (line.trim()) {
+          try {
+            decisionsList.push(JSON.parse(line));
+          } catch (_) {}
+        }
+      }
+    }
+
+    const revDecision = decisionsList.find(
+      (d) =>
+        d.stage === 'reviewer-selection' &&
+        (d.workItemId === 'ITEM-93-P2-ATTEMPT-review' || d.workItemId === 'ITEM-93-P2-ATTEMPT')
+    );
+    assert.ok(revDecision, 'decision log must contain reviewer-selection record');
+    assert.equal(
+      typeof revDecision.attempt,
+      'number',
+      'decision log reviewer-selection must have attempt number'
+    );
+    assert.equal(revDecision.attempt, 1, 'attempt is 1');
+    assert.equal(
+      typeof revDecision.attemptNumber,
+      'number',
+      'decision log reviewer-selection must have attemptNumber'
+    );
+    assert.equal(revDecision.attemptNumber, 1, 'attemptNumber is 1');
+  });
 });

@@ -6,6 +6,7 @@
 - Status: READY_FOR_CODEX
 - Assigned author: BOOTSTRAP_SELECTION agy-pool agy01 (google)
 - Dependencies: TASK-AI-89
+- Scope amendment: diff budget 200 raised to 550 (repair round 1 added reviewer-lane tests)
 - Supersedes: TASK-AI-91 (BLOCKED: repair budget 2/2 exhausted with one confirmed open P1); this branch contains the TASK-AI-91 commits up to 92f710a plus the remaining fix
 
 ## Business Outcome

@@ -482,7 +482,8 @@ function reviewLane(
   now,
   candidates,
   evidenceData,
-  registry
+  registry,
+  opts
 ) {
   const writerKey =
     typeof itemOrWriterKey === 'string'
@@ -713,6 +714,31 @@ function reviewLane(
     }
 
     writeUsageReportFromHarnessResult(reviewJob, res);
+
+    if (!res || res.exitCode !== 0) {
+      if (opts && typeof opts.onReviewerLaunchFailure === 'function') {
+        opts.onReviewerLaunchFailure(res, candidate);
+      }
+      return {
+        pass: false,
+        sha: targetSha,
+        verdict: 'CHANGES_REQUIRED',
+        reviewer: reviewerIdentity,
+        res,
+        launchFailed: true,
+        findings: [
+          {
+            id: 'REVIEWER_LAUNCH_FAILED',
+            open: true,
+            detail:
+              'reviewer launch failed: ' +
+              ((res && res.stderr) ||
+                (res && res.failureReason) ||
+                'exit code ' + (res && res.exitCode)),
+          },
+        ],
+      };
+    }
 
     if (logOpts) {
       const adapter = harnessFor({ harness: reviewJob.harness });
@@ -2606,7 +2632,19 @@ async function runOrchestration(goal, opts) {
 
   const outcome = (item, status, reason, extra) => {
     statusOf.set(item.id, status);
-    const entry = Object.assign({ workItemId: item.id, status, reason: reason || null }, extra);
+    const extraFields = Object.assign({}, extra);
+    if (status === ItemStatus.BLOCKED) {
+      const itemTried = (item && item.triedKeys) || (extra && extra.triedKeys);
+      if (itemTried) {
+        const arr = Array.isArray(itemTried) ? itemTried : Array.from(itemTried);
+        if (!extraFields.triedKeys) extraFields.triedKeys = arr;
+        if (!extraFields.tried) extraFields.tried = arr;
+      }
+    }
+    const entry = Object.assign(
+      { workItemId: item.id, status, reason: reason || null },
+      extraFields
+    );
     log.outcomes.push(entry);
     return reason;
   };
@@ -2741,10 +2779,14 @@ async function runOrchestration(goal, opts) {
             ? new Map(Object.entries(item.domainAttempts))
             : new Map();
     }
+    if (!item.triedKeys || !(item.triedKeys instanceof Set)) {
+      item.triedKeys = new Set(Array.isArray(item.triedKeys) ? item.triedKeys : []);
+    }
     const failedKeys = item.failedKeys;
     const forbiddenDomains = [];
     const excludedDomains = item.excludedDomains;
     const domainAttempts = item.domainAttempts;
+    const triedKeys = item.triedKeys;
     let blockedReason = null;
     let session = null;
 
@@ -2777,6 +2819,7 @@ async function runOrchestration(goal, opts) {
       const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
       if (launch.firstChoice === null) launch.firstChoice = decision.chosen;
       launch.selected = decision.chosen;
+      triedKeys.add(decision.chosen);
       const candDomain = routing.canonicalFailureDomain(candidate);
       domainAttempts.set(candDomain, (domainAttempts.get(candDomain) || 0) + 1);
 
@@ -2881,6 +2924,7 @@ async function runOrchestration(goal, opts) {
         launch.cause = classification.cause;
         launch.outcome = 'failed';
         failedKeys.add(decision.chosen);
+        triedKeys.add(decision.chosen);
 
         evidenceData = recordLaunchFailureEvidence(
           evidenceDir,
@@ -3049,6 +3093,7 @@ async function runOrchestration(goal, opts) {
     if (!session) {
       const isNoAlt =
         failedKeys.size > 0 ||
+        triedKeys.size > 0 ||
         Boolean(blockedReason && blockedReason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN'));
       outcome(
         item,
@@ -3057,8 +3102,8 @@ async function runOrchestration(goal, opts) {
         Object.assign(
           {
             reasonCode: isNoAlt ? 'NO_ALTERNATE_FAILURE_DOMAIN' : undefined,
-            triedKeys: Array.from(failedKeys),
-            tried: Array.from(failedKeys),
+            triedKeys: Array.from(triedKeys),
+            tried: Array.from(triedKeys),
           },
           launch.cause ? { cause: launch.cause } : undefined
         )
@@ -3084,7 +3129,13 @@ async function runOrchestration(goal, opts) {
         item,
         ItemStatus.BLOCKED,
         blockedReason,
-        launch.cause ? { cause: launch.cause } : undefined
+        Object.assign(
+          {
+            triedKeys: Array.from(triedKeys),
+            tried: Array.from(triedKeys),
+          },
+          launch.cause ? { cause: launch.cause } : undefined
+        )
       );
       continue;
     }
@@ -3101,7 +3152,7 @@ async function runOrchestration(goal, opts) {
       candidates,
       evidenceData,
       registry,
-      { failedKeys, excludedDomains, domainAttempts, evidenceDir }
+      { failedKeys, excludedDomains, domainAttempts, triedKeys, evidenceDir }
     );
     if (reviewed.status === ReviewStatus.COMPLETED) {
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
@@ -3110,13 +3161,13 @@ async function runOrchestration(goal, opts) {
         reviewed.reason === 'NO_ALTERNATE_FAILURE_DOMAIN' ||
         (item.blockedReason && item.blockedReason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN')) ||
         (reviewed.reason && reviewed.reason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN'));
-      const extra = isNoAlt
-        ? {
-            reasonCode: 'NO_ALTERNATE_FAILURE_DOMAIN',
-            triedKeys: Array.from(failedKeys),
-            tried: Array.from(failedKeys),
-          }
-        : undefined;
+      const extra = Object.assign(
+        {
+          triedKeys: Array.from(triedKeys),
+          tried: Array.from(triedKeys),
+        },
+        isNoAlt ? { reasonCode: 'NO_ALTERNATE_FAILURE_DOMAIN' } : undefined
+      );
       outcome(
         item,
         ItemStatus.BLOCKED,
@@ -3288,6 +3339,14 @@ async function reviewItem(
       ? excludedDomains
       : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
   const domainAttemptsMap = resolveDomainAttempts(options, item, session, o);
+  const triedKeys =
+    options.triedKeys || (item && item.triedKeys) || (session && session.triedKeys) || new Set();
+  const triedKeySet =
+    triedKeys instanceof Set ? triedKeys : new Set(Array.isArray(triedKeys) ? triedKeys : []);
+  if (item && !(item.triedKeys instanceof Set)) item.triedKeys = triedKeySet;
+  if (item && !(item.failedKeys instanceof Set)) item.failedKeys = failedKeySet;
+  if (item && !(item.excludedDomains instanceof Set)) item.excludedDomains = excludedDomainSet;
+  const evidenceDir = resolveEvidenceDir(options, o);
   const hostWorktree = o.cwd || process.cwd();
   const isolatedWorkerRoot = o.isolatedWorker
     ? require('./isolation-launcher').workerRootFor(hostWorktree)
@@ -3329,6 +3388,12 @@ async function reviewItem(
   // allowing reviewer candidates on the same gateway with distinct upstreams
   // without forbidding the shared router account.
   const forbiddenDomains = [writerUpstream || writerGateway].filter(Boolean);
+  const reviewerAttempt =
+    options.attempt !== undefined
+      ? options.attempt
+      : item && item.reviewerAttempt !== undefined
+        ? item.reviewerAttempt
+        : 1;
   const reviewerDecision = await selectCandidateForProfile(
     {
       id: item.id + '-review',
@@ -3338,6 +3403,8 @@ async function reviewItem(
       failedKeys: failedKeySet,
       excludedDomains: excludedDomainSet,
       domainAttempts: domainAttemptsMap,
+      attempt: reviewerAttempt,
+      attemptNumber: reviewerAttempt,
     },
     candidates,
     forbiddenDomains,
@@ -3349,9 +3416,13 @@ async function reviewItem(
       failedKeys: failedKeySet,
       excludedDomains: excludedDomainSet,
       domainAttempts: domainAttemptsMap,
+      attempt: reviewerAttempt,
+      attemptNumber: reviewerAttempt,
     }
   );
   if (reviewerDecision.chosen) {
+    triedKeySet.add(reviewerDecision.chosen);
+    if (item && item.triedKeys instanceof Set) item.triedKeys.add(reviewerDecision.chosen);
     const revCand = (Array.isArray(candidates) ? candidates : []).find(
       (c) => candidateKey(c) === reviewerDecision.chosen
     );
@@ -3365,6 +3436,96 @@ async function reviewItem(
     }
   }
   const reviewerIdentity = reviewerDecision.chosen || o.reviewerIdentity;
+  if (reviewerIdentity) {
+    triedKeySet.add(reviewerIdentity);
+    if (item && item.triedKeys instanceof Set) item.triedKeys.add(reviewerIdentity);
+  }
+
+  const recordReviewerLaunchFailure = (res, candidate) => {
+    const revKey = (candidate && candidateKey(candidate)) || reviewerIdentity;
+    if (!revKey) return;
+    failedKeySet.add(revKey);
+    triedKeySet.add(revKey);
+    if (item && item.failedKeys instanceof Set) item.failedKeys.add(revKey);
+    if (session && session.failedKeys instanceof Set) session.failedKeys.add(revKey);
+    if (options && options.failedKeys instanceof Set) options.failedKeys.add(revKey);
+    if (item && item.triedKeys instanceof Set) item.triedKeys.add(revKey);
+
+    const cand =
+      candidate ||
+      (Array.isArray(candidates) ? candidates : []).find((c) => candidateKey(c) === revKey) ||
+      candidatesApi.parseCandidateKey(revKey);
+    if (!cand) return;
+
+    const isLauncherTimedOut = Boolean(
+      res &&
+      (res.timedOut === true ||
+        /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.stderr || '') ||
+        /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.failureReason || ''))
+    );
+    const classification = classifyFailure({
+      exitCode: res ? res.exitCode : 1,
+      httpStatus: res ? res.httpStatus : undefined,
+      body: res ? res.body || res.stderr || '' : '',
+      stdout: res ? res.stdout : undefined,
+      stderr: res ? res.stderr : '',
+      accountId: cand.accountId,
+      timedOut: isLauncherTimedOut,
+    });
+
+    const candDomain = routing.canonicalFailureDomain(cand);
+    const attemptsInDomain = domainAttemptsMap.get(candDomain) || 0;
+    const domainExhausted = attemptsInDomain >= 2;
+    const scopeExcludesDomain =
+      classification.scope === 'upstream' || classification.scope === 'gateway';
+    if ((scopeExcludesDomain || domainExhausted) && candDomain) {
+      excludedDomainSet.add(candDomain);
+      if (item && item.excludedDomains instanceof Set) item.excludedDomains.add(candDomain);
+      if (session && session.excludedDomains instanceof Set)
+        session.excludedDomains.add(candDomain);
+      if (options && options.excludedDomains instanceof Set)
+        options.excludedDomains.add(candDomain);
+    }
+
+    if (evidenceDir || evidenceData) {
+      evidenceData = recordLaunchFailureEvidence(
+        evidenceDir,
+        evidenceData,
+        cand,
+        res,
+        classification,
+        now
+      );
+      if (log) log.evidenceData = evidenceData;
+    }
+
+    if (logOpts) {
+      const allExcluded = new Set(Array.from(failedKeySet));
+      for (const d of excludedDomainSet) allExcluded.add(d);
+      for (const c of Array.isArray(candidates) ? candidates : []) {
+        const k = candidateKey(c);
+        const cDomain = routing.canonicalFailureDomain(c);
+        if (excludedDomainSet.has(cDomain)) allExcluded.add(k);
+      }
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.FAILED,
+          workItemId: (item ? item.id : 'item') + '-review',
+          role: 'reviewer',
+          attempt: reviewerAttempt,
+          attemptNumber: reviewerAttempt,
+          chosen: revKey,
+          chosenKey: revKey,
+          branch: (session && session.branch) || o.branch,
+          failureScope: classification.scope,
+          detail: classification.cause,
+          excluded: Array.from(allExcluded),
+          excludedSet: Array.from(allExcluded),
+        },
+        logOpts
+      );
+    }
+  };
 
   const budget = Number.isFinite(Number(o.reviewBudget))
     ? Number(o.reviewBudget)
@@ -3399,12 +3560,33 @@ async function reviewItem(
           now,
           candidates,
           evidenceData,
-          registry
+          registry,
+          {
+            failedKeys: failedKeySet,
+            excludedDomains: excludedDomainSet,
+            domainAttempts: domainAttemptsMap,
+            triedKeys: triedKeySet,
+            evidenceDir,
+            attempt: reviewerAttempt,
+            onReviewerLaunchFailure: recordReviewerLaunchFailure,
+          }
         );
 
   const reviewWithManifest = async (currentSha) => {
     roundCount += 1;
     const rev = await baseReviewFn(currentSha);
+    if (
+      rev &&
+      (rev.launchFailed ||
+        (rev.res && rev.res.exitCode !== 0) ||
+        (rev.exitCode !== undefined && rev.exitCode !== 0))
+    ) {
+      const revCand =
+        (Array.isArray(candidates) ? candidates : []).find(
+          (c) => candidateKey(c) === reviewerIdentity
+        ) || candidatesApi.parseCandidateKey(reviewerIdentity);
+      recordReviewerLaunchFailure(rev.res || rev, revCand);
+    }
 
     const repoCandidates = [workerRoot, session && session.worktree, o.cwd, process.cwd()].filter(
       Boolean
@@ -3495,7 +3677,8 @@ async function reviewItem(
                 failedKeys: failedKeySet,
                 excludedDomains: excludedDomainSet,
                 domainAttempts: domainAttemptsMap,
-                evidenceDir: options.evidenceDir,
+                triedKeys: triedKeySet,
+                evidenceDir: options.evidenceDir || evidenceDir,
               }
             ),
     }
@@ -3684,6 +3867,13 @@ function repairRound(
       ? excludedDomains
       : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
   const domainAttemptsMap = resolveDomainAttempts(options, item, session, o);
+  const triedKeys =
+    options.triedKeys || (item && item.triedKeys) || (session && session.triedKeys) || new Set();
+  const triedKeySet =
+    triedKeys instanceof Set ? triedKeys : new Set(Array.isArray(triedKeys) ? triedKeys : []);
+  if (item && !(item.triedKeys instanceof Set)) item.triedKeys = triedKeySet;
+  if (item && !(item.failedKeys instanceof Set)) item.failedKeys = failedKeySet;
+  if (item && !(item.excludedDomains instanceof Set)) item.excludedDomains = excludedDomainSet;
   const evidenceDir = resolveEvidenceDir(options, o);
 
   return async (findings, sha) => {
@@ -3738,6 +3928,9 @@ function repairRound(
       return { sha };
     }
     const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
+    triedKeySet.add(decision.chosen);
+    if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(decision.chosen);
+    if (item && item.triedKeys && item.triedKeys.add) item.triedKeys.add(decision.chosen);
     const candDomain = routing.canonicalFailureDomain(candidate);
     domainAttemptsMap.set(candDomain, (domainAttemptsMap.get(candDomain) || 0) + 1);
     const route = resolveLaunchRoute(candidate, o, registry);
@@ -3799,7 +3992,10 @@ function repairRound(
     writeUsageReportFromHarnessResult(repairJob, res);
     if (!res || res.exitCode !== 0) {
       failedKeySet.add(decision.chosen);
+      triedKeySet.add(decision.chosen);
       if (item && item.failedKeys instanceof Set) item.failedKeys.add(decision.chosen);
+      if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(decision.chosen);
+      if (item && item.triedKeys && item.triedKeys.add) item.triedKeys.add(decision.chosen);
       const classification = classifyFailure({
         exitCode: res ? res.exitCode : 1,
         httpStatus: res ? res.httpStatus : undefined,
