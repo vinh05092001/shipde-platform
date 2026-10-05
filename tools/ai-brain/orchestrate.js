@@ -1004,6 +1004,120 @@ function headShaOf(cwd, options) {
   }
 }
 
+function isTestFilePath(filePath) {
+  return /(?:^|\/)tests?(?:\/|$)|\.(?:test|spec)\./i.test(filePath);
+}
+
+function measureFailBefore(workerRoot, baseSha, headSha, command, options) {
+  if (
+    typeof workerRoot !== 'string' ||
+    !workerRoot ||
+    typeof baseSha !== 'string' ||
+    !baseSha ||
+    typeof headSha !== 'string' ||
+    !headSha ||
+    typeof command !== 'string' ||
+    !command.trim()
+  ) {
+    return null;
+  }
+
+  const o = options || {};
+  const check = o.spawnSync || spawnSync;
+  const timeout = o.timeoutMs || 120000;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-brain-fail-before-'));
+  const baseTree = path.join(tempRoot, 'base-tree');
+  const archiveFile = path.join(tempRoot, 'base.tar');
+
+  try {
+    fs.mkdirSync(baseTree, { recursive: true });
+
+    const archive = check(
+      'git',
+      [
+        '-c',
+        'safe.directory=*',
+        '-C',
+        workerRoot,
+        'archive',
+        '--format=tar',
+        '--output',
+        archiveFile,
+        baseSha,
+      ],
+      { encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024 }
+    );
+    if (!archive || archive.status !== 0 || !fs.existsSync(archiveFile)) return null;
+
+    const extracted = check('tar', ['-xf', 'base.tar', '-C', 'base-tree'], {
+      cwd: tempRoot,
+      encoding: 'utf8',
+      timeout,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (!extracted || extracted.status !== 0) return null;
+
+    const diff = check(
+      'git',
+      ['-c', 'safe.directory=*', '-C', workerRoot, 'diff', '--name-only', '-z', baseSha, headSha],
+      { encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024 }
+    );
+    if (!diff || diff.status !== 0) return null;
+
+    const changedPaths = String(diff.stdout || '')
+      .split('\0')
+      .filter(Boolean);
+    const testFiles = changedPaths.filter(isTestFilePath);
+    for (const filePath of testFiles) {
+      const segments = filePath.split(/[\\/]/);
+      if (
+        path.isAbsolute(filePath) ||
+        segments.some((segment) => segment === '..' || segment === '.')
+      ) {
+        return null;
+      }
+      const fileResult = check(
+        'git',
+        ['-c', 'safe.directory=*', '-C', workerRoot, 'show', headSha + ':' + filePath],
+        { encoding: null, timeout, maxBuffer: 16 * 1024 * 1024 }
+      );
+      if (!fileResult || fileResult.status !== 0 || !Buffer.isBuffer(fileResult.stdout)) {
+        return null;
+      }
+      const destination = path.resolve(baseTree, ...segments);
+      if (!destination.startsWith(path.resolve(baseTree) + path.sep)) return null;
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, fileResult.stdout);
+    }
+
+    const env = Object.assign({}, process.env);
+    delete env.NODE_TEST_CONTEXT;
+    const result = check(command, [], {
+      cwd: baseTree,
+      env,
+      shell: true,
+      encoding: 'utf8',
+      timeout,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (!result || !Number.isInteger(result.status)) return null;
+
+    return {
+      command,
+      exitCode: result.status,
+      output: (String(result.stdout || '') + String(result.stderr || '')).slice(-4000),
+      baseSha,
+      headSha,
+      testFiles,
+      measuredBy: 'supervisor-base-tree',
+    };
+  } catch (_) {
+    return null;
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 function getTreeStatus(cwd, options) {
   if (!cwd || !fs.existsSync(path.join(cwd, '.git'))) {
     return { isDirty: false, dirtyPaths: [], lines: [] };
@@ -2916,6 +3030,21 @@ async function runOrchestration(goal, opts) {
       if (res && res.failBefore) {
         job.failBefore = res.failBefore;
       }
+      if (
+        !job.failBefore &&
+        res &&
+        res.exitCode === 0 &&
+        job.cwd &&
+        job.baseSha &&
+        item.verification &&
+        item.verification.command
+      ) {
+        const workerHead = headShaOf(job.cwd);
+        if (workerHead) {
+          const measure = o.measureFailBefore || measureFailBefore;
+          job.failBefore = measure(job.cwd, job.baseSha, workerHead, item.verification.command);
+        }
+      }
 
       // A definite non-zero exit is a failed launch. A session that has not exited
       // yet (exitCode null) is not a failure: it is the case the supervisor exists
@@ -4583,6 +4712,7 @@ module.exports = {
   repairSpec,
   resolveLauncher,
   headShaOf,
+  measureFailBefore,
   isTreeDirty,
   getTreeStatus,
   verifyWorkerCommit,
