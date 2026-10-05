@@ -120,6 +120,15 @@ describe('TASK-AI-96: launcher model ids match 9Router ids', () => {
     for (const id of wireIds(cfg)) assert.equal(id, 'xmtp/mimo-v2.6-pro');
   });
 
+  test('other upstream prefixes (ocz/..., kr/...) are sent to 9Router whole', () => {
+    for (const model of ['ocz/big-pickle', 'kr/glm-5-agentic']) {
+      const { cfg } = generatedConfigFor(model);
+      const ids = wireIds(cfg);
+      assert.ok(ids.length > 0, model + ' has model entries');
+      for (const id of ids) assert.equal(id, model);
+    }
+  });
+
   test('the router prefix (ninerouter/...) is still stripped', () => {
     const { cfg } = generatedConfigFor('ninerouter/ag/gemini-3.1-pro-low');
     const short = cfg.provider.ninerouter.models['ag/gemini-3.1-pro-low'];
