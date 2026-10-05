@@ -3464,14 +3464,34 @@ async function reviewItem(
     : configuredReviewer
       ? routing.canonicalFailureDomain(configuredReviewer)
       : null;
+  // The Controller is the only selector: once it has judged at least one
+  // candidate and refused them all, a configured reviewer must not override
+  // that refusal. The configured reviewer is only a fallback when the
+  // Controller had nothing to judge (for example a pinned reviewer with an
+  // empty candidate pool), and it is compared by its canonical key.
+  const configuredReviewerKey = configuredReviewerCandidate
+    ? candidateKey(configuredReviewerCandidate) || configuredReviewer
+    : configuredReviewer;
+  const reviewerResult = (reviewerDecision && reviewerDecision.result) || {};
+  const controllerJudgedCandidates =
+    (Array.isArray(reviewerResult.rejected) && reviewerResult.rejected.length > 0) ||
+    (Array.isArray(reviewerResult.ranking) && reviewerResult.ranking.length > 0);
   const configuredReviewerEligible = Boolean(
     configuredReviewer &&
+    !controllerJudgedCandidates &&
+    !failedKeySet.has(configuredReviewerKey) &&
     !failedKeySet.has(configuredReviewer) &&
     !excludedDomainSet.has(configuredReviewerDomain) &&
     (domainAttemptsMap.get(configuredReviewerDomain) || 0) < 2
   );
+  // A configured reviewer that is the writer is passed through only so the
+  // review lane refuses it with REVIEWER_EQUALS_WRITER; it is never launched.
+  const configuredIsWriter = Boolean(
+    configuredReviewerKey && session && session.candidateKey === configuredReviewerKey
+  );
   const reviewerIdentity =
-    reviewerDecision.chosen || (configuredReviewerEligible ? configuredReviewer : null);
+    reviewerDecision.chosen ||
+    (configuredReviewerEligible || configuredIsWriter ? configuredReviewerKey : null);
   const reviewerTriedKeySet = new Set();
   if (reviewerIdentity) {
     triedKeySet.add(reviewerIdentity);
