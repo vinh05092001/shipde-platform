@@ -708,6 +708,9 @@ function reviewLane(
 
     let res = null;
     try {
+      if (opts && typeof opts.onReviewerLaunch === 'function') {
+        opts.onReviewerLaunch(candidate);
+      }
       res = await launcher(reviewJob);
     } catch (err) {
       res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
@@ -717,7 +720,7 @@ function reviewLane(
 
     if (!res || res.exitCode !== 0) {
       if (opts && typeof opts.onReviewerLaunchFailure === 'function') {
-        opts.onReviewerLaunchFailure(res, candidate);
+        opts.onReviewerLaunchFailure(res, candidate, opts && opts.attempt);
       }
       return {
         pass: false,
@@ -751,6 +754,8 @@ function reviewLane(
             stage: decisions.Stage.LAUNCHED,
             workItemId: (item ? item.id : 'item') + '-review',
             role: 'reviewer',
+            attempt: opts && opts.attempt,
+            attemptNumber: opts && opts.attempt,
             chosen: reviewerIdentity,
             harness: reviewJob.harness,
             branch: reviewJob.branch,
@@ -3399,6 +3404,7 @@ async function reviewItem(
       id: item.id + '-review',
       roleRequirement: { role: 'reviewer' },
       complexity: item.complexity,
+      qualityFloor: Math.max(Number(item.qualityFloor) || 0, 75),
       writerCandidateKey: writerKey,
       failedKeys: failedKeySet,
       excludedDomains: excludedDomainSet,
@@ -3423,33 +3429,28 @@ async function reviewItem(
   if (reviewerDecision.chosen) {
     triedKeySet.add(reviewerDecision.chosen);
     if (item && item.triedKeys instanceof Set) item.triedKeys.add(reviewerDecision.chosen);
-    const revCand = (Array.isArray(candidates) ? candidates : []).find(
-      (c) => candidateKey(c) === reviewerDecision.chosen
-    );
-    if (revCand) {
-      const revDomain = routing.canonicalFailureDomain(revCand);
-      domainAttemptsMap.set(revDomain, (domainAttemptsMap.get(revDomain) || 0) + 1);
-      if ((domainAttemptsMap.get(revDomain) || 0) >= 2) {
-        excludedDomainSet.add(revDomain);
-        if (item && item.excludedDomains instanceof Set) item.excludedDomains.add(revDomain);
-      }
-    }
   }
   const reviewerIdentity = reviewerDecision.chosen || o.reviewerIdentity;
+  const reviewerTriedKeySet = new Set();
   if (reviewerIdentity) {
     triedKeySet.add(reviewerIdentity);
     if (item && item.triedKeys instanceof Set) item.triedKeys.add(reviewerIdentity);
   }
 
-  const recordReviewerLaunchFailure = (res, candidate) => {
-    const revKey = (candidate && candidateKey(candidate)) || reviewerIdentity;
+  let activeReviewerKey = reviewerIdentity;
+  let activeReviewerAttempt = reviewerAttempt;
+
+  const recordReviewerLaunchFailure = (res, candidate, attempt) => {
+    const revKey = (candidate && candidateKey(candidate)) || activeReviewerKey || reviewerIdentity;
     if (!revKey) return;
+    reviewerTriedKeySet.add(revKey);
     failedKeySet.add(revKey);
     triedKeySet.add(revKey);
     if (item && item.failedKeys instanceof Set) item.failedKeys.add(revKey);
     if (session && session.failedKeys instanceof Set) session.failedKeys.add(revKey);
     if (options && options.failedKeys instanceof Set) options.failedKeys.add(revKey);
     if (item && item.triedKeys instanceof Set) item.triedKeys.add(revKey);
+    if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(revKey);
 
     const cand =
       candidate ||
@@ -3507,13 +3508,19 @@ async function reviewItem(
         const cDomain = routing.canonicalFailureDomain(c);
         if (excludedDomainSet.has(cDomain)) allExcluded.add(k);
       }
+      const failAttempt =
+        attempt !== undefined
+          ? attempt
+          : activeReviewerAttempt !== undefined
+            ? activeReviewerAttempt
+            : reviewerAttempt;
       decisions.recordDecision(
         {
           stage: decisions.Stage.FAILED,
           workItemId: (item ? item.id : 'item') + '-review',
           role: 'reviewer',
-          attempt: reviewerAttempt,
-          attemptNumber: reviewerAttempt,
+          attempt: failAttempt,
+          attemptNumber: failAttempt,
           chosen: revKey,
           chosenKey: revKey,
           branch: (session && session.branch) || o.branch,
@@ -3545,36 +3552,129 @@ async function reviewItem(
   };
   let roundCount = 0;
   let lastManifestResult = null;
-
-  const baseReviewFn =
-    typeof o.reviewer === 'function'
-      ? o.reviewer
-      : reviewLane(
-          Object.assign({}, o, { reviewerIdentity }),
-          item,
-          session,
-          log,
-          logOpts,
-          launcher,
-          usageDir,
-          now,
-          candidates,
-          evidenceData,
-          registry,
-          {
-            failedKeys: failedKeySet,
-            excludedDomains: excludedDomainSet,
-            domainAttempts: domainAttemptsMap,
-            triedKeys: triedKeySet,
-            evidenceDir,
-            attempt: reviewerAttempt,
-            onReviewerLaunchFailure: recordReviewerLaunchFailure,
-          }
-        );
+  let reviewerLaunchFailed = false;
 
   const reviewWithManifest = async (currentSha) => {
     roundCount += 1;
-    const rev = await baseReviewFn(currentSha);
+    activeReviewerAttempt = options.attempt !== undefined ? options.attempt : roundCount;
+
+    let rev;
+    if (typeof o.reviewer === 'function') {
+      rev = await o.reviewer(currentSha);
+    } else {
+      if (roundCount === 1) {
+        activeReviewerKey = reviewerDecision.chosen || o.reviewerIdentity;
+      } else {
+        const nextDecision = await selectCandidateForProfile(
+          {
+            id: item.id + '-review',
+            roleRequirement: { role: 'reviewer' },
+            complexity: item.complexity,
+            qualityFloor: Math.max(Number(item.qualityFloor) || 0, 75),
+            writerCandidateKey: writerKey,
+            failedKeys: new Set([...failedKeySet, ...reviewerTriedKeySet]),
+            excludedDomains: excludedDomainSet,
+            domainAttempts: domainAttemptsMap,
+            attempt: activeReviewerAttempt,
+            attemptNumber: activeReviewerAttempt,
+          },
+          candidates,
+          forbiddenDomains,
+          evidenceData,
+          o,
+          logOpts,
+          now,
+          {
+            failedKeys: new Set([...failedKeySet, ...reviewerTriedKeySet]),
+            excludedDomains: excludedDomainSet,
+            domainAttempts: domainAttemptsMap,
+            attempt: activeReviewerAttempt,
+            attemptNumber: activeReviewerAttempt,
+          }
+        );
+        if (nextDecision.chosen) {
+          activeReviewerKey = nextDecision.chosen;
+          triedKeySet.add(activeReviewerKey);
+          if (item && item.triedKeys instanceof Set) item.triedKeys.add(activeReviewerKey);
+          if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(activeReviewerKey);
+        } else {
+          activeReviewerKey = null;
+        }
+      }
+
+      if (!activeReviewerKey) {
+        const isCapExhausted =
+          Array.from(domainAttemptsMap.values()).some((v) => v >= 2) ||
+          excludedDomainSet.size > 0 ||
+          failedKeySet.size > 0;
+        const refusalReason = isCapExhausted
+          ? 'NO_ALTERNATE_FAILURE_DOMAIN'
+          : 'NO_REVIEWER_CANDIDATE';
+        if (logOpts) {
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.REFUSED,
+              workItemId: (item ? item.id : 'item') + '-review',
+              role: 'reviewer',
+              attempt: activeReviewerAttempt,
+              attemptNumber: activeReviewerAttempt,
+              detail: refusalReason,
+            },
+            logOpts
+          );
+        }
+        return {
+          pass: false,
+          sha: null,
+          cause: refusalReason,
+          verdict: 'REFUSED',
+          findings: [
+            {
+              id: refusalReason,
+              open: true,
+              detail: 'no eligible reviewer candidate available outside writer failure domain',
+            },
+          ],
+        };
+      }
+
+      const laneFn = reviewLane(
+        Object.assign({}, o, { reviewerIdentity: activeReviewerKey }),
+        item,
+        session,
+        log,
+        logOpts,
+        launcher,
+        usageDir,
+        now,
+        candidates,
+        evidenceData,
+        registry,
+        {
+          failedKeys: failedKeySet,
+          excludedDomains: excludedDomainSet,
+          domainAttempts: domainAttemptsMap,
+          triedKeys: triedKeySet,
+          evidenceDir,
+          attempt: activeReviewerAttempt,
+          onReviewerLaunch: (candidate) => {
+            const reviewerDomain = routing.canonicalFailureDomain(candidate);
+            const attempts = (domainAttemptsMap.get(reviewerDomain) || 0) + 1;
+            domainAttemptsMap.set(reviewerDomain, attempts);
+            if (attempts >= 2) {
+              excludedDomainSet.add(reviewerDomain);
+              if (item && item.excludedDomains instanceof Set) {
+                item.excludedDomains.add(reviewerDomain);
+              }
+            }
+          },
+          onReviewerLaunchFailure: (res, cand) =>
+            recordReviewerLaunchFailure(res, cand, activeReviewerAttempt),
+        }
+      );
+      rev = await laneFn(currentSha);
+      reviewerLaunchFailed = Boolean(rev && rev.launchFailed);
+    }
 
     const repoCandidates = [workerRoot, session && session.worktree, o.cwd, process.cwd()].filter(
       Boolean
@@ -3631,7 +3731,8 @@ async function reviewItem(
       baseSha: currentBaseSha,
       reviewedSha: currentSha,
       writerCandidateKey: (session && session.candidateKey) || o.writerCandidateKey,
-      reviewerCandidateKey: (rev && rev.reviewer) || reviewerIdentity || o.reviewerIdentity,
+      reviewerCandidateKey:
+        (rev && rev.reviewer) || activeReviewerKey || reviewerIdentity || o.reviewerIdentity,
       verdict: (rev && rev.verdict) || (rev && rev.pass ? 'PASS' : 'CHANGES_REQUIRED'),
       findings: (rev && rev.findings) || [],
       tests: currentTests,
@@ -3646,37 +3747,44 @@ async function reviewItem(
     {
       runTests: captureRunTests,
       review: reviewWithManifest,
-      repair:
-        typeof o.repairer === 'function'
-          ? o.repairer
-          : repairRound(
-              o,
-              item,
-              session,
-              log,
-              logOpts,
-              launcher,
-              usageDir,
-              now,
-              candidates,
-              evidenceData,
-              registry,
-              {
-                failedKeys: failedKeySet,
-                excludedDomains: excludedDomainSet,
-                domainAttempts: domainAttemptsMap,
-                triedKeys: triedKeySet,
-                evidenceDir: options.evidenceDir || evidenceDir,
-              }
-            ),
+      repair: async (...args) => {
+        if (reviewerLaunchFailed) {
+          reviewerLaunchFailed = false;
+          return { sha: args[1] };
+        }
+        if (typeof o.repairer === 'function') return o.repairer(...args);
+        return repairRound(
+          o,
+          item,
+          session,
+          log,
+          logOpts,
+          launcher,
+          usageDir,
+          now,
+          candidates,
+          evidenceData,
+          registry,
+          {
+            failedKeys: failedKeySet,
+            excludedDomains: excludedDomainSet,
+            domainAttempts: domainAttemptsMap,
+            triedKeys: triedKeySet,
+            evidenceDir: options.evidenceDir || evidenceDir,
+          }
+        )(...args);
+      },
     }
   );
+
+  const effectiveReviewer =
+    (review && review.reviewer) || activeReviewerKey || reviewerIdentity || null;
 
   const entry = {
     workItemId: item.id,
     sha: review.finalSha || targetSha,
-    reviewerIdentity: reviewerIdentity || null,
-    reviewer: reviewerIdentity || null,
+    reviewerIdentity: effectiveReviewer,
+    reviewer: effectiveReviewer,
     writerCandidateKey: session.candidateKey,
     workerRoot: workerRoot || (session && session.worktree) || null,
     publishCwd: publishCwdForReceipt(o, workerRoot || (session && session.worktree) || null),
