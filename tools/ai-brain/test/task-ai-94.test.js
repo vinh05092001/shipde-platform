@@ -545,4 +545,69 @@ describe('TASK-AI-94: reviewer lane re-selection and launch attempt counting', (
       'reviewer selection attemptNumber values advance on every round'
     );
   });
+  test('configured reviewer outside the candidate pool counts against its canonical domain', async () => {
+    const candWriter = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-pool-writer',
+      modelId: 'up-pool-writer/m1',
+    });
+    const outOfPool = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-out-of-pool',
+      modelId: 'up-out-of-pool/m1',
+    });
+    const outOfPoolDomain = require('../routing').canonicalFailureDomain(outOfPool);
+    const sha = '6060606060606060606060606060606060606060';
+    const launched = [];
+    const result = await orchestrate.reviewItem(
+      {
+        reviewerIdentity: outOfPool.candidateKey,
+        decisionDir,
+        evidenceDir,
+        reviewBudget: 3,
+        tests: () => ({ pass: true, findings: [] }),
+        repairer: async (_item, currentSha) => ({ sha: currentSha }),
+      },
+      { id: 'ITEM-94-OUT-OF-POOL' },
+      {
+        candidateKey: candWriter.candidateKey,
+        headSha: sha,
+        baseSha: sha,
+        branch: 'feat/task-ai-94-out-of-pool',
+      },
+      { goal: 'configured reviewer outside the pool', reviews: [] },
+      { dir: decisionDir, now: NOW },
+      async (job) => {
+        launched.push(job.candidateKey);
+        fs.writeFileSync(
+          job.verdictFile,
+          JSON.stringify({
+            sha: job.baseSha,
+            verdict: 'CHANGES_REQUIRED',
+            findings: [{ id: 'F-1', severity: 'P2', open: true, detail: 'keep reviewing' }],
+          })
+        );
+        return { exitCode: 0, stdout: 'review changes required' };
+      },
+      path.join(tempRoot, 'usage'),
+      NOW,
+      [],
+      null,
+      { sources: [] },
+      {
+        failedKeys: new Set(),
+        excludedDomains: new Set(),
+        domainAttempts: new Map([[outOfPoolDomain, 1]]),
+        triedKeys: new Set(),
+        evidenceDir,
+      }
+    );
+
+    assert.equal(
+      launched.length,
+      1,
+      'one earlier attempt plus one reviewer launch reaches the two-attempt cap for the domain'
+    );
+    assert.equal(result.status, 'BLOCKED');
+  });
 });

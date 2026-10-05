@@ -569,7 +569,7 @@ function reviewLane(
     const candidateList = Array.isArray(candidates) ? candidates : [];
     const candidate =
       candidateList.find((c) => candidateKey(c) === reviewerIdentity) ||
-      candidatesApi.parseCandidateKey(reviewerIdentity);
+      parseCandidateKey(reviewerIdentity);
     if (!candidate) {
       return {
         pass: false,
@@ -3398,7 +3398,7 @@ async function reviewItem(
   let writerUpstream = writerCandidate && writerCandidate.upstream;
   let writerGateway = writerCandidate && writerCandidate.gateway;
   if ((!writerUpstream || !writerGateway) && writerKey) {
-    const parsed = candidatesApi.parseCandidateKey(writerKey);
+    const parsed = parseCandidateKey(writerKey);
     if (parsed) {
       if (!writerGateway) writerGateway = parsed.gateway;
       if (!writerUpstream) writerUpstream = parsed.upstream;
@@ -3457,7 +3457,7 @@ async function reviewItem(
   const configuredReviewerCandidate = configuredReviewer
     ? (Array.isArray(candidates) ? candidates : []).find(
         (c) => candidateKey(c) === configuredReviewer
-      ) || candidatesApi.parseCandidateKey(configuredReviewer)
+      ) || parseCandidateKey(configuredReviewer)
     : null;
   const configuredReviewerDomain = configuredReviewerCandidate
     ? routing.canonicalFailureDomain(configuredReviewerCandidate)
@@ -3516,7 +3516,7 @@ async function reviewItem(
     const cand =
       candidate ||
       (Array.isArray(candidates) ? candidates : []).find((c) => candidateKey(c) === revKey) ||
-      candidatesApi.parseCandidateKey(revKey);
+      parseCandidateKey(revKey);
     if (!cand) return;
 
     const isLauncherTimedOut = Boolean(
@@ -3717,9 +3717,13 @@ async function reviewItem(
         };
       }
 
-      const activeReviewerCandidate = (Array.isArray(candidates) ? candidates : []).find(
-        (candidate) => candidateKey(candidate) === activeReviewerKey
-      );
+      const activeReviewerCandidate =
+        (Array.isArray(candidates) ? candidates : []).find(
+          (candidate) => candidateKey(candidate) === activeReviewerKey
+        ) ||
+        (configuredReviewerCandidate && activeReviewerKey === configuredReviewerKey
+          ? configuredReviewerCandidate
+          : parseCandidateKey(activeReviewerKey));
       const activeReviewerDomain = activeReviewerCandidate
         ? routing.canonicalFailureDomain(activeReviewerCandidate)
         : routing.canonicalFailureDomain(activeReviewerKey);
@@ -3767,7 +3771,11 @@ async function reviewItem(
           evidenceDir,
           attempt: activeReviewerAttempt,
           onReviewerLaunch: (candidate) => {
-            const reviewerDomain = routing.canonicalFailureDomain(candidate);
+            // Count against the same canonical domain the launch guard used,
+            // even when the reviewer is not in the injected candidate pool.
+            const reviewerDomain = routing.canonicalFailureDomain(
+              candidate || activeReviewerCandidate
+            );
             const attemptsInDomain = domainAttemptsMap.get(reviewerDomain) || 0;
             const attempts = attemptsInDomain + 1;
             domainAttemptsMap.set(reviewerDomain, attempts);
