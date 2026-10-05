@@ -35,6 +35,7 @@ const decisions = require('./decisions');
 const ranking = require('./ranking');
 const quotaStore = require('./quota-store');
 const candidatesApi = require('./candidates');
+const { loadPriors, priorFor } = require('./priors');
 const { candidateKey, parseCandidateKey } = require('./discovery/identity');
 const { contextRefusal } = require('./harness');
 
@@ -584,6 +585,7 @@ function evidenceAgePenalty(candidate, now) {
  */
 function scoreForProfile(candidate, assessment, ctx) {
   const now = (ctx && ctx.now) || Date.now();
+  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors);
   const latency = latencyScoreOf(candidate);
   const quality = qualityScoreOf(candidate, now);
   const reliability = reliabilityScoreOf(candidate);
@@ -628,6 +630,7 @@ function scoreForProfile(candidate, assessment, ctx) {
   const headroomPenalty =
     candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
   score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
+  if (prior) score += prior.bonus;
 
   return {
     score,
@@ -639,6 +642,7 @@ function scoreForProfile(candidate, assessment, ctx) {
       busyPenalty,
       evidenceAgePenalty: agePenalty,
       headroomPenalty,
+      prior,
     },
     reservationsHeld: busy,
   };
@@ -657,6 +661,7 @@ function scoreForProfile(candidate, assessment, ctx) {
 function rankForProfile(candidates, profile, assessment, ctx) {
   const context = ctx || {};
   const now = context.now || Date.now();
+  const priors = context.priors === undefined ? loadPriors() : context.priors;
   const explorationBudget = Number.isFinite(Number(context.explorationBudget))
     ? Number(context.explorationBudget)
     : 0;
@@ -781,9 +786,13 @@ function rankForProfile(candidates, profile, assessment, ctx) {
           : 'QUOTA_UNKNOWN_DRY_RUN_INSPECTION';
     }
 
-    if (!context._scoreContext)
-      context._scoreContext = Object.assign({}, context, { taskId: profile.taskId, now });
-    const scored = scoreForProfile(c, assessment, context._scoreContext);
+    const scoreContext = Object.assign({}, context, {
+      taskId: profile.taskId,
+      now,
+      role: profile.role,
+      priors,
+    });
+    const scored = scoreForProfile(c, assessment, scoreContext);
     ranked.push(
       Object.assign({}, c, {
         candidateKey: key,
@@ -796,12 +805,21 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   }
 
   ranked.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
+    const aPriorBonus = a.scoreBreakdown.prior ? a.scoreBreakdown.prior.bonus : 0;
+    const bPriorBonus = b.scoreBreakdown.prior ? b.scoreBreakdown.prior.bonus : 0;
+    const aBaseScore = a.score - aPriorBonus;
+    const bBaseScore = b.score - bPriorBonus;
+    if (bBaseScore !== aBaseScore) return bBaseScore - aBaseScore;
+    if (bPriorBonus !== aPriorBonus) return bPriorBonus - aPriorBonus;
     if (a.reservationsHeld !== b.reservationsHeld) return a.reservationsHeld - b.reservationsHeld;
     return a.candidateKey.localeCompare(b.candidateKey);
   });
 
-  const allZero = ranked.length > 0 && ranked.every((c) => c.score === 0);
+  const allZero =
+    ranked.length > 0 &&
+    ranked.every(
+      (c) => c.score - (c.scoreBreakdown.prior ? c.scoreBreakdown.prior.bonus : 0) === 0
+    );
   const top3 = ranked.slice(0, 3);
   const chosen = top3.length ? top3[0].candidateKey : null;
   const reasonCode = allZero ? 'MODEL_SELECTION_NOT_PROVEN' : null;
@@ -1098,6 +1116,7 @@ async function runProfileDispatch(args, deps) {
 
   const rankCtx = {
     now,
+    priors: d.priors,
     taskId: profile.taskId,
     evidenceData,
     headrooms: d.headrooms,

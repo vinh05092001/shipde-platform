@@ -4082,6 +4082,7 @@ describe('TASK-AI-64 worker timeout and upstream quota fallback (DEFECT M)', () 
           sha: hostRepo.sha,
           decisionDir,
           evidenceDir,
+          ranking: { priors: { ranking: [] } },
           candidates: [candAg, candGh],
           specs: [
             {
@@ -4174,6 +4175,7 @@ describe('TASK-AI-64 worker timeout and upstream quota fallback (DEFECT M)', () 
           sha: hostRepo.sha,
           decisionDir,
           evidenceDir,
+          ranking: { priors: { ranking: [] } },
           candidates: [candAg, candGh],
           specs: [
             {
