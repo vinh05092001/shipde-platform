@@ -3660,16 +3660,24 @@ async function reviewItem(
           if (item && item.triedKeys instanceof Set) item.triedKeys.add(activeReviewerKey);
           if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(activeReviewerKey);
         } else {
-          const configuredCandidate = configuredReviewerCandidate;
+          // Same rule as the first selection: never override a Controller
+          // refusal, and compare the configured reviewer by canonical key.
+          const nextResult = (nextDecision && nextDecision.result) || {};
+          const nextJudged =
+            (Array.isArray(nextResult.rejected) && nextResult.rejected.length > 0) ||
+            (Array.isArray(nextResult.ranking) && nextResult.ranking.length > 0);
           const configuredDomain = configuredReviewerDomain;
           const configuredStillEligible = Boolean(
-            configuredReviewer &&
-            configuredCandidate &&
+            configuredReviewerKey &&
+            configuredReviewerCandidate &&
+            !nextJudged &&
+            !nextFailedKeys.has(configuredReviewerKey) &&
             !nextFailedKeys.has(configuredReviewer) &&
+            !failedKeySet.has(configuredReviewerKey) &&
             !excludedDomainSet.has(configuredDomain) &&
             (domainAttemptsMap.get(configuredDomain) || 0) < 2
           );
-          activeReviewerKey = configuredStillEligible ? configuredReviewer : null;
+          activeReviewerKey = configuredStillEligible ? configuredReviewerKey : null;
         }
       }
 
