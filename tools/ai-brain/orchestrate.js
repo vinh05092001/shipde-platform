@@ -709,7 +709,23 @@ function reviewLane(
     let res = null;
     try {
       if (opts && typeof opts.onReviewerLaunch === 'function') {
-        opts.onReviewerLaunch(candidate);
+        const eligible = opts.onReviewerLaunch(candidate);
+        if (eligible === false) {
+          return {
+            pass: false,
+            sha: targetSha,
+            cause: 'NO_ALTERNATE_FAILURE_DOMAIN',
+            verdict: 'REFUSED',
+            reviewer: reviewerIdentity,
+            findings: [
+              {
+                id: 'NO_ALTERNATE_FAILURE_DOMAIN',
+                open: true,
+                detail: 'reviewer failure domain is excluded or its attempt cap is exhausted',
+              },
+            ],
+          };
+        }
       }
       res = await launcher(reviewJob);
     } catch (err) {
@@ -2080,9 +2096,11 @@ function buildProfile(item, o, forbiddenFailureDomains) {
       Number.isFinite(Number(item.qualityFloor)) &&
       Number(item.qualityFloor) >= 0
         ? Number(item.qualityFloor)
-        : codingOrReview
-          ? 70
-          : 40,
+        : role === 'reviewer'
+          ? 75
+          : codingOrReview
+            ? 70
+            : 40,
     costCeiling:
       item.costCeiling !== null &&
       item.costCeiling !== undefined &&
@@ -3393,6 +3411,13 @@ async function reviewItem(
   // allowing reviewer candidates on the same gateway with distinct upstreams
   // without forbidding the shared router account.
   const forbiddenDomains = [writerUpstream || writerGateway].filter(Boolean);
+  const reviewerQualityFloor =
+    item.qualityFloor !== null &&
+    item.qualityFloor !== undefined &&
+    Number.isFinite(Number(item.qualityFloor)) &&
+    Number(item.qualityFloor) >= 0
+      ? Number(item.qualityFloor)
+      : 75;
   const reviewerAttempt =
     options.attempt !== undefined
       ? options.attempt
@@ -3404,7 +3429,7 @@ async function reviewItem(
       id: item.id + '-review',
       roleRequirement: { role: 'reviewer' },
       complexity: item.complexity,
-      qualityFloor: Math.max(Number(item.qualityFloor) || 0, 75),
+      qualityFloor: reviewerQualityFloor,
       writerCandidateKey: writerKey,
       failedKeys: failedKeySet,
       excludedDomains: excludedDomainSet,
@@ -3430,7 +3455,25 @@ async function reviewItem(
     triedKeySet.add(reviewerDecision.chosen);
     if (item && item.triedKeys instanceof Set) item.triedKeys.add(reviewerDecision.chosen);
   }
-  const reviewerIdentity = reviewerDecision.chosen || o.reviewerIdentity;
+  const configuredReviewer = o.reviewerIdentity || null;
+  const configuredReviewerCandidate = configuredReviewer
+    ? (Array.isArray(candidates) ? candidates : []).find(
+        (c) => candidateKey(c) === configuredReviewer
+      ) || candidatesApi.parseCandidateKey(configuredReviewer)
+    : null;
+  const configuredReviewerDomain = configuredReviewerCandidate
+    ? routing.canonicalFailureDomain(configuredReviewerCandidate)
+    : configuredReviewer
+      ? routing.canonicalFailureDomain(configuredReviewer)
+      : null;
+  const configuredReviewerEligible = Boolean(
+    configuredReviewer &&
+    !failedKeySet.has(configuredReviewer) &&
+    !excludedDomainSet.has(configuredReviewerDomain) &&
+    (domainAttemptsMap.get(configuredReviewerDomain) || 0) < 2
+  );
+  const reviewerIdentity =
+    reviewerDecision.chosen || (configuredReviewerEligible ? configuredReviewer : null);
   const reviewerTriedKeySet = new Set();
   if (reviewerIdentity) {
     triedKeySet.add(reviewerIdentity);
@@ -3541,11 +3584,17 @@ async function reviewItem(
   const runTestsForReview =
     typeof o.tests === 'function'
       ? o.tests
-      : () =>
-          runVerificationCommand(
-            item,
-            Object.assign({}, o, { workerRoot, baseSha: session.baseSha || o.baseSha })
-          );
+      : !item.verification && options.verificationRequired !== true
+        ? () => ({
+            pass: true,
+            cause: null,
+            detail: 'review caller supplied a completed work item',
+          })
+        : () =>
+            runVerificationCommand(
+              item,
+              Object.assign({}, o, { workerRoot, baseSha: session.baseSha || o.baseSha })
+            );
   const captureRunTests = () => {
     lastTestResult = runTestsForReview();
     return lastTestResult;
@@ -3556,23 +3605,24 @@ async function reviewItem(
 
   const reviewWithManifest = async (currentSha) => {
     roundCount += 1;
-    activeReviewerAttempt = options.attempt !== undefined ? options.attempt : roundCount;
+    activeReviewerAttempt = reviewerAttempt + roundCount - 1;
 
     let rev;
     if (typeof o.reviewer === 'function') {
       rev = await o.reviewer(currentSha);
     } else {
       if (roundCount === 1) {
-        activeReviewerKey = reviewerDecision.chosen || o.reviewerIdentity;
+        activeReviewerKey = reviewerIdentity;
       } else {
+        const nextFailedKeys = new Set([...failedKeySet, ...reviewerTriedKeySet]);
         const nextDecision = await selectCandidateForProfile(
           {
             id: item.id + '-review',
             roleRequirement: { role: 'reviewer' },
             complexity: item.complexity,
-            qualityFloor: Math.max(Number(item.qualityFloor) || 0, 75),
+            qualityFloor: reviewerQualityFloor,
             writerCandidateKey: writerKey,
-            failedKeys: new Set([...failedKeySet, ...reviewerTriedKeySet]),
+            failedKeys: nextFailedKeys,
             excludedDomains: excludedDomainSet,
             domainAttempts: domainAttemptsMap,
             attempt: activeReviewerAttempt,
@@ -3585,7 +3635,7 @@ async function reviewItem(
           logOpts,
           now,
           {
-            failedKeys: new Set([...failedKeySet, ...reviewerTriedKeySet]),
+            failedKeys: nextFailedKeys,
             excludedDomains: excludedDomainSet,
             domainAttempts: domainAttemptsMap,
             attempt: activeReviewerAttempt,
@@ -3598,7 +3648,16 @@ async function reviewItem(
           if (item && item.triedKeys instanceof Set) item.triedKeys.add(activeReviewerKey);
           if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(activeReviewerKey);
         } else {
-          activeReviewerKey = null;
+          const configuredCandidate = configuredReviewerCandidate;
+          const configuredDomain = configuredReviewerDomain;
+          const configuredStillEligible = Boolean(
+            configuredReviewer &&
+            configuredCandidate &&
+            !nextFailedKeys.has(configuredReviewer) &&
+            !excludedDomainSet.has(configuredDomain) &&
+            (domainAttemptsMap.get(configuredDomain) || 0) < 2
+          );
+          activeReviewerKey = configuredStillEligible ? configuredReviewer : null;
         }
       }
 
@@ -3638,6 +3697,34 @@ async function reviewItem(
         };
       }
 
+      const activeReviewerCandidate = (Array.isArray(candidates) ? candidates : []).find(
+        (candidate) => candidateKey(candidate) === activeReviewerKey
+      );
+      const activeReviewerDomain = activeReviewerCandidate
+        ? routing.canonicalFailureDomain(activeReviewerCandidate)
+        : routing.canonicalFailureDomain(activeReviewerKey);
+      if (
+        failedKeySet.has(activeReviewerKey) ||
+        reviewerTriedKeySet.has(activeReviewerKey) ||
+        excludedDomainSet.has(activeReviewerDomain) ||
+        (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2
+      ) {
+        activeReviewerKey = null;
+        return {
+          pass: false,
+          sha: currentSha,
+          cause: 'NO_ALTERNATE_FAILURE_DOMAIN',
+          verdict: 'REFUSED',
+          findings: [
+            {
+              id: 'NO_ALTERNATE_FAILURE_DOMAIN',
+              open: true,
+              detail: 'no eligible reviewer candidate remains outside excluded failure domains',
+            },
+          ],
+        };
+      }
+
       const laneFn = reviewLane(
         Object.assign({}, o, { reviewerIdentity: activeReviewerKey }),
         item,
@@ -3659,7 +3746,8 @@ async function reviewItem(
           attempt: activeReviewerAttempt,
           onReviewerLaunch: (candidate) => {
             const reviewerDomain = routing.canonicalFailureDomain(candidate);
-            const attempts = (domainAttemptsMap.get(reviewerDomain) || 0) + 1;
+            const attemptsInDomain = domainAttemptsMap.get(reviewerDomain) || 0;
+            const attempts = attemptsInDomain + 1;
             domainAttemptsMap.set(reviewerDomain, attempts);
             if (attempts >= 2) {
               excludedDomainSet.add(reviewerDomain);
@@ -3667,6 +3755,7 @@ async function reviewItem(
                 item.excludedDomains.add(reviewerDomain);
               }
             }
+            return true;
           },
           onReviewerLaunchFailure: (res, cand) =>
             recordReviewerLaunchFailure(res, cand, activeReviewerAttempt),

@@ -392,4 +392,156 @@ describe('TASK-AI-94: reviewer lane re-selection and launch attempt counting', (
     assert.ok(outcome.triedKeys.includes(candR1.candidateKey), 'triedKeys includes candR1');
     assert.ok(outcome.triedKeys.includes(candR2.candidateKey), 'triedKeys includes candR2');
   });
+
+  test('configured reviewer fallback is refused when its key or failure domain is ineligible', async () => {
+    const candWriter = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-config-writer',
+      modelId: 'up-config-writer/m1',
+    });
+    const configuredReviewer = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-config-reviewer',
+      modelId: 'up-config-reviewer/m1',
+    });
+    const reviewerDomain = '9router/up-config-reviewer';
+    const sha = '4040404040404040404040404040404040404040';
+    const cases = [
+      { name: 'failed key', failedKeys: new Set([configuredReviewer.candidateKey]) },
+      { name: 'excluded domain', excludedDomains: new Set([reviewerDomain]) },
+      { name: 'two-attempt cap', domainAttempts: new Map([[reviewerDomain, 2]]) },
+    ];
+
+    for (const refusal of cases) {
+      const launches = [];
+      const item = { id: 'ITEM-94-CONFIG-' + refusal.name.replace(/\W+/g, '-') };
+      const result = await orchestrate.reviewItem(
+        {
+          reviewerIdentity: configuredReviewer.candidateKey,
+          decisionDir,
+          evidenceDir,
+          reviewBudget: 1,
+        },
+        item,
+        {
+          candidateKey: candWriter.candidateKey,
+          headSha: sha,
+          baseSha: sha,
+          branch: 'feat/task-ai-94-reviewer-fallback',
+        },
+        { goal: 'configured reviewer refusal', reviews: [] },
+        { dir: decisionDir, now: NOW },
+        async (job) => {
+          launches.push(job.candidateKey);
+          return { exitCode: 1, httpStatus: 500, stderr: 'unexpected reviewer launch' };
+        },
+        path.join(tempRoot, 'usage'),
+        NOW,
+        [candWriter, configuredReviewer],
+        null,
+        { sources: [] },
+        Object.assign(
+          {
+            failedKeys: new Set(),
+            excludedDomains: new Set(),
+            domainAttempts: new Map(),
+            triedKeys: new Set(),
+            evidenceDir,
+          },
+          refusal
+        )
+      );
+
+      assert.deepEqual(launches, [], refusal.name + ' must not launch configured reviewer');
+      assert.equal(result.status, 'BLOCKED', refusal.name + ' blocks the reviewer lane');
+      assert.equal(
+        result.reason,
+        'NO_ALTERNATE_FAILURE_DOMAIN',
+        refusal.name + ' uses the canonical no-alternate reason'
+      );
+    }
+  });
+
+  test('reviewer keeps the work-item quality floor and increments supplied attempt numbers', async () => {
+    const candWriter = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-floor-writer',
+      modelId: 'up-floor-writer/m1',
+      quality: 100,
+    });
+    const candReviewer1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-floor-reviewer-1',
+      modelId: 'up-floor-reviewer-1/m1',
+      quality: 90,
+    });
+    const candReviewer2 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-floor-reviewer-2',
+      modelId: 'up-floor-reviewer-2/m1',
+      quality: 70,
+    });
+    const sha = '5050505050505050505050505050505050505050';
+    const launched = [];
+    const result = await orchestrate.reviewItem(
+      { decisionDir, evidenceDir, reviewBudget: 2 },
+      { id: 'ITEM-94-QUALITY-FLOOR', qualityFloor: 50 },
+      {
+        candidateKey: candWriter.candidateKey,
+        headSha: sha,
+        baseSha: sha,
+        branch: 'feat/task-ai-94-quality-floor',
+      },
+      { goal: 'configured reviewer quality floor', reviews: [] },
+      { dir: decisionDir, now: NOW },
+      async (job) => {
+        launched.push(job.candidateKey);
+        if (job.candidateKey === candReviewer1.candidateKey) {
+          return { exitCode: 1, httpStatus: 500, stderr: 'reviewer launch failed' };
+        }
+        fs.writeFileSync(
+          job.verdictFile,
+          JSON.stringify({ sha: job.baseSha, verdict: 'PASS', findings: [] })
+        );
+        return { exitCode: 0, stdout: 'review ok' };
+      },
+      path.join(tempRoot, 'usage'),
+      NOW,
+      [candWriter, candReviewer1, candReviewer2],
+      null,
+      { sources: [] },
+      {
+        failedKeys: new Set(),
+        excludedDomains: new Set(),
+        domainAttempts: new Map(),
+        triedKeys: new Set(),
+        evidenceDir,
+        attempt: 7,
+      }
+    );
+
+    assert.deepEqual(launched, [candReviewer1.candidateKey, candReviewer2.candidateKey]);
+    assert.equal(result.status, 'COMPLETED');
+
+    const decisionsList = fs
+      .readFileSync(path.join(decisionDir, '2026-10-05.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    const reviewerSelections = decisionsList.filter(
+      (decision) =>
+        decision.stage === 'reviewer-selection' &&
+        decision.workItemId === 'ITEM-94-QUALITY-FLOOR-review'
+    );
+    assert.deepEqual(
+      reviewerSelections.map((decision) => decision.attempt),
+      [7, 8],
+      'reviewer selection attempt numbers advance from the caller-supplied attempt'
+    );
+    assert.deepEqual(
+      reviewerSelections.map((decision) => decision.attemptNumber),
+      [7, 8],
+      'reviewer selection attemptNumber values advance on every round'
+    );
+  });
 });
