@@ -1061,7 +1061,13 @@ function getIsolatedLauncher() {
         if (pinnedModel.startsWith(prefixWithSlash)) {
           const relativeId = pinnedModel.slice(prefixWithSlash.length);
           if (relativeId) {
-            modelsMap[relativeId] = { id: relativeId, name: relativeId };
+            // Only the router's own prefix (e.g. 'ninerouter/') is stripped
+            // before the id reaches 9Router. An upstream prefix such as
+            // 'cl/' or 'xmtp/' is part of the 9Router model id and must be
+            // sent whole, or 9Router answers "Model not found".
+            const routerProvider = sourcesModule.providerFromPrefix(routerSource.modelPrefix);
+            const wireId = providerId === routerProvider ? relativeId : pinnedModel;
+            modelsMap[relativeId] = { id: wireId, name: relativeId };
           }
         }
       }
