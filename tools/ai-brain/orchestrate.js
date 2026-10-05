@@ -2208,7 +2208,11 @@ function recordLaunchFailureEvidence(
   if (evidenceDir) {
     try {
       evidence.recordOutcome(evidenceDir, candidate, payload);
-      return evidence.loadEvidence(evidenceDir);
+      const reloaded = evidence.loadEvidence(evidenceDir);
+      if (evidenceData && typeof evidenceData === 'object' && reloaded) {
+        Object.assign(evidenceData, reloaded);
+      }
+      return reloaded || evidenceData;
     } catch (_) {}
   }
   if (evidenceData && typeof evidenceData === 'object') {
@@ -2242,6 +2246,27 @@ function recordLaunchFailureEvidence(
   return evidenceData;
 }
 
+function resolveDomainAttempts(options, item, extra, o) {
+  const da =
+    (options && options.domainAttempts) ||
+    (item && item.domainAttempts) ||
+    (extra && extra.domainAttempts) ||
+    (o && o.domainAttempts) ||
+    null;
+  const map =
+    da instanceof Map ? da : new Map(da && typeof da === 'object' ? Object.entries(da) : []);
+  if (item && !item.domainAttempts) item.domainAttempts = map;
+  return map;
+}
+
+function resolveEvidenceDir(options, o) {
+  return (
+    (options && options.evidenceDir) ||
+    (o && o.evidenceDir) ||
+    (Array.isArray(o && o.candidates) ? null : path.join(__dirname, 'data', 'evidence'))
+  );
+}
+
 async function selectCandidateForProfile(
   item,
   annotatedCandidates,
@@ -2261,6 +2286,7 @@ async function selectCandidateForProfile(
     excludedDomains instanceof Set
       ? excludedDomains
       : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
+  const domainAttemptsMap = resolveDomainAttempts(options, item, null, o);
   const attemptNumber = options.attempt !== undefined ? options.attempt : item && item.attempt;
 
   const profile = buildProfile(item, o, forbiddenDomains);
@@ -2296,7 +2322,7 @@ async function selectCandidateForProfile(
     );
   }
 
-  if (failedKeySet.size > 0 || excludedDomainSet.size > 0) {
+  if (failedKeySet.size > 0 || excludedDomainSet.size > 0 || domainAttemptsMap.size > 0) {
     candidates = candidates.map((c) => {
       const k = candidateKey(c);
       if (failedKeySet.has(k)) {
@@ -2307,10 +2333,12 @@ async function selectCandidateForProfile(
         });
       }
       const cDomain = routing.canonicalFailureDomain(c);
-      if (excludedDomainSet.has(cDomain)) {
+      if (excludedDomainSet.has(cDomain) || (domainAttemptsMap.get(cDomain) || 0) >= 2) {
         return Object.assign({}, c, {
           blocked: true,
-          blockReason: 'FAILURE_DOMAIN_EXCLUDED',
+          blockReason: excludedDomainSet.has(cDomain)
+            ? 'FAILURE_DOMAIN_EXCLUDED'
+            : 'DOMAIN_ATTEMPTS_EXHAUSTED',
           blockScope: 'domain',
         });
       }
@@ -2360,9 +2388,11 @@ async function selectCandidateForProfile(
       const chosenCand = candidates.find((c) => candidateKey(c) === result.chosen);
       if (chosenCand) {
         const cDomain = routing.canonicalFailureDomain(chosenCand);
-        if (excludedDomainSet.has(cDomain)) {
+        if (excludedDomainSet.has(cDomain) || (domainAttemptsMap.get(cDomain) || 0) >= 2) {
           result.chosen = null;
-          result.reason = 'REFUSED: failure domain previously excluded';
+          result.reason = excludedDomainSet.has(cDomain)
+            ? 'REFUSED: failure domain previously excluded'
+            : 'REFUSED: failure domain attempt budget exhausted';
         }
       }
     }
@@ -2406,12 +2436,17 @@ async function selectCandidateForProfile(
   for (const c of candidates) {
     const k = candidateKey(c);
     const cDomain = routing.canonicalFailureDomain(c);
-    if (excludedDomainSet.has(cDomain)) {
+    if (excludedDomainSet.has(cDomain) || (domainAttemptsMap.get(cDomain) || 0) >= 2) {
       allExcluded.add(k);
     }
   }
   for (const d of excludedDomainSet) {
     allExcluded.add(d);
+  }
+  for (const [d, count] of domainAttemptsMap.entries()) {
+    if (count >= 2) {
+      allExcluded.add(d);
+    }
   }
 
   const decisionRecorded = {
@@ -2698,10 +2733,18 @@ async function runOrchestration(goal, opts) {
         Array.isArray(item.excludedDomains) ? item.excludedDomains : []
       );
     }
+    if (!item.domainAttempts || !(item.domainAttempts instanceof Map)) {
+      item.domainAttempts =
+        item.domainAttempts instanceof Map
+          ? item.domainAttempts
+          : item.domainAttempts && typeof item.domainAttempts === 'object'
+            ? new Map(Object.entries(item.domainAttempts))
+            : new Map();
+    }
     const failedKeys = item.failedKeys;
     const forbiddenDomains = [];
     const excludedDomains = item.excludedDomains;
-    const domainAttempts = new Map();
+    const domainAttempts = item.domainAttempts;
     let blockedReason = null;
     let session = null;
 
@@ -2717,7 +2760,7 @@ async function runOrchestration(goal, opts) {
         o,
         logOpts,
         now,
-        { failedKeys, excludedDomains, attempt }
+        { failedKeys, excludedDomains, domainAttempts, attempt }
       );
 
       log.selections.push({ workItemId: item.id, attempt, decision });
@@ -3058,12 +3101,28 @@ async function runOrchestration(goal, opts) {
       candidates,
       evidenceData,
       registry,
-      { failedKeys, excludedDomains }
+      { failedKeys, excludedDomains, domainAttempts, evidenceDir }
     );
     if (reviewed.status === ReviewStatus.COMPLETED) {
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
     } else {
-      outcome(item, ItemStatus.BLOCKED, reviewed.reason);
+      const isNoAlt =
+        reviewed.reason === 'NO_ALTERNATE_FAILURE_DOMAIN' ||
+        (item.blockedReason && item.blockedReason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN')) ||
+        (reviewed.reason && reviewed.reason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN'));
+      const extra = isNoAlt
+        ? {
+            reasonCode: 'NO_ALTERNATE_FAILURE_DOMAIN',
+            triedKeys: Array.from(failedKeys),
+            tried: Array.from(failedKeys),
+          }
+        : undefined;
+      outcome(
+        item,
+        ItemStatus.BLOCKED,
+        isNoAlt ? 'NO_ALTERNATE_FAILURE_DOMAIN' : reviewed.reason,
+        extra
+      );
     }
   }
 
@@ -3075,6 +3134,7 @@ async function runOrchestration(goal, opts) {
     status: o.publication ? PublicationStatus.REFUSED : PublicationStatus.NOT_REQUESTED,
     reason: 'NO_REVIEWED_COMMIT: nothing to publish',
   };
+  log.evidenceData = evidenceData;
 
   return finish(log, statusOf, { now, cli, checkpointFile, checkpointOnDisk, out: o.out, logOpts });
 }
@@ -3227,6 +3287,7 @@ async function reviewItem(
     excludedDomains instanceof Set
       ? excludedDomains
       : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
+  const domainAttemptsMap = resolveDomainAttempts(options, item, session, o);
   const hostWorktree = o.cwd || process.cwd();
   const isolatedWorkerRoot = o.isolatedWorker
     ? require('./isolation-launcher').workerRootFor(hostWorktree)
@@ -3276,6 +3337,7 @@ async function reviewItem(
       writerCandidateKey: writerKey,
       failedKeys: failedKeySet,
       excludedDomains: excludedDomainSet,
+      domainAttempts: domainAttemptsMap,
     },
     candidates,
     forbiddenDomains,
@@ -3283,8 +3345,25 @@ async function reviewItem(
     o,
     logOpts,
     now,
-    { failedKeys: failedKeySet, excludedDomains: excludedDomainSet }
+    {
+      failedKeys: failedKeySet,
+      excludedDomains: excludedDomainSet,
+      domainAttempts: domainAttemptsMap,
+    }
   );
+  if (reviewerDecision.chosen) {
+    const revCand = (Array.isArray(candidates) ? candidates : []).find(
+      (c) => candidateKey(c) === reviewerDecision.chosen
+    );
+    if (revCand) {
+      const revDomain = routing.canonicalFailureDomain(revCand);
+      domainAttemptsMap.set(revDomain, (domainAttemptsMap.get(revDomain) || 0) + 1);
+      if ((domainAttemptsMap.get(revDomain) || 0) >= 2) {
+        excludedDomainSet.add(revDomain);
+        if (item && item.excludedDomains instanceof Set) item.excludedDomains.add(revDomain);
+      }
+    }
+  }
   const reviewerIdentity = reviewerDecision.chosen || o.reviewerIdentity;
 
   const budget = Number.isFinite(Number(o.reviewBudget))
@@ -3412,7 +3491,12 @@ async function reviewItem(
               candidates,
               evidenceData,
               registry,
-              { failedKeys: failedKeySet, excludedDomains: excludedDomainSet }
+              {
+                failedKeys: failedKeySet,
+                excludedDomains: excludedDomainSet,
+                domainAttempts: domainAttemptsMap,
+                evidenceDir: options.evidenceDir,
+              }
             ),
     }
   );
@@ -3599,6 +3683,8 @@ function repairRound(
     excludedDomains instanceof Set
       ? excludedDomains
       : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
+  const domainAttemptsMap = resolveDomainAttempts(options, item, session, o);
+  const evidenceDir = resolveEvidenceDir(options, o);
 
   return async (findings, sha) => {
     const hostWorktree = o.cwd || process.cwd();
@@ -3626,6 +3712,7 @@ function repairRound(
 
     planned.failedKeys = failedKeySet;
     planned.excludedDomains = excludedDomainSet;
+    planned.domainAttempts = domainAttemptsMap;
     const decision = await selectCandidateForProfile(
       planned,
       candidates,
@@ -3634,10 +3721,25 @@ function repairRound(
       o,
       logOpts,
       now,
-      { failedKeys: failedKeySet, excludedDomains: excludedDomainSet }
+      {
+        failedKeys: failedKeySet,
+        excludedDomains: excludedDomainSet,
+        domainAttempts: domainAttemptsMap,
+      }
     );
-    if (!decision.chosen) return { sha };
+    if (!decision.chosen) {
+      if (
+        failedKeySet.size > 0 ||
+        excludedDomainSet.size > 0 ||
+        Array.from(domainAttemptsMap.values()).some((v) => v >= 2)
+      ) {
+        if (item) item.blockedReason = 'NO_ALTERNATE_FAILURE_DOMAIN';
+      }
+      return { sha };
+    }
     const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
+    const candDomain = routing.canonicalFailureDomain(candidate);
+    domainAttemptsMap.set(candDomain, (domainAttemptsMap.get(candDomain) || 0) + 1);
     const route = resolveLaunchRoute(candidate, o, registry);
     if (!route) return { sha };
     const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
@@ -3706,16 +3808,24 @@ function repairRound(
         accountId: candidate.accountId,
       });
       const candDomain = routing.canonicalFailureDomain(candidate);
-      if (
-        (classification.scope === 'upstream' || classification.scope === 'gateway') &&
-        candDomain
-      ) {
+      const attemptsInDomain = domainAttemptsMap.get(candDomain) || 0;
+      const domainExhausted = attemptsInDomain >= 2;
+      const scopeExcludesDomain =
+        classification.scope === 'upstream' || classification.scope === 'gateway';
+      if ((scopeExcludesDomain || domainExhausted) && candDomain) {
         excludedDomainSet.add(candDomain);
         if (item && item.excludedDomains instanceof Set) item.excludedDomains.add(candDomain);
       }
-      const evidenceDir = (o && o.evidenceDir) || null;
       if (evidenceDir || evidenceData) {
-        recordLaunchFailureEvidence(evidenceDir, evidenceData, candidate, res, classification, now);
+        evidenceData = recordLaunchFailureEvidence(
+          evidenceDir,
+          evidenceData,
+          candidate,
+          res,
+          classification,
+          now
+        );
+        if (log) log.evidenceData = evidenceData;
       }
       return { sha };
     }
