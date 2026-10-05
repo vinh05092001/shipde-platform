@@ -482,7 +482,8 @@ function reviewLane(
   now,
   candidates,
   evidenceData,
-  registry
+  registry,
+  opts
 ) {
   const writerKey =
     typeof itemOrWriterKey === 'string'
@@ -568,7 +569,7 @@ function reviewLane(
     const candidateList = Array.isArray(candidates) ? candidates : [];
     const candidate =
       candidateList.find((c) => candidateKey(c) === reviewerIdentity) ||
-      candidatesApi.parseCandidateKey(reviewerIdentity);
+      parseCandidateKey(reviewerIdentity);
     if (!candidate) {
       return {
         pass: false,
@@ -707,12 +708,56 @@ function reviewLane(
 
     let res = null;
     try {
+      if (opts && typeof opts.onReviewerLaunch === 'function') {
+        const eligible = opts.onReviewerLaunch(candidate);
+        if (eligible === false) {
+          return {
+            pass: false,
+            sha: targetSha,
+            cause: 'NO_ALTERNATE_FAILURE_DOMAIN',
+            verdict: 'REFUSED',
+            reviewer: reviewerIdentity,
+            findings: [
+              {
+                id: 'NO_ALTERNATE_FAILURE_DOMAIN',
+                open: true,
+                detail: 'reviewer failure domain is excluded or its attempt cap is exhausted',
+              },
+            ],
+          };
+        }
+      }
       res = await launcher(reviewJob);
     } catch (err) {
       res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
     }
 
     writeUsageReportFromHarnessResult(reviewJob, res);
+
+    if (!res || res.exitCode !== 0) {
+      if (opts && typeof opts.onReviewerLaunchFailure === 'function') {
+        opts.onReviewerLaunchFailure(res, candidate, opts && opts.attempt);
+      }
+      return {
+        pass: false,
+        sha: targetSha,
+        verdict: 'CHANGES_REQUIRED',
+        reviewer: reviewerIdentity,
+        res,
+        launchFailed: true,
+        findings: [
+          {
+            id: 'REVIEWER_LAUNCH_FAILED',
+            open: true,
+            detail:
+              'reviewer launch failed: ' +
+              ((res && res.stderr) ||
+                (res && res.failureReason) ||
+                'exit code ' + (res && res.exitCode)),
+          },
+        ],
+      };
+    }
 
     if (logOpts) {
       const adapter = harnessFor({ harness: reviewJob.harness });
@@ -725,6 +770,8 @@ function reviewLane(
             stage: decisions.Stage.LAUNCHED,
             workItemId: (item ? item.id : 'item') + '-review',
             role: 'reviewer',
+            attempt: opts && opts.attempt,
+            attemptNumber: opts && opts.attempt,
             chosen: reviewerIdentity,
             harness: reviewJob.harness,
             branch: reviewJob.branch,
@@ -2186,6 +2233,87 @@ function buildCandidates(options, evidenceData) {
   return candidatesApi.mergeCandidates(baseCandidates, evCandidates);
 }
 
+function recordLaunchFailureEvidence(
+  evidenceDir,
+  evidenceData,
+  candidate,
+  res,
+  classification,
+  now
+) {
+  const payload = {
+    status: 'failed',
+    exitCode: res && typeof res.exitCode === 'number' ? res.exitCode : 1,
+    stderr: res ? res.stderr : undefined,
+    body: res ? res.body : undefined,
+    cause: classification.cause,
+    scope: classification.scope,
+    httpStatus: res ? res.httpStatus : undefined,
+    level: evidence.Level ? evidence.Level.API : 'API',
+    source: 'launch-failure',
+  };
+  if (evidenceDir) {
+    try {
+      evidence.recordOutcome(evidenceDir, candidate, payload);
+      const reloaded = evidence.loadEvidence(evidenceDir);
+      if (evidenceData && typeof evidenceData === 'object' && reloaded) {
+        Object.assign(evidenceData, reloaded);
+      }
+      return reloaded || evidenceData;
+    } catch (_) {}
+  }
+  if (evidenceData && typeof evidenceData === 'object') {
+    if (!evidenceData.cooldowns) evidenceData.cooldowns = {};
+    const key = candidateKey(candidate);
+    evidenceData.cooldowns[key] = {
+      lastStatus: 'blocked',
+      failCount: ((evidenceData.cooldowns[key] && evidenceData.cooldowns[key].failCount) || 0) + 1,
+      blockedAt: new Date(now).toISOString(),
+      blockReason: classification.cause,
+      cause: classification.cause,
+      scope: classification.scope,
+      cooldownMs: classification.cooldownMs,
+    };
+    if (classification.scope === 'upstream' && candidate.upstream) {
+      if (!evidenceData.upstreamStatus) evidenceData.upstreamStatus = {};
+      evidenceData.upstreamStatus[candidate.upstream] = {
+        lastStatus: 'blocked',
+        failCount:
+          ((evidenceData.upstreamStatus[candidate.upstream] &&
+            evidenceData.upstreamStatus[candidate.upstream].failCount) ||
+            0) + 1,
+        blockedAt: new Date(now).toISOString(),
+        blockReason: classification.cause,
+        cause: classification.cause,
+        scope: 'upstream',
+        cooldownMs: classification.cooldownMs,
+      };
+    }
+  }
+  return evidenceData;
+}
+
+function resolveDomainAttempts(options, item, extra, o) {
+  const da =
+    (options && options.domainAttempts) ||
+    (item && item.domainAttempts) ||
+    (extra && extra.domainAttempts) ||
+    (o && o.domainAttempts) ||
+    null;
+  const map =
+    da instanceof Map ? da : new Map(da && typeof da === 'object' ? Object.entries(da) : []);
+  if (item && !item.domainAttempts) item.domainAttempts = map;
+  return map;
+}
+
+function resolveEvidenceDir(options, o) {
+  return (
+    (options && options.evidenceDir) ||
+    (o && o.evidenceDir) ||
+    (Array.isArray(o && o.candidates) ? null : path.join(__dirname, 'data', 'evidence'))
+  );
+}
+
 async function selectCandidateForProfile(
   item,
   annotatedCandidates,
@@ -2193,8 +2321,21 @@ async function selectCandidateForProfile(
   evidenceData,
   o,
   logOpts,
-  now
+  now,
+  opts
 ) {
+  const options = opts || {};
+  const failedKeys = options.failedKeys || (item && item.failedKeys) || (o && o.failedKeys) || null;
+  const failedKeySet =
+    failedKeys instanceof Set ? failedKeys : new Set(Array.isArray(failedKeys) ? failedKeys : []);
+  const excludedDomains = options.excludedDomains || (item && item.excludedDomains) || null;
+  const excludedDomainSet =
+    excludedDomains instanceof Set
+      ? excludedDomains
+      : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
+  const domainAttemptsMap = resolveDomainAttempts(options, item, null, o);
+  const attemptNumber = options.attempt !== undefined ? options.attempt : item && item.attempt;
+
   const profile = buildProfile(item, o, forbiddenDomains);
   const registry = (o && o.registry) || sourcesApi.loadSources();
   const jevSource = sourcesApi.getSource('jev', registry);
@@ -2226,6 +2367,30 @@ async function selectCandidateForProfile(
       evData,
       { now }
     );
+  }
+
+  if (failedKeySet.size > 0 || excludedDomainSet.size > 0 || domainAttemptsMap.size > 0) {
+    candidates = candidates.map((c) => {
+      const k = candidateKey(c);
+      if (failedKeySet.has(k)) {
+        return Object.assign({}, c, {
+          blocked: true,
+          blockReason: 'LAUNCH_FAILED',
+          blockScope: 'candidate',
+        });
+      }
+      const cDomain = routing.canonicalFailureDomain(c);
+      if (excludedDomainSet.has(cDomain) || (domainAttemptsMap.get(cDomain) || 0) >= 2) {
+        return Object.assign({}, c, {
+          blocked: true,
+          blockReason: excludedDomainSet.has(cDomain)
+            ? 'FAILURE_DOMAIN_EXCLUDED'
+            : 'DOMAIN_ATTEMPTS_EXHAUSTED',
+          blockScope: 'domain',
+        });
+      }
+      return c;
+    });
   }
 
   // The weighting assessment is the Controller's own, obtained through the real
@@ -2262,6 +2427,24 @@ async function selectCandidateForProfile(
 
   const result = routing.rankForProfile(candidates, profile, assessment, rankCtx);
 
+  if (result.chosen) {
+    if (failedKeySet.has(result.chosen)) {
+      result.chosen = null;
+      result.reason = 'REFUSED: candidate launch previously failed';
+    } else {
+      const chosenCand = candidates.find((c) => candidateKey(c) === result.chosen);
+      if (chosenCand) {
+        const cDomain = routing.canonicalFailureDomain(chosenCand);
+        if (excludedDomainSet.has(cDomain) || (domainAttemptsMap.get(cDomain) || 0) >= 2) {
+          result.chosen = null;
+          result.reason = excludedDomainSet.has(cDomain)
+            ? 'REFUSED: failure domain previously excluded'
+            : 'REFUSED: failure domain attempt budget exhausted';
+        }
+      }
+    }
+  }
+
   const writerKey = (item && item.writerCandidateKey) || null;
   if (writerKey) {
     if (result.chosen && result.chosen === writerKey) {
@@ -2296,10 +2479,29 @@ async function selectCandidateForProfile(
       ? (decisions.Stage && decisions.Stage.REVIEWER_SELECTION) || 'reviewer-selection'
       : (decisions.Stage && decisions.Stage.SELECTED) || 'selected';
 
+  const allExcluded = new Set(failedKeySet);
+  for (const c of candidates) {
+    const k = candidateKey(c);
+    const cDomain = routing.canonicalFailureDomain(c);
+    if (excludedDomainSet.has(cDomain) || (domainAttemptsMap.get(cDomain) || 0) >= 2) {
+      allExcluded.add(k);
+    }
+  }
+  for (const d of excludedDomainSet) {
+    allExcluded.add(d);
+  }
+  for (const [d, count] of domainAttemptsMap.entries()) {
+    if (count >= 2) {
+      allExcluded.add(d);
+    }
+  }
+
   const decisionRecorded = {
     stage,
     workItemId: profile.taskId,
     role: roleOf(item),
+    attempt: attemptNumber !== undefined ? attemptNumber : undefined,
+    attemptNumber: attemptNumber !== undefined ? attemptNumber : undefined,
     profile,
     taskProfile: profile,
     jev: assessment,
@@ -2342,7 +2544,10 @@ async function selectCandidateForProfile(
     firstChoice: result.top3[0] ? result.top3[0].candidateKey : null,
     selected: result.chosen,
     chosen: result.chosen,
+    chosenKey: result.chosen,
     reason: result.reason,
+    excluded: Array.from(allExcluded),
+    excludedSet: Array.from(allExcluded),
   };
   decisions.recordDecision(decisionRecorded, logOpts);
 
@@ -2431,7 +2636,7 @@ async function runOrchestration(goal, opts) {
   const testsInjectedCandidates = Array.isArray(o.candidates);
   const evidenceDir =
     o.evidenceDir || (testsInjectedCandidates ? null : path.join(__dirname, 'data', 'evidence'));
-  const evidenceData =
+  let evidenceData =
     o.evidenceData !== undefined
       ? o.evidenceData
       : evidenceDir
@@ -2448,7 +2653,19 @@ async function runOrchestration(goal, opts) {
 
   const outcome = (item, status, reason, extra) => {
     statusOf.set(item.id, status);
-    const entry = Object.assign({ workItemId: item.id, status, reason: reason || null }, extra);
+    const extraFields = Object.assign({}, extra);
+    if (status === ItemStatus.BLOCKED) {
+      const itemTried = (item && item.triedKeys) || (extra && extra.triedKeys);
+      if (itemTried) {
+        const arr = Array.isArray(itemTried) ? itemTried : Array.from(itemTried);
+        if (!extraFields.triedKeys) extraFields.triedKeys = arr;
+        if (!extraFields.tried) extraFields.tried = arr;
+      }
+    }
+    const entry = Object.assign(
+      { workItemId: item.id, status, reason: reason || null },
+      extraFields
+    );
     log.outcomes.push(entry);
     return reason;
   };
@@ -2567,8 +2784,30 @@ async function runOrchestration(goal, opts) {
       cause: null,
       outcome: null,
     };
-    const failedKeys = new Set();
+    if (!item.failedKeys || !(item.failedKeys instanceof Set)) {
+      item.failedKeys = new Set(Array.isArray(item.failedKeys) ? item.failedKeys : []);
+    }
+    if (!item.excludedDomains || !(item.excludedDomains instanceof Set)) {
+      item.excludedDomains = new Set(
+        Array.isArray(item.excludedDomains) ? item.excludedDomains : []
+      );
+    }
+    if (!item.domainAttempts || !(item.domainAttempts instanceof Map)) {
+      item.domainAttempts =
+        item.domainAttempts instanceof Map
+          ? item.domainAttempts
+          : item.domainAttempts && typeof item.domainAttempts === 'object'
+            ? new Map(Object.entries(item.domainAttempts))
+            : new Map();
+    }
+    if (!item.triedKeys || !(item.triedKeys instanceof Set)) {
+      item.triedKeys = new Set(Array.isArray(item.triedKeys) ? item.triedKeys : []);
+    }
+    const failedKeys = item.failedKeys;
     const forbiddenDomains = [];
+    const excludedDomains = item.excludedDomains;
+    const domainAttempts = item.domainAttempts;
+    const triedKeys = item.triedKeys;
     let blockedReason = null;
     let session = null;
 
@@ -2583,17 +2822,27 @@ async function runOrchestration(goal, opts) {
         evidenceData,
         o,
         logOpts,
-        now
+        now,
+        { failedKeys, excludedDomains, domainAttempts, attempt }
       );
 
       log.selections.push({ workItemId: item.id, attempt, decision });
       if (!decision.chosen) {
-        blockedReason = 'NO_ELIGIBLE_CANDIDATE: ' + (decision.reason || 'no candidate qualifies');
+        if (failedKeys.size > 0) {
+          blockedReason =
+            'NO_ALTERNATE_FAILURE_DOMAIN' +
+            (launch.scope && launch.cause ? ': ' + launch.scope + ' (' + launch.cause + ')' : '');
+        } else {
+          blockedReason = 'NO_ELIGIBLE_CANDIDATE: ' + (decision.reason || 'no candidate qualifies');
+        }
         break;
       }
       const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
       if (launch.firstChoice === null) launch.firstChoice = decision.chosen;
       launch.selected = decision.chosen;
+      triedKeys.add(decision.chosen);
+      const candDomain = routing.canonicalFailureDomain(candidate);
+      domainAttempts.set(candDomain, (domainAttempts.get(candDomain) || 0) + 1);
 
       const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
       const usageFile = prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt);
@@ -2696,6 +2945,37 @@ async function runOrchestration(goal, opts) {
         launch.cause = classification.cause;
         launch.outcome = 'failed';
         failedKeys.add(decision.chosen);
+        triedKeys.add(decision.chosen);
+
+        evidenceData = recordLaunchFailureEvidence(
+          evidenceDir,
+          evidenceData,
+          candidate,
+          res,
+          classification,
+          now
+        );
+
+        const attemptsInDomain = domainAttempts.get(candDomain) || 0;
+        const domainExhausted = attemptsInDomain >= 2;
+        const scopeExcludesDomain =
+          classification.scope === 'upstream' || classification.scope === 'gateway';
+        if (scopeExcludesDomain || domainExhausted) {
+          if (candDomain) {
+            excludedDomains.add(candDomain);
+          }
+          if (classification.scope === 'upstream' || (domainExhausted && candidate.upstream)) {
+            if (candidate.upstream && !forbiddenDomains.includes(candidate.upstream)) {
+              forbiddenDomains.push(candidate.upstream);
+            }
+          }
+          if (classification.scope === 'gateway' || (domainExhausted && !candidate.upstream)) {
+            if (candidate.gateway && !forbiddenDomains.includes(candidate.gateway)) {
+              forbiddenDomains.push(candidate.gateway);
+            }
+          }
+        }
+
         cli.applyFailureBlocks(
           candidates,
           failedKeys,
@@ -2704,19 +2984,45 @@ async function runOrchestration(goal, opts) {
           true,
           cli.LIVE_BLOCK_CODES
         );
+        const allFailedExcluded = new Set(failedKeys);
+        for (const c of candidates) {
+          const k = candidateKey(c);
+          const cDomain = routing.canonicalFailureDomain(c);
+          if (excludedDomains.has(cDomain)) {
+            allFailedExcluded.add(k);
+          }
+        }
+        for (const d of excludedDomains) {
+          allFailedExcluded.add(d);
+        }
         decisions.recordDecision(
           {
             stage: decisions.Stage.FAILED,
             workItemId: item.id,
             role: roleOf(item),
+            attempt,
+            attemptNumber: attempt,
             chosen: decision.chosen,
+            chosenKey: decision.chosen,
             branch: job.branch,
             failureScope: classification.scope,
             detail: classification.cause,
+            excluded: Array.from(allFailedExcluded),
+            excludedSet: Array.from(allFailedExcluded),
           },
           logOpts
         );
-        const alternate = candidates.find((c) => !c.blocked && !failedKeys.has(candidateKey(c)));
+        const alternate = candidates.find((c) => {
+          const k = candidateKey(c);
+          if (failedKeys.has(k)) return false;
+          if (c.blocked) return false;
+          const cDomain = routing.canonicalFailureDomain(c);
+          if (excludedDomains.has(cDomain)) return false;
+          if ((domainAttempts.get(cDomain) || 0) >= 2) return false;
+          if (routing.isForbiddenCandidate && routing.isForbiddenCandidate(c, forbiddenDomains))
+            return false;
+          return true;
+        });
         if (!alternate) {
           blockedReason =
             'NO_ALTERNATE_FAILURE_DOMAIN: ' +
@@ -2806,11 +3112,22 @@ async function runOrchestration(goal, opts) {
     }
 
     if (!session) {
+      const isNoAlt =
+        failedKeys.size > 0 ||
+        triedKeys.size > 0 ||
+        Boolean(blockedReason && blockedReason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN'));
       outcome(
         item,
         ItemStatus.BLOCKED,
         blockedReason || 'NO_LIVE_SESSION',
-        launch.cause ? { cause: launch.cause } : undefined
+        Object.assign(
+          {
+            reasonCode: isNoAlt ? 'NO_ALTERNATE_FAILURE_DOMAIN' : undefined,
+            triedKeys: Array.from(triedKeys),
+            tried: Array.from(triedKeys),
+          },
+          launch.cause ? { cause: launch.cause } : undefined
+        )
       );
       continue;
     }
@@ -2833,7 +3150,13 @@ async function runOrchestration(goal, opts) {
         item,
         ItemStatus.BLOCKED,
         blockedReason,
-        launch.cause ? { cause: launch.cause } : undefined
+        Object.assign(
+          {
+            triedKeys: Array.from(triedKeys),
+            tried: Array.from(triedKeys),
+          },
+          launch.cause ? { cause: launch.cause } : undefined
+        )
       );
       continue;
     }
@@ -2849,12 +3172,29 @@ async function runOrchestration(goal, opts) {
       now,
       candidates,
       evidenceData,
-      registry
+      registry,
+      { failedKeys, excludedDomains, domainAttempts, triedKeys, evidenceDir }
     );
     if (reviewed.status === ReviewStatus.COMPLETED) {
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
     } else {
-      outcome(item, ItemStatus.BLOCKED, reviewed.reason);
+      const isNoAlt =
+        reviewed.reason === 'NO_ALTERNATE_FAILURE_DOMAIN' ||
+        (item.blockedReason && item.blockedReason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN')) ||
+        (reviewed.reason && reviewed.reason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN'));
+      const extra = Object.assign(
+        {
+          triedKeys: Array.from(triedKeys),
+          tried: Array.from(triedKeys),
+        },
+        isNoAlt ? { reasonCode: 'NO_ALTERNATE_FAILURE_DOMAIN' } : undefined
+      );
+      outcome(
+        item,
+        ItemStatus.BLOCKED,
+        isNoAlt ? 'NO_ALTERNATE_FAILURE_DOMAIN' : reviewed.reason,
+        extra
+      );
     }
   }
 
@@ -2866,6 +3206,7 @@ async function runOrchestration(goal, opts) {
     status: o.publication ? PublicationStatus.REFUSED : PublicationStatus.NOT_REQUESTED,
     reason: 'NO_REVIEWED_COMMIT: nothing to publish',
   };
+  log.evidenceData = evidenceData;
 
   return finish(log, statusOf, { now, cli, checkpointFile, checkpointOnDisk, out: o.out, logOpts });
 }
@@ -2996,8 +3337,37 @@ async function reviewItem(
   now,
   candidates,
   evidenceData,
-  registry
+  registry,
+  opts
 ) {
+  const options = opts || {};
+  const failedKeys =
+    options.failedKeys ||
+    (item && item.failedKeys) ||
+    (session && session.failedKeys) ||
+    (o && o.failedKeys) ||
+    new Set();
+  const failedKeySet =
+    failedKeys instanceof Set ? failedKeys : new Set(Array.isArray(failedKeys) ? failedKeys : []);
+  const excludedDomains =
+    options.excludedDomains ||
+    (item && item.excludedDomains) ||
+    (session && session.excludedDomains) ||
+    (o && o.excludedDomains) ||
+    new Set();
+  const excludedDomainSet =
+    excludedDomains instanceof Set
+      ? excludedDomains
+      : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
+  const domainAttemptsMap = resolveDomainAttempts(options, item, session, o);
+  const triedKeys =
+    options.triedKeys || (item && item.triedKeys) || (session && session.triedKeys) || new Set();
+  const triedKeySet =
+    triedKeys instanceof Set ? triedKeys : new Set(Array.isArray(triedKeys) ? triedKeys : []);
+  if (item && !(item.triedKeys instanceof Set)) item.triedKeys = triedKeySet;
+  if (item && !(item.failedKeys instanceof Set)) item.failedKeys = failedKeySet;
+  if (item && !(item.excludedDomains instanceof Set)) item.excludedDomains = excludedDomainSet;
+  const evidenceDir = resolveEvidenceDir(options, o);
   const hostWorktree = o.cwd || process.cwd();
   const isolatedWorkerRoot = o.isolatedWorker
     ? require('./isolation-launcher').workerRootFor(hostWorktree)
@@ -3028,7 +3398,7 @@ async function reviewItem(
   let writerUpstream = writerCandidate && writerCandidate.upstream;
   let writerGateway = writerCandidate && writerCandidate.gateway;
   if ((!writerUpstream || !writerGateway) && writerKey) {
-    const parsed = candidatesApi.parseCandidateKey(writerKey);
+    const parsed = parseCandidateKey(writerKey);
     if (parsed) {
       if (!writerGateway) writerGateway = parsed.gateway;
       if (!writerUpstream) writerUpstream = parsed.upstream;
@@ -3039,21 +3409,191 @@ async function reviewItem(
   // allowing reviewer candidates on the same gateway with distinct upstreams
   // without forbidding the shared router account.
   const forbiddenDomains = [writerUpstream || writerGateway].filter(Boolean);
+  const reviewerQualityFloor =
+    item.qualityFloor !== null &&
+    item.qualityFloor !== undefined &&
+    Number.isFinite(Number(item.qualityFloor)) &&
+    Number(item.qualityFloor) >= 0
+      ? Number(item.qualityFloor)
+      : 75;
+  const reviewerAttempt =
+    options.attempt !== undefined
+      ? options.attempt
+      : item && item.reviewerAttempt !== undefined
+        ? item.reviewerAttempt
+        : 1;
   const reviewerDecision = await selectCandidateForProfile(
     {
       id: item.id + '-review',
       roleRequirement: { role: 'reviewer' },
       complexity: item.complexity,
+      qualityFloor: reviewerQualityFloor,
       writerCandidateKey: writerKey,
+      failedKeys: failedKeySet,
+      excludedDomains: excludedDomainSet,
+      domainAttempts: domainAttemptsMap,
+      attempt: reviewerAttempt,
+      attemptNumber: reviewerAttempt,
     },
     candidates,
     forbiddenDomains,
     evidenceData,
     o,
     logOpts,
-    now
+    now,
+    {
+      failedKeys: failedKeySet,
+      excludedDomains: excludedDomainSet,
+      domainAttempts: domainAttemptsMap,
+      attempt: reviewerAttempt,
+      attemptNumber: reviewerAttempt,
+    }
   );
-  const reviewerIdentity = reviewerDecision.chosen || o.reviewerIdentity;
+  if (reviewerDecision.chosen) {
+    triedKeySet.add(reviewerDecision.chosen);
+    if (item && item.triedKeys instanceof Set) item.triedKeys.add(reviewerDecision.chosen);
+  }
+  const configuredReviewer = o.reviewerIdentity || null;
+  const configuredReviewerCandidate = configuredReviewer
+    ? (Array.isArray(candidates) ? candidates : []).find(
+        (c) => candidateKey(c) === configuredReviewer
+      ) || parseCandidateKey(configuredReviewer)
+    : null;
+  const configuredReviewerDomain = configuredReviewerCandidate
+    ? routing.canonicalFailureDomain(configuredReviewerCandidate)
+    : configuredReviewer
+      ? routing.canonicalFailureDomain(configuredReviewer)
+      : null;
+  // The Controller is the only selector: once it has judged at least one
+  // candidate and refused them all, a configured reviewer must not override
+  // that refusal. The configured reviewer is only a fallback when the
+  // Controller had nothing to judge (for example a pinned reviewer with an
+  // empty candidate pool), and it is compared by its canonical key.
+  const configuredReviewerKey = configuredReviewerCandidate
+    ? candidateKey(configuredReviewerCandidate) || configuredReviewer
+    : configuredReviewer;
+  const reviewerResult = (reviewerDecision && reviewerDecision.result) || {};
+  const controllerJudgedCandidates =
+    (Array.isArray(reviewerResult.rejected) && reviewerResult.rejected.length > 0) ||
+    (Array.isArray(reviewerResult.ranking) && reviewerResult.ranking.length > 0);
+  const configuredReviewerEligible = Boolean(
+    configuredReviewer &&
+    !controllerJudgedCandidates &&
+    !failedKeySet.has(configuredReviewerKey) &&
+    !failedKeySet.has(configuredReviewer) &&
+    !excludedDomainSet.has(configuredReviewerDomain) &&
+    (domainAttemptsMap.get(configuredReviewerDomain) || 0) < 2
+  );
+  // A configured reviewer that is the writer is passed through only so the
+  // review lane refuses it with REVIEWER_EQUALS_WRITER; it is never launched.
+  const configuredIsWriter = Boolean(
+    configuredReviewerKey && session && session.candidateKey === configuredReviewerKey
+  );
+  const reviewerIdentity =
+    reviewerDecision.chosen ||
+    (configuredReviewerEligible || configuredIsWriter ? configuredReviewerKey : null);
+  const reviewerTriedKeySet = new Set();
+  if (reviewerIdentity) {
+    triedKeySet.add(reviewerIdentity);
+    if (item && item.triedKeys instanceof Set) item.triedKeys.add(reviewerIdentity);
+  }
+
+  let activeReviewerKey = reviewerIdentity;
+  let activeReviewerAttempt = reviewerAttempt;
+
+  const recordReviewerLaunchFailure = (res, candidate, attempt) => {
+    const revKey = (candidate && candidateKey(candidate)) || activeReviewerKey || reviewerIdentity;
+    if (!revKey) return;
+    reviewerTriedKeySet.add(revKey);
+    failedKeySet.add(revKey);
+    triedKeySet.add(revKey);
+    if (item && item.failedKeys instanceof Set) item.failedKeys.add(revKey);
+    if (session && session.failedKeys instanceof Set) session.failedKeys.add(revKey);
+    if (options && options.failedKeys instanceof Set) options.failedKeys.add(revKey);
+    if (item && item.triedKeys instanceof Set) item.triedKeys.add(revKey);
+    if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(revKey);
+
+    const cand =
+      candidate ||
+      (Array.isArray(candidates) ? candidates : []).find((c) => candidateKey(c) === revKey) ||
+      parseCandidateKey(revKey);
+    if (!cand) return;
+
+    const isLauncherTimedOut = Boolean(
+      res &&
+      (res.timedOut === true ||
+        /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.stderr || '') ||
+        /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.failureReason || ''))
+    );
+    const classification = classifyFailure({
+      exitCode: res ? res.exitCode : 1,
+      httpStatus: res ? res.httpStatus : undefined,
+      body: res ? res.body || res.stderr || '' : '',
+      stdout: res ? res.stdout : undefined,
+      stderr: res ? res.stderr : '',
+      accountId: cand.accountId,
+      timedOut: isLauncherTimedOut,
+    });
+
+    const candDomain = routing.canonicalFailureDomain(cand);
+    const attemptsInDomain = domainAttemptsMap.get(candDomain) || 0;
+    const domainExhausted = attemptsInDomain >= 2;
+    const scopeExcludesDomain =
+      classification.scope === 'upstream' || classification.scope === 'gateway';
+    if ((scopeExcludesDomain || domainExhausted) && candDomain) {
+      excludedDomainSet.add(candDomain);
+      if (item && item.excludedDomains instanceof Set) item.excludedDomains.add(candDomain);
+      if (session && session.excludedDomains instanceof Set)
+        session.excludedDomains.add(candDomain);
+      if (options && options.excludedDomains instanceof Set)
+        options.excludedDomains.add(candDomain);
+    }
+
+    if (evidenceDir || evidenceData) {
+      evidenceData = recordLaunchFailureEvidence(
+        evidenceDir,
+        evidenceData,
+        cand,
+        res,
+        classification,
+        now
+      );
+      if (log) log.evidenceData = evidenceData;
+    }
+
+    if (logOpts) {
+      const allExcluded = new Set(Array.from(failedKeySet));
+      for (const d of excludedDomainSet) allExcluded.add(d);
+      for (const c of Array.isArray(candidates) ? candidates : []) {
+        const k = candidateKey(c);
+        const cDomain = routing.canonicalFailureDomain(c);
+        if (excludedDomainSet.has(cDomain)) allExcluded.add(k);
+      }
+      const failAttempt =
+        attempt !== undefined
+          ? attempt
+          : activeReviewerAttempt !== undefined
+            ? activeReviewerAttempt
+            : reviewerAttempt;
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.FAILED,
+          workItemId: (item ? item.id : 'item') + '-review',
+          role: 'reviewer',
+          attempt: failAttempt,
+          attemptNumber: failAttempt,
+          chosen: revKey,
+          chosenKey: revKey,
+          branch: (session && session.branch) || o.branch,
+          failureScope: classification.scope,
+          detail: classification.cause,
+          excluded: Array.from(allExcluded),
+          excludedSet: Array.from(allExcluded),
+        },
+        logOpts
+      );
+    }
+  };
 
   const budget = Number.isFinite(Number(o.reviewBudget))
     ? Number(o.reviewBudget)
@@ -3073,27 +3613,187 @@ async function reviewItem(
   };
   let roundCount = 0;
   let lastManifestResult = null;
-
-  const baseReviewFn =
-    typeof o.reviewer === 'function'
-      ? o.reviewer
-      : reviewLane(
-          Object.assign({}, o, { reviewerIdentity }),
-          item,
-          session,
-          log,
-          logOpts,
-          launcher,
-          usageDir,
-          now,
-          candidates,
-          evidenceData,
-          registry
-        );
+  let reviewerLaunchFailed = false;
 
   const reviewWithManifest = async (currentSha) => {
     roundCount += 1;
-    const rev = await baseReviewFn(currentSha);
+    activeReviewerAttempt = reviewerAttempt + roundCount - 1;
+
+    let rev;
+    if (typeof o.reviewer === 'function') {
+      rev = await o.reviewer(currentSha);
+    } else {
+      if (roundCount === 1) {
+        activeReviewerKey = reviewerIdentity;
+      } else {
+        const nextFailedKeys = new Set([...failedKeySet, ...reviewerTriedKeySet]);
+        const nextDecision = await selectCandidateForProfile(
+          {
+            id: item.id + '-review',
+            roleRequirement: { role: 'reviewer' },
+            complexity: item.complexity,
+            qualityFloor: reviewerQualityFloor,
+            writerCandidateKey: writerKey,
+            failedKeys: nextFailedKeys,
+            excludedDomains: excludedDomainSet,
+            domainAttempts: domainAttemptsMap,
+            attempt: activeReviewerAttempt,
+            attemptNumber: activeReviewerAttempt,
+          },
+          candidates,
+          forbiddenDomains,
+          evidenceData,
+          o,
+          logOpts,
+          now,
+          {
+            failedKeys: nextFailedKeys,
+            excludedDomains: excludedDomainSet,
+            domainAttempts: domainAttemptsMap,
+            attempt: activeReviewerAttempt,
+            attemptNumber: activeReviewerAttempt,
+          }
+        );
+        if (nextDecision.chosen) {
+          activeReviewerKey = nextDecision.chosen;
+          triedKeySet.add(activeReviewerKey);
+          if (item && item.triedKeys instanceof Set) item.triedKeys.add(activeReviewerKey);
+          if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(activeReviewerKey);
+        } else {
+          // Same rule as the first selection: never override a Controller
+          // refusal, and compare the configured reviewer by canonical key.
+          const nextResult = (nextDecision && nextDecision.result) || {};
+          const nextJudged =
+            (Array.isArray(nextResult.rejected) && nextResult.rejected.length > 0) ||
+            (Array.isArray(nextResult.ranking) && nextResult.ranking.length > 0);
+          const configuredDomain = configuredReviewerDomain;
+          const configuredStillEligible = Boolean(
+            configuredReviewerKey &&
+            configuredReviewerCandidate &&
+            !nextJudged &&
+            !nextFailedKeys.has(configuredReviewerKey) &&
+            !nextFailedKeys.has(configuredReviewer) &&
+            !failedKeySet.has(configuredReviewerKey) &&
+            !excludedDomainSet.has(configuredDomain) &&
+            (domainAttemptsMap.get(configuredDomain) || 0) < 2
+          );
+          activeReviewerKey = configuredStillEligible ? configuredReviewerKey : null;
+        }
+      }
+
+      if (!activeReviewerKey) {
+        const isCapExhausted =
+          Array.from(domainAttemptsMap.values()).some((v) => v >= 2) ||
+          excludedDomainSet.size > 0 ||
+          failedKeySet.size > 0;
+        const refusalReason = isCapExhausted
+          ? 'NO_ALTERNATE_FAILURE_DOMAIN'
+          : 'NO_REVIEWER_CANDIDATE';
+        if (logOpts) {
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.REFUSED,
+              workItemId: (item ? item.id : 'item') + '-review',
+              role: 'reviewer',
+              attempt: activeReviewerAttempt,
+              attemptNumber: activeReviewerAttempt,
+              detail: refusalReason,
+            },
+            logOpts
+          );
+        }
+        return {
+          pass: false,
+          sha: null,
+          cause: refusalReason,
+          verdict: 'REFUSED',
+          findings: [
+            {
+              id: refusalReason,
+              open: true,
+              detail: 'no eligible reviewer candidate available outside writer failure domain',
+            },
+          ],
+        };
+      }
+
+      const activeReviewerCandidate =
+        (Array.isArray(candidates) ? candidates : []).find(
+          (candidate) => candidateKey(candidate) === activeReviewerKey
+        ) ||
+        (configuredReviewerCandidate && activeReviewerKey === configuredReviewerKey
+          ? configuredReviewerCandidate
+          : parseCandidateKey(activeReviewerKey));
+      const activeReviewerDomain = activeReviewerCandidate
+        ? routing.canonicalFailureDomain(activeReviewerCandidate)
+        : routing.canonicalFailureDomain(activeReviewerKey);
+      if (
+        failedKeySet.has(activeReviewerKey) ||
+        reviewerTriedKeySet.has(activeReviewerKey) ||
+        excludedDomainSet.has(activeReviewerDomain) ||
+        (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2
+      ) {
+        activeReviewerKey = null;
+        // sha: null makes the review loop stop BLOCKED with this cause
+        // instead of treating the refusal as a failed review and repairing.
+        return {
+          pass: false,
+          sha: null,
+          cause: 'NO_ALTERNATE_FAILURE_DOMAIN',
+          verdict: 'REFUSED',
+          findings: [
+            {
+              id: 'NO_ALTERNATE_FAILURE_DOMAIN',
+              open: true,
+              detail: 'no eligible reviewer candidate remains outside excluded failure domains',
+            },
+          ],
+        };
+      }
+
+      const laneFn = reviewLane(
+        Object.assign({}, o, { reviewerIdentity: activeReviewerKey }),
+        item,
+        session,
+        log,
+        logOpts,
+        launcher,
+        usageDir,
+        now,
+        candidates,
+        evidenceData,
+        registry,
+        {
+          failedKeys: failedKeySet,
+          excludedDomains: excludedDomainSet,
+          domainAttempts: domainAttemptsMap,
+          triedKeys: triedKeySet,
+          evidenceDir,
+          attempt: activeReviewerAttempt,
+          onReviewerLaunch: (candidate) => {
+            // Count against the same canonical domain the launch guard used,
+            // even when the reviewer is not in the injected candidate pool.
+            const reviewerDomain = routing.canonicalFailureDomain(
+              candidate || activeReviewerCandidate
+            );
+            const attemptsInDomain = domainAttemptsMap.get(reviewerDomain) || 0;
+            const attempts = attemptsInDomain + 1;
+            domainAttemptsMap.set(reviewerDomain, attempts);
+            if (attempts >= 2) {
+              excludedDomainSet.add(reviewerDomain);
+              if (item && item.excludedDomains instanceof Set) {
+                item.excludedDomains.add(reviewerDomain);
+              }
+            }
+            return true;
+          },
+          onReviewerLaunchFailure: (res, cand) =>
+            recordReviewerLaunchFailure(res, cand, activeReviewerAttempt),
+        }
+      );
+      rev = await laneFn(currentSha);
+      reviewerLaunchFailed = Boolean(rev && rev.launchFailed);
+    }
 
     const repoCandidates = [workerRoot, session && session.worktree, o.cwd, process.cwd()].filter(
       Boolean
@@ -3150,7 +3850,8 @@ async function reviewItem(
       baseSha: currentBaseSha,
       reviewedSha: currentSha,
       writerCandidateKey: (session && session.candidateKey) || o.writerCandidateKey,
-      reviewerCandidateKey: (rev && rev.reviewer) || reviewerIdentity || o.reviewerIdentity,
+      reviewerCandidateKey:
+        (rev && rev.reviewer) || activeReviewerKey || reviewerIdentity || o.reviewerIdentity,
       verdict: (rev && rev.verdict) || (rev && rev.pass ? 'PASS' : 'CHANGES_REQUIRED'),
       findings: (rev && rev.findings) || [],
       tests: currentTests,
@@ -3165,30 +3866,44 @@ async function reviewItem(
     {
       runTests: captureRunTests,
       review: reviewWithManifest,
-      repair:
-        typeof o.repairer === 'function'
-          ? o.repairer
-          : repairRound(
-              o,
-              item,
-              session,
-              log,
-              logOpts,
-              launcher,
-              usageDir,
-              now,
-              candidates,
-              evidenceData,
-              registry
-            ),
+      repair: async (...args) => {
+        if (reviewerLaunchFailed) {
+          reviewerLaunchFailed = false;
+          return { sha: args[1] };
+        }
+        if (typeof o.repairer === 'function') return o.repairer(...args);
+        return repairRound(
+          o,
+          item,
+          session,
+          log,
+          logOpts,
+          launcher,
+          usageDir,
+          now,
+          candidates,
+          evidenceData,
+          registry,
+          {
+            failedKeys: failedKeySet,
+            excludedDomains: excludedDomainSet,
+            domainAttempts: domainAttemptsMap,
+            triedKeys: triedKeySet,
+            evidenceDir: options.evidenceDir || evidenceDir,
+          }
+        )(...args);
+      },
     }
   );
+
+  const effectiveReviewer =
+    (review && review.reviewer) || activeReviewerKey || reviewerIdentity || null;
 
   const entry = {
     workItemId: item.id,
     sha: review.finalSha || targetSha,
-    reviewerIdentity: reviewerIdentity || null,
-    reviewer: reviewerIdentity || null,
+    reviewerIdentity: effectiveReviewer,
+    reviewer: effectiveReviewer,
     writerCandidateKey: session.candidateKey,
     workerRoot: workerRoot || (session && session.worktree) || null,
     publishCwd: publishCwdForReceipt(o, workerRoot || (session && session.worktree) || null),
@@ -3344,14 +4059,57 @@ function repairRound(
   now,
   candidates,
   evidenceData,
-  registry
+  registry,
+  opts
 ) {
+  const options = opts || {};
+  const failedKeys =
+    options.failedKeys ||
+    (item && item.failedKeys) ||
+    (session && session.failedKeys) ||
+    (o && o.failedKeys) ||
+    new Set();
+  const failedKeySet =
+    failedKeys instanceof Set ? failedKeys : new Set(Array.isArray(failedKeys) ? failedKeys : []);
+  const excludedDomains =
+    options.excludedDomains ||
+    (item && item.excludedDomains) ||
+    (session && session.excludedDomains) ||
+    (o && o.excludedDomains) ||
+    new Set();
+  const excludedDomainSet =
+    excludedDomains instanceof Set
+      ? excludedDomains
+      : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
+  const domainAttemptsMap = resolveDomainAttempts(options, item, session, o);
+  const triedKeys =
+    options.triedKeys || (item && item.triedKeys) || (session && session.triedKeys) || new Set();
+  const triedKeySet =
+    triedKeys instanceof Set ? triedKeys : new Set(Array.isArray(triedKeys) ? triedKeys : []);
+  if (item && !(item.triedKeys instanceof Set)) item.triedKeys = triedKeySet;
+  if (item && !(item.failedKeys instanceof Set)) item.failedKeys = failedKeySet;
+  if (item && !(item.excludedDomains instanceof Set)) item.excludedDomains = excludedDomainSet;
+  const evidenceDir = resolveEvidenceDir(options, o);
+  let repairAttemptCounter =
+    log && log.review && log.review.review && Number.isFinite(Number(log.review.review.repairCount))
+      ? Number(log.review.review.repairCount)
+      : 0;
+
   return async (findings, sha) => {
     const hostWorktree = o.cwd || process.cwd();
     const isolatedWorkerRoot = o.isolatedWorker
       ? require('./isolation-launcher').workerRootFor(hostWorktree)
       : null;
-    const round = ((log.review && log.review.review.repairCount) || 0) + 1;
+    repairAttemptCounter += 1;
+    const round =
+      options.attempt !== undefined
+        ? options.attempt
+        : log &&
+            log.review &&
+            log.review.review &&
+            Number.isFinite(Number(log.review.review.repairCount))
+          ? Number(log.review.review.repairCount) + 1
+          : repairAttemptCounter;
     const spec = repairSpec(item, findings, round);
     const replanned = planner.plan(log.goal, { specs: (o.specs || []).concat([spec]) });
     if (replanned.errors.length) {
@@ -3361,6 +4119,8 @@ function repairRound(
           stage: decisions.Stage.REFUSED,
           workItemId: item.id,
           role: roleOf(item),
+          attempt: round,
+          attemptNumber: round,
           detail: 'REPAIR_REPLAN_REFUSED: ' + replanned.errors.join('; '),
         },
         logOpts
@@ -3370,6 +4130,11 @@ function repairRound(
     const planned = replanned.workItems.find((w) => w.id === spec.id);
     if (!planned) return { sha };
 
+    planned.failedKeys = failedKeySet;
+    planned.excludedDomains = excludedDomainSet;
+    planned.domainAttempts = domainAttemptsMap;
+    planned.attempt = round;
+    planned.attemptNumber = round;
     const decision = await selectCandidateForProfile(
       planned,
       candidates,
@@ -3377,10 +4142,31 @@ function repairRound(
       evidenceData,
       o,
       logOpts,
-      now
+      now,
+      {
+        failedKeys: failedKeySet,
+        excludedDomains: excludedDomainSet,
+        domainAttempts: domainAttemptsMap,
+        attempt: round,
+        attemptNumber: round,
+      }
     );
-    if (!decision.chosen) return { sha };
+    if (!decision.chosen) {
+      if (
+        failedKeySet.size > 0 ||
+        excludedDomainSet.size > 0 ||
+        Array.from(domainAttemptsMap.values()).some((v) => v >= 2)
+      ) {
+        if (item) item.blockedReason = 'NO_ALTERNATE_FAILURE_DOMAIN';
+      }
+      return { sha };
+    }
     const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
+    triedKeySet.add(decision.chosen);
+    if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(decision.chosen);
+    if (item && item.triedKeys && item.triedKeys.add) item.triedKeys.add(decision.chosen);
+    const candDomain = routing.canonicalFailureDomain(candidate);
+    domainAttemptsMap.set(candDomain, (domainAttemptsMap.get(candDomain) || 0) + 1);
     const route = resolveLaunchRoute(candidate, o, registry);
     if (!route) return { sha };
     const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
@@ -3438,7 +4224,67 @@ function repairRound(
       res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
     }
     writeUsageReportFromHarnessResult(repairJob, res);
-    if (!res || res.exitCode !== 0) return { sha };
+    if (!res || res.exitCode !== 0) {
+      failedKeySet.add(decision.chosen);
+      triedKeySet.add(decision.chosen);
+      if (item && item.failedKeys instanceof Set) item.failedKeys.add(decision.chosen);
+      if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(decision.chosen);
+      if (item && item.triedKeys && item.triedKeys.add) item.triedKeys.add(decision.chosen);
+      const classification = classifyFailure({
+        exitCode: res ? res.exitCode : 1,
+        httpStatus: res ? res.httpStatus : undefined,
+        body: res ? res.body || res.stderr || '' : '',
+        stderr: res ? res.stderr : '',
+        accountId: candidate.accountId,
+      });
+      const candDomain = routing.canonicalFailureDomain(candidate);
+      const attemptsInDomain = domainAttemptsMap.get(candDomain) || 0;
+      const domainExhausted = attemptsInDomain >= 2;
+      const scopeExcludesDomain =
+        classification.scope === 'upstream' || classification.scope === 'gateway';
+      if ((scopeExcludesDomain || domainExhausted) && candDomain) {
+        excludedDomainSet.add(candDomain);
+        if (item && item.excludedDomains instanceof Set) item.excludedDomains.add(candDomain);
+      }
+      if (evidenceDir || evidenceData) {
+        evidenceData = recordLaunchFailureEvidence(
+          evidenceDir,
+          evidenceData,
+          candidate,
+          res,
+          classification,
+          now
+        );
+        if (log) log.evidenceData = evidenceData;
+      }
+      if (logOpts) {
+        const allExcluded = new Set(Array.from(failedKeySet));
+        for (const d of excludedDomainSet) allExcluded.add(d);
+        for (const c of Array.isArray(candidates) ? candidates : []) {
+          const k = candidateKey(c);
+          const cDomain = routing.canonicalFailureDomain(c);
+          if (excludedDomainSet.has(cDomain)) allExcluded.add(k);
+        }
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: planned.id,
+            role: roleOf(planned),
+            attempt: round,
+            attemptNumber: round,
+            chosen: decision.chosen,
+            chosenKey: decision.chosen,
+            branch: repairJob.branch,
+            failureScope: classification.scope,
+            detail: classification.cause,
+            excluded: Array.from(allExcluded),
+            excludedSet: Array.from(allExcluded),
+          },
+          logOpts
+        );
+      }
+      return { sha };
+    }
 
     const adapter = harnessFor({ harness: repairJob.harness });
     const handle = adapter ? require('./executor').readSessionId(adapter, repairJob, res).id : null;
@@ -3449,6 +4295,8 @@ function repairRound(
         stage: decisions.Stage.LAUNCHED,
         workItemId: planned.id,
         role: roleOf(planned),
+        attempt: round,
+        attemptNumber: round,
         chosen: decision.chosen,
         harness: repairJob.harness,
         branch: repairJob.branch,
