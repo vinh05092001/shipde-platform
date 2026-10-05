@@ -2096,11 +2096,9 @@ function buildProfile(item, o, forbiddenFailureDomains) {
       Number.isFinite(Number(item.qualityFloor)) &&
       Number(item.qualityFloor) >= 0
         ? Number(item.qualityFloor)
-        : role === 'reviewer'
-          ? 75
-          : codingOrReview
-            ? 70
-            : 40,
+        : codingOrReview
+          ? 70
+          : 40,
     costCeiling:
       item.costCeiling !== null &&
       item.costCeiling !== undefined &&
@@ -3584,17 +3582,11 @@ async function reviewItem(
   const runTestsForReview =
     typeof o.tests === 'function'
       ? o.tests
-      : !item.verification && options.verificationRequired !== true
-        ? () => ({
-            pass: true,
-            cause: null,
-            detail: 'review caller supplied a completed work item',
-          })
-        : () =>
-            runVerificationCommand(
-              item,
-              Object.assign({}, o, { workerRoot, baseSha: session.baseSha || o.baseSha })
-            );
+      : () =>
+          runVerificationCommand(
+            item,
+            Object.assign({}, o, { workerRoot, baseSha: session.baseSha || o.baseSha })
+          );
   const captureRunTests = () => {
     lastTestResult = runTestsForReview();
     return lastTestResult;

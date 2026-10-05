@@ -4,7 +4,7 @@
 
 - Work Item ID: TASK-AI-94
 - Status: READY_FOR_CODEX
-- Assigned authors: agy-pool agy01 (initial), then tokenharbor/gpt-6-luna via opencode (completion after agy quota exhaustion and two ocz timeouts)
+- Assigned authors: agy-pool agy01 (initial), tokenharbor/gpt-6-luna via opencode (completion and two repairs), Claude supervisor repair of two out-of-scope regressions at operator request (2026-10-05)
 - Dependencies: TASK-AI-89
 - Supersedes: TASK-AI-91 and TASK-AI-93 (both BLOCKED after exhausting repair budgets); this branch contains their commits up to b284ecc plus the reviewer-lane fix
 

@@ -421,6 +421,7 @@ describe('TASK-AI-94: reviewer lane re-selection and launch attempt counting', (
           decisionDir,
           evidenceDir,
           reviewBudget: 1,
+          tests: () => ({ pass: true, findings: [] }),
         },
         item,
         {
@@ -484,7 +485,7 @@ describe('TASK-AI-94: reviewer lane re-selection and launch attempt counting', (
     const sha = '5050505050505050505050505050505050505050';
     const launched = [];
     const result = await orchestrate.reviewItem(
-      { decisionDir, evidenceDir, reviewBudget: 2 },
+      { decisionDir, evidenceDir, reviewBudget: 2, tests: () => ({ pass: true, findings: [] }) },
       { id: 'ITEM-94-QUALITY-FLOOR', qualityFloor: 50 },
       {
         candidateKey: candWriter.candidateKey,
