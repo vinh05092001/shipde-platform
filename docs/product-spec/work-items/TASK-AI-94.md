@@ -6,6 +6,7 @@
 - Status: READY_FOR_CODEX
 - Assigned authors: agy-pool agy01 (initial), tokenharbor/gpt-6-luna via opencode (completion and two repairs), Claude supervisor repair of two out-of-scope regressions at operator request (2026-10-05)
 - Dependencies: TASK-AI-89
+- Scope amendment: diff budget recorded as the combined TASK-AI-91, TASK-AI-93 and TASK-AI-94 change (about 3200 lines, mostly tests); the reviewer-lane delta over b284ecc is the reviewed unit
 - Supersedes: TASK-AI-91 and TASK-AI-93 (both BLOCKED after exhausting repair budgets); this branch contains their commits up to b284ecc plus the reviewer-lane fix
 
 ## Business Outcome

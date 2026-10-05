@@ -3730,9 +3730,11 @@ async function reviewItem(
         (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2
       ) {
         activeReviewerKey = null;
+        // sha: null makes the review loop stop BLOCKED with this cause
+        // instead of treating the refusal as a failed review and repairing.
         return {
           pass: false,
-          sha: currentSha,
+          sha: null,
           cause: 'NO_ALTERNATE_FAILURE_DOMAIN',
           verdict: 'REFUSED',
           findings: [
