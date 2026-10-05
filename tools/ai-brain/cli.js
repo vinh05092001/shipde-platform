@@ -800,6 +800,47 @@ function assembleCandidates(
  * caller that supplies its own candidates is testing or replaying them, not
  * asking what the machine actually serves.
  */
+function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
+  const input = Array.isArray(inputAccounts) ? inputAccounts : [];
+  const registry = Array.isArray(registryAccounts) ? registryAccounts : [];
+  if (registry.length === 0) return input;
+  const map = new Map();
+  const noId = [];
+  const hasCaps = (a) => Boolean(a && a.capabilities && Object.keys(a.capabilities).length > 0);
+
+  for (const acc of input) {
+    if (!acc || typeof acc !== 'object') continue;
+    if (!acc.id) {
+      noId.push(acc);
+      continue;
+    }
+    map.set(acc.id, Object.assign({}, acc));
+  }
+  for (const reg of registry) {
+    if (!reg || typeof reg !== 'object' || !reg.id) continue;
+    if (map.has(reg.id)) {
+      const existing = map.get(reg.id);
+      if (!hasCaps(existing) && hasCaps(reg)) {
+        map.set(reg.id, Object.assign({}, reg, existing, { capabilities: reg.capabilities }));
+      }
+    } else {
+      map.set(reg.id, Object.assign({}, reg));
+    }
+  }
+  return [...Array.from(map.values()), ...noId];
+}
+
+/**
+ * Assemble candidates for a live dispatch run.
+ *
+ * Combines candidates generated from catalogue, openCodeIds, and accounts, with
+ * gateway-derived and pool-derived candidates. Merges evidence-only candidates
+ * so models seen in evidence history participate in selection.
+ *
+ * If `options.candidates` is provided, that array is returned directly: a
+ * caller that supplies its own candidates is testing or replaying them, not
+ * asking what the machine actually serves.
+ */
 function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const candidatesApi = require('./candidates');
   const { expandOfferings } = require('./offerings');
@@ -819,6 +860,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       offs = [];
     }
   }
+
+  const registryAccounts = Array.isArray(opts.registryAccounts)
+    ? opts.registryAccounts
+    : typeof opts.listAccounts === 'function'
+      ? opts.listAccounts()
+      : require('./accounts').listAccounts();
+  const evidenceAccounts = mergeEvidenceAccounts(accounts, registryAccounts);
 
   return assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
     ...candidatesApi.generateCandidates({
@@ -855,10 +903,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       adapterScript: opts.adapterScript,
       platform: opts.platform,
     }),
-    ...candidatesApi.candidatesFromEvidence(opts.evidenceData, { accounts }).filter((c) => {
-      if (c.legacy) return false;
-      return Array.isArray(c.evidence) && c.evidence.some((e) => e && e.status === 'passed');
-    }),
+    ...candidatesApi
+      .candidatesFromEvidence(opts.evidenceData, { accounts: evidenceAccounts })
+      .filter((c) => {
+        if (c.legacy) return false;
+        return Array.isArray(c.evidence) && c.evidence.some((e) => e && e.status === 'passed');
+      }),
   ]);
 }
 
@@ -2696,10 +2746,11 @@ function orchestrateCommand(args, deps = {}) {
   const registry = sourcesApi.loadSources();
   const readJsonArg = (value) =>
     typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
+  const inputAccounts = readJsonArg(args.accounts) || (Array.isArray(d.accounts) ? d.accounts : []);
   const candidates = generateCandidates({
     registry,
     catalogue: readJsonArg(args.catalogue) || [],
-    accounts: readJsonArg(args.accounts) || [],
+    accounts: inputAccounts,
     openCodeIds: Array.isArray(args['opencode-ids'])
       ? args['opencode-ids']
       : typeof args['opencode-ids'] === 'string'
@@ -2710,6 +2761,12 @@ function orchestrateCommand(args, deps = {}) {
     typeof args['evidence-dir'] === 'string' && args['evidence-dir']
       ? args['evidence-dir']
       : path.join(__dirname, 'data', 'evidence');
+  const registryAccounts = Array.isArray(d.registryAccounts)
+    ? d.registryAccounts
+    : typeof d.listAccounts === 'function'
+      ? d.listAccounts()
+      : require('./accounts').listAccounts();
+  const evidenceAccounts = mergeEvidenceAccounts(inputAccounts, registryAccounts);
   // The live loop is async (TASK-AI-65): the JEV assessment behind every
   // Controller selection returns a promise. An unhandled rejection would crash
   // silently, so it is caught here and turned into a non-zero exit instead.
@@ -2717,6 +2774,8 @@ function orchestrateCommand(args, deps = {}) {
     specs,
     specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
     candidates,
+    accounts: evidenceAccounts,
+    registryAccounts,
     registry,
     evidenceDir,
     run: d.run,

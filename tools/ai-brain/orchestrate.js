@@ -2113,6 +2113,47 @@ function hasQuotaAccountReadings(options) {
   }
 }
 
+function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
+  const input = Array.isArray(inputAccounts) ? inputAccounts : [];
+  const registry = Array.isArray(registryAccounts) ? registryAccounts : [];
+  if (registry.length === 0) return input;
+  const map = new Map();
+  const noId = [];
+  const hasCaps = (a) => Boolean(a && a.capabilities && Object.keys(a.capabilities).length > 0);
+
+  for (const acc of input) {
+    if (!acc || typeof acc !== 'object') continue;
+    if (!acc.id) {
+      noId.push(acc);
+      continue;
+    }
+    map.set(acc.id, Object.assign({}, acc));
+  }
+  for (const reg of registry) {
+    if (!reg || typeof reg !== 'object' || !reg.id) continue;
+    if (map.has(reg.id)) {
+      const existing = map.get(reg.id);
+      if (!hasCaps(existing) && hasCaps(reg)) {
+        map.set(reg.id, Object.assign({}, reg, existing, { capabilities: reg.capabilities }));
+      }
+    } else {
+      map.set(reg.id, Object.assign({}, reg));
+    }
+  }
+  return [...Array.from(map.values()), ...noId];
+}
+
+function resolveEvidenceAccounts(o) {
+  const inputAccounts = (o && o.accounts) || (o && o.ranking && o.ranking.accounts) || [];
+  const registryAccounts =
+    o && Array.isArray(o.registryAccounts)
+      ? o.registryAccounts
+      : o && typeof o.listAccounts === 'function'
+        ? o.listAccounts()
+        : [];
+  return mergeEvidenceAccounts(inputAccounts, registryAccounts);
+}
+
 function buildCandidates(options, evidenceData) {
   const o = options || {};
   let baseCandidates = [];
@@ -2137,7 +2178,7 @@ function buildCandidates(options, evidenceData) {
           : testsInjectedCandidates
             ? null
             : evidence.loadEvidence(path.join(__dirname, 'data', 'evidence'));
-  const accounts = (o && o.accounts) || (o && o.ranking && o.ranking.accounts) || [];
+  const accounts = resolveEvidenceAccounts(o);
   const evCandidates =
     evData && Array.isArray(evData.combinations)
       ? candidatesApi.candidatesFromEvidence(evData, { accounts }).filter((c) => !c.legacy)
@@ -2175,7 +2216,7 @@ async function selectCandidateForProfile(
 
   let candidates = Array.isArray(annotatedCandidates) ? annotatedCandidates : [];
   if (evData && Array.isArray(evData.combinations) && evData.combinations.length > 0) {
-    const accounts = (o && o.accounts) || (o && o.ranking && o.ranking.accounts) || [];
+    const accounts = resolveEvidenceAccounts(o);
     const evCandidates = candidatesApi
       .candidatesFromEvidence(evData, { accounts })
       .filter((c) => !c.legacy);
