@@ -107,6 +107,114 @@ function failureDomainFromCandidateKey(key) {
   return domain.length ? domain.join('/') : 'unknown';
 }
 
+/** Build the reviewable draft body from the already-validated manifest. */
+function buildDraftBody(manifest, evidence) {
+  const m = manifest || {};
+  const e = evidence || {};
+  const workItemId = String(e.workItemId || m.workItemId || '').trim();
+  const outcome = String(e.outcome || 'Reviewed work item').trim();
+  const writer = String(m.writerCandidateKey || '').trim();
+  const reviewer = String(m.reviewerCandidateKey || '').trim();
+  const manifestPath = String(e.reviewManifest || '').trim();
+  const artifactPath = String(e.reviewArtifact || '').trim();
+  const decisionEvidence = String(e.decisionEvidence || '').trim();
+  const failBefore = e.failBefore || {};
+  const failCommand = String(failBefore.command || '').trim();
+  const failExitCode = Number(failBefore.exitCode);
+  const tests = Array.isArray(m.tests) ? m.tests : [];
+  const findings = Array.isArray(m.findings) ? m.findings : [];
+  const openFindings = findings.filter((finding) => finding && finding.status === 'open');
+  if (m.verdict === 'PASS' && openFindings.length > 0) {
+    throw new Error(
+      'PUBLISH_REFUSED: PASS_WITH_OPEN_FINDINGS: ' +
+        openFindings.map((finding) => finding.id).join(', ')
+    );
+  }
+  if (!reviewer) throw new Error('PUBLISH_REFUSED: review manifest missing reviewerCandidateKey');
+  if (!decisionEvidence) throw new Error('PUBLISH_REFUSED: decision evidence path is required');
+  if (
+    !workItemId ||
+    !writer ||
+    !manifestPath ||
+    !artifactPath ||
+    !failCommand ||
+    !Number.isFinite(failExitCode)
+  ) {
+    throw new Error('PUBLISH_REFUSED: draft Pull Request evidence is incomplete');
+  }
+  const passingTests = tests.filter((item) => item && item.result === 'pass');
+  if (passingTests.length === 0) {
+    throw new Error('PUBLISH_REFUSED: draft Pull Request is missing pass-after tests');
+  }
+  const testLines = tests.map((item) => {
+    const line = '- ' + item.command + ' -> ' + item.result;
+    return item.summary ? line + ' (' + item.summary + ')' : line;
+  });
+  const findingLines =
+    findings.length === 0
+      ? ['- No findings recorded.']
+      : findings.map(
+          (finding) => '- ' + finding.id + ' [' + finding.status + '] ' + finding.summary
+        );
+  return [
+    '## Work Item',
+    '',
+    '- Work Item ID: ' + workItemId,
+    '- Business outcome: ' + outcome,
+    '- Writer candidate: ' + writer,
+    '- Reviewer candidate: ' + reviewer,
+    '',
+    '## Source requirements',
+    '',
+    '- Requirements: ' + workItemId + ' acceptance matrix',
+    '- Work Item: docs/product-spec/work-items/' + workItemId + '.md',
+    '',
+    '## Scope integrity',
+    '',
+    '- Exactly one Work Item: ' + workItemId,
+    '- Reviewed commit: ' + m.reviewedCommit,
+    '',
+    '## Implementation',
+    '',
+    '- Review verdict: ' + m.verdict,
+    '- Review artifact: ' + artifactPath,
+    '- Findings:',
+    ...findingLines,
+    '',
+    '## Acceptance evidence',
+    '',
+    '- Review manifest: ' + manifestPath,
+    '- Decision evidence: ' + decisionEvidence,
+    '',
+    '## Verification',
+    '',
+    '- Fail-before: ' + failCommand + ' exited ' + failExitCode,
+    '- Pass-after tests:',
+    ...testLines,
+    '',
+    '## Safety and recovery',
+    '',
+    '- Draft only; publication does not mark ready, approve, or merge.',
+    '- Publication refusals preserve the reviewed evidence and name the failed gate.',
+    '',
+    '## Documentation and traceability',
+    '',
+    '- Review manifest: ' + manifestPath,
+    '- Review artifact: ' + artifactPath,
+    '- Decision evidence: ' + decisionEvidence,
+    '',
+    '## Risks and limitations',
+    '',
+    '- This draft is bound to reviewed commit ' + m.reviewedCommit + '.',
+    '',
+    '## Codex review',
+    '',
+    '- Review status: READY_FOR_CODEX',
+    '- Reviewed commit: ' + m.reviewedCommit,
+    '',
+  ].join('\n');
+}
+
 /**
  * M-R06 (TASK-AI-77): a push is authorised by a structured review manifest, not
  * by the option values themselves. The manifest is validated against the very
@@ -237,17 +345,10 @@ function createDraftPullRequest(options) {
   if (!/^\[[A-Za-z0-9-]+\]/.test(title)) {
     throw new Error('PUBLISH_REFUSED: draft title must begin with [<WORK_ITEM_ID>]');
   }
-  const body =
-    o.body ||
-    'Draft opened by the Ship Dễ live loop at the reviewed commit ' +
-      reviewedSha +
-      '. Reviewer: ' +
-      (o.reviewer || o.reviewerCandidateKey || 'missing reviewer') +
-      '. Decision evidence: ' +
-      (o.decisionEvidence || 'not supplied') +
-      '. This Pull Request is a proof artifact: the loop never merges it.';
+  const body = buildDraftBody(o.manifest, Object.assign({}, o, { workItemId, outcome }));
+  const runGh = typeof o.ghRun === 'function' ? o.ghRun : ghRun;
 
-  const existing = ghRun([
+  const existing = runGh([
     'pr',
     'list',
     '--repo',
@@ -267,7 +368,7 @@ function createDraftPullRequest(options) {
     }
   }
 
-  const created = ghRun([
+  const created = runGh([
     'pr',
     'create',
     '--repo',
@@ -289,7 +390,7 @@ function createDraftPullRequest(options) {
     .split('#')
     .pop()
     .trim();
-  const view = ghRun([
+  const view = runGh([
     'pr',
     'view',
     number,
@@ -438,7 +539,26 @@ function publish(options) {
   // already issued and before the destination, the head check, the clone and the
   // push: an approval authorises a push, the manifest says whether the reviewed
   // evidence covers it.
-  requireReviewManifest(options, refuse);
+  const manifestValidation = requireReviewManifest(options, refuse);
+  if (options.draft) {
+    if (!manifestValidation || !manifestValidation.manifest) {
+      refuse(
+        'PUBLISH_REFUSED: draft Pull Request requires a review manifest with reviewer evidence'
+      );
+    }
+    const reviewer = manifestValidation.manifest.reviewerCandidateKey;
+    if (typeof reviewer !== 'string' || !reviewer.trim()) {
+      refuse('PUBLISH_REFUSED: review manifest missing reviewerCandidateKey');
+    }
+    const decisionEvidence = options.draft.decisionEvidence;
+    if (
+      typeof decisionEvidence !== 'string' ||
+      !decisionEvidence.trim() ||
+      !fs.existsSync(decisionEvidence)
+    ) {
+      refuse('PUBLISH_REFUSED: decision evidence path is missing or does not exist');
+    }
+  }
 
   // P1: trusted push destination. remoteUrl and branch come from the options
   // the controller passed in; the worker-writable cwd is never consulted for
@@ -515,6 +635,9 @@ function publish(options) {
               remoteUrl,
               branch: targetBranch,
               reviewedSha: currentSha,
+              manifest: manifestValidation && manifestValidation.manifest,
+              reviewManifest: options.reviewManifest,
+              reviewArtifact: options.reviewArtifact,
             })
           ),
         }
@@ -532,6 +655,7 @@ function ghRun(args, cwd) {
 module.exports = {
   publish,
   createDraftPullRequest,
+  buildDraftBody,
   buildSanitizedMirror,
   transferReviewedObjects,
   // M-R04: the reviewer-independence rule has exactly one definition; the review

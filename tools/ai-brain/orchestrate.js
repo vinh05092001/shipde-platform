@@ -4570,24 +4570,50 @@ function publication(o, entry) {
         reviewManifest,
         reviewArtifact,
         workItemId: (request && request.workItemId) || (entry && entry.workItemId),
-        draft:
-          request.draft ||
-          (entry.draftTitle
-            ? {
-                workItemId: entry.workItemId,
-                outcome: String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item',
-                reviewer:
-                  entry.reviewerIdentity ||
-                  (review && review.reviewer) ||
-                  entry.reviewer ||
-                  request.reviewer ||
-                  null,
-                decisionEvidence:
-                  entry.decisionLog && entry.decisionLog.dir
-                    ? entry.decisionLog.dir
-                    : entry.decisionLog || null,
-              }
-            : undefined),
+        draft: (() => {
+          if (!request.draft && !entry.draftTitle) return undefined;
+          const manifest = manifestValidation && manifestValidation.manifest;
+          const callerDraft = request.draft || {};
+          return Object.assign(
+            {
+              workItemId: entry.workItemId,
+              outcome: entry.draftTitle
+                ? String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item'
+                : 'work item',
+              reviewer:
+                entry.reviewerIdentity ||
+                (review && review.reviewer) ||
+                entry.reviewer ||
+                request.reviewer ||
+                null,
+              writerCandidateKey: manifest && manifest.writerCandidateKey,
+              reviewerCandidateKey: manifest && manifest.reviewerCandidateKey,
+              verdict: manifest && manifest.verdict,
+              findings: (manifest && manifest.findings) || [],
+              tests: (manifest && manifest.tests) || [],
+              reviewManifest,
+              reviewArtifact,
+              decisionEvidence:
+                (entry.decisionLog && entry.decisionLog.dir) ||
+                (typeof entry.decisionLog === 'string' ? entry.decisionLog : null) ||
+                o.decisionDir ||
+                callerDraft.decisionEvidence ||
+                null,
+              failBefore: entry.failBefore || {
+                command: entry.tests && entry.tests.command,
+                exitCode: entry.tests && entry.tests.baseExitCode,
+              },
+            },
+            {
+              workItemId: callerDraft.workItemId || entry.workItemId,
+              outcome:
+                callerDraft.outcome ||
+                (entry.draftTitle
+                  ? String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item'
+                  : 'work item'),
+            }
+          );
+        })(),
         log: typeof o.log === 'function' ? o.log : null,
       })
     );
