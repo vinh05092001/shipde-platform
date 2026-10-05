@@ -97,6 +97,7 @@ function buildDefaults() {
     outcomes: [],
     reconciliation: null,
     checkpoint: null,
+    resumed: null,
     publications: [],
     publication: null,
     isolation: null,
@@ -2735,17 +2736,61 @@ async function runOrchestration(goal, opts) {
   // 3. Resume (AI-64-R14). The checkpoint file is the only resume input: a missing
   //    file is a clean first run, and an item the checkpoint already carries as
   //    completed is never launched again.
-  const checkpointOnDisk = cli.readCheckpoint(checkpointFile);
+  let checkpointOnDisk = cli.readCheckpoint(checkpointFile);
+  const liveSteps =
+    checkpointOnDisk && checkpointOnDisk.liveSteps && typeof checkpointOnDisk.liveSteps === 'object'
+      ? checkpointOnDisk.liveSteps
+      : {};
+  const persistStep = (workItemId, stage, fields) => {
+    if (!checkpointFile) return;
+    const previous = liveSteps[workItemId] || { workItemId, failures: [] };
+    const nextStep = Object.assign({}, previous, fields || {}, {
+      workItemId,
+      stage,
+      updatedAt: new Date(now).toISOString(),
+    });
+    liveSteps[workItemId] = nextStep;
+    const next = Object.assign({}, checkpointOnDisk || {}, {
+      schemaVersion: 1,
+      liveSteps,
+      updatedAt: new Date(now).toISOString(),
+    });
+    checkpointOnDisk = next;
+    cli.writeJsonFile(checkpointFile, next);
+  };
   const completedBefore = new Set(
     checkpointOnDisk && Array.isArray(checkpointOnDisk.completed) ? checkpointOnDisk.completed : []
+  );
+  const publishedBefore = new Set(
+    Object.entries(liveSteps)
+      .filter(
+        ([, step]) =>
+          step && step.publication && step.publication.status === PublicationStatus.PUBLISHED_DRAFT
+      )
+      .map(([workItemId]) => workItemId)
   );
 
   // 4. One writer per work item, and an unreadable log stops the run instead of
   //    reading as "no writers": the only evidence of a claim is the claim.
-  const writers = decisions.openWritersDetailed(logOpts);
+  // One decision-log read anchors both questions this gate asks: who holds a
+  // writer claim now, and which work items this log already records as
+  // launched. The second one is what stops an empty or one-step-stale
+  // checkpoint from silently relaunching a worker (CK-R01 P2-4).
+  const decisionLogRead = decisions.readDecisionsDetailed(logOpts);
+  const writers = decisionLogRead.readable
+    ? decisions.openWritersDetailed(
+        Object.assign({}, logOpts, { records: decisionLogRead.records })
+      )
+    : { writers: [], readable: false, damaged: decisionLogRead.damaged };
   const logUnreadable = writers.readable
     ? null
     : 'DECISION_LOG_UNREADABLE: ' + (writers.damaged.join('; ') || 'unknown');
+  const launchedBefore = new Set();
+  for (const record of decisionLogRead.records) {
+    if (record && record.stage === decisions.Stage.LAUNCHED && record.workItemId) {
+      launchedBefore.add(String(record.workItemId));
+    }
+  }
 
   const statusOf = new Map();
   const testsInjectedCandidates = Array.isArray(o.candidates);
@@ -2792,8 +2837,14 @@ async function runOrchestration(goal, opts) {
       outcome(item, ItemStatus.DEFERRED, log.plan.errors.join('; '));
       continue;
     }
-    if (completedBefore.has(item.id)) {
+    if (completedBefore.has(item.id) || publishedBefore.has(item.id)) {
       outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_COMPLETED');
+      log.resumed = {
+        stage: 'resumed',
+        workItemId: item.id,
+        from: checkpointOnDisk.step || 'completed',
+      };
+      const savedStep = liveSteps[item.id];
       const rec = extractCheckpointReview(checkpointOnDisk, item.id);
       const checkpointReviewError = validateCheckpointReceipt(rec, item, o);
       const anchoredEvidence =
@@ -2842,9 +2893,21 @@ async function runOrchestration(goal, opts) {
               }
             : null,
       };
-      log.reviews.push(reviewEntry);
-      log.review = reviewEntry;
+      if (!log.reviews.some((review) => review.workItemId === item.id))
+        log.reviews.push(reviewEntry);
+      log.review = log.reviews[log.reviews.length - 1] || reviewEntry;
       continue;
+    }
+    const savedStep = liveSteps[item.id] || null;
+    if (savedStep && savedStep.review && savedStep.review.status === ReviewStatus.COMPLETED) {
+      const reviewEntry = savedStep.review.entry;
+      if (reviewEntry) {
+        outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_REVIEW_COMPLETED');
+        log.reviews.push(reviewEntry);
+        log.review = reviewEntry;
+        log.resumed = { stage: 'resumed', workItemId: item.id, from: savedStep.stage };
+        continue;
+      }
     }
     if (logUnreadable) {
       decisions.recordDecision(
@@ -2860,7 +2923,19 @@ async function runOrchestration(goal, opts) {
       continue;
     }
     const claim = writers.writers.find((w) => w.workItemId === item.id);
-    if (claim) {
+    // CK-R02 (P1-3): the session this checkpoint recorded is the session that
+    // owns the claim. A claim held by that same session is reclaimed on resume;
+    // a claim held by any other live session is still a duplicate writer. The
+    // check runs before the RESUMED record so a foreign claim is never
+    // overwritten by the resuming run's own record.
+    const recordedSessionId =
+      savedStep && savedStep.launch && savedStep.launch.sessionId
+        ? String(savedStep.launch.sessionId)
+        : null;
+    const ownClaim = Boolean(
+      claim && recordedSessionId && claim.sessionId && String(claim.sessionId) === recordedSessionId
+    );
+    if (claim && !ownClaim) {
       const reason = 'DUPLICATE_WRITER: session ' + (claim.sessionId || 'unknown') + ' holds it';
       decisions.recordDecision(
         {
@@ -2873,6 +2948,43 @@ async function runOrchestration(goal, opts) {
       );
       outcome(item, ItemStatus.BLOCKED, reason);
       continue;
+    }
+    if (checkpointOnDisk && !(savedStep && savedStep.launch) && launchedBefore.has(item.id)) {
+      // CK-R01 (P2-4): the decision log already records a launched worker for
+      // this item and this checkpoint carries no launch record to resume from.
+      // A stale or emptied checkpoint is not evidence that nothing happened, so
+      // the run refuses loudly instead of silently relaunching the worker.
+      const reason =
+        'CHECKPOINT_LAUNCH_RECORD_MISSING: the decision log already records a launched worker for ' +
+        item.id +
+        ' and this checkpoint holds no launch record to resume from';
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.REFUSED,
+          workItemId: item.id,
+          role: roleOf(item),
+          detail: reason,
+        },
+        logOpts
+      );
+      outcome(item, ItemStatus.BLOCKED, reason);
+      continue;
+    }
+    if (savedStep && savedStep.stage && checkpointOnDisk) {
+      log.resumed = { stage: 'resumed', workItemId: item.id, from: savedStep.stage };
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.RESUMED,
+          workItemId: item.id,
+          role: roleOf(item),
+          sessionId: recordedSessionId || undefined,
+          detail: ownClaim
+            ? 'resumed from ' + savedStep.stage + ' and reclaimed its writer claim'
+            : 'resumed from ' + savedStep.stage,
+          checkpoint: checkpointFile,
+        },
+        logOpts
+      );
     }
     if (!launcher) {
       const reason =
@@ -2923,6 +3035,13 @@ async function runOrchestration(goal, opts) {
     const excludedDomains = item.excludedDomains;
     const domainAttempts = item.domainAttempts;
     const triedKeys = item.triedKeys;
+    for (const failure of (savedStep && savedStep.failures) || []) {
+      if (failure.failedCandidateKey) failedKeys.add(failure.failedCandidateKey);
+      if (failure.failureDomain) excludedDomains.add(failure.failureDomain);
+      if (failure.forbiddenDomain && !forbiddenDomains.includes(failure.forbiddenDomain)) {
+        forbiddenDomains.push(failure.forbiddenDomain);
+      }
+    }
     let blockedReason = null;
     let session = null;
 
@@ -2930,16 +3049,35 @@ async function runOrchestration(goal, opts) {
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
       //    launch, with the ranking inputs it was made from (AI-64-R03).
-      const decision = await selectCandidateForProfile(
-        item,
-        candidates,
-        forbiddenDomains,
-        evidenceData,
-        o,
-        logOpts,
-        now,
-        { failedKeys, excludedDomains, domainAttempts, attempt }
-      );
+      const currentItemStep = liveSteps[item.id] || savedStep;
+      const failedForSelection = new Set(failedKeys);
+      const excludedForSelection = new Set(excludedDomains);
+      const selectedCheckpoint =
+        attempt === 1 &&
+        currentItemStep &&
+        currentItemStep.selection &&
+        !(currentItemStep.failures || []).some(
+          (failure) => failure.failedCandidateKey === currentItemStep.selection.candidateKey
+        )
+          ? currentItemStep.selection
+          : null;
+      const decision = selectedCheckpoint
+        ? selectedCheckpoint.decision
+        : await selectCandidateForProfile(
+            item,
+            candidates,
+            [...new Set(forbiddenDomains)],
+            evidenceData,
+            o,
+            logOpts,
+            now,
+            {
+              failedKeys: failedForSelection,
+              excludedDomains: excludedForSelection,
+              domainAttempts,
+              attempt,
+            }
+          );
 
       log.selections.push({ workItemId: item.id, attempt, decision });
       if (!decision.chosen) {
@@ -2958,6 +3096,13 @@ async function runOrchestration(goal, opts) {
       triedKeys.add(decision.chosen);
       const candDomain = routing.canonicalFailureDomain(candidate);
       domainAttempts.set(candDomain, (domainAttempts.get(candDomain) || 0) + 1);
+      if (!selectedCheckpoint) {
+        const currentStep = liveSteps[item.id] || savedStep;
+        persistStep(item.id, 'candidate_selected', {
+          selection: { candidateKey: decision.chosen, decision },
+          failures: (currentStep && currentStep.failures) || [],
+        });
+      }
 
       const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
       const usageFile = prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt);
@@ -3016,14 +3161,88 @@ async function runOrchestration(goal, opts) {
         }
       }
 
+      const previousLaunch = currentItemStep && currentItemStep.launch;
       let res = null;
-      try {
-        res = launcher(job);
-      } catch (err) {
-        res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
+      if (previousLaunch && previousLaunch.candidateKey === decision.chosen) {
+        res = {
+          exitCode: previousLaunch.exitCode,
+          stdout: previousLaunch.hasArtifact ? 'checkpointed worker output was present' : '',
+          stderr: '',
+          sessionId: previousLaunch.sessionId,
+        };
+        job.failBefore = previousLaunch.failBefore || null;
+        log.resumed = {
+          stage: 'resumed',
+          workItemId: item.id,
+          from: previousLaunch.failBefore ? 'fail_before_measured' : 'worker_launch_finished',
+        };
+      } else {
+        try {
+          res = launcher(job);
+        } catch (err) {
+          res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
+        }
+        if (res && res.exercise) job.exercise = res.exercise;
+        writeUsageReportFromHarnessResult(job, res);
+        const adapter = harnessFor({ harness: job.harness });
+        const launchHandle = adapter
+          ? require('./executor').readSessionId(adapter, job, res).id
+          : null;
+        const launchFailed =
+          !res || (res.exitCode !== null && res.exitCode !== undefined && res.exitCode !== 0);
+        const currentSavedStep = liveSteps[item.id] || savedStep;
+        let launchClassification = null;
+        const failureList =
+          currentSavedStep && currentSavedStep.failures ? currentSavedStep.failures.slice() : [];
+        if (launchFailed) {
+          launchClassification = classifyFailure({
+            exitCode: res ? res.exitCode : -1,
+            httpStatus: res ? res.httpStatus : undefined,
+            body: res ? res.body || res.stderr || '' : '',
+            stderr: res ? res.stderr : '',
+            accountId: candidate.accountId,
+            timedOut: Boolean(res && res.timedOut),
+          });
+          failureList.push({
+            failedCandidateKey: decision.chosen,
+            failureScope: launchClassification.scope,
+            failureDomain:
+              launchClassification.scope === 'gateway' || launchClassification.scope === 'upstream'
+                ? routing.canonicalFailureDomain(candidate)
+                : null,
+            forbiddenDomain:
+              launchClassification.scope === 'upstream'
+                ? candidate.upstream
+                : launchClassification.scope === 'gateway'
+                  ? candidate.gateway
+                  : null,
+            cause: launchClassification.cause,
+          });
+        }
+        persistStep(item.id, 'worker_launch_finished', {
+          failures: failureList,
+          launch: {
+            candidateKey: decision.chosen,
+            exitCode: res ? res.exitCode : -1,
+            hasArtifact: Boolean(res && (res.stdout || res.artifact)),
+            sessionId: launchHandle,
+            failureClassification: launchClassification,
+            workerSha: headShaOf(job.cwd) || o.sha || null,
+            failBefore: null,
+          },
+        });
       }
 
-      writeUsageReportFromHarnessResult(job, res);
+      if (previousLaunch && previousLaunch.candidateKey === decision.chosen) {
+        writeUsageReportFromHarnessResult(job, res);
+        if (job.usageFile && res && res.sessionId && !fs.existsSync(job.usageFile)) {
+          fs.writeFileSync(
+            job.usageFile,
+            JSON.stringify({ session_id: res.sessionId }, null, 2),
+            'utf8'
+          );
+        }
+      }
 
       if (res && res.exercise) {
         job.exercise = res.exercise;
@@ -3046,6 +3265,19 @@ async function runOrchestration(goal, opts) {
           job.failBefore = measure(job.cwd, job.baseSha, workerHead, item.verification.command);
         }
       }
+      {
+        const currentStep = liveSteps[item.id] || {};
+        const recordedFailBefore = currentStep.launch && currentStep.launch.failBefore;
+        if (JSON.stringify(recordedFailBefore || null) !== JSON.stringify(job.failBefore || null)) {
+          persistStep(item.id, 'fail_before_measured', {
+            launch: Object.assign({}, currentStep.launch, { failBefore: job.failBefore || null }),
+            failBefore: job.failBefore || null,
+          });
+        }
+      }
+      if (previousLaunch && previousLaunch.failBefore) {
+        job.failBefore = previousLaunch.failBefore;
+      }
 
       // A definite non-zero exit is a failed launch. A session that has not exited
       // yet (exitCode null) is not a failure: it is the case the supervisor exists
@@ -3062,21 +3294,48 @@ async function runOrchestration(goal, opts) {
             /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.stderr || '') ||
             /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.failureReason || ''))
         );
-        const classification = classifyFailure({
-          exitCode: res ? res.exitCode : -1,
-          httpStatus: res ? res.httpStatus : undefined,
-          body: res ? res.body : undefined,
-          stdout: res ? res.stdout : undefined,
-          stderr: res ? res.stderr : undefined,
-          accountId: candidate.accountId,
-          timedOut: isLauncherTimedOut,
-        });
+        const classification =
+          previousLaunch && previousLaunch.failureClassification
+            ? previousLaunch.failureClassification
+            : classifyFailure({
+                exitCode: res ? res.exitCode : -1,
+                httpStatus: res ? res.httpStatus : undefined,
+                body: res ? res.body : undefined,
+                stdout: res ? res.stdout : undefined,
+                stderr: res ? res.stderr : undefined,
+                accountId: candidate.accountId,
+                timedOut: isLauncherTimedOut,
+              });
         launch.scope = classification.scope;
         launch.cause = classification.cause;
         launch.outcome = 'failed';
+        const currentStep = liveSteps[item.id] || {};
+        const failureList = (currentStep.failures || []).slice();
+        if (!failureList.some((f) => f.failedCandidateKey === decision.chosen)) {
+          failureList.push({
+            failedCandidateKey: decision.chosen,
+            failureScope: classification.scope,
+            failureDomain:
+              classification.scope === 'gateway' || classification.scope === 'upstream'
+                ? routing.canonicalFailureDomain(candidate)
+                : null,
+            forbiddenDomain:
+              classification.scope === 'upstream'
+                ? candidate.upstream
+                : classification.scope === 'gateway'
+                  ? candidate.gateway
+                  : null,
+            cause: classification.cause,
+          });
+        }
+        persistStep(item.id, 'worker_launch_failed', { failures: failureList });
         failedKeys.add(decision.chosen);
-        triedKeys.add(decision.chosen);
-
+        if (classification.scope === 'gateway' || classification.scope === 'upstream') {
+          excludedDomains.add(candDomain);
+          const forbidden =
+            classification.scope === 'upstream' ? candidate.upstream : candidate.gateway;
+          if (forbidden && !forbiddenDomains.includes(forbidden)) forbiddenDomains.push(forbidden);
+        }
         evidenceData = recordLaunchFailureEvidence(
           evidenceDir,
           evidenceData,
@@ -3303,8 +3562,23 @@ async function runOrchestration(goal, opts) {
       candidates,
       evidenceData,
       registry,
-      { failedKeys, excludedDomains, domainAttempts, triedKeys, evidenceDir }
+      {
+        failedKeys,
+        excludedDomains,
+        domainAttempts,
+        triedKeys,
+        evidenceDir,
+        onCheckpoint: (reviewStage, reviewData) => persistStep(item.id, reviewStage, reviewData),
+        resumedReview: savedStep && savedStep.review ? savedStep.review : null,
+        resumedReviewRounds: (savedStep && savedStep.reviewRounds) || [],
+      }
     );
+    const reviewEntry = log.reviews[log.reviews.length - 1];
+    if (reviewEntry) {
+      persistStep(item.id, 'review_completed', {
+        review: { status: reviewed.status, entry: reviewEntry },
+      });
+    }
     if (reviewed.status === ReviewStatus.COMPLETED) {
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
     } else {
@@ -3331,7 +3605,33 @@ async function runOrchestration(goal, opts) {
   // 6. Publication is its own gated stage (AI-64-P04/R12/R13), one entry per
   //    reviewed work item. The loop cannot mint the approval that authorises it, so
   //    an unwired run says so instead of pretending a draft Pull Request exists.
-  for (const entry of log.reviews) log.publications.push(publication(o, entry));
+  for (const entry of log.reviews) {
+    const itemStep = liveSteps[entry.workItemId] || {};
+    // CK-R03 (P1-2): a draft publication already recorded in the checkpoint is
+    // returned exactly as it was written — including a run cut between the
+    // publication persist and finish(). Never a second publish, never a rebuilt
+    // receipt, whatever the rebuilt review record for this resume looks like.
+    const recordedPublication =
+      itemStep.publication && itemStep.publication.status === PublicationStatus.PUBLISHED_DRAFT
+        ? itemStep.publication
+        : null;
+    if (recordedPublication) {
+      if (!log.publications.some((saved) => saved.workItemId === entry.workItemId)) {
+        log.publications.push(recordedPublication);
+      }
+      log.resumed = {
+        stage: 'resumed',
+        workItemId: entry.workItemId,
+        from: 'publication',
+      };
+      continue;
+    }
+    const published = publication(o, entry);
+    log.publications.push(published);
+    if (published.status === PublicationStatus.PUBLISHED_DRAFT) {
+      persistStep(entry.workItemId, 'publication', { publication: published });
+    }
+  }
   log.publication = log.publications[log.publications.length - 1] || {
     status: o.publication ? PublicationStatus.REFUSED : PublicationStatus.NOT_REQUESTED,
     reason: 'NO_REVIEWED_COMMIT: nothing to publish',
@@ -3744,13 +4044,23 @@ async function reviewItem(
   let roundCount = 0;
   let lastManifestResult = null;
   let reviewerLaunchFailed = false;
+  // CK-R01 (P1-1): every completed review round accumulates here, so each
+  // checkpoint write carries the whole history instead of only the resumed
+  // rounds plus the current one. An interruption after round 2 keeps rounds 1
+  // and 2 on disk; a replayed round rewrites no record and duplicates nothing.
+  const recordedReviewRounds = (options.resumedReviewRounds || []).slice();
 
   const reviewWithManifest = async (currentSha) => {
     roundCount += 1;
     activeReviewerAttempt = reviewerAttempt + roundCount - 1;
 
     let rev;
-    if (typeof o.reviewer === 'function') {
+    const priorRound = (options.resumedReviewRounds || []).find(
+      (round) => round && round.sha === currentSha && round.result
+    );
+    if (priorRound) {
+      rev = priorRound.result;
+    } else if (typeof o.reviewer === 'function') {
       rev = await o.reviewer(currentSha);
     } else {
       if (roundCount === 1) {
@@ -3924,6 +4234,18 @@ async function reviewItem(
       rev = await laneFn(currentSha);
       reviewerLaunchFailed = Boolean(rev && rev.launchFailed);
     }
+    if (!priorRound) {
+      recordedReviewRounds.push({
+        round: recordedReviewRounds.length + 1,
+        sha: currentSha,
+        result: rev,
+      });
+    }
+    if (typeof options.onCheckpoint === 'function') {
+      options.onCheckpoint('review_round_completed', {
+        reviewRounds: recordedReviewRounds.slice(),
+      });
+    }
 
     const repoCandidates = [workerRoot, session && session.worktree, o.cwd, process.cwd()].filter(
       Boolean
@@ -4001,7 +4323,15 @@ async function reviewItem(
           reviewerLaunchFailed = false;
           return { sha: args[1] };
         }
-        if (typeof o.repairer === 'function') return o.repairer(...args);
+        if (typeof o.repairer === 'function') {
+          const repaired = await o.repairer(...args);
+          if (typeof options.onCheckpoint === 'function') {
+            options.onCheckpoint('repair_round_completed', {
+              repair: { sha: (repaired && repaired.sha) || args[1], injected: true },
+            });
+          }
+          return repaired;
+        }
         return repairRound(
           o,
           item,
@@ -4049,7 +4379,6 @@ async function reviewItem(
     manifest: lastManifestResult ? lastManifestResult.manifest : null,
     manifestValidation: lastManifestResult ? lastManifestResult.validation : null,
   };
-
   if (!entry.reviewManifest) {
     const decisionDir = (logOpts && logOpts.dir) || o.decisionDir;
     if (decisionDir) {
@@ -4289,6 +4618,11 @@ function repairRound(
       ) {
         if (item) item.blockedReason = 'NO_ALTERNATE_FAILURE_DOMAIN';
       }
+      if (typeof options.onCheckpoint === 'function') {
+        options.onCheckpoint('repair_round_completed', {
+          repair: { round, sha, candidateKey: decision.chosen },
+        });
+      }
       return { sha };
     }
     const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
@@ -4436,6 +4770,11 @@ function repairRound(
       },
       logOpts
     );
+    if (typeof options.onCheckpoint === 'function') {
+      options.onCheckpoint('repair_round_completed', {
+        repair: { round, sha: nextSha, candidateKey: decision.chosen },
+      });
+    }
     return { sha: nextSha };
   };
 }
