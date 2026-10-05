@@ -41,6 +41,18 @@ const approvals = require('./approval-registry');
 const { isWorkerPath } = require('./isolation-launcher');
 const { resolveWorkerGitDir, safeCopyObjects } = require('./supervisor');
 
+// Load lazily because routing has a runtime dependency on this publisher module.
+// Routing owns the canonical implementation; this module only forwards to it.
+const routingFailureDomain = (candidate) => require('./routing').canonicalFailureDomain(candidate);
+
+// Compatibility adapter for existing publisher consumers. Pass the parsed
+// route dimensions to routing so its candidate-key adapter cannot recurse here.
+function candidateFailureDomain(key) {
+  const parts = String(key || '').split('::');
+  if (parts.length !== 7) return null;
+  return routingFailureDomain({ gateway: parts[2], upstream: parts[3] });
+}
+
 // A reviewed commit is a commit: 40 hex characters. Anything else is a label,
 // not evidence (reconcile.js SHA_40, control.ps1 headRefOid).
 const SHA_40 = /^[0-9a-f]{40}$/i;
@@ -98,13 +110,6 @@ function resolveBranch(branch, cwd) {
     throw new Error('PUBLISH_REFUSED: invalid branch name: ' + target);
   }
   return target;
-}
-
-function failureDomainFromCandidateKey(key) {
-  const parts = String(key || '').split('::');
-  if (parts.length !== 7) return null;
-  const domain = [parts[2], parts[3]].filter((p) => p && p !== '*');
-  return domain.length ? domain.join('/') : 'unknown';
 }
 
 /** Build the reviewable draft body from the already-validated manifest. */
@@ -249,13 +254,86 @@ function requireReviewManifest(options, refuse) {
     artifactPath: o.reviewArtifact,
   });
   if (!result.ok) {
-    refuse('PUBLISH_REFUSED: ' + result.code + (result.reason ? ': ' + result.reason : ''));
+    // P2-3: one clean message, prefixed exactly once. The refusal carries its
+    // own gate code (MANIFEST_SHA_MISMATCH) beside the legacy SHA_MISMATCH
+    // token the untouched task-ai-77 assertions match; PUBLISH_REFUSED is never
+    // repeated inside the message.
+    const code =
+      result.code === 'SHA_MISMATCH' ? 'SHA_MISMATCH (MANIFEST_SHA_MISMATCH)' : result.code;
+    refuse('PUBLISH_REFUSED: ' + code + (result.reason ? ': ' + result.reason : ''));
   }
   // A review that did not pass cannot authorise a push, however well bound.
   if (!ACCEPTED_VERDICTS.includes(result.verdict)) {
     refuse('PUBLISH_REFUSED: VERDICT_NOT_PASS: the review manifest verdict is ' + result.verdict);
   }
   return result;
+}
+
+/** Parse the Work Item identifier from a CSV row, honoring quoted commas/quotes. */
+function csvFields(line) {
+  const fields = [];
+  let field = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (quoted && char === '"' && line[i + 1] === '"') {
+      field += '"';
+      i += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      fields.push(field);
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+  fields.push(field);
+  return fields;
+}
+
+/**
+ * The reviewed commit, not the working tree, is authoritative for registration:
+ * the register is read with `git show <sha>:<path>` through the same hardened
+ * git helper `getHeadSha` uses (Q4: clean environment, no hooks, no worker
+ * config), so no checkout ever happens and the mutable tree cannot launder a
+ * row. `registerPresent` is separate from `registered` so the caller can tell
+ * "this repository carries no delivery register" (a legacy fixture) apart from
+ * "the register names no row for this Work Item" (a refusal).
+ */
+function registerStateAtCommit(cwd, reviewedSha, workItemId) {
+  const state = { registerPresent: false, registered: false };
+  const { withCleanGitEnv, safeGit } = require('./supervisor');
+  const result = withCleanGitEnv(
+    cwd,
+    (tmpDir) =>
+      safeGit(
+        tmpDir,
+        cwd,
+        [
+          'show',
+          reviewedSha + ':docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
+        ],
+        20000
+      ),
+    { workerWritable: isWorkerPath(cwd) }
+  );
+  if (result.status !== 0 || typeof result.stdout !== 'string') return state;
+  state.registerPresent = true;
+  const [header, ...rows] = result.stdout.split(/\r?\n/);
+  if (!header) return state;
+  const workItemColumn = csvFields(header).findIndex(
+    (field) => field.trim().toLowerCase() === 'work_item_id'
+  );
+  if (workItemColumn < 0) return state;
+  if (typeof workItemId !== 'string' || !workItemId.trim()) return state;
+  state.registered = rows.some((line) => csvFields(line)[workItemColumn] === workItemId.trim());
+  return state;
+}
+
+/** The reviewed commit names the Work Item in its register row, or it does not. */
+function workItemRegisteredAtCommit(cwd, reviewedSha, workItemId) {
+  return registerStateAtCommit(cwd, reviewedSha, workItemId).registered;
 }
 
 /**
@@ -483,8 +561,8 @@ function publish(options) {
     refuse('PUBLISH_REFUSED: missing review artifact');
   }
   if (options.writerCandidateKey && options.reviewerCandidateKey) {
-    const writerDomain = failureDomainFromCandidateKey(options.writerCandidateKey);
-    const reviewerDomain = failureDomainFromCandidateKey(options.reviewerCandidateKey);
+    const writerDomain = candidateFailureDomain(options.writerCandidateKey);
+    const reviewerDomain = candidateFailureDomain(options.reviewerCandidateKey);
     if (writerDomain && reviewerDomain && writerDomain === reviewerDomain) {
       refuse('PUBLISH_REFUSED: reviewer shares writer failure domain ' + reviewerDomain);
     }
@@ -494,12 +572,16 @@ function publish(options) {
   // operator side; when it is absent the publish is refused unless the caller
   // explicitly injected testMode (tests only — never inferred from argv/env).
   const regPath = approvals.registryPath(registryPath);
+  let approvalRecord = null;
+  let legacyFlatApproval = false;
   if (fs.existsSync(regPath)) {
     const registry = approvals.readRegistry(regPath);
     const entry = approvals.approvalEntry(registry, approvalId);
     if (approvals.approvalState(entry) !== approvals.State.APPROVED) {
       refuse('PUBLISH_REFUSED: approvalId not registered or not APPROVED');
     }
+    approvalRecord = entry;
+    legacyFlatApproval = typeof entry === 'string';
     // P4: the binding. A registered, APPROVED approval for a different commit
     // does not authorise pushing this one.
     const bound = approvals.approvalReviewedSha(entry);
@@ -540,6 +622,16 @@ function publish(options) {
   // push: an approval authorises a push, the manifest says whether the reviewed
   // evidence covers it.
   const manifestValidation = requireReviewManifest(options, refuse);
+  if (manifestValidation && approvalRecord) {
+    const approvedReviewer = approvals.approvalReviewer(approvalRecord);
+    const manifestReviewer = manifestValidation.manifest.reviewerCandidateKey;
+    // Historical flat APPROVED entries carry no reviewer. Keep this seam only
+    // for the existing TASK-AI-77 simulated-publish fixtures; structured
+    // approval records without reviewer identity always refuse.
+    if (approvedReviewer !== manifestReviewer && !(testMode && legacyFlatApproval)) {
+      refuse('PUBLISH_REFUSED: APPROVAL_REVIEWER_MISMATCH');
+    }
+  }
   if (options.draft) {
     if (!manifestValidation || !manifestValidation.manifest) {
       refuse(
@@ -579,6 +671,17 @@ function publish(options) {
 
   if (currentSha !== reviewedSha) {
     refuse('PUBLISH_REFUSED: SHA mismatch. Expected ' + reviewedSha + ', got ' + currentSha);
+  }
+
+  // PG-R03: registration at the exact reviewed commit. Live publication always
+  // requires the row before cloning or pushing. The simulated mode keeps its
+  // legacy seam only for repositories that carry no delivery register at all
+  // (the pre-register fixtures in task-ai-64/77/isolation); a repository that
+  // does carry one is held to its rows in every mode, so the gate is exercised
+  // wherever a real register is seeded.
+  const registration = registerStateAtCommit(cwd, reviewedSha, options.workItemId);
+  if (!registration.registered && (!testMode || registration.registerPresent)) {
+    refuse('PUBLISH_REFUSED: WORK_ITEM_NOT_REGISTERED');
   }
 
   // testMode is an explicit injected option used only by tests: the external
@@ -660,7 +763,8 @@ module.exports = {
   transferReviewedObjects,
   // M-R04: the reviewer-independence rule has exactly one definition; the review
   // manifest reuses it instead of restating it.
-  failureDomainFromCandidateKey,
+  failureDomainFromCandidateKey: candidateFailureDomain,
+  workItemRegisteredAtCommit,
   SAFE_MIRROR_CONFIG,
   ACCEPTED_VERDICTS,
 };
