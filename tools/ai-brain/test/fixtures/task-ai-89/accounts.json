@@ -1,0 +1,13 @@
+[
+  {
+    "id": "xkiro",
+    "provider": "9router",
+    "enabled": true,
+    "tier": 0,
+    "capabilities": {
+      "jsonSchema": true,
+      "tools": true,
+      "contextWindow": 200000
+    }
+  }
+]
