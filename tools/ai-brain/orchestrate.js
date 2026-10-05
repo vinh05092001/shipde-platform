@@ -2519,6 +2519,7 @@ async function selectCandidateForProfile(
     now,
     taskId: profile.taskId,
     evidenceData: evData,
+    priors: o && o.ranking && o.ranking.priors,
     headrooms: o && o.ranking && o.ranking.headrooms,
     reservations: o && o.ranking && o.ranking.reservations,
     accounts: o && o.ranking && o.ranking.accounts,
