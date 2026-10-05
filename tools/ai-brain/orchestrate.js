@@ -2186,6 +2186,61 @@ function buildCandidates(options, evidenceData) {
   return candidatesApi.mergeCandidates(baseCandidates, evCandidates);
 }
 
+function recordLaunchFailureEvidence(
+  evidenceDir,
+  evidenceData,
+  candidate,
+  res,
+  classification,
+  now
+) {
+  const payload = {
+    status: 'failed',
+    exitCode: res && typeof res.exitCode === 'number' ? res.exitCode : 1,
+    stderr: res ? res.stderr : undefined,
+    body: res ? res.body : undefined,
+    cause: classification.cause,
+    httpStatus: res ? res.httpStatus : undefined,
+    level: evidence.Level ? evidence.Level.API : 'API',
+    source: 'launch-failure',
+  };
+  if (evidenceDir) {
+    try {
+      evidence.recordOutcome(evidenceDir, candidate, payload);
+      return evidence.loadEvidence(evidenceDir);
+    } catch (_) {}
+  }
+  if (evidenceData && typeof evidenceData === 'object') {
+    if (!evidenceData.cooldowns) evidenceData.cooldowns = {};
+    const key = candidateKey(candidate);
+    evidenceData.cooldowns[key] = {
+      lastStatus: 'blocked',
+      failCount: ((evidenceData.cooldowns[key] && evidenceData.cooldowns[key].failCount) || 0) + 1,
+      blockedAt: new Date(now).toISOString(),
+      blockReason: classification.cause,
+      cause: classification.cause,
+      scope: classification.scope,
+      cooldownMs: classification.cooldownMs,
+    };
+    if (classification.scope === 'upstream' && candidate.upstream) {
+      if (!evidenceData.upstreamStatus) evidenceData.upstreamStatus = {};
+      evidenceData.upstreamStatus[candidate.upstream] = {
+        lastStatus: 'blocked',
+        failCount:
+          ((evidenceData.upstreamStatus[candidate.upstream] &&
+            evidenceData.upstreamStatus[candidate.upstream].failCount) ||
+            0) + 1,
+        blockedAt: new Date(now).toISOString(),
+        blockReason: classification.cause,
+        cause: classification.cause,
+        scope: 'upstream',
+        cooldownMs: classification.cooldownMs,
+      };
+    }
+  }
+  return evidenceData;
+}
+
 async function selectCandidateForProfile(
   item,
   annotatedCandidates,
@@ -2193,8 +2248,20 @@ async function selectCandidateForProfile(
   evidenceData,
   o,
   logOpts,
-  now
+  now,
+  opts
 ) {
+  const options = opts || {};
+  const failedKeys = options.failedKeys || (item && item.failedKeys) || (o && o.failedKeys) || null;
+  const failedKeySet =
+    failedKeys instanceof Set ? failedKeys : new Set(Array.isArray(failedKeys) ? failedKeys : []);
+  const excludedDomains = options.excludedDomains || (item && item.excludedDomains) || null;
+  const excludedDomainSet =
+    excludedDomains instanceof Set
+      ? excludedDomains
+      : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
+  const attemptNumber = options.attempt !== undefined ? options.attempt : item && item.attempt;
+
   const profile = buildProfile(item, o, forbiddenDomains);
   const registry = (o && o.registry) || sourcesApi.loadSources();
   const jevSource = sourcesApi.getSource('jev', registry);
@@ -2226,6 +2293,28 @@ async function selectCandidateForProfile(
       evData,
       { now }
     );
+  }
+
+  if (failedKeySet.size > 0 || excludedDomainSet.size > 0) {
+    candidates = candidates.map((c) => {
+      const k = candidateKey(c);
+      if (failedKeySet.has(k)) {
+        return Object.assign({}, c, {
+          blocked: true,
+          blockReason: 'LAUNCH_FAILED',
+          blockScope: 'candidate',
+        });
+      }
+      const cDomain = routing.canonicalFailureDomain(c);
+      if (excludedDomainSet.has(cDomain)) {
+        return Object.assign({}, c, {
+          blocked: true,
+          blockReason: 'FAILURE_DOMAIN_EXCLUDED',
+          blockScope: 'domain',
+        });
+      }
+      return c;
+    });
   }
 
   // The weighting assessment is the Controller's own, obtained through the real
@@ -2261,6 +2350,11 @@ async function selectCandidateForProfile(
   };
 
   const result = routing.rankForProfile(candidates, profile, assessment, rankCtx);
+
+  if (result.chosen && failedKeySet.has(result.chosen)) {
+    result.chosen = null;
+    result.reason = 'REFUSED: candidate launch previously failed';
+  }
 
   const writerKey = (item && item.writerCandidateKey) || null;
   if (writerKey) {
@@ -2300,6 +2394,8 @@ async function selectCandidateForProfile(
     stage,
     workItemId: profile.taskId,
     role: roleOf(item),
+    attempt: attemptNumber !== undefined ? attemptNumber : undefined,
+    attemptNumber: attemptNumber !== undefined ? attemptNumber : undefined,
     profile,
     taskProfile: profile,
     jev: assessment,
@@ -2342,7 +2438,10 @@ async function selectCandidateForProfile(
     firstChoice: result.top3[0] ? result.top3[0].candidateKey : null,
     selected: result.chosen,
     chosen: result.chosen,
+    chosenKey: result.chosen,
     reason: result.reason,
+    excluded: Array.from(failedKeySet),
+    excludedSet: Array.from(failedKeySet),
   };
   decisions.recordDecision(decisionRecorded, logOpts);
 
@@ -2431,7 +2530,7 @@ async function runOrchestration(goal, opts) {
   const testsInjectedCandidates = Array.isArray(o.candidates);
   const evidenceDir =
     o.evidenceDir || (testsInjectedCandidates ? null : path.join(__dirname, 'data', 'evidence'));
-  const evidenceData =
+  let evidenceData =
     o.evidenceData !== undefined
       ? o.evidenceData
       : evidenceDir
@@ -2569,6 +2668,8 @@ async function runOrchestration(goal, opts) {
     };
     const failedKeys = new Set();
     const forbiddenDomains = [];
+    const excludedDomains = new Set();
+    const domainAttempts = new Map();
     let blockedReason = null;
     let session = null;
 
@@ -2583,17 +2684,26 @@ async function runOrchestration(goal, opts) {
         evidenceData,
         o,
         logOpts,
-        now
+        now,
+        { failedKeys, excludedDomains, attempt }
       );
 
       log.selections.push({ workItemId: item.id, attempt, decision });
       if (!decision.chosen) {
-        blockedReason = 'NO_ELIGIBLE_CANDIDATE: ' + (decision.reason || 'no candidate qualifies');
+        if (failedKeys.size > 0) {
+          blockedReason =
+            'NO_ALTERNATE_FAILURE_DOMAIN' +
+            (launch.scope && launch.cause ? ': ' + launch.scope + ' (' + launch.cause + ')' : '');
+        } else {
+          blockedReason = 'NO_ELIGIBLE_CANDIDATE: ' + (decision.reason || 'no candidate qualifies');
+        }
         break;
       }
       const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
       if (launch.firstChoice === null) launch.firstChoice = decision.chosen;
       launch.selected = decision.chosen;
+      const candDomain = routing.canonicalFailureDomain(candidate);
+      domainAttempts.set(candDomain, (domainAttempts.get(candDomain) || 0) + 1);
 
       const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
       const usageFile = prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt);
@@ -2696,6 +2806,36 @@ async function runOrchestration(goal, opts) {
         launch.cause = classification.cause;
         launch.outcome = 'failed';
         failedKeys.add(decision.chosen);
+
+        evidenceData = recordLaunchFailureEvidence(
+          evidenceDir,
+          evidenceData,
+          candidate,
+          res,
+          classification,
+          now
+        );
+
+        const attemptsInDomain = domainAttempts.get(candDomain) || 0;
+        const domainExhausted = attemptsInDomain >= 2;
+        const scopeExcludesDomain =
+          classification.scope === 'upstream' || classification.scope === 'gateway';
+        if (scopeExcludesDomain || domainExhausted) {
+          if (candDomain) {
+            excludedDomains.add(candDomain);
+          }
+          if (classification.scope === 'upstream' || (domainExhausted && candidate.upstream)) {
+            if (candidate.upstream && !forbiddenDomains.includes(candidate.upstream)) {
+              forbiddenDomains.push(candidate.upstream);
+            }
+          }
+          if (classification.scope === 'gateway' || (domainExhausted && !candidate.upstream)) {
+            if (candidate.gateway && !forbiddenDomains.includes(candidate.gateway)) {
+              forbiddenDomains.push(candidate.gateway);
+            }
+          }
+        }
+
         cli.applyFailureBlocks(
           candidates,
           failedKeys,
@@ -2709,14 +2849,29 @@ async function runOrchestration(goal, opts) {
             stage: decisions.Stage.FAILED,
             workItemId: item.id,
             role: roleOf(item),
+            attempt,
+            attemptNumber: attempt,
             chosen: decision.chosen,
+            chosenKey: decision.chosen,
             branch: job.branch,
             failureScope: classification.scope,
             detail: classification.cause,
+            excluded: Array.from(failedKeys),
+            excludedSet: Array.from(failedKeys),
           },
           logOpts
         );
-        const alternate = candidates.find((c) => !c.blocked && !failedKeys.has(candidateKey(c)));
+        const alternate = candidates.find((c) => {
+          const k = candidateKey(c);
+          if (failedKeys.has(k)) return false;
+          if (c.blocked) return false;
+          const cDomain = routing.canonicalFailureDomain(c);
+          if (excludedDomains.has(cDomain)) return false;
+          if ((domainAttempts.get(cDomain) || 0) >= 2) return false;
+          if (routing.isForbiddenCandidate && routing.isForbiddenCandidate(c, forbiddenDomains))
+            return false;
+          return true;
+        });
         if (!alternate) {
           blockedReason =
             'NO_ALTERNATE_FAILURE_DOMAIN: ' +
@@ -2806,11 +2961,21 @@ async function runOrchestration(goal, opts) {
     }
 
     if (!session) {
+      const isNoAlt =
+        failedKeys.size > 0 ||
+        Boolean(blockedReason && blockedReason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN'));
       outcome(
         item,
         ItemStatus.BLOCKED,
         blockedReason || 'NO_LIVE_SESSION',
-        launch.cause ? { cause: launch.cause } : undefined
+        Object.assign(
+          {
+            reasonCode: isNoAlt ? 'NO_ALTERNATE_FAILURE_DOMAIN' : undefined,
+            triedKeys: Array.from(failedKeys),
+            tried: Array.from(failedKeys),
+          },
+          launch.cause ? { cause: launch.cause } : undefined
+        )
       );
       continue;
     }
