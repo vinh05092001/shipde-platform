@@ -797,4 +797,166 @@ describe('TASK-AI-93: per-domain attempt cap and failure evidence across all lan
     );
     assert.equal(revDecision.attemptNumber, 1, 'attemptNumber is 1');
   });
+
+  // P2: repair selection decision must have an attempt number (attempt and attemptNumber)
+  test('P2 repair attempt: repair selection decision has an attempt number and attemptNumber in decision log', async () => {
+    const candWriter = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-rw',
+      modelId: 'up-rw/m1',
+      quality: 90,
+    });
+    const candRepair = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-rep',
+      modelId: 'up-rep/m1',
+      quality: 85,
+    });
+
+    const run = (job) => {
+      if (job.usageFile) {
+        fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-p2-rep-att' }));
+      }
+      return { exitCode: 0, stdout: 'ok' };
+    };
+
+    let reviewRoundCount = 0;
+    const reviewer = (sha) => {
+      reviewRoundCount += 1;
+      if (reviewRoundCount === 1) {
+        return {
+          sha,
+          verdict: 'CHANGES_REQUIRED',
+          findings: [{ id: 'NEED_FIX_1', open: true }],
+        };
+      }
+      return { sha, verdict: 'PASS', findings: [] };
+    };
+
+    await orchestrate.runOrchestration('Goal for P2 repair attempt', {
+      specs: [
+        {
+          id: 'ITEM-93-P2-REPAIR-ATTEMPT',
+          roleRequirement: { role: 'writer' },
+          files: ['file.js'],
+          acceptanceCriteria: ['works'],
+          proofFloor: 'NONE',
+          verification: { command: 'node -e "process.exit(0)"', expect: '' },
+        },
+      ],
+      candidates: [candWriter, candRepair],
+      evidenceDir,
+      decisionDir,
+      now: NOW,
+      run,
+      tests: () => ({ pass: true, findings: [] }),
+      reviewer,
+      sha: '8888888888888888888888888888888888888888',
+      baseSha: '8888888888888888888888888888888888888888',
+    });
+
+    const files = fs.readdirSync(decisionDir).filter((f) => f.endsWith('.jsonl'));
+    const decisionsList = [];
+    for (const file of files.sort()) {
+      const raw = fs.readFileSync(path.join(decisionDir, file), 'utf8');
+      for (const line of raw.split('\n')) {
+        if (line.trim()) {
+          try {
+            decisionsList.push(JSON.parse(line));
+          } catch (_) {}
+        }
+      }
+    }
+
+    const repairDecision = decisionsList.find(
+      (d) =>
+        d.stage === 'selected' &&
+        typeof d.workItemId === 'string' &&
+        d.workItemId.startsWith('ITEM-93-P2-REPAIR-ATTEMPT-repair')
+    );
+    assert.ok(repairDecision, 'decision log must contain repair selected record');
+    assert.equal(
+      typeof repairDecision.attempt,
+      'number',
+      'decision log repair selected must have attempt number'
+    );
+    assert.equal(repairDecision.attempt, 1, 'repair attempt is 1');
+    assert.equal(
+      typeof repairDecision.attemptNumber,
+      'number',
+      'decision log repair selected must have attemptNumber'
+    );
+    assert.equal(repairDecision.attemptNumber, 1, 'repair attemptNumber is 1');
+  });
+
+  // P2: a single reviewer launch failure produces exactly one failure evidence item
+  test('P2 single reviewer failure evidence: a single reviewer launch failure produces exactly one failure evidence item', async () => {
+    const candWriter = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-w2',
+      modelId: 'up-w2/m1',
+      quality: 95,
+    });
+    const candReviewerFail = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-rf',
+      modelId: 'up-rf/m1',
+      quality: 90,
+    });
+    const candRepair = sampleCandidate({
+      gateway: '9router',
+      upstream: 'up-rep2',
+      modelId: 'up-rep2/m1',
+      quality: 80,
+    });
+
+    const run = (job) => {
+      if (job.usageFile) {
+        fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-p2-single-ev' }));
+      }
+      if (job.candidateKey === candWriter.candidateKey) {
+        return { exitCode: 0, stdout: 'writer ok' };
+      }
+      if (job.candidateKey === candReviewerFail.candidateKey) {
+        return {
+          exitCode: 1,
+          httpStatus: 500,
+          stderr: '500 INTERNAL_SERVER_ERROR: reviewer failed to launch',
+        };
+      }
+      return { exitCode: 0, stdout: 'ok' };
+    };
+
+    await orchestrate.runOrchestration('Goal for single reviewer failure evidence', {
+      specs: [
+        {
+          id: 'ITEM-93-P2-SINGLE-EV',
+          roleRequirement: { role: 'writer' },
+          files: ['file.js'],
+          acceptanceCriteria: ['works'],
+          proofFloor: 'NONE',
+          verification: { command: 'node -e "process.exit(0)"', expect: '' },
+        },
+      ],
+      candidates: [candWriter, candReviewerFail, candRepair],
+      evidenceDir,
+      decisionDir,
+      now: NOW,
+      reviewBudget: 0,
+      run,
+      tests: () => ({ pass: true, findings: [] }),
+      sha: '9999999999999999999999999999999999999999',
+      baseSha: '9999999999999999999999999999999999999999',
+    });
+
+    const evData = evidence.loadEvidence(evidenceDir);
+    assert.ok(evData, 'evidence must exist');
+    const revEv = evidence.getEvidence(evData, candReviewerFail);
+    assert.equal(
+      revEv.length,
+      1,
+      'a single reviewer launch failure produces exactly one failure evidence item'
+    );
+    assert.equal(revEv[0].status, 'failed');
+  });
 });

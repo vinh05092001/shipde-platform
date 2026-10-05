@@ -3575,18 +3575,6 @@ async function reviewItem(
   const reviewWithManifest = async (currentSha) => {
     roundCount += 1;
     const rev = await baseReviewFn(currentSha);
-    if (
-      rev &&
-      (rev.launchFailed ||
-        (rev.res && rev.res.exitCode !== 0) ||
-        (rev.exitCode !== undefined && rev.exitCode !== 0))
-    ) {
-      const revCand =
-        (Array.isArray(candidates) ? candidates : []).find(
-          (c) => candidateKey(c) === reviewerIdentity
-        ) || candidatesApi.parseCandidateKey(reviewerIdentity);
-      recordReviewerLaunchFailure(rev.res || rev, revCand);
-    }
 
     const repoCandidates = [workerRoot, session && session.worktree, o.cwd, process.cwd()].filter(
       Boolean
@@ -3875,13 +3863,26 @@ function repairRound(
   if (item && !(item.failedKeys instanceof Set)) item.failedKeys = failedKeySet;
   if (item && !(item.excludedDomains instanceof Set)) item.excludedDomains = excludedDomainSet;
   const evidenceDir = resolveEvidenceDir(options, o);
+  let repairAttemptCounter =
+    log && log.review && log.review.review && Number.isFinite(Number(log.review.review.repairCount))
+      ? Number(log.review.review.repairCount)
+      : 0;
 
   return async (findings, sha) => {
     const hostWorktree = o.cwd || process.cwd();
     const isolatedWorkerRoot = o.isolatedWorker
       ? require('./isolation-launcher').workerRootFor(hostWorktree)
       : null;
-    const round = ((log.review && log.review.review.repairCount) || 0) + 1;
+    repairAttemptCounter += 1;
+    const round =
+      options.attempt !== undefined
+        ? options.attempt
+        : log &&
+            log.review &&
+            log.review.review &&
+            Number.isFinite(Number(log.review.review.repairCount))
+          ? Number(log.review.review.repairCount) + 1
+          : repairAttemptCounter;
     const spec = repairSpec(item, findings, round);
     const replanned = planner.plan(log.goal, { specs: (o.specs || []).concat([spec]) });
     if (replanned.errors.length) {
@@ -3891,6 +3892,8 @@ function repairRound(
           stage: decisions.Stage.REFUSED,
           workItemId: item.id,
           role: roleOf(item),
+          attempt: round,
+          attemptNumber: round,
           detail: 'REPAIR_REPLAN_REFUSED: ' + replanned.errors.join('; '),
         },
         logOpts
@@ -3903,6 +3906,8 @@ function repairRound(
     planned.failedKeys = failedKeySet;
     planned.excludedDomains = excludedDomainSet;
     planned.domainAttempts = domainAttemptsMap;
+    planned.attempt = round;
+    planned.attemptNumber = round;
     const decision = await selectCandidateForProfile(
       planned,
       candidates,
@@ -3915,6 +3920,8 @@ function repairRound(
         failedKeys: failedKeySet,
         excludedDomains: excludedDomainSet,
         domainAttempts: domainAttemptsMap,
+        attempt: round,
+        attemptNumber: round,
       }
     );
     if (!decision.chosen) {
@@ -4023,6 +4030,32 @@ function repairRound(
         );
         if (log) log.evidenceData = evidenceData;
       }
+      if (logOpts) {
+        const allExcluded = new Set(Array.from(failedKeySet));
+        for (const d of excludedDomainSet) allExcluded.add(d);
+        for (const c of Array.isArray(candidates) ? candidates : []) {
+          const k = candidateKey(c);
+          const cDomain = routing.canonicalFailureDomain(c);
+          if (excludedDomainSet.has(cDomain)) allExcluded.add(k);
+        }
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: planned.id,
+            role: roleOf(planned),
+            attempt: round,
+            attemptNumber: round,
+            chosen: decision.chosen,
+            chosenKey: decision.chosen,
+            branch: repairJob.branch,
+            failureScope: classification.scope,
+            detail: classification.cause,
+            excluded: Array.from(allExcluded),
+            excludedSet: Array.from(allExcluded),
+          },
+          logOpts
+        );
+      }
       return { sha };
     }
 
@@ -4035,6 +4068,8 @@ function repairRound(
         stage: decisions.Stage.LAUNCHED,
         workItemId: planned.id,
         role: roleOf(planned),
+        attempt: round,
+        attemptNumber: round,
         chosen: decision.chosen,
         harness: repairJob.harness,
         branch: repairJob.branch,
