@@ -989,36 +989,14 @@ function simulatedFailureFor(candidate) {
 }
 
 function sameFailureDomain(candidate, failed, classification) {
-  if (!candidate || !failed || !classification) return false;
-  const sameConcrete = (left, right) =>
-    Boolean(left && right && left !== '*' && right !== '*' && left === right);
-  const scope = classification.scope || 'unknown';
-  if (scope === 'upstream') {
-    return candidate.upstream === failed.upstream;
-  }
-  if (scope === 'candidate' || scope === 'model') {
-    return (candidate.modelId || candidate.model) === (failed.modelId || failed.model);
-  }
-  if (scope === 'account') {
-    return sameConcrete(candidate.accountId, failed.accountId);
-  }
-  if (scope === 'gateway') {
-    return candidate.gateway && candidate.gateway === failed.gateway;
-  }
-  if (scope === 'access_path') {
-    return candidate.accessPath && candidate.accessPath === failed.accessPath;
-  }
-  if (scope === 'harness') {
-    if (classification && classification.cause === 'launch_config') {
-      return false;
-    }
-    return candidate.harness && candidate.harness === failed.harness;
-  }
-  return (
-    (candidate.upstream && candidate.upstream === failed.upstream) ||
-    sameConcrete(candidate.accountId, failed.accountId) ||
-    (candidate.gateway && candidate.gateway === failed.gateway)
-  );
+  // mvp-repair.test.js:66-70 evaluates this function via new Function without CommonJS require scope.
+  const routing =
+    typeof require === 'function'
+      ? require('./routing')
+      : process.getBuiltinModule('module').createRequire(`${process.cwd()}/tools/ai-brain/cli.js`)(
+          './routing'
+        );
+  return routing.sameFailureDomain(candidate, failed, classification);
 }
 
 /**
@@ -1038,6 +1016,7 @@ function applyFailureBlocks(
 ) {
   const candidatesApi = require('./candidates');
   for (const c of candidates) {
+    if (c.blocked) continue;
     const key = candidatesApi.candidateKey(c);
     if (failedKeys.has(key)) {
       c.blocked = true;

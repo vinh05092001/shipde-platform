@@ -398,6 +398,60 @@ function failureDomainOf(candidate) {
   return canonicalFailureDomain(candidate);
 }
 
+/** Compare candidates using the canonical identity for a classified failure scope. */
+function sameFailureDomain(candidate, failed, classification) {
+  if (!candidate || !failed || !classification) return false;
+  const scope = classification.scope || 'unknown';
+  const sameRoute = () => {
+    const leftDomain = failureDomainOf(candidate);
+    const rightDomain = failureDomainOf(failed);
+    return leftDomain !== 'unknown' && rightDomain !== 'unknown' && leftDomain === rightDomain;
+  };
+
+  if (scope === 'gateway') {
+    if (
+      !candidate.gateway ||
+      !failed.gateway ||
+      candidate.gateway === '*' ||
+      failed.gateway === '*'
+    ) {
+      return false;
+    }
+    return candidate.gateway === failed.gateway;
+  }
+  if (scope === 'upstream') {
+    if (candidate.gateway === '*' || failed.gateway === '*') {
+      return false;
+    }
+    return sameRoute();
+  }
+  if (scope === 'account') {
+    return (
+      candidate.accountId &&
+      failed.accountId &&
+      candidate.accountId !== '*' &&
+      failed.accountId !== '*' &&
+      canonicalFailureDomain(candidate.accountId) === canonicalFailureDomain(failed.accountId)
+    );
+  }
+  if (scope === 'candidate' || scope === 'model') {
+    return (
+      sameRoute() &&
+      Boolean(
+        (candidate.modelId || candidate.model) &&
+        (candidate.modelId || candidate.model) === (failed.modelId || failed.model)
+      )
+    );
+  }
+  if (scope === 'access_path')
+    return candidate.accessPath && candidate.accessPath === failed.accessPath;
+  if (scope === 'harness') {
+    if (classification.cause === 'launch_config') return false;
+    return candidate.harness && candidate.harness === failed.harness;
+  }
+  return false;
+}
+
 /** Whether any identity dimension of the candidate is an explicitly forbidden domain. */
 function matchesForbiddenDomain(candidate, forbiddenFailureDomains) {
   const domains = new Set(forbiddenFailureDomains || []);
@@ -1492,6 +1546,7 @@ module.exports = {
   claudeFamilyExclusion,
   canonicalFailureDomain,
   failureDomainOf,
+  sameFailureDomain,
   matchesForbiddenDomain,
   proofObserved,
   rankForProfile,
