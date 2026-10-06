@@ -33,9 +33,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-r3-confirm.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-r3-confirm.jsonl"]
     },
     {
       "candidateKey": "direct-http::direct::::amd-radeon::*::UNKNOWN::DeepSeek-V4-Flash-Vision-Exp",
@@ -76,9 +74,7 @@
           }
         ]
       },
-      "evidenceRef": [
-        ".inputs/live-20261006.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-20261006.jsonl"]
     },
     {
       "candidateKey": "direct-http::direct::::corti::*::UNKNOWN::corti-s1",
@@ -104,9 +100,7 @@
       },
       "callContract": "omit temperature,max_tokens",
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-fix-20261006.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-fix-20261006.jsonl"]
     },
     {
       "candidateKey": "direct-http::direct::::thegrid::*::UNKNOWN::agent-max",
@@ -132,9 +126,7 @@
       },
       "callContract": "concurrency<=2",
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-fix-20261006.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-fix-20261006.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::ag::ninerouter::UNKNOWN::ag/claude-opus-4-6-thinking",
@@ -160,9 +152,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-r3-quota.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-r3-quota.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::cl::ninerouter::UNKNOWN::cl/anthropic/claude-opus-5.5:batch",
@@ -188,9 +178,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-r3-quota.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-r3-quota.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::alims-intl::ninerouter::UNKNOWN::alims-intl/qwen3-coder-next",
@@ -216,9 +204,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-r3-quota.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-r3-quota.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::cl::ninerouter::UNKNOWN::cl/cognitivecomputations/dolphin-mistral-24b-venice-edition",
@@ -244,9 +230,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-r3-quota.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-r3-quota.jsonl"]
     },
     {
       "candidateKey": "direct-http::direct::::bai::bai#1::UNKNOWN::claude-fable-5",
@@ -272,9 +256,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-r3-quota.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-r3-quota.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::cohere::ninerouter::UNKNOWN::cohere/command-a-03-2025",
@@ -300,9 +282,7 @@
       },
       "callContract": "route unsupported via 9router",
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-audit2-20261006.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-audit2-20261006.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::cerebras::ninerouter::UNKNOWN::cerebras/llama-4-scout-17b-16e-instruct",
@@ -328,9 +308,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-r3-quota.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-r3-quota.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::cc::ninerouter::UNKNOWN::cc/claude-fable-5",
@@ -356,9 +334,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-r3-quota.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-r3-quota.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::gh::ninerouter::UNKNOWN::gh/copilot-search-b",
@@ -384,9 +360,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-audit2-20261006.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-audit2-20261006.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::ag::ninerouter::UNKNOWN::ag/gemini-3-flash-agent",
@@ -412,9 +386,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-audit2-20261006.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-audit2-20261006.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::xmtp::ninerouter::UNKNOWN::xmtp/mimo-v2.5-tts",
@@ -440,9 +412,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-audit2-20261006.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-audit2-20261006.jsonl"]
     },
     {
       "candidateKey": "direct-http::9router::9router::llm7::ninerouter::UNKNOWN::llm7/deepseek-v4-flash",
@@ -468,9 +438,7 @@
       },
       "callContract": null,
       "benchmark": null,
-      "evidenceRef": [
-        ".inputs/live-audit2-20261006.jsonl"
-      ]
+      "evidenceRef": [".inputs/live-audit2-20261006.jsonl"]
     }
   ],
   "cooldowns": {
