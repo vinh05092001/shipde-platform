@@ -4,16 +4,9 @@
  * Ship Dễ — TASK-AI-116: isolated opencode-direct launches can use a direct
  * model source, not only 9Router.
  *
- * Problem (main 377d483): the worker opencode.json is always built from the
- * 9router entry in sources.json, so a Controller-pinned candidate from a
- * direct OpenAI-compatible source (inception, dahl, regolo, amd-radeon,
- * tencent, cohere, baseten, thb, rqsty) cannot run isolated.
- *
- * The fix: resolve the source from the pinned model's first path segment
- * (e.g. inception/mercury-2.5 → sources.json id inception), validate it has
- * an https endpoint and credential.env, generate opencode.json with the
- * direct source's endpoint and credential, and add only that credential to
- * the worker env allowlist.
+ * SUPERVISOR FIX: The source is resolved from the candidate gateway field, not
+ * the model prefix, because 9Router model IDs can have upstream prefixes that
+ * equal direct source IDs (ambiguous).
  */
 
 const { test, describe } = require('node:test');
@@ -59,6 +52,7 @@ function runDirectLaunch(model, opts) {
   let capturedScript = null;
   let thrownError = null;
   const fakeEnv = opts && opts.fakeEnv ? { ...opts.fakeEnv } : {};
+  const gateway = opts && opts.gateway !== undefined ? opts.gateway : undefined;
 
   try {
     const tempShim = path.join(tmpDir, 'launch-temp');
@@ -106,6 +100,7 @@ function runDirectLaunch(model, opts) {
         verifyBoundary: () => true,
         baseSha: '0123456789012345678901234567890123456789',
         workerTimeoutMs: 1000,
+        gateway: gateway,
       });
     } catch (err) {
       thrownError = err;
@@ -135,9 +130,92 @@ function runDirectLaunch(model, opts) {
 }
 
 describe('TASK-AI-116: isolated launches with direct model sources', () => {
-  test('DS-R01: ninerouter/... keeps existing 9router behavior byte-for-byte', () => {
+  test('gateway 9router with model xmtp/mimo-v2.6-pro uses 9router config, wire id xmtp/...', () => {
+    const { cfg, thrownError } = runDirectLaunch('xmtp/mimo-v2.6-pro', {
+      fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
+      gateway: '9router',
+    });
+
+    assert.ok(!thrownError, 'no error for 9router with upstream prefix');
+    assert.ok(cfg, 'opencode.json exists');
+    assert.ok(cfg.provider.xmtp, 'provider is xmtp (from model prefix)');
+    assert.equal(cfg.provider.xmtp.options.baseURL, 'http://127.0.0.1:20128/v1');
+    assert.equal(cfg.provider.xmtp.options.apiKey, '{env:NINEROUTER_API_KEY}');
+    // Upstream prefix sent whole to 9router (TASK-AI-96)
+    assert.ok(cfg.provider.xmtp.models['xmtp/mimo-v2.6-pro']);
+    assert.equal(cfg.provider.xmtp.models['xmtp/mimo-v2.6-pro'].id, 'xmtp/mimo-v2.6-pro');
+  });
+
+  test('gateway inception with model inception/mercury-2.5 uses inception endpoint, id mercury-2.5, env INCEPTION_API_KEY only', () => {
+    const { cfg, thrownError, capturedScript } = runDirectLaunch('inception/mercury-2.5', {
+      fakeEnv: { INCEPTION_API_KEY: 'test-not-a-key-inception' },
+      gateway: 'inception',
+    });
+
+    assert.ok(!thrownError, 'no error thrown for inception model');
+    assert.ok(cfg, 'opencode.json exists');
+    assert.ok(cfg.provider.inception, 'provider is inception');
+    assert.equal(cfg.provider.inception.options.baseURL, 'https://api.inceptionlabs.ai/v1');
+    assert.equal(cfg.provider.inception.options.apiKey, '{env:INCEPTION_API_KEY}');
+    assert.ok(cfg.provider.inception.models['mercury-2.5'], 'model mapped without prefix');
+    assert.equal(cfg.provider.inception.models['mercury-2.5'].id, 'mercury-2.5');
+
+    assert.ok(capturedScript, 'run-target.ps1 captured');
+    assert.match(capturedScript, /INCEPTION_API_KEY/, 'INCEPTION_API_KEY is in allowlist');
+    assert.ok(
+      !capturedScript.includes('NINEROUTER_API_KEY'),
+      'NINEROUTER_API_KEY not in allowlist for direct source'
+    );
+  });
+
+  test('gateway 9router with model inception/mercury-2.5 uses 9router, NOT direct inception', () => {
+    const { cfg, thrownError } = runDirectLaunch('inception/mercury-2.5', {
+      fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
+      gateway: '9router',
+    });
+
+    assert.ok(!thrownError, 'no error for 9router');
+    assert.ok(cfg, 'opencode.json exists');
+    // When gateway is 9router, use 9router even if model has a direct source prefix
+    assert.ok(cfg.provider.inception, 'provider is inception (from model prefix)');
+    assert.equal(cfg.provider.inception.options.baseURL, 'http://127.0.0.1:20128/v1');
+    assert.equal(cfg.provider.inception.options.apiKey, '{env:NINEROUTER_API_KEY}');
+  });
+
+  test('unknown gateway fails with OPENCODE_DIRECT_SOURCE_UNKNOWN', () => {
+    const { thrownError } = runDirectLaunch('some-model', {
+      fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
+      gateway: 'unknown-gateway',
+    });
+
+    assert.ok(thrownError, 'error thrown for unknown gateway');
+    assert.match(thrownError.message, /OPENCODE_DIRECT_SOURCE_UNKNOWN/);
+    assert.match(thrownError.message, /unknown-gateway/);
+  });
+
+  test('no gateway (legacy) uses 9router unchanged', () => {
+    const { cfg, thrownError } = runDirectLaunch('ninerouter/ag/gemini-3.1-pro-low', {
+      fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
+      gateway: null,
+    });
+
+    assert.ok(!thrownError, 'no error for legacy (no gateway)');
+    assert.ok(cfg, 'opencode.json exists');
+    assert.ok(cfg.provider.ninerouter, 'provider is ninerouter');
+    assert.equal(cfg.provider.ninerouter.options.baseURL, 'http://127.0.0.1:20128/v1');
+    assert.equal(cfg.provider.ninerouter.options.apiKey, '{env:NINEROUTER_API_KEY}');
+    assert.ok(cfg.provider.ninerouter.models['ag/gemini-3.1-pro-low'], 'short model exists');
+    assert.equal(
+      cfg.provider.ninerouter.models['ag/gemini-3.1-pro-low'].id,
+      'ag/gemini-3.1-pro-low',
+      'router prefix is stripped'
+    );
+  });
+
+  test('gateway 9router with ninerouter/ model strips the router prefix', () => {
     const { cfg, thrownError } = runDirectLaunch('ninerouter/ag/gemini-3.1-pro-low', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-not-a-key-9router' },
+      gateway: '9router',
     });
 
     assert.ok(!thrownError, 'no error thrown for 9router model');
@@ -153,38 +231,10 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     );
   });
 
-  test('DS-R01: inception/mercury-2.5 resolves to inception source', () => {
-    const { cfg, thrownError } = runDirectLaunch('inception/mercury-2.5', {
-      fakeEnv: { INCEPTION_API_KEY: 'test-not-a-key-inception' },
-    });
-
-    assert.ok(!thrownError, 'no error thrown for inception model');
-    assert.ok(cfg, 'opencode.json exists');
-    assert.ok(cfg.provider.inception, 'provider is inception');
-    assert.equal(cfg.provider.inception.options.baseURL, 'https://api.inceptionlabs.ai/v1');
-    assert.equal(cfg.provider.inception.options.apiKey, '{env:INCEPTION_API_KEY}');
-  });
-
-  test('DS-R02: unknown prefix falls back to 9router instead of failing', () => {
-    // Unknown prefixes like 'cl/', 'xmtp/' are upstream providers routed through 9router
-    const { cfg, thrownError } = runDirectLaunch('cl/cline-free/mimo-v2.6-flash', {
+  test('source without endpoint fails with OPENCODE_DIRECT_SOURCE_UNSUPPORTED', () => {
+    const { thrownError } = runDirectLaunch('some-model', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
-    });
-
-    assert.ok(!thrownError, 'no error thrown - falls back to 9router');
-    assert.ok(cfg, 'opencode.json exists');
-    // The provider ID is derived from the model prefix (cl), not the source
-    assert.ok(cfg.provider.cl, 'provider is cl (from model prefix)');
-    // But it uses 9router's endpoint and credential
-    assert.equal(cfg.provider.cl.options.baseURL, 'http://127.0.0.1:20128/v1');
-    assert.equal(cfg.provider.cl.options.apiKey, '{env:NINEROUTER_API_KEY}');
-    // Upstream prefix should be sent whole to 9router (TASK-AI-96)
-    assert.ok(cfg.provider.cl.models['cl/cline-free/mimo-v2.6-flash']);
-  });
-
-  test('DS-R02: source without endpoint fails with OPENCODE_DIRECT_SOURCE_UNSUPPORTED', () => {
-    const { thrownError } = runDirectLaunch('codex/some-model', {
-      fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
+      gateway: 'codex',
     });
 
     assert.ok(thrownError, 'error thrown for source without endpoint');
@@ -192,9 +242,10 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     assert.match(thrownError.message, /codex/);
   });
 
-  test('DS-R02: source without credential.env fails with OPENCODE_DIRECT_SOURCE_UNSUPPORTED', () => {
-    const { thrownError } = runDirectLaunch('paseo/model-name', {
+  test('source without credential.env fails with OPENCODE_DIRECT_SOURCE_UNSUPPORTED', () => {
+    const { thrownError } = runDirectLaunch('model-name', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
+      gateway: 'paseo',
     });
 
     assert.ok(thrownError, 'error thrown for source without credential.env');
@@ -202,33 +253,10 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     assert.match(thrownError.message, /paseo/);
   });
 
-  test('DS-R03: direct source opencode.json uses source id as provider, endpoint as baseURL', () => {
-    const { cfg } = runDirectLaunch('tencent/hunyuan-large', {
-      fakeEnv: { TENCENT_TOKENHUB_API_KEY: 'test-not-a-key-tencent' },
-    });
-
-    assert.ok(cfg, 'opencode.json exists');
-    assert.ok(cfg.provider.tencent, 'provider id matches source id');
-    assert.equal(
-      cfg.provider.tencent.options.baseURL,
-      'https://tokenhub-intl.tencentcloudmaas.com/v1'
-    );
-    assert.equal(cfg.provider.tencent.options.apiKey, '{env:TENCENT_TOKENHUB_API_KEY}');
-  });
-
-  test('DS-R03: model id is sent WITHOUT the source prefix', () => {
-    const { cfg } = runDirectLaunch('inception/mercury-2.5', {
-      fakeEnv: { INCEPTION_API_KEY: 'test-not-a-key' },
-    });
-
-    assert.ok(cfg.provider.inception.models['mercury-2.5'], 'model mapped without prefix');
-    assert.equal(cfg.provider.inception.models['mercury-2.5'].id, 'mercury-2.5');
-    assert.equal(cfg.provider.inception.models['mercury-2.5'].name, 'mercury-2.5');
-  });
-
-  test('DS-R03: full model entry also exists in models map', () => {
+  test('direct source model id sent WITHOUT the gateway prefix', () => {
     const { cfg } = runDirectLaunch('regolo/qwen-2.5-coder-32b', {
       fakeEnv: { REGOLO_API_KEY: 'test-not-a-key-regolo' },
+      gateway: 'regolo',
     });
 
     assert.ok(cfg.provider.regolo.models['regolo/qwen-2.5-coder-32b'], 'full model entry exists');
@@ -236,9 +264,10 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     assert.equal(cfg.provider.regolo.models['qwen-2.5-coder-32b'].id, 'qwen-2.5-coder-32b');
   });
 
-  test('DS-R04: worker env allowlist adds ONLY the selected source credential', () => {
+  test('worker env allowlist adds ONLY the selected source credential', () => {
     const { capturedScript } = runDirectLaunch('cohere/command-r-plus', {
       fakeEnv: { COHERE_API_KEY: 'test-not-a-key-cohere' },
+      gateway: 'cohere',
     });
 
     assert.ok(capturedScript, 'run-target.ps1 captured');
@@ -251,15 +280,12 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
       !capturedScript.includes('INCEPTION_API_KEY'),
       'other source credentials not in allowlist'
     );
-    assert.ok(
-      !capturedScript.includes('TENCENT_TOKENHUB_API_KEY'),
-      'other source credentials not in allowlist'
-    );
   });
 
-  test('DS-R04: 9router case still adds only NINEROUTER_API_KEY', () => {
+  test('9router case still adds only NINEROUTER_API_KEY', () => {
     const { capturedScript } = runDirectLaunch('ninerouter/ag/gemini-3.1-pro-low', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-not-a-key-9router' },
+      gateway: '9router',
     });
 
     assert.ok(capturedScript, 'run-target.ps1 captured');
@@ -270,13 +296,13 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     );
   });
 
-  test('DS-R04: missing env var fails with OPENCODE_DIRECT_CREDENTIAL_MISSING before spawn', () => {
-    // Temporarily clear BASETEN_API_KEY if it exists
+  test('missing env var fails with OPENCODE_DIRECT_CREDENTIAL_MISSING before spawn', () => {
     const realValue = process.env.BASETEN_API_KEY;
     delete process.env.BASETEN_API_KEY;
     try {
       const { thrownError } = runDirectLaunch('baseten/llama-3.1-70b', {
-        fakeEnv: {}, // BASETEN_API_KEY not set
+        fakeEnv: {},
+        gateway: 'baseten',
       });
 
       assert.ok(thrownError, 'error thrown for missing credential');
@@ -287,10 +313,11 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     }
   });
 
-  test('DS-R04: credential VALUE never appears in opencode.json or run-target.ps1', () => {
+  test('credential VALUE never appears in opencode.json or run-target.ps1', () => {
     const fakeCredential = 'SECRET-test-credential-value-12345';
     const { cfg, capturedScript } = runDirectLaunch('thb/gpt-4o', {
       fakeEnv: { TOKENHARBOR_API_KEY: fakeCredential },
+      gateway: 'thb',
     });
 
     assert.ok(cfg, 'opencode.json exists');
@@ -308,34 +335,14 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     );
   });
 
-  test('DS-R01: rqsty source works as direct source', () => {
-    const { cfg, thrownError } = runDirectLaunch('rqsty/claude-3-opus', {
-      fakeEnv: { REQUESTY_API_KEY: 'test-not-a-key-rqsty' },
-    });
-
-    assert.ok(!thrownError, 'no error for rqsty source');
-    assert.ok(cfg.provider.rqsty, 'provider is rqsty');
-    assert.equal(cfg.provider.rqsty.options.baseURL, 'https://router.requesty.ai/v1');
-    assert.equal(cfg.provider.rqsty.options.apiKey, '{env:REQUESTY_API_KEY}');
-    assert.ok(cfg.provider.rqsty.models['claude-3-opus'], 'model without prefix exists');
-  });
-
-  test('DS-R02: http://127.0.0.1 endpoint is allowed', () => {
+  test('http://127.0.0.1 endpoint is allowed', () => {
     const { cfg, thrownError } = runDirectLaunch('ninerouter/test-model', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
+      gateway: '9router',
     });
 
     assert.ok(!thrownError, 'no error for 127.0.0.1 endpoint');
     assert.ok(cfg, 'opencode.json exists');
     assert.equal(cfg.provider.ninerouter.options.baseURL, 'http://127.0.0.1:20128/v1');
-  });
-
-  test('DS-R02: localhost endpoint is allowed', () => {
-    // This test would require a source with localhost endpoint, which 9router has as 127.0.0.1
-    // The validation logic should allow both
-    const { cfg } = runDirectLaunch('ninerouter/model', {
-      fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
-    });
-    assert.ok(cfg, 'localhost/127.0.0.1 endpoints are allowed');
   });
 });

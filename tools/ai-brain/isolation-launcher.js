@@ -1040,36 +1040,25 @@ function getIsolatedLauncher() {
           ? args[modelIdx + 1]
           : (opts && opts.pinnedModel) || (opts && opts.model) || null;
 
-      // DS-R01: resolve the source from the pinned model's first path segment
-      let sourceId = '9router'; // default to 9router for backward compatibility
-      let usedFallback = false;
-      if (pinnedModel && pinnedModel.includes('/')) {
-        const prefix = pinnedModel.split('/')[0];
-        sourceId = prefix === 'ninerouter' ? '9router' : prefix;
-      }
+      // SUPERVISOR FIX: resolve source from candidate gateway, not model prefix
+      // The gateway comes from the Controller-pinned candidate key
+      const gateway = (opts && opts.gateway) || null;
+
+      // No gateway (legacy callers/tests) -> use 9router unchanged
+      const sourceId = gateway || '9router';
 
       const selectedSource = sources.sources.find((s) => s.id === sourceId);
       if (!selectedSource) {
-        // DS-R02: Unknown source prefix. Could be an upstream prefix routed through 9router
-        // (e.g., cl/, xmtp/, kr/), so fall back to 9router instead of failing.
-        const routerSource = sources.sources.find((s) => s.id === '9router');
-        if (!routerSource) {
-          const err = new Error(
-            `OPENCODE_DIRECT_SOURCE_UNKNOWN: source '${sourceId}' not found in sources.json and 9router fallback unavailable`
-          );
-          err.code = 'OPENCODE_DIRECT_SOURCE_UNKNOWN';
-          throw err;
-        }
-        // Use 9router as fallback for unknown prefixes (upstream providers)
-        sourceId = '9router';
-        usedFallback = true;
+        const err = new Error(
+          `OPENCODE_DIRECT_SOURCE_UNKNOWN: gateway '${sourceId}' not found in sources.json`
+        );
+        err.code = 'OPENCODE_DIRECT_SOURCE_UNKNOWN';
+        throw err;
       }
 
-      const finalSource = sources.sources.find((s) => s.id === sourceId);
-
       // DS-R02: validate that the source has an https endpoint (or http://127.0.0.1 / localhost) and credential.env
-      const endpoint = finalSource.endpoint;
-      const credentialEnv = finalSource.credential && finalSource.credential.env;
+      const endpoint = selectedSource.endpoint;
+      const credentialEnv = selectedSource.credential && selectedSource.credential.env;
 
       const isHttpsOrLocalhost =
         endpoint &&
@@ -1100,9 +1089,9 @@ function getIsolatedLauncher() {
       // Derive provider id directly from the exact --model string opencode receives
       const providerId =
         (pinnedModel && sourcesModule.providerFromPrefix(pinnedModel)) ||
-        sourcesModule.providerFromPrefix(finalSource.modelPrefix) ||
-        sourcesModule.providerFromPrefix(finalSource) ||
-        finalSource.id;
+        sourcesModule.providerFromPrefix(selectedSource.modelPrefix) ||
+        sourcesModule.providerFromPrefix(selectedSource) ||
+        selectedSource.id;
 
       if (pinnedModel) {
         const derivedFromModel = sourcesModule.providerFromPrefix(pinnedModel);
@@ -1114,7 +1103,7 @@ function getIsolatedLauncher() {
       }
 
       // DS-R03: build models map with model id sent WITHOUT the source prefix for direct sources,
-      // but WITH the upstream prefix for 9router fallback (TASK-AI-96)
+      // but WITH the upstream prefix for 9router (TASK-AI-96)
       const modelsMap = {};
       if (pinnedModel) {
         modelsMap[pinnedModel] = { id: pinnedModel, name: pinnedModel };
@@ -1126,22 +1115,24 @@ function getIsolatedLauncher() {
 
         // Check which prefix to use for stripping
         let prefixToStrip = null;
-        if (providerId === routerProvider && !usedFallback) {
-          // This is a ninerouter/ model - strip the router prefix
+        if (sourceId === '9router' && providerId === routerProvider) {
+          // This is a ninerouter/ model through 9router - strip the router prefix
           prefixToStrip = providerId + '/';
-        } else if (!usedFallback && sourceId !== '9router') {
-          // This is a direct source model (inception/, regolo/, etc.) - strip that prefix
-          prefixToStrip = sourceId + '/';
+        } else if (sourceId !== '9router') {
+          // This is a direct source model (inception/, regolo/, etc.) - strip the gateway prefix if present
+          const gatewayPrefix = sourceId + '/';
+          if (pinnedModel.startsWith(gatewayPrefix)) {
+            prefixToStrip = gatewayPrefix;
+          }
         }
-        // else: usedFallback is true, meaning upstream prefix (cl/, xmtp/) - don't strip
+        // else: 9router with upstream prefix (cl/, xmtp/) - don't strip
 
         if (prefixToStrip && pinnedModel.startsWith(prefixToStrip)) {
           const relativeId = pinnedModel.slice(prefixToStrip.length);
           if (relativeId) {
             // For 9router's own prefix or direct sources: strip and use relativeId as wire ID
-            // For fallback (upstream providers): keep full pinnedModel (but this branch won't execute)
-            const wireId = usedFallback ? pinnedModel : relativeId;
-            modelsMap[relativeId] = { id: wireId, name: relativeId };
+            // For 9router with upstream prefix: keep full pinnedModel (this branch won't execute)
+            modelsMap[relativeId] = { id: relativeId, name: relativeId };
           }
         }
       }
@@ -1153,10 +1144,10 @@ function getIsolatedLauncher() {
         provider: {
           [providerId]: {
             npm: '@ai-sdk/openai-compatible',
-            name: finalSource.label || providerId,
+            name: selectedSource.label || providerId,
             options: {
-              baseURL: finalSource.endpoint,
-              apiKey: `{env:${finalSource.credential.env}}`,
+              baseURL: selectedSource.endpoint,
+              apiKey: `{env:${selectedSource.credential.env}}`,
             },
             models: modelsMap,
           },
