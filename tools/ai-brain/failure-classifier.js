@@ -56,6 +56,68 @@ const HumanAction = {
 };
 
 /**
+ * Operations that are replayable (read-only or idempotent).
+ */
+const REPLAYABLE_OPERATIONS = new Set(['probe', 'list', 'reviewRead', 'testRun']);
+
+/**
+ * Operations that are NEVER replayable (mutating external effects).
+ */
+const NON_REPLAYABLE_OPERATIONS = new Set(['publish', 'push', 'createPR', 'comment', 'merge']);
+
+/**
+ * Determines if an operation can be safely replayed.
+ * Only read-only or idempotent operations are replayable.
+ * Mirrors the AGENTS.md rule against blind retries of external effects.
+ *
+ * @param {string} operation - The operation name
+ * @returns {boolean} True if the operation is replayable
+ */
+function isReplayable(operation) {
+  if (typeof operation !== 'string' || !operation) return false;
+  if (REPLAYABLE_OPERATIONS.has(operation)) return true;
+  if (NON_REPLAYABLE_OPERATIONS.has(operation)) return false;
+  return false;
+}
+
+/**
+ * Determines if a cause is retryable based on its classification.
+ */
+function causeRetryable(cause) {
+  switch (cause) {
+    case Cause.TIMEOUT:
+    case Cause.QUOTA_EXHAUSTED:
+    case Cause.UPSTREAM_RATE_LIMIT:
+    case Cause.UPSTREAM_CREDIT_EXHAUSTED:
+    case Cause.UPSTREAM_MONTHLY_LIMIT:
+    case Cause.ACCOUNT_QUOTA_EXHAUSTED:
+    case Cause.GENUINE_CAPACITY:
+    case Cause.EXHAUSTION_HIDING:
+      return true;
+    case Cause.UPSTREAM_ENTITLEMENT:
+    case Cause.UPSTREAM_CREDENTIAL:
+    case Cause.ACCOUNT_AUTH_FAILED:
+    case Cause.MODEL_UNSUPPORTED:
+    case Cause.ALIAS_MISMATCH:
+    case Cause.LAUNCH_CONFIG:
+    case Cause.HARNESS_FAILED:
+    case Cause.UNKNOWN:
+    default:
+      return false;
+  }
+}
+
+/**
+ * Adds retryable and retryAfterMs fields to a classification result.
+ */
+function addRetryFields(result) {
+  const retryable = causeRetryable(result.cause);
+  result.retryable = retryable;
+  result.retryAfterMs = result.resetTime ? result.resetTime - Date.now() : null;
+  return result;
+}
+
+/**
  * Maximum cooldown allowed for parsed reset hints (30 days in ms).
  */
 const MAX_RESET_MS = 30 * 24 * 60 * 60 * 1000;
@@ -374,14 +436,14 @@ function classifyFailure(input) {
   );
 
   if (isTimedOut) {
-    return {
+    return addRetryFields({
       cause: Cause.TIMEOUT,
       scope: Scope.UPSTREAM,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.TIMEOUT],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: Date.now() + DEFAULT_COOLDOWNS[Cause.TIMEOUT],
-    };
+    });
   }
 
   const providerEvents = extractStructuredProviderEvents(stdout);
@@ -394,16 +456,14 @@ function classifyFailure(input) {
   if (quotaEvent) {
     const resetMs = parseResetTime(eventPayloadText(quotaEvent) || text);
     const retryable = structuredRetryableHint(providerEvents);
-    const result = {
+    return addRetryFields({
       cause: Cause.QUOTA_EXHAUSTED,
       scope: /account/i.test(input?.cause || '') ? Scope.ACCOUNT : Scope.UPSTREAM,
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
-    };
-    if (retryable !== undefined) result.retryable = retryable;
-    return result;
+    });
   }
 
   let envelopeStatus = null;
@@ -473,39 +533,39 @@ function classifyFailure(input) {
     )
   ) {
     const resetMs = parseResetTime(errorPayloadText || text);
-    return {
+    return addRetryFields({
       cause: Cause.UPSTREAM_MONTHLY_LIMIT,
       scope: Scope.UPSTREAM,
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_MONTHLY_LIMIT],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
-    };
+    });
   }
 
   // Case 1: upstream credit exhausted (402 with "out of credit" / provider credit, or generic 402)
   if (effectiveStatus === 402 || effectiveStatus === 504) {
     const resetMs = parseResetTime(errorPayloadText || text);
-    return {
+    return addRetryFields({
       cause: Cause.UPSTREAM_CREDIT_EXHAUSTED,
       scope: Scope.UPSTREAM,
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_CREDIT_EXHAUSTED],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
-    };
+    });
   }
 
   // Case 3: upstream entitlement (403 unauthorized / not licensed)
   if (effectiveStatus === 403 || /not licensed to use Copilot/i.test(errorPayloadText || text)) {
-    return {
+    return addRetryFields({
       cause: Cause.UPSTREAM_ENTITLEMENT,
       scope: Scope.UPSTREAM,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.UPSTREAM_ENTITLEMENT],
       humanAction: HumanAction.REQUIRED,
       evidence,
       resetTime: null,
-    };
+    });
   }
 
   // Case 13: Harness / launch config failure (e.g. OpenCode provider/config resolution error before model call)
@@ -570,14 +630,14 @@ function classifyFailure(input) {
       /HARNESS_FAILED|harness_failed/i.test(configErrorText) &&
       !/LAUNCH_CONFIG|launch_config/i.test(configErrorText);
     const cause = isHarnessFailed ? Cause.HARNESS_FAILED : Cause.LAUNCH_CONFIG;
-    return {
+    return addRetryFields({
       cause,
       scope: Scope.HARNESS,
       cooldownMs: DEFAULT_COOLDOWNS[cause] !== undefined ? DEFAULT_COOLDOWNS[cause] : 5 * 60 * 1000,
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: null,
-    };
+    });
   }
 
   // Case 11: exhaustion hiding (Paseo "running" status but provider reports unavailable with long reset)
@@ -592,14 +652,14 @@ function classifyFailure(input) {
 
   if (isExhaustionHiding) {
     const resetMs = parseResetTime(errorPayloadText || text);
-    return {
+    return addRetryFields({
       cause: Cause.EXHAUSTION_HIDING,
       scope: Scope.UPSTREAM,
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.EXHAUSTION_HIDING],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
-    };
+    });
   }
 
   // Upstream quota exhausted (e.g. "Unavailable (reset after ...)", FreeUsageLimit, HTTP 429 quota indicators)
@@ -629,17 +689,14 @@ function classifyFailure(input) {
 
   if (isUpstreamQuota) {
     const resetMs = parseResetTime(errorPayloadText || text);
-    const quotaResult = {
+    return addRetryFields({
       cause: Cause.QUOTA_EXHAUSTED,
       scope: Scope.UPSTREAM,
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
-    };
-    const quotaRetryable = structuredRetryableHint(providerEvents);
-    if (quotaRetryable !== undefined) quotaResult.retryable = quotaRetryable;
-    return quotaResult;
+    });
   }
 
   // Case 4: upstream rate limit (429 with rate limit indicators, or plain 429)
@@ -648,14 +705,14 @@ function classifyFailure(input) {
     /rate.?limit|too many requests|user_global_rate_limited/i.test(errorPayloadText)
   ) {
     const resetMs = parseResetTime(errorPayloadText || text);
-    return {
+    return addRetryFields({
       cause: Cause.UPSTREAM_RATE_LIMIT,
       scope: Scope.UPSTREAM,
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_RATE_LIMIT],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
-    };
+    });
   }
 
   // Account auth failure on 401 or auth text with account
@@ -663,26 +720,26 @@ function classifyFailure(input) {
     (effectiveStatus === 401 && accountId && accountId !== '*') ||
     /authentication failed|login.required|not logged in|requires login/i.test(text)
   ) {
-    return {
+    return addRetryFields({
       cause: Cause.ACCOUNT_AUTH_FAILED,
       scope: Scope.ACCOUNT,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.ACCOUNT_AUTH_FAILED],
       humanAction: HumanAction.REQUIRED,
       evidence,
       resetTime: null,
-    };
+    });
   }
 
   // Case 5: upstream credential problem (401 unauthorized on upstream)
   if (effectiveStatus === 401 || /invalid.*token|invalid.*credential/i.test(text)) {
-    return {
+    return addRetryFields({
       cause: Cause.UPSTREAM_CREDENTIAL,
       scope: Scope.UPSTREAM,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.UPSTREAM_CREDENTIAL],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: null,
-    };
+    });
   }
 
   // Case 6: model not supported (400 with "model not supported")
@@ -690,14 +747,14 @@ function classifyFailure(input) {
     httpStatus === 400 &&
     /model.{0,20}not.{0,10}support|not.{0,10}support.{0,10}model/i.test(text)
   ) {
-    return {
+    return addRetryFields({
       cause: Cause.MODEL_UNSUPPORTED,
       scope: Scope.MODEL,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.MODEL_UNSUPPORTED],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: null,
-    };
+    });
   }
 
   // Case 7: alias mismatch / model not found (access path issue)
@@ -706,27 +763,27 @@ function classifyFailure(input) {
     (/model not found|Model not found/i.test(text) &&
       (/did you mean/i.test(text) || effectiveStatus === 404))
   ) {
-    return {
+    return addRetryFields({
       cause: Cause.ALIAS_MISMATCH,
       scope: Scope.MODEL,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.ALIAS_MISMATCH],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: null,
-    };
+    });
   }
 
   // Case 8: account quota exhausted (agy CLI exit 3 with "limit reached" and reset time)
   if (exitCode === 3 && /limit reached|quota exhausted|usage limit/i.test(text)) {
     const resetMs = parseResetTime(text);
-    return {
+    return addRetryFields({
       cause: Cause.ACCOUNT_QUOTA_EXHAUSTED,
       scope: Scope.ACCOUNT,
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.ACCOUNT_QUOTA_EXHAUSTED],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
-    };
+    });
   }
 
   // Case 9: genuine capacity (503 with "no capacity available")
@@ -735,26 +792,42 @@ function classifyFailure(input) {
     /no capacity available|capacity.{0,10}unavailable|server.{0,10}capacity/i.test(text)
   ) {
     const resetMs = parseResetTime(text);
-    return {
+    return addRetryFields({
       cause: Cause.GENUINE_CAPACITY,
       scope: Scope.UPSTREAM,
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.GENUINE_CAPACITY],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
-    };
+    });
   }
 
   // Case 10: account auth failed (agy CLI "authentication failed" / "login required")
   if (/authentication failed|login.required|not logged in|requires login/i.test(text)) {
-    return {
+    return addRetryFields({
       cause: Cause.ACCOUNT_AUTH_FAILED,
       scope: Scope.ACCOUNT,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.ACCOUNT_AUTH_FAILED],
       humanAction: HumanAction.REQUIRED,
       evidence,
       resetTime: null,
-    };
+    });
+  }
+
+  // Case: transient upstream 5xx (retryable)
+  if (
+    httpStatus >= 500 &&
+    httpStatus <= 599 &&
+    /transient|outage|unavailable|temporarily|try.*again|busy|service unavailable/i.test(text)
+  ) {
+    return addRetryFields({
+      cause: Cause.GENUINE_CAPACITY,
+      scope: Scope.UPSTREAM,
+      cooldownMs: DEFAULT_COOLDOWNS[Cause.GENUINE_CAPACITY],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: null,
+    });
   }
 
   // Case 12: HTTP process failure means gateway or access path failure
@@ -762,27 +835,27 @@ function classifyFailure(input) {
     httpStatus === 0 ||
     (exitCode !== 0 && /ECONNREFUSED|ENOTFOUND|gateway unreachable/i.test(text))
   ) {
-    return {
+    return addRetryFields({
       cause: Cause.UNKNOWN,
       scope: Scope.GATEWAY,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.UNKNOWN],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: null,
-    };
+    });
   }
 
   // Unknown cause — scope UNKNOWN means no fault location can be inferred.
   // Callers must apply the 5-minute cooldown to the (upstream, model)
   // combination that produced the signal, not to the harness globally.
-  return {
+  return addRetryFields({
     cause: Cause.UNKNOWN,
     scope: Scope.UNKNOWN,
     cooldownMs: DEFAULT_COOLDOWNS[Cause.UNKNOWN],
     humanAction: HumanAction.NONE,
     evidence,
     resetTime: null,
-  };
+  });
 }
 
 module.exports = {
@@ -794,4 +867,5 @@ module.exports = {
   DEFAULT_COOLDOWNS,
   requiresHumanAction,
   classifyFailure,
+  isReplayable,
 };
