@@ -263,8 +263,9 @@ $psi.Password = $sec
     'PUBLIC',
     'PATHEXT',
   ];
-  if (options.adapterId === 'opencode-direct') {
-    envAllowed.push('NINEROUTER_API_KEY');
+  // DS-R04: add only the selected source's credential env to the allowlist
+  if (options.adapterId === 'opencode-direct' && options.credentialEnv) {
+    envAllowed.push(options.credentialEnv);
   }
   const allowedArray = '@(' + envAllowed.map((k) => `"${k}"`).join(', ') + ')';
 
@@ -1025,13 +1026,12 @@ function getIsolatedLauncher() {
       }
     }
 
+    // DS-R04: store the credential env for the worker allowlist
+    let selectedCredentialEnv = null;
+
     if (adapter.id === 'opencode-direct') {
       const sourcesModule = require('./sources');
       const sources = require('./sources.json');
-      const routerSource = sources.sources.find((s) => s.id === '9router');
-      if (!routerSource) {
-        throw new Error('OPENCODE_DIRECT_LAUNCH_FAILED: 9router source not found in sources.json');
-      }
 
       // Extract pinned model id from args or options (the exact --model string opencode receives)
       const modelIdx = Array.isArray(args) ? args.indexOf('--model') : -1;
@@ -1040,12 +1040,69 @@ function getIsolatedLauncher() {
           ? args[modelIdx + 1]
           : (opts && opts.pinnedModel) || (opts && opts.model) || null;
 
+      // DS-R01: resolve the source from the pinned model's first path segment
+      let sourceId = '9router'; // default to 9router for backward compatibility
+      let usedFallback = false;
+      if (pinnedModel && pinnedModel.includes('/')) {
+        const prefix = pinnedModel.split('/')[0];
+        sourceId = prefix === 'ninerouter' ? '9router' : prefix;
+      }
+
+      const selectedSource = sources.sources.find((s) => s.id === sourceId);
+      if (!selectedSource) {
+        // DS-R02: Unknown source prefix. Could be an upstream prefix routed through 9router
+        // (e.g., cl/, xmtp/, kr/), so fall back to 9router instead of failing.
+        const routerSource = sources.sources.find((s) => s.id === '9router');
+        if (!routerSource) {
+          const err = new Error(
+            `OPENCODE_DIRECT_SOURCE_UNKNOWN: source '${sourceId}' not found in sources.json and 9router fallback unavailable`
+          );
+          err.code = 'OPENCODE_DIRECT_SOURCE_UNKNOWN';
+          throw err;
+        }
+        // Use 9router as fallback for unknown prefixes (upstream providers)
+        sourceId = '9router';
+        usedFallback = true;
+      }
+
+      const finalSource = sources.sources.find((s) => s.id === sourceId);
+
+      // DS-R02: validate that the source has an https endpoint (or http://127.0.0.1 / localhost) and credential.env
+      const endpoint = finalSource.endpoint;
+      const credentialEnv = finalSource.credential && finalSource.credential.env;
+
+      const isHttpsOrLocalhost =
+        endpoint &&
+        (endpoint.startsWith('https://') ||
+          endpoint.startsWith('http://127.0.0.1') ||
+          endpoint.startsWith('http://localhost'));
+
+      if (!isHttpsOrLocalhost || !credentialEnv) {
+        const err = new Error(
+          `OPENCODE_DIRECT_SOURCE_UNSUPPORTED: source '${sourceId}' does not have a valid https endpoint (or http://127.0.0.1 / localhost) and credential.env`
+        );
+        err.code = 'OPENCODE_DIRECT_SOURCE_UNSUPPORTED';
+        throw err;
+      }
+
+      // DS-R04: verify that the credential is available in the host environment before spawning
+      if (!process.env[credentialEnv]) {
+        const err = new Error(
+          `OPENCODE_DIRECT_CREDENTIAL_MISSING: environment variable ${credentialEnv} is not set`
+        );
+        err.code = 'OPENCODE_DIRECT_CREDENTIAL_MISSING';
+        throw err;
+      }
+
+      // Store for later use in buildWorkerLaunchScript
+      selectedCredentialEnv = credentialEnv;
+
       // Derive provider id directly from the exact --model string opencode receives
       const providerId =
         (pinnedModel && sourcesModule.providerFromPrefix(pinnedModel)) ||
-        sourcesModule.providerFromPrefix(routerSource.modelPrefix) ||
-        sourcesModule.providerFromPrefix(routerSource) ||
-        routerSource.id;
+        sourcesModule.providerFromPrefix(finalSource.modelPrefix) ||
+        sourcesModule.providerFromPrefix(finalSource) ||
+        finalSource.id;
 
       if (pinnedModel) {
         const derivedFromModel = sourcesModule.providerFromPrefix(pinnedModel);
@@ -1056,34 +1113,50 @@ function getIsolatedLauncher() {
         }
       }
 
+      // DS-R03: build models map with model id sent WITHOUT the source prefix for direct sources,
+      // but WITH the upstream prefix for 9router fallback (TASK-AI-96)
       const modelsMap = {};
       if (pinnedModel) {
         modelsMap[pinnedModel] = { id: pinnedModel, name: pinnedModel };
-        const prefixWithSlash = providerId + '/';
-        if (pinnedModel.startsWith(prefixWithSlash)) {
-          const relativeId = pinnedModel.slice(prefixWithSlash.length);
+
+        // Determine if we should strip the prefix
+        const routerSource = sources.sources.find((s) => s.id === '9router');
+        const routerProvider =
+          routerSource && sourcesModule.providerFromPrefix(routerSource.modelPrefix);
+
+        // Check which prefix to use for stripping
+        let prefixToStrip = null;
+        if (providerId === routerProvider && !usedFallback) {
+          // This is a ninerouter/ model - strip the router prefix
+          prefixToStrip = providerId + '/';
+        } else if (!usedFallback && sourceId !== '9router') {
+          // This is a direct source model (inception/, regolo/, etc.) - strip that prefix
+          prefixToStrip = sourceId + '/';
+        }
+        // else: usedFallback is true, meaning upstream prefix (cl/, xmtp/) - don't strip
+
+        if (prefixToStrip && pinnedModel.startsWith(prefixToStrip)) {
+          const relativeId = pinnedModel.slice(prefixToStrip.length);
           if (relativeId) {
-            // Only the router's own prefix (e.g. 'ninerouter/') is stripped
-            // before the id reaches 9Router. An upstream prefix such as
-            // 'cl/' or 'xmtp/' is part of the 9Router model id and must be
-            // sent whole, or 9Router answers "Model not found".
-            const routerProvider = sourcesModule.providerFromPrefix(routerSource.modelPrefix);
-            const wireId = providerId === routerProvider ? relativeId : pinnedModel;
+            // For 9router's own prefix or direct sources: strip and use relativeId as wire ID
+            // For fallback (upstream providers): keep full pinnedModel (but this branch won't execute)
+            const wireId = usedFallback ? pinnedModel : relativeId;
             modelsMap[relativeId] = { id: wireId, name: relativeId };
           }
         }
       }
 
+      // DS-R03: generate opencode.json with the direct source's endpoint and credential
       const configPath = path.join(workerRoot, 'opencode.json');
       const configData = JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
         provider: {
           [providerId]: {
             npm: '@ai-sdk/openai-compatible',
-            name: routerSource.label || providerId,
+            name: finalSource.label || providerId,
             options: {
-              baseURL: routerSource.endpoint,
-              apiKey: `{env:${routerSource.credential.env}}`,
+              baseURL: finalSource.endpoint,
+              apiKey: `{env:${finalSource.credential.env}}`,
             },
             models: modelsMap,
           },
@@ -1326,6 +1399,7 @@ function getIsolatedLauncher() {
       completionNonce,
       adapterId: adapter.id,
       rtkPathPrepend,
+      credentialEnv: selectedCredentialEnv,
     });
 
     const tempScript = path.join(
