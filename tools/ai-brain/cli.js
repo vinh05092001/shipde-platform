@@ -2556,10 +2556,61 @@ function evidenceCommand(args, deps) {
   const rootDir = args.root || d.rootDir || process.cwd();
   const sub = args._[1];
 
+  if (sub === 'import-evaluation') {
+    const file = args.file;
+    if (typeof file !== 'string' || file.trim() === '') {
+      error('evidence import-evaluation requires --file <path>');
+      error(
+        'Dùng: evidence import-evaluation --file <path> [--evidence-dir <dir>] [--dry-run] [--json]'
+      );
+      exit(2);
+      return { exitCode: 2 };
+    }
+    const { importEvaluation } = require('./evaluation-import');
+    const dir =
+      args['evidence-dir'] ||
+      args.evidenceDir ||
+      d.evidenceDir ||
+      path.join(__dirname, 'data', 'evidence');
+    let result;
+    try {
+      result = importEvaluation({ file, evidenceDir: dir, dryRun: Boolean(args['dry-run']) });
+    } catch (err) {
+      error('REFUSED: ' + ((err && err.code) || 'ERROR') + ' - ' + ((err && err.message) || err));
+      exit(1);
+      return { exitCode: 1 };
+    }
+    const counts = result.counts || result;
+    const rejected = Array.isArray(counts.rejected) ? counts.rejected.length : counts.rejected || 0;
+    if (args.json) {
+      log(
+        JSON.stringify({
+          ok: true,
+          counts: {
+            importedAlive: counts.importedAlive,
+            cooldownsSet: counts.cooldownsSet,
+            skipped: counts.skipped,
+            rejected,
+          },
+        })
+      );
+    } else {
+      log('imported alive ' + counts.importedAlive);
+      log('cooldowns set ' + counts.cooldownsSet);
+      log('skipped ' + counts.skipped);
+      log('rejected ' + rejected);
+    }
+    exit(0);
+    return { exitCode: 0, result };
+  }
+
   if (sub !== 'import-work') {
     error('Lệnh không rõ: evidence ' + (sub || ''));
     error(
       'Dùng: evidence import-work --sha <40-hex> --manifest <file> --writer <key> --review <file> --reviewer <identity> --work-item <id> [--pr-head <sha>] [--main-ref <ref>] [--evidence-dir <dir>] [--json]'
+    );
+    error(
+      'Dùng: evidence import-evaluation --file <path> [--evidence-dir <dir>] [--dry-run] [--json]'
     );
     exit(2);
     return { exitCode: 2 };
