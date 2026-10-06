@@ -1225,7 +1225,32 @@ function getIsolatedLauncher() {
       'Microsoft/',
     ]);
     const payloadArgsPath = path.join(payloadDir, 'launch-args-' + completionNonce + '.json');
-    fs.writeFileSync(payloadArgsPath, JSON.stringify(fullArgs), 'utf8');
+
+    // TASK-AI-113: Windows caps a command line at ~32,767 characters. The
+    // opencode-direct author prompt (TASK-AI-109 skill pack) blew past that and
+    // every isolated launch failed with "The filename or extension is too
+    // long". The prompt is the LAST positional arg from
+    // harness.js opencodeDirect.launch; write it to a file inside workerRoot
+    // and hand the model a short instruction that points at the file. The
+    // file is UTF-8 with no BOM and is covered by the `.shipde/` git exclude
+    // added above.
+    let launchArgs = fullArgs;
+    if (adapter.id === 'opencode-direct' && launchArgs.length > 0) {
+      const prompt = launchArgs[launchArgs.length - 1];
+      if (typeof prompt === 'string' && prompt.length > 0) {
+        const promptFileName = 'prompt-' + completionNonce + '.md';
+        fs.writeFileSync(path.join(payloadDir, promptFileName), Buffer.from(prompt, 'utf8'));
+        launchArgs = launchArgs
+          .slice(0, -1)
+          .concat(
+            'Read the file .shipde/' +
+              promptFileName +
+              ' in the current directory. It is your complete task; follow it exactly.'
+          );
+      }
+    }
+
+    fs.writeFileSync(payloadArgsPath, JSON.stringify(launchArgs), 'utf8');
 
     const scriptContent = buildWorkerLaunchScript({
       credPath,
