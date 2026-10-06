@@ -246,6 +246,7 @@ $psi.Password = $sec
 `;
 
   const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
+  const rtkPathPrepend = options.rtkPathPrepend || null;
 
   const envAllowed = [
     'PATH',
@@ -317,6 +318,7 @@ foreach ($key in $allowed) {
         $psi.EnvironmentVariables[$key] = [Environment]::GetEnvironmentVariable($key)
     }
 }
+${rtkPathPrepend ? `$psi.EnvironmentVariables["PATH"] = "${rtkPathPrepend.replace(/\\/g, '\\\\')}" + ";" + $psi.EnvironmentVariables["PATH"]` : ''}
 
 $process = [System.Diagnostics.Process]::Start($psi)
 $wrapperPid = $process.Id
@@ -1185,10 +1187,71 @@ function getIsolatedLauncher() {
       throw err;
     }
 
+    const rtkConfig = opts.rtk || null;
+    let rtkEnabled = false;
+    let rtkDecision = 'not_requested';
+    let rtkPathPrepend = null;
+    const RISK_DOMAINS = ['auth', 'tenancy', 'money', 'carrier', 'security'];
+
+    if (rtkConfig && rtkConfig.enabled) {
+      const isRepairRound = Boolean(retainWorkerHead);
+      const hasRiskDomains =
+        Array.isArray(opts.riskDomains) &&
+        opts.riskDomains.some((d) => RISK_DOMAINS.includes(String(d).toLowerCase()));
+      const isLowRisk = opts.lowRisk === true || !hasRiskDomains;
+
+      if (isRepairRound) {
+        rtkDecision = 'repair_round_blocks_rtk';
+      } else if (hasRiskDomains) {
+        rtkDecision = 'risk_domains_block_rtk';
+      } else if (!isLowRisk) {
+        rtkDecision = 'not_low_risk';
+      } else {
+        rtkEnabled = true;
+        rtkDecision = 'provided';
+        const rtkSource =
+          rtkConfig.sourcePath ||
+          process.env.SHIPDE_RTK_PATH ||
+          path.join(
+            process.env.LOCALAPPDATA || '',
+            'Microsoft',
+            'WinGet',
+            'Packages',
+            'rtk-ai.rtk_Microsoft.Winget.Source_8wekyb3d8bbwe',
+            'rtk.exe'
+          );
+        const rtkDestBin = path.join(workerRoot, '.shipde-bin');
+        const rtkDestExe = path.join(rtkDestBin, 'rtk.exe');
+        try {
+          if (fs.existsSync(rtkSource)) {
+            fs.mkdirSync(rtkDestBin, { recursive: true });
+            fs.copyFileSync(rtkSource, rtkDestExe);
+            rtkPathPrepend = rtkDestBin;
+          } else {
+            console.error('[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: source not found at ' + rtkSource);
+            rtkEnabled = false;
+            rtkDecision = 'rtk_unavailable_source_missing';
+          }
+        } catch (err) {
+          console.error('[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: ' + err.message);
+          rtkEnabled = false;
+          rtkDecision = 'rtk_copy_failed';
+        }
+      }
+    } else {
+      rtkDecision = 'rtk_not_enabled';
+    }
+
     const credPath = path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'WorkerUser.cred');
 
     const exe = executableFor(adapter.command, opts);
-    const fullArgs = exe.prefixArgs.concat(args);
+    let fullArgs = exe.prefixArgs.concat(args);
+
+    if (rtkEnabled && fullArgs.length > 0 && typeof fullArgs[fullArgs.length - 1] === 'string') {
+      const hint =
+        '\n\n# RTK is optional for reading long output (use: rtk test, rtk err, rtk git diff).\n# Final check and all evidence are produced by the host, raw.';
+      fullArgs = [...fullArgs.slice(0, -1), fullArgs[fullArgs.length - 1] + hint];
+    }
 
     // Q6: the launch result is written to a HOST-OWNED directory outside
     // workerRoot. Inside workerRoot a worker child that survives the main
@@ -1262,6 +1325,7 @@ function getIsolatedLauncher() {
       workerTimeoutMs,
       completionNonce,
       adapterId: adapter.id,
+      rtkPathPrepend,
     });
 
     const tempScript = path.join(
@@ -1290,6 +1354,7 @@ function getIsolatedLauncher() {
       launchResult.exercise = exerciseResult;
       launchResult.failBefore = exerciseResult.failBefore;
     }
+    launchResult.rtk = { provided: rtkEnabled, reason: rtkDecision };
     return launchResult;
   };
 }
