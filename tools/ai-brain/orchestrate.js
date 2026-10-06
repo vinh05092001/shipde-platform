@@ -4187,6 +4187,46 @@ async function reviewItem(
       },
     ],
   });
+  // The existing cause survives a launch failure: when the failed launches
+  // exhausted a reviewer failure domain (its attempt cap is reached) and no
+  // alternate domain remains, the item ends BLOCKED with
+  // NO_ALTERNATE_FAILURE_DOMAIN. REVIEWER_UNAVAILABLE is only for the other
+  // exhaustion, where candidates failed to launch without exhausting any
+  // reviewer failure domain.
+  const reviewerDomainAttempts = new Map();
+  const noAlternateFailureDomainResult = () => ({
+    pass: false,
+    sha: null,
+    cause: 'NO_ALTERNATE_FAILURE_DOMAIN',
+    verdict: 'REFUSED',
+    findings: [
+      {
+        id: 'NO_ALTERNATE_FAILURE_DOMAIN',
+        open: true,
+        detail: 'no eligible reviewer candidate remains outside exhausted failure domains',
+      },
+    ],
+  });
+  const reviewerExhaustionResult = () => {
+    const domainCapExhausted = Array.from(reviewerDomainAttempts.values()).some((v) => v >= 2);
+    if (!domainCapExhausted) {
+      return reviewerUnavailableResult();
+    }
+    if (logOpts) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.REFUSED,
+          workItemId: (item ? item.id : 'item') + '-review',
+          role: 'reviewer',
+          attempt: activeReviewerAttempt,
+          attemptNumber: activeReviewerAttempt,
+          detail: 'NO_ALTERNATE_FAILURE_DOMAIN',
+        },
+        logOpts
+      );
+    }
+    return noAlternateFailureDomainResult();
+  };
 
   const reviewWithManifest = async (currentSha) => {
     roundCount += 1;
@@ -4204,9 +4244,10 @@ async function reviewItem(
       // TASK-AI-114 R01: a reviewer launch failure is not a verdict. It is
       // kept as a classified failed reviewer attempt and the lane is retried
       // with the next reviewer; only a real parsed verdict becomes a review
-      // round, and a launch failure never triggers a repair. When every
-      // candidate has failed to launch the review is blocked with
-      // REVIEWER_UNAVAILABLE.
+      // round, and a launch failure never triggers a repair. When the retries
+      // are exhausted the cause keeps the existing distinction: a failure
+      // domain exhausted by the launches ends BLOCKED NO_ALTERNATE_FAILURE_DOMAIN,
+      // otherwise the review is blocked with REVIEWER_UNAVAILABLE.
       let launchAttempt = 0;
       let launchFailures = 0;
       for (;;) {
@@ -4275,7 +4316,7 @@ async function reviewItem(
 
         if (!activeReviewerKey) {
           if (launchFailures > 0) {
-            return reviewerUnavailableResult();
+            return reviewerExhaustionResult();
           }
           const isCapExhausted =
             Array.from(domainAttemptsMap.values()).some((v) => v >= 2) ||
@@ -4330,7 +4371,7 @@ async function reviewItem(
         ) {
           activeReviewerKey = null;
           if (launchFailures > 0) {
-            return reviewerUnavailableResult();
+            return reviewerExhaustionResult();
           }
           // sha: null makes the review loop stop BLOCKED with this cause
           // instead of treating the refusal as a failed review and repairing.
@@ -4377,6 +4418,10 @@ async function reviewItem(
               const attemptsInDomain = domainAttemptsMap.get(reviewerDomain) || 0;
               const attempts = attemptsInDomain + 1;
               domainAttemptsMap.set(reviewerDomain, attempts);
+              reviewerDomainAttempts.set(
+                reviewerDomain,
+                (reviewerDomainAttempts.get(reviewerDomain) || 0) + 1
+              );
               if (attempts >= 2) {
                 excludedDomainSet.add(reviewerDomain);
                 if (item && item.excludedDomains instanceof Set) {
@@ -4398,7 +4443,7 @@ async function reviewItem(
         // recording a round or repairing.
         launchFailures += 1;
         if (launchAttempt > (Array.isArray(candidates) ? candidates.length : 0) + 1) {
-          return reviewerUnavailableResult();
+          return reviewerExhaustionResult();
         }
       }
     }

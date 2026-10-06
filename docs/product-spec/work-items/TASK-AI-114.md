@@ -34,8 +34,11 @@ round: a reviewer launch failure stays a classified failed reviewer attempt with
 the existing failure classification and reviewer re-selection, never a
 `CHANGES_REQUIRED` verdict and never a repair, and an old checkpoint round whose
 result carries `launchFailed === true` is discarded and reviewed again. When
-every reviewer candidate fails to launch, the item is `BLOCKED` with
-`REVIEWER_UNAVAILABLE`. Dependencies are worked and reviewed before their
+the failed launches exhaust a reviewer failure domain (its attempt cap is
+reached) and no alternate domain remains, the item keeps the existing `BLOCKED`
+`NO_ALTERNATE_FAILURE_DOMAIN`; `REVIEWER_UNAVAILABLE` is only for the other
+exhaustion, where every reviewer candidate failed to launch without exhausting
+any reviewer failure domain. Dependencies are worked and reviewed before their
 dependents, a dependent launches from its dependency's PASS commit (recorded in
 the checkpoint and the decision log as `baseSha` with `baseFrom: <dependency
 id>`), and a dependent whose dependency has no PASS is `BLOCKED` with
@@ -46,7 +49,7 @@ closed with `MULTI_DEPENDENCY_BASE_UNSUPPORTED`.
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| R01 | Reviewer launch fails (HTTP 429 quota) | Recorded as a failed reviewer attempt with the existing failure classification and reviewer re-selection; never a review round, never a `CHANGES_REQUIRED` verdict, no repair; all candidates exhausted → `BLOCKED` `REVIEWER_UNAVAILABLE` | R01 tests in `tools/ai-brain/test/task-ai-114.test.js` |
+| R01 | Reviewer launch fails (HTTP 429 quota) | Recorded as a failed reviewer attempt with the existing failure classification and reviewer re-selection; never a review round, never a `CHANGES_REQUIRED` verdict, no repair; all candidates exhausted → `BLOCKED` `REVIEWER_UNAVAILABLE`, while launch failures that exhaust a reviewer failure domain with no alternate domain keep `BLOCKED` `NO_ALTERNATE_FAILURE_DOMAIN` | R01 tests in `tools/ai-brain/test/task-ai-114.test.js` |
 | R02 | Resume of a checkpoint whose review round has `result.launchFailed === true` | That round is discarded and the commit is reviewed again | R02 test in `tools/ai-brain/test/task-ai-114.test.js` |
 | R03 | Work item with one dependency | Launch `baseSha` is the dependency PASS SHA; checkpoint and decision log record `baseSha` with `baseFrom: <dependency id>`; multiple dependencies → `MULTI_DEPENDENCY_BASE_UNSUPPORTED`, no launch | R03 tests in `tools/ai-brain/test/task-ai-114.test.js` |
 | R04 | Dependent while the dependency has no PASS | No dependent launch before the dependency is PASS; dependency `BLOCKED` → dependent `BLOCKED` `DEPENDENCY_NOT_PASSED`; dependencies are reviewed before dependents even when the plan lists the dependent first | R04 tests in `tools/ai-brain/test/task-ai-114.test.js` |
