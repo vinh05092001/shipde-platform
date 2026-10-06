@@ -257,11 +257,15 @@ describe('TASK-AI-109 lane D non-UI compatibility (UI-R02)', () => {
     for (const role of ['author.foundation', 'reviewer', 'security-review']) {
       const pack = skillPack.lockedPack(role);
       const entries = skillPack.skillsFor(role);
-      const root = role === 'author.ui' || role === 'reviewer.ui' ? IMPECCABLE_ROOT : SUPERPOWERS_ROOT;
+      const root =
+        role === 'author.ui' || role === 'reviewer.ui' ? IMPECCABLE_ROOT : SUPERPOWERS_ROOT;
       const expectedParts = [skillPack.LOCK_HEADER];
       for (const entry of entries) {
         const text = fs.readFileSync(path.join(root, entry.file), 'utf8');
-        const lockedLines = text.split('\n').map((line) => skillPack.lockLine(line)).join('\n');
+        const lockedLines = text
+          .split('\n')
+          .map((line) => skillPack.lockLine(line))
+          .join('\n');
         expectedParts.push('## Skill: ' + entry.name + ' (' + entry.file + ')');
         expectedParts.push(lockedLines);
       }
@@ -282,7 +286,10 @@ describe('TASK-AI-109 lane D non-UI compatibility (UI-R02)', () => {
     const expectedParts = [skillPack.LOCK_HEADER];
     for (const entry of entries) {
       const text = fs.readFileSync(path.join(SUPERPOWERS_ROOT, entry.file), 'utf8');
-      const lockedLines = text.split('\n').map((line) => skillPack.lockLine(line)).join('\n');
+      const lockedLines = text
+        .split('\n')
+        .map((line) => skillPack.lockLine(line))
+        .join('\n');
       expectedParts.push('## Skill: ' + entry.name + ' (' + entry.file + ')');
       expectedParts.push(lockedLines);
     }

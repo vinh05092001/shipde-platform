@@ -28,7 +28,7 @@ function _endsWithExtension(filePath, ext) {
 
 function _matchesFilePatterns(filePath, patterns) {
   if (!patterns || patterns.length === 0) return false;
-  return patterns.some(pattern => {
+  return patterns.some((pattern) => {
     if (pattern.startsWith('**/')) {
       const ext = pattern.slice(3);
       return _endsWithExtension(filePath, ext);
@@ -46,19 +46,19 @@ function _matchesFilePatterns(filePath, patterns) {
 
 function _matchesRiskDomain(riskDomain, triggers) {
   if (!triggers || triggers.length === 0) return false;
-  return triggers.some(t => t === riskDomain || t === riskDomain.toLowerCase());
+  return triggers.some((t) => t === riskDomain || t === riskDomain.toLowerCase());
 }
 
 function toolsFor({ role, files, riskDomains } = {}) {
   const manifest = load();
-  return manifest.filter(tool => {
+  return manifest.filter((tool) => {
     if (role && !tool.roles.includes(role)) return false;
     if (files && files.length > 0) {
-      const fileMatches = files.some(f => _matchesFilePatterns(f, tool.triggers));
+      const fileMatches = files.some((f) => _matchesFilePatterns(f, tool.triggers));
       if (!fileMatches) return false;
     }
     if (riskDomains && riskDomains.length > 0) {
-      const riskMatches = riskDomains.some(r => _matchesRiskDomain(r, tool.triggers));
+      const riskMatches = riskDomains.some((r) => _matchesRiskDomain(r, tool.triggers));
       if (!riskMatches) return false;
     }
     return true;
@@ -67,12 +67,52 @@ function toolsFor({ role, files, riskDomains } = {}) {
 
 function gatesFor() {
   const manifest = load();
-  const gateTools = manifest.filter(t => t.gate === true);
+  const gateTools = manifest.filter((t) => t.gate === true);
   const repoCommands = [
-    { id: 'repo-test', repo: 'vinh05092001/shipde-platform', purpose: 'Run all tests', roles: ['author', 'reviewer'], triggers: [], gate: true, command: 'test', installed: true, evidenceRef: null },
-    { id: 'repo-lint', repo: 'vinh05092001/shipde-platform', purpose: 'Run linting', roles: ['author', 'reviewer'], triggers: [], gate: true, command: 'lint', installed: true, evidenceRef: null },
-    { id: 'repo-typecheck', repo: 'vinh05092001/shipde-platform', purpose: 'Run type checking', roles: ['author', 'reviewer'], triggers: [], gate: true, command: 'typecheck', installed: true, evidenceRef: null },
-    { id: 'repo-security-secrets', repo: 'vinh05092001/shipde-platform', purpose: 'Scan for secrets', roles: ['security-review'], triggers: [], gate: true, command: 'security:secrets', installed: true, evidenceRef: null },
+    {
+      id: 'repo-test',
+      repo: 'vinh05092001/shipde-platform',
+      purpose: 'Run all tests',
+      roles: ['author', 'reviewer'],
+      triggers: [],
+      gate: true,
+      command: 'test',
+      installed: true,
+      evidenceRef: null,
+    },
+    {
+      id: 'repo-lint',
+      repo: 'vinh05092001/shipde-platform',
+      purpose: 'Run linting',
+      roles: ['author', 'reviewer'],
+      triggers: [],
+      gate: true,
+      command: 'lint',
+      installed: true,
+      evidenceRef: null,
+    },
+    {
+      id: 'repo-typecheck',
+      repo: 'vinh05092001/shipde-platform',
+      purpose: 'Run type checking',
+      roles: ['author', 'reviewer'],
+      triggers: [],
+      gate: true,
+      command: 'typecheck',
+      installed: true,
+      evidenceRef: null,
+    },
+    {
+      id: 'repo-security-secrets',
+      repo: 'vinh05092001/shipde-platform',
+      purpose: 'Scan for secrets',
+      roles: ['security-review'],
+      triggers: [],
+      gate: true,
+      command: 'security:secrets',
+      installed: true,
+      evidenceRef: null,
+    },
   ];
   return [...gateTools, ...repoCommands];
 }
