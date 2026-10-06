@@ -914,7 +914,32 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
 
 function readCheckpoint(file) {
   const fs = require('fs');
-  if (!file || !fs.existsSync(file)) return null;
+  if (!file) return null;
+  // A `.tmp` next to the checkpoint is a writeJsonFile write whose rename was
+  // interrupted: the file itself is complete (a torn write is not valid JSON)
+  // and it is newer than the checkpoint below it. Adopt it and finish the
+  // rename, so a one-step-stale checkpoint cannot silently relaunch work the
+  // decision log already records as launched (TASK-AI-105 P2-4). A torn
+  // half-write is dropped instead: the checkpoint is the last complete state.
+  const tmp = file + '.tmp';
+  if (fs.existsSync(tmp)) {
+    let adopted = null;
+    try {
+      adopted = JSON.parse(fs.readFileSync(tmp, 'utf8'));
+    } catch (err) {
+      adopted = null;
+    }
+    if (adopted && typeof adopted === 'object' && !Array.isArray(adopted)) {
+      try {
+        fs.renameSync(tmp, file);
+      } catch (err) {}
+      return adopted;
+    }
+    try {
+      fs.unlinkSync(tmp);
+    } catch (err) {}
+  }
+  if (!fs.existsSync(file)) return null;
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
@@ -2722,20 +2747,22 @@ function orchestrateCommand(args, deps = {}) {
     return Promise.resolve({ exitCode: 2 });
   }
   const out = typeof args.out === 'string' ? args.out : null;
-  const registry = sourcesApi.loadSources();
+  const registry = (d && d.registry) || sourcesApi.loadSources();
   const readJsonArg = (value) =>
     typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
   const inputAccounts = readJsonArg(args.accounts) || (Array.isArray(d.accounts) ? d.accounts : []);
-  const candidates = generateCandidates({
-    registry,
-    catalogue: readJsonArg(args.catalogue) || [],
-    accounts: inputAccounts,
-    openCodeIds: Array.isArray(args['opencode-ids'])
-      ? args['opencode-ids']
-      : typeof args['opencode-ids'] === 'string'
-        ? args['opencode-ids'].split(',').filter(Boolean)
-        : [],
-  });
+  const candidates = Array.isArray(d.candidates)
+    ? d.candidates
+    : generateCandidates({
+        registry,
+        catalogue: readJsonArg(args.catalogue) || [],
+        accounts: inputAccounts,
+        openCodeIds: Array.isArray(args['opencode-ids'])
+          ? args['opencode-ids']
+          : typeof args['opencode-ids'] === 'string'
+            ? args['opencode-ids'].split(',').filter(Boolean)
+            : [],
+      });
   const evidenceDir =
     typeof args['evidence-dir'] === 'string' && args['evidence-dir']
       ? args['evidence-dir']
@@ -2760,6 +2787,7 @@ function orchestrateCommand(args, deps = {}) {
     run: d.run,
     tests: d.tests,
     reviewer: d.reviewer,
+    measureFailBefore: d.measureFailBefore,
     home: typeof args.home === 'string' ? args.home : undefined,
     enforceProofFloors: true,
     isolatedWorker: Boolean(args['isolated-worker']),
