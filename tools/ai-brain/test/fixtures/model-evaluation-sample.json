@@ -1,0 +1,528 @@
+{
+  "schema": "shipde-model-evaluation/1",
+  "generatedAt": "2026-10-06T07:30:36.359Z",
+  "probeWindow": {
+    "min": "2026-10-06T04:20:50.985Z",
+    "max": "2026-10-06T07:20:42.421Z"
+  },
+  "notes": [
+    "Fixture: 16 candidates copied verbatim from the TASK-AI-108 evaluation file (.eval-input.json, not committed); no key material."
+  ],
+  "candidates": [
+    {
+      "candidateKey": "direct-http::9router::9router::bzl::ninerouter::UNKNOWN::bzl/auto:free",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "bzl",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "bzl/auto:free",
+      "source": "9router",
+      "status": "ALIVE",
+      "proofLevel": "API_PASS",
+      "observedAt": "2026-10-06T07:07:32.828Z",
+      "latencyMs": 3035,
+      "http": 200,
+      "quota": {
+        "state": "OK",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-r3-confirm.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::direct::::amd-radeon::*::UNKNOWN::DeepSeek-V4-Flash-Vision-Exp",
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "gateway": "",
+      "upstream": "amd-radeon",
+      "accountId": "*",
+      "quotaScope": "UNKNOWN",
+      "model": "DeepSeek-V4-Flash-Vision-Exp",
+      "source": "amd-radeon",
+      "status": "ALIVE",
+      "proofLevel": "API_PASS",
+      "observedAt": "2026-10-06T04:25:15.495Z",
+      "latencyMs": 2868,
+      "http": 200,
+      "quota": {
+        "state": "OK",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": {
+        "canonicalModelId": "deepseek-v4-flash-vision-exp",
+        "tier": "T2",
+        "scores": [
+          {
+            "name": "LiveBench",
+            "metric": "overall (release 2026-06-25)",
+            "score": 76.8
+          },
+          {
+            "name": "LiveBench",
+            "metric": "coding (release 2026-06-25)",
+            "score": 68.2
+          }
+        ]
+      },
+      "evidenceRef": [
+        ".inputs/live-20261006.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::direct::::corti::*::UNKNOWN::corti-s1",
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "gateway": "",
+      "upstream": "corti",
+      "accountId": "*",
+      "quotaScope": "UNKNOWN",
+      "model": "corti-s1",
+      "source": "corti",
+      "status": "ALIVE",
+      "proofLevel": "API_PASS",
+      "observedAt": "2026-10-06T05:43:58.057Z",
+      "latencyMs": 2718,
+      "http": 200,
+      "quota": {
+        "state": "OK",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": "omit temperature,max_tokens",
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-fix-20261006.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::direct::::thegrid::*::UNKNOWN::agent-max",
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "gateway": "",
+      "upstream": "thegrid",
+      "accountId": "*",
+      "quotaScope": "UNKNOWN",
+      "model": "agent-max",
+      "source": "thegrid",
+      "status": "ALIVE",
+      "proofLevel": "API_PASS",
+      "observedAt": "2026-10-06T05:17:45.199Z",
+      "latencyMs": 1877,
+      "http": 200,
+      "quota": {
+        "state": "OK",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": "concurrency<=2",
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-fix-20261006.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::ag::ninerouter::UNKNOWN::ag/claude-opus-4-6-thinking",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "ag/claude-opus-4-6-thinking",
+      "source": "9router",
+      "status": "QUOTA",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T07:09:42.402Z",
+      "latencyMs": 7,
+      "http": 503,
+      "quota": {
+        "state": "EXHAUSTED",
+        "resetAt": "2026-10-10T15:22:44.402Z",
+        "resetText": "reset after 104h 13m 2s",
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-r3-quota.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::cl::ninerouter::UNKNOWN::cl/anthropic/claude-opus-5.5:batch",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cl",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "cl/anthropic/claude-opus-5.5:batch",
+      "source": "9router",
+      "status": "QUOTA",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T07:18:04.418Z",
+      "latencyMs": 610,
+      "http": 429,
+      "quota": {
+        "state": "RATE_LIMITED",
+        "resetAt": "2026-10-06T07:18:06.418Z",
+        "resetText": "reset after 2s",
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-r3-quota.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::alims-intl::ninerouter::UNKNOWN::alims-intl/qwen3-coder-next",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "alims-intl",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "alims-intl/qwen3-coder-next",
+      "source": "9router",
+      "status": "QUOTA",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T07:10:23.582Z",
+      "latencyMs": 350,
+      "http": 400,
+      "quota": {
+        "state": "EXHAUSTED",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-r3-quota.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::cl::ninerouter::UNKNOWN::cl/cognitivecomputations/dolphin-mistral-24b-venice-edition",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cl",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "cl/cognitivecomputations/dolphin-mistral-24b-venice-edition",
+      "source": "9router",
+      "status": "QUOTA",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T07:18:05.327Z",
+      "latencyMs": 698,
+      "http": 429,
+      "quota": {
+        "state": "RATE_LIMITED",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-r3-quota.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::direct::::bai::bai#1::UNKNOWN::claude-fable-5",
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "gateway": "",
+      "upstream": "bai",
+      "accountId": "bai#1",
+      "quotaScope": "UNKNOWN",
+      "model": "claude-fable-5",
+      "source": "bai#1",
+      "status": "QUOTA",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T07:20:21.454Z",
+      "latencyMs": 196,
+      "http": 403,
+      "quota": {
+        "state": "EXHAUSTED",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "account"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-r3-quota.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::cohere::ninerouter::UNKNOWN::cohere/command-a-03-2025",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cohere",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "cohere/command-a-03-2025",
+      "source": "9router",
+      "status": "NOT_SUPPORTED_ON_ROUTE",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T06:29:48.208Z",
+      "latencyMs": 401,
+      "http": 405,
+      "quota": {
+        "state": "UNKNOWN",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": "route unsupported via 9router",
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-audit2-20261006.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::cerebras::ninerouter::UNKNOWN::cerebras/llama-4-scout-17b-16e-instruct",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cerebras",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "cerebras/llama-4-scout-17b-16e-instruct",
+      "source": "9router",
+      "status": "RETIRED",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T07:13:31.209Z",
+      "latencyMs": 5,
+      "http": 404,
+      "quota": {
+        "state": "UNKNOWN",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-r3-quota.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::cc::ninerouter::UNKNOWN::cc/claude-fable-5",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "cc",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "cc/claude-fable-5",
+      "source": "9router",
+      "status": "AUTH",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T07:13:09.038Z",
+      "latencyMs": 4,
+      "http": 401,
+      "quota": {
+        "state": "UNKNOWN",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-r3-quota.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::gh::ninerouter::UNKNOWN::gh/copilot-search-b",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "gh",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "gh/copilot-search-b",
+      "source": "9router",
+      "status": "TOOL_ONLY",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T06:29:50.319Z",
+      "latencyMs": 1855,
+      "http": 200,
+      "quota": {
+        "state": "UNKNOWN",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-audit2-20261006.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::ag::ninerouter::UNKNOWN::ag/gemini-3-flash-agent",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "ag",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "ag/gemini-3-flash-agent",
+      "source": "9router",
+      "status": "MODEL_WRONG_ANSWER",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T06:28:39.661Z",
+      "latencyMs": 1244,
+      "http": 200,
+      "quota": {
+        "state": "UNKNOWN",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-audit2-20261006.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::xmtp::ninerouter::UNKNOWN::xmtp/mimo-v2.5-tts",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "xmtp",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "xmtp/mimo-v2.5-tts",
+      "source": "9router",
+      "status": "CALL_CONTRACT",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T06:31:29.328Z",
+      "latencyMs": 100,
+      "http": 400,
+      "quota": {
+        "state": "UNKNOWN",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-audit2-20261006.jsonl"
+      ]
+    },
+    {
+      "candidateKey": "direct-http::9router::9router::llm7::ninerouter::UNKNOWN::llm7/deepseek-v4-flash",
+      "harness": "direct-http",
+      "accessPath": "9router",
+      "gateway": "9router",
+      "upstream": "llm7",
+      "accountId": "ninerouter",
+      "quotaScope": "UNKNOWN",
+      "model": "llm7/deepseek-v4-flash",
+      "source": "9router",
+      "status": "UPSTREAM_ERROR",
+      "proofLevel": null,
+      "observedAt": "2026-10-06T06:30:04.597Z",
+      "latencyMs": 2019,
+      "http": 400,
+      "quota": {
+        "state": "UNKNOWN",
+        "resetAt": null,
+        "resetText": null,
+        "remaining": "UNKNOWN",
+        "scope": "upstream"
+      },
+      "callContract": null,
+      "benchmark": null,
+      "evidenceRef": [
+        ".inputs/live-audit2-20261006.jsonl"
+      ]
+    }
+  ],
+  "cooldowns": {
+    "direct-http::9router::9router::ag::ninerouter::UNKNOWN::ag/claude-opus-4-6-thinking": {
+      "lastStatus": "blocked",
+      "blockedAt": "2026-10-06T07:09:42.402Z",
+      "blockReason": "quota_exhausted (HTTP 503)",
+      "cause": "quota_exhausted",
+      "scope": "upstream",
+      "cooldownMs": 375182000,
+      "resetTime": "2026-10-10T15:22:44.402Z",
+      "humanAction": "none"
+    },
+    "direct-http::9router::9router::cl::ninerouter::UNKNOWN::cl/anthropic/claude-opus-5.5:batch": {
+      "lastStatus": "blocked",
+      "blockedAt": "2026-10-06T07:18:04.418Z",
+      "blockReason": "upstream_rate_limit (HTTP 429)",
+      "cause": "upstream_rate_limit",
+      "scope": "upstream",
+      "cooldownMs": 2000,
+      "resetTime": "2026-10-06T07:18:06.418Z",
+      "humanAction": "none"
+    },
+    "direct-http::9router::9router::alims-intl::ninerouter::UNKNOWN::alims-intl/qwen3-coder-next": {
+      "lastStatus": "blocked",
+      "blockedAt": "2026-10-06T07:10:23.582Z",
+      "blockReason": "quota_exhausted (HTTP 400)",
+      "cause": "quota_exhausted",
+      "scope": "upstream",
+      "cooldownMs": 3600000,
+      "resetTime": null,
+      "humanAction": "none"
+    },
+    "direct-http::9router::9router::cl::ninerouter::UNKNOWN::cl/cognitivecomputations/dolphin-mistral-24b-venice-edition": {
+      "lastStatus": "blocked",
+      "blockedAt": "2026-10-06T07:18:05.327Z",
+      "blockReason": "upstream_rate_limit (HTTP 429)",
+      "cause": "upstream_rate_limit",
+      "scope": "upstream",
+      "cooldownMs": 300000,
+      "resetTime": null,
+      "humanAction": "none"
+    },
+    "direct-http::direct::::bai::bai#1::UNKNOWN::claude-fable-5": {
+      "lastStatus": "blocked",
+      "blockedAt": "2026-10-06T07:20:21.454Z",
+      "blockReason": "quota_exhausted (HTTP 403)",
+      "cause": "quota_exhausted",
+      "scope": "account",
+      "cooldownMs": 3600000,
+      "resetTime": null,
+      "humanAction": "none"
+    }
+  }
+}

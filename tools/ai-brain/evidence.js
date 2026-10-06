@@ -584,6 +584,7 @@ module.exports = {
   saveEvidence,
   migrateEvidence,
   candidateKey,
+  findCombo,
   recordProbe,
   recordOutcome: recordProbe,
   getEvidence,
