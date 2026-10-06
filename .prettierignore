@@ -39,3 +39,9 @@ DASHBOARD.html
 # secret-surface guard fails closed on a file it cannot read (AC-AI-18-06).
 # Prettier cannot parse it, and making it parsable would delete the fixture.
 tools/ai-guard/test/fixtures/unparsable-source/
+
+# TASK-AI-109: Superpowers skills vendored verbatim from upstream; they stay
+# byte-identical to the pinned commit and are consumed only through the
+# ShipDe lock in tools/ai-brain/skill-pack.js.
+tools/ai-brain/skills/superpowers/skills/
+tools/ai-brain/skills/superpowers/LICENSE

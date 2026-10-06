@@ -9,12 +9,28 @@
  * or account; those come only from the pinned candidate.
  */
 
+const skillPack = require('./skill-pack');
+
 const PUBLISHER_BOUNDARY =
   'Publisher boundary: you are a worker. Never push, never open a Pull Request, ' +
   'never merge. Submit your evidence and stop.';
 
 const CLEAN_TREE_RULES =
   'Clean tree requirement: work only inside the allowed paths, do not create scratch/backup/test files outside them, delete any temporary file before finishing, finish with exactly one local commit and a clean git status (no untracked files).';
+
+/**
+ * The item's role, resolved the same way orchestrate.js resolves it: the
+ * roleRequirement the plan pinned, else the item role, else the default
+ * author lane. prompt-compiler.js keeps its own copy so it never imports the
+ * orchestration loop (which imports this module back).
+ */
+function roleOf(item) {
+  return (
+    (item && item.roleRequirement && item.roleRequirement.role) ||
+    (item && item.role) ||
+    'author.foundation'
+  );
+}
 
 /**
  * @param item  a plan work item (from planner.js)
@@ -115,6 +131,11 @@ function compilePrompt(item, ctx) {
     );
   }
   if (c.candidateKey) lines.push('Pinned candidateKey: ' + c.candidateKey);
+  // ShipDe rules (publisher boundary, clean tree) stay first; the locked
+  // skill pack comes last. Roles without a pack, or SHIPDE_SKILL_PACK=off,
+  // leave the prompt byte-identical to before.
+  const pack = skillPack.lockedPack(roleOf(i));
+  if (pack) lines.push(pack);
   return lines.join('\n');
 }
 
@@ -183,6 +204,9 @@ function compileReviewPrompt(item, ctx) {
   if (c.candidateKey) {
     lines.push('Pinned candidateKey: ' + c.candidateKey);
   }
+  // The review lane always runs the reviewer pack, after the ShipDe rules.
+  const reviewPack = skillPack.lockedPack('reviewer');
+  if (reviewPack) lines.push(reviewPack);
   return lines.join('\n');
 }
 
