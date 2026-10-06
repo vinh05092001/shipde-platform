@@ -45,3 +45,8 @@ tools/ai-guard/test/fixtures/unparsable-source/
 # ShipDe lock in tools/ai-brain/skill-pack.js.
 tools/ai-brain/skills/superpowers/skills/
 tools/ai-brain/skills/superpowers/LICENSE
+
+# TASK-AI-109 lane D: Impeccable skills vendored verbatim from upstream; the
+# whole tree (including NOTICE.md hash records) stays byte-stable and is
+# consumed only through the ShipDe lock in tools/ai-brain/skill-pack.js.
+tools/ai-brain/skills/impeccable/

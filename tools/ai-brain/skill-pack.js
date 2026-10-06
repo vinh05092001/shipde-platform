@@ -15,12 +15,21 @@
  *
  * Rollback without a code change: SHIPDE_SKILL_PACK=off disables the pack
  * (lockedPack returns '' and prompts are byte-identical to before).
+ *
+ * Lane D (UI roles): role ids containing "ui" or "frontend" run the vendored
+ * pbakaus/impeccable texts from skills/impeccable/ instead of Superpowers.
+ * Every UI pack starts with UI_AUTHORITY_HEADER — the approved screen
+ * specification, DESIGN.md when approved, and the ShipDe UX rules are the
+ * authority, Impeccable only helps implement them — then the same LOCK_HEADER
+ * and line lock as lane A. Lines invoking `npx impeccable` or a live browser
+ * are kept but tagged as install-and-Work-Item-gated tools.
  */
 
 const fs = require('fs');
 const path = require('path');
 
 const SUPERPOWERS_ROOT = path.join(__dirname, 'skills', 'superpowers');
+const IMPECCABLE_ROOT = path.join(__dirname, 'skills', 'impeccable');
 
 /**
  * Pure data: role -> vendored skills. `file` is the sub-path kept from the
@@ -71,6 +80,39 @@ const ROLE_SKILLS = Object.freeze({
     }),
   ]),
 });
+
+/**
+ * Pure data: UI roles -> vendored Impeccable texts. `file` is the sub-path
+ * kept from the upstream pbakaus/impeccable repo, relative to
+ * skills/impeccable/.
+ */
+const UI_ROLE_SKILLS = Object.freeze([
+  Object.freeze({ name: 'impeccable', file: '.agent/skills/impeccable/SKILL.md' }),
+  Object.freeze({
+    name: 'impeccable-audit',
+    file: '.agent/skills/impeccable/reference/audit.md',
+  }),
+  Object.freeze({
+    name: 'impeccable-critique',
+    file: '.agent/skills/impeccable/reference/critique.md',
+  }),
+  Object.freeze({
+    name: 'impeccable-craft',
+    file: '.agent/skills/impeccable/reference/craft.md',
+  }),
+  Object.freeze({
+    name: 'impeccable-craft-floor',
+    file: '.agent/skills/impeccable/reference/craft-floor.md',
+  }),
+  Object.freeze({
+    name: 'impeccable-component-review',
+    file: '.agent/skills/impeccable/reference/component-review.md',
+  }),
+  Object.freeze({
+    name: 'impeccable-clarify',
+    file: '.agent/skills/impeccable/reference/clarify.md',
+  }),
+]);
 
 /**
  * ShipDe override paragraph. It always comes first, before any skill text.
@@ -126,17 +168,51 @@ const FORBIDDEN_PATTERNS = Object.freeze([
   }),
 ]);
 
+/**
+ * ShipDe UI authority paragraph. UI packs always start with it, before
+ * LOCK_HEADER and before any Impeccable text: the approved screen
+ * specification rules the UI, Impeccable only helps implement it.
+ */
+const UI_AUTHORITY_HEADER = [
+  'ShipDe UI authority. Read this before any Impeccable text below.',
+  '- The approved screen specification is the authority for every UI decision: DESIGN.md when it is approved, and docs/product-spec/docs/03-ux/DESIGN-SYSTEM-UX-RULES.md until then.',
+  '- Impeccable guidance only helps implement that authority and never overrides the layout, copy, states or flows defined there.',
+  '- Every UI state required by the specification must be implemented: loading, empty, validation, error, forbidden, partial, success, recovery.',
+].join('\n');
+
+/**
+ * Impeccable tool lines survive the lock, but only as install-and-Work-Item
+ * gated tools. The tag is inserted directly after the tool phrase so table
+ * rows and command lists keep their shape.
+ */
+const UI_TOOL_TAG = '[tool: run only if installed and allowed by the Work Item]';
+const UI_TOOL_ANCHORS = Object.freeze([
+  'Bash(npx impeccable *)',
+  'in the live browser; no manual picking',
+]);
+
 const textCache = new Map();
 
-function readSkillText(file) {
-  if (!textCache.has(file)) {
-    textCache.set(file, fs.readFileSync(path.join(SUPERPOWERS_ROOT, file), 'utf8'));
+function readSkillText(root, file) {
+  const key = root + '::' + file;
+  if (!textCache.has(key)) {
+    textCache.set(key, fs.readFileSync(path.join(root, file), 'utf8'));
   }
-  return textCache.get(file);
+  return textCache.get(key);
+}
+
+/**
+ * UI roles are role ids containing "ui" or "frontend", for example author.ui
+ * or reviewer.ui.
+ */
+function isUiRole(role) {
+  const r = typeof role === 'string' ? role.toLowerCase() : '';
+  return r.includes('ui') || r.includes('frontend');
 }
 
 function entriesFor(role) {
   const r = typeof role === 'string' ? role : '';
+  if (isUiRole(r)) return UI_ROLE_SKILLS;
   if (r === 'author' || r.startsWith('author.')) return ROLE_SKILLS['author.*'];
   if (r === 'reviewer') return ROLE_SKILLS.reviewer;
   if (r === 'security-review') return ROLE_SKILLS['security-review'];
@@ -144,14 +220,15 @@ function entriesFor(role) {
 }
 
 /**
- * @param role e.g. 'author.foundation', 'reviewer', 'security-review'
+ * @param role e.g. 'author.foundation', 'reviewer', 'security-review', 'author.ui'
  * @returns [{ name, file, text }] in pack order, [] when the role has no pack
  */
 function skillsFor(role) {
+  const root = isUiRole(role) ? IMPECCABLE_ROOT : SUPERPOWERS_ROOT;
   return entriesFor(role).map((entry) => ({
     name: entry.name,
     file: entry.file,
-    text: readSkillText(entry.file),
+    text: readSkillText(root, entry.file),
   }));
 }
 
@@ -171,31 +248,54 @@ function applyLock(text) {
     .join('\n');
 }
 
+function tagToolLine(line) {
+  const lo = line.toLowerCase();
+  if (!lo.includes('npx impeccable') && !lo.includes('in the live browser')) return line;
+  for (const anchor of UI_TOOL_ANCHORS) {
+    const at = line.indexOf(anchor);
+    if (at >= 0) {
+      return line.slice(0, at + anchor.length) + ' ' + UI_TOOL_TAG + line.slice(at + anchor.length);
+    }
+  }
+  return line + ' ' + UI_TOOL_TAG;
+}
+
+function applyUiLock(text) {
+  return applyLock(text).split('\n').map(tagToolLine).join('\n');
+}
+
 function packDisabled() {
   return process.env.SHIPDE_SKILL_PACK === 'off';
 }
 
 /**
- * @param role e.g. 'author.foundation', 'reviewer', 'security-review'
- * @returns LOCK_HEADER + the locked skill texts, or '' when the role has no
- * pack or SHIPDE_SKILL_PACK=off.
+ * @param role e.g. 'author.foundation', 'reviewer', 'security-review', 'author.ui'
+ * @returns UI_AUTHORITY_HEADER + LOCK_HEADER + the locked skill texts for UI
+ * roles, LOCK_HEADER + the locked skill texts otherwise, or '' when the role
+ * has no pack or SHIPDE_SKILL_PACK=off.
  */
 function lockedPack(role) {
   if (packDisabled()) return '';
   const skills = skillsFor(role);
   if (skills.length === 0) return '';
-  const parts = [LOCK_HEADER];
+  const ui = isUiRole(role);
+  const parts = [];
+  if (ui) parts.push(UI_AUTHORITY_HEADER);
+  parts.push(LOCK_HEADER);
   for (const skill of skills) {
     parts.push('## Skill: ' + skill.name + ' (' + skill.file + ')');
-    parts.push(applyLock(skill.text));
+    parts.push(ui ? applyUiLock(skill.text) : applyLock(skill.text));
   }
   return parts.join('\n');
 }
 
 module.exports = {
   ROLE_SKILLS,
+  UI_ROLE_SKILLS,
   FORBIDDEN_PATTERNS,
   LOCK_HEADER,
+  UI_AUTHORITY_HEADER,
+  UI_TOOL_TAG,
   skillsFor,
   lockLine,
   lockedPack,
