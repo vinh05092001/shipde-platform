@@ -739,10 +739,13 @@ function reviewLane(
       if (opts && typeof opts.onReviewerLaunchFailure === 'function') {
         opts.onReviewerLaunchFailure(res, candidate, opts && opts.attempt);
       }
+      // TASK-AI-114 R01: a launch failure is a failed reviewer attempt, never a
+      // verdict. It carries no verdict value, so nothing downstream can record
+      // it as a review round or read it as CHANGES_REQUIRED.
       return {
         pass: false,
         sha: targetSha,
-        verdict: 'CHANGES_REQUIRED',
+        verdict: 'LAUNCH_FAILED',
         reviewer: reviewerIdentity,
         res,
         launchFailed: true,
@@ -2675,6 +2678,35 @@ async function selectCandidateForProfile(
 }
 
 /**
+ * TASK-AI-114 (D3): dependencies first, dependents after them, plan order
+ * preserved for everything else. A dependency the planner already refused
+ * (unknown id or cycle) cannot appear here; the visiting mark still keeps a
+ * malformed edge from recursing forever.
+ */
+function orderDependenciesFirst(items) {
+  const list = Array.isArray(items) ? items : [];
+  const byId = new Map();
+  for (const item of list) {
+    if (item && item.id) byId.set(item.id, item);
+  }
+  const state = new Map();
+  const ordered = [];
+  const visit = (item) => {
+    const mark = state.get(item.id);
+    if (mark === 'done' || mark === 'visiting') return;
+    state.set(item.id, 'visiting');
+    for (const depId of item.dependencies || []) {
+      const depItem = byId.get(depId);
+      if (depItem) visit(depItem);
+    }
+    state.set(item.id, 'done');
+    ordered.push(item);
+  };
+  for (const item of list) visit(item);
+  return ordered;
+}
+
+/**
  * @param goal  user goal text
  * @param opts  {
  *   specs, specText, candidates, registry, run, isolatedWorker, tests, reviewer,
@@ -2830,7 +2862,28 @@ async function runOrchestration(goal, opts) {
     return reason;
   };
 
-  for (const item of log.plan.workItems) {
+  // TASK-AI-114 R04 (D3): a dependency is worked and reviewed before its
+  // dependent, so the dependent can start from the dependency's PASS commit.
+  // The order is stable: items without dependencies keep the plan order, and a
+  // dependent is only moved after its own dependencies.
+  const dependencyPassShaOf = (depId) => {
+    for (let i = log.reviews.length - 1; i >= 0; i -= 1) {
+      const entry = log.reviews[i];
+      if (
+        entry &&
+        entry.workItemId === depId &&
+        entry.sha &&
+        SHA_40.test(String(entry.sha)) &&
+        entry.review &&
+        entry.review.status === ReviewStatus.COMPLETED
+      ) {
+        return String(entry.sha).trim();
+      }
+    }
+    return null;
+  };
+
+  for (const item of orderDependenciesFirst(log.plan.workItems)) {
     if (log.plan.errors.length > 0) {
       // AI-64-R01: nothing is deferred silently; the errors travel in the run's
       // own outcome record and every item is reported as deferred.
@@ -3002,6 +3055,60 @@ async function runOrchestration(goal, opts) {
       continue;
     }
 
+    // TASK-AI-114 R03/R04 (D2/D3): a dependent work item is launched only after
+    // its dependency is PASS, and it starts from the dependency's reviewed PASS
+    // commit rather than the global --base-sha. The handoff is recorded as
+    // `baseSha` with `baseFrom: <dependency id>`. Multiple dependencies are
+    // refused fail-closed (MULTI_DEPENDENCY_BASE_UNSUPPORTED): one launch base
+    // cannot be several commits at once.
+    const depIds = Array.isArray(item.dependencies)
+      ? item.dependencies.filter((depId) => typeof depId === 'string' && depId)
+      : [];
+    let dependencyBase = null;
+    if (depIds.length > 1) {
+      const reason =
+        'MULTI_DEPENDENCY_BASE_UNSUPPORTED: ' +
+        item.id +
+        ' depends on ' +
+        depIds.join(', ') +
+        '; a dependent launch takes exactly one dependency commit';
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.REFUSED,
+          workItemId: item.id,
+          role: roleOf(item),
+          detail: reason,
+        },
+        logOpts
+      );
+      outcome(item, ItemStatus.BLOCKED, reason);
+      continue;
+    }
+    if (depIds.length === 1) {
+      const depId = depIds[0];
+      const depPassSha = dependencyPassShaOf(depId);
+      if (!depPassSha) {
+        const reason =
+          'DEPENDENCY_NOT_PASSED: ' +
+          item.id +
+          ' needs a PASS review of ' +
+          depId +
+          ' before it can be launched';
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.REFUSED,
+            workItemId: item.id,
+            role: roleOf(item),
+            detail: reason,
+          },
+          logOpts
+        );
+        outcome(item, ItemStatus.BLOCKED, reason);
+        continue;
+      }
+      dependencyBase = { baseSha: depPassSha, baseFrom: depId };
+    }
+
     const launch = {
       workItemId: item.id,
       firstChoice: null,
@@ -3136,7 +3243,8 @@ async function runOrchestration(goal, opts) {
         prompt,
         branch,
         base: o.base || 'main',
-        baseSha: o.baseSha || null,
+        // TASK-AI-114 R03: a dependent starts from its dependency's PASS commit.
+        baseSha: dependencyBase ? dependencyBase.baseSha : o.baseSha || null,
         hostWorktree: o.isolatedWorker ? hostWorktree : null,
         workerRoot: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || null,
         cwd: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd,
@@ -3229,6 +3337,11 @@ async function runOrchestration(goal, opts) {
             failureClassification: launchClassification,
             workerSha: headShaOf(job.cwd) || o.sha || null,
             failBefore: null,
+            // TASK-AI-114 R03: the commit this launch starts from and where it
+            // came from: the dependency id for a dependent, the global
+            // --base-sha otherwise.
+            baseSha: job.baseSha || null,
+            baseFrom: dependencyBase ? dependencyBase.baseFrom : null,
           },
         });
       }
@@ -3487,6 +3600,10 @@ async function runOrchestration(goal, opts) {
           sessionId: reported.id,
           detail: 'DURABLE_SESSION_ID',
           worktree: job.cwd || null,
+          // TASK-AI-114 R03: the handoff commit, with the dependency it came
+          // from when this work item is a dependent.
+          baseSha: job.baseSha || null,
+          baseFrom: dependencyBase ? dependencyBase.baseFrom : null,
         },
         logOpts
       );
@@ -4043,19 +4160,80 @@ async function reviewItem(
   };
   let roundCount = 0;
   let lastManifestResult = null;
-  let reviewerLaunchFailed = false;
+  // TASK-AI-114 R02: an old checkpoint can carry a "review round" whose result
+  // is a launch failure. A launch failure is not a verdict, so that round is
+  // discarded here and the commit is reviewed again.
+  const resumedReviewRounds = (options.resumedReviewRounds || []).filter(
+    (round) => !(round && round.result && round.result.launchFailed === true)
+  );
   // CK-R01 (P1-1): every completed review round accumulates here, so each
   // checkpoint write carries the whole history instead of only the resumed
   // rounds plus the current one. An interruption after round 2 keeps rounds 1
   // and 2 on disk; a replayed round rewrites no record and duplicates nothing.
-  const recordedReviewRounds = (options.resumedReviewRounds || []).slice();
+  const recordedReviewRounds = resumedReviewRounds.slice();
+
+  // TASK-AI-114 R01: when every reviewer candidate failed to launch there is no
+  // verdict at all, and the item is blocked with REVIEWER_UNAVAILABLE.
+  const reviewerUnavailableResult = () => ({
+    pass: false,
+    sha: null,
+    cause: 'REVIEWER_UNAVAILABLE',
+    verdict: 'REFUSED',
+    findings: [
+      {
+        id: 'REVIEWER_UNAVAILABLE',
+        open: true,
+        detail: 'every reviewer candidate failed to launch; no verdict was produced',
+      },
+    ],
+  });
+  // The existing cause survives a launch failure: when the failed launches
+  // exhausted a reviewer failure domain (its attempt cap is reached) and no
+  // alternate domain remains, the item ends BLOCKED with
+  // NO_ALTERNATE_FAILURE_DOMAIN. REVIEWER_UNAVAILABLE is only for the other
+  // exhaustion, where candidates failed to launch without exhausting any
+  // reviewer failure domain.
+  const reviewerDomainAttempts = new Map();
+  const noAlternateFailureDomainResult = () => ({
+    pass: false,
+    sha: null,
+    cause: 'NO_ALTERNATE_FAILURE_DOMAIN',
+    verdict: 'REFUSED',
+    findings: [
+      {
+        id: 'NO_ALTERNATE_FAILURE_DOMAIN',
+        open: true,
+        detail: 'no eligible reviewer candidate remains outside exhausted failure domains',
+      },
+    ],
+  });
+  const reviewerExhaustionResult = () => {
+    const domainCapExhausted = Array.from(reviewerDomainAttempts.values()).some((v) => v >= 2);
+    if (!domainCapExhausted) {
+      return reviewerUnavailableResult();
+    }
+    if (logOpts) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.REFUSED,
+          workItemId: (item ? item.id : 'item') + '-review',
+          role: 'reviewer',
+          attempt: activeReviewerAttempt,
+          attemptNumber: activeReviewerAttempt,
+          detail: 'NO_ALTERNATE_FAILURE_DOMAIN',
+        },
+        logOpts
+      );
+    }
+    return noAlternateFailureDomainResult();
+  };
 
   const reviewWithManifest = async (currentSha) => {
     roundCount += 1;
     activeReviewerAttempt = reviewerAttempt + roundCount - 1;
 
     let rev;
-    const priorRound = (options.resumedReviewRounds || []).find(
+    const priorRound = resumedReviewRounds.find(
       (round) => round && round.sha === currentSha && round.result
     );
     if (priorRound) {
@@ -4063,188 +4241,224 @@ async function reviewItem(
     } else if (typeof o.reviewer === 'function') {
       rev = await o.reviewer(currentSha);
     } else {
-      if (roundCount === 1) {
-        activeReviewerKey = reviewerIdentity;
-      } else {
-        const nextFailedKeys = new Set([...failedKeySet, ...reviewerTriedKeySet]);
-        const nextDecision = await selectCandidateForProfile(
-          {
-            id: item.id + '-review',
-            roleRequirement: { role: 'reviewer' },
-            complexity: item.complexity,
-            qualityFloor: reviewerQualityFloor,
-            writerCandidateKey: writerKey,
-            failedKeys: nextFailedKeys,
-            excludedDomains: excludedDomainSet,
-            domainAttempts: domainAttemptsMap,
-            attempt: activeReviewerAttempt,
-            attemptNumber: activeReviewerAttempt,
-          },
-          candidates,
-          forbiddenDomains,
-          evidenceData,
-          o,
-          logOpts,
-          now,
-          {
-            failedKeys: nextFailedKeys,
-            excludedDomains: excludedDomainSet,
-            domainAttempts: domainAttemptsMap,
-            attempt: activeReviewerAttempt,
-            attemptNumber: activeReviewerAttempt,
-          }
-        );
-        if (nextDecision.chosen) {
-          activeReviewerKey = nextDecision.chosen;
-          triedKeySet.add(activeReviewerKey);
-          if (item && item.triedKeys instanceof Set) item.triedKeys.add(activeReviewerKey);
-          if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(activeReviewerKey);
-        } else {
-          // Same rule as the first selection: never override a Controller
-          // refusal, and compare the configured reviewer by canonical key.
-          const nextResult = (nextDecision && nextDecision.result) || {};
-          const nextJudged =
-            (Array.isArray(nextResult.rejected) && nextResult.rejected.length > 0) ||
-            (Array.isArray(nextResult.ranking) && nextResult.ranking.length > 0);
-          const configuredDomain = configuredReviewerDomain;
-          const configuredStillEligible = Boolean(
-            configuredReviewerKey &&
-            configuredReviewerCandidate &&
-            !nextJudged &&
-            !nextFailedKeys.has(configuredReviewerKey) &&
-            !nextFailedKeys.has(configuredReviewer) &&
-            !failedKeySet.has(configuredReviewerKey) &&
-            !excludedDomainSet.has(configuredDomain) &&
-            (domainAttemptsMap.get(configuredDomain) || 0) < 2
-          );
-          activeReviewerKey = configuredStillEligible ? configuredReviewerKey : null;
+      // TASK-AI-114 R01: a reviewer launch failure is not a verdict. It is
+      // kept as a classified failed reviewer attempt and the lane is retried
+      // with the next reviewer; only a real parsed verdict becomes a review
+      // round, and a launch failure never triggers a repair. When the retries
+      // are exhausted the cause keeps the existing distinction: a failure
+      // domain exhausted by the launches ends BLOCKED NO_ALTERNATE_FAILURE_DOMAIN,
+      // otherwise the review is blocked with REVIEWER_UNAVAILABLE.
+      let launchAttempt = 0;
+      let launchFailures = 0;
+      for (;;) {
+        launchAttempt += 1;
+        if (launchAttempt > 1) {
+          activeReviewerAttempt += 1;
         }
-      }
-
-      if (!activeReviewerKey) {
-        const isCapExhausted =
-          Array.from(domainAttemptsMap.values()).some((v) => v >= 2) ||
-          excludedDomainSet.size > 0 ||
-          failedKeySet.size > 0;
-        const refusalReason = isCapExhausted
-          ? 'NO_ALTERNATE_FAILURE_DOMAIN'
-          : 'NO_REVIEWER_CANDIDATE';
-        if (logOpts) {
-          decisions.recordDecision(
+        if (roundCount === 1 && launchAttempt === 1) {
+          activeReviewerKey = reviewerIdentity;
+        } else {
+          const nextFailedKeys = new Set([...failedKeySet, ...reviewerTriedKeySet]);
+          const nextDecision = await selectCandidateForProfile(
             {
-              stage: decisions.Stage.REFUSED,
-              workItemId: (item ? item.id : 'item') + '-review',
-              role: 'reviewer',
+              id: item.id + '-review',
+              roleRequirement: { role: 'reviewer' },
+              complexity: item.complexity,
+              qualityFloor: reviewerQualityFloor,
+              writerCandidateKey: writerKey,
+              failedKeys: nextFailedKeys,
+              excludedDomains: excludedDomainSet,
+              domainAttempts: domainAttemptsMap,
               attempt: activeReviewerAttempt,
               attemptNumber: activeReviewerAttempt,
-              detail: refusalReason,
             },
-            logOpts
-          );
-        }
-        return {
-          pass: false,
-          sha: null,
-          cause: refusalReason,
-          verdict: 'REFUSED',
-          findings: [
+            candidates,
+            forbiddenDomains,
+            evidenceData,
+            o,
+            logOpts,
+            now,
             {
-              id: refusalReason,
-              open: true,
-              detail: 'no eligible reviewer candidate available outside writer failure domain',
-            },
-          ],
-        };
-      }
-
-      const activeReviewerCandidate =
-        (Array.isArray(candidates) ? candidates : []).find(
-          (candidate) => candidateKey(candidate) === activeReviewerKey
-        ) ||
-        (configuredReviewerCandidate && activeReviewerKey === configuredReviewerKey
-          ? configuredReviewerCandidate
-          : parseCandidateKey(activeReviewerKey));
-      const activeReviewerDomain = activeReviewerCandidate
-        ? routing.canonicalFailureDomain(activeReviewerCandidate)
-        : routing.canonicalFailureDomain(activeReviewerKey);
-      if (
-        failedKeySet.has(activeReviewerKey) ||
-        reviewerTriedKeySet.has(activeReviewerKey) ||
-        excludedDomainSet.has(activeReviewerDomain) ||
-        (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2
-      ) {
-        activeReviewerKey = null;
-        // sha: null makes the review loop stop BLOCKED with this cause
-        // instead of treating the refusal as a failed review and repairing.
-        return {
-          pass: false,
-          sha: null,
-          cause: 'NO_ALTERNATE_FAILURE_DOMAIN',
-          verdict: 'REFUSED',
-          findings: [
-            {
-              id: 'NO_ALTERNATE_FAILURE_DOMAIN',
-              open: true,
-              detail: 'no eligible reviewer candidate remains outside excluded failure domains',
-            },
-          ],
-        };
-      }
-
-      const laneFn = reviewLane(
-        Object.assign({}, o, { reviewerIdentity: activeReviewerKey }),
-        item,
-        session,
-        log,
-        logOpts,
-        launcher,
-        usageDir,
-        now,
-        candidates,
-        evidenceData,
-        registry,
-        {
-          failedKeys: failedKeySet,
-          excludedDomains: excludedDomainSet,
-          domainAttempts: domainAttemptsMap,
-          triedKeys: triedKeySet,
-          evidenceDir,
-          attempt: activeReviewerAttempt,
-          onReviewerLaunch: (candidate) => {
-            // Count against the same canonical domain the launch guard used,
-            // even when the reviewer is not in the injected candidate pool.
-            const reviewerDomain = routing.canonicalFailureDomain(
-              candidate || activeReviewerCandidate
-            );
-            const attemptsInDomain = domainAttemptsMap.get(reviewerDomain) || 0;
-            const attempts = attemptsInDomain + 1;
-            domainAttemptsMap.set(reviewerDomain, attempts);
-            if (attempts >= 2) {
-              excludedDomainSet.add(reviewerDomain);
-              if (item && item.excludedDomains instanceof Set) {
-                item.excludedDomains.add(reviewerDomain);
-              }
+              failedKeys: nextFailedKeys,
+              excludedDomains: excludedDomainSet,
+              domainAttempts: domainAttemptsMap,
+              attempt: activeReviewerAttempt,
+              attemptNumber: activeReviewerAttempt,
             }
-            return true;
-          },
-          onReviewerLaunchFailure: (res, cand) =>
-            recordReviewerLaunchFailure(res, cand, activeReviewerAttempt),
+          );
+          if (nextDecision.chosen) {
+            activeReviewerKey = nextDecision.chosen;
+            triedKeySet.add(activeReviewerKey);
+            if (item && item.triedKeys instanceof Set) item.triedKeys.add(activeReviewerKey);
+            if (options.triedKeys && options.triedKeys.add)
+              options.triedKeys.add(activeReviewerKey);
+          } else {
+            // Same rule as the first selection: never override a Controller
+            // refusal, and compare the configured reviewer by canonical key.
+            const nextResult = (nextDecision && nextDecision.result) || {};
+            const nextJudged =
+              (Array.isArray(nextResult.rejected) && nextResult.rejected.length > 0) ||
+              (Array.isArray(nextResult.ranking) && nextResult.ranking.length > 0);
+            const configuredDomain = configuredReviewerDomain;
+            const configuredStillEligible = Boolean(
+              configuredReviewerKey &&
+              configuredReviewerCandidate &&
+              !nextJudged &&
+              !nextFailedKeys.has(configuredReviewerKey) &&
+              !nextFailedKeys.has(configuredReviewer) &&
+              !failedKeySet.has(configuredReviewerKey) &&
+              !excludedDomainSet.has(configuredDomain) &&
+              (domainAttemptsMap.get(configuredDomain) || 0) < 2
+            );
+            activeReviewerKey = configuredStillEligible ? configuredReviewerKey : null;
+          }
         }
-      );
-      rev = await laneFn(currentSha);
-      reviewerLaunchFailed = Boolean(rev && rev.launchFailed);
+
+        if (!activeReviewerKey) {
+          if (launchFailures > 0) {
+            return reviewerExhaustionResult();
+          }
+          const isCapExhausted =
+            Array.from(domainAttemptsMap.values()).some((v) => v >= 2) ||
+            excludedDomainSet.size > 0 ||
+            failedKeySet.size > 0;
+          const refusalReason = isCapExhausted
+            ? 'NO_ALTERNATE_FAILURE_DOMAIN'
+            : 'NO_REVIEWER_CANDIDATE';
+          if (logOpts) {
+            decisions.recordDecision(
+              {
+                stage: decisions.Stage.REFUSED,
+                workItemId: (item ? item.id : 'item') + '-review',
+                role: 'reviewer',
+                attempt: activeReviewerAttempt,
+                attemptNumber: activeReviewerAttempt,
+                detail: refusalReason,
+              },
+              logOpts
+            );
+          }
+          return {
+            pass: false,
+            sha: null,
+            cause: refusalReason,
+            verdict: 'REFUSED',
+            findings: [
+              {
+                id: refusalReason,
+                open: true,
+                detail: 'no eligible reviewer candidate available outside writer failure domain',
+              },
+            ],
+          };
+        }
+
+        const activeReviewerCandidate =
+          (Array.isArray(candidates) ? candidates : []).find(
+            (candidate) => candidateKey(candidate) === activeReviewerKey
+          ) ||
+          (configuredReviewerCandidate && activeReviewerKey === configuredReviewerKey
+            ? configuredReviewerCandidate
+            : parseCandidateKey(activeReviewerKey));
+        const activeReviewerDomain = activeReviewerCandidate
+          ? routing.canonicalFailureDomain(activeReviewerCandidate)
+          : routing.canonicalFailureDomain(activeReviewerKey);
+        if (
+          failedKeySet.has(activeReviewerKey) ||
+          reviewerTriedKeySet.has(activeReviewerKey) ||
+          excludedDomainSet.has(activeReviewerDomain) ||
+          (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2
+        ) {
+          activeReviewerKey = null;
+          if (launchFailures > 0) {
+            return reviewerExhaustionResult();
+          }
+          // sha: null makes the review loop stop BLOCKED with this cause
+          // instead of treating the refusal as a failed review and repairing.
+          return {
+            pass: false,
+            sha: null,
+            cause: 'NO_ALTERNATE_FAILURE_DOMAIN',
+            verdict: 'REFUSED',
+            findings: [
+              {
+                id: 'NO_ALTERNATE_FAILURE_DOMAIN',
+                open: true,
+                detail: 'no eligible reviewer candidate remains outside excluded failure domains',
+              },
+            ],
+          };
+        }
+
+        const laneFn = reviewLane(
+          Object.assign({}, o, { reviewerIdentity: activeReviewerKey }),
+          item,
+          session,
+          log,
+          logOpts,
+          launcher,
+          usageDir,
+          now,
+          candidates,
+          evidenceData,
+          registry,
+          {
+            failedKeys: failedKeySet,
+            excludedDomains: excludedDomainSet,
+            domainAttempts: domainAttemptsMap,
+            triedKeys: triedKeySet,
+            evidenceDir,
+            attempt: activeReviewerAttempt,
+            onReviewerLaunch: (candidate) => {
+              // Count against the same canonical domain the launch guard used,
+              // even when the reviewer is not in the injected candidate pool.
+              const reviewerDomain = routing.canonicalFailureDomain(
+                candidate || activeReviewerCandidate
+              );
+              const attemptsInDomain = domainAttemptsMap.get(reviewerDomain) || 0;
+              const attempts = attemptsInDomain + 1;
+              domainAttemptsMap.set(reviewerDomain, attempts);
+              reviewerDomainAttempts.set(
+                reviewerDomain,
+                (reviewerDomainAttempts.get(reviewerDomain) || 0) + 1
+              );
+              if (attempts >= 2) {
+                excludedDomainSet.add(reviewerDomain);
+                if (item && item.excludedDomains instanceof Set) {
+                  item.excludedDomains.add(reviewerDomain);
+                }
+              }
+              return true;
+            },
+            onReviewerLaunchFailure: (res, cand) =>
+              recordReviewerLaunchFailure(res, cand, activeReviewerAttempt),
+          }
+        );
+        rev = await laneFn(currentSha);
+        if (!rev || !rev.launchFailed) {
+          break;
+        }
+        // The failure is already classified and recorded by
+        // onReviewerLaunchFailure; retry with the next reviewer instead of
+        // recording a round or repairing.
+        launchFailures += 1;
+        if (launchAttempt > (Array.isArray(candidates) ? candidates.length : 0) + 1) {
+          return reviewerExhaustionResult();
+        }
+      }
     }
-    if (!priorRound) {
+    // TASK-AI-114 R01: only a real parsed verdict creates a review round.
+    if (!priorRound && !(rev && rev.launchFailed)) {
       recordedReviewRounds.push({
         round: recordedReviewRounds.length + 1,
         sha: currentSha,
         result: rev,
       });
-    }
-    if (typeof options.onCheckpoint === 'function') {
-      options.onCheckpoint('review_round_completed', {
-        reviewRounds: recordedReviewRounds.slice(),
-      });
+      if (typeof options.onCheckpoint === 'function') {
+        options.onCheckpoint('review_round_completed', {
+          reviewRounds: recordedReviewRounds.slice(),
+        });
+      }
     }
 
     const repoCandidates = [workerRoot, session && session.worktree, o.cwd, process.cwd()].filter(
@@ -4319,10 +4533,6 @@ async function reviewItem(
       runTests: captureRunTests,
       review: reviewWithManifest,
       repair: async (...args) => {
-        if (reviewerLaunchFailed) {
-          reviewerLaunchFailed = false;
-          return { sha: args[1] };
-        }
         if (typeof o.repairer === 'function') {
           const repaired = await o.repairer(...args);
           if (typeof options.onCheckpoint === 'function') {
