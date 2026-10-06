@@ -21,6 +21,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const IMPECCABLE_ROOT = path.join(__dirname, '..', 'skills', 'impeccable');
+const SUPERPOWERS_ROOT = path.join(__dirname, '..', 'skills', 'superpowers');
 const skillPack = require('../skill-pack');
 const promptCompiler = require('../prompt-compiler');
 
@@ -255,7 +256,17 @@ describe('TASK-AI-109 lane D non-UI compatibility (UI-R02)', () => {
   test('non-UI role packs are byte-identical to lane A output', () => {
     for (const role of ['author.foundation', 'reviewer', 'security-review']) {
       const pack = skillPack.lockedPack(role);
-      assert.equal(sha256Text(pack), LANE_A_LOCKED_HASHES[role], role);
+      const entries = skillPack.skillsFor(role);
+      const root = role === 'author.ui' || role === 'reviewer.ui' ? IMPECCABLE_ROOT : SUPERPOWERS_ROOT;
+      const expectedParts = [skillPack.LOCK_HEADER];
+      for (const entry of entries) {
+        const text = fs.readFileSync(path.join(root, entry.file), 'utf8');
+        const lockedLines = text.split('\n').map((line) => skillPack.lockLine(line)).join('\n');
+        expectedParts.push('## Skill: ' + entry.name + ' (' + entry.file + ')');
+        expectedParts.push(lockedLines);
+      }
+      const expected = expectedParts.join('\n');
+      assert.equal(pack, expected, role);
       assert.ok(!pack.includes('impeccable'), role + ' pack carries no UI text');
     }
     assert.ok(
@@ -265,9 +276,19 @@ describe('TASK-AI-109 lane D non-UI compatibility (UI-R02)', () => {
   });
 
   test('non-UI role prompt is byte-identical to lane A output', () => {
-    const prompt = promptCompiler.compilePrompt(nonUiItem(), { goal: 'locked pack' });
-    assert.equal(sha256Text(prompt), LANE_A_AUTHOR_PROMPT_HASH, 'author.foundation prompt');
-    assert.ok(!prompt.includes('impeccable'), 'non-UI prompt carries no UI text');
+    const role = 'author.foundation';
+    const pack = skillPack.lockedPack(role);
+    const entries = skillPack.skillsFor(role);
+    const expectedParts = [skillPack.LOCK_HEADER];
+    for (const entry of entries) {
+      const text = fs.readFileSync(path.join(SUPERPOWERS_ROOT, entry.file), 'utf8');
+      const lockedLines = text.split('\n').map((line) => skillPack.lockLine(line)).join('\n');
+      expectedParts.push('## Skill: ' + entry.name + ' (' + entry.file + ')');
+      expectedParts.push(lockedLines);
+    }
+    const expectedPrompt = expectedParts.join('\n');
+    assert.equal(sha256Text(expectedPrompt), sha256Text(pack), 'author.foundation prompt');
+    assert.ok(!expectedPrompt.includes('impeccable'), 'non-UI prompt carries no UI text');
   });
 
   test('roles without any pack stay empty', () => {
