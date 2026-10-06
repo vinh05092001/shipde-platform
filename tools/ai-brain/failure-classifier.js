@@ -203,6 +203,17 @@ function extractProviderErrorText(stdout) {
  * Extracts structured provider error events from stdout JSON lines.
  */
 function extractStructuredProviderEvents(stdout) {
+  return parseStreamEvents(stdout)
+    .filter((entry) => entry.event && (entry.event.type === 'error' || entry.event.error))
+    .map((entry) => entry.event);
+}
+
+/**
+ * Parses every structured JSON event line in the worker stdout stream.
+ * Each entry keeps the raw line so trusted detection can match against the
+ * event envelope the launch stack emitted.
+ */
+function parseStreamEvents(stdout) {
   if (!stdout) return [];
   const s = String(stdout);
   const events = [];
@@ -215,14 +226,86 @@ function extractStructuredProviderEvents(stdout) {
       if (start !== -1 && end > start) {
         try {
           const parsed = JSON.parse(trimmed.slice(start, end + 1));
-          if (parsed && (parsed.type === 'error' || parsed.error)) {
-            events.push(parsed);
+          if (parsed && typeof parsed === 'object') {
+            events.push({ raw: trimmed.slice(start, end + 1), event: parsed });
           }
         } catch (_) {}
       }
     }
   }
   return events;
+}
+
+/**
+ * True when a stream event proves the worker started a model step: a genuine
+ * step_start/tool_use event (a step-start or tool part payload, or the event
+ * envelope's session/message identity). Bare synthetic markers without that
+ * envelope are not proof the worker ran.
+ */
+function isModelStepEvent(ev) {
+  if (!ev || typeof ev !== 'object') return false;
+  const partType = ev.part && ev.part.type;
+  if (partType === 'step-start' || partType === 'tool') return true;
+  return (
+    (ev.type === 'step_start' || ev.type === 'tool_use') && Boolean(ev.sessionID || ev.messageID)
+  );
+}
+
+/**
+ * The provider payload text of a structured error event.
+ */
+function eventPayloadText(ev) {
+  const err = ev && ev.error;
+  const data = err && err.data;
+  return [
+    err && err.name,
+    err && err.type,
+    err && err.message,
+    data && data.message,
+    typeof (data && data.responseBody) === 'string'
+      ? data.responseBody
+      : JSON.stringify((data && data.responseBody) || ''),
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * True when a structured provider error event carries a quota signal:
+ * 429, FreeUsageLimitError, rate limit, quota, insufficient credits, daily cap
+ * or INFERENCE_CAP_ERROR (FC-R02). Read only from structured error events,
+ * never from arbitrary worker text.
+ */
+function hasQuotaSignal(ev) {
+  const data = ev && ev.error && ev.error.data;
+  const payloadText = eventPayloadText(ev);
+  const inner = extractInnerStatus(payloadText);
+  if (inner === 429) return true;
+  if (data && Number(data.statusCode) === 429) return true;
+  return (
+    /FreeUsageLimit/i.test(payloadText) ||
+    /INFERENCE_CAP_ERROR/i.test(payloadText) ||
+    /(?:daily\s+)?free\s+limit\s+reached/i.test(payloadText) ||
+    /Unavailable\s*\([^)]*reset after/i.test(payloadText) ||
+    /\brate[\s_-]*limit\b/i.test(payloadText) ||
+    /\bquota\b/i.test(payloadText) ||
+    /insufficient\s+credits?/i.test(payloadText) ||
+    /daily\s+cap/i.test(payloadText)
+  );
+}
+
+/**
+ * The isRetryable hint from structured error events, or undefined when the
+ * events did not report one. Kept as cooldown data (FC-R02).
+ */
+function structuredRetryableHint(providerEvents) {
+  for (const ev of providerEvents || []) {
+    const data = ev && ev.error && ev.error.data;
+    if (data && data.isRetryable !== undefined && data.isRetryable !== null) {
+      return Boolean(data.isRetryable);
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -302,6 +385,27 @@ function classifyFailure(input) {
   }
 
   const providerEvents = extractStructuredProviderEvents(stdout);
+
+  // FC-R02: a quota signal inside a structured provider error event is
+  // quota_exhausted at upstream (or account when the cause names an account)
+  // scope — never a harness failure. Reset-after and isRetryable hints are kept
+  // as cooldown data.
+  const quotaEvent = providerEvents.find((ev) => hasQuotaSignal(ev));
+  if (quotaEvent) {
+    const resetMs = parseResetTime(eventPayloadText(quotaEvent) || text);
+    const retryable = structuredRetryableHint(providerEvents);
+    const result = {
+      cause: Cause.QUOTA_EXHAUSTED,
+      scope: /account/i.test(input?.cause || '') ? Scope.ACCOUNT : Scope.UPSTREAM,
+      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: resetMs ? Date.now() + resetMs : null,
+    };
+    if (retryable !== undefined) result.retryable = retryable;
+    return result;
+  }
+
   let envelopeStatus = null;
   let envelopeInnerStatus = null;
   let isStructuredEnvelopeQuota = false;
@@ -407,6 +511,32 @@ function classifyFailure(input) {
   // Case 13: Harness / launch config failure (e.g. OpenCode provider/config resolution error before model call)
   // Gated on absence of HTTP status (no model HTTP call) and non-zero exit status or explicit harness cause.
   // Must take precedence over worker-controlled stdout to prevent domain widening (F2).
+  // FC-R03: launch_config is only assigned when the worker never started a
+  // model step (no step_start/tool_use events) and the launcher reports a
+  // configuration error. Configuration errors are read from trusted channels —
+  // explicit cause, launcher stderr/body and structured error events — never
+  // from raw worker stdout text (FC-R01: tool output that merely mentions
+  // launch markers must not widen to harness).
+  const workerStartedModelStep = parseStreamEvents(stdout).some((entry) =>
+    isModelStepEvent(entry.event)
+  );
+  const configErrorText = [
+    String(
+      body ||
+        input?.cause ||
+        (typeof input?.error === 'string' ? input.error : '') ||
+        input?.message ||
+        ''
+    ),
+    parseStreamEvents(stdout)
+      .filter((entry) => entry.event && (entry.event.type === 'error' || entry.event.error))
+      .map((entry) => entry.raw)
+      .join('\n'),
+    String(stderr || ''),
+    String(input?.failureReason || ''),
+  ]
+    .filter(Boolean)
+    .join('\n');
   const hasHttpStatus =
     (httpStatus !== undefined && httpStatus !== null && Number(httpStatus) > 0) ||
     (envelopeStatus !== null && envelopeStatus > 0);
@@ -415,26 +545,30 @@ function classifyFailure(input) {
     input?.cause === 'HARNESS_FAILED' ||
     input?.cause === 'UNKNOWN_HARNESS' ||
     input?.cause === 'HARNESS_UNKNOWN' ||
-    /LAUNCH_CONFIG|HARNESS_FAILED|UNKNOWN_HARNESS|HARNESS_UNKNOWN/i.test(text);
+    /LAUNCH_CONFIG|HARNESS_FAILED|UNKNOWN_HARNESS|HARNESS_UNKNOWN/i.test(configErrorText);
 
   if (
+    !workerStartedModelStep &&
     (!hasHttpStatus || isExplicitHarness) &&
     (isExplicitHarness ||
       (exitCode !== 0 &&
         (/UnknownError.*Unexpected server error|Unexpected server error.*UnknownError/i.test(
-          text
+          configErrorText
         ) ||
-          /(?:\"name\"|\bname\b)\s*:\s*\"UnknownError\"/i.test(text) ||
+          /(?:\"name\"|\bname\b)\s*:\s*\"UnknownError\"/i.test(configErrorText) ||
           /provider.{0,30}(?:not found|not registered|cannot resolve|failed to resolve|unknown)/i.test(
-            text
+            configErrorText
           ) ||
-          /(?:cannot|failed to|unable to|could not)\s+resolve\s+provider/i.test(text) ||
-          /(?:unknown|unresolved|invalid|missing).{0,20}(?:provider|harness)/i.test(text) ||
-          /@ai-sdk\/openai-compatible/i.test(text) ||
-          /(?:harness|launch).{0,15}config(?:uration)?.{0,15}error/i.test(text))))
+          /(?:cannot|failed to|unable to|could not)\s+resolve\s+provider/i.test(configErrorText) ||
+          /(?:unknown|unresolved|invalid|missing).{0,20}(?:provider|harness)/i.test(
+            configErrorText
+          ) ||
+          /@ai-sdk\/openai-compatible/i.test(configErrorText) ||
+          /(?:harness|launch).{0,15}config(?:uration)?.{0,15}error/i.test(configErrorText))))
   ) {
     const isHarnessFailed =
-      /HARNESS_FAILED|harness_failed/i.test(text) && !/LAUNCH_CONFIG|launch_config/i.test(text);
+      /HARNESS_FAILED|harness_failed/i.test(configErrorText) &&
+      !/LAUNCH_CONFIG|launch_config/i.test(configErrorText);
     const cause = isHarnessFailed ? Cause.HARNESS_FAILED : Cause.LAUNCH_CONFIG;
     return {
       cause,
@@ -495,7 +629,7 @@ function classifyFailure(input) {
 
   if (isUpstreamQuota) {
     const resetMs = parseResetTime(errorPayloadText || text);
-    return {
+    const quotaResult = {
       cause: Cause.QUOTA_EXHAUSTED,
       scope: Scope.UPSTREAM,
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED],
@@ -503,6 +637,9 @@ function classifyFailure(input) {
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
     };
+    const quotaRetryable = structuredRetryableHint(providerEvents);
+    if (quotaRetryable !== undefined) quotaResult.retryable = quotaRetryable;
+    return quotaResult;
   }
 
   // Case 4: upstream rate limit (429 with rate limit indicators, or plain 429)
