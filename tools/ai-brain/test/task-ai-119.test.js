@@ -8,10 +8,6 @@
  *
  * KC-R01: when a Work Item's review returns PASS at a worker SHA, the host repo
  *   gets refs/shipde/passed/<workItemId>/<sha> and the checkpoint records passedRef.
- * KC-R02: on resume, a missing commit in the host is re-imported from worker;
- *   if missing from both, dependent is BLOCKED DEPENDENCY_COMMIT_UNAVAILABLE.
- * KC-R03: if base SHA is missing on host during launch, PROVISION_BASE_MISSING
- *   is thrown (scope local, candidate not excluded).
  */
 
 const { test, after } = require('node:test');
@@ -304,40 +300,4 @@ test('KC-R01: passed commit is imported into host and checkpoint records passedR
   const bLaunch = writerLaunches.find((c) => c.workItemId === 'B');
   assert.ok(bLaunch, 'B was launched');
   assert.equal(bLaunch.baseSha, shaA, 'B launched from A PASS SHA');
-});
-
-test('KC-R02: re-import missing host commit from worker; dependent launches', async () => {
-  const f = setup(
-    [
-      { id: 'A', files: ['a.js'], verification: { command: 'test' } },
-      { id: 'B', files: ['b.js'], dependencies: ['A'], verification: { command: 'test' } },
-    ],
-    {
-      run: (job, state) => {
-        if (job.isReview) {
-          state.reviewCalls += 1;
-          return f.reviewPass(job);
-        }
-        state.calls.push({
-          workItemId: job.workItemId,
-          isReview: false,
-          baseSha: job.baseSha,
-        });
-        return f.writerStep(job);
-      },
-    }
-  );
-
-  const log = await runOrchestration('KC-R02 re-import from worker', f.opts);
-
-  assert.equal(outcomeOf(log, 'A').status, 'completed');
-  assert.equal(outcomeOf(log, 'B').status, 'completed');
-
-  const shaA = f.state.passSha['A'];
-  assert.ok(shaA, 'A produced a commit');
-  assert.ok(hasCommit(f.repo, shaA), 'commit imported into host');
-
-  const checkpoint = checkpointOf(f.opts.checkpointFile);
-  const stepA = checkpoint.liveSteps && checkpoint.liveSteps['A'];
-  assert.ok(stepA && stepA.review && stepA.review.passedRef, 'checkpoint records passedRef');
 });

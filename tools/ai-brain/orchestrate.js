@@ -3128,30 +3128,6 @@ async function runOrchestration(goal, opts) {
         outcome(item, ItemStatus.BLOCKED, reason);
         continue;
       }
-      // TASK-AI-119: ensure commit exists in host; import if missing
-      if (hostCwd && depPassSha) {
-        try {
-          if (!hasCommit(hostCwd, depPassSha, spawnSync)) {
-            const depStep = liveSteps[depId] || {};
-            const workerRootForImport =
-              (depStep.review && depStep.review.entry && depStep.review.entry.workerRoot) ||
-              (depStep.launch && depStep.launch.worktree) ||
-              hostCwd;
-            const imp = importPassedCommit({
-              hostRepo: hostCwd,
-              workerRoot: workerRootForImport,
-              workItemId: depId,
-              sha: depPassSha,
-              spawnSync,
-            });
-            if (!imp.ok) {
-              continue;
-            }
-          }
-        } catch (e) {
-          continue;
-        }
-      }
       dependencyBase = { baseSha: depPassSha, baseFrom: depId };
     }
 
