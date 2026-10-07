@@ -58,7 +58,12 @@ const sourcesApi = require('./sources');
 const jev = require('./jev');
 const { candidateKey } = require('./candidates');
 const { parseCandidateKey } = require('./discovery/identity');
-const { classifyFailure, isReplayable } = require('./failure-classifier');
+const {
+  classifyFailure,
+  isReplayable,
+  isolationVerdictBlockReason,
+  ISOLATION_VERDICT_HUMAN_ACTION,
+} = require('./failure-classifier');
 const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
 
 const ItemStatus = Object.freeze({
@@ -102,6 +107,11 @@ function buildDefaults() {
     publications: [],
     publication: null,
     isolation: null,
+    // TASK-AI-121 LF-R03: the worker timeout this run launches with (ms).
+    workerTimeoutMs: null,
+    // TASK-AI-121 LF-R02: set when a stale/missing isolation verdict stopped
+    // the run — the reason and the operator action that clears it.
+    isolationStop: null,
     status: null,
     refusal: null,
   };
@@ -184,6 +194,9 @@ function resolveLauncher(o, isolatedLauncher) {
       onProvisioned: typeof o.onProvisioned === 'function' ? o.onProvisioned : undefined,
       candidateKey: job.candidateKey || null,
       gateway: job.gateway || null,
+      // TASK-AI-121 LF-R03: the worker timeout the run was given, for writer,
+      // reviewer and repair launches alike.
+      workerTimeoutMs: o.workerTimeoutMs || job.workerTimeoutMs || undefined,
     });
   };
 }
@@ -194,6 +207,50 @@ function harnessFor(candidate) {
   } catch (err) {
     return null;
   }
+}
+
+/**
+ * TASK-AI-121 LF-R01: the launcher's own message for a failed launch — the
+ * error a throw carried, the refusal a route returned, then the process text.
+ * This is the "real error message" the failed decision entry must keep.
+ */
+function launchFailureText(res) {
+  return String((res && (res.stderr || res.refusal || res.failureReason || res.body)) || '');
+}
+
+/**
+ * A "failed" decision entry keeps the classified cause for provider failures,
+ * but for a local launch infrastructure failure (LF-R01) the cause alone threw
+ * the real message away — the exact thing a supervisor needs. The message is
+ * scrubbed of secrets and capped at 300 chars.
+ */
+function failureMessageOf(res) {
+  return decisions.scrubText(launchFailureText(res)).trim().slice(0, 300);
+}
+
+function failedDecisionDetail(classification, res) {
+  const message = failureMessageOf(res);
+  if (classification.scope === 'local' && message) return message;
+  return classification.cause;
+}
+
+/**
+ * LF-R02: a stale or missing isolation verdict fails every candidate the same
+ * way, so the run records why it stopped and the operator action that clears
+ * it. The first detection wins; the stop travels on the run log.
+ */
+function markIsolationVerdictStop(log, res, classification) {
+  if (!log || (classification && classification.scope !== 'local')) return null;
+  const reasonCode = isolationVerdictBlockReason(launchFailureText(res));
+  if (!reasonCode) return null;
+  if (!log.isolationStop) {
+    log.isolationStop = {
+      reasonCode,
+      reason: failureMessageOf(res) || reasonCode,
+      humanAction: ISOLATION_VERDICT_HUMAN_ACTION,
+    };
+  }
+  return log.isolationStop;
 }
 
 function resolveLaunchRoute(candidate, options, registry) {
@@ -708,6 +765,7 @@ function reviewLane(
         reviewOf: item ? item.id : undefined,
       },
       exercise: o.exercise || null,
+      workerTimeoutMs: o.workerTimeoutMs || null,
     };
 
     let res = null;
@@ -2724,7 +2782,7 @@ function orderDependenciesFirst(items) {
  *   the loop is too.
  */
 async function runOrchestration(goal, opts) {
-  const o = opts || {};
+  const o = Object.assign({}, opts || {});
   const now = o.now || Date.now();
   const log = buildDefaults();
   log.goal = goal || null;
@@ -2753,6 +2811,15 @@ async function runOrchestration(goal, opts) {
   if (!decisionDir) {
     return refuseRun(log, 'DECISION_LOG_DIR_MISSING: a live run must be able to write its trace');
   }
+
+  // TASK-AI-121 LF-R03: the worker timeout every launch (writer, reviewer and
+  // repair) starts with, in milliseconds. The CLI flag's unit is minutes
+  // (--worker-timeout-min, 1..240, default 30); this is its run-log form.
+  o.workerTimeoutMs =
+    Number.isFinite(Number(o.workerTimeoutMs)) && Number(o.workerTimeoutMs) > 0
+      ? Number(o.workerTimeoutMs)
+      : 30 * 60 * 1000;
+  log.workerTimeoutMs = o.workerTimeoutMs;
 
   // 2. The worker boundary (AI-64-P03). The isolated launcher is obtained
   //    whenever the run asks for the boundary, whether or not a runner was
@@ -3029,6 +3096,17 @@ async function runOrchestration(goal, opts) {
         log.resumed = { stage: 'resumed', workItemId: item.id, from: savedStep.stage };
         continue;
       }
+    }
+    // TASK-AI-121 LF-R02: the run already stopped on an unusable isolation
+    // verdict. Every remaining item would fail the same way, so nothing else is
+    // launched; each is reported BLOCKED with the reason and the operator
+    // action. Items already completed above stay completed.
+    if (log.isolationStop) {
+      outcome(item, ItemStatus.BLOCKED, log.isolationStop.reason, {
+        reasonCode: log.isolationStop.reasonCode,
+        humanAction: log.isolationStop.humanAction,
+      });
+      continue;
     }
     if (logUnreadable) {
       decisions.recordDecision(
@@ -3439,6 +3517,7 @@ async function runOrchestration(goal, opts) {
         title: String(item.id),
         labels: { workItem: String(item.id), role: roleOf(item) },
         exercise: o.exercise || null,
+        workerTimeoutMs: o.workerTimeoutMs || null,
       };
 
       // The exercise runner exists in the worker's own tree before the agent
@@ -3465,10 +3544,19 @@ async function runOrchestration(goal, opts) {
       let res = null;
       if (replayedLaunch) {
         launchClassification = previousLaunch.failureClassification || null;
+        // TASK-AI-121 LF-R01: the replay reports the failure the first attempt
+        // earned, real message included — an empty stderr here is what lost the
+        // message for every attempt after the first.
+        const recordedMessage =
+          previousLaunch.failureMessage ||
+          (launchClassification &&
+            launchClassification.evidence &&
+            launchClassification.evidence.stderr) ||
+          '';
         res = {
           exitCode: previousLaunch.exitCode,
           stdout: previousLaunch.hasArtifact ? 'checkpointed worker output was present' : '',
-          stderr: '',
+          stderr: recordedMessage,
           sessionId: previousLaunch.sessionId,
         };
         job.failBefore = previousLaunch.failBefore || null;
@@ -3540,6 +3628,9 @@ async function runOrchestration(goal, opts) {
             hasArtifact: Boolean(res && (res.stdout || res.artifact)),
             sessionId: launchHandle,
             failureClassification: launchClassification,
+            // TASK-AI-121 LF-R01: the real launcher message (scrubbed, capped)
+            // so a replayed attempt records it instead of losing it.
+            failureMessage: launchFailed ? failureMessageOf(res) : null,
             workerSha: headShaOf(job.cwd) || o.sha || null,
             failBefore: null,
             // TASK-AI-114 R03: the commit this launch starts from and where it
@@ -3663,14 +3754,18 @@ async function runOrchestration(goal, opts) {
           // attempt budget either, so the same candidate key stays selectable.
           domainAttempts.set(candDomain, Math.max(0, (domainAttempts.get(candDomain) || 0) - 1));
         }
-        evidenceData = recordLaunchFailureEvidence(
-          evidenceDir,
-          evidenceData,
-          candidate,
-          res,
-          classification,
-          now
-        );
+        // TASK-AI-121 LF-R01: a local launch infrastructure failure is not
+        // evidence about the candidate — it sets no evidence cooldown.
+        if (classification.scope !== 'local') {
+          evidenceData = recordLaunchFailureEvidence(
+            evidenceDir,
+            evidenceData,
+            candidate,
+            res,
+            classification,
+            now
+          );
+        }
 
         const attemptsInDomain = domainAttempts.get(candDomain) || 0;
         const domainExhausted = attemptsInDomain >= 2;
@@ -3724,18 +3819,32 @@ async function runOrchestration(goal, opts) {
             chosenKey: decision.chosen,
             branch: job.branch,
             failureScope: classification.scope,
-            detail: classification.cause,
+            cause: classification.cause,
+            // TASK-AI-121 LF-R01: a local launch infrastructure failure keeps
+            // the launcher's real message (first 300 chars, no secrets) so the
+            // human reads what actually broke, not the cause word alone.
+            detail: failedDecisionDetail(classification, res),
             excluded: Array.from(allFailedExcluded),
             excludedSet: Array.from(allFailedExcluded),
             // RT-R01: record retryable and retryAfterMs from classification
             retryable: classification.retryable,
             retryAfterMs: classification.retryAfterMs,
             // RT-R03: the cooldown this failure actually sets — the longer of
-            // the default cooldown and the provider's own retryAfterMs.
-            cooldownMs: evidence.effectiveCooldownMs(classification),
+            // the default cooldown and the provider's own retryAfterMs. A local
+            // failure sets none.
+            cooldownMs:
+              classification.scope === 'local' ? 0 : evidence.effectiveCooldownMs(classification),
           },
           logOpts
         );
+        // TASK-AI-121 LF-R02: a stale or missing isolation verdict would fail
+        // every candidate identically. The run stops here — one launch, one
+        // recorded failure, and the operator action that clears it.
+        const verdictStop = markIsolationVerdictStop(log, res, classification);
+        if (verdictStop) {
+          blockedReason = verdictStop.reason;
+          break;
+        }
         const alternate = candidates.find((c) => {
           const k = candidateKey(c);
           if (failedKeys.has(k)) return false;
@@ -3844,16 +3953,22 @@ async function runOrchestration(goal, opts) {
         failedKeys.size > 0 ||
         triedKeys.size > 0 ||
         Boolean(blockedReason && blockedReason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN'));
+      const verdictStop = log.isolationStop || null;
       outcome(
         item,
         ItemStatus.BLOCKED,
-        blockedReason || 'NO_LIVE_SESSION',
+        (verdictStop && verdictStop.reason) || blockedReason || 'NO_LIVE_SESSION',
         Object.assign(
           {
-            reasonCode: isNoAlt ? 'NO_ALTERNATE_FAILURE_DOMAIN' : undefined,
+            reasonCode: verdictStop
+              ? verdictStop.reasonCode
+              : isNoAlt
+                ? 'NO_ALTERNATE_FAILURE_DOMAIN'
+                : undefined,
             triedKeys: Array.from(triedKeys),
             tried: Array.from(triedKeys),
           },
+          verdictStop ? { humanAction: verdictStop.humanAction } : undefined,
           launch.cause ? { cause: launch.cause } : undefined
         )
       );
@@ -3887,6 +4002,12 @@ async function runOrchestration(goal, opts) {
             triedKeys: Array.from(triedKeys),
             tried: Array.from(triedKeys),
           },
+          log.isolationStop
+            ? {
+                reasonCode: log.isolationStop.reasonCode,
+                humanAction: log.isolationStop.humanAction,
+              }
+            : undefined,
           launch.cause ? { cause: launch.cause } : undefined
         )
       );
@@ -3946,17 +4067,26 @@ async function runOrchestration(goal, opts) {
         reviewed.reason === 'NO_ALTERNATE_FAILURE_DOMAIN' ||
         (item.blockedReason && item.blockedReason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN')) ||
         (reviewed.reason && reviewed.reason.startsWith('NO_ALTERNATE_FAILURE_DOMAIN'));
+      const verdictStop = log.isolationStop || null;
       const extra = Object.assign(
         {
           triedKeys: Array.from(triedKeys),
           tried: Array.from(triedKeys),
         },
-        isNoAlt ? { reasonCode: 'NO_ALTERNATE_FAILURE_DOMAIN' } : undefined
+        verdictStop
+          ? { reasonCode: verdictStop.reasonCode, humanAction: verdictStop.humanAction }
+          : isNoAlt
+            ? { reasonCode: 'NO_ALTERNATE_FAILURE_DOMAIN' }
+            : undefined
       );
       outcome(
         item,
         ItemStatus.BLOCKED,
-        isNoAlt ? 'NO_ALTERNATE_FAILURE_DOMAIN' : reviewed.reason,
+        verdictStop
+          ? verdictStop.reason
+          : isNoAlt
+            ? 'NO_ALTERNATE_FAILURE_DOMAIN'
+            : reviewed.reason,
         extra
       );
     }
@@ -4378,11 +4508,7 @@ async function reviewItem(
     const revKey = (candidate && candidateKey(candidate)) || activeReviewerKey || reviewerIdentity;
     if (!revKey) return;
     reviewerTriedKeySet.add(revKey);
-    failedKeySet.add(revKey);
     triedKeySet.add(revKey);
-    if (item && item.failedKeys instanceof Set) item.failedKeys.add(revKey);
-    if (session && session.failedKeys instanceof Set) session.failedKeys.add(revKey);
-    if (options && options.failedKeys instanceof Set) options.failedKeys.add(revKey);
     if (item && item.triedKeys instanceof Set) item.triedKeys.add(revKey);
     if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(revKey);
 
@@ -4408,12 +4534,22 @@ async function reviewItem(
       timedOut: isLauncherTimedOut,
     });
 
+    // TASK-AI-121 LF-R01: a local launch infrastructure failure blames no
+    // reviewer key, no failure domain and sets no evidence cooldown.
+    const blaming = classification.scope !== 'local';
+    if (blaming) {
+      failedKeySet.add(revKey);
+      if (item && item.failedKeys instanceof Set) item.failedKeys.add(revKey);
+      if (session && session.failedKeys instanceof Set) session.failedKeys.add(revKey);
+      if (options && options.failedKeys instanceof Set) options.failedKeys.add(revKey);
+    }
+
     const candDomain = routing.canonicalFailureDomain(cand);
     const attemptsInDomain = domainAttemptsMap.get(candDomain) || 0;
     const domainExhausted = attemptsInDomain >= 2;
     const scopeExcludesDomain =
       classification.scope === 'upstream' || classification.scope === 'gateway';
-    if ((scopeExcludesDomain || domainExhausted) && candDomain) {
+    if (blaming && (scopeExcludesDomain || domainExhausted) && candDomain) {
       excludedDomainSet.add(candDomain);
       if (item && item.excludedDomains instanceof Set) item.excludedDomains.add(candDomain);
       if (session && session.excludedDomains instanceof Set)
@@ -4422,7 +4558,7 @@ async function reviewItem(
         options.excludedDomains.add(candDomain);
     }
 
-    if (evidenceDir || evidenceData) {
+    if (blaming && (evidenceDir || evidenceData)) {
       evidenceData = recordLaunchFailureEvidence(
         evidenceDir,
         evidenceData,
@@ -4459,18 +4595,25 @@ async function reviewItem(
           chosenKey: revKey,
           branch: (session && session.branch) || o.branch,
           failureScope: classification.scope,
-          detail: classification.cause,
+          cause: classification.cause,
+          // TASK-AI-121 LF-R01: the real launcher message survives a local
+          // launch infrastructure failure.
+          detail: failedDecisionDetail(classification, res),
           excluded: Array.from(allExcluded),
           excludedSet: Array.from(allExcluded),
           // RT-R01: record retryable and retryAfterMs from classification
           retryable: classification.retryable,
           retryAfterMs: classification.retryAfterMs,
           // RT-R03: the cooldown this failure actually sets.
-          cooldownMs: evidence.effectiveCooldownMs(classification),
+          cooldownMs:
+            classification.scope === 'local' ? 0 : evidence.effectiveCooldownMs(classification),
         },
         logOpts
       );
     }
+    // TASK-AI-121 LF-R02: an unusable isolation verdict stops the whole run —
+    // no reviewer would fail any differently.
+    markIsolationVerdictStop(log, res, classification);
   };
 
   const budget = Number.isFinite(Number(o.reviewBudget))
@@ -4766,6 +4909,23 @@ async function reviewItem(
           }
         );
         rev = await laneFn(currentSha);
+        // TASK-AI-121 LF-R02: the run is already stopping on an unusable
+        // isolation verdict — no reviewer is tried again.
+        if (log.isolationStop) {
+          return {
+            pass: false,
+            sha: null,
+            cause: log.isolationStop.reason,
+            verdict: 'REFUSED',
+            findings: [
+              {
+                id: log.isolationStop.reasonCode,
+                open: true,
+                detail: log.isolationStop.reason,
+              },
+            ],
+          };
+        }
         if (!rev || !rev.launchFailed) {
           break;
         }
@@ -5232,6 +5392,7 @@ function repairRound(
       checkpoint: o.checkpointFile || null,
       title: planned.id,
       labels: { workItem: planned.id, role: roleOf(planned), repairOf: item.id },
+      workerTimeoutMs: o.workerTimeoutMs || null,
     };
     let res = null;
     try {
@@ -5241,9 +5402,7 @@ function repairRound(
     }
     writeUsageReportFromHarnessResult(repairJob, res);
     if (!res || res.exitCode !== 0) {
-      failedKeySet.add(decision.chosen);
       triedKeySet.add(decision.chosen);
-      if (item && item.failedKeys instanceof Set) item.failedKeys.add(decision.chosen);
       if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(decision.chosen);
       if (item && item.triedKeys && item.triedKeys.add) item.triedKeys.add(decision.chosen);
       const classification = classifyFailure({
@@ -5253,16 +5412,23 @@ function repairRound(
         stderr: res ? res.stderr : '',
         accountId: candidate.accountId,
       });
+      // TASK-AI-121 LF-R01: a local launch infrastructure failure blames no
+      // key, no failure domain and sets no evidence cooldown.
+      const blaming = classification.scope !== 'local';
+      if (blaming) {
+        failedKeySet.add(decision.chosen);
+        if (item && item.failedKeys instanceof Set) item.failedKeys.add(decision.chosen);
+      }
       const candDomain = routing.canonicalFailureDomain(candidate);
       const attemptsInDomain = domainAttemptsMap.get(candDomain) || 0;
       const domainExhausted = attemptsInDomain >= 2;
       const scopeExcludesDomain =
         classification.scope === 'upstream' || classification.scope === 'gateway';
-      if ((scopeExcludesDomain || domainExhausted) && candDomain) {
+      if (blaming && (scopeExcludesDomain || domainExhausted) && candDomain) {
         excludedDomainSet.add(candDomain);
         if (item && item.excludedDomains instanceof Set) item.excludedDomains.add(candDomain);
       }
-      if (evidenceDir || evidenceData) {
+      if (blaming && (evidenceDir || evidenceData)) {
         evidenceData = recordLaunchFailureEvidence(
           evidenceDir,
           evidenceData,
@@ -5292,18 +5458,24 @@ function repairRound(
             chosenKey: decision.chosen,
             branch: repairJob.branch,
             failureScope: classification.scope,
-            detail: classification.cause,
+            cause: classification.cause,
+            // TASK-AI-121 LF-R01: the real launcher message survives a local
+            // launch infrastructure failure.
+            detail: failedDecisionDetail(classification, res),
             excluded: Array.from(allExcluded),
             excludedSet: Array.from(allExcluded),
             // RT-R01: record retryable and retryAfterMs from classification
             retryable: classification.retryable,
             retryAfterMs: classification.retryAfterMs,
             // RT-R03: the cooldown this failure actually sets.
-            cooldownMs: evidence.effectiveCooldownMs(classification),
+            cooldownMs:
+              classification.scope === 'local' ? 0 : evidence.effectiveCooldownMs(classification),
           },
           logOpts
         );
       }
+      // TASK-AI-121 LF-R02: an unusable isolation verdict stops the run.
+      markIsolationVerdictStop(log, res, classification);
       return { sha };
     }
 
