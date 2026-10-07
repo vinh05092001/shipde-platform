@@ -62,6 +62,51 @@ const HumanAction = {
 };
 
 /**
+ * The operator action that clears an unusable isolation verdict: the verdict
+ * file only exists again after the isolation checks are re-run.
+ */
+const ISOLATION_VERDICT_HUMAN_ACTION = 'run scripts/ai/isolation/Test-WorkerIsolation.ps1';
+
+/**
+ * Launch infrastructure errors: the isolated launcher itself could not start
+ * the worker. These are this machine's launch configuration, never a model,
+ * account, gateway or harness fault (TASK-AI-121 LF-R01):
+ *
+ *   ISOLATION_VERDICT_STALE / _MISSING / _INVALID / _NOT_CLOSED — the boundary
+ *   attestation is unusable; ISOLATION_CHECKOUT_FAILED and the pinned base-SHA
+ *   errors; PROVISION_BASE_MISMATCH; a worker-root removal that failed with
+ *   EPERM/EBUSY; and the clone failure the launcher reports verbatim.
+ *
+ * Only the launcher's own stderr is read here — worker stdout never widens or
+ * narrows the rule.
+ */
+function isLaunchInfraFailure(text) {
+  const s = String(text || '');
+  return (
+    /ISOLATION_VERDICT_(STALE|MISSING|INVALID|NOT_CLOSED)/.test(s) ||
+    /ISOLATION_CHECKOUT_FAILED|ISOLATION_BASE_SHA_MISSING|ISOLATION_BASE_SHA_INVALID/.test(s) ||
+    /PROVISION_BASE_MISMATCH/.test(s) ||
+    /Failed to clone repository/.test(s) ||
+    /\b(EPERM|EBUSY)\b[^\n]{0,120}(unlink|rmdir|operation not permitted|resource busy or locked)/.test(
+      s
+    ) ||
+    /(unlink|rmdir)[^\n]{0,120}\b(EPERM|EBUSY)\b/.test(s)
+  );
+}
+
+/**
+ * The verdict errors that make every candidate fail identically, so the run
+ * must stop instead of walking the rest of the list (LF-R02). Returns the
+ * reason code to report, or null when the failure is not one of them.
+ */
+function isolationVerdictBlockReason(text) {
+  const s = String(text || '');
+  if (/ISOLATION_VERDICT_STALE/.test(s)) return 'ISOLATION_VERDICT_STALE';
+  if (/ISOLATION_VERDICT_MISSING/.test(s)) return 'ISOLATION_VERDICT_MISSING';
+  return null;
+}
+
+/**
  * Operations that are replayable (read-only or idempotent).
  */
 const REPLAYABLE_OPERATIONS = new Set(['probe', 'list', 'reviewRead', 'testRun']);
@@ -452,16 +497,15 @@ function classifyFailure(input) {
     });
   }
 
-  // TASK-AI-120 RI-R03: a launch that cannot check out its pinned base commit
-  // is a local provisioning failure, not a model, account or failure-domain
-  // fault. The signal is the launcher's own stderr — worker output never
-  // widens (or narrows) it — and Scope.LOCAL must keep every exclusion set
-  // clean: no candidate key and no failure domain is to blame.
-  if (
-    /ISOLATION_CHECKOUT_FAILED|ISOLATION_BASE_SHA_MISSING|ISOLATION_BASE_SHA_INVALID/.test(
-      String(stderr || '')
-    )
-  ) {
+  // TASK-AI-120 RI-R03 / TASK-AI-121 LF-R01: a launch that cannot provision its
+  // worker (a stale or unusable isolation verdict, a failed checkout of its
+  // pinned base commit, a provisioned-HEAD mismatch, an EPERM/EBUSY worker-root
+  // removal or a failed clone) is a local provisioning failure, not a model,
+  // account or failure-domain fault. The signal is the launcher's own stderr —
+  // worker output never widens (or narrows) it — and Scope.LOCAL must keep
+  // every exclusion set clean: no candidate key and no failure domain is to
+  // blame.
+  if (isLaunchInfraFailure(String(stderr || ''))) {
     return addRetryFields({
       cause: Cause.LAUNCH_CONFIG,
       scope: Scope.LOCAL,
@@ -888,6 +932,9 @@ module.exports = {
   Cause,
   Scope,
   HumanAction,
+  ISOLATION_VERDICT_HUMAN_ACTION,
+  isLaunchInfraFailure,
+  isolationVerdictBlockReason,
   parseResetTime,
   MAX_RESET_MS,
   DEFAULT_COOLDOWNS,

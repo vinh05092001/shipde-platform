@@ -2767,7 +2767,7 @@ function reviewCommand(args, deps) {
  * orchestrate (TASK-AI-64, TASK-AI-85): the live autonomous loop —
  *   node tools/ai-brain/cli.js orchestrate --goal <text|file> --specs <file>
  *     [--isolated-worker --base-sha <40-hex>] [--checkpoint <file>] [--out <file>]
- *     [--evidence-dir <dir>]
+ *     [--evidence-dir <dir>] [--worker-timeout-min <1..240>]
  */
 function orchestrateCommand(args, deps = {}) {
   const d = deps || {};
@@ -2798,6 +2798,27 @@ function orchestrateCommand(args, deps = {}) {
     return Promise.resolve({ exitCode: 2 });
   }
   const out = typeof args.out === 'string' ? args.out : null;
+  // TASK-AI-121 LF-R03: --worker-timeout-min N (1..240, default 30) is the
+  // worker timeout every isolated launch (writer, reviewer, repair) uses.
+  // A value outside the range is a typo, and a typo is refused rather than
+  // clamped into a timeout nobody asked for.
+  const workerTimeoutMinRaw = args['worker-timeout-min'];
+  let workerTimeoutMs = 30 * 60 * 1000;
+  if (workerTimeoutMinRaw !== undefined) {
+    const minutes = Number(workerTimeoutMinRaw);
+    if (
+      workerTimeoutMinRaw === true ||
+      workerTimeoutMinRaw === '' ||
+      !Number.isInteger(minutes) ||
+      minutes < 1 ||
+      minutes > 240
+    ) {
+      console.error('orchestrate: --worker-timeout-min must be an integer between 1 and 240');
+      exit(2);
+      return Promise.resolve({ exitCode: 2 });
+    }
+    workerTimeoutMs = minutes * 60 * 1000;
+  }
   const registry = (d && d.registry) || sourcesApi.loadSources();
   const readJsonArg = (value) =>
     typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
@@ -2842,6 +2863,7 @@ function orchestrateCommand(args, deps = {}) {
     home: typeof args.home === 'string' ? args.home : undefined,
     enforceProofFloors: true,
     isolatedWorker: Boolean(args['isolated-worker']),
+    workerTimeoutMs,
     decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
     checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,
     usageDir: typeof args['usage-dir'] === 'string' ? args['usage-dir'] : null,
