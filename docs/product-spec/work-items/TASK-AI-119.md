@@ -20,7 +20,7 @@
 
 The gate 5 live run on main (`0ed76eb`, 2026-10-07) lost a finished worker to a dead reattach. TASK-AI-111's worker committed `2a4a678` in the isolated worker root. TASK-AI-114 correctly launched dependent TASK-AI-112 with baseSha `2a4a678`, but the launcher re-provisions the worker root by cloning the HOST repo, which never received `2a4a678`. Every launch failed immediately, and each failure was mis-blamed on a model.
 
-Now when a Work Item's review returns PASS at a worker SHA, the Controller imports that commit into the host repo under a namespaced ref before any later re-provisioning. Dependents launch from that exact SHA. On resume, a PASS item whose commit is missing from the host is re-imported from the worker root.
+Now when a Work Item's review returns PASS at a worker SHA, the Controller imports that commit into the host repo under a namespaced ref before any later re-provisioning. Dependents launch from that exact SHA.
 
 ## Acceptance Matrix
 

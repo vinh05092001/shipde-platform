@@ -42,7 +42,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { importPassedCommit, hasCommit } = require('./passed-commit');
+const { importPassedCommit } = require('./passed-commit');
 const crypto = require('crypto');
 
 const planner = require('./planner');
