@@ -3583,6 +3583,9 @@ async function runOrchestration(goal, opts) {
             detail: classification.cause,
             excluded: Array.from(allFailedExcluded),
             excludedSet: Array.from(allFailedExcluded),
+            // RT-R01: record retryable and retryAfterMs from classification
+            retryable: classification.retryable,
+            retryAfterMs: classification.retryAfterMs,
           },
           logOpts
         );
@@ -3721,6 +3724,9 @@ async function runOrchestration(goal, opts) {
           branch: session.branch,
           sessionId: session.sessionId,
           detail: blockedReason,
+          // RT-R01: retryable is false for terminal session failures (no classification available)
+          retryable: false,
+          retryAfterMs: null,
         },
         logOpts
       );
@@ -4211,6 +4217,9 @@ async function reviewItem(
           detail: classification.cause,
           excluded: Array.from(allExcluded),
           excludedSet: Array.from(allExcluded),
+          // RT-R01: record retryable and retryAfterMs from classification
+          retryable: classification.retryable,
+          retryAfterMs: classification.retryAfterMs,
         },
         logOpts
       );
@@ -5028,6 +5037,9 @@ function repairRound(
             detail: classification.cause,
             excluded: Array.from(allExcluded),
             excludedSet: Array.from(allExcluded),
+            // RT-R01: record retryable and retryAfterMs from classification
+            retryable: classification.retryable,
+            retryAfterMs: classification.retryAfterMs,
           },
           logOpts
         );
