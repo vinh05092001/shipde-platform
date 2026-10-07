@@ -111,7 +111,7 @@ function setup(specs, options) {
   const writer = cand('writer', 'author.foundation', { cost: 0.1 });
   const reviewerA = cand('reviewera', 'reviewer.primary');
   const reviewerB = cand('reviewerb', 'reviewer.primary');
-  const candidates = [writer, reviewerA];
+  const candidates = opts.onlyWriter ? [writer] : [writer, reviewerA];
   if (opts.secondReviewer) candidates.push(reviewerB);
 
   const state = {
@@ -265,6 +265,7 @@ test('RT-R01: failed decision-log entries include retryable and retryAfterMs fro
 test('RT-R02: non-retryable failure excludes that candidate from re-selection', async () => {
   let writerCalls = 0;
   const f = setup([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
+    onlyWriter: true, // Only one candidate so no alternates available
     run: (job) => {
       if (job.isReview) return f.reviewPass(job);
       writerCalls += 1;
@@ -303,6 +304,13 @@ test('RT-R02: non-retryable failure excludes that candidate from re-selection', 
     writerFailed.excluded && writerFailed.excluded.includes(writerKey),
     'non-retryable candidate should be excluded'
   );
+
+  // Assert writer was called exactly once - non-retryable candidate should not be re-selected
+  assert.equal(
+    writerCalls,
+    1,
+    'writer should only be called once, non-retryable candidate excluded'
+  );
 });
 
 // RT-R03: retryAfterMs overrides cooldown when greater
@@ -332,6 +340,19 @@ test('RT-R03: cooldown uses retryAfterMs when greater than default cooldown', as
   assert.ok(classification.retryable, '429 should be retryable');
   // The retryAfterMs should be recorded in the decision log
   assert.ok(writerFailed.retryAfterMs !== null, 'retryAfterMs should be recorded in failed record');
+
+  // RT-R03: the retryAfterMs should be exactly as classified (max of existing cooldownMs and retryAfterMs)
+  assert.equal(
+    writerFailed.retryAfterMs,
+    classification.retryAfterMs,
+    'retryAfterMs should match classification'
+  );
+  // Verify retryAfterMs is not shorter than the default cooldown for 429 (5 minutes = 300000ms)
+  const defaultQuotaCooldown = classification.cooldownMs;
+  assert.ok(
+    writerFailed.retryAfterMs >= defaultQuotaCooldown,
+    'retryAfterMs should not be shorter than default cooldown'
+  );
 });
 
 // RT-R04: publish step never auto re-runs after failure (isReplayable guard)

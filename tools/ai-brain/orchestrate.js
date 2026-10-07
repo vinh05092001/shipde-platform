@@ -57,7 +57,7 @@ const sourcesApi = require('./sources');
 const jev = require('./jev');
 const { candidateKey } = require('./candidates');
 const { parseCandidateKey } = require('./discovery/identity');
-const { classifyFailure } = require('./failure-classifier');
+const { classifyFailure, isReplayable } = require('./failure-classifier');
 const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
 
 const ItemStatus = Object.freeze({
@@ -4771,12 +4771,18 @@ async function reviewItem(
     : review.status === ReviewStatus.COMPLETED
       ? 'REVIEW_PASS'
       : 'REPAIR_BUDGET_EXHAUSTED';
+  const reviewStage =
+    review.status === ReviewStatus.COMPLETED ? decisions.Stage.COMPLETED : decisions.Stage.FAILED;
+  const reviewClassification =
+    review.status === ReviewStatus.COMPLETED
+      ? { retryable: true, retryAfterMs: null }
+      : classifyFailure({
+          exitCode: 1,
+          body: 'REPAIR_BUDGET_EXHAUSTED: review failed and repair budget exhausted',
+        });
   decisions.recordDecision(
     {
-      stage:
-        review.status === ReviewStatus.COMPLETED
-          ? decisions.Stage.COMPLETED
-          : decisions.Stage.FAILED,
+      stage: reviewStage,
       workItemId: item.id,
       role: roleOf(item),
       chosen: session.candidateKey,
@@ -4790,6 +4796,8 @@ async function reviewItem(
       tests: compactTestEvidence(lastTestResult, (session && session.failBefore) || null),
       reviewRounds: Array.isArray(review.rounds) ? review.rounds.length : null,
       repairCount: review.repairCount,
+      retryable: reviewClassification.retryable,
+      retryAfterMs: reviewClassification.retryAfterMs,
     },
     logOpts
   );
@@ -5086,6 +5094,19 @@ function repairRound(
  */
 function publication(o, entry) {
   const request = o.publication;
+  const hasPubRecord = entry && entry.publication;
+  const pubAlreadyAttempted =
+    hasPubRecord &&
+    (hasPubRecord.status === PublicationStatus.REFUSED ||
+      hasPubRecord.status === PublicationStatus.NOT_REQUESTED);
+  if (hasPubRecord && pubAlreadyAttempted && !isReplayable('publish')) {
+    return {
+      status: PublicationStatus.REFUSED,
+      workItemId: entry.workItemId,
+      reason:
+        'PUBLISH_NOT_REPLAYABLE: publish cannot be replayed after a failed or timed-out attempt',
+    };
+  }
   if (entry && entry.checkpointReviewError) {
     return {
       status: PublicationStatus.REFUSED,
