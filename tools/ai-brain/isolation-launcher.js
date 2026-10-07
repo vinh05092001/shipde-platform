@@ -784,6 +784,31 @@ function getIsolatedLauncher() {
     }
     const headSha = String(baseSha);
 
+    // TASK-AI-119: If the requested base SHA is not present in the host repo when
+    // provisioning, fail with PROVISION_BASE_MISSING before cloning.
+    if (hostCwd) {
+      const hostCat = (opts.spawnSync || cp.spawnSync)(
+        'git',
+        ['-C', hostCwd, 'cat-file', '-e', headSha + '^{commit}'],
+        {
+          windowsHide: true,
+          encoding: 'utf8',
+          env: Object.assign({}, process.env, {
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: nulDevice,
+            GIT_CONFIG_SYSTEM: nulDevice,
+          }),
+        }
+      );
+      if (hostCat.status !== 0) {
+        const err = new Error(
+          'PROVISION_BASE_MISSING: requested base SHA not present in host repo: ' + headSha
+        );
+        err.code = 'PROVISION_BASE_MISSING';
+        throw err;
+      }
+    }
+
     // Distinguish initial launch of a work item vs repair round explicitly:
     // (1) Initial launch (no repair context, retainWorkerHead is not provided):
     //     always re-provision a fresh worker root at the pinned base SHA

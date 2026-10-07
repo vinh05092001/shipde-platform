@@ -38,6 +38,7 @@ const Cause = {
  * Scope of the failure — what is affected.
  */
 const Scope = {
+  LOCAL: 'local',
   MODEL: 'model',
   UPSTREAM: 'upstream',
   ACCOUNT: 'account',
@@ -399,6 +400,33 @@ function classifyFailure(input) {
     .join('\n');
   const { scrubText } = require('./decisions');
   const scrubbedStdout = scrubText(String(stdout || input?.stdout || '')).slice(0, 500);
+  // TASK-AI-119: Local/controller provision failures are local scope; no domain exclusion
+  if (
+    /PROVISION_BASE_MISSING/.test(String(stderr || '')) ||
+    /PROVISION_BASE_MISSING/.test(String(body || ''))
+  ) {
+    return addRetryFields({
+      cause: Cause.LAUNCH_CONFIG,
+      scope: Scope.LOCAL,
+      cooldownMs: DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0,
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: Date.now() + (DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0),
+    });
+  }
+  if (
+    /PROVISION_BASE_MISMATCH/.test(String(stderr || '') + ' ' + String(body || '')) ||
+    /WORKER_HEAD_MISMATCH/.test(String(stderr || '') + ' ' + String(body || ''))
+  ) {
+    return addRetryFields({
+      cause: Cause.LAUNCH_CONFIG,
+      scope: Scope.LOCAL,
+      cooldownMs: DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0,
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: Date.now() + (DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0),
+    });
+  }
   const evidence = {
     exitCode,
     httpStatus,

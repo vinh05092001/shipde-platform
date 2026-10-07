@@ -42,6 +42,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { importPassedCommit, hasCommit } = require('./passed-commit');
 const crypto = require('crypto');
 
 const planner = require('./planner');
@@ -2735,6 +2736,8 @@ async function runOrchestration(goal, opts) {
 
   const cli = controller();
   const decisionDir = o.decisionDir || null;
+  const hostCwd =
+    o.hostCwd || o.cwd || o.workdir || (o && o.host && o.host.cwd) || (o && o.root) || null;
   const logOpts = { dir: decisionDir, now };
   const checkpointFile =
     o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : null);
@@ -3109,6 +3112,60 @@ async function runOrchestration(goal, opts) {
         );
         outcome(item, ItemStatus.BLOCKED, reason);
         continue;
+      }
+      // TASK-AI-119: ensure commit exists in host; import if missing
+      if (hostCwd && depPassSha) {
+        try {
+          if (!hasCommit(hostCwd, depPassSha, spawnSync)) {
+            const depStep = liveSteps[depId] || {};
+            const workerRootForImport =
+              (depStep.review && depStep.review.entry && depStep.review.entry.workerRoot) ||
+              (depStep.review && depStep.review.entry && depStep.review.entry.publishCwd) ||
+              o.workerRoot ||
+              hostCwd;
+            const imp = importPassedCommit({
+              hostRepo: hostCwd,
+              workerRoot: workerRootForImport,
+              workItemId: depId,
+              sha: depPassSha,
+              spawnSync,
+            });
+            if (!imp.ok) {
+              const reason =
+                'DEPENDENCY_COMMIT_UNAVAILABLE: ' +
+                item.id +
+                ' needs commit ' +
+                depPassSha +
+                ' from ' +
+                depId;
+              decisions.recordDecision(
+                {
+                  stage: decisions.Stage.REFUSED,
+                  workItemId: item.id,
+                  role: roleOf(item),
+                  detail: reason,
+                },
+                logOpts
+              );
+              outcome(item, ItemStatus.BLOCKED, reason);
+              continue;
+            }
+          }
+        } catch (e) {
+          const reason =
+            'DEPENDENCY_COMMIT_UNAVAILABLE: ' + item.id + ' failed to verify/import ' + depPassSha;
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.REFUSED,
+              workItemId: item.id,
+              role: roleOf(item),
+              detail: reason,
+            },
+            logOpts
+          );
+          outcome(item, ItemStatus.BLOCKED, reason);
+          continue;
+        }
       }
       dependencyBase = { baseSha: depPassSha, baseFrom: depId };
     }
@@ -3781,6 +3838,32 @@ async function runOrchestration(goal, opts) {
       });
     }
     if (reviewed.status === ReviewStatus.COMPLETED) {
+      // TASK-AI-119: import passed commit into host repo
+      let passedRef = null;
+      if (reviewEntry && reviewEntry.sha && hostCwd) {
+        try {
+          const imp = importPassedCommit({
+            hostRepo: hostCwd,
+            workerRoot:
+              reviewEntry.workerRoot || reviewEntry.publishCwd || reviewEntry.branch || hostCwd,
+            workItemId: item.id,
+            sha: reviewEntry.sha,
+            spawnSync,
+          });
+          if (imp.ok) passedRef = imp.ref;
+        } catch (e) {
+          // ignore; handled elsewhere if needed
+        }
+      }
+      if (reviewEntry) {
+        persistStep(item.id, 'review_completed', {
+          review: {
+            status: reviewed.status,
+            entry: reviewEntry,
+            passedRef: passedRef || undefined,
+          },
+        });
+      }
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
     } else {
       const isNoAlt =
