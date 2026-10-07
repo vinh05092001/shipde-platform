@@ -438,20 +438,6 @@ function classifyFailure(input) {
       resetTime: Date.now() + (DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0),
     });
   }
-  if (
-    /PROVISION_BASE_MISMATCH/.test(String(stderr || '') + ' ' + String(body || '')) ||
-    /WORKER_HEAD_MISMATCH/.test(String(stderr || '') + ' ' + String(body || ''))
-  ) {
-    return addRetryFields({
-      cause: Cause.LAUNCH_CONFIG,
-      scope: Scope.LOCAL,
-      cooldownMs: DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0,
-      humanAction: HumanAction.NONE,
-      evidence,
-      resetTime: Date.now() + (DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0),
-    });
-  }
-
   // Launcher timeout: authentic signal from launcher (structured timedOut flag, Cause.TIMEOUT, or launcher stderr prefix)
   // Launcher timeout takes precedence over all worker output and quota errors (F1)
   const isTimedOut = Boolean(

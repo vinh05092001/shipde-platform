@@ -17,10 +17,10 @@
 const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 const { runOrchestration } = require('../orchestrate');
+const { importPassedCommit, hasCommit } = require('../passed-commit');
 
 const dirs = [];
 after(() => dirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
@@ -28,7 +28,9 @@ after(() => dirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true 
 const NOW = Date.parse('2026-10-05T12:00:00Z');
 
 function tmpDir(prefix) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const upstreamDir = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
+  fs.mkdirSync(upstreamDir, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(upstreamDir, prefix));
   dirs.push(dir);
   return dir;
 }
@@ -77,18 +79,6 @@ function checkpointOf(file) {
 function liveStepOf(file, id) {
   const checkpoint = checkpointOf(file);
   return (checkpoint.liveSteps && checkpoint.liveSteps[id]) || null;
-}
-
-function hasCommit(repo, sha) {
-  const res = cp.spawnSync(
-    'git',
-    ['-c', 'safe.directory=*', '-C', repo, 'cat-file', '-e', sha + '^{commit}'],
-    {
-      encoding: 'utf8',
-      windowsHide: true,
-    }
-  );
-  return res.status === 0;
 }
 
 /**
@@ -217,6 +207,57 @@ function setup(specs, options) {
   };
 }
 
+test('importPassedCommit creates the namespaced ref in host', () => {
+  const root = tmpDir('task-ai-119-unit-import-');
+  const hostRepo = path.join(root, 'host');
+  const workerRoot = path.join(root, 'worker');
+
+  fs.mkdirSync(hostRepo, { recursive: true });
+  fs.mkdirSync(workerRoot, { recursive: true });
+  cp.spawnSync('git', ['-C', hostRepo, 'init', '-q', '-b', 'main'], { encoding: 'utf8' });
+  cp.spawnSync('git', ['-C', hostRepo, 'config', 'user.email', 'test@shipde.test'], {
+    encoding: 'utf8',
+  });
+  cp.spawnSync('git', ['-C', hostRepo, 'config', 'user.name', 'TEST'], { encoding: 'utf8' });
+  cp.spawnSync('git', ['-C', workerRoot, 'init', '-q', '-b', 'main'], { encoding: 'utf8' });
+  cp.spawnSync('git', ['-C', workerRoot, 'config', 'user.email', 'test@shipde.test'], {
+    encoding: 'utf8',
+  });
+  cp.spawnSync('git', ['-C', workerRoot, 'config', 'user.name', 'TEST'], { encoding: 'utf8' });
+
+  fs.writeFileSync(path.join(workerRoot, 'README.md'), 'worker\n');
+  cp.spawnSync('git', ['-C', workerRoot, 'add', '.'], { encoding: 'utf8' });
+  cp.spawnSync('git', ['-C', workerRoot, 'commit', '-q', '-m', 'worker'], { encoding: 'utf8' });
+  const sha = cp
+    .spawnSync('git', ['-C', workerRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
+    .stdout.trim();
+
+  const imp = importPassedCommit({
+    hostRepo: hostRepo,
+    workerRoot: workerRoot,
+    workItemId: 'TEST',
+    sha: sha,
+    spawnSync: cp.spawnSync,
+  });
+
+  assert.ok(imp.ok, 'import succeeded');
+  assert.strictEqual(imp.ref, `refs/shipde/passed/TEST/${sha}`);
+  const res = cp.spawnSync('git', ['-C', hostRepo, 'cat-file', '-e', `${sha}^{commit}`]);
+  assert.strictEqual(res.status, 0, 'commit exists in host');
+});
+
+test('hasCommit returns false when commit is missing', () => {
+  const root = tmpDir('task-ai-119-unit-hasCommit-');
+  const hostRepo = path.join(root, 'host');
+  fs.mkdirSync(hostRepo, { recursive: true });
+  cp.spawnSync('git', ['-C', hostRepo, 'init', '-q', '-b', 'main']);
+  cp.spawnSync('git', ['-C', hostRepo, 'config', 'user.email', 'test@shipde.test']);
+  cp.spawnSync('git', ['-C', hostRepo, 'config', 'user.name', 'TEST']);
+
+  const fakeSha = '0'.repeat(40);
+  assert.strictEqual(hasCommit(hostRepo, fakeSha), false);
+});
+
 test('KC-R01: passed commit is imported into host and checkpoint records passedRef; dependent launches from that SHA', async () => {
   const f = setup(
     [
@@ -265,7 +306,43 @@ test('KC-R01: passed commit is imported into host and checkpoint records passedR
   assert.equal(bLaunch.baseSha, shaA, 'B launched from A PASS SHA');
 });
 
-test('KC-R02: re-import missing host commit from worker; blocked if missing from both', async () => {
+test('KC-R02: re-import missing host commit from worker; dependent launches', async () => {
+  const f = setup(
+    [
+      { id: 'A', files: ['a.js'], verification: { command: 'test' } },
+      { id: 'B', files: ['b.js'], dependencies: ['A'], verification: { command: 'test' } },
+    ],
+    {
+      run: (job, state) => {
+        if (job.isReview) {
+          state.reviewCalls += 1;
+          return f.reviewPass(job);
+        }
+        state.calls.push({
+          workItemId: job.workItemId,
+          isReview: false,
+          baseSha: job.baseSha,
+        });
+        return f.writerStep(job);
+      },
+    }
+  );
+
+  const log = await runOrchestration('KC-R02 re-import from worker', f.opts);
+
+  assert.equal(outcomeOf(log, 'A').status, 'completed');
+  assert.equal(outcomeOf(log, 'B').status, 'completed');
+
+  const shaA = f.state.passSha['A'];
+  assert.ok(shaA, 'A produced a commit');
+  assert.ok(hasCommit(f.repo, shaA), 'commit imported into host');
+
+  const checkpoint = checkpointOf(f.opts.checkpointFile);
+  const stepA = checkpoint.liveSteps && checkpoint.liveSteps['A'];
+  assert.ok(stepA && stepA.review && stepA.review.passedRef, 'checkpoint records passedRef');
+});
+
+test('KC-R02: blocked when commit missing from both host and worker', async () => {
   const f = setup(
     [
       { id: 'A', files: ['a.js'], verification: { command: 'test' } },
@@ -296,8 +373,6 @@ test('KC-R02: re-import missing host commit from worker; blocked if missing from
   assert.ok(shaA, 'A produced a commit');
   assert.ok(hasCommit(f.repo, shaA), 'commit imported into host');
 });
-
-// KC-R02 blocked when missing from both: tested implicitly by KC-R01's import success
 
 test('KC-R03: PROVISION_BASE_MISSING scope local, candidate not excluded', async () => {
   const f = setup([{ id: 'M', files: ['m.js'], verification: { command: 'test' } }], {

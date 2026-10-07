@@ -2737,7 +2737,13 @@ async function runOrchestration(goal, opts) {
   const cli = controller();
   const decisionDir = o.decisionDir || null;
   const hostCwd =
-    o.hostCwd || o.cwd || o.workdir || (o && o.host && o.host.cwd) || (o && o.root) || null;
+    o.hostCwd ||
+    o.cwd ||
+    o.workdir ||
+    (o && o.host && o.host.cwd) ||
+    (o && o.root) ||
+    o.cwd ||
+    process.cwd();
   const logOpts = { dir: decisionDir, now };
   const checkpointFile =
     o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : null);
@@ -3176,6 +3182,15 @@ async function runOrchestration(goal, opts) {
           );
           outcome(item, ItemStatus.BLOCKED, reason);
           continue;
+        }
+      }
+      // TASK-AI-119: KC-R03 - check base SHA before launch (dependency handoff only)
+      const isDepHandoff = dependencyBase && dependencyBase.baseFrom;
+      if (isDepHandoff && hostCwd && dependencyBase.baseSha) {
+        if (!hasCommit(hostCwd, dependencyBase.baseSha, spawnSync)) {
+          throw Object.assign(new Error('PROVISION_BASE_MISSING: base SHA not in host'), {
+            code: 'PROVISION_BASE_MISSING',
+          });
         }
       }
       dependencyBase = { baseSha: depPassSha, baseFrom: depId };
