@@ -352,4 +352,19 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     assert.ok(cfg, 'opencode.json exists');
     assert.equal(cfg.provider.ninerouter.options.baseURL, 'http://127.0.0.1:20128/v1');
   });
+
+  test('direct source with unprefixed model uses source id as provider', () => {
+    const { cfg, thrownError } = runDirectLaunch('mercury-2.5', {
+      fakeEnv: { INCEPTION_API_KEY: 'test-key' },
+      gateway: 'inception',
+    });
+
+    assert.ok(!thrownError, 'no error for unprefixed model on direct gateway');
+    assert.ok(cfg, 'opencode.json exists');
+    assert.ok(cfg.provider.inception, 'provider is source id (inception)');
+    assert.equal(cfg.provider.inception.options.baseURL, 'https://api.inceptionlabs.ai/v1');
+    assert.equal(cfg.provider.inception.options.apiKey, '{env:INCEPTION_API_KEY}');
+    assert.ok(cfg.provider.inception.models['mercury-2.5'], 'model exists without prefix');
+    assert.equal(cfg.provider.inception.models['mercury-2.5'].id, 'mercury-2.5');
+  });
 });

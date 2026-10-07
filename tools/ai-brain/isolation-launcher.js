@@ -1087,14 +1087,13 @@ function getIsolatedLauncher() {
       // Store for later use in buildWorkerLaunchScript
       selectedCredentialEnv = credentialEnv;
 
-      // Derive provider id directly from the exact --model string opencode receives
+      // DS-R03: for direct sources, provider id must be the source id, not the model name
       const providerId =
-        (pinnedModel && sourcesModule.providerFromPrefix(pinnedModel)) ||
-        sourcesModule.providerFromPrefix(selectedSource.modelPrefix) ||
-        sourcesModule.providerFromPrefix(selectedSource) ||
-        selectedSource.id;
+        sourceId === '9router' && pinnedModel
+          ? sourcesModule.providerFromPrefix(pinnedModel) || selectedSource.id
+          : selectedSource.id;
 
-      if (pinnedModel) {
+      if (pinnedModel && sourceId === '9router') {
         const derivedFromModel = sourcesModule.providerFromPrefix(pinnedModel);
         if (derivedFromModel && derivedFromModel !== providerId) {
           throw new Error(
