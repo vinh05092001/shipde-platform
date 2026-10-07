@@ -2736,14 +2736,13 @@ async function runOrchestration(goal, opts) {
 
   const cli = controller();
   const decisionDir = o.decisionDir || null;
+  // TASK-AI-120 RI-R04: the host repo for passed-commit imports and host-side
+  // commit checks is named explicitly. There is deliberately no default to the
+  // incidental process.cwd(): a run that names no host repo imports nothing
+  // instead of writing refs/shipde/* into whatever repository the process
+  // happens to sit in.
   const hostCwd =
-    o.hostCwd ||
-    o.cwd ||
-    o.workdir ||
-    (o && o.host && o.host.cwd) ||
-    (o && o.root) ||
-    o.cwd ||
-    process.cwd();
+    o.hostCwd || o.cwd || o.workdir || (o && o.host && o.host.cwd) || (o && o.root) || null;
   const logOpts = { dir: decisionDir, now };
   const checkpointFile =
     o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : null);
@@ -2814,6 +2813,31 @@ async function runOrchestration(goal, opts) {
       )
       .map(([workItemId]) => workItemId)
   );
+
+  // TASK-AI-120 RI-R01/RI-R04: one passed-ref import path for every resume
+  // shape. The live path records passedRef on the review entry and as its
+  // sibling; a resume must see either before importing again (a second import
+  // is a fetch that can fail or duplicate). The import runs only with an
+  // explicit host repo and only from the recorded worker root — never from the
+  // incidental process.cwd() (RI-R04).
+  const recordedPassedRefOf = (step, entry) =>
+    (entry && entry.passedRef) || (step && step.review && step.review.passedRef) || null;
+  const importPassedRefFor = (workItemId, entry, step) => {
+    const recorded = recordedPassedRefOf(step, entry);
+    if (recorded || !entry || !entry.sha || !hostCwd) return recorded;
+    try {
+      const imp = importPassedCommit({
+        hostRepo: hostCwd,
+        workerRoot: entry.workerRoot || entry.worktree || null,
+        workItemId,
+        sha: entry.sha,
+        spawnSync,
+      });
+      return imp.ok ? imp.ref : null;
+    } catch (e) {
+      return null;
+    }
+  };
 
   // 4. One writer per work item, and an unreadable log stops the run instead of
   //    reading as "no writers": the only evidence of a claim is the claim.
@@ -2959,6 +2983,21 @@ async function runOrchestration(goal, opts) {
               }
             : null,
       };
+      // TASK-AI-120 RI-R01 (finding 6): an item completed before this run may
+      // still be missing its passed ref — the interrupt that created this
+      // checkpoint could land after the outcome and before the import. Import
+      // now, before anything depends on the commit.
+      const completedPassedRef = importPassedRefFor(item.id, reviewEntry, savedStep);
+      if (completedPassedRef && !reviewEntry.passedRef) {
+        reviewEntry.passedRef = completedPassedRef;
+        persistStep(item.id, 'review_completed', {
+          review: {
+            status: ReviewStatus.COMPLETED,
+            entry: reviewEntry,
+            passedRef: completedPassedRef,
+          },
+        });
+      }
       if (!log.reviews.some((review) => review.workItemId === item.id))
         log.reviews.push(reviewEntry);
       log.review = log.reviews[log.reviews.length - 1] || reviewEntry;
@@ -2968,32 +3007,21 @@ async function runOrchestration(goal, opts) {
     if (savedStep && savedStep.review && savedStep.review.status === ReviewStatus.COMPLETED) {
       const reviewEntry = savedStep.review.entry;
       if (reviewEntry) {
-        // RI-R01: resume import - if no passedRef, import the commit
-        let passedRef = reviewEntry.passedRef || null;
-        if (!passedRef && reviewEntry.sha && hostCwd) {
-          try {
-            const imp = importPassedCommit({
-              hostRepo: hostCwd,
-              workerRoot: reviewEntry.workerRoot || (session && session.worktree) || null,
-              workItemId: item.id,
-              sha: reviewEntry.sha,
-              spawnSync,
-            });
-            if (imp.ok) {
-              passedRef = imp.ref;
-              persistStep(item.id, 'review_completed', {
-                review: {
-                  status: savedStep.review.status,
-                  entry: Object.assign({}, reviewEntry, { passedRef }),
-                },
-              });
-            }
-          } catch (e) {
-            // ignore; handled elsewhere if needed
-          }
-        }
+        // TASK-AI-120 RI-R01: a step resumed at review_completed with a PASS
+        // review and no passedRef imports the PASS SHA from the recorded
+        // worker root before any dependent launch, and records passedRef on
+        // the review entry and beside it — the two places the live path records
+        // it, so a later resume sees the ref instead of importing again.
+        const passedRef = importPassedRefFor(item.id, reviewEntry, savedStep);
         if (passedRef && !reviewEntry.passedRef) {
           reviewEntry.passedRef = passedRef;
+          persistStep(item.id, 'review_completed', {
+            review: {
+              status: savedStep.review.status,
+              entry: reviewEntry,
+              passedRef,
+            },
+          });
         }
         outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_REVIEW_COMPLETED');
         log.reviews.push(reviewEntry);
@@ -3155,11 +3183,17 @@ async function runOrchestration(goal, opts) {
         outcome(item, ItemStatus.BLOCKED, reason);
         continue;
       }
-      // RI-R02: check if commit exists in host and worker before proceeding
+      // TASK-AI-120 RI-R02: a dependent can start only from a commit that still
+      // exists — in the host or in the dependency's recorded worker root. When
+      // the PASS SHA is in neither, the dependent is BLOCKED with
+      // DEPENDENCY_COMMIT_UNAVAILABLE before any writer launch.
       const savedDepStep = liveSteps[depId];
       const depReviewEntry = savedDepStep && savedDepStep.review && savedDepStep.review.entry;
-      const workerRoot = (depReviewEntry && depReviewEntry.workerRoot) || null;
-      if (hostCwd && !hasCommit(hostCwd, depPassSha)) {
+      const workerRoot =
+        (depReviewEntry && (depReviewEntry.workerRoot || depReviewEntry.worktree)) || null;
+      const hostHasDep = hostCwd ? hasCommit(hostCwd, depPassSha) : false;
+      const workerHasDep = workerRoot ? hasCommit(workerRoot, depPassSha) : false;
+      if (!hostHasDep && !workerHasDep) {
         const reason =
           'DEPENDENCY_COMMIT_UNAVAILABLE: ' +
           item.id +
@@ -3167,28 +3201,7 @@ async function runOrchestration(goal, opts) {
           depId +
           ' (sha ' +
           depPassSha +
-          ') which is not present in the host repository';
-        decisions.recordDecision(
-          {
-            stage: decisions.Stage.REFUSED,
-            workItemId: item.id,
-            role: roleOf(item),
-            detail: reason,
-          },
-          logOpts
-        );
-        outcome(item, ItemStatus.BLOCKED, reason);
-        continue;
-      }
-      if (workerRoot && !hasCommit(workerRoot, depPassSha)) {
-        const reason =
-          'DEPENDENCY_COMMIT_UNAVAILABLE: ' +
-          item.id +
-          ' depends on ' +
-          depId +
-          ' (sha ' +
-          depPassSha +
-          ') which is not present in the worker root';
+          ') which is present in neither the host repository nor the worker root';
         decisions.recordDecision(
           {
             stage: decisions.Stage.REFUSED,
@@ -3238,9 +3251,16 @@ async function runOrchestration(goal, opts) {
     const domainAttempts = item.domainAttempts;
     const triedKeys = item.triedKeys;
     for (const failure of (savedStep && savedStep.failures) || []) {
-      if (failure.failedCandidateKey) failedKeys.add(failure.failedCandidateKey);
-      if (failure.failureDomain) excludedDomains.add(failure.failureDomain);
-      if (failure.forbiddenDomain && !forbiddenDomains.includes(failure.forbiddenDomain)) {
+      // TASK-AI-120 RI-R03: a local failure (a missing base commit) blames
+      // nothing — not on the fresh attempt and not on a later resume.
+      const blaming = failure.failureScope !== 'local';
+      if (blaming && failure.failedCandidateKey) failedKeys.add(failure.failedCandidateKey);
+      if (blaming && failure.failureDomain) excludedDomains.add(failure.failureDomain);
+      if (
+        blaming &&
+        failure.forbiddenDomain &&
+        !forbiddenDomains.includes(failure.forbiddenDomain)
+      ) {
         forbiddenDomains.push(failure.forbiddenDomain);
       }
     }
@@ -3435,8 +3455,16 @@ async function runOrchestration(goal, opts) {
       }
 
       const previousLaunch = currentItemStep && currentItemStep.launch;
+      // TASK-AI-120 RI-R03: the blame decision must use the classification this
+      // attempt earned. A replayed launch carries its recorded classification;
+      // a fresh failure is classified from its own signals below.
+      const replayedLaunch = Boolean(
+        previousLaunch && previousLaunch.candidateKey === decision.chosen
+      );
+      let launchClassification = null;
       let res = null;
-      if (previousLaunch && previousLaunch.candidateKey === decision.chosen) {
+      if (replayedLaunch) {
+        launchClassification = previousLaunch.failureClassification || null;
         res = {
           exitCode: previousLaunch.exitCode,
           stdout: previousLaunch.hasArtifact ? 'checkpointed worker output was present' : '',
@@ -3464,35 +3492,30 @@ async function runOrchestration(goal, opts) {
         const launchFailed =
           !res || (res.exitCode !== null && res.exitCode !== undefined && res.exitCode !== 0);
         const currentSavedStep = liveSteps[item.id] || savedStep;
-        let launchClassification = null;
         const failureList =
           currentSavedStep && currentSavedStep.failures ? currentSavedStep.failures.slice() : [];
         if (launchFailed) {
-          // RI-R03: base commit failures get launch_config/local with no candidate blame
-          const isBaseCommitFailure =
+          // TASK-AI-120 RI-R03: the shared classifier owns the missing-base
+          // rule (ISOLATION_CHECKOUT_FAILED / ISOLATION_BASE_SHA_* ->
+          // launch_config / local), so a fresh failure classifies exactly like
+          // a replayed one and the guard below is never dead. The inputs are
+          // the full launch signals — including worker stdout, where provider
+          // quota events travel — so this is the one classification of record.
+          const isLaunchTimedOut = Boolean(
             res &&
-            res.stderr &&
-            /ISOLATION_CHECKOUT_FAILED|ISOLATION_BASE_SHA_MISSING/.test(res.stderr);
-          if (isBaseCommitFailure) {
-            launchClassification = {
-              cause: 'launch_config',
-              scope: 'local',
-              cooldownMs: 5 * 60 * 1000,
-              humanAction: 'none',
-              evidence: res.stderr,
-              resetTime: null,
-              retryable: false,
-            };
-          } else {
-            launchClassification = classifyFailure({
-              exitCode: res ? res.exitCode : -1,
-              httpStatus: res ? res.httpStatus : undefined,
-              body: res ? res.body || res.stderr || '' : '',
-              stderr: res ? res.stderr : '',
-              accountId: candidate.accountId,
-              timedOut: Boolean(res && res.timedOut),
-            });
-          }
+            (res.timedOut === true ||
+              /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.stderr || '') ||
+              /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.failureReason || ''))
+          );
+          launchClassification = classifyFailure({
+            exitCode: res ? res.exitCode : -1,
+            httpStatus: res ? res.httpStatus : undefined,
+            body: res ? res.body : undefined,
+            stdout: res ? res.stdout : undefined,
+            stderr: res ? res.stderr : undefined,
+            accountId: candidate.accountId,
+            timedOut: isLaunchTimedOut,
+          });
           failureList.push({
             failedCandidateKey: decision.chosen,
             failureScope: launchClassification.scope,
@@ -3589,18 +3612,19 @@ async function runOrchestration(goal, opts) {
             /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.stderr || '') ||
             /\[ISOLATION_LAUNCHER\] worker timed out/i.test(res.failureReason || ''))
         );
+        // TASK-AI-120 RI-R03: never recompute a different classification here —
+        // the failure is recorded and blamed (or not) as one thing.
         const classification =
-          previousLaunch && previousLaunch.failureClassification
-            ? previousLaunch.failureClassification
-            : classifyFailure({
-                exitCode: res ? res.exitCode : -1,
-                httpStatus: res ? res.httpStatus : undefined,
-                body: res ? res.body : undefined,
-                stdout: res ? res.stdout : undefined,
-                stderr: res ? res.stderr : undefined,
-                accountId: candidate.accountId,
-                timedOut: isLauncherTimedOut,
-              });
+          launchClassification ||
+          classifyFailure({
+            exitCode: res ? res.exitCode : -1,
+            httpStatus: res ? res.httpStatus : undefined,
+            body: res ? res.body : undefined,
+            stdout: res ? res.stdout : undefined,
+            stderr: res ? res.stderr : undefined,
+            accountId: candidate.accountId,
+            timedOut: isLauncherTimedOut,
+          });
         launch.scope = classification.scope;
         launch.cause = classification.cause;
         launch.outcome = 'failed';
@@ -3634,6 +3658,10 @@ async function runOrchestration(goal, opts) {
             if (forbidden && !forbiddenDomains.includes(forbidden))
               forbiddenDomains.push(forbidden);
           }
+        } else {
+          // A local failure is nobody's fault: it consumes no failure-domain
+          // attempt budget either, so the same candidate key stays selectable.
+          domainAttempts.set(candDomain, Math.max(0, (domainAttempts.get(candDomain) || 0) - 1));
         }
         evidenceData = recordLaunchFailureEvidence(
           evidenceDir,
@@ -3648,7 +3676,9 @@ async function runOrchestration(goal, opts) {
         const domainExhausted = attemptsInDomain >= 2;
         const scopeExcludesDomain =
           classification.scope === 'upstream' || classification.scope === 'gateway';
-        if (scopeExcludesDomain || domainExhausted) {
+        // TASK-AI-120 RI-R03: a local failure (e.g. a missing base commit) must
+        // not add the candidate or its failure domain to any exclusion set.
+        if (classification.scope !== 'local' && (scopeExcludesDomain || domainExhausted)) {
           if (candDomain) {
             excludedDomains.add(candDomain);
           }
@@ -3888,28 +3918,20 @@ async function runOrchestration(goal, opts) {
     );
     const reviewEntry = log.reviews[log.reviews.length - 1];
     if (reviewEntry) {
+      // The interrupt window (TASK-AI-120 RI-R01): the PASS is checkpointed
+      // before the import, so a kill here resumes into a step with no passedRef.
       persistStep(item.id, 'review_completed', {
         review: { status: reviewed.status, entry: reviewEntry },
       });
     }
     if (reviewed.status === ReviewStatus.COMPLETED) {
-      // TASK-AI-119: import passed commit into host repo
-      let passedRef = null;
-      if (reviewEntry && reviewEntry.sha && hostCwd) {
-        try {
-          const imp = importPassedCommit({
-            hostRepo: hostCwd,
-            workerRoot: reviewEntry.workerRoot || (session && session.worktree) || hostCwd,
-            workItemId: item.id,
-            sha: reviewEntry.sha,
-            spawnSync,
-          });
-          if (imp.ok) passedRef = imp.ref;
-        } catch (e) {
-          // ignore; handled elsewhere if needed
-        }
-      }
+      // TASK-AI-119/120: import the passed commit into the host repo and record
+      // passedRef on the review entry and beside it (RI-R01).
+      const passedRef = reviewEntry
+        ? importPassedRefFor(item.id, reviewEntry, liveSteps[item.id])
+        : null;
       if (reviewEntry) {
+        if (passedRef) reviewEntry.passedRef = passedRef;
         persistStep(item.id, 'review_completed', {
           review: {
             status: reviewed.status,

@@ -36,6 +36,11 @@ const Cause = {
 
 /**
  * Scope of the failure — what is affected.
+ *
+ * `local` is the one scope that blames nothing outside this machine's own
+ * launch configuration (e.g. a base commit the launcher cannot check out).
+ * A local failure must never add a candidate or a failure domain to an
+ * exclusion set (TASK-AI-120 RI-R03).
  */
 const Scope = {
   MODEL: 'model',
@@ -44,6 +49,7 @@ const Scope = {
   ACCESS_PATH: 'access_path',
   GATEWAY: 'gateway',
   HARNESS: 'harness',
+  LOCAL: 'local',
   UNKNOWN: 'unknown',
 };
 
@@ -443,6 +449,26 @@ function classifyFailure(input) {
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: Date.now() + DEFAULT_COOLDOWNS[Cause.TIMEOUT],
+    });
+  }
+
+  // TASK-AI-120 RI-R03: a launch that cannot check out its pinned base commit
+  // is a local provisioning failure, not a model, account or failure-domain
+  // fault. The signal is the launcher's own stderr — worker output never
+  // widens (or narrows) it — and Scope.LOCAL must keep every exclusion set
+  // clean: no candidate key and no failure domain is to blame.
+  if (
+    /ISOLATION_CHECKOUT_FAILED|ISOLATION_BASE_SHA_MISSING|ISOLATION_BASE_SHA_INVALID/.test(
+      String(stderr || '')
+    )
+  ) {
+    return addRetryFields({
+      cause: Cause.LAUNCH_CONFIG,
+      scope: Scope.LOCAL,
+      cooldownMs: DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: null,
     });
   }
 
