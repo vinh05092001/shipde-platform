@@ -1081,8 +1081,8 @@ function getIsolatedLauncher() {
         throw err;
       }
 
-      // DS-R04: verify that the credential is available in the host environment before spawning
-      if (!process.env[credentialEnv]) {
+      // DS-R04: verify that the credential is available in the host environment before spawning (direct sources only; 9router never checked)
+      if (sourceId !== '9router' && !process.env[credentialEnv]) {
         const err = new Error(
           `OPENCODE_DIRECT_CREDENTIAL_MISSING: environment variable ${credentialEnv} is not set`
         );
