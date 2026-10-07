@@ -42,7 +42,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { importPassedCommit } = require('./passed-commit');
+const { importPassedCommit, hasCommit } = require('./passed-commit');
 const crypto = require('crypto');
 
 const planner = require('./planner');
@@ -2968,6 +2968,33 @@ async function runOrchestration(goal, opts) {
     if (savedStep && savedStep.review && savedStep.review.status === ReviewStatus.COMPLETED) {
       const reviewEntry = savedStep.review.entry;
       if (reviewEntry) {
+        // RI-R01: resume import - if no passedRef, import the commit
+        let passedRef = reviewEntry.passedRef || null;
+        if (!passedRef && reviewEntry.sha && hostCwd) {
+          try {
+            const imp = importPassedCommit({
+              hostRepo: hostCwd,
+              workerRoot: reviewEntry.workerRoot || (session && session.worktree) || null,
+              workItemId: item.id,
+              sha: reviewEntry.sha,
+              spawnSync,
+            });
+            if (imp.ok) {
+              passedRef = imp.ref;
+              persistStep(item.id, 'review_completed', {
+                review: {
+                  status: savedStep.review.status,
+                  entry: Object.assign({}, reviewEntry, { passedRef }),
+                },
+              });
+            }
+          } catch (e) {
+            // ignore; handled elsewhere if needed
+          }
+        }
+        if (passedRef && !reviewEntry.passedRef) {
+          reviewEntry.passedRef = passedRef;
+        }
         outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_REVIEW_COMPLETED');
         log.reviews.push(reviewEntry);
         log.review = reviewEntry;
@@ -3116,6 +3143,52 @@ async function runOrchestration(goal, opts) {
           ' needs a PASS review of ' +
           depId +
           ' before it can be launched';
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.REFUSED,
+            workItemId: item.id,
+            role: roleOf(item),
+            detail: reason,
+          },
+          logOpts
+        );
+        outcome(item, ItemStatus.BLOCKED, reason);
+        continue;
+      }
+      // RI-R02: check if commit exists in host and worker before proceeding
+      const savedDepStep = liveSteps[depId];
+      const depReviewEntry = savedDepStep && savedDepStep.review && savedDepStep.review.entry;
+      const workerRoot = (depReviewEntry && depReviewEntry.workerRoot) || null;
+      if (hostCwd && !hasCommit(hostCwd, depPassSha)) {
+        const reason =
+          'DEPENDENCY_COMMIT_UNAVAILABLE: ' +
+          item.id +
+          ' depends on ' +
+          depId +
+          ' (sha ' +
+          depPassSha +
+          ') which is not present in the host repository';
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.REFUSED,
+            workItemId: item.id,
+            role: roleOf(item),
+            detail: reason,
+          },
+          logOpts
+        );
+        outcome(item, ItemStatus.BLOCKED, reason);
+        continue;
+      }
+      if (workerRoot && !hasCommit(workerRoot, depPassSha)) {
+        const reason =
+          'DEPENDENCY_COMMIT_UNAVAILABLE: ' +
+          item.id +
+          ' depends on ' +
+          depId +
+          ' (sha ' +
+          depPassSha +
+          ') which is not present in the worker root';
         decisions.recordDecision(
           {
             stage: decisions.Stage.REFUSED,
@@ -3395,14 +3468,31 @@ async function runOrchestration(goal, opts) {
         const failureList =
           currentSavedStep && currentSavedStep.failures ? currentSavedStep.failures.slice() : [];
         if (launchFailed) {
-          launchClassification = classifyFailure({
-            exitCode: res ? res.exitCode : -1,
-            httpStatus: res ? res.httpStatus : undefined,
-            body: res ? res.body || res.stderr || '' : '',
-            stderr: res ? res.stderr : '',
-            accountId: candidate.accountId,
-            timedOut: Boolean(res && res.timedOut),
-          });
+          // RI-R03: base commit failures get launch_config/local with no candidate blame
+          const isBaseCommitFailure =
+            res &&
+            res.stderr &&
+            /ISOLATION_CHECKOUT_FAILED|ISOLATION_BASE_SHA_MISSING/.test(res.stderr);
+          if (isBaseCommitFailure) {
+            launchClassification = {
+              cause: 'launch_config',
+              scope: 'local',
+              cooldownMs: 5 * 60 * 1000,
+              humanAction: 'none',
+              evidence: res.stderr,
+              resetTime: null,
+              retryable: false,
+            };
+          } else {
+            launchClassification = classifyFailure({
+              exitCode: res ? res.exitCode : -1,
+              httpStatus: res ? res.httpStatus : undefined,
+              body: res ? res.body || res.stderr || '' : '',
+              stderr: res ? res.stderr : '',
+              accountId: candidate.accountId,
+              timedOut: Boolean(res && res.timedOut),
+            });
+          }
           failureList.push({
             failedCandidateKey: decision.chosen,
             failureScope: launchClassification.scope,
@@ -3534,12 +3624,16 @@ async function runOrchestration(goal, opts) {
           });
         }
         persistStep(item.id, 'worker_launch_failed', { failures: failureList });
-        failedKeys.add(decision.chosen);
-        if (classification.scope === 'gateway' || classification.scope === 'upstream') {
-          excludedDomains.add(candDomain);
-          const forbidden =
-            classification.scope === 'upstream' ? candidate.upstream : candidate.gateway;
-          if (forbidden && !forbiddenDomains.includes(forbidden)) forbiddenDomains.push(forbidden);
+        // RI-R03: local scope failures (like missing base commit) don't add to failedKeys
+        if (classification.scope !== 'local') {
+          failedKeys.add(decision.chosen);
+          if (classification.scope === 'gateway' || classification.scope === 'upstream') {
+            excludedDomains.add(candDomain);
+            const forbidden =
+              classification.scope === 'upstream' ? candidate.upstream : candidate.gateway;
+            if (forbidden && !forbiddenDomains.includes(forbidden))
+              forbiddenDomains.push(forbidden);
+          }
         }
         evidenceData = recordLaunchFailureEvidence(
           evidenceDir,
