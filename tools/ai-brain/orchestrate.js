@@ -181,6 +181,8 @@ function resolveLauncher(o, isolatedLauncher) {
       verdictPath: job.verdictPath,
       exercise: job.exercise || o.exercise || null,
       onProvisioned: typeof o.onProvisioned === 'function' ? o.onProvisioned : undefined,
+      candidateKey: job.candidateKey || null,
+      gateway: job.gateway || null,
     });
   };
 }

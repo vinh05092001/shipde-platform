@@ -60,6 +60,7 @@ function getFolderHash(folder) {
       }
     }
   }
+
   readDir(folder);
   const fileHashes = [];
   for (const file of files) {
@@ -263,8 +264,9 @@ $psi.Password = $sec
     'PUBLIC',
     'PATHEXT',
   ];
-  if (options.adapterId === 'opencode-direct') {
-    envAllowed.push('NINEROUTER_API_KEY');
+  // DS-R04: add only the selected source's credential env to the allowlist
+  if (options.adapterId === 'opencode-direct' && options.credentialEnv) {
+    envAllowed.push(options.credentialEnv);
   }
   const allowedArray = '@(' + envAllowed.map((k) => `"${k}"`).join(', ') + ')';
 
@@ -1025,13 +1027,13 @@ function getIsolatedLauncher() {
       }
     }
 
+    // DS-R04: store the credential env for the worker allowlist
+    let selectedCredentialEnv = null;
+
     if (adapter.id === 'opencode-direct') {
       const sourcesModule = require('./sources');
       const sources = require('./sources.json');
-      const routerSource = sources.sources.find((s) => s.id === '9router');
-      if (!routerSource) {
-        throw new Error('OPENCODE_DIRECT_LAUNCH_FAILED: 9router source not found in sources.json');
-      }
+      const { parseCandidateKey } = require('./discovery/identity');
 
       // Extract pinned model id from args or options (the exact --model string opencode receives)
       const modelIdx = Array.isArray(args) ? args.indexOf('--model') : -1;
@@ -1040,14 +1042,64 @@ function getIsolatedLauncher() {
           ? args[modelIdx + 1]
           : (opts && opts.pinnedModel) || (opts && opts.model) || null;
 
-      // Derive provider id directly from the exact --model string opencode receives
-      const providerId =
-        (pinnedModel && sourcesModule.providerFromPrefix(pinnedModel)) ||
-        sourcesModule.providerFromPrefix(routerSource.modelPrefix) ||
-        sourcesModule.providerFromPrefix(routerSource) ||
-        routerSource.id;
+      // SUPERVISOR FIX: resolve source from candidate gateway, not model prefix
+      // The gateway comes from the Controller-pinned candidate key (7 parts separated by '::')
+      const candidateKey = (opts && opts.candidateKey) || null;
+      let sourceId = null;
+      if (candidateKey) {
+        const parsed = parseCandidateKey(candidateKey);
+        sourceId = parsed && parsed.gateway ? parsed.gateway : null;
+      }
 
-      if (pinnedModel) {
+      // No gateway (legacy callers/tests) -> use 9router unchanged
+      sourceId = sourceId || '9router';
+
+      const selectedSource = sources.sources.find((s) => s.id === sourceId);
+      if (!selectedSource) {
+        const err = new Error(
+          `OPENCODE_DIRECT_SOURCE_UNKNOWN: gateway '${sourceId}' not found in sources.json`
+        );
+        err.code = 'OPENCODE_DIRECT_SOURCE_UNKNOWN';
+        throw err;
+      }
+
+      // DS-R02: validate that the source has an https endpoint (or http://127.0.0.1 / localhost) and credential.env
+      const endpoint = selectedSource.endpoint;
+      const credentialEnv = selectedSource.credential && selectedSource.credential.env;
+
+      const isHttpsOrLocalhost =
+        endpoint &&
+        (endpoint.startsWith('https://') ||
+          endpoint.startsWith('http://127.0.0.1') ||
+          endpoint.startsWith('http://localhost'));
+
+      if (!isHttpsOrLocalhost || !credentialEnv) {
+        const err = new Error(
+          `OPENCODE_DIRECT_SOURCE_UNSUPPORTED: source '${sourceId}' does not have a valid https endpoint (or http://127.0.0.1 / localhost) and credential.env`
+        );
+        err.code = 'OPENCODE_DIRECT_SOURCE_UNSUPPORTED';
+        throw err;
+      }
+
+      // DS-R04: verify that the credential is available in the host environment before spawning (direct sources only; 9router never checked)
+      if (sourceId !== '9router' && !process.env[credentialEnv]) {
+        const err = new Error(
+          `OPENCODE_DIRECT_CREDENTIAL_MISSING: environment variable ${credentialEnv} is not set`
+        );
+        err.code = 'OPENCODE_DIRECT_CREDENTIAL_MISSING';
+        throw err;
+      }
+
+      // Store for later use in buildWorkerLaunchScript
+      selectedCredentialEnv = credentialEnv;
+
+      // DS-R03: for direct sources, provider id must be the source id, not the model name
+      const providerId =
+        sourceId === '9router' && pinnedModel
+          ? sourcesModule.providerFromPrefix(pinnedModel) || selectedSource.id
+          : selectedSource.id;
+
+      if (pinnedModel && sourceId === '9router') {
         const derivedFromModel = sourcesModule.providerFromPrefix(pinnedModel);
         if (derivedFromModel && derivedFromModel !== providerId) {
           throw new Error(
@@ -1063,27 +1115,27 @@ function getIsolatedLauncher() {
         if (pinnedModel.startsWith(prefixWithSlash)) {
           const relativeId = pinnedModel.slice(prefixWithSlash.length);
           if (relativeId) {
-            // Only the router's own prefix (e.g. 'ninerouter/') is stripped
-            // before the id reaches 9Router. An upstream prefix such as
-            // 'cl/' or 'xmtp/' is part of the 9Router model id and must be
-            // sent whole, or 9Router answers "Model not found".
-            const routerProvider = sourcesModule.providerFromPrefix(routerSource.modelPrefix);
-            const wireId = providerId === routerProvider ? relativeId : pinnedModel;
+            // For 9router with upstream prefix (cl/, xmtp/), use full pinnedModel as wireId
+            // For 9router with router's own prefix and for direct sources, use relativeId as wireId
+            const routerProvider = sourcesModule.providerFromPrefix(selectedSource.modelPrefix);
+            const useFullWireId = sourceId === '9router' && providerId !== routerProvider;
+            const wireId = useFullWireId ? pinnedModel : relativeId;
             modelsMap[relativeId] = { id: wireId, name: relativeId };
           }
         }
       }
 
+      // DS-R03: generate opencode.json with the direct source's endpoint and credential
       const configPath = path.join(workerRoot, 'opencode.json');
       const configData = JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
         provider: {
           [providerId]: {
             npm: '@ai-sdk/openai-compatible',
-            name: routerSource.label || providerId,
+            name: selectedSource.label || providerId,
             options: {
-              baseURL: routerSource.endpoint,
-              apiKey: `{env:${routerSource.credential.env}}`,
+              baseURL: selectedSource.endpoint,
+              apiKey: `{env:${selectedSource.credential.env}}`,
             },
             models: modelsMap,
           },
@@ -1326,6 +1378,7 @@ function getIsolatedLauncher() {
       completionNonce,
       adapterId: adapter.id,
       rtkPathPrepend,
+      credentialEnv: selectedCredentialEnv,
     });
 
     const tempScript = path.join(
