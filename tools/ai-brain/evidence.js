@@ -25,6 +25,35 @@ const { scrubText } = require('./decisions');
 
 const SCHEMA_VERSION = 2;
 
+/**
+ * The cooldown the Controller actually applies to a classification (RT-R03).
+ *
+ * The classifier answers two different questions: `cooldownMs` is the default
+ * this cause cools down for, `retryAfterMs` is how long the provider itself said
+ * the condition lasts. When the provider's own number is longer it wins, and
+ * when the default is longer it still stands — a cooldown is never shortened by
+ * a smaller retry hint. Neither answer is dropped: a classification with no
+ * answer at all (both null) is the "never recovers on time alone" case and
+ * stays null instead of becoming zero.
+ *
+ * @param {{cooldownMs?: number|null, retryAfterMs?: number|null}} classification
+ * @returns {number|null} max(cooldownMs, retryAfterMs), null only when both are
+ */
+function effectiveCooldownMs(classification) {
+  const cooldownMs =
+    classification && typeof classification.cooldownMs === 'number'
+      ? classification.cooldownMs
+      : null;
+  const retryAfterMs =
+    classification && typeof classification.retryAfterMs === 'number'
+      ? classification.retryAfterMs
+      : null;
+  if (cooldownMs === null && retryAfterMs === null) return null;
+  if (cooldownMs === null) return retryAfterMs;
+  if (retryAfterMs === null) return cooldownMs;
+  return Math.max(cooldownMs, retryAfterMs);
+}
+
 /** Evidence levels — higher numbers are stronger evidence. */
 const Level = { API: 1, HARNESS: 2, OUTCOME: 3 };
 const Status = { PASSED: 'passed', FAILED: 'failed', UNKNOWN: 'unknown' };
@@ -234,7 +263,7 @@ function recordProbe(dir, candidate, item) {
           : '');
     cd.cause = classification.cause;
     cd.scope = classification.scope;
-    cd.cooldownMs = classification.cooldownMs;
+    cd.cooldownMs = effectiveCooldownMs(classification);
     cd.resetTime = classification.resetTime;
     cd.humanAction = classification.humanAction;
     cd.offeringId = key;
@@ -279,7 +308,7 @@ function recordProbe(dir, candidate, item) {
       us.blockReason = cd.blockReason;
       us.cause = classification.cause;
       us.scope = 'upstream';
-      us.cooldownMs = classification.cooldownMs;
+      us.cooldownMs = effectiveCooldownMs(classification);
       us.resetTime = cd.resetTime !== undefined ? cd.resetTime : classification.resetTime;
     }
   }
@@ -580,6 +609,7 @@ module.exports = {
   Status,
   BLOCK_CODES,
   BLOCK_TTL_MS,
+  effectiveCooldownMs,
   loadEvidence,
   saveEvidence,
   migrateEvidence,
