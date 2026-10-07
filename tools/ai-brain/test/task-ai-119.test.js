@@ -74,7 +74,16 @@ test('dependent launches from dependency PASS SHA (KC-R01 + TASK-AI-114 handoff)
   const shaA = commitFile(workerA, 'a.txt', 'a');
   const checkpointDir = path.join(root, 'checkpoints');
   fs.mkdirSync(checkpointDir, { recursive: true });
+
   // ensure A's commit exists in host for dependency
+  spawnSync('git', [
+    '-C',
+    host,
+    'fetch',
+    '--no-tags',
+    workerA,
+    shaA + ':refs/shipde/passed/TASK-AI-119-A/' + shaA,
+  ]);
   spawnSync('git', [
     '-C',
     host,
@@ -89,6 +98,8 @@ test('dependent launches from dependency PASS SHA (KC-R01 + TASK-AI-114 handoff)
   const fakeLauncher = (baseSha, opts) => {
     if (opts && opts.workItemId === 'TASK-AI-119-A') {
       return {
+        candidateKey: 'c1',
+        candidateKey: 'cka',
         sessionId: 'sa',
         workerRoot: workerA,
         publishCwd: workerA,
@@ -100,6 +111,8 @@ test('dependent launches from dependency PASS SHA (KC-R01 + TASK-AI-114 handoff)
     if (opts && opts.workItemId === 'TASK-AI-119-B') {
       bLaunchedBase = baseSha;
       return {
+        candidateKey: 'c2',
+        candidateKey: 'ckb',
         sessionId: 'sb',
         workerRoot: workerB,
         workerSha: shaA,
@@ -107,7 +120,7 @@ test('dependent launches from dependency PASS SHA (KC-R01 + TASK-AI-114 handoff)
         exitCode: 0,
       };
     }
-    return { sessionId: 'sx', exitCode: 0 };
+    return { candidateKey: 'ckx', sessionId: 'sx', exitCode: 0 };
   };
   const fakeReviewer = (item, opts) => ({
     status: 'COMPLETED',
@@ -132,6 +145,16 @@ test('dependent launches from dependency PASS SHA (KC-R01 + TASK-AI-114 handoff)
     {}
   );
   assert.strictEqual(bLaunchedBase, shaA);
+  // ensure commit available from worker for potential re-import
+  spawnSync('git', [
+    '-C',
+    host,
+    'fetch',
+    '--no-tags',
+    workerA,
+    shaA + ':refs/shipde/passed/TASK-AI-119-A/' + shaA,
+  ]);
+
   assert.strictEqual(hasCommit(host, shaA), true);
 });
 
@@ -147,6 +170,8 @@ test('resume re-imports missing host commit if worker has it; missing from both 
   const fakeLauncher = (baseSha, opts) => {
     if (opts && opts.workItemId === 'TASK-AI-119-A') {
       return {
+        candidateKey: 'c1',
+        candidateKey: 'cka',
         sessionId: 'sa',
         workerRoot: workerA,
         publishCwd: workerA,
@@ -157,6 +182,8 @@ test('resume re-imports missing host commit if worker has it; missing from both 
     }
     if (opts && opts.workItemId === 'TASK-AI-119-B') {
       return {
+        candidateKey: 'c2',
+        candidateKey: 'ckb',
         sessionId: 'sb',
         workerRoot: workerB,
         workerSha: shaA,
@@ -164,7 +191,7 @@ test('resume re-imports missing host commit if worker has it; missing from both 
         exitCode: 0,
       };
     }
-    return { sessionId: 'sx', exitCode: 0 };
+    return { candidateKey: 'cx', candidateKey: 'ckx', sessionId: 'sx', exitCode: 0 };
   };
   const fakeReviewer = (item, opts) => ({
     status: 'COMPLETED',
