@@ -400,6 +400,30 @@ function classifyFailure(input) {
     .join('\n');
   const { scrubText } = require('./decisions');
   const scrubbedStdout = scrubText(String(stdout || input?.stdout || '')).slice(0, 500);
+  const evidence = {
+    exitCode,
+    httpStatus,
+    body: scrubText(
+      String(
+        body ||
+          input?.cause ||
+          (typeof input?.error === 'string' ? input.error : '') ||
+          input?.message ||
+          ''
+      )
+    ).slice(0, 500),
+    stdout: scrubbedStdout,
+    stderr: scrubText(String(stderr || '')).slice(0, 500),
+  };
+  if (evidence.httpStatus === undefined || evidence.httpStatus === null) {
+    delete evidence.httpStatus;
+  }
+  if (evidence.exitCode === undefined || evidence.exitCode === null) {
+    delete evidence.exitCode;
+  }
+  if (!evidence.stdout) {
+    delete evidence.stdout;
+  }
   // TASK-AI-119: Local/controller provision failures are local scope; no domain exclusion
   if (
     /PROVISION_BASE_MISSING/.test(String(stderr || '')) ||
@@ -426,30 +450,6 @@ function classifyFailure(input) {
       evidence,
       resetTime: Date.now() + (DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0),
     });
-  }
-  const evidence = {
-    exitCode,
-    httpStatus,
-    body: scrubText(
-      String(
-        body ||
-          input?.cause ||
-          (typeof input?.error === 'string' ? input.error : '') ||
-          input?.message ||
-          ''
-      )
-    ).slice(0, 500),
-    stdout: scrubbedStdout,
-    stderr: scrubText(String(stderr || '')).slice(0, 500),
-  };
-  if (evidence.httpStatus === undefined || evidence.httpStatus === null) {
-    delete evidence.httpStatus;
-  }
-  if (evidence.exitCode === undefined || evidence.exitCode === null) {
-    delete evidence.exitCode;
-  }
-  if (!evidence.stdout) {
-    delete evidence.stdout;
   }
 
   // Launcher timeout: authentic signal from launcher (structured timedOut flag, Cause.TIMEOUT, or launcher stderr prefix)
