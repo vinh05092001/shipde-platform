@@ -4102,6 +4102,9 @@ async function runOrchestration(goal, opts) {
   //    A failed publish can already have left an external effect behind, so the run
   //    starts no second one until an operator reconciles in a fresh run.
   const publishGuard = { failed: null };
+  // TASK-AI-122 PI-R03: what this run published — workItemId -> published
+  // branch. A dependent draft PR stacks on its dependency's branch.
+  const publishedByItem = new Map();
   const recordPublishDecision = (entry, published) => {
     const reason = published.reason || null;
     const notReplayable = Boolean(reason && reason.startsWith('PUBLISH_NOT_REPLAYABLE'));
@@ -4145,6 +4148,14 @@ async function runOrchestration(goal, opts) {
       if (!log.publications.some((saved) => saved.workItemId === entry.workItemId)) {
         log.publications.push(recordedPublication);
       }
+      const recordedBranch =
+        recordedPublication.branch ||
+        (recordedPublication.result && recordedPublication.result.branch) ||
+        (entry && entry.branch) ||
+        null;
+      if (recordedBranch) {
+        publishedByItem.set(entry.workItemId, String(recordedBranch).replace(/^refs\/heads\//, ''));
+      }
       log.resumed = {
         stage: 'resumed',
         workItemId: entry.workItemId,
@@ -4175,7 +4186,7 @@ async function runOrchestration(goal, opts) {
       continue;
     }
 
-    const published = publication(o, entry, publishGuard);
+    const published = publication(o, entry, publishGuard, publishedByItem);
     log.publications.push(published);
 
     // The publication record lives on the entry as well, so this run's guard and
@@ -4197,6 +4208,22 @@ async function runOrchestration(goal, opts) {
         } catch (_) {
           // publication() already corrected the record and marked the guard.
         }
+      }
+      // PI-R03: record the published branch so a dependent can stack on it.
+      // Only a draft that still stands counts: an attempt that failed after the
+      // record was written publishes no branch.
+      const publishedBranch =
+        published.status === PublicationStatus.PUBLISHED_DRAFT
+          ? published.branch ||
+            (published.result && published.result.branch) ||
+            (entry && entry.branch) ||
+            null
+          : null;
+      if (publishedBranch) {
+        publishedByItem.set(
+          entry.workItemId,
+          String(publishedBranch).replace(/^refs\/heads\//, '')
+        );
       }
     }
     recordPublishDecision(entry, published);
@@ -4296,7 +4323,7 @@ function writeReviewManifestAndArtifact(opts) {
     verdict,
     findings: findingsList,
     tests: testsList,
-    artifactPath,
+    artifactPath: itemArtifactPath,
   });
 
   const manifestJson = JSON.stringify(manifest, null, 2) + '\n';
@@ -4314,12 +4341,16 @@ function writeReviewManifestAndArtifact(opts) {
   const validation = validateManifest(manifest, {
     repoCwd,
     expected: { workItemId, commit: reviewedSha },
-    artifactPath,
+    artifactPath: itemArtifactPath,
   });
 
+  // PI-R01: the per-Work-Item manifest and artifact are the artifacts of
+  // record. The shared review-manifest.json / review-artifact.md pair is still
+  // written for legacy readers, but it is last-writer-wins across a multi-item
+  // run, so nothing downstream may treat it as this item's evidence.
   return {
-    manifestPath,
-    artifactPath,
+    manifestPath: itemManifestPath,
+    artifactPath: itemArtifactPath,
     manifest,
     validation,
   };
@@ -5508,6 +5539,61 @@ function repairRound(
   };
 }
 
+/** The approval ids a publication request carries (TASK-AI-122 PI-R02). */
+function approvalIdsOf(request) {
+  if (!request) return [];
+  if (Array.isArray(request.approvalIds)) {
+    return request.approvalIds.map((id) => String(id).trim()).filter(Boolean);
+  }
+  const single = request.approvalId;
+  return typeof single === 'string' && single.trim() ? [single.trim()] : [];
+}
+
+/**
+ * PI-R02: one approval per reviewed commit. The multi-approval request shape
+ * (`--approval ID1,ID2`) is matched per item by the approval record's
+ * reviewedSha; an item no supplied approval binds has no approval at all and is
+ * reported NOT_REQUESTED (APPROVAL_NOT_SUPPLIED) — never an attempt, so the
+ * replay guard stays clean for the items that do carry an approval. Ids that
+ * resolve to no bound record keep the legacy seam: they are passed through and
+ * the publisher's own binding gate decides.
+ *
+ * The legacy singular approvalId has no list to match across and is passed
+ * through unchanged: a bound-but-wrong approval then refuses at the publisher
+ * with the binding named, which is the diagnostic that shape has always had.
+ */
+function selectApprovalId(request, reviewedSha) {
+  if (!Array.isArray(request.approvalIds)) {
+    return { approvalId: request.approvalId || null };
+  }
+  const ids = approvalIdsOf(request);
+  if (ids.length === 0) return { approvalId: null, missing: true };
+  const approvals = require('./approval-registry');
+  let registry = null;
+  try {
+    const regPath = approvals.registryPath(request.registryPath);
+    registry = fs.existsSync(regPath) ? approvals.readRegistry(regPath) : null;
+  } catch (err) {
+    registry = null;
+  }
+  let sawBound = false;
+  let unboundFallback = null;
+  for (const id of ids) {
+    const entry = registry ? approvals.approvalEntry(registry, id) : null;
+    const bound = approvals.approvalReviewedSha(entry);
+    if (bound) {
+      sawBound = true;
+      if (String(bound).toLowerCase() === String(reviewedSha).toLowerCase()) {
+        return { approvalId: id };
+      }
+    } else if (unboundFallback === null) {
+      unboundFallback = id;
+    }
+  }
+  if (!sawBound && unboundFallback !== null) return { approvalId: unboundFallback };
+  return { approvalId: null, missing: true };
+}
+
 /**
  * The publication stage for one reviewed work item.
  *
@@ -5522,8 +5608,12 @@ function repairRound(
  * from this call rather than read from `entry.publication`, because the entry
  * carries every outcome — a refusal that never reached the publisher, a
  * not-requested run — while only an attempted publish can be unreplayable.
+ *
+ * `publishedByItem` is this run's publish outcome: workItemId -> published
+ * branch. A dependent draft stacks its PR base on the dependency's published
+ * branch (TASK-AI-122 PI-R03), and is not published at all without one.
  */
-function publication(o, entry, publishGuard) {
+function publication(o, entry, publishGuard, publishedByItem) {
   const request = o.publication;
   const markAttemptFailed = (reason) => {
     if (publishGuard && !publishGuard.failed) {
@@ -5560,8 +5650,23 @@ function publication(o, entry, publishGuard) {
     };
   }
   const review = entry && entry.review;
+  // PI-R01: the review manifest and artifact are per Work Item. The per-item
+  // files written at review time are this item's evidence; the legacy shared
+  // review-manifest.json / review-artifact.md pair is read only when no
+  // per-item file exists, because it is last-writer-wins across a multi-item
+  // run. An explicit request pin stays authoritative for the caller that set it.
+  const itemKey = (request && request.workItemId) || (entry && entry.workItemId);
+  const itemDecisionDir =
+    (entry && entry.decisionLog && entry.decisionLog.dir) || o.decisionDir || null;
+  const itemManifestCandidate =
+    itemDecisionDir && path.join(itemDecisionDir, 'review-manifest-' + itemKey + '.json');
+  const itemArtifactCandidate =
+    itemDecisionDir && path.join(itemDecisionDir, 'review-artifact-' + itemKey + '.md');
   const reviewManifest =
     (request && request.reviewManifest) ||
+    (itemManifestCandidate && fs.existsSync(itemManifestCandidate)
+      ? itemManifestCandidate
+      : null) ||
     (entry && entry.reviewManifest) ||
     (entry &&
       entry.decisionLog &&
@@ -5571,6 +5676,9 @@ function publication(o, entry, publishGuard) {
     null;
   const reviewArtifact =
     (request && request.reviewArtifact) ||
+    (itemArtifactCandidate && fs.existsSync(itemArtifactCandidate)
+      ? itemArtifactCandidate
+      : null) ||
     (entry && entry.reviewArtifact) ||
     (entry &&
       entry.decisionLog &&
@@ -5591,6 +5699,55 @@ function publication(o, entry, publishGuard) {
       reason: 'NO_REVIEWED_COMMIT: the item did not reach a passing review',
     };
   }
+
+  const reviewedSha = (entry && entry.sha) || (review && review.finalSha) || null;
+
+  // PI-R02: an approval binds one reviewed commit. An item no supplied
+  // approval binds is NOT_REQUESTED (APPROVAL_NOT_SUPPLIED) — not a refusal,
+  // and never an attempt, so the replay guard stays clean for the items that
+  // do carry an approval.
+  const approval = selectApprovalId(request, reviewedSha);
+  if (!approval.approvalId) {
+    return {
+      status: PublicationStatus.NOT_REQUESTED,
+      workItemId: entry && entry.workItemId,
+      reason:
+        'APPROVAL_NOT_SUPPLIED: no supplied approval is bound to reviewed commit ' + reviewedSha,
+    };
+  }
+
+  // PI-R03: one draft PR per Work Item. A dependent stacks its PR base on the
+  // dependency's published branch, so its diff carries only its own commit(s);
+  // without a published dependency there is no legal base and no publish.
+  const specItem =
+    (entry && entry.item) ||
+    (o.specs || []).find((s) => s && s.id === (entry && entry.workItemId)) ||
+    null;
+  const dependencies = (
+    specItem && Array.isArray(specItem.dependencies) ? specItem.dependencies : []
+  ).filter(Boolean);
+  let baseBranch = null;
+  if (dependencies.length > 1) {
+    return {
+      status: PublicationStatus.REFUSED,
+      workItemId: entry && entry.workItemId,
+      reason:
+        'MULTI_DEPENDENCY_BASE_UNSUPPORTED: a dependent draft PR stacks on exactly one dependency, got ' +
+        dependencies.join(', '),
+    };
+  }
+  if (dependencies.length === 1) {
+    const dependencyBranch = publishedByItem && publishedByItem.get(dependencies[0]);
+    if (!dependencyBranch) {
+      return {
+        status: PublicationStatus.REFUSED,
+        workItemId: entry && entry.workItemId,
+        reason: 'DEPENDENCY_NOT_PUBLISHED: ' + dependencies[0] + ' was not published in this run',
+      };
+    }
+    baseBranch = dependencyBranch;
+  }
+
   let imported = null;
   try {
     imported = importReviewedCommitForPublish(o, entry, request);
@@ -5632,6 +5789,10 @@ function publication(o, entry, publishGuard) {
           ? o.publisher
           : require('./publisher').publish;
     attempted = true;
+    // PI-R03: the publish branch is this item's own branch, and the approval is
+    // the one bound to this item's reviewed commit (PI-R02).
+    const publishBranch =
+      (entry && entry.branch) || (request && request.branch) || (review && review.branch) || null;
     const result = publishFn(
       Object.assign({}, request, {
         // The publisher still owns the approval, destination and draft gates.
@@ -5650,20 +5811,28 @@ function publication(o, entry, publishGuard) {
           entry.reviewer ||
           request.reviewer ||
           null,
-        branch: request.branch || entry.branch || (review && review.branch) || null,
+        branch: publishBranch,
+        approvalId: approval.approvalId,
         reviewManifest,
         reviewArtifact,
-        workItemId: (request && request.workItemId) || (entry && entry.workItemId),
+        workItemId: (entry && entry.workItemId) || (request && request.workItemId),
         draft: (() => {
           if (!request.draft && !entry.draftTitle) return undefined;
           const manifest = manifestValidation && manifestValidation.manifest;
           const callerDraft = request.draft || {};
+          // PI-R03: the title is "[<workItemId>] <outcome>" from that item's own
+          // spec. A run-level draft title (the old specs[0] shape) names another
+          // Work Item and must not label this one's Pull Request.
+          const callerNamesThisItem =
+            typeof callerDraft.workItemId === 'string' &&
+            callerDraft.workItemId === String(entry.workItemId);
+          const specOutcome = entry.draftTitle
+            ? String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item'
+            : 'work item';
           return Object.assign(
             {
               workItemId: entry.workItemId,
-              outcome: entry.draftTitle
-                ? String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item'
-                : 'work item',
+              outcome: (callerNamesThisItem && callerDraft.outcome) || specOutcome,
               reviewer:
                 entry.reviewerIdentity ||
                 (review && review.reviewer) ||
@@ -5688,14 +5857,9 @@ function publication(o, entry, publishGuard) {
                 exitCode: entry.tests && entry.tests.baseExitCode,
               },
             },
-            {
-              workItemId: callerDraft.workItemId || entry.workItemId,
-              outcome:
-                callerDraft.outcome ||
-                (entry.draftTitle
-                  ? String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item'
-                  : 'work item'),
-            }
+            // PI-R03: a dependent draft PR stacks on the dependency's published
+            // branch; an independent one has no base override.
+            baseBranch ? { baseBranch } : {}
           );
         })(),
         log: typeof o.log === 'function' ? o.log : null,
@@ -5704,6 +5868,8 @@ function publication(o, entry, publishGuard) {
     const record = {
       status: PublicationStatus.PUBLISHED_DRAFT,
       workItemId: entry.workItemId,
+      branch: publishBranch,
+      baseBranch,
       result,
       attempted,
     };
