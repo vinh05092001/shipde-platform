@@ -42,6 +42,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { importPassedCommit } = require('./passed-commit');
 const crypto = require('crypto');
 
 const planner = require('./planner');
@@ -2735,6 +2736,14 @@ async function runOrchestration(goal, opts) {
 
   const cli = controller();
   const decisionDir = o.decisionDir || null;
+  const hostCwd =
+    o.hostCwd ||
+    o.cwd ||
+    o.workdir ||
+    (o && o.host && o.host.cwd) ||
+    (o && o.root) ||
+    o.cwd ||
+    process.cwd();
   const logOpts = { dir: decisionDir, now };
   const checkpointFile =
     o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : null);
@@ -3090,7 +3099,16 @@ async function runOrchestration(goal, opts) {
     }
     if (depIds.length === 1) {
       const depId = depIds[0];
-      const depPassSha = dependencyPassShaOf(depId);
+      let depPassSha = dependencyPassShaOf(depId);
+      if (
+        !depPassSha &&
+        liveSteps[depId] &&
+        liveSteps[depId].review &&
+        liveSteps[depId].review.entry &&
+        liveSteps[depId].review.entry.sha
+      ) {
+        depPassSha = liveSteps[depId].review.entry.sha;
+      }
       if (!depPassSha) {
         const reason =
           'DEPENDENCY_NOT_PASSED: ' +
@@ -3781,6 +3799,31 @@ async function runOrchestration(goal, opts) {
       });
     }
     if (reviewed.status === ReviewStatus.COMPLETED) {
+      // TASK-AI-119: import passed commit into host repo
+      let passedRef = null;
+      if (reviewEntry && reviewEntry.sha && hostCwd) {
+        try {
+          const imp = importPassedCommit({
+            hostRepo: hostCwd,
+            workerRoot: reviewEntry.workerRoot || (session && session.worktree) || hostCwd,
+            workItemId: item.id,
+            sha: reviewEntry.sha,
+            spawnSync,
+          });
+          if (imp.ok) passedRef = imp.ref;
+        } catch (e) {
+          // ignore; handled elsewhere if needed
+        }
+      }
+      if (reviewEntry) {
+        persistStep(item.id, 'review_completed', {
+          review: {
+            status: reviewed.status,
+            entry: reviewEntry,
+            passedRef: passedRef || undefined,
+          },
+        });
+      }
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
     } else {
       const isNoAlt =
