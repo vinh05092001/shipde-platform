@@ -1033,6 +1033,7 @@ function getIsolatedLauncher() {
     if (adapter.id === 'opencode-direct') {
       const sourcesModule = require('./sources');
       const sources = require('./sources.json');
+      const { parseCandidateKey } = require('./discovery/identity');
 
       // Extract pinned model id from args or options (the exact --model string opencode receives)
       const modelIdx = Array.isArray(args) ? args.indexOf('--model') : -1;
@@ -1042,11 +1043,16 @@ function getIsolatedLauncher() {
           : (opts && opts.pinnedModel) || (opts && opts.model) || null;
 
       // SUPERVISOR FIX: resolve source from candidate gateway, not model prefix
-      // The gateway comes from the Controller-pinned candidate key
-      const gateway = (opts && opts.gateway) || null;
+      // The gateway comes from the Controller-pinned candidate key (7 parts separated by '::')
+      const candidateKey = (opts && opts.candidateKey) || null;
+      let sourceId = null;
+      if (candidateKey) {
+        const parsed = parseCandidateKey(candidateKey);
+        sourceId = parsed && parsed.gateway ? parsed.gateway : null;
+      }
 
       // No gateway (legacy callers/tests) -> use 9router unchanged
-      const sourceId = gateway || '9router';
+      sourceId = sourceId || '9router';
 
       const selectedSource = sources.sources.find((s) => s.id === sourceId);
       if (!selectedSource) {

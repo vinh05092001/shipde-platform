@@ -52,7 +52,7 @@ function runDirectLaunch(model, opts) {
   let capturedScript = null;
   let thrownError = null;
   const fakeEnv = opts && opts.fakeEnv ? { ...opts.fakeEnv } : {};
-  const gateway = opts && opts.gateway !== undefined ? opts.gateway : undefined;
+  const candidateKey = opts && opts.candidateKey !== undefined ? opts.candidateKey : null;
 
   try {
     const tempShim = path.join(tmpDir, 'launch-temp');
@@ -100,7 +100,7 @@ function runDirectLaunch(model, opts) {
         verifyBoundary: () => true,
         baseSha: '0123456789012345678901234567890123456789',
         workerTimeoutMs: 1000,
-        gateway: gateway,
+        candidateKey: candidateKey,
       });
     } catch (err) {
       thrownError = err;
@@ -133,7 +133,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('gateway 9router with model xmtp/mimo-v2.6-pro uses 9router config, wire id xmtp/...', () => {
     const { cfg, thrownError } = runDirectLaunch('xmtp/mimo-v2.6-pro', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
-      gateway: '9router',
+      candidateKey: 'harness::accessPath::9router::upstream::*:::xmtp/mimo-v2.6-pro',
     });
 
     assert.ok(!thrownError, 'no error for 9router with upstream prefix');
@@ -156,7 +156,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('gateway inception with model inception/mercury-2.5 uses inception endpoint, id mercury-2.5, env INCEPTION_API_KEY only', () => {
     const { cfg, thrownError, capturedScript } = runDirectLaunch('inception/mercury-2.5', {
       fakeEnv: { INCEPTION_API_KEY: 'test-not-a-key-inception' },
-      gateway: 'inception',
+      candidateKey: 'harness::accessPath::inception::upstream::*:::inception/mercury-2.5',
     });
 
     assert.ok(!thrownError, 'no error thrown for inception model');
@@ -178,7 +178,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('gateway 9router with model inception/mercury-2.5 uses 9router, NOT direct inception', () => {
     const { cfg, thrownError } = runDirectLaunch('inception/mercury-2.5', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
-      gateway: '9router',
+      candidateKey: 'harness::accessPath::9router::upstream::*:::inception/mercury-2.5',
     });
 
     assert.ok(!thrownError, 'no error for 9router');
@@ -192,7 +192,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('unknown gateway fails with OPENCODE_DIRECT_SOURCE_UNKNOWN', () => {
     const { thrownError } = runDirectLaunch('some-model', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
-      gateway: 'unknown-gateway',
+      candidateKey: 'harness::accessPath::unknown-gateway::upstream::*:::some-model',
     });
 
     assert.ok(thrownError, 'error thrown for unknown gateway');
@@ -203,7 +203,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('no gateway (legacy) uses 9router unchanged', () => {
     const { cfg, thrownError } = runDirectLaunch('ninerouter/ag/gemini-3.1-pro-low', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
-      gateway: null,
+      candidateKey: null,
     });
 
     assert.ok(!thrownError, 'no error for legacy (no gateway)');
@@ -222,7 +222,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('gateway 9router with ninerouter/ model strips the router prefix', () => {
     const { cfg, thrownError } = runDirectLaunch('ninerouter/ag/gemini-3.1-pro-low', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-not-a-key-9router' },
-      gateway: '9router',
+      candidateKey: 'harness::accessPath::9router::upstream::*:::ninerouter/ag/gemini-3.1-pro-low',
     });
 
     assert.ok(!thrownError, 'no error thrown for 9router model');
@@ -241,7 +241,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('source without endpoint fails with OPENCODE_DIRECT_SOURCE_UNSUPPORTED', () => {
     const { thrownError } = runDirectLaunch('some-model', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
-      gateway: 'codex',
+      candidateKey: 'harness::accessPath::codex::upstream::*:::some-model',
     });
 
     assert.ok(thrownError, 'error thrown for source without endpoint');
@@ -252,7 +252,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('source without credential.env fails with OPENCODE_DIRECT_SOURCE_UNSUPPORTED', () => {
     const { thrownError } = runDirectLaunch('model-name', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
-      gateway: 'paseo',
+      candidateKey: 'harness::accessPath::paseo::upstream::*:::model-name',
     });
 
     assert.ok(thrownError, 'error thrown for source without credential.env');
@@ -263,7 +263,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('direct source model id sent WITHOUT the gateway prefix', () => {
     const { cfg } = runDirectLaunch('regolo/qwen-2.5-coder-32b', {
       fakeEnv: { REGOLO_API_KEY: 'test-not-a-key-regolo' },
-      gateway: 'regolo',
+      candidateKey: 'harness::accessPath::regolo::upstream::*:::regolo/qwen-2.5-coder-32b',
     });
 
     assert.ok(cfg.provider.regolo.models['regolo/qwen-2.5-coder-32b'], 'full model entry exists');
@@ -274,7 +274,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('worker env allowlist adds ONLY the selected source credential', () => {
     const { capturedScript } = runDirectLaunch('cohere/command-r-plus', {
       fakeEnv: { COHERE_API_KEY: 'test-not-a-key-cohere' },
-      gateway: 'cohere',
+      candidateKey: 'harness::accessPath::cohere::upstream::*:::cohere/command-r-plus',
     });
 
     assert.ok(capturedScript, 'run-target.ps1 captured');
@@ -292,7 +292,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('9router case still adds only NINEROUTER_API_KEY', () => {
     const { capturedScript } = runDirectLaunch('ninerouter/ag/gemini-3.1-pro-low', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-not-a-key-9router' },
-      gateway: '9router',
+      candidateKey: 'harness::accessPath::9router::upstream::*:::ninerouter/ag/gemini-3.1-pro-low',
     });
 
     assert.ok(capturedScript, 'run-target.ps1 captured');
@@ -309,7 +309,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     try {
       const { thrownError } = runDirectLaunch('baseten/llama-3.1-70b', {
         fakeEnv: {},
-        gateway: 'baseten',
+        candidateKey: 'harness::accessPath::baseten::upstream::*:::baseten/llama-3.1-70b',
       });
 
       assert.ok(thrownError, 'error thrown for missing credential');
@@ -324,7 +324,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     const fakeCredential = 'SECRET-test-credential-value-12345';
     const { cfg, capturedScript } = runDirectLaunch('thb/gpt-4o', {
       fakeEnv: { TOKENHARBOR_API_KEY: fakeCredential },
-      gateway: 'thb',
+      candidateKey: 'harness::accessPath::thb::upstream::*:::thb/gpt-4o',
     });
 
     assert.ok(cfg, 'opencode.json exists');
@@ -345,7 +345,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('http://127.0.0.1 endpoint is allowed', () => {
     const { cfg, thrownError } = runDirectLaunch('ninerouter/test-model', {
       fakeEnv: { NINEROUTER_API_KEY: 'test-key' },
-      gateway: '9router',
+      candidateKey: 'harness::accessPath::9router::upstream::*:::ninerouter/test-model',
     });
 
     assert.ok(!thrownError, 'no error for 127.0.0.1 endpoint');
@@ -356,7 +356,7 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
   test('direct source with unprefixed model uses source id as provider', () => {
     const { cfg, thrownError } = runDirectLaunch('mercury-2.5', {
       fakeEnv: { INCEPTION_API_KEY: 'test-key' },
-      gateway: 'inception',
+      candidateKey: 'harness::accessPath::inception::upstream::*:::mercury-2.5',
     });
 
     assert.ok(!thrownError, 'no error for unprefixed model on direct gateway');
