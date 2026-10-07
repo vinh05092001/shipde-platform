@@ -2392,7 +2392,9 @@ function recordLaunchFailureEvidence(
       blockReason: classification.cause,
       cause: classification.cause,
       scope: classification.scope,
-      cooldownMs: classification.cooldownMs,
+      // RT-R03: the applied cooldown never drops below the retryAfterMs the
+      // classifier reported for this same failure.
+      cooldownMs: evidence.effectiveCooldownMs(classification),
     };
     if (classification.scope === 'upstream' && candidate.upstream) {
       if (!evidenceData.upstreamStatus) evidenceData.upstreamStatus = {};
@@ -2406,7 +2408,7 @@ function recordLaunchFailureEvidence(
         blockReason: classification.cause,
         cause: classification.cause,
         scope: 'upstream',
-        cooldownMs: classification.cooldownMs,
+        cooldownMs: evidence.effectiveCooldownMs(classification),
       };
     }
   }
@@ -3586,6 +3588,9 @@ async function runOrchestration(goal, opts) {
             // RT-R01: record retryable and retryAfterMs from classification
             retryable: classification.retryable,
             retryAfterMs: classification.retryAfterMs,
+            // RT-R03: the cooldown this failure actually sets — the longer of
+            // the default cooldown and the provider's own retryAfterMs.
+            cooldownMs: evidence.effectiveCooldownMs(classification),
           },
           logOpts
         );
@@ -3727,6 +3732,7 @@ async function runOrchestration(goal, opts) {
           // RT-R01: retryable is false for terminal session failures (no classification available)
           retryable: false,
           retryAfterMs: null,
+          cooldownMs: null,
         },
         logOpts
       );
@@ -3800,6 +3806,42 @@ async function runOrchestration(goal, opts) {
   // 6. Publication is its own gated stage (AI-64-P04/R12/R13), one entry per
   //    reviewed work item. The loop cannot mint the approval that authorises it, so
   //    an unwired run says so instead of pretending a draft Pull Request exists.
+  //
+  // RT-R04 (TASK-AI-118): publish is never replayable. The run records whether an
+  //    attempt already failed or timed out and refuses every later attempt with
+  //    PUBLISH_NOT_REPLAYABLE — in the publication record and in the decision log.
+  //    A failed publish can already have left an external effect behind, so the run
+  //    starts no second one until an operator reconciles in a fresh run.
+  const publishGuard = { failed: null };
+  const recordPublishDecision = (entry, published) => {
+    const reason = published.reason || null;
+    const notReplayable = Boolean(reason && reason.startsWith('PUBLISH_NOT_REPLAYABLE'));
+    if (!logOpts || (!o.publication && !notReplayable)) return;
+    decisions.recordDecision(
+      {
+        stage:
+          published.status === PublicationStatus.PUBLISHED_DRAFT
+            ? decisions.Stage.COMPLETED
+            : decisions.Stage.REFUSED,
+        workItemId: entry.workItemId,
+        role: roleOf(entry.item || entry),
+        status: published.status,
+        detail: notReplayable
+          ? 'PUBLISH_NOT_REPLAYABLE'
+          : published.attempted
+            ? 'PUBLISH_ATTEMPT'
+            : 'PUBLISH_NOT_ATTEMPTED',
+        reason,
+        refusalCode: notReplayable
+          ? 'PUBLISH_NOT_REPLAYABLE'
+          : published.status === PublicationStatus.REFUSED && published.attempted
+            ? 'PUBLISH_FAILED'
+            : undefined,
+      },
+      logOpts
+    );
+  };
+
   for (const entry of log.reviews) {
     const itemStep = liveSteps[entry.workItemId] || {};
     // CK-R03 (P1-2): a draft publication already recorded in the checkpoint is
@@ -3821,12 +3863,56 @@ async function runOrchestration(goal, opts) {
       };
       continue;
     }
-    const published = publication(o, entry);
+
+    // RT-R04: a publish attempt already failed or timed out in this run, and
+    // isReplayable('publish') says that attempt may never be made again.
+    if (publishGuard.failed && !isReplayable('publish')) {
+      const refused = {
+        status: PublicationStatus.REFUSED,
+        workItemId: entry.workItemId,
+        reason:
+          'PUBLISH_NOT_REPLAYABLE: publish cannot be replayed after a failed or timed-out attempt (' +
+          publishGuard.failed.workItemId +
+          ': ' +
+          publishGuard.failed.reason +
+          ')',
+      };
+      log.publications.push(refused);
+      entry.publication = refused;
+      if (liveSteps[entry.workItemId]) {
+        liveSteps[entry.workItemId].publication = refused;
+      }
+      recordPublishDecision(entry, refused);
+      continue;
+    }
+
+    const published = publication(o, entry, publishGuard);
     log.publications.push(published);
+
+    // The publication record lives on the entry as well, so this run's guard and
+    // a later resume both see what the attempt actually did.
+    entry.publication = published;
+    if (liveSteps[entry.workItemId]) {
+      liveSteps[entry.workItemId].publication = published;
+    }
+
     if (published.status === PublicationStatus.PUBLISHED_DRAFT) {
       persistStep(entry.workItemId, 'publication', { publication: published });
+      if (published.result && typeof published.result.then === 'function') {
+        // CK-R03 keeps the draft receipt exactly as written. The attempt itself is
+        // awaited so a failed or timed-out publish marks the guard before this loop
+        // can reach the next entry, and so the record stops claiming a draft that
+        // never landed.
+        try {
+          await published.result;
+        } catch (_) {
+          // publication() already corrected the record and marked the guard.
+        }
+      }
     }
+    recordPublishDecision(entry, published);
   }
+
   log.publication = log.publications[log.publications.length - 1] || {
     status: o.publication ? PublicationStatus.REFUSED : PublicationStatus.NOT_REQUESTED,
     reason: 'NO_REVIEWED_COMMIT: nothing to publish',
@@ -4220,6 +4306,8 @@ async function reviewItem(
           // RT-R01: record retryable and retryAfterMs from classification
           retryable: classification.retryable,
           retryAfterMs: classification.retryAfterMs,
+          // RT-R03: the cooldown this failure actually sets.
+          cooldownMs: evidence.effectiveCooldownMs(classification),
         },
         logOpts
       );
@@ -4798,6 +4886,9 @@ async function reviewItem(
       repairCount: review.repairCount,
       retryable: reviewClassification.retryable,
       retryAfterMs: reviewClassification.retryAfterMs,
+      // RT-R03: no cooldown for a passing review; a failed one carries the
+      // longer of its default cooldown and retryAfterMs.
+      cooldownMs: evidence.effectiveCooldownMs(reviewClassification),
     },
     logOpts
   );
@@ -5048,6 +5139,8 @@ function repairRound(
             // RT-R01: record retryable and retryAfterMs from classification
             retryable: classification.retryable,
             retryAfterMs: classification.retryAfterMs,
+            // RT-R03: the cooldown this failure actually sets.
+            cooldownMs: evidence.effectiveCooldownMs(classification),
           },
           logOpts
         );
@@ -5091,22 +5184,24 @@ function repairRound(
  * human authority wrote and bound to the reviewed commit. The loop cannot mint
  * one, so a run with no approval records that fact and publishes nothing — which
  * is the correct outcome, not a fallback to an unapproved push.
+ *
+ * `publishGuard` is the run's replay state: once the publisher throws or its
+ * promise rejects (a failed or timed-out attempt) the guard is marked here, and
+ * the loop refuses the next attempt with PUBLISH_NOT_REPLAYABLE. It is marked
+ * from this call rather than read from `entry.publication`, because the entry
+ * carries every outcome — a refusal that never reached the publisher, a
+ * not-requested run — while only an attempted publish can be unreplayable.
  */
-function publication(o, entry) {
+function publication(o, entry, publishGuard) {
   const request = o.publication;
-  const hasPubRecord = entry && entry.publication;
-  const pubAlreadyAttempted =
-    hasPubRecord &&
-    (hasPubRecord.status === PublicationStatus.REFUSED ||
-      hasPubRecord.status === PublicationStatus.NOT_REQUESTED);
-  if (hasPubRecord && pubAlreadyAttempted && !isReplayable('publish')) {
-    return {
-      status: PublicationStatus.REFUSED,
-      workItemId: entry.workItemId,
-      reason:
-        'PUBLISH_NOT_REPLAYABLE: publish cannot be replayed after a failed or timed-out attempt',
-    };
-  }
+  const markAttemptFailed = (reason) => {
+    if (publishGuard && !publishGuard.failed) {
+      publishGuard.failed = { workItemId: entry.workItemId, reason };
+    }
+  };
+  // Only a call that reached the publisher is an attempt. A manifest or import
+  // refusal never touched the external effect, so it must not poison the guard.
+  let attempted = false;
   if (entry && entry.checkpointReviewError) {
     return {
       status: PublicationStatus.REFUSED,
@@ -5205,6 +5300,7 @@ function publication(o, entry) {
         : typeof o.publisher === 'function'
           ? o.publisher
           : require('./publisher').publish;
+    attempted = true;
     const result = publishFn(
       Object.assign({}, request, {
         // The publisher still owns the approval, destination and draft gates.
@@ -5274,12 +5370,32 @@ function publication(o, entry) {
         log: typeof o.log === 'function' ? o.log : null,
       })
     );
-    return { status: PublicationStatus.PUBLISHED_DRAFT, workItemId: entry.workItemId, result };
+    const record = {
+      status: PublicationStatus.PUBLISHED_DRAFT,
+      workItemId: entry.workItemId,
+      result,
+      attempted,
+    };
+    if (result && typeof result.then === 'function') {
+      // A rejected publish is a failed or timed-out attempt. The record stops
+      // claiming a draft that never landed, and the run's guard is marked —
+      // both before the loop can reach another entry.
+      result.then(null, (err) => {
+        const reason = String((err && err.message) || err);
+        record.status = PublicationStatus.REFUSED;
+        record.reason = reason;
+        markAttemptFailed(reason);
+      });
+    }
+    return record;
   } catch (err) {
+    const reason = String((err && err.message) || err);
+    if (attempted) markAttemptFailed(reason);
     return {
       status: PublicationStatus.REFUSED,
       workItemId: entry.workItemId,
-      reason: String((err && err.message) || err),
+      reason,
+      attempted,
     };
   } finally {
     if (imported) imported.cleanup();
@@ -5415,4 +5531,5 @@ module.exports = {
   ItemStatus,
   RunStatus,
   PublicationStatus,
+  effectiveCooldownMs: evidence.effectiveCooldownMs,
 };
