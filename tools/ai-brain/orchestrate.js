@@ -3152,7 +3152,77 @@ async function runOrchestration(goal, opts) {
     let blockedReason = null;
     let session = null;
 
-    for (let attempt = 1; attempt <= candidates.length + 1; attempt += 1) {
+    // TASK-AI-117 (RS-R01/RS-R02): a checkpoint whose launch already completed
+    // (a worker commit and exit 0) has nothing to relaunch and nothing to
+    // reattach to — that writer session is finished. The run proceeds directly
+    // to review of that exact workerSha with the recorded failBefore: no
+    // candidate is re-selected, no session is reattached, and
+    // HARNESS_NO_SESSION_ID is never raised (nor counted as a failure-domain
+    // attempt) for a completed launch. A launch with no workerSha is genuinely
+    // incomplete and keeps the launch/reattach path below (RS-R03).
+    const recordedLaunch = savedStep && savedStep.launch ? savedStep.launch : null;
+    const recordedLaunchExit = recordedLaunch ? recordedLaunch.exitCode : null;
+    const resumedCompletedLaunch = Boolean(
+      recordedLaunch &&
+      recordedLaunch.workerSha &&
+      SHA_40.test(String(recordedLaunch.workerSha).trim()) &&
+      (recordedLaunchExit === 0 || recordedLaunchExit === '0')
+    );
+    if (resumedCompletedLaunch) {
+      const workerSha = String(recordedLaunch.workerSha).trim();
+      const resumedCandidate = (Array.isArray(candidates) ? candidates : []).find(
+        (c) => candidateKey(c) === recordedLaunch.candidateKey
+      );
+      const resumeBase = recordedLaunch.baseSha || o.baseSha || null;
+      const resumeWorktree = o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd || null;
+      let resumedFailBefore = recordedLaunch.failBefore || null;
+      if (!resumedFailBefore && resumeBase && item.verification && item.verification.command) {
+        // The recorded failBefore is reused whenever it exists; only a launch
+        // interrupted before its measurement is measured here, exactly as the
+        // launch path would have measured it.
+        const measure = o.measureFailBefore || measureFailBefore;
+        resumedFailBefore = measure(
+          resumeWorktree,
+          resumeBase,
+          workerSha,
+          item.verification.command
+        );
+      }
+      session = {
+        workItemId: item.id,
+        attempt: 1,
+        firstChoice: recordedLaunch.candidateKey || null,
+        selected: recordedLaunch.candidateKey || null,
+        fallbackReason: null,
+        sessionId: recordedLaunch.sessionId || null,
+        usageReport: null,
+        candidateKey: recordedLaunch.candidateKey || null,
+        harness: (resumedCandidate && resumedCandidate.harness) || null,
+        branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+        baseSha: resumeBase,
+        exitCode: recordedLaunch.exitCode,
+        status: SessionStatus.COMPLETED_WITH_ARTIFACT,
+        startedAt: null,
+        exercise: null,
+        failBefore: resumedFailBefore,
+        worktree: resumeWorktree,
+        headSha: workerSha,
+      };
+      log.sessions.push(session);
+      log.launches.push({
+        workItemId: item.id,
+        firstChoice: session.firstChoice,
+        selected: session.selected,
+        fallbackReason: null,
+        scope: null,
+        cause: null,
+        outcome: 'resumed',
+      });
+      log.exercise = session.exercise;
+      log.failBefore = session.failBefore;
+    }
+
+    for (let attempt = 1; !session && attempt <= candidates.length + 1; attempt += 1) {
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
       //    launch, with the ranking inputs it was made from (AI-64-R03).
@@ -3921,7 +3991,10 @@ async function reviewItem(
     : null;
   const workerRoot =
     (o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) || session.worktree || null;
-  const workerHead = (workerRoot && headShaOf(workerRoot)) || session.headSha || null;
+  // TASK-AI-117 (RS-R01): the review reads the commit the launch recorded —
+  // the checkpoint's exact workerSha — and only falls back to the worktree head
+  // when no such commit was ever recorded.
+  const workerHead = (session && session.headSha) || (workerRoot && headShaOf(workerRoot)) || null;
   const targetSha =
     workerHead && SHA_40.test(workerHead)
       ? workerHead
