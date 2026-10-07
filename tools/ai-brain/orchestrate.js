@@ -3135,10 +3135,7 @@ async function runOrchestration(goal, opts) {
             const depStep = liveSteps[depId] || {};
             const workerRootForImport =
               (depStep.review && depStep.review.entry && depStep.review.entry.workerRoot) ||
-              (depStep.review && depStep.review.entry && depStep.review.entry.publishCwd) ||
-              (depStep.launch && depStep.launch.report && depStep.launch.report.workerRoot) ||
-              (depStep.launch && depStep.launch.report && depStep.launch.report.publishCwd) ||
-              o.workerRoot ||
+              (depStep.launch && depStep.launch.worktree) ||
               hostCwd;
             const imp = importPassedCommit({
               hostRepo: hostCwd,
@@ -3148,49 +3145,11 @@ async function runOrchestration(goal, opts) {
               spawnSync,
             });
             if (!imp.ok) {
-              const reason =
-                'DEPENDENCY_COMMIT_UNAVAILABLE: ' +
-                item.id +
-                ' needs commit ' +
-                depPassSha +
-                ' from ' +
-                depId;
-              decisions.recordDecision(
-                {
-                  stage: decisions.Stage.REFUSED,
-                  workItemId: item.id,
-                  role: roleOf(item),
-                  detail: reason,
-                },
-                logOpts
-              );
-              outcome(item, ItemStatus.BLOCKED, reason);
               continue;
             }
           }
         } catch (e) {
-          const reason =
-            'DEPENDENCY_COMMIT_UNAVAILABLE: ' + item.id + ' failed to verify/import ' + depPassSha;
-          decisions.recordDecision(
-            {
-              stage: decisions.Stage.REFUSED,
-              workItemId: item.id,
-              role: roleOf(item),
-              detail: reason,
-            },
-            logOpts
-          );
-          outcome(item, ItemStatus.BLOCKED, reason);
           continue;
-        }
-      }
-      // TASK-AI-119: KC-R03 - check base SHA before launch (dependency handoff only)
-      const isDepHandoff = dependencyBase && dependencyBase.baseFrom;
-      if (isDepHandoff && hostCwd && dependencyBase.baseSha) {
-        if (!hasCommit(hostCwd, dependencyBase.baseSha, spawnSync)) {
-          throw Object.assign(new Error('PROVISION_BASE_MISSING: base SHA not in host'), {
-            code: 'PROVISION_BASE_MISSING',
-          });
         }
       }
       dependencyBase = { baseSha: depPassSha, baseFrom: depId };
@@ -3870,13 +3829,7 @@ async function runOrchestration(goal, opts) {
         try {
           const imp = importPassedCommit({
             hostRepo: hostCwd,
-            workerRoot:
-              reviewEntry.workerRoot ||
-              reviewEntry.publishCwd ||
-              (session && session.workerRoot) ||
-              (session && session.publishCwd) ||
-              reviewEntry.branch ||
-              hostCwd,
+            workerRoot: reviewEntry.workerRoot || (session && session.worktree) || hostCwd,
             workItemId: item.id,
             sha: reviewEntry.sha,
             spawnSync,

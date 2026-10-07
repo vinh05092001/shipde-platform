@@ -38,7 +38,6 @@ const Cause = {
  * Scope of the failure — what is affected.
  */
 const Scope = {
-  LOCAL: 'local',
   MODEL: 'model',
   UPSTREAM: 'upstream',
   ACCOUNT: 'account',
@@ -424,20 +423,7 @@ function classifyFailure(input) {
   if (!evidence.stdout) {
     delete evidence.stdout;
   }
-  // TASK-AI-119: Local/controller provision failures are local scope; no domain exclusion
-  if (
-    /PROVISION_BASE_MISSING/.test(String(stderr || '')) ||
-    /PROVISION_BASE_MISSING/.test(String(body || ''))
-  ) {
-    return addRetryFields({
-      cause: Cause.LAUNCH_CONFIG,
-      scope: Scope.LOCAL,
-      cooldownMs: DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0,
-      humanAction: HumanAction.NONE,
-      evidence,
-      resetTime: Date.now() + (DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG] || 0),
-    });
-  }
+
   // Launcher timeout: authentic signal from launcher (structured timedOut flag, Cause.TIMEOUT, or launcher stderr prefix)
   // Launcher timeout takes precedence over all worker output and quota errors (F1)
   const isTimedOut = Boolean(
