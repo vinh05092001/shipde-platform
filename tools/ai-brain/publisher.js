@@ -423,6 +423,18 @@ function createDraftPullRequest(options) {
   if (!/^\[[A-Za-z0-9-]+\]/.test(title)) {
     throw new Error('PUBLISH_REFUSED: draft title must begin with [<WORK_ITEM_ID>]');
   }
+  // TASK-AI-122 PI-R03: a dependent draft PR stacks on the dependency's
+  // published branch, so its diff carries only its own commit(s).
+  const baseBranch = o.baseBranch ? String(o.baseBranch).trim() : null;
+  if (baseBranch) {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/.test(baseBranch) ||
+      baseBranch.includes('..') ||
+      baseBranch.endsWith('.lock')
+    ) {
+      throw new Error('PUBLISH_REFUSED: invalid draft base branch: ' + baseBranch);
+    }
+  }
   const body = buildDraftBody(o.manifest, Object.assign({}, o, { workItemId, outcome }));
   const runGh = typeof o.ghRun === 'function' ? o.ghRun : ghRun;
 
@@ -446,19 +458,21 @@ function createDraftPullRequest(options) {
     }
   }
 
-  const created = runGh([
-    'pr',
-    'create',
-    '--repo',
-    repoOf(remoteUrl),
-    '--draft',
-    '--head',
-    branch,
-    '--title',
-    title,
-    '--body',
-    body,
-  ]);
+  const created = runGh(
+    [
+      'pr',
+      'create',
+      '--repo',
+      repoOf(remoteUrl),
+      '--draft',
+      '--head',
+      branch,
+      '--title',
+      title,
+      '--body',
+      body,
+    ].concat(baseBranch ? ['--base', baseBranch] : [])
+  );
   if (created.exitCode !== 0) {
     throw new Error('PUBLISH_FAILED: gh pr create failed: ' + created.stderr);
   }

@@ -2874,13 +2874,19 @@ function orchestrateCommand(args, deps = {}) {
     workerRoot: typeof args['worker-root'] === 'string' ? args['worker-root'] : null,
     exercise: typeof args.exercise === 'string' ? args.exercise : null,
     reviewBudget: args['review-budget'],
+    // TASK-AI-122 PI-R02: --approval accepts several comma-separated ids, one
+    // per reviewed commit. PI-R03: the draft title comes from each item's own
+    // spec at publish time, never from specs[0] or the run-level goal.
     publication: args.publish
       ? {
-          approvalId: args.approval,
+          approvalIds: String(args.approval || '')
+            .split(',')
+            .map((id) => id.trim())
+            .filter(Boolean),
           expiry: args['approval-expiry'] ? Date.parse(args['approval-expiry']) : undefined,
           remoteUrl: args['remote-url'],
           branch: typeof args.branch === 'string' ? args.branch : null,
-          draft: { workItemId: specs[0].id, outcome: String(goal).slice(0, 72) },
+          draft: {},
         }
       : null,
     out,
