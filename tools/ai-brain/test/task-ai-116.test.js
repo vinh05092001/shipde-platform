@@ -144,6 +144,13 @@ describe('TASK-AI-116: isolated launches with direct model sources', () => {
     // Upstream prefix sent whole to 9router (TASK-AI-96)
     assert.ok(cfg.provider.xmtp.models['xmtp/mimo-v2.6-pro']);
     assert.equal(cfg.provider.xmtp.models['xmtp/mimo-v2.6-pro'].id, 'xmtp/mimo-v2.6-pro');
+    // Short key mapping for opencode resolution (origin/main compatibility)
+    assert.ok(cfg.provider.xmtp.models['mimo-v2.6-pro'], 'short key exists');
+    assert.equal(
+      cfg.provider.xmtp.models['mimo-v2.6-pro'].id,
+      'xmtp/mimo-v2.6-pro',
+      'short key has full wire id'
+    );
   });
 
   test('gateway inception with model inception/mercury-2.5 uses inception endpoint, id mercury-2.5, env INCEPTION_API_KEY only', () => {

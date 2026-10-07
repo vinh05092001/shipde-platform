@@ -60,6 +60,7 @@ function getFolderHash(folder) {
       }
     }
   }
+
   readDir(folder);
   const fileHashes = [];
   for (const file of files) {
@@ -1102,37 +1103,19 @@ function getIsolatedLauncher() {
         }
       }
 
-      // DS-R03: build models map with model id sent WITHOUT the source prefix for direct sources,
-      // but WITH the upstream prefix for 9router (TASK-AI-96)
       const modelsMap = {};
       if (pinnedModel) {
         modelsMap[pinnedModel] = { id: pinnedModel, name: pinnedModel };
-
-        // Determine if we should strip the prefix
-        const routerSource = sources.sources.find((s) => s.id === '9router');
-        const routerProvider =
-          routerSource && sourcesModule.providerFromPrefix(routerSource.modelPrefix);
-
-        // Check which prefix to use for stripping
-        let prefixToStrip = null;
-        if (sourceId === '9router' && providerId === routerProvider) {
-          // This is a ninerouter/ model through 9router - strip the router prefix
-          prefixToStrip = providerId + '/';
-        } else if (sourceId !== '9router') {
-          // This is a direct source model (inception/, regolo/, etc.) - strip the gateway prefix if present
-          const gatewayPrefix = sourceId + '/';
-          if (pinnedModel.startsWith(gatewayPrefix)) {
-            prefixToStrip = gatewayPrefix;
-          }
-        }
-        // else: 9router with upstream prefix (cl/, xmtp/) - don't strip
-
-        if (prefixToStrip && pinnedModel.startsWith(prefixToStrip)) {
-          const relativeId = pinnedModel.slice(prefixToStrip.length);
+        const prefixWithSlash = providerId + '/';
+        if (pinnedModel.startsWith(prefixWithSlash)) {
+          const relativeId = pinnedModel.slice(prefixWithSlash.length);
           if (relativeId) {
-            // For 9router's own prefix or direct sources: strip and use relativeId as wire ID
-            // For 9router with upstream prefix: keep full pinnedModel (this branch won't execute)
-            modelsMap[relativeId] = { id: relativeId, name: relativeId };
+            // For 9router with upstream prefix (cl/, xmtp/), use full pinnedModel as wireId
+            // For 9router with router's own prefix and for direct sources, use relativeId as wireId
+            const routerProvider = sourcesModule.providerFromPrefix(selectedSource.modelPrefix);
+            const useFullWireId = sourceId === '9router' && providerId !== routerProvider;
+            const wireId = useFullWireId ? pinnedModel : relativeId;
+            modelsMap[relativeId] = { id: wireId, name: relativeId };
           }
         }
       }
