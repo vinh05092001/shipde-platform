@@ -3093,7 +3093,16 @@ async function runOrchestration(goal, opts) {
     }
     if (depIds.length === 1) {
       const depId = depIds[0];
-      const depPassSha = dependencyPassShaOf(depId);
+      let depPassSha = dependencyPassShaOf(depId);
+      if (
+        !depPassSha &&
+        liveSteps[depId] &&
+        liveSteps[depId].review &&
+        liveSteps[depId].review.entry &&
+        liveSteps[depId].review.entry.sha
+      ) {
+        depPassSha = liveSteps[depId].review.entry.sha;
+      }
       if (!depPassSha) {
         const reason =
           'DEPENDENCY_NOT_PASSED: ' +
@@ -3121,6 +3130,8 @@ async function runOrchestration(goal, opts) {
             const workerRootForImport =
               (depStep.review && depStep.review.entry && depStep.review.entry.workerRoot) ||
               (depStep.review && depStep.review.entry && depStep.review.entry.publishCwd) ||
+              (depStep.launch && depStep.launch.report && depStep.launch.report.workerRoot) ||
+              (depStep.launch && depStep.launch.report && depStep.launch.report.publishCwd) ||
               o.workerRoot ||
               hostCwd;
             const imp = importPassedCommit({
@@ -3845,7 +3856,12 @@ async function runOrchestration(goal, opts) {
           const imp = importPassedCommit({
             hostRepo: hostCwd,
             workerRoot:
-              reviewEntry.workerRoot || reviewEntry.publishCwd || reviewEntry.branch || hostCwd,
+              reviewEntry.workerRoot ||
+              reviewEntry.publishCwd ||
+              (session && session.workerRoot) ||
+              (session && session.publishCwd) ||
+              reviewEntry.branch ||
+              hostCwd,
             workItemId: item.id,
             sha: reviewEntry.sha,
             spawnSync,

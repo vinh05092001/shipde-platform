@@ -65,3 +65,167 @@ test('hasCommit returns false when missing', () => {
     } catch {}
   }
 });
+
+test('dependent launches from dependency PASS SHA (KC-R01 + TASK-AI-114 handoff)', async () => {
+  const root = fs.mkdtempSync(path.join(__dirname, '..', '..', '..', '.upstream-tmp', 't119d-'));
+  const host = initRepo(path.join(root, 'host'));
+  const workerA = initRepo(path.join(root, 'workerA'));
+  const workerB = initRepo(path.join(root, 'workerB'));
+  const shaA = commitFile(workerA, 'a.txt', 'a');
+  const checkpointDir = path.join(root, 'checkpoints');
+  fs.mkdirSync(checkpointDir, { recursive: true });
+  // ensure A's commit exists in host for dependency
+  spawnSync('git', [
+    '-C',
+    host,
+    'fetch',
+    '--no-tags',
+    workerA,
+    shaA + ':refs/shipde/passed/TASK-AI-119-A/' + shaA,
+  ]);
+
+  const runner = require('../orchestrate');
+  let bLaunchedBase = null;
+  const fakeLauncher = (baseSha, opts) => {
+    if (opts && opts.workItemId === 'TASK-AI-119-A') {
+      return {
+        sessionId: 'sa',
+        workerRoot: workerA,
+        publishCwd: workerA,
+        workerSha: shaA,
+        publishCwd: workerA,
+        exitCode: 0,
+      };
+    }
+    if (opts && opts.workItemId === 'TASK-AI-119-B') {
+      bLaunchedBase = baseSha;
+      return {
+        sessionId: 'sb',
+        workerRoot: workerB,
+        workerSha: shaA,
+        publishCwd: workerB,
+        exitCode: 0,
+      };
+    }
+    return { sessionId: 'sx', exitCode: 0 };
+  };
+  const fakeReviewer = (item, opts) => ({
+    status: 'COMPLETED',
+    sha: shaA,
+    workerRoot: workerA,
+    publishCwd: workerA,
+    verdict: 'PASS',
+    reviewer: 'codex',
+  });
+  await runner.runOrchestration(
+    'orchestrate',
+    {
+      workItems: [
+        { id: 'TASK-AI-119-A', dependencies: [] },
+        { id: 'TASK-AI-119-B', dependencies: ['TASK-AI-119-A'] },
+      ],
+      checkpointDir,
+      launcher: fakeLauncher,
+      reviewer: fakeReviewer,
+      hostCwd: host,
+    },
+    {}
+  );
+  assert.strictEqual(bLaunchedBase, shaA);
+  assert.strictEqual(hasCommit(host, shaA), true);
+});
+
+test('resume re-imports missing host commit if worker has it; missing from both blocks (KC-R02)', async () => {
+  const root = fs.mkdtempSync(path.join(__dirname, '..', '..', '..', '.upstream-tmp', 't119e-'));
+  const host = initRepo(path.join(root, 'host'));
+  const workerA = initRepo(path.join(root, 'workerA'));
+  const workerB = initRepo(path.join(root, 'workerB'));
+  const shaA = commitFile(workerA, 'a.txt', 'a');
+  const runner = require('../orchestrate');
+  const checkpointDir = path.join(root, 'checkpoints');
+  fs.mkdirSync(checkpointDir, { recursive: true });
+  const fakeLauncher = (baseSha, opts) => {
+    if (opts && opts.workItemId === 'TASK-AI-119-A') {
+      return {
+        sessionId: 'sa',
+        workerRoot: workerA,
+        publishCwd: workerA,
+        workerSha: shaA,
+        publishCwd: workerA,
+        exitCode: 0,
+      };
+    }
+    if (opts && opts.workItemId === 'TASK-AI-119-B') {
+      return {
+        sessionId: 'sb',
+        workerRoot: workerB,
+        workerSha: shaA,
+        publishCwd: workerB,
+        exitCode: 0,
+      };
+    }
+    return { sessionId: 'sx', exitCode: 0 };
+  };
+  const fakeReviewer = (item, opts) => ({
+    status: 'COMPLETED',
+    sha: shaA,
+    workerRoot: workerA,
+    publishCwd: workerA,
+    verdict: 'PASS',
+    reviewer: 'codex',
+  });
+  await runner.runOrchestration(
+    'orchestrate',
+    {
+      workItems: [
+        { id: 'TASK-AI-119-A', dependencies: [] },
+        { id: 'TASK-AI-119-B', dependencies: ['TASK-AI-119-A'] },
+      ],
+      checkpointDir,
+      launcher: fakeLauncher,
+      reviewer: fakeReviewer,
+      hostCwd: host,
+    },
+    {}
+  );
+  assert.strictEqual(hasCommit(host, shaA), true);
+});
+
+test('PROVISION_BASE_MISSING blocks launch and does not exclude candidate (KC-R03)', async () => {
+  const root = fs.mkdtempSync(path.join(__dirname, '..', '..', '..', '.upstream-tmp', 't119f-'));
+  const host = initRepo(path.join(root, 'host'));
+  const worker = initRepo(path.join(root, 'worker'));
+  const shaA = commitFile(worker, 'a.txt', 'a');
+  const runner = require('../orchestrate');
+  const checkpointDir = path.join(root, 'checkpoints');
+  fs.mkdirSync(checkpointDir, { recursive: true });
+  const fakeLauncher = (baseSha, opts) => {
+    const e = new Error('missing base');
+    e.code = 'PROVISION_BASE_MISSING';
+    throw e;
+  };
+  const fakeReviewer = (item, opts) => ({
+    status: 'COMPLETED',
+    sha: shaA,
+    workerRoot: workerA,
+    publishCwd: workerA,
+    verdict: 'PASS',
+    reviewer: 'codex',
+  });
+  try {
+    await runner.runOrchestration(
+      'orchestrate',
+      {
+        workItems: [{ id: 'TASK-AI-119-M', dependencies: [] }],
+        checkpointDir,
+        launcher: fakeLauncher,
+        reviewer: fakeReviewer,
+        hostCwd: host,
+      },
+      {}
+    );
+    assert.fail('should have thrown');
+  } catch (e) {
+    // expected
+  }
+});
