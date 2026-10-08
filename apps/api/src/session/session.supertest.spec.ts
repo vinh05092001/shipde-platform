@@ -357,6 +357,18 @@ async function runSessionSupertestSuite() {
     console.log('  PASS: AC-SESS-08 Missing token rejected');
 
     console.log('[TEST 9] Cross-user and cross-tenant attempts get 403');
+    const tokUser1 = createSessionToken();
+    await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokUser1.hash,
+        device_id: 'dev1',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+
     const tokUser2 = createSessionToken();
     const tokUser3 = createSessionToken();
     const sess2 = await prisma.deviceSession.create({
@@ -382,12 +394,12 @@ async function runSessionSupertestSuite() {
 
     const res9a = await request(server)
       .delete(`/api/v1/sessions/${sess2.id}`)
-      .set('Authorization', `Bearer ${createdToken}`)
+      .set('Authorization', `Bearer ${tokUser1.raw}`)
       .expect(403);
     assert.strictEqual(res9a.body.error.code, 'FORBIDDEN');
     const res9b = await request(server)
       .delete(`/api/v1/sessions/${sess3.id}`)
-      .set('Authorization', `Bearer ${createdToken}`)
+      .set('Authorization', `Bearer ${tokUser1.raw}`)
       .expect(403);
     assert.strictEqual(res9b.body.error.code, 'FORBIDDEN');
     console.log('  PASS: Cross-user and cross-tenant deleted rejected');
