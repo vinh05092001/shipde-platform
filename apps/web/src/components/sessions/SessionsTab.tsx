@@ -113,7 +113,6 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
       );
       if (res.ok) {
         onToast?.('Đã thu hồi tất cả phiên làm việc được chọn');
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch
         void fetchSessions();
       } else {
         onToast?.('Thu hồi tất cả phiên thất bại');

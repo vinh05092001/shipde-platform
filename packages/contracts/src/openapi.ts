@@ -918,7 +918,6 @@ export interface components {
     };
     Meta: {
       correlation_id: string;
-      total?: number;
     };
     LivenessResponse: {
       /** @enum {string} */

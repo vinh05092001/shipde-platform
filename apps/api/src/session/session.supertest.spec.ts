@@ -404,6 +404,82 @@ async function runSessionSupertestSuite() {
     assert.strictEqual(res12b.body.error.code, 'UNAUTHENTICATED');
     console.log('  PASS: Expired and revoked sessions rejected');
 
+    console.log('[TEST 13] Audit failure fails the operation');
+    const tokAudit = createSessionToken();
+    const sessAudit = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokAudit.hash,
+        device_id: 'audit-test',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const originalAuditCreate = prisma.auditLog.create;
+    let auditCreateCalled = false;
+    prisma.auditLog.create = async () => {
+      auditCreateCalled = true;
+      throw new Error('Simulated audit failure');
+    };
+
+    try {
+      // 1. Transactional path: Trying to revoke the active session should fail
+      const res13 = await request(server)
+        .delete(`/api/v1/sessions/${sessAudit.id}`)
+        .set('Authorization', `Bearer ${tokAudit.raw}`)
+        .expect(500);
+
+      assert.ok(auditCreateCalled, 'auditLog.create should have been called');
+
+      // Verify the session was NOT revoked due to transaction rollback
+      const checkSess = await prisma.deviceSession.findUnique({ where: { id: sessAudit.id } });
+      assert.strictEqual(
+        checkSess?.status,
+        SessionStatusEnum.ACTIVE,
+        'Session should remain ACTIVE after failed audit'
+      );
+
+      // 2. Non-transactional path (idempotent revoke)
+      // Manually revoke the session first (bypassing the mock)
+      prisma.auditLog.create = originalAuditCreate;
+      await prisma.deviceSession.update({
+        where: { id: sessAudit.id },
+        data: { status: SessionStatusEnum.REVOKED },
+      });
+      prisma.auditLog.create = async () => {
+        auditCreateCalled = true;
+        throw new Error('Simulated audit failure on idempotent path');
+      };
+
+      auditCreateCalled = false;
+      // Now do an idempotent revoke, which should fail because audit fails and we don't swallow
+      // We need a fresh active token to auth
+      const tokIdemp = createSessionToken();
+      await prisma.deviceSession.create({
+        data: {
+          user_id: user.id,
+          merchant_id: merchant.id,
+          session_token_hash: tokIdemp.hash,
+          device_id: 'audit-idemp',
+          status: SessionStatusEnum.ACTIVE,
+          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+        },
+      });
+
+      await request(server)
+        .delete(`/api/v1/sessions/${sessAudit.id}`)
+        .set('Authorization', `Bearer ${tokIdemp.raw}`)
+        .expect(500);
+
+      assert.ok(auditCreateCalled, 'auditLog.create should have been called on idempotent path');
+
+      console.log('  PASS: Audit failure aborted the operation and rolled back');
+    } finally {
+      prisma.auditLog.create = originalAuditCreate;
+    }
+
     console.log('================================================================');
     console.log('ALL SESSION TESTS PASSED');
     console.log('================================================================');

@@ -368,9 +368,7 @@ export class SessionService {
       });
     } catch (err) {
       console.error('Failed to persist audit log:', err);
-      if (tx !== this.prisma) {
-        throw err;
-      }
+      throw err;
     }
   }
 }
