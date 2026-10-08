@@ -1664,7 +1664,9 @@ function draftTitleForItem(item) {
     (item && item.verification && item.verification.expect) ||
     null;
   const clean = outcome ? String(outcome).trim() : '';
-  return '[' + String((item && item.id) || 'WORK-ITEM') + '] ' + (clean || 'verified work item');
+  // DT-R01: strip any Work Item ID patterns from outcome text
+  const stripped = clean.replace(/\b(FEAT-|TASK-FOUND-|TASK-AI-)[A-Za-z0-9]+/g, '');
+  return '[' + String((item && item.id) || 'WORK-ITEM') + '] ' + (stripped || 'verified work item');
 }
 
 function receiptFailureDomain(candidateKeyValue) {
