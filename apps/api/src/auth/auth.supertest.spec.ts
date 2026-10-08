@@ -1115,6 +1115,9 @@ async function runAuthSupertestSuite() {
     await prisma.deviceSession.create({
       data: {
         user_id: userForSuspension!.id,
+        merchant_id: userForSuspension!.merchant_id,
+        session_token_hash: 'dummy-hash-' + testSuffix,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
         device_id: 'web-session-test',
         last_active_at: new Date(),
         is_revoked: false,

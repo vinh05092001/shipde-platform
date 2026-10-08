@@ -473,6 +473,13 @@ export default function ShipDeConsoleApp() {
                           <span>Cài Đặt Cửa Hàng</span>
                         </button>
                       )}
+                      <a
+                        href="/sessions"
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-1.5"
+                      >
+                        <Lock className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Phiên đăng nhập</span>
+                      </a>
                       <button
                         type="button"
                         onClick={() => {

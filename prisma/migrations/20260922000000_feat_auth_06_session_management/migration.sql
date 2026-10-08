@@ -42,8 +42,7 @@ WHERE "session_token_hash" IS NULL;
 -- Make session_token_hash NOT NULL
 ALTER TABLE "device_sessions" ALTER COLUMN "session_token_hash" SET NOT NULL;
 
--- Make expires_at NOT NULL with a default
-ALTER TABLE "device_sessions" ALTER COLUMN "expires_at" SET DEFAULT CURRENT_TIMESTAMP + INTERVAL '90 days';
+-- Make expires_at NOT NULL
 UPDATE "device_sessions" SET "expires_at" = CURRENT_TIMESTAMP + INTERVAL '90 days' WHERE "expires_at" IS NULL;
 ALTER TABLE "device_sessions" ALTER COLUMN "expires_at" SET NOT NULL;
 

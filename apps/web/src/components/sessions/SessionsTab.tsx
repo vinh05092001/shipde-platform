@@ -128,7 +128,20 @@ export function SessionsTab({ onToast }: SessionsTabProps) {
 
   if (fetchState === 'loading' && sessions.length === 0) return <div>Đang tải...</div>;
   if (fetchState === 'forbidden') return <div>Không có quyền truy cập</div>;
-  if (fetchState === 'error') return <div>Đã xảy ra lỗi</div>;
+  if (fetchState === 'error') {
+    return (
+      <div className="flex flex-col items-center justify-center p-8 space-y-4 border rounded-md bg-red-50 text-red-700">
+        <AlertCircle size={32} />
+        <p>Đã xảy ra lỗi khi tải danh sách phiên làm việc.</p>
+        <button
+          onClick={fetchSessions}
+          className="flex items-center gap-2 px-4 py-2 bg-red-100 hover:bg-red-200 rounded-md transition-colors"
+        >
+          <RefreshCw size={16} /> Thử lại
+        </button>
+      </div>
+    );
+  }
 
   const activeSessions = sessions.filter((s) => s.status === 'ACTIVE');
   const otherActive = activeSessions.filter((s) => !s.is_current);

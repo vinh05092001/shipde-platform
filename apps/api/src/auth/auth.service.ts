@@ -2019,6 +2019,7 @@ export class AuthService {
         device_id: rememberDevice ? 'web-remember' : 'web-session',
         last_active_at: new Date(),
         expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+        ip_address: this.hashIp(clientIp),
       },
     });
 

@@ -15,7 +15,12 @@ const INACTIVITY_DAYS = 30;
 export class SessionService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  async list(userId: string, merchantId: string, currentSessionTokenHash?: string) {
+  async list(
+    userId: string,
+    merchantId: string,
+    currentSessionTokenHash?: string,
+    correlationId?: string
+  ) {
     const now = new Date();
     const sessions = await this.prisma.deviceSession.findMany({
       where: {
@@ -49,7 +54,7 @@ export class SessionService {
       };
     });
 
-    return { data: results, meta: { total: results.length } };
+    return { data: results, meta: { correlation_id: correlationId || 'system' } };
   }
 
   async validateSession(tokenHash: string): Promise<{
@@ -85,6 +90,7 @@ export class SessionService {
     userId: string,
     merchantId: string,
     correlationId: string,
+    ipAddress?: string,
     reason = 'User requested revocation'
   ) {
     const session = await this.prisma.deviceSession.findUnique({
@@ -125,32 +131,51 @@ export class SessionService {
       session.status === SessionStatusEnum.REVOKED ||
       session.status === SessionStatusEnum.EXPIRED
     ) {
+      await this.logAudit({
+        merchantId,
+        userId,
+        actor: userId,
+        action: 'SESSION_REVOKED',
+        resource: `Session:${sessionId}`,
+        details: { reason: 'Idempotent call', device_id: session.device_id },
+        correlationId,
+        ipAddress,
+      });
+
       return {
         session_id: session.id,
-        status: session.status,
+        status: SessionStatusEnum.REVOKED,
         message: 'Phiên đã được thu hồi trước đó',
       };
     }
 
-    const updated = await this.prisma.deviceSession.update({
-      where: { id: sessionId },
-      data: {
-        status: SessionStatusEnum.REVOKED,
-        is_revoked: true,
-        revoked_at: new Date(),
-        revoked_by: userId,
-        revoke_reason: reason,
-      },
-    });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const updatedSession = await tx.deviceSession.update({
+        where: { id: sessionId },
+        data: {
+          status: SessionStatusEnum.REVOKED,
+          is_revoked: true,
+          revoked_at: new Date(),
+          revoked_by: userId,
+          revoke_reason: reason,
+        },
+      });
 
-    await this.logAudit({
-      merchantId,
-      userId,
-      actor: userId,
-      action: 'SESSION_REVOKED',
-      resource: `Session:${sessionId}`,
-      details: { reason, device_id: session.device_id },
-      correlationId,
+      await this.logAudit(
+        {
+          merchantId,
+          userId,
+          actor: userId,
+          action: 'SESSION_REVOKED',
+          resource: `Session:${sessionId}`,
+          details: { reason, device_id: session.device_id },
+          correlationId,
+          ipAddress,
+        },
+        tx
+      );
+
+      return updatedSession;
     });
 
     return {
@@ -165,7 +190,8 @@ export class SessionService {
     merchantId: string,
     currentSessionId: string | undefined,
     dto: RevokeAllDto,
-    correlationId: string
+    correlationId: string,
+    ipAddress?: string
   ) {
     const includeCurrent = dto.include_current === true;
     const where: Record<string, unknown> = {
@@ -185,25 +211,31 @@ export class SessionService {
     }
 
     const now = new Date();
-    await this.prisma.deviceSession.updateMany({
-      where: { id: { in: activeSessions.map((s) => s.id) } },
-      data: {
-        status: SessionStatusEnum.REVOKED,
-        is_revoked: true,
-        revoked_at: now,
-        revoked_by: userId,
-        revoke_reason: 'Revoke all sessions',
-      },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.deviceSession.updateMany({
+        where: { id: { in: activeSessions.map((s) => s.id) } },
+        data: {
+          status: SessionStatusEnum.REVOKED,
+          is_revoked: true,
+          revoked_at: now,
+          revoked_by: userId,
+          revoke_reason: 'Revoke all sessions',
+        },
+      });
 
-    await this.logAudit({
-      merchantId,
-      userId,
-      actor: userId,
-      action: 'SESSIONS_REVOKED_ALL',
-      resource: `User:${userId}`,
-      details: { revoked_count: activeSessions.length, include_current: includeCurrent },
-      correlationId,
+      await this.logAudit(
+        {
+          merchantId,
+          userId,
+          actor: userId,
+          action: 'SESSIONS_REVOKED_ALL',
+          resource: `User:${userId}`,
+          details: { revoked_count: activeSessions.length, include_current: includeCurrent },
+          correlationId,
+          ipAddress,
+        },
+        tx
+      );
     });
 
     return {
@@ -292,15 +324,19 @@ export class SessionService {
       .digest('hex');
   }
 
-  private async logAudit(meta: {
-    merchantId: string;
-    userId?: string;
-    actor: string;
-    action: string;
-    resource: string;
-    details?: Record<string, unknown>;
-    correlationId?: string;
-  }): Promise<void> {
+  private async logAudit(
+    meta: {
+      merchantId: string;
+      userId?: string;
+      actor: string;
+      action: string;
+      resource: string;
+      details?: Record<string, unknown>;
+      correlationId?: string;
+      ipAddress?: string;
+    },
+    tx: any = this.prisma
+  ): Promise<void> {
     console.log(
       formatStructuredLog({
         level: 'info',
@@ -311,7 +347,7 @@ export class SessionService {
     );
 
     try {
-      await this.prisma.auditLog.create({
+      await tx.auditLog.create({
         data: {
           merchant_id: meta.merchantId,
           user_id: meta.userId || null,
@@ -319,7 +355,7 @@ export class SessionService {
           entity_type: meta.resource.split(':')[0] || 'Session',
           entity_id: meta.resource.split(':')[1] || meta.userId || 'system',
           new_value: meta.details ? JSON.parse(JSON.stringify(meta.details)) : null,
-          ip_address: null,
+          ip_address: meta.ipAddress ? this.hashIp(meta.ipAddress) : null,
         },
       });
     } catch (err) {

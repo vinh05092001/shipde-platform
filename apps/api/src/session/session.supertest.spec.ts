@@ -131,6 +131,34 @@ async function runSessionSupertestSuite() {
     },
   });
 
+  const merchant2 = await prisma.merchant.create({
+    data: {
+      name: `Session Test Shop 2 ${testSuffix}`,
+      code: `SESS2TEST${testSuffix}`,
+      status: 'ACTIVE',
+    },
+  });
+  const user2 = await prisma.user.create({
+    data: {
+      merchant_id: merchant.id, // same merchant
+      email: `session.user2.${testSuffix}@shipde.vn`,
+      full_name: 'Session Test User 2',
+      password_hash: 'test-hash-not-real',
+      role: RoleEnum.OPS_CSKH,
+      status: 'ACTIVE',
+    },
+  });
+  const user3 = await prisma.user.create({
+    data: {
+      merchant_id: merchant2.id, // different merchant
+      email: `session.user3.${testSuffix}@shipde.vn`,
+      full_name: 'Session Test User 3',
+      password_hash: 'test-hash-not-real',
+      role: RoleEnum.OWNER,
+      status: 'ACTIVE',
+    },
+  });
+
   const server = app.getHttpServer();
   let createdSessionId: string;
   let createdToken: string;
@@ -283,19 +311,112 @@ async function runSessionSupertestSuite() {
     assert.strictEqual(res8.body.error.code, 'UNAUTHENTICATED');
     console.log('  PASS: AC-SESS-08 Missing token rejected');
 
+    console.log('[TEST 9] Cross-user and cross-tenant attempts get 403');
+    const tokUser2 = createSessionToken();
+    const tokUser3 = createSessionToken();
+    const sess2 = await prisma.deviceSession.create({
+      data: {
+        user_id: user2.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokUser2.hash,
+        device_id: 'dev2',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+    const sess3 = await prisma.deviceSession.create({
+      data: {
+        user_id: user3.id,
+        merchant_id: merchant2.id,
+        session_token_hash: tokUser3.hash,
+        device_id: 'dev3',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const res9a = await request(server)
+      .delete(`/api/v1/sessions/${sess2.id}`)
+      .set('Authorization', `Bearer ${tokUser.raw}`)
+      .expect(403);
+    assert.strictEqual(res9a.body.error.code, 'FORBIDDEN');
+    const res9b = await request(server)
+      .delete(`/api/v1/sessions/${sess3.id}`)
+      .set('Authorization', `Bearer ${tokUser.raw}`)
+      .expect(403);
+    assert.strictEqual(res9b.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: Cross-user and cross-tenant deleted rejected');
+
+    console.log('[TEST 10] Heartbeat on a non-current session gets 403');
+    // Using tokUser (current session = sess1), trying to heartbeat sess2
+    const res10 = await request(server)
+      .patch(`/api/v1/sessions/${sess2.id}/heartbeat`)
+      .set('Authorization', `Bearer ${tokUser.raw}`)
+      .expect(403);
+    assert.strictEqual(res10.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: Heartbeat on non-current session rejected');
+
+    console.log('[TEST 11] Include current = true behavior');
+    // tokUser2 has 1 session (sess2). Let's create another one for them.
+    const tokUser2b = createSessionToken();
+    await prisma.deviceSession.create({
+      data: {
+        user_id: user2.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokUser2b.hash,
+        device_id: 'dev2b',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+    const res11 = await request(server)
+      .post('/api/v1/sessions/revoke-all')
+      .set('Authorization', `Bearer ${tokUser2.raw}`)
+      .send({ include_current: true })
+      .expect(200);
+    assert.strictEqual(res11.body.revoked_count, 2);
+    console.log('  PASS: include_current=true revokes all');
+
+    console.log('[TEST 12] Revoked/Expired session rejected');
+    // tokUser2 was just revoked, so it should be rejected
+    const res12 = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${tokUser2.raw}`)
+      .expect(401);
+    assert.strictEqual(res12.body.error.code, 'UNAUTHENTICATED');
+
+    // Create an expired session
+    const tokExpired = createSessionToken();
+    await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokExpired.hash,
+        device_id: 'exp',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() - 1000),
+      },
+    });
+    const res12b = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${tokExpired.raw}`)
+      .expect(401);
+    assert.strictEqual(res12b.body.error.code, 'UNAUTHENTICATED');
+    console.log('  PASS: Expired and revoked sessions rejected');
+
     console.log('================================================================');
     console.log('ALL SESSION TESTS PASSED');
     console.log('================================================================');
   } finally {
     try {
       await prisma.deviceSession.deleteMany({
-        where: { merchant_id: merchant.id },
+        where: { merchant_id: { in: [merchant.id, merchant2.id] } },
       });
       await prisma.auditLog.deleteMany({
-        where: { merchant_id: merchant.id },
+        where: { merchant_id: { in: [merchant.id, merchant2.id] } },
       });
-      await prisma.user.deleteMany({ where: { merchant_id: merchant.id } });
-      await prisma.merchant.delete({ where: { id: merchant.id } });
+      await prisma.user.deleteMany({ where: { merchant_id: { in: [merchant.id, merchant2.id] } } });
+      await prisma.merchant.deleteMany({ where: { id: { in: [merchant.id, merchant2.id] } } });
     } catch {
       // Ignore cleanup errors
     }
