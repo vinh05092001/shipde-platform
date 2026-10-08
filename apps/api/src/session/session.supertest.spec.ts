@@ -440,7 +440,8 @@ async function runSessionSupertestSuite() {
       .get('/api/v1/sessions')
       .set('Authorization', `Bearer ${tokUser2.raw}`)
       .expect(401);
-    assert.strictEqual(res12.body.error.code, 'UNAUTHENTICATED');
+    assert.strictEqual(res12.body.error.code, 'SESSION_INVALID');
+    assert.ok(res12.body.error.next_action, 'next_action should be present');
 
     // Create an expired session
     const tokExpired = createSessionToken();
@@ -458,7 +459,8 @@ async function runSessionSupertestSuite() {
       .get('/api/v1/sessions')
       .set('Authorization', `Bearer ${tokExpired.raw}`)
       .expect(401);
-    assert.strictEqual(res12b.body.error.code, 'UNAUTHENTICATED');
+    assert.strictEqual(res12b.body.error.code, 'SESSION_INVALID');
+    assert.ok(res12b.body.error.next_action, 'next_action should be present');
     console.log('  PASS: Expired and revoked sessions rejected');
 
     console.log('[TEST 13] Audit failure fails the operation');

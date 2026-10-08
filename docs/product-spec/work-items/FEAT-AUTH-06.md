@@ -56,3 +56,4 @@ pnpm install --frozen-lockfile / pnpm db:generate / pnpm lint / pnpm typecheck /
 
 - FEAT-AUTH-03 not merged (tests create sessions directly). Risk: low.
 - No JWT/Redis/frontend. Risk: low.
+- The canonical error catalog (`docs/product-spec/docs/05-api-integrations/ERROR-IDEMPOTENCY-RETRY.md`) defines no auth/session codes; `UNAUTHENTICATED` and `SESSION_INVALID` need product sign-off.
