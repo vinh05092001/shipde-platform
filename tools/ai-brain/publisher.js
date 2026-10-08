@@ -161,7 +161,12 @@ function buildDraftBody(manifest, evidence) {
       ? ['- No findings recorded.']
       : findings.map(
           (finding) =>
-            '- ' + finding.id + ' [' + finding.status + '] ' + neutralise(finding.summary)
+            '- ' +
+            neutralise(finding.id) +
+            ' [' +
+            finding.status +
+            '] ' +
+            neutralise(finding.summary)
         );
   return [
     '## Work Item',

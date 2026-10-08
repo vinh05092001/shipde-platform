@@ -2190,7 +2190,8 @@ function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
     workerRoot: workerRoot ? String(workerRoot).trim() : null,
     publishCwd: publishCwd ? String(publishCwd).trim() : null,
     branch: branch ? String(branch).trim() : null,
-    draftTitle: entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }, o.goal),
+    draftTitle:
+      entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }, (logOpts || {}).goal),
     tests,
     reviewRounds: decisionLog.reviewRounds,
     repairCount,
@@ -2221,7 +2222,13 @@ function buildCheckpointReviews(log, prior, completedIds, logOpts) {
     for (const entry of log.reviews) {
       if (!entry || !entry.workItemId) continue;
       if (entry.fromCheckpoint && entry.checkpointReviewError) continue;
-      const normalized = normalizeReviewForCheckpoint(entry, entry.workItemId, logOpts);
+      const normalized = normalizeReviewForCheckpoint(
+        entry,
+        entry.workItemId,
+        Object.assign({}, logOpts, {
+          goal: typeof o !== 'undefined' ? o.goal : logOpts && logOpts.goal,
+        })
+      );
       if (normalized) map.set(entry.workItemId, normalized);
     }
   }
@@ -6300,6 +6307,7 @@ module.exports = {
   reviewLane,
   reviewItem,
   draftTitleForItem,
+  normalizeReviewForCheckpoint,
   provisionReviewRoot,
   publishCwdForReceipt,
   resolvePublishCwd,
