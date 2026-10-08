@@ -39,6 +39,8 @@ export interface AppConfig {
   AUTH_TOKEN_TTL_SECONDS: number;
   /** Passwordless OTP login alternative (SCR-AUTH-01 "if configured"); default false. */
   AUTH_LOGIN_OTP_ENABLED: boolean;
+  /** Frontend URL for building links in emails/SMS */
+  FRONTEND_URL: string;
 }
 
 export class ConfigValidationError extends Error {
@@ -235,6 +237,10 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   }
   const AUTH_LOGIN_OTP_ENABLED = authLoginOtpRaw === 'true';
 
+  const FRONTEND_URL =
+    rawEnv.FRONTEND_URL ||
+    (NODE_ENV === 'production' ? 'https://shipde.vn' : 'http://localhost:3000');
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -258,6 +264,7 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     AUTH_TOKEN_SECRET,
     AUTH_TOKEN_TTL_SECONDS,
     AUTH_LOGIN_OTP_ENABLED,
+    FRONTEND_URL,
   };
 }
 

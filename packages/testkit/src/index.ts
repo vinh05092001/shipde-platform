@@ -179,6 +179,7 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     LOG_LEVEL: 'info',
     AUTH_TOKEN_TTL_SECONDS: 43200,
     AUTH_LOGIN_OTP_ENABLED: false,
+    FRONTEND_URL: 'http://localhost:3000',
     ...overrides,
   };
 }

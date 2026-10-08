@@ -602,8 +602,8 @@ async function runAuthSupertestSuite() {
     const lastMsg19d = mockDeliveryAdapter.getLastMessage();
     assert.ok(lastMsg19d, 'Expected token delivery message');
     assert.strictEqual(lastMsg19d.recipient, email1);
-    assert.ok(lastMsg19d.token, 'Expected reset token in delivery message');
-    const resetToken19d = lastMsg19d.token!;
+    assert.ok(lastMsg19d.link, 'Expected reset link in delivery message');
+    const resetToken19d = new URL(lastMsg19d.link!).searchParams.get('token')!;
     console.log('  PASS: Valid user received reset token via delivery adapter');
 
     // 19e. IP rate limit: 5 requests/hour per IP
@@ -777,9 +777,66 @@ async function runAuthSupertestSuite() {
       })
       .expect(400);
     assert.strictEqual(res21e.body.error.code, 'VALIDATION_ERROR');
-    const mismatchField = res21e.body.error.fields?.find((f) => f.code === 'MISMATCH');
+    const mismatchField = res21e.body.error.fields?.find((f: any) => f.code === 'MISMATCH');
     assert.ok(mismatchField, 'Expected MISMATCH field error');
     console.log('  PASS: Password mismatch rejected with 400 VALIDATION_ERROR MISMATCH');
+
+    // 21h. Expired token (AC-07)
+    rateLimitService.clear();
+    await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
+    const expiredMsg = mockDeliveryAdapter.getLastMessage();
+    const expiredToken = new URL(expiredMsg.link!).searchParams.get('token')!;
+
+    const dbToken = await prisma.passwordResetToken.findFirst({
+      where: { identifier: email1, consumed_at: null },
+      orderBy: { created_at: 'desc' },
+    });
+    if (dbToken) {
+      await prisma.passwordResetToken.update({
+        where: { id: dbToken.id },
+        data: { expires_at: new Date(Date.now() - 3600000) },
+      });
+    }
+
+    const res21h = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({
+        token: expiredToken,
+        password: 'AnotherPass123!',
+        password_confirm: 'AnotherPass123!',
+      })
+      .expect(400);
+    assert.strictEqual(res21h.body.error.code, 'TOKEN_EXPIRED');
+    console.log('  PASS: Expired token rejected with 400 TOKEN_EXPIRED');
+
+    // 21i. Atomic single-use test (concurrent requests)
+    rateLimitService.clear();
+    await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
+    const raceMsg = mockDeliveryAdapter.getLastMessage();
+    const raceToken = new URL(raceMsg.link!).searchParams.get('token')!;
+
+    const [resRace1, resRace2] = await Promise.all([
+      request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .set('x-forwarded-for', '203.0.113.14')
+        .send({
+          token: raceToken,
+          password: 'RacePassword123!',
+          password_confirm: 'RacePassword123!',
+        }),
+      request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .set('x-forwarded-for', '203.0.113.15')
+        .send({
+          token: raceToken,
+          password: 'RacePassword456!',
+          password_confirm: 'RacePassword456!',
+        }),
+    ]);
+    const statuses = [resRace1.status, resRace2.status].sort();
+    assert.deepStrictEqual(statuses, [200, 400]); // one succeeds, one fails
+    console.log('  PASS: Concurrent resets atomically handled (only one succeeds)');
   } finally {
     await app.close();
   }

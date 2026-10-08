@@ -87,7 +87,8 @@ export class CanonicalApiException extends HttpException {
     message: string,
     public readonly retryable = false,
     public readonly next_action?: string,
-    public readonly fields?: CanonicalFieldError[]
+    public readonly fields?: CanonicalFieldError[],
+    public readonly retryAfterSeconds?: number
   ) {
     super(
       {
@@ -97,6 +98,7 @@ export class CanonicalApiException extends HttpException {
           retryable,
           next_action,
           fields,
+          ...(retryAfterSeconds !== undefined && { cooldown_seconds: retryAfterSeconds }),
         },
       },
       statusCode
@@ -217,7 +219,9 @@ export class AuthService {
         'RATE_LIMITED',
         rateLimitCheck.reason || 'Quá nhiều yêu cầu đăng ký. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${rateLimitCheck.retryAfterSeconds || 3600} giây trước khi thử lại`
+        `Vui lòng chờ ${rateLimitCheck.retryAfterSeconds || 3600} giây trước khi thử lại`,
+        undefined,
+        rateLimitCheck.retryAfterSeconds
       );
     }
 
@@ -485,7 +489,9 @@ export class AuthService {
         'RATE_LIMITED',
         otpLimit.reason || 'Quá nhiều lần thử mã OTP không chính xác. Vui lòng yêu cầu mã mới.',
         true,
-        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây`
+        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây`,
+        undefined,
+        otpLimit.retryAfterSeconds
       );
     }
 
@@ -632,7 +638,9 @@ export class AuthService {
         'RATE_LIMITED',
         rateCheck.reason || 'Vui lòng chờ trước khi yêu cầu gửi lại mã',
         true,
-        `Vui lòng chờ ${rateCheck.retryAfterSeconds || 60} giây`
+        `Vui lòng chờ ${rateCheck.retryAfterSeconds || 60} giây`,
+        undefined,
+        rateCheck.retryAfterSeconds
       );
     }
 
@@ -810,7 +818,9 @@ export class AuthService {
         'RATE_LIMITED',
         `Quá nhiều yêu cầu. Vui lòng thử lại sau ${ipRateCheck.retryAfterSeconds} giây.`,
         true,
-        `Thử lại sau ${ipRateCheck.retryAfterSeconds} giây`
+        `Thử lại sau ${ipRateCheck.retryAfterSeconds} giây`,
+        undefined,
+        ipRateCheck.retryAfterSeconds
       );
     }
 
@@ -824,7 +834,9 @@ export class AuthService {
         'RATE_LIMITED',
         `Quá nhiều yêu cầu cho tài khoản này. Vui lòng thử lại sau ${identifierRateCheck.retryAfterSeconds} giây.`,
         true,
-        `Thử lại sau ${identifierRateCheck.retryAfterSeconds} giây`
+        `Thử lại sau ${identifierRateCheck.retryAfterSeconds} giây`,
+        undefined,
+        identifierRateCheck.retryAfterSeconds
       );
     }
 
@@ -854,6 +866,26 @@ export class AuthService {
         details: { identifier: normalizedIdentifier, channel, reason: 'user_not_found' },
       });
       return genericResponse;
+    }
+
+    if (user.status === 'suspended' || user.status === 'disabled') {
+      await this.logAudit({
+        merchantId: user.merchant_id,
+        userId: user.id,
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_FORGOT_PASSWORD_BLOCKED',
+        resource: `user:${user.id}`,
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { reason: user.status },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Tài khoản bị khóa, không thể yêu cầu đặt lại mật khẩu.',
+        false,
+        'Vui lòng liên hệ bộ phận CSKH để được hỗ trợ'
+      );
     }
 
     const isVerified =
@@ -888,10 +920,12 @@ export class AuthService {
     });
 
     if (this.deliveryAdapter) {
+      const baseUrl = this.config?.FRONTEND_URL || 'http://localhost:3000';
       await this.deliveryAdapter.sendVerification({
         channel,
         recipient: normalizedIdentifier,
-        token: rawToken,
+        purpose: 'password_reset',
+        link: `${baseUrl}/reset-password?token=${rawToken}`,
       });
     }
 
@@ -914,7 +948,7 @@ export class AuthService {
    * Validates token exists, not expired, not consumed
    * Returns identifier and channel for UI confirmation
    */
-  async verifyResetToken(dto: VerifyResetTokenDto, correlationId: string) {
+  async verifyResetToken(dto: VerifyResetTokenDto, clientIp: string, correlationId: string) {
     const rawToken = dto.token?.trim();
     if (!rawToken) {
       throw new CanonicalApiException(
@@ -927,6 +961,19 @@ export class AuthService {
       );
     }
 
+    const resetLimit = await this.rateLimitService.checkResetTokenLimit(clientIp);
+    if (!resetLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        resetLimit.reason || 'Quá nhiều yêu cầu. Vui lòng thử lại sau.',
+        true,
+        `Thử lại sau ${resetLimit.retryAfterSeconds} giây`,
+        undefined,
+        resetLimit.retryAfterSeconds
+      );
+    }
+
     const hashedToken = this.hashSecret(rawToken);
     const tokenRecord = await this.prisma.passwordResetToken.findUnique({
       where: { token: hashedToken },
@@ -934,12 +981,23 @@ export class AuthService {
     });
 
     if (!tokenRecord) {
+      await this.rateLimitService.recordResetTokenFailure(clientIp);
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'INVALID_TOKEN',
         'Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn',
         false,
         'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+      );
+    }
+
+    if (tokenRecord.user.status === 'suspended' || tokenRecord.user.status === 'disabled') {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Tài khoản bị khóa, không thể đặt lại mật khẩu.',
+        false,
+        'Vui lòng liên hệ bộ phận CSKH để được hỗ trợ'
       );
     }
 
@@ -1055,18 +1113,43 @@ export class AuthService {
     }
 
     const hashedToken = this.hashSecret(rawToken!);
+
+    const resetLimit = await this.rateLimitService.checkResetTokenLimit(clientIp);
+    if (!resetLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        resetLimit.reason || 'Quá nhiều yêu cầu. Vui lòng thử lại sau.',
+        true,
+        `Thử lại sau ${resetLimit.retryAfterSeconds} giây`,
+        undefined,
+        resetLimit.retryAfterSeconds
+      );
+    }
+
     const tokenRecord = await this.prisma.passwordResetToken.findUnique({
       where: { token: hashedToken },
       include: { user: true },
     });
 
     if (!tokenRecord) {
+      await this.rateLimitService.recordResetTokenFailure(clientIp);
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'INVALID_TOKEN',
         'Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn',
         false,
         'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+      );
+    }
+
+    if (tokenRecord.user.status === 'suspended' || tokenRecord.user.status === 'disabled') {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Tài khoản bị khóa, không thể đặt lại mật khẩu.',
+        false,
+        'Vui lòng liên hệ bộ phận CSKH để được hỗ trợ'
       );
     }
 
@@ -1098,10 +1181,20 @@ export class AuthService {
         data: { password_hash: newPasswordHash, updated_at: new Date() },
       });
 
-      await tx.passwordResetToken.update({
-        where: { id: tokenRecord.id },
+      const { count } = await tx.passwordResetToken.updateMany({
+        where: { id: tokenRecord.id, consumed_at: null },
         data: { consumed_at: new Date() },
       });
+
+      if (count === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'TOKEN_ALREADY_USED',
+          'Liên kết đặt lại mật khẩu này đã được sử dụng',
+          false,
+          'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+        );
+      }
 
       await tx.deviceSession.updateMany({
         where: { user_id: tokenRecord.user_id, is_revoked: false },
@@ -1195,7 +1288,9 @@ export class AuthService {
         'RATE_LIMITED',
         ipCheck.reason || 'Quá nhiều yêu cầu mã OTP. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 3600} giây trước khi thử lại`
+        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 3600} giây trước khi thử lại`,
+        undefined,
+        ipCheck.retryAfterSeconds
       );
     }
     const idCheck = await this.rateLimitService.checkLoginOtpRequestLimit(normalized.stored);
@@ -1213,7 +1308,9 @@ export class AuthService {
         'RATE_LIMITED',
         idCheck.reason || 'Quá nhiều yêu cầu mã OTP cho tài khoản này.',
         true,
-        `Vui lòng chờ ${idCheck.retryAfterSeconds || 60} giây trước khi thử lại`
+        `Vui lòng chờ ${idCheck.retryAfterSeconds || 60} giây trước khi thử lại`,
+        undefined,
+        idCheck.retryAfterSeconds
       );
     }
     await this.rateLimitService.recordLoginOtpIpAttempt(clientIp);
@@ -1382,7 +1479,9 @@ export class AuthService {
         'RATE_LIMITED',
         otpLimit.reason || 'Quá nhiều lần thử mã OTP. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây trước khi thử lại`
+        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây trước khi thử lại`,
+        undefined,
+        otpLimit.retryAfterSeconds
       );
     }
 
@@ -1577,7 +1676,9 @@ export class AuthService {
         'RATE_LIMITED',
         ipCheck.reason || 'Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 900} giây trước khi thử lại`
+        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 900} giây trước khi thử lại`,
+        undefined,
+        ipCheck.retryAfterSeconds
       );
     }
     await this.rateLimitService.recordLoginIpAttempt(clientIp);
@@ -1600,7 +1701,9 @@ export class AuthService {
         'RATE_LIMITED',
         identifierCheck.reason || 'Quá nhiều lần đăng nhập thất bại. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${identifierCheck.retryAfterSeconds || 900} giây trước khi thử lại`
+        `Vui lòng chờ ${identifierCheck.retryAfterSeconds || 900} giây trước khi thử lại`,
+        undefined,
+        identifierCheck.retryAfterSeconds
       );
     }
 

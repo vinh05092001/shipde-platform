@@ -160,6 +160,32 @@ export class RateLimitService {
     await this.recordAttemptKey(`ratelimit:forgot:${identifier}`, windowSeconds);
   }
 
+  /**
+   * Check reset token verification limits (FEAT-AUTH-04):
+   * - Maximum 5 failed attempts per 1-hour window per IP
+   */
+  async checkResetTokenLimit(ip: string): Promise<RateLimitResult> {
+    const key = `ratelimit:reset:fail:${ip}`;
+    const windowSeconds = 3600;
+    const check = await this.getAttempts(key, windowSeconds);
+    if (check.count >= 5) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: 'Quá nhiều lần thử mã không chính xác. Vui lòng thử lại sau.',
+      };
+    }
+    return { allowed: true };
+  }
+
+  async recordResetTokenFailure(ip: string): Promise<number> {
+    const key = `ratelimit:reset:fail:${ip}`;
+    const windowSeconds = 3600;
+    await this.recordAttemptKey(key, windowSeconds);
+    const check = await this.getAttempts(key, windowSeconds);
+    return check.count;
+  }
+
   async recordResendAttempt(
     identifier: string,
     channel: string,

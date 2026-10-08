@@ -1,4 +1,14 @@
-import { Controller, Post, Body, Req, Res, HttpCode, HttpStatus, Inject } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Req,
+  Res,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  UseFilters,
+} from '@nestjs/common';
 import { Request, Response } from 'express';
 import {
   AuthService,
@@ -13,9 +23,11 @@ import {
   LoginOtpRequestDto,
   LoginOtpVerifyDto,
 } from './auth.service';
+import { CanonicalExceptionFilter } from './canonical-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
 
 @Controller('auth')
+@UseFilters(CanonicalExceptionFilter)
 export class AuthController {
   constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
@@ -91,7 +103,8 @@ export class AuthController {
     @Res() res: Response
   ): Promise<Response> {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
-    const result = await this.authService.verifyResetToken(dto, correlationId);
+    const clientIp = this.extractClientIp(req);
+    const result = await this.authService.verifyResetToken(dto, clientIp, correlationId);
     return res.status(HttpStatus.OK).json(result);
   }
 

@@ -446,7 +446,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           success: false,
           error: body?.error?.message || 'Gửi liên kết đặt lại mật khẩu thất bại',
           code: body?.error?.code || 'VALIDATION_ERROR',
-          cooldownSeconds: body?.error?.retryable ? body?.error?.next_action : undefined,
+          cooldownSeconds: body?.error?.cooldown_seconds,
           nextAction: body?.error?.next_action,
         };
       }
