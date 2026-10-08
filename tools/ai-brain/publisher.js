@@ -114,17 +114,18 @@ function resolveBranch(branch, cwd) {
 
 /** Build the reviewable draft body from the already-validated manifest. */
 function buildDraftBody(manifest, evidence) {
+  const neutralise = (text) => String(text).replace(/</g, '‹').replace(/>/g, '›');
   const m = manifest || {};
   const e = evidence || {};
   const workItemId = String(e.workItemId || m.workItemId || '').trim();
-  const outcome = String(e.outcome || 'Reviewed work item').trim();
+  const outcome = neutralise(String(e.outcome || 'Reviewed work item').trim());
   const writer = String(m.writerCandidateKey || '').trim();
   const reviewer = String(m.reviewerCandidateKey || '').trim();
   const manifestPath = String(e.reviewManifest || '').trim();
   const artifactPath = String(e.reviewArtifact || '').trim();
   const decisionEvidence = String(e.decisionEvidence || '').trim();
   const failBefore = e.failBefore || {};
-  const failCommand = String(failBefore.command || '').trim();
+  const failCommand = neutralise(String(failBefore.command || '').trim());
   const failExitCode = Number(failBefore.exitCode);
   const tests = Array.isArray(m.tests) ? m.tests : [];
   const findings = Array.isArray(m.findings) ? m.findings : [];
@@ -152,14 +153,15 @@ function buildDraftBody(manifest, evidence) {
     throw new Error('PUBLISH_REFUSED: draft Pull Request is missing pass-after tests');
   }
   const testLines = tests.map((item) => {
-    const line = '- ' + item.command + ' -> ' + item.result;
-    return item.summary ? line + ' (' + item.summary + ')' : line;
+    const line = '- ' + neutralise(item.command) + ' -> ' + neutralise(item.result);
+    return item.summary ? line + ' (' + neutralise(item.summary) + ')' : line;
   });
   const findingLines =
     findings.length === 0
       ? ['- No findings recorded.']
       : findings.map(
-          (finding) => '- ' + finding.id + ' [' + finding.status + '] ' + finding.summary
+          (finding) =>
+            '- ' + finding.id + ' [' + finding.status + '] ' + neutralise(finding.summary)
         );
   return [
     '## Work Item',
