@@ -345,6 +345,79 @@ test('DT-R01: truncate to 72 characters', async () => {
   assert.ok(composed.startsWith('[TASK-AI-123] '), 'the composed title keeps its prefix');
 });
 
+test('DT-R01: an acceptance-only spec item titles from the run goal, never the acceptance text', async () => {
+  const goal =
+    'Track carrier quote revisions end to end\n' + 'Second goal line never titles the draft';
+  const f = setup(
+    'task-ai-123-dt-r01-goal-',
+    [
+      {
+        id: 'TASK-AI-123',
+        acceptanceCriteria: [
+          'SL-R01: slugify(text) lower-cases and replaces runs of non [a-z0-9] with a single dash',
+        ],
+        files: ['test.js'],
+        verification: { command: 'test' },
+      },
+    ],
+    {
+      approvals: { 'TASK-AI-123': 'AP-123-R01-GOAL' },
+    }
+  );
+  f.opts.goal = goal;
+
+  const log = await runOrchestration(goal, f.opts);
+
+  const publication = publicationOf(log, 'TASK-AI-123');
+  assert.ok(publication, 'publication exists');
+  assert.equal(publication.status, 'PUBLISHED_DRAFT');
+
+  const draft = f.state.publishCalls[0].draft;
+  const title = '[' + draft.workItemId + '] ' + String(draft.outcome || '').trim();
+
+  assert.equal(
+    title,
+    '[TASK-AI-123] Track carrier quote revisions end to end',
+    'the draft title is the first line of the run goal: ' + title
+  );
+  assert.ok(
+    !title.includes('slugify') && !title.includes('SL-R01'),
+    'the draft title carries none of the acceptance text: ' + title
+  );
+});
+
+test('DT-R01: hyphenated Work Item IDs are stripped from the outcome', async () => {
+  const f = setup(
+    'task-ai-123-dt-r01-hyphen-',
+    [
+      {
+        id: 'TASK-AI-123',
+        businessOutcome: 'Integrate the flow after FEAT-AUTH-01 and TASK-AI-111 landed',
+        files: ['test.js'],
+        verification: { command: 'test' },
+      },
+    ],
+    {
+      approvals: { 'TASK-AI-123': 'AP-123-R01-HYPHEN' },
+    }
+  );
+
+  const log = await runOrchestration('hyphenated IDs are stripped from the outcome', f.opts);
+
+  const publication = publicationOf(log, 'TASK-AI-123');
+  assert.ok(publication, 'publication exists');
+  assert.equal(publication.status, 'PUBLISHED_DRAFT');
+
+  const draft = f.state.publishCalls[0].draft;
+  const title = '[' + draft.workItemId + '] ' + String(draft.outcome || '').trim();
+  const idPattern = /\b(?:FEAT|TASK-FOUND|TASK-AI)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\b/g;
+  const ids = title.match(idPattern) || [];
+
+  assert.equal(ids.length, 1, 'the title carries exactly one Work Item ID: ' + title);
+  assert.equal(ids[0], 'TASK-AI-123', 'the only Work Item ID is the item own ID: ' + title);
+  assert.ok(!title.includes('-01'), 'no leftover -01 fragment: ' + title);
+});
+
 test('DT-R02: badly formatted worker file triggers repair instead of review', async () => {
   const dir = tmpDir('task-ai-123-dt-r02-bad-');
   const repo = makeRepo(path.join(dir, 'repo'));
