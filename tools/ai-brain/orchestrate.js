@@ -70,6 +70,10 @@ const ItemStatus = Object.freeze({
   COMPLETED: 'completed',
   BLOCKED: 'blocked',
   DEFERRED: 'deferred',
+  // DT-R02: an item the format gate stopped before review. It is neither
+  // completed nor an infrastructure block — the work exists, it is unformatted,
+  // and it is never reviewed or published until a repair round formats it.
+  REFUSED: 'refused',
 });
 
 const RunStatus = Object.freeze({
@@ -101,6 +105,9 @@ function buildDefaults() {
     reviews: [],
     review: null,
     outcomes: [],
+    // DT-R02: one record per host-side format check the Controller ran, so an
+    // unavailable prettier is a visible warning and not a silent pass.
+    formatChecks: [],
     reconciliation: null,
     checkpoint: null,
     resumed: null,
@@ -1657,14 +1664,39 @@ function normalizedReceiptTests(tests) {
   };
 }
 
-function draftTitleForItem(item) {
+/**
+ * DT-R01: a draft Pull Request title is "[<workItemId>] <outcome>".
+ *
+ * The outcome is the Work Item's own title/outcome field — never acceptance
+ * criteria text — it carries exactly one Work Item ID (the one in the prefix),
+ * and the whole title is truncated to 72 characters. A title that quotes
+ * another Work Item ID fails the Feature contract gate, so foreign IDs are
+ * removed from the outcome before the title is composed.
+ */
+const WORK_ITEM_ID = /\b(?:FEAT|TASK-FOUND|TASK-AI)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/g;
+const DRAFT_TITLE_LIMIT = 72;
+
+function draftTitleFor(workItemId, outcome, fallback) {
+  const id = String(workItemId || '').trim() || 'WORK-ITEM';
+  const raw = outcome ? String(outcome).trim() : '';
+  const withoutIds = raw.replace(WORK_ITEM_ID, '');
+  // Only a removed ID can leave doubled whitespace behind, so an untouched
+  // outcome keeps its own spacing exactly as the spec wrote it.
+  const clean = withoutIds === raw ? raw : withoutIds.replace(/\s{2,}/g, ' ').trim();
+  const body = clean || String(fallback || 'verified work item');
+  const title = '[' + id + '] ' + body;
+  return title.length > DRAFT_TITLE_LIMIT ? title.slice(0, DRAFT_TITLE_LIMIT) : title;
+}
+
+function draftTitleForItem(item, goal) {
+  const goalText = goal ? String(goal).trim() : '';
+  const firstLine = goalText.split(/\r?\n/)[0];
   const outcome =
-    (item && (item.businessOutcome || item.outcome || item.title || item.name)) ||
-    (item && Array.isArray(item.acceptanceCriteria) && item.acceptanceCriteria[0]) ||
-    (item && item.verification && item.verification.expect) ||
+    (item && (item.outcome || item.title || item.name)) ||
+    (item && item.businessOutcome) ||
+    firstLine ||
     null;
-  const clean = outcome ? String(outcome).trim() : '';
-  return '[' + String((item && item.id) || 'WORK-ITEM') + '] ' + (clean || 'verified work item');
+  return draftTitleFor(item && item.id, outcome, 'work item');
 }
 
 function receiptFailureDomain(candidateKeyValue) {
@@ -2158,7 +2190,7 @@ function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
     workerRoot: workerRoot ? String(workerRoot).trim() : null,
     publishCwd: publishCwd ? String(publishCwd).trim() : null,
     branch: branch ? String(branch).trim() : null,
-    draftTitle: entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }),
+    draftTitle: entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }, o.goal),
     tests,
     reviewRounds: decisionLog.reviewRounds,
     repairCount,
@@ -4038,7 +4070,9 @@ async function runOrchestration(goal, opts) {
       }
     );
     const reviewEntry = log.reviews[log.reviews.length - 1];
-    if (reviewEntry) {
+    // DT-R02: the format gate refuses before any review record is written, so a
+    // stale entry from an earlier item must never be checkpointed as this one.
+    if (reviewEntry && reviewEntry.workItemId === item.id) {
       // The interrupt window (TASK-AI-120 RI-R01): the PASS is checkpointed
       // before the import, so a kill here resumes into a step with no passedRef.
       persistStep(item.id, 'review_completed', {
@@ -4062,6 +4096,20 @@ async function runOrchestration(goal, opts) {
         });
       }
       outcome(item, ItemStatus.COMPLETED, 'REVIEW_PASS');
+    } else if (reviewed.status === ItemStatus.REFUSED) {
+      // DT-R02: the format gate stopped the item before review. It is neither a
+      // completed item nor an infrastructure block — the commit exists and is
+      // unformatted, so it is refused and the next run retries it after a
+      // repair formats the files.
+      outcome(
+        item,
+        ItemStatus.REFUSED,
+        reviewed.reason,
+        Object.assign(
+          { triedKeys: Array.from(triedKeys), tried: Array.from(triedKeys) },
+          reviewed.gate ? { reasonCode: reviewed.gate } : undefined
+        )
+      );
     } else {
       const isNoAlt =
         reviewed.reason === 'NO_ALTERNATE_FAILURE_DOMAIN' ||
@@ -4356,6 +4404,179 @@ function writeReviewManifestAndArtifact(opts) {
   };
 }
 
+/** DT-R02: what a host-side format check concluded about a worker commit. */
+const FormatGate = Object.freeze({
+  PASSED: 'PASSED',
+  REFUSED: 'REFUSED',
+  UNAVAILABLE: 'UNAVAILABLE',
+});
+
+/** The file types `prettier --check` can judge. */
+const PRETTIER_FILE = /\.(js|jsx|ts|tsx|json|md|html|css|scss|less|yaml|yml)$/i;
+
+function stripAnsi(text) {
+  return String(text || '').replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+/**
+ * The repository's own prettier, resolved from this module instead of from the
+ * process cwd: DT-R02 is a host-side gate and the worker's files sit in a
+ * worker root that carries no node_modules of its own.
+ */
+function prettierEntry() {
+  const pkgPath = require.resolve('prettier/package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin && pkg.bin.prettier;
+  return bin ? path.join(path.dirname(pkgPath), bin) : null;
+}
+
+/**
+ * The worker's changed files between the handoff base and the commit under
+ * review, filtered to the ones prettier can check and that still exist.
+ */
+function changedPrettierFiles(workerRoot, baseSha, targetSha) {
+  const diff = spawnSync('git', ['diff', '--name-only', baseSha + '..' + targetSha], {
+    cwd: workerRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (diff.error || diff.status !== 0) {
+    const detail =
+      (diff.error && diff.error.message) || String(diff.stderr || '').trim() || 'git diff failed';
+    return { files: [], detail: 'changed files are unknown: ' + stripAnsi(detail).trim() };
+  }
+  const names = String(diff.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const files = names
+    .filter((name) => PRETTIER_FILE.test(name) && fs.existsSync(path.join(workerRoot, name)))
+    .map((name) => path.join(workerRoot, name));
+  return { files, detail: null };
+}
+
+/** `prettier --check` over exactly these files, run from the host repository. */
+function prettierCheck(files) {
+  let entry = null;
+  try {
+    entry = prettierEntry();
+  } catch (err) {
+    return { status: 'UNAVAILABLE', detail: 'prettier is not installed: ' + (err && err.message) };
+  }
+  if (!entry) return { status: 'UNAVAILABLE', detail: 'prettier has no executable entry point' };
+  const result = spawnSync(
+    process.execPath,
+    [entry, '--check', '--ignore-unknown', '--'].concat(files),
+    { cwd: path.resolve(__dirname, '..', '..'), encoding: 'utf8', windowsHide: true }
+  );
+  if (result.error) return { status: 'UNAVAILABLE', detail: String(result.error.message) };
+  const lines = stripAnsi(String(result.stderr || '') + String(result.stdout || ''))
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^Checking formatting/.test(line));
+  if (/Cannot find module/.test(lines.join('\n'))) {
+    return { status: 'UNAVAILABLE', detail: lines[0] || 'prettier could not be loaded' };
+  }
+  if (result.status === 0) return { status: 'PASSED', detail: null };
+  return {
+    status: 'FAILED',
+    detail: lines[0] || 'prettier --check exited with code ' + result.status,
+  };
+}
+
+/**
+ * DT-R02: the format gate, run after a worker commit and before review.
+ *
+ * Every verdict is written to the run's `formatChecks` list and emitted through
+ * `o.log` as FORMAT_CHECK_PASSED / FORMAT_CHECK_FAILED / FORMAT_CHECK_UNAVAILABLE
+ * / FORMAT_CHECK_REFUSED, so a missing prettier is a recorded warning rather
+ * than a silent pass. A failing check gets one bounded repair round through the
+ * existing repair path; if the repaired commit still does not format the item
+ * is refused — never reviewed, never published.
+ */
+async function runFormatGate(params) {
+  const o = params.o;
+  const item = params.item;
+  const log = params.log;
+  const logOpts = params.logOpts;
+  const workerRoot = params.workerRoot;
+  const baseSha = params.baseSha;
+  const targetSha = params.targetSha;
+  const repair = params.repair;
+  const namesOf = (files) =>
+    files.map((file) => path.relative(workerRoot, file) || file).slice(0, 5);
+  const record = (status, entry) => {
+    const value = Object.assign(
+      { workItemId: item.id, status, baseSha: baseSha || null, sha: targetSha },
+      entry || {}
+    );
+    if (log && Array.isArray(log.formatChecks)) log.formatChecks.push(value);
+    if (typeof o.log === 'function') o.log('FORMAT_CHECK_' + status, value);
+    return value;
+  };
+
+  const changed = changedPrettierFiles(workerRoot, baseSha, targetSha);
+  if (changed.detail) {
+    // The changed files cannot be named, so nothing can be verified. That is the
+    // same situation as a missing prettier: recorded, never a silent pass.
+    record('UNAVAILABLE', { reason: changed.detail });
+    return { status: FormatGate.UNAVAILABLE, reason: changed.detail };
+  }
+  if (changed.files.length === 0) return { status: FormatGate.PASSED, files: [] };
+
+  const first = prettierCheck(changed.files);
+  if (first.status === 'UNAVAILABLE') {
+    record('UNAVAILABLE', { files: namesOf(changed.files), reason: first.detail });
+    return { status: FormatGate.UNAVAILABLE, reason: first.detail };
+  }
+  if (first.status === 'PASSED') {
+    record('PASSED', { files: namesOf(changed.files) });
+    return { status: FormatGate.PASSED, files: changed.files, sha: targetSha };
+  }
+
+  record('FAILED', { files: namesOf(changed.files), reason: first.detail });
+  const findings = [
+    {
+      id: 'FORMAT_CHECK_FAILED',
+      status: 'open',
+      summary:
+        'prettier --check failed on ' +
+        changed.files.length +
+        ' changed file(s): ' +
+        namesOf(changed.files).join(', '),
+    },
+  ];
+  const repaired = await repair(findings, targetSha);
+  const repairedSha = repaired && repaired.sha ? String(repaired.sha) : '';
+  if (!SHA_40.test(repairedSha)) {
+    const reason = 'FORMAT_CHECK_FAILED: the repair round produced no reviewable commit';
+    record('REFUSED', { files: namesOf(changed.files), reason });
+    return { status: FormatGate.REFUSED, reason, files: changed.files };
+  }
+
+  const again = changedPrettierFiles(workerRoot, baseSha, repairedSha);
+  if (again.detail) {
+    record('UNAVAILABLE', { files: namesOf(changed.files), reason: again.detail });
+    return { status: FormatGate.UNAVAILABLE, reason: again.detail };
+  }
+  const second =
+    again.files.length === 0 ? { status: 'PASSED', detail: null } : prettierCheck(again.files);
+  if (second.status === 'UNAVAILABLE') {
+    record('UNAVAILABLE', { files: namesOf(again.files), reason: second.detail });
+    return { status: FormatGate.UNAVAILABLE, reason: second.detail };
+  }
+  if (second.status === 'PASSED') {
+    record('PASSED', { files: namesOf(again.files), sha: repairedSha, repaired: true });
+    return { status: FormatGate.PASSED, files: again.files, sha: repairedSha };
+  }
+  const reason =
+    'FORMAT_CHECK_FAILED: prettier --check still fails after the repair round: ' +
+    namesOf(again.files).join(', ');
+  record('REFUSED', { files: namesOf(again.files), reason });
+  return { status: FormatGate.REFUSED, reason, files: again.files, sha: repairedSha };
+}
+
 /** The review / repair stage for one completed session. */
 async function reviewItem(
   o,
@@ -4409,7 +4630,7 @@ async function reviewItem(
   // the checkpoint's exact workerSha — and only falls back to the worktree head
   // when no such commit was ever recorded.
   const workerHead = (session && session.headSha) || (workerRoot && headShaOf(workerRoot)) || null;
-  const targetSha =
+  let targetSha =
     workerHead && SHA_40.test(workerHead)
       ? workerHead
       : o.sha && SHA_40.test(String(o.sha))
@@ -4423,6 +4644,82 @@ async function reviewItem(
       status: ReviewStatus.BLOCKED,
       reason: 'REVIEW_SHA_UNPINNED: a 40-character commit under review is mandatory',
     };
+  }
+
+  // The one repair path: the injected repairer when a harness provides one,
+  // otherwise the Controller's own bounded repair round. The format gate and the
+  // review loop both use it, so a format finding is repaired exactly like any
+  // other finding (DT-R02 "reuse the existing repair path").
+  const repairWithFinding = async (findings, sha) => {
+    if (typeof o.repairer === 'function') {
+      const repaired = await o.repairer(findings, sha);
+      if (typeof options.onCheckpoint === 'function') {
+        options.onCheckpoint('repair_round_completed', {
+          repair: { sha: (repaired && repaired.sha) || sha, injected: true },
+        });
+      }
+      return repaired;
+    }
+    return repairRound(
+      o,
+      item,
+      session,
+      log,
+      logOpts,
+      launcher,
+      usageDir,
+      now,
+      candidates,
+      evidenceData,
+      registry,
+      {
+        failedKeys: failedKeySet,
+        excludedDomains: excludedDomainSet,
+        domainAttempts: domainAttemptsMap,
+        triedKeys: triedKeySet,
+        evidenceDir: options.evidenceDir || evidenceDir,
+      }
+    )(findings, sha);
+  };
+
+  // DT-R02: after a worker commit and BEFORE review, the Controller runs a
+  // host-side prettier --check over the worker's changed files only. An
+  // unformatted commit is never reviewed and never published: the item takes
+  // exactly one bounded repair round on a finding that names the files, and is
+  // refused if it still does not format. A prettier the host cannot run is
+  // recorded as FORMAT_CHECK_UNAVAILABLE and does not block.
+  const formatBaseSha = (session && session.baseSha) || o.baseSha || null;
+  if ((o.isolatedWorker || o.formatCheck === true) && workerRoot && formatBaseSha) {
+    const gate = await runFormatGate({
+      o,
+      item,
+      log,
+      logOpts,
+      workerRoot,
+      baseSha: formatBaseSha,
+      targetSha,
+      repair: repairWithFinding,
+    });
+    if (gate.status === FormatGate.REFUSED) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.REFUSED,
+          workItemId: item.id,
+          role: roleOf(item),
+          chosen: (session && session.candidateKey) || null,
+          branch: (session && session.branch) || null,
+          sha: targetSha,
+          detail: gate.reason,
+          findings: [{ id: 'FORMAT_CHECK_FAILED', status: 'open', summary: gate.reason }],
+        },
+        logOpts
+      );
+      return { status: ItemStatus.REFUSED, reason: gate.reason, gate: 'FORMAT_CHECK_FAILED' };
+    }
+    if (gate.sha && SHA_40.test(String(gate.sha))) {
+      // A repair round that did format the files produced the commit to review.
+      targetSha = String(gate.sha);
+    }
   }
 
   const writerKey = (session && session.candidateKey) || null;
@@ -5054,37 +5351,7 @@ async function reviewItem(
     {
       runTests: captureRunTests,
       review: reviewWithManifest,
-      repair: async (...args) => {
-        if (typeof o.repairer === 'function') {
-          const repaired = await o.repairer(...args);
-          if (typeof options.onCheckpoint === 'function') {
-            options.onCheckpoint('repair_round_completed', {
-              repair: { sha: (repaired && repaired.sha) || args[1], injected: true },
-            });
-          }
-          return repaired;
-        }
-        return repairRound(
-          o,
-          item,
-          session,
-          log,
-          logOpts,
-          launcher,
-          usageDir,
-          now,
-          candidates,
-          evidenceData,
-          registry,
-          {
-            failedKeys: failedKeySet,
-            excludedDomains: excludedDomainSet,
-            domainAttempts: domainAttemptsMap,
-            triedKeys: triedKeySet,
-            evidenceDir: options.evidenceDir || evidenceDir,
-          }
-        )(...args);
-      },
+      repair: repairWithFinding,
     }
   );
 
@@ -5101,7 +5368,7 @@ async function reviewItem(
     publishCwd: publishCwdForReceipt(o, workerRoot || (session && session.worktree) || null),
     branch: (session && session.branch) || o.branch || null,
     baseSha: (session && session.baseSha) || o.baseSha || null,
-    draftTitle: draftTitleForItem(item),
+    draftTitle: draftTitleForItem(item, o.goal),
     item,
     testResult: lastTestResult,
     failBefore: (session && session.failBefore) || null,
@@ -5827,12 +6094,20 @@ function publication(o, entry, publishGuard, publishedByItem) {
             typeof callerDraft.workItemId === 'string' &&
             callerDraft.workItemId === String(entry.workItemId);
           const specOutcome = entry.draftTitle
-            ? String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '') || 'work item'
-            : 'work item';
+            ? String(entry.draftTitle).replace(/^\[[^\]]+\]\s*/, '')
+            : null;
+          // DT-R01: whichever source names the outcome, the Pull Request title
+          // and the body's outcome line are composed from this one normalized
+          // string — exactly one Work Item ID, truncated to 72 characters.
+          const outcome = draftTitleFor(
+            entry.workItemId,
+            (callerNamesThisItem && callerDraft.outcome) || specOutcome,
+            'work item'
+          ).replace(/^\[[^\]]+\]\s*/, '');
           return Object.assign(
             {
               workItemId: entry.workItemId,
-              outcome: (callerNamesThisItem && callerDraft.outcome) || specOutcome,
+              outcome,
               reviewer:
                 entry.reviewerIdentity ||
                 (review && review.reviewer) ||
@@ -5934,7 +6209,9 @@ function finish(log, statusOf, ctx) {
   for (const item of log.plan.workItems) {
     const status = statusOf.get(item.id) || ItemStatus.DEFERRED;
     if (status === ItemStatus.COMPLETED) completed.push(item.id);
-    else if (status === ItemStatus.BLOCKED) blocked.push(item.id);
+    // A format-gate refusal is a stop the next run re-attempts after the files
+    // are formatted, so it is reported beside the blocks and never as deferred.
+    else if (status === ItemStatus.BLOCKED || status === ItemStatus.REFUSED) blocked.push(item.id);
     else deferred.push(item.id);
   }
   log.reconciliation = {
@@ -6022,6 +6299,7 @@ module.exports = {
   repairRound,
   reviewLane,
   reviewItem,
+  draftTitleForItem,
   provisionReviewRoot,
   publishCwdForReceipt,
   resolvePublishCwd,
