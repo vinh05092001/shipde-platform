@@ -12,8 +12,9 @@
  *   - Strip any other Work Item ID pattern from <outcome>.
  *
  * DT-R02: after a worker commit and BEFORE review, the Controller runs a host-side
- *   format check on the worker's changed files only. If it fails, the item goes
- *   to a bounded repair round.
+ *   format check on the worker's changed files only. If it fails, the item takes
+ *   a bounded repair round and is refused while it stays unformatted; a prettier
+ *   the host cannot run is a recorded FORMAT_CHECK_UNAVAILABLE warning.
  *
  * DT-R03: tests cover title from outcome with exactly one ID, badly formatted worker
  *   file triggers repair instead of review, and well-formatted file goes straight
@@ -25,7 +26,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
-const { runOrchestration } = require('../orchestrate');
+const { runOrchestration, draftTitleForItem } = require('../orchestrate');
 const cli = require('../cli');
 
 const dirs = [];
@@ -161,7 +162,7 @@ function setup(prefix, specs, config) {
       'change-' + job.workItemId + '.js',
       'done for ' + job.workItemId + '\n'
     );
-    return { exitCode: 0, stdout: 'worker completed' };
+    return { exitCode: 0, stdout: 'worker completed', headSha: state.passSha[job.workItemId] };
   };
 
   const opts = {
@@ -270,6 +271,16 @@ test('DT-R01: title from outcome, exactly one ID even when outcome mentions anot
     finalId.startsWith('[TASK-AI-123]'),
     'title starts with correct Work Item ID: ' + finalId
   );
+
+  // DT-R01: the outcome text itself carries no second Work Item ID, and the
+  // composed title is truncated to 72 characters. Both fail on origin/main,
+  // where the outcome is published verbatim.
+  assert.equal(
+    (outcome.match(idPattern) || []).length,
+    0,
+    'the outcome must not quote another Work Item ID: ' + outcome
+  );
+  assert.ok(title.length <= 72, 'the title is at most 72 characters: ' + title.length);
 });
 
 test('DT-R01: strip multiple ID patterns from outcome', async () => {
@@ -299,6 +310,19 @@ test('DT-R01: strip multiple ID patterns from outcome', async () => {
     const idPattern = /\b(FEAT-|TASK-FOUND-|TASK-AI-)[A-Za-z0-9]+\b/g;
     const allIds = title.match(idPattern) || [];
     assert.equal(allIds.length, 1, 'only one ID in title for ' + tc.description + ': ' + title);
+
+    // DT-R01: the Controller composes that title itself. On origin/main the
+    // builder is not exported and keeps the foreign ID, so this cannot pass.
+    const composed = draftTitleForItem({ id: 'TASK-AI-123', businessOutcome: tc.input });
+    assert.ok(
+      composed.startsWith(tc.expectedStart),
+      'the controller title starts correctly: ' + composed
+    );
+    assert.equal(
+      (composed.match(idPattern) || []).length,
+      1,
+      'the controller title carries only the prefix ID for ' + tc.description + ': ' + composed
+    );
   }
 });
 
@@ -308,6 +332,16 @@ test('DT-R01: truncate to 72 characters', async () => {
 
   assert.ok(title.length <= 72, 'title is 72 characters or less: ' + title.length);
   assert.equal(title.length, 72, 'title is truncated to exactly 72');
+
+  // DT-R01: the Controller truncates the title it actually composes. On
+  // origin/main the builder is not exported and truncates nothing.
+  const composed = draftTitleForItem({ id: 'TASK-AI-123', businessOutcome: longOutcome });
+  assert.equal(
+    composed.length,
+    72,
+    'the controller title is truncated to exactly 72: ' + composed.length
+  );
+  assert.ok(composed.startsWith('[TASK-AI-123] '), 'the composed title keeps its prefix');
 });
 
 test('DT-R02: badly formatted worker file triggers repair instead of review', async () => {
@@ -324,6 +358,10 @@ test('DT-R02: badly formatted worker file triggers repair instead of review', as
       workItemId: job.workItemId,
       isReview: Boolean(job.isReview),
     });
+    if (job.usageFile) {
+      fs.mkdirSync(path.dirname(job.usageFile), { recursive: true });
+      fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + state.calls.length }));
+    }
     if (job.isReview) {
       fs.writeFileSync(
         job.verdictFile || path.join(job.cwd, 'verdict.json'),
@@ -360,6 +398,12 @@ test('DT-R02: badly formatted worker file triggers repair instead of review', as
     cwd: repo.dir,
     workerRoot: repo.dir,
     baseSha: repo.base,
+    formatCheck: true,
+    // DT-R02: every format-check verdict the Controller emits lands in the same
+    // list the repair round writes to, so a passing check is observable too.
+    log: (code, payload) => {
+      if (String(code).indexOf('FORMAT_CHECK') === 0) state.formatCheckCalls.push(payload);
+    },
     ranking: {
       headrooms: {
         'acct-writer': { status: 'available' },
@@ -383,11 +427,10 @@ test('DT-R02: badly formatted worker file triggers repair instead of review', as
     publisher: (pubOpts) => ({ status: 'published', sha: pubOpts.reviewedSha }),
   };
 
-  // DT-R02: format check should run BEFORE review and trigger repair for bad files
-  // This behavior is NOT implemented yet - test should fail until implementation exists
   const log = await runOrchestration('DT-R02 badly formatted file', opts);
 
-  // Check that format check was invoked (this assertion will fail until implemented)
+  // DT-R02: format check runs BEFORE review and the repair round is triggered
+  // for the badly formatted file (the repairer records the finding it received)
   assert.ok(
     state.formatCheckCalls.length > 0,
     'format check must run before review: ' + JSON.stringify(state.formatCheckCalls)
@@ -400,6 +443,24 @@ test('DT-R02: badly formatted worker file triggers repair instead of review', as
   assert.ok(
     outcome.status === 'completed' || outcome.status === 'refused',
     'outcome status: ' + outcome.status
+  );
+
+  // DT-R02: the finding names the files, the item is refused rather than
+  // reviewed, and the run records why. None of this exists on origin/main.
+  const repairCall = state.formatCheckCalls.find((call) => Array.isArray(call.findings));
+  assert.ok(repairCall, 'the bounded repair round received the format finding');
+  assert.equal(repairCall.findings[0].id, 'FORMAT_CHECK_FAILED');
+  assert.match(repairCall.findings[0].summary, /test\.js/);
+  assert.equal(outcome.status, 'refused', 'an unformatted commit is refused: ' + outcome.status);
+  assert.equal(log.reviews.length, 0, 'the unformatted commit is never reviewed');
+  assert.equal(
+    publicationOf(log, 'TASK-AI-123'),
+    null,
+    'the unformatted commit is never published'
+  );
+  assert.ok(
+    (log.formatChecks || []).some((entry) => entry.status === 'REFUSED'),
+    'the refused verdict is recorded on the run: ' + JSON.stringify(log.formatChecks)
   );
 });
 
@@ -417,6 +478,10 @@ test('DT-R02: well-formatted worker file goes straight to review', async () => {
       workItemId: job.workItemId,
       isReview: Boolean(job.isReview),
     });
+    if (job.usageFile) {
+      fs.mkdirSync(path.dirname(job.usageFile), { recursive: true });
+      fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + state.calls.length }));
+    }
     if (job.isReview) {
       fs.writeFileSync(
         job.verdictFile || path.join(job.cwd, 'verdict.json'),
@@ -424,10 +489,10 @@ test('DT-R02: well-formatted worker file goes straight to review', async () => {
       );
       return { exitCode: 0, stdout: 'review pass' };
     }
-    // Simulate well-formatted file
+    // Simulate well-formatted file: single quotes match the repository .prettierrc
     fs.writeFileSync(
       path.join(repo.dir, 'test.js'),
-      'function test() {\n  console.log("good");\n}\n'
+      "function test() {\n  console.log('good');\n}\n"
     );
     repo.git(['add', '.']);
     repo.git(['commit', '-q', '-m', 'worker work']);
@@ -453,6 +518,12 @@ test('DT-R02: well-formatted worker file goes straight to review', async () => {
     cwd: repo.dir,
     workerRoot: repo.dir,
     baseSha: repo.base,
+    formatCheck: true,
+    // DT-R02: every format-check verdict the Controller emits lands in the same
+    // list the repair round writes to, so a passing check is observable too.
+    log: (code, payload) => {
+      if (String(code).indexOf('FORMAT_CHECK') === 0) state.formatCheckCalls.push(payload);
+    },
     ranking: {
       headrooms: {
         'acct-writer': { status: 'available' },
@@ -475,11 +546,9 @@ test('DT-R02: well-formatted worker file goes straight to review', async () => {
     publisher: (pubOpts) => ({ status: 'published', sha: pubOpts.reviewedSha }),
   };
 
-  // DT-R02: well-formatted files should pass format check and proceed to review
-  // This behavior is NOT implemented yet - test should fail until implementation exists
   const log = await runOrchestration('DT-R02 well-formatted file', opts);
 
-  // Check that format check was invoked for well-formatted file too
+  // DT-R02: the format check runs for every worker commit, formatted or not
   assert.ok(
     state.formatCheckCalls.length > 0,
     'format check must run for all files: ' + JSON.stringify(state.formatCheckCalls)
@@ -488,9 +557,23 @@ test('DT-R02: well-formatted worker file goes straight to review', async () => {
   const outcome = outcomeOf(log, 'TASK-AI-123');
   assert.ok(outcome, 'outcome exists');
 
-  // Well-formatted file should complete without repair
+  // After format check, item should be completed or refused
   assert.ok(
     outcome.status === 'completed' || outcome.status === 'refused',
     'outcome status: ' + outcome.status
   );
+
+  // DT-R02: a formatted commit needs no repair round and reaches the reviewer.
+  // Neither the PASSED verdict nor the review exists on origin/main.
+  assert.equal(outcome.status, 'completed', 'a formatted commit completes: ' + outcome.status);
+  assert.equal(
+    state.formatCheckCalls.some((call) => Array.isArray(call.findings)),
+    false,
+    'the formatted file never triggers a repair round'
+  );
+  assert.ok(
+    (log.formatChecks || []).some((entry) => entry.status === 'PASSED'),
+    'the passing verdict is recorded on the run: ' + JSON.stringify(log.formatChecks)
+  );
+  assert.equal(log.reviews.length, 1, 'the formatted commit is reviewed exactly once');
 });
