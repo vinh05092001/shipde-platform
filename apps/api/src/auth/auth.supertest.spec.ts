@@ -867,6 +867,19 @@ async function runAuthSupertestSuite() {
           password_confirm: 'RacePassword456!',
         }),
     ]);
+
+    const statuses = [resRace1.status, resRace2.status].sort();
+    assert.deepStrictEqual(statuses, [200, 400]); // one succeeds, one fails
+    const failedRes = resRace1.status === 400 ? resRace1 : resRace2;
+    assert.strictEqual(failedRes.body.error.code, 'TOKEN_ALREADY_USED');
+
+    const userRace = await prisma.user.findFirst({ where: { email: email1 } });
+    const pw1Match = await verifyPassword('RacePassword123!', userRace!.password_hash);
+    const pw2Match = await verifyPassword('RacePassword456!', userRace!.password_hash);
+    assert.ok(pw1Match || pw2Match, 'Password should have changed to one of the race passwords');
+    assert.ok(!(pw1Match && pw2Match), 'Password cannot be both');
+    console.log('  PASS: Concurrent resets atomically handled (exactly one succeeds)');
+
     // 21j. Suspended account during reset returns 403 FORBIDDEN
     rateLimitService.clear();
     await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
@@ -880,6 +893,12 @@ async function runAuthSupertestSuite() {
       data: { status: 'suspended' },
     });
 
+    const resVerifySusp = await request(app.getHttpServer())
+      .post('/auth/verify-reset-token')
+      .send({ token: suspToken })
+      .expect(403);
+    assert.strictEqual(resVerifySusp.body.error.code, 'FORBIDDEN');
+
     const res21j = await request(app.getHttpServer())
       .post('/auth/reset-password')
       .set('x-forwarded-for', '203.0.113.16')
@@ -890,7 +909,7 @@ async function runAuthSupertestSuite() {
       })
       .expect(403);
     assert.strictEqual(res21j.body.error.code, 'FORBIDDEN');
-    console.log('  PASS: Reset for suspended account rejected with 403 FORBIDDEN');
+    console.log('  PASS: Verify and reset for suspended account rejected with 403 FORBIDDEN');
 
     // Restore the account
     await prisma.user.update({
@@ -899,12 +918,40 @@ async function runAuthSupertestSuite() {
     });
 
     // 21k. Verify session revocation and audit logging
-    const sessions = await prisma.deviceSession.findMany({
+    rateLimitService.clear();
+    await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
+    const revokeMsg = mockDeliveryAdapter.getLastMessage();
+    const revokeToken = new URL(revokeMsg!.link!).searchParams.get('token')!;
+
+    await prisma.deviceSession.create({
+      data: {
+        user_id: userForSuspension!.id,
+        device_id: 'web-session-test',
+        last_active_at: new Date(),
+        is_revoked: false,
+      },
+    });
+
+    const sessionsBefore = await prisma.deviceSession.findMany({
+      where: { user_id: userForSuspension!.id, is_revoked: false },
+    });
+    assert.ok(sessionsBefore.length > 0, 'Should have active sessions before reset');
+
+    const res21k = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.17')
+      .send({
+        token: revokeToken,
+        password: 'RevokePassword123!',
+        password_confirm: 'RevokePassword123!',
+      })
+      .expect(200);
+
+    const sessionsAfter = await prisma.deviceSession.findMany({
       where: { user_id: userForSuspension!.id },
     });
-    // all sessions should be revoked from the 21a reset
     assert.ok(
-      sessions.every((s) => s.is_revoked),
+      sessionsAfter.length > 0 && sessionsAfter.every((s) => s.is_revoked),
       'All sessions should be revoked after reset'
     );
 
