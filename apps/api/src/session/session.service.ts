@@ -96,6 +96,16 @@ export class SessionService {
     reason = 'User requested revocation',
     ipAddress?: string
   ) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+      throw new NotFoundException({
+        error: {
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy phiên làm việc',
+          retryable: false,
+        },
+      });
+    }
+
     const session = await this.prisma.deviceSession.findUnique({
       where: { id: sessionId },
     });
@@ -258,6 +268,16 @@ export class SessionService {
     merchantId: string,
     currentSessionId?: string
   ) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+      throw new NotFoundException({
+        error: {
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy phiên làm việc',
+          retryable: false,
+        },
+      });
+    }
+
     const session = await this.prisma.deviceSession.findUnique({
       where: { id: sessionId },
     });

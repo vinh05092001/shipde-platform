@@ -258,6 +258,16 @@ async function runSessionSupertestSuite() {
     assert.strictEqual(res5.body.error.code, 'SESSION_NOT_FOUND');
     console.log('  PASS: AC-SESS-05 Not found returns canonical error');
 
+    // TEST 5b: Heartbeat malformed id returns 404
+    console.log('[TEST 5b] Heartbeat malformed id returns 404');
+    const res5b = await request(server)
+      .patch('/api/v1/sessions/malformed-id/heartbeat')
+      .set('Authorization', `Bearer ${tok5.raw}`)
+      .expect(404);
+
+    assert.strictEqual(res5b.body.error.code, 'SESSION_NOT_FOUND');
+    console.log('  PASS: Heartbeat malformed id returns canonical error');
+
     // AC-SESS-06: Heartbeat
     console.log('[TEST 6 / AC-SESS-06] Heartbeat');
     const tok6 = createSessionToken();
