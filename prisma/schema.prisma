@@ -142,6 +142,10 @@ model User {
   email_verified_at DateTime?         @db.Timestamptz
   phone_verified_at DateTime?         @db.Timestamptz
   terms_accepted_at DateTime?         @db.Timestamptz
+  created_by        String?           @db.VarChar(64)
+  activated_at      DateTime?         @db.Timestamptz
+  created_by_ip     String?           @db.VarChar(64)
+
   terms_version     String?           @db.VarChar(32)
   created_at        DateTime          @default(now()) @db.Timestamptz
   updated_at        DateTime          @updatedAt @db.Timestamptz
