@@ -337,29 +337,20 @@ async function runSessionSupertestSuite() {
 
     const res9a = await request(server)
       .delete(`/api/v1/sessions/${sess2.id}`)
-      .set('Authorization', `Bearer ${tokUser.raw}`)
+      .set('Authorization', `Bearer ${createdToken}`)
       .expect(403);
     assert.strictEqual(res9a.body.error.code, 'FORBIDDEN');
     const res9b = await request(server)
       .delete(`/api/v1/sessions/${sess3.id}`)
-      .set('Authorization', `Bearer ${tokUser.raw}`)
+      .set('Authorization', `Bearer ${createdToken}`)
       .expect(403);
     assert.strictEqual(res9b.body.error.code, 'FORBIDDEN');
     console.log('  PASS: Cross-user and cross-tenant deleted rejected');
 
     console.log('[TEST 10] Heartbeat on a non-current session gets 403');
-    // Using tokUser (current session = sess1), trying to heartbeat sess2
-    const res10 = await request(server)
-      .patch(`/api/v1/sessions/${sess2.id}/heartbeat`)
-      .set('Authorization', `Bearer ${tokUser.raw}`)
-      .expect(403);
-    assert.strictEqual(res10.body.error.code, 'FORBIDDEN');
-    console.log('  PASS: Heartbeat on non-current session rejected');
-
-    console.log('[TEST 11] Include current = true behavior');
     // tokUser2 has 1 session (sess2). Let's create another one for them.
     const tokUser2b = createSessionToken();
-    await prisma.deviceSession.create({
+    const sess2b = await prisma.deviceSession.create({
       data: {
         user_id: user2.id,
         merchant_id: merchant.id,
@@ -369,6 +360,15 @@ async function runSessionSupertestSuite() {
         expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
       },
     });
+    // Using tokUser2 (current session = sess2), trying to heartbeat sess2b
+    const res10 = await request(server)
+      .patch(`/api/v1/sessions/${sess2b.id}/heartbeat`)
+      .set('Authorization', `Bearer ${tokUser2.raw}`)
+      .expect(403);
+    assert.strictEqual(res10.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: Heartbeat on non-current session rejected');
+
+    console.log('[TEST 11] Include current = true behavior');
     const res11 = await request(server)
       .post('/api/v1/sessions/revoke-all')
       .set('Authorization', `Bearer ${tokUser2.raw}`)

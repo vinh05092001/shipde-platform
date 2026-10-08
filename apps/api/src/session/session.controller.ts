@@ -25,12 +25,7 @@ export class SessionController {
   constructor(@Inject(SessionService) private readonly sessionService: SessionService) {}
 
   private extractIp(req: any): string {
-    return (
-      req.headers['x-forwarded-for']?.split(',')[0] ||
-      req.ip ||
-      req.socket?.remoteAddress ||
-      '127.0.0.1'
-    );
+    return req.ip || req.socket?.remoteAddress || '127.0.0.1';
   }
 
   /** GET /api/v1/sessions — List active sessions for current user */
@@ -51,7 +46,7 @@ export class SessionController {
     const merchantId = req.merchantId as string;
     const correlationId = req.headers['x-correlation-id'] || normalizeCorrelationId();
     const ip = this.extractIp(req);
-    return this.sessionService.revoke(sessionId, userId, merchantId, correlationId, ip);
+    return this.sessionService.revoke(sessionId, userId, merchantId, correlationId, undefined, ip);
   }
 
   /** POST /api/v1/sessions/revoke-all — Revoke all sessions (logout everywhere) */

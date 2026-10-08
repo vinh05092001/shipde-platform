@@ -54,7 +54,10 @@ export class SessionService {
       };
     });
 
-    return { data: results, meta: { correlation_id: correlationId || 'system' } };
+    return {
+      data: results,
+      meta: { total: results.length, correlation_id: correlationId || 'system' },
+    };
   }
 
   async validateSession(tokenHash: string): Promise<{
@@ -90,8 +93,8 @@ export class SessionService {
     userId: string,
     merchantId: string,
     correlationId: string,
-    ipAddress?: string,
-    reason = 'User requested revocation'
+    reason = 'User requested revocation',
+    ipAddress?: string
   ) {
     const session = await this.prisma.deviceSession.findUnique({
       where: { id: sessionId },
@@ -131,21 +134,26 @@ export class SessionService {
       session.status === SessionStatusEnum.REVOKED ||
       session.status === SessionStatusEnum.EXPIRED
     ) {
-      await this.logAudit({
-        merchantId,
-        userId,
-        actor: userId,
-        action: 'SESSION_REVOKED',
-        resource: `Session:${sessionId}`,
-        details: { reason: 'Idempotent call', device_id: session.device_id },
-        correlationId,
-        ipAddress,
-      });
+      if (session.status === SessionStatusEnum.REVOKED) {
+        await this.logAudit({
+          merchantId,
+          userId,
+          actor: userId,
+          action: 'SESSION_REVOKED',
+          resource: `Session:${sessionId}`,
+          details: { reason: 'Idempotent call', device_id: session.device_id },
+          correlationId,
+          ipAddress,
+        });
+      }
 
       return {
         session_id: session.id,
-        status: SessionStatusEnum.REVOKED,
-        message: 'Phiên đã được thu hồi trước đó',
+        status: session.status,
+        message:
+          session.status === SessionStatusEnum.REVOKED
+            ? 'Phiên đã được thu hồi trước đó'
+            : 'Phiên đã hết hạn',
       };
     }
 
@@ -360,7 +368,9 @@ export class SessionService {
       });
     } catch (err) {
       console.error('Failed to persist audit log:', err);
-      throw err;
+      if (tx !== this.prisma) {
+        throw err;
+      }
     }
   }
 }
