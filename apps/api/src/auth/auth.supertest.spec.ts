@@ -308,7 +308,9 @@ async function runAuthSupertestSuite() {
     } finally {
       console.log = originalConsoleLog7;
     }
-    console.log('  PASS: AC-AUTH-02-07 Valid token transitioned user to active status and protected PII');
+    console.log(
+      '  PASS: AC-AUTH-02-07 Valid token transitioned user to active status and protected PII'
+    );
 
     // -------------------------------------------------------------------------
     // AC-AUTH-02-08: Verify with expired token -> 410 TOKEN_EXPIRED
@@ -671,8 +673,14 @@ async function runAuthSupertestSuite() {
       assert.strictEqual(auditLogs19c.length, 1, 'Audit log must be created');
 
       const fullAuditRow = JSON.stringify(auditLogs19c[0]);
-      assert.ok(!fullAuditRow.includes(unverifiedEmail), 'Audit log row must not contain raw email');
-      assert.ok(!auditLogMessage19c.includes(unverifiedEmail), 'Console args must not contain raw email');
+      assert.ok(
+        !fullAuditRow.includes(unverifiedEmail),
+        'Audit log row must not contain raw email'
+      );
+      assert.ok(
+        !auditLogMessage19c.includes(unverifiedEmail),
+        'Console args must not contain raw email'
+      );
     } finally {
       console.log = originalConsoleLog;
     }

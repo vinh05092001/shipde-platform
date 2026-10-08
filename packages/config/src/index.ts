@@ -250,10 +250,13 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   const auditHmacKeyRaw = rawEnv.AUDIT_IDENTIFIER_HMAC_KEY;
   if (NODE_ENV === 'production') {
     if (!auditHmacKeyRaw || auditHmacKeyRaw.trim().length < 32) {
-      invalidFields.push('AUDIT_IDENTIFIER_HMAC_KEY (required in production with at least 32 characters)');
+      invalidFields.push(
+        'AUDIT_IDENTIFIER_HMAC_KEY (required in production with at least 32 characters)'
+      );
     }
   }
-  const AUDIT_IDENTIFIER_HMAC_KEY = auditHmacKeyRaw || 'default-dev-audit-hmac-key-override-32-chars';
+  const AUDIT_IDENTIFIER_HMAC_KEY =
+    auditHmacKeyRaw || 'default-dev-audit-hmac-key-override-32-chars';
 
   const FRONTEND_URL =
     rawEnv.FRONTEND_URL ||

@@ -2123,7 +2123,8 @@ export class AuthService {
   }
 
   private hashIdentifierForAudit(identifier: string): string {
-    const key = this.config?.AUDIT_IDENTIFIER_HMAC_KEY || 'default-dev-audit-hmac-key-override-32-chars';
+    const key =
+      this.config?.AUDIT_IDENTIFIER_HMAC_KEY || 'default-dev-audit-hmac-key-override-32-chars';
     return createHmac('sha256', key).update(identifier).digest('hex').substring(0, 16);
   }
 
