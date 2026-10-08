@@ -236,8 +236,10 @@ async function runSessionSupertestSuite() {
     assert.strictEqual(res4.body.status, 'REVOKED');
     console.log('  PASS: AC-SESS-04 Idempotent revoke');
 
-    // AC-SESS-05: Revoke nonexistent session returns 404
-    console.log('[TEST 5 / AC-SESS-05] Revoke nonexistent returns 404');
+    // AC-SESS-05: Revoke nonexistent session and malformed session return identical 404
+    console.log(
+      '[TEST 5 / AC-SESS-05] Revoke nonexistent/malformed returns 404 with identical body'
+    );
     // Create a fresh session to use as auth token (old one is revoked)
     const tok5 = createSessionToken();
     await prisma.deviceSession.create({
@@ -250,23 +252,56 @@ async function runSessionSupertestSuite() {
         expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
       },
     });
-    const res5 = await request(server)
-      .delete('/api/v1/sessions/nonexistent-session-id')
+
+    const res5Malformed = await request(server)
+      .delete('/api/v1/sessions/malformed-session-id')
       .set('Authorization', `Bearer ${tok5.raw}`)
       .expect(404);
 
-    assert.strictEqual(res5.body.error.code, 'SESSION_NOT_FOUND');
-    console.log('  PASS: AC-SESS-05 Not found returns canonical error');
+    const res5Nonexistent = await request(server)
+      .delete('/api/v1/sessions/00000000-0000-0000-0000-000000000000')
+      .set('Authorization', `Bearer ${tok5.raw}`)
+      .expect(404);
 
-    // TEST 5b: Heartbeat malformed id returns 404
-    console.log('[TEST 5b] Heartbeat malformed id returns 404');
-    const res5b = await request(server)
+    const err5Malformed = { ...res5Malformed.body };
+    delete err5Malformed.correlation_id;
+    delete err5Malformed.request_id;
+    const err5Nonexistent = { ...res5Nonexistent.body };
+    delete err5Nonexistent.correlation_id;
+    delete err5Nonexistent.request_id;
+
+    assert.deepStrictEqual(err5Malformed, err5Nonexistent);
+    assert.strictEqual(err5Malformed.error.code, 'SESSION_NOT_FOUND');
+    assert.strictEqual(err5Malformed.error.message, 'Không tìm thấy phiên làm việc');
+    console.log(
+      '  PASS: AC-SESS-05 Not found returns canonical error for both malformed and well-formed nonexistent IDs'
+    );
+
+    // TEST 5b: Heartbeat nonexistent session and malformed session return identical 404
+    console.log('[TEST 5b] Heartbeat nonexistent/malformed returns 404 with identical body');
+    const res5bMalformed = await request(server)
       .patch('/api/v1/sessions/malformed-id/heartbeat')
       .set('Authorization', `Bearer ${tok5.raw}`)
       .expect(404);
 
-    assert.strictEqual(res5b.body.error.code, 'SESSION_NOT_FOUND');
-    console.log('  PASS: Heartbeat malformed id returns canonical error');
+    const res5bNonexistent = await request(server)
+      .patch('/api/v1/sessions/00000000-0000-0000-0000-000000000000/heartbeat')
+      .set('Authorization', `Bearer ${tok5.raw}`)
+      .expect(404);
+
+    const err5bMalformed = { ...res5bMalformed.body };
+    delete err5bMalformed.correlation_id;
+    delete err5bMalformed.request_id;
+    const err5bNonexistent = { ...res5bNonexistent.body };
+    delete err5bNonexistent.correlation_id;
+    delete err5bNonexistent.request_id;
+
+    assert.deepStrictEqual(err5bMalformed, err5bNonexistent);
+    assert.strictEqual(err5bMalformed.error.code, 'SESSION_NOT_FOUND');
+    assert.strictEqual(err5bMalformed.error.message, 'Không tìm thấy phiên làm việc');
+    console.log(
+      '  PASS: Heartbeat returns identical canonical error for both malformed and well-formed nonexistent IDs'
+    );
 
     // AC-SESS-06: Heartbeat
     console.log('[TEST 6 / AC-SESS-06] Heartbeat');

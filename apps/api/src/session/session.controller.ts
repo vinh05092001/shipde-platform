@@ -15,6 +15,7 @@ import {
 import { SessionService, RevokeAllDto } from './session.service';
 import { normalizeCorrelationId } from '@shipde/config';
 import { SessionGuard } from './session.guard';
+import { SessionIdPipe } from './session-id.pipe';
 
 /**
  * FEAT-AUTH-06 — Session management controller.
@@ -41,7 +42,7 @@ export class SessionController {
   /** DELETE /api/v1/sessions/:sessionId — Revoke a single session */
   @Delete(':sessionId')
   @HttpCode(HttpStatus.OK)
-  async revoke(@Param('sessionId') sessionId: string, @Req() req: any) {
+  async revoke(@Param('sessionId', SessionIdPipe) sessionId: string, @Req() req: any) {
     const userId = req.userId as string;
     const merchantId = req.merchantId as string;
     const correlationId = req.headers['x-correlation-id'] || normalizeCorrelationId();
@@ -70,7 +71,7 @@ export class SessionController {
 
   /** PATCH /api/v1/sessions/:sessionId/heartbeat — Update last activity */
   @Patch(':sessionId/heartbeat')
-  async heartbeat(@Param('sessionId') sessionId: string, @Req() req: any) {
+  async heartbeat(@Param('sessionId', SessionIdPipe) sessionId: string, @Req() req: any) {
     const userId = req.userId as string;
     const merchantId = req.merchantId as string;
     const currentSessionId = req.sessionId as string | undefined;
